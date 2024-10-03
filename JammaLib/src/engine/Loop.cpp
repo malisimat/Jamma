@@ -83,7 +83,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		break;
 	}
 
-	auto mixerParams = GetMixerParams(loopParams.Size, behaviour);
+	auto mixerParams = GetMixerParams(loopParams.Size, behaviour, loopParams.Channel);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
@@ -95,12 +95,14 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 }
 
 audio::AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
-	audio::BehaviourParams behaviour)
+	audio::BehaviourParams behaviour,
+	unsigned int channel)
 {
 	AudioMixerParams mixerParams;
 	mixerParams.Size = { 110, loopSize.Height };
 	mixerParams.Position = { 6, 6 };
 	mixerParams.Behaviour = behaviour;
+	mixerParams.OutputChannel = channel;
 
 	return mixerParams;
 }
@@ -113,7 +115,7 @@ utils::Position2d Loop::Position() const
 
 void Loop::SetSize(utils::Size2d size)
 {
-	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams());
+	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams(), _loopParams.Channel);
 
 	_mixer->SetSize(mixerParams.Size);
 

@@ -38,6 +38,7 @@ namespace engine
 			RecordTexture(""),
 			OverdubTexture(""),
 			PunchTexture(""),
+			Channel(0),
 			FadeSamps(800u)
 		{
 		}
@@ -52,6 +53,7 @@ namespace engine
 			RecordTexture(""),
 			OverdubTexture(""),
 			PunchTexture(""),
+			Channel(0u),
 			FadeSamps(800u)
 		{
 		}
@@ -64,6 +66,7 @@ namespace engine
 		std::string RecordTexture;
 		std::string OverdubTexture;
 		std::string PunchTexture;
+		unsigned int Channel;
 		unsigned int FadeSamps;
 	};
 
@@ -138,7 +141,8 @@ namespace engine
 			io::JamFile::Loop loopStruct,
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
-			audio::BehaviourParams behaviour);
+			audio::BehaviourParams behaviour,
+			unsigned int channel);
 
 		virtual utils::Position2d Position() const override;
 		virtual void SetSize(utils::Size2d size) override;

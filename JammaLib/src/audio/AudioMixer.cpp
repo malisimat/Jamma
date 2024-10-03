@@ -15,8 +15,9 @@ const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
 AudioMixer::AudioMixer(AudioMixerParams params) :
 	GuiElement(params),
 	_inputChannel(params.InputChannel),
+	_outputChannel(params.OutputChannel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size))),
+	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size, params.OutputChannel))),
 	_fade(std::make_unique<InterpolatedValueExp>())
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
@@ -38,7 +39,7 @@ void AudioMixer::InitReceivers()
 
 void AudioMixer::SetSize(utils::Size2d size)
 {
-	auto sliderParams = GetSliderParams(size);
+	auto sliderParams = GetSliderParams(size, _outputChannel);
 	_slider->SetSize(sliderParams.Size);
 
 	GuiElement::SetSize(size);
@@ -77,6 +78,16 @@ void AudioMixer::SetInputChannel(unsigned int channel)
 	_inputChannel = channel;
 }
 
+unsigned int AudioMixer::OutputChannel() const
+{
+	return _outputChannel;
+}
+
+void AudioMixer::SetOutputChannel(unsigned int channel)
+{
+	_outputChannel = channel;
+}
+
 void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
 	unsigned int index) const
@@ -103,14 +114,14 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize)
+gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize, unsigned int outputChannel)
 {
 	GuiSliderParams sliderParams;
 	sliderParams.Min = 0.0;
 	sliderParams.Max = 6.0;
 	sliderParams.InitValue = 1.0;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
-	sliderParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
+	sliderParams.Position = { (int)_Gap.Width + (200 * (int)outputChannel), (int)_Gap.Height};
 	sliderParams.Size = { mixerSize.Width - (2u * _Gap.Width), mixerSize.Height - (2 * _Gap.Height) };
 	sliderParams.MinSize = { std::max(40u,mixerSize.Width), std::max(40u, mixerSize.Height) };
 	sliderParams.DragControlOffset = { (int)_DragGap.Width, (int)_DragGap.Height };

@@ -186,12 +186,13 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan)
 
 	audio::WireMixBehaviourParams wire;
 	wire.Channels = { chan };
-	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire);
+	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire, chan);
 	
 	LoopParams loopParams;
 	loopParams.Wav = "hh";
 	loopParams.Id = "LP-" + utils::GetGuid();
 	loopParams.TakeId = _id;
+	loopParams.Channel = chan;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 	AddLoop(loop);
 
