@@ -33,7 +33,6 @@ Scene::Scene(SceneParams params,
 			Position3d{ 0, 0, 420 },
 			1.0),
 		0)),
-	_audioMutex(std::mutex()),
 	_userConfig(user),
 	_clock(std::make_shared<Timer>())
 {
@@ -292,7 +291,7 @@ void Scene::OnJobTick(Time curTime)
 		// removing previous identical jobs
 		for (auto j = _jobList.begin(); j != _jobList.end();)
 		{
-			if (*j == job)
+			if (job == *j)
 				j = _jobList.erase(j);
 			else
 				++j;
@@ -355,7 +354,6 @@ void Scene::CommitChanges()
 	{
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
-		std::cout << "Joblist size: " << _jobList.size() << "\n";
 	}
 }
 
@@ -493,6 +491,6 @@ void Scene::JobLoop()
 	while (!_isSceneQuitting)
 	{
 		OnJobTick(Timer::GetTime());
-		std::this_thread::sleep_for(std::chrono::milliseconds(120));
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 }

@@ -36,11 +36,13 @@ void SetupConsole()
 
 std::optional<io::InitFile> LoadIni()
 {
-	std::wstring initPath = GetPath(PATH_ROAMING) + L"/Jamma/defaults.json";
+	std::wstring roamingPath = GetPath(PATH_ROAMING) + L"\\Jamma";
+	std::wstring initPath = roamingPath + L"/defaults.json";
 	io::TextReadWriter txtFile;
 	auto res = txtFile.Read(initPath, MAX_JSON_CHARS);
 
-	std::string iniTxt = InitFile::DefaultJson;
+
+	std::string iniTxt = InitFile::DefaultJson(EncodeUtf8(roamingPath));
 	if (!res.has_value())
 		txtFile.Write(initPath, iniTxt, (unsigned int)iniTxt.size(), 0);
 	else
@@ -58,6 +60,7 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	io::TextReadWriter txtFile;
 
 	std::string jamJson = JamFile::DefaultJson;
+	std::wcout << "Load Jam: " << ini.Jam << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	if (!res.has_value())
 	{

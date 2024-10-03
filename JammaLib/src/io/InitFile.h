@@ -24,7 +24,7 @@ namespace io
 	{
 		static std::optional<InitFile> FromStream(std::stringstream ss);
 		static bool ToStream(InitFile jam, std::stringstream ss);
-		static const std::string DefaultJson;
+		static const std::string DefaultJson(std::string roamingPath);
 
 		enum LoadType
 		{
