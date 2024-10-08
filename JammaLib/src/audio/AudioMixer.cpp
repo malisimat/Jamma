@@ -121,7 +121,7 @@ gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize, unsign
 	sliderParams.Max = 6.0;
 	sliderParams.InitValue = 1.0;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
-	sliderParams.Position = { (int)_Gap.Width + (200 * (int)outputChannel), (int)_Gap.Height};
+	sliderParams.Position = { (int)_Gap.Width, (int)_Gap.Height};
 	sliderParams.Size = { mixerSize.Width - (2u * _Gap.Width), mixerSize.Height - (2 * _Gap.Height) };
 	sliderParams.MinSize = { std::max(40u,mixerSize.Width), std::max(40u, mixerSize.Height) };
 	sliderParams.DragControlOffset = { (int)_DragGap.Width, (int)_DragGap.Height };
