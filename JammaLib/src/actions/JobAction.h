@@ -14,7 +14,7 @@ namespace actions
 		JobAction();
 		~JobAction();
 
-		bool operator==(const JobAction& other) {
+		bool operator==(const JobAction& other) const {
 			if (other.JobActionType == JobActionType)
 				return other.SourceId == SourceId;
 

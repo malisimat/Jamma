@@ -389,8 +389,7 @@ bool Trigger::StateMachine(bool isDown,
 	case TRIGSTATE_RECORDING:
 		if (isActivate && isDown)
 		{
-				EndRecording(cfg);
-
+			EndRecording(cfg);
 			changedState = true;
 		}
 		else if (!isActivate && isDown)

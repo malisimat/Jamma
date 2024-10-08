@@ -99,6 +99,7 @@ namespace audio
 	public:
 		BehaviourParams Behaviour;
 		unsigned int InputChannel;
+		unsigned int OutputChannel;
 	};
 	
 	struct MixerBehaviourFactory
@@ -121,6 +122,8 @@ namespace audio
 		AudioMixer(AudioMixerParams params);
 
 	public:
+		virtual std::string ClassName() const { return "AudioMixer"; }
+
 		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
 		virtual void InitReceivers() override;
 		virtual void SetSize(utils::Size2d size) override;
@@ -134,8 +137,11 @@ namespace audio
 		unsigned int InputChannel() const;
 		void SetInputChannel(unsigned int channel);
 
+		unsigned int OutputChannel() const;
+		void SetOutputChannel(unsigned int channel);
+
 	protected:
-		gui::GuiSliderParams GetSliderParams(utils::Size2d size);
+		gui::GuiSliderParams GetSliderParams(utils::Size2d size, unsigned int outputChannel);
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -143,6 +149,7 @@ namespace audio
 		static const utils::Size2d _DragSize;
 
 		unsigned int _inputChannel;
+		unsigned int _outputChannel;
 		std::unique_ptr<MixBehaviour> _behaviour;
 		std::shared_ptr<gui::GuiSlider> _slider;
 		std::unique_ptr<InterpolatedValue> _fade;

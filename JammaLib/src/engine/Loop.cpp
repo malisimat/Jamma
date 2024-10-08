@@ -83,7 +83,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		break;
 	}
 
-	auto mixerParams = GetMixerParams(loopParams.Size, behaviour);
+	auto mixerParams = GetMixerParams(loopParams.Size, behaviour, loopParams.Channel);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
@@ -95,25 +95,21 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 }
 
 audio::AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
-	audio::BehaviourParams behaviour)
+	audio::BehaviourParams behaviour,
+	unsigned int channel)
 {
 	AudioMixerParams mixerParams;
 	mixerParams.Size = { 110, loopSize.Height };
 	mixerParams.Position = { 6, 6 };
 	mixerParams.Behaviour = behaviour;
+	mixerParams.OutputChannel = channel;
 
 	return mixerParams;
 }
 
-utils::Position2d Loop::Position() const
-{
-	auto pos = ModelPosition();
-	return { (int)round(pos.X), (int)round(pos.Y) };
-}
-
 void Loop::SetSize(utils::Size2d size)
 {
-	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams());
+	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams(), _loopParams.Channel);
 
 	_mixer->SetSize(mixerParams.Size);
 
@@ -272,6 +268,16 @@ void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 		if (index >= bufSize)
 			index -= _loopLength;
 	}
+}
+
+unsigned int Loop::LoopChannel() const
+{
+	return _loopParams.Channel;
+}
+
+void Loop::SetLoopChannel(unsigned int channel)
+{
+	_loopParams.Channel = channel;
 }
 
 unsigned int Loop::InputChannel() const

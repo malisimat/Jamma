@@ -43,6 +43,8 @@ namespace engine
 			io::JamFile::Station stationStruct,
 			std::wstring dir);
 
+		virtual std::string ClassName() const { return "Station"; }
+
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }

@@ -87,6 +87,8 @@ namespace gui
 			utils::Size2d dragSize,
 			utils::Size2d dragGap);
 
+		virtual std::string ClassName() const { return "GuiSlider"; }
+
 		virtual	void SetSize(utils::Size2d size) override;
 		virtual bool HitTest(utils::Position2d pos) override;
 		virtual void Draw(base::DrawContext& ctx) override;
