@@ -270,6 +270,16 @@ void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 	}
 }
 
+unsigned int Loop::LoopChannel() const
+{
+	return _loopParams.Channel;
+}
+
+void Loop::SetLoopChannel(unsigned int channel)
+{
+	_loopParams.Channel = channel;
+}
+
 unsigned int Loop::InputChannel() const
 {
 	return _mixer->InputChannel();

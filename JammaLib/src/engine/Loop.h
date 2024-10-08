@@ -158,6 +158,8 @@ namespace engine
 			unsigned int channel,
 			unsigned int delaySamps,
 			unsigned int numSamps);
+		unsigned int LoopChannel() const;
+		void SetLoopChannel(unsigned int channel);
 		unsigned int InputChannel() const;
 		void SetInputChannel(unsigned int channel);
 		std::string Id() const;
