@@ -393,7 +393,6 @@ void LoopTake::ArrangeLoops()
 	if (0 == numLoops)
 		return;
 
-	auto loopHeight = CalcLoopHeight(_sizeParams.Size.Height, numLoops);
 	utils::Size2d loopSize = { _sizeParams.Size.Width - (2 * _Gap.Width), _sizeParams.Size.Height - (2 * _Gap.Height) };
 
 	auto loopCount = 0u;
@@ -402,12 +401,12 @@ void LoopTake::ArrangeLoops()
 
 	for (auto& loop : _backLoops)
 	{
-		loop->SetPosition({ (int)_Gap.Width, (int)(_Gap.Height + (loopCount * loopHeight)) });
+		loop->SetPosition({ (int)_Gap.Width + ((int)loopSize.Width * (int)loop->LoopChannel()), (int)_Gap.Height});
 		loop->SetSize(loopSize);
 		loop->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		loop->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
 
-		std::cout << "[Arranging loop " << loop->Id() << "] Scale: " << 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << std::endl;
+		std::cout << "[Arranging loop " << loop->Id() << "] Scale: " << 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << ", Position: " << loop->Position().X << std::endl;
 
 		loopCount++;
 	}
