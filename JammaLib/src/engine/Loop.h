@@ -144,7 +144,7 @@ namespace engine
 			audio::BehaviourParams behaviour,
 			unsigned int channel);
 
-		virtual utils::Position2d Position() const override;
+		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void Draw3d(base::DrawContext& ctx) override;

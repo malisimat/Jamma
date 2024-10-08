@@ -122,6 +122,8 @@ namespace audio
 		AudioMixer(AudioMixerParams params);
 
 	public:
+		virtual std::string ClassName() const { return "AudioMixer"; }
+
 		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
 		virtual void InitReceivers() override;
 		virtual void SetSize(utils::Size2d size) override;
