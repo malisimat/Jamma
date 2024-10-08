@@ -464,9 +464,12 @@ void APIENTRY Window::MessageCallback(GLenum source,
 	const GLchar* message,
 	const void* userParam)
 {
-	fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
-		(type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""),
-		type, severity, message);
+	if ((131185 != id) || (33361 != type))
+	{
+		fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
+			(type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""),
+			type, severity, message);
+	}
 }
 
 Size2d Window::AdjustSize(Size2d size, DWORD style)
