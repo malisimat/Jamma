@@ -215,7 +215,7 @@ bool GuiElement::HitTest(Position2d localPos)
 {
 	for (auto& child : _children)
 	{
-		if (child->HitTest(localPos))
+		if (child->HitTest(child->ParentToLocal(localPos)))
 			return true;
 	}
 

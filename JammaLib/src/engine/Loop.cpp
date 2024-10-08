@@ -107,12 +107,6 @@ audio::AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
 	return mixerParams;
 }
 
-utils::Position2d Loop::Position() const
-{
-	auto pos = ModelPosition();
-	return { (int)round(pos.X), (int)round(pos.Y) };
-}
-
 void Loop::SetSize(utils::Size2d size)
 {
 	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams(), _loopParams.Channel);
