@@ -43,8 +43,8 @@ Loop::Loop(LoopParams loopParams,
 	vuParams.Size = { 12, 24 };
 	vuParams.ModelScale = 1.0f;
 	vuParams.ModelTexture = "blue";
-	vuParams.ModelShader = "vu"; // TODO: define vu shader
-	vuParams.LedHeight = 1.5f;
+	vuParams.ModelShader = "vu";
+	vuParams.LedHeight = 1.0f;
 	_vu = std::make_shared<VU>(vuParams);
 
 	_children.push_back(_model);
@@ -116,7 +116,8 @@ void Loop::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 }
 
-void Loop::Draw3d(DrawContext& ctx)
+void Loop::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
@@ -136,7 +137,7 @@ void Loop::Draw3d(DrawContext& ctx)
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale + _mixer->Level(), scale)));
 	
 	for (auto& child : _children)
-		child->Draw3d(ctx);
+		child->Draw3d(ctx, 1);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();

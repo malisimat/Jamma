@@ -122,7 +122,7 @@ namespace engine
 			std::wstring dir);
 		
 		virtual void Draw(base::DrawContext& ctx) override;
-		virtual void Draw3d(base::DrawContext& ctx) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 
 		virtual void SetSize(utils::Size2d size) override
 		{

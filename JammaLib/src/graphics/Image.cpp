@@ -55,7 +55,8 @@ void Image::Draw(DrawContext& ctx)
 	glCtx.PopMvp();
 }
 
-void Image::Draw3d(DrawContext& ctx)
+void Image::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
 }
 

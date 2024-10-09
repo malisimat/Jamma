@@ -115,7 +115,8 @@ void Scene::Draw(DrawContext& ctx)
 	glCtx.PopMvp();
 }
 
-void Scene::Draw3d(DrawContext& ctx)
+void Scene::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
 	glEnable(GL_DEPTH_TEST);
 
@@ -125,7 +126,7 @@ void Scene::Draw3d(DrawContext& ctx)
 	glCtx.PushMvp(_viewProj);
 
 	for (auto& station : _stations)
-		station->Draw3d(ctx);
+		station->Draw3d(ctx, 1);
 
 	glCtx.PopMvp();
 }

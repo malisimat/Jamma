@@ -24,13 +24,14 @@ LoopModel::~LoopModel()
 {
 }
 
-void LoopModel::Draw3d(DrawContext& ctx)
+void LoopModel::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
 
-	GuiModel::Draw3d(glCtx);
+	GuiModel::Draw3d(glCtx, 1);
 
 	glCtx.PopMvp();
 }

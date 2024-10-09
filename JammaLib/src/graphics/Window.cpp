@@ -339,7 +339,7 @@ void Window::Render()
 	_drawContext.SetSize(_config.Size);
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
-	_scene.Draw3d(_drawContext);
+	_scene.Draw3d(_drawContext, 1);
 	_scene.Draw(_drawContext);
 }
 

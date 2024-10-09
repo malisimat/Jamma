@@ -18,7 +18,8 @@ GuiModel::GuiModel(GuiModelParams params) :
 {
 }
 
-void GuiModel::Draw3d(DrawContext& ctx)
+void GuiModel::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = ModelPosition();
@@ -40,14 +41,17 @@ void GuiModel::Draw3d(DrawContext& ctx)
 	glBindVertexArray(_vertexArray);
 
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
-	glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
+	if (numInstances > 1)
+		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
+	else
+		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glBindVertexArray(0);
 	glUseProgram(0);
 
 	for (auto& child : _children)
-		child->Draw3d(ctx);
+		child->Draw3d(ctx, 1);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();

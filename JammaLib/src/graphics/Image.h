@@ -69,7 +69,7 @@ namespace graphics
 	public:
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(base::DrawContext& ctx) override;
-		virtual void Draw3d(base::DrawContext& ctx) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

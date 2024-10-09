@@ -42,22 +42,23 @@ namespace engine
 		VU& operator=(const VU&) = delete;
 
 	public:
-		void Draw3d(base::DrawContext& ctx) override;
+		void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 
 		double Value() const;
 		void SetValue(double value, unsigned int numUpdates);
 		void UpdateModel(float radius);
 
 	protected:
-		static unsigned int NumLeds(unsigned int vuHeight, double ledHeight);
+		static unsigned int TotalNumLeds(unsigned int vuHeight, double ledHeight);
+		static unsigned int CurrentNumLeds(double value, unsigned int maxLeds);
 		static std::tuple<std::vector<float>, std::vector<float>>
-			CalcLedGeometry(unsigned int led,
-				float radius,
+			CalcLedGeometry(float radius,
 				unsigned int height,
 				float ledHeight);
 
 	protected:
-		static const float _LedGap;
+		static const float _LedDy;
+		static const double _MaxValue;
 
 		audio::FallingValue _value;
 		VuParams _vuParams;

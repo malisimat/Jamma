@@ -147,7 +147,7 @@ namespace engine
 		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
-		virtual void Draw3d(base::DrawContext& ctx) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		inline virtual int OnWrite(float samp, int indexOffset) override;
