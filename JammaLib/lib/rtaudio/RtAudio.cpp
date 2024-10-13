@@ -2836,8 +2836,8 @@ RtAudio::DeviceInfo RtApiAsio :: getDeviceInfo( unsigned int device )
     return devices_[ device ];
   }
 
-  char driverName[32];
-  ASIOError result = drivers.asioGetDriverName( (int) device, driverName, 32 );
+  char driverName[128];
+  ASIOError result = drivers.asioGetDriverName( (int) device, driverName, 128 );
   if ( result != ASE_OK ) {
     errorStream_ << "RtApiAsio::getDeviceInfo: unable to get driver name (" << getAsioErrorString( result ) << ").";
     errorText_ = errorStream_.str();
@@ -2956,8 +2956,8 @@ bool RtApiAsio :: probeDeviceOpen( unsigned int device, StreamMode mode, unsigne
     return FAILURE;
   }
 
-  char driverName[32];
-  ASIOError result = drivers.asioGetDriverName( (int) device, driverName, 32 );
+  char driverName[128];
+  ASIOError result = drivers.asioGetDriverName( (int) device, driverName, 128 );
   if ( result != ASE_OK ) {
     errorStream_ << "RtApiAsio::probeDeviceOpen: unable to get driver name (" << getAsioErrorString( result ) << ").";
     errorText_ = errorStream_.str();
