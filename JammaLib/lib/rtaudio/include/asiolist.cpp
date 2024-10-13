@@ -261,7 +261,7 @@ LONG AsioDriverList::asioGetDriverName (int drvID,char *drvname,int drvnamesize)
 
 	if ((lpdrv = getDrvStruct(drvID,lpdrvlist)) != 0) {
 		if (strlen(lpdrv->drvname) < (unsigned int)drvnamesize) {
-			strcpy_s(drvname, sizeof drvname, lpdrv->drvname);
+			strcpy_s(drvname, drvnamesize, lpdrv->drvname);
 		}
 		else {
 			memcpy(drvname,lpdrv->drvname,drvnamesize-4);
