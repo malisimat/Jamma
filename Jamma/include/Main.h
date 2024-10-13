@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////
 //
-// Copyright(c) 2018-2019 Matt Jones
+// Copyright(c) 2018-2024 Matt Jones
 // Subject to the MIT license, see LICENSE file.
 //
 ///////////////////////////////////////////////////////////
@@ -13,4 +13,5 @@
 
 #include <SDKDDKVer.h>
 #define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers
+#define NOMINMAX
 #include <windows.h>

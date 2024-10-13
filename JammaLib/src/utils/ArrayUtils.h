@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////
 //
-// Copyright(c) 2018-2019 Matt Jones
+// Copyright(c) 2018-2024 Matt Jones
 // Subject to the MIT license, see LICENSE file.
 //
 ///////////////////////////////////////////////////////////
@@ -79,7 +79,6 @@ namespace utils
 		i1 = i1 > 0 ? i1 : 0;
 		i1 = i1 < arrSize ? i1 : arrSize;
 		i2 = i2 < arrSize ? i2 : arrSize;
-		i2 = std::min(i2, arrSize);
 
 		if (i2 <= i1)
 			return T();
