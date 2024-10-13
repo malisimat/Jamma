@@ -21,7 +21,7 @@ public:
 	void Fill(BufferBank& bank)
 	{
 		auto numSamps = (unsigned int)Samples.size();
-		bank.SetLength(numSamps, true);
+		bank.SetLength(numSamps);
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
