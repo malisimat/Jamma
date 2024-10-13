@@ -8,7 +8,8 @@ using graphics::GlDrawContext;
 using gui::GuiModel;
 using utils::Size2d;
 
-const float VU::_LedGap = 0.4f;
+const float VU::_LedDy = 1.5f;
+const double VU::_MaxValue = 0.3;
 
 VU::VU(VuParams params) :
 	GuiModel(params),
@@ -21,16 +22,23 @@ VU::~VU()
 {
 }
 
-void VU::Draw3d(DrawContext& ctx)
+void VU::Draw3d(DrawContext& ctx,
+	unsigned int numInstances)
 {
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-
 	auto val = _value.Current();
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	auto totalNumLeds = TotalNumLeds(_sizeParams.Size.Height,
+		_vuParams.LedHeight);
+	auto numLeds = CurrentNumLeds(val, totalNumLeds);
+
 	glCtx.SetUniform("Value",(float)val);
+	glCtx.SetUniform("DX", 0.0f);
+	glCtx.SetUniform("DY", _LedDy);
+	glCtx.SetUniform("NumInstances", totalNumLeds);
 
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f + 0.2f * val, 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f + 0.1f * val, 1.0f)));
 
-	GuiModel::Draw3d(glCtx);
+	GuiModel::Draw3d(glCtx, numLeds);
 
 	glCtx.PopMvp();
 }
@@ -51,39 +59,33 @@ void VU::SetValue(double value, unsigned int numUpdates)
 
 void VU::UpdateModel(float radius)
 {
-	std::vector<float> verts;
-	std::vector<float> uvs;
+	auto [ledVerts, ledUvs] =
+		CalcLedGeometry(radius,
+			_sizeParams.Size.Height,
+			_vuParams.LedHeight);
 
-	auto numLeds = NumLeds(_sizeParams.Size.Height,
-		_vuParams.LedHeight);
-
-	for (auto led = 0u; led < numLeds; led++)
-	{
-		auto [ledVerts, ledUvs] =
-			CalcLedGeometry(led,
-				radius,
-				_sizeParams.Size.Height,
-				_vuParams.LedHeight);
-
-		for (auto vert : ledVerts)
-			verts.push_back(vert);
-
-		for (auto uv : ledUvs)
-			uvs.push_back(uv);
-	}
-
-	SetGeometry(verts, uvs);
+	SetGeometry(ledVerts, ledUvs);
 }
 
-unsigned int VU::NumLeds(unsigned int vuHeight,
+unsigned int VU::TotalNumLeds(unsigned int vuHeight,
 	double ledHeight)
 {
 	return (unsigned int)std::ceil(((double)vuHeight) / ledHeight);
 }
 
+unsigned int VU::CurrentNumLeds(double value, unsigned int totalNumLeds)
+{
+	auto frac = value / _MaxValue;
+	if (frac < 0)
+		frac = 0.0;
+	else if (frac > 1)
+		frac = 1.0;
+
+	return (unsigned int)std::ceil(frac * (double)totalNumLeds);
+}
+
 std::tuple<std::vector<float>, std::vector<float>>
-VU::CalcLedGeometry(unsigned int led,
-	float radius,
+VU::CalcLedGeometry(float radius,
 	unsigned int height,
 	float ledHeight)
 {
@@ -102,8 +104,8 @@ VU::CalcLedGeometry(unsigned int led,
 	auto xInner2 = sin(angle2) * (radius - radialThickness);
 	auto xOuter1 = sin(angle1) * (radius + radialThickness);
 	auto xOuter2 = sin(angle2) * (radius + radialThickness);
-	auto yMin = (led * ledHeight) + (_LedGap * 0.5f);
-	auto yMax = ((led + 1) * ledHeight) - (_LedGap * 0.5f);
+	auto yMin = (ledHeight * 0.5f);
+	auto yMax = -(ledHeight * 0.5f);
 	auto yMid = (yMin + yMax) * 0.5f;
 	auto zInner1 = cos(angle1) * (radius - radialThickness);
 	auto zInner2 = cos(angle2) * (radius - radialThickness);

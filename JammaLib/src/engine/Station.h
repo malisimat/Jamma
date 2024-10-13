@@ -59,7 +59,10 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
-		virtual void OnTick(Time curTime, unsigned int samps, std::optional<io::UserConfig> cfg) override;
+		virtual void OnTick(Time curTime,
+			unsigned int samps,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params) override;
 		
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);

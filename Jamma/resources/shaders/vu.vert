@@ -4,11 +4,13 @@ layout(location = 0) in vec3 PositionIN;
 layout(location = 1) in vec2 UvIN;
 
 out vec2 UV;
-out float LedAlpha;
 out vec3 Rgb;
 
 uniform mat4 MVP;
 uniform float Value;
+uniform float DX;
+uniform float DY;
+uniform int NumInstances;
 
 vec3 hsv2rgb(vec3 c)
 {
@@ -19,8 +21,11 @@ vec3 hsv2rgb(vec3 c)
 
 void main()
 {
-    gl_Position =  MVP * vec4(PositionIN,1);
+    vec2 offset = vec2(DX * float(gl_InstanceID), DY * float(gl_InstanceID));
+    vec4 pos = vec4(PositionIN.x + offset.x, PositionIN.y + offset.y, PositionIN.z, 1);
+    gl_Position = MVP * pos;
+
     UV = UvIN;
-	LedAlpha = sign(Value - UvIN.y) * .5 + .5;
-	Rgb = hsv2rgb(vec3(1.4 - (UvIN.y * 0.4), 1., 1.));
+    float h = gl_InstanceID / float(NumInstances-1);
+	Rgb = hsv2rgb(vec3(0.3 + (h * 0.016), 1., 1.));
 }

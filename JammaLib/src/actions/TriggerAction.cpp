@@ -5,7 +5,7 @@ using namespace actions;
 TriggerAction::TriggerAction() :
 	ActionType(TriggerActionType::TRIGGER_REC_START),
 	TargetId(""),
-	OverbudTargetId(""),
+	OverdubTargetId(""),
 	SampleCount(0),
 	InputChannels({})
 {

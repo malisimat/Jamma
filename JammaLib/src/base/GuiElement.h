@@ -70,7 +70,7 @@ namespace base
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(DrawContext& ctx) override;
-		virtual void Draw3d(DrawContext& ctx) override;
+		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances) override;
 		virtual bool HitTest(utils::Position2d localPos);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;

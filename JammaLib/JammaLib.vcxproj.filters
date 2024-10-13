@@ -344,23 +344,23 @@
     <ClInclude Include="src\io\UserConfig.h">
       <Filter>src\io</Filter>
     </ClInclude>
-    <ClInclude Include="src\utils\MathUtils.h">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="include\Constants.h">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\VU.h">
-      <Filter>include</Filter>
+      <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\LoopModel.h">
-      <Filter>include</Filter>
+      <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\FallingValue.h">
-      <Filter>include</Filter>
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils\MathUtils.h">
+      <Filter>src\utils</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\BufferBank.h">
-      <Filter>include</Filter>
+      <Filter>src\audio</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -529,20 +529,20 @@
     <ClCompile Include="src\io\TextReadWriter.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
-    <ClCompile Include="src\utils\MathUtils.cpp">
-      <Filter>src</Filter>
-    </ClCompile>
     <ClCompile Include="src\engine\VU.cpp">
-      <Filter>src</Filter>
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\LoopModel.cpp">
-      <Filter>src</Filter>
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\MathUtils.cpp">
+      <Filter>src\utils</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\FallingValue.cpp">
-      <Filter>src</Filter>
+      <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\BufferBank.cpp">
-      <Filter>src</Filter>
+      <Filter>src\audio</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

@@ -230,7 +230,10 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		virtual void OnTick(Time curTime, unsigned int samps, std::optional<io::UserConfig> cfg) override;
+		virtual void OnTick(Time curTime,
+			unsigned int samps,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params) override;
 		virtual void Draw(base::DrawContext& ctx) override;
 
 		void AddBinding(DualBinding activate, DualBinding ditch);
@@ -258,18 +261,19 @@ namespace engine
 			int keyState);
 		bool StateMachine(bool isDown,
 			bool isActivate,
-			std::optional<io::UserConfig> cfg);
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
 
 		// Only call from state machine
-		void StartRecording(std::optional<io::UserConfig> cfg);
-		void EndRecording(std::optional<io::UserConfig> cfg);
-		void SetDitchDown(std::optional<io::UserConfig> cfg);
-		void Ditch(std::optional<io::UserConfig> cfg);
-		void StartOverdub(std::optional<io::UserConfig> cfg);
-		void EndOverdub(std::optional<io::UserConfig> cfg);
-		void DitchOverdub(std::optional<io::UserConfig> cfg);
-		void StartPunchIn(std::optional<io::UserConfig> cfg);
-		void EndPunchIn(std::optional<io::UserConfig> cfg);
+		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void EndRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void SetDitchDown(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void Ditch(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void StartOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void EndOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void DitchOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void StartPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 
 	private:
 		double _debounceTimeMs;

@@ -65,10 +65,12 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Json::JsonPart json)
 {
 	std::string name;
-	unsigned int bufSize = 0;
-	unsigned int latency = 0;
-	unsigned int numChannelsIn = 0;
-	unsigned int numChannelsOut = 0;
+	unsigned int sampleRate = 44100;
+	unsigned int bufSize = 512;
+	unsigned int latency = 512;
+	unsigned int numBuffers = 4;
+	unsigned int numChannelsIn = 2;
+	unsigned int numChannelsOut = 2;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -77,11 +79,32 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 			name = std::get<std::string>(json.KeyValues["name"]);
 	}
 
+	iter = json.KeyValues.find("samplerate");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["samplerate"].index() == 2)
+			sampleRate = std::get<unsigned long>(json.KeyValues["samplerate"]);
+	}
+
 	iter = json.KeyValues.find("bufsize");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["bufsize"].index() == 2)
 			bufSize = std::get<unsigned long>(json.KeyValues["bufsize"]);
+	}
+
+	iter = json.KeyValues.find("numbuffers");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["numbuffers"].index() == 2)
+			numBuffers = std::get<unsigned long>(json.KeyValues["numbuffers"]);
+	}
+
+	iter = json.KeyValues.find("latency");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["latency"].index() == 2)
+			latency = std::get<unsigned long>(json.KeyValues["latency"]);
 	}
 
 	iter = json.KeyValues.find("numchannelsin");
@@ -98,23 +121,12 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 			numChannelsOut = std::get<unsigned long>(json.KeyValues["numchannelsout"]);
 	}
 
-	if ((0 == bufSize) || name.empty())
-		return std::nullopt;
-
-	if ((0 == numChannelsIn) && (0 == numChannelsOut))
-		return std::nullopt;
-
-	iter = json.KeyValues.find("latency");
-	if (iter != json.KeyValues.end())
-	{
-		if (json.KeyValues["latency"].index() == 2)
-			latency = std::get<unsigned long>(json.KeyValues["latency"]);
-	}
-
 	AudioSettings audio;
 	audio.Name = name;
+	audio.SampleRate = sampleRate;
 	audio.BufSize = bufSize;
 	audio.Latency = latency;
+	audio.NumBuffers = numBuffers;
 	audio.NumChannelsIn = numChannelsIn;
 	audio.NumChannelsOut = numChannelsOut;
 	return audio;
@@ -159,4 +171,36 @@ std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson
 	trig.PreDelay = preDelay;
 	trig.DebounceSamps = debounceSamps;
 	return trig;
+}
+
+
+
+// How much to (further) delay input signal from ADC, in samples
+unsigned int UserConfig::AdcBufferDelay(unsigned int latency) const {
+	return latency > Trigger.PreDelay + constants::MaxLoopFadeSamps ?
+		0 :
+		Trigger.PreDelay + constants::MaxLoopFadeSamps - latency;
+}
+
+// How long to continue recording after trigger to end loop recording, in samples
+unsigned int UserConfig::EndRecordingSamps(int error) const {
+	if (error > 0)
+	{
+		if (error > (int)constants::MaxLoopFadeSamps)
+			return 0;
+	}
+
+	return constants::MaxLoopFadeSamps - error;
+}
+
+// The index at which to start playing a loop after trigger to end recording,
+// in samples (includes intro, so zero is first index of intro, not the loop)
+unsigned long UserConfig::LoopPlayPos(int error,
+	unsigned long loopLength,
+	unsigned int latency) const {
+	auto loopSamp = utils::ModNeg(
+		((long)Trigger.PreDelay) - (long)(constants::MaxLoopFadeSamps - latency),
+		loopLength);
+
+	return loopSamp;
 }

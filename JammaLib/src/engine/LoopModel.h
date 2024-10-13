@@ -41,7 +41,7 @@ namespace engine
 		LoopModel& operator=(const LoopModel&) = delete;
 
 	public:
-		void Draw3d(base::DrawContext& ctx) override;
+		void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void UpdateModel(const audio::BufferBank& buffer,
