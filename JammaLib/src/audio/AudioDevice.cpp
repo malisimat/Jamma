@@ -2,18 +2,27 @@
 
 using namespace audio;
 
+
+void AudioStreamParams::PrintParams()
+{
+	std::cout << "Name : " << Name << std::endl; // The name of the device used for the stream
+	std::cout << "SampleRate : " << SampleRate << std::endl; // The actual sample rate of the stream, in Hz
+	std::cout << "NumBuffers : " << NumBuffers << std::endl; // The buffer size used by the device
+	std::cout << "BufSize : " << BufSize << std::endl; // The buffer size used by the device
+	std::cout << "Latency : " << Latency << std::endl; // The total input+output latency reported by the device, in samples
+	std::cout << "NumInputChannels : " << NumInputChannels << std::endl; // The number of input channels used in the stream
+	std::cout << "NumOutputChannels : " << NumOutputChannels << std::endl; // The number of output channels used in the stream
+}
+
 AudioDevice::AudioDevice() :
-	_inDeviceInfo(RtAudio::DeviceInfo()),
-	_outDeviceInfo(RtAudio::DeviceInfo()),
+	_audioStreamParams(),
 	_stream(std::unique_ptr<RtAudio>())
 {
 }
 
-AudioDevice::AudioDevice(RtAudio::DeviceInfo inDeviceInfo,
-	RtAudio::DeviceInfo outDeviceInfo,
+AudioDevice::AudioDevice(AudioStreamParams audioStreamParams,
 	std::unique_ptr<RtAudio> stream) :
-	_inDeviceInfo(inDeviceInfo),
-	_outDeviceInfo(outDeviceInfo),
+	_audioStreamParams(audioStreamParams),
 	_stream(std::move(stream))
 {
 }
@@ -34,7 +43,10 @@ void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 void AudioDevice::Start()
 {
 	if (_stream)
+	{
 		_stream->startStream();
+		_audioStreamParams.Latency = (unsigned int)_stream->getStreamLatency();
+	}
 }
 
 void AudioDevice::Stop()
@@ -46,34 +58,28 @@ void AudioDevice::Stop()
 		_stream->closeStream();
 }
 
-RtAudio::DeviceInfo AudioDevice::GetInputStreamInfo()
+AudioStreamParams AudioDevice::GetAudioStreamParams()
 {
-	return _inDeviceInfo;
-}
-
-RtAudio::DeviceInfo AudioDevice::GetOutputStreamInfo()
-{
-	return _outDeviceInfo;
+	return _audioStreamParams;
 }
 
 std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	std::function<int(void*,void*,unsigned int,double,RtAudioStreamStatus,void*)> onAudio,
 	std::function<void(RtAudioError::Type,const std::string&)> onError,
+	io::UserConfig::AudioSettings audioSettings,
 	void* AudioSink)
 {
 	std::unique_ptr<RtAudio> rtAudio;
 
 	try
 	{
-		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_DS);
+		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_WASAPI);
 	}
 	catch (RtAudioError& err)
 	{
-		std::cout << "Error instantiating DirectSound API: " << err.getMessage() << std::endl;
+		std::cout << "Error instantiating WASAPI API: " << err.getMessage() << std::endl;
 		return std::nullopt;
 	}
-
-	unsigned int bufFrames = 512;
 
 	auto deviceCount = rtAudio->getDeviceCount();
 	auto inDeviceNum = rtAudio->getDefaultInputDevice();
@@ -84,18 +90,26 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	if ((inDev.inputChannels == 0) && (outDev.outputChannels == 0))
 		return std::nullopt;
 
+	// Correct the audioSettings so they work
+	audioSettings.NumChannelsIn = std::min(inDev.inputChannels, audioSettings.NumChannelsIn);
+	audioSettings.NumChannelsOut = std::min(outDev.outputChannels, audioSettings.NumChannelsOut);
+	audioSettings.SampleRate = FindClosest(inDev.sampleRates, audioSettings.SampleRate);
+
 	RtAudio::StreamParameters inParams;
 	inParams.deviceId = inDeviceNum;
 	inParams.firstChannel = 0;
-	inParams.nChannels = std::min(inDev.inputChannels, 2u);
+	inParams.nChannels = audioSettings.NumChannelsIn;
+
 	RtAudio::StreamParameters outParams;
 	outParams.deviceId = outDeviceNum;
 	outParams.firstChannel = 0;
-	outParams.nChannels = std::min(outDev.outputChannels, 2u);
+	outParams.nChannels = audioSettings.NumChannelsOut;
 
 	RtAudio::StreamOptions streamOptions;
-	streamOptions.numberOfBuffers = 4;
-	streamOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
+	streamOptions.numberOfBuffers = audioSettings.NumBuffers;
+	//streamOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
+
+	AudioStreamParams audioStreamParams;
 
 	std::cout << "Opening audio stream" << std::endl;
 	std::cout << "[Input Device] " << inParams.deviceId << " : " << inParams.nChannels << "ch" << std::endl;
@@ -106,8 +120,8 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 		rtAudio->openStream(outParams.nChannels > 0 ? &outParams : nullptr,
 			inParams.nChannels > 0 ? &inParams : nullptr,
 			RTAUDIO_FLOAT32,
-			44100,
-			&bufFrames,
+			audioSettings.SampleRate,
+			&audioSettings.BufSize,
 			*onAudio.target<RtAudioCallback>(),
 			(void*)AudioSink,
 			&streamOptions,
@@ -123,5 +137,32 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	if (!rtAudio->isStreamOpen())
 		return std::nullopt;
 
-	return std::make_unique<AudioDevice>(inDev, outDev, std::move(rtAudio));
+	audioSettings.NumBuffers = streamOptions.numberOfBuffers;
+	audioStreamParams.Name = streamOptions.streamName;
+	audioStreamParams.SampleRate = audioSettings.SampleRate;
+	audioStreamParams.BufSize = audioSettings.BufSize;
+	audioStreamParams.NumBuffers = streamOptions.numberOfBuffers;
+	audioStreamParams.Latency = (unsigned int) rtAudio->getStreamLatency();
+	audioStreamParams.NumInputChannels = inParams.nChannels;
+	audioStreamParams.NumOutputChannels = outParams.nChannels;
+
+	return std::make_unique<AudioDevice>(audioStreamParams, std::move(rtAudio));
+}
+
+unsigned int AudioDevice::FindClosest(const std::vector<unsigned int>& vec,
+	unsigned int target)
+{
+	if (vec.empty()) {
+		throw std::invalid_argument("The vector is empty");
+	}
+
+	unsigned int closest = vec[0];
+	for (unsigned int num : vec) {
+		if (std::abs(static_cast<int>(num) - static_cast<int>(target)) <
+			std::abs(static_cast<int>(closest) - static_cast<int>(target))) {
+			closest = num;
+		}
+	}
+
+	return closest;
 }

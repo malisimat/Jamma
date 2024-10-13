@@ -169,8 +169,20 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 
 		auto cfg = action.GetUserConfig();
+		auto streamParams = action.GetAudioParams();
+		auto latency = streamParams.has_value() ?
+			streamParams.value().Latency :
+			0u;
+
+		if (0u == latency)
+		{
+			latency = cfg.has_value() ?
+				cfg.value().Audio.Latency :
+				0u;
+		}
+
 		auto playPos = cfg.has_value() ?
-			cfg.value().LoopPlayPos(errorSamps, loopLength) :
+			cfg.value().LoopPlayPos(errorSamps, loopLength, latency) :
 			0;
 		auto endRecordSamps = cfg.has_value() ?
 			cfg.value().EndRecordingSamps(errorSamps) :
@@ -207,11 +219,14 @@ ActionResult Station::OnAction(TriggerAction action)
 	return res;
 }
 
-void Station::OnTick(Time curTime, unsigned int samps, std::optional<io::UserConfig> cfg)
+void Station::OnTick(Time curTime,
+	unsigned int samps,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	for (auto& trig : _triggers)
 	{
-		trig->OnTick(curTime, samps, cfg);
+		trig->OnTick(curTime, samps, cfg, params);
 	}
 }
 

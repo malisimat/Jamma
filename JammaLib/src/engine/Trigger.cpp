@@ -111,7 +111,10 @@ ActionResult Trigger::OnAction(KeyAction action)
 	return res;
 }
 
-void Trigger::OnTick(Time curTime, unsigned int samps, std::optional<io::UserConfig> cfg)
+void Trigger::OnTick(Time curTime,
+	unsigned int samps,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	if ((TriggerState::TRIGSTATE_DEFAULT != _state) &&
 		(TriggerState::TRIGSTATE_DITCHDOWN != _state))
@@ -131,7 +134,7 @@ void Trigger::OnTick(Time curTime, unsigned int samps, std::optional<io::UserCon
 			_lastActivateTime = curTime;
 			_isLastActivateDown = _isLastActivateDownRaw;
 
-			StateMachine(_isLastActivateDownRaw, true, cfg);
+			StateMachine(_isLastActivateDownRaw, true, cfg, params);
 		}
 	}
 	
@@ -144,7 +147,7 @@ void Trigger::OnTick(Time curTime, unsigned int samps, std::optional<io::UserCon
 			_lastDitchTime = curTime;
 			_isLastDitchDown = _isLastDitchDownRaw;
 
-			StateMachine(_isLastDitchDownRaw, false, cfg);
+			StateMachine(_isLastDitchDownRaw, false, cfg, params);
 		}
 	}
 }
@@ -353,10 +356,10 @@ bool Trigger::TryChangeState(DualBinding& binding,
 	switch (trigResult)
 	{
 	case DualBinding::MATCH_DOWN:
-		StateMachine(true, isActivate, action.GetUserConfig());
+		StateMachine(true, isActivate, action.GetUserConfig(), action.GetAudioParams());
 		return true;
 	case DualBinding::MATCH_RELEASE:
-		StateMachine(false, isActivate, action.GetUserConfig());
+		StateMachine(false, isActivate, action.GetUserConfig(), action.GetAudioParams());
 		return true;
 	}
 
@@ -365,7 +368,8 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 bool Trigger::StateMachine(bool isDown,
 	bool isActivate,
-	std::optional<io::UserConfig> cfg)
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	bool changedState = false;
 
@@ -376,12 +380,12 @@ bool Trigger::StateMachine(bool isDown,
 		{
 			if (isActivate)
 			{
-				StartRecording(cfg);
+				StartRecording(cfg, params);
 				changedState = true;
 			}
 			else
 			{
-				SetDitchDown(cfg);
+				SetDitchDown(cfg, params);
 				changedState = true;
 			}
 		}
@@ -389,49 +393,49 @@ bool Trigger::StateMachine(bool isDown,
 	case TRIGSTATE_RECORDING:
 		if (isActivate && isDown)
 		{
-			EndRecording(cfg);
+			EndRecording(cfg, params);
 			changedState = true;
 		}
 		else if (!isActivate && isDown)
 		{
-			Ditch(cfg);
+			Ditch(cfg, params);
 			changedState = true;
 		}
 		break;
 	case TRIGSTATE_DITCHDOWN:
 		if (isActivate && isDown)
 		{
-			StartOverdub(cfg);
+			StartOverdub(cfg, params);
 			changedState = true;
 		}
 		else if (!isActivate && !isDown)
 		{
-			Ditch(cfg);
+			Ditch(cfg, params);
 			changedState = true;
 		}
 		break;
 	case TRIGSTATE_OVERDUBBING:
 		if (isActivate && isDown)
 		{
-			EndOverdub(cfg);
+			EndOverdub(cfg, params);
 			changedState = true;
 		}
 		else if (!isActivate && isDown)
 		{
-			StartPunchIn(cfg);
+			StartPunchIn(cfg, params);
 			changedState = true;
 		}
 		break;
 	case TRIGSTATE_PUNCHEDIN:
 		if (isActivate && isDown)
 		{
-			DitchOverdub(cfg);
+			DitchOverdub(cfg, params);
 			changedState = true;
 		}
 		if (!isActivate && !isDown)
 		{
 			// End punch-in but maintain overdub mode (release)
-			EndPunchIn(cfg);
+			EndPunchIn(cfg, params);
 			changedState = true;
 		}
 		break;
@@ -440,7 +444,8 @@ bool Trigger::StateMachine(bool isDown,
 	return changedState;
 }
 
-void Trigger::StartRecording(std::optional<io::UserConfig> cfg)
+void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_RECORDING;
 	_recordSampCount = 0;
@@ -454,6 +459,9 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		auto res = _receiver->OnAction(trigAction);
 
 		// TODO: History for undo
@@ -466,7 +474,8 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg)
 	}
 }
 
-void Trigger::EndRecording(std::optional<io::UserConfig> cfg)
+void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -482,18 +491,23 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		// TODO: History for undo
 
 		_receiver->OnAction(trigAction);
 	}
 }
 
-void Trigger::SetDitchDown(std::optional<io::UserConfig> cfg)
+void Trigger::SetDitchDown(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DITCHDOWN;
 }
 
-void Trigger::Ditch(std::optional<io::UserConfig> cfg)
+void Trigger::Ditch(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
 	auto popBack = !_lastLoopTakes.empty();
@@ -510,6 +524,9 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		_receiver->OnAction(trigAction);
 	}
 
@@ -517,7 +534,8 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg)
 		_lastLoopTakes.pop_back();
 }
 
-void Trigger::StartOverdub(std::optional<io::UserConfig> cfg)
+void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 	_recordSampCount = 0;
@@ -531,6 +549,9 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		auto res = _receiver->OnAction(trigAction);
 
 		if (res.IsEaten)
@@ -541,7 +562,8 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg)
 	}
 }
 
-void Trigger::EndOverdub(std::optional<io::UserConfig> cfg)
+void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -557,11 +579,15 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		_receiver->OnAction(trigAction);
 	}
 }
 
-void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg)
+void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -578,6 +604,9 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg)
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
 
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
+
 		_receiver->OnAction(trigAction);
 	}
 
@@ -585,7 +614,8 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg)
 		_lastLoopTakes.pop_back();
 }
 
-void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg)
+void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_PUNCHEDIN;
 
@@ -601,7 +631,8 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg)
 	}
 }
 
-void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg)
+void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
@@ -616,6 +647,9 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg)
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
+
+		if (params.has_value())
+			trigAction.SetAudioParams(params.value());
 
 		_receiver->OnAction(trigAction);
 	}

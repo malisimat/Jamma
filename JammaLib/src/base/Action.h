@@ -4,6 +4,7 @@
 #include <memory>
 #include "../utils/CommonTypes.h"
 #include "../engine/Timer.h"
+#include "../audio/AudioDevice.h"
 #include "../io/UserConfig.h"
 
 namespace base
@@ -27,8 +28,12 @@ namespace base
 		std::optional<io::UserConfig> GetUserConfig() const { return _userConfig; }
 		void SetUserConfig(io::UserConfig cfg) { _userConfig = cfg; }
 
+		std::optional<audio::AudioStreamParams> GetAudioParams() const { return _audioStreamParams; }
+		void SetAudioParams(audio::AudioStreamParams params) { _audioStreamParams = params; }
+
 	protected:
 		Time _actionTime;
 		std::optional<io::UserConfig> _userConfig;
+		std::optional< audio::AudioStreamParams> _audioStreamParams;
 	};
 }

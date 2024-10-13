@@ -265,11 +265,17 @@ ActionResult Scene::OnAction(KeyAction action)
 	return { false, "", ACTIONRESULT_DEFAULT };
 }
 
-void Scene::OnTick(Time curTime, unsigned int samps, std::optional<io::UserConfig> cfg)
+void Scene::OnTick(Time curTime,
+	unsigned int samps,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	for (auto& station : _stations)
 	{
-		station->OnTick(curTime, samps, _userConfig);
+		station->OnTick(curTime,
+			samps,
+			_userConfig,
+			_audioDevice->GetAudioStreamParams());
 	}
 }
 
@@ -310,23 +316,24 @@ void Scene::InitAudio()
 
 	auto dev = AudioDevice::Open(Scene::AudioCallback,
 		[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
+		_userConfig.Audio,
 		this);
 
 	if (dev.has_value())
 	{
 		_audioDevice = std::move(dev.value());
 
-		auto inParams = _audioDevice->GetInputStreamInfo();
-		auto outParams = _audioDevice->GetOutputStreamInfo();
-		
-		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(),
-				ChannelMixer::DefaultBufferSize,
-				inParams.inputChannels,
-				outParams.outputChannels}));
-
 		_audioCallbackCount = 0;
 		_audioDevice->Start();
+
+		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+		audioStreamParams.PrintParams();
+
+		_channelMixer->SetParams(ChannelMixerParams({
+				_userConfig.AdcBufferDelay(audioStreamParams.Latency),
+				ChannelMixer::DefaultBufferSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels }));
 	}
 }
 
@@ -383,10 +390,10 @@ void Scene::OnAudio(float* inBuf,
 {
 	if (nullptr != inBuf)
 	{
-		auto inDeviceInfo = nullptr == _audioDevice ?
-			RtAudio::DeviceInfo() : _audioDevice->GetInputStreamInfo();
-		_channelMixer->FromAdc(inBuf, inDeviceInfo.inputChannels, numSamps);
-		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(), numSamps);
+		auto audioStreamParams = nullptr == _audioDevice ?
+			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
+		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(audioStreamParams.Latency), numSamps);
 
 		for (auto& station : _stations)
 		{
@@ -401,9 +408,9 @@ void Scene::OnAudio(float* inBuf,
 
 	if (nullptr != outBuf)
 	{
-		auto outDeviceInfo = nullptr == _audioDevice ?
-			RtAudio::DeviceInfo() : _audioDevice->GetOutputStreamInfo();
-		std::fill(outBuf, outBuf + numSamps * outDeviceInfo.outputChannels, 0.0f);
+		auto audioStreamParams = nullptr == _audioDevice ?
+			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
 
 		for (auto& station : _stations)
 		{
@@ -411,7 +418,7 @@ void Scene::OnAudio(float* inBuf,
 			station->EndMultiPlay(numSamps);
 		}
 
-		_channelMixer->ToDac(outBuf, outDeviceInfo.outputChannels, numSamps);
+		_channelMixer->ToDac(outBuf, audioStreamParams.NumOutputChannels, numSamps);
 	}
 	else
 	{
@@ -424,7 +431,10 @@ void Scene::OnAudio(float* inBuf,
 	
 	_channelMixer->Sink()->EndMultiWrite(numSamps, true);
 
-	OnTick(Timer::GetTime(), numSamps, _userConfig);
+	OnTick(Timer::GetTime(),
+		numSamps,
+		_userConfig,
+		_audioDevice->GetAudioStreamParams());
 }
 
 bool Scene::OnUndo(std::shared_ptr<base::ActionUndo> undo)
