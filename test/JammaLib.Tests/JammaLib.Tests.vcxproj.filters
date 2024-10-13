@@ -2,48 +2,70 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="pch.cpp" />
-    <ClCompile Include="src\graphics\Window_Tests.cpp">
-      <Filter>src\graphics</Filter>
+    <ClCompile Include="src\audio\AudioBuffer_Tests.cpp">
+      <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiSlider_Tests.cpp">
-      <Filter>src\gui</Filter>
+    <ClCompile Include="src\audio\BufferBank_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\ChannelMixer_Tests.cpp">
+      <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiSlider_Tests.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\JamFile_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\Json_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\Loop_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\RigFile_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
     <ClCompile Include="src\engine\Trigger_Tests.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\UserConfig_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\Window_Tests.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
-    <ClCompile Include="src\audio\Loop_Tests.cpp" />
-    <ClCompile Include="src\audio\ChannelMixer_Tests.cpp" />
-    <ClCompile Include="src\io\JamFile_Tests.cpp" />
-    <ClCompile Include="src\io\Json_Tests.cpp" />
-    <ClCompile Include="src\io\RigFile_Tests.cpp" />
-    <ClCompile Include="src\io\UserConfig_Tests.cpp" />
-    <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">
-      <UniqueIdentifier>{b99c83ef-efcf-4283-a7d3-dde63a527bb2}</UniqueIdentifier>
+      <UniqueIdentifier>{cddfb5f7-c6d0-4fde-a1b5-046f4e7c852e}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\graphics">
-      <UniqueIdentifier>{886bae90-3ad7-4146-b07e-e26f7e5c322a}</UniqueIdentifier>
+      <UniqueIdentifier>{eb0caa34-213e-4b07-832f-eddba6f69ebf}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\utils">
-      <UniqueIdentifier>{c9136b91-b5f6-4cfd-8e17-3a1eebfd5ec5}</UniqueIdentifier>
+      <UniqueIdentifier>{d9f92f1a-cb4e-411c-8613-003f616ba0de}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\gui">
-      <UniqueIdentifier>{ea95c538-c3c3-445c-a4bc-8309ff729115}</UniqueIdentifier>
+      <UniqueIdentifier>{a4fe29be-cbad-4c04-a60f-0da54982f9a1}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\engine">
-      <UniqueIdentifier>{2cd22d39-9fc3-4e1a-b5b9-2182899b534e}</UniqueIdentifier>
+      <UniqueIdentifier>{ed08d834-448e-4c68-b01c-d2c667604059}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\audio">
+      <UniqueIdentifier>{c1a32882-7c0d-47e0-a209-59e76b901e83}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\io">
+      <UniqueIdentifier>{a4ba3b1e-e149-4a44-a69d-22c4b3d645b4}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
