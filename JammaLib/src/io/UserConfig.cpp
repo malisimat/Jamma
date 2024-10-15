@@ -65,8 +65,8 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Json::JsonPart json)
 {
 	std::string name;
-	unsigned int sampleRate = 44100;
-	unsigned int bufSize = 512;
+	unsigned int sampleRate = constants::DefaultSampleRate;
+	unsigned int bufSize = constants::DefaultBufferSizeSamps;
 	unsigned int latency = 512;
 	unsigned int numBuffers = 4;
 	unsigned int numChannelsIn = 2;
@@ -134,7 +134,7 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 
 std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json::JsonPart json)
 {
-	unsigned int fadeSamps = 3000;
+	unsigned int fadeSamps = constants::DefaultFadeSamps;
 
 	auto iter = json.KeyValues.find("fadeSamps");
 	if (iter != json.KeyValues.end())
@@ -150,8 +150,8 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 
 std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson(Json::JsonPart json)
 {
-	unsigned int preDelay = 0;
-	unsigned int debounceSamps = 280;
+	unsigned int preDelay = constants::DefaultPreDelaySamps;
+	unsigned int debounceSamps = constants::DefaultDebounceSamps;
 
 	auto iter = json.KeyValues.find("preDelay");
 	if (iter != json.KeyValues.end())
