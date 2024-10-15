@@ -428,8 +428,9 @@ double Loop::CalcDrawRadius(unsigned long loopLength)
 void Loop::UpdateLoopModel()
 {
 	auto length = STATE_RECORDING == _state ? _writeIndex : _loopLength;
+	auto offset = STATE_RECORDING == _state ? 0ul : constants::MaxLoopFadeSamps;
 
 	auto radius = (float)CalcDrawRadius(length);
-	_model->UpdateModel(_bufferBank, length, radius);
+	_model->UpdateModel(_bufferBank, length, offset, radius);
 	_vu->UpdateModel(radius);
 }

@@ -46,6 +46,7 @@ namespace engine
 		void SetLoopIndexFrac(double frac);
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
+			unsigned long offset,
 			float radius);
 
 	protected:
@@ -56,6 +57,7 @@ namespace engine
 			CalcGrainGeometry(const audio::BufferBank& buffer,
 				unsigned int grain,
 				unsigned int numGrains,
+				unsigned long offset,
 				float lastYMin,
 				float lastYMax,
 				float radius);

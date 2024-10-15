@@ -66,6 +66,7 @@ unsigned int LoopModel::CurrentNumLeds(unsigned int vuHeight,
 
 void LoopModel::UpdateModel(const BufferBank& buffer,
 	unsigned long loopLength,
+	unsigned long offset,
 	float radius)
 {
 	std::vector<float> verts;
@@ -81,6 +82,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 			CalcGrainGeometry(buffer,
 				grain,
 				numGrains,
+				offset,
 				lastYMin,
 				lastYMax,
 				radius);
@@ -99,6 +101,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 		CalcGrainGeometry(buffer,
 			numGrains,
 			numGrains,
+			offset,
 			lastYMin,
 			lastYMax,
 			radius);
@@ -116,6 +119,7 @@ std::tuple<std::vector<float>, std::vector<float>, float, float>
 LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 	unsigned int grain,
 	unsigned int numGrains,
+	unsigned long offset,
 	float lastYMin,
 	float lastYMax,
 	float radius)
@@ -130,8 +134,8 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 
 	auto angle1 = ((float)constants::TWOPI) * ((float)(grain - 1) / (float)numGrains);
 	auto angle2 = ((float)constants::TWOPI) * ((float)grain / (float)numGrains);
-	auto i1 = constants::MaxLoopFadeSamps + (grain - 1) * constants::GrainSamps;
-	auto i2 = constants::MaxLoopFadeSamps + grain * constants::GrainSamps;
+	auto i1 = offset + (grain - 1) * (unsigned long)constants::GrainSamps;
+	auto i2 = offset + grain * (unsigned long)constants::GrainSamps;
 	auto gMin = buffer.SubMin(i1, i2);
 	auto gMax = buffer.SubMax(i1, i2);
 
