@@ -73,11 +73,11 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 
 	try
 	{
-		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_WASAPI);
+		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_DS);
 	}
 	catch (RtAudioError& err)
 	{
-		std::cout << "Error instantiating WASAPI API: " << err.getMessage() << std::endl;
+		std::cout << "Error instantiating Audio API: " << err.getMessage() << std::endl;
 		return std::nullopt;
 	}
 

@@ -329,8 +329,12 @@ void Scene::InitAudio()
 		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
 		audioStreamParams.PrintParams();
 
+		auto latency = (0u == audioStreamParams.Latency) ?
+			_userConfig.Audio.Latency :
+			audioStreamParams.Latency;
+
 		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(audioStreamParams.Latency),
+				_userConfig.AdcBufferDelay(latency),
 				ChannelMixer::DefaultBufferSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels }));
@@ -392,8 +396,12 @@ void Scene::OnAudio(float* inBuf,
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		auto latency = (0u == audioStreamParams.Latency) ?
+			_userConfig.Audio.Latency :
+			audioStreamParams.Latency;
+
 		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
-		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(audioStreamParams.Latency), numSamps);
+		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(latency), numSamps);
 
 		for (auto& station : _stations)
 		{
