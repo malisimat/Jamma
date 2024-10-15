@@ -134,11 +134,15 @@ void Loop::Draw3d(DrawContext& ctx,
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale + _mixer->Level(), scale)));
-	
-	for (auto& child : _children)
-		child->Draw3d(ctx, 1);
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
+	_vu->Draw3d(ctx, 1);
+
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->Level(), 1.0f)));
+	
+	_model->Draw3d(ctx, 1);
+	
+	glCtx.PopMvp();
 	glCtx.PopMvp();
 	glCtx.PopMvp();
 }
@@ -243,7 +247,7 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 		channel->EndPlay(numSamps);
 	}
 
-	_vu->SetValue(_lastPeak, numSamps);
+	_vu->SetValue(_lastPeak * _mixer->Level(), numSamps);
 }
 
 void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
