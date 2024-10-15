@@ -27,5 +27,6 @@ void main()
 
     UV = UvIN;
     float h = gl_InstanceID / float(NumInstances-1);
-	Rgb = hsv2rgb(vec3(0.3 + (h * 0.016), 1., 1.));
+    float hue = clamp(0.3 + (h * 0.005), 0.0, 0.8);
+	Rgb = hsv2rgb(vec3(hue, 1., 1.));
 }

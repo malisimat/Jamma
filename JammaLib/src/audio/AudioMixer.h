@@ -126,6 +126,8 @@ namespace audio
 		AudioMixer(AudioMixerParams params);
 
 	public:
+		static const double DefaultLevel;
+
 		virtual std::string ClassName() const { return "AudioMixer"; }
 
 		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;

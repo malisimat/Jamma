@@ -8,6 +8,8 @@ using base::GuiElement;
 using gui::GuiSlider;
 using gui::GuiSliderParams;
 
+const double AudioMixer::DefaultLevel = 1.0;
+
 const utils::Size2d AudioMixer::_Gap = { 2, 4 };
 const utils::Size2d AudioMixer::_DragGap = { 4, 4 };
 const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
@@ -26,7 +28,7 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 	interpParams.Damping = 100.0f;
 
 	_fade = std::make_unique<InterpolatedValueExp>(interpParams);
-	_fade->Jump(1.0);
+	_fade->Jump(DefaultLevel);
 
 	_children.push_back(_slider);
 }
@@ -34,7 +36,7 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 void AudioMixer::InitReceivers()
 {
 	_slider->SetReceiver(ActionReceiver::shared_from_this());
-	_slider->SetValue(0.2);
+	_slider->SetValue(DefaultLevel);
 }
 
 void AudioMixer::SetSize(utils::Size2d size)
@@ -127,7 +129,7 @@ gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize, unsign
 	GuiSliderParams sliderParams;
 	sliderParams.Min = 0.0;
 	sliderParams.Max = 6.0;
-	sliderParams.InitValue = 1.0;
+	sliderParams.InitValue = DefaultLevel;
 	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
 	sliderParams.Position = { (int)_Gap.Width, (int)_Gap.Height};
 	sliderParams.Size = { mixerSize.Width - (2u * _Gap.Width), mixerSize.Height - (2 * _Gap.Height) };

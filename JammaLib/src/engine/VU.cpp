@@ -9,7 +9,7 @@ using gui::GuiModel;
 using utils::Size2d;
 
 const float VU::_LedDy = 1.5f;
-const double VU::_MaxValue = 0.3;
+const double VU::_MaxValue = 1.0;
 
 VU::VU(VuParams params) :
 	GuiModel(params),
@@ -36,7 +36,7 @@ void VU::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("DY", _LedDy);
 	glCtx.SetUniform("NumInstances", totalNumLeds);
 
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f + 0.1f * val, 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f, 1.0f)));
 
 	GuiModel::Draw3d(glCtx, numLeds);
 
@@ -55,6 +55,11 @@ void VU::SetValue(double value, unsigned int numUpdates)
 		_value.Next();
 
 	_value.SetTarget(value);
+}
+
+double VU::FallRate() const
+{
+	return _vuParams.FallRate;
 }
 
 void VU::UpdateModel(float radius)

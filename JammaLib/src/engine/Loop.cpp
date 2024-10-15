@@ -40,7 +40,7 @@ Loop::Loop(LoopParams loopParams,
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
-	vuParams.Size = { 12, 24 };
+	vuParams.Size = { 12, 85 };
 	vuParams.ModelScale = 1.0f;
 	vuParams.ModelTexture = "blue";
 	vuParams.ModelShader = "vu";
@@ -255,7 +255,17 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 		channel->EndPlay(numSamps);
 	}
 
-	_vu->SetValue(_lastPeak * _mixer->Level(), numSamps);
+	auto curValue = _vu->Value();
+	auto newValue = _lastPeak * _mixer->Level();
+	if (newValue > curValue)
+		curValue = newValue;
+	else
+	{
+		curValue -= _vu->FallRate();
+		if (curValue < newValue)
+			curValue = newValue;
+	}
+	_vu->SetValue(curValue, numSamps);
 }
 
 void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
@@ -405,7 +415,7 @@ void Loop::Reset()
 	_writeIndex = 0;
 	_playIndex = 0;
 	_loopLength = 0;
-	_mixer->SetLevel(1.0);
+	_mixer->SetLevel(AudioMixer::DefaultLevel);
 }
 
 unsigned long Loop::LoopIndex() const
