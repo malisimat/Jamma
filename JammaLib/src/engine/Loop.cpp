@@ -124,10 +124,15 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
 
-	auto index = STATE_RECORDING == _state ?
+	auto index = (STATE_RECORDING == _state) ?
 		_writeIndex :
 		_playIndex;
-	index = index > constants::MaxLoopFadeSamps ? index - constants::MaxLoopFadeSamps : index;
+
+	if (STATE_RECORDING != _state)
+	{
+		if (index >= constants::MaxLoopFadeSamps)
+			index -= constants::MaxLoopFadeSamps;
+	}
 
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 	_model->SetLoopIndexFrac(frac);
@@ -195,6 +200,9 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	// and adjust level
 	if (0 == _loopLength)
 		return;
+
+	if (STATE_RECORDING == _state)
+		_mixer->Offset(numSamps);
 
 	if ((STATE_PLAYING != _state) && (STATE_PLAYINGRECORDING != _state))
 		return;
@@ -397,6 +405,7 @@ void Loop::Reset()
 	_writeIndex = 0;
 	_playIndex = 0;
 	_loopLength = 0;
+	_mixer->SetLevel(1.0);
 }
 
 unsigned long Loop::LoopIndex() const
@@ -409,7 +418,7 @@ unsigned long Loop::LoopIndex() const
 
 double Loop::CalcDrawRadius(unsigned long loopLength)
 {
-	auto minRadius = 100.0;
+	auto minRadius = 50.0;
 	auto maxRadius = 400.0;
 	auto radius = 70.0 * log(loopLength) - 600;
 

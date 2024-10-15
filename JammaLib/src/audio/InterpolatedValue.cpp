@@ -72,6 +72,17 @@ void InterpolatedValueLinear::SetTarget(double target)
 		_endVal = target;
 		_dVal = (_endVal - _lastVal) * _params.Rate;
 	}
+	else
+	{
+		_dVal = 0.0;
+	}
+}
+
+void InterpolatedValueLinear::Jump(double target)
+{
+	_lastVal = target;
+	_endVal = target;
+	_dVal = 0.0;
 }
 
 InterpolatedValueExp::InterpolatedValueExp() :
@@ -99,4 +110,9 @@ double InterpolatedValueExp::Next()
 double InterpolatedValueExp::Current() const
 {
 	return _lastVal;
+}
+
+void InterpolatedValueExp::Jump(double target)
+{
+	_lastVal = target;
 }

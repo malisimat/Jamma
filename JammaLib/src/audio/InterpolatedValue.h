@@ -20,6 +20,7 @@ namespace audio
 		virtual double Next();
 		virtual double Current() const;
 		virtual void SetTarget(double target);
+		virtual void Jump(double target) = 0;
 
 	protected:
 		double _target;
@@ -42,6 +43,7 @@ namespace audio
 		virtual double Next() override;
 		virtual double Current() const;
 		virtual void SetTarget(double target) override;
+		virtual void Jump(double target) override;
 
 	protected:
 		double _endVal;
@@ -66,6 +68,7 @@ namespace audio
 	public:
 		virtual double Next() override;
 		virtual double Current() const;
+		virtual void Jump(double target) override;
 
 	protected:
 		double _lastVal;

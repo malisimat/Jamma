@@ -12,7 +12,7 @@ using utils::Size2d;
 const Size2d LoopModel::_LedGap = { 6, 6 };
 const float LoopModel::_MinHeight = 1.0f;
 const float LoopModel::_RadialThicknessFrac = 1.0f / 20.0f;
-const float LoopModel::_HeightScale = 50.0f;
+const float LoopModel::_HeightScale = 500.0f;
 
 LoopModel::LoopModel(LoopModelParams params) :
 	GuiModel(params),

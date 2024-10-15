@@ -26,7 +26,7 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 	interpParams.Damping = 100.0f;
 
 	_fade = std::make_unique<InterpolatedValueExp>(interpParams);
-	_fade->SetTarget(1.0);
+	_fade->Jump(1.0);
 
 	_children.push_back(_slider);
 }
@@ -56,6 +56,11 @@ double AudioMixer::Level() const
 	return _fade->Current();
 }
 
+void AudioMixer::SetLevel(double level)
+{
+	_fade->SetTarget(level);
+}
+
 void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
 	unsigned int index)
@@ -65,7 +70,10 @@ void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 
 void AudioMixer::Offset(unsigned int numSamps)
 {
-	// TODO: Update fader state
+	for (auto samp = 0u; samp < numSamps; samp++)
+	{
+		_fade->Next();
+	}
 }
 
 unsigned int AudioMixer::InputChannel() const

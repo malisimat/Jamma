@@ -36,7 +36,7 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 
 	auto destIndex = 0;
 
-	for (auto i = 0u; i < numSamps; i++)
+	for (auto i = 0u; i < numSamps; i++) // TODO: pass the whole vector to the sink
 	{
 		destIndex = dest->OnWrite(_buffer[index], destIndex);
 

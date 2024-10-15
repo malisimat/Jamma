@@ -84,7 +84,9 @@ namespace audio
 				"",
 				"",
 				{}),
-			Behaviour(MixBehaviourParams())
+			Behaviour(MixBehaviourParams()),
+			InputChannel(0u),
+			OutputChannel(0u)
 		{
 		}
 
@@ -92,7 +94,9 @@ namespace audio
 			BehaviourParams behaviour,
 			gui::GuiSliderParams sliderParams) :
 			base::GuiElementParams(params),
-			Behaviour(behaviour)
+			Behaviour(behaviour),
+			InputChannel(0u),
+			OutputChannel(0u)
 		{
 		}
 
@@ -129,6 +133,7 @@ namespace audio
 		virtual void SetSize(utils::Size2d size) override;
 
 		double Level() const;
+		void SetLevel(double level);
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
 			unsigned int index);
