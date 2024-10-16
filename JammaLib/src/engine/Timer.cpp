@@ -25,9 +25,14 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 	_loopCount += loopCountIncrement;
 }
 
+void Timer::Clear()
+{
+	_quantiseSamps = 0u;
+}
+
 bool Timer::IsQuantisable() const
 {
-	return 0 != _quantiseSamps;
+	return 0u != _quantiseSamps;
 }
 
 void Timer::SetQuantisation(unsigned int quantiseSamps,
@@ -39,6 +44,9 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
 {
+	if (0u == _quantiseSamps)
+		return std::make_tuple(length, 0);
+
 	switch (_quantisation)
 	{
 	case QUANTISE_MULTIPLE:

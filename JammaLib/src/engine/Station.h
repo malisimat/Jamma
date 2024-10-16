@@ -67,6 +67,7 @@ namespace engine
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
+		unsigned int NumTakes() const;
 		void Reset();
 		void SetClock(std::shared_ptr<Timer> clock);
 

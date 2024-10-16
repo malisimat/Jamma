@@ -26,6 +26,7 @@ namespace engine
 		static double GetElapsedSeconds(Time t1, Time t2);
 
 		void Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement);
+		void Clear();
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);

@@ -148,6 +148,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		newLoopTake->Record(action.InputChannels);
 
 		res.Id = newLoopTake->Id();
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		break;
 	}
@@ -192,6 +193,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
 
 		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
 	case TriggerAction::TRIGGER_DITCH:
@@ -213,6 +215,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 
 		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
 		break;
 	}
 
@@ -256,6 +259,13 @@ void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 
 	_triggers.push_back(trigger);
 	_children.push_back(trigger);
+}
+
+unsigned int Station::NumTakes() const
+{
+	return _changesMade ?
+		(unsigned int)_backLoopTakes.size() :
+		(unsigned int)_loopTakes.size();
 }
 
 void Station::Reset()

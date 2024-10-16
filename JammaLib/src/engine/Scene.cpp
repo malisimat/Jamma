@@ -245,18 +245,30 @@ ActionResult Scene::OnAction(KeyAction action)
 		return { res };
 	}
 
+	bool checkReset = false;
+	unsigned int numTakes = 0;
+
 	for (auto& station : _stations)
 	{
 		auto res = station->OnAction(action);
 
 		if (res.IsEaten)
 		{
-			/*switch (res.ResultType)
+			switch (res.ResultType)
 			{
-			case ACTIONRESULT_ID:
+			/*case ACTIONRESULT_ID:
 				_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
+				break;*/
+			case ACTIONRESULT_DITCH:
+				checkReset = true;
+				numTakes += station->NumTakes();
 				break;
-			}*/
+			}
+
+			if (checkReset && (0 == numTakes))
+			{
+				_clock->Clear();
+			}
 
 			return res;
 		}

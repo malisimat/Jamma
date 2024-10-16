@@ -198,8 +198,13 @@ unsigned int UserConfig::EndRecordingSamps(int error) const {
 unsigned long UserConfig::LoopPlayPos(int error,
 	unsigned long loopLength,
 	unsigned int latency) const {
+	auto fadeSamps = 0u;// Loop.FadeSamps;
+	auto fadeOffset = latency > fadeSamps ?
+		0u :
+		fadeSamps - latency;
+
 	auto loopSamp = utils::ModNeg(
-		((long)Trigger.PreDelay) - (long)(constants::MaxLoopFadeSamps - latency),
+		((long)Trigger.PreDelay) - (long)fadeOffset,
 		loopLength);
 
 	return loopSamp;

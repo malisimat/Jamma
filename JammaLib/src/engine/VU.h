@@ -14,14 +14,14 @@ namespace engine
 		VuParams() :
 			gui::GuiModelParams(),
 			LedHeight(10.0f),
-			FallRate(0.008)
+			FallRate(0.04)
 		{
 		}
 
 		VuParams(gui::GuiModelParams params) :
 			gui::GuiModelParams(params),
 			LedHeight(10.0f),
-			FallRate(0.008)
+			FallRate(0.04)
 		{
 		}
 

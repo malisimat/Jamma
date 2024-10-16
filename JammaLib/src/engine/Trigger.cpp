@@ -96,6 +96,7 @@ ActionResult Trigger::OnAction(KeyAction action)
 		if (TryChangeState(b, true, action, keyState))
 		{
 			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
 			return res;
 		}
 	}
@@ -104,6 +105,9 @@ ActionResult Trigger::OnAction(KeyAction action)
 		if (TryChangeState(b, false, action, keyState))
 		{
 			res.IsEaten = true;
+			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
+				actions::ACTIONRESULT_DITCH :
+				actions::ACTIONRESULT_DEFAULT;
 			return res;
 		}
 	}
