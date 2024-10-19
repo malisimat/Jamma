@@ -14,6 +14,7 @@ void main()
     gl_Position =  MVP * vec4(PositionIN,1);
     UV = UvIN;
 
-	vec3 lightDir = normalize(vec3(1.0, -0.5, -0.3));
-	diff = 0.1 + clamp(dot(NormalIN, lightDir), 0, 0.9);
+	vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
+	vec4 normScreen = MVP * vec4(NormalIN,0);
+	diff = 0.1 + clamp(dot(normScreen.xyz, lightDir), 0, 0.9);
 }
