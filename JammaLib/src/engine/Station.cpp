@@ -164,30 +164,36 @@ ActionResult Station::OnAction(TriggerAction action)
 				auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
 				loopLength = quantisedLength;
 				errorSamps = err;
+				std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
 			}
 			else
+			{
 				_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
+				std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+			}
 		}
 
 		auto cfg = action.GetUserConfig();
 		auto streamParams = action.GetAudioParams();
-		auto latency = streamParams.has_value() ?
-			streamParams.value().Latency :
+		auto outLatency = streamParams.has_value() ?
+			streamParams.value().OutputLatency :
 			0u;
 
-		if (0u == latency)
+		if (0u == outLatency)
 		{
-			latency = cfg.has_value() ?
-				cfg.value().Audio.Latency :
+			outLatency = cfg.has_value() ?
+				cfg.value().Audio.LatencyOut :
 				0u;
 		}
 
 		auto playPos = cfg.has_value() ?
-			cfg.value().LoopPlayPos(errorSamps, loopLength, latency) :
+			cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
 			0;
 		auto endRecordSamps = cfg.has_value() ?
 			cfg.value().EndRecordingSamps(errorSamps) :
 			0;
+
+		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << std::endl;
 
 		if (loopTake.has_value())
 			loopTake.value()->Play(playPos, loopLength, endRecordSamps);

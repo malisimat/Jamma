@@ -442,17 +442,20 @@ void RtApi :: tickStreamTime( void )
 #endif
 }
 
-long RtApi :: getStreamLatency( void )
+long RtApi :: getInputStreamLatency(void)
+{
+    verifyStream();
+
+    if (stream_.mode == INPUT || stream_.mode == DUPLEX)
+        return stream_.latency[1];
+}
+
+long RtApi :: getOutputStreamLatency( void )
 {
   verifyStream();
 
-  long totalLatency = 0;
   if ( stream_.mode == OUTPUT || stream_.mode == DUPLEX )
-    totalLatency = stream_.latency[0];
-  if ( stream_.mode == INPUT || stream_.mode == DUPLEX )
-    totalLatency += stream_.latency[1];
-
-  return totalLatency;
+    return stream_.latency[0];
 }
 
 double RtApi :: getStreamTime( void )

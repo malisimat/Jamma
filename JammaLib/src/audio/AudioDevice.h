@@ -19,7 +19,8 @@ namespace audio
 		unsigned int SampleRate; // The actual sample rate of the stream, in Hz
 		unsigned int NumBuffers; // The buffer size used by the device
 		unsigned int BufSize; // The buffer size used by the device
-		unsigned int Latency; // The total input+output latency reported by the device, in samples
+		unsigned int InputLatency; // The input latency reported by the device, in samples
+		unsigned int OutputLatency; // The output latency reported by the device, in samples
 		unsigned int NumInputChannels; // The number of input channels for the stream
 		unsigned int NumOutputChannels; // The number of output channels for the stream
 

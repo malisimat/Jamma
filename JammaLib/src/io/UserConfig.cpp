@@ -67,7 +67,8 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 	std::string name;
 	unsigned int sampleRate = constants::DefaultSampleRate;
 	unsigned int bufSize = constants::DefaultBufferSizeSamps;
-	unsigned int latency = 512;
+	unsigned int inLatency = 512;
+	unsigned int outLatency = 512;
 	unsigned int numBuffers = 4;
 	unsigned int numChannelsIn = 2;
 	unsigned int numChannelsOut = 2;
@@ -100,11 +101,18 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 			numBuffers = std::get<unsigned long>(json.KeyValues["numbuffers"]);
 	}
 
-	iter = json.KeyValues.find("latency");
+	iter = json.KeyValues.find("inlatency");
 	if (iter != json.KeyValues.end())
 	{
-		if (json.KeyValues["latency"].index() == 2)
-			latency = std::get<unsigned long>(json.KeyValues["latency"]);
+		if (json.KeyValues["inlatency"].index() == 2)
+			inLatency = std::get<unsigned long>(json.KeyValues["inlatency"]);
+	}
+
+	iter = json.KeyValues.find("outlatency");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["outlatency"].index() == 2)
+			outLatency = std::get<unsigned long>(json.KeyValues["outlatency"]);
 	}
 
 	iter = json.KeyValues.find("numchannelsin");
@@ -125,7 +133,8 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 	audio.Name = name;
 	audio.SampleRate = sampleRate;
 	audio.BufSize = bufSize;
-	audio.Latency = latency;
+	audio.LatencyIn = inLatency;
+	audio.LatencyOut = outLatency;
 	audio.NumBuffers = numBuffers;
 	audio.NumChannelsIn = numChannelsIn;
 	audio.NumChannelsOut = numChannelsOut;
@@ -176,10 +185,10 @@ std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson
 
 
 // How much to (further) delay input signal from ADC, in samples
-unsigned int UserConfig::AdcBufferDelay(unsigned int latency) const {
-	return latency > Trigger.PreDelay + constants::MaxLoopFadeSamps ?
+unsigned int UserConfig::AdcBufferDelay(unsigned int inLatency) const {
+	return inLatency > Trigger.PreDelay + constants::MaxLoopFadeSamps ?
 		0 :
-		Trigger.PreDelay + constants::MaxLoopFadeSamps - latency;
+		Trigger.PreDelay + constants::MaxLoopFadeSamps - inLatency;
 }
 
 // How long to continue recording after trigger to end loop recording, in samples
@@ -197,15 +206,54 @@ unsigned int UserConfig::EndRecordingSamps(int error) const {
 // in samples (includes intro, so zero is first index of intro, not the loop)
 unsigned long UserConfig::LoopPlayPos(int error,
 	unsigned long loopLength,
-	unsigned int latency) const {
+	unsigned int outLatency) const {
+	auto loopStart = (unsigned long)constants::MaxLoopFadeSamps;
 	auto fadeSamps = 0u;// Loop.FadeSamps;
-	auto fadeOffset = latency > fadeSamps ?
-		0u :
-		fadeSamps - latency;
+	auto playPos = (loopStart - fadeSamps) + Trigger.PreDelay + outLatency;
+	auto bufSize = loopLength + loopStart;
+	
+	if (error >= 0)
+	{
+		// If positive error, move playpos forward to skip time
+		// already lost due to late trigger
+		playPos += error;
 
-	auto loopSamp = utils::ModNeg(
-		((long)Trigger.PreDelay) - (long)fadeOffset,
-		loopLength);
+		while (playPos >= bufSize)
+			playPos -= loopLength;
+	}
+	else
+	{
+		// If negative error, then move position backwards
+		// to fill in time until trigger should have been pressed
+		auto appliedError = false;
+		auto foundPos = false;
 
-	return loopSamp;
+		while (!foundPos)
+		{
+			if (!appliedError)
+			{
+				if (playPos < (unsigned long)(-error))
+					playPos += loopLength;
+				else
+				{
+					playPos += error;
+					appliedError = true;
+				}
+			}
+			else
+			{
+				if (playPos < loopStart)
+					playPos += loopLength;
+				else
+					foundPos = true;
+			}
+		}
+	}
+
+	// For first play, since buffers may still be filling up
+	// then play from before the loop starts to avoid glitches
+	if (playPos > loopLength)
+		playPos -= loopLength;
+
+	return playPos;
 }

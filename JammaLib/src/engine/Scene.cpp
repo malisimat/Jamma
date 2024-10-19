@@ -267,6 +267,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			if (checkReset && (0 == numTakes))
 			{
+				std::cout << "Reset" << std::endl;
 				_clock->Clear();
 			}
 
@@ -341,12 +342,12 @@ void Scene::InitAudio()
 		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
 		audioStreamParams.PrintParams();
 
-		auto latency = (0u == audioStreamParams.Latency) ?
-			_userConfig.Audio.Latency :
-			audioStreamParams.Latency;
+		auto inLatency = (0u == audioStreamParams.InputLatency) ?
+			_userConfig.Audio.LatencyIn :
+			audioStreamParams.InputLatency;
 
 		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(latency),
+				_userConfig.AdcBufferDelay(inLatency),
 				ChannelMixer::DefaultBufferSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels }));
@@ -408,12 +409,12 @@ void Scene::OnAudio(float* inBuf,
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-		auto latency = (0u == audioStreamParams.Latency) ?
-			_userConfig.Audio.Latency :
-			audioStreamParams.Latency;
+		auto inLatency = (0u == audioStreamParams.InputLatency) ?
+			_userConfig.Audio.LatencyIn :
+			audioStreamParams.InputLatency;
 
 		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
-		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(latency), numSamps);
+		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
 
 		for (auto& station : _stations)
 		{

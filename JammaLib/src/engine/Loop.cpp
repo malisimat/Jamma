@@ -373,7 +373,7 @@ void Loop::Play(unsigned long index,
 		return;
 	}
 
-	_playIndex = (index + constants::MaxLoopFadeSamps) >= bufSize ? (bufSize-1) : index + constants::MaxLoopFadeSamps;
+	_playIndex = index >= bufSize ? (bufSize-1) : index;
 	_loopLength = loopLength;
 
 	auto playState = continueRecording ? STATE_PLAYINGRECORDING : STATE_PLAYING;

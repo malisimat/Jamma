@@ -9,7 +9,8 @@ void AudioStreamParams::PrintParams()
 	std::cout << "SampleRate : " << SampleRate << std::endl; // The actual sample rate of the stream, in Hz
 	std::cout << "NumBuffers : " << NumBuffers << std::endl; // The buffer size used by the device
 	std::cout << "BufSize : " << BufSize << std::endl; // The buffer size used by the device
-	std::cout << "Latency : " << Latency << std::endl; // The total input+output latency reported by the device, in samples
+	std::cout << "InputLatency : " << InputLatency << std::endl; // The input latency reported by the device, in samples
+	std::cout << "OutputLatency : " << OutputLatency << std::endl; // The output latency reported by the device, in samples
 	std::cout << "NumInputChannels : " << NumInputChannels << std::endl; // The number of input channels used in the stream
 	std::cout << "NumOutputChannels : " << NumOutputChannels << std::endl; // The number of output channels used in the stream
 }
@@ -45,7 +46,8 @@ void AudioDevice::Start()
 	if (_stream)
 	{
 		_stream->startStream();
-		_audioStreamParams.Latency = (unsigned int)_stream->getStreamLatency();
+		_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
+		_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
 	}
 }
 
@@ -142,7 +144,8 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	audioStreamParams.SampleRate = audioSettings.SampleRate;
 	audioStreamParams.BufSize = audioSettings.BufSize;
 	audioStreamParams.NumBuffers = streamOptions.numberOfBuffers;
-	audioStreamParams.Latency = (unsigned int) rtAudio->getStreamLatency();
+	audioStreamParams.InputLatency = (unsigned int)rtAudio->getInputStreamLatency();
+	audioStreamParams.OutputLatency = (unsigned int) rtAudio->getOutputStreamLatency();
 	audioStreamParams.NumInputChannels = inParams.nChannels;
 	audioStreamParams.NumOutputChannels = outParams.nChannels;
 
