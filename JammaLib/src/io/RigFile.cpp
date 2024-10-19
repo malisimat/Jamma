@@ -76,9 +76,28 @@ std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 	return rig;
 }
 
-bool RigFile::ToStream(RigFile rig, std::stringstream ss)
+bool RigFile::ToStream(RigFile rig, std::stringstream& ss)
 {
-	return false;
+	ss << "Version: " << rig.Version << std::endl;
+	ss << "Name: " << rig.Name << std::endl;
+
+	ss << "=== Audio ===" << std::endl;
+	ss << "Audio Name: " << rig.User.Audio.Name << std::endl;
+	ss << "SampleRate: " << rig.User.Audio.SampleRate << std::endl;
+	ss << "NumBuffers: " << rig.User.Audio.NumBuffers << std::endl;
+	ss << "NumChannelsIn: " << rig.User.Audio.NumChannelsIn << std::endl;
+	ss << "NumChannelsOut: " << rig.User.Audio.NumChannelsOut << std::endl;
+	ss << "LatencyIn: " << rig.User.Audio.LatencyIn << std::endl;
+	ss << "LatencyOut: " << rig.User.Audio.LatencyOut << std::endl;
+
+	ss << "=== Loop ===" << std::endl;
+	ss << "FadeSamps: " << rig.User.Loop.FadeSamps << std::endl;
+
+	ss << "=== Trigger ===" << std::endl;
+	ss << "DebounceSamps: " << rig.User.Trigger.DebounceSamps << std::endl;
+	ss << "PreDelay: " << rig.User.Trigger.PreDelay << std::endl;
+
+	return true;
 }
 
 std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPart json)

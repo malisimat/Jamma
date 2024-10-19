@@ -193,7 +193,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			cfg.value().EndRecordingSamps(errorSamps) :
 			0;
 
-		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << std::endl;
+		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
 
 		if (loopTake.has_value())
 			loopTake.value()->Play(playPos, loopLength, endRecordSamps);

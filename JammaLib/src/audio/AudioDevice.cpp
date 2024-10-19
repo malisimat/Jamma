@@ -75,7 +75,7 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 
 	try
 	{
-		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_DS);
+		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
 	}
 	catch (RtAudioError& err)
 	{

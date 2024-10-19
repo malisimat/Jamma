@@ -96,7 +96,15 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 	return ini;
 }
 
-bool InitFile::ToStream(InitFile jam, std::stringstream ss)
+bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 {
-	return false;
+	ss << "Jam: " << utils::EncodeUtf8(ini.Jam) << std::endl;
+	ss << "JamLoadType: " << ini.JamLoadType << std::endl;
+	ss << "Rig: " << utils::EncodeUtf8(ini.Rig) << std::endl;
+	ss << "RigLoadType: " << ini.RigLoadType << std::endl;
+
+	ss << "WinPos: " << ini.WinPos.X << "," << ini.WinPos.Y << std::endl;
+	ss << "WinSize: " << ini.WinSize.Width << "," << ini.WinSize.Height << std::endl;
+
+	return true;
 }

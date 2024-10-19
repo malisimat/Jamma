@@ -41,7 +41,6 @@ std::optional<io::InitFile> LoadIni()
 	io::TextReadWriter txtFile;
 	auto res = txtFile.Read(initPath, MAX_JSON_CHARS);
 
-
 	std::string iniTxt = InitFile::DefaultJson(EncodeUtf8(roamingPath));
 	if (!res.has_value())
 		txtFile.Write(initPath, iniTxt, (unsigned int)iniTxt.size(), 0);
@@ -116,13 +115,22 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (defaults.has_value())
 	{
+		std::stringstream ss;
+		InitFile::ToStream(defaults.value(), ss);
+
 		auto jamOpt = LoadJam(defaults.value());
 		if (jamOpt.has_value())
 			jam = jamOpt.value();
 
+		JamFile::ToStream(jam, ss);
+
 		auto rigOpt = LoadRig(defaults.value());
 		if (rigOpt.has_value())
 			rig = rigOpt.value();
+
+		RigFile::ToStream(rig, ss);
+
+		std::cout << ss.str() << std::endl;
 	}
 
 	auto scene = Scene::FromFile(sceneParams, jam, rig, utils::GetParentDirectory(defaults.value().Jam));

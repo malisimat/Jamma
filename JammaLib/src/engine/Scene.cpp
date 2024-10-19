@@ -234,6 +234,8 @@ ActionResult Scene::OnAction(KeyAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+	action.SetAudioParams(_audioDevice->GetAudioStreamParams());
+
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
 	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (actions::MODIFIER_CTRL == action.Modifiers))
@@ -297,6 +299,7 @@ void Scene::OnJobTick(Time curTime)
 	actions::JobAction job;
 	job.SetActionTime(Timer::GetTime());
 	job.SetUserConfig(_userConfig);
+	job.SetAudioParams(_audioDevice->GetAudioStreamParams());
 
 	{
 		std::shared_lock lock(_jobMutex);

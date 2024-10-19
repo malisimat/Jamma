@@ -28,7 +28,7 @@ namespace io
 		};
 
 		static std::optional<RigFile> FromStream(std::stringstream ss);
-		static bool ToStream(RigFile jam, std::stringstream ss);
+		static bool ToStream(RigFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
 
 

@@ -87,9 +87,42 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	return jam;
 }
 
-bool JamFile::ToStream(JamFile jam, std::stringstream ss)
+bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
-	return false;
+	ss << "Version: " << jam.Version << std::endl;
+	ss << "Name: " << jam.Name << std::endl;
+	ss << "TimerTicks: " << jam.TimerTicks << std::endl;
+	ss << "QuantiseSamps: " << jam.QuantiseSamps << std::endl;
+	ss << "Quantisation: " << jam.Quantisation << std::endl;
+
+	for (auto &station : jam.Stations)
+	{
+		ss << "=== Station ===" << std::endl;
+		ss << "Name: " << station.Name << std::endl;
+		ss << "StationType: " << station.StationType << std::endl;
+
+		for (auto& loopTake : station.LoopTakes)
+		{
+			ss << "====== LoopTake ======" << std::endl;
+			ss << "Name: " << loopTake.Name << std::endl;
+
+			for (auto& loop: loopTake.Loops)
+			{
+				ss << "========= Loop =========" << std::endl;
+				ss << "Name: " << loop.Name << std::endl;
+				ss << "Length: " << loop.Length << std::endl;
+				ss << "Index: " << loop.Index << std::endl;
+				ss << "MasterLoopCount: " << loop.MasterLoopCount << std::endl;
+				ss << "Level: " << loop.Level << std::endl;
+				ss << "Muted: " << loop.Muted << std::endl;
+				ss << "MixType: " << loop.Mix.Mix << std::endl;
+				ss << "MuteGroups: " << loop.MuteGroups << std::endl;
+				ss << "SelectGroups: " << loop.SelectGroups << std::endl;
+			}
+		}
+	}
+
+	return true;
 }
 
 std::optional<JamFile::LoopMix> JamFile::LoopMix::FromJson(Json::JsonPart json)

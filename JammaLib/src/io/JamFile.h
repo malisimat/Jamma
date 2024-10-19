@@ -29,7 +29,7 @@ namespace io
 		};
 
 		static std::optional<JamFile> FromStream(std::stringstream ss);
-		static bool ToStream(JamFile jam, std::stringstream ss);
+		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
 
 		struct LoopMix
