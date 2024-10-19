@@ -13,7 +13,9 @@ const double VU::_MaxValue = 1.0;
 
 VU::VU(VuParams params) :
 	GuiModel(params),
-	_value(audio::FallingValue({ params.FallRate })),
+	_value(audio::FallingValue({
+		params.FallRate,
+		params.HoldSamps })),
 	_vuParams(params)
 {
 }
@@ -26,19 +28,25 @@ void VU::Draw3d(DrawContext& ctx,
 	unsigned int numInstances)
 {
 	auto val = _value.Current();
+	auto hold = _value.HoldValue();
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto totalNumLeds = TotalNumLeds(_sizeParams.Size.Height,
 		_vuParams.LedHeight);
 	auto numLeds = CurrentNumLeds(val, totalNumLeds);
+	auto holdLed = CurrentNumLeds(hold, totalNumLeds);
 
-	glCtx.SetUniform("Value",(float)val);
 	glCtx.SetUniform("DX", 0.0f);
 	glCtx.SetUniform("DY", _LedDy);
 	glCtx.SetUniform("NumInstances", totalNumLeds);
+	glCtx.SetUniform("InstanceOffset", 0u);
 
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f, 1.0f)));
 
 	GuiModel::Draw3d(glCtx, numLeds);
+
+	glCtx.SetUniform("InstanceOffset", holdLed);
+
+	GuiModel::Draw3d(glCtx, 1);
 
 	glCtx.PopMvp();
 }
@@ -55,6 +63,11 @@ void VU::SetValue(double value, unsigned int numUpdates)
 		_value.Next();
 
 	_value.SetTarget(value);
+}
+
+double VU::HoldValue() const
+{
+	return _value.HoldValue();
 }
 
 double VU::FallRate() const

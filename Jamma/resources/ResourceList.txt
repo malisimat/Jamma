@@ -1,7 +1,7 @@
 1 grid
 2 texture MVP
 2 texture_shaded MVP
-2 vu MVP Value DX DY NumInstances
+2 vu MVP DX DY NumInstances InstanceOffset
 1 fader_back
 1 fader
 1 fader_over

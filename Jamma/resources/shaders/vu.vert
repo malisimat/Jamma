@@ -7,10 +7,10 @@ out vec2 UV;
 out vec3 Rgb;
 
 uniform mat4 MVP;
-uniform float Value;
 uniform float DX;
 uniform float DY;
 uniform int NumInstances;
+uniform int InstanceOffset;
 
 vec3 hsv2rgb(vec3 c)
 {
@@ -21,12 +21,13 @@ vec3 hsv2rgb(vec3 c)
 
 void main()
 {
-    vec2 offset = vec2(DX * float(gl_InstanceID), DY * float(gl_InstanceID));
+    float instanceId = float(gl_InstanceID + InstanceOffset);
+    vec2 offset = vec2(DX * instanceId, DY * instanceId);
     vec4 pos = vec4(PositionIN.x + offset.x, PositionIN.y + offset.y, PositionIN.z, 1);
     gl_Position = MVP * pos;
 
     UV = UvIN;
-    float h = gl_InstanceID / float(NumInstances-1);
-    float hue = clamp(0.3 + (h * 0.005), 0.0, 0.8);
+    float h = instanceId / float(NumInstances-1);
+    float hue = clamp(0.3 - (h * 0.4), 0.0, 0.8);
 	Rgb = hsv2rgb(vec3(hue, 1., 1.));
 }

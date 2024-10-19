@@ -67,6 +67,8 @@ void ShaderResource::SetUniforms(GlDrawContext& ctx)
 
 			if (val.type() == typeid(int))
 				glUniform1i(uniform.second, std::any_cast<int&>(val));
+			else if (val.type() == typeid(unsigned int))
+				glUniform1i(uniform.second, std::any_cast<unsigned int&>(val));
 			else if (val.type() == typeid(float))
 				glUniform1f(uniform.second, std::any_cast<float&>(val));
 			else if (val.type() == typeid(glm::mat4))
