@@ -35,12 +35,12 @@ Loop::Loop(LoopParams loopParams,
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
-	modelParams.ModelTexture = "grid";
+	modelParams.ModelTexture = "levels";
 	modelParams.ModelShader = "texture_shaded";
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
-	vuParams.Size = { 12, 85 };
+	vuParams.Size = { 12, 18 };
 	vuParams.ModelScale = 1.0f;
 	vuParams.ModelTexture = "blue";
 	vuParams.ModelShader = "vu";

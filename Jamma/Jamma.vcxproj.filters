@@ -85,6 +85,9 @@
     <Content Include="resources\textures\purple.tga">
       <Filter>resources\textures</Filter>
     </Content>
+    <Content Include="resources\textures\levels.tga">
+      <Filter>resources\textures</Filter>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <Content Include="resources\shaders\texture.frag">

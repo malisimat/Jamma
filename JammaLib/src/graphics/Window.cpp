@@ -333,7 +333,7 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
-	glClearColor(0.129f, 0.586f, 0.949f, 1.0f);
+	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	_drawContext.SetSize(_config.Size);

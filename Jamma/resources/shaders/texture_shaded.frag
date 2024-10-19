@@ -9,6 +9,6 @@ uniform sampler2D TextureSampler;
 
 void main()
 {
-    ColorOUT = 0.05 + vec4((0.1 + diff) * texture(TextureSampler, UV).xyz, 1.0);
+    ColorOUT = 0.04 + vec4((0.2 + diff) * texture(TextureSampler, UV).xyz, 1.0);
 	//ColorOUT = vec4(1.0, 0.3, 0.3, 1.0);
 }
