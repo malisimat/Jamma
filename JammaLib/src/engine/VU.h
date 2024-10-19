@@ -15,7 +15,7 @@ namespace engine
 			gui::GuiModelParams(),
 			LedHeight(10.0f),
 			FallRate(0.00004),
-			HoldFallRate(0.000025),
+			HoldFallRate(0.00003),
 			HoldSamps(12000u)
 		{
 		}
@@ -24,7 +24,7 @@ namespace engine
 			gui::GuiModelParams(params),
 			LedHeight(10.0f),
 			FallRate(0.00004),
-			HoldFallRate(0.000025),
+			HoldFallRate(0.00003),
 			HoldSamps(12000u)
 		{
 		}

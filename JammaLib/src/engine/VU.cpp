@@ -34,7 +34,7 @@ void VU::Draw3d(DrawContext& ctx,
 	auto totalNumLeds = TotalNumLeds(_sizeParams.Size.Height,
 		_vuParams.LedHeight);
 	auto numLeds = CurrentNumLeds(val, totalNumLeds);
-	auto holdLed = CurrentNumLeds(hold, totalNumLeds);
+	auto holdLed = CurrentNumLeds(hold, totalNumLeds) - 1;
 
 	glCtx.SetUniform("DX", 0.0f);
 	glCtx.SetUniform("DY", _LedDy);

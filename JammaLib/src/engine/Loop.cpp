@@ -191,6 +191,13 @@ void Loop::EndWrite(unsigned int numSamps, bool updateIndex)
 
 	_writeIndex += numSamps;
 	_bufferBank.SetLength(_writeIndex);
+
+	if (STATE_RECORDING == _state)
+	{
+		auto newValue = _lastPeak * _mixer->Level();
+		_vu->SetValue(newValue, numSamps);
+		_lastPeak = 0.0f;
+	}
 }
 
 void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
