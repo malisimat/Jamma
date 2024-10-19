@@ -14,22 +14,25 @@ namespace engine
 		VuParams() :
 			gui::GuiModelParams(),
 			LedHeight(10.0f),
-			FallRate(0.03),
-			HoldSamps(22000u)
+			FallRate(0.00004),
+			HoldFallRate(0.00002),
+			HoldSamps(12000u)
 		{
 		}
 
 		VuParams(gui::GuiModelParams params) :
 			gui::GuiModelParams(params),
 			LedHeight(10.0f),
-			FallRate(0.03),
-			HoldSamps(22000u)
+			FallRate(0.00004),
+			HoldFallRate(0.00002),
+			HoldSamps(12000u)
 		{
 		}
 
 	public:
 		float LedHeight;
 		double FallRate;
+		double HoldFallRate;
 		unsigned int HoldSamps;
 	};
 
@@ -49,8 +52,9 @@ namespace engine
 
 		double Value() const;
 		void SetValue(double value, unsigned int numUpdates);
-		double HoldValue() const;
 		double FallRate() const;
+		double HoldValue() const;
+		double HoldFallRate() const;
 		void UpdateModel(float radius);
 
 	protected:

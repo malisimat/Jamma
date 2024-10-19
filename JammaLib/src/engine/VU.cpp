@@ -15,6 +15,7 @@ VU::VU(VuParams params) :
 	GuiModel(params),
 	_value(audio::FallingValue({
 		params.FallRate,
+		params.HoldFallRate,
 		params.HoldSamps })),
 	_vuParams(params)
 {
@@ -59,10 +60,14 @@ double VU::Value() const
 void VU::SetValue(double value, unsigned int numUpdates)
 {
 	_value.SetTarget(value);
+
 	for (auto i = 0u; i < numUpdates; i++)
 		_value.Next();
+}
 
-	_value.SetTarget(value);
+double VU::FallRate() const
+{
+	return _vuParams.FallRate;
 }
 
 double VU::HoldValue() const
@@ -70,9 +75,9 @@ double VU::HoldValue() const
 	return _value.HoldValue();
 }
 
-double VU::FallRate() const
+double VU::HoldFallRate() const
 {
-	return _vuParams.FallRate;
+	return _vuParams.HoldFallRate;
 }
 
 void VU::UpdateModel(float radius)

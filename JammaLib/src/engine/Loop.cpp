@@ -255,17 +255,8 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 		channel->EndPlay(numSamps);
 	}
 
-	auto curValue = _vu->Value();
 	auto newValue = _lastPeak * _mixer->Level();
-	if (newValue > curValue)
-		curValue = newValue;
-	else
-	{
-		curValue -= _vu->FallRate();
-		if (curValue < newValue)
-			curValue = newValue;
-	}
-	_vu->SetValue(curValue, numSamps);
+	_vu->SetValue(newValue, numSamps);
 }
 
 void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,

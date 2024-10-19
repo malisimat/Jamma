@@ -12,6 +12,7 @@ namespace audio
 		{
 		public:
 			double FallRate;
+			double HoldFallRate;
 			unsigned int HoldSamps;
 		};
 
