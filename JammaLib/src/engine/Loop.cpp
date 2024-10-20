@@ -131,7 +131,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (STATE_RECORDING != _state)
 	{
 		if (index >= constants::MaxLoopFadeSamps)
-			index -= constants::MaxLoopFadeSamps;  //TODO: Not needed?
+			index -= constants::MaxLoopFadeSamps;
 	}
 
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
