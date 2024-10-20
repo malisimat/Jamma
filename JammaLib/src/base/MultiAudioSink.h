@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <optional>
+#include "Audible.h"
 #include "AudioSink.h"
 #include "MultiAudible.h"
 
@@ -29,7 +30,8 @@ namespace base
 		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
 			unsigned int numSamps) {}
 		virtual void EndMultiWrite(unsigned int numSamps) { return EndMultiWrite(numSamps, false); }
-		virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex)
+		virtual void EndMultiWrite(unsigned int numSamps,
+			bool updateIndex)
 		{
 			for (auto chan = 0u; chan < NumInputChannels(); chan++)
 			{
@@ -47,11 +49,12 @@ namespace base
 		}
 		virtual void OnWriteChannel(unsigned int channel,
 			float samp,
-			unsigned int indexOffset)
+			unsigned int indexOffset,
+			Audible::AudioSourceType source)
 		{
 			auto chan = InputChannel(channel);
 			if (chan)
-				chan->OnWrite(samp, indexOffset);
+				chan->OnWrite(samp, indexOffset, source);
 		}
 		virtual unsigned int NumInputChannels() const { return 0; };
 

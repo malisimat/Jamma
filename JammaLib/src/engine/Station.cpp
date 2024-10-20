@@ -98,13 +98,15 @@ void Station::OnWriteChannel(unsigned int channel,
 }
 
 // TODO: Remove method
-void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src, unsigned int numSamps)
+void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
 		take->OnWrite(src, numSamps);
 }
 
-void Station::EndMultiWrite(unsigned int numSamps, bool updateIndex)
+void Station::EndMultiWrite(unsigned int numSamps,
+	bool updateIndex)
 {
 	for (auto& take : _loopTakes)
 		take->EndMultiWrite(numSamps, updateIndex);

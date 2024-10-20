@@ -107,9 +107,10 @@ namespace engine
 			_mixer(std::move(other._mixer)),
 			_model(std::move(other._model)),
 			_vu(std::move(other._vu)),
-			_bufferBank(std::move(other._bufferBank))
+			_bufferBank(std::move(other._bufferBank)),
+			_monitorBufferBank(std::move(other._monitorBufferBank))
 		{
-			other._writeIndex = 0;
+			other._writeIndex = 0ul;
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 		}
@@ -131,6 +132,7 @@ namespace engine
 				_model.swap(other._model);
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
+				std::swap(_monitorBufferBank, other._monitorBufferBank);
 			}
 
 			return *this;
@@ -150,9 +152,14 @@ namespace engine
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		inline virtual int OnWrite(float samp, int indexOffset) override;
-		inline virtual int OnOverwrite(float samp, int indexOffset) override;
-		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
+		inline virtual int OnWrite(float samp,
+			int indexOffset,
+			Audible::AudioSourceType source) override;
+		inline virtual int OnOverwrite(float samp,
+			int indexOffset,
+			Audible::AudioSourceType source) override;
+		virtual void EndWrite(unsigned int numSamps,
+			bool updateIndex) override;
 
 		void OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 			unsigned int channel,
@@ -193,5 +200,6 @@ namespace engine
 		std::shared_ptr<LoopModel> _model;
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
+		audio::BufferBank _monitorBufferBank;
 	};
 }

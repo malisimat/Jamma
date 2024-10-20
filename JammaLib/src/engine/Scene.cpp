@@ -417,7 +417,17 @@ void Scene::OnAudio(float* inBuf,
 			audioStreamParams.InputLatency;
 
 		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
+
+		_channelMixer->InitPlay(0u, numSamps);
+		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
+
+		for (auto& station : _stations)
+		{
+			_channelMixer->Source()->OnPlay(station, numSamps);
+		}
+
 		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
+		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_INPUT);
 
 		for (auto& station : _stations)
 		{

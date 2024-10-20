@@ -48,14 +48,17 @@ namespace engine
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
+		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// TODO: Remove OnWrite method
-		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src, unsigned int numSamps) override;
+		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+			unsigned int numSamps) override;
 		virtual void OnWriteChannel(unsigned int channel,
 			const std::shared_ptr<base::AudioSource> src,
 			unsigned int numSamps);
-		virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex) override;
+		virtual void EndMultiWrite(unsigned int numSamps,
+			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;

@@ -96,11 +96,12 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _index;
+		auto source = AUDIOSOURCE_INPUT;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
 			if (index < Samples.size())
-				dest->OnWrite(Samples[index], i);
+				dest->OnWrite(Samples[index], i, source);
 
 			index++;
 		}

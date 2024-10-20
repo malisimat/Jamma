@@ -25,8 +25,12 @@ namespace audio
 		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
 			unsigned int numSamps) override;
 		virtual void EndPlay(unsigned int numSamps) override;
-		inline virtual int OnWrite(float samp, int indexOffset) override;
-		inline virtual int OnOverwrite(float samp, int indexOffset) override;
+		inline virtual int OnWrite(float samp,
+			int indexOffset,
+			Audible::AudioSourceType source) override;
+		inline virtual int OnOverwrite(float samp,
+			int indexOffset,
+			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
 		void SetSize(unsigned int size);

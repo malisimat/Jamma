@@ -38,7 +38,7 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 
 	for (auto i = 0u; i < numSamps; i++) // TODO: pass the whole vector to the sink
 	{
-		destIndex = dest->OnWrite(_buffer[index], destIndex);
+		destIndex = dest->OnWrite(_buffer[index], destIndex, SourceType());
 
 		index++;
 		if (index >= bufSize)
@@ -69,7 +69,9 @@ void AudioBuffer::EndPlay(unsigned int numSamps)
 		_playIndex -= bufSize;
 }
 
-inline int AudioBuffer::OnWrite(float samp, int indexOffset)
+inline int AudioBuffer::OnWrite(float samp,
+	int indexOffset,
+	Audible::AudioSourceType source)
 {
 	auto bufSize = (unsigned int)_buffer.size();
 
@@ -87,7 +89,9 @@ inline int AudioBuffer::OnWrite(float samp, int indexOffset)
 	return indexOffset + 1;
 }
 
-inline int AudioBuffer::OnOverwrite(float samp, int indexOffset)
+inline int AudioBuffer::OnOverwrite(float samp,
+	int indexOffset,
+	Audible::AudioSourceType source)
 {
 	auto bufSize = (unsigned int)_buffer.size();
 

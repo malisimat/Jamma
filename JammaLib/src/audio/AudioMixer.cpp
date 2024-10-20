@@ -107,7 +107,10 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
-			dest->OnWriteChannel(chan, samp, index);
+			dest->OnWriteChannel(chan,
+				samp,
+				index,
+				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}
 }
 
@@ -120,7 +123,10 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (chan < _mixParams.ChannelLevels.size())
-			dest->OnWriteChannel(chan, samp * _mixParams.ChannelLevels.at(chan), index);
+			dest->OnWriteChannel(chan,
+				samp * _mixParams.ChannelLevels.at(chan),
+				index,
+				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}
 }
 

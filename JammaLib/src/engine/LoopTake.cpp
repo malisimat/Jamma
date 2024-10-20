@@ -99,7 +99,8 @@ void LoopTake::OnWriteChannel(unsigned int channel,
 	}
 }
 
-void LoopTake::EndMultiWrite(unsigned int numSamps, bool updateIndex)
+void LoopTake::EndMultiWrite(unsigned int numSamps,
+	bool updateIndex)
 {
 	for (auto& loop : _loops)
 		 loop->EndWrite(numSamps, updateIndex);

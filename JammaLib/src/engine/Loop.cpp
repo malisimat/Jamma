@@ -131,7 +131,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (STATE_RECORDING != _state)
 	{
 		if (index >= constants::MaxLoopFadeSamps)
-			index -= constants::MaxLoopFadeSamps;
+			index -= constants::MaxLoopFadeSamps;  //TODO: Not needed?
 	}
 
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
@@ -152,32 +152,42 @@ void Loop::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-int Loop::OnWrite(float samp, int indexOffset)
+int Loop::OnWrite(float samp,
+	int indexOffset,
+	Audible::AudioSourceType source)
 {
-	return OnOverwrite(samp, indexOffset);
+	return OnOverwrite(samp, indexOffset, source);
 }
 
-int Loop::OnOverwrite(float samp, int indexOffset)
+int Loop::OnOverwrite(float samp,
+	int indexOffset,
+	Audible::AudioSourceType source)
 {
 	if ((STATE_RECORDING != _state) &&
 		(STATE_PLAYINGRECORDING != _state) &&
 		(STATE_OVERDUBBING != _state) &&
 		(STATE_PUNCHEDIN != _state))
 		return indexOffset;
-
-	auto peak = std::abs(samp);
-	if (STATE_RECORDING == _state)
+	
+	if (AUDIOSOURCE_MONITOR == source)
 	{
-		if (peak > _lastPeak)
-			_lastPeak = peak;
+		_monitorBufferBank[_writeIndex + indexOffset] = samp;
+
+		auto peak = std::abs(samp);
+		if (STATE_RECORDING == _state)
+		{
+			if (peak > _lastPeak)
+				_lastPeak = peak;
+		}
 	}
-		
-	_bufferBank[_writeIndex + indexOffset] = samp;
+	else
+		_bufferBank[_writeIndex + indexOffset] = samp;
 
 	return indexOffset + 1;
 }
 
-void Loop::EndWrite(unsigned int numSamps, bool updateIndex)
+void Loop::EndWrite(unsigned int numSamps,
+	bool updateIndex)
 {
 	// Only update if currently recording
 	if ((STATE_RECORDING != _state) &&
@@ -194,6 +204,8 @@ void Loop::EndWrite(unsigned int numSamps, bool updateIndex)
 
 	if (STATE_RECORDING == _state)
 	{
+		_monitorBufferBank.SetLength(_writeIndex);
+
 		auto newValue = _lastPeak * _mixer->Level();
 		_vu->SetValue(newValue, numSamps);
 		_lastPeak = 0.0f;
@@ -283,7 +295,7 @@ void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	for (auto i = 0u; i < numSamps; i++)
 	{
-		dest->OnWriteChannel(channel, _bufferBank[index], i);
+		dest->OnWriteChannel(channel, _bufferBank[index], i, AUDIOSOURCE_INPUT);
 
 		index++;
 		if (index >= bufSize)
@@ -321,6 +333,7 @@ void Loop::Update()
 	UpdateLoopModel();
 
 	_bufferBank.UpdateCapacity();
+	_monitorBufferBank.UpdateCapacity();
 }
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
@@ -354,9 +367,13 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 void Loop::Record()
 {
 	Reset();
+
 	_state = STATE_RECORDING;
 	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
 	_bufferBank.UpdateCapacity();
+
+	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
+	_monitorBufferBank.UpdateCapacity();
 }
 
 void Loop::Play(unsigned long index,
@@ -410,9 +427,9 @@ void Loop::Reset()
 {
 	_state = STATE_INACTIVE;
 
-	_writeIndex = 0;
-	_playIndex = 0;
-	_loopLength = 0;
+	_writeIndex = 0ul;
+	_playIndex = 0ul;
+	_loopLength = 0ul;
 	_mixer->SetLevel(AudioMixer::DefaultLevel);
 }
 
@@ -439,6 +456,7 @@ void Loop::UpdateLoopModel()
 	auto offset = STATE_RECORDING == _state ? 0ul : constants::MaxLoopFadeSamps;
 
 	auto radius = (float)CalcDrawRadius(length);
-	_model->UpdateModel(_bufferBank, length, offset, radius);
+	auto& bufBank = STATE_RECORDING == _state ? _monitorBufferBank : _bufferBank;
+	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
 }

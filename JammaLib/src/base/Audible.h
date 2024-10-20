@@ -16,6 +16,12 @@ namespace base
 			AUDIO_BOTH
 		};
 
+		enum AudioSourceType
+		{
+			AUDIOSOURCE_INPUT,
+			AUDIOSOURCE_MONITOR
+		};
+
 	public:
 		Audible() {};
 		~Audible() {};

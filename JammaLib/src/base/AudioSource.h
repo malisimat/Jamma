@@ -7,7 +7,13 @@
 
 namespace base
 {
-	class AudioSourceParams {};
+	class AudioSourceParams
+	{
+	public:
+		AudioSourceParams() : SourceType(Audible::AudioSourceType::AUDIOSOURCE_INPUT) {}
+	public:
+		Audible::AudioSourceType SourceType;
+	};
 
 	class AudioSource :
 		public virtual Audible
@@ -24,6 +30,9 @@ namespace base
 			unsigned int numSamps) = 0;
 		virtual void EndPlay(unsigned int numSamps) = 0;
 
+		Audible::AudioSourceType SourceType() const { return _sourceParams.SourceType; }
+		void SetSourceType(Audible::AudioSourceType source) { _sourceParams.SourceType = source; }
+		
 		std::shared_ptr<AudioSource> shared_from_this()
 		{
 			return std::dynamic_pointer_cast<AudioSource>(
