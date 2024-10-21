@@ -26,6 +26,7 @@ LoopTake::LoopTake(LoopTakeParams params) :
 	_state(STATE_DEFAULT),
 	_id(params.Id),
 	_sourceId(""),
+	_fadeSamps(params.FadeSamps),
 	_sourceType(SOURCE_LOOPTAKE),
 	_recordedSampCount(0),
 	_endRecordSampCount(0),
@@ -179,7 +180,12 @@ LoopTake::LoopTakeSource LoopTake::SourceType() const
 	return _sourceType;
 }
 
-std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan)
+unsigned long LoopTake::NumRecordedSamps() const
+{
+	return _recordedSampCount;
+}
+
+std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationName)
 {
 	auto newNumLoops = (unsigned int)_loops.size() + 1;
 
@@ -190,10 +196,11 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan)
 	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire, chan);
 	
 	LoopParams loopParams;
-	loopParams.Wav = "hh";
-	loopParams.Id = "LP-" + utils::GetGuid();
+	loopParams.Wav = stationName;
+	loopParams.Id = stationName + "-" + utils::GetGuid();
 	loopParams.TakeId = _id;
 	loopParams.Channel = chan;
+	loopParams.FadeSamps = _fadeSamps;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 	AddLoop(loop);
 
@@ -212,7 +219,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_changesMade = true;
 }
 
-void LoopTake::Record(std::vector<unsigned int> channels)
+void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName)
 {
 	_state = STATE_RECORDING;
 
@@ -223,18 +230,13 @@ void LoopTake::Record(std::vector<unsigned int> channels)
 
 	for (auto chan : channels)
 	{
-		auto loop = AddLoop(chan);
+		auto loop = AddLoop(chan, stationName);
 		loop->Record();
 	}
 
 	//_flipLoopBuffer = true;
 	_loopsNeedUpdating = true;
 	_changesMade = true;
-}
-
-unsigned long LoopTake::NumRecordedSamps() const
-{
-	return _recordedSampCount;
 }
 
 void LoopTake::Play(unsigned long index,

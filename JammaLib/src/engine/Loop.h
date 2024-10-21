@@ -14,6 +14,7 @@
 #include "../io/JamFile.h"
 #include "../audio/BufferBank.h"
 #include "../audio/AudioMixer.h"
+#include "../audio/Hanning.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 
@@ -39,7 +40,7 @@ namespace engine
 			OverdubTexture(""),
 			PunchTexture(""),
 			Channel(0),
-			FadeSamps(800u)
+			FadeSamps(constants::DefaultFadeSamps)
 		{
 		}
 
@@ -54,7 +55,7 @@ namespace engine
 			OverdubTexture(""),
 			PunchTexture(""),
 			Channel(0u),
-			FadeSamps(800u)
+			FadeSamps(constants::DefaultFadeSamps)
 		{
 		}
 
@@ -105,6 +106,7 @@ namespace engine
 			_playIndex(other._playIndex),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
+			_hanning(std::move(other._hanning)),
 			_model(std::move(other._model)),
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
@@ -129,6 +131,7 @@ namespace engine
 				std::swap(_playIndex, other._playIndex);
 				std::swap(_loopParams, other._loopParams);
 				_mixer.swap(other._mixer);
+				_hanning.swap(other._hanning);
 				_model.swap(other._model);
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
@@ -197,6 +200,7 @@ namespace engine
 		LoopVisualState _state;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;

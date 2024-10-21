@@ -39,6 +39,7 @@ namespace engine
 
 	public:
 		std::string Id;
+		unsigned int FadeSamps;
 		std::vector<LoopParams> Loops;
 	};
 
@@ -99,10 +100,10 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource SourceType() const;
 		unsigned long NumRecordedSamps() const;
-		std::shared_ptr<Loop> AddLoop(unsigned int chan);
+		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
 
-		void Record(std::vector<unsigned int> channels);
+		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
@@ -129,6 +130,7 @@ namespace engine
 		LoopTakeState _state;
 		std::string _id;
 		std::string _sourceId;
+		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;

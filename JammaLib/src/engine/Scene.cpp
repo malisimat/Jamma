@@ -72,6 +72,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	stationParams.Position = { 20, 20 };
 	stationParams.ModelPosition = { -50, -20 };
 	stationParams.Size = { 140, 300 };
+	stationParams.FadeSamps = rigStruct.User.Loop.FadeSamps > constants::MaxLoopFadeSamps ?
+		constants::MaxLoopFadeSamps :
+		rigStruct.User.Loop.FadeSamps;
 
 	for (auto stationStruct : jamStruct.Stations)
 	{

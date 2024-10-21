@@ -14,6 +14,7 @@ using resources::ResourceLib;
 
 Trigger::Trigger(TriggerParams trigParams) :
 	GuiElement(trigParams),
+	_name(trigParams.Name),
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
@@ -40,6 +41,8 @@ Trigger::~Trigger()
 
 std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
 {
+	trigParams.Name = trigStruct.Name;
+
 	auto trigger = std::make_shared<Trigger>(trigParams);
 
 	for (auto trigPair : trigStruct.TriggerPairs)
@@ -248,6 +251,16 @@ void Trigger::Reset()
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_recordSampCount = 0;
 	_lastLoopTakes.clear();
+}
+
+std::string Trigger::Name() const
+{
+	return _name;
+}
+
+void Trigger::SetName(std::string name)
+{
+	_name = name;
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)

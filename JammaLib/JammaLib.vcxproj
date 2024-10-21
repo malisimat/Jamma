@@ -215,6 +215,7 @@
     <ClInclude Include="src\audio\BufferBank.h" />
     <ClInclude Include="src\actions\JobAction.h" />
     <ClInclude Include="src\audio\FallingValue.h" />
+    <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
     <ClInclude Include="src\engine\VU.h" />
     <ClInclude Include="src\base\MultiAudible.h" />
@@ -321,6 +322,7 @@
     <ClCompile Include="src\actions\TriggerAction.cpp" />
     <ClCompile Include="src\actions\JobAction.cpp" />
     <ClCompile Include="src\audio\FallingValue.cpp" />
+    <ClCompile Include="src\audio\Hanning.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />
     <ClCompile Include="src\engine\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />

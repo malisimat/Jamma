@@ -7,6 +7,7 @@ using base::AudioSink;
 using base::MultiAudioSource;
 using audio::BufferBank;
 using audio::AudioMixer;
+using audio::Hanning;
 using audio::AudioMixerParams;
 using audio::PanMixBehaviour;
 using gui::GuiSliderParams;
@@ -27,10 +28,12 @@ Loop::Loop(LoopParams loopParams,
 	_state(STATE_PLAYING),
 	_loopParams(loopParams),
 	_mixer(nullptr),
+	_hanning(nullptr),
 	_model(nullptr),
 	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
+	_hanning = std::make_unique<Hanning>(loopParams.FadeSamps);
 
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
@@ -226,29 +229,65 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	if ((STATE_PLAYING != _state) && (STATE_PLAYINGRECORDING != _state))
 		return;
 
+	auto peak = 0.0f;
+	auto bufBankSize = _bufferBank.Length();
+
 	auto index = _playIndex;
 	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
 	while (index >= bufSize)
 		index -= _loopLength;
 
-	auto peak = 0.0f;
+	// Check if we are inside crossfading region at any point
+	auto isXfadeRegion = (_playIndex + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
-	auto bufBankSize = _bufferBank.Length();
-
-	for (auto i = 0u; i < numSamps; i++)
+	if (isXfadeRegion)
 	{
-		if (index < bufBankSize)
+		for (auto i = 0u; i < numSamps; i++)
 		{
-			auto samp = _bufferBank[index];
-			_mixer->OnPlay(dest, samp, i);
+			auto isXfade = (_playIndex + i) >= (bufSize - _loopParams.FadeSamps);
+			isXfade &= (_playIndex + i) < bufSize;
 
-			if (std::abs(samp) > peak)
-				peak = std::abs(samp);
+			if (index < bufBankSize)
+			{
+				auto samp = _bufferBank[index];
+
+				if (isXfade)
+				{
+					auto xfadeIndex = (_playIndex + i) - (bufSize - _loopParams.FadeSamps);
+					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
+					auto xfadeSamp = _bufferBank[xfadeBufIndex];
+
+					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
+				}
+
+				_mixer->OnPlay(dest, samp, i);
+
+				if (std::abs(samp) > peak)
+					peak = std::abs(samp);
+			}
+
+			index++;
+			if (index >= bufSize)
+				index -= _loopLength;
 		}
+	}
+	else
+	{
+		for (auto i = 0u; i < numSamps; i++)
+		{
+			if (index < bufBankSize)
+			{
+				auto samp = _bufferBank[index];
+				_mixer->OnPlay(dest, samp, i);
 
-		index++;
-		if (index >= bufSize)
-			index -= _loopLength;
+				if (std::abs(samp) > peak)
+					peak = std::abs(samp);
+			}
+
+			index++;
+			if (index >= bufSize)
+				index -= _loopLength;
+		}
 	}
 
 	_lastPeak = peak;

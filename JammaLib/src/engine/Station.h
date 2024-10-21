@@ -19,9 +19,15 @@ namespace engine
 				"",
 				"",
 				"",
-				{})
+				{}),
+			Name(""),
+			FadeSamps(constants::DefaultFadeSamps)
 		{
 		}
+
+	public:
+		std::string Name;
+		unsigned int FadeSamps;
 	};
 	
 	class Station :
@@ -72,6 +78,8 @@ namespace engine
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
 		unsigned int NumTakes() const;
 		void Reset();
+		std::string Name() const;
+		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
 
 	protected:
@@ -84,10 +92,11 @@ namespace engine
 	protected:
 		static const utils::Size2d _Gap;
 
+		std::string _name;
+		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
-
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
 	};
 }

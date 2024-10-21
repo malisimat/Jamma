@@ -362,6 +362,9 @@
     <ClInclude Include="src\audio\BufferBank.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\Hanning.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -538,10 +541,13 @@
     <ClCompile Include="src\utils\MathUtils.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\FallingValue.cpp">
+    <ClCompile Include="src\audio\BufferBank.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\BufferBank.cpp">
+    <ClCompile Include="src\audio\Hanning.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\FallingValue.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
   </ItemGroup>

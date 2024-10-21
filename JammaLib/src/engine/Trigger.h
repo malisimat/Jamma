@@ -198,6 +198,7 @@ namespace engine
 		{};
 
 	public:
+		std::string Name;
 		std::vector<DualBinding> Activate;
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
@@ -244,6 +245,8 @@ namespace engine
 		void ClearInputChannels();
 		TriggerState GetState() const;
 		void Reset();
+		std::string Name() const;
+		void SetName(std::string name);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -276,6 +279,7 @@ namespace engine
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 
 	private:
+		std::string _name;
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;

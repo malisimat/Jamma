@@ -22,6 +22,8 @@ const utils::Size2d Station::_Gap = { 5, 5 };
 Station::Station(StationParams params) :
 	GuiElement(params),
 	MultiAudioSource(),
+	_name(params.Name),
+	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_loopTakes(),
 	_triggers({})
@@ -36,6 +38,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
+	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
@@ -147,7 +150,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels);
+		newLoopTake->Record(action.InputChannels, Name());
 
 		res.Id = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
@@ -244,7 +247,8 @@ void Station::OnTick(Time curTime,
 std::shared_ptr<LoopTake> Station::AddTake()
 {
 	LoopTakeParams takeParams;
-	takeParams.Id = "TK-" + utils::GetGuid();
+	takeParams.Id = _name + "-TK-" + utils::GetGuid();
+	takeParams.FadeSamps = _fadeSamps;
 
 	auto take = std::make_shared<LoopTake>(takeParams);
 	AddTake(take);
@@ -293,6 +297,16 @@ void Station::Reset()
 			_children.erase(child);
 	}
 	_triggers.clear();
+}
+
+std::string Station::Name() const
+{
+	return _name;
+}
+
+void Station::SetName(std::string name)
+{
+	_name = name;
 }
 
 void Station::SetClock(std::shared_ptr<Timer> clock)
