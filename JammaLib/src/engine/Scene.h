@@ -142,6 +142,7 @@ namespace engine
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
+		void Reset();
 		void InitAudio();
 		void CloseAudio();
 		void CommitChanges();
@@ -171,6 +172,7 @@ namespace engine
 	protected:
 		bool _isSceneTouching;
 		bool _isSceneQuitting;
+		bool _isSceneReset;
 		utils::Position2d _initTouchDownPosition;
 		utils::Position3d _initTouchCamPosition;
 		glm::mat4 _viewProj;

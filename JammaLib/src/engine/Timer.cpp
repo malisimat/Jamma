@@ -15,6 +15,18 @@ Time Timer::GetTime()
 	return std::chrono::steady_clock::now();
 }
 
+Time Timer::GetZero()
+{
+	Time time;
+	return time.min();
+}
+
+bool Timer::IsZero(Time t)
+{
+	Time time;
+	return time.min() == t;
+}
+
 double Timer::GetElapsedSeconds(Time t1, Time t2)
 {
 	return std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count();

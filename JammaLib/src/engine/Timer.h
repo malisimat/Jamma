@@ -23,6 +23,8 @@ namespace engine
 
 	public:
 		static Time GetTime();
+		static Time GetZero();
+		static bool IsZero(Time t);
 		static double GetElapsedSeconds(Time t1, Time t2);
 
 		void Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement);

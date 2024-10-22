@@ -18,6 +18,7 @@ Scene::Scene(SceneParams params,
 	Sizeable(params),
 	_isSceneTouching(false),
 	_isSceneQuitting(false),
+	_isSceneReset(true),
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
@@ -66,7 +67,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	trigParams.TextureDitchDown = "blue";
 	trigParams.TextureOverdubbing = "orange";
 	trigParams.TexturePunchedIn = "purple";
-	trigParams.DebounceMs = 120;
+	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
 	stationParams.Position = { 20, 20 };
@@ -218,7 +219,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
-	
+
 	auto activeElement = _touchDownElement.lock();
 
 	if (activeElement)
@@ -251,7 +252,6 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 
 	bool checkReset = false;
-	unsigned int numTakes = 0;
 
 	for (auto& station : _stations)
 	{
@@ -259,21 +259,29 @@ ActionResult Scene::OnAction(KeyAction action)
 
 		if (res.IsEaten)
 		{
+			std::cout << "KeyAction eaten: " << res.Id << ", " << res.ResultType << std::endl;
 			switch (res.ResultType)
 			{
-			/*case ACTIONRESULT_ID:
-				_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
-				break;*/
+			case ACTIONRESULT_ACTIVATE:
+				_isSceneReset = false;
+				/*case ACTIONRESULT_ID:
+					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
+					break;*/
 			case ACTIONRESULT_DITCH:
 				checkReset = true;
-				numTakes += station->NumTakes();
 				break;
 			}
 
-			if (checkReset && (0 == numTakes))
+			if (checkReset && !_isSceneReset)
 			{
-				std::cout << "Reset" << std::endl;
-				_clock->Clear();
+				unsigned int numTakes = 0;
+				for (auto& station : _stations)
+				{
+					numTakes += station->NumTakes();
+				}
+
+				if (0 == numTakes)
+					Reset();
 			}
 
 			return res;
@@ -288,12 +296,21 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	unsigned int totalNumLoops = 0u;
+
 	for (auto& station : _stations)
 	{
 		station->OnTick(curTime,
 			samps,
 			_userConfig,
 			_audioDevice->GetAudioStreamParams());
+
+		totalNumLoops += station->NumTakes();
+	}
+
+	if ((0u == totalNumLoops) && !_isSceneReset)
+	{
+		Reset();
 	}
 }
 
@@ -327,6 +344,13 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+}
+
+void Scene::Reset()
+{
+	std::cout << "Reset" << std::endl;
+	_clock->Clear();
+	_isSceneReset = true;
 }
 
 void Scene::InitAudio()

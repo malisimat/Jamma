@@ -138,20 +138,24 @@ void Trigger::OnTick(Time curTime,
 	{
 		if (elapsedMs > _debounceTimeMs)
 		{
-			_lastActivateTime = curTime;
+			std::cout << "~~~~ Trigger ACTIVATE set to DOWN = " << _isLastActivateDownRaw << " (currently " << _isLastActivateDown << ")" << std::endl;
+			
+			_lastActivateTime = Timer::GetZero();
 			_isLastActivateDown = _isLastActivateDownRaw;
 
 			StateMachine(_isLastActivateDownRaw, true, cfg, params);
 		}
 	}
-	
+
 	elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, curTime) * 1000.0;
 	
 	if (_isLastDitchDownRaw != _isLastDitchDown)
 	{
 		if (elapsedMs > _debounceTimeMs)
 		{
-			_lastDitchTime = curTime;
+			std::cout << "~~~~ Trigger DITCH set to DOWN = " << _isLastDitchDownRaw << " (currently " << _isLastDitchDown << ")" << std::endl;
+
+			_lastDitchTime = Timer::GetZero();
 			_isLastDitchDown = _isLastDitchDownRaw;
 
 			StateMachine(_isLastDitchDownRaw, false, cfg, params);
@@ -293,55 +297,65 @@ bool Trigger::Debounce(bool isActivate,
 
 	if (isActivate)
 	{
+		auto isDebounceBypassed = Timer::IsZero(_lastActivateTime) || (0 == _debounceTimeMs);
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, actionTime) * 1000.0;
 
 		if ((DualBinding::MATCH_DOWN == trigResult) && !_isLastActivateDownRaw)
 		{
+			std::cout << "~~~~ Trigger ACTIVATE DOWN (currently up) - bypassed = " << isDebounceBypassed << ", elapsedMs = " << elapsedMs << std::endl;
 			_lastActivateTime = actionTime;
 			_isLastActivateDownRaw = true;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastActivateDown = true;
+				std::cout << "~~~~ Trigger ACTIVATE DOWN : set" << std::endl;
 			}
 		}
 		else if ((DualBinding::MATCH_RELEASE == trigResult) && _isLastActivateDownRaw)
 		{
+			std::cout << "~~~~ Trigger ACTIVATE RELEASE (currently down) - bypassed = " << isDebounceBypassed << ", elapsedMs = " << elapsedMs << std::endl;
 			_lastActivateTime = actionTime;
 			_isLastActivateDownRaw = false;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastActivateDown = false;
+				std::cout << "~~~~ Trigger ACTIVATE RELEASE : set" << std::endl;
 			}
 		}
 	}
 	else
 	{
+		auto isDebounceBypassed = Timer::IsZero(_lastDitchTime) || (0 == _debounceTimeMs);
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, actionTime) * 1000.0;
 
 		if ((DualBinding::MATCH_DOWN == trigResult) && !_isLastDitchDownRaw)
 		{
+			std::cout << "~~~~ Trigger DITCH DOWN (currently up) - bypassed = " << isDebounceBypassed << std::endl;
 			_lastDitchTime = actionTime;
 			_isLastDitchDownRaw = true;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastDitchDown = true;
+				std::cout << "~~~~ Trigger DITCH DOWN : set" << std::endl;
 			}
 		}
 		else if ((DualBinding::MATCH_RELEASE == trigResult) && _isLastDitchDownRaw)
 		{
+			std::cout << "~~~~ Trigger DITCH UP (currently down) - bypassed = " << isDebounceBypassed << std::endl;
 			_lastDitchTime = actionTime;
 			_isLastDitchDownRaw = false;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastDitchDown = false;
+				std::cout << "~~~~ Trigger DITCH RELEASE : set" << std::endl;
 			}
 		}
 	}
@@ -361,14 +375,18 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)
+	{
 		return false;
+	}
 
 	allowedThrough = Debounce(isActivate,
 		trigResult,
 		action.GetActionTime());
 
 	if (!allowedThrough)
+	{
 		return false;
+	}
 
 	switch (trigResult)
 	{
