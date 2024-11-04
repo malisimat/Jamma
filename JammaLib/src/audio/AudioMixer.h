@@ -17,6 +17,8 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
+			float fadeCurrent,
+			float fadeNew,
 			unsigned int index) const {};
 	};
 
@@ -24,6 +26,11 @@ namespace audio
 
 	class WireMixBehaviourParams : public MixBehaviourParams
 	{
+	public:
+		WireMixBehaviourParams() {};
+		WireMixBehaviourParams(const std::vector<unsigned int>& vec) :
+			Channels(vec) {};
+
 	public:
 		std::vector<unsigned int> Channels;
 	};
@@ -40,6 +47,8 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
+			float fadeCurrent,
+			float fadeNew,
 			unsigned int index) const override;
 
 	protected:
@@ -64,13 +73,26 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
+			float fadeCurrent,
+			float fadeNew,
 			unsigned int index) const override;
 
 	protected:
 		PanMixBehaviourParams _mixParams;
 	};
 
-	typedef std::variant<MixBehaviourParams, PanMixBehaviourParams, WireMixBehaviourParams> BehaviourParams;
+	class BounceMixBehaviourParams : public WireMixBehaviourParams {};
+	class BounceMixBehaviour : public WireMixBehaviour
+	{
+	public:
+		BounceMixBehaviour(BounceMixBehaviourParams mixParams) :
+			WireMixBehaviour(mixParams)
+		{
+			_mixParams = mixParams;
+		}
+	};
+
+	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams> BehaviourParams;
 
 	class AudioMixerParams :
 		public base::GuiElementParams
@@ -117,6 +139,9 @@ namespace audio
 		std::unique_ptr<MixBehaviour> operator()(WireMixBehaviourParams wireParams) const {
 			return std::move(std::make_unique<WireMixBehaviour>(wireParams));
 		}
+		std::unique_ptr<MixBehaviour> operator()(BounceMixBehaviourParams bounceParams) const {
+			return std::move(std::make_unique<BounceMixBehaviour>(bounceParams));
+		}
 	};
 
 	class AudioMixer :
@@ -136,6 +161,7 @@ namespace audio
 
 		double Level() const;
 		void SetLevel(double level);
+		void SetLevelDelayed(double level, unsigned int sampsDelay);
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
 			unsigned int index);

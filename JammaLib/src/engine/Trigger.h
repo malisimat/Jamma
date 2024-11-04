@@ -9,6 +9,8 @@
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
+#include "../actions/DelayedAction.h"
+#include "../audio/AudioMixer.h"
 #include "../io/RigFile.h"
 
 namespace engine
@@ -22,7 +24,8 @@ namespace engine
 			SOURCE_STATION
 		};
 		SourceType SourceType;
-		std::string TakeId;
+		std::string SourceTakeId;
+		std::string TargetTakeId;
 	};
 
 	enum TriggerSource
@@ -247,6 +250,8 @@ namespace engine
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
+		std::optional<TriggerTake> TryGetLastTake() const;
+		const std::shared_ptr<audio::AudioMixer> OverdubMixer() const;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -298,5 +303,7 @@ namespace engine
 		graphics::Image _textureOverdubbing;
 		graphics::Image _texturePunchedIn;
 		std::vector<TriggerTake> _lastLoopTakes;
+		std::vector<actions::DelayedAction> _delayedActions;
+		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 	};
 }

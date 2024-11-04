@@ -183,7 +183,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		_touchDownElement.reset();
 
-		return { false, "", ACTIONRESULT_DEFAULT };
+		return { false, "", "", ACTIONRESULT_DEFAULT };
 	}
 
 	for (auto& station : _stations)
@@ -208,7 +208,8 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	ActionResult res;
 	res.IsEaten = true;
-	res.Id = "";
+	res.SourceId = "";
+	res.TargetId = "";
 	res.ResultType = ACTIONRESULT_ID;
 	res.Undo = std::shared_ptr<ActionUndo>();
 	res.ActiveElement = std::weak_ptr<GuiElement>();
@@ -231,7 +232,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		SetSize(_sizeParams.Size);
 	}
 
-	return { false, "", ACTIONRESULT_DEFAULT };
+	return { false, "", "", ACTIONRESULT_DEFAULT };
 }
 
 ActionResult Scene::OnAction(KeyAction action)
@@ -259,7 +260,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 		if (res.IsEaten)
 		{
-			std::cout << "KeyAction eaten: " << res.Id << ", " << res.ResultType << std::endl;
+			std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
 			switch (res.ResultType)
 			{
 			case ACTIONRESULT_ACTIVATE:
@@ -288,7 +289,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		}
 	}
 
-	return { false, "", ACTIONRESULT_DEFAULT };
+	return { false, "", "", ACTIONRESULT_DEFAULT };
 }
 
 void Scene::OnTick(Time curTime,
@@ -450,7 +451,7 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			_channelMixer->Source()->OnPlay(station, numSamps);
+			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
 		}
 
 		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
@@ -458,7 +459,19 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			_channelMixer->Source()->OnPlay(station, numSamps);
+			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
+		
+			// Overdubbing / bouncing
+			// Each trigger knows which looptakes are wired up to which
+			// other looptakes (and inputs)
+			// Imagine overdubbing a drum take - records from inputs 5-8
+			// Then on audio, we transfer audio directly from previous loops
+			// to new looptake, no wiring/mixing, so loop 1 goes to new loop 1 etc.
+			// The only wiring/mixing done is from input audio.
+			// We call a method on station to wind all these internal looptake bounces
+			// forward, according to the triggers that are in overdub mode.
+			station->OnBounce(numSamps);
+
 			station->EndMultiWrite(numSamps, true);
 		}
 	}
@@ -475,7 +488,7 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			station->OnPlay(_channelMixer->Sink(), numSamps);
+			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 
@@ -485,7 +498,7 @@ void Scene::OnAudio(float* inBuf,
 	{
 		for (auto& station : _stations)
 		{
-			station->OnPlay(_channelMixer->Sink(), numSamps);
+			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 	}

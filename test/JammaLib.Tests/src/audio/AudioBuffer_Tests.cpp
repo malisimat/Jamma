@@ -81,7 +81,7 @@ public:
 		for (auto i = 0u; i < numSamps; i++)
 		{
 			if (index < Samples.size())
-				dest->OnWrite(Samples[index], i, source);
+				dest->OnMixWrite(Samples[index], 1.0f, 1.0f, i, source);
 
 			index++;
 		}
@@ -132,7 +132,7 @@ TEST(AudioBuffer, PlayWrapsAround) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		audioBuf.OnPlay(sink, blockSize);
+		audioBuf.OnPlay(sink, 0, blockSize);
 		audioBuf.EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
 	}
@@ -180,7 +180,7 @@ TEST(AudioBuffer, WriteMatchesRead) {
 		audioBuf->EndWrite(blockSize, true);
 
 		// Play buffer to mocked sink
-		audioBuf->OnPlay(sink, blockSize);
+		audioBuf->OnPlay(sink, 0, blockSize);
 		audioBuf->EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
 	}
@@ -210,7 +210,7 @@ TEST(AudioBuffer, IsCorrectlyDelayed) {
 
 		// Play buffer to mocked sink
 		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, blockSize);
+		audioBuf->OnPlay(sink, 0, blockSize);
 		audioBuf->EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
 	}
@@ -240,7 +240,7 @@ TEST(AudioBuffer, ClampsToMaxBufSize) {
 
 		// Play buffer to mocked sink
 		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, blockSize);
+		audioBuf->OnPlay(sink, 0, blockSize);
 		audioBuf->EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
 	}
@@ -270,7 +270,7 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
 
 		// Play buffer to mocked sink
 		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, blockSize);
+		audioBuf->OnPlay(sink, 0, blockSize);
 		audioBuf->EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
 	}

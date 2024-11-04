@@ -55,13 +55,17 @@ namespace engine
 		virtual	utils::Position2d Position() const override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			const std::shared_ptr<audio::AudioMixer> mixer,
+			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		// TODO: Remove OnWrite method
 		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void OnWriteChannel(unsigned int channel,
 			const std::shared_ptr<base::AudioSource> src,
+			int indexOffset,
 			unsigned int numSamps);
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex) override;
@@ -81,6 +85,7 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
+		void OnBounce(unsigned int numSamps);
 
 	protected:
 		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);

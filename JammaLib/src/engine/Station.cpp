@@ -13,6 +13,7 @@ using actions::TouchAction;
 using actions::TriggerAction;
 using actions::JobAction;
 using gui::GuiSliderParams;
+using audio::AudioMixer;
 using audio::AudioMixerParams;
 using audio::WireMixBehaviourParams;
 using utils::Size2d;
@@ -78,12 +79,13 @@ utils::Position2d Station::Position() const
 	return _modelScreenPos;
 }
 
-void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps)
+void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+	const std::shared_ptr<AudioMixer> mixer,
+	int indexOffset,
+	unsigned int numSamps)
 {
-	// Need to rewind buffer as we are pushing to
-	// the same place for multiple takes
 	for (auto& take : _loopTakes)
-		take->OnPlay(dest, numSamps);
+		take->OnPlay(dest, mixer, indexOffset, numSamps);
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -94,18 +96,20 @@ void Station::EndMultiPlay(unsigned int numSamps)
 
 void Station::OnWriteChannel(unsigned int channel,
 	const std::shared_ptr<base::AudioSource> src,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
-		take->OnWriteChannel(channel, src, numSamps);
+		take->OnWriteChannel(channel, src, indexOffset, numSamps);
 }
 
 // TODO: Remove method
 void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
-		take->OnWrite(src, numSamps);
+		take->OnWrite(src, indexOffset, numSamps);
 }
 
 void Station::EndMultiWrite(unsigned int numSamps,
@@ -152,7 +156,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto newLoopTake = AddTake();
 		newLoopTake->Record(action.InputChannels, Name());
 
-		res.Id = newLoopTake->Id();
+		res.SourceId = "";
+		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		break;
@@ -205,6 +210,17 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+		break;
+	}
+	case TriggerAction::TRIGGER_OVERDUB_START:
+	{
+		auto newLoopTake = AddTake();
+		newLoopTake->Record(action.InputChannels, Name());
+
+		res.SourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+		res.TargetId = newLoopTake->Id();
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+		res.IsEaten = true;
 		break;
 	}
 	case TriggerAction::TRIGGER_DITCH:
@@ -312,6 +328,46 @@ void Station::SetName(std::string name)
 void Station::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = clock;
+}
+
+void Station::OnBounce(unsigned int numSamps)
+{
+	// for each trigger, check which loop takes are being bounced
+	// based on overdub modes, and play those looptakes into the new ones
+	// with static offset based on maxloopfadesamps and output latency
+
+	// Have a clever mixer with timer that can fade between punchedin audioIN and loop output
+	// and then stream loop output to this - it will be faded (but on a delayed timer) with the audio
+	// already recorded in this buffer session (assume audio IN is written first).
+	// Delay is constants::MaxLoopFadeSamps, because we want to punch in at the actual samples
+	// being played along with, because we are delayed by this amount deliberately.
+	// Therefore read current samp and mix with loop sample according to mixer's state.
+	for (auto& trigger : _triggers)
+	{
+		if ((trigger->GetState() == TRIGSTATE_OVERDUBBING) ||
+			(trigger->GetState() == TRIGSTATE_PUNCHEDIN))
+		{
+			auto lastTake = trigger->TryGetLastTake();
+
+			if (lastTake.has_value())
+			{
+				auto& take = lastTake.value();
+				std::string sourceId = take.SourceTakeId;
+				std::string targetId = take.TargetTakeId;
+				auto sourceMatch = std::find_if(_backLoopTakes.begin(),
+					_backLoopTakes.end(),
+					[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
+				auto targetMatch = std::find_if(_backLoopTakes.begin(),
+					_backLoopTakes.end(),
+					[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
+
+				if ((sourceMatch != _backLoopTakes.end()) || (targetMatch != _backLoopTakes.end()))
+				{
+					(*sourceMatch)->OnPlay(*targetMatch, trigger->OverdubMixer(), -((long)constants::MaxLoopFadeSamps), numSamps);
+				}
+			}
+		}
+	}
 }
 
 unsigned int Station::CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)

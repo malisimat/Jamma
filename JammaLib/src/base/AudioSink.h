@@ -21,14 +21,23 @@ namespace base
 
 			for (auto i = 0u; i < numSamps; i++)
 			{
-				offsetInput = OnOverwrite(0.0f, offsetInput, AUDIOSOURCE_INPUT);
-				offsetMonitor = OnOverwrite(0.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
+				offsetInput = OnMixWrite(0.0f, 0.0f, 1.0f, offsetInput, AUDIOSOURCE_INPUT);
+				offsetMonitor = OnMixWrite(0.0f, 0.0f, 1.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
 			}
 		}
-		inline virtual int OnWrite(float samp,
-			int indexOffset,
-			AudioSourceType source) { return indexOffset; };
-		inline virtual int OnOverwrite(float samp,
+		//inline virtual int OnWrite(float samp,
+		//	float fadeCurrent,
+		//	float fadeNew,
+		//	int indexOffset,
+		//	AudioSourceType source) { return indexOffset; };
+		//inline virtual int OnAddWrite(float samp,
+		//	float fadeCurrent,
+		//	float fadeNew,
+		//	int indexOffset,
+		//	AudioSourceType source) { return indexOffset; };
+		inline virtual int OnMixWrite(float samp,
+			float fadeCurrent,
+			float fadeNew,
 			int indexOffset,
 			AudioSourceType source) { return indexOffset; };
 		virtual void EndWrite(unsigned int numSamps) { return EndWrite(numSamps, false); }

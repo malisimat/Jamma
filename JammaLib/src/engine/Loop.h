@@ -153,12 +153,14 @@ namespace engine
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
+		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			const std::shared_ptr<audio::AudioMixer> mixer,
+			int sampOffset,
+			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		inline virtual int OnWrite(float samp,
-			int indexOffset,
-			Audible::AudioSourceType source) override;
-		inline virtual int OnOverwrite(float samp,
+		inline virtual int OnMixWrite(float samp,
+			float fadeCurrent,
+			float fadeNew,
 			int indexOffset,
 			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps,

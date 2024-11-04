@@ -66,10 +66,12 @@ void LoopTake::SetSize(utils::Size2d size)
 }
 
 void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+	const std::shared_ptr<AudioMixer> mixer,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& loop : _loops)
-		loop->OnPlay(dest, numSamps);
+		loop->OnPlay(dest, mixer, indexOffset, numSamps);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -80,23 +82,25 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 
 // TODO: Remove method
 void LoopTake::OnWrite(const std::shared_ptr<MultiAudioSource> src,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& loop : _loops)
 	{
 		auto inChan = loop->InputChannel();
-		src->OnPlayChannel(inChan, loop, numSamps);
+		src->OnPlayChannel(inChan, loop, indexOffset, numSamps);
 	}
 }
 
 void LoopTake::OnWriteChannel(unsigned int channel,
 	const std::shared_ptr<base::AudioSource> src,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& loop : _loops)
 	{
 		if (loop->InputChannel() == channel)
-			src->OnPlay(loop, numSamps);
+			src->OnPlay(loop, indexOffset, numSamps);
 	}
 }
 
@@ -150,7 +154,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	}
 
-	return { false, "", actions::ACTIONRESULT_DEFAULT };
+	return { false, "", "", actions::ACTIONRESULT_DEFAULT};
 }
 
 void LoopTake::OnPlayRaw(const std::shared_ptr<MultiAudioSink> dest,

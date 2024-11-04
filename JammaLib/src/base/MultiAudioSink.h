@@ -28,6 +28,7 @@ namespace base
 			}
 		}
 		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+			int indexOffset,
 			unsigned int numSamps) {}
 		virtual void EndMultiWrite(unsigned int numSamps) { return EndMultiWrite(numSamps, false); }
 		virtual void EndMultiWrite(unsigned int numSamps,
@@ -41,20 +42,23 @@ namespace base
 		}
 		virtual void OnWriteChannel(unsigned int channel,
 			const std::shared_ptr<base::AudioSource> src,
+			int indexOffset,
 			unsigned int numSamps)
 		{
 			auto chan = InputChannel(channel);
 			if (chan)
-				src->OnPlay(chan, numSamps);
+				src->OnPlay(chan, indexOffset, numSamps);
 		}
-		virtual void OnWriteChannel(unsigned int channel,
+		virtual void OnMixWriteChannel(unsigned int channel,
 			float samp,
-			unsigned int indexOffset,
+			float fadeCurrent,
+			float fadeNew,
+			int indexOffset,
 			Audible::AudioSourceType source)
 		{
 			auto chan = InputChannel(channel);
 			if (chan)
-				chan->OnWrite(samp, indexOffset, source);
+				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
 		virtual unsigned int NumInputChannels() const { return 0; };
 

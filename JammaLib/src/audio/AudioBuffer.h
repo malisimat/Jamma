@@ -23,12 +23,12 @@ namespace audio
 			return AUDIO_BOTH;
 		}
 		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
+			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndPlay(unsigned int numSamps) override;
-		inline virtual int OnWrite(float samp,
-			int indexOffset,
-			Audible::AudioSourceType source) override;
-		inline virtual int OnOverwrite(float samp,
+		inline virtual int OnMixWrite(float samp,
+			float fadeCurrent,
+			float fadeNew,
 			int indexOffset,
 			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;

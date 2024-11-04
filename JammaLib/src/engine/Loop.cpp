@@ -155,14 +155,9 @@ void Loop::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-int Loop::OnWrite(float samp,
-	int indexOffset,
-	Audible::AudioSourceType source)
-{
-	return OnOverwrite(samp, indexOffset, source);
-}
-
-int Loop::OnOverwrite(float samp,
+int Loop::OnMixWrite(float samp,
+	float fadeCurrent,
+	float fadeNew,
 	int indexOffset,
 	Audible::AudioSourceType source)
 {
@@ -174,7 +169,7 @@ int Loop::OnOverwrite(float samp,
 	
 	if (AUDIOSOURCE_MONITOR == source)
 	{
-		_monitorBufferBank[_writeIndex + indexOffset] = samp;
+		_monitorBufferBank[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _monitorBufferBank[_writeIndex + indexOffset]);
 
 		auto peak = std::abs(samp);
 		if (STATE_RECORDING == _state)
@@ -184,7 +179,7 @@ int Loop::OnOverwrite(float samp,
 		}
 	}
 	else
-		_bufferBank[_writeIndex + indexOffset] = samp;
+		_bufferBank[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _bufferBank[_writeIndex + indexOffset]);
 
 	return indexOffset + 1;
 }
@@ -216,6 +211,8 @@ void Loop::EndWrite(unsigned int numSamps,
 }
 
 void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+	const std::shared_ptr<AudioMixer> mixer,
+	int sampOffset,
 	unsigned int numSamps)
 {
 	// Mixer will stereo spread the mono wav
@@ -260,7 +257,10 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
 
-				_mixer->OnPlay(dest, samp, i);
+				if (nullptr == mixer)
+					_mixer->OnPlay(dest, samp, i);
+				else
+					mixer->OnPlay(dest, samp, i);
 
 				if (std::abs(samp) > peak)
 					peak = std::abs(samp);
@@ -322,8 +322,6 @@ void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 	unsigned int delaySamps,
 	unsigned int numSamps)
 {
-	// Mixer will stereo spread the mono wav
-	// and adjust level
 	if (0 == _loopLength)
 		return;
 
@@ -334,7 +332,12 @@ void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	for (auto i = 0u; i < numSamps; i++)
 	{
-		dest->OnWriteChannel(channel, _bufferBank[index], i, AUDIOSOURCE_INPUT);
+		dest->OnMixWriteChannel(channel,
+			_bufferBank[index],
+			1.0f,
+			1.0f,
+			i,
+			AUDIOSOURCE_INPUT);
 
 		index++;
 		if (index >= bufSize)

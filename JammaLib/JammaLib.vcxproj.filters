@@ -209,9 +209,6 @@
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\MultiAudioSource.h">
-      <Filter>src\audio</Filter>
-    </ClInclude>
     <ClInclude Include="src\audio\ChannelMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -364,6 +361,12 @@
     </ClInclude>
     <ClInclude Include="src\audio\Hanning.h">
       <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\MultiAudioSource.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\actions\DelayedAction.h">
+      <Filter>src\actions</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -549,6 +552,9 @@
     </ClCompile>
     <ClCompile Include="src\audio\FallingValue.cpp">
       <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\actions\DelayedAction.cpp">
+      <Filter>src\actions</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

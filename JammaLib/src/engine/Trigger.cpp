@@ -7,9 +7,11 @@ using namespace engine;
 using actions::ActionResult;
 using actions::KeyAction;
 using actions::TriggerAction;
+using actions::DelayedAction;
 using graphics::GlDrawContext;
 using graphics::Image;
 using graphics::ImageParams;
+using audio::AudioMixer;
 using resources::ResourceLib;
 
 Trigger::Trigger(TriggerParams trigParams) :
@@ -31,8 +33,23 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_lastLoopTakes({})
+	_lastLoopTakes({}),
+	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
+	_delayedActions({})
 {
+	_overdubMixer = std::make_shared<AudioMixer>(
+		audio::AudioMixerParams(
+			base::GuiElementParams(DrawableParams{ "" },
+				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+				SizeableParams{ 1,1 },
+				"",
+				"",
+				"",
+				{}),
+			audio::BounceMixBehaviourParams(audio::WireMixBehaviourParams({ 0u })),
+			gui::GuiSliderParams()
+		)
+	);
 }
 
 Trigger::~Trigger()
@@ -125,7 +142,14 @@ void Trigger::OnTick(Time curTime,
 {
 	if ((TriggerState::TRIGSTATE_DEFAULT != _state) &&
 		(TriggerState::TRIGSTATE_DITCHDOWN != _state))
-		_recordSampCount+= samps;
+	{
+		_recordSampCount += samps;
+
+		for (auto& action : _delayedActions)
+		{
+			action.OnTick(curTime, samps, cfg, params);
+		}
+	}
 
 	if (0 == _debounceTimeMs)
 		return;
@@ -265,6 +289,19 @@ std::string Trigger::Name() const
 void Trigger::SetName(std::string name)
 {
 	_name = name;
+}
+
+std::optional<TriggerTake> Trigger::TryGetLastTake() const
+{
+	if (!_lastLoopTakes.empty())
+		return _lastLoopTakes.back();
+
+	return std::nullopt;
+}
+
+const std::shared_ptr<AudioMixer> Trigger::OverdubMixer() const
+{
+	return _overdubMixer;
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)
@@ -483,7 +520,9 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_RECORDING;
+
 	_recordSampCount = 0;
+	_delayedActions.clear();
 
 	if (_receiver)
 	{
@@ -503,7 +542,7 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.Id };
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
 			_lastLoopTakes.push_back(newTake);
 		}
 	}
@@ -520,7 +559,7 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -545,6 +584,7 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
+	_delayedActions.clear();
 	auto popBack = !_lastLoopTakes.empty();
 
 	if ((_receiver) && popBack)
@@ -553,7 +593,7 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_DITCH;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -573,7 +613,9 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
+
 	_recordSampCount = 0;
+	_delayedActions.clear();
 
 	if (_receiver)
 	{
@@ -591,7 +633,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.Id };
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.TargetId, res.SourceId };
 			_lastLoopTakes.push_back(newTake);
 		}
 	}
@@ -608,7 +650,7 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -626,6 +668,7 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_DEFAULT;
 
+	_delayedActions.clear();
 	auto popBack = !_lastLoopTakes.empty();
 
 	if ((_receiver) && popBack)
@@ -633,7 +676,7 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 		auto lastTake = _lastLoopTakes.back();
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_DITCH;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -654,13 +697,16 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_PUNCHEDIN;
 
+	_delayedActions.clear();
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
+
 	if ((_receiver) && !_lastLoopTakes.empty())
 	{
 		auto lastTake = _lastLoopTakes.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 		_receiver->OnAction(trigAction);
 	}
@@ -671,13 +717,15 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
+
 	if ((_receiver) && !_lastLoopTakes.empty())
 	{
 		auto lastTake = _lastLoopTakes.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())

@@ -50,7 +50,7 @@ void AudioMixer::SetSize(utils::Size2d size)
 ActionResult AudioMixer::OnAction(DoubleAction val)
 {
 	_fade->SetTarget(val.Value());
-	return { true, "", ACTIONRESULT_DEFAULT, nullptr };
+	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr};
 }
 
 double AudioMixer::Level() const
@@ -67,7 +67,7 @@ void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
 	unsigned int index)
 {
-	_behaviour->Apply(dest, samp * (float)_fade->Next(), index);
+	_behaviour->Apply(dest, samp, 1.0f, (float)_fade->Next(), index);
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
@@ -100,6 +100,8 @@ void AudioMixer::SetOutputChannel(unsigned int channel)
 
 void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
+	float fadeCurrent,
+	float fadeNew,
 	unsigned int index) const
 {
 	auto numChans = dest->NumInputChannels();
@@ -107,7 +109,9 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
-			dest->OnWriteChannel(chan,
+			dest->OnMixWriteChannel(chan,
+				fadeCurrent,
+				fadeNew,
 				samp,
 				index,
 				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
@@ -116,6 +120,8 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 
 void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
+	float fadeCurrent,
+	float fadeNew,
 	unsigned int index) const
 {
 	auto numChans = dest->NumInputChannels();
@@ -123,8 +129,10 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (chan < _mixParams.ChannelLevels.size())
-			dest->OnWriteChannel(chan,
+			dest->OnMixWriteChannel(chan,
 				samp * _mixParams.ChannelLevels.at(chan),
+				fadeCurrent,
+				fadeNew,
 				index,
 				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}

@@ -36,7 +36,9 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 
 			for (auto samp = 0u; samp < numSamps; samp++)
 			{
-				currentOffset = buf->OnOverwrite(inBuf[samp*numChannels + chan],
+				currentOffset = buf->OnMixWrite(inBuf[samp*numChannels + chan],
+					0.0f,
+					1.0f,
 					currentOffset,
 					source);
 			}

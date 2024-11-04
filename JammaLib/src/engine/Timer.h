@@ -35,7 +35,7 @@ namespace engine
 
 	private:
 		unsigned long _loopCount;
-		unsigned int sampOffset;
+		unsigned int _sampOffset;
 		unsigned int _quantiseSamps;
 		QuantisationType _quantisation;
 	};

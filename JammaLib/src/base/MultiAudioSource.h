@@ -6,6 +6,11 @@
 #include "MultiAudible.h"
 #include "MultiAudioSink.h"
 
+namespace audio
+{
+	class AudioMixer;
+}
+
 namespace base
 {
 	class MultiAudioSource :
@@ -25,12 +30,14 @@ namespace base
 	public:
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			const std::shared_ptr<audio::AudioMixer> mixer,
+			int indexOffset,
 			unsigned int numSamps)
 		{
 			for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
 			{
 				auto channel = OutputChannel(chan);
-				dest->OnWriteChannel(chan, channel, numSamps);
+				dest->OnWriteChannel(chan, channel, indexOffset, numSamps);
 			}
 		}
 		virtual void EndMultiPlay(unsigned int numSamps)
@@ -43,11 +50,12 @@ namespace base
 		}
 		virtual void OnPlayChannel(unsigned int channel,
 			const std::shared_ptr<base::AudioSink> dest,
+			int indexOffset,
 			unsigned int numSamps)
 		{
 			auto chan = OutputChannel(channel);
 			if (chan)
-				chan->OnPlay(dest, numSamps);
+				chan->OnPlay(dest, indexOffset, numSamps);
 		}
 		virtual unsigned int NumOutputChannels() const { return 0; };
 

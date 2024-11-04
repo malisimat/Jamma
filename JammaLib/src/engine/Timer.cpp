@@ -2,7 +2,11 @@
 
 using namespace engine;
 
-Timer::Timer()
+Timer::Timer() :
+	_loopCount(0ul),
+	_sampOffset(0u),
+	_quantiseSamps(0u),
+	_quantisation(QUANTISE_OFF)
 {
 }
 
