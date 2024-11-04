@@ -2,13 +2,14 @@
 
 #include <string>
 #include <memory>
-#include "MultiAudioSource.h"
+#include "Trigger.h"
 #include "ActionReceiver.h"
 #include "ResourceUser.h"
 #include "GuiElement.h"
 #include "GlUtils.h"
 #include "VU.h"
 #include "LoopModel.h"
+#include "../base/MultiAudioSource.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"
 #include "../io/JamFile.h"
@@ -154,7 +155,7 @@ namespace engine
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<audio::AudioMixer> mixer,
+			const std::shared_ptr<Trigger> trigger,
 			int sampOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;

@@ -65,13 +65,26 @@ void LoopTake::SetSize(utils::Size2d size)
 	ArrangeLoops();
 }
 
+unsigned int LoopTake::NumInputChannels() const
+{
+	return (unsigned int)_backLoops.size();
+}
+
+const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel)
+{
+	if (channel < _loops.size())
+		return _loops[channel];
+
+	return std::shared_ptr<AudioSink>();
+}
+
 void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
-	const std::shared_ptr<AudioMixer> mixer,
+	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& loop : _loops)
-		loop->OnPlay(dest, mixer, indexOffset, numSamps);
+		loop->OnPlay(dest, trigger, indexOffset, numSamps);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)

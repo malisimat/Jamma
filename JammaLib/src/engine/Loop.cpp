@@ -211,7 +211,7 @@ void Loop::EndWrite(unsigned int numSamps,
 }
 
 void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
-	const std::shared_ptr<AudioMixer> mixer,
+	const std::shared_ptr<Trigger> trigger,
 	int sampOffset,
 	unsigned int numSamps)
 {
@@ -257,10 +257,10 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
 
-				if (nullptr == mixer)
+				if (nullptr == trigger)
 					_mixer->OnPlay(dest, samp, i);
 				else
-					mixer->OnPlay(dest, samp, i);
+					trigger->OnPlay(dest, samp, i);
 
 				if (std::abs(samp) > peak)
 					peak = std::abs(samp);

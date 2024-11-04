@@ -218,7 +218,9 @@ namespace engine
 		TRIGSTATE_RECORDING,
 		TRIGSTATE_DITCHDOWN,
 		TRIGSTATE_OVERDUBBING,
-		TRIGSTATE_PUNCHEDIN
+		TRIGSTATE_OVERDUBBINGDITCHDOWN,
+		TRIGSTATE_PUNCHEDIN,
+		TRIGSTATE_PUNCHEDINDITCHDOWN
 	};
 	
 	class Trigger :
@@ -251,7 +253,9 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::optional<TriggerTake> TryGetLastTake() const;
-		const std::shared_ptr<audio::AudioMixer> OverdubMixer() const;
+		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			float samp,
+			unsigned int index);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -276,6 +280,7 @@ namespace engine
 		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void EndRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void SetDitchDown(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void SetDitchUp(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void Ditch(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void StartOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void EndOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);

@@ -210,8 +210,14 @@ void Trigger::Draw(base::DrawContext& ctx)
 	case TRIGSTATE_OVERDUBBING:
 		_textureOverdubbing.Draw(ctx);
 		break;
+	case TRIGSTATE_OVERDUBBINGDITCHDOWN:
+		_textureDitchDown.Draw(ctx);
+		break;
 	case TRIGSTATE_PUNCHEDIN:
 		_texturePunchedIn.Draw(ctx);
+		break;
+	case TRIGSTATE_PUNCHEDINDITCHDOWN:
+		_textureDitchDown.Draw(ctx);
 		break;
 	}
 
@@ -299,9 +305,32 @@ std::optional<TriggerTake> Trigger::TryGetLastTake() const
 	return std::nullopt;
 }
 
-const std::shared_ptr<AudioMixer> Trigger::OverdubMixer() const
+void Trigger::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+	float samp,
+	unsigned int index)
 {
-	return _overdubMixer;
+	bool removeExpired = false;
+	for (auto& action : _delayedActions)
+	{
+		if (action.SampsLeft(index) == 0)
+		{
+			_overdubMixer->SetLevel(action.GetTarget());
+			removeExpired = true;
+		}
+	}
+
+	if (removeExpired)
+	{
+		std::vector<DelayedAction> newActions;
+
+		auto isNotExpired = [index](DelayedAction action) { return action.SampsLeft(index) > 0; };
+		std::copy_if(_delayedActions.begin(), _delayedActions.end(),
+			std::back_inserter(newActions), isNotExpired);
+
+		_delayedActions = newActions;
+	}
+
+	_overdubMixer->OnPlay(dest, samp, index);
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)
@@ -489,26 +518,39 @@ bool Trigger::StateMachine(bool isDown,
 	case TRIGSTATE_OVERDUBBING:
 		if (isActivate && isDown)
 		{
-			EndOverdub(cfg, params);
+			StartPunchIn(cfg, params);
 			changedState = true;
 		}
 		else if (!isActivate && isDown)
 		{
-			StartPunchIn(cfg, params);
+			SetDitchDown(cfg, params);
+			changedState = true;
+		}
+		break;
+	case TRIGSTATE_OVERDUBBINGDITCHDOWN:
+		if (isActivate && isDown)
+		{
+			EndOverdub(cfg, params);
+			changedState = true;
+		}
+		else if (!isActivate && !isDown)
+		{
+			Ditch(cfg, params);
 			changedState = true;
 		}
 		break;
 	case TRIGSTATE_PUNCHEDIN:
-		if (isActivate && isDown)
-		{
-			DitchOverdub(cfg, params);
-			changedState = true;
-		}
-		if (!isActivate && !isDown)
+		if (isActivate && !isDown)
 		{
 			// End punch-in but maintain overdub mode (release)
 			EndPunchIn(cfg, params);
 			changedState = true;
+		}
+		break;
+	case TRIGSTATE_PUNCHEDINDITCHDOWN:
+		if (!isActivate && !isDown)
+		{
+			SetDitchUp(cfg, params);
 		}
 		break;
 	}
@@ -577,7 +619,19 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 void Trigger::SetDitchDown(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	_state = TRIGSTATE_DITCHDOWN;
+	if (TRIGSTATE_OVERDUBBING == _state)
+		_state = TRIGSTATE_OVERDUBBINGDITCHDOWN;
+	else if (TRIGSTATE_PUNCHEDIN == _state)
+		_state = TRIGSTATE_PUNCHEDINDITCHDOWN;
+	else
+		_state = TRIGSTATE_DITCHDOWN;
+}
+
+void Trigger::SetDitchUp(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	if (TRIGSTATE_PUNCHEDINDITCHDOWN == _state)
+		_state = TRIGSTATE_PUNCHEDIN;
 }
 
 void Trigger::Ditch(std::optional<io::UserConfig> cfg,
@@ -616,12 +670,13 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 	_recordSampCount = 0;
 	_delayedActions.clear();
+	_overdubMixer->SetLevel(1.0);
 
 	if (_receiver)
 	{
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
-		trigAction.SampleCount = _recordSampCount;
+		trigAction.InputChannels = _inputChannels;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
@@ -633,7 +688,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.TargetId, res.SourceId };
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
 			_lastLoopTakes.push_back(newTake);
 		}
 	}
@@ -715,7 +770,10 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	_state = TRIGSTATE_OVERDUBBING;
+	if (TRIGSTATE_PUNCHEDINDITCHDOWN == _state)
+		_state = TRIGSTATE_OVERDUBBINGDITCHDOWN;
+	else
+		_state = TRIGSTATE_OVERDUBBING;
 
 	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
 

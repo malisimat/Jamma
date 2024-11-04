@@ -161,7 +161,6 @@ namespace audio
 
 		double Level() const;
 		void SetLevel(double level);
-		void SetLevelDelayed(double level, unsigned int sampsDelay);
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
 			unsigned int index);

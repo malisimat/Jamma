@@ -6,9 +6,9 @@
 #include "MultiAudible.h"
 #include "MultiAudioSink.h"
 
-namespace audio
+namespace engine
 {
-	class AudioMixer;
+	class Trigger;
 }
 
 namespace base
@@ -30,7 +30,7 @@ namespace base
 	public:
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<audio::AudioMixer> mixer,
+			const std::shared_ptr<engine::Trigger> trigger,
 			int indexOffset,
 			unsigned int numSamps)
 		{

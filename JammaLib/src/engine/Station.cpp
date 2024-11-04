@@ -80,12 +80,12 @@ utils::Position2d Station::Position() const
 }
 
 void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-	const std::shared_ptr<AudioMixer> mixer,
+	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
-		take->OnPlay(dest, mixer, indexOffset, numSamps);
+		take->OnPlay(dest, trigger, indexOffset, numSamps);
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -214,13 +214,65 @@ ActionResult Station::OnAction(TriggerAction action)
 	}
 	case TriggerAction::TRIGGER_OVERDUB_START:
 	{
+		auto sourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+
 		auto newLoopTake = AddTake();
 		newLoopTake->Record(action.InputChannels, Name());
 
-		res.SourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		break;
+	}
+	case TriggerAction::TRIGGER_OVERDUB_END:
+	{
+		auto loopLength = action.SampleCount;
+		auto errorSamps = 0;
+
+		if (_clock)
+		{
+			if (_clock->IsQuantisable())
+			{
+				auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+				loopLength = quantisedLength;
+				errorSamps = err;
+				std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
+			}
+			else
+			{
+				_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
+				std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+			}
+		}
+
+		auto cfg = action.GetUserConfig();
+		auto streamParams = action.GetAudioParams();
+		auto outLatency = streamParams.has_value() ?
+			streamParams.value().OutputLatency :
+			0u;
+
+		if (0u == outLatency)
+		{
+			outLatency = cfg.has_value() ?
+				cfg.value().Audio.LatencyOut :
+				0u;
+		}
+
+		auto playPos = cfg.has_value() ?
+			cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+			0;
+		auto endRecordSamps = cfg.has_value() ?
+			cfg.value().EndRecordingSamps(errorSamps) :
+			0;
+
+		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
+
+		if (loopTake.has_value())
+			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
 	case TriggerAction::TRIGGER_DITCH:
@@ -361,9 +413,9 @@ void Station::OnBounce(unsigned int numSamps)
 					_backLoopTakes.end(),
 					[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
 
-				if ((sourceMatch != _backLoopTakes.end()) || (targetMatch != _backLoopTakes.end()))
+				if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 				{
-					(*sourceMatch)->OnPlay(*targetMatch, trigger->OverdubMixer(), -((long)constants::MaxLoopFadeSamps), numSamps);
+					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 				}
 			}
 		}

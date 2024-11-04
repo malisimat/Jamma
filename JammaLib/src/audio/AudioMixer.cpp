@@ -67,7 +67,15 @@ void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
 	unsigned int index)
 {
-	_behaviour->Apply(dest, samp, 1.0f, (float)_fade->Next(), index);
+	if (_behaviour)
+	{
+		float fadeNext = (float)_fade->Next();
+
+		if (dynamic_cast<BounceMixBehaviour*>(_behaviour.get()))
+			_behaviour->Apply(dest, samp, 1.0f - fadeNext, fadeNext, index);
+		else
+			_behaviour->Apply(dest, samp, 1.0f, fadeNext, index);
+	}
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
@@ -110,9 +118,9 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
 			dest->OnMixWriteChannel(chan,
+				samp,
 				fadeCurrent,
 				fadeNew,
-				samp,
 				index,
 				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}

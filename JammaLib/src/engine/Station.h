@@ -55,7 +55,7 @@ namespace engine
 		virtual	utils::Position2d Position() const override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<audio::AudioMixer> mixer,
+			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
