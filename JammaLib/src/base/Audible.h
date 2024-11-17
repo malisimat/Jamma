@@ -19,7 +19,8 @@ namespace base
 		enum AudioSourceType
 		{
 			AUDIOSOURCE_INPUT,
-			AUDIOSOURCE_MONITOR
+			AUDIOSOURCE_MONITOR,
+			AUDIOSOURCE_BOUNCE
 		};
 
 	public:

@@ -217,7 +217,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto sourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
 
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name());
+		newLoopTake->Overdub(action.InputChannels, Name());
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
@@ -382,7 +382,7 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
-void Station::OnBounce(unsigned int numSamps)
+void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 {
 	// for each trigger, check which loop takes are being bounced
 	// based on overdub modes, and play those looptakes into the new ones
@@ -397,7 +397,8 @@ void Station::OnBounce(unsigned int numSamps)
 	for (auto& trigger : _triggers)
 	{
 		if ((trigger->GetState() == TRIGSTATE_OVERDUBBING) ||
-			(trigger->GetState() == TRIGSTATE_PUNCHEDIN))
+			(trigger->GetState() == TRIGSTATE_PUNCHEDIN) ||
+			(trigger->GetState() == TRIGSTATE_DEFAULT))
 		{
 			auto lastTake = trigger->TryGetLastTake();
 
@@ -415,7 +416,7 @@ void Station::OnBounce(unsigned int numSamps)
 
 				if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 				{
-					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps + (long)config.Audio.LatencyOut), numSamps);
 				}
 			}
 		}

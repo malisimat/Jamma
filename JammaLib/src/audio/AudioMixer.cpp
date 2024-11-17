@@ -16,10 +16,8 @@ const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
 
 AudioMixer::AudioMixer(AudioMixerParams params) :
 	GuiElement(params),
-	_inputChannel(params.InputChannel),
-	_outputChannel(params.OutputChannel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size, params.OutputChannel))),
+	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size))),
 	_fade(std::make_unique<InterpolatedValueExp>())
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
@@ -41,7 +39,7 @@ void AudioMixer::InitReceivers()
 
 void AudioMixer::SetSize(utils::Size2d size)
 {
-	auto sliderParams = GetSliderParams(size, _outputChannel);
+	auto sliderParams = GetSliderParams(size);
 	_slider->SetSize(sliderParams.Size);
 
 	GuiElement::SetSize(size);
@@ -86,24 +84,9 @@ void AudioMixer::Offset(unsigned int numSamps)
 	}
 }
 
-unsigned int AudioMixer::InputChannel() const
+void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 {
-	return _inputChannel;
-}
-
-void AudioMixer::SetInputChannel(unsigned int channel)
-{
-	_inputChannel = channel;
-}
-
-unsigned int AudioMixer::OutputChannel() const
-{
-	return _outputChannel;
-}
-
-void AudioMixer::SetOutputChannel(unsigned int channel)
-{
-	_outputChannel = channel;
+	_behaviour = std::move(behaviour);
 }
 
 void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
@@ -146,7 +129,27 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize, unsigned int outputChannel)
+void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+	float samp,
+	float fadeCurrent,
+	float fadeNew,
+	unsigned int index) const
+{
+	auto numChans = dest->NumInputChannels();
+
+	for (auto chan = 0u; chan < numChans; chan++)
+	{
+		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
+			dest->OnMixWriteChannel(chan,
+				samp,
+				fadeCurrent,
+				fadeNew,
+				index,
+				base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
+	}
+}
+
+gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize)
 {
 	GuiSliderParams sliderParams;
 	sliderParams.Min = 0.0;

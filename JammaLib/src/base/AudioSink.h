@@ -25,16 +25,6 @@ namespace base
 				offsetMonitor = OnMixWrite(0.0f, 0.0f, 1.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
 			}
 		}
-		//inline virtual int OnWrite(float samp,
-		//	float fadeCurrent,
-		//	float fadeNew,
-		//	int indexOffset,
-		//	AudioSourceType source) { return indexOffset; };
-		//inline virtual int OnAddWrite(float samp,
-		//	float fadeCurrent,
-		//	float fadeNew,
-		//	int indexOffset,
-		//	AudioSourceType source) { return indexOffset; };
 		inline virtual int OnMixWrite(float samp,
 			float fadeCurrent,
 			float fadeNew,

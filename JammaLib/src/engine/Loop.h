@@ -85,7 +85,8 @@ namespace engine
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
 			STATE_OVERDUBBING,
-			STATE_PUNCHEDIN
+			STATE_PUNCHEDIN,
+			STATE_OVERDUBBINGRECORDING
 		};
 
 	public:
@@ -147,8 +148,7 @@ namespace engine
 			io::JamFile::Loop loopStruct,
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
-			audio::BehaviourParams behaviour,
-			unsigned int channel);
+			audio::BehaviourParams behaviour);
 
 		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
@@ -173,8 +173,6 @@ namespace engine
 			unsigned int numSamps);
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
-		unsigned int InputChannel() const;
-		void SetInputChannel(unsigned int channel);
 		std::string Id() const;
 
 		void Update();

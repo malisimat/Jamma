@@ -86,7 +86,8 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		break;
 	}
 
-	auto mixerParams = GetMixerParams(loopParams.Size, behaviour, loopParams.Channel);
+	auto mixerParams = GetMixerParams(loopParams.Size,
+		behaviour);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
@@ -98,21 +99,20 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 }
 
 audio::AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
-	audio::BehaviourParams behaviour,
-	unsigned int channel)
+	audio::BehaviourParams behaviour)
 {
 	AudioMixerParams mixerParams;
 	mixerParams.Size = { 110, loopSize.Height };
 	mixerParams.Position = { 6, 6 };
 	mixerParams.Behaviour = behaviour;
-	mixerParams.OutputChannel = channel;
 
 	return mixerParams;
 }
 
 void Loop::SetSize(utils::Size2d size)
 {
-	auto mixerParams = GetMixerParams(size, audio::WireMixBehaviourParams(), _loopParams.Channel);
+	auto mixerParams = GetMixerParams(size,
+		audio::WireMixBehaviourParams());
 
 	_mixer->SetSize(mixerParams.Size);
 
@@ -127,11 +127,14 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
 
-	auto index = (STATE_RECORDING == _state) ?
+	auto isRecording = (STATE_RECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state);
+	auto index = isRecording ?
 		_writeIndex :
 		_playIndex;
 
-	if (STATE_RECORDING != _state)
+	if (!isRecording)
 	{
 		if (index >= constants::MaxLoopFadeSamps)
 			index -= constants::MaxLoopFadeSamps;
@@ -164,7 +167,8 @@ int Loop::OnMixWrite(float samp,
 	if ((STATE_RECORDING != _state) &&
 		(STATE_PLAYINGRECORDING != _state) &&
 		(STATE_OVERDUBBING != _state) &&
-		(STATE_PUNCHEDIN != _state))
+		(STATE_PUNCHEDIN != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state))
 		return indexOffset;
 	
 	if (AUDIOSOURCE_MONITOR == source)
@@ -191,7 +195,8 @@ void Loop::EndWrite(unsigned int numSamps,
 	if ((STATE_RECORDING != _state) &&
 		(STATE_PLAYINGRECORDING != _state) &&
 		(STATE_OVERDUBBING != _state) &&
-		(STATE_PUNCHEDIN != _state))
+		(STATE_PUNCHEDIN != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state))
 		return;
 
 	if (!updateIndex)
@@ -223,14 +228,34 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	if (STATE_RECORDING == _state)
 		_mixer->Offset(numSamps);
 
-	if ((STATE_PLAYING != _state) && (STATE_PLAYINGRECORDING != _state))
+	auto isPlaying = (STATE_PLAYING == _state) ||
+		(STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state);
+
+	if (!isPlaying)
 		return;
 
 	auto peak = 0.0f;
 	auto bufBankSize = _bufferBank.Length();
+	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
 
 	auto index = _playIndex;
-	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
+
+	if (sampOffset >= 0)
+	{
+		index += sampOffset;
+	}
+	else
+	{
+		while (index < (unsigned long)(-sampOffset))
+			index += _loopLength;
+
+		index += sampOffset;
+
+		if (index < constants::MaxLoopFadeSamps)
+			index += _loopLength;
+	}
+
 	while (index >= bufSize)
 		index -= _loopLength;
 
@@ -278,7 +303,11 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 			if (index < bufBankSize)
 			{
 				auto samp = _bufferBank[index];
-				_mixer->OnPlay(dest, samp, i);
+
+				if (nullptr == trigger)
+					_mixer->OnPlay(dest, samp, i);
+				else
+					trigger->OnPlay(dest, samp, i);
 
 				if (std::abs(samp) > peak)
 					peak = std::abs(samp);
@@ -295,7 +324,13 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 
 void Loop::EndMultiPlay(unsigned int numSamps)
 {
-	if ((STATE_PLAYING != _state) && (STATE_PLAYINGRECORDING != _state))
+	auto isPlaying = (STATE_PLAYING == _state) ||
+		(STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state);
+
+	if (!isPlaying)
 		return;
 
 	if (0 == _loopLength)
@@ -355,16 +390,6 @@ void Loop::SetLoopChannel(unsigned int channel)
 	_loopParams.Channel = channel;
 }
 
-unsigned int Loop::InputChannel() const
-{
-	return _mixer->InputChannel();
-}
-
-void Loop::SetInputChannel(unsigned int channel)
-{
-	_mixer->SetInputChannel(channel);
-}
-
 std::string Loop::Id() const
 {
 	return _loopParams.Id;
@@ -403,6 +428,8 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 	UpdateLoopModel();
 
+	std::cout << "-=-=- Loop LOADED " << _loopParams.Wav << std::endl;
+
 	return true;
 }
 
@@ -416,6 +443,8 @@ void Loop::Record()
 
 	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
 	_monitorBufferBank.UpdateCapacity();
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Play(unsigned long index,
@@ -433,14 +462,21 @@ void Loop::Play(unsigned long index,
 	_playIndex = index >= bufSize ? (bufSize-1) : index;
 	_loopLength = loopLength;
 
-	auto playState = continueRecording ? STATE_PLAYINGRECORDING : STATE_PLAYING;
+	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
+	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
+	auto playState = continueRecording ? recordState : STATE_PLAYING;
 	_state = loopLength > 0 ? playState : STATE_INACTIVE;
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::EndRecording()
 {
-	if (STATE_PLAYINGRECORDING == _state)
+	if ((STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state))
 		_state = STATE_PLAYING;
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Ditch()
@@ -448,21 +484,36 @@ void Loop::Ditch()
 	Reset();
 	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
 	_bufferBank.UpdateCapacity();
+
+	std::cout << "-=-=- Loop DITCH" << std::endl;
 }
 
 void Loop::Overdub()
 {
+	Reset();
+
 	_state = STATE_OVERDUBBING;
+	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
+	_bufferBank.UpdateCapacity();
+
+	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
+	_monitorBufferBank.UpdateCapacity();
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchIn()
 {
 	_state = STATE_PUNCHEDIN;
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchOut()
 {
 	_state = STATE_OVERDUBBING;
+
+	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Reset()
@@ -473,6 +524,8 @@ void Loop::Reset()
 	_playIndex = 0ul;
 	_loopLength = 0ul;
 	_mixer->SetLevel(AudioMixer::DefaultLevel);
+
+	std::cout << "-=-=- Loop RESET" << std::endl;
 }
 
 unsigned long Loop::LoopIndex() const
@@ -494,11 +547,14 @@ double Loop::CalcDrawRadius(unsigned long loopLength)
 
 void Loop::UpdateLoopModel()
 {
-	auto length = STATE_RECORDING == _state ? _writeIndex : _loopLength;
-	auto offset = STATE_RECORDING == _state ? 0ul : constants::MaxLoopFadeSamps;
+	auto isRecording = (STATE_RECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state);
+	auto length = isRecording ? _writeIndex : _loopLength;
+	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
 	auto radius = (float)CalcDrawRadius(length);
-	auto& bufBank = STATE_RECORDING == _state ? _monitorBufferBank : _bufferBank;
+	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
 }

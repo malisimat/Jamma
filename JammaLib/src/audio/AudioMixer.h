@@ -90,6 +90,13 @@ namespace audio
 		{
 			_mixParams = mixParams;
 		}
+
+	public:
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+			float samp,
+			float fadeCurrent,
+			float fadeNew,
+			unsigned int index) const override;
 	};
 
 	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams> BehaviourParams;
@@ -106,9 +113,7 @@ namespace audio
 				"",
 				"",
 				{}),
-			Behaviour(MixBehaviourParams()),
-			InputChannel(0u),
-			OutputChannel(0u)
+			Behaviour(MixBehaviourParams())
 		{
 		}
 
@@ -116,16 +121,12 @@ namespace audio
 			BehaviourParams behaviour,
 			gui::GuiSliderParams sliderParams) :
 			base::GuiElementParams(params),
-			Behaviour(behaviour),
-			InputChannel(0u),
-			OutputChannel(0u)
+			Behaviour(behaviour)
 		{
 		}
 
 	public:
 		BehaviourParams Behaviour;
-		unsigned int InputChannel;
-		unsigned int OutputChannel;
 	};
 	
 	struct MixerBehaviourFactory
@@ -165,15 +166,10 @@ namespace audio
 			float samp,
 			unsigned int index);
 		void Offset(unsigned int numSamps);
-		
-		unsigned int InputChannel() const;
-		void SetInputChannel(unsigned int channel);
-
-		unsigned int OutputChannel() const;
-		void SetOutputChannel(unsigned int channel);
+		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
 	protected:
-		gui::GuiSliderParams GetSliderParams(utils::Size2d size, unsigned int outputChannel);
+		gui::GuiSliderParams GetSliderParams(utils::Size2d size);
 
 	protected:
 		static const utils::Size2d _Gap;

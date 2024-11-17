@@ -232,7 +232,10 @@ namespace engine
 		~Trigger();
 
 	public:
-		static std::optional<std::shared_ptr<Trigger>> FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct);
+		static std::optional<std::shared_ptr<Trigger>> FromFile(TriggerParams trigParams,
+			io::RigFile::Trigger trigStruct);
+		static audio::BounceMixBehaviourParams GetOverdubBehaviourParams(std::vector<unsigned int> channels);
+		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
@@ -260,6 +263,8 @@ namespace engine
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
+
+		void _UpdateBehaviour();
 
 	private:
 		bool IgnoreRepeats(bool isActivate,

@@ -85,7 +85,7 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
-		void OnBounce(unsigned int numSamps);
+		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
 		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
