@@ -239,6 +239,9 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	auto bufBankSize = _bufferBank.Length();
 	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
 
+	// _playIndex is always within range:
+	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
+	// index should apply the offset and then also stay in the same range
 	auto index = _playIndex;
 
 	if (sampOffset >= 0)
@@ -251,23 +254,28 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 			index += _loopLength;
 
 		index += sampOffset;
-
-		if (index < constants::MaxLoopFadeSamps)
-			index += _loopLength;
 	}
 
 	while (index >= bufSize)
 		index -= _loopLength;
 
+	if (index < constants::MaxLoopFadeSamps)
+		index += _loopLength;
+
 	// Check if we are inside crossfading region at any point
-	auto isXfadeRegion = (_playIndex + numSamps) >= (bufSize - _loopParams.FadeSamps);
+	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
 	if (isXfadeRegion)
 	{
+		// Store the offset play index to avoid the effect of
+		// index wrapping around, which will cause xfade region
+		// calc to fail
+		auto startIndex = index;
+
 		for (auto i = 0u; i < numSamps; i++)
 		{
-			auto isXfade = (_playIndex + i) >= (bufSize - _loopParams.FadeSamps);
-			isXfade &= (_playIndex + i) < bufSize;
+			auto isXfade = (startIndex + i) >= (bufSize - _loopParams.FadeSamps);
+			isXfade &= index < bufSize;
 
 			if (index < bufBankSize)
 			{
@@ -275,7 +283,7 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 
 				if (isXfade)
 				{
-					auto xfadeIndex = (_playIndex + i) - (bufSize - _loopParams.FadeSamps);
+					auto xfadeIndex = (startIndex + i) - (bufSize - _loopParams.FadeSamps);
 					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
 					auto xfadeSamp = _bufferBank[xfadeBufIndex];
 
@@ -350,34 +358,6 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 
 	auto newValue = _lastPeak * _mixer->Level();
 	_vu->SetValue(newValue, numSamps);
-}
-
-void Loop::OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
-	unsigned int channel,
-	unsigned int delaySamps,
-	unsigned int numSamps)
-{
-	if (0 == _loopLength)
-		return;
-
-	auto index = _playIndex + delaySamps;
-	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
-	while (index >= bufSize)
-		index -= _loopLength;
-
-	for (auto i = 0u; i < numSamps; i++)
-	{
-		dest->OnMixWriteChannel(channel,
-			_bufferBank[index],
-			1.0f,
-			1.0f,
-			i,
-			AUDIOSOURCE_INPUT);
-
-		index++;
-		if (index >= bufSize)
-			index -= _loopLength;
-	}
 }
 
 unsigned int Loop::LoopChannel() const

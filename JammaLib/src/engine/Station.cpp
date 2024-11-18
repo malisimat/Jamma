@@ -397,14 +397,15 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 	for (auto& trigger : _triggers)
 	{
 		if ((trigger->GetState() == TRIGSTATE_OVERDUBBING) ||
+			(trigger->GetState() == TRIGSTATE_OVERDUBBINGDITCHDOWN) ||
 			(trigger->GetState() == TRIGSTATE_PUNCHEDIN) ||
+			(trigger->GetState() == TRIGSTATE_PUNCHEDINDITCHDOWN) ||
 			(trigger->GetState() == TRIGSTATE_DEFAULT))
 		{
-			auto lastTake = trigger->TryGetLastTake();
+			auto takes = trigger->GetTakes();
 
-			if (lastTake.has_value())
+			for (auto& take : takes)
 			{
-				auto& take = lastTake.value();
 				std::string sourceId = take.SourceTakeId;
 				std::string targetId = take.TargetTakeId;
 				auto sourceMatch = std::find_if(_backLoopTakes.begin(),
@@ -416,7 +417,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 				if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 				{
-					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps + (long)config.Audio.LatencyOut), numSamps);
+					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 				}
 			}
 		}

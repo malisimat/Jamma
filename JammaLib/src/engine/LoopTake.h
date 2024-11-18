@@ -95,9 +95,6 @@ namespace engine
 			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
-		void OnPlayRaw(const std::shared_ptr<MultiAudioSink> dest,
-			unsigned int delaySamps,
-			unsigned int numSamps);		
 		std::string Id() const;
 		std::string SourceId() const;
 		LoopTakeSource SourceType() const;

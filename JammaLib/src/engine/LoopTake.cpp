@@ -154,18 +154,6 @@ ActionResult LoopTake::OnAction(JobAction action)
 	return { false, "", "", actions::ACTIONRESULT_DEFAULT};
 }
 
-void LoopTake::OnPlayRaw(const std::shared_ptr<MultiAudioSink> dest,
-	unsigned int delaySamps,
-	unsigned int numSamps)
-{
-	auto loopNum = 0u;
-	for (auto& loop : _loops)
-	{
-		loop->OnPlayRaw(dest, loopNum, delaySamps, numSamps);
-		loopNum++;
-	}
-}
-
 std::string LoopTake::Id() const
 {
 	return _id;

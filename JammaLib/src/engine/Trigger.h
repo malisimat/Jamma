@@ -255,7 +255,7 @@ namespace engine
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
-		std::optional<TriggerTake> TryGetLastTake() const;
+		std::vector<TriggerTake> GetTakes() const;
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
 			unsigned int index);
@@ -312,7 +312,7 @@ namespace engine
 		graphics::Image _textureDitchDown;
 		graphics::Image _textureOverdubbing;
 		graphics::Image _texturePunchedIn;
-		std::vector<TriggerTake> _lastLoopTakes;
+		std::vector<TriggerTake> _loopTakeHistory;
 		std::vector<actions::DelayedAction> _delayedActions;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 	};

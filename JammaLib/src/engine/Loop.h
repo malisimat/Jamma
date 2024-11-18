@@ -167,10 +167,6 @@ namespace engine
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
 
-		void OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
-			unsigned int channel,
-			unsigned int delaySamps,
-			unsigned int numSamps);
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;

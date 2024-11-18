@@ -33,7 +33,7 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_lastLoopTakes({}),
+	_loopTakeHistory({}),
 	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
 	_delayedActions({})
 {
@@ -291,7 +291,7 @@ void Trigger::Reset()
 
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_recordSampCount = 0;
-	_lastLoopTakes.clear();
+	_loopTakeHistory.clear();
 }
 
 std::string Trigger::Name() const
@@ -304,12 +304,9 @@ void Trigger::SetName(std::string name)
 	_name = name;
 }
 
-std::optional<TriggerTake> Trigger::TryGetLastTake() const
+std::vector<TriggerTake> Trigger::GetTakes() const
 {
-	if (!_lastLoopTakes.empty())
-		return _lastLoopTakes.back();
-
-	return std::nullopt;
+	return _loopTakeHistory;
 }
 
 void Trigger::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
@@ -586,7 +583,7 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 		if (res.IsEaten)
 		{
 			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
-			_lastLoopTakes.push_back(newTake);
+			_loopTakeHistory.push_back(newTake);
 		}
 	}
 }
@@ -598,9 +595,9 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger END RECORDING" << std::endl;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_END;
@@ -645,11 +642,11 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger DITCH" << std::endl;
 
 	_delayedActions.clear();
-	auto popBack = !_lastLoopTakes.empty();
+	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_DITCH;
@@ -666,7 +663,7 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	}
 
 	if (popBack)
-		_lastLoopTakes.pop_back();
+		_loopTakeHistory.pop_back();
 }
 
 void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
@@ -697,7 +694,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 		if (res.IsEaten)
 		{
 			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
-			_lastLoopTakes.push_back(newTake);
+			_loopTakeHistory.push_back(newTake);
 		}
 	}
 }
@@ -709,9 +706,9 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_END;
@@ -736,11 +733,11 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger DITCH OVERDUB" << std::endl;
 
 	_delayedActions.clear();
-	auto popBack = !_lastLoopTakes.empty();
+	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_DITCH;
 		trigAction.TargetId = lastTake.TargetTakeId;
@@ -756,7 +753,7 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 	}
 
 	if (popBack)
-		_lastLoopTakes.pop_back();
+		_loopTakeHistory.pop_back();
 }
 
 void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
@@ -769,9 +766,9 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	_delayedActions.clear();
 	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
@@ -793,9 +790,9 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
