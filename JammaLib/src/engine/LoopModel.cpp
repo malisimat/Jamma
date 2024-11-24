@@ -16,7 +16,8 @@ const float LoopModel::_HeightScale = 100.0f;
 
 LoopModel::LoopModel(LoopModelParams params) :
 	GuiModel(params),
-	_loopIndexFrac(0)
+	_loopIndexFrac(0),
+	_modelState(STATE_RECORDING)
 {
 }
 
@@ -31,6 +32,8 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
 
+	glCtx.SetUniform("LoopState", (unsigned int)_modelState);
+
 	GuiModel::Draw3d(glCtx, 1);
 
 	glCtx.PopMvp();
@@ -44,6 +47,11 @@ double LoopModel::LoopIndexFrac() const
 void LoopModel::SetLoopIndexFrac(double frac)
 {
 	_loopIndexFrac = frac;
+}
+
+void LoopModel::SetLoopState(LoopModelState state)
+{
+	_modelState = state;
 }
 
 unsigned int LoopModel::TotalNumLeds(unsigned int vuHeight,

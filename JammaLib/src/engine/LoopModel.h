@@ -33,6 +33,14 @@ namespace engine
 		public virtual gui::GuiModel
 	{
 	public:
+		enum LoopModelState
+		{
+			STATE_RECORDING = 0,
+			STATE_PLAYING = 1,
+			STATE_MUTED = 2
+		};
+
+	public:
 		LoopModel(LoopModelParams params);
 		~LoopModel();
 
@@ -44,6 +52,7 @@ namespace engine
 		void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
+		void SetLoopState(LoopModelState state);
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
 			unsigned long offset,
@@ -69,5 +78,6 @@ namespace engine
 		static const float _HeightScale;
 
 		double _loopIndexFrac;
+		LoopModelState _modelState;
 	};
 }

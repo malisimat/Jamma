@@ -84,6 +84,7 @@ namespace engine
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
+			STATE_MUTED,
 			STATE_OVERDUBBING,
 			STATE_PUNCHEDIN,
 			STATE_OVERDUBBINGRECORDING
@@ -177,6 +178,8 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			bool continueRecording);
+		void Mute();
+		void UnMute();
 		void EndRecording();
 		void Ditch();
 		void Overdub();
@@ -188,6 +191,7 @@ namespace engine
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
 		void UpdateLoopModel();
+		void UpdateMuteState(bool muted);
 
 	protected:
 		unsigned long _playIndex;

@@ -16,6 +16,8 @@ const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
 
 AudioMixer::AudioMixer(AudioMixerParams params) :
 	GuiElement(params),
+	_isMuted(false),
+	_unmutedFadeTarget(DefaultLevel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
 	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size))),
 	_fade(std::make_unique<InterpolatedValueExp>())
@@ -47,8 +49,24 @@ void AudioMixer::SetSize(utils::Size2d size)
 
 ActionResult AudioMixer::OnAction(DoubleAction val)
 {
-	_fade->SetTarget(val.Value());
+	SetUnmutedLevel(val.Value());
+
 	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr};
+}
+
+bool AudioMixer::IsMuted() const
+{
+	return _isMuted;
+}
+
+void AudioMixer::SetMuted(bool muted)
+{
+	_isMuted = muted;
+
+	if (muted)
+		_fade->SetTarget(0.0);
+	else
+		_fade->SetTarget(_unmutedFadeTarget);
 }
 
 double AudioMixer::Level() const
@@ -56,9 +74,17 @@ double AudioMixer::Level() const
 	return _fade->Current();
 }
 
-void AudioMixer::SetLevel(double level)
+double AudioMixer::UnmutedLevel() const
 {
-	_fade->SetTarget(level);
+	return _unmutedFadeTarget;
+}
+
+void AudioMixer::SetUnmutedLevel(double level)
+{
+	_unmutedFadeTarget = level;
+	
+	if (!_isMuted)
+		_fade->SetTarget(_unmutedFadeTarget);
 }
 
 void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,

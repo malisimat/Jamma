@@ -271,6 +271,10 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (loopTake.has_value())
 			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
 
+		auto sourceLoopTake = TryGetTake(action.SourceId);
+		if (sourceLoopTake.has_value())
+			sourceLoopTake.value()->Mute();
+
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;

@@ -1,7 +1,7 @@
 1 grid
 1 levels
 2 texture MVP
-2 texture_shaded MVP
+2 texture_shaded MVP LoopState
 2 vu MVP DX DY NumInstances InstanceOffset
 1 fader_back
 1 fader

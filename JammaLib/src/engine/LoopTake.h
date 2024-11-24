@@ -60,10 +60,11 @@ namespace engine
 
 		enum LoopTakeState
 		{
-			STATE_DEFAULT,
+			STATE_INACTIVE,
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
+			STATE_MUTED,
 			STATE_OVERDUBBING,
 			STATE_PUNCHEDIN,
 			STATE_OVERDUBBINGRECORDING
@@ -106,6 +107,8 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
+		void Mute();
+		void UnMute();
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);

@@ -160,8 +160,11 @@ namespace audio
 		virtual void InitReceivers() override;
 		virtual void SetSize(utils::Size2d size) override;
 
+		bool IsMuted() const;
+		void SetMuted(bool muted);
 		double Level() const;
-		void SetLevel(double level);
+		double UnmutedLevel() const;
+		void SetUnmutedLevel(double level);
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
 			unsigned int index);
@@ -176,8 +179,8 @@ namespace audio
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
 
-		unsigned int _inputChannel;
-		unsigned int _outputChannel;
+		bool _isMuted;
+		double _unmutedFadeTarget;
 		std::unique_ptr<MixBehaviour> _behaviour;
 		std::shared_ptr<gui::GuiSlider> _slider;
 		std::unique_ptr<InterpolatedValue> _fade;

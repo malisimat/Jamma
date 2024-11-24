@@ -29,7 +29,7 @@ namespace actions
 	public:
 		TriggerActionType ActionType;
 		std::string TargetId;
-		std::string OverdubTargetId;
+		std::string SourceId;
 		unsigned long SampleCount;
 		std::vector<unsigned int> InputChannels;
 	};

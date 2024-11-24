@@ -318,7 +318,7 @@ void Trigger::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		if (action.SampsLeft(index) == 0)
 		{
-			_overdubMixer->SetLevel(action.GetTarget());
+			_overdubMixer->SetUnmutedLevel(action.GetTarget());
 			removeExpired = true;
 		}
 	}
@@ -675,7 +675,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 	_recordSampCount = 0;
 	_delayedActions.clear();
-	_overdubMixer->SetLevel(1.0);
+	_overdubMixer->SetUnmutedLevel(1.0);
 
 	if (_receiver)
 	{
@@ -712,6 +712,7 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_END;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
@@ -763,7 +764,6 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
-	_delayedActions.clear();
 	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())

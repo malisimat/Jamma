@@ -23,7 +23,7 @@ LoopTake::LoopTake(LoopTakeParams params) :
 	_flipLoopBuffer(false),
 	_loopsNeedUpdating(false),
 	_endRecordingCompleted(false),
-	_state(STATE_DEFAULT),
+	_state(STATE_INACTIVE),
 	_id(params.Id),
 	_sourceId(""),
 	_fadeSamps(params.FadeSamps),
@@ -210,6 +210,9 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 
 void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName)
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	_state = STATE_RECORDING;
 
 	_recordedSampCount = 0;
@@ -232,6 +235,10 @@ void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps)
 {
+	if ((STATE_RECORDING != _state) &&
+		(STATE_OVERDUBBING != _state))
+		return;
+
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 
@@ -242,14 +249,42 @@ void LoopTake::Play(unsigned long index,
 
 	auto recordState = STATE_OVERDUBBING == _state ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = endRecordSamps > 0 ? recordState : STATE_PLAYING;
-	_state = loopLength > 0 ? playState : STATE_DEFAULT;
+	_state = loopLength > 0 ? playState : STATE_INACTIVE;
+}
+
+void LoopTake::Mute()
+{
+	if (STATE_PLAYING != _state)
+		return;
+
+	_state = STATE_MUTED;
+
+	for (auto& loop : _loops)
+	{
+		loop->Mute();
+	}
+}
+
+void LoopTake::UnMute()
+{
+	if (STATE_MUTED != _state)
+		return;
+
+	_state = STATE_PLAYING;
+
+	for (auto& loop : _loops)
+	{
+		loop->UnMute();
+	}
 }
 
 void LoopTake::EndRecording()
 {
-	if ((STATE_PLAYINGRECORDING == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state))
-		_state = STATE_PLAYING;
+	if ((STATE_PLAYINGRECORDING != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state))
+		return;
+
+	_state = STATE_PLAYING;
 
 	for (auto& loop : _loops)
 	{
@@ -273,6 +308,9 @@ void LoopTake::Ditch()
 
 void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationName)
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	_state = STATE_OVERDUBBING;
 
 	_recordedSampCount = 0;
@@ -293,6 +331,9 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 
 void LoopTake::PunchIn()
 {
+	if (STATE_OVERDUBBING != _state)
+		return;
+
 	_state = STATE_PUNCHEDIN;
 
 	for (auto& loop : _loops)
@@ -303,6 +344,9 @@ void LoopTake::PunchIn()
 
 void LoopTake::PunchOut()
 {
+	if (STATE_PUNCHEDIN != _state)
+		return;
+
 	_state = STATE_OVERDUBBING;
 
 	for (auto& loop : _loops)

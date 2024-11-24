@@ -25,7 +25,7 @@ Loop::Loop(LoopParams loopParams,
 	_lastPeak(0.0f),
 	_pitch(1.0),
 	_loopLength(0),
-	_state(STATE_PLAYING),
+	_state(STATE_INACTIVE),
 	_loopParams(loopParams),
 	_mixer(nullptr),
 	_hanning(nullptr),
@@ -143,13 +143,21 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 	_model->SetLoopIndexFrac(frac);
 
+	LoopModel::LoopModelState modelState = LoopModel::LoopModelState::STATE_RECORDING;
+	if (STATE_PLAYING == _state)
+		modelState = LoopModel::LoopModelState::STATE_PLAYING;
+	else if (STATE_MUTED == _state)
+		modelState = LoopModel::LoopModelState::STATE_MUTED;
+
+	_model->SetLoopState(modelState);
+
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
 	_vu->Draw3d(ctx, 1);
 
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->Level(), 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->UnmutedLevel(), 1.0f)));
 	
 	_model->Draw3d(ctx, 1);
 	
@@ -229,6 +237,7 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 		_mixer->Offset(numSamps);
 
 	auto isPlaying = (STATE_PLAYING == _state) ||
+		(STATE_MUTED == _state) ||
 		(STATE_PLAYINGRECORDING == _state) ||
 		(STATE_OVERDUBBINGRECORDING == _state);
 
@@ -333,6 +342,7 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 void Loop::EndMultiPlay(unsigned int numSamps)
 {
 	auto isPlaying = (STATE_PLAYING == _state) ||
+		(STATE_MUTED == _state) ||
 		(STATE_PLAYINGRECORDING == _state) ||
 		(STATE_OVERDUBBING == _state) ||
 		(STATE_PUNCHEDIN == _state) ||
@@ -415,6 +425,9 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 void Loop::Record()
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	Reset();
 
 	_state = STATE_RECORDING;
@@ -450,26 +463,53 @@ void Loop::Play(unsigned long index,
 	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
+void Loop::Mute()
+{
+	if (STATE_PLAYING != _state)
+		return;
+
+	UpdateMuteState(true);
+}
+
+void Loop::UnMute()
+{
+	if (STATE_MUTED != _state)
+		return;
+	
+	_state = STATE_PLAYING;
+
+	UpdateMuteState(false);
+}
+
 void Loop::EndRecording()
 {
-	if ((STATE_PLAYINGRECORDING == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state))
-		_state = STATE_PLAYING;
+	if ((STATE_PLAYINGRECORDING != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state))
+		return;
+	
+	_state = STATE_PLAYING;
 
 	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Ditch()
 {
-	Reset();
-	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_bufferBank.UpdateCapacity();
+	if (STATE_INACTIVE == _state)
+		return;
 
-	std::cout << "-=-=- Loop DITCH" << std::endl;
+Reset();
+
+_bufferBank.SetLength(constants::MaxLoopFadeSamps);
+_bufferBank.UpdateCapacity();
+
+std::cout << "-=-=- Loop DITCH" << std::endl;
 }
 
 void Loop::Overdub()
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	Reset();
 
 	_state = STATE_OVERDUBBING;
@@ -484,6 +524,9 @@ void Loop::Overdub()
 
 void Loop::PunchIn()
 {
+	if (STATE_OVERDUBBING != _state)
+		return;
+
 	_state = STATE_PUNCHEDIN;
 
 	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
@@ -491,6 +534,9 @@ void Loop::PunchIn()
 
 void Loop::PunchOut()
 {
+	if (STATE_PUNCHEDIN != _state)
+		return;
+
 	_state = STATE_OVERDUBBING;
 
 	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
@@ -503,7 +549,8 @@ void Loop::Reset()
 	_writeIndex = 0ul;
 	_playIndex = 0ul;
 	_loopLength = 0ul;
-	_mixer->SetLevel(AudioMixer::DefaultLevel);
+	_mixer->SetMuted(false);
+	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
 
 	std::cout << "-=-=- Loop RESET" << std::endl;
 }
@@ -537,4 +584,22 @@ void Loop::UpdateLoopModel()
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
+}
+
+void Loop::UpdateMuteState(bool muted)
+{
+	if (muted && (STATE_PLAYING == _state))
+	{
+		_state = STATE_MUTED;
+
+		if (!_mixer->IsMuted())
+			_mixer->SetMuted(true);
+	}
+	else if (!muted && (STATE_MUTED == _state))
+	{
+		_state = STATE_PLAYING;
+
+		if (_mixer->IsMuted())
+			_mixer->SetMuted(false);
+	}
 }
