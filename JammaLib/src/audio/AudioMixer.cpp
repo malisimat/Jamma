@@ -121,17 +121,14 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float fadeNew,
 	unsigned int index) const
 {
-	auto numChans = dest->NumInputChannels();
-
-	for (auto chan = 0u; chan < numChans; chan++)
+	for (auto chan : _mixParams.Channels)
 	{
-		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
-			dest->OnMixWriteChannel(chan,
-				samp,
-				fadeCurrent,
-				fadeNew,
-				index,
-				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
+		dest->OnMixWriteChannel(chan,
+			samp,
+			fadeCurrent,
+			fadeNew,
+			index,
+			base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}
 }
 
@@ -161,17 +158,14 @@ void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float fadeNew,
 	unsigned int index) const
 {
-	auto numChans = dest->NumInputChannels();
-
-	for (auto chan = 0u; chan < numChans; chan++)
+	for (auto chan : _mixParams.Channels)
 	{
-		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
-			dest->OnMixWriteChannel(chan,
-				samp,
-				fadeCurrent,
-				fadeNew,
-				index,
-				base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
+		dest->OnMixWriteChannel(chan,
+			samp,
+			fadeCurrent,
+			fadeNew,
+			index,
+			base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
 	}
 }
 
