@@ -2,18 +2,20 @@
 
 #include <string>
 #include <memory>
-#include "MultiAudioSource.h"
+#include "Trigger.h"
 #include "ActionReceiver.h"
 #include "ResourceUser.h"
 #include "GuiElement.h"
 #include "GlUtils.h"
 #include "VU.h"
 #include "LoopModel.h"
+#include "../base/MultiAudioSource.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"
 #include "../io/JamFile.h"
 #include "../audio/BufferBank.h"
 #include "../audio/AudioMixer.h"
+#include "../audio/Hanning.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 
@@ -39,7 +41,7 @@ namespace engine
 			OverdubTexture(""),
 			PunchTexture(""),
 			Channel(0),
-			FadeSamps(800u)
+			FadeSamps(constants::DefaultFadeSamps)
 		{
 		}
 
@@ -54,7 +56,7 @@ namespace engine
 			OverdubTexture(""),
 			PunchTexture(""),
 			Channel(0u),
-			FadeSamps(800u)
+			FadeSamps(constants::DefaultFadeSamps)
 		{
 		}
 
@@ -82,8 +84,10 @@ namespace engine
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
+			STATE_MUTED,
 			STATE_OVERDUBBING,
-			STATE_PUNCHEDIN
+			STATE_PUNCHEDIN,
+			STATE_OVERDUBBINGRECORDING
 		};
 
 	public:
@@ -105,11 +109,13 @@ namespace engine
 			_playIndex(other._playIndex),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
+			_hanning(std::move(other._hanning)),
 			_model(std::move(other._model)),
 			_vu(std::move(other._vu)),
-			_bufferBank(std::move(other._bufferBank))
+			_bufferBank(std::move(other._bufferBank)),
+			_monitorBufferBank(std::move(other._monitorBufferBank))
 		{
-			other._writeIndex = 0;
+			other._writeIndex = 0ul;
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 		}
@@ -128,9 +134,11 @@ namespace engine
 				std::swap(_playIndex, other._playIndex);
 				std::swap(_loopParams, other._loopParams);
 				_mixer.swap(other._mixer);
+				_hanning.swap(other._hanning);
 				_model.swap(other._model);
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
+				std::swap(_monitorBufferBank, other._monitorBufferBank);
 			}
 
 			return *this;
@@ -141,27 +149,27 @@ namespace engine
 			io::JamFile::Loop loopStruct,
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
-			audio::BehaviourParams behaviour,
-			unsigned int channel);
+			audio::BehaviourParams behaviour);
 
 		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
+		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			const std::shared_ptr<Trigger> trigger,
+			int sampOffset,
+			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		inline virtual int OnWrite(float samp, int indexOffset) override;
-		inline virtual int OnOverwrite(float samp, int indexOffset) override;
-		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
+		inline virtual int OnMixWrite(float samp,
+			float fadeCurrent,
+			float fadeNew,
+			int indexOffset,
+			Audible::AudioSourceType source) override;
+		virtual void EndWrite(unsigned int numSamps,
+			bool updateIndex) override;
 
-		void OnPlayRaw(const std::shared_ptr<base::MultiAudioSink> dest,
-			unsigned int channel,
-			unsigned int delaySamps,
-			unsigned int numSamps);
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
-		unsigned int InputChannel() const;
-		void SetInputChannel(unsigned int channel);
 		std::string Id() const;
 
 		void Update();
@@ -170,6 +178,8 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			bool continueRecording);
+		void Mute();
+		void UnMute();
 		void EndRecording();
 		void Ditch();
 		void Overdub();
@@ -181,6 +191,7 @@ namespace engine
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
 		void UpdateLoopModel();
+		void UpdateMuteState(bool muted);
 
 	protected:
 		unsigned long _playIndex;
@@ -190,8 +201,10 @@ namespace engine
 		LoopVisualState _state;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
+		audio::BufferBank _monitorBufferBank;
 	};
 }

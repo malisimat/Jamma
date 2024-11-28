@@ -18,6 +18,7 @@ Scene::Scene(SceneParams params,
 	Sizeable(params),
 	_isSceneTouching(false),
 	_isSceneQuitting(false),
+	_isSceneReset(true),
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
@@ -66,12 +67,15 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	trigParams.TextureDitchDown = "blue";
 	trigParams.TextureOverdubbing = "orange";
 	trigParams.TexturePunchedIn = "purple";
-	trigParams.DebounceMs = 120;
+	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
 	stationParams.Position = { 20, 20 };
 	stationParams.ModelPosition = { -50, -20 };
 	stationParams.Size = { 140, 300 };
+	stationParams.FadeSamps = rigStruct.User.Loop.FadeSamps > constants::MaxLoopFadeSamps ?
+		constants::MaxLoopFadeSamps :
+		rigStruct.User.Loop.FadeSamps;
 
 	for (auto stationStruct : jamStruct.Stations)
 	{
@@ -179,7 +183,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		_touchDownElement.reset();
 
-		return { false, "", ACTIONRESULT_DEFAULT };
+		return { false, "", "", ACTIONRESULT_DEFAULT };
 	}
 
 	for (auto& station : _stations)
@@ -204,7 +208,8 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	ActionResult res;
 	res.IsEaten = true;
-	res.Id = "";
+	res.SourceId = "";
+	res.TargetId = "";
 	res.ResultType = ACTIONRESULT_ID;
 	res.Undo = std::shared_ptr<ActionUndo>();
 	res.ActiveElement = std::weak_ptr<GuiElement>();
@@ -215,7 +220,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
-	
+
 	auto activeElement = _touchDownElement.lock();
 
 	if (activeElement)
@@ -227,7 +232,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		SetSize(_sizeParams.Size);
 	}
 
-	return { false, "", ACTIONRESULT_DEFAULT };
+	return { false, "", "", ACTIONRESULT_DEFAULT };
 }
 
 ActionResult Scene::OnAction(KeyAction action)
@@ -248,7 +253,6 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 
 	bool checkReset = false;
-	unsigned int numTakes = 0;
 
 	for (auto& station : _stations)
 	{
@@ -256,28 +260,36 @@ ActionResult Scene::OnAction(KeyAction action)
 
 		if (res.IsEaten)
 		{
+			std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
 			switch (res.ResultType)
 			{
-			/*case ACTIONRESULT_ID:
-				_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
-				break;*/
+			case ACTIONRESULT_ACTIVATE:
+				_isSceneReset = false;
+				/*case ACTIONRESULT_ID:
+					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
+					break;*/
 			case ACTIONRESULT_DITCH:
 				checkReset = true;
-				numTakes += station->NumTakes();
 				break;
 			}
 
-			if (checkReset && (0 == numTakes))
+			if (checkReset && !_isSceneReset)
 			{
-				std::cout << "Reset" << std::endl;
-				_clock->Clear();
+				unsigned int numTakes = 0;
+				for (auto& station : _stations)
+				{
+					numTakes += station->NumTakes();
+				}
+
+				if (0 == numTakes)
+					Reset();
 			}
 
 			return res;
 		}
 	}
 
-	return { false, "", ACTIONRESULT_DEFAULT };
+	return { false, "", "", ACTIONRESULT_DEFAULT };
 }
 
 void Scene::OnTick(Time curTime,
@@ -285,12 +297,21 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	unsigned int totalNumLoops = 0u;
+
 	for (auto& station : _stations)
 	{
 		station->OnTick(curTime,
 			samps,
 			_userConfig,
 			_audioDevice->GetAudioStreamParams());
+
+		totalNumLoops += station->NumTakes();
+	}
+
+	if ((0u == totalNumLoops) && !_isSceneReset)
+	{
+		Reset();
 	}
 }
 
@@ -324,6 +345,13 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+}
+
+void Scene::Reset()
+{
+	std::cout << "Reset" << std::endl;
+	_clock->Clear();
+	_isSceneReset = true;
 }
 
 void Scene::InitAudio()
@@ -417,11 +445,37 @@ void Scene::OnAudio(float* inBuf,
 			audioStreamParams.InputLatency;
 
 		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
-		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
+
+		_channelMixer->InitPlay(0u, numSamps);
+		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
 
 		for (auto& station : _stations)
 		{
-			_channelMixer->Source()->OnPlay(station, numSamps);
+			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
+		}
+
+		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
+		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_INPUT);
+
+		for (auto& station : _stations)
+		{
+			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
+		
+			// Overdubbing / bouncing
+			// Each trigger knows which looptakes are wired up to which
+			// other looptakes (and inputs)
+			// Imagine overdubbing a drum take - records from inputs 5-8
+			// Then on audio, we transfer audio directly from previous loops
+			// to new looptake, no wiring/mixing, so loop 1 goes to new loop 1 etc.
+			// The only wiring/mixing done is from input audio.
+			// We call a method on station to wind all these internal looptake bounces
+			// forward, according to the triggers that are in overdub mode.
+			station->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
+			station->OnBounce(numSamps, _userConfig);
+
+			station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
+			station->OnBounce(numSamps, _userConfig);
+
 			station->EndMultiWrite(numSamps, true);
 		}
 	}
@@ -438,7 +492,7 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			station->OnPlay(_channelMixer->Sink(), numSamps);
+			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 
@@ -448,7 +502,7 @@ void Scene::OnAudio(float* inBuf,
 	{
 		for (auto& station : _stations)
 		{
-			station->OnPlay(_channelMixer->Sink(), numSamps);
+			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 	}

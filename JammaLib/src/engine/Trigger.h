@@ -9,6 +9,8 @@
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
+#include "../actions/DelayedAction.h"
+#include "../audio/AudioMixer.h"
 #include "../io/RigFile.h"
 
 namespace engine
@@ -22,7 +24,8 @@ namespace engine
 			SOURCE_STATION
 		};
 		SourceType SourceType;
-		std::string TakeId;
+		std::string SourceTakeId;
+		std::string TargetTakeId;
 	};
 
 	enum TriggerSource
@@ -198,6 +201,7 @@ namespace engine
 		{};
 
 	public:
+		std::string Name;
 		std::vector<DualBinding> Activate;
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
@@ -214,7 +218,9 @@ namespace engine
 		TRIGSTATE_RECORDING,
 		TRIGSTATE_DITCHDOWN,
 		TRIGSTATE_OVERDUBBING,
-		TRIGSTATE_PUNCHEDIN
+		TRIGSTATE_OVERDUBBINGDITCHDOWN,
+		TRIGSTATE_PUNCHEDIN,
+		TRIGSTATE_PUNCHEDINDITCHDOWN
 	};
 	
 	class Trigger :
@@ -226,7 +232,10 @@ namespace engine
 		~Trigger();
 
 	public:
-		static std::optional<std::shared_ptr<Trigger>> FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct);
+		static std::optional<std::shared_ptr<Trigger>> FromFile(TriggerParams trigParams,
+			io::RigFile::Trigger trigStruct);
+		static audio::BounceMixBehaviourParams GetOverdubBehaviourParams(std::vector<unsigned int> channels);
+		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
@@ -244,10 +253,18 @@ namespace engine
 		void ClearInputChannels();
 		TriggerState GetState() const;
 		void Reset();
+		std::string Name() const;
+		void SetName(std::string name);
+		std::vector<TriggerTake> GetTakes() const;
+		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			float samp,
+			unsigned int index);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
+
+		void _UpdateBehaviour();
 
 	private:
 		bool IgnoreRepeats(bool isActivate,
@@ -268,6 +285,7 @@ namespace engine
 		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void EndRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void SetDitchDown(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		void SetDitchUp(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void Ditch(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void StartOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void EndOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
@@ -276,6 +294,7 @@ namespace engine
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 
 	private:
+		std::string _name;
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
@@ -293,6 +312,8 @@ namespace engine
 		graphics::Image _textureDitchDown;
 		graphics::Image _textureOverdubbing;
 		graphics::Image _texturePunchedIn;
-		std::vector<TriggerTake> _lastLoopTakes;
+		std::vector<TriggerTake> _loopTakeHistory;
+		std::vector<actions::DelayedAction> _delayedActions;
+		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 	};
 }

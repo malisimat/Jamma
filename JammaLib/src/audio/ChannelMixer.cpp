@@ -28,6 +28,7 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(); chan++)
 	{
 		auto buf = _adcMixer->Channel(chan);
+		auto source = _adcMixer->SourceType();
 
 		if ((buf) && (numChannels > chan))
 		{
@@ -35,7 +36,11 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 
 			for (auto samp = 0u; samp < numSamps; samp++)
 			{
-				currentOffset = buf->OnOverwrite(inBuf[samp*numChannels + chan], currentOffset);
+				currentOffset = buf->OnMixWrite(inBuf[samp*numChannels + chan],
+					0.0f,
+					1.0f,
+					currentOffset,
+					source);
 			}
 
 			buf->EndWrite(numSamps, true);
@@ -141,9 +146,15 @@ const std::shared_ptr<AudioBuffer> ChannelMixer::BufferMixer::Channel(unsigned i
 const std::shared_ptr<AudioSource> ChannelMixer::AdcChannelMixer::OutputChannel(unsigned int channel)
 {
 	if (channel < _buffers.size())
-		return _buffers[channel];
+	{
+		auto chan = _buffers[channel];
+		chan->SetSourceType(SourceType());
+		return chan;
+	}
 
-	return std::shared_ptr<AudioSource>();
+	auto chan = std::shared_ptr<AudioSource>();
+	chan->SetSourceType(SourceType());
+	return chan;
 }
 
 const std::shared_ptr<AudioSink> ChannelMixer::DacChannelMixer::InputChannel(unsigned int channel)

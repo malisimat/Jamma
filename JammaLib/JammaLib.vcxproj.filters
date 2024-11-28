@@ -209,9 +209,6 @@
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\MultiAudioSource.h">
-      <Filter>src\audio</Filter>
-    </ClInclude>
     <ClInclude Include="src\audio\ChannelMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -361,6 +358,15 @@
     </ClInclude>
     <ClInclude Include="src\audio\BufferBank.h">
       <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\Hanning.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\MultiAudioSource.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\actions\DelayedAction.h">
+      <Filter>src\actions</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -538,11 +544,17 @@
     <ClCompile Include="src\utils\MathUtils.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\BufferBank.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\Hanning.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\FallingValue.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\BufferBank.cpp">
-      <Filter>src\audio</Filter>
+    <ClCompile Include="src\actions\DelayedAction.cpp">
+      <Filter>src\actions</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

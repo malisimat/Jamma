@@ -23,6 +23,7 @@ AudioBuffer::~AudioBuffer()
 }
 
 void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	if (0 == _sampsRecorded)
@@ -30,7 +31,7 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 
 	auto bufSize = (unsigned int)_buffer.size();
 
-	auto index = _playIndex;
+	auto index = _playIndex + (long)indexOffset;
 	while (index >= bufSize)
 		index -= bufSize;
 
@@ -38,7 +39,7 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 
 	for (auto i = 0u; i < numSamps; i++) // TODO: pass the whole vector to the sink
 	{
-		destIndex = dest->OnWrite(_buffer[index], destIndex);
+		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, SourceType());
 
 		index++;
 		if (index >= bufSize)
@@ -69,7 +70,11 @@ void AudioBuffer::EndPlay(unsigned int numSamps)
 		_playIndex -= bufSize;
 }
 
-inline int AudioBuffer::OnWrite(float samp, int indexOffset)
+inline int AudioBuffer::OnMixWrite(float samp,
+	float fadeCurrent,
+	float fadeNew,
+	int indexOffset,
+	Audible::AudioSourceType source)
 {
 	auto bufSize = (unsigned int)_buffer.size();
 
@@ -82,25 +87,7 @@ inline int AudioBuffer::OnWrite(float samp, int indexOffset)
 	while (bufSize <= _writeIndex + indexOffset)
 		indexOffset -= (int)_buffer.size();
 
-	_buffer[_writeIndex + indexOffset]+= samp;
-
-	return indexOffset + 1;
-}
-
-inline int AudioBuffer::OnOverwrite(float samp, int indexOffset)
-{
-	auto bufSize = (unsigned int)_buffer.size();
-
-	if (0 == bufSize)
-	{
-		_writeIndex = 0;
-		return 0;
-	}
-
-	while (bufSize <= _writeIndex + indexOffset)
-		indexOffset -= (int)_buffer.size();
-
-	_buffer[_writeIndex + indexOffset] = samp;
+	_buffer[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _buffer[_writeIndex + indexOffset]);
 
 	return indexOffset + 1;
 }

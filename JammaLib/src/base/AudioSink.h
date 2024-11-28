@@ -16,15 +16,23 @@ namespace base
 		virtual AudioDirection AudibleDirection() const override { return AUDIO_SINK; }
 		virtual void Zero(unsigned int numSamps)
 		{
-			auto offset = 0;
+			auto offsetInput = 0;
+			auto offsetMonitor = 0;
 
 			for (auto i = 0u; i < numSamps; i++)
-				offset = OnOverwrite(0.0f, offset);
+			{
+				offsetInput = OnMixWrite(0.0f, 0.0f, 1.0f, offsetInput, AUDIOSOURCE_INPUT);
+				offsetMonitor = OnMixWrite(0.0f, 0.0f, 1.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
+			}
 		}
-		inline virtual int OnWrite(float samp, int indexOffset) { return indexOffset; };
-		inline virtual int OnOverwrite(float samp, int indexOffset) { return indexOffset; };
+		inline virtual int OnMixWrite(float samp,
+			float fadeCurrent,
+			float fadeNew,
+			int indexOffset,
+			AudioSourceType source) { return indexOffset; };
 		virtual void EndWrite(unsigned int numSamps) { return EndWrite(numSamps, false); }
-		virtual void EndWrite(unsigned int numSamps, bool updateIndex) = 0;
+		virtual void EndWrite(unsigned int numSamps,
+			bool updateIndex) = 0;
 
 		std::shared_ptr<AudioSink> shared_from_this()
 		{

@@ -16,10 +16,10 @@ const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
 
 AudioMixer::AudioMixer(AudioMixerParams params) :
 	GuiElement(params),
-	_inputChannel(params.InputChannel),
-	_outputChannel(params.OutputChannel),
+	_isMuted(false),
+	_unmutedFadeTarget(DefaultLevel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size, params.OutputChannel))),
+	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size))),
 	_fade(std::make_unique<InterpolatedValueExp>())
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
@@ -41,7 +41,7 @@ void AudioMixer::InitReceivers()
 
 void AudioMixer::SetSize(utils::Size2d size)
 {
-	auto sliderParams = GetSliderParams(size, _outputChannel);
+	auto sliderParams = GetSliderParams(size);
 	_slider->SetSize(sliderParams.Size);
 
 	GuiElement::SetSize(size);
@@ -49,8 +49,24 @@ void AudioMixer::SetSize(utils::Size2d size)
 
 ActionResult AudioMixer::OnAction(DoubleAction val)
 {
-	_fade->SetTarget(val.Value());
-	return { true, "", ACTIONRESULT_DEFAULT, nullptr };
+	SetUnmutedLevel(val.Value());
+
+	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr};
+}
+
+bool AudioMixer::IsMuted() const
+{
+	return _isMuted;
+}
+
+void AudioMixer::SetMuted(bool muted)
+{
+	_isMuted = muted;
+
+	if (muted)
+		_fade->SetTarget(0.0);
+	else
+		_fade->SetTarget(_unmutedFadeTarget);
 }
 
 double AudioMixer::Level() const
@@ -58,16 +74,32 @@ double AudioMixer::Level() const
 	return _fade->Current();
 }
 
-void AudioMixer::SetLevel(double level)
+double AudioMixer::UnmutedLevel() const
 {
-	_fade->SetTarget(level);
+	return _unmutedFadeTarget;
+}
+
+void AudioMixer::SetUnmutedLevel(double level)
+{
+	_unmutedFadeTarget = level;
+	
+	if (!_isMuted)
+		_fade->SetTarget(_unmutedFadeTarget);
 }
 
 void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
 	unsigned int index)
 {
-	_behaviour->Apply(dest, samp * (float)_fade->Next(), index);
+	if (_behaviour)
+	{
+		float fadeNext = (float)_fade->Next();
+
+		if (dynamic_cast<BounceMixBehaviour*>(_behaviour.get()))
+			_behaviour->Apply(dest, samp, 1.0f - fadeNext, fadeNext, index);
+		else
+			_behaviour->Apply(dest, samp, 1.0f, fadeNext, index);
+	}
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
@@ -78,41 +110,32 @@ void AudioMixer::Offset(unsigned int numSamps)
 	}
 }
 
-unsigned int AudioMixer::InputChannel() const
+void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 {
-	return _inputChannel;
-}
-
-void AudioMixer::SetInputChannel(unsigned int channel)
-{
-	_inputChannel = channel;
-}
-
-unsigned int AudioMixer::OutputChannel() const
-{
-	return _outputChannel;
-}
-
-void AudioMixer::SetOutputChannel(unsigned int channel)
-{
-	_outputChannel = channel;
+	_behaviour = std::move(behaviour);
 }
 
 void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
+	float fadeCurrent,
+	float fadeNew,
 	unsigned int index) const
 {
-	auto numChans = dest->NumInputChannels();
-
-	for (auto chan = 0u; chan < numChans; chan++)
+	for (auto chan : _mixParams.Channels)
 	{
-		if (std::find(_mixParams.Channels.begin(), _mixParams.Channels.end(), chan) != _mixParams.Channels.end())
-			dest->OnWriteChannel(chan, samp, index);
+		dest->OnMixWriteChannel(chan,
+			samp,
+			fadeCurrent,
+			fadeNew,
+			index,
+			base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}
 }
 
 void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
+	float fadeCurrent,
+	float fadeNew,
 	unsigned int index) const
 {
 	auto numChans = dest->NumInputChannels();
@@ -120,11 +143,33 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (chan < _mixParams.ChannelLevels.size())
-			dest->OnWriteChannel(chan, samp * _mixParams.ChannelLevels.at(chan), index);
+			dest->OnMixWriteChannel(chan,
+				samp * _mixParams.ChannelLevels.at(chan),
+				fadeCurrent,
+				fadeNew,
+				index,
+				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
 	}
 }
 
-gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize, unsigned int outputChannel)
+void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+	float samp,
+	float fadeCurrent,
+	float fadeNew,
+	unsigned int index) const
+{
+	for (auto chan : _mixParams.Channels)
+	{
+		dest->OnMixWriteChannel(chan,
+			samp,
+			fadeCurrent,
+			fadeNew,
+			index,
+			base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
+	}
+}
+
+gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize)
 {
 	GuiSliderParams sliderParams;
 	sliderParams.Min = 0.0;

@@ -13,6 +13,7 @@ using actions::TouchAction;
 using actions::TriggerAction;
 using actions::JobAction;
 using gui::GuiSliderParams;
+using audio::AudioMixer;
 using audio::AudioMixerParams;
 using audio::WireMixBehaviourParams;
 using utils::Size2d;
@@ -22,6 +23,8 @@ const utils::Size2d Station::_Gap = { 5, 5 };
 Station::Station(StationParams params) :
 	GuiElement(params),
 	MultiAudioSource(),
+	_name(params.Name),
+	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_loopTakes(),
 	_triggers({})
@@ -36,6 +39,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
+	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
@@ -75,12 +79,13 @@ utils::Position2d Station::Position() const
 	return _modelScreenPos;
 }
 
-void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps)
+void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+	const std::shared_ptr<Trigger> trigger,
+	int indexOffset,
+	unsigned int numSamps)
 {
-	// Need to rewind buffer as we are pushing to
-	// the same place for multiple takes
 	for (auto& take : _loopTakes)
-		take->OnPlay(dest, numSamps);
+		take->OnPlay(dest, trigger, indexOffset, numSamps);
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -91,20 +96,24 @@ void Station::EndMultiPlay(unsigned int numSamps)
 
 void Station::OnWriteChannel(unsigned int channel,
 	const std::shared_ptr<base::AudioSource> src,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
-		take->OnWriteChannel(channel, src, numSamps);
+		take->OnWriteChannel(channel, src, indexOffset, numSamps);
 }
 
 // TODO: Remove method
-void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src, unsigned int numSamps)
+void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
+	int indexOffset,
+	unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
-		take->OnWrite(src, numSamps);
+		take->OnWrite(src, indexOffset, numSamps);
 }
 
-void Station::EndMultiWrite(unsigned int numSamps, bool updateIndex)
+void Station::EndMultiWrite(unsigned int numSamps,
+	bool updateIndex)
 {
 	for (auto& take : _loopTakes)
 		take->EndMultiWrite(numSamps, updateIndex);
@@ -145,9 +154,10 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels);
+		newLoopTake->Record(action.InputChannels, Name());
 
-		res.Id = newLoopTake->Id();
+		res.SourceId = "";
+		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		break;
@@ -202,6 +212,73 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
+	case TriggerAction::TRIGGER_OVERDUB_START:
+	{
+		auto sourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+
+		auto newLoopTake = AddTake();
+		newLoopTake->Overdub(action.InputChannels, Name());
+
+		res.SourceId = sourceId;
+		res.TargetId = newLoopTake->Id();
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+		res.IsEaten = true;
+		break;
+	}
+	case TriggerAction::TRIGGER_OVERDUB_END:
+	{
+		auto loopLength = action.SampleCount;
+		auto errorSamps = 0;
+
+		if (_clock)
+		{
+			if (_clock->IsQuantisable())
+			{
+				auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+				loopLength = quantisedLength;
+				errorSamps = err;
+				std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
+			}
+			else
+			{
+				_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
+				std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+			}
+		}
+
+		auto cfg = action.GetUserConfig();
+		auto streamParams = action.GetAudioParams();
+		auto outLatency = streamParams.has_value() ?
+			streamParams.value().OutputLatency :
+			0u;
+
+		if (0u == outLatency)
+		{
+			outLatency = cfg.has_value() ?
+				cfg.value().Audio.LatencyOut :
+				0u;
+		}
+
+		auto playPos = cfg.has_value() ?
+			cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+			0;
+		auto endRecordSamps = cfg.has_value() ?
+			cfg.value().EndRecordingSamps(errorSamps) :
+			0;
+
+		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
+
+		if (loopTake.has_value())
+			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
+
+		auto sourceLoopTake = TryGetTake(action.SourceId);
+		if (sourceLoopTake.has_value())
+			sourceLoopTake.value()->Mute();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+		break;
+	}
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
@@ -242,7 +319,8 @@ void Station::OnTick(Time curTime,
 std::shared_ptr<LoopTake> Station::AddTake()
 {
 	LoopTakeParams takeParams;
-	takeParams.Id = "TK-" + utils::GetGuid();
+	takeParams.Id = _name + "-TK-" + utils::GetGuid();
+	takeParams.FadeSamps = _fadeSamps;
 
 	auto take = std::make_shared<LoopTake>(takeParams);
 	AddTake(take);
@@ -293,9 +371,61 @@ void Station::Reset()
 	_triggers.clear();
 }
 
+std::string Station::Name() const
+{
+	return _name;
+}
+
+void Station::SetName(std::string name)
+{
+	_name = name;
+}
+
 void Station::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = clock;
+}
+
+void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
+{
+	// for each trigger, check which loop takes are being bounced
+	// based on overdub modes, and play those looptakes into the new ones
+	// with static offset based on maxloopfadesamps and output latency
+
+	// Have a clever mixer with timer that can fade between punchedin audioIN and loop output
+	// and then stream loop output to this - it will be faded (but on a delayed timer) with the audio
+	// already recorded in this buffer session (assume audio IN is written first).
+	// Delay is constants::MaxLoopFadeSamps, because we want to punch in at the actual samples
+	// being played along with, because we are delayed by this amount deliberately.
+	// Therefore read current samp and mix with loop sample according to mixer's state.
+	for (auto& trigger : _triggers)
+	{
+		if ((trigger->GetState() == TRIGSTATE_OVERDUBBING) ||
+			(trigger->GetState() == TRIGSTATE_OVERDUBBINGDITCHDOWN) ||
+			(trigger->GetState() == TRIGSTATE_PUNCHEDIN) ||
+			(trigger->GetState() == TRIGSTATE_PUNCHEDINDITCHDOWN) ||
+			(trigger->GetState() == TRIGSTATE_DEFAULT))
+		{
+			auto takes = trigger->GetTakes();
+
+			for (auto& take : takes)
+			{
+				std::string sourceId = take.SourceTakeId;
+				std::string targetId = take.TargetTakeId;
+				auto sourceMatch = std::find_if(_backLoopTakes.begin(),
+					_backLoopTakes.end(),
+					[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
+				auto targetMatch = std::find_if(_backLoopTakes.begin(),
+					_backLoopTakes.end(),
+					[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
+
+				if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
+				{
+					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				}
+			}
+		}
+	}
 }
 
 unsigned int Station::CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)

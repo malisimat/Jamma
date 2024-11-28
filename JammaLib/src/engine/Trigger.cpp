@@ -7,13 +7,16 @@ using namespace engine;
 using actions::ActionResult;
 using actions::KeyAction;
 using actions::TriggerAction;
+using actions::DelayedAction;
 using graphics::GlDrawContext;
 using graphics::Image;
 using graphics::ImageParams;
+using audio::AudioMixer;
 using resources::ResourceLib;
 
 Trigger::Trigger(TriggerParams trigParams) :
 	GuiElement(trigParams),
+	_name(trigParams.Name),
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
@@ -30,8 +33,12 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
 	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_lastLoopTakes({})
+	_loopTakeHistory({}),
+	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
+	_delayedActions({})
 {
+	_overdubMixer = std::make_shared<AudioMixer>(
+		GetOverdubMixerParams(trigParams.InputChannels));
 }
 
 Trigger::~Trigger()
@@ -40,6 +47,8 @@ Trigger::~Trigger()
 
 std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
 {
+	trigParams.Name = trigStruct.Name;
+
 	auto trigger = std::make_shared<Trigger>(trigParams);
 
 	for (auto trigPair : trigStruct.TriggerPairs)
@@ -75,6 +84,22 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 		trigger->AddInputChannel(inChan);
 
 	return trigger;
+}
+
+audio::BounceMixBehaviourParams Trigger::GetOverdubBehaviourParams(
+	std::vector<unsigned int> channels)
+{
+	return audio::BounceMixBehaviourParams{ audio::WireMixBehaviourParams(channels) };
+}
+
+audio::AudioMixerParams Trigger::GetOverdubMixerParams(std::vector<unsigned int> channels)
+{
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Size = { 1, 1 };
+	mixerParams.Position = { 0, 0 };
+	mixerParams.Behaviour = GetOverdubBehaviourParams(channels);
+
+	return mixerParams;
 }
 
 utils::Position2d Trigger::Position() const
@@ -122,7 +147,14 @@ void Trigger::OnTick(Time curTime,
 {
 	if ((TriggerState::TRIGSTATE_DEFAULT != _state) &&
 		(TriggerState::TRIGSTATE_DITCHDOWN != _state))
-		_recordSampCount+= samps;
+	{
+		_recordSampCount += samps;
+
+		for (auto& action : _delayedActions)
+		{
+			action.OnTick(curTime, samps, cfg, params);
+		}
+	}
 
 	if (0 == _debounceTimeMs)
 		return;
@@ -135,20 +167,20 @@ void Trigger::OnTick(Time curTime,
 	{
 		if (elapsedMs > _debounceTimeMs)
 		{
-			_lastActivateTime = curTime;
+			_lastActivateTime = Timer::GetZero();
 			_isLastActivateDown = _isLastActivateDownRaw;
 
 			StateMachine(_isLastActivateDownRaw, true, cfg, params);
 		}
 	}
-	
+
 	elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, curTime) * 1000.0;
 	
 	if (_isLastDitchDownRaw != _isLastDitchDown)
 	{
 		if (elapsedMs > _debounceTimeMs)
 		{
-			_lastDitchTime = curTime;
+			_lastDitchTime = Timer::GetZero();
 			_isLastDitchDown = _isLastDitchDownRaw;
 
 			StateMachine(_isLastDitchDownRaw, false, cfg, params);
@@ -179,8 +211,14 @@ void Trigger::Draw(base::DrawContext& ctx)
 	case TRIGSTATE_OVERDUBBING:
 		_textureOverdubbing.Draw(ctx);
 		break;
+	case TRIGSTATE_OVERDUBBINGDITCHDOWN:
+		_textureDitchDown.Draw(ctx);
+		break;
 	case TRIGSTATE_PUNCHEDIN:
 		_texturePunchedIn.Draw(ctx);
+		break;
+	case TRIGSTATE_PUNCHEDINDITCHDOWN:
+		_textureDitchDown.Draw(ctx);
 		break;
 	}
 
@@ -216,6 +254,8 @@ void Trigger::ClearBindings()
 void Trigger::AddInputChannel(unsigned int chan)
 {
 	_inputChannels.push_back(chan);
+
+	_UpdateBehaviour();
 }
 
 void Trigger::RemoveInputChannel(unsigned int chan)
@@ -223,11 +263,15 @@ void Trigger::RemoveInputChannel(unsigned int chan)
 	auto inChan = std::find(_inputChannels.begin(), _inputChannels.end(), chan);
 	if (inChan != _inputChannels.end())
 		_inputChannels.erase(inChan);
+
+	_UpdateBehaviour();
 }
 
 void Trigger::ClearInputChannels()
 {
 	_inputChannels.clear();
+
+	_UpdateBehaviour();
 }
 
 TriggerState Trigger::GetState() const
@@ -247,7 +291,50 @@ void Trigger::Reset()
 
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_recordSampCount = 0;
-	_lastLoopTakes.clear();
+	_loopTakeHistory.clear();
+}
+
+std::string Trigger::Name() const
+{
+	return _name;
+}
+
+void Trigger::SetName(std::string name)
+{
+	_name = name;
+}
+
+std::vector<TriggerTake> Trigger::GetTakes() const
+{
+	return _loopTakeHistory;
+}
+
+void Trigger::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+	float samp,
+	unsigned int index)
+{
+	bool removeExpired = false;
+	for (auto& action : _delayedActions)
+	{
+		if (action.SampsLeft(index) == 0)
+		{
+			_overdubMixer->SetUnmutedLevel(action.GetTarget());
+			removeExpired = true;
+		}
+	}
+
+	if (removeExpired)
+	{
+		std::vector<DelayedAction> newActions;
+
+		auto isNotExpired = [index](DelayedAction action) { return action.SampsLeft(index) > 0; };
+		std::copy_if(_delayedActions.begin(), _delayedActions.end(),
+			std::back_inserter(newActions), isNotExpired);
+
+		_delayedActions = newActions;
+	}
+
+	_overdubMixer->OnPlay(dest, samp, index);
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)
@@ -280,6 +367,7 @@ bool Trigger::Debounce(bool isActivate,
 
 	if (isActivate)
 	{
+		auto isDebounceBypassed = Timer::IsZero(_lastActivateTime) || (0 == _debounceTimeMs);
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, actionTime) * 1000.0;
 
 		if ((DualBinding::MATCH_DOWN == trigResult) && !_isLastActivateDownRaw)
@@ -287,7 +375,7 @@ bool Trigger::Debounce(bool isActivate,
 			_lastActivateTime = actionTime;
 			_isLastActivateDownRaw = true;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastActivateDown = true;
@@ -298,7 +386,7 @@ bool Trigger::Debounce(bool isActivate,
 			_lastActivateTime = actionTime;
 			_isLastActivateDownRaw = false;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastActivateDown = false;
@@ -307,6 +395,7 @@ bool Trigger::Debounce(bool isActivate,
 	}
 	else
 	{
+		auto isDebounceBypassed = Timer::IsZero(_lastDitchTime) || (0 == _debounceTimeMs);
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, actionTime) * 1000.0;
 
 		if ((DualBinding::MATCH_DOWN == trigResult) && !_isLastDitchDownRaw)
@@ -314,7 +403,7 @@ bool Trigger::Debounce(bool isActivate,
 			_lastDitchTime = actionTime;
 			_isLastDitchDownRaw = true;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastDitchDown = true;
@@ -325,7 +414,7 @@ bool Trigger::Debounce(bool isActivate,
 			_lastDitchTime = actionTime;
 			_isLastDitchDownRaw = false;
 
-			if ((0 == _debounceTimeMs) || (elapsedMs > _debounceTimeMs))
+			if (isDebounceBypassed || (elapsedMs > _debounceTimeMs))
 			{
 				allowedThrough = true;
 				_isLastDitchDown = false;
@@ -348,14 +437,18 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)
+	{
 		return false;
+	}
 
 	allowedThrough = Debounce(isActivate,
 		trigResult,
 		action.GetActionTime());
 
 	if (!allowedThrough)
+	{
 		return false;
+	}
 
 	switch (trigResult)
 	{
@@ -421,26 +514,39 @@ bool Trigger::StateMachine(bool isDown,
 	case TRIGSTATE_OVERDUBBING:
 		if (isActivate && isDown)
 		{
-			EndOverdub(cfg, params);
+			StartPunchIn(cfg, params);
 			changedState = true;
 		}
 		else if (!isActivate && isDown)
 		{
-			StartPunchIn(cfg, params);
+			SetDitchDown(cfg, params);
+			changedState = true;
+		}
+		break;
+	case TRIGSTATE_OVERDUBBINGDITCHDOWN:
+		if (isActivate && isDown)
+		{
+			EndOverdub(cfg, params);
+			changedState = true;
+		}
+		else if (!isActivate && !isDown)
+		{
+			Ditch(cfg, params);
 			changedState = true;
 		}
 		break;
 	case TRIGSTATE_PUNCHEDIN:
-		if (isActivate && isDown)
-		{
-			DitchOverdub(cfg, params);
-			changedState = true;
-		}
-		if (!isActivate && !isDown)
+		if (isActivate && !isDown)
 		{
 			// End punch-in but maintain overdub mode (release)
 			EndPunchIn(cfg, params);
 			changedState = true;
+		}
+		break;
+	case TRIGSTATE_PUNCHEDINDITCHDOWN:
+		if (!isActivate && !isDown)
+		{
+			SetDitchUp(cfg, params);
 		}
 		break;
 	}
@@ -452,7 +558,11 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_RECORDING;
+
+	std::cout << "~~~~ Trigger RECORDING" << std::endl;
+
 	_recordSampCount = 0;
+	_delayedActions.clear();
 
 	if (_receiver)
 	{
@@ -472,8 +582,8 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.Id };
-			_lastLoopTakes.push_back(newTake);
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
+			_loopTakeHistory.push_back(newTake);
 		}
 	}
 }
@@ -483,13 +593,15 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_DEFAULT;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	std::cout << "~~~~ Trigger END RECORDING" << std::endl;
+
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -507,22 +619,38 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 void Trigger::SetDitchDown(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	_state = TRIGSTATE_DITCHDOWN;
+	if (TRIGSTATE_OVERDUBBING == _state)
+		_state = TRIGSTATE_OVERDUBBINGDITCHDOWN;
+	else if (TRIGSTATE_PUNCHEDIN == _state)
+		_state = TRIGSTATE_PUNCHEDINDITCHDOWN;
+	else
+		_state = TRIGSTATE_DITCHDOWN;
+}
+
+void Trigger::SetDitchUp(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	if (TRIGSTATE_PUNCHEDINDITCHDOWN == _state)
+		_state = TRIGSTATE_PUNCHEDIN;
 }
 
 void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_DEFAULT;
-	auto popBack = !_lastLoopTakes.empty();
+
+	std::cout << "~~~~ Trigger DITCH" << std::endl;
+
+	_delayedActions.clear();
+	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_DITCH;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -535,20 +663,25 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	}
 
 	if (popBack)
-		_lastLoopTakes.pop_back();
+		_loopTakeHistory.pop_back();
 }
 
 void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
+
+	std::cout << "~~~~ Trigger START OVERDUB" << std::endl;
+
 	_recordSampCount = 0;
+	_delayedActions.clear();
+	_overdubMixer->SetUnmutedLevel(1.0);
 
 	if (_receiver)
 	{
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
-		trigAction.SampleCount = _recordSampCount;
+		trigAction.InputChannels = _inputChannels;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
@@ -560,8 +693,8 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.Id };
-			_lastLoopTakes.push_back(newTake);
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
+			_loopTakeHistory.push_back(newTake);
 		}
 	}
 }
@@ -571,13 +704,16 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_DEFAULT;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
+
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.SourceId = lastTake.SourceTakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -595,14 +731,17 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_DEFAULT;
 
-	auto popBack = !_lastLoopTakes.empty();
+	std::cout << "~~~~ Trigger DITCH OVERDUB" << std::endl;
+
+	_delayedActions.clear();
+	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_DITCH;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -615,7 +754,7 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 	}
 
 	if (popBack)
-		_lastLoopTakes.pop_back();
+		_loopTakeHistory.pop_back();
 }
 
 void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
@@ -623,13 +762,17 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 {
 	_state = TRIGSTATE_PUNCHEDIN;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
+
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
+
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 		_receiver->OnAction(trigAction);
 	}
@@ -638,15 +781,22 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	_state = TRIGSTATE_OVERDUBBING;
+	if (TRIGSTATE_PUNCHEDINDITCHDOWN == _state)
+		_state = TRIGSTATE_OVERDUBBINGDITCHDOWN;
+	else
+		_state = TRIGSTATE_OVERDUBBING;
 
-	if ((_receiver) && !_lastLoopTakes.empty())
+	std::cout << "~~~~ Trigger END PUNCHIN" << std::endl;
+
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
+
+	if ((_receiver) && !_loopTakeHistory.empty())
 	{
-		auto lastTake = _lastLoopTakes.back();
+		auto lastTake = _loopTakeHistory.back();
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
-		trigAction.TargetId = lastTake.TakeId;
+		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
 		if (cfg.has_value())
@@ -677,4 +827,11 @@ void Trigger::_ReleaseResources()
 	_textureDitchDown.ReleaseResources();
 	_textureOverdubbing.ReleaseResources();
 	_texturePunchedIn.ReleaseResources();
+}
+
+void Trigger::_UpdateBehaviour()
+{
+	_overdubMixer->SetBehaviour(
+		std::move(std::make_unique<audio::BounceMixBehaviour>(
+			GetOverdubBehaviourParams(_inputChannels))));
 }

@@ -112,11 +112,12 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _writeIndex;
+		auto source = AUDIOSOURCE_INPUT;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
 			if (index < Samples.size())
-				dest->OnWrite(Samples[index], i);
+				dest->OnWrite(Samples[index], i, source);
 
 			index++;
 		}
@@ -185,9 +186,14 @@ protected:
 	virtual const std::shared_ptr<AudioSource> OutputChannel(unsigned int channel)
 	{
 		if (channel == 0)
+		{
+			_source->SetSourceType(SourceType());
 			return _source;
+		}
 
-		return std::shared_ptr<AudioSource>();
+		auto chan = std::shared_ptr<AudioSource>();
+		chan->SetSourceType(SourceType());
+		return chan;
 	}
 private:
 	std::shared_ptr<MockedSource> _source;

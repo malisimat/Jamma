@@ -23,9 +23,10 @@ LoopTake::LoopTake(LoopTakeParams params) :
 	_flipLoopBuffer(false),
 	_loopsNeedUpdating(false),
 	_endRecordingCompleted(false),
-	_state(STATE_DEFAULT),
+	_state(STATE_INACTIVE),
 	_id(params.Id),
 	_sourceId(""),
+	_fadeSamps(params.FadeSamps),
 	_sourceType(SOURCE_LOOPTAKE),
 	_recordedSampCount(0),
 	_endRecordSampCount(0),
@@ -64,11 +65,26 @@ void LoopTake::SetSize(utils::Size2d size)
 	ArrangeLoops();
 }
 
+unsigned int LoopTake::NumInputChannels() const
+{
+	return (unsigned int)_backLoops.size();
+}
+
+const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel)
+{
+	if (channel < _loops.size())
+		return _loops[channel];
+
+	return std::shared_ptr<AudioSink>();
+}
+
 void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+	const std::shared_ptr<Trigger> trigger,
+	int indexOffset,
 	unsigned int numSamps)
 {
 	for (auto& loop : _loops)
-		loop->OnPlay(dest, numSamps);
+		loop->OnPlay(dest, trigger, indexOffset, numSamps);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -77,42 +93,28 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		loop->EndMultiPlay(numSamps);
 }
 
-// TODO: Remove method
-void LoopTake::OnWrite(const std::shared_ptr<MultiAudioSource> src,
-	unsigned int numSamps)
-{
-	for (auto& loop : _loops)
-	{
-		auto inChan = loop->InputChannel();
-		src->OnPlayChannel(inChan, loop, numSamps);
-	}
-}
-
-void LoopTake::OnWriteChannel(unsigned int channel,
-	const std::shared_ptr<base::AudioSource> src,
-	unsigned int numSamps)
-{
-	for (auto& loop : _loops)
-	{
-		if (loop->InputChannel() == channel)
-			src->OnPlay(loop, numSamps);
-	}
-}
-
-void LoopTake::EndMultiWrite(unsigned int numSamps, bool updateIndex)
+void LoopTake::EndMultiWrite(unsigned int numSamps,
+	bool updateIndex)
 {
 	for (auto& loop : _loops)
 		 loop->EndWrite(numSamps, updateIndex);
 
-	if (STATE_PLAYINGRECORDING == _state)
+	auto isRecording = (STATE_RECORDING == _state) ||
+		(STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state);
+	auto isEndRecording = (STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state);
+
+	if (isEndRecording)
 	{
 		_endRecordSampCount += numSamps;
 		if (_endRecordSampCount > _endRecordSamps)
 			_endRecordingCompleted = true;
 	}
 
-	if ((STATE_RECORDING == _state) ||
-		(STATE_PLAYINGRECORDING == _state))
+	if (isRecording)
 	{
 		_recordedSampCount += numSamps;
 		_loopsNeedUpdating = true;
@@ -138,6 +140,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	case JobAction::JOB_ENDRECORDING:
 	{
 		EndRecording();
+		std::cout << "Ended recording" << std::endl;
 
 		ActionResult res;
 		res.IsEaten = true;
@@ -148,19 +151,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	}
 
-	return { false, "", actions::ACTIONRESULT_DEFAULT };
-}
-
-void LoopTake::OnPlayRaw(const std::shared_ptr<MultiAudioSink> dest,
-	unsigned int delaySamps,
-	unsigned int numSamps)
-{
-	auto loopNum = 0u;
-	for (auto& loop : _loops)
-	{
-		loop->OnPlayRaw(dest, loopNum, delaySamps, numSamps);
-		loopNum++;
-	}
+	return { false, "", "", actions::ACTIONRESULT_DEFAULT};
 }
 
 std::string LoopTake::Id() const
@@ -178,7 +169,12 @@ LoopTake::LoopTakeSource LoopTake::SourceType() const
 	return _sourceType;
 }
 
-std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan)
+unsigned long LoopTake::NumRecordedSamps() const
+{
+	return _recordedSampCount;
+}
+
+std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationName)
 {
 	auto newNumLoops = (unsigned int)_loops.size() + 1;
 
@@ -186,13 +182,14 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan)
 
 	audio::WireMixBehaviourParams wire;
 	wire.Channels = { chan };
-	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire, chan);
+	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire);
 	
 	LoopParams loopParams;
-	loopParams.Wav = "hh";
-	loopParams.Id = "LP-" + utils::GetGuid();
+	loopParams.Wav = stationName;
+	loopParams.Id = stationName + "-" + utils::GetGuid();
 	loopParams.TakeId = _id;
 	loopParams.Channel = chan;
+	loopParams.FadeSamps = _fadeSamps;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 	AddLoop(loop);
 
@@ -211,8 +208,11 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_changesMade = true;
 }
 
-void LoopTake::Record(std::vector<unsigned int> channels)
+void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName)
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	_state = STATE_RECORDING;
 
 	_recordedSampCount = 0;
@@ -222,7 +222,7 @@ void LoopTake::Record(std::vector<unsigned int> channels)
 
 	for (auto chan : channels)
 	{
-		auto loop = AddLoop(chan);
+		auto loop = AddLoop(chan, stationName);
 		loop->Record();
 	}
 
@@ -231,15 +231,14 @@ void LoopTake::Record(std::vector<unsigned int> channels)
 	_changesMade = true;
 }
 
-unsigned long LoopTake::NumRecordedSamps() const
-{
-	return _recordedSampCount;
-}
-
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps)
 {
+	if ((STATE_RECORDING != _state) &&
+		(STATE_OVERDUBBING != _state))
+		return;
+
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 
@@ -248,14 +247,44 @@ void LoopTake::Play(unsigned long index,
 		loop->Play(index, loopLength, endRecordSamps > 0);
 	}
 
-	auto playState = endRecordSamps > 0 ? STATE_PLAYINGRECORDING : STATE_PLAYING;
-	_state = loopLength > 0 ? playState : STATE_DEFAULT;
+	auto recordState = STATE_OVERDUBBING == _state ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
+	auto playState = endRecordSamps > 0 ? recordState : STATE_PLAYING;
+	_state = loopLength > 0 ? playState : STATE_INACTIVE;
+}
+
+void LoopTake::Mute()
+{
+	if (STATE_PLAYING != _state)
+		return;
+
+	_state = STATE_MUTED;
+
+	for (auto& loop : _loops)
+	{
+		loop->Mute();
+	}
+}
+
+void LoopTake::UnMute()
+{
+	if (STATE_MUTED != _state)
+		return;
+
+	_state = STATE_PLAYING;
+
+	for (auto& loop : _loops)
+	{
+		loop->UnMute();
+	}
 }
 
 void LoopTake::EndRecording()
 {
-	if (STATE_PLAYINGRECORDING == _state)
-		_state = STATE_PLAYING;
+	if ((STATE_PLAYINGRECORDING != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state))
+		return;
+
+	_state = STATE_PLAYING;
 
 	for (auto& loop : _loops)
 	{
@@ -277,18 +306,34 @@ void LoopTake::Ditch()
 	_loops.clear();
 }
 
-void LoopTake::Overdub()
+void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationName)
 {
+	if (STATE_INACTIVE != _state)
+		return;
+
 	_state = STATE_OVERDUBBING;
 
-	for (auto& loop : _loops)
+	_recordedSampCount = 0;
+	_endRecordSampCount = 0;
+	_endRecordSamps = 0;
+	_backLoops.clear();
+
+	for (auto chan : channels)
 	{
+		auto loop = AddLoop(chan, stationName);
 		loop->Overdub();
 	}
+
+	//_flipLoopBuffer = true;
+	_loopsNeedUpdating = true;
+	_changesMade = true;
 }
 
 void LoopTake::PunchIn()
 {
+	if (STATE_OVERDUBBING != _state)
+		return;
+
 	_state = STATE_PUNCHEDIN;
 
 	for (auto& loop : _loops)
@@ -299,6 +344,9 @@ void LoopTake::PunchIn()
 
 void LoopTake::PunchOut()
 {
+	if (STATE_PUNCHEDIN != _state)
+		return;
+
 	_state = STATE_OVERDUBBING;
 
 	for (auto& loop : _loops)

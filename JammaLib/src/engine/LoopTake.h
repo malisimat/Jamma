@@ -25,6 +25,7 @@ namespace engine
 				"",
 				{}),
 			Id(""),
+			FadeSamps(constants::DefaultFadeSamps),
 			Loops({})
 		{
 		}
@@ -33,12 +34,14 @@ namespace engine
 			std::vector<LoopParams> loops) :
 			base::GuiElementParams(params),
 			Id(""),
+			FadeSamps(constants::DefaultFadeSamps),
 			Loops(loops)
 		{
 		}
 
 	public:
 		std::string Id;
+		unsigned int FadeSamps;
 		std::vector<LoopParams> Loops;
 	};
 
@@ -57,12 +60,14 @@ namespace engine
 
 		enum LoopTakeState
 		{
-			STATE_DEFAULT,
+			STATE_INACTIVE,
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
+			STATE_MUTED,
 			STATE_OVERDUBBING,
-			STATE_PUNCHEDIN
+			STATE_PUNCHEDIN,
+			STATE_OVERDUBBINGRECORDING
 		};
 
 	public:
@@ -80,33 +85,33 @@ namespace engine
 
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps) override;
+		virtual unsigned int NumInputChannels() const override;
+		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel) override;
+		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+			const std::shared_ptr<Trigger> trigger,
+			int indexOffset,
+			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		// TODO: Remove OnWrite method
-		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src, unsigned int numSamps) override;
-		virtual void OnWriteChannel(unsigned int channel,
-			const std::shared_ptr<base::AudioSource> src,
-			unsigned int numSamps);
-		virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex) override;
+		virtual void EndMultiWrite(unsigned int numSamps,
+			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
-		void OnPlayRaw(const std::shared_ptr<MultiAudioSink> dest,
-			unsigned int delaySamps,
-			unsigned int numSamps);		
 		std::string Id() const;
 		std::string SourceId() const;
 		LoopTakeSource SourceType() const;
 		unsigned long NumRecordedSamps() const;
-		std::shared_ptr<Loop> AddLoop(unsigned int chan);
+		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
 
-		void Record(std::vector<unsigned int> channels);
+		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
+		void Mute();
+		void UnMute();
 		void EndRecording();
 		void Ditch();
-		void Overdub();
+		void Overdub(std::vector<unsigned int> channels, std::string stationName);
 		void PunchIn();
 		void PunchOut();
 
@@ -127,6 +132,7 @@ namespace engine
 		LoopTakeState _state;
 		std::string _id;
 		std::string _sourceId;
+		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;

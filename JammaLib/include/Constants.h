@@ -22,7 +22,7 @@ namespace constants
 	const unsigned int MaxLoopFadeSamps = 70000u;
 	const unsigned long MaxLoopBufferSize = 40000000ul;
 	const unsigned int GrainSamps = 300u;
-	const unsigned int DefaultFadeSamps = 3000u;
+	const unsigned int DefaultFadeSamps = 20u;
 	const unsigned int DefaultPreDelaySamps = 0u;
 	const unsigned int DefaultDebounceSamps = 280u;
 	const unsigned int DefaultSampleRate = 44100u;
