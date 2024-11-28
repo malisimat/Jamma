@@ -131,5 +131,11 @@ unsigned int GlDrawContext::_CreateFrameBuffer(Size2d size, ContextTarget target
 	unsigned int fbo;
 	glGenFramebuffers(1, &fbo);
 
+	unsigned int rb;
+	glGenRenderbuffers(1, &rb);
+	glBindRenderbuffer(GL_RENDERBUFFER, rb);
+	glRenderbufferStorage(GL_FRAMEBUFFER, GL_DEPTH_COMPONENT16, size.Width, size.Height);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+
 	return fbo;
 }
