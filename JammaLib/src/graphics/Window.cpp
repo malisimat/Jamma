@@ -77,6 +77,8 @@ void Window::LoadResources()
 void Window::InitScene()
 {
 	_scene.InitResources(_resourceLib, true);
+	_pickContext.Initialise();
+	_drawContext.Initialise();
 }
 
 void Window::ShowMessage(LPCWSTR message)
@@ -323,8 +325,8 @@ void Window::Resize(Size2d size)
 {
 	_config.Size = size;
 
-	_pickContext.SetSize(size);
-	_drawContext.SetSize(size);
+	_pickContext.Initialise();
+	_drawContext.Initialise();
 }
 
 void Window::SetWindowState(WindowState state)
@@ -347,6 +349,8 @@ void Window::Render()
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	_scene.Draw3d(_pickContext, 1);
+
+	_drawContext.Bind();
 
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

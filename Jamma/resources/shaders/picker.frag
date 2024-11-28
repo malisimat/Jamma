@@ -6,9 +6,10 @@ uniform uint ObjectId;
 
 void main()
 {
-    float a = (data >> 24) & 0xff;
-    float r = (data >> 16) & 0xff;
-    float g = (data >> 8) & 0xff;
-    float b = data & 0xff;
+    int id = int(ObjectId);
+    float a = (id >> 24) & 0xff;
+    float r = (id >> 16) & 0xff;
+    float g = (id >> 8) & 0xff;
+    float b = id & 0xff;
     ColorOUT = vec4(r, g, b, a);
 }

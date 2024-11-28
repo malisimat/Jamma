@@ -468,7 +468,7 @@ std::vector<JobAction> Station::_CommitChanges()
 	
 	_loopTakes = _backLoopTakes; // TODO: Undo?
 
-	GuiElement::CommitChanges();
+	GuiElement::_CommitChanges();
 
 	return {};
 }

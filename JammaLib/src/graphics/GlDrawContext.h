@@ -28,8 +28,8 @@ namespace graphics
 			return ContextType::OPENGL;
 		}
 
-		void SetSize(utils::Size2d size) override;
-		bool Bind() override;
+		void Initialise() override;
+		void Bind() override;
 		unsigned int GetPixel(utils::Position2d pos) override;
 
 		std::optional<std::any> GetUniform(std::string name);

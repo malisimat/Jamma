@@ -7,9 +7,6 @@ GlDrawContext::GlDrawContext(Size2d size,
 	ContextTarget target) :
 	DrawContext(size, target)
 {
-	_frameBuffer = _CreateFrameBuffer(size, target);
-
-	SetSize(size);
 }
 
 GlDrawContext::~GlDrawContext()
@@ -18,34 +15,30 @@ GlDrawContext::~GlDrawContext()
 		glDeleteFramebuffers(1, &_frameBuffer);
 }
 
-void GlDrawContext::SetSize(Size2d size)
+void GlDrawContext::Initialise()
 {
-	DrawContext::SetSize(size);
+	_frameBuffer = _CreateFrameBuffer(_size, _target);
 
 	if (SCREEN == _target)
 		return;
+
+	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
 
 	unsigned int texture;
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size.Width, size.Height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _size.Width, _size.Height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
-	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 }
 
-bool GlDrawContext::Bind()
+void GlDrawContext::Bind()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
-
-	auto res = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	std::cout << "Bound FrameBuffer " << _frameBuffer << ", result = " << res << std::endl;
-	return GL_FRAMEBUFFER_COMPLETE == res;
 }
 
 unsigned int GlDrawContext::GetPixel(utils::Position2d pos)

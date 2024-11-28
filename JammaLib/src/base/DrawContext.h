@@ -26,15 +26,9 @@ namespace base
 			return _target;
 		}
 
-		virtual void SetSize(utils::Size2d size)
-		{
-			_size = size;
-		}
+		virtual void Initialise() { }
 
-		virtual bool Bind()
-		{
-			return true;
-		}
+		virtual void Bind() { }
 
 		virtual unsigned int GetPixel(utils::Position2d pos)
 		{
