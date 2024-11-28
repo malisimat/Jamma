@@ -309,6 +309,10 @@
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</DeploymentContent>
     </Content>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="resources\shaders\picker.frag" />
+    <None Include="resources\shaders\picker.vert" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

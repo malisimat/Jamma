@@ -405,8 +405,8 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		}
 
 		_loops = _backLoops; // TODO: Undo?
-
 	}
+
 	std::vector<JobAction> jobs;
 
 	if (_loopsNeedUpdating)
@@ -430,6 +430,8 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(job);
 	}
+
+	GuiElement::_CommitChanges();
 
 	return jobs;
 }

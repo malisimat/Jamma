@@ -133,4 +133,12 @@
       <Filter>resources</Filter>
     </Content>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="resources\shaders\picker.frag">
+      <Filter>resources\shaders</Filter>
+    </None>
+    <None Include="resources\shaders\picker.vert">
+      <Filter>resources\shaders</Filter>
+    </None>
+  </ItemGroup>
 </Project>

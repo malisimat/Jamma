@@ -190,6 +190,7 @@ namespace engine
 		void Reset();
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
+		static LoopModel::LoopModelState ToLoopModelState(LoopVisualState state);
 		void UpdateLoopModel();
 		void UpdateMuteState(bool muted);
 

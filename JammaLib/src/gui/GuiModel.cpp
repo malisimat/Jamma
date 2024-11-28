@@ -29,8 +29,11 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	auto texture = _modelTexture.lock();
-	auto shader = _modelShader.lock();
+	auto modelTexture = GetTexture();
+	auto modelShader = GetShader();
+
+	auto texture = modelTexture.lock();
+	auto shader = modelShader.lock();
 
 	if (!texture || !shader)
 		return;
@@ -71,9 +74,9 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto validated = true;
 
 	if (validated)
-		validated = InitTexture(resourceLib);
+		validated = InitTextures(resourceLib);
 	if (validated)
-		validated = InitShader(resourceLib);
+		validated = InitShaders(resourceLib);
 	if (validated)
 	{
 		if (_geometryNeedsUpdating)
@@ -99,44 +102,72 @@ void GuiModel::_ReleaseResources()
 	_vertexArray = 0;
 }
 
-bool GuiModel::InitTexture(ResourceLib& resourceLib)
+bool GuiModel::InitTextures(ResourceLib& resourceLib)
 {
-	auto textureOpt = resourceLib.GetResource(_modelParams.ModelTexture);
+	bool result = true;
 
-	if (!textureOpt.has_value())
-		return false;
+	for (std::string texture : _modelParams.ModelTextures)
+	{
+		auto textureOpt = resourceLib.GetResource(texture);
 
-	auto resource = textureOpt.value().lock();
+		if (!textureOpt.has_value())
+		{
+			result = false;
+			continue;
+		}
 
-	if (!resource)
-		return false;
+		auto resource = textureOpt.value().lock();
 
-	if (TEXTURE != resource->GetType())
-		return false;
+		if (!resource)
+		{
+			result = false;
+			continue;
+		}
 
-	_modelTexture = std::dynamic_pointer_cast<TextureResource>(resource);
+		if (TEXTURE != resource->GetType())
+		{
+			result = false;
+			continue;
+		}
 
-	return true;
+		_modelTextures.push_back(std::dynamic_pointer_cast<TextureResource>(resource));
+	}
+
+	return result;
 }
 
-bool GuiModel::InitShader(ResourceLib & resourceLib)
+bool GuiModel::InitShaders(ResourceLib & resourceLib)
 {
-	auto shaderOpt = resourceLib.GetResource(_modelParams.ModelShader);
+	bool result = true;
 
-	if (!shaderOpt.has_value())
-		return false;
+	for (std::string shader : _modelParams.ModelShaders)
+	{
+		auto shaderOpt = resourceLib.GetResource(shader);
 
-	auto resource = shaderOpt.value().lock();
+		if (!shaderOpt.has_value())
+		{
+			result = false;
+			continue;
+		}
 
-	if (!resource)
-		return false;
+		auto resource = shaderOpt.value().lock();
 
-	if (SHADER != resource->GetType())
-		return false;
+		if (!resource)
+		{
+			result = false;
+			continue;
+		}
 
-	_modelShader = std::dynamic_pointer_cast<ShaderResource>(resource);
+		if (SHADER != resource->GetType())
+		{
+			result = false;
+			continue;
+		}
 
-	return true;
+		_modelShaders.push_back(std::dynamic_pointer_cast<ShaderResource>(resource));
+	}
+
+	return result;
 }
 
 bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)

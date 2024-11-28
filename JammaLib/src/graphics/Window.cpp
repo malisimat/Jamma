@@ -22,7 +22,9 @@ Window::Window(Scene& scene,
 	_resizing(false),
 	_trackingMouse(false),
 	_buttonsDown(0),
-	_modifiers(actions::MODIFIER_NONE)
+	_modifiers(actions::MODIFIER_NONE),
+	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
+	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
 {
 	_config.Size = { scene.Width(), scene.Height() };
 	_config.Position = { CW_USEDEFAULT, 0};
@@ -317,8 +319,12 @@ void Window::SetTrackingMouse(bool tracking)
 	_trackingMouse = tracking;
 }
 
-void Window::Resize(Size2d size, WindowState state)
+void Window::Resize(Size2d size)
 {
+	_config.Size = size;
+
+	_pickContext.SetSize(size);
+	_drawContext.SetSize(size);
 }
 
 void Window::SetWindowState(WindowState state)
@@ -333,12 +339,17 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
-	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-	_drawContext.SetSize(_config.Size);
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
+
+	_pickContext.Bind();
+
+	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	_scene.Draw3d(_pickContext, 1);
+
+	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	_scene.Draw3d(_drawContext, 1);
 	_scene.Draw(_drawContext);
 }
