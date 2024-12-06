@@ -2,14 +2,12 @@
 
 in vec2 UV;
 out vec4 ColorOUT;
-uniform uint ObjectId;
+uniform int ObjectId;
 
 void main()
 {
-    int id = int(ObjectId);
-    float a = (id >> 24) & 0xff;
-    float r = (id >> 16) & 0xff;
-    float g = (id >> 8) & 0xff;
-    float b = id & 0xff;
-    ColorOUT = vec4(r, g, b, a);
+    float r = ((ObjectId >> 16) & 0xff) / 255.0;
+    float g = ((ObjectId >> 8) & 0xff) / 255.0;
+    float b = (ObjectId & 0xff) / 255.0;
+    ColorOUT = vec4(r, g, b, 1.0);
 }

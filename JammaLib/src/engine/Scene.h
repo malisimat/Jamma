@@ -129,6 +129,7 @@ namespace engine
 			_sizeParams.Size = size;
 			InitSize();
 		}
+		void SetHover3d(std::vector<unsigned char> path);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const	{ return _sizeParams.Size.Height; }
 

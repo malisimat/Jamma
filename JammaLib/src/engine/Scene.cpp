@@ -157,6 +157,41 @@ void Scene::_ReleaseResources()
 	Drawable::_ReleaseResources();
 }
 
+void Scene::SetHover3d(std::vector<unsigned char> path)
+{
+	if (path.empty())
+		return;
+
+	bool foundChild = true;
+	std::shared_ptr<GuiElement> curChild;
+	auto stationIndex = path[0];
+
+	for (auto& station : _stations)
+		station->SetHover3d(false);
+
+	if (stationIndex < _stations.size())
+	{
+		curChild = _stations[stationIndex];
+
+		std::vector<unsigned char> curPath(path);
+
+		while (nullptr != curChild) {
+			// Remove this element's index from the front
+			curPath.erase(curPath.begin());
+
+			if (curPath.empty())
+			{
+				// Set this and all below to hovering
+				curChild->SetHover3d(true);
+				break;
+			}
+
+			auto nextChild = curChild->TryGetChild(curPath[0]);
+			curChild = nextChild;
+		}
+	}
+}
+
 ActionResult Scene::OnAction(TouchAction action)
 {
 	action.SetActionTime(Timer::GetTime());

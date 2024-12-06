@@ -7,12 +7,15 @@
 
 #include "Window.h"
 #include "StringUtils.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 using namespace actions;
 using namespace engine;
 using namespace graphics;
 using namespace utils;
 using namespace resources;
+using base::GuiElement;
 
 Window::Window(Scene& scene,
 	ResourceLib& resourceLib) :
@@ -22,6 +25,7 @@ Window::Window(Scene& scene,
 	_resizing(false),
 	_trackingMouse(false),
 	_buttonsDown(0),
+	_lastHoverObjectId(0),
 	_modifiers(actions::MODIFIER_NONE),
 	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
 	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
@@ -346,9 +350,13 @@ void Window::Render()
 
 	_pickContext.Bind();
 
-	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	_scene.Draw3d(_pickContext, 1);
+
+	// Save the picker render to bmp:
+	// std::vector<unsigned char> data = _pickContext.GetTexture();
+	// stbi_write_bmp("picker.bmp", _config.Size.Width, _config.Size.Height, 4, data.data());
 
 	_drawContext.Bind();
 
@@ -432,6 +440,21 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	auto objectId = _pickContext.GetPixel({ touchAction.Position.X, touchAction.Position.Y });
+	if (objectId != _lastHoverObjectId)
+	{
+		auto path = utils::IdToVec(objectId);
+		_scene.SetHover3d(path);
+
+		std::cout << "Mouse over path (" << objectId << "): ";
+		for (auto p : path)
+			std::cout << (unsigned int)p << " ";
+
+		std::cout << std::endl;
+
+		_lastHoverObjectId = objectId;
+	}
+
 	return _scene.OnAction(touchAction);
 }
 

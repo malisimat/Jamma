@@ -7,6 +7,7 @@
 #include <optional>
 #include <glm/glm.hpp>
 #include "../utils/CommonTypes.h"
+#include "../utils/VecUtils.h"
 #include "DrawContext.h"
 #include <gl/glew.h>
 #include <gl/gl.h>
@@ -31,6 +32,7 @@ namespace graphics
 		void Initialise() override;
 		void Bind() override;
 		unsigned int GetPixel(utils::Position2d pos) override;
+		const std::vector<unsigned char> GetTexture() const;
 
 		std::optional<std::any> GetUniform(std::string name);
 		void SetUniform(const std::string& name, std::any val);

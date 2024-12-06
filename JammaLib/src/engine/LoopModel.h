@@ -4,6 +4,7 @@
 #include <memory>
 #include "../include/Constants.h"
 #include "../utils/ArrayUtils.h"
+#include "../utils/VecUtils.h"
 #include "../audio/BufferBank.h"
 #include "../gui/GuiModel.h"
 

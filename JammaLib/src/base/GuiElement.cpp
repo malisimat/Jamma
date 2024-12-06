@@ -14,6 +14,8 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(params),
 	Sizeable(params),
 	_changesMade(false),
+	_isHovering3d(false),
+	_index(0),
 	_guiParams(params),
 	_state(STATE_NORMAL),
 	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
@@ -228,6 +230,16 @@ bool GuiElement::HitTest(Position2d localPos)
 	return false;
 }
 
+void GuiElement::SetHover3d(bool hovering)
+{
+	_isHovering3d = hovering;
+
+	for (auto& child : _children)
+	{
+		child->SetHover3d(hovering);
+	}
+}
+
 void GuiElement::SetIndex(unsigned int index)
 {
 	_index = index;
@@ -242,6 +254,14 @@ std::vector<unsigned int> GuiElement::GlobalId()
 	id.push_back(_index);
 
 	return id;
+}
+
+std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
+{
+	if (index < _children.size())
+		return _children.at(index);
+
+	return nullptr;
 }
 
 void GuiElement::_InitResources(ResourceLib& resourceLib, bool forceInit)

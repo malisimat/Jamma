@@ -6,6 +6,7 @@ using base::Drawable;
 using base::DrawableParams;
 using graphics::GlDrawContext;
 using audio::BufferBank;
+using actions::ActionResult;
 using gui::GuiModel;
 using utils::Size2d;
 
@@ -35,15 +36,15 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	if (STATE_PICKING == _modelState)
 	{
 		auto idVec = GlobalId();
-		unsigned int id = (idVec[0] & 0xFF) +
-			((idVec[1] & 0xFF) << 8) +
-			((idVec[2] & 0xFF) << 16) +
-			((idVec[3] & 0xFF) << 24);
+		unsigned int id = utils::VecToId(idVec);
 
 		glCtx.SetUniform("ObjectId", id);
 	}
 	else
+	{
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
+		glCtx.SetUniform("LoopHover", _isHovering3d ? 1.0f : 0.0f);
+	}
 
 	GuiModel::Draw3d(glCtx, 1);
 

@@ -28,7 +28,7 @@ void GlDrawContext::Initialise()
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _size.Width, _size.Height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _size.Width, _size.Height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -55,17 +55,29 @@ unsigned int GlDrawContext::GetPixel(utils::Position2d pos)
 	if (pos.X >= 0 && ((unsigned int)pos.X) < _size.Width &&
 		pos.Y >= 0 && ((unsigned int)pos.Y) < _size.Height)
 	{
-		glReadPixels(pos.X, pos.Y, 1, 1, GL_BGRA, GL_UNSIGNED_BYTE, &pixels);
+		glReadPixels(pos.X, pos.Y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixels);
 
-		red = pixels[2];
+		red = pixels[0];
 		green = pixels[1];
-		blue = pixels[0];
+		blue = pixels[2];
 		alpha = pixels[3];
 
-		objectId = alpha + (red << 24) + (green << 16) + (blue << 8);
+		objectId = utils::VecToId({ red, green, blue, alpha });
 	}
 
 	return objectId;
+}
+
+const std::vector<unsigned char> GlDrawContext::GetTexture() const
+{
+	unsigned int objectId = 0;
+	std::vector<unsigned char> pixels(4 * _size.Width * _size.Height);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+
+	glReadPixels(0, 0, _size.Width, _size.Height, GL_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
+
+	return pixels;
 }
 
 std::optional<std::any> GlDrawContext::GetUniform(std::string name)
@@ -130,6 +142,7 @@ unsigned int GlDrawContext::_CreateFrameBuffer(Size2d size, ContextTarget target
 
 	unsigned int fbo;
 	glGenFramebuffers(1, &fbo);
+	glBindRenderbuffer(GL_FRAMEBUFFER, fbo);
 
 	unsigned int rb;
 	glGenRenderbuffers(1, &rb);

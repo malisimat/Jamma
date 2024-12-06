@@ -23,6 +23,7 @@
 #include "ActionReceiver.h"
 #include "CommonTypes.h"
 #include "../base/DrawContext.h"
+#include "../utils/VecUtils.h"
 #include "../include/Constants.h"
 #include "../resources/Resource.h"
 #include "../resources/ResourceLib.h"
@@ -102,6 +103,7 @@ namespace graphics
 		bool _resizing;
 		bool _trackingMouse;
 		unsigned int _buttonsDown;
+		unsigned int _lastHoverObjectId;
 
 		GlDrawContext _drawContext;
 		GlDrawContext _pickContext;
