@@ -446,12 +446,6 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 		auto path = utils::IdToVec(objectId);
 		_scene.SetHover3d(path);
 
-		std::cout << "Mouse over path (" << objectId << "): ";
-		for (auto p : path)
-			std::cout << (unsigned int)p << " ";
-
-		std::cout << std::endl;
-
 		_lastHoverObjectId = objectId;
 	}
 

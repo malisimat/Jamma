@@ -92,6 +92,7 @@ namespace engine
 			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
+		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;

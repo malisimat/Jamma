@@ -83,6 +83,12 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	int indexOffset,
 	unsigned int numSamps)
 {
+	if (nullptr == dest)
+		return;
+	
+	if (!dest->IsArmed())
+		return;
+
 	for (auto& loop : _loops)
 		loop->OnPlay(dest, trigger, indexOffset, numSamps);
 }
@@ -93,17 +99,22 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		loop->EndMultiPlay(numSamps);
 }
 
+bool LoopTake::IsArmed() const
+{
+	return (STATE_RECORDING == _state) ||
+		(STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state);
+}
+
 void LoopTake::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex)
 {
 	for (auto& loop : _loops)
 		 loop->EndWrite(numSamps, updateIndex);
 
-	auto isRecording = (STATE_RECORDING == _state) ||
-		(STATE_PLAYINGRECORDING == _state) ||
-		(STATE_OVERDUBBING == _state) ||
-		(STATE_PUNCHEDIN == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state);
+	auto isRecording = IsArmed();
 	auto isEndRecording = (STATE_PLAYINGRECORDING == _state) ||
 		(STATE_OVERDUBBINGRECORDING == _state);
 
@@ -236,7 +247,8 @@ void LoopTake::Play(unsigned long index,
 	unsigned int endRecordSamps)
 {
 	if ((STATE_RECORDING != _state) &&
-		(STATE_OVERDUBBING != _state))
+		(STATE_OVERDUBBING != _state) &&
+		(STATE_PUNCHEDIN != _state))
 		return;
 
 	_endRecordSampCount = 0;
@@ -247,7 +259,8 @@ void LoopTake::Play(unsigned long index,
 		loop->Play(index, loopLength, endRecordSamps > 0);
 	}
 
-	auto recordState = STATE_OVERDUBBING == _state ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
+	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
+	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = endRecordSamps > 0 ? recordState : STATE_PLAYING;
 	_state = loopLength > 0 ? playState : STATE_INACTIVE;
 }

@@ -216,11 +216,8 @@ namespace engine
 	{
 		TRIGSTATE_DEFAULT,
 		TRIGSTATE_RECORDING,
-		TRIGSTATE_DITCHDOWN,
 		TRIGSTATE_OVERDUBBING,
-		TRIGSTATE_OVERDUBBINGDITCHDOWN,
-		TRIGSTATE_PUNCHEDIN,
-		TRIGSTATE_PUNCHEDINDITCHDOWN
+		TRIGSTATE_PUNCHEDIN
 	};
 	
 	class Trigger :
@@ -252,6 +249,7 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		TriggerState GetState() const;
+		bool IsDitchDown() const;
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
@@ -304,6 +302,7 @@ namespace engine
 		unsigned long _recordSampCount;
 		Time _lastActivateTime;
 		Time _lastDitchTime;
+		bool _isDitchDown;
 		bool _isLastActivateDown;
 		bool _isLastDitchDown;
 		bool _isLastActivateDownRaw;

@@ -466,8 +466,6 @@ void Loop::UnMute()
 {
 	if (STATE_MUTED != _state)
 		return;
-	
-	_state = STATE_PLAYING;
 
 	UpdateMuteState(false);
 }
