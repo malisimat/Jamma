@@ -37,7 +37,7 @@ Scene::Scene(SceneParams params,
 	_userConfig(user),
 	_clock(std::make_shared<Timer>())
 {
-	GuiLabelParams labelParams(GuiElementParams(
+	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
 		MoveableParams(utils::Position2d{ 10, 10 }, utils::Position3d{ 10, 10, 0 }, 1.0),
 		SizeableParams{ 200,80 },
@@ -70,6 +70,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
+	stationParams.Index = 0;
 	stationParams.Position = { 20, 20 };
 	stationParams.ModelPosition = { -50, -20 };
 	stationParams.Size = { 140, 300 };
@@ -77,16 +78,14 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		constants::MaxLoopFadeSamps :
 		rigStruct.User.Loop.FadeSamps;
 
-	auto stationCount = 0u;
-
 	for (auto stationStruct : jamStruct.Stations)
 	{
 		auto station = Station::FromFile(stationParams, stationStruct, dir);
 		if (station.has_value())
 		{
-			if (rigStruct.Triggers.size() > stationCount)
+			if (rigStruct.Triggers.size() > stationParams.Index)
 			{
-				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationCount]);
+				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
 
 				if (trigger.has_value())
 					station.value()->AddTrigger(trigger.value());
@@ -95,9 +94,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			scene->AddStation(station.value());
 		}
 
+		stationParams.Index++;
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
-		stationCount++;
 	}
 
 	scene->SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
@@ -182,7 +181,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path)
 			// Remove this element's index from the front
 			curPath.erase(curPath.begin());
 
-			if (curPath.empty())
+			if (curPath.empty() || (0xFF == curPath[0]))
 			{
 				// Set this and all below to hovering
 				curChild->SetHover3d(true);

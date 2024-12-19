@@ -36,6 +36,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	if (STATE_PICKING == _modelState)
 	{
 		auto idVec = GlobalId();
+		idVec.resize(2);
 		unsigned int id = utils::VecToId(idVec);
 
 		glCtx.SetUniform("ObjectId", id);

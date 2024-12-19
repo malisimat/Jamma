@@ -15,7 +15,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Sizeable(params),
 	_changesMade(false),
 	_isHovering3d(false),
-	_index(0),
+	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
 	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture")),

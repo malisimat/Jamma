@@ -11,9 +11,16 @@
 
 unsigned int utils::VecToId(std::vector<unsigned int> vec)
 {
-	return (vec[0] & 0xFF) +
-		(((vec[1] & 0xFF) << 8) & 0xFF00) +
-		(((vec[2] & 0xFF) << 16) & 0xFF0000);
+	unsigned int id = 0u;
+	auto len = vec.size();
+
+	for (auto i = 0u; i < 3; i++)
+	{
+		auto v = i < len ? (vec[i] & 0xFF) : 0xFF;
+		id += v << (8 * i);
+	}
+
+	return id;
 }
 
 std::vector<unsigned char> utils::IdToVec(unsigned int id)
