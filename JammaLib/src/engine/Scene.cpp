@@ -77,14 +77,16 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		constants::MaxLoopFadeSamps :
 		rigStruct.User.Loop.FadeSamps;
 
+	auto stationCount = 0u;
+
 	for (auto stationStruct : jamStruct.Stations)
 	{
 		auto station = Station::FromFile(stationParams, stationStruct, dir);
 		if (station.has_value())
 		{
-			if (rigStruct.Triggers.size() > 0)
+			if (rigStruct.Triggers.size() > stationCount)
 			{
-				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[0]);
+				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationCount]);
 
 				if (trigger.has_value())
 					station.value()->AddTrigger(trigger.value());
@@ -93,8 +95,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			scene->AddStation(station.value());
 		}
 
-		stationParams.Position += { 0, 90 };
-		stationParams.ModelPosition += { 0, 90 };
+		stationParams.Position += { 600, 0 };
+		stationParams.ModelPosition += { 600, 0 };
+		stationCount++;
 	}
 
 	scene->SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
