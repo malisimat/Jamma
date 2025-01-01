@@ -25,6 +25,7 @@ namespace io
 		static std::optional<InitFile> FromStream(std::stringstream ss);
 		static bool ToStream(InitFile ini, std::stringstream& ss);
 		static const std::string DefaultJson(std::string roamingPath);
+		static const void SetWinParams(InitFile& ini, const Json::JsonArray& array);
 
 		enum LoadType
 		{

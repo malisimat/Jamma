@@ -4,6 +4,7 @@
 #include <memory>
 #include "../include/Constants.h"
 #include "../utils/ArrayUtils.h"
+#include "../utils/VecUtils.h"
 #include "../audio/BufferBank.h"
 #include "../gui/GuiModel.h"
 
@@ -37,7 +38,8 @@ namespace engine
 		{
 			STATE_RECORDING = 0,
 			STATE_PLAYING = 1,
-			STATE_MUTED = 2
+			STATE_MUTED = 2,
+			STATE_PICKING = 3
 		};
 
 	public:
@@ -61,6 +63,8 @@ namespace engine
 	protected:
 		static unsigned int TotalNumLeds(unsigned int vuHeight, unsigned int ledHeight);
 		static unsigned int CurrentNumLeds(unsigned int vuHeight, unsigned int ledHeight, double value);
+
+		std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 		std::tuple<std::vector<float>, std::vector<float>, float, float>
 			CalcGrainGeometry(const audio::BufferBank& buffer,

@@ -4,21 +4,14 @@ using namespace base;
 using namespace engine;
 using namespace resources;
 using base::AudioSink;
-using base::MultiAudioSource;
 using audio::BufferBank;
 using audio::AudioMixer;
 using audio::Hanning;
 using audio::AudioMixerParams;
-using audio::PanMixBehaviour;
-using gui::GuiSliderParams;
-using gui::GuiModel;
-using gui::GuiModelParams;
 using graphics::GlDrawContext;
-using actions::ActionResult;
-using actions::JobAction;
 
 Loop::Loop(LoopParams loopParams,
-	audio::AudioMixerParams mixerParams) :
+	AudioMixerParams mixerParams) :
 	GuiElement(loopParams),
 	AudioSink(),
 	_playIndex(0),
@@ -38,15 +31,15 @@ Loop::Loop(LoopParams loopParams,
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
-	modelParams.ModelTexture = "levels";
-	modelParams.ModelShader = "texture_shaded";
+	modelParams.ModelTextures = { "levels" };
+	modelParams.ModelShaders = { "texture_shaded", "picker"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
 	vuParams.Size = { 12, 18 };
 	vuParams.ModelScale = 1.0f;
-	vuParams.ModelTexture = "blue";
-	vuParams.ModelShader = "vu";
+	vuParams.ModelTextures = { "blue" };
+	vuParams.ModelShaders = { "vu" };
 	vuParams.LedHeight = 1.0f;
 	_vu = std::make_shared<VU>(vuParams);
 
@@ -98,7 +91,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	return loop;
 }
 
-audio::AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
+AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
 	audio::BehaviourParams behaviour)
 {
 	AudioMixerParams mixerParams;
@@ -127,6 +120,8 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
 
+	auto isPicking = TEXTURE == ctx.GetContextTarget();
+
 	auto isRecording = (STATE_RECORDING == _state) ||
 		(STATE_OVERDUBBING == _state) ||
 		(STATE_PUNCHEDIN == _state);
@@ -143,19 +138,15 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 	_model->SetLoopIndexFrac(frac);
 
-	LoopModel::LoopModelState modelState = LoopModel::LoopModelState::STATE_RECORDING;
-	if (STATE_PLAYING == _state)
-		modelState = LoopModel::LoopModelState::STATE_PLAYING;
-	else if (STATE_MUTED == _state)
-		modelState = LoopModel::LoopModelState::STATE_MUTED;
-
+	LoopModel::LoopModelState modelState = isPicking ? LoopModel::LoopModelState::STATE_PICKING : ToLoopModelState(_state);
 	_model->SetLoopState(modelState);
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	_vu->Draw3d(ctx, 1);
+	if (!isPicking)
+		_vu->Draw3d(ctx, 1);
 
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->UnmutedLevel(), 1.0f)));
 	
@@ -475,8 +466,6 @@ void Loop::UnMute()
 {
 	if (STATE_MUTED != _state)
 		return;
-	
-	_state = STATE_PLAYING;
 
 	UpdateMuteState(false);
 }
@@ -570,6 +559,26 @@ double Loop::CalcDrawRadius(unsigned long loopLength)
 	auto radius = 70.0 * log(loopLength) - 600;
 
 	return std::clamp(radius, minRadius, maxRadius);
+}
+
+LoopModel::LoopModelState Loop::ToLoopModelState(LoopVisualState state)
+{
+	LoopModel::LoopModelState modelState;
+
+	switch (state)
+	{
+	case STATE_PLAYING:
+		modelState = LoopModel::LoopModelState::STATE_PLAYING;
+		break;
+	case STATE_MUTED:
+		modelState = LoopModel::LoopModelState::STATE_MUTED;
+		break;
+	default:
+		modelState = LoopModel::LoopModelState::STATE_RECORDING;
+		break;
+	}
+
+	return modelState;
 }
 
 void Loop::UpdateLoopModel()

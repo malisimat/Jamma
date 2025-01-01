@@ -27,6 +27,7 @@ namespace base
 				channel->Zero(numSamps);
 			}
 		}
+		virtual bool IsArmed() const { return true; }
 		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
 			int indexOffset,
 			unsigned int numSamps) {}

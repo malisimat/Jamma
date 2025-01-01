@@ -15,6 +15,7 @@ using namespace std::placeholders;
 Scene::Scene(SceneParams params,
 	UserConfig user) :
 	Drawable(params),
+	Moveable(params),
 	Sizeable(params),
 	_isSceneTouching(false),
 	_isSceneQuitting(false),
@@ -27,6 +28,8 @@ Scene::Scene(SceneParams params,
 	_masterLoop(std::shared_ptr<Loop>()),
 	_stations(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
+	_hoverElement3d(std::weak_ptr<GuiElement>()),
+	_touchDownElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
 	_camera(CameraParams(
 		MoveableParams(
@@ -37,7 +40,7 @@ Scene::Scene(SceneParams params,
 	_userConfig(user),
 	_clock(std::make_shared<Timer>())
 {
-	GuiLabelParams labelParams(GuiElementParams(
+	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
 		MoveableParams(utils::Position2d{ 10, 10 }, utils::Position3d{ 10, 10, 0 }, 1.0),
 		SizeableParams{ 200,80 },
@@ -70,6 +73,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
+	stationParams.Index = 0;
 	stationParams.Position = { 20, 20 };
 	stationParams.ModelPosition = { -50, -20 };
 	stationParams.Size = { 140, 300 };
@@ -82,9 +86,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		auto station = Station::FromFile(stationParams, stationStruct, dir);
 		if (station.has_value())
 		{
-			if (rigStruct.Triggers.size() > 0)
+			if (rigStruct.Triggers.size() > stationParams.Index)
 			{
-				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[0]);
+				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
 
 				if (trigger.has_value())
 					station.value()->AddTrigger(trigger.value());
@@ -93,8 +97,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			scene->AddStation(station.value());
 		}
 
-		stationParams.Position += { 0, 90 };
-		stationParams.ModelPosition += { 0, 90 };
+		stationParams.Index++;
+		stationParams.Position += { 600, 0 };
+		stationParams.ModelPosition += { 600, 0 };
 	}
 
 	scene->SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
@@ -157,6 +162,53 @@ void Scene::_ReleaseResources()
 	Drawable::_ReleaseResources();
 }
 
+void Scene::SetHover3d(std::vector<unsigned char> path)
+{
+	for (auto& station : _stations)
+		station->SetHover3d(false);
+
+	bool isHovering = path.size() > 2 ?
+		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
+		false;
+
+	if (!isHovering)
+	{
+		std::cout << "No hover 3d element" << std::endl;
+		_hoverElement3d.reset();
+		return;
+	}
+
+	bool foundChild = true;
+	std::shared_ptr<GuiElement> curChild;
+	auto stationIndex = path[0];
+
+	if (stationIndex < _stations.size())
+	{
+		curChild = _stations[stationIndex];
+
+		std::vector<unsigned char> curPath(path);
+
+		while (nullptr != curChild) {
+			// Remove this element's index from the front
+			curPath.erase(curPath.begin());
+
+			if (curPath.empty() || (0xFF == curPath[0]))
+			{
+				// Set this and all below to hovering
+				curChild->SetHover3d(true);
+
+				_hoverElement3d = curChild;
+
+				std::cout << "SET hover 3d element" << std::endl;
+				break;
+			}
+
+			auto nextChild = curChild->TryGetChild(curPath[0]);
+			curChild = nextChild;
+		}
+	}
+}
+
 ActionResult Scene::OnAction(TouchAction action)
 {
 	action.SetActionTime(Timer::GetTime());
@@ -167,6 +219,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
 		auto activeElement = _touchDownElement.lock();
+		auto activeElement3d = _touchDownElement3d.lock();
 
 		if (activeElement)
 		{
@@ -178,10 +231,28 @@ ActionResult Scene::OnAction(TouchAction action)
 					_undoHistory.Add(res.Undo);
 			}
 		}
+		else if (activeElement3d)
+		{
+			auto hoverElement3d = _hoverElement3d.lock();
+
+			if (hoverElement3d == activeElement3d)
+			{
+				std::cout << "Matched element 3d UP with currently hovering element 3d" << std::endl;
+
+				auto res = activeElement3d->OnAction(activeElement3d->GlobalToLocal(action));
+
+				if (res.IsEaten)
+				{
+					if (nullptr != res.Undo)
+						_undoHistory.Add(res.Undo);
+				}
+			}
+		}
 		else if (_isSceneTouching)
 			_isSceneTouching = false;
 
 		_touchDownElement.reset();
+		_touchDownElement3d.reset();
 
 		return { false, "", "", ACTIONRESULT_DEFAULT };
 	}
@@ -197,6 +268,14 @@ ActionResult Scene::OnAction(TouchAction action)
 
 			if (!_touchDownElement.lock())
 				_touchDownElement = res.ActiveElement;
+
+			return res;
+		}
+		else if (_hoverElement3d.lock())
+		{
+			_touchDownElement3d = _hoverElement3d;
+			res.ActiveElement = _hoverElement3d;
+			res.IsEaten = true;
 
 			return res;
 		}

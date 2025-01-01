@@ -300,6 +300,15 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
 		break;
+	case TriggerAction::TRIGGER_DITCH_UNMUTE:
+		if (loopTake.has_value())
+		{
+			loopTake.value()->UnMute();
+		}
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
 	}
 
 	return res;
@@ -388,41 +397,24 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 
 void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 {
-	// for each trigger, check which loop takes are being bounced
-	// based on overdub modes, and play those looptakes into the new ones
-	// with static offset based on maxloopfadesamps and output latency
-
-	// Have a clever mixer with timer that can fade between punchedin audioIN and loop output
-	// and then stream loop output to this - it will be faded (but on a delayed timer) with the audio
-	// already recorded in this buffer session (assume audio IN is written first).
-	// Delay is constants::MaxLoopFadeSamps, because we want to punch in at the actual samples
-	// being played along with, because we are delayed by this amount deliberately.
-	// Therefore read current samp and mix with loop sample according to mixer's state.
 	for (auto& trigger : _triggers)
 	{
-		if ((trigger->GetState() == TRIGSTATE_OVERDUBBING) ||
-			(trigger->GetState() == TRIGSTATE_OVERDUBBINGDITCHDOWN) ||
-			(trigger->GetState() == TRIGSTATE_PUNCHEDIN) ||
-			(trigger->GetState() == TRIGSTATE_PUNCHEDINDITCHDOWN) ||
-			(trigger->GetState() == TRIGSTATE_DEFAULT))
+		auto takes = trigger->GetTakes();
+
+		for (auto& take : takes)
 		{
-			auto takes = trigger->GetTakes();
+			std::string sourceId = take.SourceTakeId;
+			std::string targetId = take.TargetTakeId;
+			auto sourceMatch = std::find_if(_backLoopTakes.begin(),
+				_backLoopTakes.end(),
+				[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
+			auto targetMatch = std::find_if(_backLoopTakes.begin(),
+				_backLoopTakes.end(),
+				[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
 
-			for (auto& take : takes)
+			if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 			{
-				std::string sourceId = take.SourceTakeId;
-				std::string targetId = take.TargetTakeId;
-				auto sourceMatch = std::find_if(_backLoopTakes.begin(),
-					_backLoopTakes.end(),
-					[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
-				auto targetMatch = std::find_if(_backLoopTakes.begin(),
-					_backLoopTakes.end(),
-					[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
-
-				if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
-				{
-					(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
-				}
+				(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 			}
 		}
 	}
@@ -467,6 +459,9 @@ std::vector<JobAction> Station::_CommitChanges()
 	}
 	
 	_loopTakes = _backLoopTakes; // TODO: Undo?
+
+	GuiElement::_CommitChanges();
+
 	return {};
 }
 

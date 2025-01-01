@@ -22,6 +22,8 @@
 #include "Action.h"
 #include "ActionReceiver.h"
 #include "CommonTypes.h"
+#include "../base/DrawContext.h"
+#include "../utils/VecUtils.h"
 #include "../include/Constants.h"
 #include "../resources/Resource.h"
 #include "../resources/ResourceLib.h"
@@ -67,7 +69,7 @@ namespace graphics
 		void SetResizing(bool resizing);
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
-		void Resize(utils::Size2d size, WindowState state);
+		void Resize(utils::Size2d size);
 		void SetWindowState(WindowState state);
 		utils::Size2d GetSize();
 		void Render();
@@ -101,8 +103,10 @@ namespace graphics
 		bool _resizing;
 		bool _trackingMouse;
 		unsigned int _buttonsDown;
+		unsigned int _lastHoverObjectId;
 
 		GlDrawContext _drawContext;
+		GlDrawContext _pickContext;
 		engine::Scene& _scene;
 		resources::ResourceLib& _resourceLib;
 		actions::Modifier _modifiers;

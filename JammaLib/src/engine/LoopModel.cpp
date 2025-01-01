@@ -6,6 +6,7 @@ using base::Drawable;
 using base::DrawableParams;
 using graphics::GlDrawContext;
 using audio::BufferBank;
+using actions::ActionResult;
 using gui::GuiModel;
 using utils::Size2d;
 
@@ -32,7 +33,19 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
 
-	glCtx.SetUniform("LoopState", (unsigned int)_modelState);
+	if (STATE_PICKING == _modelState)
+	{
+		auto idVec = GlobalId();
+		idVec.resize(2);
+		unsigned int id = utils::VecToId(idVec);
+
+		glCtx.SetUniform("ObjectId", id);
+	}
+	else
+	{
+		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
+		glCtx.SetUniform("LoopHover", _isHovering3d ? 1.0f : 0.0f);
+	}
 
 	GuiModel::Draw3d(glCtx, 1);
 
@@ -70,6 +83,15 @@ unsigned int LoopModel::CurrentNumLeds(unsigned int vuHeight,
 	auto numLeds = TotalNumLeds(vuHeight, ledHeight);
 
 	return (unsigned int)std::ceil(value * numLeds);
+}
+
+std::weak_ptr<resources::ShaderResource> LoopModel::GetShader()
+{
+	unsigned int shaderIndex = (STATE_PICKING == _modelState) ? 1 : 0;
+	if (_modelShaders.size() > shaderIndex)
+		return _modelShaders.at(shaderIndex);
+
+	return std::weak_ptr<resources::ShaderResource>();
 }
 
 void LoopModel::UpdateModel(const BufferBank& buffer,

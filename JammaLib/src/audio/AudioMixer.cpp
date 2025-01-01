@@ -121,6 +121,9 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float fadeNew,
 	unsigned int index) const
 {
+	if (nullptr == dest)
+		return;
+
 	for (auto chan : _mixParams.Channels)
 	{
 		dest->OnMixWriteChannel(chan,
@@ -138,6 +141,9 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float fadeNew,
 	unsigned int index) const
 {
+	if (nullptr == dest)
+		return;
+
 	auto numChans = dest->NumInputChannels();
 
 	for (auto chan = 0u; chan < numChans; chan++)
@@ -158,6 +164,9 @@ void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float fadeNew,
 	unsigned int index) const
 {
+	if (nullptr == dest)
+		return;
+
 	for (auto chan : _mixParams.Channels)
 	{
 		dest->OnMixWriteChannel(chan,

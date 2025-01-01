@@ -191,7 +191,7 @@ namespace engine
 	{
 	public:
 		TriggerParams() :
-			base::GuiElementParams(DrawableParams{ "" },
+			base::GuiElementParams(0, DrawableParams{ "" },
 			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
 			SizeableParams{ 1,1 },
 			"",
@@ -216,11 +216,8 @@ namespace engine
 	{
 		TRIGSTATE_DEFAULT,
 		TRIGSTATE_RECORDING,
-		TRIGSTATE_DITCHDOWN,
 		TRIGSTATE_OVERDUBBING,
-		TRIGSTATE_OVERDUBBINGDITCHDOWN,
-		TRIGSTATE_PUNCHEDIN,
-		TRIGSTATE_PUNCHEDINDITCHDOWN
+		TRIGSTATE_PUNCHEDIN
 	};
 	
 	class Trigger :
@@ -252,6 +249,7 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		TriggerState GetState() const;
+		bool IsDitchDown() const;
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
@@ -304,6 +302,7 @@ namespace engine
 		unsigned long _recordSampCount;
 		Time _lastActivateTime;
 		Time _lastDitchTime;
+		bool _isDitchDown;
 		bool _isLastActivateDown;
 		bool _isLastDitchDown;
 		bool _isLastActivateDownRaw;

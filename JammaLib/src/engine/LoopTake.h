@@ -17,7 +17,7 @@ namespace engine
 	{
 	public:
 		LoopTakeParams() :
-			base::GuiElementParams(DrawableParams{ "" },
+			base::GuiElementParams(0, DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
 				SizeableParams{ 1,1 },
 				"",
@@ -92,6 +92,7 @@ namespace engine
 			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
+		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;

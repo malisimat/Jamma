@@ -14,6 +14,8 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(params),
 	Sizeable(params),
 	_changesMade(false),
+	_isHovering3d(false),
+	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
 	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
@@ -28,10 +30,13 @@ void GuiElement::Init()
 {
 	InitReceivers();
 
+	unsigned int index = 0;
 	for (auto& child : _children)
 	{
 		child->SetParent(GuiElement::shared_from_this());
 		child->Init();
+		child->SetIndex(index);
+		index++;
 	}
 }
 
@@ -225,6 +230,40 @@ bool GuiElement::HitTest(Position2d localPos)
 	return false;
 }
 
+void GuiElement::SetHover3d(bool hovering)
+{
+	_isHovering3d = hovering;
+
+	for (auto& child : _children)
+	{
+		child->SetHover3d(hovering);
+	}
+}
+
+void GuiElement::SetIndex(unsigned int index)
+{
+	_index = index;
+}
+
+std::vector<unsigned int> GuiElement::GlobalId()
+{
+	if (nullptr == _parent)
+		return { _index };
+
+	auto id = _parent->GlobalId();
+	id.push_back(_index);
+
+	return id;
+}
+
+std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
+{
+	if (index < _children.size())
+		return _children.at(index);
+
+	return nullptr;
+}
+
 void GuiElement::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_texture.InitResources(resourceLib, forceInit);
@@ -249,5 +288,13 @@ void GuiElement::_ReleaseResources()
 
 std::vector<JobAction> GuiElement::_CommitChanges()
 {
+	unsigned int index = 0;
+
+	for (auto& child : _children)
+	{
+		child->SetIndex(index);
+		index++;
+	}
+
 	return {};
 }

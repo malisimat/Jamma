@@ -15,6 +15,52 @@ const std::string InitFile::DefaultJson(std::string roamingPath)
 	return "{\"rig\":\"" + roamingPath + "\\default.rig\",\"jam\":\"" + roamingPath + "\\default.jam\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000]}";
 }
 
+const void InitFile::SetWinParams(InitFile& ini, const Json::JsonArray& array)
+{
+	auto vec = std::visit([](auto&& value) -> std::vector<long>
+		{
+			std::vector<long> result;
+			using ValueType = std::decay_t<decltype(value)>;
+			if constexpr (std::is_same_v<ValueType, std::vector<long>>)
+			{
+				auto res = static_cast<std::vector<long>>(value);
+				if (res.size() > 1)
+				{
+					result.push_back(res[0]);
+					result.push_back(res[1]);
+
+					if (res.size() > 3)
+					{
+						result.push_back(res[2]);
+						result.push_back(res[3]);
+					}
+				}
+			}
+			else if constexpr (std::is_same_v<ValueType, std::vector<unsigned long>>)
+			{
+				auto res = static_cast<std::vector<unsigned long>>(value);
+				if (res.size() > 1)
+				{
+					result.push_back(res[0]);
+					result.push_back(res[1]);
+
+					if (res.size() > 3)
+					{
+						result.push_back(res[2]);
+						result.push_back(res[3]);
+					}
+				}
+			}
+			return result;
+		}, array.Array);
+
+	if (vec.size() > 1)
+		ini.WinPos = { vec[0], vec[1] };
+
+	if (vec.size() > 3)
+		ini.WinSize = { (unsigned int)vec[2], (unsigned int)vec[3] };
+}
+
 std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 {
 	auto root = Json::FromStream(std::move(ss));
@@ -73,23 +119,7 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 		if (iniParams.KeyValues["win"].index() == 5)
 		{
 			auto jsonArray = std::get<Json::JsonArray>(iniParams.KeyValues["win"]);
-
-			if (jsonArray.Array.index() == 1)
-			{
-				auto winArray = std::get<std::vector<long>>(jsonArray.Array);
-
-				if (winArray.size() > 1)
-				{
-					ini.WinPos = { winArray[0], winArray[1] };
-
-					if (winArray.size() > 3)
-					{
-						unsigned int w = winArray[2] > winArray[0] ? (unsigned int)(winArray[2] - winArray[0]) : 1;
-						unsigned int h = winArray[3] > winArray[1] ? (unsigned int)(winArray[3] - winArray[1]) : 1;
-						ini.WinSize = { w, h };
-					}
-				}
-			}
+			SetWinParams(ini, jsonArray);
 		}
 	}
 

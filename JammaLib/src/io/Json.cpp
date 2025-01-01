@@ -107,6 +107,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 		{
 			charBuf.clear();
 			// Value is array
+			auto isNextPart = false;
 			auto isArrayEnd = false;
 			auto isFirstIt = true;
 			std::vector<std::string> values;
@@ -129,12 +130,21 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 								parts.push_back(part.Part.value());
 
 							ss = std::move(part.Stream);
-
 							while (ss >> c)
 							{
+								isNextPart = ',' == c;
 								isArrayEnd = ']' == c;
-								if ((',' == c) || isArrayEnd)
+								if (isNextPart || isArrayEnd)
 									break;
+							}
+
+							if (isNextPart && !isArrayEnd)
+							{
+								while (ss >> c)
+								{
+									if ('{' == c)
+										break;
+								}
 							}
 						}
 
@@ -191,7 +201,9 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 
 			while (!finished)
 			{
-				if ('}' == ss.peek())
+				char peeked = ss.peek();
+
+				if (('}' == peeked) || ('\n' == peeked))
 					finished = true;
 				else if (ss >> c)
 					finished = (',' == c);

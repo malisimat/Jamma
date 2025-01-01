@@ -21,7 +21,8 @@ namespace base
 		public SizeableParams
 	{
 	public:
-		GuiElementParams(DrawableParams drawParams,
+		GuiElementParams(unsigned int index,
+			DrawableParams drawParams,
 			MoveableParams moveParams,
 			SizeableParams sizeParams,
 			std::string overTexture,
@@ -31,6 +32,7 @@ namespace base
 			DrawableParams(drawParams),
 			MoveableParams(moveParams),
 			SizeableParams(sizeParams),
+			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
 			OutTexture(outTexture),
@@ -39,6 +41,7 @@ namespace base
 		}
 
 	public:
+		unsigned int Index;
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
@@ -72,6 +75,10 @@ namespace base
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances) override;
 		virtual bool HitTest(utils::Position2d localPos);
+		virtual void SetHover3d(bool hovering);
+		virtual void SetIndex(unsigned int index);
+		virtual std::vector<unsigned int> GlobalId();
+		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
@@ -99,6 +106,8 @@ namespace base
 
 	protected:
 		bool _changesMade;
+		bool _isHovering3d;
+		unsigned int _index;
 		GuiElementParams _guiParams;
 		GuiElementState _state;
 		graphics::Image _texture;

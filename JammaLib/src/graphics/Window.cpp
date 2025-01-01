@@ -7,12 +7,15 @@
 
 #include "Window.h"
 #include "StringUtils.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 using namespace actions;
 using namespace engine;
 using namespace graphics;
 using namespace utils;
 using namespace resources;
+using base::GuiElement;
 
 Window::Window(Scene& scene,
 	ResourceLib& resourceLib) :
@@ -22,10 +25,14 @@ Window::Window(Scene& scene,
 	_resizing(false),
 	_trackingMouse(false),
 	_buttonsDown(0),
-	_modifiers(actions::MODIFIER_NONE)
+	_lastHoverObjectId(0),
+	_modifiers(actions::MODIFIER_NONE),
+	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
+	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
 {
-	_config.Size = { scene.Width(), scene.Height() };
-	_config.Position = { CW_USEDEFAULT, 0};
+	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
+	_config.Position = { scene.Position().X, scene.Position().Y};
+	//_config.Position = { CW_USEDEFAULT, 0};
 	_config.State = WINDOWED;
 }
 
@@ -75,6 +82,8 @@ void Window::LoadResources()
 void Window::InitScene()
 {
 	_scene.InitResources(_resourceLib, true);
+	_pickContext.Initialise();
+	_drawContext.Initialise();
 }
 
 void Window::ShowMessage(LPCWSTR message)
@@ -168,7 +177,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	auto size = (WINDOWED == _config.State) ? AdjustSize(_config.Size, _style) : _config.Size;
-	auto pos = (WINDOWED == _config.State) ? Center(size) : _config.Position;
+	auto pos = _config.Position;// (WINDOWED == _config.State) ? Center(size) : _config.Position;
 
 	// Create a new window and context
 	_wnd = CreateWindowEx(
@@ -317,8 +326,12 @@ void Window::SetTrackingMouse(bool tracking)
 	_trackingMouse = tracking;
 }
 
-void Window::Resize(Size2d size, WindowState state)
+void Window::Resize(Size2d size)
 {
+	_config.Size = size;
+
+	_pickContext.Initialise();
+	_drawContext.Initialise();
 }
 
 void Window::SetWindowState(WindowState state)
@@ -333,12 +346,23 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
-	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-	_drawContext.SetSize(_config.Size);
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
+
+	_pickContext.Bind();
+
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	_scene.Draw3d(_pickContext, 1);
+
+	// Save the picker render to bmp:
+	// std::vector<unsigned char> data = _pickContext.GetTexture();
+	// stbi_write_bmp("picker.bmp", _config.Size.Width, _config.Size.Height, 4, data.data());
+
+	_drawContext.Bind();
+
+	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	_scene.Draw3d(_drawContext, 1);
 	_scene.Draw(_drawContext);
 }
@@ -417,6 +441,15 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
+	auto objectId = _pickContext.GetPixel({ touchAction.Position.X, touchAction.Position.Y });
+	if (objectId != _lastHoverObjectId)
+	{
+		auto path = utils::IdToVec(objectId);
+		_scene.SetHover3d(path);
+
+		_lastHoverObjectId = objectId;
+	}
+
 	return _scene.OnAction(touchAction);
 }
 

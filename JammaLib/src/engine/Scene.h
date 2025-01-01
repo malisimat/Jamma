@@ -18,6 +18,7 @@
 #include "Drawable.h"
 #include "ActionReceiver.h"
 #include "AudioSource.h"
+#include "Moveable.h"
 #include "Sizeable.h"
 #include "GuiElement.h"
 #include "Station.h"
@@ -27,12 +28,15 @@ namespace engine
 {
 	class SceneParams :
 		public base::DrawableParams,
+		public base::MoveableParams,
 		public base::SizeableParams
 	{
 	public:
 		SceneParams(base::DrawableParams drawParams,
+			base::MoveableParams moveParams,
 			base::SizeableParams sizeParams) :
 			base::DrawableParams(drawParams),
+			base::MoveableParams(moveParams),
 			base::SizeableParams(sizeParams)
 		{}
 	};
@@ -40,6 +44,7 @@ namespace engine
 	class Scene :
 		public base::Tickable,
 		public base::Drawable,
+		public base::Moveable,
 		public base::Sizeable,
 		public base::ActionReceiver
 	{
@@ -71,6 +76,8 @@ namespace engine
 			_undoHistory(std::move(other._undoHistory)),
 			_stations(std::move(other._stations)),
 			_touchDownElement(other._touchDownElement),
+			_hoverElement3d(other._hoverElement3d),
+			_touchDownElement3d(other._touchDownElement3d),
 			_masterLoop(other._masterLoop)
 		{
 			other._stations = std::vector<std::shared_ptr<Station>>();
@@ -107,6 +114,8 @@ namespace engine
 				_stations.swap(other._stations);
 				_undoHistory.swap(other._undoHistory);
 				std::swap(_touchDownElement, other._touchDownElement),
+				std::swap(_hoverElement3d, other._hoverElement3d),
+				std::swap(_touchDownElement3d, other._touchDownElement3d),
 				_masterLoop.swap(other._masterLoop);
 				std::swap(_drawParams, other._drawParams);
 				std::swap(_sizeParams, other._sizeParams);
@@ -129,6 +138,7 @@ namespace engine
 			_sizeParams.Size = size;
 			InitSize();
 		}
+		void SetHover3d(std::vector<unsigned char> path);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const	{ return _sizeParams.Size.Height; }
 
@@ -183,6 +193,8 @@ namespace engine
 		std::vector<std::shared_ptr<Station>> _stations;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
+		std::weak_ptr<base::GuiElement> _hoverElement3d;
+		std::weak_ptr<base::GuiElement> _touchDownElement3d;
 		std::shared_ptr<Loop> _masterLoop;
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;
