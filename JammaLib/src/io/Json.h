@@ -24,11 +24,12 @@ namespace io
 		struct JsonPart;
 		typedef std::variant<bool, long, unsigned long, double, std::string, JsonArray, JsonPart> JsonValue;
 		typedef std::variant<bool, long, unsigned long, double, std::string> JsonScalar;
+		typedef std::variant<std::vector<bool>, std::vector<long>, std::vector<unsigned long>, std::vector<double>, std::vector<std::string>, std::vector<JsonPart>> JsonArrayType;
 
 		struct JsonArray
 		{
 			unsigned int Length;
-			std::variant<std::vector<bool>, std::vector<long>, std::vector<unsigned long>, std::vector<double>, std::vector<std::string>, std::vector<JsonPart>> Array;
+			JsonArrayType Array;
 		};
 
 		struct JsonPart

@@ -109,12 +109,17 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	auto defaults = LoadIni();
 
-	SceneParams sceneParams(DrawableParams{ "" }, SizeableParams{ 1400, 1000 });
+	SceneParams sceneParams(DrawableParams{ "" },
+		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
+		SizeableParams{ 1400, 1000 });
 	JamFile jam;
 	RigFile rig;
 
 	if (defaults.has_value())
 	{
+		sceneParams.Position = defaults.value().WinPos;
+		sceneParams.Size = defaults.value().WinSize;
+
 		std::stringstream ss;
 		InitFile::ToStream(defaults.value(), ss);
 

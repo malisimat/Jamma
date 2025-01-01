@@ -15,6 +15,7 @@ using namespace std::placeholders;
 Scene::Scene(SceneParams params,
 	UserConfig user) :
 	Drawable(params),
+	Moveable(params),
 	Sizeable(params),
 	_isSceneTouching(false),
 	_isSceneQuitting(false),
@@ -27,6 +28,8 @@ Scene::Scene(SceneParams params,
 	_masterLoop(std::shared_ptr<Loop>()),
 	_stations(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
+	_hoverElement3d(std::weak_ptr<GuiElement>()),
+	_touchDownElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
 	_camera(CameraParams(
 		MoveableParams(
@@ -161,15 +164,23 @@ void Scene::_ReleaseResources()
 
 void Scene::SetHover3d(std::vector<unsigned char> path)
 {
-	if (path.empty())
+	for (auto& station : _stations)
+		station->SetHover3d(false);
+
+	bool isHovering = path.size() > 2 ?
+		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
+		false;
+
+	if (!isHovering)
+	{
+		std::cout << "No hover 3d element" << std::endl;
+		_hoverElement3d.reset();
 		return;
+	}
 
 	bool foundChild = true;
 	std::shared_ptr<GuiElement> curChild;
 	auto stationIndex = path[0];
-
-	for (auto& station : _stations)
-		station->SetHover3d(false);
 
 	if (stationIndex < _stations.size())
 	{
@@ -185,6 +196,10 @@ void Scene::SetHover3d(std::vector<unsigned char> path)
 			{
 				// Set this and all below to hovering
 				curChild->SetHover3d(true);
+
+				_hoverElement3d = curChild;
+
+				std::cout << "SET hover 3d element" << std::endl;
 				break;
 			}
 
@@ -204,6 +219,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
 		auto activeElement = _touchDownElement.lock();
+		auto activeElement3d = _touchDownElement3d.lock();
 
 		if (activeElement)
 		{
@@ -215,10 +231,28 @@ ActionResult Scene::OnAction(TouchAction action)
 					_undoHistory.Add(res.Undo);
 			}
 		}
+		else if (activeElement3d)
+		{
+			auto hoverElement3d = _hoverElement3d.lock();
+
+			if (hoverElement3d == activeElement3d)
+			{
+				std::cout << "Matched element 3d UP with currently hovering element 3d" << std::endl;
+
+				auto res = activeElement3d->OnAction(activeElement3d->GlobalToLocal(action));
+
+				if (res.IsEaten)
+				{
+					if (nullptr != res.Undo)
+						_undoHistory.Add(res.Undo);
+				}
+			}
+		}
 		else if (_isSceneTouching)
 			_isSceneTouching = false;
 
 		_touchDownElement.reset();
+		_touchDownElement3d.reset();
 
 		return { false, "", "", ACTIONRESULT_DEFAULT };
 	}
@@ -234,6 +268,14 @@ ActionResult Scene::OnAction(TouchAction action)
 
 			if (!_touchDownElement.lock())
 				_touchDownElement = res.ActiveElement;
+
+			return res;
+		}
+		else if (_hoverElement3d.lock())
+		{
+			_touchDownElement3d = _hoverElement3d;
+			res.ActiveElement = _hoverElement3d;
+			res.IsEaten = true;
 
 			return res;
 		}

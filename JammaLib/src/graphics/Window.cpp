@@ -30,8 +30,9 @@ Window::Window(Scene& scene,
 	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
 	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
 {
-	_config.Size = { scene.Width(), scene.Height() };
-	_config.Position = { CW_USEDEFAULT, 0};
+	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
+	_config.Position = { scene.Position().X, scene.Position().Y};
+	//_config.Position = { CW_USEDEFAULT, 0};
 	_config.State = WINDOWED;
 }
 
@@ -176,7 +177,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	auto size = (WINDOWED == _config.State) ? AdjustSize(_config.Size, _style) : _config.Size;
-	auto pos = (WINDOWED == _config.State) ? Center(size) : _config.Position;
+	auto pos = _config.Position;// (WINDOWED == _config.State) ? Center(size) : _config.Position;
 
 	// Create a new window and context
 	_wnd = CreateWindowEx(
