@@ -14,7 +14,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(params),
 	Sizeable(params),
 	_changesMade(false),
-	_isHovering3d(false),
+	_isPicking3d(false),
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
@@ -230,13 +230,23 @@ bool GuiElement::HitTest(Position2d localPos)
 	return false;
 }
 
-void GuiElement::SetHover3d(bool hovering)
+void GuiElement::SetSelected(bool selected)
 {
-	_isHovering3d = hovering;
+	_isSelected = selected;
 
 	for (auto& child : _children)
 	{
-		child->SetHover3d(hovering);
+		child->SetSelected(selected);
+	}
+}
+
+void GuiElement::SetPicking3d(bool picking)
+{
+	_isPicking3d = picking;
+
+	for (auto& child : _children)
+	{
+		child->SetPicking3d(picking);
 	}
 }
 

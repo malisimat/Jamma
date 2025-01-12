@@ -7,6 +7,7 @@
 #include "MultiAudioSink.h"
 #include "InterpolatedValue.h"
 #include "GuiElement.h"
+#include "Tweakable.h"
 #include "../actions/DoubleAction.h"
 #include "../gui/GuiSlider.h"
 
@@ -102,7 +103,8 @@ namespace audio
 	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams> BehaviourParams;
 
 	class AudioMixerParams :
-		public base::GuiElementParams
+		public base::GuiElementParams,
+		public base::TweakableParams
 	{
 	public:
 		AudioMixerParams() :
@@ -113,14 +115,17 @@ namespace audio
 				"",
 				"",
 				{}),
+			base::TweakableParams(),
 			Behaviour(MixBehaviourParams())
 		{
 		}
 
 		AudioMixerParams(base::GuiElementParams params,
+			base::TweakableParams tweakParams,
 			BehaviourParams behaviour,
 			gui::GuiSliderParams sliderParams) :
 			base::GuiElementParams(params),
+			base::TweakableParams(tweakParams),
 			Behaviour(behaviour)
 		{
 		}
@@ -146,7 +151,8 @@ namespace audio
 	};
 
 	class AudioMixer :
-		public base::GuiElement
+		public base::GuiElement,
+		public base::Tweakable
 	{
 	public:
 		AudioMixer(AudioMixerParams params);
@@ -159,9 +165,9 @@ namespace audio
 		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
 		virtual void InitReceivers() override;
 		virtual void SetSize(utils::Size2d size) override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 
-		bool IsMuted() const;
-		void SetMuted(bool muted);
 		double Level() const;
 		double UnmutedLevel() const;
 		void SetUnmutedLevel(double level);
@@ -179,7 +185,6 @@ namespace audio
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
 
-		bool _isMuted;
 		double _unmutedFadeTarget;
 		std::unique_ptr<MixBehaviour> _behaviour;
 		std::shared_ptr<gui::GuiSlider> _slider;

@@ -2,7 +2,11 @@
 
 using namespace actions;
 
-KeyAction::KeyAction()
+KeyAction::KeyAction() :
+	KeyActionType(KeyActionType::KEY_DOWN),
+	KeyChar(0),
+	IsSystem(false),
+	Modifiers(Action::MODIFIER_NONE)
 {
 }
 

@@ -44,7 +44,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	else
 	{
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
-		glCtx.SetUniform("LoopHover", _isHovering3d ? 1.0f : 0.0f);
+		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 	}
 
 	GuiModel::Draw3d(glCtx, 1);

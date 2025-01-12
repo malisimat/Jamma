@@ -12,6 +12,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiSlider.h"
+#include "../gui/GuiSelector.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "Tickable.h"
@@ -73,6 +74,7 @@ namespace engine
 			_channelMixer(std::move(other._channelMixer)),
 			_audioDevice(std::move(other._audioDevice)),
 			_label(std::move(other._label)),
+			_selector(std::move(other._selector)),
 			_undoHistory(std::move(other._undoHistory)),
 			_stations(std::move(other._stations)),
 			_touchDownElement(other._touchDownElement),
@@ -87,6 +89,17 @@ namespace engine
 			other._audioDevice = std::make_unique<audio::AudioDevice>();
 			other._label = std::make_unique<gui::GuiLabel>(
 				gui::GuiLabelParams(
+					base::GuiElementParams(
+						base::DrawableParams{ "" },
+						base::MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+						base::SizeableParams{ 1,1 },
+						"",
+						"",
+						"",
+						{}),
+					""));
+			other._selector = std::make_unique<gui::GuiSelector>(
+				gui::GuiSelectorParams(
 					base::GuiElementParams(
 						base::DrawableParams{ "" },
 						base::MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
@@ -111,6 +124,7 @@ namespace engine
 				_channelMixer.swap(other._channelMixer);
 				_audioDevice.swap(other._audioDevice);
 				_label.swap(other._label);
+				_selector.swap(other._selector);
 				_stations.swap(other._stations);
 				_undoHistory.swap(other._undoHistory);
 				std::swap(_touchDownElement, other._touchDownElement),
@@ -138,7 +152,7 @@ namespace engine
 			_sizeParams.Size = size;
 			InitSize();
 		}
-		void SetHover3d(std::vector<unsigned char> path);
+		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const	{ return _sizeParams.Size.Height; }
 
@@ -152,6 +166,7 @@ namespace engine
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
+		std::shared_ptr<base::GuiElement> ChildFromPath(std::vector<unsigned char> path);
 		void Reset();
 		void InitAudio();
 		void CloseAudio();
@@ -174,6 +189,7 @@ namespace engine
 		bool OnUndo(std::shared_ptr<base::ActionUndo> undo);
 		void JobLoop();
 		void InitSize();
+		void UpdateSelection(actions::ActionResultType res);
 		glm::mat4 View();
 
 		void AddStation(std::shared_ptr<Station> station);
@@ -183,6 +199,7 @@ namespace engine
 		bool _isSceneTouching;
 		bool _isSceneQuitting;
 		bool _isSceneReset;
+		bool _isSceneDragged;
 		utils::Position2d _initTouchDownPosition;
 		utils::Position3d _initTouchCamPosition;
 		glm::mat4 _viewProj;
@@ -190,6 +207,7 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::unique_ptr<gui::GuiLabel> _label;
+		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

@@ -4,6 +4,7 @@
 #include <memory>
 #include "Loop.h"
 #include "GuiElement.h"
+#include "Tweakable.h"
 #include "MultiAudioSource.h"
 #include "MultiAudioSink.h"
 #include "AudioSink.h"
@@ -13,7 +14,8 @@
 namespace engine
 {
 	class LoopTakeParams :
-		public base::GuiElementParams
+		public base::GuiElementParams,
+		public base::TweakableParams
 	{
 	public:
 		LoopTakeParams() :
@@ -25,14 +27,17 @@ namespace engine
 				"",
 				{}),
 			Id(""),
+			base::TweakableParams(),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops({})
 		{
 		}
 
 		LoopTakeParams(base::GuiElementParams params,
+			base::TweakableParams tweakParams,
 			std::vector<LoopParams> loops) :
 			base::GuiElementParams(params),
+			base::TweakableParams(tweakParams),
 			Id(""),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops(loops)
@@ -47,6 +52,7 @@ namespace engine
 
 	class LoopTake :
 		public virtual base::GuiElement,
+		public virtual base::Tweakable,
 		public virtual base::MultiAudioSource,
 		public virtual base::MultiAudioSink
 	{
@@ -64,7 +70,6 @@ namespace engine
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
-			STATE_MUTED,
 			STATE_OVERDUBBING,
 			STATE_PUNCHEDIN,
 			STATE_OVERDUBBINGRECORDING
@@ -96,10 +101,15 @@ namespace engine
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
+		virtual bool Select() override;
+		virtual bool DeSelect() override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 
 		std::string Id() const;
 		std::string SourceId() const;
 		LoopTakeSource SourceType() const;
+		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
@@ -108,8 +118,6 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
-		void Mute();
-		void UnMute();
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);

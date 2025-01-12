@@ -20,10 +20,12 @@ Scene::Scene(SceneParams params,
 	_isSceneTouching(false),
 	_isSceneQuitting(false),
 	_isSceneReset(true),
+	_isSceneDragged(false),
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
 	_label(std::unique_ptr<GuiLabel>()),
+	_selector(std::unique_ptr<GuiSelector>()),
 	_audioDevice(std::unique_ptr<AudioDevice>()),
 	_masterLoop(std::shared_ptr<Loop>()),
 	_stations(),
@@ -49,6 +51,16 @@ Scene::Scene(SceneParams params,
 		"",
 		{}), "Jamma");
 	_label = std::make_unique<GuiLabel>(labelParams);
+
+	GuiSelectorParams selectorParams(GuiElementParams(0,
+		DrawableParams{ "" },
+		MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+		SizeableParams{ 200,80 },
+		"",
+		"",
+		"",
+		{}));
+	_selector = std::make_unique<GuiSelector>(selectorParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
 
@@ -121,6 +133,8 @@ void Scene::Draw(DrawContext& ctx)
 	for (auto& station : _stations)
 		station->Draw(ctx);
 
+	_selector->Draw(ctx);
+
 	glCtx.PopMvp();
 }
 
@@ -143,6 +157,7 @@ void Scene::Draw3d(DrawContext& ctx,
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_label->InitResources(resourceLib, forceInit);
+	_selector->InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
@@ -155,6 +170,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void Scene::_ReleaseResources()
 {
 	_label->ReleaseResources();
+	_selector->ReleaseResources();
 
 	for (auto& station : _stations)
 		station->ReleaseResources();
@@ -162,59 +178,20 @@ void Scene::_ReleaseResources()
 	Drawable::_ReleaseResources();
 }
 
-void Scene::SetHover3d(std::vector<unsigned char> path)
+void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
-	for (auto& station : _stations)
-		station->SetHover3d(false);
+	_selector->UpdateCurrentHover(path, modifiers);
 
-	bool isHovering = path.size() > 2 ?
-		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
-		false;
-
-	if (!isHovering)
-	{
-		std::cout << "No hover 3d element" << std::endl;
-		_hoverElement3d.reset();
-		return;
-	}
-
-	bool foundChild = true;
-	std::shared_ptr<GuiElement> curChild;
-	auto stationIndex = path[0];
-
-	if (stationIndex < _stations.size())
-	{
-		curChild = _stations[stationIndex];
-
-		std::vector<unsigned char> curPath(path);
-
-		while (nullptr != curChild) {
-			// Remove this element's index from the front
-			curPath.erase(curPath.begin());
-
-			if (curPath.empty() || (0xFF == curPath[0]))
-			{
-				// Set this and all below to hovering
-				curChild->SetHover3d(true);
-
-				_hoverElement3d = curChild;
-
-				std::cout << "SET hover 3d element" << std::endl;
-				break;
-			}
-
-			auto nextChild = curChild->TryGetChild(curPath[0]);
-			curChild = nextChild;
-		}
-	}
+	UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
 ActionResult Scene::OnAction(TouchAction action)
 {
+	ActionResult res;
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 
-	std::cout << "Touch action " << action.Touch << " [" << action.State << "] " << action.Index << std::endl;
+	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
@@ -223,7 +200,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		if (activeElement)
 		{
-			auto res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			res = activeElement->OnAction(activeElement->GlobalToLocal(action));
 
 			if (res.IsEaten)
 			{
@@ -231,25 +208,16 @@ ActionResult Scene::OnAction(TouchAction action)
 					_undoHistory.Add(res.Undo);
 			}
 		}
-		else if (activeElement3d)
-		{
-			auto hoverElement3d = _hoverElement3d.lock();
-
-			if (hoverElement3d == activeElement3d)
-			{
-				std::cout << "Matched element 3d UP with currently hovering element 3d" << std::endl;
-
-				auto res = activeElement3d->OnAction(activeElement3d->GlobalToLocal(action));
-
-				if (res.IsEaten)
-				{
-					if (nullptr != res.Undo)
-						_undoHistory.Add(res.Undo);
-				}
-			}
-		}
 		else if (_isSceneTouching)
+		{
 			_isSceneTouching = false;
+			if (!_isSceneDragged)
+				_selector->ClearSelection();
+		}
+
+		res = _selector->OnAction(_selector->ParentToLocal(action));
+
+		UpdateSelection(res.ResultType);
 
 		_touchDownElement.reset();
 		_touchDownElement3d.reset();
@@ -259,7 +227,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	for (auto& station : _stations)
 	{
-		auto res = station->OnAction(station->ParentToLocal(action));
+		res = station->OnAction(station->ParentToLocal(action));
 
 		if (res.IsEaten)
 		{
@@ -271,21 +239,25 @@ ActionResult Scene::OnAction(TouchAction action)
 
 			return res;
 		}
-		else if (_hoverElement3d.lock())
-		{
-			_touchDownElement3d = _hoverElement3d;
-			res.ActiveElement = _hoverElement3d;
-			res.IsEaten = true;
-
-			return res;
-		}
 	}
-	
+
+	res = _selector->OnAction(_selector->ParentToLocal(action));
+
+	UpdateSelection(res.ResultType);
+
+	if (res.IsEaten)
+	{
+		if (nullptr != res.Undo)
+			_undoHistory.Add(res.Undo);
+
+		return res;
+	}
+
 	_isSceneTouching = true;
+	_isSceneDragged = false;
 	_initTouchDownPosition = action.Position;
 	_initTouchCamPosition = _camera.ModelPosition();
 
-	ActionResult res;
 	res.IsEaten = true;
 	res.SourceId = "";
 	res.TargetId = "";
@@ -309,6 +281,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		auto dPos = action.Position - _initTouchDownPosition;
 		_camera.SetModelPosition(_initTouchCamPosition - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0 });
 		SetSize(_sizeParams.Size);
+
+		_isSceneDragged = true;
 	}
 
 	return { false, "", "", ACTIONRESULT_DEFAULT };
@@ -322,7 +296,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
-	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (actions::MODIFIER_CTRL == action.Modifiers))
+	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL == action.Modifiers))
 	{
 		std::cout << ">> Undo <<" << std::endl;
 
@@ -424,6 +398,36 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+}
+
+std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path)
+{
+	if (path.size() < 1)
+		return nullptr;
+
+	std::shared_ptr<GuiElement> curChild;
+	std::vector<unsigned char> curPath(path);
+
+	auto stationIndex = path[0];
+
+	if (stationIndex < _stations.size())
+	{
+		curChild = _stations[stationIndex];
+
+		std::vector<unsigned char> curPath(path);
+
+		while (nullptr != curChild)
+		{
+			curPath.erase(curPath.begin());
+
+			if (curPath.empty() || (0xFF == curPath[0]))
+				return curChild;
+
+			curChild = curChild->TryGetChild(curPath[0]);
+		}
+	}
+
+	return nullptr;
 }
 
 void Scene::Reset()
@@ -623,6 +627,61 @@ void Scene::InitSize()
 	_overlayViewProj = glm::mat4(1.0);
 	_overlayViewProj = glm::translate(_overlayViewProj, glm::vec3(-1.0f, -1.0f, -1.0f));
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
+}
+
+void Scene::UpdateSelection(ActionResultType res)
+{
+	for (auto& station : _stations)
+		station->SetPicking3d(false);
+
+	auto hovering = ChildFromPath(_selector->CurrentHover());
+	if (nullptr != hovering)
+		hovering->SetPicking3d(true);
+
+	switch (res)
+	{
+	case ACTIONRESULT_SELECT: case ACTIONRESULT_DESELECT:
+		for (auto& station : _stations)
+			station->SetSelected(false);
+
+		for (auto& path : *_selector)
+		{
+			auto child = ChildFromPath(path);
+			if (nullptr != child)
+				child->SetSelected(true);
+		}
+		break;
+	case ACTIONRESULT_MUTE:
+		for (auto& path : *_selector)
+		{
+			auto child = ChildFromPath(path);
+			std::shared_ptr<LoopTake> childTake = std::dynamic_pointer_cast<LoopTake>(child);
+
+			if (nullptr != childTake)
+				childTake->Mute();
+		}
+		break;
+	case ACTIONRESULT_UNMUTE:
+		for (auto& path : (*_selector))
+		{
+			auto child = ChildFromPath(path);
+			std::shared_ptr<LoopTake> childTake = std::dynamic_pointer_cast<LoopTake>(child);
+
+			if (nullptr != childTake)
+				childTake->UnMute();
+		}
+
+		break;
+	case ACTIONRESULT_DEFAULT:
+		for (auto& path : (*_selector))
+		{
+			auto child = ChildFromPath(path);
+			if (nullptr != child)
+				child->SetPicking3d(true);
+		}
+
+		break;
+	}
 }
 
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)

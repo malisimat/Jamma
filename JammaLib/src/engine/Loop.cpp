@@ -13,6 +13,7 @@ using graphics::GlDrawContext;
 Loop::Loop(LoopParams loopParams,
 	AudioMixerParams mixerParams) :
 	GuiElement(loopParams),
+	Tweakable(loopParams),
 	AudioSink(),
 	_playIndex(0),
 	_lastPeak(0.0f),
@@ -454,20 +455,44 @@ void Loop::Play(unsigned long index,
 	std::cout << "-=-=- Loop " << _state << " - " << _loopParams.Id << std::endl;
 }
 
-void Loop::Mute()
+bool Loop::Select()
 {
-	if (STATE_PLAYING != _state)
-		return;
+	auto isNewState = Tweakable::Select();
 
-	UpdateMuteState(true);
+	if (isNewState)
+		_mixer->Select();
+
+	return isNewState;
 }
 
-void Loop::UnMute()
+bool Loop::DeSelect()
 {
-	if (STATE_MUTED != _state)
-		return;
+	auto isNewState = Tweakable::DeSelect();
 
-	UpdateMuteState(false);
+	if (isNewState)
+		_mixer->DeSelect();
+
+	return isNewState;
+}
+
+bool Loop::Mute()
+{
+	auto isNewState = Tweakable::Mute();
+
+	if (isNewState)
+		_mixer->Mute();
+
+	return isNewState;
+}
+
+bool Loop::UnMute()
+{
+	auto isNewState = Tweakable::UnMute();
+
+	if (isNewState)
+		_mixer->UnMute();
+
+	return isNewState;
 }
 
 void Loop::EndRecording()
@@ -538,7 +563,7 @@ void Loop::Reset()
 	_writeIndex = 0ul;
 	_playIndex = 0ul;
 	_loopLength = 0ul;
-	_mixer->SetMuted(false);
+	_mixer->UnMute();
 	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
 
 	std::cout << "-=-=- Loop RESET" << std::endl;
@@ -593,22 +618,4 @@ void Loop::UpdateLoopModel()
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
-}
-
-void Loop::UpdateMuteState(bool muted)
-{
-	if (muted && (STATE_PLAYING == _state))
-	{
-		_state = STATE_MUTED;
-
-		if (!_mixer->IsMuted())
-			_mixer->SetMuted(true);
-	}
-	else if (!muted && (STATE_MUTED == _state))
-	{
-		_state = STATE_PLAYING;
-
-		if (_mixer->IsMuted())
-			_mixer->SetMuted(false);
-	}
 }

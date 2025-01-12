@@ -14,6 +14,15 @@ namespace base
 	class Action
 	{
 	public:
+		enum Modifiers
+		{
+			MODIFIER_NONE = 0,
+			MODIFIER_CTRL = 1,
+			MODIFIER_ALT = 2,
+			MODIFIER_SHIFT = 4
+		};
+
+	public:
 		Action() :
 			_actionTime(std::chrono::steady_clock::now()),
 			_userConfig(std::nullopt)

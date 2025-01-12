@@ -219,6 +219,7 @@
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
+    <ClInclude Include="src\base\Tweakable.h" />
     <ClInclude Include="src\engine\VU.h" />
     <ClInclude Include="src\base\MultiAudible.h" />
     <ClInclude Include="src\base\Audible.h" />
@@ -232,6 +233,7 @@
     <ClInclude Include="src\base\Sharable.h" />
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
+    <ClInclude Include="src\gui\GuiSelector.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
     <ClInclude Include="src\io\UserConfig.h" />
@@ -330,6 +332,7 @@
     <ClCompile Include="src\engine\LoopModel.cpp" />
     <ClCompile Include="src\engine\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
+    <ClCompile Include="src\gui\GuiSelector.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\RigFile.cpp" />
     <ClCompile Include="src\io\Json.cpp" />
