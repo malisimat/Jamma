@@ -55,7 +55,7 @@ Scene::Scene(SceneParams params,
 	GuiSelectorParams selectorParams(GuiElementParams(0,
 		DrawableParams{ "" },
 		MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-		SizeableParams{ 200,80 },
+		SizeableParams{ params.Size },
 		"",
 		"",
 		"",
@@ -178,13 +178,6 @@ void Scene::_ReleaseResources()
 	Drawable::_ReleaseResources();
 }
 
-void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
-{
-	_selector->UpdateCurrentHover(path, modifiers);
-
-	UpdateSelection(ACTIONRESULT_DEFAULT);
-}
-
 ActionResult Scene::OnAction(TouchAction action)
 {
 	ActionResult res;
@@ -218,6 +211,8 @@ ActionResult Scene::OnAction(TouchAction action)
 		res = _selector->OnAction(_selector->ParentToLocal(action));
 
 		UpdateSelection(res.ResultType);
+
+		_selector->ClearSelection();
 
 		_touchDownElement.reset();
 		_touchDownElement3d.reset();
@@ -400,34 +395,26 @@ void Scene::OnJobTick(Time curTime)
 		receiver->OnAction(job);
 }
 
-std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path)
+void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
-	if (path.size() < 1)
-		return nullptr;
+	bool isSelected = false;
+	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_DEFAULT;
 
-	std::shared_ptr<GuiElement> curChild;
-	std::vector<unsigned char> curPath(path);
-
-	auto stationIndex = path[0];
-
-	if (stationIndex < _stations.size())
+	auto hovering = ChildFromPath(path);
+	if (nullptr != hovering)
 	{
-		curChild = _stations[stationIndex];
+		isSelected = hovering->IsSelected();
 
-		std::vector<unsigned char> curPath(path);
-
-		while (nullptr != curChild)
-		{
-			curPath.erase(curPath.begin());
-
-			if (curPath.empty() || (0xFF == curPath[0]))
-				return curChild;
-
-			curChild = curChild->TryGetChild(curPath[0]);
-		}
+		if (std::shared_ptr<Tweakable> tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
+			tweakState = tweakable->GetTweakState();
 	}
 
-	return nullptr;
+	_selector->UpdateCurrentHover(path,
+		modifiers,
+		isSelected,
+		tweakState);
+
+	UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
 void Scene::Reset()
@@ -640,15 +627,20 @@ void Scene::UpdateSelection(ActionResultType res)
 
 	switch (res)
 	{
-	case ACTIONRESULT_SELECT: case ACTIONRESULT_DESELECT:
-		for (auto& station : _stations)
-			station->SetSelected(false);
-
+	case ACTIONRESULT_SELECT:
 		for (auto& path : *_selector)
 		{
 			auto child = ChildFromPath(path);
 			if (nullptr != child)
-				child->SetSelected(true);
+				child->Select();
+		}
+		break;
+	case ACTIONRESULT_DESELECT:
+		for (auto& path : *_selector)
+		{
+			auto child = ChildFromPath(path);
+			if (nullptr != child)
+				child->DeSelect();
 		}
 		break;
 	case ACTIONRESULT_MUTE:
@@ -711,6 +703,36 @@ void Scene::AddStation(std::shared_ptr<Station> station)
 void Scene::SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
 	_clock->SetQuantisation(quantiseSamps, quantisation);
+}
+
+std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path)
+{
+	if (path.size() < 1)
+		return nullptr;
+
+	std::shared_ptr<GuiElement> curChild;
+	std::vector<unsigned char> curPath(path);
+
+	auto stationIndex = path[0];
+
+	if (stationIndex < _stations.size())
+	{
+		curChild = _stations[stationIndex];
+
+		std::vector<unsigned char> curPath(path);
+
+		while (nullptr != curChild)
+		{
+			curPath.erase(curPath.begin());
+
+			if (curPath.empty() || (0xFF == curPath[0]))
+				return curChild;
+
+			curChild = curChild->TryGetChild(curPath[0]);
+		}
+	}
+
+	return nullptr;
 }
 
 void Scene::JobLoop()

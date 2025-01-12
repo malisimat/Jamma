@@ -16,8 +16,7 @@ namespace base
 		enum TweakState
 		{
 			TWEAKSTATE_DEFAULT = 0,
-			TWEAKSTATE_SELECTED = 1,
-			TWEAKSTATE_MUTED = 2
+			TWEAKSTATE_MUTED = 1
 		};
 
 		// Bitwise operators for setting flags easily
@@ -48,38 +47,19 @@ namespace base
 			return _tweakState;
 		}
 
-		bool IsSelected() const
-		{
-			return _tweakState & TWEAKSTATE_SELECTED;
-		}
-
 		bool IsMuted() const
 		{
 			return _tweakState & TWEAKSTATE_MUTED;
 		}
 
-		virtual bool Select()
-		{
-			bool isAlreadySet = IsSelected();
-			_tweakState |= TWEAKSTATE_SELECTED;
-
-			return !isAlreadySet;
-		}
-		virtual bool DeSelect()
-		{
-			bool isAlreadyUnset = !IsSelected();
-			_tweakState &= ~TWEAKSTATE_SELECTED;
-
-			return !isAlreadyUnset;
-		}
-
 		virtual bool Mute()
 		{
 			bool isAlreadySet = IsMuted();
-			_tweakState |= TWEAKSTATE_SELECTED;
+			_tweakState |= TWEAKSTATE_MUTED;
 
 			return !isAlreadySet;
 		}
+
 		virtual bool UnMute()
 		{
 			bool isAlreadyUnset = !IsMuted();

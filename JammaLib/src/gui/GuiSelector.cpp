@@ -8,11 +8,12 @@ using base::Tweakable;
 GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 	_isSelecting(false),
 	_selectionTool(SELECTION_PAINT),
-	_selectMode(SELECT_SELECT),
+	_selectMode(SELECT_NONE),
 	_initPos({0,0}),
 	_currentPos({0,0}),
 	_currentHover({}),
-	_currentHoverState(Tweakable::TweakState::TWEAKSTATE_DEFAULT),
+	_currentHoverSelected(false),
+	_currentHoverTweakState(Tweakable::TweakState::TWEAKSTATE_DEFAULT),
 	_selections({}),
 	GuiElement(guiParams)
 {
@@ -23,11 +24,12 @@ std::vector<unsigned char> GuiSelector::CurrentHover() const
 	return _currentHover;
 }
 
-bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path, Action::Modifiers modifiers)
+bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
+	Action::Modifiers modifiers,
+	bool isSelected,
+	base::Tweakable::TweakState tweakState)
 {
-	bool isHovering = path.size() > 2 ?
-		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
-		false;
+	bool isHovering = IsHovering(path);
 
 	if (!isHovering)
 	{
@@ -38,6 +40,8 @@ bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path, Action::Mo
 	if (path != _currentHover)
 	{
 		_currentHover = path;
+		_currentHoverSelected = isSelected;
+		_currentHoverTweakState = tweakState;
 
 		if (_isSelecting)
 		{
@@ -64,18 +68,20 @@ void GuiSelector::ClearSelection()
 
 actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 {
-	actions::ActionResult result;
+	actions::ActionResult result = GuiElement::OnAction(action);
 	result.IsEaten = false;
 
 	if (actions::TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
-		if (!_currentHover.empty())
+		if (_currentHover.empty())
+			_selectMode = SELECT_NONE;
+		else
 		{
 			// Check current status and flip it
 			if (0 == action.Index)
 			{
 				result.IsEaten = true;
-				auto mode = (Action::Modifiers::MODIFIER_ALT & action.Modifiers) > 0 ?
+				auto mode = _currentHoverSelected ?
 					SELECT_DESELECT :
 					SELECT_SELECT;
 
@@ -84,7 +90,7 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 			else if (1 == action.Index)
 			{
 				result.IsEaten = true;
-				auto mode = (Action::Modifiers::MODIFIER_ALT & action.Modifiers) > 0 ?
+				auto mode = Tweakable::TweakState::TWEAKSTATE_MUTED & _currentHoverTweakState ?
 					SELECT_UNMUTE :
 					SELECT_MUTE;
 
@@ -123,9 +129,16 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 	return result;
 }
 
+bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
+{
+	return path.size() > 2 ?
+		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
+		false;
+}
+
 void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)
 {
-	Reset();
+	ClearSelection();
 
 	_isSelecting = true;
 	_selectionTool = SELECTION_PAINT;
@@ -171,7 +184,7 @@ std::vector<std::vector<unsigned char>>::const_iterator GuiSelector::end() const
 
 void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
 {
-	Reset();
+	ClearSelection();
 
 	_isSelecting = true;
 	_selectionTool = SELECTION_RECT;
@@ -192,9 +205,4 @@ void GuiSelector::UpdateRectSelection(utils::Position2d pos)
 void GuiSelector::EndSelection()
 {
 	_isSelecting = false;
-}
-
-void GuiSelector::Reset()
-{
-	_selections.clear();
 }

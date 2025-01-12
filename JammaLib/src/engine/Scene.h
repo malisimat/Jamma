@@ -152,9 +152,6 @@ namespace engine
 			_sizeParams.Size = size;
 			InitSize();
 		}
-		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
-		unsigned int Width() const { return _sizeParams.Size.Width; }
-		unsigned int Height() const	{ return _sizeParams.Size.Height; }
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
@@ -166,7 +163,9 @@ namespace engine
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
-		std::shared_ptr<base::GuiElement> ChildFromPath(std::vector<unsigned char> path);
+		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
+		unsigned int Width() const { return _sizeParams.Size.Width; }
+		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
 		void InitAudio();
 		void CloseAudio();
@@ -187,13 +186,14 @@ namespace engine
 			float* outBuffer,
 			unsigned int numSamps);
 		bool OnUndo(std::shared_ptr<base::ActionUndo> undo);
-		void JobLoop();
 		void InitSize();
 		void UpdateSelection(actions::ActionResultType res);
 		glm::mat4 View();
 
 		void AddStation(std::shared_ptr<Station> station);
 		void SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		std::shared_ptr<base::GuiElement> ChildFromPath(std::vector<unsigned char> path);
+		void JobLoop();
 
 	protected:
 		bool _isSceneTouching;

@@ -5,6 +5,7 @@
 #include "GuiElement.h"
 #include "Tweakable.h"
 #include "../base/Action.h"
+#include <Tweakable.h>
 
 namespace gui
 {
@@ -22,6 +23,7 @@ namespace gui
 
 		enum SelectMode
 		{
+			SELECT_NONE,
 			SELECT_SELECT,
 			SELECT_DESELECT,
 			SELECT_MUTE,
@@ -35,13 +37,18 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 
 		std::vector<unsigned char> CurrentHover() const;
-		bool UpdateCurrentHover(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
+		bool UpdateCurrentHover(std::vector<unsigned char> path,
+			base::Action::Modifiers modifiers,
+			bool isSelected,
+			base::Tweakable::TweakState tweakState);
 		void ClearSelection();
 
 		std::vector<std::vector<unsigned char>>::const_iterator begin() const;
 		std::vector<std::vector<unsigned char>>::const_iterator end() const;
 
 	protected:
+		bool IsHovering(std::vector<unsigned char> path) const;
+
 		void StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection);
 		void AddPaintSelection(std::vector<unsigned char> selection);
 		void RemovePaintSelection(std::vector<unsigned char> selection);
@@ -59,7 +66,8 @@ namespace gui
 		utils::Position2d _initPos;
 		utils::Position2d _currentPos;
 		std::vector<unsigned char> _currentHover;
-		base::Tweakable::TweakState _currentHoverState;
+		bool _currentHoverSelected;
+		base::Tweakable::TweakState _currentHoverTweakState;
 		std::vector<std::vector<unsigned char>> _selections;
 	};
 }

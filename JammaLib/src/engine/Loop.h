@@ -84,13 +84,12 @@ namespace engine
 		public virtual base::MultiAudioSource
 	{
 	public:
-		enum LoopVisualState
+		enum LoopPlayState
 		{
 			STATE_INACTIVE,
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
-			STATE_MUTED,
 			STATE_OVERDUBBING,
 			STATE_PUNCHEDIN,
 			STATE_OVERDUBBINGRECORDING
@@ -112,7 +111,7 @@ namespace engine
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
 			_loopLength(other._loopLength),
-			_state(other._state),
+			_playState(other._playState),
 			_playIndex(other._playIndex),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -199,7 +198,7 @@ namespace engine
 		void Reset();
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
-		static LoopModel::LoopModelState ToLoopModelState(LoopVisualState state);
+		static LoopModel::LoopModelState ToLoopModelState(LoopPlayState state, bool isMuted);
 		void UpdateLoopModel();
 
 	protected:
@@ -207,7 +206,7 @@ namespace engine
 		float _lastPeak;
 		double _pitch;
 		unsigned long _loopLength;
-		LoopVisualState _state;
+		LoopPlayState _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;

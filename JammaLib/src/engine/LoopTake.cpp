@@ -273,7 +273,7 @@ void LoopTake::Play(unsigned long index,
 
 bool LoopTake::Select()
 {
-	auto isNewState = Tweakable::Select();
+	auto isNewState = GuiElement::Select();
 
 	if (isNewState)
 	{
@@ -288,7 +288,7 @@ bool LoopTake::Select()
 
 bool LoopTake::DeSelect()
 {
-	auto isNewState = Tweakable::DeSelect();
+	auto isNewState = GuiElement::DeSelect();
 
 	if (isNewState)
 	{

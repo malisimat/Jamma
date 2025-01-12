@@ -58,6 +58,11 @@ void GuiElement::SetSize(Size2d size)
 	_outTexture.SetSize(_sizeParams.Size);
 }
 
+bool GuiElement::IsSelected() const
+{
+	return _isSelected;
+}
+
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
@@ -154,7 +159,13 @@ ActionResult GuiElement::OnAction(TouchAction action)
 	}
 
 	if (Size2d::RectTest(_sizeParams.Size, action.Position))
+	{
+		_state = TouchAction::TouchState::TOUCH_DOWN == action.State ?
+			STATE_DOWN :
+			STATE_NORMAL;
+
 		return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+	}
 
 	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr };
 }
@@ -168,6 +179,17 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 
 		if (res.IsEaten)
 			return res;
+	}
+
+	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
+	{
+		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
+			_state : STATE_OUT;
+	}
+	else
+	{
+		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
+			STATE_OVER : _state;
 	}
 
 	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr};
@@ -230,15 +252,40 @@ bool GuiElement::HitTest(Position2d localPos)
 	return false;
 }
 
-void GuiElement::SetSelected(bool selected)
+bool GuiElement::Select()
 {
-	_isSelected = selected;
+	auto isNewState = !_isSelected;
 
-	for (auto& child : _children)
+	if (isNewState)
 	{
-		child->SetSelected(selected);
+		_isSelected = true;
+
+		for (auto& child : _children)
+		{
+			child->Select();
+		}
 	}
+
+	return isNewState;
 }
+
+bool GuiElement::DeSelect()
+{
+	auto isNewState = _isSelected;
+
+	if (isNewState)
+	{
+		_isSelected = false;
+
+		for (auto& child : _children)
+		{
+			child->DeSelect();
+		}
+	}
+
+	return isNewState;
+}
+
 
 void GuiElement::SetPicking3d(bool picking)
 {

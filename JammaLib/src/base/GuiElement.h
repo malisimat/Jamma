@@ -75,7 +75,8 @@ namespace base
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances) override;
 		virtual bool HitTest(utils::Position2d localPos);
-		virtual void SetSelected(bool selected);
+		virtual bool Select();
+		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
 		virtual void SetIndex(unsigned int index);
 		virtual std::vector<unsigned int> GlobalId();
@@ -85,6 +86,7 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		bool IsSelected() const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
