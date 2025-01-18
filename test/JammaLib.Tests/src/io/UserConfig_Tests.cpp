@@ -17,7 +17,8 @@ TEST(UserConfig, ParsesAudioSettings) {
 	ASSERT_TRUE(audio.has_value());
 	ASSERT_EQ(0, audio.value().Name.compare("Soundblaster"));
 	ASSERT_EQ(12, audio.value().BufSize);
-	ASSERT_EQ(212, audio.value().Latency);
+	ASSERT_EQ(212, audio.value().LatencyIn);
+	ASSERT_EQ(212, audio.value().LatencyOut);
 	ASSERT_EQ(6, audio.value().NumChannelsIn);
 	ASSERT_EQ(8, audio.value().NumChannelsOut);
 }
@@ -57,7 +58,8 @@ TEST(UserConfig, ParsesFile) {
 
 	ASSERT_EQ(0, cfg.value().Audio.Name.compare("HDMI"));
 	ASSERT_EQ(255, cfg.value().Audio.BufSize);
-	ASSERT_EQ(414, cfg.value().Audio.Latency);
+	ASSERT_EQ(414, cfg.value().Audio.LatencyIn);
+	ASSERT_EQ(414, cfg.value().Audio.LatencyOut);
 	ASSERT_EQ(0, cfg.value().Audio.NumChannelsIn);
 	ASSERT_EQ(10, cfg.value().Audio.NumChannelsOut);
 

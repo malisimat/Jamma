@@ -45,7 +45,8 @@ public:
 	{
 		_numTimesCalled++;
 		_lastMatched = action.ActionType == _expected;
-		return { _lastMatched, "", actions::ACTIONRESULT_DEFAULT };
+
+		return { _lastMatched, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	};
 	void SetExpected(TriggerAction::TriggerActionType expected) { _expected = expected; }
 	bool GetLastMatched() const { return _lastMatched; }

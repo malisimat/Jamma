@@ -101,7 +101,7 @@ public:
 		for (auto i = 0u; i < numSamps; i++)
 		{
 			if (index < Samples.size())
-				dest->OnWrite(Samples[index], i, source);
+				dest->OnMixWrite(Samples[index], 0.0f, 1.0f, i, source);
 
 			index++;
 		}
@@ -151,6 +151,11 @@ TEST(Loop, PlayWrapsAround) {
 	loopParams.Size = { 80, 80 };
 	loopParams.Position = { 10, 22 };
 
+	engine::TriggerParams trigParams;
+	trigParams.Index = 0;
+
+	auto trigger = std::make_shared<engine::Trigger>(trigParams);
+
 	auto loop = Loop(loopParams, mixerParams);
 
 	auto numBlocks = (bufSize * 2) / blockSize;
@@ -158,7 +163,7 @@ TEST(Loop, PlayWrapsAround) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		sink->Zero(blockSize);
-		loop.OnPlay(sink, blockSize);
+		loop.OnPlay(sink, trigger, 0u, blockSize);
 		loop.EndMultiPlay(blockSize);
 		sink->EndMultiWrite(blockSize, true);
 	}

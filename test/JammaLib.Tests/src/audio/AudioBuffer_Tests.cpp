@@ -73,6 +73,7 @@ public:
 
 public:
 	virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
+		int indexOffset,
 		unsigned int numSamps)
 	{
 		auto index = _index;
@@ -113,7 +114,7 @@ public:
 		return true;
 	}
 
-private:
+protected:
 	unsigned int _index;
 	std::vector<float> Samples;
 };
@@ -152,7 +153,7 @@ TEST(AudioBuffer, WriteWrapsAround) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		source->OnPlay(audioBuf, blockSize);
+		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 	}
@@ -175,7 +176,7 @@ TEST(AudioBuffer, WriteMatchesRead) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		// Play source to buffer
-		source->OnPlay(audioBuf, blockSize);
+		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 
@@ -204,7 +205,7 @@ TEST(AudioBuffer, IsCorrectlyDelayed) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		// Play source to buffer
-		source->OnPlay(audioBuf, blockSize);
+		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 
@@ -234,7 +235,7 @@ TEST(AudioBuffer, ClampsToMaxBufSize) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		// Play source to buffer
-		source->OnPlay(audioBuf, blockSize);
+		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 
@@ -264,7 +265,7 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		// Play source to buffer
-		source->OnPlay(audioBuf, blockSize);
+		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 

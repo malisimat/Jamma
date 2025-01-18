@@ -23,7 +23,7 @@ public:
 	virtual actions::ActionResult OnAction(actions::DoubleAction action) override
 	{
 		_value = action.Value();
-		return { true, "", actions::ACTIONRESULT_DEFAULT, nullptr };
+		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	};
 	
 	bool IsExpected() { return _expected == _value; }
