@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "audio/ChannelMixer.h"
+#include "engine/Trigger.h"
 
 using resources::ResourceLib;
 using audio::ChannelMixer;
@@ -11,6 +12,7 @@ using base::AudioSink;
 using base::MultiAudioSource;
 using base::MultiAudioSink;
 using base::AudioSourceParams;
+using engine::Trigger;
 
 class MockedSink :
 	public AudioSink
@@ -109,6 +111,7 @@ public:
 
 public:
 	virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
+		int indexOffset,
 		unsigned int numSamps)
 	{
 		auto index = _writeIndex;
@@ -117,7 +120,7 @@ public:
 		for (auto i = 0u; i < numSamps; i++)
 		{
 			if (index < Samples.size())
-				dest->OnWrite(Samples[index], i, source);
+				dest->OnMixWrite(Samples[index], 0.0f, 1.0f, i, source);
 
 			index++;
 		}
@@ -209,7 +212,11 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	chanParams.NumInputChannels = 1;
 	chanParams.NumOutputChannels = 1;
 
+	engine::TriggerParams trigParams;
+	trigParams.Index = 0;
+
 	auto chanMixer = ChannelMixer(chanParams);
+	auto trigger = std::make_shared<engine::Trigger>(trigParams);
 	auto sink = std::make_shared<MockedMultiSink>(bufSize);
 
 	auto buf = std::vector<float>(bufSize);
@@ -224,7 +231,7 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		sink->Zero(blockSize);
-		chanMixer.Source()->OnPlay(sink, blockSize);
+		chanMixer.Source()->OnPlay(sink, trigger, 0u, blockSize);
 		chanMixer.Source()->EndMultiPlay(blockSize);
 		sink->EndMultiWrite(blockSize, true);
 	}
@@ -243,7 +250,11 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 	chanParams.NumInputChannels = 1;
 	chanParams.NumOutputChannels = 1;
 
+	engine::TriggerParams trigParams;
+	trigParams.Index = 0;
+
 	auto chanMixer = ChannelMixer(chanParams);
+	auto trigger = std::make_shared<engine::Trigger>(trigParams);
 	auto source = std::make_shared<MockedMultiSource>(bufSize);
 
 	auto numBlocks = (bufSize * 2) / blockSize;
@@ -252,7 +263,7 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		chanMixer.Sink()->Zero(blockSize);
-		source->OnPlay(chanMixer.Sink(), blockSize);
+		source->OnPlay(chanMixer.Sink(), trigger, 0u, blockSize);
 		source->EndMultiPlay(blockSize);
 
 		auto tempBuf = std::vector<float>(blockSize);

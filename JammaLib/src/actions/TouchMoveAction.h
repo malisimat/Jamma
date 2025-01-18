@@ -16,5 +16,6 @@ namespace actions
 		TouchAction::TouchType Touch;
 		int Index;
 		utils::Position2d Position;
+		Modifiers Modifiers;
 	};
 }

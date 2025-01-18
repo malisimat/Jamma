@@ -371,11 +371,14 @@
     <ClInclude Include="src\actions\DelayedAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
-    <ClInclude Include="lib\stb\stb_image_write.h">
-      <Filter>lib\stb</Filter>
+    <ClInclude Include="src\gui\GuiSelector.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\Tweakable.h">
+      <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\utils\VecUtils.h">
-      <Filter>include</Filter>
+      <Filter>src\utils</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -566,7 +569,10 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\VecUtils.cpp">
-      <Filter>src</Filter>
+      <Filter>src\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiSelector.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

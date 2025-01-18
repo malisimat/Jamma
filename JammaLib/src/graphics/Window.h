@@ -67,6 +67,7 @@ namespace graphics
 		bool IsFullscreen() const;
 		bool IsResizing() const;
 		void SetResizing(bool resizing);
+		base::Action::Modifiers Modifiers() const;
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
@@ -109,6 +110,6 @@ namespace graphics
 		GlDrawContext _pickContext;
 		engine::Scene& _scene;
 		resources::ResourceLib& _resourceLib;
-		actions::Modifier _modifiers;
+		base::Action::Modifiers _modifiers;
 	};
 }

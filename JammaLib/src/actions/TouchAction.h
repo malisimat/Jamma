@@ -31,5 +31,6 @@ namespace actions
 		int Index;
 		int Value;
 		utils::Position2d Position;
+		Modifiers Modifiers;
 	};
 }

@@ -448,6 +448,8 @@ long RtApi :: getInputStreamLatency(void)
 
     if (stream_.mode == INPUT || stream_.mode == DUPLEX)
         return stream_.latency[1];
+
+    return 0L;
 }
 
 long RtApi :: getOutputStreamLatency( void )
@@ -456,6 +458,8 @@ long RtApi :: getOutputStreamLatency( void )
 
   if ( stream_.mode == OUTPUT || stream_.mode == DUPLEX )
     return stream_.latency[0];
+
+  return 0L;
 }
 
 double RtApi :: getStreamTime( void )
@@ -5158,10 +5162,10 @@ void RtApiWasapi::wasapiThread()
   }
   else if ( stream_.mode == DUPLEX )
   {
-    convBuffSize = std::max( ( size_t ) ( ceilf( stream_.bufferSize * captureSrRatio ) ) * stream_.nDeviceChannels[INPUT] * formatBytes( stream_.deviceFormat[INPUT] ),
-                             ( size_t ) ( ceilf( stream_.bufferSize * renderSrRatio ) ) * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) );
-    deviceBuffSize = std::max( stream_.bufferSize * stream_.nDeviceChannels[INPUT] * formatBytes( stream_.deviceFormat[INPUT] ),
-                               stream_.bufferSize * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) );
+    convBuffSize = static_cast<unsigned int>( std::max( ( size_t ) ( ceilf( stream_.bufferSize * captureSrRatio ) ) * stream_.nDeviceChannels[INPUT] * formatBytes( stream_.deviceFormat[INPUT] ),
+                             ( size_t ) ( ceilf( stream_.bufferSize * renderSrRatio ) ) * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) ) );
+    deviceBuffSize = static_cast<unsigned int>( std::max( stream_.bufferSize * stream_.nDeviceChannels[INPUT] * formatBytes( stream_.deviceFormat[INPUT] ),
+                               stream_.bufferSize * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) ) );
   }
 
   convBuffSize *= 2; // allow overflow for *SrRatio remainders

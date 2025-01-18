@@ -214,7 +214,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 					std::string str(charBuf.data());
 					std::stringstream ss2(str);
 
-					if ((str.size() > 0) && IsAllDigits(str, false))
+					if ((!str.empty()) && IsAllDigits(str, false))
 					{
 						if ('-' == str[0])
 						{

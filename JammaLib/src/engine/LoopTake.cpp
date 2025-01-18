@@ -19,6 +19,7 @@ const Size2d LoopTake::_Gap = { 6, 6 };
 
 LoopTake::LoopTake(LoopTakeParams params) :
 	GuiElement(params),
+	Tweakable(params),
 	MultiAudioSource(),
 	_flipLoopBuffer(false),
 	_loopsNeedUpdating(false),
@@ -180,6 +181,11 @@ LoopTake::LoopTakeSource LoopTake::SourceType() const
 	return _sourceType;
 }
 
+LoopTake::LoopTakeState LoopTake::TakeState() const
+{
+	return _state;
+}
+
 unsigned long LoopTake::NumRecordedSamps() const
 {
 	return _recordedSampCount;
@@ -265,30 +271,64 @@ void LoopTake::Play(unsigned long index,
 	_state = loopLength > 0 ? playState : STATE_INACTIVE;
 }
 
-void LoopTake::Mute()
+bool LoopTake::Select()
 {
-	if (STATE_PLAYING != _state)
-		return;
+	auto isNewState = GuiElement::Select();
 
-	_state = STATE_MUTED;
-
-	for (auto& loop : _loops)
+	if (isNewState)
 	{
-		loop->Mute();
+		for (auto& loop : _loops)
+		{
+			loop->Select();
+		}
 	}
+
+	return isNewState;
 }
 
-void LoopTake::UnMute()
+bool LoopTake::DeSelect()
 {
-	if (STATE_MUTED != _state)
-		return;
+	auto isNewState = GuiElement::DeSelect();
 
-	_state = STATE_PLAYING;
-
-	for (auto& loop : _loops)
+	if (isNewState)
 	{
-		loop->UnMute();
+		for (auto& loop : _loops)
+		{
+			loop->DeSelect();
+		}
 	}
+
+	return isNewState;
+}
+
+bool LoopTake::Mute()
+{
+	auto isNewState = Tweakable::Mute();
+
+	if (isNewState)
+	{
+		for (auto& loop : _loops)
+		{
+			loop->Mute();
+		}
+	}
+
+	return isNewState;
+}
+
+bool LoopTake::UnMute()
+{
+	auto isNewState = Tweakable::UnMute();
+
+	if (isNewState)
+	{
+		for (auto& loop : _loops)
+		{
+			loop->UnMute();
+		}
+	}
+
+	return isNewState;
 }
 
 void LoopTake::EndRecording()

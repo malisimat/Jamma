@@ -8,7 +8,7 @@
 #include "Window.h"
 #include "StringUtils.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "stb/stb_image_write.h"
 
 using namespace actions;
 using namespace engine;
@@ -16,6 +16,7 @@ using namespace graphics;
 using namespace utils;
 using namespace resources;
 using base::GuiElement;
+using base::Action;
 
 Window::Window(Scene& scene,
 	ResourceLib& resourceLib) :
@@ -26,7 +27,7 @@ Window::Window(Scene& scene,
 	_trackingMouse(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
-	_modifiers(actions::MODIFIER_NONE),
+	_modifiers(Action::MODIFIER_NONE),
 	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
 	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
 {
@@ -316,6 +317,11 @@ void Window::SetResizing(bool resizing)
 	_resizing = resizing;
 }
 
+Action::Modifiers Window::Modifiers() const
+{
+	return _modifiers;
+}
+
 bool Window::IsTrackingMouse() const
 {
 	return _trackingMouse;
@@ -445,7 +451,7 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 	if (objectId != _lastHoverObjectId)
 	{
 		auto path = utils::IdToVec(objectId);
-		_scene.SetHover3d(path);
+		_scene.SetHover3d(path, touchAction.Modifiers);
 
 		_lastHoverObjectId = objectId;
 	}
@@ -462,28 +468,28 @@ ActionResult Window::OnAction(KeyAction keyAction)
 	{
 	case 16:
 		if (KeyAction::KEY_DOWN == keyAction.KeyActionType)
-			modifiers |= ((int)actions::MODIFIER_SHIFT);
+			modifiers |= ((int)Action::MODIFIER_SHIFT);
 		else
-			modifiers &= ~((int)actions::MODIFIER_SHIFT);
+			modifiers &= ~((int)Action::MODIFIER_SHIFT);
 
 		break;
 	case 17:
 		if (KeyAction::KEY_DOWN == keyAction.KeyActionType)
-			modifiers |= ((int)actions::MODIFIER_CTRL);
+			modifiers |= ((int)Action::MODIFIER_CTRL);
 		else
-			modifiers &= ~((int)actions::MODIFIER_CTRL);
+			modifiers &= ~((int)Action::MODIFIER_CTRL);
 
 		break;
 	case 18:
 		if (KeyAction::KEY_DOWN == keyAction.KeyActionType)
-			modifiers |= ((int)actions::MODIFIER_ALT);
+			modifiers |= ((int)Action::MODIFIER_ALT);
 		else
-			modifiers &= ~((int)actions::MODIFIER_ALT);
+			modifiers &= ~((int)Action::MODIFIER_ALT);
 
 		break;
 	}
 
-	_modifiers = (actions::Modifier)modifiers;
+	_modifiers = (Action::Modifiers)modifiers;
 	keyAction.Modifiers = _modifiers;
 
 	return _scene.OnAction(keyAction);
@@ -712,6 +718,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_DOWN;
 		touchAction.Index = 0;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -728,6 +736,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_UP;
 		touchAction.Index = 0;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -744,6 +754,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_DOWN;
 		touchAction.Index = 2;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -760,6 +772,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_UP;
 		touchAction.Index = 2;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -776,6 +790,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_DOWN;
 		touchAction.Index = 1;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -792,6 +808,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.State = TouchAction::TOUCH_UP;
 		touchAction.Index = 1;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -811,6 +829,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		TouchMoveAction touchAction;
 		touchAction.Touch = TouchAction::TOUCH_MOUSE;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		/*MOUSEOVERSTATE mouseoverstate = MOUSEOVER_NORMAL;
@@ -872,6 +892,8 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		touchAction.Index = 4;
 		touchAction.Value = delta;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.Modifiers = window->Modifiers();
+
 		window->OnAction(touchAction);
 
 		return 0;
@@ -893,6 +915,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			KeyAction keyAction;
 			keyAction.KeyChar = (unsigned int)wParam;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
+			keyAction.Modifiers = window->Modifiers();
 
 			window->OnAction(keyAction);
 		}
@@ -906,6 +929,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		KeyAction keyAction;
 		keyAction.KeyChar = (unsigned int)wParam;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
+		keyAction.Modifiers = window->Modifiers();
 
 		window->OnAction(keyAction);
 
@@ -926,6 +950,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			keyAction.KeyChar = (unsigned int)wParam;
 			keyAction.IsSystem = true;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
+			keyAction.Modifiers = window->Modifiers();
 
 			window->OnAction(keyAction);
 		}
@@ -941,6 +966,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		keyAction.KeyChar = (unsigned int)wParam;
 		keyAction.IsSystem = true;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
+		keyAction.Modifiers = window->Modifiers();
 
 		window->OnAction(keyAction);
 		return 0;

@@ -4,6 +4,7 @@
 #include <memory>
 #include "Trigger.h"
 #include "ActionReceiver.h"
+#include "Tweakable.h"
 #include "ResourceUser.h"
 #include "GuiElement.h"
 #include "GlUtils.h"
@@ -22,7 +23,8 @@
 namespace engine
 {
 	class LoopParams :
-		public base::GuiElementParams
+		public base::GuiElementParams,
+		public base::TweakableParams
 	{
 	public:
 		LoopParams() :
@@ -33,6 +35,7 @@ namespace engine
 				"",
 				"",
 				{}),
+			base::TweakableParams(),
 			Id(""),
 			TakeId(""),
 			Wav(""),
@@ -46,8 +49,10 @@ namespace engine
 		}
 
 		LoopParams(base::GuiElementParams params,
+			base::TweakableParams tweakParams,
 			std::string wav) :
 			base::GuiElementParams(params),
+			base::TweakableParams(tweakParams),
 			Id(""),
 			TakeId(""),
 			Wav(wav),
@@ -74,17 +79,17 @@ namespace engine
 
 	class Loop :
 		public virtual base::GuiElement,
+		public virtual base::Tweakable,
 		public virtual base::AudioSink,
 		public virtual base::MultiAudioSource
 	{
 	public:
-		enum LoopVisualState
+		enum LoopPlayState
 		{
 			STATE_INACTIVE,
 			STATE_RECORDING,
 			STATE_PLAYINGRECORDING,
 			STATE_PLAYING,
-			STATE_MUTED,
 			STATE_OVERDUBBING,
 			STATE_PUNCHEDIN,
 			STATE_OVERDUBBINGRECORDING
@@ -102,10 +107,11 @@ namespace engine
 		// Move
 		Loop(Loop&& other) :
 			GuiElement(other._guiParams),
+			Tweakable(other._loopParams),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
 			_loopLength(other._loopLength),
-			_state(other._state),
+			_playState(other._playState),
 			_playIndex(other._playIndex),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -167,6 +173,10 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
+		virtual bool Select() override;
+		virtual bool DeSelect() override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
@@ -178,8 +188,6 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			bool continueRecording);
-		void Mute();
-		void UnMute();
 		void EndRecording();
 		void Ditch();
 		void Overdub();
@@ -190,16 +198,15 @@ namespace engine
 		void Reset();
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
-		static LoopModel::LoopModelState ToLoopModelState(LoopVisualState state);
+		static LoopModel::LoopModelState ToLoopModelState(LoopPlayState state, bool isMuted);
 		void UpdateLoopModel();
-		void UpdateMuteState(bool muted);
 
 	protected:
 		unsigned long _playIndex;
 		float _lastPeak;
 		double _pitch;
 		unsigned long _loopLength;
-		LoopVisualState _state;
+		LoopPlayState _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;

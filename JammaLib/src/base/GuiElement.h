@@ -75,7 +75,9 @@ namespace base
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances) override;
 		virtual bool HitTest(utils::Position2d localPos);
-		virtual void SetHover3d(bool hovering);
+		virtual bool Select();
+		virtual bool DeSelect();
+		virtual void SetPicking3d(bool picking);
 		virtual void SetIndex(unsigned int index);
 		virtual std::vector<unsigned int> GlobalId();
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
@@ -84,6 +86,7 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		bool IsSelected() const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
@@ -106,7 +109,8 @@ namespace base
 
 	protected:
 		bool _changesMade;
-		bool _isHovering3d;
+		bool _isSelected;
+		bool _isPicking3d;
 		unsigned int _index;
 		GuiElementParams _guiParams;
 		GuiElementState _state;

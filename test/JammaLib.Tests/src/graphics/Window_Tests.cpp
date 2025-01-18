@@ -11,6 +11,7 @@ using engine::SceneParams;
 
 TEST(Window, IsInitiallyWindowed) {
 	auto sceneParams = SceneParams(base::DrawableParams(),
+		base::MoveableParams(),
 		base::SizeableParams());
 	io::UserConfig userConfig = {};
 	auto scene = Scene(sceneParams, userConfig);
