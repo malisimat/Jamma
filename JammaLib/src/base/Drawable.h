@@ -8,6 +8,13 @@
 
 namespace base
 {
+	enum DrawPass
+	{
+		PASS_SCENE,
+		PASS_PICKER,
+		PASS_HIGHLIGHT
+	};
+
 	class DrawableParams
 	{
 	public:
@@ -26,7 +33,7 @@ namespace base
 
 	public:
 		virtual void Draw(DrawContext& ctx) = 0;
-		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances) = 0;
+		virtual void Draw3d(DrawContext& ctx, unsigned int numInstances, DrawPass pass) = 0;
 
 	protected:
 		DrawableParams _drawParams;

@@ -31,8 +31,9 @@ namespace graphics
 
 		void Initialise() override;
 		void Bind() override;
+		unsigned int GetTexture() const;
 		unsigned int GetPixel(utils::Position2d pos) override;
-		const std::vector<unsigned char> GetTexture() const;
+		const std::vector<unsigned char> GetPixels() const;
 
 		std::optional<std::any> GetUniform(std::string name);
 		void SetUniform(const std::string& name, std::any val);
@@ -51,5 +52,6 @@ namespace graphics
 		std::map<std::string, std::any> _uniforms;
 		std::vector<glm::mat4> _mvp;
 		unsigned int _frameBuffer;
+		unsigned int _texture;
 	};
 }

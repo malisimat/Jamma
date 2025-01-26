@@ -33,7 +33,7 @@ Loop::Loop(LoopParams loopParams,
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
 	modelParams.ModelTextures = { "levels" };
-	modelParams.ModelShaders = { "texture_shaded", "picker"};
+	modelParams.ModelShaders = { "texture_shaded", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
@@ -114,14 +114,13 @@ void Loop::SetSize(utils::Size2d size)
 }
 
 void Loop::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
-
-	auto isPicking = TEXTURE == ctx.GetContextTarget();
 
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
@@ -138,22 +137,18 @@ void Loop::Draw3d(DrawContext& ctx,
 
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 	_model->SetLoopIndexFrac(frac);
-
-	LoopModel::LoopModelState modelState = isPicking ?
-		LoopModel::LoopModelState::STATE_PICKING :
-		ToLoopModelState(_playState, IsMuted());
-	_model->SetLoopState(modelState);
+	_model->SetLoopState(GetLoopModelState(pass, _playState, IsMuted()));
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	if (!isPicking)
-		_vu->Draw3d(ctx, 1);
+	if (PASS_SCENE == pass)
+		_vu->Draw3d(ctx, 1, pass);
 
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->UnmutedLevel(), 1.0f)));
 	
-	_model->Draw3d(ctx, 1);
+	_model->Draw3d(ctx, 1, pass);
 	
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -586,23 +581,25 @@ double Loop::CalcDrawRadius(unsigned long loopLength)
 	return std::clamp(radius, minRadius, maxRadius);
 }
 
-LoopModel::LoopModelState Loop::ToLoopModelState(LoopPlayState state, bool isMuted)
+LoopModel::LoopModelState Loop::GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted)
 {
-	LoopModel::LoopModelState modelState;
-
-	switch (state)
+	switch (pass)
 	{
-	case STATE_PLAYING:
-		modelState = isMuted ?
-			LoopModel::LoopModelState::STATE_MUTED :
-			LoopModel::LoopModelState::STATE_PLAYING;
-		break;
+	case PASS_PICKER:
+		return LoopModel::LoopModelState::STATE_PICKING;
+	case PASS_HIGHLIGHT:
+		return LoopModel::LoopModelState::STATE_HIGHLIGHTING;
 	default:
-		modelState = LoopModel::LoopModelState::STATE_RECORDING;
-		break;
+		switch (state)
+		{
+		case STATE_PLAYING:
+			return isMuted ?
+				LoopModel::LoopModelState::STATE_MUTED :
+				LoopModel::LoopModelState::STATE_PLAYING;
+		default:
+			return LoopModel::LoopModelState::STATE_RECORDING;
+		}
 	}
-
-	return modelState;
 }
 
 void Loop::UpdateLoopModel()

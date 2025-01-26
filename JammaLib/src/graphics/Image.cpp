@@ -45,7 +45,6 @@ void Image::Draw(DrawContext& ctx)
 
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
 
-	//glDrawArraysInstanced(GL_TRIANGLES, 0, VertexCount, 1);
 	glDrawArrays(GL_TRIANGLES, 0, VertexCount);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
@@ -56,7 +55,8 @@ void Image::Draw(DrawContext& ctx)
 }
 
 void Image::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 }
 

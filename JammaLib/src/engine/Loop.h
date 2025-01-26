@@ -160,7 +160,7 @@ namespace engine
 		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
-		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int sampOffset,
@@ -198,7 +198,7 @@ namespace engine
 		void Reset();
 		unsigned long LoopIndex() const;
 		static double CalcDrawRadius(unsigned long loopLength);
-		static LoopModel::LoopModelState ToLoopModelState(LoopPlayState state, bool isMuted);
+		static LoopModel::LoopModelState GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		void UpdateLoopModel();
 
 	protected:

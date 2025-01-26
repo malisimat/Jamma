@@ -115,7 +115,8 @@ void GuiElement::Draw(DrawContext& ctx)
 }
 
 void GuiElement::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
@@ -127,7 +128,7 @@ void GuiElement::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
 	for (auto& child : _children)
-		child->Draw3d(ctx, 1);
+		child->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();

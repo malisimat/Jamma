@@ -310,8 +310,12 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <None Include="resources\shaders\blur.frag" />
+    <None Include="resources\shaders\blur.vert" />
     <None Include="resources\shaders\picker.frag" />
     <None Include="resources\shaders\picker.vert" />
+    <None Include="resources\shaders\white.vert" />
+    <None Include="resources\shaders\white.frag" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

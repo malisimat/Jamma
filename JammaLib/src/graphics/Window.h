@@ -32,6 +32,7 @@
 #include "../actions/TouchMoveAction.h"
 #include "../actions/CursorAction.h"
 #include "../actions/WindowAction.h"
+#include "ImageFullscreen.h"
 
 namespace graphics
 {
@@ -108,8 +109,11 @@ namespace graphics
 
 		GlDrawContext _drawContext;
 		GlDrawContext _pickContext;
+		GlDrawContext _textureContext;
 		engine::Scene& _scene;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
+
+		ImageFullscreen _highlightPass;
 	};
 }

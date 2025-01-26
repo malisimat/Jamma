@@ -48,7 +48,7 @@ namespace engine
 		VU& operator=(const VU&) = delete;
 
 	public:
-		void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		double Value() const;
 		void SetValue(double value, unsigned int numUpdates);

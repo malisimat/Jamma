@@ -17,6 +17,7 @@ using namespace utils;
 using namespace resources;
 using base::GuiElement;
 using base::Action;
+using base::DrawPass;
 
 Window::Window(Scene& scene,
 	ResourceLib& resourceLib) :
@@ -29,7 +30,9 @@ Window::Window(Scene& scene,
 	_lastHoverObjectId(0),
 	_modifiers(Action::MODIFIER_NONE),
 	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
-	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN)
+	_textureContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
+	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN),
+	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
 	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
 	_config.Position = { scene.Position().X, scene.Position().Y};
@@ -39,6 +42,7 @@ Window::Window(Scene& scene,
 
 Window::~Window()
 {
+	_highlightPass.ReleaseResources();
 }
 
 void Window::LoadResources()
@@ -83,7 +87,9 @@ void Window::LoadResources()
 void Window::InitScene()
 {
 	_scene.InitResources(_resourceLib, true);
+	_highlightPass.InitResources(_resourceLib, true);
 	_pickContext.Initialise();
+	_textureContext.Initialise();
 	_drawContext.Initialise();
 }
 
@@ -337,6 +343,7 @@ void Window::Resize(Size2d size)
 	_config.Size = size;
 
 	_pickContext.Initialise();
+	_textureContext.Initialise();
 	_drawContext.Initialise();
 }
 
@@ -358,18 +365,28 @@ void Window::Render()
 	_pickContext.Bind();
 
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	_scene.Draw3d(_pickContext, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	_scene.Draw3d(_pickContext, 1, DrawPass::PASS_PICKER);
 
 	// Save the picker render to bmp:
 	// std::vector<unsigned char> data = _pickContext.GetTexture();
 	// stbi_write_bmp("picker.bmp", _config.Size.Width, _config.Size.Height, 4, data.data());
 
+	_textureContext.Bind();
+
+	glClearColor(0.1f, 0.1f, 0.1f, 0.5f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	_scene.Draw3d(_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
+
 	_drawContext.Bind();
 
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	_scene.Draw3d(_drawContext, 1);
+
+	_highlightPass.SetTexture(_textureContext.GetTexture());
+	_highlightPass.Draw3d(_drawContext, 1, DrawPass::PASS_SCENE);
+
+	_scene.Draw3d(_drawContext, 1, DrawPass::PASS_SCENE);
 	_scene.Draw(_drawContext);
 }
 
