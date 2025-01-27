@@ -14,6 +14,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(params),
 	Sizeable(params),
 	_changesMade(false),
+	_isSelected(false),
 	_isPicking3d(false),
 	_index(params.Index),
 	_guiParams(params),
