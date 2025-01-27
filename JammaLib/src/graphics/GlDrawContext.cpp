@@ -38,9 +38,11 @@ void GlDrawContext::Initialise()
 
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
 
+	GLint texMode = PICKING == _target ? GL_RGB : GL_RGBA;
+
 	glGenTextures(1, &_texture);
 	glBindTexture(GL_TEXTURE_2D, _texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _size.Width, _size.Height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D(GL_TEXTURE_2D, 0, texMode, _size.Width, _size.Height, 0, texMode, GL_UNSIGNED_BYTE, nullptr);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glBindTexture(GL_TEXTURE_2D, 0);

@@ -29,7 +29,7 @@ Window::Window(Scene& scene,
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
 	_modifiers(Action::MODIFIER_NONE),
-	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
+	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::PICKING),
 	_textureContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
 	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
@@ -374,7 +374,7 @@ void Window::Render()
 
 	_textureContext.Bind();
 
-	glClearColor(0.1f, 0.1f, 0.1f, 0.5f);
+	glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
 	_scene.Draw3d(_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
 

@@ -144,6 +144,8 @@ void Scene::Draw3d(DrawContext& ctx,
 {
 	if (PASS_SCENE == pass)
 		glEnable(GL_DEPTH_TEST);
+	else
+		glDisable(GL_DEPTH_TEST);
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.ClearMvp();
