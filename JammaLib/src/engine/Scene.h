@@ -212,7 +212,6 @@ namespace engine
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
-		std::weak_ptr<base::GuiElement> _touchDownElement3d;
 		std::shared_ptr<Loop> _masterLoop;
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;

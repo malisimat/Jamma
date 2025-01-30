@@ -10,12 +10,12 @@ namespace base
 	{
 	public:
 		Tweakable(TweakableParams params) :
-			_tweakState(TWEAKSTATE_DEFAULT) {}
+			_tweakState(TWEAKSTATE_NONE) {}
 		~Tweakable() {}
 
 		enum TweakState
 		{
-			TWEAKSTATE_DEFAULT = 0,
+			TWEAKSTATE_NONE = 0,
 			TWEAKSTATE_MUTED = 1
 		};
 
@@ -67,7 +67,6 @@ namespace base
 
 			return !isAlreadyUnset;
 		}
-
 
 	protected:
 		TweakState _tweakState;

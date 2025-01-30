@@ -5,11 +5,13 @@
 #include "AudioSink.h"
 #include "MultiAudioSource.h"
 #include "MultiAudioSink.h"
+#include "Tweakable.h"
 
 namespace engine
 {
 	class StationParams :
-		public base::GuiElementParams
+		public base::GuiElementParams,
+		public base::TweakableParams
 	{
 	public:
 		StationParams() :
@@ -20,6 +22,7 @@ namespace engine
 				"",
 				"",
 				{}),
+			base::TweakableParams(),
 			Name(""),
 			FadeSamps(constants::DefaultFadeSamps)
 		{
@@ -33,6 +36,7 @@ namespace engine
 	class Station :
 		public base::Tickable,
 		public base::GuiElement,
+		public base::Tweakable,
 		public base::MultiAudioSource,
 		public base::MultiAudioSink
 	{

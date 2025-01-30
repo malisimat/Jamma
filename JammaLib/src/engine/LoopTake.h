@@ -105,6 +105,8 @@ namespace engine
 		virtual bool DeSelect() override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		virtual void SetPickingFromState(EditMode mode, bool flipState) override;
+		virtual void SetStateFromPicking(EditMode mode, bool flipState) override;
 
 		std::string Id() const;
 		std::string SourceId() const;

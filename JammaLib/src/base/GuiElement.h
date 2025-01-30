@@ -52,8 +52,8 @@ namespace base
 		public Drawable, 
 		public Sizeable, 
 		public Moveable,
-		public virtual ActionSender,
-		public virtual ActionReceiver
+		public ActionSender,
+		public ActionReceiver
 	{
 	public:
 		GuiElement(GuiElementParams params);
@@ -67,6 +67,12 @@ namespace base
 			STATE_OUT
 		};
 
+		enum EditMode
+		{
+			EDIT_SELECT,
+			EDIT_MUTE
+		};
+
 	public:
 		virtual ActionDirection Direction() const override { return ACTIONDIR_DUPLEX; }
 		virtual void Init();
@@ -78,6 +84,8 @@ namespace base
 		virtual bool Select();
 		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
+		virtual void SetPickingFromState(EditMode mode, bool flipState);
+		virtual void SetStateFromPicking(EditMode mode, bool flipState);
 		virtual void SetIndex(unsigned int index);
 		virtual std::vector<unsigned int> GlobalId();
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);

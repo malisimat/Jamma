@@ -299,6 +299,22 @@ void GuiElement::SetPicking3d(bool picking)
 	}
 }
 
+void GuiElement::SetPickingFromState(EditMode mode, bool flipState)
+{
+	for (auto& child : _children)
+	{
+		child->SetPickingFromState(mode, flipState);
+	}
+}
+
+void GuiElement::SetStateFromPicking(EditMode mode, bool flipState)
+{
+	for (auto& child : _children)
+	{
+		child->SetStateFromPicking(mode, flipState);
+	}
+}
+
 void GuiElement::SetIndex(unsigned int index)
 {
 	_index = index;
