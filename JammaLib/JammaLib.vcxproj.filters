@@ -380,6 +380,9 @@
     <ClInclude Include="src\utils\VecUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
+    <ClInclude Include="src\graphics\ImageFullscreen.h">
+      <Filter>include</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -573,6 +576,9 @@
     </ClCompile>
     <ClCompile Include="src\gui\GuiSelector.cpp">
       <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\ImageFullscreen.cpp">
+      <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

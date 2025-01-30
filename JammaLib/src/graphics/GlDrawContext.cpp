@@ -5,7 +5,9 @@ using namespace utils;
 
 GlDrawContext::GlDrawContext(Size2d size,
 	ContextTarget target) :
-	DrawContext(size, target)
+	DrawContext(size, target),
+	_frameBuffer(0u),
+	_texture(0u)
 {
 }
 
@@ -17,6 +19,18 @@ GlDrawContext::~GlDrawContext()
 
 void GlDrawContext::Initialise()
 {
+	if (_texture)
+	{
+		glDeleteTextures(1, &_texture);
+		_texture = 0u;
+	}
+
+	if (_frameBuffer)
+	{
+		glDeleteFramebuffers(1, &_frameBuffer);
+		_frameBuffer = 0u;
+	}
+
 	_frameBuffer = _CreateFrameBuffer(_size, _target);
 
 	if (SCREEN == _target)
@@ -24,21 +38,63 @@ void GlDrawContext::Initialise()
 
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
 
-	unsigned int texture;
-	glGenTextures(1, &texture);
-	glBindTexture(GL_TEXTURE_2D, texture);
+	GLint texMode = PICKING == _target ? GL_RGB : GL_RGBA;
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _size.Width, _size.Height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-
+	glGenTextures(1, &_texture);
+	glBindTexture(GL_TEXTURE_2D, _texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, texMode, _size.Width, _size.Height, 0, texMode, GL_UNSIGNED_BYTE, nullptr);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glBindTexture(GL_TEXTURE_2D, 0);
 
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _texture, 0);
+
+	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		std::cerr << "Framebuffer is not complete: ";
+		switch (status) {
+		case GL_FRAMEBUFFER_UNDEFINED:
+			std::cerr << "GL_FRAMEBUFFER_UNDEFINED";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
+			break;
+		case GL_FRAMEBUFFER_UNSUPPORTED:
+			std::cerr << "GL_FRAMEBUFFER_UNSUPPORTED";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
+			break;
+		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
+			std::cerr << "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS";
+			break;
+		default:
+			std::cerr << "Unknown error";
+		}
+		std::cerr << std::endl;
+	}
+	else {
+		std::cout << "Framebuffer is complete!" << std::endl;
+	}
 }
 
 void GlDrawContext::Bind()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+}
+
+unsigned int GlDrawContext::GetTexture() const
+{
+	return _texture;
 }
 
 unsigned int GlDrawContext::GetPixel(utils::Position2d pos)
@@ -68,7 +124,7 @@ unsigned int GlDrawContext::GetPixel(utils::Position2d pos)
 	return objectId;
 }
 
-const std::vector<unsigned char> GlDrawContext::GetTexture() const
+const std::vector<unsigned char> GlDrawContext::GetPixels() const
 {
 	unsigned int objectId = 0;
 	std::vector<unsigned char> pixels(4 * _size.Width * _size.Height);
@@ -142,13 +198,13 @@ unsigned int GlDrawContext::_CreateFrameBuffer(Size2d size, ContextTarget target
 
 	unsigned int fbo;
 	glGenFramebuffers(1, &fbo);
-	glBindRenderbuffer(GL_FRAMEBUFFER, fbo);
+	/*glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
 	unsigned int rb;
 	glGenRenderbuffers(1, &rb);
 	glBindRenderbuffer(GL_RENDERBUFFER, rb);
 	glRenderbufferStorage(GL_FRAMEBUFFER, GL_DEPTH_COMPONENT16, size.Width, size.Height);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);*/
 
 	return fbo;
 }

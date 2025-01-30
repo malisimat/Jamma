@@ -26,7 +26,8 @@ VU::~VU()
 }
 
 void VU::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto val = _value.Current();
 	auto hold = _value.HoldValue();
@@ -43,11 +44,11 @@ void VU::Draw3d(DrawContext& ctx,
 
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, 4.0f, 1.0f)));
 
-	GuiModel::Draw3d(glCtx, numLeds);
+	GuiModel::Draw3d(glCtx, numLeds, pass);
 
 	glCtx.SetUniform("InstanceOffset", holdLed);
 
-	GuiModel::Draw3d(glCtx, 1);
+	GuiModel::Draw3d(glCtx, 1, pass);
 
 	glCtx.PopMvp();
 }

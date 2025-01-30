@@ -22,6 +22,7 @@ const utils::Size2d Station::_Gap = { 5, 5 };
 
 Station::Station(StationParams params) :
 	GuiElement(params),
+	Tweakable(params),
 	MultiAudioSource(),
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),

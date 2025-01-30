@@ -331,6 +331,48 @@ bool LoopTake::UnMute()
 	return isNewState;
 }
 
+void LoopTake::SetPickingFromState(EditMode mode, bool flipState)
+{
+	switch (mode)
+	{
+	case EDIT_SELECT:
+		_isPicking3d = flipState ?
+			!_isSelected :
+			_isSelected;
+		break;
+	case EDIT_MUTE:
+		_isPicking3d = flipState ? 
+			!(TWEAKSTATE_MUTED & _tweakState)
+			: (TWEAKSTATE_MUTED & _tweakState);
+		break;
+	}
+
+	GuiElement::SetPicking3d(_isPicking3d);
+}
+
+void LoopTake::SetStateFromPicking(EditMode mode, bool flipState)
+{
+	bool isPicking = flipState ?
+		!_isPicking3d :
+		_isPicking3d;
+
+	switch (mode)
+	{
+	case EDIT_SELECT:
+		if (isPicking)
+			Select();
+		else
+			DeSelect();
+		break;
+	case EDIT_MUTE:
+		if (isPicking)
+			Mute();
+		else
+			UnMute();
+		break;
+	}
+}
+
 void LoopTake::EndRecording()
 {
 	if ((STATE_PLAYINGRECORDING != _state) &&

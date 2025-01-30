@@ -56,6 +56,7 @@ namespace utils
 			};
 		}
 	};
+
 	struct Position3d
 	{
 		float X;

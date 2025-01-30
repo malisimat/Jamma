@@ -31,7 +31,6 @@ Scene::Scene(SceneParams params,
 	_stations(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
-	_touchDownElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
 	_camera(CameraParams(
 		MoveableParams(
@@ -139,17 +138,20 @@ void Scene::Draw(DrawContext& ctx)
 }
 
 void Scene::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
-	glEnable(GL_DEPTH_TEST);
+	if (PASS_SCENE == pass)
+		glEnable(GL_DEPTH_TEST);
+	else
+		glDisable(GL_DEPTH_TEST);
 
-	// Draw scene
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
 
 	for (auto& station : _stations)
-		station->Draw3d(ctx, 1);
+		station->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
 }
@@ -189,7 +191,6 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
 		auto activeElement = _touchDownElement.lock();
-		auto activeElement3d = _touchDownElement3d.lock();
 
 		if (activeElement)
 		{
@@ -204,18 +205,20 @@ ActionResult Scene::OnAction(TouchAction action)
 		else if (_isSceneTouching)
 		{
 			_isSceneTouching = false;
+
+			// Clear selection only if not dragged
+			// isSceneTouching should only be true if selector mode is SELECT_NONE
+			// so try to use that instead!
 			if (!_isSceneDragged)
-				_selector->ClearSelection();
+				UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
 
+		// Update selector and then react to result (selecting, deselecting, muting, unmuting)
 		res = _selector->OnAction(_selector->ParentToLocal(action));
 
 		UpdateSelection(res.ResultType);
 
-		_selector->ClearSelection();
-
 		_touchDownElement.reset();
-		_touchDownElement3d.reset();
 
 		return { false, "", "", ACTIONRESULT_DEFAULT };
 	}
@@ -291,7 +294,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
-	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL == action.Modifiers))
+	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
 	{
 		std::cout << ">> Undo <<" << std::endl;
 
@@ -335,6 +338,15 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			return res;
 		}
+	}
+
+	auto res = _selector->OnAction(action);
+
+	if (res.IsEaten)
+	{
+		std::cout << "KeyAction eaten by selector: " << res.ResultType << std::endl;
+		UpdateSelection(res.ResultType);
+		return res;
 	}
 
 	return { false, "", "", ACTIONRESULT_DEFAULT };
@@ -398,7 +410,7 @@ void Scene::OnJobTick(Time curTime)
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
 	bool isSelected = false;
-	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_DEFAULT;
+	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 
 	auto hovering = ChildFromPath(path);
 	if (nullptr != hovering)
@@ -618,59 +630,113 @@ void Scene::InitSize()
 
 void Scene::UpdateSelection(ActionResultType res)
 {
-	for (auto& station : _stations)
-		station->SetPicking3d(false);
+	// Called when touch up + down, and when hover updated
+	auto currentMode = _selector->CurrentMode();
+	std::shared_ptr<GuiElement> hovering = nullptr;
 
-	auto hovering = ChildFromPath(_selector->CurrentHover());
-	if (nullptr != hovering)
-		hovering->SetPicking3d(true);
-
+	std::cout << "Scene::UpdateSelection " << res << ", " << currentMode << std::endl;
 	switch (res)
 	{
-	case ACTIONRESULT_SELECT:
-		for (auto& path : *_selector)
+	case ACTIONRESULT_DEFAULT:
+		// Only called when hover changed or touch down
+		switch (currentMode)
 		{
-			auto child = ChildFromPath(path);
-			if (nullptr != child)
-				child->Select();
+		case GuiSelector::SELECT_NONE:
+			for (auto& station : _stations)
+				station->SetPicking3d(false);
+
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(true);
+
+			break;
+		case GuiSelector::SELECT_NONEADD:
+			for (auto& station : _stations)
+				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
+
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(!hovering->IsSelected());
+
+			break;
+		case GuiSelector::SELECT_SELECT:
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(true);
+
+			break;
+		case GuiSelector::SELECT_SELECTADD:
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(true);
+
+			break;
+		case GuiSelector::SELECT_SELECTREMOVE:
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(false);
+
+			break;
+		case GuiSelector::SELECT_MUTE:
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(true);
+
+			break;
+		case GuiSelector::SELECT_UNMUTE:
+			hovering = ChildFromPath(_selector->CurrentHover());
+			if (nullptr != hovering)
+				hovering->SetPicking3d(true);
+
+			break;
 		}
 		break;
-	case ACTIONRESULT_DESELECT:
-		for (auto& path : *_selector)
+	case ACTIONRESULT_SELECT:
+		// Only called on touch up
+		for (auto& station : _stations)
 		{
-			auto child = ChildFromPath(path);
-			if (nullptr != child)
-				child->DeSelect();
+			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
+			station->SetPicking3d(false);
 		}
+
 		break;
 	case ACTIONRESULT_MUTE:
-		for (auto& path : *_selector)
+		// Only called on touch up
+		for (auto& station : _stations)
 		{
-			auto child = ChildFromPath(path);
-			std::shared_ptr<LoopTake> childTake = std::dynamic_pointer_cast<LoopTake>(child);
-
-			if (nullptr != childTake)
-				childTake->Mute();
+			station->SetStateFromPicking(GuiElement::EDIT_MUTE, false);
+			station->SetPicking3d(false);
 		}
+
+		SetHover3d(_selector->CurrentHover(), Action::MODIFIER_NONE);
+
 		break;
 	case ACTIONRESULT_UNMUTE:
-		for (auto& path : (*_selector))
+		// Only called on touch up
+		for (auto& station : _stations)
 		{
-			auto child = ChildFromPath(path);
-			std::shared_ptr<LoopTake> childTake = std::dynamic_pointer_cast<LoopTake>(child);
-
-			if (nullptr != childTake)
-				childTake->UnMute();
+			station->SetStateFromPicking(GuiElement::EDIT_MUTE, true);
+			station->SetPicking3d(false);
 		}
+
+		SetHover3d(_selector->CurrentHover(), Action::MODIFIER_NONE);
 
 		break;
-	case ACTIONRESULT_DEFAULT:
-		for (auto& path : (*_selector))
-		{
-			auto child = ChildFromPath(path);
-			if (nullptr != child)
-				child->SetPicking3d(true);
-		}
+	case ACTIONRESULT_INITSELECT:
+		for (auto& station : _stations)
+			station->SetPicking3d(false);
+
+		hovering = ChildFromPath(_selector->CurrentHover());
+		if (nullptr != hovering)
+			hovering->SetPicking3d(true);
+
+		break;
+	case ACTIONRESULT_CLEARSELECT:
+		for (auto& station : _stations)
+			station->SetPicking3d(false);
+
+		for (auto& station : _stations)
+			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
 
 		break;
 	}

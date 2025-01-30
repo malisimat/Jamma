@@ -12,6 +12,8 @@ GuiModel::GuiModel(GuiModelParams params) :
 	GuiElement(params),
 	_geometryNeedsUpdating(false),
 	_modelParams(params),
+	_vertexArray(0),
+	_vertexBuffer{0,0,0},
 	_numTris(0),
 	_backVerts({}),
 	_backUvs({})
@@ -19,7 +21,8 @@ GuiModel::GuiModel(GuiModelParams params) :
 }
 
 void GuiModel::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = ModelPosition();
@@ -54,7 +57,7 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glUseProgram(0);
 
 	for (auto& child : _children)
-		child->Draw3d(ctx, 1);
+		child->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -216,7 +219,7 @@ bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
 
-	GlUtils::CheckError("Image::InitVertexArray");
+	GlUtils::CheckError("GuiModel::InitVertexArray");
 
 	return true;
 }

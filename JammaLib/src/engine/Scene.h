@@ -145,7 +145,7 @@ namespace engine
 			std::wstring dir);
 		
 		virtual void Draw(base::DrawContext& ctx) override;
-		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -212,7 +212,6 @@ namespace engine
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
-		std::weak_ptr<base::GuiElement> _touchDownElement3d;
 		std::shared_ptr<Loop> _masterLoop;
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;

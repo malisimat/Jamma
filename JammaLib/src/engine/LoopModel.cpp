@@ -27,27 +27,35 @@ LoopModel::~LoopModel()
 }
 
 void LoopModel::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
 
-	if (STATE_PICKING == _modelState)
+	unsigned int id;
+	std::vector<unsigned int> idVec;
+
+	switch (_modelState)
 	{
-		auto idVec = GlobalId();
+	case STATE_PICKING:
+		idVec = GlobalId();
 		idVec.resize(2);
-		unsigned int id = utils::VecToId(idVec);
+		id = utils::VecToId(idVec);
 
 		glCtx.SetUniform("ObjectId", id);
-	}
-	else
-	{
+		break;
+	case STATE_HIGHLIGHTING:
+		glCtx.SetUniform("Highlight", _isSelected ? 1.0f : 0.0f);
+		break;
+	default:
 		glCtx.SetUniform("LoopState", (unsigned int)_modelState);
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
+		break;
 	}
 
-	GuiModel::Draw3d(glCtx, 1);
+	GuiModel::Draw3d(glCtx, 1, pass);
 
 	glCtx.PopMvp();
 }
@@ -87,7 +95,18 @@ unsigned int LoopModel::CurrentNumLeds(unsigned int vuHeight,
 
 std::weak_ptr<resources::ShaderResource> LoopModel::GetShader()
 {
-	unsigned int shaderIndex = (STATE_PICKING == _modelState) ? 1 : 0;
+	unsigned int shaderIndex = 0u;
+	
+	switch (_modelState)
+	{
+	case STATE_PICKING:
+		shaderIndex = 1u;
+		break;
+	case STATE_HIGHLIGHTING:
+		shaderIndex = 2u;
+		break;
+	}
+
 	if (_modelShaders.size() > shaderIndex)
 		return _modelShaders.at(shaderIndex);
 

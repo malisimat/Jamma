@@ -39,7 +39,8 @@ namespace engine
 			STATE_RECORDING = 0,
 			STATE_PLAYING = 1,
 			STATE_MUTED = 2,
-			STATE_PICKING = 3
+			STATE_PICKING = 3,
+			STATE_HIGHLIGHTING = 4
 		};
 
 	public:
@@ -51,7 +52,8 @@ namespace engine
 		LoopModel& operator=(const LoopModel&) = delete;
 
 	public:
-		void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);

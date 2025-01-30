@@ -14,6 +14,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(params),
 	Sizeable(params),
 	_changesMade(false),
+	_isSelected(false),
 	_isPicking3d(false),
 	_index(params.Index),
 	_guiParams(params),
@@ -115,7 +116,8 @@ void GuiElement::Draw(DrawContext& ctx)
 }
 
 void GuiElement::Draw3d(DrawContext& ctx,
-	unsigned int numInstances)
+	unsigned int numInstances,
+	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
@@ -127,7 +129,7 @@ void GuiElement::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
 	for (auto& child : _children)
-		child->Draw3d(ctx, 1);
+		child->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -294,6 +296,22 @@ void GuiElement::SetPicking3d(bool picking)
 	for (auto& child : _children)
 	{
 		child->SetPicking3d(picking);
+	}
+}
+
+void GuiElement::SetPickingFromState(EditMode mode, bool flipState)
+{
+	for (auto& child : _children)
+	{
+		child->SetPickingFromState(mode, flipState);
+	}
+}
+
+void GuiElement::SetStateFromPicking(EditMode mode, bool flipState)
+{
+	for (auto& child : _children)
+	{
+		child->SetStateFromPicking(mode, flipState);
 	}
 }
 

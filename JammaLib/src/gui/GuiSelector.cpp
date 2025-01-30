@@ -13,10 +13,14 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 	_currentPos({0,0}),
 	_currentHover({}),
 	_currentHoverSelected(false),
-	_currentHoverTweakState(Tweakable::TweakState::TWEAKSTATE_DEFAULT),
-	_selections({}),
+	_currentHoverTweakState(Tweakable::TweakState::TWEAKSTATE_NONE),
 	GuiElement(guiParams)
 {
+}
+
+GuiSelector::SelectMode GuiSelector::CurrentMode() const
+{
+	return _selectMode;
 }
 
 std::vector<unsigned char> GuiSelector::CurrentHover() const
@@ -34,36 +38,16 @@ bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 	if (!isHovering)
 	{
 		_currentHover = {};
+		_currentHoverSelected = false;
+		_currentHoverTweakState = Tweakable::TWEAKSTATE_NONE;
 		return isHovering;
 	}
 
-	if (path != _currentHover)
-	{
-		_currentHover = path;
-		_currentHoverSelected = isSelected;
-		_currentHoverTweakState = tweakState;
-
-		if (_isSelecting)
-		{
-			switch (_selectionTool)
-			{
-			case SELECTION_PAINT:
-				if (modifiers & Action::Modifiers::MODIFIER_ALT)
-					RemovePaintSelection(path);
-				else
-					AddPaintSelection(path);
-
-				break;
-			}
-		}
-	}
+	_currentHover = path;
+	_currentHoverSelected = isSelected;
+	_currentHoverTweakState = tweakState;
 
 	return isHovering;
-}
-
-void GuiSelector::ClearSelection()
-{
-	_selections.clear();
 }
 
 actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
@@ -81,11 +65,14 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 			if (0 == action.Index)
 			{
 				result.IsEaten = true;
-				auto mode = _currentHoverSelected ?
-					SELECT_DESELECT :
+				auto mode = Action::MODIFIER_CTRL & action.Modifiers ?
+					(_currentHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD ) :
 					SELECT_SELECT;
 
 				StartPaintSelection(mode, _currentHover);
+
+				if (SELECT_SELECT == mode)
+					result.ResultType = actions::ACTIONRESULT_INITSELECT;
 			}
 			else if (1 == action.Index)
 			{
@@ -102,27 +89,50 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 	{
 		if (0 == action.Index)
 		{
-			if ((SELECT_SELECT == _selectMode) || (SELECT_DESELECT == _selectMode))
+			if ((SELECT_SELECT == _selectMode) ||
+				(SELECT_SELECTADD == _selectMode) ||
+				(SELECT_SELECTREMOVE == _selectMode))
 			{
 				result.IsEaten = true;
-				result.ResultType = SELECT_SELECT == _selectMode ?
-					actions::ActionResultType::ACTIONRESULT_SELECT :
-					actions::ActionResultType::ACTIONRESULT_DESELECT;
+				result.ResultType = actions::ACTIONRESULT_SELECT;
 
 				EndSelection();
 			}
 		}
 		else if (1 == action.Index)
 		{
-			if ((SELECT_MUTE == _selectMode) || (SELECT_UNMUTE == _selectMode))
+			if ((SELECT_MUTE == _selectMode) ||
+				(SELECT_UNMUTE == _selectMode))
 			{
 				result.IsEaten = true;
-				result.ResultType = SELECT_MUTE == _selectMode ?
-					actions::ActionResultType::ACTIONRESULT_MUTE :
-					actions::ActionResultType::ACTIONRESULT_UNMUTE;
+				result.ResultType = (SELECT_MUTE == _selectMode) ?
+					actions::ACTIONRESULT_MUTE :
+					actions::ACTIONRESULT_UNMUTE;
 
 				EndSelection();
 			}
+		}
+	}
+
+	return result;
+}
+
+actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
+{
+	actions::ActionResult result = GuiElement::OnAction(action);
+	result.IsEaten = false;
+
+	if (17 == action.KeyChar)
+	{
+		if ((SELECT_NONE == _selectMode) && (actions::KeyAction::KeyActionType::KEY_DOWN == action.KeyActionType))
+		{
+			_selectMode = SELECT_NONEADD;
+			result.IsEaten = true;
+		}
+		else if ((SELECT_NONEADD == _selectMode) && (actions::KeyAction::KeyActionType::KEY_UP == action.KeyActionType))
+		{
+			_selectMode = SELECT_NONE;
+			result.IsEaten = true;
 		}
 	}
 
@@ -138,54 +148,13 @@ bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
 
 void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)
 {
-	ClearSelection();
-
 	_isSelecting = true;
 	_selectionTool = SELECTION_PAINT;
 	_selectMode = mode;
-
-	_selections.push_back(selection);
-}
-
-void GuiSelector::AddPaintSelection(std::vector<unsigned char> selection)
-{
-	if (_isSelecting && (SELECTION_PAINT != _selectionTool))
-		return;
-
-	RemovePaintSelection(selection);
-	_selections.push_back(selection);
-}
-
-void GuiSelector::RemovePaintSelection(std::vector<unsigned char> selection)
-{
-	if (_isSelecting && (SELECTION_PAINT != _selectionTool))
-		return;
-
-	std::vector<std::vector<unsigned char>> newSelections;
-
-	for (auto& s : _selections)
-	{
-		if (s != selection)
-			newSelections.push_back(s);
-	}
-
-	_selections = newSelections;
-}
-
-std::vector<std::vector<unsigned char>>::const_iterator GuiSelector::begin() const
-{
-	return _selections.cbegin();
-}
-
-std::vector<std::vector<unsigned char>>::const_iterator GuiSelector::end() const
-{
-	return _selections.cend();
 }
 
 void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
 {
-	ClearSelection();
-
 	_isSelecting = true;
 	_selectionTool = SELECTION_RECT;
 	_selectMode = mode;
@@ -196,7 +165,10 @@ void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
 
 void GuiSelector::UpdateRectSelection(utils::Position2d pos)
 {
-	if (_isSelecting && (SELECTION_RECT != _selectionTool))
+	if (!_isSelecting)
+		return;
+
+	if (SELECTION_RECT != _selectionTool)
 		return;
 
 	_currentPos = pos;
@@ -205,4 +177,5 @@ void GuiSelector::UpdateRectSelection(utils::Position2d pos)
 void GuiSelector::EndSelection()
 {
 	_isSelecting = false;
+	_selectMode = SELECT_NONE;
 }

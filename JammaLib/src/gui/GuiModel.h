@@ -46,7 +46,7 @@ namespace gui
 		GuiModel(GuiModelParams params);
 
 	public:
-		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		void SetGeometry(std::vector<float> coords, std::vector<float> uvs);
 

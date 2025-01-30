@@ -1,7 +1,9 @@
 #version 330 core
 
 in vec2 UV;
+
 out vec4 ColorOUT;
+
 uniform int ObjectId;
 
 void main()
