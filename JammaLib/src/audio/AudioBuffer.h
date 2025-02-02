@@ -18,10 +18,7 @@ namespace audio
 		~AudioBuffer();
 
 	public:
-		virtual AudioDirection AudibleDirection() const override
-		{
-			return AUDIO_BOTH;
-		}
+		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_BOTH; }
 		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
 			int indexOffset,
 			unsigned int numSamps) override;

@@ -137,7 +137,7 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			fadeCurrent,
 			fadeNew,
 			index,
-			base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
+			base::Audible::AudioSourceType::AUDIOSOURCE_LOOPS);
 	}
 }
 
@@ -160,7 +160,7 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 				fadeCurrent,
 				fadeNew,
 				index,
-				base::Audible::AudioSourceType::AUDIOSOURCE_INPUT);
+				base::Audible::AudioSourceType::AUDIOSOURCE_ADC);
 	}
 }
 

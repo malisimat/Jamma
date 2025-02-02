@@ -13,7 +13,7 @@ namespace base
 		AudioSink() : _writeIndex(0) {}
 
 	public:
-		virtual AudioDirection AudibleDirection() const override { return AUDIO_SINK; }
+		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_SINK; }
 		virtual void Zero(unsigned int numSamps)
 		{
 			auto offsetInput = 0;
@@ -21,7 +21,7 @@ namespace base
 
 			for (auto i = 0u; i < numSamps; i++)
 			{
-				offsetInput = OnMixWrite(0.0f, 0.0f, 1.0f, offsetInput, AUDIOSOURCE_INPUT);
+				offsetInput = OnMixWrite(0.0f, 0.0f, 1.0f, offsetInput, AUDIOSOURCE_ADC);
 				offsetMonitor = OnMixWrite(0.0f, 0.0f, 1.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
 			}
 		}

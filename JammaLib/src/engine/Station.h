@@ -6,6 +6,8 @@
 #include "MultiAudioSource.h"
 #include "MultiAudioSink.h"
 #include "Tweakable.h"
+#include "../audio/AudioMixer.h"
+#include "../audio/AudioBuffer.h"
 
 namespace engine
 {
@@ -57,22 +59,22 @@ namespace engine
 
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
-		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
+		virtual MultiAudioPlugType MultiAudioPlug() const { return MULTIAUDIOPLUG_NONE; }
+		virtual unsigned int NumOutputChannels() const override;
+		virtual unsigned int NumInputChannels() const override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
 			unsigned int numSamps) override;
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		// TODO: Remove OnWrite method
-		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
-			int indexOffset,
-			unsigned int numSamps) override;
 		virtual void OnWriteChannel(unsigned int channel,
 			const std::shared_ptr<base::AudioSource> src,
 			int indexOffset,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			Audible::AudioSourceType source);
 		virtual void EndMultiWrite(unsigned int numSamps,
-			bool updateIndex) override;
+			bool updateIndex,
+			Audible::AudioSourceType source) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
@@ -89,23 +91,30 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
+		void SetupBuffers(unsigned int chans, unsigned int bufSize);
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
 		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
+		virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel) override;
+
 		void ArrangeTakes();
 		std::optional<std::shared_ptr<LoopTake>> TryGetTake(std::string id);
 
 	protected:
 		static const utils::Size2d _Gap;
 
+		bool _flipTakeBuffer;
+		bool _flipAudioBuffer;
 		std::string _name;
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
+		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
+		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};
 }

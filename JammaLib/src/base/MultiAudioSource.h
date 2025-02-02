@@ -28,7 +28,7 @@ namespace base
 		~MultiAudioSource() {}
 
 	public:
-		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_SOURCE; }
+		virtual MultiAudioPlugType MultiAudiblePlug() const { return MULTIAUDIOPLUG_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<engine::Trigger> trigger,
 			int indexOffset,
@@ -37,7 +37,11 @@ namespace base
 			for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
 			{
 				auto channel = OutputChannel(chan);
-				dest->OnWriteChannel(chan, channel, indexOffset, numSamps);
+				dest->OnWriteChannel(chan,
+					channel,
+					indexOffset,
+					numSamps,
+					_sourceParams.SourceType);
 			}
 		}
 		virtual void EndMultiPlay(unsigned int numSamps)
@@ -48,14 +52,14 @@ namespace base
 				channel->EndPlay(numSamps);
 			}
 		}
-		virtual void OnPlayChannel(unsigned int channel,
+		virtual void OnPlayChannel(unsigned int chan,
 			const std::shared_ptr<base::AudioSink> dest,
 			int indexOffset,
 			unsigned int numSamps)
 		{
-			auto chan = OutputChannel(channel);
-			if (chan)
-				chan->OnPlay(dest, indexOffset, numSamps);
+			auto channel = OutputChannel(chan);
+			if (channel)
+				channel->OnPlay(dest, indexOffset, numSamps);
 		}
 		virtual unsigned int NumOutputChannels() const { return 0; };
 
@@ -71,9 +75,7 @@ namespace base
 	protected:
 		virtual const std::shared_ptr<AudioSource> OutputChannel(unsigned int channel)
 		{
-			auto chan = std::shared_ptr<AudioSource>();
-			chan->SetSourceType(SourceType());
-			return chan;
+			return nullptr;
 		}
 
 	protected:

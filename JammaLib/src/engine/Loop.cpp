@@ -212,6 +212,7 @@ void Loop::EndWrite(unsigned int numSamps,
 	}
 }
 
+// Only called when outputting to DAC
 void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int sampOffset,
@@ -350,7 +351,9 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
 	{
 		auto channel = OutputChannel(chan);
-		channel->EndPlay(numSamps);
+
+		if (channel)
+			channel->EndPlay(numSamps);
 	}
 
 	auto newValue = _lastPeak * _mixer->Level();
