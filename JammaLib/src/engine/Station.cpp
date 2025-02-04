@@ -1,4 +1,5 @@
 #include "Station.h"
+#include <memory>
 
 using namespace engine;
 using namespace audio;
@@ -10,7 +11,8 @@ using utils::Size2d;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
 
-Station::Station(StationParams params) :
+Station::Station(StationParams params,
+	AudioMixerParams mixerParams) :
 	GuiElement(params),
 	Tweakable(params),
 	MultiAudioSource(),
@@ -19,11 +21,15 @@ Station::Station(StationParams params) :
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
+	_mixer(nullptr),
 	_loopTakes(),
 	_triggers(),
 	_backLoopTakes(),
 	_audioBuffers()
 {
+	_mixer = std::make_unique<AudioMixer>(mixerParams);
+
+	_children.push_back(_mixer);
 }
 
 Station::~Station()
@@ -31,11 +37,12 @@ Station::~Station()
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,
+	AudioMixerParams mixerParams,
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
 	stationParams.Name = stationStruct.Name;
-	auto station = std::make_shared<Station>(stationParams);
+	auto station = std::make_shared<Station>(stationParams, mixerParams);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -59,6 +66,17 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	}
 		
 	return station;
+}
+
+AudioMixerParams Station::GetMixerParams(utils::Size2d stationSize,
+	audio::BehaviourParams behaviour)
+{
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 110, stationSize.Height };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = behaviour;
+
+	return mixerParams;
 }
 
 void Station::SetSize(utils::Size2d size)
@@ -93,11 +111,24 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	int indexOffset,
 	unsigned int numSamps)
 {
+	auto ptr = Sharable::shared_from_this();
+
 	for (auto& take : _loopTakes)
-		take->OnPlay(dest,
+		take->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
+
+	for (auto& buf : _audioBuffers)
+	{
+		unsigned int i = 0;
+		auto bufIter = buf->Start();
+
+		while ((bufIter != buf->End()) && (i < numSamps))
+		{
+			_mixer->OnPlay(dest, *bufIter++, i++);
+		}
+	}
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -106,7 +137,10 @@ void Station::EndMultiPlay(unsigned int numSamps)
 		take->EndMultiPlay(numSamps);
 
 	for (auto& buffer : _audioBuffers)
+	{
+		buffer->EndWrite(numSamps, true);
 		buffer->EndPlay(numSamps);
+	}
 }
 
 void Station::OnWriteChannel(unsigned int channel,
@@ -359,7 +393,14 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	takeParams.Id = _name + "-TK-" + utils::GetGuid();
 	takeParams.FadeSamps = _fadeSamps;
 
-	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
+	WireMixBehaviourParams wireParams;
+
+	for (unsigned int i = 0; i < _audioBuffers.size(); i++)
+	{
+		wireParams.Channels.push_back(i);
+	}
+
+	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, wireParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	AddTake(take);
 
@@ -368,6 +409,8 @@ std::shared_ptr<LoopTake> Station::AddTake()
 
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	take->SetupBuffers(NumInputChannels(), BufSize());
+
 	_backLoopTakes.push_back(take);
 	Init();
 
@@ -427,18 +470,32 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 
 void Station::SetupBuffers(unsigned int chans, unsigned int bufSize)
 {
+	WireMixBehaviourParams wireParams;
+
 	_backAudioBuffers.clear();
 
 	for (unsigned int i = 0; i < chans; i++)
 	{
+		wireParams.Channels.push_back(i);
 		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(bufSize));
 	}
+
+	_mixer->SetBehaviour(std::make_unique<WireMixBehaviour>(wireParams));
 
 	_flipAudioBuffer = true;
 	_changesMade = true;
 
 	for (auto& take : _loopTakes)
 		take->SetupBuffers(chans, bufSize);
+}
+
+unsigned int Station::BufSize() const
+{
+	auto bufs = _changesMade ? _backAudioBuffers : _audioBuffers;
+	if (bufs.empty())
+		return 0;
+
+	return bufs[0]->BufSize();
 }
 
 void Station::OnBounce(unsigned int numSamps, io::UserConfig config)

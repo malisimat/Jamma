@@ -13,6 +13,7 @@ using actions::TriggerAction;
 using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
+using audio::WireMixBehaviourParams;
 using utils::Size2d;
 
 const Size2d LoopTake::_Gap = { 6, 6 };
@@ -82,7 +83,7 @@ AudioMixerParams LoopTake::GetMixerParams(utils::Size2d loopSize,
 void LoopTake::SetSize(utils::Size2d size)
 {
 	auto mixerParams = GetMixerParams(size,
-		audio::WireMixBehaviourParams());
+		WireMixBehaviourParams());
 
 	_mixer->SetSize(mixerParams.Size);
 
@@ -135,14 +136,24 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	if (!dest->IsArmed())
 		return;
 
+	auto ptr = Sharable::shared_from_this();
+
 	for (auto& loop : _loops)
-		loop->OnPlay(std::shared_ptr<MultiAudioSink>(this),
+		loop->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
-	dest->OnWrite(std::shared_ptr<MultiAudioSource>(this), indexOffset, numSamps);
-	//_mixer->OnPlay(dest);
+	for (auto& buf : _audioBuffers)
+	{
+		unsigned int i = 0;
+		auto bufIter = buf->Start();
+
+		while ((bufIter != buf->End()) && (i < numSamps))
+		{
+			_mixer->OnPlay(dest, *bufIter++, i++);
+		}
+	}
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -151,7 +162,10 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		loop->EndMultiPlay(numSamps);
 
 	for (auto& buffer : _audioBuffers)
+	{
+		buffer->EndWrite(numSamps, true);
 		buffer->EndPlay(numSamps);
+	}
 }
 
 bool LoopTake::IsArmed() const
@@ -282,6 +296,8 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 
 void LoopTake::SetupBuffers(unsigned int chans, unsigned int bufSize)
 {
+	WireMixBehaviourParams wireParams;
+
 	_backAudioBuffers.clear();
 
 	for (unsigned int i = 0; i < chans; i++)

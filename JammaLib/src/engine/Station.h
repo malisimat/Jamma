@@ -43,7 +43,8 @@ namespace engine
 		public base::MultiAudioSink
 	{
 	public:
-		Station(StationParams params);
+		Station(StationParams params,
+			audio::AudioMixerParams mixerParams);
 		~Station();
 
 		// Copy
@@ -52,8 +53,11 @@ namespace engine
 
 	public:
 		static std::optional<std::shared_ptr<Station>> FromFile(StationParams stationParams,
+			audio::AudioMixerParams mixerParams,
 			io::JamFile::Station stationStruct,
 			std::wstring dir);
+		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
+			audio::BehaviourParams behaviour);
 
 		virtual std::string ClassName() const { return "Station"; }
 
@@ -92,6 +96,7 @@ namespace engine
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetupBuffers(unsigned int chans, unsigned int bufSize);
+		unsigned int BufSize() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
@@ -111,6 +116,7 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
+		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;

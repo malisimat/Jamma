@@ -29,9 +29,6 @@ namespace base
 			}
 		}
 		virtual bool IsArmed() const { return true; }
-		virtual void OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
-			int indexOffset,
-			unsigned int numSamps) {}
 		virtual void EndMultiWrite(unsigned int numSamps,
 			Audible::AudioSourceType source) { return EndMultiWrite(numSamps, false, source); }
 		virtual void EndMultiWrite(unsigned int numSamps,

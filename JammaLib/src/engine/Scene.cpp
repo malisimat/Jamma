@@ -92,9 +92,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		constants::MaxLoopFadeSamps :
 		rigStruct.User.Loop.FadeSamps;
 
-	for (auto stationStruct : jamStruct.Stations)
+	WireMixBehaviourParams wireParams;
+	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, wireParams);
+
+	for (auto& stationStruct : jamStruct.Stations)
 	{
-		auto station = Station::FromFile(stationParams, stationStruct, dir);
+		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{
 			if (rigStruct.Triggers.size() > stationParams.Index)
