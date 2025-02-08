@@ -72,7 +72,7 @@ namespace base
 
 	protected:
 		virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel,
-			AudioSource::AudioSourceType source) {
+			Audible::AudioSourceType source) {
 			return nullptr;
 		}
 	};

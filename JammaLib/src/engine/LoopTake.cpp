@@ -104,24 +104,17 @@ unsigned int LoopTake::NumOutputChannels() const
 		(unsigned int)_audioBuffers.size();
 }
 
-const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel,
+void LoopTake::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
-	switch (source)
+	for (auto chan = 0u; chan < NumInputChannels(); chan++)
 	{
-	case Audible::AUDIOSOURCE_ADC:
-	case Audible::AUDIOSOURCE_BOUNCE:
-	case Audible::AUDIOSOURCE_MONITOR:
-		if (channel < _loops.size())
-			return _loops[channel];
-	case Audible::AUDIOSOURCE_LOOPS:
-		if (channel < _audioBuffers.size())
-			return _audioBuffers[channel];
-
-		break;
+		auto channel = InputChannel(chan, source);
+		channel->Zero(numSamps);
 	}
 
-	return nullptr;
+	for (auto& loop : _loops)
+		loop->Zero(numSamps);
 }
 
 // Only called when outputting to DAC
@@ -147,7 +140,7 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	for (auto& buf : _audioBuffers)
 	{
 		unsigned int i = 0;
-		auto bufIter = buf->Start();
+		auto bufIter = buf->Delay(numSamps);
 
 		while ((bufIter != buf->End()) && (i < numSamps))
 		{
@@ -482,6 +475,9 @@ void LoopTake::Ditch()
 		loop->Ditch();
 	}
 
+	if (!_audioBuffers.empty())
+		Zero(_audioBuffers[0]->BufSize(), Audible::AUDIOSOURCE_LOOPS);
+
 	_loops.clear();
 }
 
@@ -621,13 +617,23 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	return jobs;
 }
 
-const std::shared_ptr<AudioSource> LoopTake::OutputChannel(unsigned int channel)
+const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel,
+	Audible::AudioSourceType source)
 {
-	if (channel < _audioBuffers.size())
+	switch (source)
 	{
-		auto chan = _audioBuffers[channel];
-		chan->SetSourceType(SourceType());
-		return chan;
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_BOUNCE:
+	case Audible::AUDIOSOURCE_MONITOR:
+		if (channel < _loops.size())
+			return _loops[channel];
+
+		break;
+	case Audible::AUDIOSOURCE_LOOPS:
+		if (channel < _audioBuffers.size())
+			return _audioBuffers[channel];
+
+		break;
 	}
 
 	return nullptr;

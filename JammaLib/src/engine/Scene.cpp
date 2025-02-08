@@ -92,8 +92,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		constants::MaxLoopFadeSamps :
 		rigStruct.User.Loop.FadeSamps;
 
-	WireMixBehaviourParams wireParams;
-	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, wireParams);
+	MergeMixBehaviourParams mergeParams;
+	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
 
 	for (auto& stationStruct : jamStruct.Stations)
 	{
@@ -584,6 +584,7 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}

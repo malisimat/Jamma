@@ -66,6 +66,8 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const { return MULTIAUDIOPLUG_NONE; }
 		virtual unsigned int NumOutputChannels() const override;
 		virtual unsigned int NumInputChannels() const override;
+		virtual void Zero(unsigned int numSamps,
+			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
@@ -103,7 +105,8 @@ namespace engine
 		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel) override;
+		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+			Audible::AudioSourceType source);
 
 		void ArrangeTakes();
 		std::optional<std::shared_ptr<LoopTake>> TryGetTake(std::string id);

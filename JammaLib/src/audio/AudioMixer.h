@@ -18,7 +18,6 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
-			float fadeCurrent,
 			float fadeNew,
 			unsigned int index) const {};
 	};
@@ -48,7 +47,6 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
-			float fadeCurrent,
 			float fadeNew,
 			unsigned int index) const override;
 
@@ -74,7 +72,6 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
-			float fadeCurrent,
 			float fadeNew,
 			unsigned int index) const override;
 
@@ -95,12 +92,28 @@ namespace audio
 	public:
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
 			float samp,
-			float fadeCurrent,
 			float fadeNew,
 			unsigned int index) const override;
 	};
 
-	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams> BehaviourParams;
+	class MergeMixBehaviourParams : public WireMixBehaviourParams {};
+	class MergeMixBehaviour : public WireMixBehaviour
+	{
+	public:
+		MergeMixBehaviour(MergeMixBehaviourParams mixParams) :
+			WireMixBehaviour(mixParams)
+		{
+			_mixParams = mixParams;
+		}
+
+	public:
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+			float samp,
+			float fadeNew,
+			unsigned int index) const override;
+	};
+
+	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams, MergeMixBehaviourParams> BehaviourParams;
 
 	class AudioMixerParams :
 		public base::GuiElementParams,
@@ -147,6 +160,9 @@ namespace audio
 		}
 		std::unique_ptr<MixBehaviour> operator()(BounceMixBehaviourParams bounceParams) const {
 			return std::move(std::make_unique<BounceMixBehaviour>(bounceParams));
+		}
+		std::unique_ptr<MixBehaviour> operator()(MergeMixBehaviourParams mergeParams) const {
+			return std::move(std::make_unique<MergeMixBehaviour>(mergeParams));
 		}
 	};
 

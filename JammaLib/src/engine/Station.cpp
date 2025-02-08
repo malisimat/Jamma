@@ -105,6 +105,19 @@ unsigned int Station::NumInputChannels() const
 		(unsigned int)_audioBuffers.size();
 }
 
+void Station::Zero(unsigned int numSamps,
+	Audible::AudioSourceType source)
+{
+	for (auto chan = 0u; chan < NumInputChannels(); chan++)
+	{
+		auto channel = InputChannel(chan, source);
+		channel->Zero(numSamps);
+	}
+
+	for (auto& take : _loopTakes)
+		take->Zero(numSamps, source);
+}
+
 // Only called when outputting to DAC
 void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
@@ -122,7 +135,7 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	for (auto& buf : _audioBuffers)
 	{
 		unsigned int i = 0;
-		auto bufIter = buf->Start();
+		auto bufIter = buf->Delay(numSamps);
 
 		while ((bufIter != buf->End()) && (i < numSamps))
 		{
@@ -393,14 +406,14 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	takeParams.Id = _name + "-TK-" + utils::GetGuid();
 	takeParams.FadeSamps = _fadeSamps;
 
-	WireMixBehaviourParams wireParams;
+	MergeMixBehaviourParams mergeParams;
 
 	for (unsigned int i = 0; i < _audioBuffers.size(); i++)
 	{
-		wireParams.Channels.push_back(i);
+		mergeParams.Channels.push_back(i);
 	}
 
-	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, wireParams);
+	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	AddTake(take);
 
@@ -470,17 +483,17 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 
 void Station::SetupBuffers(unsigned int chans, unsigned int bufSize)
 {
-	WireMixBehaviourParams wireParams;
+	MergeMixBehaviourParams mergeParams;
 
 	_backAudioBuffers.clear();
 
 	for (unsigned int i = 0; i < chans; i++)
 	{
-		wireParams.Channels.push_back(i);
+		mergeParams.Channels.push_back(i);
 		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(bufSize));
 	}
 
-	_mixer->SetBehaviour(std::make_unique<WireMixBehaviour>(wireParams));
+	_mixer->SetBehaviour(std::make_unique<MergeMixBehaviour>(mergeParams));
 
 	_flipAudioBuffer = true;
 	_changesMade = true;
@@ -578,14 +591,11 @@ std::vector<JobAction> Station::_CommitChanges()
 	return {};
 }
 
-const std::shared_ptr<AudioSource> Station::OutputChannel(unsigned int channel)
+const std::shared_ptr<AudioSink> Station::InputChannel(unsigned int channel,
+	Audible::AudioSourceType source)
 {
 	if (channel < _audioBuffers.size())
-	{
-		auto chan = _audioBuffers[channel];
-		chan->SetSourceType(SourceType());
-		return chan;
-	}
+		return _audioBuffers[channel];
 
 	return nullptr;
 }

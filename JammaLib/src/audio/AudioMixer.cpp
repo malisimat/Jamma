@@ -98,14 +98,7 @@ void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	unsigned int index)
 {
 	if (_behaviour)
-	{
-		float fadeNext = (float)_fade->Next();
-
-		if (dynamic_cast<BounceMixBehaviour*>(_behaviour.get()))
-			_behaviour->Apply(dest, samp, 1.0f - fadeNext, fadeNext, index);
-		else
-			_behaviour->Apply(dest, samp, 1.0f, fadeNext, index);
-	}
+		_behaviour->Apply(dest, samp, (float)_fade->Next(), index);
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
@@ -123,12 +116,13 @@ void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 
 void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
-	float fadeCurrent,
 	float fadeNew,
 	unsigned int index) const
 {
 	if (nullptr == dest)
 		return;
+
+	float fadeCurrent = 0.0f;
 
 	for (auto chan : _mixParams.Channels)
 	{
@@ -143,7 +137,6 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 
 void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
-	float fadeCurrent,
 	float fadeNew,
 	unsigned int index) const
 {
@@ -151,6 +144,7 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 
 	auto numChans = dest->NumInputChannels();
+	float fadeCurrent = 1.0f;
 
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
@@ -166,12 +160,13 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 
 void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	float samp,
-	float fadeCurrent,
 	float fadeNew,
 	unsigned int index) const
 {
 	if (nullptr == dest)
 		return;
+
+	float fadeCurrent = 1.0f - fadeNew;
 
 	for (auto chan : _mixParams.Channels)
 	{
@@ -181,6 +176,27 @@ void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			fadeNew,
 			index,
 			base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
+	}
+}
+
+void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+	float samp,
+	float fadeNew,
+	unsigned int index) const
+{
+	if (nullptr == dest)
+		return;
+
+	float fadeCurrent = 1.0f;
+
+	for (auto chan : _mixParams.Channels)
+	{
+		dest->OnMixWriteChannel(chan,
+			samp,
+			fadeCurrent,
+			fadeNew,
+			index,
+			base::Audible::AudioSourceType::AUDIOSOURCE_MIXER);
 	}
 }
 

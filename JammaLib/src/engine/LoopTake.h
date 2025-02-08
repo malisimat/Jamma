@@ -101,7 +101,7 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_NONE; }
 		virtual unsigned int NumInputChannels() const override;
 		virtual unsigned int NumOutputChannels() const override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
@@ -144,7 +144,8 @@ namespace engine
 
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel);
+		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+			base::AudioSource::AudioSourceType source);
 
 		void ArrangeLoops();
 		void UpdateLoops();

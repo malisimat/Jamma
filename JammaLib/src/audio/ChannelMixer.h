@@ -27,6 +27,7 @@ namespace audio
 		protected:
 			std::vector<std::shared_ptr<AudioBuffer>> _buffers;
 		};
+
 		class AdcChannelMixer :
 			public BufferMixer,
 			public base::MultiAudioSource
