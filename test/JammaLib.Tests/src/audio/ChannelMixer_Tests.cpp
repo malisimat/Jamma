@@ -115,7 +115,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _writeIndex;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -230,10 +230,10 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	auto numBlocks = (bufSize * 2) / blockSize;
 	for (int i = 0; i < numBlocks; i++)
 	{
-		sink->Zero(blockSize);
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		chanMixer.Source()->OnPlay(sink, trigger, 0u, blockSize);
 		chanMixer.Source()->EndMultiPlay(blockSize);
-		sink->EndMultiWrite(blockSize, true);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
@@ -262,13 +262,13 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		chanMixer.Sink()->Zero(blockSize);
+		chanMixer.Sink()->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		source->OnPlay(chanMixer.Sink(), trigger, 0u, blockSize);
 		source->EndMultiPlay(blockSize);
 
 		auto tempBuf = std::vector<float>(blockSize);
 		chanMixer.ToDac(tempBuf.data(), 1, blockSize);
-		chanMixer.Sink()->EndMultiWrite(blockSize, true);
+		chanMixer.Sink()->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 
 		for (auto v : tempBuf)
 			buf.push_back(v);

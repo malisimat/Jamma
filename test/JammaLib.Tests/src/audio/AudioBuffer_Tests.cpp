@@ -77,7 +77,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _index;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{

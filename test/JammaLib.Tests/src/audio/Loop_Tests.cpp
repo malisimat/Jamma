@@ -96,7 +96,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _index;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -162,10 +162,10 @@ TEST(Loop, PlayWrapsAround) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		sink->Zero(blockSize);
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		loop.OnPlay(sink, trigger, 0u, blockSize);
 		loop.EndMultiPlay(blockSize);
-		sink->EndMultiWrite(blockSize, true);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
