@@ -78,10 +78,10 @@ namespace engine
 	};
 
 	class Loop :
-		public virtual base::GuiElement,
-		public virtual base::Tweakable,
-		public virtual base::AudioSink,
-		public virtual base::MultiAudioSource
+		public base::GuiElement,
+		public base::Tweakable,
+		public base::AudioSink,
+		public base::MultiAudioSource
 	{
 	public:
 		enum LoopPlayState
@@ -159,7 +159,7 @@ namespace engine
 
 		virtual std::string ClassName() const { return "Loop"; }
 		virtual void SetSize(utils::Size2d size) override;
-		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,

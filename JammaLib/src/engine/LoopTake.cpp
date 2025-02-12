@@ -13,15 +13,18 @@ using actions::TriggerAction;
 using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
+using audio::WireMixBehaviourParams;
 using utils::Size2d;
 
 const Size2d LoopTake::_Gap = { 6, 6 };
 
-LoopTake::LoopTake(LoopTakeParams params) :
+LoopTake::LoopTake(LoopTakeParams params,
+	AudioMixerParams mixerParams) :
 	GuiElement(params),
 	Tweakable(params),
 	MultiAudioSource(),
 	_flipLoopBuffer(false),
+	_flipAudioBuffer(false),
 	_loopsNeedUpdating(false),
 	_endRecordingCompleted(false),
 	_state(STATE_INACTIVE),
@@ -32,9 +35,15 @@ LoopTake::LoopTake(LoopTakeParams params) :
 	_recordedSampCount(0),
 	_endRecordSampCount(0),
 	_endRecordSamps(0),
-	_loops({}),
-	_backLoops({})
+	_mixer(nullptr),
+	_loops(),
+	_backLoops(),
+	_audioBuffers(),
+	_backAudioBuffers()
 {
+	_mixer = std::make_unique<AudioMixer>(mixerParams);
+
+	_children.push_back(_mixer);
 }
 
 LoopTake::~LoopTake()
@@ -43,7 +52,8 @@ LoopTake::~LoopTake()
 
 std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeParams, io::JamFile::LoopTake takeStruct, std::wstring dir)
 {
-	auto take = std::make_shared<LoopTake>(takeParams);
+	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
+	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 
 	LoopParams loopParams;
 	loopParams.Wav = "hh";
@@ -59,8 +69,24 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	return take;
 }
 
+AudioMixerParams LoopTake::GetMixerParams(utils::Size2d loopSize,
+	audio::BehaviourParams behaviour)
+{
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 110, loopSize.Height };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = behaviour;
+
+	return mixerParams;
+}
+
 void LoopTake::SetSize(utils::Size2d size)
 {
+	auto mixerParams = GetMixerParams(size,
+		WireMixBehaviourParams());
+
+	_mixer->SetSize(mixerParams.Size);
+
 	GuiElement::SetSize(size);
 
 	ArrangeLoops();
@@ -71,14 +97,27 @@ unsigned int LoopTake::NumInputChannels() const
 	return (unsigned int)_backLoops.size();
 }
 
-const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel)
+unsigned int LoopTake::NumOutputChannels() const
 {
-	if (channel < _loops.size())
-		return _loops[channel];
-
-	return std::shared_ptr<AudioSink>();
+	return _changesMade ?
+		(unsigned int)_backAudioBuffers.size() :
+		(unsigned int)_audioBuffers.size();
 }
 
+void LoopTake::Zero(unsigned int numSamps,
+	Audible::AudioSourceType source)
+{
+	for (auto chan = 0u; chan < NumInputChannels(); chan++)
+	{
+		auto channel = InputChannel(chan, source);
+		channel->Zero(numSamps);
+	}
+
+	for (auto& loop : _loops)
+		loop->Zero(numSamps);
+}
+
+// Only called when outputting to DAC
 void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
@@ -90,14 +129,36 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	if (!dest->IsArmed())
 		return;
 
+	auto ptr = Sharable::shared_from_this();
+
 	for (auto& loop : _loops)
-		loop->OnPlay(dest, trigger, indexOffset, numSamps);
+		loop->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+			trigger,
+			indexOffset,
+			numSamps);
+
+	for (auto& buf : _audioBuffers)
+	{
+		unsigned int i = 0;
+		auto bufIter = buf->Delay(numSamps);
+
+		while ((bufIter != buf->End()) && (i < numSamps))
+		{
+			_mixer->OnPlay(dest, *bufIter++, i++);
+		}
+	}
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
 {
 	for (auto& loop : _loops)
 		loop->EndMultiPlay(numSamps);
+
+	for (auto& buffer : _audioBuffers)
+	{
+		buffer->EndWrite(numSamps, true);
+		buffer->EndPlay(numSamps);
+	}
 }
 
 bool LoopTake::IsArmed() const
@@ -110,7 +171,8 @@ bool LoopTake::IsArmed() const
 }
 
 void LoopTake::EndMultiWrite(unsigned int numSamps,
-	bool updateIndex)
+	bool updateIndex,
+	Audible::AudioSourceType source)
 {
 	for (auto& loop : _loops)
 		 loop->EndWrite(numSamps, updateIndex);
@@ -176,7 +238,7 @@ std::string LoopTake::SourceId() const
 	return _sourceId;
 }
 
-LoopTake::LoopTakeSource LoopTake::SourceType() const
+LoopTake::LoopTakeSource LoopTake::TakeSourceType() const
 {
 	return _sourceType;
 }
@@ -222,6 +284,21 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	ArrangeLoops();
 
 	_flipLoopBuffer = true;
+	_changesMade = true;
+}
+
+void LoopTake::SetupBuffers(unsigned int chans, unsigned int bufSize)
+{
+	WireMixBehaviourParams wireParams;
+
+	_backAudioBuffers.clear();
+
+	for (unsigned int i = 0; i < chans; i++)
+	{
+		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(bufSize));
+	}
+
+	_flipAudioBuffer = true;
 	_changesMade = true;
 }
 
@@ -398,6 +475,9 @@ void LoopTake::Ditch()
 		loop->Ditch();
 	}
 
+	if (!_audioBuffers.empty())
+		Zero(_audioBuffers[0]->BufSize(), Audible::AUDIOSOURCE_LOOPS);
+
 	_loops.clear();
 }
 
@@ -502,6 +582,12 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		_loops = _backLoops; // TODO: Undo?
 	}
 
+	if (_flipAudioBuffer)
+	{
+		_audioBuffers = _backAudioBuffers;
+		_flipAudioBuffer = false;
+	}
+
 	std::vector<JobAction> jobs;
 
 	if (_loopsNeedUpdating)
@@ -529,6 +615,28 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	GuiElement::_CommitChanges();
 
 	return jobs;
+}
+
+const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel,
+	Audible::AudioSourceType source)
+{
+	switch (source)
+	{
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_BOUNCE:
+	case Audible::AUDIOSOURCE_MONITOR:
+		if (channel < _loops.size())
+			return _loops[channel];
+
+		break;
+	case Audible::AUDIOSOURCE_LOOPS:
+		if (channel < _audioBuffers.size())
+			return _audioBuffers[channel];
+
+		break;
+	}
+
+	return nullptr;
 }
 
 void LoopTake::ArrangeLoops()

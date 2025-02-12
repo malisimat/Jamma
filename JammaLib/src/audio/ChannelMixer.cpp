@@ -107,7 +107,8 @@ void ChannelMixer::AdcChannelMixer::EndMultiPlay(unsigned int numSamps)
 	for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
 	{
 		auto channel = OutputChannel(chan);
-		channel->EndPlay(numSamps);
+		if (channel)
+			channel->EndPlay(numSamps);
 	}
 }
 
@@ -116,16 +117,19 @@ unsigned int ChannelMixer::AdcChannelMixer::NumOutputChannels() const
 	return (unsigned int)_buffers.size();
 }
 
-void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps)
+void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps,
+	Audible::AudioSourceType source)
 {
-	EndMultiWrite(numSamps, true);
+	EndMultiWrite(numSamps, true, source);
 }
 
-void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps, bool updateIndex)
+void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps,
+	bool updateIndex,
+	Audible::AudioSourceType source)
 {
 	for (unsigned int chan = 0; chan < NumInputChannels(); chan++)
 	{
-		auto channel = InputChannel(chan);
+		auto channel = InputChannel(chan, source);
 		channel->EndWrite(numSamps, updateIndex);
 	}
 }
@@ -152,12 +156,11 @@ const std::shared_ptr<AudioSource> ChannelMixer::AdcChannelMixer::OutputChannel(
 		return chan;
 	}
 
-	auto chan = std::shared_ptr<AudioSource>();
-	chan->SetSourceType(SourceType());
-	return chan;
+	return nullptr;
 }
 
-const std::shared_ptr<AudioSink> ChannelMixer::DacChannelMixer::InputChannel(unsigned int channel)
+const std::shared_ptr<AudioSink> ChannelMixer::DacChannelMixer::InputChannel(unsigned int channel,
+	Audible::AudioSourceType source)
 {
 	if (channel < _buffers.size())
 		return _buffers[channel];

@@ -92,9 +92,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		constants::MaxLoopFadeSamps :
 		rigStruct.User.Loop.FadeSamps;
 
-	for (auto stationStruct : jamStruct.Stations)
+	MergeMixBehaviourParams mergeParams;
+	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
+
+	for (auto& stationStruct : jamStruct.Stations)
 	{
-		auto station = Station::FromFile(stationParams, stationStruct, dir);
+		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{
 			if (rigStruct.Triggers.size() > stationParams.Index)
@@ -464,6 +467,13 @@ void Scene::InitAudio()
 				ChannelMixer::DefaultBufferSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels }));
+
+		for (auto& station : _stations)
+		{
+			if (station)
+				station->SetupBuffers(audioStreamParams.NumOutputChannels,
+					ChannelMixer::DefaultBufferSize);
+		}
 	}
 }
 
@@ -537,7 +547,7 @@ void Scene::OnAudio(float* inBuf,
 		}
 
 		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
-		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_INPUT);
+		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
 
 		for (auto& station : _stations)
 		{
@@ -558,13 +568,13 @@ void Scene::OnAudio(float* inBuf,
 			station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
 			station->OnBounce(numSamps, _userConfig);
 
-			station->EndMultiWrite(numSamps, true);
+			station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_BOUNCE);
 		}
 	}
 
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
-	_channelMixer->Sink()->Zero(numSamps);
+	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 
 	if (nullptr != outBuf)
 	{
@@ -574,6 +584,7 @@ void Scene::OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
@@ -589,7 +600,7 @@ void Scene::OnAudio(float* inBuf,
 		}
 	}
 	
-	_channelMixer->Sink()->EndMultiWrite(numSamps, true);
+	_channelMixer->Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 
 	OnTick(Timer::GetTime(),
 		numSamps,
@@ -763,6 +774,7 @@ void Scene::AddStation(std::shared_ptr<Station> station)
 	_stations.push_back(station);
 
 	station->SetClock(_clock);
+	station->SetupBuffers(_channelMixer->Sink()->NumInputChannels(), ChannelMixer::DefaultBufferSize);
 	station->Init();
 }
 

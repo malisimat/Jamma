@@ -10,18 +10,18 @@ namespace base
 		public virtual Sharable
 	{
 	public:
-		enum MultiAudioDirection
+		enum MultiAudioPlugType
 		{
-			MULTIAUDIO_NONE,
-			MULTIAUDIO_SOURCE,
-			MULTIAUDIO_SINK,
-			MULTIAUDIO_BOTH
+			MULTIAUDIOPLUG_NONE,
+			MULTIAUDIOPLUG_SOURCE,
+			MULTIAUDIOPLUG_SINK,
+			MULTIAUDIOPLUG_BOTH
 		};
 	public:
 		MultiAudible() {};
 		~MultiAudible() {};
 
 	public:
-		virtual MultiAudioDirection MultiAudibleDirection() const { return MULTIAUDIO_NONE; }
+		virtual MultiAudioPlugType MultiAudioPlug() const { return MULTIAUDIOPLUG_NONE; }
 	};
 }

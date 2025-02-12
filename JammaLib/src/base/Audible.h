@@ -8,19 +8,21 @@ namespace base
 		public virtual Sharable
 	{
 	public:
-		enum AudioDirection
+		enum AudioPlugType
 		{
-			AUDIO_NONE,
-			AUDIO_SOURCE,
-			AUDIO_SINK,
-			AUDIO_BOTH
+			AUDIOPLUG_NONE,
+			AUDIOPLUG_SOURCE,
+			AUDIOPLUG_SINK,
+			AUDIOPLUG_BOTH
 		};
 
 		enum AudioSourceType
 		{
-			AUDIOSOURCE_INPUT,
+			AUDIOSOURCE_ADC,
 			AUDIOSOURCE_MONITOR,
-			AUDIOSOURCE_BOUNCE
+			AUDIOSOURCE_BOUNCE,
+			AUDIOSOURCE_LOOPS,
+			AUDIOSOURCE_MIXER
 		};
 
 	public:
@@ -28,6 +30,6 @@ namespace base
 		~Audible() {};
 
 	public:
-		virtual AudioDirection AudibleDirection() const { return AUDIO_NONE; }
+		virtual AudioPlugType AudioPlug() const { return AUDIOPLUG_NONE; }
 	};
 }

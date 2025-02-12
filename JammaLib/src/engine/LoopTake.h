@@ -10,6 +10,10 @@
 #include "AudioSink.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
+#include "../audio/AudioMixer.h"
+#include "../audio/AudioBuffer.h"
+
+using base::Audible;
 
 namespace engine
 {
@@ -51,10 +55,10 @@ namespace engine
 	};
 
 	class LoopTake :
-		public virtual base::GuiElement,
-		public virtual base::Tweakable,
-		public virtual base::MultiAudioSource,
-		public virtual base::MultiAudioSink
+		public base::GuiElement,
+		public base::Tweakable,
+		public base::MultiAudioSource,
+		public base::MultiAudioSink
 	{
 	public:
 		enum LoopTakeSource
@@ -76,7 +80,8 @@ namespace engine
 		};
 
 	public:
-		LoopTake(LoopTakeParams params);
+		LoopTake(LoopTakeParams params,
+			audio::AudioMixerParams mixerParams);
 		~LoopTake();
 
 		// Copy
@@ -84,14 +89,20 @@ namespace engine
 		LoopTake& operator=(const LoopTake&) = delete;
 
 	public:
-		static std::optional<std::shared_ptr<LoopTake>> FromFile(LoopTakeParams takeParams, io::JamFile::LoopTake takeStruct, std::wstring dir);
+		static std::optional<std::shared_ptr<LoopTake>> FromFile(LoopTakeParams takeParams,
+			io::JamFile::LoopTake takeStruct,
+			std::wstring dir);
+		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
+			audio::BehaviourParams behaviour);
 
 		virtual std::string ClassName() const { return "LoopTake"; }
 
 		virtual void SetSize(utils::Size2d size) override;
-		virtual MultiAudioDirection MultiAudibleDirection() const override { return MULTIAUDIO_BOTH; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_NONE; }
 		virtual unsigned int NumInputChannels() const override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel) override;
+		virtual unsigned int NumOutputChannels() const override;
+		virtual void Zero(unsigned int numSamps,
+			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
@@ -99,7 +110,8 @@ namespace engine
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
-			bool updateIndex) override;
+			bool updateIndex,
+			Audible::AudioSourceType source) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
 		virtual bool DeSelect() override;
@@ -110,11 +122,12 @@ namespace engine
 
 		std::string Id() const;
 		std::string SourceId() const;
-		LoopTakeSource SourceType() const;
+		LoopTakeSource TakeSourceType() const;
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
+		void SetupBuffers(unsigned int chans, unsigned int bufSize);
 
 		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
@@ -131,6 +144,9 @@ namespace engine
 
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
+		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+			base::AudioSource::AudioSourceType source);
+
 		void ArrangeLoops();
 		void UpdateLoops();
 
@@ -138,6 +154,7 @@ namespace engine
 		static const utils::Size2d _Gap;
 
 		bool _flipLoopBuffer;
+		bool _flipAudioBuffer;
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
 		LoopTakeState _state;
@@ -148,7 +165,10 @@ namespace engine
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
+		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
+		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};
 }

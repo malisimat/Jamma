@@ -1,35 +1,35 @@
 #include "Station.h"
+#include <memory>
 
 using namespace engine;
-using base::MultiAudioSource;
-using base::AudioSink;
-using base::GuiElement;
-using base::GuiElementParams;
-using base::DrawContext;
+using namespace audio;
+using namespace actions;
+using namespace base;
 using resources::ResourceLib;
-using actions::ActionResult;
-using actions::KeyAction;
-using actions::TouchAction;
-using actions::TriggerAction;
-using actions::JobAction;
 using gui::GuiSliderParams;
-using audio::AudioMixer;
-using audio::AudioMixerParams;
-using audio::WireMixBehaviourParams;
 using utils::Size2d;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
 
-Station::Station(StationParams params) :
+Station::Station(StationParams params,
+	AudioMixerParams mixerParams) :
 	GuiElement(params),
 	Tweakable(params),
 	MultiAudioSource(),
+	_flipTakeBuffer(false),
+	_flipAudioBuffer(false),
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
+	_mixer(nullptr),
 	_loopTakes(),
-	_triggers({})
+	_triggers(),
+	_backLoopTakes(),
+	_audioBuffers()
 {
+	_mixer = std::make_unique<AudioMixer>(mixerParams);
+
+	_children.push_back(_mixer);
 }
 
 Station::~Station()
@@ -37,11 +37,12 @@ Station::~Station()
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,
+	AudioMixerParams mixerParams,
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
 	stationParams.Name = stationStruct.Name;
-	auto station = std::make_shared<Station>(stationParams);
+	auto station = std::make_shared<Station>(stationParams, mixerParams);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -67,6 +68,17 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	return station;
 }
 
+AudioMixerParams Station::GetMixerParams(utils::Size2d stationSize,
+	audio::BehaviourParams behaviour)
+{
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 110, stationSize.Height };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = behaviour;
+
+	return mixerParams;
+}
+
 void Station::SetSize(utils::Size2d size)
 {
 	GuiElement::SetSize(size);
@@ -74,50 +86,111 @@ void Station::SetSize(utils::Size2d size)
 	ArrangeTakes();
 }
 
-
 utils::Position2d Station::Position() const
 {
 	return _modelScreenPos;
 }
 
+unsigned int Station::NumOutputChannels() const
+{
+	return _changesMade ?
+		(unsigned int)_backAudioBuffers.size() :
+		(unsigned int)_audioBuffers.size();
+}
+
+unsigned int Station::NumInputChannels() const
+{
+	return _changesMade ?
+		(unsigned int)_backAudioBuffers.size() :
+		(unsigned int)_audioBuffers.size();
+}
+
+void Station::Zero(unsigned int numSamps,
+	Audible::AudioSourceType source)
+{
+	for (auto chan = 0u; chan < NumInputChannels(); chan++)
+	{
+		auto channel = InputChannel(chan, source);
+		channel->Zero(numSamps);
+	}
+
+	for (auto& take : _loopTakes)
+		take->Zero(numSamps, source);
+}
+
+// Only called when outputting to DAC
 void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
 {
+	auto ptr = Sharable::shared_from_this();
+
 	for (auto& take : _loopTakes)
-		take->OnPlay(dest, trigger, indexOffset, numSamps);
+		take->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+			trigger,
+			indexOffset,
+			numSamps);
+
+	for (auto& buf : _audioBuffers)
+	{
+		unsigned int i = 0;
+		auto bufIter = buf->Delay(numSamps);
+
+		while ((bufIter != buf->End()) && (i < numSamps))
+		{
+			_mixer->OnPlay(dest, *bufIter++, i++);
+		}
+	}
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
 {
 	for (auto& take : _loopTakes)
 		take->EndMultiPlay(numSamps);
+
+	for (auto& buffer : _audioBuffers)
+	{
+		buffer->EndWrite(numSamps, true);
+		buffer->EndPlay(numSamps);
+	}
 }
 
 void Station::OnWriteChannel(unsigned int channel,
 	const std::shared_ptr<base::AudioSource> src,
 	int indexOffset,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	Audible::AudioSourceType source)
 {
-	for (auto& take : _loopTakes)
-		take->OnWriteChannel(channel, src, indexOffset, numSamps);
-}
-
-// TODO: Remove method
-void Station::OnWrite(const std::shared_ptr<base::MultiAudioSource> src,
-	int indexOffset,
-	unsigned int numSamps)
-{
-	for (auto& take : _loopTakes)
-		take->OnWrite(src, indexOffset, numSamps);
+	switch (source)
+	{
+	case Audible::AudioSourceType::AUDIOSOURCE_ADC:
+	case Audible::AudioSourceType::AUDIOSOURCE_MONITOR:
+	case Audible::AudioSourceType::AUDIOSOURCE_BOUNCE:
+		for (auto& take : _loopTakes)
+			take->OnWriteChannel(channel,
+				src,
+				indexOffset,
+				numSamps,
+				source);
+		break;
+	case Audible::AudioSourceType::AUDIOSOURCE_LOOPS:
+		for (auto& take : _loopTakes)
+			take->OnWriteChannel(channel,
+				src,
+				indexOffset,
+				numSamps,
+				source);
+		break;
+	}
 }
 
 void Station::EndMultiWrite(unsigned int numSamps,
-	bool updateIndex)
+	bool updateIndex,
+	Audible::AudioSourceType source)
 {
 	for (auto& take : _loopTakes)
-		take->EndMultiWrite(numSamps, updateIndex);
+		take->EndMultiWrite(numSamps, updateIndex, source);
 }
 
 ActionResult Station::OnAction(KeyAction action)
@@ -294,6 +367,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			{
 				_backLoopTakes.erase(match);
 				ArrangeTakes();
+				_flipTakeBuffer = true;
 				_changesMade = true;
 			}
 		}
@@ -332,7 +406,15 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	takeParams.Id = _name + "-TK-" + utils::GetGuid();
 	takeParams.FadeSamps = _fadeSamps;
 
-	auto take = std::make_shared<LoopTake>(takeParams);
+	MergeMixBehaviourParams mergeParams;
+
+	for (unsigned int i = 0; i < _audioBuffers.size(); i++)
+	{
+		mergeParams.Channels.push_back(i);
+	}
+
+	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, mergeParams);
+	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	AddTake(take);
 
 	return take;
@@ -340,10 +422,13 @@ std::shared_ptr<LoopTake> Station::AddTake()
 
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
+	take->SetupBuffers(NumInputChannels(), BufSize());
+
 	_backLoopTakes.push_back(take);
 	Init();
 
 	ArrangeTakes();
+	_flipTakeBuffer = true;
 	_changesMade = true;
 }
 
@@ -396,6 +481,36 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
+void Station::SetupBuffers(unsigned int chans, unsigned int bufSize)
+{
+	MergeMixBehaviourParams mergeParams;
+
+	_backAudioBuffers.clear();
+
+	for (unsigned int i = 0; i < chans; i++)
+	{
+		mergeParams.Channels.push_back(i);
+		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(bufSize));
+	}
+
+	_mixer->SetBehaviour(std::make_unique<MergeMixBehaviour>(mergeParams));
+
+	_flipAudioBuffer = true;
+	_changesMade = true;
+
+	for (auto& take : _loopTakes)
+		take->SetupBuffers(chans, bufSize);
+}
+
+unsigned int Station::BufSize() const
+{
+	auto bufs = _changesMade ? _backAudioBuffers : _audioBuffers;
+	if (bufs.empty())
+		return 0;
+
+	return bufs[0]->BufSize();
+}
+
 void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 {
 	for (auto& trigger : _triggers)
@@ -438,32 +553,51 @@ unsigned int Station::CalcTakeHeight(unsigned int stationHeight, unsigned int nu
 
 std::vector<JobAction> Station::_CommitChanges()
 {
-	// Remove and add any children
-	// (difference between back and front LoopTake buffer)
-	std::vector<std::shared_ptr<LoopTake>> toAdd;
-	std::vector<std::shared_ptr<LoopTake>> toRemove;
-	std::copy_if(_backLoopTakes.begin(), _backLoopTakes.end(), std::back_inserter(toAdd), [&](const std::shared_ptr<LoopTake>& take) { return (std::find(_loopTakes.begin(), _loopTakes.end(), take) == _loopTakes.end()); });
-	std::copy_if(_loopTakes.begin(), _loopTakes.end(), std::back_inserter(toRemove), [&](const std::shared_ptr<LoopTake>& take) { return (std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take) == _backLoopTakes.end()); });
-	
-	for (auto& take : toAdd)
+	if (_flipTakeBuffer)
 	{
-		take->SetParent(GuiElement::shared_from_this());
-		take->Init();
-		_children.push_back(take);
+		// Remove and add any children
+		// (difference between back and front LoopTake buffer)
+		std::vector<std::shared_ptr<LoopTake>> toAdd;
+		std::vector<std::shared_ptr<LoopTake>> toRemove;
+		std::copy_if(_backLoopTakes.begin(), _backLoopTakes.end(), std::back_inserter(toAdd), [&](const std::shared_ptr<LoopTake>& take) { return (std::find(_loopTakes.begin(), _loopTakes.end(), take) == _loopTakes.end()); });
+		std::copy_if(_loopTakes.begin(), _loopTakes.end(), std::back_inserter(toRemove), [&](const std::shared_ptr<LoopTake>& take) { return (std::find(_backLoopTakes.begin(), _backLoopTakes.end(), take) == _backLoopTakes.end()); });
+
+		for (auto& take : toAdd)
+		{
+			take->SetParent(GuiElement::shared_from_this());
+			take->Init();
+			_children.push_back(take);
+		}
+
+		for (auto& take : toRemove)
+		{
+			auto child = std::find(_children.begin(), _children.end(), take);
+			if (_children.end() != child)
+				_children.erase(child);
+		}
+
+		_loopTakes = _backLoopTakes; // TODO: Undo?
+		_flipTakeBuffer = false;
 	}
 
-	for (auto& take : toRemove)
+	if (_flipAudioBuffer)
 	{
-		auto child = std::find(_children.begin(), _children.end(), take);
-		if (_children.end() != child)
-			_children.erase(child);
+		_audioBuffers = _backAudioBuffers;
+		_flipAudioBuffer = false;
 	}
-	
-	_loopTakes = _backLoopTakes; // TODO: Undo?
 
 	GuiElement::_CommitChanges();
 
 	return {};
+}
+
+const std::shared_ptr<AudioSink> Station::InputChannel(unsigned int channel,
+	Audible::AudioSourceType source)
+{
+	if (channel < _audioBuffers.size())
+		return _audioBuffers[channel];
+
+	return nullptr;
 }
 
 void Station::ArrangeTakes()

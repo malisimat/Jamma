@@ -27,6 +27,7 @@ namespace audio
 		protected:
 			std::vector<std::shared_ptr<AudioBuffer>> _buffers;
 		};
+
 		class AdcChannelMixer :
 			public BufferMixer,
 			public base::MultiAudioSource
@@ -44,12 +45,15 @@ namespace audio
 			public base::MultiAudioSink
 		{
 		public:
-			virtual void EndMultiWrite(unsigned int numSamps) override;
-			virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex) override;
+			virtual void EndMultiWrite(unsigned int numSamps,
+				base::Audible::AudioSourceType source) override;
+			virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex,
+				base::Audible::AudioSourceType source) override;
 			virtual unsigned int NumInputChannels() const override;
 
 		protected:
-			virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel) override;
+			virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+				base::Audible::AudioSourceType source) override;
 		};
 
 	public:

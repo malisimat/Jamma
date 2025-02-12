@@ -10,7 +10,7 @@ namespace base
 	class AudioSourceParams
 	{
 	public:
-		AudioSourceParams() : SourceType(Audible::AudioSourceType::AUDIOSOURCE_INPUT) {}
+		AudioSourceParams() : SourceType(Audible::AudioSourceType::AUDIOSOURCE_ADC) {}
 	public:
 		Audible::AudioSourceType SourceType;
 	};
@@ -25,7 +25,7 @@ namespace base
 		}
 
 	public:
-		virtual AudioDirection AudibleDirection() const override { return AUDIO_SOURCE; }
+		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
 			int indexOffset,
 			unsigned int numSamps) = 0;
