@@ -4,11 +4,16 @@
 2 texture_shaded MVP LoopState LoopHover
 2 vu MVP DX DY NumInstances InstanceOffset
 2 picker MVP ObjectId
+2 colour MVP Color
 2 white MVP Highlight
 2 blur
 1 fader_back
 1 fader
 1 fader_over
+1 router
+1 router_active
+1 router_over
+1 router_down
 3 hh
 1 red
 1 green
