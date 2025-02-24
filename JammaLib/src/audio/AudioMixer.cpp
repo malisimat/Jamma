@@ -20,7 +20,7 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 	Tweakable(params),
 	_unmutedFadeTarget(DefaultLevel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_slider(std::make_shared<GuiSlider>(GetSliderParams(params.Size))),
+	_slider(std::make_shared<GuiSlider>(_GetSliderParams(params.Size))),
 	_fade(std::make_unique<InterpolatedValueExp>())
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
@@ -34,15 +34,9 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 	_children.push_back(_slider);
 }
 
-void AudioMixer::InitReceivers()
-{
-	_slider->SetReceiver(ActionReceiver::shared_from_this());
-	_slider->SetValue(DefaultLevel);
-}
-
 void AudioMixer::SetSize(utils::Size2d size)
 {
-	auto sliderParams = GetSliderParams(size);
+	auto sliderParams = _GetSliderParams(size);
 	_slider->SetSize(sliderParams.Size);
 
 	GuiElement::SetSize(size);
@@ -200,7 +194,13 @@ void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-gui::GuiSliderParams AudioMixer::GetSliderParams(utils::Size2d mixerSize)
+void AudioMixer::_InitReceivers()
+{
+	_slider->SetReceiver(ActionReceiver::shared_from_this());
+	_slider->SetValue(DefaultLevel);
+}
+
+gui::GuiSliderParams AudioMixer::_GetSliderParams(utils::Size2d mixerSize)
 {
 	GuiSliderParams sliderParams;
 	sliderParams.Min = 0.0;

@@ -78,9 +78,9 @@ namespace graphics
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
-		bool InitTexture(resources::ResourceLib& resourceLib);
-		bool InitShader(resources::ResourceLib& resourceLib);
-		bool InitVertexArray();
+		bool _InitTexture(resources::ResourceLib& resourceLib);
+		bool _InitShader(resources::ResourceLib& resourceLib);
+		bool _InitVertexArray();
 
 	protected:
 		const int VertexCount = 6;

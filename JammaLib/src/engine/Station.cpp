@@ -8,6 +8,7 @@ using namespace base;
 using resources::ResourceLib;
 using gui::GuiSliderParams;
 using utils::Size2d;
+using gui::GuiRouterParams;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
 
@@ -22,14 +23,22 @@ Station::Station(StationParams params,
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_mixer(nullptr),
+	_router(nullptr),
 	_loopTakes(),
 	_triggers(),
 	_backLoopTakes(),
-	_audioBuffers()
+	_audioBuffers(),
+	_backAudioBuffers()
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
+	_router = std::make_unique<gui::GuiRouter>(_GetRouterParams(params.Size),
+		8,
+		8,
+		false,
+		true);
 
 	_children.push_back(_mixer);
+	_children.push_back(_router);
 }
 
 Station::~Station()
@@ -83,7 +92,7 @@ void Station::SetSize(utils::Size2d size)
 {
 	GuiElement::SetSize(size);
 
-	ArrangeTakes();
+	_ArrangeTakes();
 }
 
 utils::Position2d Station::Position() const
@@ -110,7 +119,7 @@ void Station::Zero(unsigned int numSamps,
 {
 	for (auto chan = 0u; chan < NumInputChannels(); chan++)
 	{
-		auto channel = InputChannel(chan, source);
+		auto channel = _InputChannel(chan, source);
 		channel->Zero(numSamps);
 	}
 
@@ -215,13 +224,24 @@ ActionResult Station::OnAction(TouchAction action)
 	return GuiElement::OnAction(action);
 }
 
+ActionResult Station::OnAction(TouchMoveAction action)
+{
+	auto res = GuiElement::OnAction(action);
+
+	if (res.IsEaten)
+		return res;
+
+	return res;
+}
+
+
 ActionResult Station::OnAction(TriggerAction action)
 {
 	ActionResult res;
 	res.IsEaten = false;
 
 	auto loopCount = 0u;
-	auto loopTake = TryGetTake(action.TargetId);
+	auto loopTake = _TryGetTake(action.TargetId);
 
 	switch (action.ActionType)
 	{
@@ -345,7 +365,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (loopTake.has_value())
 			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
 
-		auto sourceLoopTake = TryGetTake(action.SourceId);
+		auto sourceLoopTake = _TryGetTake(action.SourceId);
 		if (sourceLoopTake.has_value())
 			sourceLoopTake.value()->Mute();
 
@@ -366,7 +386,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			if (match != _backLoopTakes.end())
 			{
 				_backLoopTakes.erase(match);
-				ArrangeTakes();
+				_ArrangeTakes();
 				_flipTakeBuffer = true;
 				_changesMade = true;
 			}
@@ -427,7 +447,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_backLoopTakes.push_back(take);
 	Init();
 
-	ArrangeTakes();
+	_ArrangeTakes();
 	_flipTakeBuffer = true;
 	_changesMade = true;
 }
@@ -536,7 +556,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 	}
 }
 
-unsigned int Station::CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
+unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
 {
 	if (0 == numTakes)
 		return 0;
@@ -549,6 +569,11 @@ unsigned int Station::CalcTakeHeight(unsigned int stationHeight, unsigned int nu
 		return minHeight;
 
 	return height;
+}
+
+void Station::_InitReceivers()
+{
+	_router->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 std::vector<JobAction> Station::_CommitChanges()
@@ -591,7 +616,12 @@ std::vector<JobAction> Station::_CommitChanges()
 	return {};
 }
 
-const std::shared_ptr<AudioSink> Station::InputChannel(unsigned int channel,
+bool Station::_HitTest(utils::Position2d localPos)
+{
+	return GuiElement::_HitTest(localPos);
+}
+
+const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
 	if (channel < _audioBuffers.size())
@@ -600,11 +630,35 @@ const std::shared_ptr<AudioSink> Station::InputChannel(unsigned int channel,
 	return nullptr;
 }
 
-void Station::ArrangeTakes()
+gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
+{
+	size.Width = 300;
+	size.Height = 300;
+	GuiRouterParams routerParams;
+
+	routerParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
+	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
+	routerParams.MinSize = routerParams.Size;
+	routerParams.Texture = "router";
+	routerParams.PinTexture = "";
+	routerParams.LinkTexture = "";
+	routerParams.DeviceInactiveTexture = "router";
+	routerParams.DeviceActiveTexture = "router_inactive";
+	routerParams.ChannelInactiveTexture = "router";
+	routerParams.ChannelActiveTexture = "router_inactive";
+	routerParams.OverTexture = "router_over";
+	routerParams.DownTexture = "router_down";
+	routerParams.HighlightTexture = "router_over";
+	routerParams.LineShader = "colour";
+
+	return routerParams;
+}
+
+void Station::_ArrangeTakes()
 {
 	auto numTakes = (unsigned int)_backLoopTakes.size();
 
-	auto takeHeight = CalcTakeHeight(_sizeParams.Size.Height, numTakes);
+	auto takeHeight = _CalcTakeHeight(_sizeParams.Size.Height, numTakes);
 	utils::Size2d takeSize = { _sizeParams.Size.Width - (2 * _Gap.Width), takeHeight - (2 * _Gap.Height) };
 
 	auto takeCount = 0;
@@ -620,7 +674,7 @@ void Station::ArrangeTakes()
 	}
 }
 
-std::optional<std::shared_ptr<LoopTake>> Station::TryGetTake(std::string id)
+std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 {
 	for (auto& take : _loopTakes)
 	{

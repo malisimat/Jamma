@@ -90,7 +90,6 @@ namespace gui
 		virtual std::string ClassName() const { return "GuiSlider"; }
 
 		virtual	void SetSize(utils::Size2d size) override;
-		virtual bool HitTest(utils::Position2d pos) override;
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
@@ -100,6 +99,7 @@ namespace gui
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
+		virtual bool _HitTest(utils::Position2d localPos) override;
 
 		static double CalcValueOffset(GuiSliderParams params,
 			utils::Size2d size,

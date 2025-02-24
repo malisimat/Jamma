@@ -69,29 +69,6 @@ void GuiSlider::SetSize(Size2d size)
 	OnValueChange(true);
 }
 
-bool GuiSlider::HitTest(Position2d localPos)
-{
-	for (auto& child : _children)
-	{
-		if (child->HitTest(child->ParentToLocal(localPos)))
-			return true;
-	}
-
-	auto left = _dragElement.Position().X;
-	auto right = _dragElement.Position().X + (int)_dragElement.GetSize().Width;
-
-	if (localPos.X > left && localPos.X < right)
-	{
-		auto bottom = _dragElement.Position().Y;
-		auto top = _dragElement.Position().X + (int)_dragElement.GetSize().Height;
-
-		if (localPos.Y > bottom && localPos.Y < top)
-			return true;
-	}
-
-	return false;
-}
-
 void GuiSlider::Draw(DrawContext & ctx)
 {
 	GuiElement::Draw(ctx);
@@ -223,6 +200,23 @@ void GuiSlider::_ReleaseResources()
 {
 	_dragElement.ReleaseResources();
 	GuiElement::_ReleaseResources();
+}
+
+bool GuiSlider::_HitTest(Position2d localPos)
+{
+	auto left = _dragElement.Position().X;
+	auto right = _dragElement.Position().X + (int)_dragElement.GetSize().Width;
+
+	if (localPos.X > left && localPos.X < right)
+	{
+		auto bottom = _dragElement.Position().Y;
+		auto top = _dragElement.Position().X + (int)_dragElement.GetSize().Height;
+
+		if (localPos.Y > bottom && localPos.Y < top)
+			return true;
+	}
+
+	return false;
 }
 
 void GuiSlider::OnValueChange(bool bypassUpdates)

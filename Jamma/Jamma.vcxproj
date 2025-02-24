@@ -310,12 +310,20 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <None Include="resources\shaders\colour.frag" />
+    <None Include="resources\shaders\colour.vert" />
     <None Include="resources\shaders\blur.frag" />
     <None Include="resources\shaders\blur.vert" />
     <None Include="resources\shaders\picker.frag" />
     <None Include="resources\shaders\picker.vert" />
     <None Include="resources\shaders\white.vert" />
     <None Include="resources\shaders\white.frag" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\textures\router.tga" />
+    <Image Include="resources\textures\router_active.tga" />
+    <Image Include="resources\textures\router_down.tga" />
+    <Image Include="resources\textures\router_over.tga" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

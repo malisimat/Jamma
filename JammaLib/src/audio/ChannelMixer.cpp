@@ -129,7 +129,7 @@ void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps,
 {
 	for (unsigned int chan = 0; chan < NumInputChannels(); chan++)
 	{
-		auto channel = InputChannel(chan, source);
+		auto channel = _InputChannel(chan, source);
 		channel->EndWrite(numSamps, updateIndex);
 	}
 }
@@ -159,7 +159,7 @@ const std::shared_ptr<AudioSource> ChannelMixer::AdcChannelMixer::OutputChannel(
 	return nullptr;
 }
 
-const std::shared_ptr<AudioSink> ChannelMixer::DacChannelMixer::InputChannel(unsigned int channel,
+const std::shared_ptr<AudioSink> ChannelMixer::DacChannelMixer::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
 	if (channel < _buffers.size())

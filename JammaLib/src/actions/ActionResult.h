@@ -29,5 +29,9 @@ namespace actions
 		ActionResultType ResultType;
 		std::shared_ptr<base::ActionUndo> Undo;
 		std::weak_ptr<base::GuiElement> ActiveElement;
+
+		static ActionResult NoAction() {
+			return { false, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+		}
 	};
 };

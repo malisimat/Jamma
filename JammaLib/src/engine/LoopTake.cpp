@@ -14,6 +14,7 @@ using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
 using audio::WireMixBehaviourParams;
+using gui::GuiRouterParams;
 using utils::Size2d;
 
 const Size2d LoopTake::_Gap = { 6, 6 };
@@ -36,14 +37,21 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_endRecordSampCount(0),
 	_endRecordSamps(0),
 	_mixer(nullptr),
+	_router(nullptr),
 	_loops(),
 	_backLoops(),
 	_audioBuffers(),
 	_backAudioBuffers()
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
+	_router = std::make_unique<gui::GuiRouter>(_GetRouterParams(params.Size),
+		8,
+		8,
+		false,
+		false);
 
 	_children.push_back(_mixer);
+	_children.push_back(_router);
 }
 
 LoopTake::~LoopTake()
@@ -89,7 +97,7 @@ void LoopTake::SetSize(utils::Size2d size)
 
 	GuiElement::SetSize(size);
 
-	ArrangeLoops();
+	_ArrangeLoops();
 }
 
 unsigned int LoopTake::NumInputChannels() const
@@ -109,7 +117,7 @@ void LoopTake::Zero(unsigned int numSamps,
 {
 	for (auto chan = 0u; chan < NumInputChannels(); chan++)
 	{
-		auto channel = InputChannel(chan, source);
+		auto channel = _InputChannel(chan, source);
 		channel->Zero(numSamps);
 	}
 
@@ -202,7 +210,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	{
 	case JobAction::JOB_UPDATELOOPS:
 	{
-		UpdateLoops();
+		_UpdateLoops();
 
 		ActionResult res;
 		res.IsEaten = true;
@@ -225,7 +233,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	}
 
-	return { false, "", "", actions::ACTIONRESULT_DEFAULT};
+	return ActionResult::NoAction();
 }
 
 std::string LoopTake::Id() const
@@ -257,7 +265,7 @@ std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationNa
 {
 	auto newNumLoops = (unsigned int)_loops.size() + 1;
 
-	auto loopHeight = CalcLoopHeight(_sizeParams.Size.Height, newNumLoops);
+	auto loopHeight = _CalcLoopHeight(_sizeParams.Size.Height, newNumLoops);
 
 	audio::WireMixBehaviourParams wire;
 	wire.Channels = { chan };
@@ -281,7 +289,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_children.push_back(loop);
 	Init();
 
-	ArrangeLoops();
+	_ArrangeLoops();
 
 	_flipLoopBuffer = true;
 	_changesMade = true;
@@ -530,7 +538,7 @@ void LoopTake::PunchOut()
 	}
 }
 
-unsigned int LoopTake::CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops)
+unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops)
 {
 	if (0 == numLoops)
 		return 0;
@@ -545,11 +553,16 @@ unsigned int LoopTake::CalcLoopHeight(unsigned int takeHeight, unsigned int numL
 	return height;
 }
 
+void LoopTake::_InitReceivers()
+{
+	_router->SetReceiver(ActionReceiver::shared_from_this());
+}
+
 void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::_InitResources(resourceLib, forceInit);
 	
-	ArrangeLoops();
+	_ArrangeLoops();
 }
 
 std::vector<JobAction> LoopTake::_CommitChanges()
@@ -617,7 +630,7 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	return jobs;
 }
 
-const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel,
+const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
 	switch (source)
@@ -639,7 +652,29 @@ const std::shared_ptr<AudioSink> LoopTake::InputChannel(unsigned int channel,
 	return nullptr;
 }
 
-void LoopTake::ArrangeLoops()
+gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size)
+{
+	GuiRouterParams routerParams;
+
+	routerParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
+	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
+	routerParams.MinSize = routerParams.Size;
+	routerParams.Texture = "router";
+	routerParams.PinTexture = "";
+	routerParams.LinkTexture = "";
+	routerParams.DeviceInactiveTexture = "router";
+	routerParams.DeviceActiveTexture = "router_inactive";
+	routerParams.ChannelInactiveTexture = "router";
+	routerParams.ChannelActiveTexture = "router_inactive";
+	routerParams.OverTexture = "router_over";
+	routerParams.DownTexture = "router_down";
+	routerParams.HighlightTexture = "router_over";
+	routerParams.LineShader = "colour";
+
+	return routerParams;
+}
+
+void LoopTake::_ArrangeLoops()
 {
 	auto numLoops = (unsigned int)_backLoops.size();
 
@@ -665,7 +700,7 @@ void LoopTake::ArrangeLoops()
 	}
 }
 
-void LoopTake::UpdateLoops()
+void LoopTake::_UpdateLoops()
 {
 	for (auto& loop : _loops)
 	{

@@ -164,9 +164,6 @@
     <ClInclude Include="src\utils\ImageUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\Touchable.h">
-      <Filter>src\base</Filter>
-    </ClInclude>
     <ClInclude Include="src\graphics\Shader.h">
       <Filter>src\resources</Filter>
     </ClInclude>
@@ -380,8 +377,11 @@
     <ClInclude Include="src\utils\VecUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiRouter.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\ImageFullscreen.h">
-      <Filter>include</Filter>
+      <Filter>src\graphics</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -577,8 +577,11 @@
     <ClCompile Include="src\gui\GuiSelector.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiRouter.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
-      <Filter>src</Filter>
+      <Filter>src\graphics</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

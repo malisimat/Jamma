@@ -65,11 +65,11 @@ void Image::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto validated = true;
 
 	if (validated)
-		validated = InitTexture(resourceLib);
+		validated = _InitTexture(resourceLib);
 	if (validated)
-		validated = InitShader(resourceLib);
+		validated = _InitShader(resourceLib);
 	if (validated)
-		validated = InitVertexArray();
+		validated = _InitVertexArray();
 
 	GlUtils::CheckError("Image::_InitResources()");
 }
@@ -84,7 +84,7 @@ void Image::_ReleaseResources()
 	_vertexArray = 0;
 }
 
-bool Image::InitTexture(ResourceLib& resourceLib)
+bool Image::_InitTexture(ResourceLib& resourceLib)
 {
 	auto textureOpt = resourceLib.GetResource(_drawParams.Texture);
 	
@@ -104,7 +104,7 @@ bool Image::InitTexture(ResourceLib& resourceLib)
 	return true;
 }
 
-bool Image::InitShader(ResourceLib& resourceLib)
+bool Image::_InitShader(ResourceLib& resourceLib)
 {
 	auto shaderOpt = resourceLib.GetResource(_shaderName);
 
@@ -124,7 +124,7 @@ bool Image::InitShader(ResourceLib& resourceLib)
 	return true;
 }
 
-bool Image::InitVertexArray()
+bool Image::_InitVertexArray()
 {
 	glGenVertexArrays(1, &_vertexArray);
 	glBindVertexArray(_vertexArray);

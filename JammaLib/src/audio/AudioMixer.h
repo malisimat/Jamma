@@ -179,7 +179,6 @@ namespace audio
 		virtual std::string ClassName() const { return "AudioMixer"; }
 
 		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
-		virtual void InitReceivers() override;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
@@ -194,7 +193,9 @@ namespace audio
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
 	protected:
-		gui::GuiSliderParams GetSliderParams(utils::Size2d size);
+		virtual void _InitReceivers() override;
+
+		gui::GuiSliderParams _GetSliderParams(utils::Size2d size);
 
 	protected:
 		static const utils::Size2d _Gap;

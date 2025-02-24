@@ -8,6 +8,7 @@
 #include "Tweakable.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../gui/GuiRouter.h"
 
 namespace engine
 {
@@ -83,6 +84,7 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
@@ -102,14 +104,17 @@ namespace engine
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
-		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
+		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
+		virtual void _InitReceivers() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+		virtual bool _HitTest(utils::Position2d pos) override;
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source);
 
-		void ArrangeTakes();
-		std::optional<std::shared_ptr<LoopTake>> TryGetTake(std::string id);
+		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
+		void _ArrangeTakes();
+		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -120,6 +125,7 @@ namespace engine
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;

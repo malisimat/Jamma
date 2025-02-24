@@ -24,7 +24,7 @@ namespace base
 		{
 			for (auto chan = 0u; chan < NumInputChannels(); chan++)
 			{
-				auto channel = InputChannel(chan, source);
+				auto channel = _InputChannel(chan, source);
 				channel->Zero(numSamps);
 			}
 		}
@@ -37,7 +37,7 @@ namespace base
 		{
 			for (auto chan = 0u; chan < NumInputChannels(); chan++)
 			{
-				auto channel = InputChannel(chan, source);
+				auto channel = _InputChannel(chan, source);
 				channel->EndWrite(numSamps, updateIndex);
 			}
 		}
@@ -47,7 +47,7 @@ namespace base
 			unsigned int numSamps,
 			Audible::AudioSourceType source)
 		{
-			auto chan = InputChannel(channel, source);
+			auto chan = _InputChannel(channel, source);
 			if (chan && src)
 				src->OnPlay(chan, indexOffset, numSamps);
 		}
@@ -58,7 +58,7 @@ namespace base
 			int indexOffset,
 			Audible::AudioSourceType source)
 		{
-			auto chan = InputChannel(channel, source);
+			auto chan = _InputChannel(channel, source);
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
@@ -71,7 +71,7 @@ namespace base
 		}
 
 	protected:
-		virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel,
+		virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) {
 			return nullptr;
 		}

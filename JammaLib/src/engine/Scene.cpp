@@ -21,6 +21,8 @@ Scene::Scene(SceneParams params,
 	_isSceneQuitting(false),
 	_isSceneReset(true),
 	_isSceneDragged(false),
+	_initTouchDownPosition{},
+	_initTouchCamPosition{},
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
@@ -223,7 +225,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		_touchDownElement.reset();
 
-		return { false, "", "", ACTIONRESULT_DEFAULT };
+		return ActionResult::NoAction();
 	}
 
 	for (auto& station : _stations)
@@ -285,8 +287,18 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 		_isSceneDragged = true;
 	}
+	else
+	{
+		for (auto& station : _stations)
+		{
+			auto res = station->OnAction(station->ParentToLocal(action));
 
-	return { false, "", "", ACTIONRESULT_DEFAULT };
+			if (res.IsEaten)
+				return res;
+		}
+	}
+
+	return ActionResult::NoAction();
 }
 
 ActionResult Scene::OnAction(KeyAction action)
@@ -352,7 +364,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		return res;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT };
+	return ActionResult::NoAction();
 }
 
 void Scene::OnTick(Time curTime,

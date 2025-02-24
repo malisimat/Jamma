@@ -1,6 +1,7 @@
 #include "GuiElement.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
+#include <typeinfo>
 
 using namespace base;
 using namespace utils;
@@ -9,10 +10,15 @@ using graphics::GlDrawContext;
 using graphics::ImageParams;
 using resources::ResourceLib;
 
+template <typename T>
+void printType(T& t) {
+	std::cout << "The type is: " << typeid(t).name() << std::endl;
+}
+
 GuiElement::GuiElement(GuiElementParams params) :
-	Drawable(params),
-	Moveable(params),
-	Sizeable(params),
+	Drawable(static_cast<DrawableParams&>(params)),
+	Moveable(static_cast<MoveableParams&>(params)),
+	Sizeable(static_cast<SizeableParams&>(params)),
 	_changesMade(false),
 	_isSelected(false),
 	_isPicking3d(false),
@@ -29,7 +35,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 
 void GuiElement::Init()
 {
-	InitReceivers();
+	_InitReceivers();
 
 	unsigned int index = 0;
 	for (auto& child : _children)
@@ -62,6 +68,17 @@ void GuiElement::SetSize(Size2d size)
 bool GuiElement::IsSelected() const
 {
 	return _isSelected;
+}
+
+bool GuiElement::HitTest(Position2d localPos)
+{
+	for (auto& child : _children)
+	{
+		if (child->HitTest(child->ParentToLocal(localPos)))
+			return true;
+	}
+
+	return _HitTest(localPos);
 }
 
 std::vector<JobAction> GuiElement::CommitChanges()
@@ -146,7 +163,7 @@ ActionResult GuiElement::OnAction(KeyAction action)
 			return res;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr};
+	return ActionResult::NoAction();
 }
 
 ActionResult GuiElement::OnAction(TouchAction action)
@@ -160,8 +177,11 @@ ActionResult GuiElement::OnAction(TouchAction action)
 			return res;
 	}
 
-	if (Size2d::RectTest(_sizeParams.Size, action.Position))
+	if (HitTest(action.Position))
 	{
+		std::cout << "GuiElement HitTest succeeded" << std::endl;
+		printType(*this);
+
 		_state = TouchAction::TouchState::TOUCH_DOWN == action.State ?
 			STATE_DOWN :
 			STATE_NORMAL;
@@ -169,7 +189,7 @@ ActionResult GuiElement::OnAction(TouchAction action)
 		return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr };
+	return ActionResult::NoAction();
 }
 
 ActionResult GuiElement::OnAction(TouchMoveAction action)
@@ -185,16 +205,16 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 
 	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
 	{
-		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
+		_state = HitTest(action.Position) ?
 			_state : STATE_OUT;
 	}
 	else
 	{
-		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
-			STATE_OVER : _state;
+		_state = HitTest(action.Position) ?
+			STATE_OVER : STATE_NORMAL;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr};
+	return ActionResult::NoAction();
 }
 
 void GuiElement::SetParent(std::shared_ptr<GuiElement> parent)
@@ -239,19 +259,6 @@ utils::Position2d GuiElement::ParentToLocal(utils::Position2d pos)
 {
 	pos -= Position();
 	return pos;
-}
-
-bool GuiElement::HitTest(Position2d localPos)
-{
-	for (auto& child : _children)
-	{
-		if (child->HitTest(child->ParentToLocal(localPos)))
-			return true;
-	}
-
-	return Size2d::RectTest(_sizeParams.Size, localPos);
-
-	return false;
 }
 
 bool GuiElement::Select()
@@ -372,4 +379,9 @@ std::vector<JobAction> GuiElement::_CommitChanges()
 	}
 
 	return {};
+}
+
+bool GuiElement::_HitTest(Position2d localPos)
+{
+	return Size2d::RectTest(_sizeParams.Size, localPos);
 }

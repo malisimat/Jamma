@@ -52,7 +52,7 @@ namespace audio
 			virtual unsigned int NumInputChannels() const override;
 
 		protected:
-			virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+			virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 				base::Audible::AudioSourceType source) override;
 		};
 

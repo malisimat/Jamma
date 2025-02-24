@@ -12,6 +12,7 @@
 #include "Trigger.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../gui/GuiRouter.h"
 
 using base::Audible;
 
@@ -140,15 +141,17 @@ namespace engine
 		void PunchOut();
 
 	protected:
-		static unsigned int CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
+		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
 
+		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
-			base::AudioSource::AudioSourceType source);
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+			base::AudioSource::AudioSourceType source) override;
 
-		void ArrangeLoops();
-		void UpdateLoops();
+		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
+		void _ArrangeLoops();
+		void _UpdateLoops();
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -166,6 +169,7 @@ namespace engine
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

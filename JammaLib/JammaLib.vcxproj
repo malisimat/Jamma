@@ -217,6 +217,7 @@
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
+    <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
     <ClInclude Include="src\base\Tweakable.h" />
@@ -309,7 +310,6 @@
     <ClInclude Include="src\engine\UndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
     <ClInclude Include="src\resources\TextureResource.h" />
-    <ClInclude Include="src\base\Touchable.h" />
     <ClInclude Include="src\actions\WindowAction.h" />
     <ClInclude Include="src\resources\WavResource.h" />
     <ClInclude Include="src\engine\Timer.h" />
@@ -329,6 +329,7 @@
     <ClCompile Include="src\audio\FallingValue.cpp" />
     <ClCompile Include="src\audio\Hanning.cpp" />
     <ClCompile Include="src\actions\DelayedAction.cpp" />
+    <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />
     <ClCompile Include="src\engine\VU.cpp" />

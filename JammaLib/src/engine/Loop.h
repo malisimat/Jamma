@@ -195,11 +195,12 @@ namespace engine
 		void PunchOut();
 
 	protected:
-		void Reset();
-		unsigned long LoopIndex() const;
-		static double CalcDrawRadius(unsigned long loopLength);
-		static LoopModel::LoopModelState GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
-		void UpdateLoopModel();
+		static double _CalcDrawRadius(unsigned long loopLength);
+		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
+		
+		void _Reset();
+		unsigned long _LoopIndex() const;
+		void _UpdateLoopModel();
 
 	protected:
 		unsigned long _playIndex;

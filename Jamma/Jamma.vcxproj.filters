@@ -152,5 +152,25 @@
     <None Include="resources\shaders\white.vert">
       <Filter>resources\shaders</Filter>
     </None>
+    <None Include="resources\shaders\colour.frag">
+      <Filter>resources\shaders</Filter>
+    </None>
+    <None Include="resources\shaders\colour.vert">
+      <Filter>resources\shaders</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\textures\router_over.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\router_active.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\router_down.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\router.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
   </ItemGroup>
 </Project>

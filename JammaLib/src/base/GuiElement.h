@@ -80,7 +80,6 @@ namespace base
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, DrawPass pass) override;
-		virtual bool HitTest(utils::Position2d localPos);
 		virtual bool Select();
 		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
@@ -95,6 +94,7 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
 		bool IsSelected() const;
+		bool HitTest(utils::Position2d localPos);
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
@@ -114,6 +114,7 @@ namespace base
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
+		virtual bool _HitTest(utils::Position2d localPos);
 
 	protected:
 		bool _changesMade;
