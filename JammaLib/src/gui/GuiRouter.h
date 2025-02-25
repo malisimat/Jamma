@@ -94,6 +94,7 @@ namespace gui
 
 		public:
 			virtual void Draw(base::DrawContext& ctx) override;
+			virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 			virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
 			unsigned int Channel() const { return _params.Channel; }
@@ -119,14 +120,21 @@ namespace gui
 			bool isOutputDevice);
 
 	public:
+		static const unsigned int StringToChan(std::string id);
+		static const std::string ChanToString(unsigned int chan);
+
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		bool AddRoute(unsigned int inputChan, unsigned int outputChan);
+		bool RemoveRoute(unsigned int inputChan, unsigned int outputChan);
+		void ClearRoutes();
 		void SetReceiver(std::weak_ptr<base::ActionReceiver> receiver);
 
 	protected:
 		const static unsigned int _GetChannelPos(unsigned int index);
+		const static unsigned int _GetChannel(unsigned int pos); // Inverse of GetChannelPos()
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -141,8 +149,8 @@ namespace gui
 		static const unsigned int _ChannelGapX;
 		static const unsigned int _ChannelGapY;
 		static const unsigned int _ChannelWidth;
-		static const unsigned int _YOffset;
 		static const unsigned int _MaxRoutes;
+		static const int _WireYOffset;
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer;

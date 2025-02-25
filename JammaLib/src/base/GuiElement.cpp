@@ -177,16 +177,26 @@ ActionResult GuiElement::OnAction(TouchAction action)
 			return res;
 	}
 
-	if (HitTest(action.Position))
+	switch (action.State)
 	{
-		std::cout << "GuiElement HitTest succeeded" << std::endl;
-		printType(*this);
+	case TouchAction::TouchState::TOUCH_DOWN:
+		if (HitTest(action.Position))
+		{
+			std::cout << "GuiElement HitTest succeeded" << std::endl;
+			printType(*this);
 
-		_state = TouchAction::TouchState::TOUCH_DOWN == action.State ?
-			STATE_DOWN :
-			STATE_NORMAL;
+			_state = STATE_DOWN;
 
-		return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+		}
+		break;
+	case TouchAction::TouchState::TOUCH_UP:
+		_state = STATE_NORMAL;
+
+		if (HitTest(action.Position))
+			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+
+		break;
 	}
 
 	return ActionResult::NoAction();

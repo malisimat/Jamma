@@ -6,11 +6,11 @@ using namespace utils;
 using namespace actions;
 using namespace resources;
 
-const unsigned int GuiRouter::_ChannelGapX = 4;
-const unsigned int GuiRouter::_ChannelGapY = 12;
-const unsigned int GuiRouter::_ChannelWidth = 16;
-const unsigned int GuiRouter::_YOffset = 24;
+const unsigned int GuiRouter::_ChannelGapX = 8;
+const unsigned int GuiRouter::_ChannelGapY = 64;
+const unsigned int GuiRouter::_ChannelWidth = 30;
 const unsigned int GuiRouter::_MaxRoutes = 128;
+const int GuiRouter::_WireYOffset = 6;
 
 GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 	GuiElement(params),
@@ -58,6 +58,21 @@ void GuiRouter::GuiRouterChannel::Draw(base::DrawContext& ctx)
 	glCtx.PopMvp();
 }
 
+ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchAction action)
+{
+	auto res = GuiElement::OnAction(action);
+
+	if (res.IsEaten)
+	{
+		res.SourceId = ChanToString(_params.Channel);
+		res.ResultType = _params.IsInput ?
+			ACTIONRESULT_ROUTERINPUT :
+			ACTIONRESULT_ROUTEROUTPUT;
+	}
+
+	return res;
+}
+
 ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchMoveAction action)
 {
 	auto res = GuiElement::OnAction(action);
@@ -84,6 +99,31 @@ void GuiRouter::GuiRouterChannel::_InitResources(ResourceLib& resourceLib, bool 
 	_highlightTexture.InitResources(resourceLib, forceInit);
 
 	GlUtils::CheckError("GuiRouterChannel::_InitResources()");
+}
+
+const unsigned int GuiRouter::StringToChan(std::string id)
+{
+	if (id.empty())
+		return 0;
+
+	unsigned int num = 0;
+
+	try {
+		num = std::stoul(id);
+	}
+	catch (const std::invalid_argument& e) {
+		std::cerr << "Invalid argument: " << e.what() << std::endl;
+	}
+	catch (const std::out_of_range& e) {
+		std::cerr << "Out of range: " << e.what() << std::endl;
+	}
+
+	return num;
+}
+
+const std::string GuiRouter::ChanToString(unsigned int chan)
+{
+	return std::to_string(chan);
 }
 
 GuiRouter::GuiRouter(GuiRouterParams params,
@@ -154,6 +194,53 @@ GuiRouter::GuiRouter(GuiRouterParams params,
 	}
 }
 
+bool GuiRouter::AddRoute(unsigned int inputChan, unsigned int outputChan)
+{
+	bool foundRoute = false;
+
+	for (auto& route : _routes)
+	{
+		if (route.first == inputChan && route.second == outputChan)
+		{
+			foundRoute = true;
+			break;
+		}
+	}
+
+	if (!foundRoute)
+	{
+		_routes.push_back(std::make_pair(inputChan, outputChan));
+		return true;
+	}
+
+	return false;
+}
+
+bool GuiRouter::RemoveRoute(unsigned int inputChan, unsigned int outputChan)
+{
+	bool foundRoute = false;
+
+	for (auto it = _routes.begin(); it != _routes.end();)
+	{
+		if (it->first == inputChan && it->second == outputChan)
+		{
+			it = _routes.erase(it);
+			foundRoute = true;
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	return foundRoute;
+}
+
+void GuiRouter::ClearRoutes()
+{
+	_routes.clear();
+}
+
 void GuiRouter::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
 {
 	_routerParams.Receiver = receiver;
@@ -170,33 +257,56 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 {
 	auto res = GuiElement::OnAction(action);
 
-	//if (res.IsEaten)
-	//	return res;
-
 	if (_isDragging)
 	{
 		if (TouchAction::TOUCH_UP == action.State)
 		{
 			_isDragging = false;
+			unsigned int endDragChannel = StringToChan(res.SourceId);
 
-			std::cout << "Finished Router drag: " << _initDragChannel << " to " << std::endl;
+			bool isValid = false;
+			bool isEndOutput = res.ResultType == ACTIONRESULT_ROUTEROUTPUT;
+			unsigned int inputChan = 0;
+			unsigned int outputChan = 0;
 
-			return {
-				true,
-				"",
-				"",
-				ACTIONRESULT_ACTIVEELEMENT,
-				nullptr,
-				std::static_pointer_cast<base::GuiElement>(shared_from_this())
-			};
+			if (_isDraggingInput && isEndOutput)
+			{
+				isValid = true;
+				inputChan = _initDragChannel;
+				outputChan = endDragChannel;
+			}
+			else if (!_isDraggingInput && !isEndOutput)
+			{
+				isValid = true;
+				inputChan = endDragChannel;
+				outputChan = _initDragChannel;
+			}
+
+			if (isValid)
+			{
+				std::cout << "Finished Router drag: " << inputChan << " to " << outputChan << std::endl;
+
+				if (!AddRoute(inputChan, outputChan))
+					RemoveRoute(inputChan, outputChan);
+
+				return {
+					true,
+					ChanToString(inputChan),
+					ChanToString(outputChan),
+					ACTIONRESULT_ROUTER,
+					nullptr,
+					std::static_pointer_cast<base::GuiElement>(shared_from_this())
+				};
+			}
 		}
 	}
 	else
 	{
-		if (TouchAction::TOUCH_DOWN == action.State)
+		if (res.IsEaten && (TouchAction::TOUCH_DOWN == action.State))
 		{
 			_isDragging = true;
-			_initDragChannel = action.Value > 0 ? (unsigned int)action.Value : 0u;
+			_isDraggingInput = ACTIONRESULT_ROUTERINPUT == res.ResultType;
+			_initDragChannel = StringToChan(res.SourceId);
 			_currentDragPos = action.Position;
 
 			std::cout << "Starting Router drag: " << _initDragChannel << " to (" << _currentDragPos.X << ", " << _currentDragPos.Y << ") " << res.IsEaten << "," << res.ResultType << std::endl;
@@ -277,6 +387,11 @@ const unsigned int GuiRouter::_GetChannelPos(unsigned int index)
 	return (index * _ChannelWidth) + ((index + 1) * _ChannelGapX);
 }
 
+const unsigned int GuiRouter::_GetChannel(unsigned int pos)
+{
+	return (pos - _ChannelGapX) / (_ChannelWidth + _ChannelGapX);
+}
+
 bool GuiRouter::_InitShader(ResourceLib& resourceLib)
 {
 	auto shaderOpt = resourceLib.GetResource(_routerParams.LineShader);
@@ -324,15 +439,24 @@ bool GuiRouter::_InitVertexArray()
 
 void GuiRouter::_DrawLines(DrawContext& ctx) const
 {
+	auto shader = _lineShader.lock();
+
+	if (!shader)
+		return;
+
 	std::vector<float> vertices;
 
 	for (auto& con : _routes)
 	{
 		auto inChanPos = (float)_GetChannelPos(con.first);
 		auto outChanPos = (float)_GetChannelPos(con.second);
+		float x1 = inChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
+		float x2 = outChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
+		float y1 = (float)(_ChannelGapY + _ChannelWidth) + (float)_WireYOffset;
+		float y2 = (float)_ChannelWidth - (float)_WireYOffset;
 
-		vertices.push_back(inChanPos); vertices.push_back((float)_YOffset);
-		vertices.push_back(outChanPos); vertices.push_back((float)_ChannelWidth);
+		vertices.push_back(x1); vertices.push_back(y1);
+		vertices.push_back(x2); vertices.push_back(y2);
 	}
 
 	if (_isDragging)
@@ -340,23 +464,22 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		if (_isDraggingInput)
 		{
 			auto inChanPos = (float)_GetChannelPos(_initDragChannel);
+			float x = inChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
+			float y = (float)(_ChannelGapY + _ChannelWidth) + (float)_WireYOffset;
 
-			vertices.push_back(inChanPos); vertices.push_back((float)_YOffset);
+			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);
 		}
 		else
 		{
 			auto outChanPos = (float)_GetChannelPos(_initDragChannel);
+			float x = outChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
+			float y = (float)_ChannelWidth - (float)_WireYOffset;
 
-			vertices.push_back(outChanPos); vertices.push_back((float)_ChannelWidth);
+			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);
 		}
 	}
-	
-	auto shader = _lineShader.lock();
-
-	if (!shader)
-		return;
 
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
@@ -367,8 +490,12 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
 	glCtx.SetUniform("color", glm::vec4(1.0f, 0.5f, 0.2f, 0.8f));
 	shader->SetUniforms(dynamic_cast<graphics::GlDrawContext&>(ctx));
+	
+	glUseProgram(shader->GetId());
 
 	glBindVertexArray(_vertexArray);
 	glDrawArrays(GL_LINES, 0, (unsigned int)(vertices.size() / 2));
 	glBindVertexArray(0);
+
+	glUseProgram(0);
 }

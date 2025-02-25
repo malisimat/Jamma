@@ -120,7 +120,8 @@ void Station::Zero(unsigned int numSamps,
 	for (auto chan = 0u; chan < NumInputChannels(); chan++)
 	{
 		auto channel = _InputChannel(chan, source);
-		channel->Zero(numSamps);
+		if (channel)
+			channel->Zero(numSamps);
 	}
 
 	for (auto& take : _loopTakes)
