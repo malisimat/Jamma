@@ -4,6 +4,7 @@
 #include "GuiElement.h"
 #include "GuiLabel.h"
 #include "ActionReceiver.h"
+#include "../actions/GuiAction.h"
 #include "../resources/ResourceLib.h"
 #include "GlUtils.h"
 

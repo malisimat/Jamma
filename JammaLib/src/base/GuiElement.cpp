@@ -166,6 +166,19 @@ ActionResult GuiElement::OnAction(KeyAction action)
 	return ActionResult::NoAction();
 }
 
+ActionResult GuiElement::OnAction(GuiAction action)
+{
+	for (auto child = _children.rbegin();
+		child != _children.rend(); ++child)
+	{
+		auto res = (*child)->OnAction(action);
+		if (res.IsEaten)
+			return res;
+	}
+
+	return ActionResult::NoAction();
+}
+
 ActionResult GuiElement::OnAction(TouchAction action)
 {
 	for (auto child = _children.rbegin();

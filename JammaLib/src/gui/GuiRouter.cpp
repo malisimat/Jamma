@@ -47,7 +47,7 @@ void GuiRouter::GuiRouterChannel::Draw(base::DrawContext& ctx)
 			_overTexture.Draw(ctx);
 
 		if (_isActive)
-			_activeTexture.Draw(ctx);
+			_overTexture.Draw(ctx);
 		else
 			_texture.Draw(ctx);
 	}
@@ -288,6 +288,32 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 
 				if (!AddRoute(inputChan, outputChan))
 					RemoveRoute(inputChan, outputChan);
+
+				auto receiver = _routerParams.Receiver.lock();
+
+				if (receiver)
+				{
+					GuiAction guiAction;
+					guiAction.Data = GuiAction::GuiConnections(_routes);
+
+					receiver->OnAction(guiAction);
+				}
+
+				for (auto i = 0u; i < _inputs.size(); i++)
+				{
+					bool matchesInput = std::any_of(_routes.begin(), _routes.end(), [i](const auto& pair) {
+						return pair.first == i;
+						});
+					_inputs[i]->SetActive(matchesInput);
+				}
+
+				for (auto i = 0u; i < _outputs.size(); i++)
+				{
+					bool matchesOutput = std::any_of(_routes.begin(), _routes.end(), [i](const auto& pair) {
+						return pair.second == i;
+						});
+					_outputs[i]->SetActive(matchesOutput);
+				}
 
 				return {
 					true,

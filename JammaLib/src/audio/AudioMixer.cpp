@@ -42,6 +42,11 @@ void AudioMixer::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 }
 
+void AudioMixer::CallMe()
+{
+	std::cout << "Called!" << std::endl;
+}
+
 ActionResult AudioMixer::OnAction(DoubleAction val)
 {
 	SetUnmutedLevel(val.Value());
@@ -100,6 +105,31 @@ void AudioMixer::Offset(unsigned int numSamps)
 	for (auto samp = 0u; samp < numSamps; samp++)
 	{
 		_fade->Next();
+	}
+}
+
+void AudioMixer::SetChannels(std::vector<std::pair<unsigned int, unsigned int>> channels)
+{
+	unsigned int chan = 0;
+
+	unsigned int maxChan = 0;
+	for (const auto& channel : channels)
+	{
+		if (channel.first > maxChan)
+			maxChan = channel.first;
+	}
+
+	std::vector<unsigned int> outputChans(maxChan + 1, 0);
+
+	// Fill the vector with the appropriate output channels
+	for (const auto& channel : channels) {
+		outputChans[channel.first] = channel.second;
+	}
+
+	if (auto wireBehaviour = dynamic_cast<audio::WireMixBehaviour*>(_behaviour.get())) {
+		WireMixBehaviourParams wireParams;
+		wireParams.Channels = outputChans;
+		wireBehaviour->SetParams(wireParams);
 	}
 }
 

@@ -13,15 +13,6 @@
 
 namespace audio
 {
-	class MixBehaviour
-	{
-	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const {};
-	};
-
 	class MixBehaviourParams {};
 
 	class WireMixBehaviourParams : public MixBehaviourParams
@@ -29,10 +20,35 @@ namespace audio
 	public:
 		WireMixBehaviourParams() {};
 		WireMixBehaviourParams(const std::vector<unsigned int>& vec) :
-			Channels(vec) {};
+			Channels(vec) {
+		};
 
 	public:
 		std::vector<unsigned int> Channels;
+	};
+
+	class PanMixBehaviourParams : public MixBehaviourParams
+	{
+	public:
+		std::vector<float> ChannelLevels;
+	};
+
+	class BounceMixBehaviourParams : public WireMixBehaviourParams {};
+
+	class MergeMixBehaviourParams : public WireMixBehaviourParams {};
+
+	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams, MergeMixBehaviourParams> BehaviourParams;
+
+	class MixBehaviour
+	{
+	public:
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+			float samp,
+			float fadeNew,
+			unsigned int index) const {};
+
+		virtual BehaviourParams GetParams() const { return BehaviourParams(); }
+		virtual void SetParams(BehaviourParams params) { }
 	};
 
 	class WireMixBehaviour : public MixBehaviour
@@ -50,14 +66,16 @@ namespace audio
 			float fadeNew,
 			unsigned int index) const override;
 
+		virtual BehaviourParams GetParams() const { return _mixParams; }
+		virtual void SetParams(BehaviourParams params)
+		{
+			if (auto* wireParams = std::get_if<audio::WireMixBehaviourParams>(&params)) {
+				_mixParams.Channels = wireParams->Channels;
+			}
+		}
+
 	protected:
 		WireMixBehaviourParams _mixParams;
-	};
-
-	class PanMixBehaviourParams : public MixBehaviourParams
-	{
-	public:
-		std::vector<float> ChannelLevels;
 	};
 
 	class PanMixBehaviour : public MixBehaviour
@@ -75,11 +93,18 @@ namespace audio
 			float fadeNew,
 			unsigned int index) const override;
 
+		virtual BehaviourParams GetParams() const { return _mixParams; }
+		virtual void SetParams(BehaviourParams params)
+		{
+			if (auto* wireParams = std::get_if<audio::PanMixBehaviourParams>(&params)) {
+				_mixParams.ChannelLevels = wireParams->ChannelLevels;
+			}
+		}
+
 	protected:
 		PanMixBehaviourParams _mixParams;
 	};
 
-	class BounceMixBehaviourParams : public WireMixBehaviourParams {};
 	class BounceMixBehaviour : public WireMixBehaviour
 	{
 	public:
@@ -96,7 +121,6 @@ namespace audio
 			unsigned int index) const override;
 	};
 
-	class MergeMixBehaviourParams : public WireMixBehaviourParams {};
 	class MergeMixBehaviour : public WireMixBehaviour
 	{
 	public:
@@ -175,6 +199,7 @@ namespace audio
 
 	public:
 		static const double DefaultLevel;
+		static void CallMe();
 
 		virtual std::string ClassName() const { return "AudioMixer"; }
 
@@ -190,6 +215,7 @@ namespace audio
 			float samp,
 			unsigned int index);
 		void Offset(unsigned int numSamps);
+		void SetChannels(std::vector<std::pair<unsigned int, unsigned int>> channels);
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
 	protected:

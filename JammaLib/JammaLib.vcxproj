@@ -217,6 +217,7 @@
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
+    <ClInclude Include="src\actions\GuiAction.h" />
     <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
@@ -329,6 +330,7 @@
     <ClCompile Include="src\audio\FallingValue.cpp" />
     <ClCompile Include="src\audio\Hanning.cpp" />
     <ClCompile Include="src\actions\DelayedAction.cpp" />
+    <ClCompile Include="src\actions\GuiAction.cpp" />
     <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />

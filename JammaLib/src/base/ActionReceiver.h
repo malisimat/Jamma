@@ -8,6 +8,7 @@
 #include "../actions/TouchMoveAction.h"
 #include "../actions/KeyAction.h"
 #include "../actions/DoubleAction.h"
+#include "../actions/GuiAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/JobAction.h"
 #include "../actions/ActionResult.h"
@@ -24,6 +25,7 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action)	{ return actions::ActionResult::NoAction(); };
 		virtual actions::ActionResult OnAction(actions::KeyAction action)		{ return actions::ActionResult::NoAction(); };
 		virtual actions::ActionResult OnAction(actions::DoubleAction action)	{ return actions::ActionResult::NoAction(); };
+		virtual actions::ActionResult OnAction(actions::GuiAction action)		{ return actions::ActionResult::NoAction(); };
 		virtual actions::ActionResult OnAction(actions::TriggerAction action)	{ return actions::ActionResult::NoAction(); };
 		virtual actions::ActionResult OnAction(actions::JobAction action)		{ return actions::ActionResult::NoAction(); };
 

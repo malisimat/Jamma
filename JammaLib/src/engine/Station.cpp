@@ -220,9 +220,31 @@ ActionResult Station::OnAction(KeyAction action)
 	return res;
 }
 
+ActionResult Station::OnAction(GuiAction action)
+{
+	auto res = GuiElement::OnAction(action);
+
+	if (res.IsEaten)
+		return res;
+
+	if (res.IsEaten && (ACTIONRESULT_ROUTER == res.ResultType))
+		std::cout << "Pause" << std::endl;
+
+	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data)) {
+		_mixer->SetChannels(chans->Connections);
+	}
+
+	return res;
+}
+
 ActionResult Station::OnAction(TouchAction action)
 {
-	return GuiElement::OnAction(action);
+	auto res = GuiElement::OnAction(action);
+
+	if (res.IsEaten && (ACTIONRESULT_ROUTER == res.ResultType))
+		std::cout << "Pause" << std::endl;
+
+	return res;
 }
 
 ActionResult Station::OnAction(TouchMoveAction action)

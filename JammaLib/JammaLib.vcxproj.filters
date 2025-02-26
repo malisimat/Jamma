@@ -383,6 +383,9 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\actions\GuiAction.h">
+      <Filter>src\actions</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -582,6 +585,9 @@
     </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
       <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\actions\GuiAction.cpp">
+      <Filter>src\actions</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
