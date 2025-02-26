@@ -6,9 +6,10 @@ using namespace utils;
 using namespace actions;
 using namespace resources;
 
+const unsigned int GuiRouterParams::BusWidth = 30;
+const unsigned int GuiRouterParams::BusGap = 8;
 const unsigned int GuiRouter::_ChannelGapX = 8;
-const unsigned int GuiRouter::_ChannelGapY = 64;
-const unsigned int GuiRouter::_ChannelWidth = 30;
+const unsigned int GuiRouter::_ChannelSpacingY = 64;
 const unsigned int GuiRouter::_MaxRoutes = 128;
 const int GuiRouter::_WireYOffset = 6;
 
@@ -23,13 +24,14 @@ GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
 		MoveableParams(Position2d{ 2, 2 }, Position3d{ 2, 2, 0 }, 1.0),
-		SizeableParams{ params.Size.Width - 4, params.Size.Height - 4 },
+		SizeableParams{ params.Size.Width - 4, params.Size.Height - 4},
 		"",
 		"",
 		"",
-		{}), std::to_string(params.Channel));
+		{}), std::to_string(params.Channel+1));
 
-	_label = std::make_unique<GuiLabel>(labelParams);
+	_label = std::make_shared<GuiLabel>(labelParams);
+	_children.push_back(_label);
 }
 
 void GuiRouter::GuiRouterChannel::Draw(base::DrawContext& ctx)
@@ -69,24 +71,6 @@ ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchAction action)
 			ACTIONRESULT_ROUTERINPUT :
 			ACTIONRESULT_ROUTEROUTPUT;
 	}
-
-	return res;
-}
-
-ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchMoveAction action)
-{
-	auto res = GuiElement::OnAction(action);
-
-	if (res.IsEaten)
-		return res;
-
-	/*res.IsEaten = false;
-	res.ResultType = ACTIONRESULT_DEFAULT;
-
-	if (!_isDragging)
-		return res;
-
-	_currentDragPos = action.Position;*/
 
 	return res;
 }
@@ -144,16 +128,20 @@ GuiRouter::GuiRouter(GuiRouterParams params,
 	_lineShader(std::weak_ptr<ShaderResource>())
 {
 	auto createGuiRouterChannelParams = [params](int index, bool isInput, bool isDevice) {
-		int x = _GetChannelPos(index);
-		int y = isInput ? _ChannelWidth + _ChannelGapY : 0;
-		std::string tex = isDevice ? params.DeviceInactiveTexture : params.ChannelInactiveTexture;
+		auto spacing = isInput ? params.InputSpacing : params.OutputSpacing;
+		auto size = isInput ? params.InputSize : params.OutputSize;
+		int x = _GetChannelPos(index, spacing);
+		int y = isInput ? _ChannelSpacingY : 0;
+		std::string tex = isDevice ?
+			params.DeviceInactiveTexture :
+			params.ChannelInactiveTexture;
 
 		GuiRouterChannelParams chanParams(
 			GuiElementParams(
 				index,
 				DrawableParams{ tex },
 				MoveableParams(Position2d{ x, y }, Position3d{ (float)x, (float)y, 0 }, 1.0),
-				SizeableParams{ _ChannelWidth, _ChannelWidth },
+				SizeableParams{ size, size },
 				params.OverTexture,
 				params.DownTexture,
 				params.DownTexture,
@@ -369,6 +357,11 @@ ActionResult GuiRouter::OnAction(TouchMoveAction action)
 	return res;
 }
 
+unsigned int GuiRouter::_GetChannelPos(unsigned int index, unsigned int spacing)
+{
+	return index * spacing;
+}
+
 void GuiRouter::_InitReceivers()
 {
 	for (auto& input : _inputs)
@@ -406,16 +399,6 @@ void GuiRouter::_ReleaseResources()
 bool GuiRouter::_HitTest(Position2d localPos)
 {
 	return false;
-}
-
-const unsigned int GuiRouter::_GetChannelPos(unsigned int index)
-{
-	return (index * _ChannelWidth) + ((index + 1) * _ChannelGapX);
-}
-
-const unsigned int GuiRouter::_GetChannel(unsigned int pos)
-{
-	return (pos - _ChannelGapX) / (_ChannelWidth + _ChannelGapX);
 }
 
 bool GuiRouter::_InitShader(ResourceLib& resourceLib)
@@ -474,12 +457,12 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 
 	for (auto& con : _routes)
 	{
-		auto inChanPos = (float)_GetChannelPos(con.first);
-		auto outChanPos = (float)_GetChannelPos(con.second);
-		float x1 = inChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
-		float x2 = outChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
-		float y1 = (float)(_ChannelGapY + _ChannelWidth) + (float)_WireYOffset;
-		float y2 = (float)_ChannelWidth - (float)_WireYOffset;
+		auto inChanPos = (float)_GetChannelPos(con.first, _routerParams.InputSpacing);
+		auto outChanPos = (float)_GetChannelPos(con.second, _routerParams.OutputSpacing);
+		float x1 = inChanPos + ((float)_routerParams.InputSize * 0.5f);
+		float x2 = outChanPos + ((float)_routerParams.OutputSize * 0.5f);
+		float y1 = (float)_ChannelSpacingY + (float)_WireYOffset;
+		float y2 = (float)_routerParams.OutputSize - (float)_WireYOffset;
 
 		vertices.push_back(x1); vertices.push_back(y1);
 		vertices.push_back(x2); vertices.push_back(y2);
@@ -489,18 +472,18 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 	{
 		if (_isDraggingInput)
 		{
-			auto inChanPos = (float)_GetChannelPos(_initDragChannel);
-			float x = inChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
-			float y = (float)(_ChannelGapY + _ChannelWidth) + (float)_WireYOffset;
+			auto inChanPos = (float)_GetChannelPos(_initDragChannel, _routerParams.InputSpacing);
+			float x = inChanPos + ((float)_routerParams.InputSize * 0.5f);
+			float y = (float)_ChannelSpacingY + (float)_WireYOffset;
 
 			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);
 		}
 		else
 		{
-			auto outChanPos = (float)_GetChannelPos(_initDragChannel);
-			float x = outChanPos + ((float)_ChannelWidth * 0.5f) + _ChannelGapX;
-			float y = (float)_ChannelWidth - (float)_WireYOffset;
+			auto outChanPos = (float)_GetChannelPos(_initDragChannel, _routerParams.OutputSpacing);
+			float x = outChanPos + ((float)_routerParams.OutputSize * 0.5f);
+			float y = (float)_ChannelSpacingY - (float)_WireYOffset;
 
 			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);

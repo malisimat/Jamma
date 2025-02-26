@@ -22,6 +22,10 @@ namespace gui
 				"",
 				"",
 				{}),
+			InputSpacing(BusWidth + BusGap),
+			InputSize(BusWidth),
+			OutputSpacing(BusWidth + BusGap),
+			OutputSize(BusWidth),
 			PinTexture(""),
 			LinkTexture(""),
 			DeviceInactiveTexture(""),
@@ -35,6 +39,10 @@ namespace gui
 
 		GuiRouterParams(base::GuiElementParams guiParams) :
 			base::GuiElementParams(guiParams),
+			InputSpacing(BusWidth + BusGap),
+			InputSize(BusWidth),
+			OutputSpacing(BusWidth + BusGap),
+			OutputSize(BusWidth),
 			PinTexture(""),
 			LinkTexture(""),
 			DeviceInactiveTexture(""),
@@ -47,6 +55,13 @@ namespace gui
 		}
 
 	public:
+		static const unsigned int BusWidth;
+		static const unsigned int BusGap;
+
+		unsigned int InputSpacing;
+		unsigned int InputSize;
+		unsigned int OutputSpacing;
+		unsigned int OutputSize;
 		std::string PinTexture;
 		std::string LinkTexture;
 		std::string DeviceInactiveTexture;
@@ -62,6 +77,13 @@ namespace gui
 		public base::GuiElement
 	{
 	public:
+		enum GuiRouterChannelType
+		{
+			CHANNEL_DEVICE,
+			CHANNEL_FADER,
+			CHANNEL_BUS
+		};
+
 		class GuiRouterChannelParams :
 			public base::GuiElementParams
 		{
@@ -96,7 +118,6 @@ namespace gui
 		public:
 			virtual void Draw(base::DrawContext& ctx) override;
 			virtual actions::ActionResult OnAction(actions::TouchAction action) override;
-			virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
 			unsigned int Channel() const { return _params.Channel; }
 			bool IsActive() const { return _isActive; }
@@ -109,7 +130,7 @@ namespace gui
 			bool _isActive;
 			graphics::Image _activeTexture;
 			graphics::Image _highlightTexture;
-			std::unique_ptr<GuiLabel> _label;
+			std::shared_ptr<GuiLabel> _label;
 			GuiRouterChannelParams _params;
 		};
 
@@ -134,8 +155,7 @@ namespace gui
 		void SetReceiver(std::weak_ptr<base::ActionReceiver> receiver);
 
 	protected:
-		const static unsigned int _GetChannelPos(unsigned int index);
-		const static unsigned int _GetChannel(unsigned int pos); // Inverse of GetChannelPos()
+		static unsigned int _GetChannelPos(unsigned int index, unsigned int spacing);
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -148,8 +168,7 @@ namespace gui
 
 	protected:
 		static const unsigned int _ChannelGapX;
-		static const unsigned int _ChannelGapY;
-		static const unsigned int _ChannelWidth;
+		static const unsigned int _ChannelSpacingY;
 		static const unsigned int _MaxRoutes;
 		static const int _WireYOffset;
 

@@ -227,9 +227,8 @@ ActionResult Station::OnAction(GuiAction action)
 	if (res.IsEaten)
 		return res;
 
-	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data)) {
+	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		_mixer->SetChannels(chans->Connections);
-	}
 
 	return res;
 }

@@ -45,7 +45,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_backAudioBuffers()
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
-	_router = std::make_unique<gui::GuiRouter>(_GetRouterParams(params.Size),
+	_router = std::make_unique<gui::GuiRouter>(
+		_GetRouterParams(params.Size, mixerParams.Size),
 		8,
 		8,
 		false,
@@ -212,9 +213,8 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	if (res.IsEaten)
 		return res;
 
-	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data)) {
+	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		_mixer->SetChannels(chans->Connections);
-	}
 
 	return res;
 }
@@ -667,7 +667,7 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	return nullptr;
 }
 
-gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size)
+gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size, utils::Size2d mixerSize)
 {
 	GuiRouterParams routerParams;
 
@@ -675,6 +675,10 @@ gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size)
 	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
 	routerParams.MinSize = routerParams.Size;
 	routerParams.Texture = "router";
+	routerParams.InputSpacing = mixerSize.Width;
+	routerParams.InputSize = mixerSize.Width - 2;
+	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
+	routerParams.OutputSize = GuiRouterParams::BusWidth;
 	routerParams.PinTexture = "";
 	routerParams.LinkTexture = "";
 	routerParams.DeviceInactiveTexture = "router";

@@ -150,7 +150,7 @@ namespace engine
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			base::AudioSource::AudioSourceType source) override;
 
-		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
+		gui::GuiRouterParams _GetRouterParams(utils::Size2d size, utils::Size2d mixerSize);
 		void _ArrangeLoops();
 		void _UpdateLoops();
 
