@@ -10,6 +10,7 @@ using engine::Trigger;
 using resources::ResourceLib;
 using actions::ActionResult;
 using actions::TriggerAction;
+using actions::GuiAction;
 using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
@@ -202,6 +203,20 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 		_loopsNeedUpdating = true;
 		_changesMade = true;
 	}
+}
+
+ActionResult LoopTake::OnAction(GuiAction action)
+{
+	auto res = GuiElement::OnAction(action);
+
+	if (res.IsEaten)
+		return res;
+
+	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data)) {
+		_mixer->SetChannels(chans->Connections);
+	}
+
+	return res;
 }
 
 ActionResult LoopTake::OnAction(JobAction action)

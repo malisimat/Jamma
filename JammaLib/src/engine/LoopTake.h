@@ -113,6 +113,7 @@ namespace engine
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
 		virtual bool DeSelect() override;

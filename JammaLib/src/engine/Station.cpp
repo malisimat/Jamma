@@ -227,9 +227,6 @@ ActionResult Station::OnAction(GuiAction action)
 	if (res.IsEaten)
 		return res;
 
-	if (res.IsEaten && (ACTIONRESULT_ROUTER == res.ResultType))
-		std::cout << "Pause" << std::endl;
-
 	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data)) {
 		_mixer->SetChannels(chans->Connections);
 	}
