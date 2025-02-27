@@ -14,6 +14,13 @@ namespace gui
 		public base::GuiElementParams
 	{
 	public:
+		enum GuiRouterChannelType
+		{
+			CHANNEL_DEVICE,
+			CHANNEL_FADER,
+			CHANNEL_BUS
+		};
+
 		GuiRouterParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
@@ -22,6 +29,8 @@ namespace gui
 				"",
 				"",
 				{}),
+			InputType(CHANNEL_BUS),
+			OutputType(CHANNEL_BUS),
 			InputSpacing(BusWidth + BusGap),
 			InputSize(BusWidth),
 			OutputSpacing(BusWidth + BusGap),
@@ -39,6 +48,8 @@ namespace gui
 
 		GuiRouterParams(base::GuiElementParams guiParams) :
 			base::GuiElementParams(guiParams),
+			InputType(CHANNEL_BUS),
+			OutputType(CHANNEL_BUS),
 			InputSpacing(BusWidth + BusGap),
 			InputSize(BusWidth),
 			OutputSpacing(BusWidth + BusGap),
@@ -58,6 +69,8 @@ namespace gui
 		static const unsigned int BusWidth;
 		static const unsigned int BusGap;
 
+		GuiRouterChannelType InputType;
+		GuiRouterChannelType OutputType;
 		unsigned int InputSpacing;
 		unsigned int InputSize;
 		unsigned int OutputSpacing;
@@ -77,13 +90,6 @@ namespace gui
 		public base::GuiElement
 	{
 	public:
-		enum GuiRouterChannelType
-		{
-			CHANNEL_DEVICE,
-			CHANNEL_FADER,
-			CHANNEL_BUS
-		};
-
 		class GuiRouterChannelParams :
 			public base::GuiElementParams
 		{
@@ -91,11 +97,11 @@ namespace gui
 			GuiRouterChannelParams(base::GuiElementParams guiParams,
 				unsigned int channel,
 				bool isInput,
-				bool isDevice) :
+				GuiRouterParams::GuiRouterChannelType type) :
 				base::GuiElementParams(guiParams),
 				Channel(channel),
 				IsInput(isInput),
-				IsDevice(isDevice),
+				ChannelType(type),
 				ActiveTexture(""),
 				HighlightTexture("")
 			{
@@ -104,7 +110,7 @@ namespace gui
 		public:
 			unsigned int Channel;
 			bool IsInput;
-			bool IsDevice;
+			GuiRouterParams::GuiRouterChannelType ChannelType;
 			std::string ActiveTexture;
 			std::string HighlightTexture;
 		};
@@ -137,9 +143,7 @@ namespace gui
 	public:
 		GuiRouter(GuiRouterParams guiParams,
 			unsigned int numInputs,
-			unsigned int numOutputs,
-			bool isInputDevice,
-			bool isOutputDevice);
+			unsigned int numOutputs);
 
 	public:
 		static const unsigned int StringToChan(std::string id);
@@ -149,6 +153,8 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		void SetNumInputs(unsigned int num);
+		void SetNumOutputs(unsigned int num);
 		bool AddRoute(unsigned int inputChan, unsigned int outputChan);
 		bool RemoveRoute(unsigned int inputChan, unsigned int outputChan);
 		void ClearRoutes();
@@ -162,6 +168,9 @@ namespace gui
 		virtual void _ReleaseResources() override;
 		virtual bool _HitTest(utils::Position2d localPos) override;
 
+		GuiRouterChannelParams _GetChannelParams(unsigned int index,
+			bool isInput,
+			GuiRouterParams::GuiRouterChannelType type);
 		bool _InitShader(resources::ResourceLib& resourceLib);
 		bool _InitVertexArray();
 		void _DrawLines(base::DrawContext& ctx) const;

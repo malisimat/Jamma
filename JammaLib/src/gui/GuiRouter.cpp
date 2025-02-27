@@ -23,7 +23,7 @@ GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 {
 	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
-		MoveableParams(Position2d{ 2, 2 }, Position3d{ 2, 2, 0 }, 1.0),
+		MoveableParams(Position2d{ 6, -4 }, Position3d{ 6, -4, 0 }, 1.0),
 		SizeableParams{ params.Size.Width - 4, params.Size.Height - 4},
 		"",
 		"",
@@ -112,9 +112,7 @@ const std::string GuiRouter::ChanToString(unsigned int chan)
 
 GuiRouter::GuiRouter(GuiRouterParams params,
 	unsigned int numInputs,
-	unsigned int numOutputs,
-	bool isInputDevice,
-	bool isOutputDevice) :
+	unsigned int numOutputs) :
 	GuiElement(params),
 	_vertexArray(0),
 	_vertexBuffer(0),
@@ -127,58 +125,87 @@ GuiRouter::GuiRouter(GuiRouterParams params,
 	_outputs{},
 	_lineShader(std::weak_ptr<ShaderResource>())
 {
-	auto createGuiRouterChannelParams = [params](int index, bool isInput, bool isDevice) {
-		auto spacing = isInput ? params.InputSpacing : params.OutputSpacing;
-		auto size = isInput ? params.InputSize : params.OutputSize;
-		int x = _GetChannelPos(index, spacing);
-		int y = isInput ? _ChannelSpacingY : 0;
-		std::string tex = isDevice ?
-			params.DeviceInactiveTexture :
-			params.ChannelInactiveTexture;
+	SetNumInputs(numInputs);
+	SetNumOutputs(numOutputs);
+}
 
-		GuiRouterChannelParams chanParams(
-			GuiElementParams(
-				index,
-				DrawableParams{ tex },
-				MoveableParams(Position2d{ x, y }, Position3d{ (float)x, (float)y, 0 }, 1.0),
-				SizeableParams{ size, size },
-				params.OverTexture,
-				params.DownTexture,
-				params.DownTexture,
-				{}),
-			index,
-			isInput,
-			isDevice
-		);
+void GuiRouter::SetNumInputs(unsigned int num)
+{
+	if (_inputs.size() == num)
+		return;
 
-		chanParams.ActiveTexture = isDevice ? params.DeviceActiveTexture : params.ChannelActiveTexture;
-		chanParams.HighlightTexture = params.HighlightTexture;
-
-		return chanParams;
-	};
-
-	for (unsigned int i = 0; i < numInputs; i++)
+	if (_inputs.size() > num)
 	{
-		auto input = std::make_shared<GuiRouterChannel>(
-			createGuiRouterChannelParams(
-				i,
-				true,
-				isInputDevice));
+		auto numToRemove = ((unsigned int)_inputs.size()) - num;
+		for (auto i = 0u; i < numToRemove; i++)
+		{
+			auto lastInput = _inputs.back();
+			auto lastInputChan = lastInput->Channel();
+			_children.erase(std::remove(_children.begin(), _children.end(), lastInput), _children.end());
 
-		_inputs.push_back(input);
-		_children.push_back(input);
+			// Remove any routes that included this input
+			_routes.erase(std::remove_if(_routes.begin(), _routes.end(),
+				[lastInputChan](const std::pair<unsigned int, unsigned int>& p) {
+					return p.first == lastInputChan;
+				}), _routes.end());
+
+			_inputs.pop_back();
+		}
 	}
-
-	for (unsigned int i = 0; i < numOutputs; i++)
+	else
 	{
-		auto output = std::make_shared<GuiRouterChannel>(
-			createGuiRouterChannelParams(
-				i,
-				false,
-				isOutputDevice));
+		auto numInputs = ((unsigned int)_inputs.size());
+		for (auto i = numInputs; i < num; i++)
+		{
+			auto input = std::make_shared<GuiRouterChannel>(
+				_GetChannelParams(
+					i,
+					true,
+					_routerParams.InputType));
 
-		_outputs.push_back(output);
-		_children.push_back(output);
+			_inputs.push_back(input);
+			_children.push_back(input);
+		}
+	}
+}
+
+void GuiRouter::SetNumOutputs(unsigned int num)
+{
+	if (_outputs.size() == num)
+		return;
+
+	if (_outputs.size() > num)
+	{
+		auto numToRemove = ((unsigned int)_outputs.size()) - num;
+		for (auto i = 0u; i < numToRemove; i++)
+		{
+			auto lastOutput = _outputs.back();
+			auto lastOutputChan = lastOutput->Channel();
+			_children.erase(std::remove(_children.begin(), _children.end(), lastOutput), _children.end());
+
+			// Remove any routes that included this input
+			_routes.erase(std::remove_if(_routes.begin(), _routes.end(),
+				[lastOutputChan](const std::pair<unsigned int, unsigned int>& p) {
+					return p.second == lastOutputChan;
+				}), _routes.end());
+
+			_outputs.pop_back();
+		}
+	}
+	else
+	{
+		auto numOutputs = ((unsigned int)_outputs.size());
+		for (auto i = numOutputs; i < num; i++)
+		{
+			auto output = std::make_shared<GuiRouterChannel>(
+				_GetChannelParams(
+					i,
+					false,
+					_routerParams.OutputType));
+
+			_outputs.push_back(output);
+			_children.push_back(output);
+		}
 	}
 }
 
@@ -399,6 +426,41 @@ void GuiRouter::_ReleaseResources()
 bool GuiRouter::_HitTest(Position2d localPos)
 {
 	return false;
+}
+
+GuiRouter::GuiRouterChannelParams GuiRouter::_GetChannelParams(unsigned int index,
+	bool isInput,
+	GuiRouterParams::GuiRouterChannelType type)
+{
+	auto spacing = isInput ? _routerParams.InputSpacing : _routerParams.OutputSpacing;
+	auto size = isInput ? _routerParams.InputSize : _routerParams.OutputSize;
+	int x = _GetChannelPos(index, spacing);
+	int y = isInput ? _ChannelSpacingY : 0;
+	std::string tex = (GuiRouterParams::CHANNEL_DEVICE == type) ?
+		_routerParams.DeviceInactiveTexture :
+		_routerParams.ChannelInactiveTexture;
+
+	GuiRouterChannelParams chanParams(
+		GuiElementParams(
+			index,
+			DrawableParams{ tex },
+			MoveableParams(Position2d{ x, y }, Position3d{ (float)x, (float)y, 0 }, 1.0),
+			SizeableParams{ size, size },
+			_routerParams.OverTexture,
+			_routerParams.DownTexture,
+			_routerParams.DownTexture,
+			{}),
+		index,
+		isInput,
+		type
+	);
+
+	chanParams.ActiveTexture = (GuiRouterParams::CHANNEL_DEVICE == type) ?
+		_routerParams.DeviceActiveTexture :
+		_routerParams.ChannelActiveTexture;
+	chanParams.HighlightTexture = _routerParams.HighlightTexture;
+
+	return chanParams;
 }
 
 bool GuiRouter::_InitShader(ResourceLib& resourceLib)

@@ -33,9 +33,7 @@ Station::Station(StationParams params,
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_router = std::make_unique<gui::GuiRouter>(_GetRouterParams(params.Size),
 		8,
-		8,
-		false,
-		true);
+		8);
 
 	_children.push_back(_mixer);
 	_children.push_back(_router);
@@ -658,6 +656,12 @@ gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
 	routerParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
 	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
 	routerParams.MinSize = routerParams.Size;
+	routerParams.InputType = GuiRouterParams::CHANNEL_BUS;
+	routerParams.OutputType = GuiRouterParams::CHANNEL_DEVICE;
+	routerParams.InputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
+	routerParams.InputSize = GuiRouterParams::BusWidth;
+	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
+	routerParams.OutputSize = GuiRouterParams::BusWidth;
 	routerParams.Texture = "router";
 	routerParams.PinTexture = "";
 	routerParams.LinkTexture = "";
