@@ -64,6 +64,9 @@ ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchAction action)
 {
 	auto res = GuiElement::OnAction(action);
 
+	if (!_isEnabled || !_isVisible)
+		return res;
+
 	if (res.IsEaten)
 	{
 		res.SourceId = ChanToString(_params.Channel);
@@ -263,7 +266,8 @@ void GuiRouter::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
 
 void GuiRouter::Draw(DrawContext& ctx)
 {
-	_DrawLines(ctx);
+	if (_isVisible)
+		_DrawLines(ctx);
 
 	GuiElement::Draw(ctx);
 }
@@ -271,6 +275,9 @@ void GuiRouter::Draw(DrawContext& ctx)
 ActionResult GuiRouter::OnAction(TouchAction action)
 {
 	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
 
 	if (_isDragging)
 	{
@@ -363,12 +370,15 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 		}
 	}
 
-	return GuiElement::OnAction(action);
+	return res;
 }
 
 ActionResult GuiRouter::OnAction(TouchMoveAction action)
 {
 	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
 
 	if (res.IsEaten)
 		return res;
@@ -545,7 +555,7 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		{
 			auto outChanPos = (float)_GetChannelPos(_initDragChannel, _routerParams.OutputSpacing);
 			float x = outChanPos + ((float)_routerParams.OutputSize * 0.5f);
-			float y = (float)_ChannelSpacingY - (float)_WireYOffset;
+			float y = (float)_routerParams.OutputSize - (float)_WireYOffset;
 
 			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);

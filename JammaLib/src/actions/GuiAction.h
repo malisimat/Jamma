@@ -11,6 +11,12 @@ namespace actions
 		public base::Action
 	{
 	public:
+		enum ActionElementType
+		{
+			ACTIONELEMENT_TOGGLE,
+			ACTIONELEMENT_ROUTER
+		};
+
 		struct GuiInt {
 			int Value;
 		};
@@ -38,6 +44,8 @@ namespace actions
 		~GuiAction();
 
 	public:
+		unsigned int Index;
+		ActionElementType ElementType;
 		GuiData Data;
 	};
 }

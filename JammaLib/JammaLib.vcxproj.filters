@@ -386,6 +386,9 @@
     <ClInclude Include="src\actions\GuiAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiToggle.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -588,6 +591,9 @@
     </ClCompile>
     <ClCompile Include="src\actions\GuiAction.cpp">
       <Filter>src\actions</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiToggle.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

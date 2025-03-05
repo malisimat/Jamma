@@ -21,3 +21,15 @@
 1 yellow
 1 purple
 1 blue
+1 arrow
+1 arrow_over
+1 arrow_down
+1 arrowup
+1 arrowup_over
+1 arrowup_down
+1 arrow2
+1 arrow2_over
+1 arrow2_down
+1 arrowup2
+1 arrowup2_over
+1 arrowup2_down

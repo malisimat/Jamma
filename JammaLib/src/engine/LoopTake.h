@@ -13,6 +13,7 @@
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRouter.h"
+#include "../gui/GuiToggle.h"
 
 using base::Audible;
 
@@ -151,11 +152,14 @@ namespace engine
 			base::AudioSource::AudioSourceType source) override;
 
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size, utils::Size2d mixerSize);
+		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer);
 		void _ArrangeLoops();
 		void _UpdateLoops();
 
 	protected:
 		static const utils::Size2d _Gap;
+		static const utils::Size2d _ToggleSize;
+		static const utils::Size2d _ToggleGap;
 
 		bool _flipLoopBuffer;
 		bool _flipAudioBuffer;
@@ -170,6 +174,8 @@ namespace engine
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiToggle> _mixerToggle;
+		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;

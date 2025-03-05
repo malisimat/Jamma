@@ -83,8 +83,6 @@ namespace engine
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
-		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
@@ -114,11 +112,14 @@ namespace engine
 			Audible::AudioSourceType source);
 
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
+		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer);
 		void _ArrangeTakes();
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
 	protected:
 		static const utils::Size2d _Gap;
+		static const utils::Size2d _ToggleSize;
+		static const utils::Size2d _ToggleGap;
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
@@ -126,6 +127,8 @@ namespace engine
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiToggle> _mixerToggle;
+		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;

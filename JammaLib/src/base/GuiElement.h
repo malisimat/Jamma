@@ -80,6 +80,8 @@ namespace base
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, DrawPass pass) override;
+		virtual void SetVisible(bool visible);
+		virtual void SetEnabled(bool enabled);
 		virtual bool Select();
 		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
@@ -94,6 +96,8 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		bool IsVisible() const;
+		bool IsEnabled() const;
 		bool IsSelected() const;
 		bool HitTest(utils::Position2d localPos);
 		std::vector<actions::JobAction> CommitChanges();
@@ -119,6 +123,8 @@ namespace base
 
 	protected:
 		bool _changesMade;
+		bool _isVisible;
+		bool _isEnabled;
 		bool _isSelected;
 		bool _isPicking3d;
 		unsigned int _index;

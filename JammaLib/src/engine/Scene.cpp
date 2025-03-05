@@ -230,7 +230,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	for (auto& station : _stations)
 	{
-		res = station->OnAction(station->ParentToLocal(action));
+		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
 		if (res.IsEaten)
 		{
@@ -291,7 +291,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	{
 		for (auto& station : _stations)
 		{
-			auto res = station->OnAction(station->ParentToLocal(action));
+			auto res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
 			if (res.IsEaten)
 				return res;

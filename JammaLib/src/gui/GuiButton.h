@@ -10,6 +10,18 @@ namespace gui
 		public base::GuiElementParams
 	{
 	public:
+		GuiButtonParams() :
+			base::GuiElementParams(0, DrawableParams{ "" },
+				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+				SizeableParams{ 1,1 },
+				"",
+				"",
+				"",
+				{}),
+			Receiver(std::weak_ptr<base::ActionReceiver>())
+		{
+		}
+
 		GuiButtonParams(base::GuiElementParams guiParams,
 			std::weak_ptr<base::ActionReceiver> receiver) :
 			base::GuiElementParams(guiParams),

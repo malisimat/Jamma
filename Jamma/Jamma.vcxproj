@@ -320,6 +320,18 @@
     <None Include="resources\shaders\white.frag" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="resources\textures\arrow.tga" />
+    <Image Include="resources\textures\arrow2.tga" />
+    <Image Include="resources\textures\arrow2_down.tga" />
+    <Image Include="resources\textures\arrow2_over.tga" />
+    <Image Include="resources\textures\arrowup.tga" />
+    <Image Include="resources\textures\arrowup2.tga" />
+    <Image Include="resources\textures\arrowup2_down.tga" />
+    <Image Include="resources\textures\arrowup2_over.tga" />
+    <Image Include="resources\textures\arrowup_down.tga" />
+    <Image Include="resources\textures\arrowup_over.tga" />
+    <Image Include="resources\textures\arrow_down.tga" />
+    <Image Include="resources\textures\arrow_over.tga" />
     <Image Include="resources\textures\router.tga" />
     <Image Include="resources\textures\router_active.tga" />
     <Image Include="resources\textures\router_down.tga" />

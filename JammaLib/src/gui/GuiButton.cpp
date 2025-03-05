@@ -16,4 +16,5 @@ void GuiButton::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
 
 void GuiButton::Draw(DrawContext& ctx)
 {
+	GuiElement::Draw(ctx);
 }

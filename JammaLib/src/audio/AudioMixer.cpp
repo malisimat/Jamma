@@ -49,7 +49,8 @@ void AudioMixer::CallMe()
 
 ActionResult AudioMixer::OnAction(DoubleAction val)
 {
-	SetUnmutedLevel(val.Value());
+	if (_isEnabled)
+		SetUnmutedLevel(val.Value());
 
 	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr};
 }

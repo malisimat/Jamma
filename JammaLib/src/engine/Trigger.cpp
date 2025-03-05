@@ -111,6 +111,9 @@ utils::Position2d Trigger::Position() const
 
 ActionResult Trigger::OnAction(KeyAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;

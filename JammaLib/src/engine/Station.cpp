@@ -9,8 +9,11 @@ using resources::ResourceLib;
 using gui::GuiSliderParams;
 using utils::Size2d;
 using gui::GuiRouterParams;
+using gui::GuiToggleParams;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
+const utils::Size2d Station::_ToggleSize = { 64, 32 };
+const utils::Size2d Station::_ToggleGap = { 6, 86 };
 
 Station::Station(StationParams params,
 	AudioMixerParams mixerParams) :
@@ -23,6 +26,8 @@ Station::Station(StationParams params,
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_mixer(nullptr),
+	_mixerToggle(nullptr),
+	_routerToggle(nullptr),
 	_router(nullptr),
 	_loopTakes(),
 	_triggers(),
@@ -35,7 +40,15 @@ Station::Station(StationParams params,
 		8,
 		8);
 
+	gui::GuiToggleParams mixerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, true));
+	_mixerToggle = std::make_shared<gui::GuiToggle>(mixerToggleParams);
+
+	gui::GuiToggleParams routerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, false));
+	_routerToggle = std::make_shared<gui::GuiToggle>(routerToggleParams);
+
 	_children.push_back(_mixer);
+	_children.push_back(_mixerToggle);
+	_children.push_back(_routerToggle);
 	_children.push_back(_router);
 }
 
@@ -203,9 +216,8 @@ void Station::EndMultiWrite(unsigned int numSamps,
 
 ActionResult Station::OnAction(KeyAction action)
 {
-	ActionResult res;
-	res.IsEaten = false;
-	res.ResultType = actions::ACTIONRESULT_DEFAULT;
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
 
 	for (auto& trig : _triggers)
 	{
@@ -214,46 +226,48 @@ ActionResult Station::OnAction(KeyAction action)
 			return trigResult;
 	}
 
-	res.IsEaten = false;
-	return res;
+	return ActionResult::NoAction();
 }
 
 ActionResult Station::OnAction(GuiAction action)
 {
 	auto res = GuiElement::OnAction(action);
 
-	if (res.IsEaten)
+	if (!_isEnabled || !_isVisible)
 		return res;
-
-	if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
-		_mixer->SetChannels(chans->Connections);
-
-	return res;
-}
-
-ActionResult Station::OnAction(TouchAction action)
-{
-	auto res = GuiElement::OnAction(action);
-
-	if (res.IsEaten && (ACTIONRESULT_ROUTER == res.ResultType))
-		std::cout << "Pause" << std::endl;
-
-	return res;
-}
-
-ActionResult Station::OnAction(TouchMoveAction action)
-{
-	auto res = GuiElement::OnAction(action);
 
 	if (res.IsEaten)
 		return res;
 
+	switch (action.ElementType)
+	{
+	case GuiAction::ACTIONELEMENT_TOGGLE:
+		if (auto toggleState = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			auto visible = ((int)GuiToggleParams::TOGGLE_ON) == toggleState->Value;
+
+			if (action.Index > 0)
+				_router->SetVisible(visible);
+			else
+				_mixer->SetVisible(visible);
+		}
+
+		break;
+	case GuiAction::ACTIONELEMENT_ROUTER:
+		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
+			_mixer->SetChannels(chans->Connections);
+
+		break;
+	}
+
 	return res;
 }
-
 
 ActionResult Station::OnAction(TriggerAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	ActionResult res;
 	res.IsEaten = false;
 
@@ -591,6 +605,8 @@ unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int n
 void Station::_InitReceivers()
 {
 	_router->SetReceiver(ActionReceiver::shared_from_this());
+	_mixerToggle->SetReceiver(ActionReceiver::shared_from_this());
+	_routerToggle->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 std::vector<JobAction> Station::_CommitChanges()
@@ -675,6 +691,27 @@ gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
 	routerParams.LineShader = "colour";
 
 	return routerParams;
+}
+
+GuiToggleParams Station::_GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer)
+{
+	GuiToggleParams toggleParams;
+
+	if (isMixer)
+		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) };
+	else
+		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) - (int)size.Height};
+
+	toggleParams.Size = _ToggleSize;
+	toggleParams.MinSize = toggleParams.Size;
+	toggleParams.Texture = "arrow";
+	toggleParams.OverTexture = "arrow_over";
+	toggleParams.DownTexture = "arrow_down";
+	toggleParams.ToggledTexture = "arrowup2";
+	toggleParams.ToggledOverTexture = "arrowup2_over";
+	toggleParams.ToggledDownTexture = "arrowup2_down";
+
+	return toggleParams;
 }
 
 void Station::_ArrangeTakes()

@@ -20,6 +20,8 @@ GuiElement::GuiElement(GuiElementParams params) :
 	Moveable(static_cast<MoveableParams&>(params)),
 	Sizeable(static_cast<SizeableParams&>(params)),
 	_changesMade(false),
+	_isVisible(true),
+	_isEnabled(true),
 	_isSelected(false),
 	_isPicking3d(false),
 	_index(params.Index),
@@ -70,6 +72,16 @@ bool GuiElement::IsSelected() const
 	return _isSelected;
 }
 
+bool GuiElement::IsVisible() const
+{
+	return _isVisible;
+}
+
+bool GuiElement::IsEnabled() const
+{
+	return _isEnabled;
+}
+
 bool GuiElement::HitTest(Position2d localPos)
 {
 	for (auto& child : _children)
@@ -105,55 +117,86 @@ std::vector<JobAction> GuiElement::CommitChanges()
 
 void GuiElement::Draw(DrawContext& ctx)
 {
-	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
-
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	switch (_state)
+	if (_isVisible)
 	{
-	case STATE_OVER:
-		_overTexture.Draw(ctx);
-		break;
-	case STATE_DOWN:
-		_downTexture.Draw(ctx);
-		break;
-	case STATE_OUT:
-		_outTexture.Draw(ctx);
-		break;
-	default:
-		_texture.Draw(ctx);
-		break;
+		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+
+		auto pos = Position();
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
+
+		switch (_state)
+		{
+		case STATE_OVER:
+			if (_overTexture.IsDrawInitialised())
+				_overTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		case STATE_DOWN:
+			if (_downTexture.IsDrawInitialised())
+				_downTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		case STATE_OUT:
+			if (_outTexture.IsDrawInitialised())
+				_outTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		default:
+			_texture.Draw(ctx);
+			break;
+		}
+
+		for (auto& child : _children)
+			child->Draw(ctx);
+
+		glCtx.PopMvp();
 	}
-
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
 }
 
 void GuiElement::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	if (_isVisible)
+	{
+		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
-	auto pos = ModelPosition();
-	auto scale = ModelScale();
+		auto pos = ModelPosition();
+		auto scale = ModelScale();
 
-	_modelScreenPos = glCtx.ProjectScreen(pos);
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+		_modelScreenPos = glCtx.ProjectScreen(pos);
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+		glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	for (auto& child : _children)
-		child->Draw3d(ctx, 1, pass);
+		for (auto& child : _children)
+			child->Draw3d(ctx, 1, pass);
 
-	glCtx.PopMvp();
-	glCtx.PopMvp();
+		glCtx.PopMvp();
+		glCtx.PopMvp();
+	}
+}
+
+void GuiElement::SetVisible(bool visible)
+{
+	_isVisible = visible;
+}
+
+void GuiElement::SetEnabled(bool enabled)
+{
+	_isEnabled = enabled;
 }
 
 ActionResult GuiElement::OnAction(KeyAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -168,6 +211,9 @@ ActionResult GuiElement::OnAction(KeyAction action)
 
 ActionResult GuiElement::OnAction(GuiAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -181,6 +227,9 @@ ActionResult GuiElement::OnAction(GuiAction action)
 
 ActionResult GuiElement::OnAction(TouchAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -217,6 +266,9 @@ ActionResult GuiElement::OnAction(TouchAction action)
 
 ActionResult GuiElement::OnAction(TouchMoveAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -229,7 +281,7 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
 	{
 		_state = HitTest(action.Position) ?
-			_state : STATE_OUT;
+			STATE_DOWN : STATE_OUT;
 	}
 	else
 	{

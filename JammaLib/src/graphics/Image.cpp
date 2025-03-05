@@ -71,6 +71,8 @@ void Image::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	if (validated)
 		validated = _InitVertexArray();
 
+	_isDrawInitialised = validated;
+
 	GlUtils::CheckError("Image::_InitResources()");
 }
 
@@ -82,6 +84,8 @@ void Image::_ReleaseResources()
 
 	glDeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
+
+	_isDrawInitialised = false;
 }
 
 bool Image::_InitTexture(ResourceLib& resourceLib)

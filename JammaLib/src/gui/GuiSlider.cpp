@@ -87,6 +87,9 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	//if (res.IsEaten)
 	//	return res;
 
+	if (!_isEnabled || !_isVisible)
+		return res;
+
 	if (_isDragging)
 	{
 		if (TouchAction::TOUCH_UP == action.State)
@@ -130,12 +133,15 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 		}
 	}
 
-	return GuiElement::OnAction(action);
+	return res;
 }
 
 ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
 	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
 
 	if (res.IsEaten)
 		return res;
@@ -155,6 +161,7 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 	OnValueChange(false);
 
 	res.IsEaten = true;
+
 	return res;
 }
 
