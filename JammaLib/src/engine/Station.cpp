@@ -25,7 +25,13 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
+	_guiPanel(nullptr),
+	_mixerPanel(nullptr),
+	_routerPanel(nullptr),
+	_masterMixer(nullptr),
 	_mixer(nullptr),
+	_audioMixers(),
+	_backAudioMixers(),
 	_mixerToggle(nullptr),
 	_routerToggle(nullptr),
 	_router(nullptr),
@@ -40,10 +46,10 @@ Station::Station(StationParams params,
 		8,
 		8);
 
-	gui::GuiToggleParams mixerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, true));
+	gui::GuiToggleParams mixerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, STATIONPANEL_MIXER));
 	_mixerToggle = std::make_shared<gui::GuiToggle>(mixerToggleParams);
 
-	gui::GuiToggleParams routerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, false));
+	gui::GuiToggleParams routerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, STATIONPANEL_ROUTER));
 	_routerToggle = std::make_shared<gui::GuiToggle>(routerToggleParams);
 
 	_children.push_back(_mixer);
@@ -153,6 +159,7 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			indexOffset,
 			numSamps);
 
+	//_masterMixer->OnPlay();
 	for (auto& buf : _audioBuffers)
 	{
 		unsigned int i = 0;
@@ -246,7 +253,7 @@ ActionResult Station::OnAction(GuiAction action)
 		{
 			auto visible = ((int)GuiToggleParams::TOGGLE_ON) == toggleState->Value;
 
-			if (action.Index > 0)
+			if (action.Index == 2)
 				_router->SetVisible(visible);
 			else
 				_mixer->SetVisible(visible);
@@ -693,11 +700,11 @@ gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
 	return routerParams;
 }
 
-GuiToggleParams Station::_GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer)
+GuiToggleParams Station::_GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType)
 {
 	GuiToggleParams toggleParams;
 
-	if (isMixer)
+	if (STATIONPANEL_MIXER == panelType)
 		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) };
 	else
 		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) - (int)size.Height};

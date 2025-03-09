@@ -8,6 +8,8 @@
 #include "Tweakable.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../gui/GuiPanel.h"
+#include "../gui/GuiToggle.h"
 #include "../gui/GuiRouter.h"
 
 namespace engine
@@ -43,6 +45,14 @@ namespace engine
 		public base::MultiAudioSource,
 		public base::MultiAudioSink
 	{
+	public:
+		enum StationPanelType
+		{
+			STATIONPANEL_MASTER,
+			STATIONPANEL_MIXER,
+			STATIONPANEL_ROUTER
+		};
+
 	public:
 		Station(StationParams params,
 			audio::AudioMixerParams mixerParams);
@@ -111,8 +121,9 @@ namespace engine
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source);
 
+		base::GuiElementParams _GetPanelParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType);
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
-		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer);
+		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType);
 		void _ArrangeTakes();
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
@@ -126,7 +137,13 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
+		std::shared_ptr<gui::GuiPanel> _guiPanel;
+		std::shared_ptr<gui::GuiPanel> _mixerPanel;
+		std::shared_ptr<gui::GuiPanel> _routerPanel;
+		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
 		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;

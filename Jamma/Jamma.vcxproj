@@ -332,10 +332,22 @@
     <Image Include="resources\textures\arrowup_over.tga" />
     <Image Include="resources\textures\arrow_down.tga" />
     <Image Include="resources\textures\arrow_over.tga" />
+    <Image Include="resources\textures\loopmode.tga" />
+    <Image Include="resources\textures\loopmode_down.tga" />
+    <Image Include="resources\textures\loopmode_over.tga" />
+    <Image Include="resources\textures\loopmode_toggled.tga" />
     <Image Include="resources\textures\router.tga" />
     <Image Include="resources\textures\router_active.tga" />
     <Image Include="resources\textures\router_down.tga" />
     <Image Include="resources\textures\router_over.tga" />
+    <Image Include="resources\textures\stationmode.tga" />
+    <Image Include="resources\textures\stationmode_down.tga" />
+    <Image Include="resources\textures\stationmode_over.tga" />
+    <Image Include="resources\textures\stationmode_toggled.tga" />
+    <Image Include="resources\textures\takemode.tga" />
+    <Image Include="resources\textures\takemode_down.tga" />
+    <Image Include="resources\textures\takemode_over.tga" />
+    <Image Include="resources\textures\takemode_toggled.tga" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

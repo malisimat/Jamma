@@ -33,3 +33,15 @@
 1 arrowup2
 1 arrowup2_over
 1 arrowup2_down
+1 stationmode
+1 stationmode_over
+1 stationmode_down
+1 stationmode_toggled
+1 takemode
+1 takemode_over
+1 takemode_down
+1 takemode_toggled
+1 loopmode
+1 loopmode_over
+1 loopmode_down
+1 loopmode_toggled

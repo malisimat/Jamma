@@ -26,10 +26,11 @@ Scene::Scene(SceneParams params,
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
-	_label(std::unique_ptr<GuiLabel>()),
-	_selector(std::unique_ptr<GuiSelector>()),
-	_audioDevice(std::unique_ptr<AudioDevice>()),
-	_masterLoop(std::shared_ptr<Loop>()),
+	_label(nullptr),
+	_selector(nullptr),
+	_modeRadio(nullptr),
+	_audioDevice(nullptr),
+	_masterLoop(nullptr),
 	_stations(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
@@ -43,25 +44,62 @@ Scene::Scene(SceneParams params,
 	_userConfig(user),
 	_clock(std::make_shared<Timer>())
 {
-	GuiLabelParams labelParams(GuiElementParams(0,
-		DrawableParams{ "" },
-		MoveableParams(utils::Position2d{ 10, 2 }, utils::Position3d{ 10, 2, 0 }, 1.0),
-		SizeableParams{ 20, 40 },
-		"",
-		"",
-		"",
-		{}), "Jamma");
+	GuiLabelParams labelParams;
+	labelParams.String = "Jamma";
+	labelParams.Position = { 10, 2 };
+	labelParams.ModelPosition = { 10, 2, 0 };
+	labelParams.Size = { 20, 40 };
 	_label = std::make_unique<GuiLabel>(labelParams);
 
-	GuiSelectorParams selectorParams(GuiElementParams(0,
-		DrawableParams{ "" },
-		MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-		SizeableParams{ params.Size },
-		"",
-		"",
-		"",
-		{}));
+	GuiSelectorParams selectorParams;
+	selectorParams.Position = { 10, 2 };
+	selectorParams.Size = params.Size;
 	_selector = std::make_unique<GuiSelector>(selectorParams);
+
+	GuiRadioParams modeRadioParams;
+	modeRadioParams.Size = { 480, 64 };
+	modeRadioParams.Position = { 0, (int)params.Size.Height - (int)modeRadioParams.Size.Height };
+	std::vector<GuiToggleParams> radioToggleParams;
+
+	for (auto i = 0u; i < 3; i++)
+	{
+		GuiToggleParams toggleParams;
+		toggleParams.Position = { (int)i * 128, 0 };
+		toggleParams.Size = { 128, 64 };
+
+		switch (i)
+		{
+		case 0:
+			toggleParams.Texture = "stationmode";
+			toggleParams.OverTexture = "stationmode_over";
+			toggleParams.DownTexture = "stationmode_down";
+			toggleParams.ToggledTexture = "stationmode_toggled";
+			toggleParams.ToggledOverTexture = "stationmode_over";
+			toggleParams.ToggledDownTexture = "stationmode_down";
+			break;
+		case 1:
+			toggleParams.Texture = "takemode";
+			toggleParams.OverTexture = "takemode_over";
+			toggleParams.DownTexture = "takemode_down";
+			toggleParams.ToggledTexture = "takemode_toggled";
+			toggleParams.ToggledOverTexture = "takemode_over";
+			toggleParams.ToggledDownTexture = "takemode_down";
+			break;
+		case 2:
+			toggleParams.Texture = "loopmode";
+			toggleParams.OverTexture = "loopmode_over";
+			toggleParams.DownTexture = "loopmode_down";
+			toggleParams.ToggledTexture = "loopmode_toggled";
+			toggleParams.ToggledOverTexture = "loopmode_over";
+			toggleParams.ToggledDownTexture = "loopmode_down";
+			break;
+		}
+
+		radioToggleParams.push_back(toggleParams);
+	}
+	
+	modeRadioParams.ToggleParams = radioToggleParams;
+	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
 
@@ -138,6 +176,7 @@ void Scene::Draw(DrawContext& ctx)
 		station->Draw(ctx);
 
 	_selector->Draw(ctx);
+	_modeRadio->Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -165,6 +204,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
+	_modeRadio->InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
@@ -178,6 +218,7 @@ void Scene::_ReleaseResources()
 {
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
+	_modeRadio->ReleaseResources();
 
 	for (auto& station : _stations)
 		station->ReleaseResources();
@@ -226,6 +267,19 @@ ActionResult Scene::OnAction(TouchAction action)
 		_touchDownElement.reset();
 
 		return ActionResult::NoAction();
+	}
+
+	res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
+
+	if (res.IsEaten)
+	{
+		if (nullptr != res.Undo)
+			_undoHistory.Add(res.Undo);
+
+		if (!_touchDownElement.lock())
+			_touchDownElement = res.ActiveElement;
+
+		return res;
 	}
 
 	for (auto& station : _stations)
@@ -289,9 +343,14 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	}
 	else
 	{
+		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
+
+		if (res.IsEaten)
+			return res;
+
 		for (auto& station : _stations)
 		{
-			auto res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
+			res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
 			if (res.IsEaten)
 				return res;
@@ -367,6 +426,18 @@ ActionResult Scene::OnAction(KeyAction action)
 	return ActionResult::NoAction();
 }
 
+ActionResult Scene::OnAction(GuiAction action)
+{
+	switch (action.ElementType)
+	{
+		case GuiAction::ACTIONELEMENT_RADIO:
+			std::cout << "GuiRadio called" << std::endl;
+			break;
+	}
+
+	return ActionResult::NoAction();
+}
+
 void Scene::OnTick(Time curTime,
 	unsigned int samps,
 	std::optional<io::UserConfig> cfg,
@@ -422,6 +493,12 @@ void Scene::OnJobTick(Time curTime)
 		receiver->OnAction(job);
 }
 
+void Scene::InitReceivers()
+{
+	_selector->SetReceiver(ActionReceiver::shared_from_this());
+	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+}
+
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
 	bool isSelected = false;
@@ -449,6 +526,12 @@ void Scene::Reset()
 	std::cout << "Reset" << std::endl;
 	_clock->Clear();
 	_isSceneReset = true;
+}
+
+void Scene::InitGui()
+{
+	_modeRadio->Init();
+	_selector->Init();
 }
 
 void Scene::InitAudio()

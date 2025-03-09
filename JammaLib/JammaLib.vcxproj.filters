@@ -149,7 +149,7 @@
     <ClInclude Include="src\resources\Resource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiButton.h">
+    <ClInclude Include="src\gui\GuiPanel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\resources\TextureResource.h">
@@ -389,6 +389,12 @@
     <ClInclude Include="src\gui\GuiToggle.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiButton.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiRadio.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -436,7 +442,7 @@
     <ClCompile Include="src\resources\ResourceLib.cpp">
       <Filter>src\resources</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiButton.cpp">
+    <ClCompile Include="src\gui\GuiPanel.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\TextureResource.cpp">
@@ -593,6 +599,12 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiToggle.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiButton.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiRadio.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
   </ItemGroup>

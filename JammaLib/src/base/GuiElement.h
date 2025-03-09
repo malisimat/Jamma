@@ -21,6 +21,17 @@ namespace base
 		public SizeableParams
 	{
 	public:
+		GuiElementParams() :
+			DrawableParams{ "" },
+			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+			SizeableParams{ 1,1 },
+			Index(0u),
+			OverTexture(""),
+			DownTexture(""),
+			OutTexture("")
+		{
+		}
+
 		GuiElementParams(unsigned int index,
 			DrawableParams drawParams,
 			MoveableParams moveParams,
@@ -35,8 +46,7 @@ namespace base
 			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
-			OutTexture(outTexture),
-			ChildParams(childParams)
+			OutTexture(outTexture)
 		{
 		}
 
@@ -45,7 +55,6 @@ namespace base
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
-		std::vector<GuiElementParams> ChildParams;
 	};
 
 	class GuiElement :

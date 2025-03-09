@@ -11,6 +11,10 @@ namespace gui
 	class GuiLabelParams : public base::GuiElementParams
 	{
 	public:
+		GuiLabelParams() :
+			base::GuiElementParams()
+		{}
+
 		GuiLabelParams(base::GuiElementParams params,
 			std::string string) :
 			base::GuiElementParams(params),

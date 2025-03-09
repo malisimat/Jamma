@@ -218,6 +218,7 @@
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
     <ClInclude Include="src\actions\GuiAction.h" />
+    <ClInclude Include="src\gui\GuiButton.h" />
     <ClInclude Include="src\gui\GuiToggle.h" />
     <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
@@ -237,6 +238,7 @@
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\GuiSelector.h" />
+    <ClInclude Include="src\gui\GuiRadio.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
     <ClInclude Include="src\io\UserConfig.h" />
@@ -295,7 +297,7 @@
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\base\ActionSender.h" />
     <ClInclude Include="src\audio\InterpolatedValue.h" />
-    <ClInclude Include="src\gui\GuiButton.h" />
+    <ClInclude Include="src\gui\GuiPanel.h" />
     <ClInclude Include="src\gui\GuiModel.h" />
     <ClInclude Include="src\base\ActionReceiver.h" />
     <ClInclude Include="src\engine\Loop.h" />
@@ -332,6 +334,7 @@
     <ClCompile Include="src\audio\Hanning.cpp" />
     <ClCompile Include="src\actions\DelayedAction.cpp" />
     <ClCompile Include="src\actions\GuiAction.cpp" />
+    <ClCompile Include="src\gui\GuiButton.cpp" />
     <ClCompile Include="src\gui\GuiToggle.cpp" />
     <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
@@ -339,6 +342,7 @@
     <ClCompile Include="src\engine\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />
+    <ClCompile Include="src\gui\GuiRadio.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\RigFile.cpp" />
     <ClCompile Include="src\io\Json.cpp" />
@@ -372,7 +376,7 @@
     <ClCompile Include="src\graphics\Shader.cpp" />
     <ClCompile Include="src\graphics\Image.cpp" />
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
-    <ClCompile Include="src\gui\GuiButton.cpp" />
+    <ClCompile Include="src\gui\GuiPanel.cpp" />
     <ClCompile Include="src\gui\GuiModel.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />
     <ClCompile Include="lib\glew\glew.c" />

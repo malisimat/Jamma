@@ -14,7 +14,8 @@ namespace actions
 		enum ActionElementType
 		{
 			ACTIONELEMENT_TOGGLE,
-			ACTIONELEMENT_ROUTER
+			ACTIONELEMENT_ROUTER,
+			ACTIONELEMENT_RADIO
 		};
 
 		struct GuiInt {

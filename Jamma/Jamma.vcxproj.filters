@@ -208,5 +208,41 @@
     <Image Include="resources\textures\arrowup2_over.tga">
       <Filter>resources\textures</Filter>
     </Image>
+    <Image Include="resources\textures\loopmode.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\loopmode_down.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\loopmode_over.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\stationmode.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\stationmode_down.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\stationmode_over.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\takemode.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\takemode_down.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\takemode_over.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\takemode_toggled.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\loopmode_toggled.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
+    <Image Include="resources\textures\stationmode_toggled.tga">
+      <Filter>resources\textures</Filter>
+    </Image>
   </ItemGroup>
 </Project>

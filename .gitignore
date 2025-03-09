@@ -10,3 +10,4 @@
 *.opendb
 .vs/
 packages/
+/JammaLib/src/base/GuiElement.cpp

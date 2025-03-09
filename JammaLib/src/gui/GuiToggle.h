@@ -57,6 +57,10 @@ namespace gui
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 
+		GuiToggleParams::ToggleState Toggle();
+		GuiToggleParams::ToggleState GetToggleState() const;
+		void SetToggleState(GuiToggleParams::ToggleState state, bool bypassUpdates);
+
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;

@@ -154,6 +154,35 @@ ActionResult GuiToggle::OnAction(TouchAction action)
 	return ActionResult::NoAction();
 }
 
+GuiToggleParams::ToggleState GuiToggle::Toggle()
+{
+	switch (_toggleState)
+	{
+	case GuiToggleParams::TOGGLE_OFF:
+		_toggleState = GuiToggleParams::TOGGLE_ON;
+		break;
+	case GuiToggleParams::TOGGLE_ON:
+		_toggleState = GuiToggleParams::TOGGLE_OFF;
+		break;
+	}
+
+	_OnToggleChange(false);
+
+	return _toggleState;
+}
+
+GuiToggleParams::ToggleState GuiToggle::GetToggleState() const
+{
+	return _toggleState;
+}
+
+void GuiToggle::SetToggleState(GuiToggleParams::ToggleState state, bool bypassUpdates)
+{
+	_toggleState = state;
+
+	_OnToggleChange(bypassUpdates);
+}
+
 void GuiToggle::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_toggledTexture.InitResources(resourceLib, forceInit);

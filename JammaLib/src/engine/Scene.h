@@ -13,6 +13,7 @@
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiSlider.h"
 #include "../gui/GuiSelector.h"
+#include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "Tickable.h"
@@ -156,6 +157,7 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -163,10 +165,12 @@ namespace engine
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
+		void InitReceivers();
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
+		void InitGui();
 		void InitAudio();
 		void CloseAudio();
 		void CommitChanges();
@@ -206,6 +210,7 @@ namespace engine
 		glm::mat4 _overlayViewProj;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
+		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
