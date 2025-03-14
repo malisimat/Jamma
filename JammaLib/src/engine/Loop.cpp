@@ -10,24 +10,23 @@ using audio::Hanning;
 using audio::AudioMixerParams;
 using graphics::GlDrawContext;
 
-Loop::Loop(LoopParams loopParams,
+Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :
-	GuiElement(loopParams),
-	Tweakable(loopParams),
+	Jammable(params),
 	AudioSink(),
 	_playIndex(0),
 	_lastPeak(0.0f),
 	_pitch(1.0),
 	_loopLength(0),
 	_playState(STATE_INACTIVE),
-	_loopParams(loopParams),
+	_loopParams(params),
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
 	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
-	_hanning = std::make_unique<Hanning>(loopParams.FadeSamps);
+	_hanning = std::make_unique<Hanning>(params.FadeSamps);
 
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };

@@ -1,5 +1,6 @@
 #include "GuiSelector.h"
 
+using namespace base;
 using namespace gui;
 using namespace utils;
 using base::Action;
@@ -9,7 +10,7 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 	_isSelecting(false),
 	_selectionTool(SELECTION_PAINT),
 	_selectMode(SELECT_NONE),
-	_selectDepth(LEVEL_TAKES),
+	_selectDepth(SelectDepth::DEPTH_LOOPTAKE),
 	_initPos({0,0}),
 	_currentPos({0,0}),
 	_currentHover({}),
@@ -23,12 +24,13 @@ GuiSelector::SelectMode GuiSelector::CurrentMode() const
 {
 	return _selectMode;
 }
-GuiSelector::SelectDepth GuiSelector::CurrentDepth() const
+
+SelectDepth GuiSelector::CurrentSelectDepth() const
 {
 	return _selectDepth;
 }
 
-void GuiSelector::SetCurrentDepth(GuiSelector::SelectDepth level)
+void GuiSelector::SetSelectDepth(SelectDepth level)
 {
 	_selectDepth = level;
 }
@@ -159,11 +161,7 @@ actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
 
 bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
 {
-	unsigned int depth =
-		_selectDepth == SelectDepth::LEVEL_STATIONS ? 1 :
-		_selectDepth == SelectDepth::LEVEL_TAKES ? 2 :
-		_selectDepth == SelectDepth::LEVEL_LOOPS ? 3 :
-		0;
+	auto depth = 1u + (unsigned int)_selectDepth;
 
 	if (path.size() < depth)
 		return false;

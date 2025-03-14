@@ -151,7 +151,7 @@ namespace engine
 		virtual void SetSize(utils::Size2d size) override
 		{
 			_sizeParams.Size = size;
-			InitSize();
+			_InitSize();
 		}
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
@@ -180,24 +180,27 @@ namespace engine
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
+		static std::vector<unsigned char> TrimPath(std::vector<unsigned char> path,
+			unsigned int depth);
 		static int AudioCallback(void* outBuffer,
 			void* inBuffer,
 			unsigned int numSamps,
 			double streamTime,
 			RtAudioStreamStatus status,
 			void* userData);
-		void OnAudio(float* inBuffer,
+
+		void _OnAudio(float* inBuffer,
 			float* outBuffer,
 			unsigned int numSamps);
-		bool OnUndo(std::shared_ptr<base::ActionUndo> undo);
-		void InitSize();
-		void UpdateSelection(actions::ActionResultType res);
-		glm::mat4 View();
-
-		void AddStation(std::shared_ptr<Station> station);
-		void SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
-		std::shared_ptr<base::GuiElement> ChildFromPath(std::vector<unsigned char> path);
-		void JobLoop();
+		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
+		void _InitSize();
+		void _UpdateSelection(actions::ActionResultType res);
+		glm::mat4 _View();
+		void _AddStation(std::shared_ptr<Station> station);
+		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		void _JobLoop();
+		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
+		void _UpdateSelectDepth(unsigned int depth);
 
 	protected:
 		bool _isSceneTouching;

@@ -3,11 +3,9 @@
 #include "LoopTake.h"
 #include "Trigger.h"
 #include "AudioSink.h"
-#include "MultiAudioSource.h"
-#include "MultiAudioSink.h"
-#include "Tweakable.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../base/Jammable.h"
 #include "../gui/GuiPanel.h"
 #include "../gui/GuiToggle.h"
 #include "../gui/GuiRouter.h"
@@ -15,19 +13,19 @@
 namespace engine
 {
 	class StationParams :
-		public base::GuiElementParams,
-		public base::TweakableParams
+		public base::JammableParams
 	{
 	public:
 		StationParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-				SizeableParams{ 1,1 },
-				"",
-				"",
-				"",
-				{}),
-			base::TweakableParams(),
+			base::JammableParams(
+				base::GuiElementParams(0, DrawableParams{ "" },
+					MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+					SizeableParams{ 1,1 },
+					"",
+					"",
+					"",
+					{})
+				),
 			Name(""),
 			FadeSamps(constants::DefaultFadeSamps)
 		{
@@ -40,9 +38,7 @@ namespace engine
 	
 	class Station :
 		public base::Tickable,
-		public base::GuiElement,
-		public base::Tweakable,
-		public base::MultiAudioSource,
+		public base::Jammable,
 		public base::MultiAudioSink
 	{
 	public:
@@ -70,11 +66,10 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
 
-		virtual std::string ClassName() const { return "Station"; }
-
+		virtual std::string ClassName() const override { return "Station"; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
-		virtual MultiAudioPlugType MultiAudioPlug() const { return MULTIAUDIOPLUG_NONE; }
 		virtual unsigned int NumOutputChannels() const override;
 		virtual unsigned int NumInputChannels() const override;
 		virtual void Zero(unsigned int numSamps,
@@ -117,14 +112,12 @@ namespace engine
 
 		virtual void _InitReceivers() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual bool _HitTest(utils::Position2d pos) override;
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
-			Audible::AudioSourceType source);
+			Audible::AudioSourceType source) override;
+		virtual void _ArrangeChildren() override;
 
-		base::GuiElementParams _GetPanelParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType);
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
 		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType);
-		void _ArrangeTakes();
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
 	protected:

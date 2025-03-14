@@ -17,9 +17,7 @@ const utils::Size2d Station::_ToggleGap = { 6, 86 };
 
 Station::Station(StationParams params,
 	AudioMixerParams mixerParams) :
-	GuiElement(params),
-	Tweakable(params),
-	MultiAudioSource(),
+	Jammable(params),
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
 	_name(params.Name),
@@ -109,7 +107,7 @@ void Station::SetSize(utils::Size2d size)
 {
 	GuiElement::SetSize(size);
 
-	_ArrangeTakes();
+	_ArrangeChildren();
 }
 
 utils::Position2d Station::Position() const
@@ -424,7 +422,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			if (match != _backLoopTakes.end())
 			{
 				_backLoopTakes.erase(match);
-				_ArrangeTakes();
+				_ArrangeChildren();
 				_flipTakeBuffer = true;
 				_changesMade = true;
 			}
@@ -485,7 +483,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_backLoopTakes.push_back(take);
 	Init();
 
-	_ArrangeTakes();
+	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
 }
@@ -656,11 +654,6 @@ std::vector<JobAction> Station::_CommitChanges()
 	return {};
 }
 
-bool Station::_HitTest(utils::Position2d localPos)
-{
-	return GuiElement::_HitTest(localPos);
-}
-
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
@@ -668,6 +661,26 @@ const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 		return _audioBuffers[channel];
 
 	return nullptr;
+}
+
+void Station::_ArrangeChildren()
+{
+	auto numTakes = (unsigned int)_backLoopTakes.size();
+
+	auto takeHeight = _CalcTakeHeight(_sizeParams.Size.Height, numTakes);
+	utils::Size2d takeSize = { _sizeParams.Size.Width - (2 * _Gap.Width), takeHeight - (2 * _Gap.Height) };
+
+	auto takeCount = 0;
+	for (auto& take : _backLoopTakes)
+	{
+		take->SetPosition({ 0, (int)(_Gap.Height + (takeCount * takeHeight)) });
+		take->SetSize(takeSize);
+		take->SetModelPosition({ 0.0f, (float)(takeCount * takeHeight), 0.0f });
+		take->SetModelScale(1.0);
+		std::cout << "[Arranging take " << take->Id() << "] Y: " << (float)(takeCount * takeHeight) << std::endl;
+
+		takeCount++;
+	}
 }
 
 gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
@@ -719,26 +732,6 @@ GuiToggleParams Station::_GetToggleParams(utils::Size2d size, utils::Size2d mixe
 	toggleParams.ToggledDownTexture = "arrowup2_down";
 
 	return toggleParams;
-}
-
-void Station::_ArrangeTakes()
-{
-	auto numTakes = (unsigned int)_backLoopTakes.size();
-
-	auto takeHeight = _CalcTakeHeight(_sizeParams.Size.Height, numTakes);
-	utils::Size2d takeSize = { _sizeParams.Size.Width - (2 * _Gap.Width), takeHeight - (2 * _Gap.Height) };
-
-	auto takeCount = 0;
-	for (auto& take : _backLoopTakes)
-	{
-		take->SetPosition({ 0, (int)(_Gap.Height + (takeCount * takeHeight)) });
-		take->SetSize(takeSize);
-		take->SetModelPosition({0.0f, (float)(takeCount * takeHeight), 0.0f });
-		take->SetModelScale(1.0);
-		std::cout << "[Arranging take " << take->Id() << "] Y: " << (float)(takeCount * takeHeight) << std::endl;
-
-		takeCount++;
-	}
 }
 
 std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)

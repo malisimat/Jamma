@@ -14,10 +14,7 @@ namespace base
 		public virtual MultiAudible
 	{
 	public:
-		virtual MultiAudioPlugType MultiAudioPlug() const
-		{
-			return MULTIAUDIOPLUG_SINK;
-		}
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_SINK; }
 
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source)

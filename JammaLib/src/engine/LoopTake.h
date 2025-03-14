@@ -3,11 +3,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "GuiElement.h"
-#include "Tweakable.h"
-#include "MultiAudioSource.h"
-#include "MultiAudioSink.h"
-#include "AudioSink.h"
+#include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
 #include "../audio/AudioMixer.h"
@@ -20,30 +16,28 @@ using base::Audible;
 namespace engine
 {
 	class LoopTakeParams :
-		public base::GuiElementParams,
-		public base::TweakableParams
+		public base::JammableParams
 	{
 	public:
 		LoopTakeParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-				SizeableParams{ 1,1 },
-				"",
-				"",
-				"",
-				{}),
+			base::JammableParams(
+				base::GuiElementParams(0, DrawableParams{ "" },
+					MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+					SizeableParams{ 1,1 },
+					"",
+					"",
+					"",
+					{})
+				),
 			Id(""),
-			base::TweakableParams(),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops({})
 		{
 		}
 
-		LoopTakeParams(base::GuiElementParams params,
-			base::TweakableParams tweakParams,
+		LoopTakeParams(base::JammableParams params,
 			std::vector<LoopParams> loops) :
-			base::GuiElementParams(params),
-			base::TweakableParams(tweakParams),
+			base::JammableParams(params),
 			Id(""),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops(loops)
@@ -57,9 +51,7 @@ namespace engine
 	};
 
 	class LoopTake :
-		public base::GuiElement,
-		public base::Tweakable,
-		public base::MultiAudioSource,
+		public base::Jammable,
 		public base::MultiAudioSink
 	{
 	public:
@@ -97,10 +89,9 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
 			audio::BehaviourParams behaviour);
 
-		virtual std::string ClassName() const { return "LoopTake"; }
-
+		virtual std::string ClassName() const override { return "LoopTake"; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
-		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_NONE; }
 		virtual unsigned int NumInputChannels() const override;
 		virtual unsigned int NumOutputChannels() const override;
 		virtual void Zero(unsigned int numSamps,
@@ -150,10 +141,10 @@ namespace engine
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			base::AudioSource::AudioSourceType source) override;
+		virtual void _ArrangeChildren() override;
 
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size, utils::Size2d mixerSize);
 		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer);
-		void _ArrangeLoops();
 		void _UpdateLoops();
 
 	protected:

@@ -2,10 +2,8 @@
 
 #include <vector>
 #include <algorithm>
-#include "GuiElement.h"
-#include "Tweakable.h"
+#include "../base/Jammable.h"
 #include "../base/Action.h"
-#include <Tweakable.h>
 
 namespace gui
 {
@@ -32,13 +30,6 @@ namespace gui
 			SELECT_UNMUTE
 		};
 
-		enum SelectDepth
-		{
-			LEVEL_STATIONS,
-			LEVEL_TAKES,
-			LEVEL_LOOPS
-		};
-
 	public:
 		GuiSelector(GuiSelectorParams guiParams);
 
@@ -47,8 +38,8 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 
 		SelectMode CurrentMode() const;
-		SelectDepth CurrentDepth() const;
-		void SetCurrentDepth(SelectDepth level);
+		base::SelectDepth CurrentSelectDepth() const;
+		void SetSelectDepth(base::SelectDepth level);
 		std::vector<unsigned char> CurrentHover() const;
 		bool UpdateCurrentHover(std::vector<unsigned char> path,
 			base::Action::Modifiers modifiers,
@@ -68,7 +59,7 @@ namespace gui
 	protected:
 		bool _isSelecting;
 		SelectMode _selectMode;
-		SelectDepth _selectDepth;
+		base::SelectDepth _selectDepth;
 		SelectionTool _selectionTool;
 		utils::Position2d _initPos;
 		utils::Position2d _currentPos;

@@ -6,11 +6,10 @@
 #include "ActionReceiver.h"
 #include "Tweakable.h"
 #include "ResourceUser.h"
-#include "GuiElement.h"
 #include "GlUtils.h"
 #include "VU.h"
 #include "LoopModel.h"
-#include "../base/MultiAudioSource.h"
+#include "../base/Jammable.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"
 #include "../io/JamFile.h"
@@ -23,19 +22,19 @@
 namespace engine
 {
 	class LoopParams :
-		public base::GuiElementParams,
-		public base::TweakableParams
+		public base::JammableParams
 	{
 	public:
 		LoopParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
+			base::JammableParams(
+				GuiElementParams(0, DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
 				SizeableParams{ 1,1 },
 				"",
 				"",
 				"",
-				{}),
-			base::TweakableParams(),
+				{})
+			),
 			Id(""),
 			TakeId(""),
 			Wav(""),
@@ -48,11 +47,9 @@ namespace engine
 		{
 		}
 
-		LoopParams(base::GuiElementParams params,
-			base::TweakableParams tweakParams,
+		LoopParams(base::JammableParams params,
 			std::string wav) :
-			base::GuiElementParams(params),
-			base::TweakableParams(tweakParams),
+			base::JammableParams(params),
 			Id(""),
 			TakeId(""),
 			Wav(wav),
@@ -78,10 +75,8 @@ namespace engine
 	};
 
 	class Loop :
-		public base::GuiElement,
-		public base::Tweakable,
-		public base::AudioSink,
-		public base::MultiAudioSource
+		public base::Jammable,
+		public base::AudioSink
 	{
 	public:
 		enum LoopPlayState
@@ -96,7 +91,7 @@ namespace engine
 		};
 
 	public:
-		Loop(LoopParams loopParams,
+		Loop(LoopParams params,
 			audio::AudioMixerParams mixerParams);
 		~Loop() { ReleaseResources(); }
 
@@ -106,8 +101,7 @@ namespace engine
 
 		// Move
 		Loop(Loop&& other) :
-			GuiElement(other._guiParams),
-			Tweakable(other._loopParams),
+			Jammable(other._loopParams),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
 			_loopLength(other._loopLength),
@@ -157,9 +151,9 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
 			audio::BehaviourParams behaviour);
 
-		virtual std::string ClassName() const { return "Loop"; }
-		virtual void SetSize(utils::Size2d size) override;
+		virtual std::string ClassName() const override { return "Loop"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
+		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,

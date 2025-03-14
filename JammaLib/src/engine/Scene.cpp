@@ -103,7 +103,7 @@ Scene::Scene(SceneParams params,
 
 	_audioDevice = std::make_unique<AudioDevice>();
 
-	_jobRunner = std::thread([this]() { this->JobLoop(); });
+	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
 
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
@@ -148,7 +148,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 					station.value()->AddTrigger(trigger.value());
 			}
 
-			scene->AddStation(station.value());
+			scene->_AddStation(station.value());
 		}
 
 		stationParams.Index++;
@@ -156,7 +156,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.ModelPosition += { 600, 0 };
 	}
 
-	scene->SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 
 	return scene;
 }
@@ -209,7 +209,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
 
-	InitSize();
+	_InitSize();
 
 	ResourceUser::_InitResources(resourceLib, forceInit);
 }
@@ -256,13 +256,13 @@ ActionResult Scene::OnAction(TouchAction action)
 			// isSceneTouching should only be true if selector mode is SELECT_NONE
 			// so try to use that instead!
 			if (!_isSceneDragged)
-				UpdateSelection(ACTIONRESULT_CLEARSELECT);
+				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
 
 		// Update selector and then react to result (selecting, deselecting, muting, unmuting)
 		res = _selector->OnAction(_selector->ParentToLocal(action));
 
-		UpdateSelection(res.ResultType);
+		_UpdateSelection(res.ResultType);
 
 		_touchDownElement.reset();
 
@@ -300,7 +300,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
-	UpdateSelection(res.ResultType);
+	_UpdateSelection(res.ResultType);
 
 	if (res.IsEaten)
 	{
@@ -419,7 +419,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	if (res.IsEaten)
 	{
 		std::cout << "KeyAction eaten by selector: " << res.ResultType << std::endl;
-		UpdateSelection(res.ResultType);
+		_UpdateSelection(res.ResultType);
 		return res;
 	}
 
@@ -431,6 +431,7 @@ ActionResult Scene::OnAction(GuiAction action)
 	switch (action.ElementType)
 	{
 		case GuiAction::ACTIONELEMENT_RADIO:
+			_UpdateSelectDepth(action.Index);
 			std::cout << "GuiRadio called" << std::endl;
 			break;
 	}
@@ -504,7 +505,9 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 
-	auto hovering = ChildFromPath(path);
+	path = TrimPath(path, _selector->CurrentSelectDepth());
+
+	auto hovering = _ChildFromPath(path);
 	if (nullptr != hovering)
 	{
 		isSelected = hovering->IsSelected();
@@ -518,7 +521,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		isSelected,
 		tweakState);
 
-	UpdateSelection(ACTIONRESULT_DEFAULT);
+	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
 void Scene::Reset()
@@ -605,6 +608,17 @@ std::mutex& Scene::GetAudioMutex()
 	return _audioMutex;
 }
 
+std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
+{
+	unsigned int pathLength = depth <= path.size() ?
+		depth :
+		(unsigned int)path.size();
+
+	std::vector<unsigned char> curPath(path.begin(), path.begin() + pathLength);
+
+	return curPath;
+}
+
 int Scene::AudioCallback(void* outBuffer,
 	void* inBuffer,
 	unsigned int numSamps,
@@ -614,12 +628,12 @@ int Scene::AudioCallback(void* outBuffer,
 {
 	Scene* scene = (Scene*)userData;
 	std::scoped_lock lock(scene->GetAudioMutex());
-	scene->OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
+	scene->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
 
 	return 0;
 }
 
-void Scene::OnAudio(float* inBuf,
+void Scene::_OnAudio(float* inBuf,
 	float* outBuf,
 	unsigned int numSamps)
 {
@@ -703,7 +717,7 @@ void Scene::OnAudio(float* inBuf,
 		_audioDevice->GetAudioStreamParams());
 }
 
-bool Scene::OnUndo(std::shared_ptr<base::ActionUndo> undo)
+bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 {
 	switch (undo->UndoType())
 	{
@@ -719,13 +733,13 @@ bool Scene::OnUndo(std::shared_ptr<base::ActionUndo> undo)
 	return false;
 }
 
-void Scene::InitSize()
+void Scene::_InitSize()
 {
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
 	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
-	_viewProj = projection * View();
+	_viewProj = projection * _View();
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
@@ -734,7 +748,7 @@ void Scene::InitSize()
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
 }
 
-void Scene::UpdateSelection(ActionResultType res)
+void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
 	auto currentMode = _selector->CurrentMode();
@@ -751,7 +765,7 @@ void Scene::UpdateSelection(ActionResultType res)
 			for (auto& station : _stations)
 				station->SetPicking3d(false);
 
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -760,37 +774,37 @@ void Scene::UpdateSelection(ActionResultType res)
 			for (auto& station : _stations)
 				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
 
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(!hovering->IsSelected());
 
 			break;
 		case GuiSelector::SELECT_SELECT:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_SELECTADD:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_SELECTREMOVE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(false);
 
 			break;
 		case GuiSelector::SELECT_MUTE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_UNMUTE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -832,7 +846,7 @@ void Scene::UpdateSelection(ActionResultType res)
 		for (auto& station : _stations)
 			station->SetPicking3d(false);
 
-		hovering = ChildFromPath(_selector->CurrentHover());
+		hovering = _ChildFromPath(_selector->CurrentHover());
 		if (nullptr != hovering)
 			hovering->SetPicking3d(true);
 
@@ -858,13 +872,13 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 		station->InitResources(resourceLib, forceInit);
 };
 
-glm::mat4 Scene::View()
+glm::mat4 Scene::_View()
 {
 	auto camPos = _camera.ModelPosition();
 	return glm::lookAt(glm::vec3(camPos.X, camPos.Y, camPos.Z), glm::vec3(camPos.X, camPos.Y, 0.f), glm::vec3(0.f, 1.f, 0.f));
 }
 
-void Scene::AddStation(std::shared_ptr<Station> station)
+void Scene::_AddStation(std::shared_ptr<Station> station)
 {
 	_stations.push_back(station);
 
@@ -873,12 +887,21 @@ void Scene::AddStation(std::shared_ptr<Station> station)
 	station->Init();
 }
 
-void Scene::SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
+void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
 	_clock->SetQuantisation(quantiseSamps, quantisation);
 }
 
-std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path)
+void Scene::_JobLoop()
+{
+	while (!_isSceneQuitting)
+	{
+		OnJobTick(Timer::GetTime());
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+}
+
+std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
 {
 	if (path.size() < 1)
 		return nullptr;
@@ -908,11 +931,13 @@ std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path
 	return nullptr;
 }
 
-void Scene::JobLoop()
+void Scene::_UpdateSelectDepth(unsigned int depth)
 {
-	while (!_isSceneQuitting)
-	{
-		OnJobTick(Timer::GetTime());
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	}
+	auto selectDepth = depth > 0 ? (SelectDepth)(depth - 1) : DEPTH_STATION;
+	_selector->SetSelectDepth(selectDepth);
+
+	for (auto& station : _stations)
+		station->SetSelectDepth(selectDepth);
+
+	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }

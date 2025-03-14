@@ -25,9 +25,8 @@ const Size2d LoopTake::_ToggleGap = { 6, 6 };
 
 LoopTake::LoopTake(LoopTakeParams params,
 	AudioMixerParams mixerParams) :
-	GuiElement(params),
-	Tweakable(params),
-	MultiAudioSource(),
+	Jammable(params),
+	MultiAudioSink(),
 	_flipLoopBuffer(false),
 	_flipAudioBuffer(false),
 	_loopsNeedUpdating(false),
@@ -110,17 +109,19 @@ void LoopTake::SetSize(utils::Size2d size)
 
 	GuiElement::SetSize(size);
 
-	_ArrangeLoops();
+	_ArrangeChildren();
 }
 
 unsigned int LoopTake::NumInputChannels() const
 {
-	return (unsigned int)_backLoops.size();
+	return _flipLoopBuffer ?
+		(unsigned int)_backLoops.size() :
+		(unsigned int)_loops.size();
 }
 
 unsigned int LoopTake::NumOutputChannels() const
 {
-	return _changesMade ?
+	return _flipAudioBuffer ?
 		(unsigned int)_backAudioBuffers.size() :
 		(unsigned int)_audioBuffers.size();
 }
@@ -319,7 +320,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 
 	Init();
 
-	_ArrangeLoops();
+	_ArrangeChildren();
 
 	_flipLoopBuffer = true;
 	_changesMade = true;
@@ -537,7 +538,6 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 		loop->Overdub();
 	}
 
-	//_flipLoopBuffer = true;
 	_loopsNeedUpdating = true;
 	_changesMade = true;
 }
@@ -594,7 +594,7 @@ void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::_InitResources(resourceLib, forceInit);
 	
-	_ArrangeLoops();
+	_ArrangeChildren();
 }
 
 std::vector<JobAction> LoopTake::_CommitChanges()
@@ -686,6 +686,32 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	return nullptr;
 }
 
+void LoopTake::_ArrangeChildren()
+{
+	auto numLoops = (unsigned int)_backLoops.size();
+
+	if (0 == numLoops)
+		return;
+
+	utils::Size2d loopSize = { _sizeParams.Size.Width - (2 * _Gap.Width), _sizeParams.Size.Height - (2 * _Gap.Height) };
+
+	auto loopCount = 0u;
+	auto dScale = 0.1;
+	auto dTotalScale = 0.4 / ((double)numLoops);
+
+	for (auto& loop : _backLoops)
+	{
+		loop->SetPosition({ (int)_Gap.Width + ((int)loopSize.Width * (int)loop->LoopChannel()), (int)_Gap.Height });
+		loop->SetSize(loopSize);
+		loop->SetModelPosition({ 0.0f, 0.0f, 0.0f });
+		loop->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
+
+		std::cout << "[Arranging loop " << loop->Id() << "] Scale: " << 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << ", Position: " << loop->Position().X << std::endl;
+
+		loopCount++;
+	}
+}
+
 gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size, utils::Size2d mixerSize)
 {
 	GuiRouterParams routerParams;
@@ -733,32 +759,6 @@ GuiToggleParams LoopTake::_GetToggleParams(utils::Size2d size, utils::Size2d mix
 	toggleParams.ToggledDownTexture = "arrowup2_down";
 
 	return toggleParams;
-}
-
-void LoopTake::_ArrangeLoops()
-{
-	auto numLoops = (unsigned int)_backLoops.size();
-
-	if (0 == numLoops)
-		return;
-
-	utils::Size2d loopSize = { _sizeParams.Size.Width - (2 * _Gap.Width), _sizeParams.Size.Height - (2 * _Gap.Height) };
-
-	auto loopCount = 0u;
-	auto dScale = 0.1;
-	auto dTotalScale = 0.4 / ((double)numLoops);
-
-	for (auto& loop : _backLoops)
-	{
-		loop->SetPosition({ (int)_Gap.Width + ((int)loopSize.Width * (int)loop->LoopChannel()), (int)_Gap.Height});
-		loop->SetSize(loopSize);
-		loop->SetModelPosition({ 0.0f, 0.0f, 0.0f });
-		loop->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
-
-		std::cout << "[Arranging loop " << loop->Id() << "] Scale: " << 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << ", Position: " << loop->Position().X << std::endl;
-
-		loopCount++;
-	}
 }
 
 void LoopTake::_UpdateLoops()

@@ -214,6 +214,7 @@
     <ClInclude Include="src\actions\ActionResult.h" />
     <ClInclude Include="src\audio\BufferBank.h" />
     <ClInclude Include="src\actions\JobAction.h" />
+    <ClInclude Include="src\base\Jammable.h" />
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />

@@ -28,7 +28,7 @@ namespace base
 		~MultiAudioSource() {}
 
 	public:
-		virtual MultiAudioPlugType MultiAudiblePlug() const { return MULTIAUDIOPLUG_SOURCE; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<engine::Trigger> trigger,
 			int indexOffset,

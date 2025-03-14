@@ -212,9 +212,6 @@
     <ClInclude Include="src\audio\ChannelMixer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\GuiElement.h">
-      <Filter>src\base</Filter>
-    </ClInclude>
     <ClInclude Include="src\base\AudioSink.h">
       <Filter>src\base</Filter>
     </ClInclude>
@@ -395,6 +392,12 @@
     <ClInclude Include="src\gui\GuiRadio.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\base\Jammable.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\GuiElement.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -514,9 +517,6 @@
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\base\GuiElement.cpp">
-      <Filter>src\base</Filter>
-    </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>
     </ClCompile>
@@ -606,6 +606,9 @@
     </ClCompile>
     <ClCompile Include="src\gui\GuiRadio.cpp">
       <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\base\GuiElement.cpp">
+      <Filter>src\base</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
