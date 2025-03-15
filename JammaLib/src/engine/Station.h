@@ -6,9 +6,7 @@
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
-#include "../gui/GuiPanel.h"
-#include "../gui/GuiToggle.h"
-#include "../gui/GuiRouter.h"
+#include "../gui/GuiRack.h"
 
 namespace engine
 {
@@ -94,12 +92,12 @@ namespace engine
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) override;
+		virtual void Reset() override;
 		
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
 		unsigned int NumTakes() const;
-		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
@@ -116,24 +114,18 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
-		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
-		gui::GuiToggleParams _GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType);
+		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
 	protected:
 		static const utils::Size2d _Gap;
-		static const utils::Size2d _ToggleSize;
-		static const utils::Size2d _ToggleGap;
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
 		unsigned int _fadeSamps;
 		std::shared_ptr<Timer> _clock;
-		std::shared_ptr<gui::GuiPanel> _guiPanel;
-		std::shared_ptr<gui::GuiPanel> _mixerPanel;
-		std::shared_ptr<gui::GuiPanel> _routerPanel;
-		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;

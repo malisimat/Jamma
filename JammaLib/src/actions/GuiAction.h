@@ -2,11 +2,12 @@
 
 #include <vector>
 #include "Action.h"
+#include "../base/ActionSender.h"
+#include "../base/ActionUndo.h"
 #include "CommonTypes.h"
 
 namespace actions
 {
-
 	class GuiAction :
 		public base::Action
 	{
@@ -14,16 +15,17 @@ namespace actions
 		enum ActionElementType
 		{
 			ACTIONELEMENT_TOGGLE,
-			ACTIONELEMENT_ROUTER,
-			ACTIONELEMENT_RADIO
+			ACTIONELEMENT_SLIDER,
+			ACTIONELEMENT_RADIO,
+			ACTIONELEMENT_ROUTER
 		};
 
 		struct GuiInt {
 			int Value;
 		};
 
-		struct GuiFloat {
-			float Value;
+		struct GuiDouble {
+			double Value;
 		};
 
 		struct GuiString {
@@ -39,7 +41,7 @@ namespace actions
 		};
 
 	public:
-		using GuiData = std::variant<GuiInt, GuiFloat, GuiString, GuiIntArray, GuiConnections>;
+		using GuiData = std::variant<GuiInt, GuiDouble, GuiString, GuiIntArray, GuiConnections>;
 
 		GuiAction();
 		~GuiAction();
@@ -48,5 +50,26 @@ namespace actions
 		unsigned int Index;
 		ActionElementType ElementType;
 		GuiData Data;
+	};
+
+
+	class GuiActionUndo :
+		public base::ActionUndo
+	{
+	public:
+		GuiActionUndo(double value,
+			std::weak_ptr<base::ActionSender> sender);
+		~GuiActionUndo();
+
+	public:
+		virtual base::UndoType UndoType() const override
+		{
+			return base::UNDO_DOUBLE;
+		}
+
+		double Value() const;
+
+	public:
+		double _value;
 	};
 }

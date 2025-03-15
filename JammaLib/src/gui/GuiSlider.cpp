@@ -106,7 +106,7 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 			ActionResult res;
 			res.IsEaten = true;
 			res.ResultType = ACTIONRESULT_DEFAULT;
-			res.Undo = std::make_shared<DoubleActionUndo>(oldValue, GuiElement::shared_from_this());
+			res.Undo = std::make_shared<GuiActionUndo>(oldValue, GuiElement::shared_from_this());
 
 			return res;
 		}
@@ -170,7 +170,7 @@ bool GuiSlider::Undo(std::shared_ptr<ActionUndo> undo)
 	if (_isDragging)
 		return false;
 
-	auto doubleUndo = std::dynamic_pointer_cast<DoubleActionUndo>(undo);
+	auto doubleUndo = std::dynamic_pointer_cast<GuiActionUndo>(undo);
 
 	if (doubleUndo)
 	{
@@ -186,7 +186,7 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 	if (_isDragging)
 		return false;
 
-	auto doubleUndo = std::dynamic_pointer_cast<DoubleActionUndo>(undo);
+	auto doubleUndo = std::dynamic_pointer_cast<GuiActionUndo>(undo);
 
 	if (doubleUndo)
 	{
@@ -231,8 +231,13 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 	auto value = _initValue + _valueOffset;
 	_dragElement.SetPosition(CalcDragPos(_sliderParams, _sizeParams.Size, value));
 
+	GuiAction action;
+	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+	action.Index = _index;
+	action.Data = GuiAction::GuiDouble(value);
+
 	if (_receiver && !bypassUpdates)
-		_receiver->OnAction(DoubleAction(value));
+		_receiver->OnAction(action);
 }
 
 double GuiSlider::CalcValueOffset(GuiSliderParams params,

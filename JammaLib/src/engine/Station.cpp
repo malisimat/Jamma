@@ -6,14 +6,11 @@ using namespace audio;
 using namespace actions;
 using namespace base;
 using resources::ResourceLib;
-using gui::GuiSliderParams;
 using utils::Size2d;
-using gui::GuiRouterParams;
+using gui::GuiRackParams;
 using gui::GuiToggleParams;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
-const utils::Size2d Station::_ToggleSize = { 64, 32 };
-const utils::Size2d Station::_ToggleGap = { 6, 86 };
 
 Station::Station(StationParams params,
 	AudioMixerParams mixerParams) :
@@ -23,10 +20,7 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
-	_guiPanel(nullptr),
-	_mixerPanel(nullptr),
-	_routerPanel(nullptr),
-	_masterMixer(nullptr),
+	_guiRack(nullptr),
 	_mixer(nullptr),
 	_audioMixers(),
 	_backAudioMixers(),
@@ -40,20 +34,11 @@ Station::Station(StationParams params,
 	_backAudioBuffers()
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
-	_router = std::make_unique<gui::GuiRouter>(_GetRouterParams(params.Size),
-		8,
-		8);
 
-	gui::GuiToggleParams mixerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, STATIONPANEL_MIXER));
-	_mixerToggle = std::make_shared<gui::GuiToggle>(mixerToggleParams);
-
-	gui::GuiToggleParams routerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, STATIONPANEL_ROUTER));
-	_routerToggle = std::make_shared<gui::GuiToggle>(routerToggleParams);
+	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_mixer);
-	_children.push_back(_mixerToggle);
-	_children.push_back(_routerToggle);
-	_children.push_back(_router);
+	_children.push_back(_guiRack);
 }
 
 Station::~Station()
@@ -456,6 +441,27 @@ void Station::OnTick(Time curTime,
 	}
 }
 
+void Station::Reset()
+{
+	Jammable::Reset();
+
+	for (auto& take : _loopTakes)
+	{
+		auto child = std::find(_children.begin(), _children.end(), take);
+		if (_children.end() != child)
+			_children.erase(child);
+	}
+	_loopTakes.clear();
+
+	for (auto& trigger : _triggers)
+	{
+		auto child = std::find(_children.begin(), _children.end(), trigger);
+		if (_children.end() != child)
+			_children.erase(child);
+	}
+	_triggers.clear();
+}
+
 std::shared_ptr<LoopTake> Station::AddTake()
 {
 	LoopTakeParams takeParams;
@@ -481,6 +487,8 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(NumInputChannels(), BufSize());
 
 	_backLoopTakes.push_back(take);
+	_children.push_back(take);
+
 	Init();
 
 	_ArrangeChildren();
@@ -501,25 +509,6 @@ unsigned int Station::NumTakes() const
 	return _changesMade ?
 		(unsigned int)_backLoopTakes.size() :
 		(unsigned int)_loopTakes.size();
-}
-
-void Station::Reset()
-{
-	for (auto& take : _loopTakes)
-	{
-		auto child = std::find(_children.begin(), _children.end(), take);
-		if (_children.end() != child)
-			_children.erase(child);
-	}
-	_loopTakes.clear();
-
-	for (auto& trigger : _triggers)
-	{
-		auto child = std::find(_children.begin(), _children.end(), trigger);
-		if (_children.end() != child)
-			_children.erase(child);
-	}
-	_triggers.clear();
 }
 
 std::string Station::Name() const
@@ -609,9 +598,7 @@ unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int n
 
 void Station::_InitReceivers()
 {
-	_router->SetReceiver(ActionReceiver::shared_from_this());
-	_mixerToggle->SetReceiver(ActionReceiver::shared_from_this());
-	_routerToggle->SetReceiver(ActionReceiver::shared_from_this());
+	_guiRack->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 std::vector<JobAction> Station::_CommitChanges()
@@ -683,55 +670,26 @@ void Station::_ArrangeChildren()
 	}
 }
 
-gui::GuiRouterParams Station::_GetRouterParams(utils::Size2d size)
+gui::GuiRackParams _GetRackParams(utils::Size2d size, unsigned int numChannels)
 {
-	size.Width = 300;
-	size.Height = 300;
-	GuiRouterParams routerParams;
+	gui::GuiRackParams params;
+	params.Size = size;
+	params.Position = { 0, 0 };
+	params.NumChannels = numChannels;
+	params.InitLevel = 1.0;
+	params.InitState = gui::GuiRackParams::RACK_MASTER;
 
-	routerParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
-	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
-	routerParams.MinSize = routerParams.Size;
-	routerParams.InputType = GuiRouterParams::CHANNEL_BUS;
-	routerParams.OutputType = GuiRouterParams::CHANNEL_DEVICE;
-	routerParams.InputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
-	routerParams.InputSize = GuiRouterParams::BusWidth;
-	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
-	routerParams.OutputSize = GuiRouterParams::BusWidth;
-	routerParams.Texture = "router";
-	routerParams.PinTexture = "";
-	routerParams.LinkTexture = "";
-	routerParams.DeviceInactiveTexture = "router";
-	routerParams.DeviceActiveTexture = "router_inactive";
-	routerParams.ChannelInactiveTexture = "router";
-	routerParams.ChannelActiveTexture = "router_inactive";
-	routerParams.OverTexture = "router_over";
-	routerParams.DownTexture = "router_down";
-	routerParams.HighlightTexture = "router_over";
-	routerParams.LineShader = "colour";
-
-	return routerParams;
+	return params;
 }
 
-GuiToggleParams Station::_GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, StationPanelType panelType)
+GuiRackParams Station::_GetRackParams(utils::Size2d size)
 {
-	GuiToggleParams toggleParams;
+	GuiRackParams rackParams;
+	rackParams.Position = { 0, 0 };
+	rackParams.Size = size;
+	rackParams.MinSize = rackParams.Size;
 
-	if (STATIONPANEL_MIXER == panelType)
-		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) };
-	else
-		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) - (int)size.Height};
-
-	toggleParams.Size = _ToggleSize;
-	toggleParams.MinSize = toggleParams.Size;
-	toggleParams.Texture = "arrow";
-	toggleParams.OverTexture = "arrow_over";
-	toggleParams.DownTexture = "arrow_down";
-	toggleParams.ToggledTexture = "arrowup2";
-	toggleParams.ToggledOverTexture = "arrowup2_over";
-	toggleParams.ToggledDownTexture = "arrowup2_down";
-
-	return toggleParams;
+	return rackParams;
 }
 
 std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)

@@ -722,7 +722,7 @@ bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 	switch (undo->UndoType())
 	{
 	case UNDO_DOUBLE:
-		auto doubleUndo = std::dynamic_pointer_cast<actions::DoubleActionUndo>(undo);
+		auto doubleUndo = std::dynamic_pointer_cast<actions::GuiActionUndo>(undo);
 		if (doubleUndo)
 		{
 			doubleUndo->Value();

@@ -8,7 +8,7 @@
 #include "InterpolatedValue.h"
 #include "GuiElement.h"
 #include "Tweakable.h"
-#include "../actions/DoubleAction.h"
+#include "../actions/GuiAction.h"
 #include "../gui/GuiSlider.h"
 
 namespace audio
@@ -199,12 +199,10 @@ namespace audio
 
 	public:
 		static const double DefaultLevel;
-		static void CallMe();
 
 		virtual std::string ClassName() const { return "AudioMixer"; }
 
-		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
-		virtual void SetSize(utils::Size2d size) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 
@@ -219,18 +217,12 @@ namespace audio
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
 	protected:
-		virtual void _InitReceivers() override;
-
-		gui::GuiSliderParams _GetSliderParams(utils::Size2d size);
-
-	protected:
 		static const utils::Size2d _Gap;
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
 
 		double _unmutedFadeTarget;
 		std::unique_ptr<MixBehaviour> _behaviour;
-		std::shared_ptr<gui::GuiSlider> _slider;
 		std::unique_ptr<InterpolatedValue> _fade;
 	};
 }

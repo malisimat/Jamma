@@ -171,6 +171,7 @@ namespace engine
 		virtual bool DeSelect() override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		virtual void Reset() override;
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
@@ -192,7 +193,6 @@ namespace engine
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		
-		void _Reset();
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
 

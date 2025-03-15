@@ -15,8 +15,7 @@ using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
 using audio::WireMixBehaviourParams;
-using gui::GuiRouterParams;
-using gui::GuiToggleParams;
+using gui::GuiRackParams;
 using utils::Size2d;
 
 const Size2d LoopTake::_Gap = { 6, 6 };
@@ -40,30 +39,18 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_endRecordSampCount(0),
 	_endRecordSamps(0),
 	_mixer(nullptr),
-	_mixerToggle(nullptr),
-	_routerToggle(nullptr),
-	_router(nullptr),
+	_guiRack(nullptr),
 	_loops(),
 	_backLoops(),
 	_audioBuffers(),
 	_backAudioBuffers()
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
-	_router = std::make_unique<gui::GuiRouter>(
-		_GetRouterParams(params.Size, mixerParams.Size),
-		0,
-		8);
 
-	gui::GuiToggleParams mixerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, true));
-	_mixerToggle = std::make_shared<gui::GuiToggle>(mixerToggleParams);
-
-	gui::GuiToggleParams routerToggleParams(_GetToggleParams(params.Size, mixerParams.Size, false));
-	_routerToggle = std::make_shared<gui::GuiToggle>(routerToggleParams);
+	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_mixer);
-	_children.push_back(_mixerToggle);
-	_children.push_back(_routerToggle);
-	_children.push_back(_router);
+	_children.push_back(_guiRack);
 }
 
 LoopTake::~LoopTake()
@@ -585,9 +572,7 @@ unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int num
 
 void LoopTake::_InitReceivers()
 {
-	_router->SetReceiver(ActionReceiver::shared_from_this());
-	_mixerToggle->SetReceiver(ActionReceiver::shared_from_this());
-	_routerToggle->SetReceiver(ActionReceiver::shared_from_this());
+	_guiRack->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void LoopTake::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -626,7 +611,7 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 
 		_loops = _backLoops; // TODO: Undo?
 
-		_router->SetNumInputs((unsigned int)_loops.size());
+		_guiRack->SetNumChannels((unsigned int)_loops.size());
 	}
 
 	if (_flipAudioBuffer)
@@ -712,53 +697,14 @@ void LoopTake::_ArrangeChildren()
 	}
 }
 
-gui::GuiRouterParams LoopTake::_GetRouterParams(utils::Size2d size, utils::Size2d mixerSize)
+GuiRackParams LoopTake::_GetRackParams(utils::Size2d size)
 {
-	GuiRouterParams routerParams;
+	GuiRackParams rackParams;
+	rackParams.Position = { 0, 0 };
+	rackParams.Size = size;
+	rackParams.MinSize = rackParams.Size;
 
-	routerParams.Position = { (int)_Gap.Width, (int)_Gap.Height };
-	routerParams.Size = { size.Width - (2 * _Gap.Width), size.Height - (2 * _Gap.Height) };
-	routerParams.MinSize = routerParams.Size;
-	routerParams.InputType = GuiRouterParams::CHANNEL_FADER;
-	routerParams.OutputType = GuiRouterParams::CHANNEL_BUS;
-	routerParams.InputSpacing = mixerSize.Width;
-	routerParams.InputSize = mixerSize.Width - 2;
-	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
-	routerParams.OutputSize = GuiRouterParams::BusWidth;
-	routerParams.Texture = "router";
-	routerParams.PinTexture = "";
-	routerParams.LinkTexture = "";
-	routerParams.DeviceInactiveTexture = "router";
-	routerParams.DeviceActiveTexture = "router_inactive";
-	routerParams.ChannelInactiveTexture = "router";
-	routerParams.ChannelActiveTexture = "router_inactive";
-	routerParams.OverTexture = "router_over";
-	routerParams.DownTexture = "router_down";
-	routerParams.HighlightTexture = "router_over";
-	routerParams.LineShader = "colour";
-
-	return routerParams;
-}
-
-GuiToggleParams LoopTake::_GetToggleParams(utils::Size2d size, utils::Size2d mixerSize, bool isMixer)
-{
-	GuiToggleParams toggleParams;
-
-	if (isMixer)
-		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) };
-	else
-		toggleParams.Position = { (int)(size.Width + _ToggleGap.Width), (int)(_Gap.Height + _ToggleGap.Height) - (int)size.Height };
-
-	toggleParams.Size = _ToggleSize;
-	toggleParams.MinSize = toggleParams.Size;
-	toggleParams.Texture = "arrow";
-	toggleParams.OverTexture = "arrow_over";
-	toggleParams.DownTexture = "arrow_down";
-	toggleParams.ToggledTexture = "arrowup2";
-	toggleParams.ToggledOverTexture = "arrowup2_over";
-	toggleParams.ToggledDownTexture = "arrowup2_down";
-
-	return toggleParams;
+	return rackParams;
 }
 
 void LoopTake::_UpdateLoops()

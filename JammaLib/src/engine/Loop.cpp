@@ -417,7 +417,7 @@ void Loop::Record()
 	if (STATE_INACTIVE != _playState)
 		return;
 
-	_Reset();
+	Reset();
 
 	_playState = STATE_RECORDING;
 	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
@@ -437,7 +437,7 @@ void Loop::Play(unsigned long index,
 
 	if (0 == bufSize)
 	{
-		_Reset();
+		Reset();
 		return;
 	}
 
@@ -492,6 +492,17 @@ bool Loop::UnMute()
 	return isNewState;
 }
 
+void Loop::Reset()
+{
+	_playState = STATE_INACTIVE;
+
+	_writeIndex = 0ul;
+	_playIndex = 0ul;
+	_loopLength = 0ul;
+	_mixer->UnMute();
+	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
+}
+
 void Loop::EndRecording()
 {
 	if ((STATE_PLAYINGRECORDING != _playState) &&
@@ -508,7 +519,7 @@ void Loop::Ditch()
 	if (STATE_INACTIVE == _playState)
 		return;
 
-_Reset();
+Reset();
 
 _bufferBank.SetLength(constants::MaxLoopFadeSamps);
 _bufferBank.UpdateCapacity();
@@ -521,7 +532,7 @@ void Loop::Overdub()
 	if (STATE_INACTIVE != _playState)
 		return;
 
-	_Reset();
+	Reset();
 
 	_playState = STATE_OVERDUBBING;
 	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
@@ -581,19 +592,6 @@ LoopModel::LoopModelState Loop::_GetLoopModelState(base::DrawPass pass, LoopPlay
 			return LoopModel::LoopModelState::STATE_RECORDING;
 		}
 	}
-}
-
-void Loop::_Reset()
-{
-	_playState = STATE_INACTIVE;
-
-	_writeIndex = 0ul;
-	_playIndex = 0ul;
-	_loopLength = 0ul;
-	_mixer->UnMute();
-	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
-
-	std::cout << "-=-=- Loop RESET" << std::endl;
 }
 
 unsigned long Loop::_LoopIndex() const

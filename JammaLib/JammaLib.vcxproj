@@ -229,7 +229,6 @@
     <ClInclude Include="src\base\MultiAudible.h" />
     <ClInclude Include="src\base\Audible.h" />
     <ClInclude Include="src\audio\ChannelMixer.h" />
-    <ClInclude Include="src\actions\DoubleAction.h" />
     <ClInclude Include="src\actions\TriggerAction.h" />
     <ClInclude Include="src\base\MultiAudioSink.h" />
     <ClInclude Include="src\base\Actionable.h" />
@@ -240,6 +239,7 @@
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\GuiSelector.h" />
     <ClInclude Include="src\gui\GuiRadio.h" />
+    <ClInclude Include="src\gui\GuiRack.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
     <ClInclude Include="src\io\UserConfig.h" />
@@ -328,7 +328,6 @@
   <ItemGroup>
     <ClCompile Include="src\audio\BufferBank.cpp" />
     <ClCompile Include="src\audio\ChannelMixer.cpp" />
-    <ClCompile Include="src\actions\DoubleAction.cpp" />
     <ClCompile Include="src\actions\TriggerAction.cpp" />
     <ClCompile Include="src\actions\JobAction.cpp" />
     <ClCompile Include="src\audio\FallingValue.cpp" />
@@ -344,6 +343,7 @@
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
+    <ClCompile Include="src\gui\GuiRack.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\RigFile.cpp" />
     <ClCompile Include="src\io\Json.cpp" />

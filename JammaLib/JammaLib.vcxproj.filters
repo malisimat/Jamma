@@ -176,9 +176,6 @@
     <ClInclude Include="src\base\AudioSource.h">
       <Filter>src\base</Filter>
     </ClInclude>
-    <ClInclude Include="src\actions\DoubleAction.h">
-      <Filter>src\actions</Filter>
-    </ClInclude>
     <ClInclude Include="src\actions\CursorAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
@@ -392,11 +389,14 @@
     <ClInclude Include="src\gui\GuiRadio.h">
       <Filter>src\gui</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\Jammable.h">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="src\base\GuiElement.h">
       <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\Jammable.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiRack.h">
+      <Filter>src\gui</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -479,9 +479,6 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\actions\KeyAction.cpp">
-      <Filter>src\actions</Filter>
-    </ClCompile>
-    <ClCompile Include="src\actions\DoubleAction.cpp">
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\actions\CursorAction.cpp">
@@ -609,6 +606,9 @@
     </ClCompile>
     <ClCompile Include="src\base\GuiElement.cpp">
       <Filter>src\base</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiRack.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

@@ -11,16 +11,11 @@ using gui::GuiSliderParams;
 
 const double AudioMixer::DefaultLevel = 1.0;
 
-const utils::Size2d AudioMixer::_Gap = { 2, 4 };
-const utils::Size2d AudioMixer::_DragGap = { 4, 4 };
-const utils::Size2d AudioMixer::_DragSize = { 32, 32 };
-
 AudioMixer::AudioMixer(AudioMixerParams params) :
 	GuiElement(params),
 	Tweakable(params),
 	_unmutedFadeTarget(DefaultLevel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_slider(std::make_shared<GuiSlider>(_GetSliderParams(params.Size))),
 	_fade(std::make_unique<InterpolatedValueExp>())
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
@@ -30,29 +25,26 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 
 	_fade = std::make_unique<InterpolatedValueExp>(interpParams);
 	_fade->Jump(DefaultLevel);
-
-	_children.push_back(_slider);
 }
 
-void AudioMixer::SetSize(utils::Size2d size)
-{
-	auto sliderParams = _GetSliderParams(size);
-	_slider->SetSize(sliderParams.Size);
-
-	GuiElement::SetSize(size);
-}
-
-void AudioMixer::CallMe()
-{
-	std::cout << "Called!" << std::endl;
-}
-
-ActionResult AudioMixer::OnAction(DoubleAction val)
+ActionResult AudioMixer::OnAction(GuiAction action)
 {
 	if (_isEnabled)
-		SetUnmutedLevel(val.Value());
+	{
+		switch (action.ElementType)
+		{
+		case GuiAction::ACTIONELEMENT_SLIDER:
+			if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
+			{
+				SetUnmutedLevel(d->Value);
 
-	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr};
+				return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+			}
+			break;
+		}
+	}
+	
+	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr };
 }
 
 bool AudioMixer::Mute()
@@ -223,30 +215,4 @@ void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			index,
 			base::Audible::AudioSourceType::AUDIOSOURCE_MIXER);
 	}
-}
-
-void AudioMixer::_InitReceivers()
-{
-	_slider->SetReceiver(ActionReceiver::shared_from_this());
-	_slider->SetValue(DefaultLevel);
-}
-
-gui::GuiSliderParams AudioMixer::_GetSliderParams(utils::Size2d mixerSize)
-{
-	GuiSliderParams sliderParams;
-	sliderParams.Min = 0.0;
-	sliderParams.Max = 6.0;
-	sliderParams.InitValue = DefaultLevel;
-	sliderParams.Orientation = GuiSliderParams::SLIDER_VERTICAL;
-	sliderParams.Position = { (int)_Gap.Width, (int)_Gap.Height};
-	sliderParams.Size = { mixerSize.Width - (2u * _Gap.Width), mixerSize.Height - (2 * _Gap.Height) };
-	sliderParams.MinSize = { std::max(40u,mixerSize.Width), std::max(40u, mixerSize.Height) };
-	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(_DragSize.Width / 2), (int)_DragGap.Height};
-	sliderParams.DragControlSize = _DragSize;
-	sliderParams.DragGap = _DragGap;
-	sliderParams.Texture = "fader_back";
-	sliderParams.DragTexture = "fader";
-	sliderParams.DragOverTexture = "fader_over";
-
-	return sliderParams;
 }

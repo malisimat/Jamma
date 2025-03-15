@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include "../utils/CommonTypes.h"
+#include "../actions/GuiAction.h"
 #include "GuiElement.h"
 #include "ActionSender.h"
 #include "ActionUndo.h"
@@ -26,6 +27,7 @@ namespace gui
 			Min(0.0),
 			Max(1.0),
 			Steps(0),
+			InitValue(0.0),
 			DragTexture(""),
 			DragOverTexture(""),
 			DragDownTexture(""),
@@ -42,6 +44,7 @@ namespace gui
 			Min(0.0),
 			Max(1.0),
 			Steps(0),
+			InitValue(0.0),
 			DragTexture(""),
 			DragOverTexture(""),
 			DragDownTexture(""),
