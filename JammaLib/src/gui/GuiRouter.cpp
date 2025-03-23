@@ -8,8 +8,6 @@ using namespace resources;
 
 const unsigned int GuiRouterParams::BusWidth = 30;
 const unsigned int GuiRouterParams::BusGap = 8;
-const unsigned int GuiRouter::_ChannelGapX = 8;
-const unsigned int GuiRouter::_ChannelSpacingY = 64;
 const unsigned int GuiRouter::_MaxRoutes = 128;
 const int GuiRouter::_WireYOffset = 6;
 
@@ -21,10 +19,14 @@ GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 	_label(nullptr),
 	_params(params)
 {
+	unsigned int width = params.Size.Width > 4 ? params.Size.Width - 4 : params.Size.Width;
+	unsigned int height = params.Size.Height > 4 ? params.Size.Height - 4 : params.Size.Height;
+	int labelX = 2 + ((int)width) / 6;
+	int labelY = 0 - ((int)height) / 6;
 	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
-		MoveableParams(Position2d{ 6, -4 }, Position3d{ 6, -4, 0 }, 1.0),
-		SizeableParams{ params.Size.Width - 4, params.Size.Height - 4},
+		MoveableParams(Position2d{ labelX, labelY }, Position3d{ (float)labelX, (float)labelY, 0 }, 1.0),
+		SizeableParams{ width, height},
 		"",
 		"",
 		"",
@@ -267,7 +269,16 @@ void GuiRouter::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
 void GuiRouter::Draw(DrawContext& ctx)
 {
 	if (_isVisible)
+	{
+		auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+
+		auto pos = Position();
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
+
 		_DrawLines(ctx);
+
+		glCtx.PopMvp();
+	}
 
 	GuiElement::Draw(ctx);
 }
@@ -350,7 +361,9 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 	}
 	else
 	{
-		if (res.IsEaten && (TouchAction::TOUCH_DOWN == action.State))
+		if (res.IsEaten && 
+			(TouchAction::TOUCH_DOWN == action.State) && 
+			((res.ResultType == ACTIONRESULT_ROUTERINPUT) || (res.ResultType == ACTIONRESULT_ROUTEROUTPUT)))
 		{
 			_isDragging = true;
 			_isDraggingInput = ACTIONRESULT_ROUTERINPUT == res.ResultType;
@@ -438,14 +451,22 @@ bool GuiRouter::_HitTest(Position2d localPos)
 	return false;
 }
 
+unsigned int GuiRouter::_CalcChannelSpacingY() const
+{
+	return _routerParams.Size.Height >= _routerParams.InputSize ?
+		(_routerParams.Size.Height - _routerParams.InputSize) :
+		_routerParams.OutputSize;
+}
+
 GuiRouter::GuiRouterChannelParams GuiRouter::_GetChannelParams(unsigned int index,
 	bool isInput,
 	GuiRouterParams::GuiRouterChannelType type)
 {
-	auto spacing = isInput ? _routerParams.InputSpacing : _routerParams.OutputSpacing;
+	auto spacingX = isInput ? _routerParams.InputSpacing : _routerParams.OutputSpacing;
+	auto spacingY = _CalcChannelSpacingY();
 	auto size = isInput ? _routerParams.InputSize : _routerParams.OutputSize;
-	int x = _GetChannelPos(index, spacing);
-	int y = isInput ? _ChannelSpacingY : 0;
+	int x = _GetChannelPos(index, spacingX);
+	int y = isInput ? spacingY : 0;
 	std::string tex = (GuiRouterParams::CHANNEL_DEVICE == type) ?
 		_routerParams.DeviceInactiveTexture :
 		_routerParams.ChannelInactiveTexture;
@@ -526,6 +547,7 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		return;
 
 	std::vector<float> vertices;
+	float channelSpacingY = (float)_CalcChannelSpacingY();
 
 	for (auto& con : _routes)
 	{
@@ -533,7 +555,7 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		auto outChanPos = (float)_GetChannelPos(con.second, _routerParams.OutputSpacing);
 		float x1 = inChanPos + ((float)_routerParams.InputSize * 0.5f);
 		float x2 = outChanPos + ((float)_routerParams.OutputSize * 0.5f);
-		float y1 = (float)_ChannelSpacingY + (float)_WireYOffset;
+		float y1 = channelSpacingY + (float)_WireYOffset;
 		float y2 = (float)_routerParams.OutputSize - (float)_WireYOffset;
 
 		vertices.push_back(x1); vertices.push_back(y1);
@@ -546,7 +568,7 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		{
 			auto inChanPos = (float)_GetChannelPos(_initDragChannel, _routerParams.InputSpacing);
 			float x = inChanPos + ((float)_routerParams.InputSize * 0.5f);
-			float y = (float)_ChannelSpacingY + (float)_WireYOffset;
+			float y = channelSpacingY + (float)_WireYOffset;
 
 			vertices.push_back(x); vertices.push_back(y);
 			vertices.push_back((float)_currentDragPos.X); vertices.push_back((float)_currentDragPos.Y);

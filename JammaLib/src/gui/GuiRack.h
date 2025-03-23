@@ -68,9 +68,10 @@ namespace gui
 	protected:
 		static const utils::Size2d _SliderGap;
 		static const unsigned int _ChannelTogglePaddingLeft;
-		static const double _RouterHeightFrac;
+		static const unsigned int _RouterSpacingY;
 		static const utils::Size2d _ChannelToggleSize;
 		static const utils::Size2d _RouterToggleSize;
+		static const unsigned int _RouterTogglePaddingBottom;
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
 
@@ -81,6 +82,7 @@ namespace gui
 
 		utils::Size2d _CalcSliderSize(utils::Size2d size);
 		unsigned int _CalcChannelPannelWidth(utils::Size2d sliderSize);
+		unsigned int _CalcRouterHeight(utils::Size2d size);
 		base::GuiElementParams _GetPanelParams(GuiRackParams::RackState state, utils::Size2d);
 		gui::GuiSliderParams _GetSliderParams(unsigned int index, utils::Size2d size);
 		gui::GuiToggleParams _GetToggleParams(GuiRackParams::RackState state, utils::Size2d);

@@ -666,7 +666,7 @@ std::vector<JobAction> Station::_CommitChanges()
 		_flipAudioBuffer = false;
 		_audioBuffers = _backAudioBuffers;
 
-		_guiRack->SetNumInputChannels((unsigned int)_audioBuffers.size());
+		_guiRack->SetNumOutputChannels((unsigned int)_audioBuffers.size());
 	}
 
 	if (_numBusChanged)

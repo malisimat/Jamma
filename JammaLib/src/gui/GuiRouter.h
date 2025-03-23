@@ -107,6 +107,7 @@ namespace gui
 				ActiveTexture(""),
 				HighlightTexture("")
 			{
+				GuiPassThrough = false;
 			}
 
 		public:
@@ -170,6 +171,7 @@ namespace gui
 		virtual void _ReleaseResources() override;
 		virtual bool _HitTest(utils::Position2d localPos) override;
 
+		unsigned int _CalcChannelSpacingY() const;
 		GuiRouterChannelParams _GetChannelParams(unsigned int index,
 			bool isInput,
 			GuiRouterParams::GuiRouterChannelType type);
@@ -178,8 +180,6 @@ namespace gui
 		void _DrawLines(base::DrawContext& ctx) const;
 
 	protected:
-		static const unsigned int _ChannelGapX;
-		static const unsigned int _ChannelSpacingY;
 		static const unsigned int _MaxRoutes;
 		static const int _WireYOffset;
 

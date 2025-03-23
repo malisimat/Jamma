@@ -10,9 +10,10 @@ using namespace utils;
 
 const utils::Size2d GuiRack::_SliderGap = { 4, 4 };
 const unsigned int GuiRack::_ChannelTogglePaddingLeft = 35;
-const double GuiRack::_RouterHeightFrac = 0.8;
+const unsigned int GuiRack::_RouterSpacingY = 64;
 const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
+const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
 const utils::Size2d GuiRack::_DragSize = { 32, 32 };
 
@@ -73,6 +74,7 @@ ActionResult GuiRack::OnAction(GuiAction action)
 		return res;
 
 	bool toggleOn;
+	bool routerVisible = _routerPanel->IsVisible();
 	GuiRackParams::RackState newRackState;
 
 	if (_receiver)
@@ -94,7 +96,7 @@ ActionResult GuiRack::OnAction(GuiAction action)
 				_rackState = toggleOn ? GuiRackParams::RACK_ROUTER : GuiRackParams::RACK_CHANNELS;
 				break;
 			case GuiRackParams::RACK_CHANNELS:
-				if ((GuiRackParams::RACK_ROUTER == _rackState) && toggleOn)
+				if (routerVisible && toggleOn)
 					_rackState = GuiRackParams::RACK_ROUTER;
 				else
 					_rackState = toggleOn ? GuiRackParams::RACK_CHANNELS : GuiRackParams::RACK_MASTER;
@@ -163,8 +165,6 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_masterPanel->SetVisible(true);
 		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(false);
-		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 2 == index ? true : bypassUpdates);
-		_routerPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		_masterPanel->SetVisible(true);
@@ -208,14 +208,19 @@ base::GuiElementParams GuiRack::_GetPanelParams(GuiRackParams::RackState state, 
 
 	switch (state)
 	{
-	case GuiRackParams::RACK_MASTER:
-		params.Size = { size.Width, size.Height };
-		params.Position = { 0, 0 };
+	case GuiRackParams::RACK_ROUTER:
+		params.Size = { _CalcChannelPannelWidth(sliderSize),
+			_CalcRouterHeight(size)};
+		params.Position = { 0, -(int)(params.Size.Height + _RouterToggleSize.Height + _RouterTogglePaddingBottom) };
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		params.Size = { _CalcChannelPannelWidth(sliderSize),
 			size.Height };
 		params.Position = { (int)size.Width, 0 };
+		break;
+	default:
+		params.Size = { size.Width, size.Height };
+		params.Position = { 0, 0 };
 		break;
 	}
 
@@ -225,6 +230,12 @@ base::GuiElementParams GuiRack::_GetPanelParams(GuiRackParams::RackState state, 
 unsigned int GuiRack::_CalcChannelPannelWidth(utils::Size2d sliderSize)
 {
 	return _rackParams.NumInputChannels * (sliderSize.Width + _SliderGap.Width);
+}
+
+unsigned int GuiRack::_CalcRouterHeight(utils::Size2d size)
+{
+	auto sliderSize = _CalcSliderSize(size);
+	return sliderSize.Width + _RouterSpacingY;
 }
 
 gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d size)
@@ -247,7 +258,7 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	else
 	{
 		sliderParams.Position = {
-			((int)_SliderGap.Width + (int)sliderSize.Width) * (int)index,
+			((int)_SliderGap.Width + (int)sliderSize.Width) * (int)(index-1),
 			(int)_SliderGap.Height
 		};
 	}
@@ -307,14 +318,14 @@ gui::GuiRouterParams GuiRack::_GetRouterParams(utils::Size2d size)
 
 	routerParams.Size = {
 		_CalcChannelPannelWidth(sliderSize),
-		(unsigned int)((double)size.Height * _RouterHeightFrac)
+		_CalcRouterHeight(size)
 	};
-	routerParams.Position = { (int)_rackParams.Size.Width, -(int)routerParams.Size.Height };
+	routerParams.Position = { 0, 0 };
 	routerParams.MinSize = routerParams.Size;
 	routerParams.InputType = GuiRouterParams::CHANNEL_BUS;
 	routerParams.OutputType = GuiRouterParams::CHANNEL_DEVICE;
-	routerParams.InputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
-	routerParams.InputSize = GuiRouterParams::BusWidth;
+	routerParams.InputSpacing = sliderSize.Width + _SliderGap.Width;
+	routerParams.InputSize = sliderSize.Width;
 	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
 	routerParams.OutputSize = GuiRouterParams::BusWidth;
 	routerParams.Texture = "router";
@@ -347,7 +358,7 @@ void GuiRack::SetNumInputChannels(unsigned int channels)
 	{
 		for (auto i = current; i < channels; ++i)
 		{
-			_AddChannel(i, _rackParams.Size);
+			_AddChannel(i+1, _rackParams.Size);
 		}
 	}
 
