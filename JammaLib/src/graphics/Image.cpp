@@ -15,7 +15,7 @@ Image::Image(ImageParams params) :
 	Sizeable(params),
 	_vertexArray(0),
 	_vertexBuffer{ 0,0 },
-	_shaderName(params.Shader),
+	_imageParams(params),
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>())
 {
@@ -110,7 +110,7 @@ bool Image::_InitTexture(ResourceLib& resourceLib)
 
 bool Image::_InitShader(ResourceLib& resourceLib)
 {
-	auto shaderOpt = resourceLib.GetResource(_shaderName);
+	auto shaderOpt = resourceLib.GetResource(_imageParams.Shader);
 
 	if (!shaderOpt.has_value())
 		return false;
@@ -149,17 +149,31 @@ bool Image::_InitVertexArray()
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(0);
 
-	static const GLfloat uvs[] = {
-		0.0f, 0.0f,
-		1.0f, 0.0f,
-		0.0f, 1.0f,
-		0.0f, 1.0f,
-		1.0f, 0.0f,
-		1.0f, 1.0f,
+	float left = _imageParams.FlipH ? 1.0f : 0.0f;
+	float right = _imageParams.FlipH ? 0.0f : 1.0f;
+	float bottom = _imageParams.FlipV ? 1.0f : 0.0f;
+	float top = _imageParams.FlipV ? 0.0f : 1.0f;
+
+	const GLfloat uvs[] = {
+		left, bottom,
+		right, bottom,
+		left, top,
+		left, top,
+		right, bottom,
+		right, top
+	};
+
+	const GLfloat uvsRotated[] = {
+		left, top,
+		left, bottom,
+		right, top,
+		right, top,
+		left, bottom,
+		right, bottom
 	};
 
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer[1]);
-	glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(GLfloat), uvs, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(GLfloat), _imageParams.Rot90 ? uvsRotated : uvs, GL_STATIC_DRAW);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(1);
 

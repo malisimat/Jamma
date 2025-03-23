@@ -611,13 +611,15 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 
 		_loops = _backLoops; // TODO: Undo?
 
-		_guiRack->SetNumChannels((unsigned int)_loops.size());
+		_guiRack->SetNumInputChannels((unsigned int)_loops.size());
 	}
 
 	if (_flipAudioBuffer)
 	{
 		_audioBuffers = _backAudioBuffers;
 		_flipAudioBuffer = false;
+
+		_guiRack->SetNumOutputChannels((unsigned int)_audioBuffers.size());
 	}
 
 	std::vector<JobAction> jobs;
@@ -703,6 +705,10 @@ GuiRackParams LoopTake::_GetRackParams(utils::Size2d size)
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
+	rackParams.NumInputChannels = NumInputChannels();
+	rackParams.NumOutputChannels = NumOutputChannels();
+	rackParams.InitLevel = 1.0;
+	rackParams.InitState = gui::GuiRackParams::RACK_MASTER;
 
 	return rackParams;
 }

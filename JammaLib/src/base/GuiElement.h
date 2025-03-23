@@ -25,6 +25,10 @@ namespace base
 			DrawableParams{ "" },
 			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
 			SizeableParams{ 1,1 },
+			Rot90(false),
+			FlipH(false),
+			FlipV(false),
+			GuiPassThrough(true),
 			Index(0u),
 			OverTexture(""),
 			DownTexture(""),
@@ -43,6 +47,10 @@ namespace base
 			DrawableParams(drawParams),
 			MoveableParams(moveParams),
 			SizeableParams(sizeParams),
+			Rot90(false),
+			FlipH(false),
+			FlipV(false),
+			GuiPassThrough(true),
 			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
@@ -51,6 +59,10 @@ namespace base
 		}
 
 	public:
+		bool Rot90;
+		bool FlipH;
+		bool FlipV;
+		bool GuiPassThrough;
 		unsigned int Index;
 		std::string OverTexture;
 		std::string DownTexture;
@@ -98,6 +110,7 @@ namespace base
 		virtual void SetStateFromPicking(EditMode mode, bool flipState);
 		virtual void SetIndex(unsigned int index);
 		virtual std::vector<unsigned int> GlobalId();
+		virtual void AddChild(std::shared_ptr<GuiElement> child);
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;

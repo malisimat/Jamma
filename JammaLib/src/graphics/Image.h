@@ -9,18 +9,27 @@
 
 namespace graphics
 {
-	class ImageParams : public base::DrawableParams, public base::SizeableParams
+	class ImageParams :
+		public base::DrawableParams,
+		public base::SizeableParams
 	{
 	public:
 		ImageParams(base::DrawableParams drawParams,
 			base::SizeableParams sizeParams,
-			std::string shader) :
+			std::string shader,
+			bool rot90, bool flipH, bool flipV) :
 			base::DrawableParams(drawParams),
 			base::SizeableParams(sizeParams),
+			Rot90(rot90),
+			FlipH(flipH),
+			FlipV(flipV),
 			Shader(shader)
 		{}
 
 	public:
+		bool Rot90;
+		bool FlipH;
+		bool FlipV;
 		std::string Shader;
 	};
 
@@ -42,14 +51,13 @@ namespace graphics
 			base::Sizeable(other._sizeParams),
 			_vertexArray(other._vertexArray),
 			_vertexBuffer{ other._vertexBuffer[0], other._vertexBuffer[1] },
-			_shaderName(other._shaderName),
+			_imageParams(std::move(other._imageParams)),
 			_texture(std::move(other._texture)),
 			_shader(std::move(other._shader))
 		{
 			other._vertexArray = 0;
 			other._vertexBuffer[0] = 0;
 			other._vertexBuffer[1] = 0;
-			other._shaderName = "";
 			other._texture = std::weak_ptr<resources::TextureResource>();
 			other._shader = std::weak_ptr<resources::ShaderResource>();
 		}
@@ -61,7 +69,7 @@ namespace graphics
 				ReleaseResources();
 				std::swap(_vertexArray, other._vertexArray);
 				std::swap(_vertexBuffer, other._vertexBuffer);
-				std::swap(_shaderName, other._shaderName);
+				std::swap(_imageParams, other._imageParams);
 				_texture.swap(other._texture);
 				_shader.swap(other._shader);
 			}
@@ -87,7 +95,7 @@ namespace graphics
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer[2];
-		std::string _shaderName;
+		ImageParams _imageParams;
 		std::weak_ptr<resources::TextureResource> _texture;
 		std::weak_ptr<resources::ShaderResource> _shader;
 	};

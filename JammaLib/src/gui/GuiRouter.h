@@ -44,6 +44,7 @@ namespace gui
 			HighlightTexture(""),
 			LineShader("")
 		{
+			GuiPassThrough = false;
 		}
 
 		GuiRouterParams(base::GuiElementParams guiParams) :
@@ -63,6 +64,7 @@ namespace gui
 			HighlightTexture(""),
 			LineShader("")
 		{
+			GuiPassThrough = false;
 		}
 
 	public:

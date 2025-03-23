@@ -19,6 +19,7 @@ namespace gui
 	public:
 		GuiToggleParams() :
 			GuiButtonParams(),
+			ToggleIndex(0u),
 			InitState(TOGGLE_OFF),
 			ToggledTexture(""),
 			ToggledOverTexture(""),
@@ -27,8 +28,9 @@ namespace gui
 		{}
 
 		GuiToggleParams(base::GuiElementParams guiParams,
-			std::weak_ptr<base::ActionReceiver> receiver) :
-			GuiButtonParams(guiParams, receiver),
+			unsigned int toggleIndex) :
+			GuiButtonParams(guiParams),
+			ToggleIndex(toggleIndex),
 			InitState(TOGGLE_OFF),
 			ToggledTexture(""),
 			ToggledOverTexture(""),
@@ -37,6 +39,7 @@ namespace gui
 		{}
 
 	public:
+		unsigned int ToggleIndex;
 		ToggleState InitState;
 		std::string ToggledTexture;
 		std::string ToggledOverTexture;
@@ -46,7 +49,7 @@ namespace gui
 	};
 
 	class GuiToggle :
-		public base::GuiElement
+		public gui::GuiButton
 	{
 	public:
 		GuiToggle(GuiToggleParams guiParams);
@@ -67,6 +70,7 @@ namespace gui
 		virtual void _OnToggleChange(bool bypassUpdates);
 
 	private:
+		unsigned int _toggleIndex;
 		GuiToggleParams::ToggleState _toggleState;
 		graphics::Image _toggledTexture;
 		graphics::Image _toggledOverTexture;

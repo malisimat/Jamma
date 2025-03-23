@@ -17,19 +17,16 @@ namespace gui
 				"",
 				"",
 				"",
-				{}),
-			Receiver(std::weak_ptr<base::ActionReceiver>())
+				{})
 		{
+			GuiPassThrough = false;
 		}
 
-		GuiButtonParams(base::GuiElementParams guiParams,
-			std::weak_ptr<base::ActionReceiver> receiver) :
-			base::GuiElementParams(guiParams),
-			Receiver(receiver)
-		{}
-
-	public:
-		std::weak_ptr<base::ActionReceiver> Receiver;
+		GuiButtonParams(base::GuiElementParams guiParams) :
+			base::GuiElementParams(guiParams)
+		{
+			GuiPassThrough = false;
+		}
 	};
 
 	class GuiButton :
@@ -37,11 +34,6 @@ namespace gui
 	{
 	public:
 		GuiButton(GuiButtonParams guiParams);
-
-	public:
-		void SetReceiver(std::weak_ptr<base::ActionReceiver> receiver);
-
-		virtual void Draw(base::DrawContext& ctx) override;
 
 	private:
 		GuiButtonParams _buttonParams;

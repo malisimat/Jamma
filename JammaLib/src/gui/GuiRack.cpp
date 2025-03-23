@@ -25,8 +25,7 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_channelPanel(nullptr),
 	_routerToggle(nullptr),
 	_routerPanel(nullptr),
-	_rackParams({}),
-	_receiver(params.Receiver)
+	_rackParams(params)
 {
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
 	_masterSlider = std::make_shared<gui::GuiSlider>(_GetSliderParams(0, params.Size));
@@ -36,16 +35,21 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_routerPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_ROUTER, params.Size));
 
 	_router = std::make_shared<gui::GuiRouter>(_GetRouterParams(params.Size),
-		params.NumChannels,
-		params.NumChannels);
+		params.NumInputChannels,
+		params.NumOutputChannels);
 
 	_children.push_back(_masterPanel);
 	_children.push_back(_masterSlider);
-	_children.push_back(_channelToggle);
-	_children.push_back(_routerToggle);
-	_children.push_back(_routerPanel);
+	_masterPanel->AddChild(_channelToggle);
+	_masterPanel->AddChild(_channelPanel);
+	_channelPanel->AddChild(_routerToggle);
+	_channelPanel->AddChild(_routerPanel);
+	_routerPanel->AddChild(_router);
 
-	SetNumChannels(params.NumChannels);
+	SetNumInputChannels(params.NumInputChannels);
+	SetNumOutputChannels(params.NumOutputChannels);
+
+	_OnRackChange((unsigned int)params.InitState, true);
 }
 
 
@@ -68,25 +72,49 @@ ActionResult GuiRack::OnAction(GuiAction action)
 	if (!_isEnabled || !_isVisible)
 		return res;
 
-	auto receiver = _receiver.lock();
+	bool toggleOn;
+	GuiRackParams::RackState newRackState;
 
-	switch (action.ElementType)
+	if (_receiver)
 	{
-	case GuiAction::ACTIONELEMENT_TOGGLE:
-		_rackState = action.Index < GuiRackParams::RACK_ROUTER ?
-			(GuiRackParams::RackState)action.Index : GuiRackParams::RACK_MASTER;
-		_OnRackChange(false);
-		break;
-	case GuiAction::ACTIONELEMENT_SLIDER:
-		if (receiver)
-			receiver->OnAction(action);
+		switch (action.ElementType)
+		{
+		case GuiAction::ACTIONELEMENT_TOGGLE:
+			toggleOn = false;
+			if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+				toggleOn = (1 == i->Value);
 
-		break;
-	case GuiAction::ACTIONELEMENT_ROUTER:
-		if (receiver)
-			receiver->OnAction(action);
+			newRackState = action.Index <= GuiRackParams::RACK_ROUTER ?
+				(GuiRackParams::RackState)action.Index :
+				GuiRackParams::RACK_MASTER;
+			
+			switch (newRackState)
+			{
+			case GuiRackParams::RACK_ROUTER:
+				_rackState = toggleOn ? GuiRackParams::RACK_ROUTER : GuiRackParams::RACK_CHANNELS;
+				break;
+			case GuiRackParams::RACK_CHANNELS:
+				if ((GuiRackParams::RACK_ROUTER == _rackState) && toggleOn)
+					_rackState = GuiRackParams::RACK_ROUTER;
+				else
+					_rackState = toggleOn ? GuiRackParams::RACK_CHANNELS : GuiRackParams::RACK_MASTER;
 
-		break;
+				break;
+			}
+			_OnRackChange(action.Index, true);
+			break;
+		case GuiAction::ACTIONELEMENT_SLIDER:
+			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+			if (_receiver)
+				_receiver->OnAction(action);
+
+			break;
+		case GuiAction::ACTIONELEMENT_ROUTER:
+			if (_receiver)
+				_receiver->OnAction(action);
+
+			break;
+		}
 	}
 
 	return ActionResult::NoAction();
@@ -101,13 +129,13 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 {
 	_rackState = state;
 
-	_OnRackChange(bypassUpdates);
+	_OnRackChange(0, bypassUpdates);
 }
 
 void GuiRack::_InitReceivers()
 {
 	_masterSlider->SetReceiver(ActionReceiver::shared_from_this());
-	_masterSlider->SetValue(_masterSlider->Value());
+	_masterSlider->SetValue(_masterSlider->Value(), true);
 
 	_channelToggle->SetReceiver(ActionReceiver::shared_from_this());
 
@@ -124,32 +152,32 @@ void GuiRack::_AddChannel(unsigned int index, utils::Size2d size)
 {
 	auto slider = std::make_shared<gui::GuiSlider>(_GetSliderParams(index, size));
 	_channelSliders.push_back(slider);
-	_children.push_back(slider);
+	_channelPanel->AddChild(slider);
 }
 
-void gui::GuiRack::_OnRackChange(bool bypassUpdates)
+void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 {
 	switch (_rackState)
 	{
 	case GuiRackParams::RACK_MASTER:
 		_masterPanel->SetVisible(true);
-		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, bypassUpdates);
+		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(false);
-		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, bypassUpdates);
+		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		_masterPanel->SetVisible(true);
-		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, bypassUpdates);
+		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(true);
-		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, bypassUpdates);
+		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_ROUTER:
 		_masterPanel->SetVisible(true);
-		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, bypassUpdates);
+		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(true);
-		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, bypassUpdates);
+		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(true);
 		break;
 	}
@@ -172,7 +200,7 @@ utils::Size2d GuiRack::_CalcSliderSize(utils::Size2d size)
 	};
 }
 
-base::GuiElementParams gui::GuiRack::_GetPanelParams(GuiRackParams::RackState state, utils::Size2d size)
+base::GuiElementParams GuiRack::_GetPanelParams(GuiRackParams::RackState state, utils::Size2d size)
 {
 	GuiElementParams params;
 
@@ -194,12 +222,12 @@ base::GuiElementParams gui::GuiRack::_GetPanelParams(GuiRackParams::RackState st
 	return params;
 }
 
-unsigned int gui::GuiRack::_CalcChannelPannelWidth(utils::Size2d sliderSize)
+unsigned int GuiRack::_CalcChannelPannelWidth(utils::Size2d sliderSize)
 {
-	return _rackParams.NumChannels * (sliderSize.Width + _SliderGap.Width);
+	return _rackParams.NumInputChannels * (sliderSize.Width + _SliderGap.Width);
 }
 
-gui::GuiSliderParams gui::GuiRack::_GetSliderParams(unsigned int index, utils::Size2d size)
+gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d size)
 {
 	auto sliderSize = _CalcSliderSize(size);
 
@@ -243,12 +271,15 @@ gui::GuiToggleParams GuiRack::_GetToggleParams(GuiRackParams::RackState state, u
 	switch (state)
 	{
 	case GuiRackParams::RACK_CHANNELS:
+		toggleParams.ToggleIndex = 1;
 		toggleParams.Position = {
 			(int)(size.Width - _ChannelToggleSize.Width),
 			((int)size.Height - (int)_ChannelToggleSize.Height) / 2 };
 		toggleParams.Size = _ChannelToggleSize;
+		toggleParams.Rot90 = true;
 		break;
 	case GuiRackParams::RACK_ROUTER:
+		toggleParams.ToggleIndex = 2;
 		toggleParams.Position = {
 			(int)size.Width + (((int)_CalcChannelPannelWidth(sliderSize) - (int)_RouterToggleSize.Width) / 2),
 			 -(int)_RouterToggleSize.Height
@@ -306,7 +337,7 @@ unsigned int GuiRack::NumChannels() const
 	return (unsigned int)_channelSliders.size();
 }
 
-void GuiRack::SetNumChannels(unsigned int channels)
+void GuiRack::SetNumInputChannels(unsigned int channels)
 {
 	auto current = (unsigned int)_channelSliders.size();
 
@@ -321,4 +352,9 @@ void GuiRack::SetNumChannels(unsigned int channels)
 	}
 
 	_router->SetNumInputs(channels);
+}
+
+void GuiRack::SetNumOutputChannels(unsigned int channels)
+{
+	_router->SetNumOutputs(channels);
 }

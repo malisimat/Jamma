@@ -21,24 +21,28 @@ namespace gui
 	public:
 		GuiRackParams() :
 			GuiElementParams(),
-			NumChannels(0),
+			NumInputChannels(0),
+			NumOutputChannels(0),
 			InitLevel(1.0),
 			InitState(RACK_MASTER),
 			Receiver(std::weak_ptr<base::ActionReceiver>())
 		{}
 
 		GuiRackParams(base::GuiElementParams params,
-			unsigned int numChannels,
+			unsigned int numInputs,
+			unsigned int numOutputs,
 			std::weak_ptr<base::ActionReceiver> receiver) :
 			GuiElementParams(params),
-			NumChannels(numChannels),
+			NumInputChannels(numInputs),
+			NumOutputChannels(numOutputs),
 			InitLevel(1.0),
 			InitState(RACK_MASTER),
 			Receiver(receiver)
 		{}
 
 	public:
-		unsigned int NumChannels;
+		unsigned int NumInputChannels;
+		unsigned int NumOutputChannels;
 		double InitLevel;
 		RackState InitState;
 		std::weak_ptr<base::ActionReceiver> Receiver;
@@ -58,7 +62,8 @@ namespace gui
 		GuiRackParams::RackState GetRackState() const;
 		void SetRackState(GuiRackParams::RackState state, bool bypassUpdates);
 		unsigned int NumChannels() const;
-		void SetNumChannels(unsigned int channels);
+		void SetNumInputChannels(unsigned int channels);
+		void SetNumOutputChannels(unsigned int channels);
 
 	protected:
 		static const utils::Size2d _SliderGap;
@@ -72,7 +77,7 @@ namespace gui
 		virtual void _InitReceivers() override;
 
 		virtual void _AddChannel(unsigned int channel, utils::Size2d size);
-		virtual void _OnRackChange(bool bypassUpdates);
+		virtual void _OnRackChange(unsigned int index, bool bypassUpdates);
 
 		utils::Size2d _CalcSliderSize(utils::Size2d size);
 		unsigned int _CalcChannelPannelWidth(utils::Size2d sliderSize);
@@ -92,6 +97,5 @@ namespace gui
 		std::shared_ptr<base::GuiElement> _routerPanel;
 		std::shared_ptr<gui::GuiRouter> _router;
 		GuiRackParams _rackParams;
-		std::weak_ptr<base::ActionReceiver> _receiver;
 	};
 }

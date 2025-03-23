@@ -8,13 +8,14 @@ using namespace resources;
 using namespace utils;
 
 GuiToggle::GuiToggle(GuiToggleParams params) :
+	GuiButton(params),
+	_toggleIndex(params.ToggleIndex),
 	_toggleState(params.InitState),
-	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_buttonParams(params),
-	GuiElement(params)
+	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_buttonParams(params)
 {
 }
 
@@ -209,7 +210,7 @@ void GuiToggle::_OnToggleChange(bool bypassUpdates)
 	{
 		GuiAction action;
 		action.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
-		action.Index = _index;
+		action.Index = _toggleIndex;
 		action.Data = GuiAction::GuiInt(_toggleState);
 		_receiver->OnAction(action);
 	}

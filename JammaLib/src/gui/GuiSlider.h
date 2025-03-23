@@ -36,6 +36,7 @@ namespace gui
 			DragControlSize({ 1,1 }),
 			DragGap({ 0,0 })
 		{
+			GuiPassThrough = false;
 		}
 
 		GuiSliderParams(GuiElementParams params) :
@@ -53,6 +54,7 @@ namespace gui
 			DragControlSize({ 1,1 }),
 			DragGap({ 0,0 })
 		{
+			GuiPassThrough = false;
 		}
 
 		enum SliderOrientation

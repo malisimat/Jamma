@@ -16,8 +16,8 @@ const int GuiRouter::_WireYOffset = 6;
 GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 	GuiElement(params),
 	_isActive(false),
-	_activeTexture(graphics::ImageParams(DrawableParams{ params.ActiveTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_highlightTexture(graphics::ImageParams(DrawableParams{ params.HighlightTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
+	_activeTexture(graphics::ImageParams(DrawableParams{ params.ActiveTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_highlightTexture(graphics::ImageParams(DrawableParams{ params.HighlightTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
 	_label(nullptr),
 	_params(params)
 {

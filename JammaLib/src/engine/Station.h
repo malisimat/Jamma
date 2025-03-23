@@ -25,13 +25,15 @@ namespace engine
 					{})
 				),
 			Name(""),
-			FadeSamps(constants::DefaultFadeSamps)
+			FadeSamps(constants::DefaultFadeSamps),
+			NumBusChannels(0)
 		{
 		}
 
 	public:
 		std::string Name;
 		unsigned int FadeSamps;
+		unsigned int NumBusChannels;
 	};
 	
 	class Station :
@@ -101,7 +103,9 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
-		void SetupBuffers(unsigned int chans, unsigned int bufSize);
+		void SetNumBusChannels(unsigned int chans);
+		void SetupBuffers(unsigned int chans,
+			unsigned int bufSize);
 		unsigned int BufSize() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
@@ -119,11 +123,14 @@ namespace engine
 
 	protected:
 		static const utils::Size2d _Gap;
+		static const unsigned int _DefaultNumBusChannels;
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
+		bool _numBusChanged;
 		std::string _name;
 		unsigned int _fadeSamps;
+		unsigned int _numBusChannels;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _mixer;

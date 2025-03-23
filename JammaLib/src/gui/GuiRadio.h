@@ -14,13 +14,16 @@ namespace gui
 		GuiRadioParams() :
 			GuiButtonParams(),
 			InitValue(0u)
-		{}
+		{
+			GuiPassThrough = false;
+		}
 
-		GuiRadioParams(base::GuiElementParams guiParams,
-			std::weak_ptr<base::ActionReceiver> receiver) :
-			GuiButtonParams(guiParams, receiver),
+		GuiRadioParams(base::GuiElementParams guiParams) :
+			GuiButtonParams(guiParams),
 			InitValue(0u)
-		{}
+		{
+			GuiPassThrough = false;
+		}
 
 	public:
 		unsigned int InitValue;

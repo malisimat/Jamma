@@ -8,13 +8,3 @@ GuiButton::GuiButton(GuiButtonParams params) :
 	GuiElement(params)
 {
 }
-
-void GuiButton::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
-{
-	_buttonParams.Receiver = receiver;
-}
-
-void GuiButton::Draw(DrawContext& ctx)
-{
-	GuiElement::Draw(ctx);
-}

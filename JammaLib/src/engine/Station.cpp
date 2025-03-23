@@ -11,12 +11,14 @@ using gui::GuiRackParams;
 using gui::GuiToggleParams;
 
 const utils::Size2d Station::_Gap = { 5, 5 };
+const unsigned int Station::_DefaultNumBusChannels = 8;
 
 Station::Station(StationParams params,
 	AudioMixerParams mixerParams) :
 	Jammable(params),
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
+	_numBusChanged(false),
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
@@ -244,6 +246,26 @@ ActionResult Station::OnAction(GuiAction action)
 
 		break;
 	case GuiAction::ACTIONELEMENT_ROUTER:
+		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
+			_mixer->SetChannels(chans->Connections);
+
+		break;
+	case GuiAction::ACTIONELEMENT_RACK:
+		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			_numBusChannels = i->Value;
+			_numBusChanged = true;
+			_changesMade = true;
+		}
+
+		if (auto vals = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			if (action.Index == 0)
+				_mixer->SetUnmutedLevel(vals->Value);
+			else if (action.Index < _audioMixers.size() + 1)
+				_audioMixers[action.Index - 1]->SetUnmutedLevel(vals->Value);
+		}
+
 		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 			_mixer->SetChannels(chans->Connections);
 
@@ -526,7 +548,15 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetupBuffers(unsigned int chans, unsigned int bufSize)
+void Station::SetNumBusChannels(unsigned int chans)
+{
+	_numBusChannels = chans;
+	_numBusChanged = true;
+	_changesMade = true;
+}
+
+void Station::SetupBuffers(unsigned int chans,
+	unsigned int bufSize)
 {
 	MergeMixBehaviourParams mergeParams;
 
@@ -605,6 +635,8 @@ std::vector<JobAction> Station::_CommitChanges()
 {
 	if (_flipTakeBuffer)
 	{
+		_flipTakeBuffer = false;
+
 		// Remove and add any children
 		// (difference between back and front LoopTake buffer)
 		std::vector<std::shared_ptr<LoopTake>> toAdd;
@@ -627,13 +659,25 @@ std::vector<JobAction> Station::_CommitChanges()
 		}
 
 		_loopTakes = _backLoopTakes; // TODO: Undo?
-		_flipTakeBuffer = false;
 	}
 
 	if (_flipAudioBuffer)
 	{
-		_audioBuffers = _backAudioBuffers;
 		_flipAudioBuffer = false;
+		_audioBuffers = _backAudioBuffers;
+
+		_guiRack->SetNumInputChannels((unsigned int)_audioBuffers.size());
+	}
+
+	if (_numBusChanged)
+	{
+		_numBusChanged = false;
+		_guiRack->SetNumInputChannels(_numBusChannels);
+
+		for (auto& take : _loopTakes)
+		{
+			take->SetupBuffers(_numBusChannels, BufSize());
+		}
 	}
 
 	GuiElement::_CommitChanges();
@@ -670,24 +714,16 @@ void Station::_ArrangeChildren()
 	}
 }
 
-gui::GuiRackParams _GetRackParams(utils::Size2d size, unsigned int numChannels)
-{
-	gui::GuiRackParams params;
-	params.Size = size;
-	params.Position = { 0, 0 };
-	params.NumChannels = numChannels;
-	params.InitLevel = 1.0;
-	params.InitState = gui::GuiRackParams::RACK_MASTER;
-
-	return params;
-}
-
 GuiRackParams Station::_GetRackParams(utils::Size2d size)
 {
 	GuiRackParams rackParams;
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
+	rackParams.NumInputChannels = _DefaultNumBusChannels;
+	rackParams.NumOutputChannels = NumOutputChannels();
+	rackParams.InitLevel = 1.0;
+	rackParams.InitState = gui::GuiRackParams::RACK_MASTER;
 
 	return rackParams;
 }

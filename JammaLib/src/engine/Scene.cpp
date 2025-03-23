@@ -569,8 +569,11 @@ void Scene::InitAudio()
 		for (auto& station : _stations)
 		{
 			if (station)
+			{
+				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
 				station->SetupBuffers(audioStreamParams.NumOutputChannels,
 					ChannelMixer::DefaultBufferSize);
+			}
 		}
 	}
 }
