@@ -302,51 +302,63 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_END:
 	{
 		auto loopLength = action.SampleCount;
-		auto errorSamps = 0;
 
-		if (_clock)
+		if (0 == loopLength)
 		{
-			if (_clock->IsQuantisable())
-			{
-				auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
-				loopLength = quantisedLength;
-				errorSamps = err;
-				std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
-			}
-			else
-			{
-				_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-				std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
-			}
+			if (loopTake.has_value())
+				loopTake.value()->Ditch();
+
+			res.IsEaten = true;
+			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
 		}
-
-		auto cfg = action.GetUserConfig();
-		auto streamParams = action.GetAudioParams();
-		auto outLatency = streamParams.has_value() ?
-			streamParams.value().OutputLatency :
-			0u;
-
-		if (0u == outLatency)
+		else
 		{
-			outLatency = cfg.has_value() ?
-				cfg.value().Audio.LatencyOut :
+			auto errorSamps = 0;
+
+			if (_clock)
+			{
+				if (_clock->IsQuantisable())
+				{
+					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					loopLength = quantisedLength;
+					errorSamps = err;
+					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
+				}
+				else
+				{
+					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
+					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+				}
+			}
+
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
+			auto outLatency = streamParams.has_value() ?
+				streamParams.value().OutputLatency :
 				0u;
+
+			if (0u == outLatency)
+			{
+				outLatency = cfg.has_value() ?
+					cfg.value().Audio.LatencyOut :
+					0u;
+			}
+
+			auto playPos = cfg.has_value() ?
+				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+				0;
+			auto endRecordSamps = cfg.has_value() ?
+				cfg.value().EndRecordingSamps(errorSamps) :
+				0;
+
+			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
+
+			if (loopTake.has_value())
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps);
+
+			res.IsEaten = true;
+			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		}
-
-		auto playPos = cfg.has_value() ?
-			cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
-			0;
-		auto endRecordSamps = cfg.has_value() ?
-			cfg.value().EndRecordingSamps(errorSamps) :
-			0;
-
-		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
-		if (loopTake.has_value())
-			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
-
-		res.IsEaten = true;
-		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_START:
