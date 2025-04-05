@@ -167,10 +167,6 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
-		virtual bool Select() override;
-		virtual bool DeSelect() override;
-		virtual bool Mute() override;
-		virtual bool UnMute() override;
 		virtual void Reset() override;
 
 		unsigned int LoopChannel() const;
@@ -178,6 +174,7 @@ namespace engine
 		std::string Id() const;
 
 		void Update();
+		void SetMixerLevel(double level);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
 		void Play(unsigned long index,

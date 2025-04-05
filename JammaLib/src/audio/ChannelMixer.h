@@ -34,7 +34,7 @@ namespace audio
 		{
 		public:
 			virtual void EndMultiPlay(unsigned int numSamps) override;
-			virtual unsigned int NumOutputChannels() const override;
+			virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 
 		protected:
 			virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel) override;
@@ -49,7 +49,7 @@ namespace audio
 				base::Audible::AudioSourceType source) override;
 			virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex,
 				base::Audible::AudioSourceType source) override;
-			virtual unsigned int NumInputChannels() const override;
+			virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 
 		protected:
 			virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,

@@ -49,6 +49,7 @@ namespace audio
 
 		virtual BehaviourParams GetParams() const { return BehaviourParams(); }
 		virtual void SetParams(BehaviourParams params) { }
+		virtual void SetMaxChannels(unsigned int channels) { }
 	};
 
 	class WireMixBehaviour : public MixBehaviour
@@ -72,6 +73,12 @@ namespace audio
 			if (auto* wireParams = std::get_if<audio::WireMixBehaviourParams>(&params)) {
 				_mixParams.Channels = wireParams->Channels;
 			}
+		}
+		virtual void SetMaxChannels(unsigned int chans)
+		{
+			_mixParams.Channels.erase(std::remove_if(_mixParams.Channels.begin(), _mixParams.Channels.end(),
+				[chans](unsigned int val) { return val > chans; }),
+				_mixParams.Channels.end());
 		}
 
 	protected:
@@ -99,6 +106,11 @@ namespace audio
 			if (auto* wireParams = std::get_if<audio::PanMixBehaviourParams>(&params)) {
 				_mixParams.ChannelLevels = wireParams->ChannelLevels;
 			}
+		}
+		virtual void SetMaxChannels(unsigned int chans)
+		{
+			if (_mixParams.ChannelLevels.size() > chans)
+				_mixParams.ChannelLevels.resize(chans);
 		}
 
 	protected:
@@ -213,7 +225,8 @@ namespace audio
 			float samp,
 			unsigned int index);
 		void Offset(unsigned int numSamps);
-		void SetChannels(std::vector<std::pair<unsigned int, unsigned int>> channels);
+		void SetChannels(std::vector<unsigned int> channels);
+		void SetMaxChannels(unsigned int channels);
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
 	protected:

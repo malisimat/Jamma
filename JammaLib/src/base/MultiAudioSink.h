@@ -19,7 +19,7 @@ namespace base
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source)
 		{
-			for (auto chan = 0u; chan < NumInputChannels(); chan++)
+			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
 				auto channel = _InputChannel(chan, source);
 				channel->Zero(numSamps);
@@ -32,7 +32,7 @@ namespace base
 			bool updateIndex,
 			Audible::AudioSourceType source)
 		{
-			for (auto chan = 0u; chan < NumInputChannels(); chan++)
+			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
 				auto channel = _InputChannel(chan, source);
 				channel->EndWrite(numSamps, updateIndex);
@@ -59,7 +59,7 @@ namespace base
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
-		virtual unsigned int NumInputChannels() const { return 0; };
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		std::shared_ptr<MultiAudioSink> shared_from_this()
 		{

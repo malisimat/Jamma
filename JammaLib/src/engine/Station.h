@@ -70,8 +70,8 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
-		virtual unsigned int NumOutputChannels() const override;
-		virtual unsigned int NumInputChannels() const override;
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
+		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
@@ -103,10 +103,11 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
+		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);
-		void SetupBuffers(unsigned int chans,
-			unsigned int bufSize);
-		unsigned int BufSize() const;
+		void SetNumAdcChannels(unsigned int chans);
+		void SetNumDacChannels(unsigned int chans);
+		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
@@ -127,21 +128,20 @@ namespace engine
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
-		bool _numBusChanged;
 		std::string _name;
 		unsigned int _fadeSamps;
-		unsigned int _numBusChannels;
+		unsigned int _lastBufSize;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<gui::GuiRack> _guiRack;
-		std::shared_ptr<audio::AudioMixer> _mixer;
-		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
-		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
+		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
 		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};

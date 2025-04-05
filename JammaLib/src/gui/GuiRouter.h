@@ -156,6 +156,8 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		unsigned int NumInputs() const;
+		unsigned int NumOutputs() const;
 		void SetNumInputs(unsigned int num);
 		void SetNumOutputs(unsigned int num);
 		bool AddRoute(unsigned int inputChan, unsigned int outputChan);

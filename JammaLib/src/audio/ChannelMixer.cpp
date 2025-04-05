@@ -25,7 +25,7 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 	if (numSamps < 1 || numChannels < 1)
 		return;
 
-	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(); chan++)
+	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(Audible::AUDIOSOURCE_ADC); chan++)
 	{
 		auto buf = _adcMixer->Channel(chan);
 		auto source = _adcMixer->SourceType();
@@ -50,7 +50,7 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 
 void ChannelMixer::InitPlay(unsigned int delaySamps, unsigned int blockSize)
 {
-	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(); chan++)
+	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(Audible::AUDIOSOURCE_ADC); chan++)
 	{
 		auto buf = _adcMixer->Channel(chan);
 
@@ -64,7 +64,7 @@ void ChannelMixer::ToDac(float* outBuf, unsigned int numChannels, unsigned int n
 	if (numSamps < 1 || numChannels < 1)
 		return;
 
-	for (auto chan = 0u; chan < _dacMixer->NumInputChannels(); chan++)
+	for (auto chan = 0u; chan < _dacMixer->NumInputChannels(Audible::AUDIOSOURCE_MIXER); chan++)
 	{
 		auto buf = _dacMixer->Channel(chan);
 
@@ -104,7 +104,7 @@ void ChannelMixer::BufferMixer::SetNumChannels(unsigned int numChans, unsigned i
 
 void ChannelMixer::AdcChannelMixer::EndMultiPlay(unsigned int numSamps)
 {
-	for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
+	for (unsigned int chan = 0; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 	{
 		auto channel = OutputChannel(chan);
 		if (channel)
@@ -112,7 +112,7 @@ void ChannelMixer::AdcChannelMixer::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-unsigned int ChannelMixer::AdcChannelMixer::NumOutputChannels() const
+unsigned int ChannelMixer::AdcChannelMixer::NumOutputChannels(Audible::AudioSourceType source) const
 {
 	return (unsigned int)_buffers.size();
 }
@@ -127,14 +127,14 @@ void ChannelMixer::DacChannelMixer::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex,
 	Audible::AudioSourceType source)
 {
-	for (unsigned int chan = 0; chan < NumInputChannels(); chan++)
+	for (unsigned int chan = 0; chan < NumInputChannels(source); chan++)
 	{
 		auto channel = _InputChannel(chan, source);
 		channel->EndWrite(numSamps, updateIndex);
 	}
 }
 
-unsigned int ChannelMixer::DacChannelMixer::NumInputChannels() const
+unsigned int ChannelMixer::DacChannelMixer::NumInputChannels(Audible::AudioSourceType source) const
 {
 	return (unsigned int)_buffers.size();
 }

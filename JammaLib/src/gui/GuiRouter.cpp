@@ -134,6 +134,16 @@ GuiRouter::GuiRouter(GuiRouterParams params,
 	SetNumOutputs(numOutputs);
 }
 
+unsigned int GuiRouter::NumInputs() const
+{
+	return (unsigned int)_inputs.size();
+}
+
+unsigned int GuiRouter::NumOutputs() const
+{
+	return (unsigned int) _outputs.size();
+}
+
 void GuiRouter::SetNumInputs(unsigned int num)
 {
 	if (_inputs.size() == num)
@@ -327,6 +337,7 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 				if (receiver)
 				{
 					GuiAction guiAction;
+					guiAction.ElementType = GuiAction::ACTIONELEMENT_ROUTER;
 					guiAction.Data = GuiAction::GuiConnections(_routes);
 
 					receiver->OnAction(guiAction);

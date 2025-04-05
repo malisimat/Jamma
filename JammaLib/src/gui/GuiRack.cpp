@@ -26,6 +26,7 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_channelPanel(nullptr),
 	_routerToggle(nullptr),
 	_routerPanel(nullptr),
+	_router(nullptr),
 	_rackParams(params)
 {
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
@@ -107,11 +108,15 @@ ActionResult GuiRack::OnAction(GuiAction action)
 			break;
 		case GuiAction::ACTIONELEMENT_SLIDER:
 			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+			if (action.Index > 0)
+				action.Index -= 1; // Account for other children of _channelPanel
+
 			if (_receiver)
 				_receiver->OnAction(action);
 
 			break;
 		case GuiAction::ACTIONELEMENT_ROUTER:
+			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
 			if (_receiver)
 				_receiver->OnAction(action);
 
@@ -243,6 +248,7 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	auto sliderSize = _CalcSliderSize(size);
 
 	GuiSliderParams sliderParams;
+	sliderParams.Index = index;
 	sliderParams.Min = 0.0;
 	sliderParams.Max = 6.0;
 	sliderParams.InitValue = _rackParams.InitLevel;
@@ -343,9 +349,17 @@ gui::GuiRouterParams GuiRack::_GetRouterParams(utils::Size2d size)
 	return routerParams;
 }
 
-unsigned int GuiRack::NumChannels() const
+unsigned int GuiRack::NumInputChannels() const
 {
 	return (unsigned int)_channelSliders.size();
+}
+
+unsigned int GuiRack::NumOutputChannels() const
+{
+	if (nullptr != _router)
+		return _router->NumOutputs();
+
+	return 0u;
 }
 
 void GuiRack::SetNumInputChannels(unsigned int channels)

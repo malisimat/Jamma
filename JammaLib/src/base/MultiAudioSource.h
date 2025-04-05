@@ -34,7 +34,7 @@ namespace base
 			int indexOffset,
 			unsigned int numSamps)
 		{
-			for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
+			for (unsigned int chan = 0; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
 				auto channel = OutputChannel(chan);
 				dest->OnWriteChannel(chan,
@@ -46,7 +46,7 @@ namespace base
 		}
 		virtual void EndMultiPlay(unsigned int numSamps)
 		{
-			for (auto chan = 0u; chan < NumOutputChannels(); chan++)
+			for (auto chan = 0u; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
 				auto channel = OutputChannel(chan);
 				channel->EndPlay(numSamps);
@@ -61,7 +61,7 @@ namespace base
 			if (channel)
 				channel->OnPlay(dest, indexOffset, numSamps);
 		}
-		virtual unsigned int NumOutputChannels() const { return 0; };
+		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		Audible::AudioSourceType SourceType() const { return _sourceParams.SourceType; }
 		void SetSourceType(Audible::AudioSourceType source) { _sourceParams.SourceType = source; }

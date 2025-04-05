@@ -101,29 +101,18 @@ void AudioMixer::Offset(unsigned int numSamps)
 	}
 }
 
-void AudioMixer::SetChannels(std::vector<std::pair<unsigned int, unsigned int>> channels)
+void AudioMixer::SetChannels(std::vector<unsigned int> channels)
 {
-	unsigned int chan = 0;
-
-	unsigned int maxChan = 0;
-	for (const auto& channel : channels)
-	{
-		if (channel.first > maxChan)
-			maxChan = channel.first;
-	}
-
-	std::vector<unsigned int> outputChans(maxChan + 1, 0);
-
-	// Fill the vector with the appropriate output channels
-	for (const auto& channel : channels) {
-		outputChans[channel.first] = channel.second;
-	}
-
 	if (auto wireBehaviour = dynamic_cast<audio::WireMixBehaviour*>(_behaviour.get())) {
 		WireMixBehaviourParams wireParams;
-		wireParams.Channels = outputChans;
+		wireParams.Channels = channels;
 		wireBehaviour->SetParams(wireParams);
 	}
+}
+
+void AudioMixer::SetMaxChannels(unsigned int chans)
+{
+	_behaviour->SetMaxChannels(chans);
 }
 
 void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
@@ -148,7 +137,7 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			fadeCurrent,
 			fadeNew,
 			index,
-			base::Audible::AudioSourceType::AUDIOSOURCE_LOOPS);
+			base::Audible::AUDIOSOURCE_MIXER);
 	}
 }
 
@@ -160,7 +149,7 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	if (nullptr == dest)
 		return;
 
-	auto numChans = dest->NumInputChannels();
+	auto numChans = dest->NumInputChannels(base::Audible::AUDIOSOURCE_MIXER);
 	float fadeCurrent = 1.0f;
 
 	for (auto chan = 0u; chan < numChans; chan++)
@@ -171,7 +160,7 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 				fadeCurrent,
 				fadeNew,
 				index,
-				base::Audible::AudioSourceType::AUDIOSOURCE_ADC);
+				base::Audible::AUDIOSOURCE_MIXER);
 	}
 }
 
@@ -192,7 +181,7 @@ void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			fadeCurrent,
 			fadeNew,
 			index,
-			base::Audible::AudioSourceType::AUDIOSOURCE_BOUNCE);
+			base::Audible::AUDIOSOURCE_MIXER);
 	}
 }
 
@@ -213,6 +202,6 @@ void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 			fadeCurrent,
 			fadeNew,
 			index,
-			base::Audible::AudioSourceType::AUDIOSOURCE_MIXER);
+			base::Audible::AUDIOSOURCE_MIXER);
 	}
 }

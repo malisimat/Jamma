@@ -570,9 +570,10 @@ void Scene::InitAudio()
 		{
 			if (station)
 			{
+				station->SetupBuffers(ChannelMixer::DefaultBufferSize);
+				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
 				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
-				station->SetupBuffers(audioStreamParams.NumOutputChannels,
-					ChannelMixer::DefaultBufferSize);
 			}
 		}
 	}
@@ -886,7 +887,9 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	_stations.push_back(station);
 
 	station->SetClock(_clock);
-	station->SetupBuffers(_channelMixer->Sink()->NumInputChannels(), ChannelMixer::DefaultBufferSize);
+	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
+	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
+	station->SetNumDacChannels(_channelMixer->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
 }
 

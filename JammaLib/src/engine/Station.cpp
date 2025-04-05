@@ -18,29 +18,30 @@ Station::Station(StationParams params,
 	Jammable(params),
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
-	_numBusChanged(false),
 	_name(params.Name),
+	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_guiRack(nullptr),
-	_mixer(nullptr),
-	_audioMixers(),
-	_backAudioMixers(),
+	_masterMixer(nullptr),
 	_mixerToggle(nullptr),
 	_routerToggle(nullptr),
 	_router(nullptr),
 	_loopTakes(),
 	_triggers(),
 	_backLoopTakes(),
+	_audioMixers(),
+	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers()
 {
-	_mixer = std::make_unique<AudioMixer>(mixerParams);
-
+	_masterMixer = std::make_unique<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
-	_children.push_back(_mixer);
+	//_children.push_back(_masterMixer);
 	_children.push_back(_guiRack);
+
+	SetNumBusChannels(_DefaultNumBusChannels);
 }
 
 Station::~Station()
@@ -102,24 +103,58 @@ utils::Position2d Station::Position() const
 	return _modelScreenPos;
 }
 
-unsigned int Station::NumOutputChannels() const
+unsigned int Station::NumInputChannels(base::Audible::AudioSourceType source) const
 {
-	return _changesMade ?
-		(unsigned int)_backAudioBuffers.size() :
-		(unsigned int)_audioBuffers.size();
+	auto takeChans = 0u;
+	auto maxChans = 0u;
+
+	switch (source)
+	{
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_MONITOR:
+	case Audible::AUDIOSOURCE_BOUNCE:
+		for (auto& take : _loopTakes)
+		{
+			takeChans = take->NumInputChannels(source);
+			if (takeChans > maxChans)
+				maxChans = takeChans;
+		}
+	case Audible::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_MIXER:
+		return NumBusChannels();
+	}
+
+	return maxChans;
 }
 
-unsigned int Station::NumInputChannels() const
+unsigned int Station::NumOutputChannels(base::Audible::AudioSourceType source) const
 {
-	return _changesMade ?
-		(unsigned int)_backAudioBuffers.size() :
-		(unsigned int)_audioBuffers.size();
+	auto takeChans = 0u;
+	auto maxChans = 0u;
+
+	switch (source)
+	{
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_MONITOR:
+	case Audible::AUDIOSOURCE_BOUNCE:
+		for (auto& take : _loopTakes)
+		{
+			takeChans = take->NumInputChannels(source);
+			if (takeChans > maxChans)
+				maxChans = takeChans;
+		}
+	case Audible::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_MIXER:
+		return NumBusChannels();
+	}
+
+	return maxChans;
 }
 
 void Station::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
-	for (auto chan = 0u; chan < NumInputChannels(); chan++)
+	for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 	{
 		auto channel = _InputChannel(chan, source);
 		if (channel)
@@ -152,7 +187,13 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 
 		while ((bufIter != buf->End()) && (i < numSamps))
 		{
-			_mixer->OnPlay(dest, *bufIter++, i++);
+			for (auto& mixer : _audioMixers)
+			{
+				mixer->OnPlay(dest, *bufIter, i);
+			}
+
+			bufIter++;
+			i++;
 		}
 	}
 }
@@ -177,9 +218,9 @@ void Station::OnWriteChannel(unsigned int channel,
 {
 	switch (source)
 	{
-	case Audible::AudioSourceType::AUDIOSOURCE_ADC:
-	case Audible::AudioSourceType::AUDIOSOURCE_MONITOR:
-	case Audible::AudioSourceType::AUDIOSOURCE_BOUNCE:
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_MONITOR:
+	case Audible::AUDIOSOURCE_BOUNCE:
 		for (auto& take : _loopTakes)
 			take->OnWriteChannel(channel,
 				src,
@@ -187,7 +228,8 @@ void Station::OnWriteChannel(unsigned int channel,
 				numSamps,
 				source);
 		break;
-	case Audible::AudioSourceType::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_MIXER:
 		for (auto& take : _loopTakes)
 			take->OnWriteChannel(channel,
 				src,
@@ -240,34 +282,65 @@ ActionResult Station::OnAction(GuiAction action)
 
 			if (action.Index == 2)
 				_router->SetVisible(visible);
-			else
-				_mixer->SetVisible(visible);
+			//else
+				//_mixer->SetVisible(visible);
 		}
 
 		break;
 	case GuiAction::ACTIONELEMENT_ROUTER:
 		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
-			_mixer->SetChannels(chans->Connections);
+		{
+			for (auto chan = 0u; chan < _audioMixers.size(); chan++)
+			{
+				std::vector<std::pair<unsigned int, unsigned int>> chanConnections;
+				std::copy_if(chans->Connections.begin(), chans->Connections.end(), std::back_inserter(chanConnections),
+					[chan](const std::pair<unsigned int, unsigned int>& pair) {
+						return pair.first == chan;
+					});
+
+				std::vector<unsigned int> secondElements;
+				std::transform(chanConnections.begin(), chanConnections.end(), std::back_inserter(secondElements),
+					[](const std::pair<unsigned int, unsigned int>& pair) {
+						return pair.second;
+					});
+				_audioMixers[0]->SetChannels(secondElements);
+			}
+		}
+		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			if (action.Index < _audioMixers.size())
+				_audioMixers[action.Index]->OnAction(action);
+		}
 
 		break;
 	case GuiAction::ACTIONELEMENT_RACK:
 		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
-			_numBusChannels = i->Value;
-			_numBusChanged = true;
-			_changesMade = true;
+			SetNumBusChannels(i->Value);
 		}
-
-		if (auto vals = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		else if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		{
-			if (action.Index == 0)
-				_mixer->SetUnmutedLevel(vals->Value);
-			else if (action.Index < _audioMixers.size() + 1)
-				_audioMixers[action.Index - 1]->SetUnmutedLevel(vals->Value);
-		}
+			for (auto chan = 0u; chan < _audioMixers.size(); chan++)
+			{
+				std::vector<std::pair<unsigned int, unsigned int>> chanConnections;
+				std::copy_if(chans->Connections.begin(), chans->Connections.end(), std::back_inserter(chanConnections),
+					[chan](const std::pair<unsigned int, unsigned int>& pair) {
+						return pair.first == chan;
+					});
 
-		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
-			_mixer->SetChannels(chans->Connections);
+				std::vector<unsigned int> secondElements;
+				std::transform(chanConnections.begin(), chanConnections.end(), std::back_inserter(secondElements),
+					[](const std::pair<unsigned int, unsigned int>& pair) {
+						return pair.second;
+					});
+				_audioMixers[0]->SetChannels(secondElements);
+			}
+		}
+		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			if (action.Index < _audioMixers.size())
+				_audioMixers[action.Index]->OnAction(action);
+		}
 
 		break;
 	}
@@ -377,55 +450,67 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_OVERDUB_END:
 	{
 		auto loopLength = action.SampleCount;
-		auto errorSamps = 0;
 
-		if (_clock)
+		if (0 == loopLength)
 		{
-			if (_clock->IsQuantisable())
-			{
-				auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
-				loopLength = quantisedLength;
-				errorSamps = err;
-				std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
-			}
-			else
-			{
-				_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-				std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
-			}
+			if (loopTake.has_value())
+				loopTake.value()->Ditch();
+
+			res.IsEaten = true;
+			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
 		}
-
-		auto cfg = action.GetUserConfig();
-		auto streamParams = action.GetAudioParams();
-		auto outLatency = streamParams.has_value() ?
-			streamParams.value().OutputLatency :
-			0u;
-
-		if (0u == outLatency)
+		else
 		{
-			outLatency = cfg.has_value() ?
-				cfg.value().Audio.LatencyOut :
+			auto errorSamps = 0;
+
+			if (_clock)
+			{
+				if (_clock->IsQuantisable())
+				{
+					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
+					loopLength = quantisedLength;
+					errorSamps = err;
+					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
+				}
+				else
+				{
+					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
+					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+				}
+			}
+
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
+			auto outLatency = streamParams.has_value() ?
+				streamParams.value().OutputLatency :
 				0u;
+
+			if (0u == outLatency)
+			{
+				outLatency = cfg.has_value() ?
+					cfg.value().Audio.LatencyOut :
+					0u;
+			}
+
+			auto playPos = cfg.has_value() ?
+				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+				0;
+			auto endRecordSamps = cfg.has_value() ?
+				cfg.value().EndRecordingSamps(errorSamps) :
+				0;
+
+			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
+
+			if (loopTake.has_value())
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps);
+
+			auto sourceLoopTake = _TryGetTake(action.SourceId);
+			if (sourceLoopTake.has_value())
+				sourceLoopTake.value()->Mute();
+
+			res.IsEaten = true;
+			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		}
-
-		auto playPos = cfg.has_value() ?
-			cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
-			0;
-		auto endRecordSamps = cfg.has_value() ?
-			cfg.value().EndRecordingSamps(errorSamps) :
-			0;
-
-		std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
-		if (loopTake.has_value())
-			loopTake.value()->Play(playPos, loopLength, endRecordSamps);
-
-		auto sourceLoopTake = _TryGetTake(action.SourceId);
-		if (sourceLoopTake.has_value())
-			sourceLoopTake.value()->Mute();
-
-		res.IsEaten = true;
-		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
 	case TriggerAction::TRIGGER_DITCH:
@@ -500,16 +585,13 @@ std::shared_ptr<LoopTake> Station::AddTake()
 {
 	LoopTakeParams takeParams;
 	takeParams.Id = _name + "-TK-" + utils::GetGuid();
+	takeParams.Size = { 100,100 };
 	takeParams.FadeSamps = _fadeSamps;
 
 	MergeMixBehaviourParams mergeParams;
+	mergeParams.Channels.push_back((unsigned int)_audioBuffers.size());
 
-	for (unsigned int i = 0; i < _audioBuffers.size(); i++)
-	{
-		mergeParams.Channels.push_back(i);
-	}
-
-	auto mixerParams = LoopTake::GetMixerParams({ 100,100 }, mergeParams);
+	auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	AddTake(take);
 
@@ -518,10 +600,10 @@ std::shared_ptr<LoopTake> Station::AddTake()
 
 void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
-	take->SetupBuffers(NumInputChannels(), BufSize());
+	take->SetupBuffers(_lastBufSize);
+	take->SetNumBusChannels(NumBusChannels());
 
 	_backLoopTakes.push_back(take);
-	_children.push_back(take);
 
 	Init();
 
@@ -560,42 +642,66 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetNumBusChannels(unsigned int chans)
+void Station::SetupBuffers(unsigned int bufSize)
 {
-	_numBusChannels = chans;
-	_numBusChanged = true;
-	_changesMade = true;
+	_lastBufSize = bufSize;
+
+	for (auto& buf : _audioBuffers)
+	{
+		buf->SetSize(bufSize);
+	}
+
+	for (auto& take : _loopTakes)
+		take->SetupBuffers(bufSize);
 }
 
-void Station::SetupBuffers(unsigned int chans,
-	unsigned int bufSize)
+void Station::SetNumBusChannels(unsigned int chans)
 {
-	MergeMixBehaviourParams mergeParams;
-
 	_backAudioBuffers.clear();
+	_backAudioMixers.clear();
 
 	for (unsigned int i = 0; i < chans; i++)
 	{
-		mergeParams.Channels.push_back(i);
-		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(bufSize));
-	}
+		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 
-	_mixer->SetBehaviour(std::make_unique<MergeMixBehaviour>(mergeParams));
+		MergeMixBehaviourParams mergeParams;
+		mergeParams.Channels.push_back((unsigned int)_audioBuffers.size());
+
+		auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, mergeParams);
+		auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
+		mixer->SetUnmutedLevel(1.0);
+		_backAudioMixers.push_back(mixer);
+	}
 
 	_flipAudioBuffer = true;
 	_changesMade = true;
 
 	for (auto& take : _loopTakes)
-		take->SetupBuffers(chans, bufSize);
+		take->SetNumBusChannels(chans);
+
+	_guiRack->SetNumInputChannels(chans);
 }
 
-unsigned int Station::BufSize() const
+void Station::SetNumAdcChannels(unsigned int chans)
 {
-	auto bufs = _changesMade ? _backAudioBuffers : _audioBuffers;
-	if (bufs.empty())
-		return 0;
+}
 
-	return bufs[0]->BufSize();
+void Station::SetNumDacChannels(unsigned int chans)
+{
+	for (auto& mixer : _audioMixers)
+	{
+		mixer->SetMaxChannels(chans);
+	}
+
+	_masterMixer->SetMaxChannels(chans);
+	_guiRack->SetNumOutputChannels(chans);
+}
+
+unsigned int Station::NumBusChannels() const
+{
+	return (_changesMade && _flipAudioBuffer) ?
+		(unsigned int)_backAudioBuffers.size() :
+		(unsigned int)_audioBuffers.size();
 }
 
 void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
@@ -677,18 +783,13 @@ std::vector<JobAction> Station::_CommitChanges()
 	{
 		_flipAudioBuffer = false;
 		_audioBuffers = _backAudioBuffers;
+		_audioMixers = _backAudioMixers;
 
-		_guiRack->SetNumOutputChannels((unsigned int)_audioBuffers.size());
-	}
-
-	if (_numBusChanged)
-	{
-		_numBusChanged = false;
-		_guiRack->SetNumInputChannels(_numBusChannels);
+		_guiRack->SetNumInputChannels((unsigned int)_audioBuffers.size());
 
 		for (auto& take : _loopTakes)
 		{
-			take->SetupBuffers(_numBusChannels, BufSize());
+			take->SetNumBusChannels((unsigned int)_audioBuffers.size());
 		}
 	}
 
@@ -732,8 +833,8 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 	rackParams.Position = { 0, 0 };
 	rackParams.Size = size;
 	rackParams.MinSize = rackParams.Size;
-	rackParams.NumInputChannels = _DefaultNumBusChannels;
-	rackParams.NumOutputChannels = NumOutputChannels();
+	rackParams.NumInputChannels = NumBusChannels();
+	rackParams.NumOutputChannels = 2;
 	rackParams.InitLevel = 1.0;
 	rackParams.InitState = gui::GuiRackParams::RACK_MASTER;
 

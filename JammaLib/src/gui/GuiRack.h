@@ -61,7 +61,8 @@ namespace gui
 
 		GuiRackParams::RackState GetRackState() const;
 		void SetRackState(GuiRackParams::RackState state, bool bypassUpdates);
-		unsigned int NumChannels() const;
+		unsigned int NumInputChannels() const;
+		unsigned int NumOutputChannels() const;
 		void SetNumInputChannels(unsigned int channels);
 		void SetNumOutputChannels(unsigned int channels);
 

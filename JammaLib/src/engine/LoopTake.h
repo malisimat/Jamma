@@ -91,8 +91,8 @@ namespace engine
 		virtual std::string ClassName() const override { return "LoopTake"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
-		virtual unsigned int NumInputChannels() const override;
-		virtual unsigned int NumOutputChannels() const override;
+		virtual unsigned int NumInputChannels(Audible::AudioSourceType) const override;
+		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
@@ -120,7 +120,10 @@ namespace engine
 		unsigned long NumRecordedSamps() const;
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
-		void SetupBuffers(unsigned int chans, unsigned int bufSize);
+		void SetMixerLevel(unsigned int chan, double level);
+		void SetupBuffers(unsigned int bufSize);
+		void SetNumBusChannels(unsigned int chans);
+		unsigned int NumBusChannels() const;
 
 		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
@@ -151,21 +154,23 @@ namespace engine
 		static const utils::Size2d _ToggleGap;
 
 		bool _flipLoopBuffer;
-		bool _flipAudioBuffer;
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
 		LoopTakeState _state;
 		std::string _id;
 		std::string _sourceId;
+		unsigned int _lastBufSize;
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
-		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<gui::GuiRack> _guiRack;
+		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};

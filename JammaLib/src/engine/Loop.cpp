@@ -347,7 +347,7 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	while (_playIndex > bufSize)
 		_playIndex -= _loopLength;
 
-	for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
+	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
 	{
 		auto channel = OutputChannel(chan);
 
@@ -380,6 +380,11 @@ void Loop::Update()
 
 	_bufferBank.UpdateCapacity();
 	_monitorBufferBank.UpdateCapacity();
+}
+
+void Loop::SetMixerLevel(double level)
+{
+	_mixer->SetUnmutedLevel(level);
 }
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
@@ -450,46 +455,6 @@ void Loop::Play(unsigned long index,
 	_playState = loopLength > 0 ? playState : STATE_INACTIVE;
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
-}
-
-bool Loop::Select()
-{
-	auto isNewState = GuiElement::Select();
-
-	if (isNewState)
-		_mixer->Select();
-
-	return isNewState;
-}
-
-bool Loop::DeSelect()
-{
-	auto isNewState = GuiElement::DeSelect();
-
-	if (isNewState)
-		_mixer->DeSelect();
-
-	return isNewState;
-}
-
-bool Loop::Mute()
-{
-	auto isNewState = Tweakable::Mute();
-
-	if (isNewState)
-		_mixer->Mute();
-
-	return isNewState;
-}
-
-bool Loop::UnMute()
-{
-	auto isNewState = Tweakable::UnMute();
-
-	if (isNewState)
-		_mixer->UnMute();
-
-	return isNewState;
 }
 
 void Loop::Reset()

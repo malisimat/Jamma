@@ -14,7 +14,7 @@ AudioBuffer::AudioBuffer(unsigned int size) :
 	AudioSource({}),
 	_playIndex(0),
 	_sampsRecorded(0),
-	_buffer(std::vector<float>(size < constants::MaxBlockSize ? constants::MaxBlockSize : size, 0.0f))
+	_buffer(std::vector<float>(size > constants::MaxBlockSize ? constants::MaxBlockSize : size, 0.0f))
 {
 }
 
@@ -104,7 +104,7 @@ void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 
 void AudioBuffer::SetSize(unsigned int size)
 {
-	_buffer.resize(size < constants::MaxBlockSize ? constants::MaxBlockSize : size);
+	_buffer.resize(size > constants::MaxBlockSize ? constants::MaxBlockSize : size);
 }
 
 void AudioBuffer::_SetWriteIndex(unsigned int index)
