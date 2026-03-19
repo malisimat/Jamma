@@ -42,7 +42,7 @@ namespace audio
 	class MixBehaviour
 	{
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const {};
@@ -62,7 +62,7 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
@@ -95,7 +95,7 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
@@ -127,7 +127,7 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
@@ -143,7 +143,7 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
@@ -221,7 +221,7 @@ namespace audio
 		double Level() const;
 		double UnmutedLevel() const;
 		void SetUnmutedLevel(double level);
-		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+		void OnPlay(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			unsigned int index);
 		void Offset(unsigned int numSamps);

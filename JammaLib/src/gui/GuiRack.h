@@ -65,6 +65,8 @@ namespace gui
 		unsigned int NumOutputChannels() const;
 		void SetNumInputChannels(unsigned int channels);
 		void SetNumOutputChannels(unsigned int channels);
+		void AddRoute(unsigned int inputChan, unsigned int outputChan);
+		void ClearRoutes();
 
 	protected:
 		static const utils::Size2d _SliderGap;

@@ -21,8 +21,9 @@ namespace base
 		{
 			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
-				auto channel = _InputChannel(chan, source);
-				channel->Zero(numSamps);
+				const auto& channel = _InputChannel(chan, source);
+				if (channel)
+					channel->Zero(numSamps);
 			}
 		}
 		virtual bool IsArmed() const { return true; }
@@ -34,8 +35,9 @@ namespace base
 		{
 			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
-				auto channel = _InputChannel(chan, source);
-				channel->EndWrite(numSamps, updateIndex);
+				const auto& channel = _InputChannel(chan, source);
+				if (channel)
+					channel->EndWrite(numSamps, updateIndex);
 			}
 		}
 		virtual void OnWriteChannel(unsigned int channel,
@@ -44,7 +46,8 @@ namespace base
 			unsigned int numSamps,
 			Audible::AudioSourceType source)
 		{
-			auto chan = _InputChannel(channel, source);
+			const auto& chan = _InputChannel(channel, source);
+
 			if (chan && src)
 				src->OnPlay(chan, indexOffset, numSamps);
 		}
@@ -55,7 +58,8 @@ namespace base
 			int indexOffset,
 			Audible::AudioSourceType source)
 		{
-			auto chan = _InputChannel(channel, source);
+			const auto& chan = _InputChannel(channel, source);
+
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}

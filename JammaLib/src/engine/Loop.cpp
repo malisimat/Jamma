@@ -349,7 +349,7 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 
 	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
 	{
-		auto channel = OutputChannel(chan);
+		const auto& channel = _OutputChannel(chan);
 
 		if (channel)
 			channel->EndPlay(numSamps);

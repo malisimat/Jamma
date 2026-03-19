@@ -36,9 +36,10 @@ namespace base
 		{
 			for (unsigned int chan = 0; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
-				auto channel = OutputChannel(chan);
+				const auto& srcChannel = _OutputChannel(chan);
+
 				dest->OnWriteChannel(chan,
-					channel,
+					srcChannel,
 					indexOffset,
 					numSamps,
 					_sourceParams.SourceType);
@@ -48,8 +49,9 @@ namespace base
 		{
 			for (auto chan = 0u; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
-				auto channel = OutputChannel(chan);
-				channel->EndPlay(numSamps);
+				const auto& channel = _OutputChannel(chan);
+				if (channel)
+					channel->EndPlay(numSamps);
 			}
 		}
 		virtual void OnPlayChannel(unsigned int chan,
@@ -57,7 +59,7 @@ namespace base
 			int indexOffset,
 			unsigned int numSamps)
 		{
-			auto channel = OutputChannel(chan);
+			const auto& channel = _OutputChannel(chan);
 			if (channel)
 				channel->OnPlay(dest, indexOffset, numSamps);
 		}
@@ -73,7 +75,7 @@ namespace base
 		}
 
 	protected:
-		virtual const std::shared_ptr<AudioSource> OutputChannel(unsigned int channel)
+		virtual const std::shared_ptr<AudioSource> _OutputChannel(unsigned int channel)
 		{
 			return nullptr;
 		}

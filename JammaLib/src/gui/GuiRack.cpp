@@ -383,3 +383,13 @@ void GuiRack::SetNumOutputChannels(unsigned int channels)
 {
 	_router->SetNumOutputs(channels);
 }
+
+void GuiRack::AddRoute(unsigned int inputChan, unsigned int outputChan)
+{
+	_router->AddRoute(inputChan, outputChan);
+}
+
+void GuiRack::ClearRoutes()
+{
+	_router->ClearRoutes();
+}

@@ -37,7 +37,7 @@ namespace audio
 			virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 
 		protected:
-			virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel) override;
+			virtual const std::shared_ptr<base::AudioSource> _OutputChannel(unsigned int channel) override;
 		};
 
 		class DacChannelMixer :

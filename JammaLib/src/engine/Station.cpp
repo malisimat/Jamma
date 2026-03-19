@@ -173,27 +173,22 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 {
 	auto ptr = Sharable::shared_from_this();
 
-	for (auto& take : _loopTakes)
+	for (const auto& take : _loopTakes)
 		take->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
 	//_masterMixer->OnPlay();
-	for (auto& buf : _audioBuffers)
+	for (const auto& buf : _audioBuffers)
 	{
-		unsigned int i = 0;
-		auto bufIter = buf->Delay(numSamps);
-
-		while ((bufIter != buf->End()) && (i < numSamps))
+		auto playIndex = buf->Delay(numSamps);
+		for (auto samp = 0u; samp < numSamps; samp++)
 		{
-			for (auto& mixer : _audioMixers)
+			for (const auto& mixer : _audioMixers)
 			{
-				mixer->OnPlay(dest, *bufIter, i);
+				mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
 			}
-
-			bufIter++;
-			i++;
 		}
 	}
 }
@@ -589,8 +584,6 @@ std::shared_ptr<LoopTake> Station::AddTake()
 	takeParams.FadeSamps = _fadeSamps;
 
 	MergeMixBehaviourParams mergeParams;
-	mergeParams.Channels.push_back((unsigned int)_audioBuffers.size());
-
 	auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, mergeParams);
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	AddTake(take);
@@ -646,7 +639,11 @@ void Station::SetupBuffers(unsigned int bufSize)
 {
 	_lastBufSize = bufSize;
 
-	for (auto& buf : _audioBuffers)
+	auto& buffers = (_flipAudioBuffer && _changesMade) ?
+		_backAudioBuffers :
+		_audioBuffers;
+
+	for (auto& buf : buffers)
 	{
 		buf->SetSize(bufSize);
 	}
@@ -659,18 +656,24 @@ void Station::SetNumBusChannels(unsigned int chans)
 {
 	_backAudioBuffers.clear();
 	_backAudioMixers.clear();
+	_guiRack->ClearRoutes();
+	_guiRack->SetNumInputChannels(chans);
 
 	for (unsigned int i = 0; i < chans; i++)
 	{
 		_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 
 		MergeMixBehaviourParams mergeParams;
-		mergeParams.Channels.push_back((unsigned int)_audioBuffers.size());
+		if (i < _guiRack->NumOutputChannels())
+			mergeParams.Channels.push_back(i);
 
 		auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, mergeParams);
 		auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
 		mixer->SetUnmutedLevel(1.0);
 		_backAudioMixers.push_back(mixer);
+
+		if (i < _guiRack->NumOutputChannels())
+			_guiRack->AddRoute(i, i);
 	}
 
 	_flipAudioBuffer = true;
@@ -678,8 +681,6 @@ void Station::SetNumBusChannels(unsigned int chans)
 
 	for (auto& take : _loopTakes)
 		take->SetNumBusChannels(chans);
-
-	_guiRack->SetNumInputChannels(chans);
 }
 
 void Station::SetNumAdcChannels(unsigned int chans)
@@ -688,13 +689,33 @@ void Station::SetNumAdcChannels(unsigned int chans)
 
 void Station::SetNumDacChannels(unsigned int chans)
 {
-	for (auto& mixer : _audioMixers)
+	auto& mixers = _flipAudioBuffer && _changesMade ?
+		_backAudioMixers :
+		_audioMixers;
+
+	for (auto& mixer : mixers)
 	{
 		mixer->SetMaxChannels(chans);
 	}
 
 	_masterMixer->SetMaxChannels(chans);
+
+	bool initRoutes = (0 == _guiRack->NumOutputChannels()) && (chans > 0);
+	
 	_guiRack->SetNumOutputChannels(chans);
+
+	if (initRoutes)
+	{
+		auto i = 0u;
+		for (auto& mixer : mixers)
+		{
+			mixer->SetChannels({i});
+			if (i < chans)
+				_guiRack->AddRoute(i, i);
+
+			i++;
+		}
+	}
 }
 
 unsigned int Station::NumBusChannels() const

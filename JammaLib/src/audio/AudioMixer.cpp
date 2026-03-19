@@ -85,7 +85,7 @@ void AudioMixer::SetUnmutedLevel(double level)
 		_fade->SetTarget(_unmutedFadeTarget);
 }
 
-void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink>& dest,
 	float samp,
 	unsigned int index)
 {
@@ -108,6 +108,16 @@ void AudioMixer::SetChannels(std::vector<unsigned int> channels)
 		wireParams.Channels = channels;
 		wireBehaviour->SetParams(wireParams);
 	}
+	else if (auto bounceBehaviour = dynamic_cast<audio::BounceMixBehaviour*>(_behaviour.get())) {
+		BounceMixBehaviourParams bounceParams;
+		bounceParams.Channels = channels;
+		bounceBehaviour->SetParams(bounceParams);
+	}
+	else if (auto mergeBehaviour = dynamic_cast<audio::MergeMixBehaviour*>(_behaviour.get())) {
+		MergeMixBehaviourParams mergeParams;
+		mergeParams.Channels = channels;
+		mergeBehaviour->SetParams(mergeParams);
+	}
 }
 
 void AudioMixer::SetMaxChannels(unsigned int chans)
@@ -120,7 +130,7 @@ void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 	_behaviour = std::move(behaviour);
 }
 
-void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
 	float samp,
 	float fadeNew,
 	unsigned int index) const
@@ -141,7 +151,7 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
 	float samp,
 	float fadeNew,
 	unsigned int index) const
@@ -164,7 +174,7 @@ void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
 	float samp,
 	float fadeNew,
 	unsigned int index) const
@@ -185,7 +195,7 @@ void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
 	}
 }
 
-void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink> dest,
+void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
 	float samp,
 	float fadeNew,
 	unsigned int index) const

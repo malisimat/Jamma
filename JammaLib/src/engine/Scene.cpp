@@ -570,7 +570,7 @@ void Scene::InitAudio()
 		{
 			if (station)
 			{
-				station->SetupBuffers(ChannelMixer::DefaultBufferSize);
+				station->SetupBuffers(audioStreamParams.BufSize);
 				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
 				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
 				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);

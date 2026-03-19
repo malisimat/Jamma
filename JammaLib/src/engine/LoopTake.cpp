@@ -162,26 +162,21 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 
 	auto ptr = Sharable::shared_from_this();
 
-	for (auto& loop : _loops)
+	for (const auto& loop : _loops)
 		loop->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
-	for (auto& buf : _audioBuffers)
+	for (const auto& buf : _audioBuffers)
 	{
-		unsigned int i = 0;
-		auto bufIter = buf->Delay(numSamps);
-
-		while ((bufIter != buf->End()) && (i < numSamps))
+		auto playIndex = buf->Delay(numSamps);
+		for (auto samp = 0u; samp < numSamps; samp++)
 		{
-			for (auto& mixer : _audioMixers)
+			for (const auto& mixer : _audioMixers)
 			{
-				mixer->OnPlay(dest, *bufIter, i);
+				mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
 			}
-
-			bufIter++;
-			i++;
 		}
 	}
 }
@@ -360,9 +355,8 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
 	WireMixBehaviourParams wireParams;
-
-	if (_audioBuffers.size() < NumBusChannels())
-		wireParams.Channels.push_back((unsigned int)_audioBuffers.size());
+	if (_backAudioBuffers.size() <= NumBusChannels())
+		wireParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
 
 	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, wireParams);
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
@@ -379,6 +373,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_changesMade = true;
 
 	_guiRack->SetNumInputChannels((unsigned int)_backLoops.size());
+	_guiRack->AddRoute((unsigned int)_backLoops.size() - 1, (unsigned int)_backLoops.size() - 1);
 }
 
 void LoopTake::SetMixerLevel(unsigned int chan, double level)
@@ -391,7 +386,11 @@ void LoopTake::SetupBuffers(unsigned int bufSize)
 {
 	_lastBufSize = bufSize;
 
-	for (auto& buf : _backAudioBuffers)
+	auto& buffers = (_flipLoopBuffer && _changesMade) ?
+		_backAudioBuffers :
+		_audioBuffers;
+
+	for (auto& buf : buffers)
 	{
 		buf->SetSize(bufSize);
 	}
