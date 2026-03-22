@@ -9,6 +9,6 @@
 *.user
 *.opendb
 .vs/
-.ai/
+.github/
 packages/
 /JammaLib/src/base/GuiElement.cpp
