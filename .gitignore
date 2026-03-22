@@ -10,5 +10,6 @@
 *.opendb
 .vs/
 .github/
+.vscode/
 packages/
 /JammaLib/src/base/GuiElement.cpp
