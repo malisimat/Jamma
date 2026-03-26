@@ -58,9 +58,25 @@ Build rules:
 
 MSBuild path:
 
-C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe
+```
+C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe
+```
 
-Preferred targeted builds:
+### Preprocessor Directives
+
+**JammaLib (all configurations):**
+- Common: `NOMINMAX`, `_LIB`, `GLEW_STATIC`, `__STDC_LIB_EXT1__`
+- Audio backends: `__WINDOWS_DS__`, `__WINDOWS_ASIO__`, `__WINDOWS_WASAPI__`
+- Debug: `_DEBUG`
+- Release: `NDEBUG`
+
+**Jamma (all configurations):**
+- Common: `_WINDOWS`
+- Win32 Debug: `WIN32`, `_DEBUG`
+- x64 Debug: `_DEBUG`
+- Release: `NDEBUG`
+
+### Preferred targeted builds:
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
@@ -69,7 +85,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 ```
 
-Solution build (sparingly):
+### Solution build (sparingly):
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
@@ -77,10 +93,11 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild Jamma.sln /m /t:Build /p:Configuration=Release /p:Platform=x64
 ```
 
-Testing:
+### Testing:
 
 - Build/run JammaLib.Tests.
 - For behavior changes in JammaLib, add/update tests when feasible.
+- **Note:** Tests require Google Test (gtest) via NuGet package `Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn`.
 
 ## Coding Guidance
 
