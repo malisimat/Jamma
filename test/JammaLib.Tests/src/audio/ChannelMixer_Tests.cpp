@@ -30,10 +30,14 @@ public:
 	}
 
 public:
-	inline virtual int OnWrite(float samp, int indexOffset)
+	inline virtual int OnMixWrite(float samp,
+		float fadeCurrent,
+		float fadeNew,
+		int indexOffset,
+		base::Audible::AudioSourceType source) override
 	{
 		if ((_writeIndex + indexOffset) < Samples.size())
-			Samples[_writeIndex + indexOffset] = samp;
+			Samples[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * Samples[_writeIndex + indexOffset]);
 
 		return indexOffset + 1;
 	};
@@ -80,7 +84,8 @@ public:
 	bool MatchesBuffer(const std::vector<float>& buf) { return _sink->MatchesBuffer(buf); }
 
 protected:
-	virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel)
+	virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType source) override
 	{
 		if (channel == 0)
 			return _sink;
@@ -115,7 +120,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _writeIndex;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -230,10 +235,10 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	auto numBlocks = (bufSize * 2) / blockSize;
 	for (int i = 0; i < numBlocks; i++)
 	{
-		sink->Zero(blockSize);
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		chanMixer.Source()->OnPlay(sink, trigger, 0u, blockSize);
 		chanMixer.Source()->EndMultiPlay(blockSize);
-		sink->EndMultiWrite(blockSize, true);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
@@ -262,13 +267,13 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		chanMixer.Sink()->Zero(blockSize);
+		chanMixer.Sink()->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		source->OnPlay(chanMixer.Sink(), trigger, 0u, blockSize);
 		source->EndMultiPlay(blockSize);
 
 		auto tempBuf = std::vector<float>(blockSize);
 		chanMixer.ToDac(tempBuf.data(), 1, blockSize);
-		chanMixer.Sink()->EndMultiWrite(blockSize, true);
+		chanMixer.Sink()->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 
 		for (auto v : tempBuf)
 			buf.push_back(v);
