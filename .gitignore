@@ -15,4 +15,3 @@
 !.github/copilot-instructions.md
 .vscode/
 packages/
-/JammaLib/src/base/GuiElement.cpp
