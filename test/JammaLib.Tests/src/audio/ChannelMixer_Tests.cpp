@@ -30,10 +30,14 @@ public:
 	}
 
 public:
-	inline virtual int OnWrite(float samp, int indexOffset)
+	inline virtual int OnMixWrite(float samp,
+		float fadeCurrent,
+		float fadeNew,
+		int indexOffset,
+		base::Audible::AudioSourceType source) override
 	{
 		if ((_writeIndex + indexOffset) < Samples.size())
-			Samples[_writeIndex + indexOffset] = samp;
+			Samples[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * Samples[_writeIndex + indexOffset]);
 
 		return indexOffset + 1;
 	};
@@ -74,13 +78,14 @@ public:
 	}
 
 public:
-	virtual unsigned int NumInputChannels() const { return 1; };
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
 	bool IsFilled() { return _sink->IsFilled(); }
 	bool MatchesBuffer(const std::vector<float>& buf) { return _sink->MatchesBuffer(buf); }
 
 protected:
-	virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel)
+	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType source) override
 	{
 		if (channel == 0)
 			return _sink;
@@ -179,14 +184,14 @@ public:
 	}
 
 public:
-	virtual unsigned int NumOutputChannels() const { return 1; };
+	virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
 	bool WasPlayed() { return _source->WasPlayed(); }
 	bool MatchesSink(std::shared_ptr<ChannelMixerMockedSink> sink) { return _source->MatchesSink(sink); }
 	bool MatchesBuffer(const std::vector<float>& buf) { return _source->MatchesBuffer(buf); }
 
 protected:
-	virtual const std::shared_ptr<AudioSource> OutputChannel(unsigned int channel)
+	virtual const std::shared_ptr<AudioSource> _OutputChannel(unsigned int channel) override
 	{
 		if (channel == 0)
 		{
@@ -194,9 +199,7 @@ protected:
 			return _source;
 		}
 
-		auto chan = std::shared_ptr<AudioSource>();
-		chan->SetSourceType(SourceType());
-		return chan;
+		return nullptr;
 	}
 private:
 	std::shared_ptr<ChannelMixerMockedSource> _source;
