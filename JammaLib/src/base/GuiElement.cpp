@@ -1,6 +1,7 @@
 #include "GuiElement.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
+#include <typeinfo>
 
 using namespace base;
 using namespace utils;
@@ -10,26 +11,28 @@ using graphics::ImageParams;
 using resources::ResourceLib;
 
 GuiElement::GuiElement(GuiElementParams params) :
-	Drawable(params),
-	Moveable(params),
-	Sizeable(params),
+	Drawable(static_cast<DrawableParams&>(params)),
+	Moveable(static_cast<MoveableParams&>(params)),
+	Sizeable(static_cast<SizeableParams&>(params)),
 	_changesMade(false),
+	_isVisible(true),
+	_isEnabled(true),
 	_isSelected(false),
 	_isPicking3d(false),
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
-	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
-	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture")),
+	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
 	_children({})
 {
 }
 
 void GuiElement::Init()
 {
-	InitReceivers();
+	_InitReceivers();
 
 	unsigned int index = 0;
 	for (auto& child : _children)
@@ -64,6 +67,27 @@ bool GuiElement::IsSelected() const
 	return _isSelected;
 }
 
+bool GuiElement::IsVisible() const
+{
+	return _isVisible;
+}
+
+bool GuiElement::IsEnabled() const
+{
+	return _isEnabled;
+}
+
+bool GuiElement::HitTest(Position2d localPos)
+{
+	for (auto& child : _children)
+	{
+		if (child->HitTest(child->ParentToLocal(localPos)))
+			return true;
+	}
+
+	return _HitTest(localPos);
+}
+
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
@@ -88,55 +112,86 @@ std::vector<JobAction> GuiElement::CommitChanges()
 
 void GuiElement::Draw(DrawContext& ctx)
 {
-	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
-
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	switch (_state)
+	if (_isVisible)
 	{
-	case STATE_OVER:
-		_overTexture.Draw(ctx);
-		break;
-	case STATE_DOWN:
-		_downTexture.Draw(ctx);
-		break;
-	case STATE_OUT:
-		_outTexture.Draw(ctx);
-		break;
-	default:
-		_texture.Draw(ctx);
-		break;
+		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+
+		auto pos = Position();
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
+
+		switch (_state)
+		{
+		case STATE_OVER:
+			if (_overTexture.IsDrawInitialised())
+				_overTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		case STATE_DOWN:
+			if (_downTexture.IsDrawInitialised())
+				_downTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		case STATE_OUT:
+			if (_outTexture.IsDrawInitialised())
+				_outTexture.Draw(ctx);
+			else
+				_texture.Draw(ctx);
+
+			break;
+		default:
+			_texture.Draw(ctx);
+			break;
+		}
+
+		for (auto& child : _children)
+			child->Draw(ctx);
+
+		glCtx.PopMvp();
 	}
-
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
 }
 
 void GuiElement::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	if (_isVisible)
+	{
+		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
-	auto pos = ModelPosition();
-	auto scale = ModelScale();
+		auto pos = ModelPosition();
+		auto scale = ModelScale();
 
-	_modelScreenPos = glCtx.ProjectScreen(pos);
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+		_modelScreenPos = glCtx.ProjectScreen(pos);
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+		glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	for (auto& child : _children)
-		child->Draw3d(ctx, 1, pass);
+		for (auto& child : _children)
+			child->Draw3d(ctx, 1, pass);
 
-	glCtx.PopMvp();
-	glCtx.PopMvp();
+		glCtx.PopMvp();
+		glCtx.PopMvp();
+	}
+}
+
+void GuiElement::SetVisible(bool visible)
+{
+	_isVisible = visible;
+}
+
+void GuiElement::SetEnabled(bool enabled)
+{
+	_isEnabled = enabled;
 }
 
 ActionResult GuiElement::OnAction(KeyAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -146,11 +201,30 @@ ActionResult GuiElement::OnAction(KeyAction action)
 			return res;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr};
+	return ActionResult::NoAction();
+}
+
+ActionResult GuiElement::OnAction(GuiAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	for (auto child = _children.rbegin();
+		child != _children.rend(); ++child)
+	{
+		auto res = (*child)->OnAction(action);
+		if (res.IsEaten)
+			return res;
+	}
+
+	return ActionResult::NoAction();
 }
 
 ActionResult GuiElement::OnAction(TouchAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -160,20 +234,36 @@ ActionResult GuiElement::OnAction(TouchAction action)
 			return res;
 	}
 
-	if (Size2d::RectTest(_sizeParams.Size, action.Position))
-	{
-		_state = TouchAction::TouchState::TOUCH_DOWN == action.State ?
-			STATE_DOWN :
-			STATE_NORMAL;
+	if (_guiParams.GuiPassThrough)
+		return ActionResult::NoAction();
 
-		return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+	switch (action.State)
+	{
+	case TouchAction::TouchState::TOUCH_DOWN:
+		if (HitTest(action.Position))
+		{
+			_state = STATE_DOWN;
+
+			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+		}
+		break;
+	case TouchAction::TouchState::TOUCH_UP:
+		_state = STATE_NORMAL;
+
+		if (HitTest(action.Position))
+			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+
+		break;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr };
+	return ActionResult::NoAction();
 }
 
 ActionResult GuiElement::OnAction(TouchMoveAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -183,18 +273,21 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 			return res;
 	}
 
+	if (_guiParams.GuiPassThrough)
+		return ActionResult::NoAction();
+
 	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
 	{
-		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
-			_state : STATE_OUT;
+		_state = HitTest(action.Position) ?
+			STATE_DOWN : STATE_OUT;
 	}
 	else
 	{
-		_state = Size2d::RectTest(_sizeParams.Size, action.Position) ?
-			STATE_OVER : _state;
+		_state = HitTest(action.Position) ?
+			STATE_OVER : STATE_NORMAL;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT, nullptr};
+	return ActionResult::NoAction();
 }
 
 void GuiElement::SetParent(std::shared_ptr<GuiElement> parent)
@@ -239,19 +332,6 @@ utils::Position2d GuiElement::ParentToLocal(utils::Position2d pos)
 {
 	pos -= Position();
 	return pos;
-}
-
-bool GuiElement::HitTest(Position2d localPos)
-{
-	for (auto& child : _children)
-	{
-		if (child->HitTest(child->ParentToLocal(localPos)))
-			return true;
-	}
-
-	return Size2d::RectTest(_sizeParams.Size, localPos);
-
-	return false;
 }
 
 bool GuiElement::Select()
@@ -331,6 +411,20 @@ std::vector<unsigned int> GuiElement::GlobalId()
 	return id;
 }
 
+void GuiElement::AddChild(std::shared_ptr<GuiElement> child)
+{
+	if (nullptr == child)
+		return;
+
+	auto it = std::find(_children.begin(), _children.end(), child);
+	if (it == _children.end())
+	{
+		_children.push_back(child);
+	}
+
+	Init();
+}
+
 std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 {
 	if (index < _children.size())
@@ -363,13 +457,10 @@ void GuiElement::_ReleaseResources()
 
 std::vector<JobAction> GuiElement::_CommitChanges()
 {
-	unsigned int index = 0;
-
-	for (auto& child : _children)
-	{
-		child->SetIndex(index);
-		index++;
-	}
-
 	return {};
+}
+
+bool GuiElement::_HitTest(Position2d localPos)
+{
+	return Size2d::RectTest(_sizeParams.Size, localPos);
 }

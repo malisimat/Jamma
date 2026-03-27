@@ -13,6 +13,7 @@
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiSlider.h"
 #include "../gui/GuiSelector.h"
+#include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "Tickable.h"
@@ -150,12 +151,13 @@ namespace engine
 		virtual void SetSize(utils::Size2d size) override
 		{
 			_sizeParams.Size = size;
-			InitSize();
+			_InitSize();
 		}
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -163,10 +165,12 @@ namespace engine
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
+		void InitReceivers();
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
+		void InitGui();
 		void InitAudio();
 		void CloseAudio();
 		void CommitChanges();
@@ -176,24 +180,27 @@ namespace engine
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
+		static std::vector<unsigned char> TrimPath(std::vector<unsigned char> path,
+			unsigned int depth);
 		static int AudioCallback(void* outBuffer,
 			void* inBuffer,
 			unsigned int numSamps,
 			double streamTime,
 			RtAudioStreamStatus status,
 			void* userData);
-		void OnAudio(float* inBuffer,
+
+		void _OnAudio(float* inBuffer,
 			float* outBuffer,
 			unsigned int numSamps);
-		bool OnUndo(std::shared_ptr<base::ActionUndo> undo);
-		void InitSize();
-		void UpdateSelection(actions::ActionResultType res);
-		glm::mat4 View();
-
-		void AddStation(std::shared_ptr<Station> station);
-		void SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
-		std::shared_ptr<base::GuiElement> ChildFromPath(std::vector<unsigned char> path);
-		void JobLoop();
+		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
+		void _InitSize();
+		void _UpdateSelection(actions::ActionResultType res);
+		glm::mat4 _View();
+		void _AddStation(std::shared_ptr<Station> station);
+		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		void _JobLoop();
+		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
+		void _UpdateSelectDepth(unsigned int depth);
 
 	protected:
 		bool _isSceneTouching;
@@ -206,6 +213,7 @@ namespace engine
 		glm::mat4 _overlayViewProj;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
+		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;

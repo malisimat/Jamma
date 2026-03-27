@@ -28,17 +28,18 @@ namespace base
 		~MultiAudioSource() {}
 
 	public:
-		virtual MultiAudioPlugType MultiAudiblePlug() const { return MULTIAUDIOPLUG_SOURCE; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_SOURCE; }
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<engine::Trigger> trigger,
 			int indexOffset,
 			unsigned int numSamps)
 		{
-			for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
+			for (unsigned int chan = 0; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
-				auto channel = OutputChannel(chan);
+				const auto& srcChannel = _OutputChannel(chan);
+
 				dest->OnWriteChannel(chan,
-					channel,
+					srcChannel,
 					indexOffset,
 					numSamps,
 					_sourceParams.SourceType);
@@ -46,10 +47,11 @@ namespace base
 		}
 		virtual void EndMultiPlay(unsigned int numSamps)
 		{
-			for (auto chan = 0u; chan < NumOutputChannels(); chan++)
+			for (auto chan = 0u; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
 			{
-				auto channel = OutputChannel(chan);
-				channel->EndPlay(numSamps);
+				const auto& channel = _OutputChannel(chan);
+				if (channel)
+					channel->EndPlay(numSamps);
 			}
 		}
 		virtual void OnPlayChannel(unsigned int chan,
@@ -57,11 +59,11 @@ namespace base
 			int indexOffset,
 			unsigned int numSamps)
 		{
-			auto channel = OutputChannel(chan);
+			const auto& channel = _OutputChannel(chan);
 			if (channel)
 				channel->OnPlay(dest, indexOffset, numSamps);
 		}
-		virtual unsigned int NumOutputChannels() const { return 0; };
+		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		Audible::AudioSourceType SourceType() const { return _sourceParams.SourceType; }
 		void SetSourceType(Audible::AudioSourceType source) { _sourceParams.SourceType = source; }
@@ -73,7 +75,7 @@ namespace base
 		}
 
 	protected:
-		virtual const std::shared_ptr<AudioSource> OutputChannel(unsigned int channel)
+		virtual const std::shared_ptr<AudioSource> _OutputChannel(unsigned int channel)
 		{
 			return nullptr;
 		}

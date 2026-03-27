@@ -30,10 +30,10 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_isLastActivateDownRaw(false),
 	_isLastDitchDownRaw(false),
 	_recordSampCount(0),
-	_textureRecording(ImageParams(DrawableParams{ trigParams.TextureRecording }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
-	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture")),
+	_textureRecording(ImageParams(DrawableParams{ trigParams.TextureRecording }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
+	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
+	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
+	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
 	_loopTakeHistory({}),
 	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
 	_delayedActions({})
@@ -111,6 +111,9 @@ utils::Position2d Trigger::Position() const
 
 ActionResult Trigger::OnAction(KeyAction action)
 {
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;
