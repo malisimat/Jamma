@@ -164,15 +164,28 @@ TEST(Loop, PlayWrapsAround) {
 
 	auto loop = Loop(loopParams, mixerParams);
 
+	// Initialize loop with audio data so _loopLength > 0 before playback.
+	// Record MaxLoopFadeSamps + loopLength samples, then call Play() to
+	// transition to playing state.
+	const auto loopLength = 50ul;
+	const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+	loop.Record();
+	for (auto i = 0ul; i < totalRecordSamps; i++)
+		loop.OnMixWrite(1.0f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+	loop.EndWrite(totalRecordSamps, true);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+
 	auto numBlocks = (bufSize * 2) / blockSize;
 
 	for (int i = 0; i < numBlocks; i++)
 	{
 		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
-		loop.OnPlay(sink, trigger, 0u, blockSize);
+		loop.OnPlay(sink, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
 		loop.EndMultiPlay(blockSize);
 		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
 }
+
