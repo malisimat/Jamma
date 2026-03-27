@@ -115,6 +115,20 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 			outLatency = std::get<unsigned long>(json.KeyValues["outlatency"]);
 	}
 
+	if (inLatency == 512 && outLatency == 512)
+	{
+		iter = json.KeyValues.find("latency");
+		if (iter != json.KeyValues.end())
+		{
+			if (json.KeyValues["latency"].index() == 2)
+			{
+				auto latency = std::get<unsigned long>(json.KeyValues["latency"]);
+				inLatency = latency;
+				outLatency = latency;
+			}
+		}
+	}
+
 	iter = json.KeyValues.find("numchannelsin");
 	if (iter != json.KeyValues.end())
 	{
