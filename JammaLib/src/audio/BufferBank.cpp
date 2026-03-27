@@ -52,6 +52,12 @@ void BufferBank::SetLength(unsigned long length)
 	_length = length < capacity ? length : capacity;
 }
 
+void BufferBank::Resize(unsigned long length)
+{
+	_length = length;
+	UpdateCapacity();
+}
+
 void BufferBank::UpdateCapacity()
 {
 	int numBanks = NumBanksToHold(_length, true);
