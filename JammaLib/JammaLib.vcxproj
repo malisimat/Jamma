@@ -29,26 +29,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -214,9 +214,14 @@
     <ClInclude Include="src\actions\ActionResult.h" />
     <ClInclude Include="src\audio\BufferBank.h" />
     <ClInclude Include="src\actions\JobAction.h" />
+    <ClInclude Include="src\base\Jammable.h" />
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
+    <ClInclude Include="src\actions\GuiAction.h" />
+    <ClInclude Include="src\gui\GuiButton.h" />
+    <ClInclude Include="src\gui\GuiToggle.h" />
+    <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
     <ClInclude Include="src\base\Tweakable.h" />
@@ -224,7 +229,6 @@
     <ClInclude Include="src\base\MultiAudible.h" />
     <ClInclude Include="src\base\Audible.h" />
     <ClInclude Include="src\audio\ChannelMixer.h" />
-    <ClInclude Include="src\actions\DoubleAction.h" />
     <ClInclude Include="src\actions\TriggerAction.h" />
     <ClInclude Include="src\base\MultiAudioSink.h" />
     <ClInclude Include="src\base\Actionable.h" />
@@ -234,6 +238,8 @@
     <ClInclude Include="src\graphics\Camera.h" />
     <ClInclude Include="include\Constants.h" />
     <ClInclude Include="src\gui\GuiSelector.h" />
+    <ClInclude Include="src\gui\GuiRadio.h" />
+    <ClInclude Include="src\gui\GuiRack.h" />
     <ClInclude Include="src\utils\VecUtils.h" />
     <ClInclude Include="src\utils\MathUtils.h" />
     <ClInclude Include="src\io\UserConfig.h" />
@@ -292,7 +298,7 @@
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\base\ActionSender.h" />
     <ClInclude Include="src\audio\InterpolatedValue.h" />
-    <ClInclude Include="src\gui\GuiButton.h" />
+    <ClInclude Include="src\gui\GuiPanel.h" />
     <ClInclude Include="src\gui\GuiModel.h" />
     <ClInclude Include="src\base\ActionReceiver.h" />
     <ClInclude Include="src\engine\Loop.h" />
@@ -309,7 +315,6 @@
     <ClInclude Include="src\engine\UndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
     <ClInclude Include="src\resources\TextureResource.h" />
-    <ClInclude Include="src\base\Touchable.h" />
     <ClInclude Include="src\actions\WindowAction.h" />
     <ClInclude Include="src\resources\WavResource.h" />
     <ClInclude Include="src\engine\Timer.h" />
@@ -323,17 +328,22 @@
   <ItemGroup>
     <ClCompile Include="src\audio\BufferBank.cpp" />
     <ClCompile Include="src\audio\ChannelMixer.cpp" />
-    <ClCompile Include="src\actions\DoubleAction.cpp" />
     <ClCompile Include="src\actions\TriggerAction.cpp" />
     <ClCompile Include="src\actions\JobAction.cpp" />
     <ClCompile Include="src\audio\FallingValue.cpp" />
     <ClCompile Include="src\audio\Hanning.cpp" />
     <ClCompile Include="src\actions\DelayedAction.cpp" />
+    <ClCompile Include="src\actions\GuiAction.cpp" />
+    <ClCompile Include="src\gui\GuiButton.cpp" />
+    <ClCompile Include="src\gui\GuiToggle.cpp" />
+    <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />
     <ClCompile Include="src\engine\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />
+    <ClCompile Include="src\gui\GuiRadio.cpp" />
+    <ClCompile Include="src\gui\GuiRack.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\RigFile.cpp" />
     <ClCompile Include="src\io\Json.cpp" />
@@ -367,7 +377,7 @@
     <ClCompile Include="src\graphics\Shader.cpp" />
     <ClCompile Include="src\graphics\Image.cpp" />
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
-    <ClCompile Include="src\gui\GuiButton.cpp" />
+    <ClCompile Include="src\gui\GuiPanel.cpp" />
     <ClCompile Include="src\gui\GuiModel.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />
     <ClCompile Include="lib\glew\glew.c" />

@@ -34,10 +34,10 @@ namespace audio
 		{
 		public:
 			virtual void EndMultiPlay(unsigned int numSamps) override;
-			virtual unsigned int NumOutputChannels() const override;
+			virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 
 		protected:
-			virtual const std::shared_ptr<base::AudioSource> OutputChannel(unsigned int channel) override;
+			virtual const std::shared_ptr<base::AudioSource> _OutputChannel(unsigned int channel) override;
 		};
 
 		class DacChannelMixer :
@@ -49,10 +49,10 @@ namespace audio
 				base::Audible::AudioSourceType source) override;
 			virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex,
 				base::Audible::AudioSourceType source) override;
-			virtual unsigned int NumInputChannels() const override;
+			virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 
 		protected:
-			virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
+			virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 				base::Audible::AudioSourceType source) override;
 		};
 

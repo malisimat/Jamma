@@ -13,11 +13,11 @@ using base::AudioSink;
 using base::MultiAudioSink;
 using base::AudioSourceParams;
 
-class MockedSink :
+class LoopMockedSink :
 	public AudioSink
 {
 public:
-	MockedSink(unsigned int bufSize) :
+	LoopMockedSink(unsigned int bufSize) :
 		Samples({})
 	{
 		Samples = std::vector<float>(bufSize);
@@ -53,7 +53,7 @@ class MockedMultiSink :
 public:
 	MockedMultiSink(unsigned int bufSize)
 	{
-		_sink = std::make_shared<MockedSink>(bufSize);
+		_sink = std::make_shared<LoopMockedSink>(bufSize);
 	}
 
 public:
@@ -70,14 +70,14 @@ protected:
 		return std::shared_ptr<AudioSink>();
 	}
 private:
-	std::shared_ptr<MockedSink> _sink;
+	std::shared_ptr<LoopMockedSink> _sink;
 };
 
-class MockedSource :
+class LoopMockedSource :
 	public AudioSource
 {
 public:
-	MockedSource(unsigned int bufSize,
+	LoopMockedSource(unsigned int bufSize,
 		AudioSourceParams params) :
 		_index(0),
 		Samples({}),
@@ -96,7 +96,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _index;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -111,7 +111,7 @@ public:
 		_index += numSamps;
 	}
 	bool WasPlayed() { return _index >= Samples.size(); }
-	bool MatchesSink(const std::shared_ptr<MockedSink> buf)
+	bool MatchesSink(const std::shared_ptr<LoopMockedSink> buf)
 	{
 		auto numSamps = buf->Samples.size();
 		for (auto samp = 0u; samp < numSamps; samp++)
@@ -162,10 +162,10 @@ TEST(Loop, PlayWrapsAround) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		sink->Zero(blockSize);
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		loop.OnPlay(sink, trigger, 0u, blockSize);
 		loop.EndMultiPlay(blockSize);
-		sink->EndMultiWrite(blockSize, true);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());

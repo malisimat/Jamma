@@ -1,4 +1,3 @@
-
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "gui/GuiSlider.h"
@@ -7,7 +6,7 @@ using base::ActionReceiver;
 using resources::ResourceLib;
 using gui::GuiSlider;
 using gui::GuiSliderParams;
-using actions::DoubleAction;
+using actions::GuiAction;
 using actions::TouchAction;
 using actions::TouchMoveAction;
 
@@ -20,9 +19,9 @@ public:
 		_expected(expected),
 		_value(0.0)	{}
 public:
-	virtual actions::ActionResult OnAction(actions::DoubleAction action) override
+	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-		_value = action.Value();
+		_value = std::get<actions::GuiAction::GuiDouble>(action.Data).Value;
 		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	};
 	
@@ -98,7 +97,11 @@ TEST(GuiSlider, ReceiverGetsValue) {
 
 	auto receiver = std::make_shared<MockedSliderReceiver>(expectedValue);
 	ASSERT_FALSE(receiver->IsExpected());
-	receiver->OnAction(DoubleAction(2.5));
+
+	auto testAction = GuiAction();
+	testAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+	testAction.Data = GuiAction::GuiDouble{ 2.5 };
+	receiver->OnAction(testAction);
 
 	slider->SetReceiver(receiver);
 	ASSERT_EQ(0.0, slider->Value());

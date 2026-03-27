@@ -59,9 +59,9 @@ void ImageFullscreen::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto validated = true;
 
 	if (validated)
-		validated = InitShader(resourceLib);
+		validated = _InitShader(resourceLib);
 	if (validated)
-		validated = InitVertexArray();
+		validated = _InitVertexArray();
 
 	GlUtils::CheckError("ImageFullscreen::_InitResources()");
 }
@@ -72,7 +72,7 @@ void ImageFullscreen::_ReleaseResources()
 	_vertexArray = 0;
 }
 
-bool ImageFullscreen::InitShader(ResourceLib& resourceLib)
+bool ImageFullscreen::_InitShader(ResourceLib& resourceLib)
 {
 	auto shaderOpt = resourceLib.GetResource(_shaderName);
 
@@ -92,7 +92,7 @@ bool ImageFullscreen::InitShader(ResourceLib& resourceLib)
 	return true;
 }
 
-bool ImageFullscreen::InitVertexArray()
+bool ImageFullscreen::_InitVertexArray()
 {
 	glGenVertexArrays(1, &_vertexArray);
 	glBindVertexArray(_vertexArray);
