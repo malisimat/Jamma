@@ -15,7 +15,7 @@ Image::Image(ImageParams params) :
 	Sizeable(params),
 	_vertexArray(0),
 	_vertexBuffer{ 0,0 },
-	_shaderName(params.Shader),
+	_imageParams(params),
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>())
 {
@@ -65,11 +65,13 @@ void Image::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto validated = true;
 
 	if (validated)
-		validated = InitTexture(resourceLib);
+		validated = _InitTexture(resourceLib);
 	if (validated)
-		validated = InitShader(resourceLib);
+		validated = _InitShader(resourceLib);
 	if (validated)
-		validated = InitVertexArray();
+		validated = _InitVertexArray();
+
+	_isDrawInitialised = validated;
 
 	GlUtils::CheckError("Image::_InitResources()");
 }
@@ -82,9 +84,11 @@ void Image::_ReleaseResources()
 
 	glDeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
+
+	_isDrawInitialised = false;
 }
 
-bool Image::InitTexture(ResourceLib& resourceLib)
+bool Image::_InitTexture(ResourceLib& resourceLib)
 {
 	auto textureOpt = resourceLib.GetResource(_drawParams.Texture);
 	
@@ -104,9 +108,9 @@ bool Image::InitTexture(ResourceLib& resourceLib)
 	return true;
 }
 
-bool Image::InitShader(ResourceLib& resourceLib)
+bool Image::_InitShader(ResourceLib& resourceLib)
 {
-	auto shaderOpt = resourceLib.GetResource(_shaderName);
+	auto shaderOpt = resourceLib.GetResource(_imageParams.Shader);
 
 	if (!shaderOpt.has_value())
 		return false;
@@ -124,7 +128,7 @@ bool Image::InitShader(ResourceLib& resourceLib)
 	return true;
 }
 
-bool Image::InitVertexArray()
+bool Image::_InitVertexArray()
 {
 	glGenVertexArrays(1, &_vertexArray);
 	glBindVertexArray(_vertexArray);
@@ -145,17 +149,31 @@ bool Image::InitVertexArray()
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(0);
 
-	static const GLfloat uvs[] = {
-		0.0f, 0.0f,
-		1.0f, 0.0f,
-		0.0f, 1.0f,
-		0.0f, 1.0f,
-		1.0f, 0.0f,
-		1.0f, 1.0f,
+	float left = _imageParams.FlipH ? 1.0f : 0.0f;
+	float right = _imageParams.FlipH ? 0.0f : 1.0f;
+	float bottom = _imageParams.FlipV ? 1.0f : 0.0f;
+	float top = _imageParams.FlipV ? 0.0f : 1.0f;
+
+	const GLfloat uvs[] = {
+		left, bottom,
+		right, bottom,
+		left, top,
+		left, top,
+		right, bottom,
+		right, top
+	};
+
+	const GLfloat uvsRotated[] = {
+		left, top,
+		left, bottom,
+		right, top,
+		right, top,
+		left, bottom,
+		right, bottom
 	};
 
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer[1]);
-	glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(GLfloat), uvs, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(GLfloat), _imageParams.Rot90 ? uvsRotated : uvs, GL_STATIC_DRAW);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(1);
 

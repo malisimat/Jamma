@@ -14,7 +14,7 @@ AudioBuffer::AudioBuffer(unsigned int size) :
 	AudioSource({}),
 	_playIndex(0),
 	_sampsRecorded(0),
-	_buffer(std::vector<float>(size < constants::MaxBlockSize ? constants::MaxBlockSize : size, 0.0f))
+	_buffer(std::vector<float>(size > constants::MaxBlockSize ? constants::MaxBlockSize : size, 0.0f))
 {
 }
 
@@ -36,10 +36,11 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 		index -= bufSize;
 
 	auto destIndex = 0;
+	auto sourceType = SourceType();
 
-	for (auto i = 0u; i < numSamps; i++) // TODO: pass the whole vector to the sink
+	for (auto i = 0u; i < numSamps; i++)
 	{
-		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, SourceType());
+		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, sourceType);
 
 		index++;
 		if (index >= bufSize)
@@ -104,7 +105,7 @@ void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 
 void AudioBuffer::SetSize(unsigned int size)
 {
-	_buffer.resize(size < constants::MaxBlockSize ? constants::MaxBlockSize : size);
+	_buffer.resize(size > constants::MaxBlockSize ? constants::MaxBlockSize : size);
 }
 
 void AudioBuffer::_SetWriteIndex(unsigned int index)
@@ -133,6 +134,11 @@ unsigned int AudioBuffer::BufSize() const
 	return (unsigned int)_buffer.size();
 }
 
+const float& AudioBuffer::operator[](unsigned int index) const
+{
+	return _buffer[index % _buffer.size()];
+}
+
 std::vector<float>::iterator AudioBuffer::Start()
 {
 	return _buffer.begin();
@@ -143,16 +149,16 @@ std::vector<float>::iterator AudioBuffer::End()
 	return _buffer.end();
 }
 
-std::vector<float>::iterator AudioBuffer::Delay(unsigned int sampsDelay)
+unsigned int AudioBuffer::Delay(unsigned int sampsDelay)
 {
 	if (0 == _sampsRecorded)
-	{
 		_playIndex = 0;
-		return _buffer.begin();
+	else
+	{
+		auto bufSize = (unsigned int)_buffer.size();
+		auto sampsBehind = sampsDelay > bufSize ? bufSize : sampsDelay;
+		_playIndex = sampsBehind > _writeIndex ? (_writeIndex + bufSize) - sampsBehind : _writeIndex - sampsBehind;
 	}
-
-	auto bufSize = (unsigned int)_buffer.size();
-	auto sampsBehind = sampsDelay > bufSize ? bufSize : sampsDelay;
-	_playIndex = sampsBehind > _writeIndex ? (_writeIndex + bufSize) - sampsBehind : _writeIndex - sampsBehind;
-	return (_buffer.begin() + _playIndex);
+	
+	return _playIndex;
 }

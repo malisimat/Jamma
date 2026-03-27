@@ -149,7 +149,7 @@
     <ClInclude Include="src\resources\Resource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiButton.h">
+    <ClInclude Include="src\gui\GuiPanel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\resources\TextureResource.h">
@@ -164,9 +164,6 @@
     <ClInclude Include="src\utils\ImageUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
-    <ClInclude Include="src\base\Touchable.h">
-      <Filter>src\base</Filter>
-    </ClInclude>
     <ClInclude Include="src\graphics\Shader.h">
       <Filter>src\resources</Filter>
     </ClInclude>
@@ -178,9 +175,6 @@
     </ClInclude>
     <ClInclude Include="src\base\AudioSource.h">
       <Filter>src\base</Filter>
-    </ClInclude>
-    <ClInclude Include="src\actions\DoubleAction.h">
-      <Filter>src\actions</Filter>
     </ClInclude>
     <ClInclude Include="src\actions\CursorAction.h">
       <Filter>src\actions</Filter>
@@ -214,9 +208,6 @@
     </ClInclude>
     <ClInclude Include="src\audio\ChannelMixer.h">
       <Filter>src\audio</Filter>
-    </ClInclude>
-    <ClInclude Include="src\base\GuiElement.h">
-      <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\base\AudioSink.h">
       <Filter>src\base</Filter>
@@ -380,8 +371,32 @@
     <ClInclude Include="src\utils\VecUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiRouter.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\ImageFullscreen.h">
-      <Filter>include</Filter>
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\actions\GuiAction.h">
+      <Filter>src\actions</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiToggle.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiButton.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiRadio.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\GuiElement.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\base\Jammable.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiRack.h">
+      <Filter>src\gui</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -430,7 +445,7 @@
     <ClCompile Include="src\resources\ResourceLib.cpp">
       <Filter>src\resources</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiButton.cpp">
+    <ClCompile Include="src\gui\GuiPanel.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\TextureResource.cpp">
@@ -466,9 +481,6 @@
     <ClCompile Include="src\actions\KeyAction.cpp">
       <Filter>src\actions</Filter>
     </ClCompile>
-    <ClCompile Include="src\actions\DoubleAction.cpp">
-      <Filter>src\actions</Filter>
-    </ClCompile>
     <ClCompile Include="src\actions\CursorAction.cpp">
       <Filter>src\actions</Filter>
     </ClCompile>
@@ -501,9 +513,6 @@
     </ClCompile>
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\base\GuiElement.cpp">
-      <Filter>src\base</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>
@@ -577,8 +586,29 @@
     <ClCompile Include="src\gui\GuiSelector.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiRouter.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
-      <Filter>src</Filter>
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\actions\GuiAction.cpp">
+      <Filter>src\actions</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiToggle.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiButton.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiRadio.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\base\GuiElement.cpp">
+      <Filter>src\base</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiRack.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

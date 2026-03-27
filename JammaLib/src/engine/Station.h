@@ -3,45 +3,52 @@
 #include "LoopTake.h"
 #include "Trigger.h"
 #include "AudioSink.h"
-#include "MultiAudioSource.h"
-#include "MultiAudioSink.h"
-#include "Tweakable.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../base/Jammable.h"
+#include "../gui/GuiRack.h"
 
 namespace engine
 {
 	class StationParams :
-		public base::GuiElementParams,
-		public base::TweakableParams
+		public base::JammableParams
 	{
 	public:
 		StationParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-				SizeableParams{ 1,1 },
-				"",
-				"",
-				"",
-				{}),
-			base::TweakableParams(),
+			base::JammableParams(
+				base::GuiElementParams(0, DrawableParams{ "" },
+					MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+					SizeableParams{ 1,1 },
+					"",
+					"",
+					"",
+					{})
+				),
 			Name(""),
-			FadeSamps(constants::DefaultFadeSamps)
+			FadeSamps(constants::DefaultFadeSamps),
+			NumBusChannels(0)
 		{
 		}
 
 	public:
 		std::string Name;
 		unsigned int FadeSamps;
+		unsigned int NumBusChannels;
 	};
 	
 	class Station :
 		public base::Tickable,
-		public base::GuiElement,
-		public base::Tweakable,
-		public base::MultiAudioSource,
+		public base::Jammable,
 		public base::MultiAudioSink
 	{
+	public:
+		enum StationPanelType
+		{
+			STATIONPANEL_MASTER,
+			STATIONPANEL_MIXER,
+			STATIONPANEL_ROUTER
+		};
+
 	public:
 		Station(StationParams params,
 			audio::AudioMixerParams mixerParams);
@@ -59,13 +66,12 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
 
-		virtual std::string ClassName() const { return "Station"; }
-
+		virtual std::string ClassName() const override { return "Station"; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual	utils::Position2d Position() const override;
-		virtual MultiAudioPlugType MultiAudioPlug() const { return MULTIAUDIOPLUG_NONE; }
-		virtual unsigned int NumOutputChannels() const override;
-		virtual unsigned int NumInputChannels() const override;
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
+		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
@@ -82,47 +88,60 @@ namespace engine
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) override;
+		virtual void Reset() override;
 		
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
 		unsigned int NumTakes() const;
-		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
-		void SetupBuffers(unsigned int chans, unsigned int bufSize);
-		unsigned int BufSize() const;
+		void SetupBuffers(unsigned int bufSize);
+		void SetNumBusChannels(unsigned int chans);
+		void SetNumAdcChannels(unsigned int chans);
+		void SetNumDacChannels(unsigned int chans);
+		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 
 	protected:
-		static unsigned int CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
+		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
+		virtual void _InitReceivers() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
-			Audible::AudioSourceType source);
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+			Audible::AudioSourceType source) override;
+		virtual void _ArrangeChildren() override;
 
-		void ArrangeTakes();
-		std::optional<std::shared_ptr<LoopTake>> TryGetTake(std::string id);
+		gui::GuiRackParams _GetRackParams(utils::Size2d size);
+		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 
 	protected:
 		static const utils::Size2d _Gap;
+		static const unsigned int _DefaultNumBusChannels;
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
 		unsigned int _fadeSamps;
+		unsigned int _lastBufSize;
 		std::shared_ptr<Timer> _clock;
-		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiRack> _guiRack;
+		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<gui::GuiToggle> _mixerToggle;
+		std::shared_ptr<gui::GuiToggle> _routerToggle;
+		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};

@@ -9,4 +9,9 @@
 *.user
 *.opendb
 .vs/
+.github/
+!.github/
+.github/*
+!.github/copilot-instructions.md
+.vscode/
 packages/
