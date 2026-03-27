@@ -16,6 +16,7 @@ namespace audio
 
 		void Init();
 		void SetLength(unsigned long length);
+		void Resize(unsigned long length);
 		void UpdateCapacity();
 		unsigned long Length() const;
 		unsigned long Capacity() const;
