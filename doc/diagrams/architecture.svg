@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" role="img" aria-labelledby="title desc">
+  <title id="title">Jamma Architecture</title>
+  <desc id="desc">High-level project architecture showing app shell, engine library, and tests.</desc>
+  <defs>
+    <style>
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 15px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .small { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #334155; }
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 10; }
+      .accent { fill: #eef2ff; }
+      .engine { fill: #ecfeff; }
+      .tests { fill: #f0fdf4; }
+      .arrow { stroke: #0f172a; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f172a" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="520" fill="#ffffff" />
+  <text x="40" y="48" class="title">Jamma Project Design</text>
+
+  <rect class="box accent" x="40" y="90" width="280" height="160" />
+  <text x="60" y="125" class="label">Jamma (app shell)</text>
+  <text x="60" y="150" class="small">- Startup and wiring</text>
+  <text x="60" y="172" class="small">- Windowing / UI integration</text>
+  <text x="60" y="194" class="small">- Device lifecycle hookup</text>
+
+  <rect class="box engine" x="360" y="90" width="580" height="320" />
+  <text x="380" y="125" class="label">JammaLib (engine)</text>
+  <text x="380" y="148" class="small">Real-time audio behavior and loop model</text>
+
+  <rect class="box" x="390" y="175" width="250" height="210" />
+  <text x="410" y="205" class="label">Engine + Actions</text>
+  <text x="410" y="227" class="small">State transitions</text>
+  <text x="410" y="249" class="small">Transport + command handling</text>
+
+  <rect class="box" x="670" y="175" width="240" height="90" />
+  <text x="690" y="205" class="label">Audio</text>
+  <text x="690" y="227" class="small">ChannelMixer, AudioBuffer</text>
+  <text x="690" y="249" class="small">Capture/playback paths</text>
+
+  <rect class="box" x="670" y="285" width="240" height="100" />
+  <text x="690" y="315" class="label">Loop Domain</text>
+  <text x="690" y="337" class="small">Station -&gt; LoopTake -&gt; Loop</text>
+  <text x="690" y="359" class="small">Recording and mix/read</text>
+
+  <rect class="box tests" x="40" y="300" width="280" height="110" />
+  <text x="60" y="332" class="label">JammaLib.Tests</text>
+  <text x="60" y="354" class="small">GoogleTest coverage</text>
+  <text x="60" y="376" class="small">Engine and audio behavior checks</text>
+
+  <path class="arrow" d="M320 170 L355 170" />
+  <path class="arrow" d="M320 340 L355 340 L355 280 L390 280" />
+</svg>

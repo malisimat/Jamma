@@ -21,7 +21,7 @@ public:
 	void Fill(BufferBank& bank)
 	{
 		auto numSamps = (unsigned int)Samples.size();
-		bank.SetLength(numSamps);
+		bank.Resize(numSamps);
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -82,4 +82,28 @@ TEST(BufferBank, StoresCorrectValuesDuringResize) {
 	source.Fill(bank);
 
 	ASSERT_TRUE(source.Matches(bank));
+}
+
+TEST(BufferBank, SetLengthClampsToCapacity) {
+	BufferBank bank;
+	auto initCapacity = bank.Capacity();
+
+	// SetLength with a value exceeding capacity must clamp to capacity, not grow
+	bank.SetLength(initCapacity + 10);
+
+	ASSERT_EQ(bank.Length(), initCapacity);
+	ASSERT_EQ(bank.Capacity(), initCapacity);
+}
+
+TEST(BufferBank, SetLengthDoesNotExceedCapacityAfterResize) {
+	BufferBank bank;
+	auto initCapacity = bank.Capacity();
+
+	// Grow capacity via Resize, then verify SetLength clamps to new capacity
+	bank.Resize(initCapacity + 10);
+	auto newCapacity = bank.Capacity();
+	ASSERT_TRUE(newCapacity > initCapacity);
+
+	bank.SetLength(newCapacity + 1);
+	ASSERT_EQ(bank.Length(), newCapacity);
 }

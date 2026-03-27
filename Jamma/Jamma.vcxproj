@@ -29,26 +29,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -310,12 +310,44 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <None Include="resources\shaders\colour.frag" />
+    <None Include="resources\shaders\colour.vert" />
     <None Include="resources\shaders\blur.frag" />
     <None Include="resources\shaders\blur.vert" />
     <None Include="resources\shaders\picker.frag" />
     <None Include="resources\shaders\picker.vert" />
     <None Include="resources\shaders\white.vert" />
     <None Include="resources\shaders\white.frag" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\textures\arrow.tga" />
+    <Image Include="resources\textures\arrow2.tga" />
+    <Image Include="resources\textures\arrow2_down.tga" />
+    <Image Include="resources\textures\arrow2_over.tga" />
+    <Image Include="resources\textures\arrowup.tga" />
+    <Image Include="resources\textures\arrowup2.tga" />
+    <Image Include="resources\textures\arrowup2_down.tga" />
+    <Image Include="resources\textures\arrowup2_over.tga" />
+    <Image Include="resources\textures\arrowup_down.tga" />
+    <Image Include="resources\textures\arrowup_over.tga" />
+    <Image Include="resources\textures\arrow_down.tga" />
+    <Image Include="resources\textures\arrow_over.tga" />
+    <Image Include="resources\textures\loopmode.tga" />
+    <Image Include="resources\textures\loopmode_down.tga" />
+    <Image Include="resources\textures\loopmode_over.tga" />
+    <Image Include="resources\textures\loopmode_toggled.tga" />
+    <Image Include="resources\textures\router.tga" />
+    <Image Include="resources\textures\router_active.tga" />
+    <Image Include="resources\textures\router_down.tga" />
+    <Image Include="resources\textures\router_over.tga" />
+    <Image Include="resources\textures\stationmode.tga" />
+    <Image Include="resources\textures\stationmode_down.tga" />
+    <Image Include="resources\textures\stationmode_over.tga" />
+    <Image Include="resources\textures\stationmode_toggled.tga" />
+    <Image Include="resources\textures\takemode.tga" />
+    <Image Include="resources\textures\takemode_down.tga" />
+    <Image Include="resources\textures\takemode_over.tga" />
+    <Image Include="resources\textures\takemode_toggled.tga" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

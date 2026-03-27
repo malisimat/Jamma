@@ -10,24 +10,23 @@ using audio::Hanning;
 using audio::AudioMixerParams;
 using graphics::GlDrawContext;
 
-Loop::Loop(LoopParams loopParams,
+Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :
-	GuiElement(loopParams),
-	Tweakable(loopParams),
+	Jammable(params),
 	AudioSink(),
 	_playIndex(0),
 	_lastPeak(0.0f),
 	_pitch(1.0),
 	_loopLength(0),
 	_playState(STATE_INACTIVE),
-	_loopParams(loopParams),
+	_loopParams(params),
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
 	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
-	_hanning = std::make_unique<Hanning>(loopParams.FadeSamps);
+	_hanning = std::make_unique<Hanning>(params.FadeSamps);
 
 	LoopModelParams modelParams;
 	modelParams.Size = { 12, 14 };
@@ -137,7 +136,7 @@ void Loop::Draw3d(DrawContext& ctx,
 
 	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 	_model->SetLoopIndexFrac(frac);
-	_model->SetLoopState(GetLoopModelState(pass, _playState, IsMuted()));
+	_model->SetLoopState(_GetLoopModelState(pass, _playState, IsMuted()));
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
@@ -348,9 +347,9 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	while (_playIndex > bufSize)
 		_playIndex -= _loopLength;
 
-	for (unsigned int chan = 0; chan < NumOutputChannels(); chan++)
+	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
 	{
-		auto channel = OutputChannel(chan);
+		const auto& channel = _OutputChannel(chan);
 
 		if (channel)
 			channel->EndPlay(numSamps);
@@ -377,10 +376,15 @@ std::string Loop::Id() const
 
 void Loop::Update()
 {
-	UpdateLoopModel();
+	_UpdateLoopModel();
 
 	_bufferBank.UpdateCapacity();
 	_monitorBufferBank.UpdateCapacity();
+}
+
+void Loop::SetMixerLevel(double level)
+{
+	_mixer->SetUnmutedLevel(level);
 }
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
@@ -396,8 +400,7 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 	_bufferBank.Init();
 
 	auto length = (unsigned long)buffer.size();
-	_bufferBank.SetLength(length);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(length);
 
 	for (auto i = 0u; i < length; i++)
 	{
@@ -406,7 +409,7 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 	_loopLength = length - constants::MaxLoopFadeSamps;
 
-	UpdateLoopModel();
+	_UpdateLoopModel();
 
 	std::cout << "-=-=- Loop LOADED " << _loopParams.Wav << std::endl;
 
@@ -421,11 +424,9 @@ void Loop::Record()
 	Reset();
 
 	_playState = STATE_RECORDING;
-	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
-	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_monitorBufferBank.UpdateCapacity();
+	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
@@ -453,44 +454,15 @@ void Loop::Play(unsigned long index,
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
 
-bool Loop::Select()
+void Loop::Reset()
 {
-	auto isNewState = GuiElement::Select();
+	_playState = STATE_INACTIVE;
 
-	if (isNewState)
-		_mixer->Select();
-
-	return isNewState;
-}
-
-bool Loop::DeSelect()
-{
-	auto isNewState = GuiElement::DeSelect();
-
-	if (isNewState)
-		_mixer->DeSelect();
-
-	return isNewState;
-}
-
-bool Loop::Mute()
-{
-	auto isNewState = Tweakable::Mute();
-
-	if (isNewState)
-		_mixer->Mute();
-
-	return isNewState;
-}
-
-bool Loop::UnMute()
-{
-	auto isNewState = Tweakable::UnMute();
-
-	if (isNewState)
-		_mixer->UnMute();
-
-	return isNewState;
+	_writeIndex = 0ul;
+	_playIndex = 0ul;
+	_loopLength = 0ul;
+	_mixer->UnMute();
+	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
 }
 
 void Loop::EndRecording()
@@ -511,8 +483,7 @@ void Loop::Ditch()
 
 Reset();
 
-_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-_bufferBank.UpdateCapacity();
+_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 std::cout << "-=-=- Loop DITCH" << std::endl;
 }
@@ -525,11 +496,9 @@ void Loop::Overdub()
 	Reset();
 
 	_playState = STATE_OVERDUBBING;
-	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
-	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_monitorBufferBank.UpdateCapacity();
+	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
@@ -554,28 +523,7 @@ void Loop::PunchOut()
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
 
-void Loop::Reset()
-{
-	_playState = STATE_INACTIVE;
-
-	_writeIndex = 0ul;
-	_playIndex = 0ul;
-	_loopLength = 0ul;
-	_mixer->UnMute();
-	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
-
-	std::cout << "-=-=- Loop RESET" << std::endl;
-}
-
-unsigned long Loop::LoopIndex() const
-{
-	if (constants::MaxLoopFadeSamps > _playIndex)
-		return 0;
-
-	return _playIndex - constants::MaxLoopFadeSamps;
-}
-
-double Loop::CalcDrawRadius(unsigned long loopLength)
+double Loop::_CalcDrawRadius(unsigned long loopLength)
 {
 	auto minRadius = 50.0;
 	auto maxRadius = 400.0;
@@ -584,7 +532,7 @@ double Loop::CalcDrawRadius(unsigned long loopLength)
 	return std::clamp(radius, minRadius, maxRadius);
 }
 
-LoopModel::LoopModelState Loop::GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted)
+LoopModel::LoopModelState Loop::_GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted)
 {
 	switch (pass)
 	{
@@ -605,7 +553,15 @@ LoopModel::LoopModelState Loop::GetLoopModelState(base::DrawPass pass, LoopPlayS
 	}
 }
 
-void Loop::UpdateLoopModel()
+unsigned long Loop::_LoopIndex() const
+{
+	if (constants::MaxLoopFadeSamps > _playIndex)
+		return 0;
+
+	return _playIndex - constants::MaxLoopFadeSamps;
+}
+
+void Loop::_UpdateLoopModel()
 {
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
@@ -613,7 +569,7 @@ void Loop::UpdateLoopModel()
 	auto length = isRecording ? _writeIndex : _loopLength;
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)CalcDrawRadius(length);
+	auto radius = (float)_CalcDrawRadius(length);
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
