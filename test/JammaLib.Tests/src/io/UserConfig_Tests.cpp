@@ -9,7 +9,7 @@ using io::Json;
 using io::UserConfig;
 
 TEST(UserConfig, ParsesAudioSettings) {
-	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"latency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
+	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"inlatency\":212,\"outlatency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto audio = UserConfig::AudioSettings::FromJson(json);
@@ -45,7 +45,7 @@ TEST(UserConfig, ParsesTriggerSettings) {
 }
 
 TEST(UserConfig, ParsesFile) {
-	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"latency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
+	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54}";
 	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
 	

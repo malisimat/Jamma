@@ -11,7 +11,7 @@ using io::RigFile;
 const std::string TriggerPairString = "{\"activatedown\":%ADOWN%,\"activateup\":11,\"ditchdown\":%DDOWN%,\"ditchup\":12}";
 
 TEST(RigFile, ParsesAudioSettings) {
-	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"latency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
+	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"inlatency\":212,\"outlatency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto audio = io::UserConfig::AudioSettings::FromJson(json);
@@ -66,7 +66,7 @@ TEST(RigFile, ParsesTrigger) {
 }
 
 TEST(RigFile, ParsesFile) {
-	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"latency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
+	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	
 	auto pair1 = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "1"), std::regex("%DDOWN%"), "2");
 	auto pair2 = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "3"), std::regex("%DDOWN%"), "4");
