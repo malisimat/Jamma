@@ -1,5 +1,6 @@
 #include "GuiSelector.h"
 
+using namespace base;
 using namespace gui;
 using namespace utils;
 using base::Action;
@@ -9,6 +10,7 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 	_isSelecting(false),
 	_selectionTool(SELECTION_PAINT),
 	_selectMode(SELECT_NONE),
+	_selectDepth(SelectDepth::DEPTH_LOOPTAKE),
 	_initPos({0,0}),
 	_currentPos({0,0}),
 	_currentHover({}),
@@ -21,6 +23,16 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 GuiSelector::SelectMode GuiSelector::CurrentMode() const
 {
 	return _selectMode;
+}
+
+SelectDepth GuiSelector::CurrentSelectDepth() const
+{
+	return _selectDepth;
+}
+
+void GuiSelector::SetSelectDepth(SelectDepth level)
+{
+	_selectDepth = level;
 }
 
 std::vector<unsigned char> GuiSelector::CurrentHover() const
@@ -52,8 +64,12 @@ bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 
 actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 {
-	actions::ActionResult result = GuiElement::OnAction(action);
-	result.IsEaten = false;
+	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
+
+	res.IsEaten = false;
 
 	if (actions::TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
@@ -64,7 +80,7 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 			// Check current status and flip it
 			if (0 == action.Index)
 			{
-				result.IsEaten = true;
+				res.IsEaten = true;
 				auto mode = Action::MODIFIER_CTRL & action.Modifiers ?
 					(_currentHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD ) :
 					SELECT_SELECT;
@@ -72,11 +88,11 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 				StartPaintSelection(mode, _currentHover);
 
 				if (SELECT_SELECT == mode)
-					result.ResultType = actions::ACTIONRESULT_INITSELECT;
+					res.ResultType = actions::ACTIONRESULT_INITSELECT;
 			}
 			else if (1 == action.Index)
 			{
-				result.IsEaten = true;
+				res.IsEaten = true;
 				auto mode = Tweakable::TweakState::TWEAKSTATE_MUTED & _currentHoverTweakState ?
 					SELECT_UNMUTE :
 					SELECT_MUTE;
@@ -93,8 +109,8 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 				(SELECT_SELECTADD == _selectMode) ||
 				(SELECT_SELECTREMOVE == _selectMode))
 			{
-				result.IsEaten = true;
-				result.ResultType = actions::ACTIONRESULT_SELECT;
+				res.IsEaten = true;
+				res.ResultType = actions::ACTIONRESULT_SELECT;
 
 				EndSelection();
 			}
@@ -104,8 +120,8 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 			if ((SELECT_MUTE == _selectMode) ||
 				(SELECT_UNMUTE == _selectMode))
 			{
-				result.IsEaten = true;
-				result.ResultType = (SELECT_MUTE == _selectMode) ?
+				res.IsEaten = true;
+				res.ResultType = (SELECT_MUTE == _selectMode) ?
 					actions::ACTIONRESULT_MUTE :
 					actions::ACTIONRESULT_UNMUTE;
 
@@ -114,36 +130,49 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 		}
 	}
 
-	return result;
+	return res;
 }
 
 actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
 {
-	actions::ActionResult result = GuiElement::OnAction(action);
-	result.IsEaten = false;
+	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
+
+	res.IsEaten = false;
 
 	if (17 == action.KeyChar)
 	{
 		if ((SELECT_NONE == _selectMode) && (actions::KeyAction::KeyActionType::KEY_DOWN == action.KeyActionType))
 		{
 			_selectMode = SELECT_NONEADD;
-			result.IsEaten = true;
+			res.IsEaten = true;
 		}
 		else if ((SELECT_NONEADD == _selectMode) && (actions::KeyAction::KeyActionType::KEY_UP == action.KeyActionType))
 		{
 			_selectMode = SELECT_NONE;
-			result.IsEaten = true;
+			res.IsEaten = true;
 		}
 	}
 
-	return result;
+	return res;
 }
 
 bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
 {
-	return path.size() > 2 ?
-		(path[0] != 0) || (path[1] != 0) || (path[2] != 0) :
-		false;
+	auto depth = 1u + (unsigned int)_selectDepth;
+
+	if (path.size() < depth)
+		return false;
+
+	for (auto i = 0u; i < depth; i++)
+	{
+		if (path[i] != 0)
+			return true;
+	}
+
+	return false;
 }
 
 void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)

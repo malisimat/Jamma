@@ -69,29 +69,6 @@ void GuiSlider::SetSize(Size2d size)
 	OnValueChange(true);
 }
 
-bool GuiSlider::HitTest(Position2d localPos)
-{
-	for (auto& child : _children)
-	{
-		if (child->HitTest(child->ParentToLocal(localPos)))
-			return true;
-	}
-
-	auto left = _dragElement.Position().X;
-	auto right = _dragElement.Position().X + (int)_dragElement.GetSize().Width;
-
-	if (localPos.X > left && localPos.X < right)
-	{
-		auto bottom = _dragElement.Position().Y;
-		auto top = _dragElement.Position().X + (int)_dragElement.GetSize().Height;
-
-		if (localPos.Y > bottom && localPos.Y < top)
-			return true;
-	}
-
-	return false;
-}
-
 void GuiSlider::Draw(DrawContext & ctx)
 {
 	GuiElement::Draw(ctx);
@@ -110,6 +87,9 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	//if (res.IsEaten)
 	//	return res;
 
+	if (!_isEnabled || !_isVisible)
+		return res;
+
 	if (_isDragging)
 	{
 		if (TouchAction::TOUCH_UP == action.State)
@@ -126,7 +106,7 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 			ActionResult res;
 			res.IsEaten = true;
 			res.ResultType = ACTIONRESULT_DEFAULT;
-			res.Undo = std::make_shared<DoubleActionUndo>(oldValue, GuiElement::shared_from_this());
+			res.Undo = std::make_shared<GuiActionUndo>(oldValue, GuiElement::shared_from_this());
 
 			return res;
 		}
@@ -153,12 +133,15 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 		}
 	}
 
-	return GuiElement::OnAction(action);
+	return res;
 }
 
 ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
 	auto res = GuiElement::OnAction(action);
+
+	if (!_isEnabled || !_isVisible)
+		return res;
 
 	if (res.IsEaten)
 		return res;
@@ -178,6 +161,7 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 	OnValueChange(false);
 
 	res.IsEaten = true;
+
 	return res;
 }
 
@@ -186,7 +170,7 @@ bool GuiSlider::Undo(std::shared_ptr<ActionUndo> undo)
 	if (_isDragging)
 		return false;
 
-	auto doubleUndo = std::dynamic_pointer_cast<DoubleActionUndo>(undo);
+	auto doubleUndo = std::dynamic_pointer_cast<GuiActionUndo>(undo);
 
 	if (doubleUndo)
 	{
@@ -202,7 +186,7 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 	if (_isDragging)
 		return false;
 
-	auto doubleUndo = std::dynamic_pointer_cast<DoubleActionUndo>(undo);
+	auto doubleUndo = std::dynamic_pointer_cast<GuiActionUndo>(undo);
 
 	if (doubleUndo)
 	{
@@ -225,13 +209,35 @@ void GuiSlider::_ReleaseResources()
 	GuiElement::_ReleaseResources();
 }
 
+bool GuiSlider::_HitTest(Position2d localPos)
+{
+	auto left = _dragElement.Position().X;
+	auto right = _dragElement.Position().X + (int)_dragElement.GetSize().Width;
+
+	if (localPos.X > left && localPos.X < right)
+	{
+		auto bottom = _dragElement.Position().Y;
+		auto top = _dragElement.Position().X + (int)_dragElement.GetSize().Height;
+
+		if (localPos.Y > bottom && localPos.Y < top)
+			return true;
+	}
+
+	return false;
+}
+
 void GuiSlider::OnValueChange(bool bypassUpdates)
 {
 	auto value = _initValue + _valueOffset;
 	_dragElement.SetPosition(CalcDragPos(_sliderParams, _sizeParams.Size, value));
 
+	GuiAction action;
+	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+	action.Index = _index;
+	action.Data = GuiAction::GuiDouble(value);
+
 	if (_receiver && !bypassUpdates)
-		_receiver->OnAction(DoubleAction(value));
+		_receiver->OnAction(action);
 }
 
 double GuiSlider::CalcValueOffset(GuiSliderParams params,

@@ -14,18 +14,16 @@ namespace base
 		public virtual MultiAudible
 	{
 	public:
-		virtual MultiAudioPlugType MultiAudioPlug() const
-		{
-			return MULTIAUDIOPLUG_SINK;
-		}
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_SINK; }
 
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source)
 		{
-			for (auto chan = 0u; chan < NumInputChannels(); chan++)
+			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
-				auto channel = InputChannel(chan, source);
-				channel->Zero(numSamps);
+				const auto& channel = _InputChannel(chan, source);
+				if (channel)
+					channel->Zero(numSamps);
 			}
 		}
 		virtual bool IsArmed() const { return true; }
@@ -35,10 +33,11 @@ namespace base
 			bool updateIndex,
 			Audible::AudioSourceType source)
 		{
-			for (auto chan = 0u; chan < NumInputChannels(); chan++)
+			for (auto chan = 0u; chan < NumInputChannels(source); chan++)
 			{
-				auto channel = InputChannel(chan, source);
-				channel->EndWrite(numSamps, updateIndex);
+				const auto& channel = _InputChannel(chan, source);
+				if (channel)
+					channel->EndWrite(numSamps, updateIndex);
 			}
 		}
 		virtual void OnWriteChannel(unsigned int channel,
@@ -47,7 +46,8 @@ namespace base
 			unsigned int numSamps,
 			Audible::AudioSourceType source)
 		{
-			auto chan = InputChannel(channel, source);
+			const auto& chan = _InputChannel(channel, source);
+
 			if (chan && src)
 				src->OnPlay(chan, indexOffset, numSamps);
 		}
@@ -58,11 +58,12 @@ namespace base
 			int indexOffset,
 			Audible::AudioSourceType source)
 		{
-			auto chan = InputChannel(channel, source);
+			const auto& chan = _InputChannel(channel, source);
+
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
-		virtual unsigned int NumInputChannels() const { return 0; };
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		std::shared_ptr<MultiAudioSink> shared_from_this()
 		{
@@ -71,7 +72,7 @@ namespace base
 		}
 
 	protected:
-		virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel,
+		virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) {
 			return nullptr;
 		}
