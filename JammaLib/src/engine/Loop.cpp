@@ -400,8 +400,7 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 	_bufferBank.Init();
 
 	auto length = (unsigned long)buffer.size();
-	_bufferBank.SetLength(length);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(length);
 
 	for (auto i = 0u; i < length; i++)
 	{
@@ -425,11 +424,9 @@ void Loop::Record()
 	Reset();
 
 	_playState = STATE_RECORDING;
-	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
-	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_monitorBufferBank.UpdateCapacity();
+	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
@@ -486,8 +483,7 @@ void Loop::Ditch()
 
 Reset();
 
-_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-_bufferBank.UpdateCapacity();
+_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 std::cout << "-=-=- Loop DITCH" << std::endl;
 }
@@ -500,11 +496,9 @@ void Loop::Overdub()
 	Reset();
 
 	_playState = STATE_OVERDUBBING;
-	_bufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_bufferBank.UpdateCapacity();
+	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
-	_monitorBufferBank.SetLength(constants::MaxLoopFadeSamps);
-	_monitorBufferBank.UpdateCapacity();
+	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }

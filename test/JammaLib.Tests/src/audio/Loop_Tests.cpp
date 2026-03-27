@@ -29,10 +29,14 @@ public:
 	}
 
 public:
-	inline virtual int OnWrite(float samp, int indexOffset)
+	inline virtual int OnMixWrite(float samp,
+		float fadeCurrent,
+		float fadeNew,
+		int indexOffset,
+		base::Audible::AudioSourceType source) override
 	{
 		if ((_writeIndex + indexOffset) < Samples.size())
-			Samples[_writeIndex + indexOffset] = samp;
+			Samples[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * Samples[_writeIndex + indexOffset]);
 
 		return indexOffset + 1;
 	};
@@ -59,20 +63,11 @@ public:
 public:
 	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
-	virtual void Zero(unsigned int numSamps, base::Audible::AudioSourceType source) override
-	{
-		_sink->Zero(numSamps);
-	}
-
-	virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex, base::Audible::AudioSourceType source) override
-	{
-		_sink->EndWrite(numSamps, updateIndex);
-	}
-
 	bool IsFilled() { return _sink->IsFilled(); }
 
 protected:
-	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel, base::Audible::AudioSourceType source) override
+	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType source) override
 	{
 		if (channel == 0)
 			return _sink;
@@ -103,6 +98,7 @@ public:
 
 public:
 	virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
+		int indexOffset,
 		unsigned int numSamps)
 	{
 		auto index = _index;
