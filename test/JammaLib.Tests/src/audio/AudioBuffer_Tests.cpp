@@ -1,4 +1,3 @@
-
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "audio/AudioBuffer.h"
@@ -13,14 +12,26 @@ using base::AudioSourceParams;
 
 namespace
 {
+	inline unsigned int SpanSize(const AudioBuffer& data)
+	{
+		return data.BufSize();
+	}
+
+	template<typename T>
+	unsigned int SpanSize(const T& data)
+	{
+		return static_cast<unsigned int>(data.size());
+	}
+
 	template<typename T>
 	std::string DumpFloatSpan(const T& data, unsigned int start, unsigned int count)
 	{
 		std::ostringstream oss;
 		oss << "[";
 
-		const auto safeStart = std::min(start, static_cast<unsigned int>(data.size()));
-		const auto safeEnd = std::min(safeStart + count, static_cast<unsigned int>(data.size()));
+		const auto dataSize = SpanSize(data);
+		const auto safeStart = (std::min)(start, dataSize);
+		const auto safeEnd = (std::min)(safeStart + count, dataSize);
 
 		for (auto i = safeStart; i < safeEnd; ++i)
 		{
