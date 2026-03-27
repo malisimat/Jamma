@@ -48,8 +48,8 @@ float& audio::BufferBank::operator[](unsigned long index)
 
 void BufferBank::SetLength(unsigned long length)
 {
-	auto capacity = Capacity();
-	_length = length < capacity ? length : capacity;
+	_length = length;
+	UpdateCapacity();
 }
 
 void BufferBank::UpdateCapacity()
