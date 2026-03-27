@@ -29,9 +29,6 @@ Window::Window(Scene& scene,
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
 	_modifiers(Action::MODIFIER_NONE),
-	_pickContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::PICKING),
-	_textureContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::TEXTURE),
-	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
 	_scene.InitGui();
@@ -90,9 +87,9 @@ void Window::InitScene()
 {
 	_scene.InitResources(_resourceLib, true);
 	_highlightPass.InitResources(_resourceLib, true);
-	_pickContext.Initialise();
-	_textureContext.Initialise();
-	_drawContext.Initialise();
+	_pickContext->Initialise();
+	_textureContext->Initialise();
+	_drawContext->Initialise();
 }
 
 void Window::ShowMessage(LPCWSTR message)
@@ -274,6 +271,10 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+	_pickContext.emplace(_config.Size, base::DrawContext::ContextTarget::PICKING);
+	_textureContext.emplace(_config.Size, base::DrawContext::ContextTarget::TEXTURE);
+	_drawContext.emplace(_config.Size, base::DrawContext::ContextTarget::SCREEN);
+
 	LoadResources();
 	InitScene();
 
@@ -344,9 +345,9 @@ void Window::Resize(Size2d size)
 {
 	_config.Size = size;
 
-	_pickContext.Initialise();
-	_textureContext.Initialise();
-	_drawContext.Initialise();
+	_pickContext->Initialise();
+	_textureContext->Initialise();
+	_drawContext->Initialise();
 }
 
 void Window::SetWindowState(WindowState state)
@@ -364,32 +365,32 @@ void Window::Render()
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
 
-	_pickContext.Bind();
+	_pickContext->Bind();
 
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
-	_scene.Draw3d(_pickContext, 1, DrawPass::PASS_PICKER);
+	_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
 
 	// Save the picker render to bmp:
-	// std::vector<unsigned char> data = _pickContext.GetTexture();
+	// std::vector<unsigned char> data = _pickContext->GetTexture();
 	// stbi_write_bmp("picker.bmp", _config.Size.Width, _config.Size.Height, 4, data.data());
 
-	_textureContext.Bind();
+	_textureContext->Bind();
 
 	glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
-	_scene.Draw3d(_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
+	_scene.Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
 
-	_drawContext.Bind();
+	_drawContext->Bind();
 
 	glClearColor(0.029f, 0.186f, 0.249f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	_highlightPass.SetTexture(_textureContext.GetTexture());
-	_highlightPass.Draw3d(_drawContext, 1, DrawPass::PASS_SCENE);
+	_highlightPass.SetTexture(_textureContext->GetTexture());
+	_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 
-	_scene.Draw3d(_drawContext, 1, DrawPass::PASS_SCENE);
-	_scene.Draw(_drawContext);
+	_scene.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
+	_scene.Draw(*_drawContext);
 }
 
 void Window::Swap()
@@ -466,7 +467,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
-	auto objectId = _pickContext.GetPixel({ touchAction.Position.X, touchAction.Position.Y });
+	auto objectId = _pickContext->GetPixel({ touchAction.Position.X, touchAction.Position.Y });
 	if (objectId != _lastHoverObjectId)
 	{
 		auto path = utils::IdToVec(objectId);

@@ -12,6 +12,7 @@
 #include <commctrl.h>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <fstream>
 #include <sstream>
 #include "glew/glew.h"
@@ -107,9 +108,9 @@ namespace graphics
 		unsigned int _buttonsDown;
 		unsigned int _lastHoverObjectId;
 
-		GlDrawContext _drawContext;
-		GlDrawContext _pickContext;
-		GlDrawContext _textureContext;
+		std::optional<GlDrawContext> _drawContext;
+		std::optional<GlDrawContext> _pickContext;
+		std::optional<GlDrawContext> _textureContext;
 		engine::Scene& _scene;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
