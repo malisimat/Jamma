@@ -21,6 +21,21 @@ namespace base
 		public SizeableParams
 	{
 	public:
+		GuiElementParams() :
+			DrawableParams{ "" },
+			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+			SizeableParams{ 1,1 },
+			Rot90(false),
+			FlipH(false),
+			FlipV(false),
+			GuiPassThrough(true),
+			Index(0u),
+			OverTexture(""),
+			DownTexture(""),
+			OutTexture("")
+		{
+		}
+
 		GuiElementParams(unsigned int index,
 			DrawableParams drawParams,
 			MoveableParams moveParams,
@@ -32,20 +47,26 @@ namespace base
 			DrawableParams(drawParams),
 			MoveableParams(moveParams),
 			SizeableParams(sizeParams),
+			Rot90(false),
+			FlipH(false),
+			FlipV(false),
+			GuiPassThrough(true),
 			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
-			OutTexture(outTexture),
-			ChildParams(childParams)
+			OutTexture(outTexture)
 		{
 		}
 
 	public:
+		bool Rot90;
+		bool FlipH;
+		bool FlipV;
+		bool GuiPassThrough;
 		unsigned int Index;
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
-		std::vector<GuiElementParams> ChildParams;
 	};
 
 	class GuiElement :
@@ -80,7 +101,8 @@ namespace base
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, DrawPass pass) override;
-		virtual bool HitTest(utils::Position2d localPos);
+		virtual void SetVisible(bool visible);
+		virtual void SetEnabled(bool enabled);
 		virtual bool Select();
 		virtual bool DeSelect();
 		virtual void SetPicking3d(bool picking);
@@ -88,13 +110,18 @@ namespace base
 		virtual void SetStateFromPicking(EditMode mode, bool flipState);
 		virtual void SetIndex(unsigned int index);
 		virtual std::vector<unsigned int> GlobalId();
+		virtual void AddChild(std::shared_ptr<GuiElement> child);
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		bool IsVisible() const;
+		bool IsEnabled() const;
 		bool IsSelected() const;
+		bool HitTest(utils::Position2d localPos);
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
@@ -114,9 +141,12 @@ namespace base
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
+		virtual bool _HitTest(utils::Position2d localPos);
 
 	protected:
 		bool _changesMade;
+		bool _isVisible;
+		bool _isEnabled;
 		bool _isSelected;
 		bool _isPicking3d;
 		unsigned int _index;

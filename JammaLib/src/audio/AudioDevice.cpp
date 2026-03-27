@@ -53,11 +53,14 @@ void AudioDevice::Start()
 
 void AudioDevice::Stop()
 {
-	if (_stream->isStreamRunning())
-		_stream->stopStream();
+	if (_stream)
+	{
+		if (_stream->isStreamRunning())
+			_stream->stopStream();
 
-	if (_stream->isStreamOpen())
-		_stream->closeStream();
+		if (_stream->isStreamOpen())
+			_stream->closeStream();
+	}
 }
 
 AudioStreamParams AudioDevice::GetAudioStreamParams()

@@ -226,48 +226,51 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	auto playPos = (loopStart - fadeSamps) + Trigger.PreDelay + outLatency;
 	auto bufSize = loopLength + loopStart;
 	
-	if (error >= 0)
+	if (loopLength > 0)
 	{
-		// If positive error, move playpos forward to skip time
-		// already lost due to late trigger
-		playPos += error;
-
-		while (playPos >= bufSize)
-			playPos -= loopLength;
-	}
-	else
-	{
-		// If negative error, then move position backwards
-		// to fill in time until trigger should have been pressed
-		auto appliedError = false;
-		auto foundPos = false;
-
-		while (!foundPos)
+		if (error >= 0)
 		{
-			if (!appliedError)
+			// If positive error, move playpos forward to skip time
+			// already lost due to late trigger
+			playPos += error;
+
+			while (playPos >= bufSize)
+				playPos -= loopLength;
+		}
+		else
+		{
+			// If negative error, then move position backwards
+			// to fill in time until trigger should have been pressed
+			auto appliedError = false;
+			auto foundPos = false;
+
+			while (!foundPos)
 			{
-				if (playPos < (unsigned long)(-error))
-					playPos += loopLength;
+				if (!appliedError)
+				{
+					if (playPos < (unsigned long)(-error))
+						playPos += loopLength;
+					else
+					{
+						playPos += error;
+						appliedError = true;
+					}
+				}
 				else
 				{
-					playPos += error;
-					appliedError = true;
+					if (playPos < loopStart)
+						playPos += loopLength;
+					else
+						foundPos = true;
 				}
 			}
-			else
-			{
-				if (playPos < loopStart)
-					playPos += loopLength;
-				else
-					foundPos = true;
-			}
 		}
-	}
 
-	// For first play, since buffers may still be filling up
-	// then play from before the loop starts to avoid glitches
-	if (playPos > loopLength)
-		playPos -= loopLength;
+		// For first play, since buffers may still be filling up
+		// then play from before the loop starts to avoid glitches
+		if (playPos > loopLength)
+			playPos -= loopLength;
+	}
 
 	return playPos;
 }

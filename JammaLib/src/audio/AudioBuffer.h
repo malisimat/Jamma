@@ -34,9 +34,12 @@ namespace audio
 		unsigned int SampsRecorded() const;
 		unsigned int BufSize() const;
 
+		const float& operator[](unsigned int index) const;
+		unsigned int Delay(unsigned int sampsDelay);
+
+	protected:
 		std::vector<float>::iterator Start();
 		std::vector<float>::iterator End();
-		std::vector<float>::iterator Delay(unsigned int sampsDelay);
 
 	protected:
 		void _SetWriteIndex(unsigned int index);

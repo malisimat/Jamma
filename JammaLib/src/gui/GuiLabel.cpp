@@ -19,22 +19,21 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 
 void GuiLabel::Draw(DrawContext& ctx)
 {
-	auto model = glm::mat4(1.0);
-	model = glm::translate(glm::mat4(1.0), glm::vec3(100.f, 200.f, 0.f));
-	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	auto mvpOpt = glCtx.GetUniform("MVP");
-
-	if (mvpOpt.has_value())
-	{
-		auto mvp = std::any_cast<std::vector<glm::mat4>>(mvpOpt.value());
-		mvp.push_back(model);
-		glCtx.SetUniform("MVP", mvp);
-	}
-
 	auto font = _font.lock();
 
-	if (font)
-		font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
+	if (!font)
+		return;
+
+	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
+
+	auto fontHeight = font->GetHeight();
+	auto pos = Position();
+	auto size = GetSize();
+	auto scale = size.Height / fontHeight;
+
+	glCtx.PushMvp(glm::scale(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)), glm::vec3(scale, scale, 1.0f)));
+	
+	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
 }
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)

@@ -21,13 +21,16 @@ Scene::Scene(SceneParams params,
 	_isSceneQuitting(false),
 	_isSceneReset(true),
 	_isSceneDragged(false),
+	_initTouchDownPosition{},
+	_initTouchCamPosition{},
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
-	_label(std::unique_ptr<GuiLabel>()),
-	_selector(std::unique_ptr<GuiSelector>()),
-	_audioDevice(std::unique_ptr<AudioDevice>()),
-	_masterLoop(std::shared_ptr<Loop>()),
+	_label(nullptr),
+	_selector(nullptr),
+	_modeRadio(nullptr),
+	_audioDevice(nullptr),
+	_masterLoop(nullptr),
 	_stations(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
@@ -41,29 +44,66 @@ Scene::Scene(SceneParams params,
 	_userConfig(user),
 	_clock(std::make_shared<Timer>())
 {
-	GuiLabelParams labelParams(GuiElementParams(0,
-		DrawableParams{ "" },
-		MoveableParams(utils::Position2d{ 10, 10 }, utils::Position3d{ 10, 10, 0 }, 1.0),
-		SizeableParams{ 200,80 },
-		"",
-		"",
-		"",
-		{}), "Jamma");
+	GuiLabelParams labelParams;
+	labelParams.String = "Jamma";
+	labelParams.Position = { 10, 2 };
+	labelParams.ModelPosition = { 10, 2, 0 };
+	labelParams.Size = { 20, 40 };
 	_label = std::make_unique<GuiLabel>(labelParams);
 
-	GuiSelectorParams selectorParams(GuiElementParams(0,
-		DrawableParams{ "" },
-		MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-		SizeableParams{ params.Size },
-		"",
-		"",
-		"",
-		{}));
+	GuiSelectorParams selectorParams;
+	selectorParams.Position = { 10, 2 };
+	selectorParams.Size = params.Size;
 	_selector = std::make_unique<GuiSelector>(selectorParams);
+
+	GuiRadioParams modeRadioParams;
+	modeRadioParams.Size = { 480, 64 };
+	modeRadioParams.Position = { 0, (int)params.Size.Height - (int)modeRadioParams.Size.Height };
+	std::vector<GuiToggleParams> radioToggleParams;
+
+	for (auto i = 0u; i < 3; i++)
+	{
+		GuiToggleParams toggleParams;
+		toggleParams.Position = { (int)i * 128, 0 };
+		toggleParams.Size = { 128, 64 };
+
+		switch (i)
+		{
+		case 0:
+			toggleParams.Texture = "stationmode";
+			toggleParams.OverTexture = "stationmode_over";
+			toggleParams.DownTexture = "stationmode_down";
+			toggleParams.ToggledTexture = "stationmode_toggled";
+			toggleParams.ToggledOverTexture = "stationmode_over";
+			toggleParams.ToggledDownTexture = "stationmode_down";
+			break;
+		case 1:
+			toggleParams.Texture = "takemode";
+			toggleParams.OverTexture = "takemode_over";
+			toggleParams.DownTexture = "takemode_down";
+			toggleParams.ToggledTexture = "takemode_toggled";
+			toggleParams.ToggledOverTexture = "takemode_over";
+			toggleParams.ToggledDownTexture = "takemode_down";
+			break;
+		case 2:
+			toggleParams.Texture = "loopmode";
+			toggleParams.OverTexture = "loopmode_over";
+			toggleParams.DownTexture = "loopmode_down";
+			toggleParams.ToggledTexture = "loopmode_toggled";
+			toggleParams.ToggledOverTexture = "loopmode_over";
+			toggleParams.ToggledDownTexture = "loopmode_down";
+			break;
+		}
+
+		radioToggleParams.push_back(toggleParams);
+	}
+	
+	modeRadioParams.ToggleParams = radioToggleParams;
+	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
 
-	_jobRunner = std::thread([this]() { this->JobLoop(); });
+	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
 
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
@@ -108,7 +148,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 					station.value()->AddTrigger(trigger.value());
 			}
 
-			scene->AddStation(station.value());
+			scene->_AddStation(station.value());
 		}
 
 		stationParams.Index++;
@@ -116,7 +156,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.ModelPosition += { 600, 0 };
 	}
 
-	scene->SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 
 	return scene;
 }
@@ -136,6 +176,7 @@ void Scene::Draw(DrawContext& ctx)
 		station->Draw(ctx);
 
 	_selector->Draw(ctx);
+	_modeRadio->Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -163,11 +204,12 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
+	_modeRadio->InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
 
-	InitSize();
+	_InitSize();
 
 	ResourceUser::_InitResources(resourceLib, forceInit);
 }
@@ -176,6 +218,7 @@ void Scene::_ReleaseResources()
 {
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
+	_modeRadio->ReleaseResources();
 
 	for (auto& station : _stations)
 		station->ReleaseResources();
@@ -213,22 +256,35 @@ ActionResult Scene::OnAction(TouchAction action)
 			// isSceneTouching should only be true if selector mode is SELECT_NONE
 			// so try to use that instead!
 			if (!_isSceneDragged)
-				UpdateSelection(ACTIONRESULT_CLEARSELECT);
+				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
 
 		// Update selector and then react to result (selecting, deselecting, muting, unmuting)
 		res = _selector->OnAction(_selector->ParentToLocal(action));
 
-		UpdateSelection(res.ResultType);
+		_UpdateSelection(res.ResultType);
 
 		_touchDownElement.reset();
 
-		return { false, "", "", ACTIONRESULT_DEFAULT };
+		return ActionResult::NoAction();
+	}
+
+	res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
+
+	if (res.IsEaten)
+	{
+		if (nullptr != res.Undo)
+			_undoHistory.Add(res.Undo);
+
+		if (!_touchDownElement.lock())
+			_touchDownElement = res.ActiveElement;
+
+		return res;
 	}
 
 	for (auto& station : _stations)
 	{
-		res = station->OnAction(station->ParentToLocal(action));
+		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
 		if (res.IsEaten)
 		{
@@ -244,7 +300,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
-	UpdateSelection(res.ResultType);
+	_UpdateSelection(res.ResultType);
 
 	if (res.IsEaten)
 	{
@@ -285,8 +341,23 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 		_isSceneDragged = true;
 	}
+	else
+	{
+		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
 
-	return { false, "", "", ACTIONRESULT_DEFAULT };
+		if (res.IsEaten)
+			return res;
+
+		for (auto& station : _stations)
+		{
+			res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
+
+			if (res.IsEaten)
+				return res;
+		}
+	}
+
+	return ActionResult::NoAction();
 }
 
 ActionResult Scene::OnAction(KeyAction action)
@@ -348,11 +419,24 @@ ActionResult Scene::OnAction(KeyAction action)
 	if (res.IsEaten)
 	{
 		std::cout << "KeyAction eaten by selector: " << res.ResultType << std::endl;
-		UpdateSelection(res.ResultType);
+		_UpdateSelection(res.ResultType);
 		return res;
 	}
 
-	return { false, "", "", ACTIONRESULT_DEFAULT };
+	return ActionResult::NoAction();
+}
+
+ActionResult Scene::OnAction(GuiAction action)
+{
+	switch (action.ElementType)
+	{
+		case GuiAction::ACTIONELEMENT_RADIO:
+			_UpdateSelectDepth(action.Index);
+			std::cout << "GuiRadio called" << std::endl;
+			break;
+	}
+
+	return ActionResult::NoAction();
 }
 
 void Scene::OnTick(Time curTime,
@@ -410,12 +494,20 @@ void Scene::OnJobTick(Time curTime)
 		receiver->OnAction(job);
 }
 
+void Scene::InitReceivers()
+{
+	_selector->SetReceiver(ActionReceiver::shared_from_this());
+	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+}
+
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
 
-	auto hovering = ChildFromPath(path);
+	path = TrimPath(path, _selector->CurrentSelectDepth());
+
+	auto hovering = _ChildFromPath(path);
 	if (nullptr != hovering)
 	{
 		isSelected = hovering->IsSelected();
@@ -429,7 +521,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		isSelected,
 		tweakState);
 
-	UpdateSelection(ACTIONRESULT_DEFAULT);
+	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
 void Scene::Reset()
@@ -437,6 +529,12 @@ void Scene::Reset()
 	std::cout << "Reset" << std::endl;
 	_clock->Clear();
 	_isSceneReset = true;
+}
+
+void Scene::InitGui()
+{
+	_modeRadio->Init();
+	_selector->Init();
 }
 
 void Scene::InitAudio()
@@ -471,8 +569,12 @@ void Scene::InitAudio()
 		for (auto& station : _stations)
 		{
 			if (station)
-				station->SetupBuffers(audioStreamParams.NumOutputChannels,
-					ChannelMixer::DefaultBufferSize);
+			{
+				station->SetupBuffers(audioStreamParams.BufSize);
+				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
+				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+			}
 		}
 	}
 }
@@ -510,6 +612,17 @@ std::mutex& Scene::GetAudioMutex()
 	return _audioMutex;
 }
 
+std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
+{
+	unsigned int pathLength = depth <= path.size() ?
+		depth :
+		(unsigned int)path.size();
+
+	std::vector<unsigned char> curPath(path.begin(), path.begin() + pathLength);
+
+	return curPath;
+}
+
 int Scene::AudioCallback(void* outBuffer,
 	void* inBuffer,
 	unsigned int numSamps,
@@ -519,12 +632,12 @@ int Scene::AudioCallback(void* outBuffer,
 {
 	Scene* scene = (Scene*)userData;
 	std::scoped_lock lock(scene->GetAudioMutex());
-	scene->OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
+	scene->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
 
 	return 0;
 }
 
-void Scene::OnAudio(float* inBuf,
+void Scene::_OnAudio(float* inBuf,
 	float* outBuf,
 	unsigned int numSamps)
 {
@@ -608,12 +721,12 @@ void Scene::OnAudio(float* inBuf,
 		_audioDevice->GetAudioStreamParams());
 }
 
-bool Scene::OnUndo(std::shared_ptr<base::ActionUndo> undo)
+bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 {
 	switch (undo->UndoType())
 	{
 	case UNDO_DOUBLE:
-		auto doubleUndo = std::dynamic_pointer_cast<actions::DoubleActionUndo>(undo);
+		auto doubleUndo = std::dynamic_pointer_cast<actions::GuiActionUndo>(undo);
 		if (doubleUndo)
 		{
 			doubleUndo->Value();
@@ -624,13 +737,13 @@ bool Scene::OnUndo(std::shared_ptr<base::ActionUndo> undo)
 	return false;
 }
 
-void Scene::InitSize()
+void Scene::_InitSize()
 {
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
 	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
-	_viewProj = projection * View();
+	_viewProj = projection * _View();
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
@@ -639,7 +752,7 @@ void Scene::InitSize()
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
 }
 
-void Scene::UpdateSelection(ActionResultType res)
+void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
 	auto currentMode = _selector->CurrentMode();
@@ -656,7 +769,7 @@ void Scene::UpdateSelection(ActionResultType res)
 			for (auto& station : _stations)
 				station->SetPicking3d(false);
 
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -665,37 +778,37 @@ void Scene::UpdateSelection(ActionResultType res)
 			for (auto& station : _stations)
 				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
 
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(!hovering->IsSelected());
 
 			break;
 		case GuiSelector::SELECT_SELECT:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_SELECTADD:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_SELECTREMOVE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(false);
 
 			break;
 		case GuiSelector::SELECT_MUTE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
 		case GuiSelector::SELECT_UNMUTE:
-			hovering = ChildFromPath(_selector->CurrentHover());
+			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
@@ -737,7 +850,7 @@ void Scene::UpdateSelection(ActionResultType res)
 		for (auto& station : _stations)
 			station->SetPicking3d(false);
 
-		hovering = ChildFromPath(_selector->CurrentHover());
+		hovering = _ChildFromPath(_selector->CurrentHover());
 		if (nullptr != hovering)
 			hovering->SetPicking3d(true);
 
@@ -763,27 +876,38 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 		station->InitResources(resourceLib, forceInit);
 };
 
-glm::mat4 Scene::View()
+glm::mat4 Scene::_View()
 {
 	auto camPos = _camera.ModelPosition();
 	return glm::lookAt(glm::vec3(camPos.X, camPos.Y, camPos.Z), glm::vec3(camPos.X, camPos.Y, 0.f), glm::vec3(0.f, 1.f, 0.f));
 }
 
-void Scene::AddStation(std::shared_ptr<Station> station)
+void Scene::_AddStation(std::shared_ptr<Station> station)
 {
 	_stations.push_back(station);
 
 	station->SetClock(_clock);
-	station->SetupBuffers(_channelMixer->Sink()->NumInputChannels(), ChannelMixer::DefaultBufferSize);
+	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
+	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
+	station->SetNumDacChannels(_channelMixer->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
 }
 
-void Scene::SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
+void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
 	_clock->SetQuantisation(quantiseSamps, quantisation);
 }
 
-std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path)
+void Scene::_JobLoop()
+{
+	while (!_isSceneQuitting)
+	{
+		OnJobTick(Timer::GetTime());
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+}
+
+std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
 {
 	if (path.size() < 1)
 		return nullptr;
@@ -813,11 +937,13 @@ std::shared_ptr<GuiElement> Scene::ChildFromPath(std::vector<unsigned char> path
 	return nullptr;
 }
 
-void Scene::JobLoop()
+void Scene::_UpdateSelectDepth(unsigned int depth)
 {
-	while (!_isSceneQuitting)
-	{
-		OnJobTick(Timer::GetTime());
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	}
+	auto selectDepth = depth > 0 ? (SelectDepth)(depth - 1) : DEPTH_STATION;
+	_selector->SetSelectDepth(selectDepth);
+
+	for (auto& station : _stations)
+		station->SetSelectDepth(selectDepth);
+
+	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
