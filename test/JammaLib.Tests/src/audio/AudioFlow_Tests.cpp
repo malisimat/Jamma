@@ -67,6 +67,13 @@ ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 	return ChannelMixer(p);
 }
 
+// Deterministic pseudo-random sample in the range (-1.0, 1.0).
+// Uses a simple LCG-style hash to avoid depending on rand() state.
+float TestSample(unsigned int index, unsigned int multiplier = 7)
+{
+	return static_cast<float>((((index + 1) * multiplier) % 2000) - 1000) / 1001.0f;
+}
+
 // Fills an interleaved buffer with deterministic non-zero test data.
 // buf must have space for numChans * numSamps floats.
 void FillTestData(float* buf, unsigned int numChans, unsigned int numSamps,
@@ -77,8 +84,7 @@ void FillTestData(float* buf, unsigned int numChans, unsigned int numSamps,
 		for (unsigned int c = 0; c < numChans; c++)
 		{
 			auto globalIndex = blockIndex * numSamps + s;
-			buf[s * numChans + c] =
-				((((globalIndex + 1) * (c + 1) * 7) % 2000) - 1000) / 1001.0f;
+			buf[s * numChans + c] = TestSample(globalIndex, (c + 1) * 7);
 		}
 	}
 }
@@ -227,7 +233,7 @@ TEST(AudioFlow, SingleChannel_LoopPlaybackProducesOutput)
 	// Fill the loop's buffer bank directly with non-zero data.
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float samp = ((((i + 1) * 7) % 2000) - 1000) / 1001.0f;
+		float samp = TestSample(static_cast<unsigned int>(i));
 		loop0->OnMixWrite(samp, 0.0f, 1.0f, static_cast<int>(i),
 			Audible::AUDIOSOURCE_ADC);
 	}
@@ -267,8 +273,8 @@ TEST(AudioFlow, TwoChannel_LoopPlaybackProducesOutput)
 	// Fill both loops with deterministic non-zero data.
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float samp0 = ((((i + 1) * 7) % 2000) - 1000) / 1001.0f;
-		float samp1 = ((((i + 1) * 13) % 2000) - 1000) / 1001.0f;
+		float samp0 = TestSample(static_cast<unsigned int>(i), 7);
+		float samp1 = TestSample(static_cast<unsigned int>(i), 13);
 		loop0->OnMixWrite(samp0, 0.0f, 1.0f, static_cast<int>(i),
 			Audible::AUDIOSOURCE_ADC);
 		loop1->OnMixWrite(samp1, 0.0f, 1.0f, static_cast<int>(i),
