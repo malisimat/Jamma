@@ -52,14 +52,21 @@ class InspectableAudioBuffer :
 public:
 	InspectableAudioBuffer(unsigned int size) : AudioSource({}), AudioBuffer(size) {}
 	unsigned long WriteIndex() const { return _writeIndex; }
+	unsigned long PlayIndex() const { return _playIndex; }
+	unsigned int RecordedSamples() const { return _sampsRecorded; }
 };
 
-class MockedSink :
+class AudioBufferTestSink :
 	public AudioSink
 {
 public:
-	MockedSink(unsigned int bufSize) :
-		Samples({})
+	AudioBufferTestSink(unsigned int bufSize) :
+		Samples({}),
+		TraceWrites(false),
+		TraceLabel("sink"),
+		OnMixWriteCallCount(0),
+		LastWriteIndices({}),
+		LastWriteSamples({})
 	{
 		Samples = std::vector<float>(bufSize);
 
@@ -70,14 +77,49 @@ public:
 	}
 
 public:
+	void SetTraceWrites(bool enabled, const std::string& label = "sink")
+	{
+		TraceWrites = enabled;
+		TraceLabel = label;
+	}
+
+	unsigned long WriteIndex() const
+	{
+		return _writeIndex;
+	}
+
+	void ResetWriteTrace()
+	{
+		OnMixWriteCallCount = 0;
+		LastWriteIndices.clear();
+		LastWriteSamples.clear();
+	}
+
 	inline virtual int OnMixWrite(float samp,
 		float fadeCurrent,
 		float fadeNew,
 		int indexOffset,
 		Audible::AudioSourceType source) override
 	{
-		if ((_writeIndex + indexOffset) < Samples.size())
-			Samples[_writeIndex + indexOffset] = samp;
+		auto destIndex = _writeIndex + indexOffset;
+		OnMixWriteCallCount++;
+		LastWriteIndices.push_back(destIndex);
+		LastWriteSamples.push_back(samp);
+
+		if (TraceWrites)
+		{
+			std::cout
+				<< "[" << TraceLabel << "] OnMixWrite"
+				<< " writeBase=" << _writeIndex
+				<< " indexOffset=" << indexOffset
+				<< " destIndex=" << destIndex
+				<< " sample=" << samp
+				<< " sourceType=" << source
+				<< std::endl;
+		}
+
+		if (destIndex < Samples.size())
+			Samples[destIndex] = samp;
 
 		return indexOffset + 1;
 	};
@@ -100,6 +142,11 @@ public:
 	}
 
 	std::vector<float> Samples;
+	bool TraceWrites;
+	std::string TraceLabel;
+	unsigned int OnMixWriteCallCount;
+	std::vector<unsigned long> LastWriteIndices;
+	std::vector<float> LastWriteSamples;
 };
 
 class MockedSource :
@@ -142,7 +189,7 @@ public:
 	}
 	const std::vector<float>& GetSamples() const { return Samples; }
 	bool WasPlayed() { return _index >= Samples.size(); }
-	bool MatchesSink(const std::shared_ptr<MockedSink> buf, unsigned int expectedDelay)
+	bool MatchesSink(const std::shared_ptr<AudioBufferTestSink> buf, unsigned int expectedDelay)
 	{
 		auto numSamps = buf->Samples.size();
 		for (auto samp = 0u; samp < numSamps; samp++)
@@ -181,7 +228,7 @@ TEST(AudioBuffer, PlayWrapsAround) {
 	auto blockSize = 11;
 
 	auto audioBuf = AudioBuffer(bufSize);
-	auto sink = std::make_shared<MockedSink>(bufSize);
+	auto sink = std::make_shared<AudioBufferTestSink>(bufSize);
 
 	// Trick buffer into thinking it has recorded something
 	audioBuf.EndWrite(blockSize, false);
@@ -225,7 +272,7 @@ TEST(AudioBuffer, WriteMatchesRead) {
 	auto audioBuf = std::make_shared<InspectableAudioBuffer>(bufSize);
 	AudioSourceParams params;
 	auto source = std::make_shared<MockedSource>(bufSize, params);
-	auto sink = std::make_shared<MockedSink>(bufSize);
+	auto sink = std::make_shared<AudioBufferTestSink>(bufSize);
 
 	ASSERT_EQ(0ul, audioBuf->WriteIndex());
 
@@ -270,10 +317,11 @@ TEST(AudioBuffer, IsCorrectlyDelayed) {
 	auto blockSize = 11;
 	auto delaySamps = 42u;
 
-	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+	auto audioBuf = std::make_shared<InspectableAudioBuffer>(bufSize);
 	AudioSourceParams params;
 	auto source = std::make_shared<MockedSource>(bufSize, params);
-	auto sink = std::make_shared<MockedSink>(bufSize);
+	auto sink = std::make_shared<AudioBufferTestSink>(bufSize);
+	sink->SetTraceWrites(true, "IsCorrectlyDelayed");
 
 	audioBuf->Zero(bufSize);
 
@@ -282,22 +330,60 @@ TEST(AudioBuffer, IsCorrectlyDelayed) {
 	{
 		std::cout << "\n--- Iteration " << i << " ---" << std::endl;
 		std::cout << "Source head before write: " << DumpFloatSpan(source->GetSamples(), 0u, 8u) << std::endl;
-		std::cout << "Buffer head before write: " << DumpFloatSpan(*audioBuf, 0u, 8u) << std::endl;
+		std::cout << "Buffer head before write: " << DumpFloatSpan(static_cast<const AudioBuffer&>(*audioBuf), 0u, 8u) << std::endl;
 
 		// Play source to buffer
 		source->OnPlay(audioBuf, 0u, blockSize);
 		source->EndPlay(blockSize);
 		audioBuf->EndWrite(blockSize, true);
 
-		std::cout << "Buffer head after write:  " << DumpFloatSpan(*audioBuf, 0u, 8u) << std::endl;
+		std::cout << "Buffer head after write:  " << DumpFloatSpan(static_cast<const AudioBuffer&>(*audioBuf), 0u, 8u) << std::endl;
 
 		// Play buffer to mocked sink
 		audioBuf->Delay(delaySamps + blockSize);
 		std::cout << "Requested delay: " << (delaySamps + blockSize)
 			<< " (assert checks observable offset of " << delaySamps << ")" << std::endl;
+		std::cout << "AudioBuffer state before OnPlay:"
+			<< " playIndex=" << audioBuf->PlayIndex()
+			<< " writeIndex=" << audioBuf->WriteIndex()
+			<< " recorded=" << audioBuf->RecordedSamples()
+			<< std::endl;
+		for (auto samp = 0u; samp < static_cast<unsigned int>(blockSize); ++samp)
+		{
+			auto readIndex = static_cast<unsigned int>((audioBuf->PlayIndex() + samp) % audioBuf->BufSize());
+			auto destIndex = static_cast<unsigned int>(sink->WriteIndex() + samp);
+			std::cout
+				<< "  [read->write] srcIndex=" << readIndex
+				<< " srcValue=" << (*audioBuf)[readIndex]
+				<< " sinkIndex=" << destIndex
+				<< std::endl;
+		}
+		sink->ResetWriteTrace();
 		audioBuf->OnPlay(sink, 0, blockSize);
 		audioBuf->EndPlay(blockSize);
 		sink->EndWrite(blockSize, true);
+
+		std::cout << "Sink OnMixWrite calls this block: " << sink->OnMixWriteCallCount << std::endl;
+		if (!sink->LastWriteIndices.empty())
+		{
+			std::cout << "  Sink write indices: [";
+			for (auto idx = 0u; idx < sink->LastWriteIndices.size(); ++idx)
+			{
+				if (idx > 0u)
+					std::cout << ", ";
+				std::cout << sink->LastWriteIndices[idx];
+			}
+			std::cout << "]" << std::endl;
+
+			std::cout << "  Sink write samples: [";
+			for (auto idx = 0u; idx < sink->LastWriteSamples.size(); ++idx)
+			{
+				if (idx > 0u)
+					std::cout << ", ";
+				std::cout << sink->LastWriteSamples[idx];
+			}
+			std::cout << "]" << std::endl;
+		}
 
 		std::cout << "Sink head after play:    " << DumpFloatSpan(sink->Samples, 0u, 8u) << std::endl;
 		if (delaySamps < sink->Samples.size())
@@ -308,6 +394,16 @@ TEST(AudioBuffer, IsCorrectlyDelayed) {
 				<< std::endl;
 		}
 	}
+
+	std::cout << "\nFinal full source: "
+		<< DumpFloatSpan(source->GetSamples(), 0u, static_cast<unsigned int>(source->GetSamples().size()))
+		<< std::endl;
+	std::cout << "Final full buffer: "
+		<< DumpFloatSpan(static_cast<const AudioBuffer&>(*audioBuf), 0u, audioBuf->BufSize())
+		<< std::endl;
+	std::cout << "Final full sink:   "
+		<< DumpFloatSpan(sink->Samples, 0u, static_cast<unsigned int>(sink->Samples.size()))
+		<< std::endl;
 
 	const auto matched = source->MatchesSink(sink, delaySamps);
 	if (!matched)
@@ -332,7 +428,7 @@ TEST(AudioBuffer, ClampsToMaxBufSize) {
 	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
 	AudioSourceParams params;
 	auto source = std::make_shared<MockedSource>(bufSize, params);
-	auto sink = std::make_shared<MockedSink>(bufSize);
+	auto sink = std::make_shared<AudioBufferTestSink>(bufSize);
 
 	audioBuf->Zero(bufSize);
 
@@ -362,7 +458,7 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
 	auto audioBuf = std::make_shared<AudioBuffer>(constants::MaxBlockSize);
 	AudioSourceParams params;
 	auto source = std::make_shared<MockedSource>(blockSize, params);
-	auto sink = std::make_shared<MockedSink>(blockSize);
+	auto sink = std::make_shared<AudioBufferTestSink>(blockSize);
 
 	audioBuf->Zero(bufSize);
 
