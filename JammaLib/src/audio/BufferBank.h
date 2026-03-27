@@ -15,8 +15,9 @@ namespace audio
 		float& operator[] (unsigned long index);
 
 		void Init();
-		// Audio-callback safe: updates logical length only, no heap allocation.
-		// Callers must ensure UpdateCapacity() is called off-thread (e.g., via Loop::Update()) before accessing indices >= Capacity().
+		// Audio-callback safe: clamps logical length to current Capacity(), no heap allocation.
+		// Length() will never exceed Capacity(). UpdateCapacity() (via Loop::Update()) must be
+		// called off-thread to grow capacity and allow SetLength to advance further.
 		void SetLength(unsigned long length);
 		// Off-thread only: updates logical length and allocates/frees buffer banks as needed.
 		// Do NOT call from the audio callback — performs heap allocation.
