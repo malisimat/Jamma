@@ -61,12 +61,12 @@ public:
 	}
 
 public:
-	virtual unsigned int NumInputChannels() const { return 1; };
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
 	bool IsFilled() { return _sink->IsFilled(); }
 
 protected:
-	virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel,
+	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
 		base::Audible::AudioSourceType source) override
 	{
 		if (channel == 0)
