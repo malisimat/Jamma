@@ -547,7 +547,11 @@ bool Trigger::StateMachine(bool isDown,
 		else
 		{
 			if (isDown)
+			{
+				StartPunchIn(cfg, params);
 				_isDitchDown = true;
+				changedState = true;
+			}
 			else if (_isDitchDown)
 			{
 				Ditch(cfg, params);
@@ -572,8 +576,7 @@ bool Trigger::StateMachine(bool isDown,
 				_isDitchDown = true;
 			else if (_isDitchDown)
 			{
-				Ditch(cfg, params);
-				_isDitchDown = false;
+				EndPunchIn(cfg, params);
 				changedState = true;
 			}
 		}
