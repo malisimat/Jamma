@@ -57,12 +57,22 @@ public:
 	}
 
 public:
-	virtual unsigned int NumInputChannels() const { return 1; };
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
+
+	virtual void Zero(unsigned int numSamps, base::Audible::AudioSourceType source) override
+	{
+		_sink->Zero(numSamps);
+	}
+
+	virtual void EndMultiWrite(unsigned int numSamps, bool updateIndex, base::Audible::AudioSourceType source) override
+	{
+		_sink->EndWrite(numSamps, updateIndex);
+	}
 
 	bool IsFilled() { return _sink->IsFilled(); }
 
 protected:
-	virtual const std::shared_ptr<AudioSink> InputChannel(unsigned int channel)
+	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel, base::Audible::AudioSourceType source) override
 	{
 		if (channel == 0)
 			return _sink;
@@ -175,10 +185,11 @@ TEST(Loop, PlayWrapsAround) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
-		loop.OnPlay(sink, trigger, 0u, blockSize);
+		loop.OnPlay(sink, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
 		loop.EndMultiPlay(blockSize);
 		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
 }
+
