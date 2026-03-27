@@ -85,6 +85,24 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 ```
 
+**Important:** When building `JammaLib.Tests.vcxproj` directly (not via the solution), always pass `/p:SolutionDir="$(pwd)\\"` — otherwise `$(SolutionDir)` is unset and include paths fail.
+
+### Running tests:
+
+Run all tests:
+
+```powershell
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$(pwd)\\"
+& .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe
+```
+
+Run a specific test (no rebuild needed if already built):
+
+```powershell
+& .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe --gtest_filter="SuiteName.TestName"
+```
+
 ### Solution build (sparingly):
 
 ```powershell
@@ -98,6 +116,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 - Build/run JammaLib.Tests.
 - For behavior changes in JammaLib, add/update tests when feasible.
 - **Note:** Tests require Google Test (gtest) via NuGet package `Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn`.
+- See "Running tests" section above for the exact commands.
 
 ## Coding Guidance
 
