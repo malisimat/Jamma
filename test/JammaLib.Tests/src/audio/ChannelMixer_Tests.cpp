@@ -14,11 +14,11 @@ using base::MultiAudioSink;
 using base::AudioSourceParams;
 using engine::Trigger;
 
-class MockedSink :
+class ChannelMixerMockedSink :
 	public AudioSink
 {
 public:
-	MockedSink(unsigned int bufSize) :
+	ChannelMixerMockedSink(unsigned int bufSize) :
 		Samples({})
 	{
 		Samples = std::vector<float>(bufSize);
@@ -70,7 +70,7 @@ class MockedMultiSink :
 public:
 	MockedMultiSink(unsigned int bufSize)
 	{
-		_sink = std::make_shared<MockedSink>(bufSize);
+		_sink = std::make_shared<ChannelMixerMockedSink>(bufSize);
 	}
 
 public:
@@ -88,14 +88,14 @@ protected:
 		return std::shared_ptr<AudioSink>();
 	}
 private:
-	std::shared_ptr<MockedSink> _sink;
+	std::shared_ptr<ChannelMixerMockedSink> _sink;
 };
 
-class MockedSource :
+class ChannelMixerMockedSource :
 	public AudioSource
 {
 public:
-	MockedSource(unsigned int bufSize,
+	ChannelMixerMockedSource(unsigned int bufSize,
 		AudioSourceParams params) :
 		_writeIndex(0),
 		Samples({}),
@@ -115,7 +115,7 @@ public:
 		unsigned int numSamps)
 	{
 		auto index = _writeIndex;
-		auto source = AUDIOSOURCE_INPUT;
+		auto source = AUDIOSOURCE_ADC;
 
 		for (auto i = 0u; i < numSamps; i++)
 		{
@@ -130,7 +130,7 @@ public:
 		_writeIndex += numSamps;
 	}
 	bool WasPlayed() { return _writeIndex >= Samples.size(); }
-	bool MatchesSink(const std::shared_ptr<MockedSink> buf)
+	bool MatchesSink(const std::shared_ptr<ChannelMixerMockedSink> buf)
 	{
 		auto numSamps = buf->Samples.size();
 		for (auto samp = 0u; samp < numSamps; samp++)
@@ -175,14 +175,14 @@ public:
 	MockedMultiSource(unsigned int bufSize)
 	{
 		AudioSourceParams params;
-		_source = std::make_shared<MockedSource>(bufSize, params);
+		_source = std::make_shared<ChannelMixerMockedSource>(bufSize, params);
 	}
 
 public:
 	virtual unsigned int NumOutputChannels() const { return 1; };
 
 	bool WasPlayed() { return _source->WasPlayed(); }
-	bool MatchesSink(std::shared_ptr<MockedSink> sink) { return _source->MatchesSink(sink); }
+	bool MatchesSink(std::shared_ptr<ChannelMixerMockedSink> sink) { return _source->MatchesSink(sink); }
 	bool MatchesBuffer(const std::vector<float>& buf) { return _source->MatchesBuffer(buf); }
 
 protected:
@@ -199,7 +199,7 @@ protected:
 		return chan;
 	}
 private:
-	std::shared_ptr<MockedSource> _source;
+	std::shared_ptr<ChannelMixerMockedSource> _source;
 };
 
 TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
@@ -230,10 +230,10 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	auto numBlocks = (bufSize * 2) / blockSize;
 	for (int i = 0; i < numBlocks; i++)
 	{
-		sink->Zero(blockSize);
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		chanMixer.Source()->OnPlay(sink, trigger, 0u, blockSize);
 		chanMixer.Source()->EndMultiPlay(blockSize);
-		sink->EndMultiWrite(blockSize, true);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
@@ -262,13 +262,13 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 
 	for (int i = 0; i < numBlocks; i++)
 	{
-		chanMixer.Sink()->Zero(blockSize);
+		chanMixer.Sink()->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
 		source->OnPlay(chanMixer.Sink(), trigger, 0u, blockSize);
 		source->EndMultiPlay(blockSize);
 
 		auto tempBuf = std::vector<float>(blockSize);
 		chanMixer.ToDac(tempBuf.data(), 1, blockSize);
-		chanMixer.Sink()->EndMultiWrite(blockSize, true);
+		chanMixer.Sink()->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 
 		for (auto v : tempBuf)
 			buf.push_back(v);

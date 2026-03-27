@@ -8,20 +8,11 @@
 #include "InterpolatedValue.h"
 #include "GuiElement.h"
 #include "Tweakable.h"
-#include "../actions/DoubleAction.h"
+#include "../actions/GuiAction.h"
 #include "../gui/GuiSlider.h"
 
 namespace audio
 {
-	class MixBehaviour
-	{
-	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const {};
-	};
-
 	class MixBehaviourParams {};
 
 	class WireMixBehaviourParams : public MixBehaviourParams
@@ -29,10 +20,36 @@ namespace audio
 	public:
 		WireMixBehaviourParams() {};
 		WireMixBehaviourParams(const std::vector<unsigned int>& vec) :
-			Channels(vec) {};
+			Channels(vec) {
+		};
 
 	public:
 		std::vector<unsigned int> Channels;
+	};
+
+	class PanMixBehaviourParams : public MixBehaviourParams
+	{
+	public:
+		std::vector<float> ChannelLevels;
+	};
+
+	class BounceMixBehaviourParams : public WireMixBehaviourParams {};
+
+	class MergeMixBehaviourParams : public WireMixBehaviourParams {};
+
+	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams, MergeMixBehaviourParams> BehaviourParams;
+
+	class MixBehaviour
+	{
+	public:
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
+			float samp,
+			float fadeNew,
+			unsigned int index) const {};
+
+		virtual BehaviourParams GetParams() const { return BehaviourParams(); }
+		virtual void SetParams(BehaviourParams params) { }
+		virtual void SetMaxChannels(unsigned int channels) { }
 	};
 
 	class WireMixBehaviour : public MixBehaviour
@@ -45,19 +62,27 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
 
+		virtual BehaviourParams GetParams() const { return _mixParams; }
+		virtual void SetParams(BehaviourParams params)
+		{
+			if (auto* wireParams = std::get_if<audio::WireMixBehaviourParams>(&params)) {
+				_mixParams.Channels = wireParams->Channels;
+			}
+		}
+		virtual void SetMaxChannels(unsigned int chans)
+		{
+			_mixParams.Channels.erase(std::remove_if(_mixParams.Channels.begin(), _mixParams.Channels.end(),
+				[chans](unsigned int val) { return val > chans; }),
+				_mixParams.Channels.end());
+		}
+
 	protected:
 		WireMixBehaviourParams _mixParams;
-	};
-
-	class PanMixBehaviourParams : public MixBehaviourParams
-	{
-	public:
-		std::vector<float> ChannelLevels;
 	};
 
 	class PanMixBehaviour : public MixBehaviour
@@ -70,16 +95,28 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
+
+		virtual BehaviourParams GetParams() const { return _mixParams; }
+		virtual void SetParams(BehaviourParams params)
+		{
+			if (auto* wireParams = std::get_if<audio::PanMixBehaviourParams>(&params)) {
+				_mixParams.ChannelLevels = wireParams->ChannelLevels;
+			}
+		}
+		virtual void SetMaxChannels(unsigned int chans)
+		{
+			if (_mixParams.ChannelLevels.size() > chans)
+				_mixParams.ChannelLevels.resize(chans);
+		}
 
 	protected:
 		PanMixBehaviourParams _mixParams;
 	};
 
-	class BounceMixBehaviourParams : public WireMixBehaviourParams {};
 	class BounceMixBehaviour : public WireMixBehaviour
 	{
 	public:
@@ -90,13 +127,12 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
 	};
 
-	class MergeMixBehaviourParams : public WireMixBehaviourParams {};
 	class MergeMixBehaviour : public WireMixBehaviour
 	{
 	public:
@@ -107,7 +143,7 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
@@ -178,23 +214,20 @@ namespace audio
 
 		virtual std::string ClassName() const { return "AudioMixer"; }
 
-		virtual actions::ActionResult OnAction(actions::DoubleAction val) override;
-		virtual void InitReceivers() override;
-		virtual void SetSize(utils::Size2d size) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 
 		double Level() const;
 		double UnmutedLevel() const;
 		void SetUnmutedLevel(double level);
-		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+		void OnPlay(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			unsigned int index);
 		void Offset(unsigned int numSamps);
+		void SetChannels(std::vector<unsigned int> channels);
+		void SetMaxChannels(unsigned int channels);
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
-
-	protected:
-		gui::GuiSliderParams GetSliderParams(utils::Size2d size);
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -203,7 +236,6 @@ namespace audio
 
 		double _unmutedFadeTarget;
 		std::unique_ptr<MixBehaviour> _behaviour;
-		std::shared_ptr<gui::GuiSlider> _slider;
 		std::unique_ptr<InterpolatedValue> _fade;
 	};
 }

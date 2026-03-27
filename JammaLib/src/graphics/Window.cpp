@@ -34,6 +34,8 @@ Window::Window(Scene& scene,
 	_drawContext({ scene.Width(), scene.Height() }, base::DrawContext::ContextTarget::SCREEN),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
+	_scene.InitGui();
+
 	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
 	_config.Position = { scene.Position().X, scene.Position().Y};
 	//_config.Position = { CW_USEDEFAULT, 0};

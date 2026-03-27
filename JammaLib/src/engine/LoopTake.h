@@ -3,45 +3,40 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "GuiElement.h"
-#include "Tweakable.h"
-#include "MultiAudioSource.h"
-#include "MultiAudioSink.h"
-#include "AudioSink.h"
+#include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
+#include "../gui/GuiRack.h"
 
 using base::Audible;
 
 namespace engine
 {
 	class LoopTakeParams :
-		public base::GuiElementParams,
-		public base::TweakableParams
+		public base::JammableParams
 	{
 	public:
 		LoopTakeParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-				SizeableParams{ 1,1 },
-				"",
-				"",
-				"",
-				{}),
+			base::JammableParams(
+				base::GuiElementParams(0, DrawableParams{ "" },
+					MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+					SizeableParams{ 1,1 },
+					"",
+					"",
+					"",
+					{})
+				),
 			Id(""),
-			base::TweakableParams(),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops({})
 		{
 		}
 
-		LoopTakeParams(base::GuiElementParams params,
-			base::TweakableParams tweakParams,
+		LoopTakeParams(base::JammableParams params,
 			std::vector<LoopParams> loops) :
-			base::GuiElementParams(params),
-			base::TweakableParams(tweakParams),
+			base::JammableParams(params),
 			Id(""),
 			FadeSamps(constants::DefaultFadeSamps),
 			Loops(loops)
@@ -55,9 +50,7 @@ namespace engine
 	};
 
 	class LoopTake :
-		public base::GuiElement,
-		public base::Tweakable,
-		public base::MultiAudioSource,
+		public base::Jammable,
 		public base::MultiAudioSink
 	{
 	public:
@@ -95,12 +88,11 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d loopSize,
 			audio::BehaviourParams behaviour);
 
-		virtual std::string ClassName() const { return "LoopTake"; }
-
+		virtual std::string ClassName() const override { return "LoopTake"; }
+		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
-		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_NONE; }
-		virtual unsigned int NumInputChannels() const override;
-		virtual unsigned int NumOutputChannels() const override;
+		virtual unsigned int NumInputChannels(Audible::AudioSourceType) const override;
+		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
@@ -112,6 +104,7 @@ namespace engine
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
+		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
 		virtual bool DeSelect() override;
@@ -127,7 +120,10 @@ namespace engine
 		unsigned long NumRecordedSamps() const;
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
-		void SetupBuffers(unsigned int chans, unsigned int bufSize);
+		void SetMixerLevel(unsigned int chan, double level);
+		void SetupBuffers(unsigned int bufSize);
+		void SetNumBusChannels(unsigned int chans);
+		unsigned int NumBusChannels() const;
 
 		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
@@ -140,34 +136,41 @@ namespace engine
 		void PunchOut();
 
 	protected:
-		static unsigned int CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
+		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
 
+		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
-		virtual const std::shared_ptr<base::AudioSink> InputChannel(unsigned int channel,
-			base::AudioSource::AudioSourceType source);
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+			base::AudioSource::AudioSourceType source) override;
+		virtual void _ArrangeChildren() override;
 
-		void ArrangeLoops();
-		void UpdateLoops();
+		gui::GuiRackParams _GetRackParams(utils::Size2d size);
+		void _UpdateLoops();
 
 	protected:
 		static const utils::Size2d _Gap;
+		static const utils::Size2d _ToggleSize;
+		static const utils::Size2d _ToggleGap;
 
 		bool _flipLoopBuffer;
-		bool _flipAudioBuffer;
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
 		LoopTakeState _state;
 		std::string _id;
 		std::string _sourceId;
+		unsigned int _lastBufSize;
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
-		std::shared_ptr<audio::AudioMixer> _mixer;
+		std::shared_ptr<gui::GuiRack> _guiRack;
+		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
+		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 	};
