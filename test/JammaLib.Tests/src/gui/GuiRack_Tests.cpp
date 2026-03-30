@@ -338,7 +338,7 @@ TEST(GuiRack, SliderActionIndexZeroNotDecremented) {
 
 	GuiAction action;
 	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
-	action.Index = 0; // Index 0 stays at 0 (no decrement when already 0)
+	action.Index = 0; // GuiRack only decrements Index when > 0, so 0 passes through unchanged
 	action.Data = GuiAction::GuiDouble{ 0.5 };
 	rack->OnAction(action);
 
