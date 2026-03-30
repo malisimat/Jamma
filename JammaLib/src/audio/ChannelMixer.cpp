@@ -28,21 +28,10 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(Audible::AUDIOSOURCE_ADC); chan++)
 	{
 		const auto buf = _adcMixer->Channel(chan);
-		auto source = _adcMixer->SourceType();
 
 		if ((buf) && (numChannels > chan))
 		{
-			auto currentOffset = 0;
-
-			for (auto samp = 0u; samp < numSamps; samp++)
-			{
-				currentOffset = buf->OnMixWrite(inBuf[samp*numChannels + chan],
-					0.0f,
-					1.0f,
-					currentOffset,
-					source);
-			}
-
+			buf->WriteInterleaved(inBuf, numSamps, numChannels, chan);
 			buf->EndWrite(numSamps, true);
 		}
 	}

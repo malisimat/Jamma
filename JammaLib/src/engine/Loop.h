@@ -165,6 +165,12 @@ namespace engine
 			float fadeNew,
 			int indexOffset,
 			Audible::AudioSourceType source) override;
+		virtual void OnBlockWrite(const float* data,
+			unsigned int numSamps,
+			int indexOffset,
+			float fadeCurrent,
+			float fadeNew,
+			Audible::AudioSourceType source) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
 		virtual void Reset() override;

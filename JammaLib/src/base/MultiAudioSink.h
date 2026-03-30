@@ -63,6 +63,21 @@ namespace base
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
+		// Block-level write to a specific channel.
+		// Routes to the channel's OnBlockWrite for reduced virtual call overhead.
+		virtual void OnBlockWriteChannel(unsigned int channel,
+			const float* data,
+			unsigned int numSamps,
+			int indexOffset,
+			float fadeCurrent,
+			float fadeNew,
+			Audible::AudioSourceType source)
+		{
+			const auto& chan = _InputChannel(channel, source);
+
+			if (chan)
+				chan->OnBlockWrite(data, numSamps, indexOffset, fadeCurrent, fadeNew, source);
+		}
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		std::shared_ptr<MultiAudioSink> shared_from_this()

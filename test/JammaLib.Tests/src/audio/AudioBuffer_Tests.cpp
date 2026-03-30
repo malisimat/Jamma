@@ -284,3 +284,153 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
 
 	ASSERT_TRUE(sink->IsZero());
 }
+
+TEST(AudioBuffer, BlockWritePureCopy) {
+	auto bufSize = 64u;
+	auto blockSize = 16u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	std::vector<float> data(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		data[i] = (float)(i + 1) * 0.1f;
+
+	// Pure copy: fadeCurrent=0, fadeNew=1
+	audioBuf->OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+	audioBuf->EndWrite(blockSize, true);
+
+	// Verify samples were copied
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i], data[i])
+			<< "Mismatch at index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockWriteAdditiveMix) {
+	auto bufSize = 64u;
+	auto blockSize = 16u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	// Write initial data
+	std::vector<float> initial(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		initial[i] = 1.0f;
+
+	audioBuf->OnBlockWrite(initial.data(), blockSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+
+	// Additive mix: fadeCurrent=1, fadeNew=1
+	std::vector<float> addData(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		addData[i] = 0.5f;
+
+	audioBuf->OnBlockWrite(addData.data(), blockSize, 0, 1.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+
+	// Verify: each sample should be initial + addData = 1.0 + 0.5 = 1.5
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i], 1.5f)
+			<< "Mismatch at index " << i;
+	}
+}
+
+TEST(AudioBuffer, WriteInterleavedSingleChannel) {
+	auto bufSize = 64u;
+	auto numSamps = 16u;
+	auto numChannels = 2u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	// Interleaved stereo data: [L0, R0, L1, R1, ...]
+	std::vector<float> interleaved(numSamps * numChannels);
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		interleaved[i * numChannels + 0] = (float)(i + 1) * 0.1f;  // L
+		interleaved[i * numChannels + 1] = (float)(i + 1) * -0.1f; // R
+	}
+
+	// Write left channel (channel 0)
+	audioBuf->WriteInterleaved(interleaved.data(), numSamps, numChannels, 0);
+	audioBuf->EndWrite(numSamps, true);
+
+	// Verify left channel was extracted correctly
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		float expected = (float)(i + 1) * 0.1f;
+		ASSERT_FLOAT_EQ((*audioBuf)[i], expected)
+			<< "Mismatch at index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockWriteWrapsAround) {
+	auto bufSize = 32u;
+	auto blockSize = 20u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	// Advance write index near end of buffer
+	std::vector<float> padding(bufSize - 5, 0.0f);
+	audioBuf->OnBlockWrite(padding.data(), bufSize - 5, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+	audioBuf->EndWrite(bufSize - 5, true);
+
+	// Now write a block that wraps around
+	std::vector<float> data(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		data[i] = (float)(i + 1) * 0.01f;
+
+	audioBuf->OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+
+	// Verify: first 5 samples at positions [27..31], rest at [0..14]
+	for (auto i = 0u; i < 5; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[bufSize - 5 + i], data[i])
+			<< "Mismatch at pre-wrap index " << i;
+	}
+	for (auto i = 5u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i - 5], data[i])
+			<< "Mismatch at post-wrap index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockPlayMatchesSamplePlay) {
+	// Verifies that the block-based OnPlay produces identical results
+	// to the old sample-by-sample OnPlay
+	auto bufSize = 100u;
+	auto blockSize = 17u;
+
+	// Setup: write known data into audio buffer
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+	std::vector<float> srcData(bufSize);
+	for (auto i = 0u; i < bufSize; i++)
+		srcData[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+	audioBuf->OnBlockWrite(srcData.data(), bufSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+	audioBuf->EndWrite(bufSize, true);
+
+	// Play through block path to sink
+	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+	auto numBlocks = (bufSize * 2) / blockSize;
+	for (auto i = 0u; i < numBlocks; i++)
+	{
+		audioBuf->OnPlay(sink, 0, blockSize);
+		audioBuf->EndPlay(blockSize);
+		sink->EndWrite(blockSize, true);
+	}
+
+	ASSERT_TRUE(sink->IsFilled());
+
+	// Verify played data matches source
+	for (auto i = 0u; i < bufSize; i++)
+	{
+		ASSERT_FLOAT_EQ(sink->Samples[i], srcData[i])
+			<< "Mismatch at index " << i;
+	}
+}

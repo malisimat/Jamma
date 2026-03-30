@@ -35,16 +35,16 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 	while (index >= bufSize)
 		index -= bufSize;
 
-	auto destIndex = 0;
 	auto sourceType = SourceType();
 
-	for (auto i = 0u; i < numSamps; i++)
-	{
-		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, sourceType);
+	// Block write path: split into contiguous segments to handle ring wrap
+	auto firstSegLen = std::min((unsigned int)(bufSize - index), numSamps);
+	dest->OnBlockWrite(&_buffer[index], firstSegLen, 0, 1.0f, 1.0f, sourceType);
 
-		index++;
-		if (index >= bufSize)
-			index -= bufSize;
+	if (firstSegLen < numSamps)
+	{
+		dest->OnBlockWrite(&_buffer[0], numSamps - firstSegLen,
+			(int)firstSegLen, 1.0f, 1.0f, sourceType);
 	}
 }
 
@@ -101,6 +101,72 @@ void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 
 	if (updateIndex)
 		_SetWriteIndex(_writeIndex + numSamps);
+}
+
+void AudioBuffer::OnBlockWrite(const float* data,
+	unsigned int numSamps,
+	int indexOffset,
+	float fadeCurrent,
+	float fadeNew,
+	Audible::AudioSourceType source)
+{
+	auto bufSize = (unsigned int)_buffer.size();
+
+	if (0 == bufSize)
+	{
+		_writeIndex = 0;
+		return;
+	}
+
+	auto writePos = (unsigned int)(_writeIndex + indexOffset);
+	while (writePos >= bufSize)
+		writePos -= bufSize;
+
+	if (fadeCurrent == 0.0f && fadeNew == 1.0f)
+	{
+		// Pure copy path
+		auto firstSeg = std::min(numSamps, bufSize - writePos);
+		std::copy(data, data + firstSeg, _buffer.begin() + writePos);
+
+		if (firstSeg < numSamps)
+			std::copy(data + firstSeg, data + numSamps, _buffer.begin());
+	}
+	else
+	{
+		for (auto i = 0u; i < numSamps; i++)
+		{
+			_buffer[writePos] = (fadeNew * data[i]) + (fadeCurrent * _buffer[writePos]);
+			writePos++;
+			if (writePos >= bufSize)
+				writePos = 0;
+		}
+	}
+}
+
+void AudioBuffer::WriteInterleaved(const float* interleavedData,
+	unsigned int numSamps,
+	unsigned int stride,
+	unsigned int channelOffset)
+{
+	auto bufSize = (unsigned int)_buffer.size();
+
+	if (0 == bufSize)
+	{
+		_writeIndex = 0;
+		return;
+	}
+
+	auto writePos = (unsigned int)_writeIndex;
+	while (writePos >= bufSize)
+		writePos -= bufSize;
+
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		_buffer[writePos] = interleavedData[i * stride + channelOffset];
+		writePos++;
+		if (writePos >= bufSize)
+			writePos = 0;
+	}
 }
 
 void AudioBuffer::SetSize(unsigned int size)

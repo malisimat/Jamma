@@ -30,6 +30,21 @@ namespace base
 			float fadeNew,
 			int indexOffset,
 			AudioSourceType source) { return indexOffset; };
+		// Block-level write: writes numSamps from contiguous data array.
+		// Reduces per-sample virtual call overhead for pure-routing paths.
+		// Default falls back to per-sample OnMixWrite.
+		virtual void OnBlockWrite(const float* data,
+			unsigned int numSamps,
+			int indexOffset,
+			float fadeCurrent,
+			float fadeNew,
+			AudioSourceType source)
+		{
+			for (auto i = 0u; i < numSamps; i++)
+			{
+				OnMixWrite(data[i], fadeCurrent, fadeNew, indexOffset + (int)i, source);
+			}
+		}
 		virtual void EndWrite(unsigned int numSamps) { return EndWrite(numSamps, false); }
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) = 0;
