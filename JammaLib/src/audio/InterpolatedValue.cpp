@@ -116,3 +116,9 @@ void InterpolatedValueExp::Jump(double target)
 {
 	_lastVal = target;
 }
+
+bool InterpolatedValueExp::IsSettled() const
+{
+	auto diff = _target - _lastVal;
+	return (diff > -1e-6) && (diff < 1e-6);
+}

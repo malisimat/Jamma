@@ -30,6 +30,18 @@ namespace base
 			float fadeNew,
 			int indexOffset,
 			AudioSourceType source) { return indexOffset; };
+		virtual void OnMixWriteBlock(const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			int indexOffset,
+			AudioSourceType source)
+		{
+			auto currentOffset = indexOffset;
+			for (auto i = 0u; i < numSamps; i++)
+			{
+				currentOffset = OnMixWrite(srcBuf[i], 0.0f, fadeLevel, currentOffset, source);
+			}
+		}
 		virtual void EndWrite(unsigned int numSamps) { return EndWrite(numSamps, false); }
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) = 0;

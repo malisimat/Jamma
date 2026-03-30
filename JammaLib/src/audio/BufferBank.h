@@ -27,6 +27,8 @@ namespace audio
 		unsigned long Capacity() const;
 		float SubMin(unsigned long i1, unsigned long i2) const;
 		float SubMax(unsigned long i1, unsigned long i2) const;
+		bool IsBlockContiguous(unsigned long index, unsigned int numSamps) const;
+		const float* BlockPtr(unsigned long index) const;
 
 	protected:
 		static unsigned int NumBanksToHold(unsigned long length, bool includeCapacityAhead);

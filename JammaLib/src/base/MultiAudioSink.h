@@ -63,6 +63,18 @@ namespace base
 			if (chan)
 				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
 		}
+		virtual void OnMixWriteBlockChannel(unsigned int channel,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			int indexOffset,
+			Audible::AudioSourceType source)
+		{
+			const auto& chan = _InputChannel(channel, source);
+
+			if (chan)
+				chan->OnMixWriteBlock(srcBuf, fadeLevel, numSamps, indexOffset, source);
+		}
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		std::shared_ptr<MultiAudioSink> shared_from_this()

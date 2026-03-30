@@ -21,6 +21,7 @@ namespace audio
 		virtual double Current() const;
 		virtual void SetTarget(double target);
 		virtual void Jump(double target) = 0;
+		virtual bool IsSettled() const { return true; }
 
 	protected:
 		double _target;
@@ -44,6 +45,7 @@ namespace audio
 		virtual double Current() const;
 		virtual void SetTarget(double target) override;
 		virtual void Jump(double target) override;
+		virtual bool IsSettled() const override { return _dVal == 0.0; }
 
 	protected:
 		double _endVal;
@@ -69,6 +71,7 @@ namespace audio
 		virtual double Next() override;
 		virtual double Current() const;
 		virtual void Jump(double target) override;
+		virtual bool IsSettled() const override;
 
 	protected:
 		double _lastVal;

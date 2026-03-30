@@ -93,6 +93,23 @@ void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink>& dest,
 		_behaviour->Apply(dest, samp, (float)_fade->Next(), index);
 }
 
+bool AudioMixer::IsBlockEligible() const
+{
+	return _behaviour && _behaviour->IsRoutingOnly() && _fade->IsSettled();
+}
+
+void AudioMixer::OnPlayBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	unsigned int numSamps)
+{
+	if (!_behaviour)
+		return;
+
+	auto fadeLevel = (float)_fade->Current();
+	_behaviour->ApplyBlock(dest, srcBuf, fadeLevel, numSamps, 0);
+	Offset(numSamps);
+}
+
 void AudioMixer::Offset(unsigned int numSamps)
 {
 	for (auto samp = 0u; samp < numSamps; samp++)
@@ -147,6 +164,26 @@ void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
 			fadeCurrent,
 			fadeNew,
 			index,
+			base::Audible::AUDIOSOURCE_MIXER);
+	}
+}
+
+void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	unsigned int startIndex) const
+{
+	if (nullptr == dest)
+		return;
+
+	for (auto chan : _mixParams.Channels)
+	{
+		dest->OnMixWriteBlockChannel(chan,
+			srcBuf,
+			fadeLevel,
+			numSamps,
+			startIndex,
 			base::Audible::AUDIOSOURCE_MIXER);
 	}
 }

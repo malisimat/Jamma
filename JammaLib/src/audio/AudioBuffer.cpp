@@ -93,6 +93,30 @@ inline int AudioBuffer::OnMixWrite(float samp,
 	return indexOffset + 1;
 }
 
+void AudioBuffer::OnMixWriteBlock(const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	int indexOffset,
+	Audible::AudioSourceType source)
+{
+	auto bufSize = (unsigned int)_buffer.size();
+
+	if (0 == bufSize)
+	{
+		_writeIndex = 0;
+		return;
+	}
+
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		auto writePos = _writeIndex + indexOffset + i;
+		while (writePos >= bufSize)
+			writePos -= bufSize;
+
+		_buffer[writePos] = fadeLevel * srcBuf[i];
+	}
+}
+
 void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 {
 	_sampsRecorded += numSamps;
@@ -161,4 +185,14 @@ unsigned int AudioBuffer::Delay(unsigned int sampsDelay)
 	}
 	
 	return _playIndex;
+}
+
+bool AudioBuffer::IsContiguous(unsigned int startIndex, unsigned int numSamps) const
+{
+	return (startIndex + numSamps) <= (unsigned int)_buffer.size();
+}
+
+const float* AudioBuffer::BlockRead(unsigned int startIndex) const
+{
+	return &_buffer[startIndex];
 }

@@ -47,6 +47,13 @@ namespace audio
 			float fadeNew,
 			unsigned int index) const {};
 
+		virtual bool IsRoutingOnly() const { return false; }
+		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			unsigned int startIndex) const {};
+
 		virtual BehaviourParams GetParams() const { return BehaviourParams(); }
 		virtual void SetParams(BehaviourParams params) { }
 		virtual void SetMaxChannels(unsigned int channels) { }
@@ -66,6 +73,13 @@ namespace audio
 			float samp,
 			float fadeNew,
 			unsigned int index) const override;
+
+		virtual bool IsRoutingOnly() const override { return true; }
+		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			unsigned int startIndex) const override;
 
 		virtual BehaviourParams GetParams() const { return _mixParams; }
 		virtual void SetParams(BehaviourParams params)
@@ -224,6 +238,10 @@ namespace audio
 		void OnPlay(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			unsigned int index);
+		bool IsBlockEligible() const;
+		void OnPlayBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			unsigned int numSamps);
 		void Offset(unsigned int numSamps);
 		void SetChannels(std::vector<unsigned int> channels);
 		void SetMaxChannels(unsigned int channels);
