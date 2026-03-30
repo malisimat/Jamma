@@ -184,6 +184,42 @@ int Loop::OnMixWrite(float samp,
 	return indexOffset + 1;
 }
 
+void Loop::OnBlockWrite(const AudioWriteRequest& request, int writeOffset)
+{
+	if ((STATE_RECORDING != _playState) &&
+		(STATE_PLAYINGRECORDING != _playState) &&
+		(STATE_OVERDUBBING != _playState) &&
+		(STATE_PUNCHEDIN != _playState) &&
+		(STATE_OVERDUBBINGRECORDING != _playState))
+		return;
+
+	if (AUDIOSOURCE_MONITOR == request.source)
+	{
+		for (unsigned int i = 0; i < request.numSamps; i++)
+		{
+			auto samp = request.samples[i * request.stride];
+			auto idx = _writeIndex + writeOffset + i;
+			_monitorBufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _monitorBufferBank[idx]);
+
+			if (STATE_RECORDING == _playState)
+			{
+				auto peak = std::abs(samp);
+				if (peak > _lastPeak)
+					_lastPeak = peak;
+			}
+		}
+	}
+	else
+	{
+		for (unsigned int i = 0; i < request.numSamps; i++)
+		{
+			auto samp = request.samples[i * request.stride];
+			auto idx = _writeIndex + writeOffset + i;
+			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
+		}
+	}
+}
+
 void Loop::EndWrite(unsigned int numSamps,
 	bool updateIndex)
 {

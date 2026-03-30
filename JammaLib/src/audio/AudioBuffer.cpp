@@ -30,21 +30,36 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 		return;
 
 	auto bufSize = (unsigned int)_buffer.size();
+	if (0 == bufSize)
+		return;
 
-	auto index = _playIndex + (long)indexOffset;
-	while (index >= bufSize)
+	long index = _playIndex + (long)indexOffset;
+	while (index < 0)
+		index += bufSize;
+	while (index >= (long)bufSize)
 		index -= bufSize;
 
-	auto destIndex = 0;
-	auto sourceType = SourceType();
+	AudioWriteRequest request;
+	request.fadeCurrent = 1.0f;
+	request.fadeNew = 1.0f;
+	request.source = SourceType();
+	request.stride = 1;
 
-	for (auto i = 0u; i < numSamps; i++)
+	auto remaining = numSamps;
+	int writePos = 0;
+
+	while (remaining > 0)
 	{
-		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, sourceType);
+		auto sampsToEnd = bufSize - (unsigned int)index;
+		auto chunkSize = (remaining < sampsToEnd) ? remaining : sampsToEnd;
 
-		index++;
-		if (index >= bufSize)
-			index -= bufSize;
+		request.samples = &_buffer[index];
+		request.numSamps = chunkSize;
+		dest->OnBlockWrite(request, writePos);
+
+		writePos += (int)chunkSize;
+		remaining -= chunkSize;
+		index = 0;
 	}
 }
 
@@ -91,6 +106,36 @@ inline int AudioBuffer::OnMixWrite(float samp,
 	_buffer[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _buffer[_writeIndex + indexOffset]);
 
 	return indexOffset + 1;
+}
+
+void AudioBuffer::OnBlockWrite(const AudioWriteRequest& request, int writeOffset)
+{
+	auto bufSize = (unsigned int)_buffer.size();
+
+	if (0 == bufSize)
+	{
+		_writeIndex = 0;
+		return;
+	}
+
+	// Compute starting buffer index, handling wrap-around
+	long startIdx = (long)_writeIndex + writeOffset;
+	while (startIdx < 0)
+		startIdx += bufSize;
+	while (startIdx >= (long)bufSize)
+		startIdx -= bufSize;
+
+	auto idx = (unsigned int)startIdx;
+
+	for (unsigned int i = 0; i < request.numSamps; i++)
+	{
+		_buffer[idx] = (request.fadeNew * request.samples[i * request.stride]) +
+			(request.fadeCurrent * _buffer[idx]);
+
+		idx++;
+		if (idx >= bufSize)
+			idx -= bufSize;
+	}
 }
 
 void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)

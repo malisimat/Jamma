@@ -28,6 +28,7 @@ namespace audio
 			float fadeNew,
 			int indexOffset,
 			Audible::AudioSourceType source) override;
+		virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
 		void SetSize(unsigned int size);

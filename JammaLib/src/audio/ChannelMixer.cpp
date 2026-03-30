@@ -32,17 +32,15 @@ void ChannelMixer::FromAdc(float* inBuf, unsigned int numChannels, unsigned int 
 
 		if ((buf) && (numChannels > chan))
 		{
-			auto currentOffset = 0;
+			AudioWriteRequest request;
+			request.samples = &inBuf[chan];
+			request.numSamps = numSamps;
+			request.stride = numChannels;
+			request.fadeCurrent = 0.0f;
+			request.fadeNew = 1.0f;
+			request.source = source;
 
-			for (auto samp = 0u; samp < numSamps; samp++)
-			{
-				currentOffset = buf->OnMixWrite(inBuf[samp*numChannels + chan],
-					0.0f,
-					1.0f,
-					currentOffset,
-					source);
-			}
-
+			buf->OnBlockWrite(request, 0);
 			buf->EndWrite(numSamps, true);
 		}
 	}
