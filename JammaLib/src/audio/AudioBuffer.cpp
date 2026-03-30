@@ -34,10 +34,7 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 		return;
 
 	long index = _playIndex + (long)indexOffset;
-	while (index < 0)
-		index += bufSize;
-	while (index >= (long)bufSize)
-		index -= bufSize;
+	index = ((index % (long)bufSize) + (long)bufSize) % (long)bufSize;
 
 	AudioWriteRequest request;
 	request.fadeCurrent = 1.0f;
@@ -120,10 +117,7 @@ void AudioBuffer::OnBlockWrite(const AudioWriteRequest& request, int writeOffset
 
 	// Compute starting buffer index, handling wrap-around
 	long startIdx = (long)_writeIndex + writeOffset;
-	while (startIdx < 0)
-		startIdx += bufSize;
-	while (startIdx >= (long)bufSize)
-		startIdx -= bufSize;
+	startIdx = ((startIdx % (long)bufSize) + (long)bufSize) % (long)bufSize;
 
 	auto idx = (unsigned int)startIdx;
 

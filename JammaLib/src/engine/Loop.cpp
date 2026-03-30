@@ -193,6 +193,9 @@ void Loop::OnBlockWrite(const AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBINGRECORDING != _playState))
 		return;
 
+	// BufferBank capacity is guaranteed ahead of _writeIndex by
+	// _BufferCapacityAhead (managed off-thread via Loop::Update).
+	// Indexing pattern matches OnMixWrite.
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
 		for (unsigned int i = 0; i < request.numSamps; i++)
