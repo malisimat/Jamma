@@ -133,7 +133,8 @@ TEST(WireMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 	auto sink = std::make_shared<MockMultiSink>(4u);
 	behaviour.Apply(sink, 1.0f, 1.0f, 0);
 
-	// Channels 0, 1, 2 remain; channel 3 (> 2) is removed
+	// SetMaxChannels removes channels strictly greater than chans.
+	// Channels 0, 1, 2 remain; channel 3 (3 > 2) is removed.
 	ASSERT_EQ(3u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);
 	EXPECT_EQ(1u, sink->Calls[1].Channel);
@@ -203,8 +204,9 @@ TEST(MergeMixBehaviour, SetParamsUpdatesChannels)
 	initial.Channels = { 0u };
 	MergeMixBehaviour behaviour(initial);
 
-	MergeMixBehaviourParams updated;
-	updated.Channels = { 2u, 3u };
+	// MergeMixBehaviour inherits SetParams from WireMixBehaviour, which
+	// handles WireMixBehaviourParams in the variant.
+	WireMixBehaviourParams updated({ 2u, 3u });
 	behaviour.SetParams(updated);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
@@ -226,7 +228,8 @@ TEST(MergeMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 	auto sink = std::make_shared<MockMultiSink>(4u);
 	behaviour.Apply(sink, 1.0f, 1.0f, 0);
 
-	// Channel 3 (> 2) is removed; channels 0 and 1 remain
+	// SetMaxChannels removes channels strictly greater than chans.
+	// Channel 3 (3 > 2) is removed; channels 0 and 1 remain.
 	ASSERT_EQ(2u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);
 	EXPECT_EQ(1u, sink->Calls[1].Channel);
