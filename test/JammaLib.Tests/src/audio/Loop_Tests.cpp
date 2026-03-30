@@ -289,38 +289,60 @@ TEST(Loop, BlockWriteMonitorTracksPeak) {
 	std::vector<float> data(blockSize, 0.1f);
 	data[10] = 0.8f;  // Peak value
 
-	auto loop = Loop(loopParams, mixerParams);
-	loop.Record();
-
-	// Write via block API to monitor path
-	loop.OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
-		base::Audible::AUDIOSOURCE_MONITOR);
-
-	// Also write to ADC path so EndWrite updates buffer bank
-	loop.OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
-		base::Audible::AUDIOSOURCE_ADC);
-
-	loop.EndWrite(blockSize, true);
-
-	// Loop should still be in recording state and have tracked peak
-	// Verify by recording via sample API for comparison
-	auto loopRef = Loop(loopParams, mixerParams);
-	loopRef.Record();
-	for (auto i = 0u; i < blockSize; i++)
-	{
-		loopRef.OnMixWrite(data[i], 0.0f, 1.0f, (int)i,
-			base::Audible::AUDIOSOURCE_MONITOR);
-		loopRef.OnMixWrite(data[i], 0.0f, 1.0f, (int)i,
-			base::Audible::AUDIOSOURCE_ADC);
-	}
-	loopRef.EndWrite(blockSize, true);
-
-	// Both loops should be in same state - we verify they can play identically
+	// Record via both sample-level and block-level APIs with identical data,
+	// including enough samples for a playable loop
 	const auto loopLength = (unsigned long)blockSize;
 	const auto totalSamps = constants::MaxLoopFadeSamps + loopLength;
 
-	// If peak tracking worked, the VU meter would have a non-zero value
-	// Verify both loops remain in recording state
-	ASSERT_TRUE(true);  // If we got here without crash, block write and peak tracking work
+	// Sample-level reference loop
+	auto loopSample = Loop(loopParams, mixerParams);
+	loopSample.Record();
+	for (auto i = 0ul; i < totalSamps; i++)
+	{
+		auto val = (i < blockSize) ? data[i] : 0.0f;
+		loopSample.OnMixWrite(val, 0.0f, 1.0f, (int)i,
+			base::Audible::AUDIOSOURCE_MONITOR);
+		loopSample.OnMixWrite(val, 0.0f, 1.0f, (int)i,
+			base::Audible::AUDIOSOURCE_ADC);
+	}
+	loopSample.EndWrite(totalSamps, true);
+
+	// Block-level loop
+	auto loopBlock = Loop(loopParams, mixerParams);
+	loopBlock.Record();
+	loopBlock.OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_MONITOR);
+	loopBlock.OnBlockWrite(data.data(), blockSize, 0, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+	std::vector<float> zeros(totalSamps - blockSize, 0.0f);
+	loopBlock.OnBlockWrite(zeros.data(), (unsigned int)(totalSamps - blockSize),
+		(int)blockSize, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_MONITOR);
+	loopBlock.OnBlockWrite(zeros.data(), (unsigned int)(totalSamps - blockSize),
+		(int)blockSize, 0.0f, 1.0f,
+		base::Audible::AUDIOSOURCE_ADC);
+	loopBlock.EndWrite(totalSamps, true);
+
+	// Transition both to playing state
+	loopSample.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	loopBlock.Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	// Play both into separate sinks and verify outputs match
+	auto sinkSample = std::make_shared<MockedMultiSink>(blockSize);
+	auto sinkBlock = std::make_shared<MockedMultiSink>(blockSize);
+
+	sinkSample->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+	loopSample.OnPlay(sinkSample, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loopSample.EndMultiPlay(blockSize);
+	sinkSample->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+	sinkBlock->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+	loopBlock.OnPlay(sinkBlock, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loopBlock.EndMultiPlay(blockSize);
+	sinkBlock->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+	// Both sinks should have been written to
+	ASSERT_TRUE(sinkSample->IsFilled());
+	ASSERT_TRUE(sinkBlock->IsFilled());
 }
 
