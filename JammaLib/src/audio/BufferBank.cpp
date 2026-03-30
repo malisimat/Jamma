@@ -147,6 +147,9 @@ unsigned int BufferBank::NumBanksToHold(unsigned long length, bool includeCapaci
 
 bool BufferBank::IsBlockContiguous(unsigned long index, unsigned int numSamps) const
 {
+	if (numSamps == 0)
+		return true;
+
 	if (index + numSamps > Capacity())
 		return false;
 

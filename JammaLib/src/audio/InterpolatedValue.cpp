@@ -119,6 +119,7 @@ void InterpolatedValueExp::Jump(double target)
 
 bool InterpolatedValueExp::IsSettled() const
 {
+	constexpr double SettleEpsilon = 1e-6;
 	auto diff = _target - _lastVal;
-	return (diff > -1e-6) && (diff < 1e-6);
+	return (diff > -SettleEpsilon) && (diff < SettleEpsilon);
 }
