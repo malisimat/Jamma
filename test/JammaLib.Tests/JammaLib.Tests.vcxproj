@@ -133,6 +133,7 @@
     <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
     <ClCompile Include="src\audio\ChannelMixer_Tests.cpp" />
     <ClCompile Include="src\audio\Loop_Tests.cpp" />
+    <ClCompile Include="src\engine\FlipBuffer_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />

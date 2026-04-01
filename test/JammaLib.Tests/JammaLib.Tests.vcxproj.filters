@@ -41,6 +41,9 @@
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\FlipBuffer_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
