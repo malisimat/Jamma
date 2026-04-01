@@ -133,12 +133,11 @@ TEST(WireMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 	auto sink = std::make_shared<MockMultiSink>(4u);
 	behaviour.Apply(sink, 1.0f, 1.0f, 0);
 
-	// SetMaxChannels removes channels strictly greater than chans.
-	// Channels 0, 1, 2 remain; channel 3 (3 > 2) is removed.
-	ASSERT_EQ(3u, sink->Calls.size());
+	// SetMaxChannels keeps channels with index < chans (count semantics).
+	// For chans = 2, channels 0 and 1 remain; channels 2 and 3 are removed.
+	ASSERT_EQ(2u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);
 	EXPECT_EQ(1u, sink->Calls[1].Channel);
-	EXPECT_EQ(2u, sink->Calls[2].Channel);
 }
 
 // ---- MergeMixBehaviour ----
