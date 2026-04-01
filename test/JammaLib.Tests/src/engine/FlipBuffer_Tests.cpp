@@ -7,9 +7,7 @@ using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Station;
 using engine::StationParams;
-using audio::AudioMixerParams;
 using audio::MergeMixBehaviourParams;
-using audio::WireMixBehaviourParams;
 using base::Audible;
 
 // ---------------------------------------------------------------------------
@@ -64,14 +62,16 @@ TEST(LoopTakeFlipBuffer, CommitChangesFlipsLoopsToFront)
 {
 	auto take = MakeLoopTake();
 
+	// Before any AddLoop, front buffer is empty.
+	take->CommitChanges();  // commit while empty
+	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+
 	take->AddLoop(0u, "station");
-	ASSERT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+	// Back buffer now has 1; front still has 0. NumInputChannels reads back.
+	EXPECT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
 
 	take->CommitChanges();
-
-	// After commit, _changesMade == false, _flipLoopBuffer == false.
-	// NumInputChannels now reads from the front (_loops), which was
-	// promoted from the back buffer.
+	// Front promoted; NumInputChannels still 1, now reading from front.
 	EXPECT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
 }
 
@@ -120,6 +120,8 @@ static void CommitInitial(const std::shared_ptr<Station>& station)
 
 // AddTake stages the take into the back buffer. NumTakes reflects the back
 // buffer while _changesMade == true.
+// Since we cannot directly see the front/back buffer, passing
+// does not directly guarantee takes in specific front/back buffers.
 TEST(StationFlipBuffer, AddTakeStagesInBackBuffer)
 {
 	auto station = MakeStation();
@@ -216,6 +218,6 @@ TEST(StationFlipBuffer, TakeInheritsBusChannelsAfterCommit)
 	auto take = station->AddTake();
 	station->CommitChanges();
 
-	// The take should have 2 bus channels (set during commit propagation).
+	// The take should have 2 bus channels.
 	EXPECT_EQ(2u, take->NumBusChannels());
 }
