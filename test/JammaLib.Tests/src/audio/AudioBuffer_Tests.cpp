@@ -284,3 +284,148 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
 
 	ASSERT_TRUE(sink->IsZero());
 }
+
+TEST(AudioBuffer, BlockWritePureCopy) {
+	auto bufSize = 64u;
+	auto blockSize = 16u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	std::vector<float> data(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		data[i] = (float)(i + 1) * 0.1f;
+
+	base::AudioWriteRequest request;
+	request.samples = data.data();
+	request.numSamps = blockSize;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(request, 0);
+	audioBuf->EndWrite(blockSize, true);
+
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i], data[i])
+			<< "Mismatch at index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockWriteAdditiveMix) {
+	auto bufSize = 64u;
+	auto blockSize = 16u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	std::vector<float> initial(blockSize, 1.0f);
+	base::AudioWriteRequest req1;
+	req1.samples = initial.data();
+	req1.numSamps = blockSize;
+	req1.stride = 1;
+	req1.fadeCurrent = 0.0f;
+	req1.fadeNew = 1.0f;
+	req1.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(req1, 0);
+
+	std::vector<float> addData(blockSize, 0.5f);
+	base::AudioWriteRequest req2;
+	req2.samples = addData.data();
+	req2.numSamps = blockSize;
+	req2.stride = 1;
+	req2.fadeCurrent = 1.0f;
+	req2.fadeNew = 1.0f;
+	req2.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(req2, 0);
+
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i], 1.5f)
+			<< "Mismatch at index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockWriteWrapsAround) {
+	auto bufSize = 32u;
+	auto blockSize = 20u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+	std::vector<float> padding(bufSize - 5, 0.0f);
+	base::AudioWriteRequest padReq;
+	padReq.samples = padding.data();
+	padReq.numSamps = bufSize - 5;
+	padReq.stride = 1;
+	padReq.fadeCurrent = 0.0f;
+	padReq.fadeNew = 1.0f;
+	padReq.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(padReq, 0);
+	audioBuf->EndWrite(bufSize - 5, true);
+
+	std::vector<float> data(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		data[i] = (float)(i + 1) * 0.01f;
+
+	base::AudioWriteRequest request;
+	request.samples = data.data();
+	request.numSamps = blockSize;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(request, 0);
+
+	for (auto i = 0u; i < 5; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[bufSize - 5 + i], data[i])
+			<< "Mismatch at pre-wrap index " << i;
+	}
+	for (auto i = 5u; i < blockSize; i++)
+	{
+		ASSERT_FLOAT_EQ((*audioBuf)[i - 5], data[i])
+			<< "Mismatch at post-wrap index " << i;
+	}
+}
+
+TEST(AudioBuffer, BlockPlayMatchesSamplePlay) {
+	auto bufSize = 100u;
+	auto blockSize = 17u;
+
+	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+	std::vector<float> srcData(bufSize);
+	for (auto i = 0u; i < bufSize; i++)
+		srcData[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+	base::AudioWriteRequest request;
+	request.samples = srcData.data();
+	request.numSamps = bufSize;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+
+	audioBuf->OnBlockWrite(request, 0);
+	audioBuf->EndWrite(bufSize, true);
+
+	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+	auto numBlocks = (bufSize * 2) / blockSize;
+	for (auto i = 0u; i < numBlocks; i++)
+	{
+		audioBuf->OnPlay(sink, 0, blockSize);
+		audioBuf->EndPlay(blockSize);
+		sink->EndWrite(blockSize, true);
+	}
+
+	ASSERT_TRUE(sink->IsFilled());
+
+	for (auto i = 0u; i < bufSize; i++)
+	{
+		ASSERT_FLOAT_EQ(sink->Samples[i], srcData[i])
+			<< "Mismatch at index " << i;
+	}
+}

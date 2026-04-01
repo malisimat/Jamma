@@ -189,3 +189,81 @@ TEST(Loop, PlayWrapsAround) {
 	ASSERT_TRUE(sink->IsFilled());
 }
 
+TEST(Loop, BlockWriteMatchesSampleWrite) {
+	auto blockSize = 64u;
+
+	WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0 };
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 160, 320 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = mixBehaviour;
+
+	LoopParams loopParams;
+	loopParams.Wav = "sample";
+	loopParams.Size = { 80, 80 };
+
+	std::vector<float> data(blockSize);
+	for (auto i = 0u; i < blockSize; i++)
+		data[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+	const auto loopLength = (unsigned long)blockSize;
+	const auto totalSamps = constants::MaxLoopFadeSamps + loopLength;
+
+	// Sample-level reference loop
+	auto loopSample = Loop(loopParams, mixerParams);
+	loopSample.Record();
+	for (auto i = 0ul; i < totalSamps; i++)
+	{
+		auto val = (i < blockSize) ? data[i] : 0.0f;
+		loopSample.OnMixWrite(val, 0.0f, 1.0f, (int)i,
+			base::Audible::AUDIOSOURCE_ADC);
+	}
+	loopSample.EndWrite(totalSamps, true);
+
+	// Block-level loop
+	auto loopBlock = Loop(loopParams, mixerParams);
+	loopBlock.Record();
+
+	base::AudioWriteRequest request;
+	request.samples = data.data();
+	request.numSamps = blockSize;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+
+	loopBlock.OnBlockWrite(request, 0);
+
+	std::vector<float> zeros(totalSamps - blockSize, 0.0f);
+	base::AudioWriteRequest zeroReq;
+	zeroReq.samples = zeros.data();
+	zeroReq.numSamps = (unsigned int)(totalSamps - blockSize);
+	zeroReq.stride = 1;
+	zeroReq.fadeCurrent = 0.0f;
+	zeroReq.fadeNew = 1.0f;
+	zeroReq.source = base::Audible::AUDIOSOURCE_ADC;
+
+	loopBlock.OnBlockWrite(zeroReq, (int)blockSize);
+	loopBlock.EndWrite(totalSamps, true);
+
+	loopSample.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	loopBlock.Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	auto sinkSample = std::make_shared<MockedMultiSink>(blockSize);
+	auto sinkBlock = std::make_shared<MockedMultiSink>(blockSize);
+
+	sinkSample->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+	loopSample.OnPlay(sinkSample, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loopSample.EndMultiPlay(blockSize);
+	sinkSample->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+	sinkBlock->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+	loopBlock.OnPlay(sinkBlock, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loopBlock.EndMultiPlay(blockSize);
+	sinkBlock->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+	ASSERT_TRUE(sinkSample->IsFilled());
+	ASSERT_TRUE(sinkBlock->IsFilled());
+}
+
