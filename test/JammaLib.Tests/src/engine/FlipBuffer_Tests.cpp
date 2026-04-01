@@ -1,8 +1,10 @@
 
 #include "gtest/gtest.h"
+#include "actions/TriggerAction.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
 
+using actions::TriggerAction;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Station;
@@ -120,8 +122,6 @@ static void CommitInitial(const std::shared_ptr<Station>& station)
 
 // AddTake stages the take into the back buffer. NumTakes reflects the back
 // buffer while _changesMade == true.
-// Since we cannot directly see the front/back buffer, passing
-// does not directly guarantee takes in specific front/back buffers.
 TEST(StationFlipBuffer, AddTakeStagesInBackBuffer)
 {
 	auto station = MakeStation();
@@ -208,7 +208,8 @@ TEST(StationFlipBuffer, SetNumBusChannelsCommitUpdatesCount)
 }
 
 // Take added to a station should inherit the bus channel count set on the
-// station at the time of commit.
+// station. Station::AddTake calls take->SetNumBusChannels(NumBusChannels())
+// at add-time, so the count is already set on the take before commit.
 TEST(StationFlipBuffer, TakeInheritsBusChannelsAfterCommit)
 {
 	auto station = MakeStation();
@@ -220,4 +221,124 @@ TEST(StationFlipBuffer, TakeInheritsBusChannelsAfterCommit)
 
 	// The take should have 2 bus channels.
 	EXPECT_EQ(2u, take->NumBusChannels());
+}
+
+// ---------------------------------------------------------------------------
+// LoopTake removal tests
+// ---------------------------------------------------------------------------
+
+// After AddLoop + CommitChanges, Ditch() clears the front buffer directly.
+// NumInputChannels returns 0 because _loops is empty and _changesMade is false.
+TEST(LoopTakeFlipBuffer, DitchClearsAllLoopsAfterCommit)
+{
+	auto take = MakeLoopTake();
+
+	take->AddLoop(0u, "station");
+	take->CommitChanges();
+	ASSERT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+
+	take->Ditch();
+
+	// Ditch clears _loops directly; _changesMade is not set by Ditch, so
+	// NumInputChannels reads from the (now-empty) front buffer.
+	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+}
+
+// Ditch with multiple committed loops clears all channels.
+TEST(LoopTakeFlipBuffer, DitchClearsMultipleLoopsAfterCommit)
+{
+	auto take = MakeLoopTake();
+
+	take->AddLoop(0u, "station");
+	take->AddLoop(1u, "station");
+	take->CommitChanges();
+	ASSERT_EQ(2u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+
+	take->Ditch();
+
+	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+}
+
+// Ditch on a take that has never had loops added is a no-op.
+TEST(LoopTakeFlipBuffer, DitchIsNoOpOnEmptyTake)
+{
+	auto take = MakeLoopTake();
+	ASSERT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+
+	take->Ditch();
+
+	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+}
+
+// ---------------------------------------------------------------------------
+// Station removal tests
+// ---------------------------------------------------------------------------
+
+// TRIGGER_DITCH stages the take removal in the back buffer. Before commit,
+// NumTakes reads the back buffer (which has the take erased), so it returns 0.
+TEST(StationFlipBuffer, DitchActionStagesTakeRemovalInBackBuffer)
+{
+	auto station = MakeStation();
+	CommitInitial(station);
+
+	auto take = station->AddTake();
+	station->CommitChanges();
+	ASSERT_EQ(1u, station->NumTakes());
+
+	TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take->Id();
+	station->OnAction(ditch);
+
+	// NumTakes reads _backLoopTakes (_changesMade == true); the take was
+	// erased from the back buffer, so the count drops to 0.
+	EXPECT_EQ(0u, station->NumTakes());
+}
+
+// After CommitChanges following TRIGGER_DITCH, the front buffer is promoted
+// and NumTakes reads the (now-empty) front buffer.
+TEST(StationFlipBuffer, DitchActionCommitRemovesTakeFromFront)
+{
+	auto station = MakeStation();
+	CommitInitial(station);
+
+	auto take = station->AddTake();
+	station->CommitChanges();
+
+	TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take->Id();
+	station->OnAction(ditch);
+	ASSERT_EQ(0u, station->NumTakes());
+
+	station->CommitChanges();
+
+	// After commit: _loopTakes = _backLoopTakes = {}; NumTakes reads front.
+	EXPECT_EQ(0u, station->NumTakes());
+}
+
+// Ditching one of two committed takes stages only that take's removal;
+// the other remains in both back and (after commit) front buffers.
+TEST(StationFlipBuffer, DitchOneOfMultipleTakesReducesCount)
+{
+	auto station = MakeStation();
+	CommitInitial(station);
+
+	auto take0 = station->AddTake();
+	station->AddTake();
+	station->CommitChanges();
+	ASSERT_EQ(2u, station->NumTakes());
+
+	TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take0->Id();
+	station->OnAction(ditch);
+
+	// Back buffer has 1 take remaining.
+	EXPECT_EQ(1u, station->NumTakes());
+
+	station->CommitChanges();
+
+	// Front buffer promoted with 1 take.
+	EXPECT_EQ(1u, station->NumTakes());
 }
