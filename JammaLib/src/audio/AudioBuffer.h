@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <memory>
 #include <iostream>
@@ -28,6 +29,7 @@ namespace audio
 			float fadeNew,
 			int indexOffset,
 			Audible::AudioSourceType source) override;
+		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
 		void SetSize(unsigned int size);
@@ -36,6 +38,8 @@ namespace audio
 
 		const float& operator[](unsigned int index) const;
 		unsigned int Delay(unsigned int sampsDelay);
+		bool IsContiguous(unsigned int startIndex, unsigned int numSamps) const;
+		const float* BlockRead(unsigned int startIndex) const;
 
 	protected:
 		std::vector<float>::iterator Start();

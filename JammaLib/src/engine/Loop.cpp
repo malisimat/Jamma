@@ -184,6 +184,46 @@ int Loop::OnMixWrite(float samp,
 	return indexOffset + 1;
 }
 
+void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
+{
+	if ((STATE_RECORDING != _playState) &&
+		(STATE_PLAYINGRECORDING != _playState) &&
+		(STATE_OVERDUBBING != _playState) &&
+		(STATE_PUNCHEDIN != _playState) &&
+		(STATE_OVERDUBBINGRECORDING != _playState))
+		return;
+
+	if (AUDIOSOURCE_MONITOR == request.source)
+	{
+		float peak = _lastPeak;
+
+		for (unsigned int i = 0; i < request.numSamps; i++)
+		{
+			auto samp = request.samples[i * request.stride];
+			auto idx = _writeIndex + writeOffset + i;
+			_monitorBufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _monitorBufferBank[idx]);
+
+			if (STATE_RECORDING == _playState)
+			{
+				auto absSamp = std::abs(samp);
+				if (absSamp > peak)
+					peak = absSamp;
+			}
+		}
+
+		_lastPeak = peak;
+	}
+	else
+	{
+		for (unsigned int i = 0; i < request.numSamps; i++)
+		{
+			auto samp = request.samples[i * request.stride];
+			auto idx = _writeIndex + writeOffset + i;
+			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
+		}
+	}
+}
+
 void Loop::EndWrite(unsigned int numSamps,
 	bool updateIndex)
 {
@@ -303,24 +343,48 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	}
 	else
 	{
-		for (auto i = 0u; i < numSamps; i++)
+		// Block fast path: routing-only mixer with settled fade,
+		// contiguous BufferBank range, and no loop wraparound
+		auto noWrapAround = (index + numSamps) < bufSize;
+		auto inBounds = (index + numSamps) <= bufBankSize;
+
+		if (nullptr == trigger &&
+			noWrapAround &&
+			inBounds &&
+			_mixer->IsBlockEligible() &&
+			_bufferBank.IsBlockContiguous(index, numSamps))
 		{
-			if (index < bufBankSize)
+			auto blockPtr = _bufferBank.BlockPtr(index);
+			_mixer->OnPlayBlock(dest, blockPtr, numSamps);
+
+			for (auto i = 0u; i < numSamps; i++)
 			{
-				auto samp = _bufferBank[index];
-
-				if (nullptr == trigger)
-					_mixer->OnPlay(dest, samp, i);
-				else
-					trigger->OnPlay(dest, samp, i);
-
-				if (std::abs(samp) > peak)
-					peak = std::abs(samp);
+				auto s = std::abs(blockPtr[i]);
+				if (s > peak)
+					peak = s;
 			}
+		}
+		else
+		{
+			for (auto i = 0u; i < numSamps; i++)
+			{
+				if (index < bufBankSize)
+				{
+					auto samp = _bufferBank[index];
 
-			index++;
-			if (index >= bufSize)
-				index -= _loopLength;
+					if (nullptr == trigger)
+						_mixer->OnPlay(dest, samp, i);
+					else
+						trigger->OnPlay(dest, samp, i);
+
+					if (std::abs(samp) > peak)
+						peak = std::abs(samp);
+				}
+
+				index++;
+				if (index >= bufSize)
+					index -= _loopLength;
+			}
 		}
 	}
 

@@ -171,11 +171,19 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	for (const auto& buf : _audioBuffers)
 	{
 		auto playIndex = buf->Delay(numSamps);
-		for (auto samp = 0u; samp < numSamps; samp++)
+
+		for (const auto& mixer : _audioMixers)
 		{
-			for (const auto& mixer : _audioMixers)
+			if (mixer->IsBlockEligible() && buf->IsContiguous(playIndex, numSamps))
 			{
-				mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
+				mixer->OnPlayBlock(dest, buf->BlockRead(playIndex), numSamps);
+			}
+			else
+			{
+				for (auto samp = 0u; samp < numSamps; samp++)
+				{
+					mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
+				}
 			}
 		}
 	}

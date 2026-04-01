@@ -30,21 +30,33 @@ void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
 		return;
 
 	auto bufSize = (unsigned int)_buffer.size();
+	if (0 == bufSize)
+		return;
 
-	auto index = _playIndex + (long)indexOffset;
-	while (index >= bufSize)
-		index -= bufSize;
+	long index = _playIndex + (long)indexOffset;
+	index = ((index % (long)bufSize) + (long)bufSize) % (long)bufSize;
 
-	auto destIndex = 0;
-	auto sourceType = SourceType();
+	base::AudioWriteRequest request;
+	request.fadeCurrent = 1.0f;
+	request.fadeNew = 1.0f;
+	request.source = SourceType();
+	request.stride = 1;
 
-	for (auto i = 0u; i < numSamps; i++)
+	auto remaining = numSamps;
+	int writePos = 0;
+
+	while (remaining > 0)
 	{
-		destIndex = dest->OnMixWrite(_buffer[index], 1.0f, 1.0f, destIndex, sourceType);
+		auto sampsToEnd = bufSize - (unsigned int)index;
+		auto chunkSize = (remaining < sampsToEnd) ? remaining : sampsToEnd;
 
-		index++;
-		if (index >= bufSize)
-			index -= bufSize;
+		request.samples = &_buffer[index];
+		request.numSamps = chunkSize;
+		dest->OnBlockWrite(request, writePos);
+
+		writePos += (int)chunkSize;
+		remaining -= chunkSize;
+		index = 0;
 	}
 }
 
@@ -101,6 +113,44 @@ void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 
 	if (updateIndex)
 		_SetWriteIndex(_writeIndex + numSamps);
+}
+
+void AudioBuffer::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
+{
+	auto bufSize = (unsigned int)_buffer.size();
+
+	if (0 == bufSize)
+	{
+		_writeIndex = 0;
+		return;
+	}
+
+	long startIdx = (long)_writeIndex + writeOffset;
+	startIdx = ((startIdx % (long)bufSize) + (long)bufSize) % (long)bufSize;
+
+	auto idx = (unsigned int)startIdx;
+
+	// Fast path: pure copy with contiguous stride-1 data
+	if (request.fadeCurrent == 0.0f && request.fadeNew == 1.0f && request.stride == 1)
+	{
+		auto firstSeg = std::min(request.numSamps, bufSize - idx);
+		std::copy(request.samples, request.samples + firstSeg, _buffer.begin() + idx);
+
+		if (firstSeg < request.numSamps)
+			std::copy(request.samples + firstSeg, request.samples + request.numSamps, _buffer.begin());
+	}
+	else
+	{
+		for (unsigned int i = 0; i < request.numSamps; i++)
+		{
+			_buffer[idx] = (request.fadeNew * request.samples[i * request.stride]) +
+				(request.fadeCurrent * _buffer[idx]);
+
+			idx++;
+			if (idx >= bufSize)
+				idx -= bufSize;
+		}
+	}
 }
 
 void AudioBuffer::SetSize(unsigned int size)
@@ -161,4 +211,14 @@ unsigned int AudioBuffer::Delay(unsigned int sampsDelay)
 	}
 	
 	return _playIndex;
+}
+
+bool AudioBuffer::IsContiguous(unsigned int startIndex, unsigned int numSamps) const
+{
+	return (startIndex + numSamps) <= (unsigned int)_buffer.size();
+}
+
+const float* AudioBuffer::BlockRead(unsigned int startIndex) const
+{
+	return &_buffer[startIndex];
 }
