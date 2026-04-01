@@ -77,7 +77,7 @@ namespace audio
 		virtual void SetMaxChannels(unsigned int chans)
 		{
 			_mixParams.Channels.erase(std::remove_if(_mixParams.Channels.begin(), _mixParams.Channels.end(),
-				[chans](unsigned int val) { return val > chans; }),
+				[chans](unsigned int val) { return val >= chans; }),
 				_mixParams.Channels.end());
 		}
 
