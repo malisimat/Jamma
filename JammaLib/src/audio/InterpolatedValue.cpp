@@ -115,6 +115,7 @@ double InterpolatedValueExp::Current() const
 void InterpolatedValueExp::Jump(double target)
 {
 	_lastVal = target;
+	_target = target;
 }
 
 bool InterpolatedValueExp::IsSettled() const
