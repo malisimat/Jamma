@@ -129,6 +129,52 @@ bool IsAllZero(const float* buf, unsigned int count)
 	return !HasNonZero(buf, count);
 }
 
+// Capturing single-channel AudioSink for per-sample verification.
+class CaptureSink :
+	public base::AudioSink
+{
+public:
+	CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
+
+	inline virtual int OnMixWrite(float samp, float fadeCurrent, float fadeNew,
+		int indexOffset, base::Audible::AudioSourceType source) override
+	{
+		auto idx = _writeIndex + indexOffset;
+		if (idx < Samples.size())
+			Samples[idx] = (fadeNew * samp) + (fadeCurrent * Samples[idx]);
+		return indexOffset + 1;
+	}
+	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
+	{
+		if (updateIndex) _writeIndex += numSamps;
+	}
+
+	std::vector<float> Samples;
+};
+
+// Capturing single-channel MultiAudioSink wrapping a CaptureSink.
+class CaptureMultiSink :
+	public base::MultiAudioSink
+{
+public:
+	CaptureMultiSink(unsigned int bufSize)
+		: _sink(std::make_shared<CaptureSink>(bufSize)) {}
+
+	virtual unsigned int NumInputChannels(
+		base::Audible::AudioSourceType source) const override { return 1; }
+	std::shared_ptr<CaptureSink> GetSink() const { return _sink; }
+
+protected:
+	virtual const std::shared_ptr<base::AudioSink> _InputChannel(
+		unsigned int channel, base::Audible::AudioSourceType source) override
+	{
+		return (channel == 0) ? _sink : nullptr;
+	}
+
+private:
+	std::shared_ptr<CaptureSink> _sink;
+};
+
 } // anonymous namespace
 
 // ===========================================================================
@@ -485,4 +531,61 @@ TEST(AudioFlow, ReadEmptyLoop_ProducesSilence)
 	ReadBlock(chanMixer, station, outBuf.data(), numChans, blockSize);
 
 	ASSERT_TRUE(IsAllZero(outBuf.data(), numChans * blockSize));
+}
+
+// ===========================================================================
+// Per-sample value verification
+// ===========================================================================
+
+// 10. Write a known ascending sequence to a loop via OnMixWrite, read back
+//     through Loop::OnPlay → mock sink, and verify every sample matches.
+//     This validates that sample values pass through the mixer path unchanged
+//     (WireMixBehaviour, fade = 1.0).
+TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
+{
+	const unsigned int loopLength = 64;
+	const unsigned int blockSize = 32;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	// Create a loop with WireMixBehaviour routing to channel 0.
+	WireMixBehaviourParams wireBehaviour;
+	wireBehaviour.Channels = { 0 };
+	auto mixerParams = Loop::GetMixerParams({ 80, 80 }, wireBehaviour);
+
+	LoopParams loopParams;
+	loopParams.Wav = "test";
+	loopParams.FadeSamps = constants::DefaultFadeSamps;
+
+	Loop loop(loopParams, mixerParams);
+	loop.Record();
+
+	// Write a known ascending sequence. The loop region starts at
+	// index MaxLoopFadeSamps. We write (k+1)*0.01f for position k
+	// within the loop region; the fade-in region is left as zero.
+	for (unsigned long i = 0; i < totalRecord; i++)
+	{
+		float val = 0.0f;
+		if (i >= constants::MaxLoopFadeSamps)
+			val = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+		loop.OnMixWrite(val, 0.0f, 1.0f, static_cast<int>(i),
+			Audible::AUDIOSOURCE_ADC);
+	}
+	loop.EndWrite(static_cast<unsigned int>(totalRecord), true);
+
+	// Transition to playing: _playIndex = MaxLoopFadeSamps.
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	// Read one block via Loop::OnPlay into a capturing mock sink.
+	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+	loop.OnPlay(sink, nullptr, 0, blockSize);
+	loop.EndMultiPlay(blockSize);
+
+	// Verify exact per-sample values. The mixer fade is 1.0 (Jump +
+	// SetTarget in Record/Reset), so samples pass through unchanged.
+	const auto& captured = sink->GetSink()->Samples;
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		float expected = static_cast<float>(s + 1) * 0.01f;
+		ASSERT_FLOAT_EQ(captured[s], expected) << "Mismatch at sample " << s;
+	}
 }
