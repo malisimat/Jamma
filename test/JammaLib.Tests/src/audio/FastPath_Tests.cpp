@@ -11,6 +11,7 @@ using audio::AudioBuffer;
 using audio::BufferBank;
 using audio::WireMixBehaviourParams;
 using audio::PanMixBehaviourParams;
+using audio::BounceMixBehaviourParams;
 using audio::MergeMixBehaviourParams;
 using audio::InterpolatedValueExp;
 using engine::Loop;
@@ -174,6 +175,19 @@ TEST(FastPath, MergeMixerIsNotBlockEligible) {
 	ASSERT_FALSE(mixer.IsBlockEligible());
 }
 
+TEST(FastPath, BounceMixerIsNotBlockEligible) {
+	BounceMixBehaviourParams bounce;
+	bounce.Channels = { 0 };
+
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 110, 80 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = bounce;
+
+	auto mixer = AudioMixer(mixerParams);
+	ASSERT_FALSE(mixer.IsBlockEligible());
+}
+
 // --- BufferBank block access tests ---
 
 TEST(FastPath, BufferBankIsBlockContiguous) {
@@ -303,41 +317,64 @@ TEST(FastPath, LoopOnPlayBlockMatchesFallback) {
 	auto blockSize = 32u;
 	auto loopLength = 50ul;
 	auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+	auto renderedSamps = (bufSize / blockSize) * blockSize;
 
-	WireMixBehaviourParams mixBehaviour;
-	mixBehaviour.Channels = { 0 };
+	WireMixBehaviourParams fastMixBehaviour;
+	fastMixBehaviour.Channels = { 0 };
 
-	AudioMixerParams mixerParams;
-	mixerParams.Size = { 160, 320 };
-	mixerParams.Position = { 6, 6 };
-	mixerParams.Behaviour = mixBehaviour;
+	PanMixBehaviourParams fallbackMixBehaviour;
+	fallbackMixBehaviour.ChannelLevels = { 1.0f };
+
+	AudioMixerParams fastMixerParams;
+	fastMixerParams.Size = { 160, 320 };
+	fastMixerParams.Position = { 6, 6 };
+	fastMixerParams.Behaviour = fastMixBehaviour;
+
+	AudioMixerParams fallbackMixerParams;
+	fallbackMixerParams.Size = { 160, 320 };
+	fallbackMixerParams.Position = { 6, 6 };
+	fallbackMixerParams.Behaviour = fallbackMixBehaviour;
 
 	LoopParams loopParams;
 	loopParams.Wav = "hh";
 	loopParams.Size = { 80, 80 };
 	loopParams.Position = { 10, 22 };
 
-	auto loopA = Loop(loopParams, mixerParams);
+	auto loopA = Loop(loopParams, fastMixerParams);
+	auto loopB = Loop(loopParams, fallbackMixerParams);
+
 	loopA.Record();
+	loopB.Record();
 	for (auto i = 0ul; i < totalRecordSamps; i++)
+	{
 		loopA.OnMixWrite(0.5f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+		loopB.OnMixWrite(0.5f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+	}
 	loopA.EndWrite(totalRecordSamps, true);
+	loopB.EndWrite(totalRecordSamps, true);
 	loopA.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	loopB.Play(constants::MaxLoopFadeSamps, loopLength, false);
 
 	auto destA = std::make_shared<FastPathMockedMultiSink>(1, bufSize);
+	auto destB = std::make_shared<FastPathMockedMultiSink>(1, bufSize);
 	auto numBlocks = bufSize / blockSize;
 
 	for (auto i = 0u; i < numBlocks; i++)
 	{
 		destA->Zero(blockSize, base::Audible::AUDIOSOURCE_MIXER);
+		destB->Zero(blockSize, base::Audible::AUDIOSOURCE_MIXER);
 		loopA.OnPlay(destA, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+		loopB.OnPlay(destB, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
 		loopA.EndMultiPlay(blockSize);
+		loopB.EndMultiPlay(blockSize);
 		destA->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_MIXER);
+		destB->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_MIXER);
 	}
 
 	auto sinkA = destA->GetSink(0);
+	auto sinkB = destB->GetSink(0);
 	bool hasNonZero = false;
-	for (auto i = 0u; i < bufSize; i++)
+	for (auto i = 0u; i < renderedSamps; i++)
 	{
 		if (sinkA->Samples[i] != 0.0f)
 		{
@@ -347,9 +384,17 @@ TEST(FastPath, LoopOnPlayBlockMatchesFallback) {
 	}
 	ASSERT_TRUE(hasNonZero);
 
-	for (auto i = 0u; i < bufSize; i++)
+	for (auto i = 0u; i < renderedSamps; i++)
 	{
-		ASSERT_FLOAT_EQ(sinkA->Samples[i], 0.5f)
-			<< "Unexpected value at sample " << i;
+		ASSERT_FLOAT_EQ(sinkA->Samples[i], sinkB->Samples[i])
+			<< "Mismatch at sample " << i;
+	}
+
+	for (auto i = renderedSamps; i < bufSize; i++)
+	{
+		ASSERT_FLOAT_EQ(sinkA->Samples[i], 0.0f)
+			<< "Fast-path tail sample should be untouched at index " << i;
+		ASSERT_FLOAT_EQ(sinkB->Samples[i], 0.0f)
+			<< "Fallback tail sample should be untouched at index " << i;
 	}
 }
