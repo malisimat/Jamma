@@ -136,12 +136,12 @@ class CaptureSink :
 public:
 	CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
 
-	inline virtual int OnMixWrite(float samp, float fadeCurrent, float fadeNew,
+	virtual int OnMixWrite(float samp, float fadeCurrent, float fadeNew,
 		int indexOffset, base::Audible::AudioSourceType source) override
 	{
-		auto idx = _writeIndex + indexOffset;
-		if (idx < Samples.size())
-			Samples[idx] = (fadeNew * samp) + (fadeCurrent * Samples[idx]);
+		auto bufferIndex = _writeIndex + indexOffset;
+		if (bufferIndex < Samples.size())
+			Samples[bufferIndex] = (fadeNew * samp) + (fadeCurrent * Samples[bufferIndex]);
 		return indexOffset + 1;
 	}
 	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
@@ -564,9 +564,9 @@ TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
 	// within the loop region; the fade-in region is left as zero.
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float val = 0.0f;
-		if (i >= constants::MaxLoopFadeSamps)
-			val = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+		float val = (i >= constants::MaxLoopFadeSamps)
+			? static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f
+			: 0.0f;
 		loop.OnMixWrite(val, 0.0f, 1.0f, static_cast<int>(i),
 			Audible::AUDIOSOURCE_ADC);
 	}
