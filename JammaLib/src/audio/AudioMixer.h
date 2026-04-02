@@ -141,6 +141,7 @@ namespace audio
 		}
 
 	public:
+		virtual bool IsRoutingOnly() const override { return false; }
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
@@ -157,6 +158,7 @@ namespace audio
 		}
 
 	public:
+		virtual bool IsRoutingOnly() const override { return false; }
 		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
 			float samp,
 			float fadeNew,
