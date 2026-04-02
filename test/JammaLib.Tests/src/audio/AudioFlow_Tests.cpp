@@ -589,3 +589,66 @@ TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
 		ASSERT_FLOAT_EQ(captured[s], expected) << "Mismatch at sample " << s;
 	}
 }
+
+// 11. Write a known ascending sequence through the full ADC → ChannelMixer →
+//     Station → LoopTake → Loop write pipeline, then read back from the loop
+//     directly and verify every sample matches.
+TEST(AudioFlow, WriteViaStation_PerSampleVerification)
+{
+	const unsigned int numChans = 1;
+	const unsigned int loopLength = 64;
+	const unsigned int blockSize = 512;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+	const unsigned int totalBlocks =
+		static_cast<unsigned int>((totalRecord + blockSize - 1) / blockSize);
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+
+	// Use AddLoop to get a reference to the loop for later verification.
+	take->Record({}, "test");
+	auto loop0 = take->AddLoop(0, "test");
+	loop0->Record();
+	station->CommitChanges();
+
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+
+	// Write an ascending sequence through the full pipeline.
+	// The loop region [MaxLoopFadeSamps, totalRecord) gets values
+	// (k+1)*0.01f where k is the position within the loop region.
+	std::vector<float> inBuf(numChans * blockSize, 0.0f);
+	for (unsigned int b = 0; b < totalBlocks; b++)
+	{
+		for (unsigned int s = 0; s < blockSize; s++)
+		{
+			unsigned long globalIndex =
+				static_cast<unsigned long>(b) * blockSize + s;
+			inBuf[s] = (globalIndex >= constants::MaxLoopFadeSamps)
+				? static_cast<float>(
+					(globalIndex - constants::MaxLoopFadeSamps) + 1) * 0.01f
+				: 0.0f;
+		}
+		WriteBlock(chanMixer, station, inBuf.data(), numChans, blockSize);
+	}
+
+	// Transition to playing: _playIndex = MaxLoopFadeSamps.
+	loop0->Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	// Read one block directly from the loop into a capturing mock sink.
+	const unsigned int readBlock = 32;
+	auto sink = std::make_shared<CaptureMultiSink>(readBlock);
+	loop0->OnPlay(sink, nullptr, 0, readBlock);
+	loop0->EndMultiPlay(readBlock);
+
+	// Verify exact per-sample values. Samples pass through the
+	// pipeline unchanged: FromAdc writes with fade(0,1), AudioBuffer
+	// reads with fade(1,1) into Loop whose buffer bank starts at 0,
+	// and all mixer fades are exactly 1.0.
+	const auto& captured = sink->GetSink()->Samples;
+	for (unsigned int s = 0; s < readBlock; s++)
+	{
+		float expected = static_cast<float>(s + 1) * 0.01f;
+		ASSERT_FLOAT_EQ(captured[s], expected) << "Mismatch at sample " << s;
+	}
+}
