@@ -652,3 +652,53 @@ TEST(AudioFlow, WriteViaStation_PerSampleVerification)
 		ASSERT_FLOAT_EQ(captured[s], expected) << "Mismatch at sample " << s;
 	}
 }
+
+// 12. Write a known ascending sequence directly to a loop, then read through
+//     the full Loop → LoopTake → Station → ChannelMixer → DAC read pipeline
+//     and verify every sample matches.
+TEST(AudioFlow, ReadViaStation_PerSampleVerification)
+{
+	const unsigned int numChans = 1;
+	const unsigned int loopLength = 64;
+	const unsigned int blockSize = 32;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+
+	take->Record({}, "test");
+	auto loop0 = take->AddLoop(0, "test");
+	loop0->Record();
+	station->CommitChanges();
+
+	// Write a known ascending sequence directly to the loop.
+	// The loop region starts at MaxLoopFadeSamps; we write (k+1)*0.01f
+	// for position k within the loop region; the fade-in region is zero.
+	for (unsigned long i = 0; i < totalRecord; i++)
+	{
+		float val = (i >= constants::MaxLoopFadeSamps)
+			? static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f
+			: 0.0f;
+		loop0->OnMixWrite(val, 0.0f, 1.0f, static_cast<int>(i),
+			Audible::AUDIOSOURCE_ADC);
+	}
+	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
+
+	// Transition take (and its loops) to playing.
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0);
+
+	// Read one block through the full Station → ChannelMixer → DAC pipeline.
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> outBuf(numChans * blockSize, 0.0f);
+	ReadBlock(chanMixer, station, outBuf.data(), numChans, blockSize);
+
+	// Verify exact per-sample values. On the first block the intermediate
+	// AudioBuffers have _sampsRecorded == 0 so Delay returns 0 and data
+	// flows through without latency. All mixer fades are 1.0.
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		float expected = static_cast<float>(s + 1) * 0.01f;
+		ASSERT_FLOAT_EQ(outBuf[s], expected) << "Mismatch at sample " << s;
+	}
+}
