@@ -70,7 +70,8 @@ ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 // Uses a simple LCG-style hash to avoid depending on rand() state.
 float TestSample(unsigned int index, unsigned int multiplier = 7)
 {
-	return static_cast<float>((((index + 1) * multiplier) % 2000) - 1000) / 1001.0f;
+	const auto wrapped = static_cast<int>(((index + 1u) * multiplier) % 2000u);
+	return static_cast<float>(wrapped - 1000) / 1001.0f;
 }
 
 // Fills an interleaved buffer with deterministic non-zero test data.
