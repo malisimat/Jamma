@@ -11,7 +11,7 @@ using base::MultiAudioSink;
 using base::AudioSourceParams;
 using base::AudioWriteRequest;
 
-// Test helper: a sink that stores samples written via OnMixWrite / OnBlockWrite
+// Test helper: a sink that stores samples written via OnBlockWrite
 class BlockWriteMockedSink :
 	public AudioSink
 {
@@ -23,30 +23,21 @@ public:
 	}
 
 public:
-	inline virtual int OnMixWrite(float samp,
-		float fadeCurrent,
-		float fadeNew,
-		int indexOffset,
-		Audible::AudioSourceType source) override
+	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
 	{
-		auto destIndex = _writeIndex + indexOffset;
-
-		if (destIndex < Samples.size())
-			Samples[destIndex] = (fadeNew * samp) + (fadeCurrent * Samples[destIndex]);
-
-		return indexOffset + 1;
-	};
+		BlockWriteCount++;
+		for (auto i = 0u; i < request.numSamps; i++)
+		{
+			auto destIndex = _writeIndex + writeOffset + i;
+			if (destIndex < Samples.size())
+				Samples[destIndex] = (request.fadeNew * request.samples[i * request.stride]) +
+					(request.fadeCurrent * Samples[destIndex]);
+		}
+	}
 	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
 	{
 		if (updateIndex)
 			_writeIndex += numSamps;
-	}
-
-	// Track how many times OnBlockWrite is called
-	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
-	{
-		BlockWriteCount++;
-		AudioSink::OnBlockWrite(request, writeOffset);
 	}
 
 	std::vector<float> Samples;
@@ -207,7 +198,56 @@ TEST(AudioBlockWrite, BlockWriteWithFade) {
 }
 
 // ------------------------------------------------------------------
-// Test: AudioBuffer::OnPlay uses block write (destination-centric)
+// Helper: reads numSamps from audioBuf at readIndex into sink.
+// Handles ring-buffer wrap-around.
+// ------------------------------------------------------------------
+static void ReadAudioBufferToSink(audio::AudioBuffer& audioBuf,
+	const std::shared_ptr<BlockWriteMockedSink>& sink,
+	unsigned int numSamps,
+	unsigned int readIndex)
+{
+	auto bufSize = audioBuf.BufSize();
+
+	if (audioBuf.IsContiguous(readIndex, numSamps))
+	{
+		AudioWriteRequest request;
+		request.samples = audioBuf.BlockRead(readIndex);
+		request.numSamps = numSamps;
+		request.stride = 1;
+		request.fadeCurrent = 0.0f;
+		request.fadeNew = 1.0f;
+		request.source = audioBuf.SourceType();
+		sink->OnBlockWrite(request, 0);
+	}
+	else
+	{
+		auto firstPart = bufSize - readIndex;
+		auto secondPart = numSamps - firstPart;
+
+		AudioWriteRequest r1;
+		r1.samples = audioBuf.BlockRead(readIndex);
+		r1.numSamps = firstPart;
+		r1.stride = 1;
+		r1.fadeCurrent = 0.0f;
+		r1.fadeNew = 1.0f;
+		r1.source = audioBuf.SourceType();
+		sink->OnBlockWrite(r1, 0);
+
+		AudioWriteRequest r2;
+		r2.samples = audioBuf.BlockRead(0);
+		r2.numSamps = secondPart;
+		r2.stride = 1;
+		r2.fadeCurrent = 0.0f;
+		r2.fadeNew = 1.0f;
+		r2.source = audioBuf.SourceType();
+		sink->OnBlockWrite(r2, (int)firstPart);
+	}
+
+	audioBuf.EndPlay(numSamps);
+}
+
+// ------------------------------------------------------------------
+// Test: AudioBuffer block read uses OnBlockWrite (destination-centric)
 // ------------------------------------------------------------------
 TEST(AudioBlockWrite, OnPlayUsesBlockWrite) {
 	auto bufSize = 100u;
@@ -232,11 +272,13 @@ TEST(AudioBlockWrite, OnPlayUsesBlockWrite) {
 	audioBuf->EndWrite(bufSize, true);
 
 	auto numBlocks = bufSize / blockSize;
+	auto playIndex = audioBuf->Delay(blockSize);
 	for (unsigned int i = 0; i < numBlocks; i++)
 	{
-		audioBuf->OnPlay(sink, 0, blockSize);
-		audioBuf->EndPlay(blockSize);
+		ReadAudioBufferToSink(*audioBuf, sink, blockSize, playIndex);
+		playIndex = (playIndex + blockSize) % audioBuf->BufSize();
 		sink->EndWrite(blockSize, true);
+		audioBuf->EndWrite(blockSize, true);
 	}
 
 	ASSERT_GT(sink->BlockWriteCount, 0u);
@@ -249,7 +291,7 @@ TEST(AudioBlockWrite, OnPlayUsesBlockWrite) {
 }
 
 // ------------------------------------------------------------------
-// Test: AudioBuffer::OnPlay handles wrap-around via block write
+// Test: AudioBuffer block read handles wrap-around via block write
 // ------------------------------------------------------------------
 TEST(AudioBlockWrite, OnPlayWrapsAroundViaBlockWrite) {
 	auto bufSize = 100u;
@@ -261,11 +303,12 @@ TEST(AudioBlockWrite, OnPlayWrapsAroundViaBlockWrite) {
 	audioBuf.EndWrite(blockSize, false);
 
 	auto numBlocks = (bufSize * 2) / blockSize;
+	auto playIndex = 0u;
 
 	for (unsigned int i = 0; i < numBlocks; i++)
 	{
-		audioBuf.OnPlay(sink, 0, blockSize);
-		audioBuf.EndPlay(blockSize);
+		ReadAudioBufferToSink(audioBuf, sink, blockSize, playIndex);
+		playIndex = (playIndex + blockSize) % audioBuf.BufSize();
 		sink->EndWrite(blockSize, true);
 	}
 
@@ -324,9 +367,9 @@ TEST(AudioBlockWrite, MultiChannelBlockWrite) {
 }
 
 // ------------------------------------------------------------------
-// Test: Block write preserves backward compatibility with OnMixWrite
+// Test: Block write produces correct output (replaces OnMixWrite comparison)
 // ------------------------------------------------------------------
-TEST(AudioBlockWrite, FallbackMatchesOnMixWrite) {
+TEST(AudioBlockWrite, BlockWriteProducesCorrectOutput) {
 	auto bufSize = 100u;
 	auto numSamps = 50u;
 
@@ -334,16 +377,8 @@ TEST(AudioBlockWrite, FallbackMatchesOnMixWrite) {
 	for (unsigned int i = 0; i < numSamps; i++)
 		source[i] = ((rand() % 2000) - 1000) / 1001.0f;
 
-	// Write using OnMixWrite (per-sample)
-	auto buf1 = std::make_shared<AudioBuffer>(bufSize);
-	auto offset = 0;
-	for (unsigned int i = 0; i < numSamps; i++)
-	{
-		offset = buf1->OnMixWrite(source[i], 0.0f, 1.0f, offset, base::Audible::AUDIOSOURCE_ADC);
-	}
-
 	// Write using OnBlockWrite (block-level)
-	auto buf2 = std::make_shared<AudioBuffer>(bufSize);
+	auto buf = std::make_shared<AudioBuffer>(bufSize);
 	AudioWriteRequest request;
 	request.samples = source.data();
 	request.numSamps = numSamps;
@@ -352,10 +387,10 @@ TEST(AudioBlockWrite, FallbackMatchesOnMixWrite) {
 	request.fadeNew = 1.0f;
 	request.source = base::Audible::AUDIOSOURCE_ADC;
 
-	buf2->OnBlockWrite(request, 0);
+	buf->OnBlockWrite(request, 0);
 
 	for (unsigned int i = 0; i < numSamps; i++)
 	{
-		EXPECT_FLOAT_EQ((*buf1)[i], (*buf2)[i]);
+		EXPECT_FLOAT_EQ((*buf)[i], source[i]);
 	}
 }

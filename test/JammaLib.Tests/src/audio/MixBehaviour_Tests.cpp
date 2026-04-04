@@ -1,6 +1,7 @@
 
 #include "gtest/gtest.h"
 #include "audio/AudioMixer.h"
+#include "base/AudioSink.h"
 
 using audio::WireMixBehaviour;
 using audio::WireMixBehaviourParams;
@@ -10,14 +11,14 @@ using audio::BounceMixBehaviour;
 using audio::BounceMixBehaviourParams;
 using base::MultiAudioSink;
 
-struct MixWriteCall
+struct BlockWriteCall
 {
 	unsigned int Channel;
-	float Samp;
 	float FadeCurrent;
 	float FadeNew;
-	int IndexOffset;
-	base::Audible::AudioSourceType Source;
+	int WriteOffset;
+	unsigned int NumSamps;
+	std::vector<float> SamplesReceived;
 };
 
 class MockMultiSink :
@@ -35,17 +36,22 @@ public:
 		return _numChannels;
 	}
 
-	virtual void OnMixWriteChannel(unsigned int channel,
-		float samp,
-		float fadeCurrent,
-		float fadeNew,
-		int indexOffset,
-		base::Audible::AudioSourceType source) override
+	virtual void OnBlockWriteChannel(unsigned int channel,
+		const base::AudioWriteRequest& request,
+		int writeOffset) override
 	{
-		Calls.push_back({ channel, samp, fadeCurrent, fadeNew, indexOffset, source });
+		BlockWriteCall call;
+		call.Channel = channel;
+		call.FadeCurrent = request.fadeCurrent;
+		call.FadeNew = request.fadeNew;
+		call.WriteOffset = writeOffset;
+		call.NumSamps = request.numSamps;
+		for (auto i = 0u; i < request.numSamps; i++)
+			call.SamplesReceived.push_back(request.samples[i * request.stride]);
+		Calls.push_back(call);
 	}
 
-	std::vector<MixWriteCall> Calls;
+	std::vector<BlockWriteCall> Calls;
 
 private:
 	unsigned int _numChannels;
@@ -53,39 +59,42 @@ private:
 
 // ---- WireMixBehaviour ----
 
-TEST(WireMixBehaviour, ApplyWritesToSpecifiedChannel)
+TEST(WireMixBehaviour, ApplyBlockWritesToSpecifiedChannel)
 {
 	WireMixBehaviourParams params({ 1u });
 	WireMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 0.5f, 0.8f, 0);
+	float sample = 0.5f;
+	behaviour.ApplyBlock(sink, &sample, 0.8f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_EQ(1u, sink->Calls[0].Channel);
-	EXPECT_FLOAT_EQ(0.5f, sink->Calls[0].Samp);
+	EXPECT_FLOAT_EQ(0.5f, sink->Calls[0].SamplesReceived[0]);
 	EXPECT_FLOAT_EQ(0.8f, sink->Calls[0].FadeNew);
 }
 
-TEST(WireMixBehaviour, ApplyFadeCurrentIsAlwaysZero)
+TEST(WireMixBehaviour, ApplyBlockFadeCurrentIsAlwaysZero)
 {
 	WireMixBehaviourParams params({ 0u });
 	WireMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.3f, 0.6f, 0);
+	float sample = 0.3f;
+	behaviour.ApplyBlock(sink, &sample, 0.6f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_FLOAT_EQ(0.0f, sink->Calls[0].FadeCurrent);
 }
 
-TEST(WireMixBehaviour, ApplyWritesToMultipleChannels)
+TEST(WireMixBehaviour, ApplyBlockWritesToMultipleChannels)
 {
 	WireMixBehaviourParams params({ 0u, 2u, 3u });
 	WireMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 1.0f, 1.0f, 5);
+	float sample = 1.0f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 5);
 
 	ASSERT_EQ(3u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);
@@ -93,18 +102,19 @@ TEST(WireMixBehaviour, ApplyWritesToMultipleChannels)
 	EXPECT_EQ(3u, sink->Calls[2].Channel);
 	for (const auto& call : sink->Calls)
 	{
-		EXPECT_EQ(5, call.IndexOffset);
+		EXPECT_EQ(5, call.WriteOffset);
 		EXPECT_FLOAT_EQ(0.0f, call.FadeCurrent);
 		EXPECT_FLOAT_EQ(1.0f, call.FadeNew);
 	}
 }
 
-TEST(WireMixBehaviour, ApplyNullDestDoesNotCrash)
+TEST(WireMixBehaviour, ApplyBlockNullDestDoesNotCrash)
 {
 	WireMixBehaviourParams params({ 0u });
 	WireMixBehaviour behaviour(params);
 
-	EXPECT_NO_FATAL_FAILURE(behaviour.Apply(nullptr, 1.0f, 1.0f, 0));
+	float sample = 1.0f;
+	EXPECT_NO_FATAL_FAILURE(behaviour.ApplyBlock(nullptr, &sample, 1.0f, 1, 0));
 }
 
 TEST(WireMixBehaviour, SetParamsUpdatesChannels)
@@ -116,7 +126,8 @@ TEST(WireMixBehaviour, SetParamsUpdatesChannels)
 	behaviour.SetParams(updated);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 0.5f, 1.0f, 0);
+	float sample = 0.5f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 0);
 
 	ASSERT_EQ(2u, sink->Calls.size());
 	EXPECT_EQ(1u, sink->Calls[0].Channel);
@@ -131,7 +142,8 @@ TEST(WireMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 	behaviour.SetMaxChannels(2u);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 1.0f, 1.0f, 0);
+	float sample = 1.0f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 0);
 
 	// SetMaxChannels keeps channels with index < chans (count semantics).
 	// For chans = 2, channels 0 and 1 remain; channels 2 and 3 are removed.
@@ -142,59 +154,63 @@ TEST(WireMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 
 // ---- MergeMixBehaviour ----
 
-TEST(MergeMixBehaviour, ApplyWritesToSpecifiedChannel)
+TEST(MergeMixBehaviour, ApplyBlockWritesToSpecifiedChannel)
 {
 	MergeMixBehaviourParams params;
 	params.Channels = { 0u };
 	MergeMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.7f, 0.5f, 0);
+	float sample = 0.7f;
+	behaviour.ApplyBlock(sink, &sample, 0.5f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);
-	EXPECT_FLOAT_EQ(0.7f, sink->Calls[0].Samp);
+	EXPECT_FLOAT_EQ(0.7f, sink->Calls[0].SamplesReceived[0]);
 	EXPECT_FLOAT_EQ(0.5f, sink->Calls[0].FadeNew);
 }
 
-TEST(MergeMixBehaviour, ApplyFadeCurrentIsAlwaysOne)
+TEST(MergeMixBehaviour, ApplyBlockFadeCurrentIsAlwaysOne)
 {
 	MergeMixBehaviourParams params;
 	params.Channels = { 0u };
 	MergeMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.4f, 0.9f, 0);
+	float sample = 0.4f;
+	behaviour.ApplyBlock(sink, &sample, 0.9f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_FLOAT_EQ(1.0f, sink->Calls[0].FadeCurrent);
 }
 
-TEST(MergeMixBehaviour, ApplyIsAdditiveAcrossMultipleChannels)
+TEST(MergeMixBehaviour, ApplyBlockIsAdditiveAcrossMultipleChannels)
 {
 	MergeMixBehaviourParams params;
 	params.Channels = { 0u, 1u };
 	MergeMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.5f, 0.5f, 0);
+	float sample = 0.5f;
+	behaviour.ApplyBlock(sink, &sample, 0.5f, 1, 0);
 
 	ASSERT_EQ(2u, sink->Calls.size());
 	for (const auto& call : sink->Calls)
 	{
 		EXPECT_FLOAT_EQ(1.0f, call.FadeCurrent);
 		EXPECT_FLOAT_EQ(0.5f, call.FadeNew);
-		EXPECT_FLOAT_EQ(0.5f, call.Samp);
+		EXPECT_FLOAT_EQ(0.5f, call.SamplesReceived[0]);
 	}
 }
 
-TEST(MergeMixBehaviour, ApplyNullDestDoesNotCrash)
+TEST(MergeMixBehaviour, ApplyBlockNullDestDoesNotCrash)
 {
 	MergeMixBehaviourParams params;
 	params.Channels = { 0u };
 	MergeMixBehaviour behaviour(params);
 
-	EXPECT_NO_FATAL_FAILURE(behaviour.Apply(nullptr, 1.0f, 1.0f, 0));
+	float sample = 1.0f;
+	EXPECT_NO_FATAL_FAILURE(behaviour.ApplyBlock(nullptr, &sample, 1.0f, 1, 0));
 }
 
 TEST(MergeMixBehaviour, SetParamsUpdatesChannels)
@@ -209,7 +225,8 @@ TEST(MergeMixBehaviour, SetParamsUpdatesChannels)
 	behaviour.SetParams(updated);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 1.0f, 1.0f, 0);
+	float sample = 1.0f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 0);
 
 	ASSERT_EQ(2u, sink->Calls.size());
 	EXPECT_EQ(2u, sink->Calls[0].Channel);
@@ -225,7 +242,8 @@ TEST(MergeMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 	behaviour.SetMaxChannels(2u);
 
 	auto sink = std::make_shared<MockMultiSink>(4u);
-	behaviour.Apply(sink, 1.0f, 1.0f, 0);
+	float sample = 1.0f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 0);
 
 	// SetMaxChannels removes channels strictly greater than chans.
 	// Channel 3 (3 > 2) is removed; channels 0 and 1 remain.
@@ -236,65 +254,70 @@ TEST(MergeMixBehaviour, SetMaxChannelsRemovesOutOfRangeChannels)
 
 // ---- BounceMixBehaviour ----
 
-TEST(BounceMixBehaviour, ApplyFadeNewZeroGivesFadeCurrentOne)
+TEST(BounceMixBehaviour, ApplyBlockFadeNewZeroGivesFadeCurrentOne)
 {
 	BounceMixBehaviourParams params;
 	params.Channels = { 0u };
 	BounceMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.8f, 0.0f, 0);
+	float sample = 0.8f;
+	behaviour.ApplyBlock(sink, &sample, 0.0f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_FLOAT_EQ(0.0f, sink->Calls[0].FadeNew);
 	EXPECT_FLOAT_EQ(1.0f, sink->Calls[0].FadeCurrent);
 }
 
-TEST(BounceMixBehaviour, ApplyFadeNewOneGivesFadeCurrentZero)
+TEST(BounceMixBehaviour, ApplyBlockFadeNewOneGivesFadeCurrentZero)
 {
 	BounceMixBehaviourParams params;
 	params.Channels = { 0u };
 	BounceMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.8f, 1.0f, 0);
+	float sample = 0.8f;
+	behaviour.ApplyBlock(sink, &sample, 1.0f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_FLOAT_EQ(1.0f, sink->Calls[0].FadeNew);
 	EXPECT_FLOAT_EQ(0.0f, sink->Calls[0].FadeCurrent);
 }
 
-TEST(BounceMixBehaviour, ApplyMidFadeInterpolates)
+TEST(BounceMixBehaviour, ApplyBlockMidFadeInterpolates)
 {
 	BounceMixBehaviourParams params;
 	params.Channels = { 0u };
 	BounceMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.5f, 0.4f, 0);
+	float sample = 0.5f;
+	behaviour.ApplyBlock(sink, &sample, 0.4f, 1, 0);
 
 	ASSERT_EQ(1u, sink->Calls.size());
 	EXPECT_FLOAT_EQ(0.4f, sink->Calls[0].FadeNew);
 	EXPECT_FLOAT_EQ(0.6f, sink->Calls[0].FadeCurrent);
 }
 
-TEST(BounceMixBehaviour, ApplyNullDestDoesNotCrash)
+TEST(BounceMixBehaviour, ApplyBlockNullDestDoesNotCrash)
 {
 	BounceMixBehaviourParams params;
 	params.Channels = { 0u };
 	BounceMixBehaviour behaviour(params);
 
-	EXPECT_NO_FATAL_FAILURE(behaviour.Apply(nullptr, 1.0f, 0.5f, 0));
+	float sample = 1.0f;
+	EXPECT_NO_FATAL_FAILURE(behaviour.ApplyBlock(nullptr, &sample, 0.5f, 1, 0));
 }
 
-TEST(BounceMixBehaviour, ApplyWritesToMultipleChannels)
+TEST(BounceMixBehaviour, ApplyBlockWritesToMultipleChannels)
 {
 	BounceMixBehaviourParams params;
 	params.Channels = { 0u, 1u };
 	BounceMixBehaviour behaviour(params);
 
 	auto sink = std::make_shared<MockMultiSink>(2u);
-	behaviour.Apply(sink, 0.5f, 0.3f, 0);
+	float sample = 0.5f;
+	behaviour.ApplyBlock(sink, &sample, 0.3f, 1, 0);
 
 	ASSERT_EQ(2u, sink->Calls.size());
 	EXPECT_EQ(0u, sink->Calls[0].Channel);

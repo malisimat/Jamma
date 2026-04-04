@@ -4,6 +4,7 @@
 #include "audio/BufferBank.h"
 #include "audio/InterpolatedValue.h"
 #include "engine/Loop.h"
+#include "base/AudioSink.h"
 
 using audio::AudioMixer;
 using audio::AudioMixerParams;
@@ -32,18 +33,6 @@ public:
 	}
 
 public:
-	inline virtual int OnMixWrite(float samp,
-		float fadeCurrent,
-		float fadeNew,
-		int indexOffset,
-		base::Audible::AudioSourceType source) override
-	{
-		auto destIndex = _writeIndex + indexOffset;
-		if (destIndex < Samples.size())
-			Samples[destIndex] = (fadeNew * samp) + (fadeCurrent * Samples[destIndex]);
-
-		return indexOffset + 1;
-	};
 	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
 	{
 		for (auto i = 0u; i < request.numSamps; i++)
@@ -134,9 +123,9 @@ TEST(FastPath, ExpFadeSettlesAfterManySamples) {
 	ASSERT_TRUE(fade.IsSettled());
 }
 
-// --- AudioMixer block eligibility tests ---
+// --- AudioMixer WriteBlock tests ---
 
-TEST(FastPath, WireMixerIsBlockEligible) {
+TEST(FastPath, WireMixerWriteBlock) {
 	WireMixBehaviourParams wire;
 	wire.Channels = { 0 };
 
@@ -146,46 +135,14 @@ TEST(FastPath, WireMixerIsBlockEligible) {
 	mixerParams.Behaviour = wire;
 
 	auto mixer = AudioMixer(mixerParams);
-	ASSERT_TRUE(mixer.IsBlockEligible());
-}
+	auto dest = std::make_shared<FastPathMockedMultiSink>(1, 64);
 
-TEST(FastPath, PanMixerIsNotBlockEligible) {
-	PanMixBehaviourParams pan;
-	pan.ChannelLevels = { 0.5f, 0.5f };
+	float src[] = { 0.5f, 0.25f };
+	mixer.WriteBlock(dest, src, 2);
 
-	AudioMixerParams mixerParams;
-	mixerParams.Size = { 110, 80 };
-	mixerParams.Position = { 6, 6 };
-	mixerParams.Behaviour = pan;
-
-	auto mixer = AudioMixer(mixerParams);
-	ASSERT_FALSE(mixer.IsBlockEligible());
-}
-
-TEST(FastPath, MergeMixerIsNotBlockEligible) {
-	MergeMixBehaviourParams merge;
-	merge.Channels = { 0 };
-
-	AudioMixerParams mixerParams;
-	mixerParams.Size = { 110, 80 };
-	mixerParams.Position = { 6, 6 };
-	mixerParams.Behaviour = merge;
-
-	auto mixer = AudioMixer(mixerParams);
-	ASSERT_FALSE(mixer.IsBlockEligible());
-}
-
-TEST(FastPath, BounceMixerIsNotBlockEligible) {
-	BounceMixBehaviourParams bounce;
-	bounce.Channels = { 0 };
-
-	AudioMixerParams mixerParams;
-	mixerParams.Size = { 110, 80 };
-	mixerParams.Position = { 6, 6 };
-	mixerParams.Behaviour = bounce;
-
-	auto mixer = AudioMixer(mixerParams);
-	ASSERT_FALSE(mixer.IsBlockEligible());
+	auto sink = dest->GetSink(0);
+	ASSERT_FLOAT_EQ(sink->Samples[0], 0.5f);
+	ASSERT_FLOAT_EQ(sink->Samples[1], 0.25f);
 }
 
 // --- BufferBank block access tests ---
@@ -222,8 +179,19 @@ TEST(FastPath, AudioBufferIsContiguous) {
 TEST(FastPath, AudioBufferBlockReadReturnsData) {
 	auto buf = std::make_shared<AudioBuffer>(100);
 
+	std::vector<float> data(10);
 	for (auto i = 0u; i < 10; i++)
-		buf->OnMixWrite((float)(i + 1) * 0.1f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+		data[i] = (float)(i + 1) * 0.1f;
+
+	base::AudioWriteRequest request;
+	request.samples = data.data();
+	request.numSamps = 10;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+
+	buf->OnBlockWrite(request, 0);
 	buf->EndWrite(10, true);
 
 	auto playIdx = buf->Delay(0);
@@ -231,7 +199,7 @@ TEST(FastPath, AudioBufferBlockReadReturnsData) {
 	ASSERT_NE(ptr, nullptr);
 }
 
-TEST(FastPath, AudioBufferOnBlockWriteMatchesPerSample) {
+TEST(FastPath, AudioBufferOnBlockWriteProducesCorrectOutput) {
 	auto bufSize = 100u;
 	auto numSamps = 32u;
 
@@ -241,14 +209,8 @@ TEST(FastPath, AudioBufferOnBlockWriteMatchesPerSample) {
 
 	float fadeLevel = 0.8f;
 
-	// Per-sample path
-	auto bufA = std::make_shared<AudioBuffer>(bufSize);
-	for (auto i = 0u; i < numSamps; i++)
-		bufA->OnMixWrite(src[i], 0.0f, fadeLevel, (int)i, base::Audible::AUDIOSOURCE_MIXER);
-	bufA->EndWrite(numSamps, true);
-
 	// Block path
-	auto bufB = std::make_shared<AudioBuffer>(bufSize);
+	auto buf = std::make_shared<AudioBuffer>(bufSize);
 	AudioWriteRequest request;
 	request.samples = src.data();
 	request.numSamps = numSamps;
@@ -257,19 +219,19 @@ TEST(FastPath, AudioBufferOnBlockWriteMatchesPerSample) {
 	request.fadeNew = fadeLevel;
 	request.source = base::Audible::AUDIOSOURCE_MIXER;
 
-	bufB->OnBlockWrite(request, 0);
-	bufB->EndWrite(numSamps, true);
+	buf->OnBlockWrite(request, 0);
+	buf->EndWrite(numSamps, true);
 
 	for (auto i = 0u; i < numSamps; i++)
 	{
-		ASSERT_FLOAT_EQ((*bufA)[i], (*bufB)[i])
+		ASSERT_FLOAT_EQ((*buf)[i], src[i] * fadeLevel)
 			<< "Mismatch at index " << i;
 	}
 }
 
-// --- AudioMixer OnPlayBlock matches OnPlay ---
+// --- AudioMixer WriteBlock produces correct output ---
 
-TEST(FastPath, MixerOnPlayBlockMatchesPerSample) {
+TEST(FastPath, MixerWriteBlockProducesCorrectOutput) {
 	auto bufSize = 64u;
 	auto numSamps = 32u;
 
@@ -285,34 +247,24 @@ TEST(FastPath, MixerOnPlayBlockMatchesPerSample) {
 	for (auto i = 0u; i < numSamps; i++)
 		src[i] = ((float)i + 1.0f) * 0.02f;
 
-	// Per-sample path
-	auto mixerA = AudioMixer(mixerParams);
-	auto destA = std::make_shared<FastPathMockedMultiSink>(1, bufSize);
-	for (auto i = 0u; i < numSamps; i++)
-		mixerA.OnPlay(destA, src[i], i);
+	// Block path via WriteBlock
+	auto mixer = AudioMixer(mixerParams);
+	auto dest = std::make_shared<FastPathMockedMultiSink>(1, bufSize);
+	mixer.WriteBlock(dest, src.data(), numSamps);
 
-	destA->EndMultiWrite(numSamps, true, base::Audible::AUDIOSOURCE_MIXER);
+	dest->EndMultiWrite(numSamps, true, base::Audible::AUDIOSOURCE_MIXER);
 
-	// Block path
-	auto mixerB = AudioMixer(mixerParams);
-	auto destB = std::make_shared<FastPathMockedMultiSink>(1, bufSize);
-	ASSERT_TRUE(mixerB.IsBlockEligible());
-	mixerB.OnPlayBlock(destB, src.data(), numSamps);
-
-	destB->EndMultiWrite(numSamps, true, base::Audible::AUDIOSOURCE_MIXER);
-
-	auto sinkA = destA->GetSink(0);
-	auto sinkB = destB->GetSink(0);
+	auto sink = dest->GetSink(0);
 	for (auto i = 0u; i < numSamps; i++)
 	{
-		ASSERT_FLOAT_EQ(sinkA->Samples[i], sinkB->Samples[i])
+		ASSERT_FLOAT_EQ(sink->Samples[i], src[i])
 			<< "Mismatch at sample " << i;
 	}
 }
 
-// --- Loop::OnPlay fast path produces identical output ---
+// --- Loop::WriteBlock fast path produces identical output ---
 
-TEST(FastPath, LoopOnPlayBlockMatchesFallback) {
+TEST(FastPath, LoopWriteBlockMatchesFallback) {
 	auto bufSize = 100u;
 	auto blockSize = 32u;
 	auto loopLength = 50ul;
@@ -345,11 +297,19 @@ TEST(FastPath, LoopOnPlayBlockMatchesFallback) {
 
 	loopA.Record();
 	loopB.Record();
-	for (auto i = 0ul; i < totalRecordSamps; i++)
-	{
-		loopA.OnMixWrite(0.5f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
-		loopB.OnMixWrite(0.5f, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
-	}
+
+	std::vector<float> recordData((unsigned int)totalRecordSamps, 0.5f);
+	AudioWriteRequest recordReq;
+	recordReq.samples = recordData.data();
+	recordReq.numSamps = (unsigned int)totalRecordSamps;
+	recordReq.stride = 1;
+	recordReq.fadeCurrent = 0.0f;
+	recordReq.fadeNew = 1.0f;
+	recordReq.source = base::Audible::AUDIOSOURCE_ADC;
+
+	loopA.OnBlockWrite(recordReq, 0);
+	loopB.OnBlockWrite(recordReq, 0);
+
 	loopA.EndWrite(totalRecordSamps, true);
 	loopB.EndWrite(totalRecordSamps, true);
 	loopA.Play(constants::MaxLoopFadeSamps, loopLength, false);
@@ -363,8 +323,8 @@ TEST(FastPath, LoopOnPlayBlockMatchesFallback) {
 	{
 		destA->Zero(blockSize, base::Audible::AUDIOSOURCE_MIXER);
 		destB->Zero(blockSize, base::Audible::AUDIOSOURCE_MIXER);
-		loopA.OnPlay(destA, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
-		loopB.OnPlay(destB, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+		loopA.WriteBlock(destA, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+		loopB.WriteBlock(destB, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
 		loopA.EndMultiPlay(blockSize);
 		loopB.EndMultiPlay(blockSize);
 		destA->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_MIXER);

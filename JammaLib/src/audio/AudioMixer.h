@@ -69,8 +69,6 @@ namespace audio
 			unsigned int numSamps,
 			unsigned int startIndex) const override;
 
-		virtual bool IsRoutingOnly() const override { return true; }
-
 		virtual BehaviourParams GetParams() const { return _mixParams; }
 		virtual void SetParams(BehaviourParams params)
 		{
