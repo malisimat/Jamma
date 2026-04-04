@@ -166,7 +166,7 @@ void Station::Zero(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
@@ -174,28 +174,31 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto ptr = Sharable::shared_from_this();
 
 	for (const auto& take : _loopTakes)
-		take->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
-	//_masterMixer->OnPlay();
+	//_masterMixer->WriteBlock();
 	for (const auto& buf : _audioBuffers)
 	{
 		auto playIndex = buf->Delay(numSamps);
 
 		for (const auto& mixer : _audioMixers)
 		{
-			if (mixer->IsBlockEligible() && buf->IsContiguous(playIndex, numSamps))
+			if (buf->IsContiguous(playIndex, numSamps))
 			{
-				mixer->OnPlayBlock(dest, buf->BlockRead(playIndex), numSamps);
+				mixer->WriteBlock(dest, buf->BlockRead(playIndex), numSamps);
 			}
 			else
 			{
-				for (auto samp = 0u; samp < numSamps; samp++)
-				{
-					mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
-				}
+				// Buffer wraps — copy into contiguous temp buffer first
+				float tempBuf[constants::MaxBlockSize];
+				auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+				for (auto samp = 0u; samp < sampsToWrite; samp++)
+					tempBuf[samp] = (*buf)[samp + playIndex];
+
+				mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 			}
 		}
 	}
@@ -213,34 +216,12 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-void Station::OnWriteChannel(unsigned int channel,
-	const std::shared_ptr<base::AudioSource> src,
-	int indexOffset,
-	unsigned int numSamps,
-	Audible::AudioSourceType source)
+void Station::OnBlockWriteChannel(unsigned int channel,
+	const base::AudioWriteRequest& request,
+	int writeOffset)
 {
-	switch (source)
-	{
-	case Audible::AUDIOSOURCE_ADC:
-	case Audible::AUDIOSOURCE_MONITOR:
-	case Audible::AUDIOSOURCE_BOUNCE:
-		for (auto& take : _loopTakes)
-			take->OnWriteChannel(channel,
-				src,
-				indexOffset,
-				numSamps,
-				source);
-		break;
-	case Audible::AUDIOSOURCE_LOOPS:
-	case Audible::AUDIOSOURCE_MIXER:
-		for (auto& take : _loopTakes)
-			take->OnWriteChannel(channel,
-				src,
-				indexOffset,
-				numSamps,
-				source);
-		break;
-	}
+	for (auto& take : _loopTakes)
+		take->OnBlockWriteChannel(channel, request, writeOffset);
 }
 
 void Station::EndMultiWrite(unsigned int numSamps,
@@ -752,7 +733,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 			if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 			}
 		}
 	}

@@ -656,7 +656,7 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
+			_channelMixer->WriteToSink(station, numSamps);
 		}
 
 		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
@@ -664,7 +664,7 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
-			_channelMixer->Source()->OnPlay(station, nullptr, 0, numSamps);
+			_channelMixer->WriteToSink(station, numSamps);
 		
 			// Overdubbing / bouncing
 			// Each trigger knows which looptakes are wired up to which
@@ -698,7 +698,7 @@ void Scene::_OnAudio(float* inBuf,
 		for (auto& station : _stations)
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 
@@ -708,7 +708,7 @@ void Scene::_OnAudio(float* inBuf,
 	{
 		for (auto& station : _stations)
 		{
-			station->OnPlay(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
 	}

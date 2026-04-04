@@ -85,20 +85,7 @@ void AudioMixer::SetUnmutedLevel(double level)
 		_fade->SetTarget(_unmutedFadeTarget);
 }
 
-void AudioMixer::OnPlay(const std::shared_ptr<MultiAudioSink>& dest,
-	float samp,
-	unsigned int index)
-{
-	if (_behaviour)
-		_behaviour->Apply(dest, samp, (float)_fade->Next(), index);
-}
-
-bool AudioMixer::IsBlockEligible() const
-{
-	return _behaviour && _behaviour->IsRoutingOnly() && _fade->IsSettled();
-}
-
-void AudioMixer::OnPlayBlock(const std::shared_ptr<MultiAudioSink>& dest,
+void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	const float* srcBuf,
 	unsigned int numSamps)
 {
@@ -147,27 +134,6 @@ void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 	_behaviour = std::move(behaviour);
 }
 
-void WireMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
-	float samp,
-	float fadeNew,
-	unsigned int index) const
-{
-	if (nullptr == dest)
-		return;
-
-	float fadeCurrent = 0.0f;
-
-	for (auto chan : _mixParams.Channels)
-	{
-		dest->OnMixWriteChannel(chan,
-			samp,
-			fadeCurrent,
-			fadeNew,
-			index,
-			base::Audible::AUDIOSOURCE_MIXER);
-	}
-}
-
 void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	const float* srcBuf,
 	float fadeLevel,
@@ -191,67 +157,76 @@ void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	}
 }
 
-void PanMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
-	float samp,
-	float fadeNew,
-	unsigned int index) const
+void PanMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	unsigned int startIndex) const
 {
 	if (nullptr == dest)
 		return;
 
 	auto numChans = dest->NumInputChannels(base::Audible::AUDIOSOURCE_MIXER);
-	float fadeCurrent = 1.0f;
 
 	for (auto chan = 0u; chan < numChans; chan++)
 	{
 		if (chan < _mixParams.ChannelLevels.size())
-			dest->OnMixWriteChannel(chan,
-				samp * _mixParams.ChannelLevels.at(chan),
-				fadeCurrent,
-				fadeNew,
-				index,
-				base::Audible::AUDIOSOURCE_MIXER);
+		{
+			base::AudioWriteRequest request;
+			request.samples = srcBuf;
+			request.numSamps = numSamps;
+			request.stride = 1;
+			request.fadeCurrent = 1.0f;
+			request.fadeNew = fadeLevel * _mixParams.ChannelLevels.at(chan);
+			request.source = base::Audible::AUDIOSOURCE_MIXER;
+
+			dest->OnBlockWriteChannel(chan, request, startIndex);
+		}
 	}
 }
 
-void BounceMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
-	float samp,
-	float fadeNew,
-	unsigned int index) const
+void BounceMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	unsigned int startIndex) const
 {
 	if (nullptr == dest)
 		return;
 
-	float fadeCurrent = 1.0f - fadeNew;
+	base::AudioWriteRequest request;
+	request.samples = srcBuf;
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeCurrent = 1.0f - fadeLevel;
+	request.fadeNew = fadeLevel;
+	request.source = base::Audible::AUDIOSOURCE_MIXER;
 
 	for (auto chan : _mixParams.Channels)
 	{
-		dest->OnMixWriteChannel(chan,
-			samp,
-			fadeCurrent,
-			fadeNew,
-			index,
-			base::Audible::AUDIOSOURCE_MIXER);
+		dest->OnBlockWriteChannel(chan, request, startIndex);
 	}
 }
 
-void MergeMixBehaviour::Apply(const std::shared_ptr<MultiAudioSink>& dest,
-	float samp,
-	float fadeNew,
-	unsigned int index) const
+void MergeMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	unsigned int startIndex) const
 {
 	if (nullptr == dest)
 		return;
 
-	float fadeCurrent = 1.0f;
+	base::AudioWriteRequest request;
+	request.samples = srcBuf;
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeCurrent = 1.0f;
+	request.fadeNew = fadeLevel;
+	request.source = base::Audible::AUDIOSOURCE_MIXER;
 
 	for (auto chan : _mixParams.Channels)
 	{
-		dest->OnMixWriteChannel(chan,
-			samp,
-			fadeCurrent,
-			fadeNew,
-			index,
-			base::Audible::AUDIOSOURCE_MIXER);
+		dest->OnBlockWriteChannel(chan, request, startIndex);
 	}
 }

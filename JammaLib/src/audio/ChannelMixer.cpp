@@ -58,6 +58,55 @@ void ChannelMixer::InitPlay(unsigned int delaySamps, unsigned int blockSize)
 	}
 }
 
+void ChannelMixer::WriteToSink(const std::shared_ptr<MultiAudioSink> dest, unsigned int numSamps)
+{
+	auto sourceType = _adcMixer->SourceType();
+
+	for (auto chan = 0u; chan < _adcMixer->NumOutputChannels(sourceType); chan++)
+	{
+		const auto buf = _adcMixer->Channel(chan);
+
+		if (buf && buf->SampsRecorded() > 0)
+		{
+			auto bufSize = buf->BufSize();
+			if (0 == bufSize)
+				continue;
+
+			auto playIndex = buf->Delay(0);
+
+			AudioWriteRequest request;
+			request.fadeCurrent = 1.0f;
+			request.fadeNew = 1.0f;
+			request.source = sourceType;
+			request.stride = 1;
+
+			if (buf->IsContiguous(playIndex, numSamps))
+			{
+				request.samples = buf->BlockRead(playIndex);
+				request.numSamps = numSamps;
+				dest->OnBlockWriteChannel(chan, request, 0);
+			}
+			else
+			{
+				// Handle wrap-around: split into two contiguous writes
+				auto sampsToEnd = bufSize - playIndex;
+				auto firstChunk = (numSamps < sampsToEnd) ? numSamps : sampsToEnd;
+
+				request.samples = buf->BlockRead(playIndex);
+				request.numSamps = firstChunk;
+				dest->OnBlockWriteChannel(chan, request, 0);
+
+				if (firstChunk < numSamps)
+				{
+					request.samples = buf->BlockRead(0);
+					request.numSamps = numSamps - firstChunk;
+					dest->OnBlockWriteChannel(chan, request, (int)firstChunk);
+				}
+			}
+		}
+	}
+}
+
 void ChannelMixer::ToDac(float* outBuf, unsigned int numChannels, unsigned int numSamps)
 {
 	if (numSamps < 1 || numChannels < 1)

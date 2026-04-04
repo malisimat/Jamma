@@ -42,12 +42,6 @@ namespace audio
 	class MixBehaviour
 	{
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const {};
-
-		virtual bool IsRoutingOnly() const { return false; }
 		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
 			const float* srcBuf,
 			float fadeLevel,
@@ -69,17 +63,13 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const override;
-
-		virtual bool IsRoutingOnly() const override { return true; }
 		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
 			const float* srcBuf,
 			float fadeLevel,
 			unsigned int numSamps,
 			unsigned int startIndex) const override;
+
+		virtual bool IsRoutingOnly() const override { return true; }
 
 		virtual BehaviourParams GetParams() const { return _mixParams; }
 		virtual void SetParams(BehaviourParams params)
@@ -109,10 +99,11 @@ namespace audio
 		}
 
 	public:
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const override;
+		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			unsigned int startIndex) const override;
 
 		virtual BehaviourParams GetParams() const { return _mixParams; }
 		virtual void SetParams(BehaviourParams params)
@@ -141,11 +132,11 @@ namespace audio
 		}
 
 	public:
-		virtual bool IsRoutingOnly() const override { return false; }
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const override;
+		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			unsigned int startIndex) const override;
 	};
 
 	class MergeMixBehaviour : public WireMixBehaviour
@@ -158,11 +149,11 @@ namespace audio
 		}
 
 	public:
-		virtual bool IsRoutingOnly() const override { return false; }
-		virtual void Apply(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			float fadeNew,
-			unsigned int index) const override;
+		virtual void ApplyBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeLevel,
+			unsigned int numSamps,
+			unsigned int startIndex) const override;
 	};
 
 	typedef std::variant<MixBehaviourParams, WireMixBehaviourParams, PanMixBehaviourParams, BounceMixBehaviourParams, MergeMixBehaviourParams> BehaviourParams;
@@ -237,11 +228,7 @@ namespace audio
 		double Level() const;
 		double UnmutedLevel() const;
 		void SetUnmutedLevel(double level);
-		void OnPlay(const std::shared_ptr<base::MultiAudioSink>& dest,
-			float samp,
-			unsigned int index);
-		bool IsBlockEligible() const;
-		void OnPlayBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
 			const float* srcBuf,
 			unsigned int numSamps);
 		void Offset(unsigned int numSamps);

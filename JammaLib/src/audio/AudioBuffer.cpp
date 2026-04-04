@@ -22,44 +22,6 @@ AudioBuffer::~AudioBuffer()
 {
 }
 
-void AudioBuffer::OnPlay(const std::shared_ptr<base::AudioSink> dest,
-	int indexOffset,
-	unsigned int numSamps)
-{
-	if (0 == _sampsRecorded)
-		return;
-
-	auto bufSize = (unsigned int)_buffer.size();
-	if (0 == bufSize)
-		return;
-
-	long index = _playIndex + (long)indexOffset;
-	index = ((index % (long)bufSize) + (long)bufSize) % (long)bufSize;
-
-	base::AudioWriteRequest request;
-	request.fadeCurrent = 1.0f;
-	request.fadeNew = 1.0f;
-	request.source = SourceType();
-	request.stride = 1;
-
-	auto remaining = numSamps;
-	int writePos = 0;
-
-	while (remaining > 0)
-	{
-		auto sampsToEnd = bufSize - (unsigned int)index;
-		auto chunkSize = (remaining < sampsToEnd) ? remaining : sampsToEnd;
-
-		request.samples = &_buffer[index];
-		request.numSamps = chunkSize;
-		dest->OnBlockWrite(request, writePos);
-
-		writePos += (int)chunkSize;
-		remaining -= chunkSize;
-		index = 0;
-	}
-}
-
 void AudioBuffer::EndPlay(unsigned int numSamps)
 {
 	auto bufSize = (unsigned int)_buffer.size();
@@ -81,28 +43,6 @@ void AudioBuffer::EndPlay(unsigned int numSamps)
 
 	while (bufSize <= _playIndex)
 		_playIndex -= bufSize;
-}
-
-inline int AudioBuffer::OnMixWrite(float samp,
-	float fadeCurrent,
-	float fadeNew,
-	int indexOffset,
-	Audible::AudioSourceType source)
-{
-	auto bufSize = (unsigned int)_buffer.size();
-
-	if (0 == bufSize)
-	{
-		_writeIndex = 0;
-		return 0;
-	}
-
-	while (bufSize <= _writeIndex + indexOffset)
-		indexOffset -= (int)_buffer.size();
-
-	_buffer[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _buffer[_writeIndex + indexOffset]);
-
-	return indexOffset + 1;
 }
 
 void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)

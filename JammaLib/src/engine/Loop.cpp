@@ -154,36 +154,6 @@ void Loop::Draw3d(DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-int Loop::OnMixWrite(float samp,
-	float fadeCurrent,
-	float fadeNew,
-	int indexOffset,
-	Audible::AudioSourceType source)
-{
-	if ((STATE_RECORDING != _playState) &&
-		(STATE_PLAYINGRECORDING != _playState) &&
-		(STATE_OVERDUBBING != _playState) &&
-		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState))
-		return indexOffset;
-	
-	if (AUDIOSOURCE_MONITOR == source)
-	{
-		_monitorBufferBank[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _monitorBufferBank[_writeIndex + indexOffset]);
-
-		auto peak = std::abs(samp);
-		if (STATE_RECORDING == _playState)
-		{
-			if (peak > _lastPeak)
-				_lastPeak = peak;
-		}
-	}
-	else
-		_bufferBank[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * _bufferBank[_writeIndex + indexOffset]);
-
-	return indexOffset + 1;
-}
-
 void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 {
 	if ((STATE_RECORDING != _playState) &&
@@ -252,7 +222,7 @@ void Loop::EndWrite(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int sampOffset,
 	unsigned int numSamps)
@@ -302,14 +272,17 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
+	// Use a stack-allocated temporary buffer for mixing samples
+	// before block-writing to the destination
+	float tempBuf[constants::MaxBlockSize];
+	auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+
 	if (isXfadeRegion)
 	{
-		// Store the offset play index to avoid the effect of
-		// index wrapping around, which will cause xfade region
-		// calc to fail
+		// Fill temp buffer with crossfade-mixed samples
 		auto startIndex = index;
 
-		for (auto i = 0u; i < numSamps; i++)
+		for (auto i = 0u; i < sampsToWrite; i++)
 		{
 			auto isXfade = (startIndex + i) >= (bufSize - _loopParams.FadeSamps);
 			isXfade &= index < bufSize;
@@ -327,65 +300,54 @@ void Loop::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
 
-				if (nullptr == trigger)
-					_mixer->OnPlay(dest, samp, i);
-				else
-					trigger->OnPlay(dest, samp, i);
+				tempBuf[i] = samp;
 
 				if (std::abs(samp) > peak)
 					peak = std::abs(samp);
+			}
+			else
+			{
+				tempBuf[i] = 0.0f;
 			}
 
 			index++;
 			if (index >= bufSize)
 				index -= _loopLength;
 		}
+
+		// Write the entire block to the destination
+		if (nullptr == trigger)
+			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
+		else
+			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
 	}
 	else
 	{
-		// Block fast path: routing-only mixer with settled fade,
-		// contiguous BufferBank range, and no loop wraparound
-		auto noWrapAround = (index + numSamps) < bufSize;
-		auto inBounds = (index + numSamps) <= bufBankSize;
-
-		if (nullptr == trigger &&
-			noWrapAround &&
-			inBounds &&
-			_mixer->IsBlockEligible() &&
-			_bufferBank.IsBlockContiguous(index, numSamps))
+		// Non-crossfade: fill temp buffer from BufferBank, handling wrap-around
+		for (auto i = 0u; i < sampsToWrite; i++)
 		{
-			auto blockPtr = _bufferBank.BlockPtr(index);
-			_mixer->OnPlayBlock(dest, blockPtr, numSamps);
-
-			for (auto i = 0u; i < numSamps; i++)
+			if (index < bufBankSize)
 			{
-				auto s = std::abs(blockPtr[i]);
-				if (s > peak)
-					peak = s;
+				tempBuf[i] = _bufferBank[index];
+
+				if (std::abs(tempBuf[i]) > peak)
+					peak = std::abs(tempBuf[i]);
 			}
+			else
+			{
+				tempBuf[i] = 0.0f;
+			}
+
+			index++;
+			if (index >= bufSize)
+				index -= _loopLength;
 		}
+
+		// Write the entire block to the destination
+		if (nullptr == trigger)
+			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 		else
-		{
-			for (auto i = 0u; i < numSamps; i++)
-			{
-				if (index < bufBankSize)
-				{
-					auto samp = _bufferBank[index];
-
-					if (nullptr == trigger)
-						_mixer->OnPlay(dest, samp, i);
-					else
-						trigger->OnPlay(dest, samp, i);
-
-					if (std::abs(samp) > peak)
-						peak = std::abs(samp);
-				}
-
-				index++;
-				if (index >= bufSize)
-					index -= _loopLength;
-			}
-		}
+			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
 	}
 
 	_lastPeak = peak;

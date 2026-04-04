@@ -155,16 +155,11 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int sampOffset,
-			unsigned int numSamps) override;
+			unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		inline virtual int OnMixWrite(float samp,
-			float fadeCurrent,
-			float fadeNew,
-			int indexOffset,
-			Audible::AudioSourceType source) override;
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;

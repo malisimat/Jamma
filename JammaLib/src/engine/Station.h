@@ -74,16 +74,14 @@ namespace engine
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
-			unsigned int numSamps) override;
+			unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		virtual void OnWriteChannel(unsigned int channel,
-			const std::shared_ptr<base::AudioSource> src,
-			int indexOffset,
-			unsigned int numSamps,
-			Audible::AudioSourceType source);
+		virtual void OnBlockWriteChannel(unsigned int channel,
+			const base::AudioWriteRequest& request,
+			int writeOffset) override;
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex,
 			Audible::AudioSourceType source) override;

@@ -149,7 +149,7 @@ void LoopTake::Zero(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
@@ -163,7 +163,7 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	auto ptr = Sharable::shared_from_this();
 
 	for (const auto& loop : _loops)
-		loop->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		loop->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
@@ -174,16 +174,19 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 
 		for (const auto& mixer : _audioMixers)
 		{
-			if (mixer->IsBlockEligible() && buf->IsContiguous(playIndex, numSamps))
+			if (buf->IsContiguous(playIndex, numSamps))
 			{
-				mixer->OnPlayBlock(dest, buf->BlockRead(playIndex), numSamps);
+				mixer->WriteBlock(dest, buf->BlockRead(playIndex), numSamps);
 			}
 			else
 			{
-				for (auto samp = 0u; samp < numSamps; samp++)
-				{
-					mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
-				}
+				// Buffer wraps — copy into contiguous temp buffer first
+				float tempBuf[constants::MaxBlockSize];
+				auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+				for (auto samp = 0u; samp < sampsToWrite; samp++)
+					tempBuf[samp] = (*buf)[samp + playIndex];
+
+				mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 			}
 		}
 	}

@@ -38,37 +38,30 @@ namespace base
 		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_SINK; }
 		virtual void Zero(unsigned int numSamps)
 		{
-			auto offsetInput = 0;
-			auto offsetMonitor = 0;
+			static const float zeros[4096] = {};
+			auto sampsToZero = (numSamps <= 4096u) ? numSamps : 4096u;
 
-			for (auto i = 0u; i < numSamps; i++)
-			{
-				offsetInput = OnMixWrite(0.0f, 0.0f, 1.0f, offsetInput, AUDIOSOURCE_ADC);
-				offsetMonitor = OnMixWrite(0.0f, 0.0f, 1.0f, offsetMonitor, AUDIOSOURCE_MONITOR);
-			}
+			AudioWriteRequest reqAdc;
+			reqAdc.samples = zeros;
+			reqAdc.numSamps = sampsToZero;
+			reqAdc.stride = 1;
+			reqAdc.fadeCurrent = 0.0f;
+			reqAdc.fadeNew = 1.0f;
+			reqAdc.source = AUDIOSOURCE_ADC;
+			OnBlockWrite(reqAdc, 0);
+
+			AudioWriteRequest reqMon;
+			reqMon.samples = zeros;
+			reqMon.numSamps = sampsToZero;
+			reqMon.stride = 1;
+			reqMon.fadeCurrent = 0.0f;
+			reqMon.fadeNew = 1.0f;
+			reqMon.source = AUDIOSOURCE_MONITOR;
+			OnBlockWrite(reqMon, 0);
 		}
-		inline virtual int OnMixWrite(float samp,
-			float fadeCurrent,
-			float fadeNew,
-			int indexOffset,
-			AudioSourceType source) { return indexOffset; };
 
 		// Block-level write: writes a contiguous or strided block of samples.
-		// Default falls back to per-sample OnMixWrite for backward compatibility.
-		virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset)
-		{
-			auto offset = writeOffset;
-			for (unsigned int i = 0; i < request.numSamps; i++)
-			{
-				offset = OnMixWrite(
-					request.samples[i * request.stride],
-					request.fadeCurrent,
-					request.fadeNew,
-					offset,
-					request.source
-				);
-			}
-		}
+		virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) {}
 
 		virtual void EndWrite(unsigned int numSamps) { return EndWrite(numSamps, false); }
 		virtual void EndWrite(unsigned int numSamps,

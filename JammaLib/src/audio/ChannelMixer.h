@@ -63,6 +63,7 @@ namespace audio
 	public:
 		void SetParams(ChannelMixerParams chanMixParams);
 		void FromAdc(float* inBuf, unsigned int numChannels, unsigned int numSamps);
+		void WriteToSink(const std::shared_ptr<base::MultiAudioSink> dest, unsigned int numSamps);
 		void ToDac(float* outBuf, unsigned int numChannels, unsigned int numSamps);
 		const std::shared_ptr<base::MultiAudioSource> Source();
 		const std::shared_ptr<base::MultiAudioSink> Sink();

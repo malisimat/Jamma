@@ -20,15 +20,7 @@ namespace audio
 
 	public:
 		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_BOTH; }
-		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
-			int indexOffset,
-			unsigned int numSamps) override;
 		virtual void EndPlay(unsigned int numSamps) override;
-		inline virtual int OnMixWrite(float samp,
-			float fadeCurrent,
-			float fadeNew,
-			int indexOffset,
-			Audible::AudioSourceType source) override;
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
