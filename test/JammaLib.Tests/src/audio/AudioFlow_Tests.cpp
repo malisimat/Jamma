@@ -453,6 +453,10 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 	station->CommitChanges();
 
 	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> allWrittenCh0;
+	std::vector<float> allWrittenCh1;
+	allWrittenCh0.reserve(totalBlocks * blockSize);
+	allWrittenCh1.reserve(totalBlocks * blockSize);
 	std::vector<float> inBuf(numChans * blockSize);
 
 	// ----- Write phase -----
@@ -460,6 +464,12 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 	{
 		FillTestData(inBuf.data(), numChans, blockSize, b);
 		WriteBlock(chanMixer, station, inBuf.data(), numChans, blockSize);
+
+		for (unsigned int s = 0; s < blockSize; s++)
+		{
+			allWrittenCh0.push_back(inBuf[s * numChans + 0]);
+			allWrittenCh1.push_back(inBuf[s * numChans + 1]);
+		}
 	}
 
 	// ----- Transition to playing -----
@@ -467,9 +477,12 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 
 	// ----- Read phase -----
 	auto readMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
-	const unsigned int readBlocks = 4;
-	bool ch0NonZero = false;
-	bool ch1NonZero = false;
+	const unsigned int readBlocks =
+		static_cast<unsigned int>((loopLength + blockSize - 1) / blockSize) + 8;
+	std::vector<float> allReadCh0;
+	std::vector<float> allReadCh1;
+	allReadCh0.reserve(readBlocks * blockSize);
+	allReadCh1.reserve(readBlocks * blockSize);
 
 	for (unsigned int b = 0; b < readBlocks; b++)
 	{
@@ -478,13 +491,31 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 
 		for (unsigned int s = 0; s < blockSize; s++)
 		{
-			if (outBuf[s * numChans + 0] != 0.0f) ch0NonZero = true;
-			if (outBuf[s * numChans + 1] != 0.0f) ch1NonZero = true;
+			allReadCh0.push_back(outBuf[s * numChans + 0]);
+			allReadCh1.push_back(outBuf[s * numChans + 1]);
 		}
 	}
 
-	ASSERT_TRUE(ch0NonZero);
-	ASSERT_TRUE(ch1NonZero);
+	ASSERT_TRUE(HasNonZero(allReadCh0.data(), static_cast<unsigned int>(allReadCh0.size())));
+	ASSERT_TRUE(HasNonZero(allReadCh1.data(), static_cast<unsigned int>(allReadCh1.size())));
+
+	// Compare directly against written loop data. In steady state, the
+	// read path is delayed by 2 blocks (LoopTake + Station intermediate
+	// AudioBuffers), so skip startup and align by that delay.
+	const unsigned int steadyStateDelaySamps = 2u * blockSize;
+	ASSERT_GT(allReadCh0.size(), steadyStateDelaySamps);
+	ASSERT_GT(allReadCh1.size(), steadyStateDelaySamps);
+
+	for (unsigned int i = steadyStateDelaySamps; i < allReadCh0.size(); i++)
+	{
+		auto loopIndex = static_cast<unsigned long>((i - steadyStateDelaySamps) % loopLength);
+		auto expectedIndex = constants::MaxLoopFadeSamps + loopIndex;
+		ASSERT_LT(expectedIndex, allWrittenCh0.size());
+		ASSERT_LT(expectedIndex, allWrittenCh1.size());
+
+		ASSERT_FLOAT_EQ(allReadCh0[i], allWrittenCh0[expectedIndex]);
+		ASSERT_FLOAT_EQ(allReadCh1[i], allWrittenCh1[expectedIndex]);
+	}
 }
 
 // ===========================================================================
