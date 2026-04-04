@@ -355,8 +355,7 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
 	WireMixBehaviourParams wireParams;
-	if (_backAudioBuffers.size() <= NumBusChannels())
-		wireParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
+	wireParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
 
 	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, wireParams);
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
