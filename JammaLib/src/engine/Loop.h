@@ -155,6 +155,15 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		// Read source data from BufferBank into outBuf, handling crossfade.
+		// Returns the number of samples written to outBuf (0 if not playing).
+		// Pure data-out method — no destination parameter.
+		unsigned int ReadBlock(float* outBuf,
+			int sampOffset,
+			unsigned int numSamps);
+
+		// Reads source data via ReadBlock, then routes to destination
+		// via mixer->WriteBlock → behaviour->ApplyBlock → dest->OnBlockWriteChannel.
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int sampOffset,

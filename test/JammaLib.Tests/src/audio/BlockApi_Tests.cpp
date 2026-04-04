@@ -348,6 +348,59 @@ TEST(BlockApi, LoopBlockWriteAndRead) {
 	}
 }
 
+TEST(BlockApi, LoopReadBlock) {
+	auto blockSize = 32u;
+	auto loopLength = (unsigned long)blockSize;
+	auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+	WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0 };
+
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 160, 320 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = mixBehaviour;
+
+	LoopParams loopParams;
+	loopParams.Wav = "test";
+	loopParams.Size = { 80, 80 };
+	loopParams.Position = { 10, 22 };
+
+	auto loop = Loop(loopParams, mixerParams);
+	loop.Record();
+
+	// Write known data to Loop via OnBlockWrite
+	std::vector<float> data(totalRecordSamps);
+	for (auto i = 0u; i < totalRecordSamps; i++)
+		data[i] = (float)(i + 1) * 0.001f;
+
+	AudioWriteRequest writeReq;
+	writeReq.samples = data.data();
+	writeReq.numSamps = totalRecordSamps;
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = base::Audible::AUDIOSOURCE_ADC;
+	loop.OnBlockWrite(writeReq, 0);
+	loop.EndWrite(totalRecordSamps, true);
+
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	// ReadBlock — pure data read, no destination parameter
+	float readBuf[constants::MaxBlockSize] = {};
+	auto sampsRead = loop.ReadBlock(readBuf, 0, blockSize);
+
+	ASSERT_EQ(sampsRead, blockSize);
+
+	// Verify ReadBlock returns the recorded data (starting at MaxLoopFadeSamps)
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		auto expected = data[constants::MaxLoopFadeSamps + i];
+		ASSERT_FLOAT_EQ(readBuf[i], expected)
+			<< "ReadBlock mismatch at sample " << i;
+	}
+}
+
 // ---------------------------------------------------------------
 // ChannelMixer write path test
 // ---------------------------------------------------------------

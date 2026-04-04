@@ -222,25 +222,16 @@ void Loop::EndWrite(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
-	const std::shared_ptr<Trigger> trigger,
+unsigned int Loop::ReadBlock(float* outBuf,
 	int sampOffset,
 	unsigned int numSamps)
 {
-	// Mixer will stereo spread the mono wav
-	// and adjust level
-	if (0 == _loopLength)
-		return;
-
-	if (STATE_RECORDING == _playState)
-		_mixer->Offset(numSamps);
-
 	auto isPlaying = (STATE_PLAYING == _playState) ||
 		(STATE_PLAYINGRECORDING == _playState) ||
 		(STATE_OVERDUBBINGRECORDING == _playState);
 
 	if (!isPlaying)
-		return;
+		return 0;
 
 	auto peak = 0.0f;
 	auto bufBankSize = _bufferBank.Length();
@@ -272,9 +263,6 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
-	// Use a stack-allocated temporary buffer for mixing samples
-	// before block-writing to the destination
-	float tempBuf[constants::MaxBlockSize];
 	auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 
 	if (isXfadeRegion)
@@ -300,57 +288,75 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 					samp = _hanning->Mix(xfadeSamp, samp, xfadeIndex);
 				}
 
-				tempBuf[i] = samp;
+				outBuf[i] = samp;
 
 				if (std::abs(samp) > peak)
 					peak = std::abs(samp);
 			}
 			else
 			{
-				tempBuf[i] = 0.0f;
+				outBuf[i] = 0.0f;
 			}
 
 			index++;
 			if (index >= bufSize)
 				index -= _loopLength;
 		}
-
-		// Write the entire block to the destination
-		if (nullptr == trigger)
-			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
-		else
-			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
 	}
 	else
 	{
-		// Non-crossfade: fill temp buffer from BufferBank, handling wrap-around
+		// Non-crossfade: fill output buffer from BufferBank, handling wrap-around
 		for (auto i = 0u; i < sampsToWrite; i++)
 		{
 			if (index < bufBankSize)
 			{
-				tempBuf[i] = _bufferBank[index];
+				outBuf[i] = _bufferBank[index];
 
-				if (std::abs(tempBuf[i]) > peak)
-					peak = std::abs(tempBuf[i]);
+				if (std::abs(outBuf[i]) > peak)
+					peak = std::abs(outBuf[i]);
 			}
 			else
 			{
-				tempBuf[i] = 0.0f;
+				outBuf[i] = 0.0f;
 			}
 
 			index++;
 			if (index >= bufSize)
 				index -= _loopLength;
 		}
+	}
 
-		// Write the entire block to the destination
+	_lastPeak = peak;
+	return sampsToWrite;
+}
+
+// Only called when outputting to DAC
+void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
+	const std::shared_ptr<Trigger> trigger,
+	int sampOffset,
+	unsigned int numSamps)
+{
+	// Mixer will stereo spread the mono wav
+	// and adjust level
+	if (0 == _loopLength)
+		return;
+
+	if (STATE_RECORDING == _playState)
+		_mixer->Offset(numSamps);
+
+	// Read source data from BufferBank into stack-allocated temp buffer
+	float tempBuf[constants::MaxBlockSize];
+	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps);
+
+	if (sampsToWrite > 0)
+	{
+		// Route to destination via mixer or trigger
+		// (both ultimately call dest->OnBlockWriteChannel)
 		if (nullptr == trigger)
 			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 		else
 			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
 	}
-
-	_lastPeak = peak;
 }
 
 void Loop::EndMultiPlay(unsigned int numSamps)
