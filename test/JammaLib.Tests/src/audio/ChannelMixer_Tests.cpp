@@ -3,7 +3,6 @@
 #include "resources/ResourceLib.h"
 #include "audio/ChannelMixer.h"
 #include "engine/Trigger.h"
-#include "base/AudioSink.h"
 
 using resources::ResourceLib;
 using audio::ChannelMixer;
@@ -22,20 +21,26 @@ public:
 	ChannelMixerMockedSink(unsigned int bufSize) :
 		Samples({})
 	{
-		Samples = std::vector<float>(bufSize, 0.0f);
+		Samples = std::vector<float>(bufSize);
+
+		for (auto i = 0u; i < bufSize; i++)
+		{
+			Samples[i] = 0.0f;
+		}
 	}
 
 public:
-	virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override
+	inline virtual int OnMixWrite(float samp,
+		float fadeCurrent,
+		float fadeNew,
+		int indexOffset,
+		base::Audible::AudioSourceType source) override
 	{
-		for (auto i = 0u; i < request.numSamps; i++)
-		{
-			auto destIndex = _writeIndex + writeOffset + i;
-			if (destIndex < Samples.size())
-				Samples[destIndex] = (request.fadeNew * request.samples[i * request.stride]) +
-					(request.fadeCurrent * Samples[destIndex]);
-		}
-	}
+		if ((_writeIndex + indexOffset) < Samples.size())
+			Samples[_writeIndex + indexOffset] = (fadeNew * samp) + (fadeCurrent * Samples[_writeIndex + indexOffset]);
+
+		return indexOffset + 1;
+	};
 	virtual void EndWrite(unsigned int numSamps, bool updateIndex)
 	{
 		if (updateIndex)
@@ -50,6 +55,8 @@ public:
 		{
 			if (samp >= Samples.size())
 				return false;
+
+			std::cout << "Comparing index " << samp << ": " << buf[samp] << " = " << Samples[samp] << "?" << std::endl;
 
 			if (buf[samp] != Samples[samp])
 				return false;
@@ -96,6 +103,7 @@ public:
 	ChannelMixerMockedSource(unsigned int bufSize,
 		AudioSourceParams params) :
 		_writeIndex(0),
+		Samples({}),
 		AudioSource(params)
 	{
 		Samples = std::vector<float>(bufSize);
@@ -107,16 +115,42 @@ public:
 	}
 
 public:
+	virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
+		int indexOffset,
+		unsigned int numSamps)
+	{
+		auto index = _writeIndex;
+		auto source = AUDIOSOURCE_ADC;
+
+		for (auto i = 0u; i < numSamps; i++)
+		{
+			if (index < Samples.size())
+				dest->OnMixWrite(Samples[index], 0.0f, 1.0f, i, source);
+
+			index++;
+		}
+	}
 	virtual void EndPlay(unsigned int numSamps)
 	{
 		_writeIndex += numSamps;
 	}
-	unsigned int WriteIndex() const { return _writeIndex; }
-	unsigned int SamplesRemaining() const
-	{
-		return (_writeIndex >= Samples.size()) ? 0 : (unsigned int)(Samples.size() - _writeIndex);
-	}
 	bool WasPlayed() { return _writeIndex >= Samples.size(); }
+	bool MatchesSink(const std::shared_ptr<ChannelMixerMockedSink> buf)
+	{
+		auto numSamps = buf->Samples.size();
+		for (auto samp = 0u; samp < numSamps; samp++)
+		{
+			if (samp >= Samples.size())
+				return false;
+
+			std::cout << "Comparing index " << samp << ": " << buf->Samples[samp] << " = " << Samples[samp] << "?" << std::endl;
+
+			if (buf->Samples[samp] != Samples[samp])
+				return false;
+		}
+
+		return true;
+	}
 	bool MatchesBuffer(const std::vector<float>& buf)
 	{
 		auto numSamps = Samples.size();
@@ -125,6 +159,8 @@ public:
 			if (samp >= buf.size())
 				return false;
 
+			std::cout << "Comparing index " << samp << ": " << buf[samp] << " = " << Samples[samp] << "?" << std::endl;
+
 			if (buf[samp] != Samples[samp])
 				return false;
 		}
@@ -132,10 +168,9 @@ public:
 		return true;
 	}
 
-	std::vector<float> Samples;
-
 private:
 	unsigned int _writeIndex;
+	std::vector<float> Samples;
 };
 
 class MockedMultiSource :
@@ -151,12 +186,8 @@ public:
 public:
 	virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
-	const float* SamplesAt() const
-	{
-		return _source->Samples.data() + _source->WriteIndex();
-	}
-	unsigned int SamplesRemaining() const { return _source->SamplesRemaining(); }
 	bool WasPlayed() { return _source->WasPlayed(); }
+	bool MatchesSink(std::shared_ptr<ChannelMixerMockedSink> sink) { return _source->MatchesSink(sink); }
 	bool MatchesBuffer(const std::vector<float>& buf) { return _source->MatchesBuffer(buf); }
 
 protected:
@@ -176,6 +207,7 @@ private:
 
 TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	auto bufSize = 100;
+	auto blockSize = 11;
 
 	ChannelMixerParams chanParams;
 	chanParams.InputBufferSize = bufSize;
@@ -183,7 +215,11 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 	chanParams.NumInputChannels = 1;
 	chanParams.NumOutputChannels = 1;
 
+	engine::TriggerParams trigParams;
+	trigParams.Index = 0;
+
 	auto chanMixer = ChannelMixer(chanParams);
+	auto trigger = std::make_shared<engine::Trigger>(trigParams);
 	auto sink = std::make_shared<MockedMultiSink>(bufSize);
 
 	auto buf = std::vector<float>(bufSize);
@@ -194,13 +230,14 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches) {
 
 	chanMixer.FromAdc(buf.data(), 1, bufSize);
 
-	// Read all data in one call via WriteToSink.
-	// After FromAdc writes bufSize to a bufSize buffer, _writeIndex wraps to 0,
-	// so WriteToSink (which uses Delay(0)) reads from index 0 — correct.
-	sink->Zero(bufSize, base::Audible::AUDIOSOURCE_ADC);
-	chanMixer.WriteToSink(sink, bufSize);
-	chanMixer.Source()->EndMultiPlay(bufSize);
-	sink->EndMultiWrite(bufSize, true, base::Audible::AUDIOSOURCE_ADC);
+	auto numBlocks = (bufSize * 2) / blockSize;
+	for (int i = 0; i < numBlocks; i++)
+	{
+		sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+		chanMixer.Source()->OnPlay(sink, trigger, 0u, blockSize);
+		chanMixer.Source()->EndMultiPlay(blockSize);
+		sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+	}
 
 	ASSERT_TRUE(sink->IsFilled());
 	ASSERT_TRUE(sink->MatchesBuffer(buf));
@@ -216,7 +253,11 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 	chanParams.NumInputChannels = 1;
 	chanParams.NumOutputChannels = 1;
 
+	engine::TriggerParams trigParams;
+	trigParams.Index = 0;
+
 	auto chanMixer = ChannelMixer(chanParams);
+	auto trigger = std::make_shared<engine::Trigger>(trigParams);
 	auto source = std::make_shared<MockedMultiSource>(bufSize);
 
 	auto numBlocks = (bufSize * 2) / blockSize;
@@ -225,19 +266,7 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches) {
 	for (int i = 0; i < numBlocks; i++)
 	{
 		chanMixer.Sink()->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
-
-		auto sampsToWrite = std::min((unsigned int)blockSize, source->SamplesRemaining());
-		if (sampsToWrite > 0)
-		{
-			base::AudioWriteRequest request;
-			request.samples = source->SamplesAt();
-			request.numSamps = sampsToWrite;
-			request.stride = 1;
-			request.fadeCurrent = 0.0f;
-			request.fadeNew = 1.0f;
-			request.source = base::Audible::AUDIOSOURCE_ADC;
-			chanMixer.Sink()->OnBlockWriteChannel(0, request, 0);
-		}
+		source->OnPlay(chanMixer.Sink(), trigger, 0u, blockSize);
 		source->EndMultiPlay(blockSize);
 
 		auto tempBuf = std::vector<float>(blockSize);
