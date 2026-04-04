@@ -64,6 +64,7 @@ public:
 	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
 	bool IsFilled() { return _sink->IsFilled(); }
+	std::shared_ptr<LoopMockedSink> GetSink() { return _sink; }
 
 protected:
 	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
@@ -189,3 +190,48 @@ TEST(Loop, PlayWrapsAround) {
 	ASSERT_TRUE(sink->IsFilled());
 }
 
+// Verify that a constant-value loop produces no gain bump in the crossfade
+// region at the wrap point. With normalized Hanning weights, fadeIn + fadeOut
+// == 1.0, so overlapping identical content must pass through unchanged.
+TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
+	const auto fadeSamps = constants::DefaultFadeSamps;
+	const auto loopLength = 50ul;
+	const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+	const float inputVal = 0.5f;
+
+	// blockSize spans twice the fade window to guarantee the full xfade
+	// region is captured (fadeSamps samples before wrap + fadeSamps after).
+	const unsigned int blockSize = fadeSamps * 2u;
+
+	WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0 };
+	auto mixerParams = Loop::GetMixerParams({ 80, 80 }, mixBehaviour);
+
+	LoopParams loopParams;
+	loopParams.Wav = "test";
+	loopParams.FadeSamps = fadeSamps;
+
+	Loop loop(loopParams, mixerParams);
+	loop.Record();
+
+	for (auto i = 0ul; i < totalRecordSamps; i++)
+		loop.OnMixWrite(inputVal, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+	loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+
+	// Start playback just before the crossfade region so the captured block
+	// straddles the entire fade window.
+	auto startIndex = constants::MaxLoopFadeSamps + loopLength - fadeSamps;
+	loop.Play(startIndex, loopLength, false);
+
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+	loop.OnPlay(sink, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loop.EndMultiPlay(blockSize);
+	sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+	const auto& samples = sink->GetSink()->Samples;
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		EXPECT_NEAR(samples[s], inputVal, 1e-5f)
+			<< "Gain bump at crossfade sample " << s;
+	}
+}

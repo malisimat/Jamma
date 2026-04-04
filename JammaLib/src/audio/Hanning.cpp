@@ -38,6 +38,16 @@ void Hanning::SetSize(unsigned int size)
 		{
 			_fadeIn[i] = Calc((_size - 1) - i, _size);
 			_fadeOut[i] = Calc(i, _size);
+
+			// Normalize so fadeIn + fadeOut == 1.0 (constant-amplitude crossfade).
+			// Without normalization, overlapping identical content can produce
+			// a gain bump up to ~8% at the crossfade midpoint.
+			auto sum = _fadeIn[i] + _fadeOut[i];
+			if (sum > 0.0f)
+			{
+				_fadeIn[i] /= sum;
+				_fadeOut[i] /= sum;
+			}
 		}
 	}
 }
