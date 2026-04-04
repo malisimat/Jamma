@@ -168,15 +168,13 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 			indexOffset,
 			numSamps);
 
-	for (const auto& buf : _audioBuffers)
+	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
+		auto& buf = _audioBuffers[i];
 		auto playIndex = buf->Delay(numSamps);
 		for (auto samp = 0u; samp < numSamps; samp++)
 		{
-			for (const auto& mixer : _audioMixers)
-			{
-				mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
-			}
+			_audioMixers[i]->OnPlay(dest, (*buf)[samp + playIndex], samp);
 		}
 	}
 }

@@ -494,7 +494,7 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 	// Compare directly against written loop data. In steady state, the
 	// read path is delayed by 2 blocks (LoopTake + Station intermediate
 	// AudioBuffers), so skip startup and align by that delay.
-	const unsigned int steadyStateDelaySamps = 2u * blockSize + 100;
+	const unsigned int steadyStateDelaySamps = 2u * blockSize;
 	ASSERT_GT(allReadCh0.size(), steadyStateDelaySamps);
 	ASSERT_GT(allReadCh1.size(), steadyStateDelaySamps);
 
