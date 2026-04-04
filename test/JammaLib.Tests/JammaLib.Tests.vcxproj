@@ -128,6 +128,7 @@
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
     <ClCompile Include="src\audio\MixBehaviour_Tests.cpp" />
     <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
