@@ -170,6 +170,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_masterPanel->SetVisible(true);
 		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(false);
+		_routerPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		_masterPanel->SetVisible(true);
