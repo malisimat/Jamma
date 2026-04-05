@@ -216,8 +216,8 @@ static void WriteData(Loop& loop,
 	float value = 1.0f)
 {
 	const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
-	for (auto i = 0ul; i < totalRecordSamps; i++)
-		loop.OnMixWrite(value, 0.0f, 1.0f, (int)i, base::Audible::AUDIOSOURCE_ADC);
+	for (auto sampleIndex = 0ul; sampleIndex < totalRecordSamps; sampleIndex++)
+		loop.OnMixWrite(value, 0.0f, 1.0f, (int)sampleIndex, base::Audible::AUDIOSOURCE_ADC);
 	loop.EndWrite(totalRecordSamps, true);
 }
 
@@ -245,8 +245,8 @@ static void PlayOneBlock(Loop& loop,
 
 static bool HasNonZeroSample(const std::vector<float>& samples)
 {
-	for (auto s : samples)
-		if (s != 0.0f)
+	for (auto sample : samples)
+		if (sample != 0.0f)
 			return true;
 	return false;
 }
