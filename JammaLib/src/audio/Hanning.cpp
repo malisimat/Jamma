@@ -36,10 +36,8 @@ void Hanning::SetSize(unsigned int size)
 	{
 		for (auto i = 0u; i < _size; i++)
 		{
-			// fadeOut[i] = 0.5 + 0.5*cos(pi*i/N)       (1 -> 0 over the window)
-			// fadeIn[i]  = 0.5 + 0.5*cos(pi*(N-i)/N)   (0 -> 1 over the window)
-			//            = 0.5 - 0.5*cos(pi*i/N)
-			// Their sum is exactly 1.0 for all i, giving constant-amplitude crossfade.
+			// Both sum to exactly 1.0 for all i,
+			// giving constant-amplitude crossfade.
 			_fadeIn[i] = Calc(_size - i, _size);
 			_fadeOut[i] = Calc(i, _size);
 		}
