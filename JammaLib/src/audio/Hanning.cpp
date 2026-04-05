@@ -36,7 +36,9 @@ void Hanning::SetSize(unsigned int size)
 	{
 		for (auto i = 0u; i < _size; i++)
 		{
-			_fadeIn[i] = Calc((_size - 1) - i, _size);
+			// Analytically these sum to 1.0 for all i,
+			// within floating-point error, giving constant-amplitude crossfade.
+			_fadeIn[i] = Calc(_size - i, _size);
 			_fadeOut[i] = Calc(i, _size);
 		}
 	}
