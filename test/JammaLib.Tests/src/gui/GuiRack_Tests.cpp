@@ -111,13 +111,14 @@ TEST(GuiRack, ToggleChannelsOnFromMaster) {
 	rack->SetReceiver(receiver);
 
 	// Toggle index 1 (RACK_CHANNELS) ON
+	// state becomes RACK_ROUTER since router is visible
 	GuiAction action;
 	action.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
 	action.Index = GuiRackParams::RACK_CHANNELS;
 	action.Data = GuiAction::GuiInt{ 1 }; // toggle on
 	rack->OnAction(action);
 
-	ASSERT_EQ(GuiRackParams::RACK_CHANNELS, rack->GetRackState());
+	ASSERT_EQ(GuiRackParams::RACK_ROUTER, rack->GetRackState());
 }
 
 TEST(GuiRack, ToggleChannelsOffFromChannels) {
