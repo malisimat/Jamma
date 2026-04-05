@@ -5,7 +5,8 @@
 using audio::Hanning;
 
 // Verify that fadeIn[i] + fadeOut[i] == 1.0 for all positions in the crossfade
-// window. This ensures overlapping identical content produces no gain bump.
+// window. This holds analytically: fadeOut = 0.5+0.5*cos(pi*i/N) and
+// fadeIn = 0.5+0.5*cos(pi*(N-i)/N) = 0.5-0.5*cos(pi*i/N), so their sum is 1.
 TEST(Hanning, CoeffsSumToOne)
 {
 	const unsigned int sizes[] = { 1, 2, 10, 20, 100 };
