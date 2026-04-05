@@ -64,6 +64,7 @@ public:
 	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override { return 1; };
 
 	bool IsFilled() { return _sink->IsFilled(); }
+	const std::vector<float>& GetSamples() const { return _sink->Samples; }
 	std::shared_ptr<LoopMockedSink> GetSink() { return _sink; }
 
 protected:
@@ -188,6 +189,309 @@ TEST(Loop, PlayWrapsAround) {
 	}
 
 	ASSERT_TRUE(sink->IsFilled());
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+static Loop MakeLoop()
+{
+	WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0 };
+	AudioMixerParams mixerParams;
+	mixerParams.Size = { 160, 320 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = mixBehaviour;
+
+	LoopParams loopParams;
+	loopParams.Wav = "hh";
+	loopParams.Size = { 80, 80 };
+	loopParams.Position = { 10, 22 };
+
+	return Loop(loopParams, mixerParams);
+}
+
+// Attempt to write loopLength samples of `value` into `loop`, then finalize
+// the write. Callers typically put the loop into a recording-compatible state
+// first, but some tests intentionally use this helper with non-recording
+// states (for example INACTIVE) to verify that writes are ignored.
+static void WriteData(Loop& loop,
+	unsigned long loopLength,
+	float value = 1.0f)
+{
+	const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+	for (auto sampleIndex = 0ul; sampleIndex < totalRecordSamps; sampleIndex++)
+		loop.OnMixWrite(value, 0.0f, 1.0f, (int)sampleIndex, base::Audible::AUDIOSOURCE_ADC);
+	loop.EndWrite(totalRecordSamps, true);
+}
+
+// Record loopLength samples then transition to PLAYING or PLAYINGRECORDING.
+static void RecordAndPlay(Loop& loop,
+	unsigned long loopLength,
+	bool continueRecording,
+	float value = 1.0f)
+{
+	loop.Record();
+	WriteData(loop, loopLength, value);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, continueRecording);
+}
+
+// Play one block through `loop` into `sink` and advance indices.
+static void PlayOneBlock(Loop& loop,
+	const std::shared_ptr<MockedMultiSink>& sink,
+	unsigned int blockSize)
+{
+	sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
+	loop.OnPlay(sink, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loop.EndMultiPlay(blockSize);
+	sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+}
+
+static bool HasNonZeroSample(const std::vector<float>& samples)
+{
+	for (auto sample : samples)
+		if (sample != 0.0f)
+			return true;
+	return false;
+}
+
+// ── State-transition tests ─────────────────────────────────────────────────
+
+TEST(Loop, StateTransition_InactiveToRecording)
+{
+	auto loop = MakeLoop();
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+	loop.Record();
+	ASSERT_EQ(Loop::STATE_RECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_RecordIgnoredWhenNotInactive)
+{
+	auto loop = MakeLoop();
+	loop.Record();
+	ASSERT_EQ(Loop::STATE_RECORDING, loop.PlayState());
+	loop.Record();  // already active - must be ignored
+	ASSERT_EQ(Loop::STATE_RECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_RecordingToPlaying)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	RecordAndPlay(loop, loopLength, false);
+	ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_RecordingToPlayingRecording)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	RecordAndPlay(loop, loopLength, true);
+	ASSERT_EQ(Loop::STATE_PLAYINGRECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_PlayingRecordingToPlaying)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	RecordAndPlay(loop, loopLength, true);
+	ASSERT_EQ(Loop::STATE_PLAYINGRECORDING, loop.PlayState());
+	loop.EndRecording();
+	ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_InactiveToOverdubbing)
+{
+	auto loop = MakeLoop();
+	loop.Overdub();
+	ASSERT_EQ(Loop::STATE_OVERDUBBING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_OverdubbingIgnoredWhenNotInactive)
+{
+	auto loop = MakeLoop();
+	loop.Record();  // RECORDING state
+	loop.Overdub(); // must be ignored
+	ASSERT_EQ(Loop::STATE_RECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_OverdubbingToPunchedIn)
+{
+	auto loop = MakeLoop();
+	loop.Overdub();
+	loop.PunchIn();
+	ASSERT_EQ(Loop::STATE_PUNCHEDIN, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_PunchInIgnoredWhenNotOverdubbing)
+{
+	auto loop = MakeLoop();
+	loop.PunchIn(); // INACTIVE - must be ignored
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_PunchedInToOverdubbing)
+{
+	auto loop = MakeLoop();
+	loop.Overdub();
+	loop.PunchIn();
+	loop.PunchOut();
+	ASSERT_EQ(Loop::STATE_OVERDUBBING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_PunchOutIgnoredWhenNotPunchedIn)
+{
+	auto loop = MakeLoop();
+	loop.Overdub();
+	loop.PunchOut(); // OVERDUBBING, not PUNCHEDIN - must be ignored
+	ASSERT_EQ(Loop::STATE_OVERDUBBING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_OverdubbingToOverdubbingRecording)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	loop.Overdub();
+	WriteData(loop, loopLength);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_PunchedInToOverdubbingRecording)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	loop.Overdub();
+	loop.PunchIn();
+	WriteData(loop, loopLength);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_OverdubbingRecordingToPlaying)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	loop.Overdub();
+	WriteData(loop, loopLength);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+	loop.EndRecording();
+	ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_DitchResetsFromRecording)
+{
+	auto loop = MakeLoop();
+	loop.Record();
+	loop.Ditch();
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_DitchResetsFromPlaying)
+{
+	auto loop = MakeLoop();
+	const auto loopLength = 50ul;
+	RecordAndPlay(loop, loopLength, false);
+	loop.Ditch();
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+TEST(Loop, StateTransition_DitchIgnoredWhenInactive)
+{
+	auto loop = MakeLoop();
+	loop.Ditch(); // already INACTIVE - must be ignored
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+// ── Recording-behaviour tests ──────────────────────────────────────────────
+
+TEST(Loop, Recording_WritesDataInRecordingState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	RecordAndPlay(loop, loopLength, false, 1.0f);
+	ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Recording_DoesNotWriteDataWhenInactive)
+{
+	const auto loopLength = 50ul;
+
+	auto loop = MakeLoop();
+	// Attempt to write without entering a recording state
+	WriteData(loop, loopLength, 1.0f);
+
+	// Buffer is empty so Play() must reset to INACTIVE
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+// ── Playback-behaviour tests ───────────────────────────────────────────────
+
+TEST(Loop, Playback_NoOutputInRecordingState)
+{
+	const auto blockSize = 11u;
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Record();
+	// Still recording - _loopLength is 0 so OnPlay must return early
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_ProducesOutputInPlayingState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	RecordAndPlay(loop, loopLength, false, 1.0f);
+	ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_ProducesOutputInPlayingRecordingState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	RecordAndPlay(loop, loopLength, true, 1.0f);  // PLAYINGRECORDING
+	ASSERT_EQ(Loop::STATE_PLAYINGRECORDING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_ProducesOutputInOverdubbingRecordingState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+	auto sink = std::make_shared<MockedMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Overdub();
+	WriteData(loop, loopLength, 1.0f);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);  // OVERDUBBINGRECORDING
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
 // Verify that a constant-value loop produces no gain bump in the crossfade
