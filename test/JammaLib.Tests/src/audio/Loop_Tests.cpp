@@ -210,8 +210,10 @@ static Loop MakeLoop()
 	return Loop(loopParams, mixerParams);
 }
 
-// Write loopLength samples of `value` into a loop that is already in a
-// recording-compatible state (RECORDING, OVERDUBBING, PUNCHEDIN, ...).
+// Attempt to write loopLength samples of `value` into `loop`, then finalize
+// the write. Callers typically put the loop into a recording-compatible state
+// first, but some tests intentionally use this helper with non-recording
+// states (for example INACTIVE) to verify that writes are ignored.
 static void WriteData(Loop& loop,
 	unsigned long loopLength,
 	float value = 1.0f)
