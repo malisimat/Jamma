@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Jamma Buffer Management Architecture</title>
+  <desc id="desc">Detailed view of buffer types, memory allocation strategy, and thread safety in the audio pipeline</desc>
+  
+  <defs>
+    <style>
+      .title { font: 700 22px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .subtitle { font: 600 18px 'Consolas', 'Courier New', monospace; fill: #334155; }
+      .section { font: 700 16px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      .label { font: 600 13px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .small { font: 400 11px 'Consolas', 'Courier New', monospace; fill: #475569; }
+      .code { font: 400 10px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      .highlight { font: 700 11px 'Consolas', 'Courier New', monospace; }
+      
+      .stack-buffer { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; rx: 6; }
+      .ring-buffer { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 6; }
+      .chunk-buffer { fill: #fdf4ff; stroke: #a855f7; stroke-width: 2; rx: 6; }
+      .temp-buffer { fill: #fefce8; stroke: #ca8a04; stroke-width: 2; rx: 6; }
+      .pass-through { fill: #f8fafc; stroke: #64748b; stroke-width: 2; stroke-dasharray: 5,5; rx: 6; }
+      
+      .safe { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.5; rx: 4; }
+      .unsafe { fill: #fee2e2; stroke: #dc2626; stroke-width: 1.5; rx: 4; }
+      .warning { fill: #fef3c7; stroke: #d97706; stroke-width: 1.5; rx: 4; }
+      
+      .arrow { stroke: #374151; stroke-width: 2; fill: none; marker-end: url(#arrowHead); }
+      .safe-arrow { stroke: #16a34a; stroke-width: 2.5; fill: none; marker-end: url(#safeArrow); }
+      .unsafe-arrow { stroke: #dc2626; stroke-width: 2.5; fill: none; marker-end: url(#unsafeArrow); }
+    </style>
+    
+    <marker id="arrowHead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#374151" />
+    </marker>
+    <marker id="safeArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a" />
+    </marker>
+    <marker id="unsafeArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626" />
+    </marker>
+  </defs>
+  
+  <rect x="0" y="0" width="1400" height="900" fill="#ffffff" />
+  <text x="20" y="35" class="title">JAMMA BUFFER MANAGEMENT ARCHITECTURE</text>
+  <text x="20" y="60" class="subtitle">Memory allocation strategy, thread safety, and performance characteristics</text>
+  
+  <!-- Buffer Type Categories -->
+  <text x="20" y="110" class="section">BUFFER TYPES BY STORAGE BEHAVIOR</text>
+  
+  <!-- Stack Buffers -->
+  <rect x="30" y="130" width="320" height="180" class="stack-buffer" />
+  <text x="45" y="155" class="label">🚀 Stack Buffers (Temporary)</text>
+  <text x="45" y="175" class="code">float tempBuf[constants::MaxBlockSize] // 4096 samples</text>
+  <text x="45" y="190" class="small">Used in: Loop::WriteBlock(), LoopTake::WriteBlock(), Station::WriteBlock()</text>
+  <text x="45" y="210" class="highlight safe">✅ CALLBACK SAFE</text>
+  <text x="45" y="225" class="small">• 16KB per buffer (4096 * sizeof(float))</text>
+  <text x="45" y="240" class="small">• Chain usage: 3 levels × 16KB = 48KB total</text>
+  <text x="45" y="255" class="small">• Automatic cleanup (stack unwinding)</text>
+  <text x="45" y="270" class="small">• Zero heap allocation</text>
+  <text x="45" y="285" class="small">• Predictable memory access</text>
+  <text x="45" y="300" class="code">Purpose: ReadBlock() → mix → route to destination</text>
+  
+  <!-- Ring Buffers -->
+  <rect x="370" y="130" width="320" height="180" class="ring-buffer" />
+  <text x="385" y="155" class="label">💾 Ring Buffers (Intermediate)</text>
+  <text x="385" y="175" class="code">class AudioBuffer { vector&lt;float&gt; _buffer; }</text>
+  <text x="385" y="190" class="small">Used in: ChannelMixer ADC/DAC, Station, LoopTake audio buffers</text>
+  <text x="385" y="210" class="highlight safe">✅ CALLBACK SAFE</text>
+  <text x="385" y="225" class="small">• Pre-allocated during setup</text>
+  <text x="385" y="240" class="small">• _writeIndex, _playIndex with modulo arithmetic</text>
+  <text x="385" y="255" class="small">• OnBlockWrite() copies with fade mixing</text>
+  <text x="385" y="270" class="small">• BlockRead() returns direct pointer</text>
+  <text x="385" y="285" class="small">• Delay() for latency compensation</text>
+  <text x="385" y="300" class="code">Purpose: Channel routing, temporary audio staging</text>
+  
+  <!-- Chunked Buffers -->
+  <rect x="710" y="130" width="320" height="180" class="chunk-buffer" />
+  <text x="725" y="155" class="label">📦 Chunked Buffers (Storage)</text>
+  <text x="725" y="175" class="code">class BufferBank { vector&lt;vector&lt;float&gt;&gt; _banks; }</text>
+  <text x="725" y="190" class="small">Used in: Loop::_bufferBank, Loop::_monitorBufferBank</text>
+  <text x="725" y="210" class="highlight safe">⚠️ MIXED SAFETY</text>
+  <text x="725" y="225" class="small highlight safe">✅ SetLength() - callback safe (clamp to capacity)</text>
+  <text x="725" y="240" class="small highlight unsafe">❌ Resize() - off-thread only (heap allocation)</text>
+  <text x="725" y="255" class="small">• 1MB chunks (262,144 samples per bank)</text>
+  <text x="725" y="270" class="small">• Lazy capacity growth via UpdateCapacity()</text>
+  <text x="725" y="285" class="small">• Ring buffer addressing across chunks</text>
+  <text x="725" y="300" class="code">Purpose: Permanent loop audio storage</text>
+  
+  <!-- Pass-Through -->
+  <rect x="1050" y="130" width="320" height="180" class="pass-through" />
+  <text x="1065" y="155" class="label">🔀 Pass-Through (No Storage)</text>
+  <text x="1065" y="175" class="code">Station, LoopTake containers</text>
+  <text x="1065" y="190" class="small">Routing only - no sample copying</text>
+  <text x="1065" y="210" class="highlight safe">✅ CALLBACK SAFE</text>
+  <text x="1065" y="225" class="small">• OnBlockWriteChannel() delegates to children</text>
+  <text x="1065" y="240" class="small">• WriteBlock() aggregates from children</text>
+  <text x="1065" y="255" class="small">• Zero memory allocation</text>
+  <text x="1065" y="270" class="small">• Pure coordination logic</text>
+  <text x="1065" y="285" class="small">• State management only</text>
+  <text x="1065" y="300" class="code">Purpose: Hierarchical audio routing</text>
+  
+  <!-- Thread Safety Matrix -->
+  <text x="20" y="360" class="section">THREAD SAFETY MATRIX</text>
+  
+  <rect x="30" y="380" width="450" height="220" class="safe" />
+  <text x="45" y="405" class="label">✅ REAL-TIME AUDIO CALLBACK SAFE</text>
+  <text x="45" y="430" class="code">AudioBuffer::OnBlockWrite(AudioWriteRequest, offset)</text>
+  <text x="55" y="445" class="small">• Ring buffer write with fade: buffer[idx] = fadeNew*sample + fadeCurrent*buffer[idx]</text>
+  <text x="45" y="465" class="code">AudioBuffer::BlockRead(index) → const float*</text>
+  <text x="55" y="480" class="small">• Direct pointer to contiguous samples (when possible)</text>
+  <text x="45" y="500" class="code">BufferBank::SetLength(numSamps)</text>
+  <text x="55" y="515" class="small">• Clamps to existing capacity, no allocation</text>
+  <text x="45" y="535" class="code">Stack allocation: float tempBuf[MaxBlockSize]</text>
+  <text x="55" y="550" class="small">• Automatic cleanup, predictable size</text>
+  <text x="45" y="570" class="code">Ring buffer arithmetic: idx = (writeIndex + offset) % capacity</text>
+  <text x="55" y="585" class="small">• Modulo operations, no branching</text>
+  
+  <rect x="500" y="380" width="450" height="220" class="unsafe" />
+  <text x="515" y="405" class="label">❌ OFF-THREAD ONLY (NOT CALLBACK SAFE)</text>
+  <text x="515" y="430" class="code">BufferBank::Resize(capacity)</text>
+  <text x="525" y="445" class="small">• Heap allocation: _banks.resize(), vector&lt;float&gt;(bankSize)</text>
+  <text x="515" y="465" class="code">BufferBank::UpdateCapacity(numBanks)</text>
+  <text x="525" y="480" class="small">• Grows buffer banks when loop length increases</text>
+  <text x="515" y="500" class="code">AudioBuffer constructor/resize</text>
+  <text x="525" y="515" class="small">• vector&lt;float&gt;::resize() during setup</text>
+  <text x="515" y="535" class="code">Exception handling, blocking I/O</text>
+  <text x="525" y="550" class="small">• File operations, network, mutex locks</text>
+  <text x="515" y="570" class="code">Dynamic allocation: new, delete, malloc, free</text>
+  <text x="525" y="585" class="small">• Unpredictable timing, potential fragmentation</text>
+  
+  <rect x="970" y="380" width="400" height="220" class="warning" />
+  <text x="985" y="405" class="label">⚠️ DESIGN CONSIDERATIONS</text>
+  <text x="985" y="430" class="small highlight unsafe">Buffer Swap Pattern:</text>
+  <text x="985" y="445" class="code">Station: _audioBuffers ↔ _backAudioBuffers</text>
+  <text x="985" y="460" class="code">LoopTake: _audioBuffers ↔ _backAudioBuffers</text>
+  <text x="985" y="475" class="small">• Setup changes off-thread, swap pointer atomically</text>
+  <text x="985" y="495" class="small highlight safe">Pre-allocation Strategy:</text>
+  <text x="985" y="510" class="small">• All buffers sized during setup</text>
+  <text x="985" y="525" class="small">• BufferBank capacity grown conservatively</text>
+  <text x="985" y="540" class="small">• Ring buffer sizes fixed at creation</text>
+  <text x="985" y="560" class="small highlight safe">Stack Depth Management:</text>
+  <text x="985" y="575" class="small">• Max 3 nested WriteBlock() calls</text>
+  <text x="985" y="590" class="small">• 48KB total (3 × 16KB per level)</text>
+  
+  <!-- Memory Layout Diagram -->
+  <text x="20" y="650" class="section">MEMORY LAYOUT & ACCESS PATTERNS</text>
+  
+  <!-- BufferBank Detail -->
+  <rect x="30" y="670" width="400" height="180" class="chunk-buffer" />
+  <text x="45" y="695" class="label">BufferBank Chunked Layout</text>
+  <text x="45" y="715" class="code">vector&lt;vector&lt;float&gt;&gt; _banks;</text>
+  <text x="45" y="735" class="small">Bank 0: [0 ... 262,143] (1MB)</text>
+  <text x="45" y="750" class="small">Bank 1: [262,144 ... 524,287] (1MB)</text>
+  <text x="45" y="765" class="small">Bank N: [N*262,144 ... (N+1)*262,144-1]</text>
+  <text x="45" y="785" class="code">Access: bank = sampleIdx / BankSize</text>
+  <text x="45" y="800" class="code">        offset = sampleIdx % BankSize</text>
+  <text x="45" y="815" class="code">        sample = _banks[bank][offset]</text>
+  <text x="45" y="835" class="small highlight safe">✅ Predictable cache behavior within banks</text>
+  
+  <!-- Ring Buffer Detail -->
+  <rect x="450" y="670" width="400" height="180" class="ring-buffer" />
+  <text x="465" y="695" class="label">AudioBuffer Ring Layout</text>
+  <text x="465" y="715" class="code">vector&lt;float&gt; _buffer; // Fixed size</text>
+  <text x="465" y="735" class="small">Write: _buffer[_writeIndex % _buffer.size()]</text>
+  <text x="465" y="750" class="small">Read:  _buffer[_playIndex % _buffer.size()]</text>
+  <text x="465" y="770" class="code">Contiguous check:</text>
+  <text x="465" y="785" class="code">if (_playIndex + numSamps &lt;= _buffer.size())</text>
+  <text x="475" y="800" class="code">return &amp;_buffer[_playIndex]; // Fast path</text>
+  <text x="465" y="815" class="code">else split_read(); // Wrap-around</text>
+  <text x="465" y="835" class="small highlight safe">✅ Optimized for contiguous blocks</text>
+  
+  <!-- Performance Metrics -->
+  <rect x="870" y="670" width="500" height="180" class="temp-buffer" />
+  <text x="885" y="695" class="label">🚀 Performance Characteristics</text>
+  <text x="885" y="720" class="small">Stack Usage per WriteBlock() chain:</text>
+  <text x="885" y="735" class="code">Loop::WriteBlock()     → 16KB stack buffer</text>
+  <text x="885" y="750" class="code">LoopTake::WriteBlock() → 16KB stack buffer</text>
+  <text x="885" y="765" class="code">Station::WriteBlock()  → 16KB stack buffer</text>
+  <text x="885" y="780" class="small highlight safe">Total: 48KB stack (real-time safe)</text>
+  <text x="885" y="800" class="small">Typical audio buffer sizes:</text>
+  <text x="885" y="815" class="code">• ADC/DAC buffers: 256-1024 samples (1-4KB)</text>
+  <text x="885" y="830" class="code">• Loop storage: Minutes of audio (MBs)</text>
+  <text x="885" y="845" class="small highlight safe">Zero heap allocation in audio callbacks</text>
+  
+  <!-- Flow arrows and safety indicators -->
+  <path class="safe-arrow" d="M180 310 Q180 350 200 380" />
+  <path class="safe-arrow" d="M530 310 Q530 350 550 380" />
+  <path class="unsafe-arrow" d="M870 310 Q870 350 850 380" />
+  
+  <text x="150" y="340" class="small highlight safe">Safe</text>
+  <text x="500" y="340" class="small highlight safe">Safe</text>
+  <text x="820" y="340" class="small highlight unsafe">Mixed</text>
+</svg>

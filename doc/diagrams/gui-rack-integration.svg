@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Jamma GuiRack Integration with Audio Routing</title>
+  <desc id="desc">How GuiRack controls Station and LoopTake audio routing through mixers and behaviors</desc>
+  
+  <defs>
+    <style>
+      .title { font: 700 22px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .subtitle { font: 600 18px 'Consolas', 'Courier New', monospace; fill: #334155; }
+      .section { font: 700 16px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      .label { font: 600 13px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .small { font: 400 11px 'Consolas', 'Courier New', monospace; fill: #475569; }
+      .code { font: 400 10px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      .highlight { font: 700 11px 'Consolas', 'Courier New', monospace; }
+      
+      .gui-rack { fill: #f0f9ff; stroke: #0284c7; stroke-width: 2; rx: 8; }
+      .gui-router { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 6; }
+      .gui-slider { fill: #fef7cd; stroke: #d97706; stroke-width: 1.5; rx: 4; }
+      .station { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; rx: 8; }
+      .looptake { fill: #e0e7ff; stroke: #6366f1; stroke-width: 2; rx: 8; }
+      .audiomixer { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 6; }
+      .audiobuffer { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.5; rx: 4; }
+      .mixbehaviour { fill: #fdf2f8; stroke: #ec4899; stroke-width: 1.5; rx: 4; }
+      
+      .ui-action { stroke: #0284c7; stroke-width: 3; fill: none; marker-end: url(#uiArrow); stroke-dasharray: 8,4; }
+      .routing-update { stroke: #059669; stroke-width: 2.5; fill: none; marker-end: url(#routingArrow); }
+      .audio-flow { stroke: #ea580c; stroke-width: 2.5; fill: none; marker-end: url(#audioArrow); }
+      .control-flow { stroke: #6366f1; stroke-width: 2; fill: none; marker-end: url(#controlArrow); }
+    </style>
+    
+    <marker id="uiArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#0284c7" />
+    </marker>
+    <marker id="routingArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#059669" />
+    </marker>
+    <marker id="audioArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ea580c" />
+    </marker>
+    <marker id="controlArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6366f1" />
+    </marker>
+  </defs>
+  
+  <rect x="0" y="0" width="1400" height="900" fill="#ffffff" />
+  <text x="20" y="35" class="title">GUIRACK INTEGRATION: UI CONTROLS → AUDIO ROUTING</text>
+  <text x="20" y="60" class="subtitle">How GUI interactions control Station and LoopTake audio mixing and routing</text>
+  
+  <!-- GuiRack Component -->
+  <rect x="50" y="100" width="300" height="200" class="gui-rack" />
+  <text x="65" y="125" class="label">GuiRack Control Surface</text>
+  
+  <!-- Master Slider -->
+  <rect x="70" y="140" width="80" height="40" class="gui-slider" />
+  <text x="80" y="155" class="small">Master Slider</text>
+  <text x="80" y="170" class="code">Range: 0.0-6.0</text>
+  
+  <!-- Channel Sliders -->
+  <rect x="160" y="140" width="80" height="40" class="gui-slider" />
+  <text x="170" y="155" class="small">Channel Sliders</text>
+  <text x="170" y="170" class="code">Per-loop levels</text>
+  
+  <!-- Router Matrix -->
+  <rect x="250" y="140" width="80" height="40" class="gui-slider" />
+  <text x="260" y="155" class="small">Router Toggle</text>
+  <text x="260" y="170" class="code">Show/hide matrix</text>
+  
+  <!-- GuiRouter Detail -->
+  <rect x="70" y="190" width="260" height="100" class="gui-router" />
+  <text x="85" y="210" class="label">GuiRouter - Visual Routing Matrix</text>
+  <text x="85" y="230" class="code">Input Channels: [Loop1][Loop2][Loop3][Loop4]</text>
+  <text x="85" y="245" class="code">             │    │    │    │</text>
+  <text x="85" y="260" class="code">             ↓    ↓    ↓    ↓</text>
+  <text x="85" y="275" class="code">Output Buses: [Bus1][Bus2][Bus3][Bus4]</text>
+  
+  <!-- User Interaction -->
+  <text x="400" y="130" class="section">User Interaction Flow</text>
+  <rect x="400" y="140" width="300" height="160" class="gui-router" />
+  <text x="415" y="160" class="small">1. User drags connection in GuiRouter</text>
+  <text x="415" y="175" class="code">   Input Channel 1 → Output Bus 3</text>
+  <text x="415" y="195" class="small">2. GuiRouter::OnAction() fires</text>
+  <text x="415" y="210" class="code">   GuiAction::ACTIONELEMENT_ROUTER</text>
+  <text x="415" y="225" class="code">   + GuiConnections{(1,3)}</text>
+  <text x="415" y="245" class="small">3. Station/LoopTake::OnAction() receives</text>
+  <text x="415" y="260" class="code">   Extracts routing pairs</text>
+  <text x="415" y="275" class="code">   Updates AudioMixer channels</text>
+  <text x="415" y="290" class="small">4. Next WriteBlock() uses new routes</text>
+  
+  <!-- Station Integration -->
+  <rect x="50" y="350" width="320" height="220" class="station" />
+  <text x="65" y="375" class="label">Station Integration</text>
+  <text x="65" y="395" class="code">std::shared_ptr&lt;gui::GuiRack&gt; _guiRack;</text>
+  
+  <!-- Station Buffers -->
+  <rect x="70" y="410" width="120" height="60" class="audiobuffer" />
+  <text x="80" y="430" class="small">Bus AudioBuffers</text>
+  <text x="80" y="445" class="code">Count = _guiRack-></text>
+  <text x="80" y="460" class="code">NumInputChannels()</text>
+  
+  <!-- Station Mixers -->
+  <rect x="200" y="410" width="120" height="60" class="audiomixer" />
+  <text x="210" y="430" class="small">Bus AudioMixers</text>
+  <text x="210" y="445" class="code">Routes = _guiRack</text>
+  <text x="210" y="460" class="code">routing connections</text>
+  
+  <!-- Station Methods -->
+  <text x="70" y="490" class="code">SetNumBusChannels(chans):</text>
+  <text x="80" y="505" class="small">• _guiRack->SetNumInputChannels(chans)</text>
+  <text x="80" y="520" class="small">• Create AudioBuffer per input</text>
+  <text x="80" y="535" class="small">• Create AudioMixer per buffer</text>
+  <text x="80" y="550" class="small">• AddRoute(i, i) for default 1:1 routing</text>
+  
+  <!-- LoopTake Integration -->
+  <rect x="400" y="350" width="320" height="220" class="looptake" />
+  <text x="415" y="375" class="label">LoopTake Integration</text>
+  <text x="415" y="395" class="code">std::shared_ptr&lt;gui::GuiRack&gt; _guiRack;</text>
+  
+  <!-- LoopTake Buffers -->
+  <rect x="420" y="410" width="120" height="60" class="audiobuffer" />
+  <text x="430" y="430" class="small">Loop AudioBuffers</text>
+  <text x="430" y="445" class="code">One per Loop added</text>
+  <text x="430" y="460" class="code">to LoopTake</text>
+  
+  <!-- LoopTake Mixers -->
+  <rect x="550" y="410" width="120" height="60" class="audiomixer" />
+  <text x="560" y="430" class="small">Loop AudioMixers</text>
+  <text x="560" y="445" class="code">WireMixBehaviour</text>
+  <text x="560" y="460" class="code">routing control</text>
+  
+  <!-- LoopTake Methods -->
+  <text x="420" y="490" class="code">AddLoop(loop):</text>
+  <text x="430" y="505" class="small">• Create AudioBuffer + AudioMixer</text>
+  <text x="430" y="520" class="small">• _guiRack->SetNumInputChannels(++count)</text>
+  <text x="430" y="535" class="small">• AddRoute(newLoop, newLoop) default</text>
+  <text x="420" y="555" class="code">NumBusChannels() → _guiRack->NumOutputChannels()</text>
+  
+  <!-- Audio Mixer Detail -->
+  <rect x="760" y="350" width="300" height="220" class="audiomixer" />
+  <text x="775" y="375" class="label">AudioMixer + MixBehaviour</text>
+  
+  <!-- MixBehaviour -->
+  <rect x="780" y="390" width="260" height="100" class="mixbehaviour" />
+  <text x="790" y="410" class="small">WireMixBehaviour / MergeMixBehaviour</text>
+  <text x="790" y="425" class="code">_mixParams.Channels = {outputBus1, outputBus3}</text>
+  <text x="790" y="445" class="code">ApplyBlock(dest, srcBuf, fadeLevel, numSamps):</text>
+  <text x="800" y="460" class="code">for (chan : _mixParams.Channels)</text>
+  <text x="810" y="475" class="code">dest->OnBlockWriteChannel(chan, request)</text>
+  
+  <!-- SetChannels Method -->
+  <text x="780" y="510" class="code">AudioMixer::SetChannels(outputChannels):</text>
+  <text x="790" y="525" class="small">• Updates _mixParams.Channels from GuiRack</text>
+  <text x="790" y="540" class="small">• Called when routing matrix changes</text>
+  <text x="790" y="555" class="small">• Next WriteBlock() uses new output channels</text>
+  
+  <!-- WriteBlock Integration -->
+  <rect x="50" y="600" width="600" height="160" class="audiobuffer" />
+  <text x="65" y="625" class="label">WriteBlock Integration with GuiRack Routing</text>
+  
+  <text x="70" y="645" class="code">Station/LoopTake::WriteBlock(dest, trigger, indexOffset, numSamps):</text>
+  <text x="80" y="665" class="small">1. Process children → bus AudioBuffers (input channels)</text>
+  <text x="80" y="680" class="small">2. For each AudioBuffer[i] and AudioMixer[i]:</text>
+  <text x="90" y="695" class="code">   mixer->WriteBlock(dest, buffer->BlockRead(playIndex), numSamps)</text>
+  <text x="90" y="710" class="small">   └─→ MixBehaviour uses _mixParams.Channels from GuiRack routing</text>
+  <text x="90" y="725" class="small">   └─→ Writes to dest->OnBlockWriteChannel(routedOutputChan, ...)</text>
+  <text x="80" y="745" class="small">3. Audio emerges on physical outputs based on GuiRack connections</text>
+  
+  <!-- GUI Action Processing -->
+  <rect x="700" y="600" width="650" height="160" class="gui-router" />
+  <text x="715" y="625" class="label">GuiAction Processing Pipeline</text>
+  
+  <text x="720" y="645" class="code">case GuiAction::ACTIONELEMENT_RACK:</text>
+  <text x="730" y="660" class="small">Router connections changed:</text>
+  <text x="730" y="675" class="code">if (auto chans = std::get_if&lt;GuiAction::GuiConnections&gt;(&action.Data))</text>
+  <text x="740" y="690" class="small">For each input channel:</text>
+  <text x="750" y="705" class="code">extractedOutputs = ExtractOutputsForInput(chan, connections)</text>
+  <text x="750" y="720" class="code">_audioMixers[chan]->SetChannels(extractedOutputs)</text>
+  <text x="730" y="740" class="small">Slider level changed:</text>
+  <text x="730" y="755" class="code">else if (auto d = std::get_if&lt;GuiAction::GuiDouble&gt;(&action.Data))</text>
+  
+  <!-- Flow Arrows -->
+  <path class="ui-action" d="M350 200 Q420 220 450 160" />
+  <text x="370" y="190" class="small highlight" fill="#0284c7">User Action</text>
+  
+  <path class="routing-update" d="M650 230 Q720 260 780 400" />
+  <text x="680" y="250" class="small highlight" fill="#059669">Route Update</text>
+  
+  <path class="control-flow" d="M370 460 L395 460" />
+  <path class="control-flow" d="M720 460 L755 460" />
+  
+  <path class="audio-flow" d="M320 510 Q400 540 420 560 L420 600" />
+  <text x="350" y="530" class="small highlight" fill="#ea580c">Audio Flow</text>
+  
+  <path class="audio-flow" d="M670 510 Q720 540 740 560 L740 600" />
+  
+  <!-- Routing States -->
+  <text x="1100" y="130" class="section">GuiRack States</text>
+  
+  <rect x="1100" y="150" width="250" height="60" class="gui-slider" />
+  <text x="1110" y="170" class="small">RACK_MASTER</text>
+  <text x="1110" y="185" class="code">Master volume only</text>
+  <text x="1110" y="200" class="small">Simplest UI mode</text>
+  
+  <rect x="1100" y="220" width="250" height="60" class="gui-slider" />
+  <text x="1110" y="240" class="small">RACK_CHANNELS</text>
+  <text x="1110" y="255" class="code">Master + per-channel sliders</text>
+  <text x="1110" y="270" class="small">Individual level control</text>
+  
+  <rect x="1100" y="290" width="250" height="80" class="gui-router" />
+  <text x="1110" y="310" class="small">RACK_ROUTER</text>
+  <text x="1110" y="325" class="code">Master + channels + routing matrix</text>
+  <text x="1110" y="340" class="small">Full visual routing control</text>
+  <text x="1110" y="355" class="small">Complex mixing scenarios</text>
+  
+  <!-- Thread Safety -->
+  <rect x="1100" y="400" width="250" height="120" class="audiobuffer" />
+  <text x="1110" y="420" class="label">Thread Safety</text>
+  <text x="1110" y="440" class="small highlight safe">✅ GUI updates on UI thread</text>
+  <text x="1110" y="455" class="small highlight safe">✅ Audio changes via pointer swaps</text>
+  <text x="1110" y="470" class="small highlight safe">✅ _backAudioBuffers pattern</text>
+  <text x="1110" y="485" class="small highlight safe">✅ Real-time audio callback safe</text>
+  <text x="1110" y="500" class="small">No heap allocation in WriteBlock</text>
+  
+  <!-- Performance Impact -->
+  <rect x="1100" y="540" width="250" height="100" class="audiomixer" />
+  <text x="1110" y="560" class="label">Performance Impact</text>
+  <text x="1110" y="580" class="small">• Routing affects destination only</text>
+  <text x="1110" y="595" class="small">• No additional buffer copying</text>
+  <text x="1110" y="610" class="small">• MixBehaviour optimization</text>
+  <text x="1110" y="625" class="small">• O(channels) routing cost</text>
+  
+  <!-- Legend -->
+  <text x="50" y="820" class="section">Legend</text>
+  <rect x="50" y="830" width="15" height="12" fill="#f0f9ff" stroke="#0284c7" stroke-width="1" />
+  <text x="75" y="840" class="small">GuiRack Components</text>
+  
+  <rect x="200" y="830" width="15" height="12" fill="#dbeafe" stroke="#2563eb" stroke-width="1" />
+  <text x="225" y="840" class="small">Station Container</text>
+  
+  <rect x="350" y="830" width="15" height="12" fill="#e0e7ff" stroke="#6366f1" stroke-width="1" />
+  <text x="375" y="840" class="small">LoopTake Container</text>
+  
+  <rect x="500" y="830" width="15" height="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1" />
+  <text x="525" y="840" class="small">AudioMixer + Behavior</text>
+  
+  <line x1="650" y1="835" x2="680" y2="835" class="ui-action" />
+  <text x="690" y="840" class="small">User Interface Action</text>
+  
+  <line x1="850" y1="835" x2="880" y2="835" class="routing-update" />
+  <text x="890" y="840" class="small">Routing Update</text>
+  
+  <line x1="1050" y1="835" x2="1080" y2="835" class="audio-flow" />
+  <text x="1090" y="840" class="small">Audio Data Flow</text>
+</svg>

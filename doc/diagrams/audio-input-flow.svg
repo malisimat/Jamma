@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Jamma Input Audio Flow - ADC to Loop Storage</title>
+  <desc id="desc">Detailed input path showing how audio flows from hardware ADC through ChannelMixer, Station, LoopTake to Loop storage with buffer management</desc>
+  
+  <defs>
+    <style>
+      .title { font: 700 20px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .subtitle { font: 600 16px 'Consolas', 'Courier New', monospace; fill: #334155; }
+      .label { font: 600 13px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .small { font: 400 11px 'Consolas', 'Courier New', monospace; fill: #475569; }
+      .code { font: 400 10px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      
+      .hardware { fill: #fef3c7; stroke: #d97706; stroke-width: 2; rx: 8; }
+      .channelmixer { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; rx: 8; }
+      .station { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; rx: 8; }
+      .looptake { fill: #e0e7ff; stroke: #6366f1; stroke-width: 2; rx: 8; }
+      .loop { fill: #fce7f3; stroke: #ec4899; stroke-width: 2; rx: 8; }
+      .buffer { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.5; rx: 4; }
+      
+      .arrow { stroke: #374151; stroke-width: 2.5; fill: none; marker-end: url(#arrowHead); }
+      .monitor-arrow { stroke: #059669; stroke-width: 3; fill: none; marker-end: url(#monitorArrow); stroke-dasharray: 5,5; }
+      .storage-arrow { stroke: #dc2626; stroke-width: 3; fill: none; marker-end: url(#storageArrow); }
+    </style>
+    
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#374151" />
+    </marker>
+    <marker id="monitorArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#059669" />
+    </marker>
+    <marker id="storageArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#dc2626" />
+    </marker>
+  </defs>
+  
+  <rect x="0" y="0" width="1200" height="800" fill="#ffffff" />
+  <text x="20" y="35" class="title">INPUT AUDIO FLOW: ADC → ChannelMixer → Station → LoopTake → Loop</text>
+  <text x="20" y="55" class="subtitle">Real-time audio callback path with dual monitor/storage routing</text>
+  
+  <!-- Hardware ADC -->
+  <rect x="30" y="100" width="180" height="120" class="hardware" />
+  <text x="45" y="125" class="label">Hardware ADC</text>
+  <text x="45" y="145" class="small">RtAudio interface</text>
+  <text x="45" y="160" class="code">void* inBuffer</text>
+  <text x="45" y="175" class="code">float samples[chan*numSamps]</text>
+  <text x="45" y="190" class="code">interleaved format</text>
+  <text x="45" y="205" class="small">⚡ Real-time thread</text>
+  
+  <!-- ChannelMixer -->
+  <rect x="260" y="80" width="200" height="160" class="channelmixer" />
+  <text x="275" y="105" class="label">ChannelMixer</text>
+  <text x="275" y="125" class="small">FromAdc(inBuf, numChans, numSamps)</text>
+  <text x="275" y="145" class="code">De-interleave:</text>
+  <text x="275" y="160" class="code">for i in numSamps:</text>
+  <text x="285" y="175" class="code">for chan in numChans:</text>
+  <text x="295" y="190" class="code">sample = inBuf[i*numChans+chan]</text>
+  <text x="295" y="205" class="code">adcMixer[chan].OnBlockWrite(..)</text>
+  <text x="275" y="225" class="small">→ Per-channel AudioBuffers</text>
+  
+  <!-- ADC Buffer Bank -->
+  <rect x="490" y="100" width="160" height="120" class="buffer" />
+  <text x="505" y="125" class="label">ADC Buffers</text>
+  <text x="505" y="145" class="small">vector&lt;AudioBuffer&gt;</text>
+  <text x="505" y="160" class="code">Ring buffers per channel</text>
+  <text x="505" y="175" class="code">_writeIndex, _playIndex</text>
+  <text x="505" y="190" class="code">Stores samples temporarily</text>
+  <text x="505" y="205" class="small">💾 Copies data</text>
+  
+  <!-- Station Container -->
+  <rect x="700" y="60" width="220" height="200" class="station" />
+  <text x="715" y="85" class="label">Station Container</text>
+  <text x="715" y="105" class="small">OnBlockWriteChannel(chan, request, 0)</text>
+  <text x="715" y="125" class="code">Routes to armed LoopTakes:</text>
+  <text x="725" y="140" class="code">for take in _loopTakes:</text>
+  <text x="735" y="155" class="code">if take.IsArmed():</text>
+  <text x="745" y="170" class="code">take.OnBlockWriteChannel(.)</text>
+  <text x="715" y="190" class="small">🔀 Pass-through routing</text>
+  <text x="715" y="210" class="small">No sample copying</text>
+  <text x="715" y="230" class="small">Coordinate takes</text>
+  <text x="715" y="245" class="small">Input latency handling</text>
+  
+  <!-- LoopTake Container -->
+  <rect x="960" y="80" width="200" height="160" class="looptake" />
+  <text x="975" y="105" class="label">LoopTake Manager</text>
+  <text x="975" y="125" class="small">OnBlockWriteChannel(chan, request, 0)</text>
+  <text x="975" y="145" class="code">State: RECORDING/OVERDUBBING</text>
+  <text x="975" y="160" class="code">Routes to armed loops:</text>
+  <text x="985" y="175" class="code">for loop in _loops:</text>
+  <text x="995" y="190" class="code">if loop.IsArmed():</text>
+  <text x="1005" y="205" class="code">loop.OnBlockWrite(..)</text>
+  <text x="975" y="225" class="small">🔀 Pass-through routing</text>
+  
+  <!-- Loop Storage -->
+  <rect x="30" y="320" width="280" height="200" class="loop" />
+  <text x="45" y="345" class="label">Loop Storage Engine</text>
+  <text x="45" y="365" class="small">OnBlockWrite(AudioWriteRequest, writeOffset)</text>
+  
+  <!-- Monitor Buffer -->
+  <rect x="50" y="380" width="120" height="80" class="buffer" />
+  <text x="60" y="400" class="small">Monitor BufferBank</text>
+  <text x="60" y="415" class="code">Zero latency path</text>
+  <text x="60" y="430" class="code">Immediate feedback</text>
+  <text x="60" y="445" class="small">💾 _monitorBufferBank</text>
+  
+  <!-- Storage Buffer -->
+  <rect x="180" y="380" width="120" height="80" class="buffer" />
+  <text x="190" y="400" class="small">Storage BufferBank</text>
+  <text x="190" y="415" class="code">Input delay compensated</text>
+  <text x="190" y="430" class="code">Permanent storage</text>
+  <text x="190" y="445" class="small">💾 _bufferBank</text>
+  
+  <text x="45" y="485" class="code">Core logic: buffer[idx] = fadeNew*sample + fadeCurrent*buffer[idx]</text>
+  <text x="45" y="500" class="small">Ring buffer arithmetic, overdub mixing, VU metering</text>
+  
+  <!-- Arrows showing main flow -->
+  <path class="arrow" d="M210 160 L255 160" />
+  <path class="arrow" d="M460 160 L485 160" />
+  <path class="arrow" d="M650 160 L695 160" />
+  <path class="arrow" d="M920 160 L955 160" />
+  
+  <!-- WriteToSink routing -->
+  <text x="680" y="300" class="subtitle">WriteToSink() - Dual Path Routing</text>
+  
+  <!-- Monitor path (green, dashed) -->
+  <path class="monitor-arrow" d="M570 180 Q620 220 650 280 Q680 320 150 360 L110 375" />
+  <text x="580" y="250" class="small" fill="#059669">MONITOR PATH</text>
+  <text x="580" y="265" class="code" fill="#059669">AUDIOSOURCE_MONITOR</text>
+  <text x="580" y="280" class="small" fill="#059669">Zero latency feedback</text>
+  
+  <!-- Storage path (red, solid) -->
+  <path class="storage-arrow" d="M570 200 Q620 240 650 300 Q680 340 280 360 L240 375" />
+  <text x="700" y="330" class="small" fill="#dc2626">STORAGE PATH</text>
+  <text x="700" y="345" class="code" fill="#dc2626">AUDIOSOURCE_ADC</text>
+  <text x="700" y="360" class="small" fill="#dc2626">Input delay compensated</text>
+  
+  <!-- Performance notes -->
+  <rect x="360" y="320" width="300" height="180" class="buffer" />
+  <text x="375" y="345" class="label">🚀 Performance Guarantees</text>
+  <text x="375" y="365" class="small">✅ Stack allocation only</text>
+  <text x="375" y="380" class="code">float tempBuf[MaxBlockSize]</text>
+  <text x="375" y="395" class="small">✅ No heap allocation in callback</text>
+  <text x="375" y="410" class="small">✅ Predictable memory access</text>
+  <text x="375" y="425" class="small">✅ Ring buffer arithmetic</text>
+  <text x="375" y="440" class="small">✅ Fade mixing (overdub support)</text>
+  <text x="375" y="455" class="small">❌ BufferBank::Resize() off-thread only</text>
+  <text x="375" y="470" class="small">❌ No exceptions or blocking I/O</text>
+  <text x="375" y="485" class="small">⚡ Real-time audio thread safe</text>
+  
+  <!-- Method signatures -->
+  <rect x="700" y="320" width="470" height="180" class="buffer" />
+  <text x="715" y="345" class="label">🔧 Key Method Signatures</text>
+  <text x="715" y="365" class="code">Scene::AudioCallback(void* inBuf, void* outBuf, numSamps)</text>
+  <text x="715" y="380" class="code">ChannelMixer::FromAdc(float* inBuf, numChans, numSamps)</text>
+  <text x="715" y="395" class="code">ChannelMixer::WriteToSink(MultiAudioSink dest, numSamps)</text>
+  <text x="715" y="410" class="code">Station::OnBlockWriteChannel(chan, AudioWriteRequest, offset)</text>
+  <text x="715" y="425" class="code">LoopTake::OnBlockWriteChannel(chan, AudioWriteRequest, offset)</text>
+  <text x="715" y="440" class="code">Loop::OnBlockWrite(AudioWriteRequest, writeOffset)</text>
+  <text x="715" y="455" class="code">AudioBuffer::OnBlockWrite(AudioWriteRequest, writeOffset)</text>
+  <text x="715" y="470" class="code">BufferBank::SetLength(numSamps) // callback safe</text>
+  <text x="715" y="485" class="code">BufferBank::Resize(capacity) // off-thread only!</text>
+  
+  <!-- Data flow legend -->
+  <text x="30" y="580" class="subtitle">Data Flow Legend</text>
+  <rect x="30" y="600" width="20" height="15" fill="#fef3c7" stroke="#d97706" stroke-width="1" />
+  <text x="60" y="612" class="small">Hardware Layer</text>
+  
+  <rect x="180" y="600" width="20" height="15" fill="#dcfce7" stroke="#16a34a" stroke-width="1" />
+  <text x="210" y="612" class="small">ChannelMixer (I/O)</text>
+  
+  <rect x="350" y="600" width="20" height="15" fill="#dbeafe" stroke="#2563eb" stroke-width="1" />
+  <text x="380" y="612" class="small">Station (Container)</text>
+  
+  <rect x="520" y="600" width="20" height="15" fill="#e0e7ff" stroke="#6366f1" stroke-width="1" />
+  <text x="550" y="612" class="small">LoopTake (Manager)</text>
+  
+  <rect x="680" y="600" width="20" height="15" fill="#fce7f3" stroke="#ec4899" stroke-width="1" />
+  <text x="710" y="612" class="small">Loop (Storage)</text>
+  
+  <rect x="850" y="600" width="20" height="15" fill="#f1f5f9" stroke="#64748b" stroke-width="1" />
+  <text x="880" y="612" class="small">Buffer (Memory)</text>
+  
+  <line x1="30" y1="630" x2="50" y2="630" class="monitor-arrow" />
+  <text x="60" y="635" class="small">Monitor Path (Zero Latency)</text>
+  
+  <line x1="250" y1="630" x2="270" y2="630" class="storage-arrow" />
+  <text x="280" y="635" class="small">Storage Path (Input Delay)</text>
+  
+  <line x1="450" y1="630" x2="470" y2="630" class="arrow" />
+  <text x="480" y="635" class="small">Standard Routing</text>
+</svg>

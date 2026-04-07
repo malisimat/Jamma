@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Jamma Output Audio Flow - Loop Storage to DAC</title>
+  <desc id="desc">Detailed output path showing how audio flows from Loop storage through LoopTake, Station, ChannelMixer to hardware DAC with buffer management</desc>
+  
+  <defs>
+    <style>
+      .title { font: 700 20px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .subtitle { font: 600 16px 'Consolas', 'Courier New', monospace; fill: #334155; }
+      .label { font: 600 13px 'Consolas', 'Courier New', monospace; fill: #0f172a; }
+      .small { font: 400 11px 'Consolas', 'Courier New', monospace; fill: #475569; }
+      .code { font: 400 10px 'Consolas', 'Courier New', monospace; fill: #1e293b; }
+      
+      .loop { fill: #fce7f3; stroke: #ec4899; stroke-width: 2; rx: 8; }
+      .looptake { fill: #e0e7ff; stroke: #6366f1; stroke-width: 2; rx: 8; }
+      .station { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; rx: 8; }
+      .channelmixer { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; rx: 8; }
+      .hardware { fill: #fef3c7; stroke: #d97706; stroke-width: 2; rx: 8; }
+      .buffer { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.5; rx: 4; }
+      .mixer { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.5; rx: 4; }
+      
+      .arrow { stroke: #374151; stroke-width: 2.5; fill: none; marker-end: url(#arrowHead); }
+      .read-arrow { stroke: #7c3aed; stroke-width: 3; fill: none; marker-end: url(#readArrow); }
+      .route-arrow { stroke: #0891b2; stroke-width: 3; fill: none; marker-end: url(#routeArrow); }
+    </style>
+    
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#374151" />
+    </marker>
+    <marker id="readArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#7c3aed" />
+    </marker>
+    <marker id="routeArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#0891b2" />
+    </marker>
+  </defs>
+  
+  <rect x="0" y="0" width="1200" height="800" fill="#ffffff" />
+  <text x="20" y="35" class="title">OUTPUT AUDIO FLOW: Loop → LoopTake → Station → ChannelMixer → DAC</text>
+  <text x="20" y="55" class="subtitle">Real-time playback path with stack buffers and crossfade mixing</text>
+  
+  <!-- Loop Storage -->
+  <rect x="30" y="100" width="280" height="200" class="loop" />
+  <text x="45" y="125" class="label">Loop Playback Engine</text>
+  <text x="45" y="145" class="small">WriteBlock(dest, trigger, sampOffset, numSamps)</text>
+  
+  <!-- Storage Buffer -->
+  <rect x="50" y="160" width="120" height="60" class="buffer" />
+  <text x="60" y="180" class="small">Storage BufferBank</text>
+  <text x="60" y="195" class="code">_bufferBank (chunked)</text>
+  <text x="60" y="210" class="small">💾 Permanent audio data</text>
+  
+  <!-- Temp Buffer -->
+  <rect x="180" y="160" width="120" height="60" class="buffer" />
+  <text x="190" y="180" class="small">Stack Temp Buffer</text>
+  <text x="190" y="195" class="code">float[MaxBlockSize]</text>
+  <text x="190" y="210" class="small">🚀 16KB stack alloc</text>
+  
+  <!-- AudioMixer -->
+  <rect x="50" y="230" width="250" height="60" class="mixer" />
+  <text x="60" y="250" class="small">AudioMixer + MixBehaviour</text>
+  <text x="60" y="265" class="code">WireMixBehaviour::ApplyBlock() - direct routing</text>
+  <text x="60" y="280" class="code">PanMixBehaviour::ApplyBlock() - stereo positioning</text>
+  
+  <!-- ReadBlock process -->
+  <text x="320" y="125" class="subtitle">ReadBlock Process:</text>
+  <text x="320" y="145" class="code">1. ringIdx = (_playIndex + sampOffset) % _bufferBank.TotalLength()</text>
+  <text x="320" y="160" class="code">2. Handle wrap-around: before + after boundary</text>
+  <text x="320" y="175" class="code">3. Apply Hanning crossfade at loop boundaries</text>
+  <text x="320" y="190" class="code">4. Copy samples to tempBuf (stack allocated)</text>
+  <text x="320" y="205" class="code">5. Return samples read (0 if not playing)</text>
+  
+  <!-- LoopTake Manager -->
+  <rect x="360" y="260" width="200" height="140" class="looptake" />
+  <text x="375" y="285" class="label">LoopTake Manager</text>
+  <text x="375" y="305" class="small">WriteBlock(dest, trigger, sampOffset, numSamps)</text>
+  <text x="375" y="325" class="code">for loop in _loops:</text>
+  <text x="385" y="340" class="code">if loop.IsPlaying():</text>
+  <text x="395" y="355" class="code">loop.WriteBlock(dest, nullptr, ...)</text>
+  <text x="375" y="375" class="small">Collects audio from all loops</text>
+  <text x="375" y="390" class="small">🔀 Routes to parent Station</text>
+  
+  <!-- Station Container -->
+  <rect x="600" y="240" width="220" height="160" class="station" />
+  <text x="615" y="265" class="label">Station Container</text>
+  <text x="615" y="285" class="small">WriteBlock(dest, trigger, sampOffset, numSamps)</text>
+  <text x="615" y="305" class="code">1. Zero destination buffers</text>
+  <text x="615" y="320" class="code">2. for take in _loopTakes:</text>
+  <text x="625" y="335" class="code">take.WriteBlock(dest, ...)</text>
+  <text x="615" y="355" class="code">3. Apply station-level _masterMixer</text>
+  <text x="615" y="370" class="code">4. EndMultiPlay() - update indices</text>
+  <text x="615" y="390" class="small">🔀 Aggregates all takes to DAC</text>
+  
+  <!-- ChannelMixer Output -->
+  <rect x="860" y="240" width="200" height="160" class="channelmixer" />
+  <text x="875" y="265" class="label">ChannelMixer</text>
+  <text x="875" y="285" class="small">ToDac(outBuf, numChans, numSamps)</text>
+  <text x="875" y="305" class="code">Re-interleave channels:</text>
+  <text x="875" y="320" class="code">for chan in numChans:</text>
+  <text x="885" y="335" class="code">buf = _dacMixer[chan]</text>
+  <text x="885" y="350" class="code">if IsContiguous():</text>
+  <text x="895" y="365" class="code">fast block copy</text>
+  <text x="885" y="380" class="code">else: split read</text>
+  <text x="875" y="395" class="small">→ Interleaved float output</text>
+  
+  <!-- Hardware DAC -->
+  <rect x="990" y="280" width="180" height="120" class="hardware" />
+  <text x="1005" y="305" class="label">Hardware DAC</text>
+  <text x="1005" y="325" class="small">RtAudio interface</text>
+  <text x="1005" y="340" class="code">void* outBuffer</text>
+  <text x="1005" y="355" class="code">float samples[chan*numSamps]</text>
+  <text x="1005" y="370" class="code">interleaved format</text>
+  <text x="1005" y="385" class="small">🔊 Audio hardware</text>
+  
+  <!-- DAC Buffer Bank -->
+  <rect x="860" y="100" width="160" height="120" class="buffer" />
+  <text x="875" y="125" class="label">DAC Buffers</text>
+  <text x="875" y="145" class="small">vector&lt;AudioBuffer&gt;</text>
+  <text x="875" y="160" class="code">Per-channel ring buffers</text>
+  <text x="875" y="175" class="code">Collect station output</text>
+  <text x="875" y="190" class="code">_playIndex, _writeIndex</text>
+  <text x="875" y="205" class="small">💾 Temporary staging</text>
+  
+  <!-- Main flow arrows -->
+  <path class="read-arrow" d="M170 220 Q240 240 320 270" />
+  <text x="190" y="250" class="small" fill="#7c3aed">ReadBlock()</text>
+  
+  <path class="route-arrow" d="M310 320 L355 320" />
+  <path class="route-arrow" d="M560 320 L595 320" />
+  <path class="route-arrow" d="M820 320 L855 320" />
+  <path class="route-arrow" d="M960 220 Q980 240 980 275" />
+  <path class="arrow" d="M1060 320 L985 340" />
+  
+  <!-- Stack allocation flow -->
+  <text x="30" y="450" class="subtitle">Stack Buffer Chain (No Heap Allocation)</text>
+  
+  <rect x="30" y="470" width="140" height="80" class="buffer" />
+  <text x="40" y="490" class="label">Loop::WriteBlock()</text>
+  <text x="40" y="505" class="code">float tempBuf[4096]</text>
+  <text x="40" y="520" class="small">16KB stack</text>
+  <text x="40" y="535" class="small">ReadBlock → tempBuf</text>
+  
+  <rect x="200" y="470" width="140" height="80" class="buffer" />
+  <text x="210" y="490" class="label">LoopTake::WriteBlock()</text>
+  <text x="210" y="505" class="code">float tempBuf[4096]</text>
+  <text x="210" y="520" class="small">16KB stack</text>
+  <text x="210" y="535" class="small">Aggregate loops</text>
+  
+  <rect x="370" y="470" width="140" height="80" class="buffer" />
+  <text x="380" y="490" class="label">Station::WriteBlock()</text>
+  <text x="380" y="505" class="code">float tempBuf[4096]</text>
+  <text x="380" y="520" class="small">16KB stack</text>
+  <text x="380" y="535" class="small">Aggregate takes</text>
+  
+  <text x="540" y="490" class="small">Total Stack Usage:</text>
+  <text x="540" y="505" class="code">3 × 16KB = 48KB</text>
+  <text x="540" y="520" class="small">Per WriteBlock() chain</text>
+  <text x="540" y="535" class="small">Real-time safe</text>
+  
+  <path class="arrow" d="M170 510 L195 510" />
+  <path class="arrow" d="M340 510 L365 510" />
+  
+  <!-- Performance characteristics -->
+  <rect x="700" y="470" width="270" height="130" class="buffer" />
+  <text x="715" y="495" class="label">🚀 Playback Performance</text>
+  <text x="715" y="515" class="small">✅ Ring buffer reads with modulo arithmetic</text>
+  <text x="715" y="530" class="small">✅ Hanning crossfade (5ms window)</text>
+  <text x="715" y="545" class="small">✅ Contiguous block optimization</text>
+  <text x="715" y="560" class="small">✅ Stack allocation only (48KB total)</text>
+  <text x="715" y="575" class="small">✅ MixBehaviour abstraction (Wire/Pan/Bounce)</text>
+  <text x="715" y="590" class="small">⚡ Zero heap allocation in playback</text>
+  
+  <!-- Method call chain -->
+  <rect x="30" y="620" width="940" height="120" class="buffer" />
+  <text x="45" y="645" class="label">🔧 Method Call Chain (Output Path)</text>
+  <text x="45" y="665" class="code">Scene::_OnAudio() → station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps)</text>
+  <text x="45" y="680" class="code">Station::WriteBlock() → take->WriteBlock(dest, nullptr, sampOffset, numSamps)</text>
+  <text x="45" y="695" class="code">LoopTake::WriteBlock() → loop->WriteBlock(dest, nullptr, sampOffset, numSamps)</text>
+  <text x="45" y="710" class="code">Loop::WriteBlock() → ReadBlock(tempBuf, ...) → _mixer->WriteBlock(dest, tempBuf, ..)</text>
+  <text x="45" y="725" class="code">AudioMixer::WriteBlock() → _behaviour->ApplyBlock(dest, srcBuf, fadeLevel, numSamps, ..)</text>
+  
+  <!-- Data flow legend -->
+  <text x="1010" y="500" class="subtitle">Flow Types</text>
+  <line x1="1010" y1="520" x2="1040" y2="520" class="read-arrow" />
+  <text x="1050" y="525" class="small">ReadBlock (data)</text>
+  
+  <line x1="1010" y1="540" x2="1040" y2="540" class="route-arrow" />
+  <text x="1050" y="545" class="small">WriteBlock (routing)</text>
+  
+  <line x1="1010" y1="560" x2="1040" y2="560" class="arrow" />
+  <text x="1050" y="565" class="small">ToDac (hardware)</text>
+  
+  <!-- Component legend -->
+  <text x="1010" y="600" class="subtitle">Components</text>
+  <rect x="1010" y="620" width="15" height="12" fill="#fce7f3" stroke="#ec4899" stroke-width="1" />
+  <text x="1035" y="630" class="small">Loop (Storage)</text>
+  
+  <rect x="1010" y="640" width="15" height="12" fill="#e0e7ff" stroke="#6366f1" stroke-width="1" />
+  <text x="1035" y="650" class="small">LoopTake (Manager)</text>
+  
+  <rect x="1010" y="660" width="15" height="12" fill="#dbeafe" stroke="#2563eb" stroke-width="1" />
+  <text x="1035" y="670" class="small">Station (Container)</text>
+  
+  <rect x="1010" y="680" width="15" height="12" fill="#dcfce7" stroke="#16a34a" stroke-width="1" />
+  <text x="1035" y="690" class="small">ChannelMixer (I/O)</text>
+  
+  <rect x="1010" y="700" width="15" height="12" fill="#fef3c7" stroke="#d97706" stroke-width="1" />
+  <text x="1035" y="710" class="small">Hardware Layer</text>
+</svg>
