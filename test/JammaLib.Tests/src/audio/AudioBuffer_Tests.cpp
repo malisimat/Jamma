@@ -271,16 +271,9 @@ sourceOffset += sampsThisBlock;
 ReadBlockFromBuffer(audioBuf, sink, blockSize, delaySamps);
 }
 
-// With excessive delay clamped to bufSize, source[i] matches sink[bufSize+i]
-// which wraps — verify data matches at maximum delay
-for (auto samp = 0u; samp < bufSize; samp++)
-{
-if ((samp + bufSize) < bufSize)
-{
-EXPECT_FLOAT_EQ(sourceData[samp], sink->Samples[samp + bufSize])
-<< "Mismatch at source=" << samp;
-}
-}
+// Excessive delay is clamped to bufSize. Verify the pipeline
+// runs without crashing and the sink received data.
+ASSERT_TRUE(sink->IsFilled());
 }
 
 TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
