@@ -96,7 +96,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\JammaLib\lib;$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
@@ -112,7 +112,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;NOMINMAX;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\JammaLib\lib;$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
@@ -130,7 +130,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\JammaLib\lib;$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
@@ -149,7 +149,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>NDEBUG;NOMINMAX;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\JammaLib\lib;$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
@@ -162,11 +162,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
-    <ClCompile Include="$(SolutionDir)JammaLib\lib\rtaudio\RtAudio.cpp" />
-    <ClCompile Include="$(SolutionDir)JammaLib\lib\rtaudio\include\asio.cpp" />
-    <ClCompile Include="$(SolutionDir)JammaLib\lib\rtaudio\include\asiodrivers.cpp" />
-    <ClCompile Include="$(SolutionDir)JammaLib\lib\rtaudio\include\asiolist.cpp" />
-    <ClCompile Include="$(SolutionDir)JammaLib\lib\rtaudio\include\iasiothiscallresolver.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\RtAudio.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\asio.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\asiodrivers.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\asiolist.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\iasiothiscallresolver.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
