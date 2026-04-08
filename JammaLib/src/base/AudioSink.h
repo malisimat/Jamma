@@ -39,25 +39,39 @@ namespace base
 		virtual void Zero(unsigned int numSamps)
 		{
 			static const float zeros[4096] = {};
-			auto sampsToZero = (numSamps <= 4096u) ? numSamps : 4096u;
+			const unsigned int zeroBlockSize =
+				static_cast<unsigned int>(sizeof(zeros) / sizeof(zeros[0]));
 
 			AudioWriteRequest reqAdc;
 			reqAdc.samples = zeros;
-			reqAdc.numSamps = sampsToZero;
 			reqAdc.stride = 1;
 			reqAdc.fadeCurrent = 0.0f;
 			reqAdc.fadeNew = 1.0f;
 			reqAdc.source = AUDIOSOURCE_ADC;
-			OnBlockWrite(reqAdc, 0);
 
 			AudioWriteRequest reqMon;
 			reqMon.samples = zeros;
-			reqMon.numSamps = sampsToZero;
 			reqMon.stride = 1;
 			reqMon.fadeCurrent = 0.0f;
 			reqMon.fadeNew = 1.0f;
 			reqMon.source = AUDIOSOURCE_MONITOR;
-			OnBlockWrite(reqMon, 0);
+
+			unsigned int writeOffset = 0;
+			unsigned int remaining = numSamps;
+			while (remaining > 0)
+			{
+				const auto sampsToZero =
+					(remaining <= zeroBlockSize) ? remaining : zeroBlockSize;
+
+				reqAdc.numSamps = sampsToZero;
+				OnBlockWrite(reqAdc, static_cast<int>(writeOffset));
+
+				reqMon.numSamps = sampsToZero;
+				OnBlockWrite(reqMon, static_cast<int>(writeOffset));
+
+				writeOffset += sampsToZero;
+				remaining -= sampsToZero;
+			}
 		}
 
 		// Block-level write: writes a contiguous or strided block of samples.
