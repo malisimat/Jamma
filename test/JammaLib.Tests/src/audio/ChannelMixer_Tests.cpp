@@ -63,13 +63,13 @@ public:
     std::vector<float> Samples;
 };
 
-class MockedMultiSink :
+class MockMultiSink :
     public MultiAudioSink
 {
 public:
-    MockedMultiSink(unsigned int bufSize)
+    MockMultiSink(unsigned int bufSize)
+        : _sink(std::make_shared<ChannelMixerMockedSink>(bufSize))
     {
-        _sink = std::make_shared<ChannelMixerMockedSink>(bufSize);
     }
 
 public:
@@ -107,7 +107,7 @@ TEST(ChannelMixer, PlayWrapsAroundAndMatches)
     chanParams.NumOutputChannels = 1;
 
     auto chanMixer = ChannelMixer(chanParams);
-    auto sink = std::make_shared<MockedMultiSink>(bufSize);
+    auto sink = std::make_shared<MockMultiSink>(bufSize);
 
     auto buf = std::vector<float>(bufSize);
     for (auto samp = 0u; samp < bufSize; samp++)
