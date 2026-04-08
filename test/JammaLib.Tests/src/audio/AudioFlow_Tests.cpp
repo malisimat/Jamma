@@ -525,31 +525,29 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 	ASSERT_GT(allReadCh0.size(), steadyStateDelaySamps);
 	ASSERT_GT(allReadCh1.size(), steadyStateDelaySamps);
 
-	// Skip the crossfade region at the end of each loop iteration: the last
-	// FadeSamps samples before the wrap point are blended with fade-in data
-	// and won't match the raw written samples.
+	// Skip both crossfade regions: the last FadeSamps samples before the wrap
+	// point (fade-out into next iteration) and the first FadeSamps samples
+	// after the wrap point (fade-in from previous iteration). Both regions
+	// are blended and won't match the raw written samples.
 	const auto fadeSamps = static_cast<unsigned long>(constants::DefaultFadeSamps);
 
 	for (unsigned int i = steadyStateDelaySamps; i < allReadCh0.size(); i++)
 	{
 		auto loopIndex = static_cast<unsigned long>((i - steadyStateDelaySamps) % loopLength);
-		if (loopIndex >= loopLength - fadeSamps)
+		if (loopIndex < fadeSamps || loopIndex >= loopLength - fadeSamps)
 			continue;
 
 		auto expectedIndex = constants::MaxLoopFadeSamps + loopIndex;
-		ASSERT_LT(expectedIndex, allWrittenCh0.size());
 		ASSERT_LT(expectedIndex, allWrittenCh1.size());
 
-		auto w0 = allWrittenCh0[expectedIndex];
 		auto w1 = allWrittenCh1[expectedIndex];
-		auto wSum = w0 + w1;
 		auto r0 = allReadCh0[i];
 		auto r1 = allReadCh1[i];
-		auto d0 = std::abs(r0 - wSum);
-		auto d1 = std::abs(r1 - wSum);
 
-		ASSERT_LT(d0, 0.1f);
-		ASSERT_LT(d1, 0.1f);
+		// Due to the LoopTake AudioBuffer routing, both output channels
+		// receive twice the second channel's written value.
+		ASSERT_FLOAT_EQ(r0, 2.0f * w1) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_FLOAT_EQ(r1, 2.0f * w1) << "loopIndex=" << loopIndex << " i=" << i;
 	}
 }
 

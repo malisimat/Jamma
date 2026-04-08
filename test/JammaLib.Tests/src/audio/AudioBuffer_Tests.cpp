@@ -186,6 +186,9 @@ TEST(AudioBuffer, WriteMatchesRead)
         {
             WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
             sourceOffset += sampsThisBlock;
+            // Real-time audio always advances the write head by a full block per tick.
+            if (sampsThisBlock < blockSize)
+                audioBuf->EndWrite(blockSize - sampsThisBlock, true);
         }
 
         ReadBlockFromBuffer(audioBuf, sink, blockSize);
@@ -198,22 +201,25 @@ TEST(AudioBuffer, WriteMatchesRead)
     }
 }
 
-TEST(AudioBuffer, IsCorrectlyDelayed)
+TEST(AudioBuffer, AppliesPlaybackDelay)
 {
     const auto bufSize = 100u;
     const auto blockSize = 11u;
     const auto delaySamps = 42u;
+    const auto sinkSize = bufSize + delaySamps;
 
     auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
-    auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(sinkSize);
 
     std::vector<float> sourceData(bufSize);
     for (auto i = 0u; i < bufSize; i++)
         sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
 
+    std::vector<float> zeroData(blockSize, 0.0f);
+
     audioBuf->Zero(bufSize);
 
-    const auto numBlocks = (bufSize / blockSize) + 1u;
+    const auto numBlocks = (sinkSize / blockSize) + 1u;
     auto sourceOffset = 0u;
 
     for (auto i = 0u; i < numBlocks; i++)
@@ -223,18 +229,29 @@ TEST(AudioBuffer, IsCorrectlyDelayed)
         {
             WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
             sourceOffset += sampsThisBlock;
+            // Real-time audio always advances the write head by a full block per tick.
+            if (sampsThisBlock < blockSize)
+                audioBuf->EndWrite(blockSize - sampsThisBlock, true);
+        }
+        else
+        {
+            // Continue clocking explicit silence so delayed audio drains predictably.
+            WriteBlockToBuffer(audioBuf, zeroData.data(), blockSize);
         }
 
         ReadBlockFromBuffer(audioBuf, sink, blockSize, delaySamps);
     }
 
+    for (auto samp = 0u; samp < delaySamps; samp++)
+    {
+        EXPECT_FLOAT_EQ(0.0f, sink->Samples[samp])
+            << "Expected silence at delayed sink sample " << samp;
+    }
+
     for (auto samp = 0u; samp < bufSize; samp++)
     {
-        if ((samp + delaySamps) < bufSize)
-        {
-            EXPECT_FLOAT_EQ(sourceData[samp], sink->Samples[samp + delaySamps])
-                << "Mismatch at source=" << samp << " sink=" << (samp + delaySamps);
-        }
+        EXPECT_FLOAT_EQ(sourceData[samp], sink->Samples[samp + delaySamps])
+            << "Mismatch at source=" << samp << " sink=" << (samp + delaySamps);
     }
 }
 
