@@ -174,6 +174,9 @@ static void AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ActionE
 
 	auto outSamples = ReadStationOutput(station, { 1.0f, 1.0f });
 	ASSERT_EQ(2u, outSamples.size());
+	// Two bus buffers at 1.0f each are summed through one mixer per output.
+	// After swapping routes {(0,1), (1,0)}, output 0 gets mixer 1 (level 1.0)
+	// for a total of 2.0f, while output 1 gets mixer 0 (level 0.25) for 0.5f.
 	EXPECT_NEAR(2.0f, outSamples[0], 0.01f);
 	EXPECT_NEAR(0.5f, outSamples[1], 0.01f);
 }
