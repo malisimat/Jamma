@@ -353,11 +353,11 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
-	MergeMixBehaviourParams wireParams;
+	MergeMixBehaviourParams mergeParams;
 	if (_backAudioBuffers.size() <= NumBusChannels())
-		wireParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
+		mergeParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
 
-	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, wireParams);
+	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, mergeParams);
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
 	mixer->SetUnmutedLevel(1.0);
 	_backAudioMixers.push_back(mixer);

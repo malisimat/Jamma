@@ -530,6 +530,7 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 	// after the wrap point (fade-in from previous iteration). Both regions
 	// are blended and won't match the raw written samples.
 	const auto fadeSamps = static_cast<unsigned long>(constants::DefaultFadeSamps);
+	constexpr auto epsilon = 1e-5f;
 
 	for (unsigned int i = steadyStateDelaySamps; i < allReadCh0.size(); i++)
 	{
@@ -547,8 +548,8 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 		auto r1 = allReadCh1[i];
 		auto wSum = w0 + w1;
 
-		ASSERT_LT(std::abs(r0 - wSum), 0.1f) << "loopIndex=" << loopIndex << " i=" << i;
-		ASSERT_LT(std::abs(r1 - wSum), 0.1f) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r0 - wSum), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r1 - wSum), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
 	}
 }
 
