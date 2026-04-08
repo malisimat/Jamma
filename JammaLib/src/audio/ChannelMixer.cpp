@@ -72,7 +72,7 @@ void ChannelMixer::WriteToSink(const std::shared_ptr<MultiAudioSink> dest, unsig
 			if (0 == bufSize)
 				continue;
 
-			auto playIndex = buf->Delay(0);
+			auto playIndex = buf->PlayIndex();
 
 			AudioWriteRequest request;
 			request.fadeCurrent = 1.0f;

@@ -153,6 +153,11 @@ unsigned int AudioBuffer::Delay(unsigned int sampsDelay)
 	return _playIndex;
 }
 
+unsigned int AudioBuffer::PlayIndex() const
+{
+	return static_cast<unsigned int>(_playIndex);
+}
+
 bool AudioBuffer::IsContiguous(unsigned int startIndex, unsigned int numSamps) const
 {
 	return (startIndex + numSamps) <= (unsigned int)_buffer.size();

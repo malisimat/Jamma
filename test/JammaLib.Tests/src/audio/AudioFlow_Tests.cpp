@@ -19,6 +19,7 @@ using audio::AudioMixerParams;
 using audio::MergeMixBehaviourParams;
 using audio::WireMixBehaviourParams;
 using base::Audible;
+using base::AudioWriteRequest;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,9 +98,9 @@ void WriteBlock(ChannelMixer& chanMixer,
 	float* inBuf, unsigned int numChans, unsigned int numSamps)
 {
 	chanMixer.FromAdc(inBuf, numChans, numSamps);
-	chanMixer.Source()->OnPlay(
-		std::dynamic_pointer_cast<base::MultiAudioSink>(station),
-		nullptr, 0, numSamps);
+	chanMixer.InitPlay(0, numSamps);
+	chanMixer.WriteToSink(
+		std::dynamic_pointer_cast<base::MultiAudioSink>(station), numSamps);
 	chanMixer.Source()->EndMultiPlay(numSamps);
 	station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_ADC);
 }
@@ -111,7 +112,7 @@ void ReadBlock(ChannelMixer& chanMixer,
 {
 	station->Zero(numSamps, READBLOCK_SOURCE);
 	chanMixer.Sink()->Zero(numSamps, READBLOCK_SOURCE);
-	station->OnPlay(chanMixer.Sink(), nullptr, 0, numSamps);
+	station->WriteBlock(chanMixer.Sink(), nullptr, 0, numSamps);
 	chanMixer.ToDac(outBuf, numChans, numSamps);
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, READBLOCK_SOURCE);
 	station->EndMultiPlay(numSamps);
@@ -139,13 +140,17 @@ class CaptureSink :
 public:
 	CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
 
-	virtual int OnMixWrite(float samp, float fadeCurrent, float fadeNew,
-		int indexOffset, base::Audible::AudioSourceType source) override
+	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
 	{
-		auto bufferIndex = _writeIndex + indexOffset;
-		if (bufferIndex < Samples.size())
-			Samples[bufferIndex] = (fadeNew * samp) + (fadeCurrent * Samples[bufferIndex]);
-		return indexOffset + 1;
+		for (auto i = 0u; i < request.numSamps; i++)
+		{
+			auto bufferIndex = _writeIndex + writeOffset + i;
+			if (bufferIndex < Samples.size())
+			{
+				auto samp = request.samples[i * request.stride];
+				Samples[bufferIndex] = (request.fadeNew * samp) + (request.fadeCurrent * Samples[bufferIndex]);
+			}
+		}
 	}
 	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
 	{
@@ -279,12 +284,18 @@ TEST(AudioFlow, SingleChannel_LoopPlaybackProducesOutput)
 	station->CommitChanges();
 
 	// Fill the loop's buffer bank directly with non-zero data.
+	std::vector<float> recordData(totalRecord);
 	for (unsigned long i = 0; i < totalRecord; i++)
-	{
-		float samp = TestSample(static_cast<unsigned int>(i));
-		loop0->OnMixWrite(samp, 0.0f, 1.0f, static_cast<int>(i),
-			Audible::AUDIOSOURCE_ADC);
-	}
+		recordData[i] = TestSample(static_cast<unsigned int>(i));
+
+	AudioWriteRequest writeReq;
+	writeReq.samples = recordData.data();
+	writeReq.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq, 0);
 	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
 
 	// Transition to playing.
@@ -319,16 +330,32 @@ TEST(AudioFlow, TwoChannel_LoopPlaybackProducesOutput)
 	station->CommitChanges();
 
 	// Fill both loops with deterministic non-zero data.
+	std::vector<float> recordData0(totalRecord);
+	std::vector<float> recordData1(totalRecord);
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float samp0 = TestSample(static_cast<unsigned int>(i), 7);
-		float samp1 = TestSample(static_cast<unsigned int>(i), 13);
-		loop0->OnMixWrite(samp0, 0.0f, 1.0f, static_cast<int>(i),
-			Audible::AUDIOSOURCE_ADC);
-		loop1->OnMixWrite(samp1, 0.0f, 1.0f, static_cast<int>(i),
-			Audible::AUDIOSOURCE_ADC);
+		recordData0[i] = TestSample(static_cast<unsigned int>(i), 7);
+		recordData1[i] = TestSample(static_cast<unsigned int>(i), 13);
 	}
+
+	AudioWriteRequest writeReq0;
+	writeReq0.samples = recordData0.data();
+	writeReq0.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq0.stride = 1;
+	writeReq0.fadeCurrent = 0.0f;
+	writeReq0.fadeNew = 1.0f;
+	writeReq0.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq0, 0);
 	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
+
+	AudioWriteRequest writeReq1;
+	writeReq1.samples = recordData1.data();
+	writeReq1.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq1.stride = 1;
+	writeReq1.fadeCurrent = 0.0f;
+	writeReq1.fadeNew = 1.0f;
+	writeReq1.source = Audible::AUDIOSOURCE_ADC;
+	loop1->OnBlockWrite(writeReq1, 0);
 	loop1->EndWrite(static_cast<unsigned int>(totalRecord), true);
 
 	// Transition to playing.
@@ -577,8 +604,8 @@ TEST(AudioFlow, ReadEmptyLoop_ProducesSilence)
 // Per-sample value verification
 // ===========================================================================
 
-// 10. Write a known ascending sequence to a loop via OnMixWrite, read back
-//     through Loop::OnPlay → mock sink, and verify every sample matches.
+// 10. Write a known ascending sequence to a loop via OnBlockWrite, read back
+//     through Loop::WriteBlock -> mock sink, and verify every sample matches.
 //     This validates that sample values pass through the mixer path unchanged
 //     (WireMixBehaviour, fade = 1.0).
 TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
@@ -599,25 +626,30 @@ TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
 	Loop loop(loopParams, mixerParams);
 	loop.Record();
 
-	// Write a known ascending sequence. The loop region starts at
-	// index MaxLoopFadeSamps. We write (k+1)*0.01f for position k
-	// within the loop region; the fade-in region is left as zero.
+	// Write a known ascending sequence using block API.
+	std::vector<float> recordData(totalRecord);
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float val = (i >= constants::MaxLoopFadeSamps)
+		recordData[i] = (i >= constants::MaxLoopFadeSamps)
 			? static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f
 			: 0.0f;
-		loop.OnMixWrite(val, 0.0f, 1.0f, static_cast<int>(i),
-			Audible::AUDIOSOURCE_ADC);
 	}
+	AudioWriteRequest writeReq;
+	writeReq.samples = recordData.data();
+	writeReq.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = Audible::AUDIOSOURCE_ADC;
+	loop.OnBlockWrite(writeReq, 0);
 	loop.EndWrite(static_cast<unsigned int>(totalRecord), true);
 
 	// Transition to playing: _playIndex = MaxLoopFadeSamps.
 	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
 
-	// Read one block via Loop::OnPlay into a capturing mock sink.
+	// Read one block via Loop::WriteBlock into a capturing mock sink.
 	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
-	loop.OnPlay(sink, nullptr, 0, blockSize);
+	loop.WriteBlock(sink, nullptr, 0, blockSize);
 	loop.EndMultiPlay(blockSize);
 
 	// Verify exact per-sample values. The mixer fade is 1.0 (Jump +
@@ -678,7 +710,7 @@ TEST(AudioFlow, WriteViaStation_PerSampleVerification)
 	// Read one block directly from the loop into a capturing mock sink.
 	const unsigned int readBlock = 32;
 	auto sink = std::make_shared<CaptureMultiSink>(readBlock);
-	loop0->OnPlay(sink, nullptr, 0, readBlock);
+	loop0->WriteBlock(sink, nullptr, 0, readBlock);
 	loop0->EndMultiPlay(readBlock);
 
 	// Verify exact per-sample values. Samples pass through the
@@ -712,17 +744,24 @@ TEST(AudioFlow, ReadViaStation_PerSampleVerification)
 	loop0->Record();
 	station->CommitChanges();
 
-	// Write a known ascending sequence directly to the loop.
+	// Write a known ascending sequence directly to the loop using block API.
 	// The loop region starts at MaxLoopFadeSamps; we write (k+1)*0.01f
 	// for position k within the loop region; the fade-in region is zero.
+	std::vector<float> recordData(totalRecord);
 	for (unsigned long i = 0; i < totalRecord; i++)
 	{
-		float val = (i >= constants::MaxLoopFadeSamps)
+		recordData[i] = (i >= constants::MaxLoopFadeSamps)
 			? static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f
 			: 0.0f;
-		loop0->OnMixWrite(val, 0.0f, 1.0f, static_cast<int>(i),
-			Audible::AUDIOSOURCE_ADC);
 	}
+	AudioWriteRequest writeReq;
+	writeReq.samples = recordData.data();
+	writeReq.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq, 0);
 	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
 
 	// Transition take (and its loops) to playing.

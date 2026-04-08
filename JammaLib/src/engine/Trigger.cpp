@@ -314,29 +314,20 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const float* srcBuf,
 	unsigned int numSamps)
 {
-	bool removeExpired = false;
 	for (auto& action : _delayedActions)
 	{
 		if (action.SampsLeft(0) == 0)
 		{
 			auto val = action.GetTarget();
 			_overdubMixer->SetUnmutedLevel(val);
-			std::cout << "Set delayed action value " << val << " (delayedActions count = " << _delayedActions.size() << ")" << std::endl;
-
-			removeExpired = true;
 		}
 	}
 
-	if (removeExpired)
-	{
-		std::vector<DelayedAction> newActions;
-
-		auto isNotExpired = [](DelayedAction action) { return action.SampsLeft(0) > 0; };
-		std::copy_if(_delayedActions.begin(), _delayedActions.end(),
-			std::back_inserter(newActions), isNotExpired);
-
-		_delayedActions = newActions;
-	}
+	// Erase expired actions in-place (no heap allocation)
+	_delayedActions.erase(
+		std::remove_if(_delayedActions.begin(), _delayedActions.end(),
+			[](DelayedAction& action) { return action.SampsLeft(0) == 0; }),
+		_delayedActions.end());
 
 	_overdubMixer->WriteBlock(dest, srcBuf, numSamps);
 }

@@ -30,6 +30,7 @@ namespace audio
 
 		const float& operator[](unsigned int index) const;
 		unsigned int Delay(unsigned int sampsDelay);
+		unsigned int PlayIndex() const;
 		bool IsContiguous(unsigned int startIndex, unsigned int numSamps) const;
 		const float* BlockRead(unsigned int startIndex) const;
 
