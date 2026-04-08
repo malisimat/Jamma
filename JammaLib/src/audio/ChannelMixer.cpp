@@ -125,13 +125,21 @@ void ChannelMixer::ToDac(float* outBuf, unsigned int numChannels, unsigned int n
 				if (buf->IsContiguous(playIndex, numSamps))
 				{
 					auto ptr = buf->BlockRead(playIndex);
+					auto offset = chan;
 					for (auto samp = 0u; samp < numSamps; samp++)
-						outBuf[samp * numChannels + chan] = ptr[samp];
+					{
+						outBuf[offset] = ptr[samp];
+						offset += numChannels;
+					}
 				}
 				else
 				{
+					auto offset = chan;
 					for (auto samp = 0u; samp < numSamps; samp++)
-						outBuf[samp * numChannels + chan] = (*buf)[samp + playIndex];
+					{
+						outBuf[offset] = (*buf)[samp + playIndex];
+						offset += numChannels;
+					}
 				}
 			}
 		}
