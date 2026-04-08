@@ -47,12 +47,12 @@ public:
 
 	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
 	{
-		for (auto i = 0u; i < request.numSamps; i++)
+		for (auto sampleIndex = 0u; sampleIndex < request.numSamps; sampleIndex++)
 		{
-			auto bufferIndex = _writeIndex + writeOffset + i;
+			auto bufferIndex = _writeIndex + writeOffset + sampleIndex;
 			if (bufferIndex < Samples.size())
 			{
-				auto samp = request.samples[i * request.stride];
+				auto samp = request.samples[sampleIndex * request.stride];
 				Samples[bufferIndex] = (request.fadeNew * samp) + (request.fadeCurrent * Samples[bufferIndex]);
 			}
 		}
@@ -73,7 +73,7 @@ class CaptureMultiSink :
 public:
 	explicit CaptureMultiSink(unsigned int numChannels) : _sinks()
 	{
-		for (auto chan = 0u; chan < numChannels; chan++)
+		for (auto channelIndex = 0u; channelIndex < numChannels; channelIndex++)
 			_sinks.push_back(std::make_shared<CaptureSink>(1u));
 	}
 
