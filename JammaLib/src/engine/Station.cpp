@@ -220,8 +220,21 @@ void Station::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)
 {
-	for (auto& take : _loopTakes)
-		take->OnBlockWriteChannel(channel, request, writeOffset);
+	// Base class routes bus sources to _audioBuffers via _InputChannel
+	// (no-op for record sources since _InputChannel returns nullptr)
+	MultiAudioSink::OnBlockWriteChannel(channel, request, writeOffset);
+
+	// Fan out record sources to all loop takes
+	// (during recording, loop takes may use any/all ADC channels)
+	switch (request.source)
+	{
+	case Audible::AUDIOSOURCE_ADC:
+	case Audible::AUDIOSOURCE_MONITOR:
+	case Audible::AUDIOSOURCE_BOUNCE:
+		for (auto& take : _loopTakes)
+			take->OnBlockWriteChannel(channel, request, writeOffset);
+		break;
+	}
 }
 
 void Station::EndMultiWrite(unsigned int numSamps,
@@ -811,8 +824,14 @@ std::vector<JobAction> Station::_CommitChanges()
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
-	if (channel < _audioBuffers.size())
-		return _audioBuffers[channel];
+ switch (source)
+	{
+	case Audible::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_MIXER:
+		if (channel < _audioBuffers.size())
+			return _audioBuffers[channel];
+		break;
+	}
 
 	return nullptr;
 }
