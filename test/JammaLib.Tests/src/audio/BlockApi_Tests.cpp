@@ -383,7 +383,7 @@ TEST(BlockApi, LoopBlockWriteAndRead) {
 
 TEST(BlockApi, LoopReadBlock) {
 	auto blockSize = 32u;
-	auto loopLength = 64ul;
+	auto loopLength = 2ul * blockSize;
 	auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
 
 	WireMixBehaviourParams mixBehaviour;

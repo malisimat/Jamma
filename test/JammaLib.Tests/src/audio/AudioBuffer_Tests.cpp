@@ -78,6 +78,8 @@ static void ReadBlockFromBuffer(const std::shared_ptr<AudioBuffer>& buf,
 {
     float tempBuf[constants::MaxBlockSize];
 
+    // Match AudioBuffer playback semantics: read the block ending
+    // numSamps before the current write index, with any extra delay applied.
     buf->Delay(delaySamps + numSamps);
 
     auto ptr = buf->PlaybackRead(tempBuf, numSamps);
