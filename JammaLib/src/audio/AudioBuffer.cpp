@@ -170,7 +170,7 @@ const float* AudioBuffer::BlockRead(unsigned int startIndex) const
 
 const float* AudioBuffer::PlaybackRead(float* tempBuf, unsigned int numSamps)
 {
-	auto playIndex = Delay(numSamps);
+	auto playIndex = PlayIndex();
 
 	if (IsContiguous(playIndex, numSamps))
 		return BlockRead(playIndex);

@@ -245,6 +245,7 @@ TEST(BlockApi, AudioBufferPlaybackRead) {
 
 	// PlaybackRead should return pointer to contiguous data
 	float tempBuf[constants::MaxBlockSize];
+	buf->Delay(numSamps);
 	auto ptr = buf->PlaybackRead(tempBuf, numSamps);
 	ASSERT_NE(ptr, nullptr);
 
@@ -382,7 +383,7 @@ TEST(BlockApi, LoopBlockWriteAndRead) {
 
 TEST(BlockApi, LoopReadBlock) {
 	auto blockSize = 32u;
-	auto loopLength = (unsigned long)blockSize;
+	auto loopLength = 64ul;
 	auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
 
 	WireMixBehaviourParams mixBehaviour;

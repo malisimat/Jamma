@@ -169,10 +169,9 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches)
             sourceOffset += sampsThisBlock;
         }
 
-        chanMixer.Sink()->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
-
         auto tempBuf = std::vector<float>(blockSize);
         chanMixer.ToDac(tempBuf.data(), 1, blockSize);
+        chanMixer.Sink()->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 
         for (auto v : tempBuf)
             outputBuf.push_back(v);

@@ -173,6 +173,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	{
 		auto& buf = _audioBuffers[i];
 		float tempBuf[constants::MaxBlockSize];
+		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
 		for (const auto& mixer : _audioMixers)

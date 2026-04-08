@@ -184,6 +184,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	for (const auto& buf : _audioBuffers)
 	{
 		float tempBuf[constants::MaxBlockSize];
+		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
 		for (const auto& mixer : _audioMixers)

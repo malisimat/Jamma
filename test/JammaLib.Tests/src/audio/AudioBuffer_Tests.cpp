@@ -78,8 +78,7 @@ static void ReadBlockFromBuffer(const std::shared_ptr<AudioBuffer>& buf,
 {
     float tempBuf[constants::MaxBlockSize];
 
-    if (delaySamps > 0)
-        buf->Delay(delaySamps + numSamps);
+    buf->Delay(delaySamps + numSamps);
 
     auto ptr = buf->PlaybackRead(tempBuf, numSamps);
 
@@ -111,6 +110,7 @@ TEST(AudioBuffer, PlayWrapsAround)
     for (auto i = 0u; i < numBlocks; i++)
     {
         float tempBuf[constants::MaxBlockSize];
+        audioBuf->Delay(blockSize);
         auto ptr = audioBuf->PlaybackRead(tempBuf, blockSize);
 
         AudioWriteRequest request;
