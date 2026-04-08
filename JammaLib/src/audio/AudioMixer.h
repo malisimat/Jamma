@@ -84,6 +84,14 @@ namespace audio
 		}
 
 	protected:
+		// Shared helper for channel-iterated block writes (Wire, Bounce, Merge).
+		void _ApplyBlockToChannels(const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			float fadeCurrent,
+			float fadeNew,
+			unsigned int numSamps,
+			unsigned int startIndex) const;
+
 		WireMixBehaviourParams _mixParams;
 	};
 

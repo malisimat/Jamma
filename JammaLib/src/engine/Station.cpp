@@ -180,27 +180,14 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			numSamps);
 
 	//_masterMixer->WriteBlock();
+	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	for (const auto& buf : _audioBuffers)
 	{
-		auto playIndex = buf->Delay(numSamps);
+		float tempBuf[constants::MaxBlockSize];
+		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
 		for (const auto& mixer : _audioMixers)
-		{
-			if (buf->IsContiguous(playIndex, numSamps))
-			{
-				mixer->WriteBlock(dest, buf->BlockRead(playIndex), numSamps);
-			}
-			else
-			{
-				// Buffer wraps — copy into contiguous temp buffer first
-				float tempBuf[constants::MaxBlockSize];
-				auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
-				for (auto samp = 0u; samp < sampsToWrite; samp++)
-					tempBuf[samp] = (*buf)[samp + playIndex];
-
-				mixer->WriteBlock(dest, tempBuf, sampsToWrite);
-			}
-		}
+			mixer->WriteBlock(dest, srcPtr, sampsToRead);
 	}
 }
 

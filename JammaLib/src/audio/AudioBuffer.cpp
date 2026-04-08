@@ -162,3 +162,17 @@ const float* AudioBuffer::BlockRead(unsigned int startIndex) const
 {
 	return &_buffer[startIndex];
 }
+
+const float* AudioBuffer::PlaybackRead(float* tempBuf, unsigned int numSamps)
+{
+	auto playIndex = Delay(numSamps);
+
+	if (IsContiguous(playIndex, numSamps))
+		return BlockRead(playIndex);
+
+	// Buffer wraps — copy into contiguous temp buffer
+	for (auto samp = 0u; samp < numSamps; samp++)
+		tempBuf[samp] = (*this)[samp + playIndex];
+
+	return tempBuf;
+}

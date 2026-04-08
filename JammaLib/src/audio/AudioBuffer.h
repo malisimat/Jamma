@@ -33,6 +33,12 @@ namespace audio
 		bool IsContiguous(unsigned int startIndex, unsigned int numSamps) const;
 		const float* BlockRead(unsigned int startIndex) const;
 
+		// Reads numSamps from the playback position (set by Delay(numSamps)).
+		// Returns a pointer to contiguous data — either a direct pointer into
+		// the ring buffer (zero-copy when no wrap-around) or tempBuf after
+		// copying wrapped data. tempBuf must hold at least numSamps floats.
+		const float* PlaybackRead(float* tempBuf, unsigned int numSamps);
+
 	protected:
 		std::vector<float>::iterator Start();
 		std::vector<float>::iterator End();

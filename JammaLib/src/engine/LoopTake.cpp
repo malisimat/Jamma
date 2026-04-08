@@ -168,28 +168,15 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			indexOffset,
 			numSamps);
 
+	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		auto& buf = _audioBuffers[i];
-		auto playIndex = buf->Delay(numSamps);
+		float tempBuf[constants::MaxBlockSize];
+		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
 		for (const auto& mixer : _audioMixers)
-		{
-			if (buf->IsContiguous(playIndex, numSamps))
-			{
-				mixer->WriteBlock(dest, buf->BlockRead(playIndex), numSamps);
-			}
-			else
-			{
-				// Buffer wraps — copy into contiguous temp buffer first
-				float tempBuf[constants::MaxBlockSize];
-				auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
-				for (auto samp = 0u; samp < sampsToWrite; samp++)
-					tempBuf[samp] = (*buf)[samp + playIndex];
-
-				mixer->WriteBlock(dest, tempBuf, sampsToWrite);
-			}
-		}
+			mixer->WriteBlock(dest, srcPtr, sampsToRead);
 	}
 }
 

@@ -134,9 +134,10 @@ void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 	_behaviour = std::move(behaviour);
 }
 
-void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+void WireMixBehaviour::_ApplyBlockToChannels(const std::shared_ptr<MultiAudioSink>& dest,
 	const float* srcBuf,
-	float fadeLevel,
+	float fadeCurrent,
+	float fadeNew,
 	unsigned int numSamps,
 	unsigned int startIndex) const
 {
@@ -147,14 +148,23 @@ void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	request.samples = srcBuf;
 	request.numSamps = numSamps;
 	request.stride = 1;
-	request.fadeCurrent = 0.0f;
-	request.fadeNew = fadeLevel;
+	request.fadeCurrent = fadeCurrent;
+	request.fadeNew = fadeNew;
 	request.source = base::Audible::AUDIOSOURCE_MIXER;
 
 	for (auto chan : _mixParams.Channels)
 	{
 		dest->OnBlockWriteChannel(chan, request, startIndex);
 	}
+}
+
+void WireMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
+	const float* srcBuf,
+	float fadeLevel,
+	unsigned int numSamps,
+	unsigned int startIndex) const
+{
+	_ApplyBlockToChannels(dest, srcBuf, 0.0f, fadeLevel, numSamps, startIndex);
 }
 
 void PanMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
@@ -191,21 +201,7 @@ void BounceMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	unsigned int numSamps,
 	unsigned int startIndex) const
 {
-	if (nullptr == dest)
-		return;
-
-	base::AudioWriteRequest request;
-	request.samples = srcBuf;
-	request.numSamps = numSamps;
-	request.stride = 1;
-	request.fadeCurrent = 1.0f - fadeLevel;
-	request.fadeNew = fadeLevel;
-	request.source = base::Audible::AUDIOSOURCE_MIXER;
-
-	for (auto chan : _mixParams.Channels)
-	{
-		dest->OnBlockWriteChannel(chan, request, startIndex);
-	}
+	_ApplyBlockToChannels(dest, srcBuf, 1.0f - fadeLevel, fadeLevel, numSamps, startIndex);
 }
 
 void MergeMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
@@ -214,19 +210,5 @@ void MergeMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	unsigned int numSamps,
 	unsigned int startIndex) const
 {
-	if (nullptr == dest)
-		return;
-
-	base::AudioWriteRequest request;
-	request.samples = srcBuf;
-	request.numSamps = numSamps;
-	request.stride = 1;
-	request.fadeCurrent = 1.0f;
-	request.fadeNew = fadeLevel;
-	request.source = base::Audible::AUDIOSOURCE_MIXER;
-
-	for (auto chan : _mixParams.Channels)
-	{
-		dest->OnBlockWriteChannel(chan, request, startIndex);
-	}
+	_ApplyBlockToChannels(dest, srcBuf, 1.0f, fadeLevel, numSamps, startIndex);
 }

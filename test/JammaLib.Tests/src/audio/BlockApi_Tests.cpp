@@ -223,6 +223,38 @@ TEST(BlockApi, AudioBufferBlockReadContiguous) {
 	}
 }
 
+TEST(BlockApi, AudioBufferPlaybackRead) {
+	auto bufSize = 64u;
+	auto numSamps = 16u;
+
+	auto buf = std::make_shared<AudioBuffer>(bufSize);
+
+	std::vector<float> data(numSamps);
+	for (auto i = 0u; i < numSamps; i++)
+		data[i] = (float)(i + 1) * 0.05f;
+
+	AudioWriteRequest request;
+	request.samples = data.data();
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = base::Audible::AUDIOSOURCE_ADC;
+	buf->OnBlockWrite(request, 0);
+	buf->EndWrite(numSamps, true);
+
+	// PlaybackRead should return pointer to contiguous data
+	float tempBuf[constants::MaxBlockSize];
+	auto ptr = buf->PlaybackRead(tempBuf, numSamps);
+	ASSERT_NE(ptr, nullptr);
+
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		ASSERT_FLOAT_EQ(ptr[i], data[i])
+			<< "PlaybackRead mismatch at index " << i;
+	}
+}
+
 // ---------------------------------------------------------------
 // AudioMixer::WriteBlock tests
 // ---------------------------------------------------------------
