@@ -288,7 +288,7 @@ ActionResult Station::OnAction(GuiAction action)
 					[](const std::pair<unsigned int, unsigned int>& pair) {
 						return pair.second;
 					});
-				_audioMixers[0]->SetChannels(secondElements);
+				_audioMixers[chan]->SetChannels(secondElements);
 			}
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
@@ -318,7 +318,7 @@ ActionResult Station::OnAction(GuiAction action)
 					[](const std::pair<unsigned int, unsigned int>& pair) {
 						return pair.second;
 					});
-				_audioMixers[0]->SetChannels(secondElements);
+				_audioMixers[chan]->SetChannels(secondElements);
 			}
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))

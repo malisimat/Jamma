@@ -1,15 +1,18 @@
 
 #include "gtest/gtest.h"
+#include "base/AudioSink.h"
 #include "actions/TriggerAction.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
 
+using actions::GuiAction;
 using actions::TriggerAction;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Station;
 using engine::StationParams;
 using audio::MergeMixBehaviourParams;
+using base::AudioWriteRequest;
 using base::Audible;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +37,145 @@ static std::shared_ptr<Station> MakeStation(const std::string& name = "test-stat
 	MergeMixBehaviourParams merge;
 	auto mixerParams = Station::GetMixerParams(params.Size, merge);
 	return std::make_shared<Station>(params, mixerParams);
+}
+
+class CaptureSink :
+	public base::AudioSink
+{
+public:
+	explicit CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
+
+	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
+	{
+		for (auto i = 0u; i < request.numSamps; i++)
+		{
+			auto bufferIndex = _writeIndex + writeOffset + i;
+			if (bufferIndex < Samples.size())
+			{
+				auto samp = request.samples[i * request.stride];
+				Samples[bufferIndex] = (request.fadeNew * samp) + (request.fadeCurrent * Samples[bufferIndex]);
+			}
+		}
+	}
+
+	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
+	{
+		if (updateIndex)
+			_writeIndex += numSamps;
+	}
+
+	std::vector<float> Samples;
+};
+
+class CaptureMultiSink :
+	public base::MultiAudioSink
+{
+public:
+	explicit CaptureMultiSink(unsigned int numChannels) : _sinks()
+	{
+		for (auto chan = 0u; chan < numChannels; chan++)
+			_sinks.push_back(std::make_shared<CaptureSink>(1u));
+	}
+
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override
+	{
+		return (unsigned int)_sinks.size();
+	}
+
+	float Sample(unsigned int channel) const
+	{
+		return _sinks.at(channel)->Samples.at(0);
+	}
+
+protected:
+	virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType source) override
+	{
+		return channel < _sinks.size() ?
+			_sinks[channel] :
+			nullptr;
+	}
+
+private:
+	std::vector<std::shared_ptr<CaptureSink>> _sinks;
+};
+
+class TestStation :
+	public Station
+{
+public:
+	TestStation(StationParams params, audio::AudioMixerParams mixerParams) :
+		Station(params, mixerParams)
+	{
+	}
+
+	void SetMixerLevel(unsigned int channel, double level)
+	{
+		_audioMixers.at(channel)->SetUnmutedLevel(level);
+		_audioMixers.at(channel)->Offset(4096);
+	}
+};
+
+static std::shared_ptr<TestStation> MakeTestStation(const std::string& name = "test-station")
+{
+	StationParams params;
+	params.Name = name;
+	params.Size = { 200, 200 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	return std::make_shared<TestStation>(params, mixerParams);
+}
+
+static std::vector<float> ReadStationOutput(const std::shared_ptr<Station>& station,
+	const std::vector<float>& busSamples)
+{
+	station->Zero(1u, Audible::AUDIOSOURCE_MIXER);
+
+	for (auto chan = 0u; chan < busSamples.size(); chan++)
+	{
+		AudioWriteRequest request;
+		request.samples = &busSamples[chan];
+		request.numSamps = 1u;
+		request.stride = 1u;
+		request.fadeCurrent = 0.0f;
+		request.fadeNew = 1.0f;
+		request.source = Audible::AUDIOSOURCE_MIXER;
+		station->OnBlockWriteChannel(chan, request, 0);
+	}
+
+	station->EndMultiWrite(1u, true, Audible::AUDIOSOURCE_MIXER);
+
+	auto capture = std::make_shared<CaptureMultiSink>((unsigned int)busSamples.size());
+	station->WriteBlock(capture, nullptr, 0, 1u);
+	capture->EndMultiWrite(1u, true, Audible::AUDIOSOURCE_MIXER);
+	station->EndMultiPlay(1u);
+
+	std::vector<float> outSamples;
+	for (auto chan = 0u; chan < busSamples.size(); chan++)
+		outSamples.push_back(capture->Sample(chan));
+
+	return outSamples;
+}
+
+static void AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ActionElementType elementType)
+{
+	auto station = MakeTestStation();
+	station->SetNumBusChannels(2u);
+	station->SetNumDacChannels(2u);
+	station->CommitChanges();
+
+	station->SetMixerLevel(0u, 0.25);
+	station->SetMixerLevel(1u, 1.0);
+
+	GuiAction action;
+	action.ElementType = elementType;
+	action.Data = GuiAction::GuiConnections{ { {0u, 1u}, {1u, 0u} } };
+	station->OnAction(action);
+
+	auto outSamples = ReadStationOutput(station, { 1.0f, 1.0f });
+	ASSERT_EQ(2u, outSamples.size());
+	EXPECT_NEAR(2.0f, outSamples[0], 0.01f);
+	EXPECT_NEAR(0.5f, outSamples[1], 0.01f);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +363,16 @@ TEST(StationFlipBuffer, TakeInheritsBusChannelsAfterCommit)
 
 	// The take should have 2 bus channels.
 	EXPECT_EQ(2u, take->NumBusChannels());
+}
+
+TEST(StationFlipBuffer, RouterActionUpdatesEachChannelMixer)
+{
+	AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ACTIONELEMENT_ROUTER);
+}
+
+TEST(StationFlipBuffer, RackConnectionsUpdateEachChannelMixer)
+{
+	AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ACTIONELEMENT_RACK);
 }
 
 // ---------------------------------------------------------------------------
