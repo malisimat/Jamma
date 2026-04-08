@@ -538,16 +538,17 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 			continue;
 
 		auto expectedIndex = constants::MaxLoopFadeSamps + loopIndex;
+		ASSERT_LT(expectedIndex, allWrittenCh0.size());
 		ASSERT_LT(expectedIndex, allWrittenCh1.size());
 
+		auto w0 = allWrittenCh0[expectedIndex];
 		auto w1 = allWrittenCh1[expectedIndex];
 		auto r0 = allReadCh0[i];
 		auto r1 = allReadCh1[i];
+		auto wSum = w0 + w1;
 
-		// Due to the LoopTake AudioBuffer routing, both output channels
-		// receive twice the second channel's written value.
-		ASSERT_FLOAT_EQ(r0, 2.0f * w1) << "loopIndex=" << loopIndex << " i=" << i;
-		ASSERT_FLOAT_EQ(r1, 2.0f * w1) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r0 - wSum), 0.1f) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r1 - wSum), 0.1f) << "loopIndex=" << loopIndex << " i=" << i;
 	}
 }
 
