@@ -177,6 +177,7 @@ namespace engine
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
+		LoopPlayState PlayState() const { return _playState; }
 
 		void Update();
 		void SetMixerLevel(double level);

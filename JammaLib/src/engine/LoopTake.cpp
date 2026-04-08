@@ -168,8 +168,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			indexOffset,
 			numSamps);
 
-	for (const auto& buf : _audioBuffers)
+	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
+		auto& buf = _audioBuffers[i];
 		auto playIndex = buf->Delay(numSamps);
 
 		for (const auto& mixer : _audioMixers)
