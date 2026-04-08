@@ -95,10 +95,10 @@ namespace engine
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
-			unsigned int numSamps) override;
+			unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,

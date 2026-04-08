@@ -26,9 +26,6 @@ namespace base
 
 	public:
 		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_SOURCE; }
-		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
-			int indexOffset,
-			unsigned int numSamps) = 0;
 		virtual void EndPlay(unsigned int numSamps) = 0;
 
 		Audible::AudioSourceType SourceType() const { return _sourceParams.SourceType; }

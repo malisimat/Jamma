@@ -29,22 +29,6 @@ namespace base
 
 	public:
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_SOURCE; }
-		virtual void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<engine::Trigger> trigger,
-			int indexOffset,
-			unsigned int numSamps)
-		{
-			for (unsigned int chan = 0; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
-			{
-				const auto& srcChannel = _OutputChannel(chan);
-
-				dest->OnWriteChannel(chan,
-					srcChannel,
-					indexOffset,
-					numSamps,
-					_sourceParams.SourceType);
-			}
-		}
 		virtual void EndMultiPlay(unsigned int numSamps)
 		{
 			for (auto chan = 0u; chan < NumOutputChannels(_sourceParams.SourceType); chan++)
@@ -53,15 +37,6 @@ namespace base
 				if (channel)
 					channel->EndPlay(numSamps);
 			}
-		}
-		virtual void OnPlayChannel(unsigned int chan,
-			const std::shared_ptr<base::AudioSink> dest,
-			int indexOffset,
-			unsigned int numSamps)
-		{
-			const auto& channel = _OutputChannel(chan);
-			if (channel)
-				channel->OnPlay(dest, indexOffset, numSamps);
 		}
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const { return 0; };
 

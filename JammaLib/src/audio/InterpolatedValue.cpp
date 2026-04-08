@@ -115,4 +115,12 @@ double InterpolatedValueExp::Current() const
 void InterpolatedValueExp::Jump(double target)
 {
 	_lastVal = target;
+	_target = target;
+}
+
+bool InterpolatedValueExp::IsSettled() const
+{
+	constexpr double SettleEpsilon = 1e-6;
+	auto diff = _target - _lastVal;
+	return (diff > -SettleEpsilon) && (diff < SettleEpsilon);
 }

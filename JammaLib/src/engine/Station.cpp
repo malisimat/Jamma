@@ -166,7 +166,7 @@ void Station::Zero(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
+void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
@@ -174,22 +174,21 @@ void Station::OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto ptr = Sharable::shared_from_this();
 
 	for (const auto& take : _loopTakes)
-		take->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
-	//_masterMixer->OnPlay();
+	//_masterMixer->WriteBlock();
+	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	for (const auto& buf : _audioBuffers)
 	{
-		auto playIndex = buf->Delay(numSamps);
-		for (auto samp = 0u; samp < numSamps; samp++)
-		{
-			for (const auto& mixer : _audioMixers)
-			{
-				mixer->OnPlay(dest, (*buf)[samp + playIndex], samp);
-			}
-		}
+		float tempBuf[constants::MaxBlockSize];
+		buf->Delay(sampsToRead);
+		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+
+		for (const auto& mixer : _audioMixers)
+			mixer->WriteBlock(dest, srcPtr, sampsToRead);
 	}
 }
 
@@ -205,32 +204,23 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-void Station::OnWriteChannel(unsigned int channel,
-	const std::shared_ptr<base::AudioSource> src,
-	int indexOffset,
-	unsigned int numSamps,
-	Audible::AudioSourceType source)
+void Station::OnBlockWriteChannel(unsigned int channel,
+	const base::AudioWriteRequest& request,
+	int writeOffset)
 {
-	switch (source)
+	// Base class routes bus sources to _audioBuffers via _InputChannel
+	// (no-op for record sources since _InputChannel returns nullptr)
+	MultiAudioSink::OnBlockWriteChannel(channel, request, writeOffset);
+
+	// Fan out record sources to all loop takes
+	// (during recording, loop takes may use any/all ADC channels)
+	switch (request.source)
 	{
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
 		for (auto& take : _loopTakes)
-			take->OnWriteChannel(channel,
-				src,
-				indexOffset,
-				numSamps,
-				source);
-		break;
-	case Audible::AUDIOSOURCE_LOOPS:
-	case Audible::AUDIOSOURCE_MIXER:
-		for (auto& take : _loopTakes)
-			take->OnWriteChannel(channel,
-				src,
-				indexOffset,
-				numSamps,
-				source);
+			take->OnBlockWriteChannel(channel, request, writeOffset);
 		break;
 	}
 }
@@ -298,7 +288,7 @@ ActionResult Station::OnAction(GuiAction action)
 					[](const std::pair<unsigned int, unsigned int>& pair) {
 						return pair.second;
 					});
-				_audioMixers[0]->SetChannels(secondElements);
+				_audioMixers[chan]->SetChannels(secondElements);
 			}
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
@@ -328,7 +318,7 @@ ActionResult Station::OnAction(GuiAction action)
 					[](const std::pair<unsigned int, unsigned int>& pair) {
 						return pair.second;
 					});
-				_audioMixers[0]->SetChannels(secondElements);
+				_audioMixers[chan]->SetChannels(secondElements);
 			}
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
@@ -744,7 +734,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 			if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->OnPlay(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 			}
 		}
 	}
@@ -822,8 +812,14 @@ std::vector<JobAction> Station::_CommitChanges()
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
-	if (channel < _audioBuffers.size())
-		return _audioBuffers[channel];
+ switch (source)
+	{
+	case Audible::AUDIOSOURCE_LOOPS:
+	case Audible::AUDIOSOURCE_MIXER:
+		if (channel < _audioBuffers.size())
+			return _audioBuffers[channel];
+		break;
+	}
 
 	return nullptr;
 }

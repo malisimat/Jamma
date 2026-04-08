@@ -40,29 +40,19 @@ namespace base
 					channel->EndWrite(numSamps, updateIndex);
 			}
 		}
-		virtual void OnWriteChannel(unsigned int channel,
-			const std::shared_ptr<base::AudioSource> src,
-			int indexOffset,
-			unsigned int numSamps,
-			Audible::AudioSourceType source)
-		{
-			const auto& chan = _InputChannel(channel, source);
 
-			if (chan && src)
-				src->OnPlay(chan, indexOffset, numSamps);
-		}
-		virtual void OnMixWriteChannel(unsigned int channel,
-			float samp,
-			float fadeCurrent,
-			float fadeNew,
-			int indexOffset,
-			Audible::AudioSourceType source)
+		// Block-level write to a specific channel.
+		// Routes to the channel sink's OnBlockWrite.
+		virtual void OnBlockWriteChannel(unsigned int channel,
+			const AudioWriteRequest& request,
+			int writeOffset)
 		{
-			const auto& chan = _InputChannel(channel, source);
+			const auto& chan = _InputChannel(channel, request.source);
 
 			if (chan)
-				chan->OnMixWrite(samp, fadeCurrent, fadeNew, indexOffset, source);
+				chan->OnBlockWrite(request, writeOffset);
 		}
+
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const { return 0; };
 
 		std::shared_ptr<MultiAudioSink> shared_from_this()

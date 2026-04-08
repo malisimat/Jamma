@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "audio/AudioBuffer.h"
@@ -7,280 +9,315 @@ using audio::AudioBuffer;
 using base::AudioSource;
 using base::AudioSink;
 using base::AudioSourceParams;
+using base::AudioWriteRequest;
 
 class AudioBufferMockedSink :
-	public AudioSink
+    public AudioSink
 {
 public:
-	AudioBufferMockedSink(unsigned int bufSize) :
-		Samples({})
-	{
-		Samples = std::vector<float>(bufSize, 0.0f);
-	}
+    AudioBufferMockedSink(unsigned int bufSize) :
+        Samples(bufSize, 0.0f)
+    {
+    }
 
 public:
-	inline virtual int OnMixWrite(float samp,
-		float fadeCurrent,
-		float fadeNew,
-		int indexOffset,
-		Audible::AudioSourceType source) override
-	{
-		auto destIndex = _writeIndex + indexOffset;
+    virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
+    {
+        for (auto i = 0u; i < request.numSamps; i++)
+        {
+            auto destIndex = _writeIndex + writeOffset + i;
+            if (destIndex < Samples.size())
+            {
+                auto samp = request.samples[i * request.stride];
+                Samples[destIndex] = (request.fadeNew * samp) +
+                    (request.fadeCurrent * Samples[destIndex]);
+            }
+        }
+    }
 
-		if (destIndex < Samples.size())
-			Samples[destIndex] = samp;
+    virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
+    {
+        if (updateIndex)
+            _writeIndex += numSamps;
+    }
 
-		return indexOffset + 1;
-	};
-	virtual void EndWrite(unsigned int numSamps, bool updateIndex)
-	{
-		if (updateIndex)
-			_writeIndex += numSamps;
-	}
+    bool IsFilled() const { return _writeIndex >= Samples.size(); }
+    bool IsZero() const
+    {
+        for (auto f : Samples)
+        {
+            if (f != 0.0f)
+                return false;
+        }
 
-	bool IsFilled() { return _writeIndex >= Samples.size(); }
-	bool IsZero()
-	{
-		for (auto f : Samples)
-		{
-			if (f != 0.f)
-				return false;
-		}
+        return true;
+    }
 
-		return true;
-	}
-
-	std::vector<float> Samples;
+    std::vector<float> Samples;
 };
 
-class AudioBufferMockedSource :
-	public AudioSource
+static void WriteBlockToBuffer(const std::shared_ptr<AudioBuffer>& buf,
+    const float* srcData,
+    unsigned int numSamps)
 {
-public:
-	AudioBufferMockedSource(unsigned int bufSize,
-		AudioSourceParams params) :
-		_index(0),
-		Samples({}),
-		AudioSource(params)
-	{
-		Samples = std::vector<float>(bufSize);
-
-		for (auto i = 0u; i < bufSize; i++)
-		{
-			Samples[i] = ((rand() % 2000) - 1000) / 1001.0f;
-		}
-	}
-
-public:
-	virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
-		int indexOffset,
-		unsigned int numSamps)
-	{
-		auto index = _index;
-		auto source = AUDIOSOURCE_ADC;
-
-		for (auto i = 0u; i < numSamps; i++)
-		{
-			if (index < Samples.size())
-				dest->OnMixWrite(Samples[index], 0.0f, 1.0f, i, source);
-
-			index++;
-		}
-	}
-	virtual void EndPlay(unsigned int numSamps)
-	{
-		_index += numSamps;
-	}
-	const std::vector<float>& GetSamples() const { return Samples; }
-	bool WasPlayed() { return _index >= Samples.size(); }
-	bool MatchesSink(const std::shared_ptr<AudioBufferMockedSink> buf, unsigned int expectedDelay)
-	{
-		auto numSamps = buf->Samples.size();
-		for (auto samp = 0u; samp < numSamps; samp++)
-		{
-			if (samp >= Samples.size())
-				return false;
-
-			if ((samp + expectedDelay) < buf->Samples.size())
-			{
-				unsigned int sinkIndex = samp + expectedDelay;
-				if (buf->Samples[sinkIndex] != Samples[samp])
-				{
-					std::cout
-						<< "Mismatch at source=" << samp
-						<< " sink=" << sinkIndex
-						<< " expected=" << Samples[samp]
-						<< " actual=" << buf->Samples[sinkIndex]
-						<< " expectedDelay=" << expectedDelay
-						<< std::endl;
-
-					return false;
-				}
-			}
-		}
-
-		return true;
-	}
-
-protected:
-	unsigned int _index;
-	std::vector<float> Samples;
-};
-
-TEST(AudioBuffer, PlayWrapsAround) {
-	auto bufSize = 100;
-	auto blockSize = 11;
-
-	auto audioBuf = AudioBuffer(bufSize);
-	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
-
-	// Trick buffer into thinking it has recorded something
-	audioBuf.EndWrite(blockSize, false);
-
-	auto numBlocks = (bufSize * 2) / blockSize;
-
-	for (int i = 0; i < numBlocks; i++)
-	{
-		audioBuf.OnPlay(sink, 0, blockSize);
-		audioBuf.EndPlay(blockSize);
-		sink->EndWrite(blockSize, true);
-	}
-
-	ASSERT_TRUE(sink->IsFilled());
+    AudioWriteRequest request;
+    request.samples = srcData;
+    request.numSamps = numSamps;
+    request.stride = 1;
+    request.fadeCurrent = 0.0f;
+    request.fadeNew = 1.0f;
+    request.source = base::Audible::AUDIOSOURCE_ADC;
+    buf->OnBlockWrite(request, 0);
+    buf->EndWrite(numSamps, true);
 }
 
-TEST(AudioBuffer, WriteWrapsAround) {
-	auto bufSize = 100;
-	auto blockSize = 11;
+static void ReadBlockFromBuffer(const std::shared_ptr<AudioBuffer>& buf,
+    const std::shared_ptr<AudioBufferMockedSink>& sink,
+    unsigned int numSamps,
+    unsigned int delaySamps = 0)
+{
+    float tempBuf[constants::MaxBlockSize];
 
-	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
-	AudioSourceParams params;
-	auto source = std::make_shared<AudioBufferMockedSource>(bufSize, params);
+    // Match AudioBuffer playback semantics: read the block ending
+    // numSamps before the current write index, with any extra delay applied.
+    buf->Delay(delaySamps + numSamps);
 
-	auto numBlocks = (bufSize * 2) / blockSize;
+    auto ptr = buf->PlaybackRead(tempBuf, numSamps);
 
-	for (int i = 0; i < numBlocks; i++)
-	{
-		source->OnPlay(audioBuf, 0u, blockSize);
-		source->EndPlay(blockSize);
-		audioBuf->EndWrite(blockSize, true);
-	}
+    AudioWriteRequest request;
+    request.samples = ptr;
+    request.numSamps = numSamps;
+    request.stride = 1;
+    request.fadeCurrent = 0.0f;
+    request.fadeNew = 1.0f;
+    request.source = base::Audible::AUDIOSOURCE_ADC;
+    sink->OnBlockWrite(request, 0);
 
-	ASSERT_TRUE(source->WasPlayed());
+    buf->EndPlay(numSamps);
+    sink->EndWrite(numSamps, true);
 }
 
-TEST(AudioBuffer, WriteMatchesRead) {
-	auto bufSize = 100;
-	auto blockSize = 11;
+TEST(AudioBuffer, PlayWrapsAround)
+{
+    const auto bufSize = 100u;
+    const auto blockSize = 11u;
 
-	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
-	AudioSourceParams params;
-	auto source = std::make_shared<AudioBufferMockedSource>(bufSize, params);
-	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
 
-	audioBuf->Zero(bufSize);
+    audioBuf->EndWrite(blockSize, false);
 
-	auto numBlocks = (bufSize / blockSize) + 1;
-	for (int i = 0; i < numBlocks; i++)
-	{
-		// Play source to buffer
-		source->OnPlay(audioBuf, 0u, blockSize);
-		source->EndPlay(blockSize);
-		audioBuf->EndWrite(blockSize, true);
+    const auto numBlocks = (bufSize * 2u) / blockSize;
 
-		// Play buffer to mocked sink
-		audioBuf->OnPlay(sink, 0, blockSize);
-		audioBuf->EndPlay(blockSize);
-		sink->EndWrite(blockSize, true);
-	}
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        float tempBuf[constants::MaxBlockSize];
+        audioBuf->Delay(blockSize);
+        auto ptr = audioBuf->PlaybackRead(tempBuf, blockSize);
 
-	ASSERT_TRUE(source->MatchesSink(sink, 0));
+        AudioWriteRequest request;
+        request.samples = ptr;
+        request.numSamps = blockSize;
+        request.stride = 1;
+        request.fadeCurrent = 0.0f;
+        request.fadeNew = 1.0f;
+        request.source = base::Audible::AUDIOSOURCE_ADC;
+        sink->OnBlockWrite(request, 0);
+
+        audioBuf->EndPlay(blockSize);
+        sink->EndWrite(blockSize, true);
+    }
+
+    ASSERT_TRUE(sink->IsFilled());
 }
 
-TEST(AudioBuffer, IsCorrectlyDelayed) {
-	auto bufSize = 100;
-	auto blockSize = 11;
-	auto delaySamps = 42u;
+TEST(AudioBuffer, WriteWrapsAround)
+{
+    const auto bufSize = 100u;
+    const auto blockSize = 11u;
 
-	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
-	AudioSourceParams params;
-	auto source = std::make_shared<AudioBufferMockedSource>(bufSize, params);
-	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
 
-	audioBuf->Zero(bufSize);
+    std::vector<float> sourceData(bufSize);
+    for (auto i = 0u; i < bufSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
 
-	auto numBlocks = (bufSize / blockSize) + 1;
-	for (int i = 0; i < numBlocks; i++)
-	{
-		source->OnPlay(audioBuf, 0u, blockSize);
-		source->EndPlay(blockSize);
-		audioBuf->EndWrite(blockSize, true);
+    const auto numBlocks = (bufSize * 2u) / blockSize;
+    auto sourceOffset = 0u;
 
-		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, 0, blockSize);
-		audioBuf->EndPlay(blockSize);
-		sink->EndWrite(blockSize, true);
-	}
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        auto sampsThisBlock = (std::min)(blockSize, bufSize - sourceOffset);
+        if (sampsThisBlock > 0 && sourceOffset < bufSize)
+        {
+            WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
+            sourceOffset += sampsThisBlock;
+        }
+        else
+        {
+            audioBuf->EndWrite(blockSize, true);
+        }
+    }
 
-	ASSERT_TRUE(source->MatchesSink(sink, delaySamps));
+    ASSERT_GE(sourceOffset, bufSize);
 }
 
-TEST(AudioBuffer, ClampsToMaxBufSize) {
-	auto bufSize = 100;
-	auto blockSize = 11;
-	auto delaySamps = bufSize + 10;
+TEST(AudioBuffer, WriteMatchesRead)
+{
+    const auto bufSize = 100u;
+    const auto blockSize = 11u;
 
-	auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
-	AudioSourceParams params;
-	auto source = std::make_shared<AudioBufferMockedSource>(bufSize, params);
-	auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
 
-	audioBuf->Zero(bufSize);
+    std::vector<float> sourceData(bufSize);
+    for (auto i = 0u; i < bufSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
 
-	auto numBlocks = (bufSize / blockSize) + 1;
-	for (int i = 0; i < numBlocks; i++)
-	{
-		// Play source to buffer
-		source->OnPlay(audioBuf, 0u, blockSize);
-		source->EndPlay(blockSize);
-		audioBuf->EndWrite(blockSize, true);
+    audioBuf->Zero(bufSize);
 
-		// Play buffer to mocked sink
-		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, 0, blockSize);
-		audioBuf->EndPlay(blockSize);
-		sink->EndWrite(blockSize, true);
-	}
+    const auto numBlocks = (bufSize / blockSize) + 1u;
+    auto sourceOffset = 0u;
 
-	ASSERT_TRUE(source->MatchesSink(sink, bufSize));
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        auto sampsThisBlock = (std::min)(blockSize, bufSize - sourceOffset);
+        if (sampsThisBlock > 0 && sourceOffset < bufSize)
+        {
+            WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
+            sourceOffset += sampsThisBlock;
+            // Real-time audio always advances the write head by a full block per tick.
+            if (sampsThisBlock < blockSize)
+                audioBuf->EndWrite(blockSize - sampsThisBlock, true);
+        }
+
+        ReadBlockFromBuffer(audioBuf, sink, blockSize);
+    }
+
+    for (auto samp = 0u; samp < bufSize; samp++)
+    {
+        EXPECT_FLOAT_EQ(sourceData[samp], sink->Samples[samp])
+            << "Mismatch at sample " << samp;
+    }
 }
 
-TEST(AudioBuffer, ExcessiveDelayPlaysNicely) {
-	auto bufSize = (int)constants::MaxBlockSize + 10;
-	auto blockSize = 11;
-	auto delaySamps = bufSize;
+TEST(AudioBuffer, AppliesPlaybackDelay)
+{
+    const auto bufSize = 100u;
+    const auto blockSize = 11u;
+    const auto delaySamps = 42u;
+    const auto sinkSize = bufSize + delaySamps;
 
-	auto audioBuf = std::make_shared<AudioBuffer>(constants::MaxBlockSize);
-	AudioSourceParams params;
-	auto source = std::make_shared<AudioBufferMockedSource>(blockSize, params);
-	auto sink = std::make_shared<AudioBufferMockedSink>(blockSize);
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(sinkSize);
 
-	audioBuf->Zero(bufSize);
+    std::vector<float> sourceData(bufSize);
+    for (auto i = 0u; i < bufSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
 
-	auto numBlocks = 2;
-	for (int i = 0; i < numBlocks; i++)
-	{
-		// Play source to buffer
-		source->OnPlay(audioBuf, 0u, blockSize);
-		source->EndPlay(blockSize);
-		audioBuf->EndWrite(blockSize, true);
+    std::vector<float> zeroData(blockSize, 0.0f);
 
-		// Play buffer to mocked sink
-		audioBuf->Delay(delaySamps + blockSize);
-		audioBuf->OnPlay(sink, 0, blockSize);
-		audioBuf->EndPlay(blockSize);
-		sink->EndWrite(blockSize, true);
-	}
+    audioBuf->Zero(bufSize);
 
-	ASSERT_TRUE(sink->IsZero());
+    const auto numBlocks = (sinkSize / blockSize) + 1u;
+    auto sourceOffset = 0u;
+
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        auto sampsThisBlock = (std::min)(blockSize, bufSize - sourceOffset);
+        if (sampsThisBlock > 0 && sourceOffset < bufSize)
+        {
+            WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
+            sourceOffset += sampsThisBlock;
+            // Real-time audio always advances the write head by a full block per tick.
+            if (sampsThisBlock < blockSize)
+                audioBuf->EndWrite(blockSize - sampsThisBlock, true);
+        }
+        else
+        {
+            // Continue clocking explicit silence so delayed audio drains predictably.
+            WriteBlockToBuffer(audioBuf, zeroData.data(), blockSize);
+        }
+
+        ReadBlockFromBuffer(audioBuf, sink, blockSize, delaySamps);
+    }
+
+    for (auto samp = 0u; samp < delaySamps; samp++)
+    {
+        EXPECT_FLOAT_EQ(0.0f, sink->Samples[samp])
+            << "Expected silence at delayed sink sample " << samp;
+    }
+
+    for (auto samp = 0u; samp < bufSize; samp++)
+    {
+        EXPECT_FLOAT_EQ(sourceData[samp], sink->Samples[samp + delaySamps])
+            << "Mismatch at source=" << samp << " sink=" << (samp + delaySamps);
+    }
+}
+
+TEST(AudioBuffer, ClampsToMaxBufSize)
+{
+    const auto bufSize = 100u;
+    const auto blockSize = 11u;
+    const auto delaySamps = bufSize + 10u;
+
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(bufSize);
+
+    std::vector<float> sourceData(bufSize);
+    for (auto i = 0u; i < bufSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+    audioBuf->Zero(bufSize);
+
+    const auto numBlocks = (bufSize / blockSize) + 1u;
+    auto sourceOffset = 0u;
+
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        auto sampsThisBlock = (std::min)(blockSize, bufSize - sourceOffset);
+        if (sampsThisBlock > 0 && sourceOffset < bufSize)
+        {
+            WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
+            sourceOffset += sampsThisBlock;
+        }
+
+        ReadBlockFromBuffer(audioBuf, sink, blockSize, delaySamps);
+    }
+
+    ASSERT_TRUE(sink->IsFilled());
+}
+
+TEST(AudioBuffer, ExcessiveDelayPlaysNicely)
+{
+    const auto bufSize = static_cast<unsigned int>(constants::MaxBlockSize) + 10u;
+    const auto blockSize = 11u;
+    const auto delaySamps = bufSize;
+
+    auto audioBuf = std::make_shared<AudioBuffer>(constants::MaxBlockSize);
+    auto sink = std::make_shared<AudioBufferMockedSink>(blockSize);
+
+    std::vector<float> sourceData(blockSize);
+    for (auto i = 0u; i < blockSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+    audioBuf->Zero(bufSize);
+
+    const auto numBlocks = 2u;
+    auto sourceOffset = 0u;
+
+    for (auto i = 0u; i < numBlocks; i++)
+    {
+        auto sampsThisBlock = (std::min)(blockSize,
+            static_cast<unsigned int>(sourceData.size()) - sourceOffset);
+        if (sampsThisBlock > 0 && sourceOffset < sourceData.size())
+        {
+            WriteBlockToBuffer(audioBuf, &sourceData[sourceOffset], sampsThisBlock);
+            sourceOffset += sampsThisBlock;
+        }
+
+        ReadBlockFromBuffer(audioBuf, sink, blockSize, delaySamps);
+    }
+
+    ASSERT_TRUE(sink->IsZero());
 }

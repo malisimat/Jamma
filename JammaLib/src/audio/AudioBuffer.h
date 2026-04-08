@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <memory>
 #include <iostream>
@@ -19,15 +20,8 @@ namespace audio
 
 	public:
 		virtual AudioPlugType AudioPlug() const override { return AUDIOPLUG_BOTH; }
-		virtual void OnPlay(const std::shared_ptr<base::AudioSink> dest,
-			int indexOffset,
-			unsigned int numSamps) override;
 		virtual void EndPlay(unsigned int numSamps) override;
-		inline virtual int OnMixWrite(float samp,
-			float fadeCurrent,
-			float fadeNew,
-			int indexOffset,
-			Audible::AudioSourceType source) override;
+		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
 		void SetSize(unsigned int size);
@@ -36,6 +30,16 @@ namespace audio
 
 		const float& operator[](unsigned int index) const;
 		unsigned int Delay(unsigned int sampsDelay);
+		unsigned int PlayIndex() const;
+		bool IsContiguous(unsigned int startIndex, unsigned int numSamps) const;
+		const float* BlockRead(unsigned int startIndex) const;
+
+		// Reads numSamps from the current playback position.
+		// Call Delay(...) first to set the playback position when needed.
+		// Returns a pointer to contiguous data — either a direct pointer into
+		// the ring buffer (zero-copy when no wrap-around) or tempBuf after
+		// copying wrapped data. tempBuf must hold at least numSamps floats.
+		const float* PlaybackRead(float* tempBuf, unsigned int numSamps);
 
 	protected:
 		std::vector<float>::iterator Start();

@@ -14,6 +14,7 @@ using actions::GuiAction;
 using actions::JobAction;
 using audio::AudioMixer;
 using audio::AudioMixerParams;
+using audio::MergeMixBehaviourParams;
 using audio::WireMixBehaviourParams;
 using gui::GuiRackParams;
 using utils::Size2d;
@@ -149,7 +150,7 @@ void LoopTake::Zero(unsigned int numSamps,
 }
 
 // Only called when outputting to DAC
-void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
+void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
 	unsigned int numSamps)
@@ -163,19 +164,19 @@ void LoopTake::OnPlay(const std::shared_ptr<MultiAudioSink> dest,
 	auto ptr = Sharable::shared_from_this();
 
 	for (const auto& loop : _loops)
-		loop->OnPlay(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		loop->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
 
+	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		auto& buf = _audioBuffers[i];
-		auto playIndex = buf->Delay(numSamps);
-		for (auto samp = 0u; samp < numSamps; samp++)
-		{
-			_audioMixers[i]->OnPlay(dest, (*buf)[samp + playIndex], samp);
-		}
+		float tempBuf[constants::MaxBlockSize];
+		buf->Delay(sampsToRead);
+		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
 	}
 }
 
@@ -251,7 +252,7 @@ ActionResult LoopTake::OnAction(GuiAction action)
 				[](const std::pair<unsigned int, unsigned int>& pair) {
 					return pair.second;
 				});
-			_audioMixers[0]->SetChannels(secondElements);
+			_audioMixers[chan]->SetChannels(secondElements);
 		}
 	}
 	else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
@@ -352,11 +353,11 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	_backLoops.push_back(loop);
 	_backAudioBuffers.push_back(std::make_shared<audio::AudioBuffer>(_lastBufSize));
 	
-	WireMixBehaviourParams wireParams;
+	MergeMixBehaviourParams mergeParams;
 	if (_backAudioBuffers.size() <= NumBusChannels())
-		wireParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
+		mergeParams.Channels.push_back((unsigned int)(_backAudioBuffers.size() - 1));
 
-	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, wireParams);
+	auto mixerParams = LoopTake::GetMixerParams(_guiParams.Size, mergeParams);
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
 	mixer->SetUnmutedLevel(1.0);
 	_backAudioMixers.push_back(mixer);

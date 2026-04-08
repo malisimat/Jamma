@@ -144,3 +144,28 @@ unsigned int BufferBank::NumBanksToHold(unsigned long length, bool includeCapaci
 
 	return numBanks;
 }
+
+bool BufferBank::IsBlockContiguous(unsigned long index, unsigned int numSamps) const
+{
+	if (numSamps == 0)
+		return true;
+
+	if (index + numSamps > Capacity())
+		return false;
+
+	auto startBank = index / _BufferBankSize;
+	auto endBank = (index + numSamps - 1) / _BufferBankSize;
+
+	return startBank == endBank;
+}
+
+const float* BufferBank::BlockPtr(unsigned long index) const
+{
+	if (index >= Capacity())
+		return nullptr;
+
+	auto bank = index / _BufferBankSize;
+	auto offset = index % _BufferBankSize;
+
+	return &_bufferBank[bank][offset];
+}

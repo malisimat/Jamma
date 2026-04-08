@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <optional>
 #include "ActionReceiver.h"
@@ -254,9 +255,9 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
-		void OnPlay(const std::shared_ptr<base::MultiAudioSink> dest,
-			float samp,
-			unsigned int index);
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+			const float* srcBuf,
+			unsigned int numSamps);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
