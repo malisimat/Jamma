@@ -115,6 +115,7 @@ private:
     std::shared_ptr<LoopMockedSink> _sink;
 };
 
+// Exposes Loop's protected play index for boundary regression tests.
 class LoopProbe : public Loop
 {
 public:
@@ -285,10 +286,12 @@ TEST(Loop, EndMultiPlayWrapsAtExactBufferBoundary)
 
     RecordAndPlay(loop, loopLength, false);
 
+    // RecordAndPlay starts playback at the first sample of the loop body.
     ASSERT_EQ(static_cast<unsigned long>(constants::MaxLoopFadeSamps), loop.PlayIndex());
 
     loop.EndMultiPlay(static_cast<unsigned int>(loopLength));
 
+    // Advancing by exactly one loop length should wrap back to the same start index.
     ASSERT_EQ(static_cast<unsigned long>(constants::MaxLoopFadeSamps), loop.PlayIndex());
 }
 
