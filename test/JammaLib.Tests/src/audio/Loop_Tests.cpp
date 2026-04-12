@@ -115,6 +115,17 @@ private:
     std::shared_ptr<LoopMockedSink> _sink;
 };
 
+class LoopProbe : public Loop
+{
+public:
+    using Loop::Loop;
+
+    unsigned long PlayIndex() const
+    {
+        return _playIndex;
+    }
+};
+
 // -- Helpers ----------------------------------------------------------------
 
 static Loop MakeLoop()
@@ -132,6 +143,23 @@ loopParams.Size = { 80, 80 };
 loopParams.Position = { 10, 22 };
 
 return Loop(loopParams, mixerParams);
+}
+
+static LoopProbe MakeLoopProbe()
+{
+    WireMixBehaviourParams mixBehaviour;
+    mixBehaviour.Channels = { 0 };
+    AudioMixerParams mixerParams;
+    mixerParams.Size = { 160, 320 };
+    mixerParams.Position = { 6, 6 };
+    mixerParams.Behaviour = mixBehaviour;
+
+    LoopParams loopParams;
+    loopParams.Wav = "hh";
+    loopParams.Size = { 80, 80 };
+    loopParams.Position = { 10, 22 };
+
+    return LoopProbe(loopParams, mixerParams);
 }
 
 // Write loopLength samples of `value` into `loop` using block API.
@@ -248,6 +276,20 @@ auto loop = MakeLoop();
 ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
 loop.Record();
 ASSERT_EQ(Loop::STATE_RECORDING, loop.PlayState());
+}
+
+TEST(Loop, EndMultiPlayWrapsAtExactBufferBoundary)
+{
+    auto loop = MakeLoopProbe();
+    const auto loopLength = 32ul;
+
+    RecordAndPlay(loop, loopLength, false);
+
+    ASSERT_EQ(static_cast<unsigned long>(constants::MaxLoopFadeSamps), loop.PlayIndex());
+
+    loop.EndMultiPlay(static_cast<unsigned int>(loopLength));
+
+    ASSERT_EQ(static_cast<unsigned long>(constants::MaxLoopFadeSamps), loop.PlayIndex());
 }
 
 TEST(Loop, StateTransition_RecordIgnoredWhenNotInactive)
