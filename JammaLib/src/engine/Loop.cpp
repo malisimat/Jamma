@@ -376,7 +376,7 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	_playIndex += numSamps;
 
 	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
-	while (_playIndex > bufSize)
+	while (_playIndex >= bufSize)
 		_playIndex -= _loopLength;
 
 	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
