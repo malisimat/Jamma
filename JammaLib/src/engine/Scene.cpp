@@ -561,7 +561,7 @@ void Scene::InitAudio()
 			audioStreamParams.InputLatency;
 
 		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(inLatency),
+				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
 				ChannelMixer::DefaultBufferSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels }));
