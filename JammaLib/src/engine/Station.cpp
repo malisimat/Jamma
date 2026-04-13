@@ -304,7 +304,7 @@ ActionResult Station::OnAction(GuiAction action)
 		{
 			if (0 == action.Index)
 				_masterMixer->OnAction(action);
-			else if ((action.Index - 1) < _audioMixers.size())
+			else if ((action.Index > 0) && ((action.Index - 1) < _audioMixers.size()))
 				_audioMixers[action.Index - 1]->OnAction(action);
 		}
 
@@ -336,7 +336,7 @@ ActionResult Station::OnAction(GuiAction action)
 		{
 			if (0 == action.Index)
 				_masterMixer->OnAction(action);
-			else if ((action.Index - 1) < _audioMixers.size())
+			else if ((action.Index > 0) && ((action.Index - 1) < _audioMixers.size()))
 				_audioMixers[action.Index - 1]->OnAction(action);
 		}
 

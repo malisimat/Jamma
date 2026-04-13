@@ -269,7 +269,7 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	{
 		if (0 == action.Index)
 			_masterMixer->OnAction(action);
-		else if ((action.Index - 1) < _loops.size())
+		else if ((action.Index > 0) && ((action.Index - 1) < _loops.size()))
 		{
 			_loops[action.Index - 1]->SetMixerLevel(d->Value);
 		}

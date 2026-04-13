@@ -19,7 +19,7 @@ const utils::Size2d GuiRack::_DragSize = { 32, 32 };
 
 GuiRack::GuiRack(GuiRackParams params) :
 	GuiElement(params),
-	_receiversInitialised(false),
+	_receiversInitialized(false),
 	_rackState(params.InitState),
 	_masterPanel(nullptr),
 	_masterSlider(nullptr),
@@ -139,7 +139,7 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 
 void GuiRack::_InitReceivers()
 {
-	_receiversInitialised = true;
+	_receiversInitialized = true;
 
 	_masterSlider->SetReceiver(ActionReceiver::shared_from_this());
 	_masterSlider->SetValue(_masterSlider->Value(), true);
@@ -161,7 +161,7 @@ void GuiRack::_AddChannel(unsigned int index, utils::Size2d size)
 	_channelSliders.push_back(slider);
 	_channelPanel->AddChild(slider);
 
-	if (_receiversInitialised)
+	if (_receiversInitialized)
 		slider->SetReceiver(ActionReceiver::shared_from_this());
 }
 
