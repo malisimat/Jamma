@@ -8,6 +8,15 @@ using engine::LoopModelParams;
 
 namespace
 {
+	constexpr auto GrainVertFloatCount = 72u;
+	constexpr auto GrainUvFloatCount = 48u;
+	constexpr auto FirstVertexY = 1u;
+	constexpr auto ThirdVertexY = 7u;
+	constexpr auto FirstTriangleSecondVertexY = 4u;
+	constexpr auto SecondTriangleSecondVertexY = 13u;
+	constexpr auto MeshMinHeight = 1.0f;
+	constexpr auto MeshHeightScale = 100.0f;
+
 	class TestLoopModel :
 		public LoopModel
 	{
@@ -48,24 +57,26 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 
 	const auto radius = 100.0f;
 	const auto radialThickness = radius / 20.0f;
-	const auto expectedYMin = -51.0f;
-	const auto expectedYMax = 76.0f;
+	const auto expectedMinSample = -0.5f;
+	const auto expectedMaxSample = 0.75f;
+	const auto expectedYMin = (MeshHeightScale * expectedMinSample) - MeshMinHeight;
+	const auto expectedYMax = (MeshHeightScale * expectedMaxSample) + MeshMinHeight;
 
 	auto [verts, uvs, yMin, yMax] = model.CalcGrainGeometry(buffer,
 		1u,
 		4u,
 		0ul,
-		-1.0f,
-		1.0f,
+		-MeshMinHeight,
+		MeshMinHeight,
 		radius);
 
-	ASSERT_EQ(72u, verts.size());
-	ASSERT_EQ(48u, uvs.size());
+	ASSERT_EQ(GrainVertFloatCount, verts.size());
+	ASSERT_EQ(GrainUvFloatCount, uvs.size());
 	EXPECT_FLOAT_EQ(expectedYMin, yMin);
 	EXPECT_FLOAT_EQ(expectedYMax, yMax);
 
 	EXPECT_FLOAT_EQ(0.0f, verts[0]);
-	EXPECT_FLOAT_EQ(-1.0f, verts[1]);
+	EXPECT_FLOAT_EQ(-MeshMinHeight, verts[1]);
 	EXPECT_FLOAT_EQ(radius + radialThickness, verts[2]);
 	EXPECT_FLOAT_EQ(radius + radialThickness, verts[3]);
 	EXPECT_FLOAT_EQ(expectedYMax, verts[4]);
@@ -91,14 +102,14 @@ TEST(LoopModelMesh, UpdateModelUsesOffsetSamplesAndMaintainsGrainContinuity)
 
 	model.UpdateModel(buffer, loopLength, offset, 100.0f);
 
-	ASSERT_EQ(144u, model.BackVerts().size());
-	ASSERT_EQ(96u, model.BackUvs().size());
+	ASSERT_EQ(GrainVertFloatCount * 2u, model.BackVerts().size());
+	ASSERT_EQ(GrainUvFloatCount * 2u, model.BackUvs().size());
 
 	const auto& verts = model.BackVerts();
-	EXPECT_FLOAT_EQ(-11.0f, verts[72 + 1]);
-	EXPECT_FLOAT_EQ(21.0f, verts[72 + 7]);
-	EXPECT_FLOAT_EQ(41.0f, verts[72 + 4]);
-	EXPECT_FLOAT_EQ(-31.0f, verts[72 + 13]);
+	EXPECT_FLOAT_EQ(-11.0f, verts[GrainVertFloatCount + FirstVertexY]);
+	EXPECT_FLOAT_EQ(21.0f, verts[GrainVertFloatCount + ThirdVertexY]);
+	EXPECT_FLOAT_EQ(41.0f, verts[GrainVertFloatCount + FirstTriangleSecondVertexY]);
+	EXPECT_FLOAT_EQ(-31.0f, verts[GrainVertFloatCount + SecondTriangleSecondVertexY]);
 }
 
 TEST(LoopModelMesh, UpdateModelBuildsTrailingPartialGrain)
@@ -114,12 +125,12 @@ TEST(LoopModelMesh, UpdateModelBuildsTrailingPartialGrain)
 
 	model.UpdateModel(buffer, loopLength, 0ul, 100.0f);
 
-	ASSERT_EQ(144u, model.BackVerts().size());
-	ASSERT_EQ(96u, model.BackUvs().size());
+	ASSERT_EQ(GrainVertFloatCount * 2u, model.BackVerts().size());
+	ASSERT_EQ(GrainUvFloatCount * 2u, model.BackUvs().size());
 
 	const auto& verts = model.BackVerts();
-	EXPECT_FLOAT_EQ(-21.0f, verts[72 + 1]);
-	EXPECT_FLOAT_EQ(11.0f, verts[72 + 7]);
-	EXPECT_FLOAT_EQ(31.0f, verts[72 + 4]);
-	EXPECT_FLOAT_EQ(-41.0f, verts[72 + 13]);
+	EXPECT_FLOAT_EQ(-21.0f, verts[GrainVertFloatCount + FirstVertexY]);
+	EXPECT_FLOAT_EQ(11.0f, verts[GrainVertFloatCount + ThirdVertexY]);
+	EXPECT_FLOAT_EQ(31.0f, verts[GrainVertFloatCount + FirstTriangleSecondVertexY]);
+	EXPECT_FLOAT_EQ(-41.0f, verts[GrainVertFloatCount + SecondTriangleSecondVertexY]);
 }
