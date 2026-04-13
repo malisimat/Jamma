@@ -20,6 +20,9 @@
     <ClCompile Include="src\gui\GuiRack_Tests.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiControls_Tests.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
     <ClCompile Include="src\io\JamFile_Tests.cpp">
       <Filter>src\io</Filter>
     </ClCompile>

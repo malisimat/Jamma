@@ -122,3 +122,66 @@ TEST(GuiSlider, ReceiverGetsValue) {
 	ASSERT_EQ(expectedValue, slider->Value());
 	ASSERT_TRUE(receiver->IsExpected());
 }
+
+TEST(GuiSlider, StepsQuantizeDraggedValue) {
+	auto dragLength = 100;
+	auto dragSize = 20;
+
+	auto sliderParams = GuiSliderParams();
+	sliderParams.Position = { 0, 0 };
+	sliderParams.Size = { (unsigned int)(dragLength + dragSize), (unsigned int)dragSize };
+	sliderParams.DragControlSize = { (unsigned int)dragSize, (unsigned int)dragSize };
+	sliderParams.InitValue = 0.0;
+	sliderParams.Min = 0.0;
+	sliderParams.Max = 1.0;
+	sliderParams.Steps = 4;
+	sliderParams.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+
+	auto slider = std::make_shared<GuiSlider>(sliderParams);
+
+	auto downAction = TouchAction();
+	downAction.Touch = actions::TouchAction::TOUCH_MOUSE;
+	downAction.Position = { dragSize / 2, dragSize / 2 };
+	downAction.Index = 0;
+	downAction.State = TouchAction::TOUCH_DOWN;
+	slider->OnAction(downAction);
+
+	auto moveAction = TouchMoveAction();
+	moveAction.Touch = actions::TouchAction::TOUCH_MOUSE;
+	moveAction.Position = { 50, dragSize / 2 };
+	moveAction.Index = 0;
+	slider->OnAction(moveAction);
+
+	ASSERT_EQ(0.5, slider->Value());
+}
+
+TEST(GuiSlider, DragBeyondRangeClampsValue) {
+	auto dragLength = 100;
+	auto dragSize = 20;
+
+	auto sliderParams = GuiSliderParams();
+	sliderParams.Position = { 0, 0 };
+	sliderParams.Size = { (unsigned int)(dragLength + dragSize), (unsigned int)dragSize };
+	sliderParams.DragControlSize = { (unsigned int)dragSize, (unsigned int)dragSize };
+	sliderParams.InitValue = 0.0;
+	sliderParams.Min = 0.0;
+	sliderParams.Max = 1.0;
+	sliderParams.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+
+	auto slider = std::make_shared<GuiSlider>(sliderParams);
+
+	auto downAction = TouchAction();
+	downAction.Touch = actions::TouchAction::TOUCH_MOUSE;
+	downAction.Position = { dragSize / 2, dragSize / 2 };
+	downAction.Index = 0;
+	downAction.State = TouchAction::TOUCH_DOWN;
+	slider->OnAction(downAction);
+
+	auto moveAction = TouchMoveAction();
+	moveAction.Touch = actions::TouchAction::TOUCH_MOUSE;
+	moveAction.Position = { dragLength + dragSize + 50, dragSize / 2 };
+	moveAction.Index = 0;
+	slider->OnAction(moveAction);
+
+	ASSERT_EQ(1.0, slider->Value());
+}
