@@ -321,3 +321,17 @@ TEST(AudioBuffer, ExcessiveDelayPlaysNicely)
 
     ASSERT_TRUE(sink->IsZero());
 }
+
+TEST(AudioBuffer, PreservesRequestedSizeAboveMaxBlockSize)
+{
+    const auto initialSize = static_cast<unsigned int>(constants::MaxBlockSize) + 10u;
+    const auto resizedSize = initialSize + 25u;
+
+    auto audioBuf = std::make_shared<AudioBuffer>(initialSize);
+
+    ASSERT_EQ(initialSize, audioBuf->BufSize());
+
+    audioBuf->SetSize(resizedSize);
+
+    ASSERT_EQ(resizedSize, audioBuf->BufSize());
+}

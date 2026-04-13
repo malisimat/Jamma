@@ -215,7 +215,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	if (isEndRecording)
 	{
 		_endRecordSampCount += numSamps;
-		if (_endRecordSampCount > _endRecordSamps)
+		if (_endRecordSampCount >= _endRecordSamps)
 			_endRecordingCompleted = true;
 	}
 
