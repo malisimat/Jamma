@@ -317,19 +317,19 @@ TEST(GuiRack, SliderActionForwardedAsRack) {
 
 	GuiAction action;
 	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
-	action.Index = 1; // Will be decremented to 0 by GuiRack
+	action.Index = 1;
 	action.Data = GuiAction::GuiDouble{ 0.75 };
 	rack->OnAction(action);
 
 	ASSERT_EQ(1, receiver->ActionCount());
 	ASSERT_EQ(GuiAction::ACTIONELEMENT_RACK, receiver->LastAction().ElementType);
-	ASSERT_EQ(0u, receiver->LastAction().Index);
+	ASSERT_EQ(1u, receiver->LastAction().Index);
 
 	auto val = std::get<GuiAction::GuiDouble>(receiver->LastAction().Data);
 	ASSERT_EQ(0.75, val.Value);
 }
 
-TEST(GuiRack, SliderActionIndexZeroNotDecremented) {
+TEST(GuiRack, MasterSliderActionKeepsIndexZero) {
 	auto params = MakeRackParams();
 	params.NumInputChannels = 2;
 	auto rack = std::make_shared<GuiRack>(params);
@@ -338,12 +338,29 @@ TEST(GuiRack, SliderActionIndexZeroNotDecremented) {
 
 	GuiAction action;
 	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
-	action.Index = 0; // GuiRack only decrements Index when > 0, so 0 passes through unchanged
+	action.Index = 0;
 	action.Data = GuiAction::GuiDouble{ 0.5 };
 	rack->OnAction(action);
 
 	ASSERT_EQ(1, receiver->ActionCount());
 	ASSERT_EQ(0u, receiver->LastAction().Index);
+}
+
+TEST(GuiRack, ChannelSliderActionDoesNotCollideWithMasterIndex) {
+	auto params = MakeRackParams();
+	params.NumInputChannels = 2;
+	auto rack = std::make_shared<GuiRack>(params);
+	auto receiver = std::make_shared<MockedRackReceiver>();
+	rack->SetReceiver(receiver);
+
+	GuiAction action;
+	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+	action.Index = 2;
+	action.Data = GuiAction::GuiDouble{ 0.25 };
+	rack->OnAction(action);
+
+	ASSERT_EQ(1, receiver->ActionCount());
+	ASSERT_EQ(2u, receiver->LastAction().Index);
 }
 
 TEST(GuiRack, RouterActionForwardedAsRack) {

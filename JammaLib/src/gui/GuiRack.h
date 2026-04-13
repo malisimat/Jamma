@@ -92,6 +92,7 @@ namespace gui
 		gui::GuiRouterParams _GetRouterParams(utils::Size2d size);
 
 	private:
+		bool _receiversInitialised;
 		GuiRackParams::RackState _rackState;
 		std::shared_ptr<base::GuiElement> _masterPanel;
 		std::shared_ptr<gui::GuiSlider> _masterSlider;

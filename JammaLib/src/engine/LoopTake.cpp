@@ -170,14 +170,24 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			numSamps);
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		auto& buf = _audioBuffers[i];
 		float tempBuf[constants::MaxBlockSize];
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+
+		if (masterLevel != 1.0f)
+		{
+			for (auto samp = 0u; samp < sampsToRead; samp++)
+				tempBuf[samp] *= masterLevel;
+		}
+
 		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
 	}
+
+	_masterMixer->Offset(sampsToRead);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -259,9 +269,8 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	{
 		if (0 == action.Index)
 			_masterMixer->OnAction(action);
-		else if ((action.Index - 1) < _audioMixers.size())
+		else if ((action.Index - 1) < _loops.size())
 		{
-			//_audioMixers[action.Index - 1]->OnAction(action);
 			_loops[action.Index - 1]->SetMixerLevel(d->Value);
 		}
 	}

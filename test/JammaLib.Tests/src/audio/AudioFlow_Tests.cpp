@@ -6,6 +6,7 @@
 #include "engine/Loop.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
+#include "actions/GuiAction.h"
 
 using engine::Station;
 using engine::StationParams;
@@ -116,6 +117,25 @@ void ReadBlock(ChannelMixer& chanMixer,
 	chanMixer.ToDac(outBuf, numChans, numSamps);
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, READBLOCK_SOURCE);
 	station->EndMultiPlay(numSamps);
+}
+
+void SetRackLevel(base::ActionReceiver& receiver, unsigned int index, double level)
+{
+	actions::GuiAction action;
+	action.ElementType = actions::GuiAction::ACTIONELEMENT_RACK;
+	action.Index = index;
+	action.Data = actions::GuiAction::GuiDouble(level);
+	receiver.OnAction(action);
+}
+
+void SetRackRoutes(base::ActionReceiver& receiver,
+	const std::vector<std::pair<unsigned int, unsigned int>>& connections)
+{
+	actions::GuiAction action;
+	action.ElementType = actions::GuiAction::ACTIONELEMENT_RACK;
+	action.Index = 0;
+	action.Data = actions::GuiAction::GuiConnections{ connections };
+	receiver.OnAction(action);
 }
 
 bool HasNonZero(const float* buf, unsigned int count)
@@ -546,10 +566,8 @@ TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 		auto w1 = allWrittenCh1[expectedIndex];
 		auto r0 = allReadCh0[i];
 		auto r1 = allReadCh1[i];
-		auto wSum = w0 + w1;
-
-		ASSERT_LT(std::abs(r0 - wSum), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
-		ASSERT_LT(std::abs(r1 - wSum), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r0 - w0), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
+		ASSERT_LT(std::abs(r1 - w1), epsilon) << "loopIndex=" << loopIndex << " i=" << i;
 	}
 }
 
@@ -779,5 +797,197 @@ TEST(AudioFlow, ReadViaStation_PerSampleVerification)
 	{
 		float expected = static_cast<float>(s + 1) * 0.01f;
 		ASSERT_FLOAT_EQ(outBuf[s], expected) << "Mismatch at sample " << s;
+	}
+}
+
+TEST(AudioFlow, LoopTakeRouterReRoutesLoopOutputs)
+{
+	const unsigned int numChans = 2;
+	const unsigned int blockSize = 32;
+	const unsigned long loopLength = 64;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto take = MakeTake();
+	take->SetNumBusChannels(numChans);
+	take->Record({}, "test");
+	auto loop0 = take->AddLoop(0, "test");
+	auto loop1 = take->AddLoop(1, "test");
+	loop0->Record();
+	loop1->Record();
+	take->CommitChanges();
+
+	std::vector<float> recordData0(totalRecord, 0.0f);
+	std::vector<float> recordData1(totalRecord, 0.0f);
+	for (unsigned long i = constants::MaxLoopFadeSamps; i < totalRecord; i++)
+	{
+		recordData0[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+		recordData1[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.02f;
+	}
+
+	AudioWriteRequest writeReq0;
+	writeReq0.samples = recordData0.data();
+	writeReq0.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq0.stride = 1;
+	writeReq0.fadeCurrent = 0.0f;
+	writeReq0.fadeNew = 1.0f;
+	writeReq0.source = Audible::AUDIOSOURCE_ADC;
+	AudioWriteRequest writeReq1;
+	writeReq1.samples = recordData1.data();
+	writeReq1.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq1.stride = 1;
+	writeReq1.fadeCurrent = 0.0f;
+	writeReq1.fadeNew = 1.0f;
+	writeReq1.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq0, 0);
+	loop1->OnBlockWrite(writeReq1, 0);
+	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
+	loop1->EndWrite(static_cast<unsigned int>(totalRecord), true);
+	loop0->Play(constants::MaxLoopFadeSamps, loopLength, false);
+	loop1->Play(constants::MaxLoopFadeSamps, loopLength, false);
+
+	class CaptureStereoSink : public base::MultiAudioSink
+	{
+	public:
+		explicit CaptureStereoSink(unsigned int bufSize) :
+			_sinks{
+				std::make_shared<CaptureSink>(bufSize),
+				std::make_shared<CaptureSink>(bufSize)
+			}
+		{}
+
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 2; }
+
+		std::shared_ptr<CaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
+
+	protected:
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel, base::Audible::AudioSourceType) override
+		{
+			return channel < _sinks.size() ? _sinks[channel] : nullptr;
+		}
+
+	private:
+		std::vector<std::shared_ptr<CaptureSink>> _sinks;
+	};
+
+	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
+
+	SetRackRoutes(*take, { {0, 1}, {1, 0} });
+
+	take->WriteBlock(sink, nullptr, 0, blockSize);
+	take->EndMultiPlay(blockSize);
+
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		ASSERT_FLOAT_EQ(sink->GetSink(0)->Samples[s], static_cast<float>(s + 1) * 0.02f);
+		ASSERT_FLOAT_EQ(sink->GetSink(1)->Samples[s], static_cast<float>(s + 1) * 0.01f);
+	}
+}
+
+TEST(AudioFlow, StationRouterReRoutesBusOutputsToDac)
+{
+	const unsigned int numChans = 2;
+	const unsigned int blockSize = 32;
+	const unsigned long loopLength = 64;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+	take->Record({}, "test");
+	auto loop0 = take->AddLoop(0, "test");
+	auto loop1 = take->AddLoop(1, "test");
+	loop0->Record();
+	loop1->Record();
+	station->CommitChanges();
+
+	std::vector<float> recordData0(totalRecord, 0.0f);
+	std::vector<float> recordData1(totalRecord, 0.0f);
+	for (unsigned long i = constants::MaxLoopFadeSamps; i < totalRecord; i++)
+	{
+		recordData0[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+		recordData1[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.02f;
+	}
+
+	AudioWriteRequest writeReq0;
+	writeReq0.samples = recordData0.data();
+	writeReq0.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq0.stride = 1;
+	writeReq0.fadeCurrent = 0.0f;
+	writeReq0.fadeNew = 1.0f;
+	writeReq0.source = Audible::AUDIOSOURCE_ADC;
+	AudioWriteRequest writeReq1;
+	writeReq1.samples = recordData1.data();
+	writeReq1.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq1.stride = 1;
+	writeReq1.fadeCurrent = 0.0f;
+	writeReq1.fadeNew = 1.0f;
+	writeReq1.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq0, 0);
+	loop1->OnBlockWrite(writeReq1, 0);
+	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
+	loop1->EndWrite(static_cast<unsigned int>(totalRecord), true);
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0);
+
+	SetRackRoutes(*station, { {0, 1}, {1, 0} });
+
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> outBuf(numChans * blockSize, 0.0f);
+	ReadBlock(chanMixer, station, outBuf.data(), numChans, blockSize);
+
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		ASSERT_FLOAT_EQ(outBuf[(s * numChans) + 0], static_cast<float>(s + 1) * 0.02f);
+		ASSERT_FLOAT_EQ(outBuf[(s * numChans) + 1], static_cast<float>(s + 1) * 0.01f);
+	}
+}
+
+TEST(AudioFlow, StationMasterRackLevelReducesOverallOutput)
+{
+	const unsigned int numChans = 1;
+	const unsigned int blockSize = 256;
+	const unsigned long loopLength = 512;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+	take->Record({}, "test");
+	auto loop0 = take->AddLoop(0, "test");
+	loop0->Record();
+	station->CommitChanges();
+
+	std::vector<float> recordData(totalRecord, 0.0f);
+	for (unsigned long i = constants::MaxLoopFadeSamps; i < totalRecord; i++)
+		recordData[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+
+	AudioWriteRequest writeReq;
+	writeReq.samples = recordData.data();
+	writeReq.numSamps = static_cast<unsigned int>(totalRecord);
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = Audible::AUDIOSOURCE_ADC;
+	loop0->OnBlockWrite(writeReq, 0);
+	loop0->EndWrite(static_cast<unsigned int>(totalRecord), true);
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0);
+
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> baseline(numChans * blockSize, 0.0f);
+	ReadBlock(chanMixer, station, baseline.data(), numChans, blockSize);
+
+	SetRackLevel(*station, 0, 0.2);
+
+	std::vector<float> settling(numChans * blockSize, 0.0f);
+	ReadBlock(chanMixer, station, settling.data(), numChans, blockSize);
+
+	std::vector<float> reduced(numChans * blockSize, 0.0f);
+	ReadBlock(chanMixer, station, reduced.data(), numChans, blockSize);
+
+	ASSERT_TRUE(HasNonZero(baseline.data(), numChans * blockSize));
+	ASSERT_TRUE(HasNonZero(reduced.data(), numChans * blockSize));
+
+	for (unsigned int s = 0; s < blockSize; s++)
+	{
+		ASSERT_LT(std::abs(reduced[s]), std::abs(baseline[s]));
 	}
 }

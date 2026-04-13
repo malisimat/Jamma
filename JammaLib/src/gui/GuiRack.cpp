@@ -19,6 +19,7 @@ const utils::Size2d GuiRack::_DragSize = { 32, 32 };
 
 GuiRack::GuiRack(GuiRackParams params) :
 	GuiElement(params),
+	_receiversInitialised(false),
 	_rackState(params.InitState),
 	_masterPanel(nullptr),
 	_masterSlider(nullptr),
@@ -108,9 +109,6 @@ ActionResult GuiRack::OnAction(GuiAction action)
 			break;
 		case GuiAction::ACTIONELEMENT_SLIDER:
 			action.ElementType = GuiAction::ACTIONELEMENT_RACK;
-			if (action.Index > 0)
-				action.Index -= 1; // Account for other children of _channelPanel
-
 			if (_receiver)
 				_receiver->OnAction(action);
 
@@ -141,6 +139,8 @@ void GuiRack::SetRackState(GuiRackParams::RackState state, bool bypassUpdates)
 
 void GuiRack::_InitReceivers()
 {
+	_receiversInitialised = true;
+
 	_masterSlider->SetReceiver(ActionReceiver::shared_from_this());
 	_masterSlider->SetValue(_masterSlider->Value(), true);
 
@@ -160,6 +160,9 @@ void GuiRack::_AddChannel(unsigned int index, utils::Size2d size)
 	auto slider = std::make_shared<gui::GuiSlider>(_GetSliderParams(index, size));
 	_channelSliders.push_back(slider);
 	_channelPanel->AddChild(slider);
+
+	if (_receiversInitialised)
+		slider->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)

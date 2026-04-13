@@ -181,15 +181,24 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	//_masterMixer->WriteBlock();
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
-	for (const auto& buf : _audioBuffers)
+	auto masterLevel = static_cast<float>(_masterMixer->Level());
+	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
+		const auto& buf = _audioBuffers[i];
 		float tempBuf[constants::MaxBlockSize];
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
-		for (const auto& mixer : _audioMixers)
-			mixer->WriteBlock(dest, srcPtr, sampsToRead);
+		if (masterLevel != 1.0f)
+		{
+			for (auto samp = 0u; samp < sampsToRead; samp++)
+				tempBuf[samp] *= masterLevel;
+		}
+
+		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
 	}
+
+	_masterMixer->Offset(sampsToRead);
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -293,8 +302,10 @@ ActionResult Station::OnAction(GuiAction action)
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
 		{
-			if (action.Index < _audioMixers.size())
-				_audioMixers[action.Index]->OnAction(action);
+			if (0 == action.Index)
+				_masterMixer->OnAction(action);
+			else if ((action.Index - 1) < _audioMixers.size())
+				_audioMixers[action.Index - 1]->OnAction(action);
 		}
 
 		break;
@@ -323,8 +334,10 @@ ActionResult Station::OnAction(GuiAction action)
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
 		{
-			if (action.Index < _audioMixers.size())
-				_audioMixers[action.Index]->OnAction(action);
+			if (0 == action.Index)
+				_masterMixer->OnAction(action);
+			else if ((action.Index - 1) < _audioMixers.size())
+				_audioMixers[action.Index - 1]->OnAction(action);
 		}
 
 		break;
