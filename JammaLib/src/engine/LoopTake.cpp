@@ -178,13 +178,15 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
-		if (masterLevel != 1.0f)
-		{
-			for (auto samp = 0u; samp < sampsToRead; samp++)
-				tempBuf[samp] *= masterLevel;
-		}
+		// When PlaybackRead returns a direct pointer into the ring buffer
+		// (no wrap-around), we must copy into tempBuf before scaling.
+		if (srcPtr != tempBuf)
+			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
 
-		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
+		for (auto samp = 0u; samp < sampsToRead; samp++)
+			tempBuf[samp] *= masterLevel;
+
+		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
 
 	_masterMixer->Offset(sampsToRead);

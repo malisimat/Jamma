@@ -179,7 +179,6 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			indexOffset,
 			numSamps);
 
-	//_masterMixer->WriteBlock();
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
@@ -189,13 +188,15 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
 
-		if (masterLevel != 1.0f)
-		{
-			for (auto samp = 0u; samp < sampsToRead; samp++)
-				tempBuf[samp] *= masterLevel;
-		}
+		// When PlaybackRead returns a direct pointer into the ring buffer
+		// (no wrap-around), we must copy into tempBuf before scaling.
+		if (srcPtr != tempBuf)
+			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
 
-		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
+		for (auto samp = 0u; samp < sampsToRead; samp++)
+			tempBuf[samp] *= masterLevel;
+
+		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
 
 	_masterMixer->Offset(sampsToRead);
@@ -270,18 +271,20 @@ ActionResult Station::OnAction(GuiAction action)
 	switch (action.ElementType)
 	{
 	case GuiAction::ACTIONELEMENT_TOGGLE:
+		// Legacy: GuiRack handles toggles internally and does not forward them,
+		// so this case is not reached. _router is nullptr and would crash if called.
 		if (auto toggleState = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
 			auto visible = ((int)GuiToggleParams::TOGGLE_ON) == toggleState->Value;
 
-			if (action.Index == 2)
+			if (_router && action.Index == 2)
 				_router->SetVisible(visible);
-			//else
-				//_mixer->SetVisible(visible);
 		}
 
 		break;
 	case GuiAction::ACTIONELEMENT_ROUTER:
+		// Legacy: GuiRack now converts ROUTER→RACK before forwarding,
+		// so this case is not reached in normal flows.
 		if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		{
 			for (auto chan = 0u; chan < _audioMixers.size(); chan++)
@@ -299,13 +302,6 @@ ActionResult Station::OnAction(GuiAction action)
 					});
 				_audioMixers[chan]->SetChannels(secondElements);
 			}
-		}
-		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
-		{
-			if (0 == action.Index)
-				_masterMixer->OnAction(action);
-			else if ((action.Index > 0) && ((action.Index - 1) < _audioMixers.size()))
-				_audioMixers[action.Index - 1]->OnAction(action);
 		}
 
 		break;
