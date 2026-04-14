@@ -137,3 +137,15 @@ TEST(LoopModelMesh, UpdateModelBuildsTrailingPartialGrain)
 	EXPECT_FLOAT_EQ(31.0f, verts[GrainVertFloatCount + FirstTriangleSecondVertexY]);
 	EXPECT_FLOAT_EQ(-41.0f, verts[GrainVertFloatCount + SecondTriangleSecondVertexY]);
 }
+
+TEST(LoopModelMesh, UpdateModelWithZeroLoopLengthClearsGeometry)
+{
+	auto model = TestLoopModel();
+	auto buffer = MakeBuffer(constants::GrainSamps);
+	buffer[0] = 0.25f;
+
+	model.UpdateModel(buffer, 0ul, 0ul, 100.0f);
+
+	EXPECT_TRUE(model.BackVerts().empty());
+	EXPECT_TRUE(model.BackUvs().empty());
+}

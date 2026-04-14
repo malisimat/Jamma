@@ -559,6 +559,9 @@ double Loop::_CalcDrawRadius(unsigned long loopLength)
 {
 	auto minRadius = 50.0;
 	auto maxRadius = 400.0;
+	if (loopLength == 0ul)
+		return minRadius;
+
 	auto radius = 70.0 * log(loopLength) - 600;
 
 	return std::clamp(radius, minRadius, maxRadius);
