@@ -136,6 +136,7 @@
     <ClCompile Include="src\audio\Hanning_Tests.cpp" />
     <ClCompile Include="src\audio\MixBehaviour_Tests.cpp" />
     <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
+    <ClCompile Include="src\engine\LoopModel_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />

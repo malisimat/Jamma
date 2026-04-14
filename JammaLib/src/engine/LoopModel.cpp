@@ -118,12 +118,23 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	unsigned long offset,
 	float radius)
 {
+	if (loopLength == 0ul)
+	{
+		SetGeometry({}, {});
+		return;
+	}
+
 	std::vector<float> verts;
 	std::vector<float> uvs;
 
 	auto lastYMin = -_MinHeight;
 	auto lastYMax = _MinHeight;
 	auto numGrains = (unsigned int)ceil((double)loopLength / (double)constants::GrainSamps);
+	if (numGrains == 0u)
+	{
+		SetGeometry({}, {});
+		return;
+	}
 
 	for (auto grain = 1u; grain < numGrains; grain++)
 	{
@@ -173,6 +184,9 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 	float lastYMax,
 	float radius)
 {
+	if (numGrains == 0u)
+		return std::make_tuple(std::vector<float>(), std::vector<float>(), lastYMin, lastYMax);
+
 	const float radialThickness = radius * _RadialThicknessFrac;
 
 	auto yToUv = [](float y) {

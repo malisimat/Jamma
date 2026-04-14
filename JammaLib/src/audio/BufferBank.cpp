@@ -98,7 +98,7 @@ float BufferBank::SubMin(unsigned long i1, unsigned long i2) const
 	if (i2 <= i1)
 		return 0.0f;
 
-	auto curMin = (*this)[0];
+	auto curMin = (*this)[i1];
 	for (auto i = i1; i < i2; i++)
 	{
 		if ((*this)[i] < curMin)
@@ -123,7 +123,7 @@ float BufferBank::SubMax(unsigned long i1, unsigned long i2) const
 	if (i2 <= i1)
 		return 0.0f;
 
-	auto curMax = (*this)[0ul];
+	auto curMax = (*this)[i1];
 	for (auto i = i1; i < i2; i++)
 	{
 		if ((*this)[i]> curMax)
