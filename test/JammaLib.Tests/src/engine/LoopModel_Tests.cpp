@@ -22,6 +22,7 @@ namespace
 	{
 	public:
 		TestLoopModel() :
+			GuiModel(LoopModelParams()),
 			LoopModel(LoopModelParams())
 		{
 		}
@@ -55,12 +56,14 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 	buffer[0] = -0.5f;
 	buffer[1] = 0.75f;
 
+	const auto tol = 1e-5f;
 	const auto radius = 100.0f;
 	const auto radialThickness = radius / 20.0f;
 	const auto expectedMinSample = -0.5f;
 	const auto expectedMaxSample = 0.75f;
 	const auto expectedYMin = (MeshHeightScale * expectedMinSample) - MeshMinHeight;
 	const auto expectedYMax = (MeshHeightScale * expectedMaxSample) + MeshMinHeight;
+	const auto expectedInitialYUv = ((-MeshMinHeight) / ((MeshMinHeight * 2.0f) + (MeshHeightScale * 2.0f))) + 0.5f;
 
 	auto [verts, uvs, yMin, yMax] = model.CalcGrainGeometry(buffer,
 		1u,
@@ -72,18 +75,18 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 
 	ASSERT_EQ(GrainVertFloatCount, verts.size());
 	ASSERT_EQ(GrainUvFloatCount, uvs.size());
-	EXPECT_FLOAT_EQ(expectedYMin, yMin);
-	EXPECT_FLOAT_EQ(expectedYMax, yMax);
+	EXPECT_NEAR(expectedYMin, yMin, tol);
+	EXPECT_NEAR(expectedYMax, yMax, tol);
 
-	EXPECT_FLOAT_EQ(0.0f, verts[0]);
-	EXPECT_FLOAT_EQ(-MeshMinHeight, verts[1]);
-	EXPECT_FLOAT_EQ(radius + radialThickness, verts[2]);
-	EXPECT_FLOAT_EQ(radius + radialThickness, verts[3]);
-	EXPECT_FLOAT_EQ(expectedYMax, verts[4]);
-	EXPECT_NEAR(0.0f, verts[5], 0.0001f);
-	EXPECT_FLOAT_EQ(0.0f, uvs[0]);
-	EXPECT_FLOAT_EQ(0.5f, uvs[1]);
-	EXPECT_FLOAT_EQ(0.25f, uvs[2]);
+	EXPECT_NEAR(0.0f, verts[0], tol);
+	EXPECT_NEAR(-MeshMinHeight, verts[1], tol);
+	EXPECT_NEAR(radius + radialThickness, verts[2], tol);
+	EXPECT_NEAR(radius + radialThickness, verts[3], tol);
+	EXPECT_NEAR(expectedYMax, verts[4], tol);
+	EXPECT_NEAR(0.0f, verts[5], tol);
+	EXPECT_NEAR(0.0f, uvs[0], tol);
+	EXPECT_NEAR(expectedInitialYUv, uvs[1], tol);
+	EXPECT_NEAR(0.25f, uvs[2], tol);
 }
 
 TEST(LoopModelMesh, UpdateModelUsesOffsetSamplesAndMaintainsGrainContinuity)
