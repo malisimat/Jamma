@@ -48,7 +48,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_audioBuffers(),
 	_backAudioBuffers()
 {
-	_masterMixer = std::make_unique<AudioMixer>(mixerParams);
+	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_guiRack);
@@ -170,14 +170,26 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			numSamps);
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		auto& buf = _audioBuffers[i];
 		float tempBuf[constants::MaxBlockSize];
 		buf->Delay(sampsToRead);
 		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
-		_audioMixers[i]->WriteBlock(dest, srcPtr, sampsToRead);
+
+		// When PlaybackRead returns a direct pointer into the ring buffer
+		// (no wrap-around), we must copy into tempBuf before scaling.
+		if (srcPtr != tempBuf)
+			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
+
+		for (auto samp = 0u; samp < sampsToRead; samp++)
+			tempBuf[samp] *= masterLevel;
+
+		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
+
+	_masterMixer->Offset(sampsToRead);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -258,10 +270,13 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
 	{
 		if (0 == action.Index)
-			_masterMixer->OnAction(action);
-		else if ((action.Index - 1) < _audioMixers.size())
 		{
-			//_audioMixers[action.Index - 1]->OnAction(action);
+			GuiAction mixerAction = action;
+			mixerAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+			_masterMixer->OnAction(mixerAction);
+		}
+		else if ((action.Index > 0) && ((action.Index - 1) < _loops.size()))
+		{
 			_loops[action.Index - 1]->SetMixerLevel(d->Value);
 		}
 	}
