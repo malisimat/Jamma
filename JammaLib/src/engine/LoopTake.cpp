@@ -48,7 +48,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_audioBuffers(),
 	_backAudioBuffers()
 {
-	_masterMixer = std::make_unique<AudioMixer>(mixerParams);
+	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_guiRack);
