@@ -270,7 +270,11 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
 	{
 		if (0 == action.Index)
-			_masterMixer->OnAction(action);
+		{
+			GuiAction mixerAction = action;
+			mixerAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+			_masterMixer->OnAction(mixerAction);
+		}
 		else if ((action.Index > 0) && ((action.Index - 1) < _loops.size()))
 		{
 			_loops[action.Index - 1]->SetMixerLevel(d->Value);

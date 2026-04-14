@@ -233,7 +233,8 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 
 	GuiAction action;
 	action.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
-	action.Index = _index;
+	// Use the semantic slider index from params, not container child order.
+	action.Index = _sliderParams.Index;
 	action.Data = GuiAction::GuiDouble(value);
 
 	if (_receiver && !bypassUpdates)

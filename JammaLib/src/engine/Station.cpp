@@ -260,7 +260,12 @@ ActionResult Station::OnAction(KeyAction action)
 
 ActionResult Station::OnAction(GuiAction action)
 {
-	auto res = GuiElement::OnAction(action);
+	const bool isRackAction =
+		(action.ElementType == GuiAction::ACTIONELEMENT_RACK) ||
+		(action.ElementType == GuiAction::ACTIONELEMENT_ROUTER) ||
+		(action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE);
+
+	auto res = isRackAction ? ActionResult::NoAction() : GuiElement::OnAction(action);
 
 	if (!_isEnabled || !_isVisible)
 		return res;
@@ -330,10 +335,13 @@ ActionResult Station::OnAction(GuiAction action)
 		}
 		else if (auto d = std::get_if<GuiAction::GuiDouble>(&action.Data))
 		{
+			GuiAction mixerAction = action;
+			mixerAction.ElementType = GuiAction::ACTIONELEMENT_SLIDER;
+
 			if (0 == action.Index)
-				_masterMixer->OnAction(action);
+				_masterMixer->OnAction(mixerAction);
 			else if ((action.Index > 0) && ((action.Index - 1) < _audioMixers.size()))
-				_audioMixers[action.Index - 1]->OnAction(action);
+				_audioMixers[action.Index - 1]->OnAction(mixerAction);
 		}
 
 		break;
