@@ -60,17 +60,39 @@ void GuiRack::SetSize(utils::Size2d size)
 {
 	_rackParams.Size = size;
 
-	auto panelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
-	_masterPanel->SetSize(panelParams.Size);
-	auto sliderParams = _GetSliderParams(0, size);
-	_masterSlider->SetSize(sliderParams.Size);
-	_masterSlider->SetDragParams(sliderParams.DragControlOffset, sliderParams.DragControlSize, sliderParams.DragGap);
-	auto toggleParams = _GetToggleParams(GuiRackParams::RACK_CHANNELS, size);
-	_channelToggle->SetSize(toggleParams.Size);
+	auto masterPanelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
+	_masterPanel->SetPosition(masterPanelParams.Position);
+	_masterPanel->SetSize(masterPanelParams.Size);
+
+	auto masterSliderParams = _GetSliderParams(0, size);
+	_masterSlider->SetPosition(masterSliderParams.Position);
+	_masterSlider->SetSize(masterSliderParams.Size);
+	_masterSlider->SetDragParams(masterSliderParams.DragControlOffset, masterSliderParams.DragControlSize, masterSliderParams.DragGap);
+
+	auto channelToggleParams = _GetToggleParams(GuiRackParams::RACK_CHANNELS, size);
+	_channelToggle->SetPosition(channelToggleParams.Position);
+	_channelToggle->SetSize(channelToggleParams.Size);
+
+	auto channelPanelParams = _GetPanelParams(GuiRackParams::RACK_CHANNELS, size);
+	_channelPanel->SetPosition(channelPanelParams.Position);
+	_channelPanel->SetSize(channelPanelParams.Size);
+
+	auto routerToggleParams = _GetToggleParams(GuiRackParams::RACK_ROUTER, size);
+	_routerToggle->SetPosition(routerToggleParams.Position);
+	_routerToggle->SetSize(routerToggleParams.Size);
+
+	auto routerPanelParams = _GetPanelParams(GuiRackParams::RACK_ROUTER, size);
+	_routerPanel->SetPosition(routerPanelParams.Position);
+	_routerPanel->SetSize(routerPanelParams.Size);
+
+	auto routerParams = _GetRouterParams(size);
+	_router->SetPosition(routerParams.Position);
+	_router->SetSize(routerParams.Size);
 
 	for (auto i = 0u; i < _channelSliders.size(); ++i)
 	{
 		auto chanSliderParams = _GetSliderParams(i + 1, size);
+		_channelSliders[i]->SetPosition(chanSliderParams.Position);
 		_channelSliders[i]->SetSize(chanSliderParams.Size);
 		_channelSliders[i]->SetDragParams(chanSliderParams.DragControlOffset, chanSliderParams.DragControlSize, chanSliderParams.DragGap);
 	}
