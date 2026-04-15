@@ -1,6 +1,5 @@
 #include "Scene.h"
 #include "glm/ext.hpp"
-#include <cmath>
 
 using namespace base;
 using namespace actions;
@@ -466,22 +465,8 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	// Update skybox drift rotation
-	if (!_skyboxStarted)
-	{
-		_skyboxStartTime = curTime;
-		_skyboxStarted = true;
-	}
-	{
-		auto t = (float)Timer::GetElapsedSeconds(_skyboxStartTime, curTime);
-		auto yaw   = glm::radians(2.0f * std::sin(0.047f * t) + 1.5f * std::sin(0.031f * t + 1.1f));
-		auto pitch = glm::radians(1.5f * std::sin(0.053f * t + 2.3f) + 1.0f * std::sin(0.019f * t + 0.7f));
-		auto roll  = glm::radians(0.8f * std::sin(0.037f * t + 1.8f));
-		auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
-		R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
-		R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
-		_skyboxViewProj = _viewRotOnlyProj * R;
-	}
+	// Skybox animation must be updated from a render/UI-thread path, not here.
+	// OnTick runs from the audio callback, so keep it free of render-only math.
 
 	unsigned int totalNumLoops = 0u;
 
