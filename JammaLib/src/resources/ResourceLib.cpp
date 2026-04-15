@@ -37,7 +37,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				return true;
 			}
 
-				break;
+			break;
 		}
 		case SHADER:
 		{
@@ -46,12 +46,12 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 			auto shader = ShaderResource::Load(vertFile, fragFile);
 
 			if (shader.has_value())
-				{
-					_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
-					return true;
-				}
+			{
+				_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
+				return true;
+			}
 
-				break;
+			break;
 		}
 		case WAV:
 		{
@@ -59,13 +59,13 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 			auto wavOpt = WavResource::Load(wavFile);
 
 			if (wavOpt.has_value())
-			{ 
+			{
 				auto[wav, numSamps, sampleRate] = wavOpt.value();
 				_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
-					return true;
+				return true;
 			}
 
-				break;
+			break;
 		}
 	}
 
