@@ -202,6 +202,22 @@ void Scene::Draw3d(DrawContext& ctx,
 
 	if (PASS_SCENE == pass)
 	{
+		if (!_skyboxStarted)
+		{
+			_skyboxStartTime = Timer::GetTime();
+			_skyboxStarted = true;
+		}
+		{
+			auto t = (float)Timer::GetElapsedSeconds(_skyboxStartTime, Timer::GetTime());
+			auto yaw   = glm::radians(2.0f * std::sin(0.047f * t) + 1.5f * std::sin(0.031f * t + 1.1f));
+			auto pitch = glm::radians(1.5f * std::sin(0.053f * t + 2.3f) + 1.0f * std::sin(0.019f * t + 0.7f));
+			auto roll  = glm::radians(0.8f * std::sin(0.037f * t + 1.8f));
+			auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
+			R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+			R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
+			_skyboxViewProj = _viewRotOnlyProj * R;
+		}
+
 		glCtx.ClearMvp();
 		glCtx.PushMvp(_skyboxViewProj);
 		_skybox.Draw(glCtx);
@@ -465,23 +481,6 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	// Update skybox drift rotation
-	if (!_skyboxStarted)
-	{
-		_skyboxStartTime = curTime;
-		_skyboxStarted = true;
-	}
-	{
-		auto t = (float)Timer::GetElapsedSeconds(_skyboxStartTime, curTime);
-		auto yaw   = glm::radians(2.0f * std::sin(0.047f * t) + 1.5f * std::sin(0.031f * t + 1.1f));
-		auto pitch = glm::radians(1.5f * std::sin(0.053f * t + 2.3f) + 1.0f * std::sin(0.019f * t + 0.7f));
-		auto roll  = glm::radians(0.8f * std::sin(0.037f * t + 1.8f));
-		auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
-		R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
-		R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
-		_skyboxViewProj = _viewRotOnlyProj * R;
-	}
-
 	unsigned int totalNumLoops = 0u;
 
 	for (auto& station : _stations)
@@ -792,7 +791,7 @@ void Scene::_InitSize()
 	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
 	_viewProj = projection * _View();
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(_View()));
-	// _skyboxViewProj is owned by OnTick(); do not reset it here
+	// _skyboxViewProj is updated in Draw3d(); do not reset it here
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
