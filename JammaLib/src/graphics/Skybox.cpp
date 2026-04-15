@@ -48,6 +48,9 @@ void Skybox::InitResources(ResourceLib& resourceLib, bool forceInit)
 	if (_initialised && !forceInit)
 		return;
 
+	if (forceInit)
+		ReleaseResources();
+
 	auto valid = _InitShader(resourceLib);
 	if (valid)
 		valid = _InitCubemap(resourceLib);
