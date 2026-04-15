@@ -1,4 +1,6 @@
 #include "LoopModel.h"
+#include <algorithm>
+#include <cmath>
 
 using namespace engine;
 using base::DrawContext;
@@ -190,11 +192,11 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 		return std::make_tuple(std::vector<float>(), std::vector<float>(), lastYMin, lastYMax);
 
 	const float radialThickness = radius * _RadialThicknessFrac;
+	const float maxMagnitude = _MinHeight + _HeightScale;
 
-	auto yToUv = [](float y) {
-		auto scale = 1.0f / ((_MinHeight * 2) + (_HeightScale * 2));
-		auto offset = 0.5f;
-		return scale * y + offset;
+	auto yToUv = [maxMagnitude](float y) {
+		auto uv = std::fabs(y) / maxMagnitude;
+		return uv > 1.0f ? 1.0f : uv;
 	};
 
 	auto angle1 = ((float)constants::TWOPI) * ((float)(grain - 1) / (float)numGrains);

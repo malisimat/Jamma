@@ -14,7 +14,8 @@ namespace resources
 		NONE = 0,
 		TEXTURE = 1,
 		SHADER = 2,
-		WAV = 3
+		WAV = 3,
+		CUBEMAP = 4
 	};
 
 	class Resource
