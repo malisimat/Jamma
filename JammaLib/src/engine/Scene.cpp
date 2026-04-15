@@ -234,6 +234,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void Scene::_ReleaseResources()
 {
+	_skybox.ReleaseResources();
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
