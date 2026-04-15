@@ -10,6 +10,7 @@
 #include "Tweakable.h"
 #include "../actions/GuiAction.h"
 #include "../gui/GuiSlider.h"
+#include "../gui/GuiVu.h"
 
 namespace audio
 {
@@ -242,6 +243,16 @@ namespace audio
 		void SetMaxChannels(unsigned int channels);
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
 
+		// VU meter (owned by this mixer; value updated in WriteBlock).
+		void SetVuVisible(bool visible);
+		void DrawVu(base::DrawContext& ctx, utils::Size2d sliderSize);
+		// Called from hot audio path when WriteBlock is bypassed (e.g. master mixer).
+		void UpdateVu(float peak, unsigned int numSamps);
+
+	protected:
+		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
+
 	protected:
 		static const utils::Size2d _Gap;
 		static const utils::Size2d _DragGap;
@@ -250,5 +261,6 @@ namespace audio
 		double _unmutedFadeTarget;
 		std::unique_ptr<MixBehaviour> _behaviour;
 		std::unique_ptr<InterpolatedValue> _fade;
+		gui::GuiVu _vu;
 	};
 }

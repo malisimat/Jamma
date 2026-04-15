@@ -265,6 +265,7 @@
     <ClInclude Include="src\base\ResourceUser.h" />
     <ClInclude Include="src\audio\AudioDevice.h" />
     <ClInclude Include="src\gui\GuiSlider.h" />
+    <ClInclude Include="src\gui\GuiVu.h" />
     <ClInclude Include="src\base\Moveable.h" />
     <ClInclude Include="src\base\Sizeable.h" />
     <ClInclude Include="src\io\FileReadWriter.h" />
@@ -356,6 +357,7 @@
     <ClCompile Include="lib\rtaudio\include\iasiothiscallresolver.cpp" />
     <ClCompile Include="src\audio\AudioDevice.cpp" />
     <ClCompile Include="src\gui\GuiSlider.cpp" />
+    <ClCompile Include="src\gui\GuiVu.cpp" />
     <ClCompile Include="src\actions\CursorAction.cpp" />
     <ClCompile Include="src\actions\KeyAction.cpp" />
     <ClCompile Include="src\actions\TouchAction.cpp" />

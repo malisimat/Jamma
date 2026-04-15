@@ -1,6 +1,7 @@
 #include "GuiSlider.h"
 #include "CommonTypes.h"
 #include "glm/ext.hpp"
+#include "../audio/AudioMixer.h"
 
 using namespace gui;
 using namespace utils;
@@ -24,7 +25,8 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 		params.DragOverTexture,
 		params.DragDownTexture,
 		params.DragOutTexture,
-		{} ))
+		{} )),
+	_mixer()
 {
 	SetValue(params.InitValue);
 	_initDragPos = _dragElement.Position();
@@ -77,6 +79,11 @@ void GuiSlider::Draw(DrawContext & ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
 	_dragElement.Draw(ctx);
+
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->DrawVu(ctx, GetSize());
+
 	glCtx.PopMvp();
 }
 
@@ -200,12 +207,24 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_dragElement.InitResources(resourceLib, forceInit);
+	
+	// Initialize mixer's resources (VU meter shaders, vertex buffers, etc.)
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->InitResources(resourceLib, forceInit);
+	
 	GuiElement::_InitResources(resourceLib, forceInit);
 }
 
 void GuiSlider::_ReleaseResources()
 {
 	_dragElement.ReleaseResources();
+	
+	// Release mixer's resources
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->ReleaseResources();
+	
 	GuiElement::_ReleaseResources();
 }
 
@@ -239,6 +258,23 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 
 	if (_receiver && !bypassUpdates)
 		_receiver->OnAction(action);
+}
+
+void GuiSlider::SetMixer(std::shared_ptr<audio::AudioMixer> mixer)
+{
+	_mixer = mixer;
+	// If this slider's GL resources were already initialized before the mixer was
+	// wired, the mixer's VU VAO won't have been set up.  Mark for re-init so the
+	// next InitResources pass calls _InitResources again and loads the mixer's VAO.
+	if (mixer)
+		_resourcesNeedInitialising = true;
+}
+
+void GuiSlider::SetVuVisible(bool visible)
+{
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->SetVuVisible(visible);
 }
 
 double GuiSlider::CalcValueOffset(GuiSliderParams params,

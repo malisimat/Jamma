@@ -42,6 +42,8 @@ Station::Station(StationParams params,
 	_children.push_back(_guiRack);
 
 	SetNumBusChannels(_DefaultNumBusChannels);
+
+	_WireVuSliders();
 }
 
 Station::~Station()
@@ -181,6 +183,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
+	auto masterPeak = 0.0f;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		const auto& buf = _audioBuffers[i];
@@ -196,9 +199,18 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 			tempBuf[samp] *= masterLevel;
 
+		// Track max peak across all channels for the master VU.
+		for (auto samp = 0u; samp < sampsToRead; samp++)
+		{
+			auto absSamp = std::abs(tempBuf[samp]);
+			if (absSamp > masterPeak)
+				masterPeak = absSamp;
+		}
+
 		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
 
+	_masterMixer->UpdateVu(masterPeak, sampsToRead);
 	_masterMixer->Offset(sampsToRead);
 }
 
@@ -843,6 +855,8 @@ std::vector<JobAction> Station::_CommitChanges()
 		{
 			take->SetNumBusChannels((unsigned int)_audioBuffers.size());
 		}
+
+		_WireVuSliders();
 	}
 
 	GuiElement::_CommitChanges();
@@ -908,4 +922,21 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 	}
 
 	return std::nullopt;
+}
+
+void Station::_WireVuSliders()
+{
+	if (!_guiRack || !_masterMixer)
+		return;
+
+	auto masterSlider = _guiRack->GetMasterSlider();
+	if (masterSlider)
+		masterSlider->SetMixer(_masterMixer);
+
+	for (auto i = 0u; i < _audioMixers.size(); i++)
+	{
+		auto slider = _guiRack->GetChannelSlider(i);
+		if (slider)
+			slider->SetMixer(_audioMixers[i]);
+	}
 }
