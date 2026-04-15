@@ -63,7 +63,7 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 	const auto expectedMaxSample = 0.75f;
 	const auto expectedYMin = (MeshHeightScale * expectedMinSample) - MeshMinHeight;
 	const auto expectedYMax = (MeshHeightScale * expectedMaxSample) + MeshMinHeight;
-	const auto expectedInitialYUv = ((-MeshMinHeight) / ((MeshMinHeight * 2.0f) + (MeshHeightScale * 2.0f))) + 0.5f;
+	const auto expectedInitialYUv = std::abs(-MeshMinHeight) / (MeshMinHeight + MeshHeightScale);
 
 	auto [verts, uvs, yMin, yMax] = model.CalcGrainGeometry(buffer,
 		1u,
@@ -86,7 +86,30 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 	EXPECT_NEAR(0.0f, verts[5], tol);
 	EXPECT_NEAR(0.0f, uvs[0], tol);
 	EXPECT_NEAR(expectedInitialYUv, uvs[1], tol);
+	EXPECT_NEAR(expectedInitialYUv, uvs[5], tol);
 	EXPECT_NEAR(0.25f, uvs[2], tol);
+}
+
+TEST(LoopModelMesh, CalcGrainGeometryReflectsUvAroundZero)
+{
+	auto model = TestLoopModel();
+	auto buffer = MakeBuffer(constants::GrainSamps * 4u);
+
+	const auto tol = 1e-5f;
+	auto [verts, uvs, yMin, yMax] = model.CalcGrainGeometry(buffer,
+		1u,
+		4u,
+		0ul,
+		0.0f,
+		0.0f,
+		100.0f);
+
+	ASSERT_EQ(GrainVertFloatCount, verts.size());
+	ASSERT_EQ(GrainUvFloatCount, uvs.size());
+	EXPECT_NEAR(0.0f, uvs[1], tol);
+	EXPECT_NEAR(0.0f, uvs[5], tol);
+	EXPECT_GT(uvs[3], 0.0f);
+	EXPECT_LE(uvs[3], 1.0f);
 }
 
 TEST(LoopModelMesh, UpdateModelUsesOffsetSamplesAndMaintainsGrainContinuity)
