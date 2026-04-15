@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <gl/glew.h>
 #include <gl/gl.h>
 #include "../audio/FallingValue.h"
@@ -53,7 +54,12 @@ namespace gui
 		utils::Position2d _position;
 		utils::Size2d     _size;
 
+		// FallingValue is confined to the audio thread; only SetPeak() may touch it.
 		audio::FallingValue _value;
+
+		// Atomic snapshots written by the audio thread and read by the render thread.
+		std::atomic<float> _displayValue;
+		std::atomic<float> _displayHold;
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer[2];

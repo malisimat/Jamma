@@ -15,6 +15,8 @@ GuiVu::GuiVu() :
 	_position({ 0, 0 }),
 	_size({ VuWidth, 1 }),
 	_value(audio::FallingValue({ 0.00005, 0.00003, 12000u })),
+	_displayValue(0.0f),
+	_displayHold(0.0f),
 	_vertexArray(0),
 	_vertexBuffer{ 0, 0 },
 	_shader(std::weak_ptr<ShaderResource>())
@@ -40,9 +42,13 @@ void GuiVu::Draw(DrawContext& ctx)
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
+	// Snapshot atomic values written by the audio thread.
+	auto displayValue = (double)_displayValue.load(std::memory_order_relaxed);
+	auto displayHold  = (double)_displayHold.load(std::memory_order_relaxed);
+
 	auto totalLeds = _CalcTotalLeds(_size.Height);
-	auto numLeds = _CalcCurrentLeds(_value.Current(), totalLeds);
-	auto holdLed = _CalcCurrentLeds(_value.HoldValue(), totalLeds);
+	auto numLeds = _CalcCurrentLeds(displayValue, totalLeds);
+	auto holdLed = _CalcCurrentLeds(displayHold, totalLeds);
 	if (holdLed > 0)
 		holdLed--;
 
@@ -69,8 +75,8 @@ void GuiVu::Draw(DrawContext& ctx)
 	if (numLeds > 0)
 		glDrawArraysInstanced(GL_TRIANGLES, 0, 6, numLeds);
 
-	// Draw peak-hold LED (one segment above the bar).
-	if (holdLed >= numLeds && holdLed < totalLeds)
+	// Draw peak-hold LED only when the signal is not silent and the hold is above the bar.
+	if (displayHold > 0.0 && holdLed >= numLeds && holdLed < totalLeds)
 	{
 		glCtx.SetUniform("InstanceOffset", holdLed);
 		shader->SetUniforms(glCtx);
@@ -90,6 +96,10 @@ void GuiVu::SetPeak(float peak, unsigned int numSamps)
 	// Advance the falling value by one step per sample, matching the VU::SetValue convention.
 	for (auto i = 0u; i < numSamps; i++)
 		_value.Next();
+
+	// Publish the latest display values to the render thread via atomics.
+	_displayValue.store((float)_value.Current(), std::memory_order_relaxed);
+	_displayHold.store((float)_value.HoldValue(), std::memory_order_relaxed);
 }
 
 void GuiVu::SetVisible(bool visible)
@@ -184,9 +194,12 @@ void GuiVu::_ReleaseResources()
 
 unsigned int GuiVu::_CalcTotalLeds(unsigned int height)
 {
-	if (LedPitch <= 0 || height == 0)
+	if (LedPitch <= 0 || height == 0 || (unsigned int)LedHeight > height)
 		return 0u;
-	return (unsigned int)std::ceil((double)height / (double)LedPitch);
+
+	// Count only LEDs whose full geometry fits within the requested height:
+	// (totalLeds - 1) * LedPitch + LedHeight <= height
+	return ((height - (unsigned int)LedHeight) / (unsigned int)LedPitch) + 1u;
 }
 
 unsigned int GuiVu::_CalcCurrentLeds(double value, unsigned int totalLeds)

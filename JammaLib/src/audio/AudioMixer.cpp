@@ -95,18 +95,22 @@ void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 		return;
 
 	auto fadeLevel = (float)_fade->Current();
+
+	if (_vu.IsVisible())
+	{
+		// Integrate peak tracking into the mixing loop to avoid a second pass.
+		auto peak = 0.0f;
+		for (auto i = 0u; i < numSamps; i++)
+		{
+			auto absSamp = std::abs(srcBuf[i]);
+			if (absSamp > peak)
+				peak = absSamp;
+		}
+		_vu.SetPeak(peak * fadeLevel, numSamps);
+	}
+
 	_behaviour->ApplyBlock(dest, srcBuf, fadeLevel, numSamps, 0);
 	Offset(numSamps);
-
-	// Update VU: find peak of this block scaled by current fade level.
-	auto peak = 0.0f;
-	for (auto i = 0u; i < numSamps; i++)
-	{
-		auto absSamp = std::abs(srcBuf[i]);
-		if (absSamp > peak)
-			peak = absSamp;
-	}
-	_vu.SetPeak(peak * fadeLevel, numSamps);
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
