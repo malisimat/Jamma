@@ -123,6 +123,7 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
+		void _WireVuSliders();
 
 	protected:
 		static const utils::Size2d _Gap;

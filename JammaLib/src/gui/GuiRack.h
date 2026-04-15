@@ -70,6 +70,9 @@ namespace gui
 		void AddRoute(unsigned int inputChan, unsigned int outputChan);
 		void ClearRoutes();
 
+		std::shared_ptr<gui::GuiSlider> GetMasterSlider() const;
+		std::shared_ptr<gui::GuiSlider> GetChannelSlider(unsigned int index) const;
+
 	protected:
 		static const utils::Size2d _SliderGap;
 		static const unsigned int _ChannelTogglePaddingLeft;

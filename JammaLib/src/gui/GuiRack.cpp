@@ -449,3 +449,15 @@ void GuiRack::ClearRoutes()
 {
 	_router->ClearRoutes();
 }
+
+std::shared_ptr<gui::GuiSlider> GuiRack::GetMasterSlider() const
+{
+	return _masterSlider;
+}
+
+std::shared_ptr<gui::GuiSlider> GuiRack::GetChannelSlider(unsigned int index) const
+{
+	if (index < _channelSliders.size())
+		return _channelSliders[index];
+	return nullptr;
+}

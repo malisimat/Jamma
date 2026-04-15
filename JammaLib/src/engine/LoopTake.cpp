@@ -52,6 +52,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_guiRack);
+
+	_WireVuSliders();
 }
 
 LoopTake::~LoopTake()
@@ -174,6 +176,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
+	auto masterPeak = 0.0f;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
 		auto& buf = _audioBuffers[i];
@@ -189,9 +192,18 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 			tempBuf[samp] *= masterLevel;
 
+		// Track max peak across all channels for the master VU.
+		for (auto samp = 0u; samp < sampsToRead; samp++)
+		{
+			auto absSamp = std::abs(tempBuf[samp]);
+			if (absSamp > masterPeak)
+				masterPeak = absSamp;
+		}
+
 		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
 
+	_masterMixer->UpdateVu(masterPeak, sampsToRead);
 	_masterMixer->Offset(sampsToRead);
 }
 
@@ -749,6 +761,8 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		_audioMixers = _backAudioMixers;
 
 		_guiRack->SetNumInputChannels((unsigned int)_loops.size());
+
+		_WireVuSliders();
 	}
 
 	std::vector<JobAction> jobs;
@@ -848,5 +862,22 @@ void LoopTake::_UpdateLoops()
 	for (auto& loop : _loops)
 	{
 		loop->Update();
+	}
+}
+
+void LoopTake::_WireVuSliders()
+{
+	if (!_guiRack || !_masterMixer)
+		return;
+
+	auto masterSlider = _guiRack->GetMasterSlider();
+	if (masterSlider)
+		masterSlider->SetMixer(_masterMixer);
+
+	for (auto i = 0u; i < _audioMixers.size(); i++)
+	{
+		auto slider = _guiRack->GetChannelSlider(i);
+		if (slider)
+			slider->SetMixer(_audioMixers[i]);
 	}
 }
