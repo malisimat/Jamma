@@ -42,6 +42,8 @@ Station::Station(StationParams params,
 	_children.push_back(_guiRack);
 
 	SetNumBusChannels(_DefaultNumBusChannels);
+
+	_WireVuSliders();
 }
 
 Station::~Station()
@@ -843,6 +845,8 @@ std::vector<JobAction> Station::_CommitChanges()
 		{
 			take->SetNumBusChannels((unsigned int)_audioBuffers.size());
 		}
+
+		_WireVuSliders();
 	}
 
 	GuiElement::_CommitChanges();
@@ -908,4 +912,21 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 	}
 
 	return std::nullopt;
+}
+
+void Station::_WireVuSliders()
+{
+	if (!_guiRack || !_masterMixer)
+		return;
+
+	auto masterSlider = _guiRack->GetMasterSlider();
+	if (masterSlider)
+		masterSlider->SetMixer(_masterMixer);
+
+	for (auto i = 0u; i < _audioMixers.size(); i++)
+	{
+		auto slider = _guiRack->GetChannelSlider(i);
+		if (slider)
+			slider->SetMixer(_audioMixers[i]);
+	}
 }

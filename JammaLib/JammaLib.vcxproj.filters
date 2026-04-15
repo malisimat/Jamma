@@ -227,6 +227,9 @@
     <ClInclude Include="src\gui\GuiSlider.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiVu.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\base\Actionable.h">
       <Filter>src\base</Filter>
     </ClInclude>
@@ -491,6 +494,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiSlider.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiVu.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioBuffer.cpp">

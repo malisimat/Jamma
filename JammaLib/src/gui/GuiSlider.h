@@ -2,12 +2,16 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include "../utils/CommonTypes.h"
 #include "../actions/GuiAction.h"
 #include "GuiElement.h"
 #include "ActionSender.h"
 #include "ActionUndo.h"
 #include "../resources/TextureResource.h"
+
+// Forward declaration to avoid circular include (AudioMixer.h -> GuiSlider.h).
+namespace audio { class AudioMixer; }
 
 namespace gui
 {
@@ -101,6 +105,10 @@ namespace gui
 		virtual bool Undo(std::shared_ptr<base::ActionUndo> undo) override;
 		virtual bool Redo(std::shared_ptr<base::ActionUndo> undo) override;
 
+		// VU meter — connects this slider to its owning AudioMixer for display.
+		void SetMixer(std::shared_ptr<audio::AudioMixer> mixer);
+		void SetVuVisible(bool visible);
+
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
@@ -123,5 +131,6 @@ namespace gui
 		base::GuiElement _dragElement;
 		double _valueOffset;
 		double _initValue;
+		std::weak_ptr<audio::AudioMixer> _mixer;
 	};
 }

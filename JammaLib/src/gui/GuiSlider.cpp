@@ -1,6 +1,7 @@
 #include "GuiSlider.h"
 #include "CommonTypes.h"
 #include "glm/ext.hpp"
+#include "../audio/AudioMixer.h"
 
 using namespace gui;
 using namespace utils;
@@ -24,7 +25,8 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 		params.DragOverTexture,
 		params.DragDownTexture,
 		params.DragOutTexture,
-		{} ))
+		{} )),
+	_mixer()
 {
 	SetValue(params.InitValue);
 	_initDragPos = _dragElement.Position();
@@ -77,6 +79,11 @@ void GuiSlider::Draw(DrawContext & ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
 	_dragElement.Draw(ctx);
+
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->DrawVu(ctx, GetSize());
+
 	glCtx.PopMvp();
 }
 
@@ -239,6 +246,18 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 
 	if (_receiver && !bypassUpdates)
 		_receiver->OnAction(action);
+}
+
+void GuiSlider::SetMixer(std::shared_ptr<audio::AudioMixer> mixer)
+{
+	_mixer = mixer;
+}
+
+void GuiSlider::SetVuVisible(bool visible)
+{
+	auto mixer = _mixer.lock();
+	if (mixer)
+		mixer->SetVuVisible(visible);
 }
 
 double GuiSlider::CalcValueOffset(GuiSliderParams params,

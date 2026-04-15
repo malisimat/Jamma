@@ -3,6 +3,7 @@
 using namespace audio;
 using namespace actions;
 using base::AudioSource;
+using base::DrawContext;
 using base::Tweakable;
 using base::MultiAudioSink;
 using base::GuiElement;
@@ -16,7 +17,8 @@ AudioMixer::AudioMixer(AudioMixerParams params) :
 	Tweakable(params),
 	_unmutedFadeTarget(DefaultLevel),
 	_behaviour(std::unique_ptr<MixBehaviour>()),
-	_fade(std::make_unique<InterpolatedValueExp>())
+	_fade(std::make_unique<InterpolatedValueExp>()),
+	_vu()
 {
 	_behaviour = std::visit(MixerBehaviourFactory{}, params.Behaviour);
 
@@ -95,6 +97,16 @@ void AudioMixer::WriteBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	auto fadeLevel = (float)_fade->Current();
 	_behaviour->ApplyBlock(dest, srcBuf, fadeLevel, numSamps, 0);
 	Offset(numSamps);
+
+	// Update VU: find peak of this block scaled by current fade level.
+	auto peak = 0.0f;
+	for (auto i = 0u; i < numSamps; i++)
+	{
+		auto absSamp = std::abs(srcBuf[i]);
+		if (absSamp > peak)
+			peak = absSamp;
+	}
+	_vu.SetPeak(peak * fadeLevel, numSamps);
 }
 
 void AudioMixer::Offset(unsigned int numSamps)
@@ -132,6 +144,31 @@ void AudioMixer::SetMaxChannels(unsigned int chans)
 void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 {
 	_behaviour = std::move(behaviour);
+}
+
+void AudioMixer::SetVuVisible(bool visible)
+{
+	_vu.SetVisible(visible);
+}
+
+void AudioMixer::DrawVu(DrawContext& ctx, utils::Size2d sliderSize)
+{
+	// Position the VU at the right edge of the slider area, full height.
+	_vu.SetPosition({ (int)sliderSize.Width - gui::GuiVu::VuWidth, 0 });
+	_vu.SetSize({ (unsigned int)gui::GuiVu::VuWidth, sliderSize.Height });
+	_vu.Draw(ctx);
+}
+
+void AudioMixer::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	_vu.InitResources(resourceLib, forceInit);
+	GuiElement::_InitResources(resourceLib, forceInit);
+}
+
+void AudioMixer::_ReleaseResources()
+{
+	_vu.ReleaseResources();
+	GuiElement::_ReleaseResources();
 }
 
 void WireMixBehaviour::_ApplyBlockToChannels(const std::shared_ptr<MultiAudioSink>& dest,
