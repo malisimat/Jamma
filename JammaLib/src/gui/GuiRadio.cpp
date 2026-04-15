@@ -24,6 +24,7 @@ GuiRadio::GuiRadio(GuiRadioParams params) :
 		std::cout << "Type: " << typeid(params).name() << std::endl;
 
 		params.Index = count;
+		params.ToggleIndex = count;
 
 		_children.push_back(std::make_shared<GuiToggle>(params));
 

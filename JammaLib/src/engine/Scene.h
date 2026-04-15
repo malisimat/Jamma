@@ -51,6 +51,14 @@ namespace engine
 		public base::ActionReceiver
 	{
 	public:
+		enum ViewMode
+		{
+			VIEW_STATION = 0,
+			VIEW_LOOPTAKE = 1,
+			VIEW_LOOP = 2
+		};
+
+	public:
 		Scene(SceneParams params,
 			io::UserConfig user);
 		~Scene()
@@ -229,5 +237,6 @@ namespace engine
 		std::mutex _audioMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
+		ViewMode _viewMode;
 	};
 }

@@ -400,6 +400,11 @@ void GuiElement::SetIndex(unsigned int index)
 	_index = index;
 }
 
+unsigned int GuiElement::Index() const
+{
+	return _index;
+}
+
 std::vector<unsigned int> GuiElement::GlobalId()
 {
 	if (nullptr == _parent)
@@ -427,8 +432,11 @@ void GuiElement::AddChild(std::shared_ptr<GuiElement> child)
 
 std::shared_ptr<GuiElement> GuiElement::TryGetChild(unsigned char index)
 {
-	if (index < _children.size())
-		return _children.at(index);
+	for (auto& child : _children)
+	{
+		if (child->Index() == index)
+			return child;
+	}
 
 	return nullptr;
 }

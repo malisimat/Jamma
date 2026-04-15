@@ -42,7 +42,8 @@ Scene::Scene(SceneParams params,
 			1.0),
 		0)),
 	_userConfig(user),
-	_clock(std::make_shared<Timer>())
+	_clock(std::make_shared<Timer>()),
+	_viewMode(VIEW_STATION)
 {
 	GuiLabelParams labelParams;
 	labelParams.String = "Jamma";
@@ -55,6 +56,7 @@ Scene::Scene(SceneParams params,
 	selectorParams.Position = { 10, 2 };
 	selectorParams.Size = params.Size;
 	_selector = std::make_unique<GuiSelector>(selectorParams);
+	_selector->SetSelectDepth(base::DEPTH_STATION);
 
 	GuiRadioParams modeRadioParams;
 	modeRadioParams.Size = { 480, 64 };
@@ -157,6 +159,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->InitReceivers();
 
 	return scene;
 }
@@ -431,8 +434,11 @@ ActionResult Scene::OnAction(GuiAction action)
 	switch (action.ElementType)
 	{
 		case GuiAction::ACTIONELEMENT_RADIO:
-			_UpdateSelectDepth(action.Index);
-			std::cout << "GuiRadio called" << std::endl;
+			if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+			{
+				_viewMode = (ViewMode)i->Value;
+				_UpdateSelectDepth((unsigned int)_viewMode);
+			}
 			break;
 	}
 
@@ -504,10 +510,19 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
+	std::vector<unsigned char> elementPath;
 
-	path = TrimPath(path, _selector->CurrentSelectDepth());
+	for (auto segment : path)
+	{
+		if (0 == segment)
+			break;
 
-	auto hovering = _ChildFromPath(path);
+		elementPath.push_back(segment - 1);
+	}
+
+	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
+
+	auto hovering = _ChildFromPath(elementPath);
 	if (nullptr != hovering)
 	{
 		isSelected = hovering->IsSelected();
@@ -516,7 +531,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 			tweakState = tweakable->GetTweakState();
 	}
 
-	_selector->UpdateCurrentHover(path,
+	_selector->UpdateCurrentHover(elementPath,
 		modifiers,
 		isSelected,
 		tweakState);
@@ -891,6 +906,12 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_channelMixer->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
+
+	auto selectDepth = (unsigned int)_viewMode;
+	if (selectDepth > (unsigned int)DEPTH_LOOP)
+		selectDepth = (unsigned int)DEPTH_LOOP;
+
+	station->SetSelectDepth((SelectDepth)selectDepth);
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
@@ -939,7 +960,10 @@ std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> pat
 
 void Scene::_UpdateSelectDepth(unsigned int depth)
 {
-	auto selectDepth = depth > 0 ? (SelectDepth)(depth - 1) : DEPTH_STATION;
+	if (depth > (unsigned int)DEPTH_LOOP)
+		depth = (unsigned int)DEPTH_LOOP;
+
+	auto selectDepth = (SelectDepth)depth;
 	_selector->SetSelectDepth(selectDepth);
 
 	for (auto& station : _stations)

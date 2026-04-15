@@ -166,13 +166,7 @@ bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
 	if (path.size() < depth)
 		return false;
 
-	for (auto i = 0u; i < depth; i++)
-	{
-		if (path[i] != 0)
-			return true;
-	}
-
-	return false;
+	return !path.empty();
 }
 
 void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)
