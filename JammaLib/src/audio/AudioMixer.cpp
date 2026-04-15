@@ -151,6 +151,11 @@ void AudioMixer::SetVuVisible(bool visible)
 	_vu.SetVisible(visible);
 }
 
+void AudioMixer::UpdateVu(float peak, unsigned int numSamps)
+{
+	_vu.SetPeak(peak, numSamps);
+}
+
 void AudioMixer::DrawVu(DrawContext& ctx, utils::Size2d sliderSize)
 {
 	// Position the VU at the right edge of the slider area, full height.

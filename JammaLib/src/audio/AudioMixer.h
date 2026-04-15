@@ -246,6 +246,8 @@ namespace audio
 		// VU meter (owned by this mixer; value updated in WriteBlock).
 		void SetVuVisible(bool visible);
 		void DrawVu(base::DrawContext& ctx, utils::Size2d sliderSize);
+		// Called from hot audio path when WriteBlock is bypassed (e.g. master mixer).
+		void UpdateVu(float peak, unsigned int numSamps);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

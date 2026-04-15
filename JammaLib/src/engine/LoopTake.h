@@ -149,6 +149,7 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
+		void _WireVuSliders();
 
 	protected:
 		static const utils::Size2d _Gap;
