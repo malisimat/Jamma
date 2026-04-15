@@ -792,7 +792,7 @@ void Scene::_InitSize()
 	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
 	_viewProj = projection * _View();
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(_View()));
-	_skyboxViewProj = _viewRotOnlyProj;
+	// _skyboxViewProj is owned by OnTick(); do not reset it here
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;
