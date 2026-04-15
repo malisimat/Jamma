@@ -50,6 +50,9 @@
     <ClCompile Include="src\engine\FlipBuffer_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\StationRack_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />

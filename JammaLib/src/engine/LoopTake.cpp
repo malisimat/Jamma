@@ -676,7 +676,7 @@ gui::GuiRackParams::RackState LoopTake::GetRackState() const
 
 void LoopTake::CollapseRackToMaster()
 {
-	if (_guiRack && _guiRack->GetRackState() == gui::GuiRackParams::RACK_ROUTER)
+	if (_guiRack && _guiRack->GetRackState() != gui::GuiRackParams::RACK_MASTER)
 		_guiRack->SetRackState(gui::GuiRackParams::RACK_MASTER, true);
 }
 

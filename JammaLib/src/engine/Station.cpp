@@ -912,6 +912,10 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 
 void Station::_CollapseOtherTakeRouters()
 {
-	for (auto& take : _loopTakes)
+	auto& takes = (_changesMade && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+
+	for (auto& take : takes)
 		take->CollapseRackToMaster();
 }
