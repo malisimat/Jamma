@@ -467,15 +467,18 @@ void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
 {
-	auto bufSize = _bufferBank.Length();
+	auto physBufSize = _bufferBank.Length();
 
-	if (0 == bufSize)
+	if (0 == physBufSize)
 	{
 		Reset();
 		return;
 	}
 
-	_playIndex = index >= bufSize ? (bufSize-1) : index;
+	// Clamp against the logical buffer size (loopLength + MaxLoopFadeSamps), not the
+	// physical size at trigger time, due to endRecordSamps tail.
+	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
+	_playIndex = (logicalBufSize > 0 && index >= logicalBufSize) ? (logicalBufSize - 1) : index;
 	_loopLength = loopLength;
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _playState) || (STATE_PUNCHEDIN == _playState);
