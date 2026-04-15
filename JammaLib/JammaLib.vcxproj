@@ -338,6 +338,7 @@
     <ClCompile Include="src\gui\GuiToggle.cpp" />
     <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
+    <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />
     <ClCompile Include="src\engine\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
@@ -390,6 +391,7 @@
     <ClCompile Include="src\engine\UndoHistory.cpp" />
     <ClCompile Include="src\io\WavReadWriter.cpp" />
     <ClCompile Include="src\resources\TextureResource.cpp" />
+    <ClCompile Include="src\resources\CubemapResource.cpp" />
     <ClCompile Include="src\actions\WindowAction.cpp" />
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\engine\Timer.cpp" />

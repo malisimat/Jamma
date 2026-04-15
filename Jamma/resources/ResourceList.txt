@@ -1,5 +1,7 @@
 1 grid
 1 levels
+2 skybox MVP
+4 sky
 2 texture MVP
 2 texture_shaded MVP LoopState LoopHover
 2 vu MVP DX DY NumInstances InstanceOffset

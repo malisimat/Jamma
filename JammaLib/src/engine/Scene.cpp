@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include "glm/ext.hpp"
+#include <cmath>
 
 using namespace base;
 using namespace actions;
@@ -25,6 +26,10 @@ Scene::Scene(SceneParams params,
 	_initTouchCamPosition{},
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
+	_viewRotOnlyProj(glm::mat4()),
+	_skyboxViewProj(glm::mat4()),
+	_skyboxStarted(false),
+	_skyboxStartTime(Timer::GetZero()),
 	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
 	_label(nullptr),
 	_selector(nullptr),
@@ -194,6 +199,15 @@ void Scene::Draw3d(DrawContext& ctx,
 		glDisable(GL_DEPTH_TEST);
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+
+	if (PASS_SCENE == pass)
+	{
+		glCtx.ClearMvp();
+		glCtx.PushMvp(_skyboxViewProj);
+		_skybox.Draw(glCtx);
+		glCtx.PopMvp();
+	}
+
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
 
@@ -205,6 +219,7 @@ void Scene::Draw3d(DrawContext& ctx,
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	_skybox.InitResources(resourceLib, forceInit);
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
@@ -450,6 +465,23 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	// Update skybox drift rotation
+	if (!_skyboxStarted)
+	{
+		_skyboxStartTime = curTime;
+		_skyboxStarted = true;
+	}
+	{
+		auto t = (float)Timer::GetElapsedSeconds(_skyboxStartTime, curTime);
+		auto yaw   = glm::radians(2.0f * std::sin(0.047f * t) + 1.5f * std::sin(0.031f * t + 1.1f));
+		auto pitch = glm::radians(1.5f * std::sin(0.053f * t + 2.3f) + 1.0f * std::sin(0.019f * t + 0.7f));
+		auto roll  = glm::radians(0.8f * std::sin(0.037f * t + 1.8f));
+		auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
+		R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+		R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
+		_skyboxViewProj = _viewRotOnlyProj * R;
+	}
+
 	unsigned int totalNumLoops = 0u;
 
 	for (auto& station : _stations)
@@ -759,6 +791,8 @@ void Scene::_InitSize()
 		1.0f;
 	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
 	_viewProj = projection * _View();
+	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(_View()));
+	_skyboxViewProj = _viewRotOnlyProj;
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
 	auto vScale = _sizeParams.Size.Height > 0 ? 2.0f / (float)_sizeParams.Size.Height : 1.0f;

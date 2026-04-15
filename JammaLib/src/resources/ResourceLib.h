@@ -10,6 +10,7 @@
 #include "TextureResource.h"
 #include "ShaderResource.h"
 #include "WavResource.h"
+#include "CubemapResource.h"
 #include "../graphics/Font.h"
 
 namespace resources

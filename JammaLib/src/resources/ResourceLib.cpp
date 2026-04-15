@@ -61,6 +61,13 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 
 			return true;
 		}
+		case CUBEMAP:
+		{
+			if (auto cubemapOpt = CubemapResource::Load(name))
+				_resources.emplace(name, std::make_shared<CubemapResource>(name, cubemapOpt.value()));
+
+			return true;
+		}
 	}
 
 	return false;

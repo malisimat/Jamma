@@ -10,6 +10,7 @@
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
 #include "../graphics/GlDrawContext.h"
+#include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiSlider.h"
 #include "../gui/GuiSelector.h"
@@ -219,6 +220,11 @@ namespace engine
 		utils::Position3d _initTouchCamPosition;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
+		glm::mat4 _viewRotOnlyProj;
+		glm::mat4 _skyboxViewProj;
+		bool _skyboxStarted;
+		Time _skyboxStartTime;
+		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;

@@ -155,6 +155,9 @@
     <ClInclude Include="src\resources\TextureResource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
+    <ClInclude Include="src\resources\CubemapResource.h">
+      <Filter>src\resources</Filter>
+    </ClInclude>
     <ClInclude Include="src\resources\ShaderResource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
@@ -377,6 +380,9 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\graphics\Skybox.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\actions\GuiAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
@@ -449,6 +455,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\TextureResource.cpp">
+      <Filter>src\resources</Filter>
+    </ClCompile>
+    <ClCompile Include="src\resources\CubemapResource.cpp">
       <Filter>src\resources</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\ShaderResource.cpp">
@@ -590,6 +599,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\ImageFullscreen.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\Skybox.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\actions\GuiAction.cpp">
