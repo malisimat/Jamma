@@ -109,6 +109,7 @@ namespace base
 		virtual void SetPickingFromState(EditMode mode, bool flipState);
 		virtual void SetStateFromPicking(EditMode mode, bool flipState);
 		virtual void SetIndex(unsigned int index);
+		unsigned int Index() const;
 		virtual std::vector<unsigned int> GlobalId();
 		virtual void AddChild(std::shared_ptr<GuiElement> child);
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);

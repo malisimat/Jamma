@@ -467,15 +467,20 @@ void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
 {
-	auto bufSize = _bufferBank.Length();
+	auto physBufSize = _bufferBank.Length();
 
-	if (0 == bufSize)
+	if (0 == physBufSize)
 	{
 		Reset();
 		return;
 	}
 
-	_playIndex = index >= bufSize ? (bufSize-1) : index;
+	// Clamp against the smaller of the logical loop size and the currently
+	// recorded physical size. This prevents reads past the current BufferBank
+	// length while still ignoring any physical tail beyond the logical loop.
+	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
+	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
+	_playIndex = (effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index;
 	_loopLength = loopLength;
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _playState) || (STATE_PUNCHEDIN == _playState);

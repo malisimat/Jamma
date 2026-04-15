@@ -243,6 +243,13 @@ void Station::EndMultiWrite(unsigned int numSamps,
 		take->EndMultiWrite(numSamps, updateIndex, source);
 }
 
+void Station::SetSelectDepth(base::SelectDepth depth)
+{
+	Jammable::SetSelectDepth(depth);
+	if (_guiRack)
+		_guiRack->SetVisible(depth == base::SelectDepth::DEPTH_STATION);
+}
+
 ActionResult Station::OnAction(KeyAction action)
 {
 	if (!_isEnabled || !_isVisible)
@@ -602,6 +609,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 {
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
+	take->SetSelectDepth(CurrentSelectDepth());
 
 	_backLoopTakes.push_back(take);
 
@@ -757,6 +765,18 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 	}
 }
 
+void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
+{
+	// Set the visibility of the Station (master/channels/router) rack
+	_guiRack->SetVisible(showStationRack);
+
+	// Set the visibility of each LoopTake rack
+	for (auto& take : _loopTakes)
+	{
+		take->SetRackVisibility(showLoopTakeRacks);
+	}
+}
+
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
 {
 	if (0 == numTakes)
@@ -803,6 +823,10 @@ std::vector<JobAction> Station::_CommitChanges()
 			if (_children.end() != child)
 				_children.erase(child);
 		}
+
+		// Re-index children so _index values are consistent with TryGetChild lookups
+		for (unsigned int i = 0; i < _children.size(); i++)
+			_children[i]->SetIndex(i);
 
 		_loopTakes = _backLoopTakes; // TODO: Undo?
 	}

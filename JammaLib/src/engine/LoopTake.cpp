@@ -239,6 +239,13 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	}
 }
 
+void LoopTake::SetSelectDepth(base::SelectDepth depth)
+{
+	Jammable::SetSelectDepth(depth);
+	if (_guiRack)
+		_guiRack->SetVisible(depth == base::SelectDepth::DEPTH_LOOPTAKE);
+}
+
 ActionResult LoopTake::OnAction(GuiAction action)
 {
 	auto res = GuiElement::OnAction(action);
@@ -647,6 +654,12 @@ void LoopTake::PunchOut()
 	}
 }
 
+void LoopTake::SetRackVisibility(bool visible)
+{
+	// Set the visibility of the LoopTake rack
+	_guiRack->SetVisible(visible);
+}
+
 unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops)
 {
 	if (0 == numLoops)
@@ -700,6 +713,10 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 			if (_children.end() != child)
 				_children.erase(child);
 		}
+
+		// Re-index children so _index values are consistent with TryGetChild lookups
+		for (unsigned int i = 0; i < _children.size(); i++)
+			_children[i]->SetIndex(i);
 
 		_loops = _backLoops; // TODO: Undo?
 		_audioBuffers = _backAudioBuffers;

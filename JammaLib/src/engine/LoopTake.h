@@ -104,6 +104,7 @@ namespace engine
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
+		virtual void SetSelectDepth(base::SelectDepth depth) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
@@ -134,6 +135,7 @@ namespace engine
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);
 		void PunchIn();
 		void PunchOut();
+		void SetRackVisibility(bool visible);
 
 	protected:
 		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);

@@ -41,7 +41,9 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	{
 	case STATE_PICKING:
 		idVec = GlobalId();
-		idVec.resize(2);
+		idVec.resize(3);
+		for (auto& idPart : idVec)
+			idPart += 1;
 		id = utils::VecToId(idVec);
 
 		glCtx.SetUniform("ObjectId", id);

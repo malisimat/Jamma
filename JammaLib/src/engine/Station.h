@@ -85,6 +85,7 @@ namespace engine
 		virtual void EndMultiWrite(unsigned int numSamps,
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
+		virtual void SetSelectDepth(base::SelectDepth depth) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
@@ -107,6 +108,7 @@ namespace engine
 		void SetNumDacChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
+		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 
 	protected:
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
