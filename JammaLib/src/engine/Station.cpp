@@ -321,7 +321,12 @@ ActionResult Station::OnAction(GuiAction action)
 		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
 			if (action.Index == gui::GuiRack::RackStateNotificationIndex)
-				_CollapseOtherTakeRouters();
+			{
+				if (i->Value == gui::GuiRackParams::RACK_ROUTER)
+					_CollapseOtherTakeRouters();
+				else if (i->Value == gui::GuiRackParams::RACK_CHANNELS)
+					_CollapseOtherTakeRoutersToChannels();
+			}
 			else
 				SetNumBusChannels(i->Value);
 		}
@@ -918,4 +923,14 @@ void Station::_CollapseOtherTakeRouters()
 
 	for (auto& take : takes)
 		take->CollapseRackToMaster();
+}
+
+void Station::_CollapseOtherTakeRoutersToChannels()
+{
+	auto& takes = (_changesMade && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+
+	for (auto& take : takes)
+		take->CollapseRouterToChannels();
 }

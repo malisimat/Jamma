@@ -119,6 +119,7 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 		void _CollapseOtherTakeRouters();
+		void _CollapseOtherTakeRoutersToChannels();
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);

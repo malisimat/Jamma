@@ -680,6 +680,12 @@ void LoopTake::CollapseRackToMaster()
 		_guiRack->SetRackState(gui::GuiRackParams::RACK_MASTER, true);
 }
 
+void LoopTake::CollapseRouterToChannels()
+{
+	if (_guiRack && _guiRack->GetRackState() == gui::GuiRackParams::RACK_ROUTER)
+		_guiRack->SetRackState(gui::GuiRackParams::RACK_CHANNELS, true);
+}
+
 unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops)
 {
 	if (0 == numLoops)

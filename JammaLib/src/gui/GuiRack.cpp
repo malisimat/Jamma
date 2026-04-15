@@ -110,15 +110,26 @@ ActionResult GuiRack::OnAction(GuiAction action)
 					computedState = (routerVisible && toggleOn) ? GuiRackParams::RACK_ROUTER :
 						(toggleOn ? GuiRackParams::RACK_CHANNELS : GuiRackParams::RACK_MASTER);
 
-				// Pre-notify receiver before expanding to RACK_ROUTER so it can
-				// collapse any other take that already has the router open.
-				if (computedState == GuiRackParams::RACK_ROUTER && _rackState != GuiRackParams::RACK_ROUTER && _receiver)
+				// Pre-notify receiver before state change so it can collapse
+				// other takes appropriately based on the new state.
+				if (_receiver)
 				{
-					GuiAction preNotify;
-					preNotify.ElementType = GuiAction::ACTIONELEMENT_RACK;
-					preNotify.Index = RackStateNotificationIndex;
-					preNotify.Data = GuiAction::GuiInt((int)GuiRackParams::RACK_ROUTER);
-					_receiver->OnAction(preNotify);
+					if (computedState == GuiRackParams::RACK_ROUTER && _rackState != GuiRackParams::RACK_ROUTER)
+					{
+						GuiAction preNotify;
+						preNotify.ElementType = GuiAction::ACTIONELEMENT_RACK;
+						preNotify.Index = RackStateNotificationIndex;
+						preNotify.Data = GuiAction::GuiInt{(int)GuiRackParams::RACK_ROUTER};
+						_receiver->OnAction(preNotify);
+					}
+					else if (computedState == GuiRackParams::RACK_CHANNELS && _rackState == GuiRackParams::RACK_MASTER)
+					{
+						GuiAction preNotify;
+						preNotify.ElementType = GuiAction::ACTIONELEMENT_RACK;
+						preNotify.Index = RackStateNotificationIndex;
+						preNotify.Data = GuiAction::GuiInt{(int)GuiRackParams::RACK_CHANNELS};
+						_receiver->OnAction(preNotify);
+					}
 				}
 
 				_rackState = computedState;
