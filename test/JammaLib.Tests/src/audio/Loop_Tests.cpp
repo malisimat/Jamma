@@ -535,6 +535,57 @@ TEST(Loop, Playback_ProducesOutputInOverdubbingRecordingState)
     ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
+// Regression: when loopLength is quantised upward so that logicalBufSize >
+// physBufSize, Play() must clamp _playIndex to physBufSize-1 rather than
+// logicalBufSize-1 so that subsequent ReadBlock calls never seek into
+// unallocated buffer positions.
+TEST(Loop, Play_IndexClampedToPhysicalBufferWhenQuantisedUp)
+{
+    // physLoopLength samples are actually recorded; quantizedLoopLength is
+    // larger (simulating clock quantisation that added extra samples).
+    const auto physLoopLength = 50ul;
+    const auto quantizedLoopLength = 100ul;  // 50 extra unrecorded samples
+    const auto physBufSize = physLoopLength + static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+    const auto blockSize = 8u;
+
+    auto loop = MakeLoopProbe();
+    loop.Record();
+    WriteData(loop, physLoopLength, 1.0f);   // physBufSize samples in bank
+
+    // Pass an index that is beyond the physical buffer (in the unrecorded tail).
+    const auto indexPastEnd = physBufSize + 5ul;
+    loop.Play(indexPastEnd, quantizedLoopLength, /*continueRecording=*/true);
+
+    // _playIndex must be clamped to the last valid physical index.
+    EXPECT_EQ(physBufSize - 1ul, loop.PlayIndex());
+
+    // ReadBlock must not crash and must produce some output (zero-filled for
+    // unrecorded tail positions is acceptable; non-crash is the key assertion).
+    float tempBuf[constants::MaxBlockSize]{};
+    auto sampsRead = loop.ReadBlock(tempBuf, 0, blockSize);
+    EXPECT_GT(sampsRead, 0u);
+}
+
+// Regression: when the passed index is within the physical buffer but still
+// within the larger quantised logical range, Play() must NOT clamp it.
+TEST(Loop, Play_IndexUnchangedWhenWithinPhysicalBuffer)
+{
+    const auto physLoopLength = 50ul;
+    const auto quantizedLoopLength = 100ul;
+    const auto physBufSize = physLoopLength + static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+
+    auto loop = MakeLoopProbe();
+    loop.Record();
+    WriteData(loop, physLoopLength, 1.0f);
+
+    // Pass an index well within the physical buffer.
+    const auto normalIndex = static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+    loop.Play(normalIndex, quantizedLoopLength, /*continueRecording=*/true);
+
+    // _playIndex must be unchanged.
+    EXPECT_EQ(normalIndex, loop.PlayIndex());
+}
+
 TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
     const auto fadeSamps = constants::DefaultFadeSamps;
     const auto loopLength = 50ul;

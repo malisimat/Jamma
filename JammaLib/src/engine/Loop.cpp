@@ -475,10 +475,12 @@ void Loop::Play(unsigned long index,
 		return;
 	}
 
-	// Clamp against the logical buffer size (loopLength + MaxLoopFadeSamps), not the
-	// physical size at trigger time, due to endRecordSamps tail.
+	// Clamp against the smaller of the logical loop size and the currently
+	// recorded physical size. This prevents reads past the current BufferBank
+	// length while still ignoring any physical tail beyond the logical loop.
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
-	_playIndex = (logicalBufSize > 0 && index >= logicalBufSize) ? (logicalBufSize - 1) : index;
+	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
+	_playIndex = (effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index;
 	_loopLength = loopLength;
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _playState) || (STATE_PUNCHEDIN == _playState);
