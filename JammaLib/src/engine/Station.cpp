@@ -332,7 +332,15 @@ ActionResult Station::OnAction(GuiAction action)
 	case GuiAction::ACTIONELEMENT_RACK:
 		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
-			SetNumBusChannels(i->Value);
+			if (action.Index == gui::GuiRack::RackStateNotificationIndex)
+			{
+				if (i->Value == gui::GuiRackParams::RACK_ROUTER)
+					_CollapseOtherTakeRouters();
+				else if (i->Value == gui::GuiRackParams::RACK_CHANNELS)
+					_CollapseOtherTakeRoutersToChannels();
+			}
+			else
+				SetNumBusChannels(i->Value);
 		}
 		else if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		{
@@ -622,11 +630,8 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
-
+	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
-
-	Init();
-
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
@@ -922,6 +927,26 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 	}
 
 	return std::nullopt;
+}
+
+void Station::_CollapseOtherTakeRouters()
+{
+	auto& takes = (_changesMade && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+
+	for (auto& take : takes)
+		take->CollapseRackToMaster();
+}
+
+void Station::_CollapseOtherTakeRoutersToChannels()
+{
+	auto& takes = (_changesMade && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+
+	for (auto& take : takes)
+		take->CollapseRouterToChannels();
 }
 
 void Station::_WireVuSliders()

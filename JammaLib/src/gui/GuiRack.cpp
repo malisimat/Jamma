@@ -58,12 +58,44 @@ GuiRack::GuiRack(GuiRackParams params) :
 
 void GuiRack::SetSize(utils::Size2d size)
 {
-	auto panelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
-	_masterPanel->SetSize(panelParams.Size);
-	auto sliderParams = _GetSliderParams(0, size);
-	_masterSlider->SetSize(sliderParams.Size);
-	auto toggleParams = _GetToggleParams(GuiRackParams::RACK_CHANNELS, size);
-	_channelToggle->SetSize(toggleParams.Size);
+	_rackParams.Size = size;
+
+	auto masterPanelParams = _GetPanelParams(GuiRackParams::RACK_MASTER, size);
+	_masterPanel->SetPosition(masterPanelParams.Position);
+	_masterPanel->SetSize(masterPanelParams.Size);
+
+	auto masterSliderParams = _GetSliderParams(0, size);
+	_masterSlider->SetPosition(masterSliderParams.Position);
+	_masterSlider->SetSize(masterSliderParams.Size);
+	_masterSlider->SetDragParams(masterSliderParams.DragControlOffset, masterSliderParams.DragControlSize, masterSliderParams.DragGap);
+
+	auto channelToggleParams = _GetToggleParams(GuiRackParams::RACK_CHANNELS, size);
+	_channelToggle->SetPosition(channelToggleParams.Position);
+	_channelToggle->SetSize(channelToggleParams.Size);
+
+	auto channelPanelParams = _GetPanelParams(GuiRackParams::RACK_CHANNELS, size);
+	_channelPanel->SetPosition(channelPanelParams.Position);
+	_channelPanel->SetSize(channelPanelParams.Size);
+
+	auto routerToggleParams = _GetToggleParams(GuiRackParams::RACK_ROUTER, size);
+	_routerToggle->SetPosition(routerToggleParams.Position);
+	_routerToggle->SetSize(routerToggleParams.Size);
+
+	auto routerPanelParams = _GetPanelParams(GuiRackParams::RACK_ROUTER, size);
+	_routerPanel->SetPosition(routerPanelParams.Position);
+	_routerPanel->SetSize(routerPanelParams.Size);
+
+	auto routerParams = _GetRouterParams(size);
+	_router->SetPosition(routerParams.Position);
+	_router->SetSize(routerParams.Size);
+
+	for (auto i = 0u; i < _channelSliders.size(); ++i)
+	{
+		auto chanSliderParams = _GetSliderParams(i + 1, size);
+		_channelSliders[i]->SetPosition(chanSliderParams.Position);
+		_channelSliders[i]->SetSize(chanSliderParams.Size);
+		_channelSliders[i]->SetDragParams(chanSliderParams.DragControlOffset, chanSliderParams.DragControlSize, chanSliderParams.DragGap);
+	}
 
 	GuiElement::SetSize(size);
 }
@@ -91,19 +123,38 @@ ActionResult GuiRack::OnAction(GuiAction action)
 			newRackState = action.Index <= GuiRackParams::RACK_ROUTER ?
 				(GuiRackParams::RackState)action.Index :
 				GuiRackParams::RACK_MASTER;
-			
-			switch (newRackState)
-			{
-			case GuiRackParams::RACK_ROUTER:
-				_rackState = toggleOn ? GuiRackParams::RACK_ROUTER : GuiRackParams::RACK_CHANNELS;
-				break;
-			case GuiRackParams::RACK_CHANNELS:
-				if (routerVisible && toggleOn)
-					_rackState = GuiRackParams::RACK_ROUTER;
-				else
-					_rackState = toggleOn ? GuiRackParams::RACK_CHANNELS : GuiRackParams::RACK_MASTER;
 
-				break;
+			{
+				GuiRackParams::RackState computedState = _rackState;
+				if (newRackState == GuiRackParams::RACK_ROUTER)
+					computedState = toggleOn ? GuiRackParams::RACK_ROUTER : GuiRackParams::RACK_CHANNELS;
+				else if (newRackState == GuiRackParams::RACK_CHANNELS)
+					computedState = (routerVisible && toggleOn) ? GuiRackParams::RACK_ROUTER :
+						(toggleOn ? GuiRackParams::RACK_CHANNELS : GuiRackParams::RACK_MASTER);
+
+				// Pre-notify receiver before state change so it can collapse
+				// other takes appropriately based on the new state.
+				if (_receiver)
+				{
+					if (computedState == GuiRackParams::RACK_ROUTER && _rackState != GuiRackParams::RACK_ROUTER)
+					{
+						GuiAction preNotify;
+						preNotify.ElementType = GuiAction::ACTIONELEMENT_RACK;
+						preNotify.Index = RackStateNotificationIndex;
+						preNotify.Data = GuiAction::GuiInt{(int)GuiRackParams::RACK_ROUTER};
+						_receiver->OnAction(preNotify);
+					}
+					else if (computedState == GuiRackParams::RACK_CHANNELS && _rackState == GuiRackParams::RACK_MASTER)
+					{
+						GuiAction preNotify;
+						preNotify.ElementType = GuiAction::ACTIONELEMENT_RACK;
+						preNotify.Index = RackStateNotificationIndex;
+						preNotify.Data = GuiAction::GuiInt{(int)GuiRackParams::RACK_CHANNELS};
+						_receiver->OnAction(preNotify);
+					}
+				}
+
+				_rackState = computedState;
 			}
 			_OnRackChange(action.Index, true);
 			break;
@@ -273,8 +324,9 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 		};
 	}
 
-	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(_DragSize.Width / 2), (int)_DragGap.Height };
-	sliderParams.DragControlSize = _DragSize;
+	utils::Size2d dragSize = { std::min(_DragSize.Width, sliderSize.Width), std::min(_DragSize.Height, sliderSize.Height) };
+	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(dragSize.Width / 2), (int)_DragGap.Height };
+	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;
 	sliderParams.Texture = "fader_back";
 	sliderParams.DragTexture = "fader";

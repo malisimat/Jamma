@@ -118,6 +118,8 @@ namespace engine
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
+		void _CollapseOtherTakeRouters();
+		void _CollapseOtherTakeRoutersToChannels();
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
