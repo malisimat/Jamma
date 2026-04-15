@@ -136,6 +136,8 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		void SetRackVisibility(bool visible);
+		gui::GuiRackParams::RackState GetRackState() const;
+		void CollapseRackToMaster();
 
 	protected:
 		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);

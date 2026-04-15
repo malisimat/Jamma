@@ -98,6 +98,9 @@ void LoopTake::SetSize(utils::Size2d size)
 		mixer->SetSize(mixerParams.Size);
 	}
 
+	if (_guiRack)
+		_guiRack->SetSize(size);
+
 	GuiElement::SetSize(size);
 
 	_ArrangeChildren();
@@ -286,6 +289,12 @@ ActionResult LoopTake::OnAction(GuiAction action)
 		{
 			_loops[action.Index - 1]->SetMixerLevel(d->Value);
 		}
+	}
+	else if (std::get_if<GuiAction::GuiInt>(&action.Data))
+	{
+		// Rack state pre-notification from _guiRack — forward to parent receiver (Station).
+		if (_receiver)
+			_receiver->OnAction(action);
 	}
 
 	return res;
@@ -658,6 +667,17 @@ void LoopTake::SetRackVisibility(bool visible)
 {
 	// Set the visibility of the LoopTake rack
 	_guiRack->SetVisible(visible);
+}
+
+gui::GuiRackParams::RackState LoopTake::GetRackState() const
+{
+	return _guiRack ? _guiRack->GetRackState() : gui::GuiRackParams::RACK_MASTER;
+}
+
+void LoopTake::CollapseRackToMaster()
+{
+	if (_guiRack && _guiRack->GetRackState() == gui::GuiRackParams::RACK_ROUTER)
+		_guiRack->SetRackState(gui::GuiRackParams::RACK_MASTER, true);
 }
 
 unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops)

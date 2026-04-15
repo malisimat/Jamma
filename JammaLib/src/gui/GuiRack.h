@@ -55,6 +55,8 @@ namespace gui
 		GuiRack(GuiRackParams params);
 
 	public:
+		static constexpr unsigned int RackStateNotificationIndex = ~0u;
+
 		virtual void SetSize(utils::Size2d size) override;
 
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;

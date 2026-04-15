@@ -58,6 +58,7 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	_sliderParams.DragControlOffset = dragOffset;
 	_sliderParams.DragControlSize = dragSize;
 	_sliderParams.DragGap = dragGap;
+	_dragElement.SetSize(dragSize);
 
 	OnValueChange(true);
 }

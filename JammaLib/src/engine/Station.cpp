@@ -320,7 +320,10 @@ ActionResult Station::OnAction(GuiAction action)
 	case GuiAction::ACTIONELEMENT_RACK:
 		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
 		{
-			SetNumBusChannels(i->Value);
+			if (action.Index == gui::GuiRack::RackStateNotificationIndex)
+				_CollapseOtherTakeRouters();
+			else
+				SetNumBusChannels(i->Value);
 		}
 		else if (auto chans = std::get_if<GuiAction::GuiConnections>(&action.Data))
 		{
@@ -610,11 +613,8 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
-
+	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
-
-	Init();
-
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
@@ -908,4 +908,10 @@ std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 	}
 
 	return std::nullopt;
+}
+
+void Station::_CollapseOtherTakeRouters()
+{
+	for (auto& take : _loopTakes)
+		take->CollapseRackToMaster();
 }
