@@ -163,6 +163,11 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBINGRECORDING != _playState))
 		return;
 
+	// During overdub standby (not punched in), only allow bounced source audio.
+	if ((STATE_OVERDUBBING == _playState) &&
+		(Audible::AUDIOSOURCE_BOUNCE != request.source))
+		return;
+
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
 		float peak = _lastPeak;

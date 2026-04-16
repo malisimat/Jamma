@@ -182,6 +182,25 @@ loop.OnBlockWrite(request, 0);
 loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
 }
 
+static void WriteData(Loop& loop,
+unsigned long loopLength,
+base::Audible::AudioSourceType source,
+float value = 1.0f)
+{
+const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+std::vector<float> data(totalRecordSamps, value);
+AudioWriteRequest request;
+request.samples = data.data();
+request.numSamps = static_cast<unsigned int>(totalRecordSamps);
+request.stride = 1;
+request.fadeCurrent = 0.0f;
+request.fadeNew = 1.0f;
+request.source = source;
+loop.OnBlockWrite(request, 0);
+loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+}
+
 // Record loopLength samples then transition to PLAYING or PLAYINGRECORDING.
 static void RecordAndPlay(Loop& loop,
 unsigned long loopLength,
@@ -464,6 +483,24 @@ loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
 ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
 }
 
+TEST(Loop, Recording_DoesNotWriteAdcDataWhenOverdubbingAndNotPunchedIn)
+{
+const auto loopLength = 50ul;
+const auto blockSize = 11u;
+
+auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+auto loop = MakeLoop();
+loop.Overdub();
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_ADC, 1.0f);
+loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+PlayOneBlock(loop, sink, blockSize);
+
+ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
+}
+
 // -- Playback-behaviour tests -----------------------------------------------
 
 TEST(Loop, Playback_NoOutputInRecordingState)
@@ -526,7 +563,7 @@ TEST(Loop, Playback_ProducesOutputInOverdubbingRecordingState)
 
     auto loop = MakeLoop();
     loop.Overdub();
-    WriteData(loop, loopLength, 1.0f);
+    WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
     loop.Play(constants::MaxLoopFadeSamps, loopLength, true);  // OVERDUBBINGRECORDING
     ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 

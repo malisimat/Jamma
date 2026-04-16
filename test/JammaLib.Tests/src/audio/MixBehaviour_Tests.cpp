@@ -18,6 +18,7 @@ unsigned int Channel;
 unsigned int NumSamps;
 float FadeCurrent;
 float FadeNew;
+base::Audible::AudioSourceType Source;
 unsigned int StartIndex;
 const float* Samples;
 };
@@ -54,6 +55,7 @@ channel,
 request.numSamps,
 request.fadeCurrent,
 request.fadeNew,
+request.source,
 static_cast<unsigned int>(writeOffset),
 request.samples
 });
@@ -308,6 +310,7 @@ behaviour.ApplyBlock(sink, srcBuf, 0.4f, 1, 0);
 ASSERT_EQ(1u, sink->Calls.size());
 EXPECT_FLOAT_EQ(0.4f, sink->Calls[0].FadeNew);
 EXPECT_FLOAT_EQ(0.6f, sink->Calls[0].FadeCurrent);
+EXPECT_EQ(base::Audible::AUDIOSOURCE_BOUNCE, sink->Calls[0].Source);
 }
 
 TEST(BounceMixBehaviour, ApplyBlockNullDestDoesNotCrash)

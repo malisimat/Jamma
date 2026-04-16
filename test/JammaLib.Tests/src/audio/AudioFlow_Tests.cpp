@@ -475,6 +475,42 @@ TEST(AudioFlow, SingleChannel_WriteReadRoundtrip)
 	}
 }
 
+TEST(AudioFlow, MutedTake_DoesNotContributeToPlayback)
+{
+	const unsigned int numChans = 1;
+	const unsigned int blockSize = 256;
+	const unsigned long loopLength = 1024ul;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+	const unsigned int totalBlocks =
+		static_cast<unsigned int>((totalRecord + blockSize - 1) / blockSize);
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+	take->Record({ 0 }, "test");
+	station->CommitChanges();
+
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> inBuf(numChans * blockSize);
+	for (unsigned int b = 0; b < totalBlocks; b++)
+	{
+		FillTestData(inBuf.data(), numChans, blockSize, b);
+		WriteBlock(chanMixer, station, inBuf.data(), numChans, blockSize);
+	}
+
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0);
+
+	auto readMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> outBuf(numChans * blockSize, 0.0f);
+	ReadBlock(readMixer, station, outBuf.data(), numChans, blockSize);
+	ASSERT_TRUE(HasNonZero(outBuf.data(), static_cast<unsigned int>(outBuf.size())));
+
+	take->Mute();
+	std::fill(outBuf.begin(), outBuf.end(), 0.0f);
+	ReadBlock(readMixer, station, outBuf.data(), numChans, blockSize);
+	ASSERT_TRUE(IsAllZero(outBuf.data(), static_cast<unsigned int>(outBuf.size())));
+}
+
 // 7. Two channels: write and read round-trip, verify both channels produce output.
 TEST(AudioFlow, TwoChannel_WriteReadRoundtrip)
 {

@@ -176,10 +176,15 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto ptr = Sharable::shared_from_this();
 
 	for (const auto& take : _loopTakes)
+	{
+		if (take->IsMuted())
+			continue;
+
 		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
 			numSamps);
+	}
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());

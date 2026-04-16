@@ -782,7 +782,7 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
-	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
