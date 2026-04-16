@@ -52,10 +52,6 @@ TEST(NinePatchImageTest, BorderDetection_FindsEncodingPixel)
 	pixels[px + 1] = 0;
 	pixels[px + 2] = 255;
 	pixels[px + 3] = 0;
-	pixels[px + 4] = 1;
-	pixels[px + 5] = 2;
-	pixels[px + 6] = 3;
-	pixels[px + 7] = 4;
 
 	auto border = DetectBorder(pixels, width, height);
 

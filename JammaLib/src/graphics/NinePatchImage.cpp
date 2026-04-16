@@ -52,13 +52,14 @@ std::optional<BorderInfo> graphics::DetectBorder(
 	for (auto pixelIndex = 0u; pixelIndex < numPixels; ++pixelIndex)
 	{
 		const auto px = pixelIndex * NumChannels;
-		const auto b = pixels[px + 0];
-		const auto g = pixels[px + 1];
-		const auto r = pixels[px + 2];
-		const auto a = pixels[px + 3];
+		const auto blue = pixels[px + 0];
+		const auto green = pixels[px + 1];
+		const auto red = pixels[px + 2];
+		const auto alpha = pixels[px + 3];
 
-		if ((b == 255) && (g == 0) && (r == 255) && (a == 0))
+		if ((blue == 255) && (green == 0) && (red == 255) && (alpha == 0))
 		{
+			// 1x1 textures have no adjacent pixel to copy from, so we keep the same pixel value.
 			const auto replacementPixelIndex = pixelIndex + 1u < numPixels
 				? pixelIndex + 1u
 				: pixelIndex > 0u ? pixelIndex - 1u : pixelIndex;
