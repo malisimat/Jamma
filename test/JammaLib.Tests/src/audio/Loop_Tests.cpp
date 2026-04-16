@@ -185,11 +185,11 @@ loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
 static void WriteData(Loop& loop,
 unsigned long loopLength,
 base::Audible::AudioSourceType source,
-float value = 1.0f)
+float sampleValue = 1.0f)
 {
 const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
 
-std::vector<float> data(totalRecordSamps, value);
+std::vector<float> data(totalRecordSamps, sampleValue);
 AudioWriteRequest request;
 request.samples = data.data();
 request.numSamps = static_cast<unsigned int>(totalRecordSamps);
