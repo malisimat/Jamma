@@ -329,8 +329,8 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;
 	sliderParams.Texture = "fader_back";
-	sliderParams.DragTexture = "fader";
-	sliderParams.DragOverTexture = "fader_over";
+	sliderParams.DragTexture = "rounded_rect";
+	sliderParams.DragOverTexture = "";
 
 	return sliderParams;
 }
