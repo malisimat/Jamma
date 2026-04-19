@@ -66,17 +66,30 @@ std::optional<NinePatchImage::BorderInfo> NinePatchImage::DetectBorder(
 
 		if ((blue == 255) && (green == 0) && (red == 255) && (alpha == 0))
 		{
+			const auto x = pixelIndex % width;
+			const auto y = pixelIndex / width;
+
+			auto replacementX = x;
+			auto replacementY = y;
+
+			if (x + 1u < width)
+				replacementX = x + 1u;
+			else if (x > 0u)
+				replacementX = x - 1u;
+			else if (y + 1u < height)
+				replacementY = y + 1u;
+			else if (y > 0u)
+				replacementY = y - 1u;
+
 			// 1x1 textures have no adjacent pixel to copy from, so we keep the same pixel value.
-			const auto replacementPixelIndex = pixelIndex + 1u < numPixels
-				? pixelIndex + 1u
-				: pixelIndex > 0u ? pixelIndex - 1u : pixelIndex;
+			const auto replacementPixelIndex = replacementY * width + replacementX;
 			const auto replacementPx = replacementPixelIndex * NumChannels;
 			for (auto i = 0; i < NumChannels; ++i)
 				pixels[px + i] = pixels[replacementPx + i];
 
 			return BorderInfo{
-				pixelIndex % width,
-				pixelIndex / width
+				x,
+				y
 			};
 		}
 	}
