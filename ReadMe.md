@@ -32,13 +32,14 @@ Current Version: v5.0.2
 
 ### Setup (First Time or Fresh Worktree)
 
-Before building, restore NuGet packages for the test suite:
+Before building, install dependencies with vcpkg from the repository root:
 
 ```powershell
-& "C:\Users\matto\Downloads\nuget.exe" restore
+vcpkg integrate install
+vcpkg install
 ```
 
-**Note:** The `packages/` directory is excluded from git. You must run `nuget restore` when setting up a fresh clone or worktree.
+This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
 
 ### Build
 
