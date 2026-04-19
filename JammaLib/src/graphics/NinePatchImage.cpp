@@ -4,8 +4,6 @@
 #include <gl/gl.h>
 #include "gl/glext.h"
 #include "gl/wglext.h"
-#include "ImageUtils.h"
-#include "glm/glm.hpp"
 
 using namespace base;
 using namespace graphics;
@@ -28,16 +26,7 @@ namespace
 	}
 }
 
-std::optional<BorderInfo> graphics::DetectBorder(
-	const std::vector<unsigned char>& pixels,
-	unsigned int width,
-	unsigned int height)
-{
-	auto pixelsCopy = pixels;
-	return DetectBorder(pixelsCopy, width, height);
-}
-
-std::optional<BorderInfo> graphics::DetectBorder(
+std::optional<NinePatchImage::BorderInfo> NinePatchImage::DetectBorder(
 	std::vector<unsigned char>& pixels,
 	unsigned int width,
 	unsigned int height)
@@ -77,7 +66,7 @@ std::optional<BorderInfo> graphics::DetectBorder(
 	return std::nullopt;
 }
 
-std::array<GLfloat, 162> graphics::BuildNinePatchPositions(
+std::array<GLfloat, 162> NinePatchImage::BuildPositions(
 	unsigned int borderX,
 	unsigned int borderY,
 	Size2d size)
@@ -173,30 +162,43 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	auto validated = true;
 
-	const auto texturePath = std::string("./resources/textures/") + _drawParams.Texture + ".tga";
-	auto imageLoaded = utils::ImageUtils::LoadTga(texturePath);
-	if (!imageLoaded.has_value())
-		validated = false;
+	if (validated)
+		validated = _InitTexture(resourceLib);
 
 	if (validated)
 	{
-		auto& [pixels, width, height] = imageLoaded.value();
-		auto border = DetectBorder(pixels, width, height);
-		if (!border.has_value())
+		auto texture = _texture.lock();
+		if (!texture)
 		{
 			validated = false;
 		}
 		else
 		{
-			_texWidth = width;
-			_texHeight = height;
-			_borderX = border->borderX;
-			_borderY = border->borderY;
+			_texWidth = texture->Width();
+			_texHeight = texture->Height();
+
+			auto pixels = std::vector<unsigned char>(_texWidth * _texHeight * NumChannels, 0);
+			glBindTexture(GL_TEXTURE_2D, texture->GetId());
+			glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			auto border = NinePatchImage::DetectBorder(pixels, _texWidth, _texHeight);
+			if (!border.has_value())
+			{
+				validated = false;
+			}
+			else
+			{
+				_borderX = border->borderX;
+				_borderY = border->borderY;
+
+				glBindTexture(GL_TEXTURE_2D, texture->GetId());
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _texWidth, _texHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
+				glBindTexture(GL_TEXTURE_2D, 0);
+			}
 		}
 	}
 
-	if (validated)
-		validated = _InitTexture(resourceLib);
 	if (validated)
 		validated = _InitShader(resourceLib);
 	if (validated)
@@ -261,7 +263,7 @@ bool NinePatchImage::_InitShader(ResourceLib& resourceLib)
 
 std::array<GLfloat, 162> NinePatchImage::_BuildPositions(Size2d size) const
 {
-	return BuildNinePatchPositions(_borderX, _borderY, size);
+	return NinePatchImage::BuildPositions(_borderX, _borderY, size);
 }
 
 bool NinePatchImage::_InitVertexArray()

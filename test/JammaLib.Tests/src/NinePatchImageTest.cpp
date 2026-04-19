@@ -5,8 +5,7 @@
 #include "gtest/gtest.h"
 #include "graphics/NinePatchImage.h"
 
-using graphics::BuildNinePatchPositions;
-using graphics::DetectBorder;
+using graphics::NinePatchImage;
 
 namespace
 {
@@ -53,7 +52,7 @@ TEST(NinePatchImageTest, BorderDetection_FindsEncodingPixel)
 	pixels[px + 2] = 255;
 	pixels[px + 3] = 0;
 
-	auto border = DetectBorder(pixels, width, height);
+	auto border = NinePatchImage::DetectBorder(pixels, width, height);
 
 	ASSERT_TRUE(border.has_value());
 	EXPECT_EQ(8u, border->borderX);
@@ -76,7 +75,7 @@ TEST(NinePatchImageTest, BorderDetection_PatchesEncodingPixel)
 	pixels[px + 6] = 30;
 	pixels[px + 7] = 40;
 
-	auto border = DetectBorder(pixels, width, height);
+	auto border = NinePatchImage::DetectBorder(pixels, width, height);
 
 	ASSERT_TRUE(border.has_value());
 	EXPECT_EQ(10u, pixels[px + 0]);
@@ -87,7 +86,7 @@ TEST(NinePatchImageTest, BorderDetection_PatchesEncodingPixel)
 
 TEST(NinePatchImageTest, BuildPositions_CornersClamped)
 {
-	auto positions = BuildNinePatchPositions(8, 8, { 64, 64 });
+	auto positions = NinePatchImage::BuildPositions(8, 8, { 64, 64 });
 	auto [xMin, xMax] = CellXBounds(positions, 0);
 	auto [yMin, yMax] = CellYBounds(positions, 0);
 
@@ -99,7 +98,7 @@ TEST(NinePatchImageTest, BuildPositions_CornersClamped)
 
 TEST(NinePatchImageTest, BuildPositions_CentreStretches)
 {
-	auto positions = BuildNinePatchPositions(8, 8, { 200, 100 });
+	auto positions = NinePatchImage::BuildPositions(8, 8, { 200, 100 });
 	auto [xMin, xMax] = CellXBounds(positions, 4);
 	auto [yMin, yMax] = CellYBounds(positions, 4);
 
@@ -112,7 +111,7 @@ TEST(NinePatchImageTest, BuildPositions_CentreStretches)
 TEST(NinePatchImageTest, BuildPositions_MinimumSize)
 {
 	const auto size = utils::Size2d{ 10, 10 };
-	auto positions = BuildNinePatchPositions(8, 8, size);
+	auto positions = NinePatchImage::BuildPositions(8, 8, size);
 
 	for (auto i = 0u; i < positions.size(); i += 3)
 	{

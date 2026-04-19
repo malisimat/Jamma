@@ -29,32 +29,27 @@ namespace graphics
 		std::string Shader;
 	};
 
-	struct BorderInfo
-	{
-		unsigned int borderX;
-		unsigned int borderY;
-	};
-
-	std::optional<BorderInfo> DetectBorder(
-		const std::vector<unsigned char>& pixels,
-		unsigned int width,
-		unsigned int height);
-
-	std::optional<BorderInfo> DetectBorder(
-		std::vector<unsigned char>& pixels,
-		unsigned int width,
-		unsigned int height);
-
-	std::array<GLfloat, 162> BuildNinePatchPositions(
-		unsigned int borderX,
-		unsigned int borderY,
-		utils::Size2d size);
-
 	class NinePatchImage :
 		public base::Drawable,
 		public base::Sizeable
 	{
 	public:
+		struct BorderInfo
+		{
+			unsigned int borderX;
+			unsigned int borderY;
+		};
+
+		static std::optional<BorderInfo> DetectBorder(
+			std::vector<unsigned char>& pixels,
+			unsigned int width,
+			unsigned int height);
+
+		static std::array<GLfloat, 162> BuildPositions(
+			unsigned int borderX,
+			unsigned int borderY,
+			utils::Size2d size);
+
 		NinePatchImage(NinePatchImageParams params);
 		~NinePatchImage() { ReleaseResources(); }
 
