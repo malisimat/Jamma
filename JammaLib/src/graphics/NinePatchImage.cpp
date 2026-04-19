@@ -180,7 +180,6 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 			auto pixels = std::vector<unsigned char>(_texWidth * _texHeight * NumChannels, 0);
 			glBindTexture(GL_TEXTURE_2D, texture->GetId());
 			glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
-			glBindTexture(GL_TEXTURE_2D, 0);
 
 			auto border = NinePatchImage::DetectBorder(pixels, _texWidth, _texHeight);
 			if (!border.has_value())
@@ -191,11 +190,10 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 			{
 				_borderX = border->borderX;
 				_borderY = border->borderY;
-
-				glBindTexture(GL_TEXTURE_2D, texture->GetId());
 				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _texWidth, _texHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
-				glBindTexture(GL_TEXTURE_2D, 0);
 			}
+
+			glBindTexture(GL_TEXTURE_2D, 0);
 		}
 	}
 
