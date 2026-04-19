@@ -297,6 +297,7 @@
     <ClInclude Include="src\engine\Scene.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
+    <ClInclude Include="src\graphics\NinePatchImage.h" />
     <ClInclude Include="src\base\ActionSender.h" />
     <ClInclude Include="src\audio\InterpolatedValue.h" />
     <ClInclude Include="src\gui\GuiPanel.h" />
@@ -379,6 +380,7 @@
     <ClCompile Include="src\engine\Scene.cpp" />
     <ClCompile Include="src\graphics\Shader.cpp" />
     <ClCompile Include="src\graphics\Image.cpp" />
+    <ClCompile Include="src\graphics\NinePatchImage.cpp" />
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
     <ClCompile Include="src\gui\GuiPanel.cpp" />
     <ClCompile Include="src\gui\GuiModel.cpp" />

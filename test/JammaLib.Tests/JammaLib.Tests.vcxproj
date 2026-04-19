@@ -141,6 +141,7 @@
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
+    <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />
     <ClCompile Include="src\gui\GuiSlider_Tests.cpp" />
