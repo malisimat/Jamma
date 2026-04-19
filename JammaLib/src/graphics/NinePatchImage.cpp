@@ -4,6 +4,7 @@
 #include <gl/gl.h>
 #include "gl/glext.h"
 #include "gl/wglext.h"
+#include "glm/glm.hpp"
 
 using namespace base;
 using namespace graphics;
@@ -23,6 +24,23 @@ namespace
 		const auto left = (std::min)(border, extent);
 		const auto right = extent > left ? (std::max)(left, extent - left) : left;
 		return { 0u, left, right, extent };
+	}
+
+	std::array<GLfloat, 162> NormalizePositions(
+		const std::array<GLfloat, 162>& positions,
+		Size2d size)
+	{
+		std::array<GLfloat, 162> normalized = positions;
+		const auto width = size.Width == 0 ? 1.0f : static_cast<GLfloat>(size.Width);
+		const auto height = size.Height == 0 ? 1.0f : static_cast<GLfloat>(size.Height);
+
+		for (auto i = 0u; i < normalized.size(); i += 3)
+		{
+			normalized[i + 0] = normalized[i + 0] / width;
+			normalized[i + 1] = normalized[i + 1] / height;
+		}
+
+		return normalized;
 	}
 }
 
@@ -138,8 +156,11 @@ void NinePatchImage::Draw(DrawContext& ctx)
 	if (!texture || !shader)
 		return;
 
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(_sizeParams.Size.Width, _sizeParams.Size.Height, 1.f)));
+
 	glUseProgram(shader->GetId());
-	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
+	shader->SetUniforms(glCtx);
 
 	glBindVertexArray(_vertexArray);
 
@@ -150,6 +171,8 @@ void NinePatchImage::Draw(DrawContext& ctx)
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glBindVertexArray(0);
 	glUseProgram(0);
+
+	glCtx.PopMvp();
 }
 
 void NinePatchImage::Draw3d(DrawContext& ctx,
@@ -261,7 +284,7 @@ bool NinePatchImage::_InitShader(ResourceLib& resourceLib)
 
 std::array<GLfloat, 162> NinePatchImage::_BuildPositions(Size2d size) const
 {
-	return NinePatchImage::BuildPositions(_borderX, _borderY, size);
+	return NormalizePositions(NinePatchImage::BuildPositions(_borderX, _borderY, size), size);
 }
 
 bool NinePatchImage::_InitVertexArray()
