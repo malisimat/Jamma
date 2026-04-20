@@ -168,11 +168,24 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	auto ptr = Sharable::shared_from_this();
 
+	// In bounce mode (trigger present), route loop audio directly to dest (the
+	// target take) so BounceMixBehaviour writes with AUDIOSOURCE_BOUNCE into
+	// the target's loops. In playback mode (no trigger), accumulate into our
+	// own audio buffers so the per-channel mixers can apply levels and routing.
+	auto loopDest = (trigger != nullptr)
+		? dest
+		: std::dynamic_pointer_cast<MultiAudioSink>(ptr);
+
 	for (const auto& loop : _loops)
-		loop->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		loop->WriteBlock(loopDest,
 			trigger,
 			indexOffset,
 			numSamps);
+
+	// In bounce mode the loops wrote directly to dest; skip the audio-buffer
+	// passthrough which is only needed for playback routing.
+	if (nullptr != trigger)
+		return;
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());

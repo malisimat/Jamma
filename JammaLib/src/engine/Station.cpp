@@ -174,11 +174,15 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	unsigned int numSamps)
 {
 	auto ptr = Sharable::shared_from_this();
+	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	auto hasActiveTake = false;
 
 	for (const auto& take : _loopTakes)
 	{
 		if (take->IsMuted())
 			continue;
+
+		hasActiveTake = true;
 
 		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
@@ -186,7 +190,25 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			numSamps);
 	}
 
-	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
+	if (!hasActiveTake)
+	{
+		// With no unmuted takes, avoid reading delayed mix buffers from prior
+		// blocks and ensure any stale content cannot leak when playback resumes.
+		for (const auto& buffer : _audioBuffers)
+		{
+			auto bufSize = buffer->BufSize();
+			if (bufSize == 0)
+				continue;
+
+			buffer->Zero(bufSize);
+			buffer->EndWrite(bufSize, true);
+		}
+
+		_masterMixer->UpdateVu(0.0f, sampsToRead);
+		_masterMixer->Offset(sampsToRead);
+		return;
+	}
+
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
@@ -577,6 +599,20 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
+	case TriggerAction::TRIGGER_PUNCHIN_START:
+		if (loopTake.has_value())
+			loopTake.value()->PunchIn();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+		break;
+	case TriggerAction::TRIGGER_PUNCHIN_END:
+		if (loopTake.has_value())
+			loopTake.value()->PunchOut();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		break;
 	}
 

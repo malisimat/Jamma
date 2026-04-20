@@ -2,12 +2,21 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
+#include "engine/LoopTake.h"
+#include "engine/Station.h"
+#include "actions/TriggerAction.h"
 
 using resources::ResourceLib;
 using engine::Loop;
 using engine::LoopParams;
+using engine::LoopTake;
+using engine::LoopTakeParams;
+using engine::Station;
+using engine::StationParams;
+using actions::TriggerAction;
 using audio::WireMixBehaviourParams;
 using audio::AudioMixerParams;
+using audio::MergeMixBehaviourParams;
 using base::AudioSource;
 using base::AudioSink;
 using base::MultiAudioSink;
@@ -229,6 +238,27 @@ for (auto sample : samples)
 if (sample != 0.0f)
 return true;
 return false;
+}
+
+static std::shared_ptr<LoopTake> MakeLoopTakeShared(const std::string& id = "take")
+{
+    LoopTakeParams takeParams;
+    takeParams.Id = id;
+    takeParams.Size = { 100, 100 };
+    takeParams.FadeSamps = constants::DefaultFadeSamps;
+    MergeMixBehaviourParams merge;
+    auto mixerParams = LoopTake::GetMixerParams(takeParams.Size, merge);
+    return std::make_shared<LoopTake>(takeParams, mixerParams);
+}
+
+static std::shared_ptr<Station> MakeStationShared(const std::string& name = "test")
+{
+    StationParams params;
+    params.Name = name;
+    params.Size = { 200, 200 };
+    MergeMixBehaviourParams merge;
+    auto mixerParams = Station::GetMixerParams(params.Size, merge);
+    return std::make_shared<Station>(params, mixerParams);
 }
 
 // -- Initial playback tests -------------------------------------------------
@@ -672,4 +702,136 @@ TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
         EXPECT_NEAR(samples[s], inputVal, 1e-5f)
             << "Gain bump at crossfade sample " << s;
     }
+}
+
+// -- Loop punch-in acceptance tests ----------------------------------------
+
+// During STATE_PUNCHEDIN both AUDIOSOURCE_ADC and AUDIOSOURCE_BOUNCE are accepted.
+// This is the complement of Recording_DoesNotWriteAdcDataWhenOverdubbingAndNotPunchedIn.
+TEST(Loop, PunchedInAcceptsAdcSource)
+{
+    auto loop = MakeLoop();
+    loop.Overdub();
+    loop.PunchIn();
+    ASSERT_EQ(Loop::STATE_PUNCHEDIN, loop.PlayState());
+
+    float adcSamp = 1.0f;
+    AudioWriteRequest adcReq;
+    adcReq.samples = &adcSamp;
+    adcReq.numSamps = 1;
+    adcReq.stride = 1;
+    adcReq.fadeCurrent = 0.0f;
+    adcReq.fadeNew = 1.0f;
+    adcReq.source = base::Audible::AUDIOSOURCE_ADC;
+
+    // OnBlockWrite must not reject the write; state stays PUNCHEDIN.
+    loop.OnBlockWrite(adcReq, 0);
+    EXPECT_EQ(Loop::STATE_PUNCHEDIN, loop.PlayState());
+}
+
+// -- LoopTake punch-in state tests -----------------------------------------
+
+// LoopTake::PunchIn() transitions from OVERDUBBING to PUNCHEDIN.
+TEST(LoopTake, PunchInTransitionsState)
+{
+    auto take = MakeLoopTakeShared("take-a");
+    take->Overdub({}, "test");  // empty channels: avoids AddLoop/Init
+    ASSERT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+
+    take->PunchIn();
+
+    EXPECT_EQ(LoopTake::STATE_PUNCHEDIN, take->TakeState());
+}
+
+// LoopTake::PunchOut() returns from PUNCHEDIN to OVERDUBBING.
+TEST(LoopTake, PunchOutReturnsToOverdubbing)
+{
+    auto take = MakeLoopTakeShared("take-b");
+    take->Overdub({}, "test");
+    take->PunchIn();
+    ASSERT_EQ(LoopTake::STATE_PUNCHEDIN, take->TakeState());
+
+    take->PunchOut();
+
+    EXPECT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+}
+
+// PunchIn on a take that is not in OVERDUBBING state is a no-op.
+TEST(LoopTake, PunchInIgnoredWhenNotOverdubbing)
+{
+    auto take = MakeLoopTakeShared("take-c");
+    ASSERT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+
+    take->PunchIn();
+
+    EXPECT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+}
+
+// -- Station punch-in action handler tests ---------------------------------
+
+// Regression: TRIGGER_PUNCHIN_START was previously unhandled in Station::OnAction,
+// so LoopTake::PunchIn() was never called and loops stayed in STATE_OVERDUBBING,
+// silently rejecting all ADC audio during punch-in.
+TEST(Station, PunchInStartTransitionsTakeToPunchedIn)
+{
+    auto station = MakeStationShared();
+    station->CommitChanges();
+
+    auto take = station->AddTake();
+    take->Overdub({}, "test");
+    station->CommitChanges();
+
+    ASSERT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+
+    TriggerAction action;
+    action.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+    action.TargetId = take->Id();
+    auto res = station->OnAction(action);
+
+    EXPECT_TRUE(res.IsEaten);
+    EXPECT_EQ(LoopTake::STATE_PUNCHEDIN, take->TakeState());
+}
+
+// Regression: TRIGGER_PUNCHIN_END was previously unhandled in Station::OnAction,
+// so loops stayed in STATE_PUNCHEDIN rather than returning to STATE_OVERDUBBING
+// on ditch release.
+TEST(Station, PunchInEndTransitionsTakeBackToOverdubbing)
+{
+    auto station = MakeStationShared();
+    station->CommitChanges();
+
+    auto take = station->AddTake();
+    take->Overdub({}, "test");
+    take->PunchIn();
+    station->CommitChanges();
+
+    ASSERT_EQ(LoopTake::STATE_PUNCHEDIN, take->TakeState());
+
+    TriggerAction action;
+    action.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+    action.TargetId = take->Id();
+    auto res = station->OnAction(action);
+
+    EXPECT_TRUE(res.IsEaten);
+    EXPECT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+}
+
+// A TRIGGER_PUNCHIN_START on a take that is not in OVERDUBBING state is a no-op.
+TEST(Station, PunchInStartIgnoredForInactiveTake)
+{
+    auto station = MakeStationShared();
+    station->CommitChanges();
+
+    auto take = station->AddTake();
+    // No Overdub() call: take remains STATE_INACTIVE
+    station->CommitChanges();
+
+    ASSERT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
+
+    TriggerAction action;
+    action.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+    action.TargetId = take->Id();
+    station->OnAction(action);
+
+    EXPECT_EQ(LoopTake::STATE_INACTIVE, take->TakeState());
 }
