@@ -190,20 +190,20 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 	}
 	else
 	{
-		auto fadeCurrent = request.fadeCurrent;
+		auto effectiveFadeCurrent = request.fadeCurrent;
 		if ((STATE_PUNCHEDIN == _playState) &&
 			(AUDIOSOURCE_BOUNCE == request.source))
 		{
 			// During punch-in, bounced source audio must mix with incoming input
 			// already written this block (not overwrite it).
-			fadeCurrent = 1.0f;
+			effectiveFadeCurrent = 1.0f;
 		}
 
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
 			auto idx = _writeIndex + writeOffset + i;
-			_bufferBank[idx] = (request.fadeNew * samp) + (fadeCurrent * _bufferBank[idx]);
+			_bufferBank[idx] = (request.fadeNew * samp) + (effectiveFadeCurrent * _bufferBank[idx]);
 		}
 	}
 }
