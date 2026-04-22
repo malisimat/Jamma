@@ -1,5 +1,4 @@
 
-#include <algorithm>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
@@ -521,8 +520,16 @@ TEST(Loop, Overdub_WritesBounceBeforePunchIn)
     auto sampsRead = loop.ReadBlock(tempBuf, 0, blockSize);
 
     ASSERT_EQ(blockSize, sampsRead);
-    ASSERT_TRUE(std::any_of(tempBuf, tempBuf + sampsRead,
-        [](float sample) { return sample != 0.0f; }));
+    auto hasNonZero = false;
+    for (auto i = 0u; i < sampsRead; i++)
+    {
+        if (tempBuf[i] != 0.0f)
+        {
+            hasNonZero = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(hasNonZero);
 }
 
 // -- Playback-behaviour tests -----------------------------------------------
