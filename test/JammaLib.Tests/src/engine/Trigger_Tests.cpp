@@ -58,6 +58,33 @@ private:
 	int _numTimesCalled;
 };
 
+struct TriggerWriteCall
+{
+	unsigned int Channel;
+	base::Audible::AudioSourceType Source;
+	float FadeCurrent;
+	float FadeNew;
+};
+
+class TriggerCaptureSink :
+	public base::MultiAudioSink
+{
+public:
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override
+	{
+		return 1u;
+	}
+
+	virtual void OnBlockWriteChannel(unsigned int channel,
+		const base::AudioWriteRequest& request,
+		int writeOffset) override
+	{
+		Calls.push_back({ channel, request.source, request.fadeCurrent, request.fadeNew });
+	}
+
+	std::vector<TriggerWriteCall> Calls;
+};
+
 std::unique_ptr<Trigger> MakeDefaultTrigger(std::shared_ptr<MockedTriggerReceiver> receiver,
 	unsigned int debounceMs)
 {
@@ -95,6 +122,24 @@ TEST(Trigger, DitchesLoop) {
 	action.KeyActionType = KeyAction::KEY_UP;
 	actionRes = trigger->OnAction(action);
 	ASSERT_TRUE(receiver->GetLastMatched());
+}
+
+TEST(Trigger, WriteBlockPassesBounceSourceThroughToDestination)
+{
+	auto receiver = std::make_shared<MockedTriggerReceiver>();
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	trigger->AddInputChannel(0);
+
+	auto sink = std::make_shared<TriggerCaptureSink>();
+	float srcBuf[] = { 0.25f, -0.25f };
+
+	trigger->WriteBlock(sink, srcBuf, 2u, base::Audible::AUDIOSOURCE_BOUNCE);
+
+	ASSERT_EQ(1u, sink->Calls.size());
+	EXPECT_EQ(0u, sink->Calls[0].Channel);
+	EXPECT_EQ(base::Audible::AUDIOSOURCE_BOUNCE, sink->Calls[0].Source);
+	EXPECT_FLOAT_EQ(0.0f, sink->Calls[0].FadeCurrent);
+	EXPECT_FLOAT_EQ(1.0f, sink->Calls[0].FadeNew);
 }
 
 TEST(Trigger, RecordsTwoLoops) {

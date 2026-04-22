@@ -167,11 +167,14 @@ namespace engine
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int sampOffset,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			base::Audible::AudioSourceType sourceType = base::Audible::AUDIOSOURCE_BOUNCE);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 		virtual void Reset() override;
 
 		unsigned int LoopChannel() const;

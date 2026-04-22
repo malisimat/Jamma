@@ -156,11 +156,22 @@ void Loop::Draw3d(DrawContext& ctx,
 
 void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 {
-	if ((STATE_RECORDING != _playState) &&
-		(STATE_PLAYINGRECORDING != _playState) &&
-		(STATE_OVERDUBBING != _playState) &&
-		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState))
+	auto writesLiveInput =
+		(AUDIOSOURCE_ADC == request.source) ||
+		(AUDIOSOURCE_MONITOR == request.source);
+	auto writesBounce = AUDIOSOURCE_BOUNCE == request.source;
+
+	auto acceptsLiveInput =
+		(STATE_RECORDING == _playState) ||
+		(STATE_PLAYINGRECORDING == _playState) ||
+		(STATE_PUNCHEDIN == _playState);
+	auto acceptsBounce =
+		(STATE_OVERDUBBING == _playState) ||
+		(STATE_PUNCHEDIN == _playState) ||
+		(STATE_OVERDUBBINGRECORDING == _playState);
+
+	if (!((writesLiveInput && acceptsLiveInput) ||
+		(writesBounce && acceptsBounce)))
 		return;
 
 	if (AUDIOSOURCE_MONITOR == request.source)
@@ -334,7 +345,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int sampOffset,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	Audible::AudioSourceType sourceType)
 {
 	// Mixer will stereo spread the mono wav
 	// and adjust level
@@ -355,8 +367,28 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		if (nullptr == trigger)
 			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 		else
-			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
+			trigger->WriteBlock(dest, tempBuf, sampsToWrite, sourceType);
 	}
+}
+
+bool Loop::Mute()
+{
+	auto isNewState = Tweakable::Mute();
+
+	if (isNewState && _mixer)
+		_mixer->Mute();
+
+	return isNewState;
+}
+
+bool Loop::UnMute()
+{
+	auto isNewState = Tweakable::UnMute();
+
+	if (isNewState && _mixer)
+		_mixer->UnMute();
+
+	return isNewState;
 }
 
 void Loop::EndMultiPlay(unsigned int numSamps)

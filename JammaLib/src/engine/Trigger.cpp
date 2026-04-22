@@ -312,8 +312,12 @@ std::vector<TriggerTake> Trigger::GetTakes() const
 
 void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const float* srcBuf,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	Audible::AudioSourceType sourceType)
 {
+	if ((nullptr == dest) || (nullptr == srcBuf))
+		return;
+
 	for (auto& action : _delayedActions)
 	{
 		if (action.SampsLeft(0) == 0)
@@ -329,7 +333,20 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			[](DelayedAction& action) { return action.SampsLeft(0) == 0; }),
 		_delayedActions.end());
 
-	_overdubMixer->WriteBlock(dest, srcBuf, numSamps);
+	base::AudioWriteRequest request;
+	request.samples = srcBuf;
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeNew = static_cast<float>(_overdubMixer->Level());
+	request.fadeCurrent = 1.0f - request.fadeNew;
+	request.source = sourceType;
+
+	for (auto chan : _inputChannels)
+	{
+		dest->OnBlockWriteChannel(chan, request, 0);
+	}
+
+	_overdubMixer->Offset(numSamps);
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)
@@ -790,6 +807,7 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 		_receiver->OnAction(trigAction);
@@ -811,6 +829,7 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 

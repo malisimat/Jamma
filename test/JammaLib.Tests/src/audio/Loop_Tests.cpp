@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
@@ -464,6 +465,66 @@ loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
 ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
 }
 
+TEST(Loop, Overdub_IgnoresLiveInputUntilPunchIn)
+{
+    const auto loopLength = 50ul;
+    const auto blockSize = 11u;
+    const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+    auto loop = MakeLoop();
+    loop.Overdub();
+
+    std::vector<float> data(totalRecordSamps, 1.0f);
+    AudioWriteRequest request;
+    request.samples = data.data();
+    request.numSamps = static_cast<unsigned int>(totalRecordSamps);
+    request.stride = 1;
+    request.fadeCurrent = 0.0f;
+    request.fadeNew = 1.0f;
+    request.source = base::Audible::AUDIOSOURCE_ADC;
+    loop.OnBlockWrite(request, 0);
+    loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+
+    loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+
+    float tempBuf[constants::MaxBlockSize]{};
+    auto sampsRead = loop.ReadBlock(tempBuf, 0, blockSize);
+
+    ASSERT_EQ(blockSize, sampsRead);
+    for (auto i = 0u; i < sampsRead; i++)
+        EXPECT_FLOAT_EQ(0.0f, tempBuf[i]);
+}
+
+TEST(Loop, Overdub_WritesBounceBeforePunchIn)
+{
+    const auto loopLength = 50ul;
+    const auto blockSize = 11u;
+    const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+    auto loop = MakeLoop();
+    loop.Overdub();
+
+    std::vector<float> data(totalRecordSamps, 1.0f);
+    AudioWriteRequest request;
+    request.samples = data.data();
+    request.numSamps = static_cast<unsigned int>(totalRecordSamps);
+    request.stride = 1;
+    request.fadeCurrent = 0.0f;
+    request.fadeNew = 1.0f;
+    request.source = base::Audible::AUDIOSOURCE_BOUNCE;
+    loop.OnBlockWrite(request, 0);
+    loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+
+    loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+
+    float tempBuf[constants::MaxBlockSize]{};
+    auto sampsRead = loop.ReadBlock(tempBuf, 0, blockSize);
+
+    ASSERT_EQ(blockSize, sampsRead);
+    ASSERT_TRUE(std::any_of(tempBuf, tempBuf + sampsRead,
+        [](float sample) { return sample != 0.0f; }));
+}
+
 // -- Playback-behaviour tests -----------------------------------------------
 
 TEST(Loop, Playback_NoOutputInRecordingState)
@@ -499,6 +560,23 @@ TEST(Loop, Playback_ProducesOutputInPlayingState)
     PlayOneBlock(loop, sink, blockSize);
 
     ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_MuteSuppressesOutput)
+{
+    const auto loopLength = 50ul;
+    const auto blockSize = 11u;
+
+    auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+    auto loop = MakeLoop();
+    RecordAndPlay(loop, loopLength, false, 1.0f);
+    ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
+
+    loop.Mute();
+    PlayOneBlock(loop, sink, blockSize);
+
+    ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
 }
 
 TEST(Loop, Playback_ProducesOutputInPlayingRecordingState)

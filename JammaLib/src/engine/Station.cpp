@@ -542,6 +542,26 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 		break;
 	}
+	case TriggerAction::TRIGGER_PUNCHIN_START:
+		if (loopTake.has_value())
+			loopTake.value()->PunchIn();
+
+		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+			sourceLoopTake.value()->Mute();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
+	case TriggerAction::TRIGGER_PUNCHIN_END:
+		if (loopTake.has_value())
+			loopTake.value()->PunchOut();
+
+		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+			sourceLoopTake.value()->UnMute();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
@@ -776,7 +796,11 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 			if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				(*sourceMatch)->WriteBlock(*targetMatch,
+					trigger,
+					-((long)constants::MaxLoopFadeSamps),
+					numSamps,
+					SourceType());
 			}
 		}
 	}

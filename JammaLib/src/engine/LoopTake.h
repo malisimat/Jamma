@@ -98,7 +98,8 @@ namespace engine
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			base::Audible::AudioSourceType sourceType = base::Audible::AUDIOSOURCE_BOUNCE);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
