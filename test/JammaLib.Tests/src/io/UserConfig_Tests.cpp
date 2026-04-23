@@ -68,3 +68,27 @@ TEST(UserConfig, ParsesFile) {
 	ASSERT_EQ(21, cfg.value().Trigger.PreDelay);
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
 }
+
+TEST(UserConfig, AdcBufferDelayKeepsPunchInputAlignedToPredelayWindow)
+{
+	UserConfig cfg;
+	cfg.Trigger.PreDelay = 400u;
+
+	const auto inLatency = 4600u;
+	const auto alignedWindow = cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps;
+
+	ASSERT_EQ(alignedWindow, cfg.AdcBufferDelay(inLatency) + inLatency);
+}
+
+TEST(UserConfig, LoopPlayPosMinusBounceFadeOffsetMatchesPredelayAndOutputLatency)
+{
+	UserConfig cfg;
+	cfg.Trigger.PreDelay = 400u;
+
+	const auto loopLength = 10000ul;
+	const auto outLatency = 6000u;
+	const auto playPos = cfg.LoopPlayPos(0, loopLength, outLatency);
+
+	ASSERT_EQ(cfg.Trigger.PreDelay + outLatency,
+		playPos - static_cast<unsigned long>(constants::MaxLoopFadeSamps));
+}

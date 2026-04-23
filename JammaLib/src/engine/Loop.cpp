@@ -156,25 +156,10 @@ void Loop::Draw3d(DrawContext& ctx,
 
 void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 {
-	auto writesLiveInput =
-		(AUDIOSOURCE_ADC == request.source) ||
-		(AUDIOSOURCE_MONITOR == request.source);
-	auto writesBounce = AUDIOSOURCE_BOUNCE == request.source;
-
-	auto acceptsLiveInput =
-		(STATE_RECORDING == _playState) ||
-		(STATE_PLAYINGRECORDING == _playState) ||
-		(STATE_PUNCHEDIN == _playState);
-	auto acceptsBounce =
-		(STATE_OVERDUBBING == _playState) ||
-		(STATE_PUNCHEDIN == _playState) ||
-		(STATE_OVERDUBBINGRECORDING == _playState);
-
-	if (!((writesLiveInput && acceptsLiveInput) ||
-		(writesBounce && acceptsBounce)))
+	if (!_CanWriteSource(request.source))
 		return;
 
-	if (AUDIOSOURCE_MONITOR == request.source)
+	if (_WritesMonitorBuffer(request.source))
 	{
 		float peak = _lastPeak;
 
@@ -202,6 +187,32 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 			auto idx = _writeIndex + writeOffset + i;
 			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
 		}
+	}
+}
+
+bool Loop::_WritesMonitorBuffer(base::Audible::AudioSourceType source) const noexcept
+{
+	return AUDIOSOURCE_MONITOR == source;
+}
+
+bool Loop::_CanWriteSource(base::Audible::AudioSourceType source) const noexcept
+{
+	// Live ADC input is already latency-compensated upstream in Scene::_OnAudio
+	// via ChannelMixer::InitPlay(UserConfig::AdcBufferDelay(...)), so punch-in/out
+	// only needs to gate which sources are accepted here.
+	switch (source)
+	{
+	case AUDIOSOURCE_ADC:
+	case AUDIOSOURCE_MONITOR:
+		return (STATE_RECORDING == _playState) ||
+			(STATE_PLAYINGRECORDING == _playState) ||
+			(STATE_PUNCHEDIN == _playState);
+	case AUDIOSOURCE_BOUNCE:
+		return (STATE_OVERDUBBING == _playState) ||
+			(STATE_PUNCHEDIN == _playState) ||
+			(STATE_OVERDUBBINGRECORDING == _playState);
+	default:
+		return false;
 	}
 }
 

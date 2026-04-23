@@ -199,6 +199,9 @@ namespace engine
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		
+		bool _WritesMonitorBuffer(base::Audible::AudioSourceType source) const noexcept;
+		bool _CanWriteSource(base::Audible::AudioSourceType source) const noexcept;
+
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
 
