@@ -888,6 +888,8 @@ unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> c
 	if (!cfg.has_value())
 		return 0u;
 
+	// Resolve latency from runtime stream params first; fallback to configured
+	// input latency if stream params are unavailable or report 0.
 	auto inputLatency = params.has_value() ?
 		params.value().InputLatency :
 		0u;
