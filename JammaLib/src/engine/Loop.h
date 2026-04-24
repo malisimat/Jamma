@@ -179,6 +179,12 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState; }
 
+		// Returns the loop's audio samples for WAV export (empty if inactive).
+		std::vector<float> ExportSamples() const;
+		// Fills a JamFile::Loop struct from current engine state.
+		// wavFilename is the bare filename that will appear in the .jam (e.g. "id.wav").
+		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
+
 		void Update();
 		void SetMixerLevel(double level);
 		bool Load(const io::WavReadWriter& readWriter);

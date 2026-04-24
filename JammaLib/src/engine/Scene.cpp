@@ -411,6 +411,129 @@ ActionResult Scene::OnAction(KeyAction action)
 		return { res };
 	}
 
+	// Ctrl+S — export session to directory
+	if ((83 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
+	{
+		auto exportDir = utils::PickDirectory(L"Choose export directory");
+		if (exportDir.empty())
+			return ActionResult::NoAction();
+
+		// Snapshot structs (defined locally — exported data is plain data, no engine types)
+		struct LoopSnapshot {
+			std::string        wavFilename;
+			std::vector<float> samples;
+			io::JamFile::Loop  jamLoop;
+		};
+		struct TakeSnapshot {
+			std::string                takeId;
+			std::vector<LoopSnapshot>  loops;
+		};
+		struct StationSnapshot {
+			std::string                  stationName;
+			unsigned int                 stationType;
+			std::vector<TakeSnapshot>    takes;
+		};
+
+		std::vector<StationSnapshot> stationData;
+		const auto sampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
+
+		// --- snapshot under audio lock (memory copies only — keep this fast) ---
+		{
+			std::lock_guard<std::mutex> lock(_audioMutex);
+
+			for (auto& station : _stations)
+			{
+				StationSnapshot stSnap;
+				stSnap.stationName = station->Name();
+				stSnap.stationType = 0; // extend when Station exposes StationType
+
+				for (auto& take : station->GetLoopTakes())
+				{
+					TakeSnapshot tkSnap;
+					tkSnap.takeId = take->Id();
+
+					for (auto& loop : take->GetLoops())
+					{
+						auto samples = loop->ExportSamples();
+						if (samples.empty())
+							continue;
+
+						const auto wavFilename = loop->Id() + ".wav";
+						LoopSnapshot lpSnap;
+						lpSnap.wavFilename = wavFilename;
+						lpSnap.samples     = std::move(samples);
+						lpSnap.jamLoop     = loop->ToJamFile(wavFilename);
+						tkSnap.loops.push_back(std::move(lpSnap));
+					}
+
+					if (!tkSnap.loops.empty())
+						stSnap.takes.push_back(std::move(tkSnap));
+				}
+
+				if (!stSnap.takes.empty())
+					stationData.push_back(std::move(stSnap));
+			}
+		}
+		// audio lock released
+
+		if (stationData.empty())
+		{
+			std::cout << "Export: nothing to export" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		// --- build JamFile struct ---
+		io::JamFile jam;
+		jam.Version       = io::JamFile::VERSION_V;
+		jam.Name          = "export";
+		jam.TimerTicks    = 0;
+		jam.QuantiseSamps = 0;
+		jam.Quantisation  = engine::Timer::QUANTISE_OFF;
+
+		for (auto& stSnap : stationData)
+		{
+			io::JamFile::Station st;
+			st.Name        = stSnap.stationName;
+			st.StationType = stSnap.stationType;
+
+			for (auto& tkSnap : stSnap.takes)
+			{
+				io::JamFile::LoopTake take;
+				take.Name = tkSnap.takeId;
+				for (auto& lpSnap : tkSnap.loops)
+					take.Loops.push_back(lpSnap.jamLoop);
+				st.LoopTakes.push_back(std::move(take));
+			}
+			jam.Stations.push_back(std::move(st));
+		}
+
+		// --- write WAV files ---
+		io::WavReadWriter wavWriter;
+		unsigned int wavCount = 0;
+		for (auto& stSnap : stationData)
+			for (auto& tkSnap : stSnap.takes)
+				for (auto& lpSnap : tkSnap.loops)
+				{
+					const auto path = exportDir + L"\\" + utils::DecodeUtf8(lpSnap.wavFilename);
+					if (wavWriter.Write(path, lpSnap.samples,
+					                    (unsigned int)lpSnap.samples.size(), sampleRate))
+						++wavCount;
+				}
+
+		// --- write .jam file ---
+		std::stringstream jamStream;
+		io::JamFile::ToStream(jam, jamStream);
+
+		io::TextReadWriter textWriter;
+		const auto jamPath = exportDir + L"\\session.jam";
+		textWriter.Write(jamPath, jamStream.str(), 0, 0);
+
+		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
+		          << utils::EncodeUtf8(exportDir) << std::endl;
+
+		return ActionResult::NoAction();
+	}
+
 	bool checkReset = false;
 
 	for (auto& station : _stations)

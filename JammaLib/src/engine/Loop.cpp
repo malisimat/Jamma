@@ -406,6 +406,58 @@ std::string Loop::Id() const
 	return _loopParams.Id;
 }
 
+std::vector<float> Loop::ExportSamples() const
+{
+	if (_loopLength == 0 || _playState == STATE_INACTIVE)
+		return {};
+
+	std::vector<float> out(_loopLength);
+	for (unsigned long i = 0; i < _loopLength; ++i)
+		out[i] = _bufferBank[constants::MaxLoopFadeSamps + i];
+	return out;
+}
+
+io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
+{
+	io::JamFile::Loop s;
+	s.Name   = wavFilename;
+	s.Length = _loopLength;
+	// Logical play index: strip the crossfade pre-roll offset
+	s.Index  = (_playIndex >= constants::MaxLoopFadeSamps)
+	               ? _playIndex - constants::MaxLoopFadeSamps : 0ul;
+	s.MasterLoopCount = 0; // restart from beginning on reload
+	s.Level  = _mixer->UnmutedLevel();
+	s.Speed  = _pitch;
+	s.Muted  = IsMuted();
+	s.MuteGroups   = 0; // not yet tracked in engine
+	s.SelectGroups = 0;
+
+	// Reconstruct LoopMix from mixer behaviour
+	auto params = _mixer->GetBehaviourParams();
+	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
+	{
+		s.Mix.Mix = io::JamFile::LoopMix::MIX_WIRE;
+		std::vector<unsigned long> chans;
+		for (auto c : wire->Channels) chans.push_back(c);
+		s.Mix.Params = chans;
+	}
+	else if (auto* pan = std::get_if<audio::PanMixBehaviourParams>(&params))
+	{
+		s.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		std::vector<double> levels;
+		for (auto l : pan->ChannelLevels) levels.push_back(l);
+		s.Mix.Params = levels;
+	}
+	else
+	{
+		// Fallback: mono centre pan
+		s.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		s.Mix.Params = std::vector<double>{ 0.5, 0.5 };
+	}
+
+	return s;
+}
+
 void Loop::Update()
 {
 	_UpdateLoopModel();

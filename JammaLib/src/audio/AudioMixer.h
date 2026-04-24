@@ -242,6 +242,8 @@ namespace audio
 		void SetChannels(std::vector<unsigned int> channels);
 		void SetMaxChannels(unsigned int channels);
 		void SetBehaviour(std::unique_ptr<MixBehaviour> behaviour);
+		audio::BehaviourParams GetBehaviourParams() const
+			{ return _behaviour ? _behaviour->GetParams() : audio::BehaviourParams{}; }
 
 		// VU meter (owned by this mixer; value updated in WriteBlock).
 		void SetVuVisible(bool visible);
