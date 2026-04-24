@@ -519,7 +519,7 @@ PlayOneBlock(loop, sink, blockSize);
 ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
-TEST(Loop, PunchedIn_MixesBounceWithAdc)
+TEST(Loop, PunchedIn_WritesAdcAndSuppressesBounce)
 {
 const auto loopLength = 50ul;
 const auto blockSize = 11u;
@@ -538,7 +538,31 @@ ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 
 PlayOneBlock(loop, sink, blockSize);
 
-ASSERT_FLOAT_EQ(adcValue + bounceValue, sink->GetSamples().at(0));
+// During punch-in, bounce is suppressed; only ADC is written to the buffer.
+ASSERT_FLOAT_EQ(adcValue, sink->GetSamples().at(0));
+}
+
+TEST(Loop, PunchedIn_BounceAfterPunchOutRestoresBounce)
+{
+// After punch-out (back to OVERDUBBING), bounce writes must resume normally.
+const auto loopLength = 50ul;
+const auto blockSize = 11u;
+const auto bounceValue = 0.5f;
+
+auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+auto loop = MakeLoop();
+loop.Overdub();
+loop.PunchIn();
+loop.PunchOut();  // back to OVERDUBBING
+// Writing bounce in OVERDUBBING state must succeed
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, bounceValue);
+loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+PlayOneBlock(loop, sink, blockSize);
+
+ASSERT_FLOAT_EQ(bounceValue, sink->GetSamples().at(0));
 }
 
 // -- Playback-behaviour tests -----------------------------------------------

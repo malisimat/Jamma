@@ -189,20 +189,15 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 	}
 	else
 	{
-		auto fadeCurrent = request.fadeCurrent;
 		if ((STATE_PUNCHEDIN == _playState) &&
 			(AUDIOSOURCE_BOUNCE == request.source))
-		{
-			// Bounce audio must add to the live ADC already written this block
-			// instead of replacing it, so preserve the existing buffer content.
-			fadeCurrent = 1.0f;
-		}
+			return;  // During punch-in, only ADC is recorded; suppress bounce
 
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
 			auto idx = _writeIndex + writeOffset + i;
-			_bufferBank[idx] = (request.fadeNew * samp) + (fadeCurrent * _bufferBank[idx]);
+			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
 		}
 	}
 }
