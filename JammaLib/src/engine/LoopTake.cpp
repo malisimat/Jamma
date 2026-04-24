@@ -167,7 +167,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 
 	auto ptr = Sharable::shared_from_this();
-	auto loopDest = nullptr == trigger ?
+	auto loopDest = trigger == nullptr ?
 		std::dynamic_pointer_cast<MultiAudioSink>(ptr) :
 		dest;
 

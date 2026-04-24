@@ -777,6 +777,8 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
+	// Keep bounced source audio fully present during punch-in so the overdub
+	// take records the original loop alongside the new live input.
 	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())

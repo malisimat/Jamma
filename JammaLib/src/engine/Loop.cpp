@@ -193,6 +193,8 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		if ((STATE_PUNCHEDIN == _playState) &&
 			(AUDIOSOURCE_BOUNCE == request.source))
 		{
+			// Bounce audio must add to the live ADC already written this block
+			// instead of replacing it, so preserve the existing buffer content.
 			fadeCurrent = 1.0f;
 		}
 
