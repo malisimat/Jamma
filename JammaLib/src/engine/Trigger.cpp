@@ -165,24 +165,24 @@ void Trigger::OnTick(Time curTime,
 	for (auto& delayed : _delayedTriggerActions)
 	{
 		if (samps >= delayed.SampsLeft)
-			delayed.SampsLeft = 0u;
-		else
-			delayed.SampsLeft -= samps;
-	}
-
-	for (auto& delayed : _delayedTriggerActions)
-	{
-		if ((delayed.SampsLeft == 0u) && _receiver)
 		{
-			auto action = delayed.Action;
+			delayed.SampsLeft = 0u;
+			if (_receiver)
+			{
+				auto action = delayed.Action;
 
-			if (delayed.UserConfig.has_value())
-				action.SetUserConfig(delayed.UserConfig.value());
+				if (delayed.UserConfig.has_value())
+					action.SetUserConfig(delayed.UserConfig.value());
 
-			if (delayed.AudioParams.has_value())
-				action.SetAudioParams(delayed.AudioParams.value());
+				if (delayed.AudioParams.has_value())
+					action.SetAudioParams(delayed.AudioParams.value());
 
-			_receiver->OnAction(action);
+				_receiver->OnAction(action);
+			}
+		}
+		else
+		{
+			delayed.SampsLeft -= samps;
 		}
 	}
 

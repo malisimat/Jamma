@@ -539,6 +539,8 @@ ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 PlayOneBlock(loop, sink, blockSize);
 
 ASSERT_FLOAT_EQ(adcValue + bounceValue, sink->GetSamples().at(0));
+ASSERT_NE(adcValue, sink->GetSamples().at(0));
+ASSERT_NE(bounceValue, sink->GetSamples().at(0));
 }
 
 TEST(Loop, PunchedIn_BounceAfterPunchOutRestoresBounce)
