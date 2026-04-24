@@ -6,6 +6,7 @@
 #include "engine/Loop.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
+#include "actions/TriggerAction.h"
 #include "actions/GuiAction.h"
 
 using engine::Station;
@@ -21,6 +22,7 @@ using audio::MergeMixBehaviourParams;
 using audio::WireMixBehaviourParams;
 using base::Audible;
 using base::AudioWriteRequest;
+using actions::TriggerAction;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -256,6 +258,40 @@ TEST(AudioFlow, SingleChannel_WriteMultiBlockAccumulates)
 
 	ASSERT_EQ(take->NumRecordedSamps(),
 		static_cast<unsigned long>(blockSize) * numBlocks);
+}
+
+TEST(AudioFlow, TriggerPunchActionsMuteSourceTakeAndToggleTargetState)
+{
+	const unsigned int numChans = 1;
+
+	auto station = MakeStation(numChans);
+	auto sourceTake = station->AddTake();
+	auto targetTake = station->AddTake();
+	station->CommitChanges();
+
+	targetTake->Overdub({ 0u }, "test");
+	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
+	ASSERT_FALSE(sourceTake->IsMuted());
+
+	TriggerAction punchIn;
+	punchIn.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+	punchIn.SourceId = sourceTake->Id();
+	punchIn.TargetId = targetTake->Id();
+
+	auto punchInResult = station->OnAction(punchIn);
+	ASSERT_TRUE(punchInResult.IsEaten);
+	EXPECT_EQ(LoopTake::STATE_PUNCHEDIN, targetTake->TakeState());
+	EXPECT_TRUE(sourceTake->IsMuted());
+
+	TriggerAction punchOut;
+	punchOut.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+	punchOut.SourceId = sourceTake->Id();
+	punchOut.TargetId = targetTake->Id();
+
+	auto punchOutResult = station->OnAction(punchOut);
+	ASSERT_TRUE(punchOutResult.IsEaten);
+	EXPECT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
+	EXPECT_FALSE(sourceTake->IsMuted());
 }
 
 // 3. Two channels: write to both channels, verify both loops record.

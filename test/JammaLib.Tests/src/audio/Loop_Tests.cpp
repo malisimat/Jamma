@@ -182,6 +182,25 @@ loop.OnBlockWrite(request, 0);
 loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
 }
 
+static void WriteData(Loop& loop,
+unsigned long loopLength,
+base::Audible::AudioSourceType source,
+float value)
+{
+const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+std::vector<float> data(totalRecordSamps, value);
+AudioWriteRequest request;
+request.samples = data.data();
+request.numSamps = static_cast<unsigned int>(totalRecordSamps);
+request.stride = 1;
+request.fadeCurrent = 0.0f;
+request.fadeNew = 1.0f;
+request.source = source;
+loop.OnBlockWrite(request, 0);
+loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+}
+
 // Record loopLength samples then transition to PLAYING or PLAYINGRECORDING.
 static void RecordAndPlay(Loop& loop,
 unsigned long loopLength,
@@ -462,6 +481,64 @@ WriteData(loop, loopLength, 1.0f);
 // Buffer is empty so Play() must reset to INACTIVE
 loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
 ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
+}
+
+TEST(Loop, Overdub_IgnoresAdcUntilPunchIn)
+{
+const auto loopLength = 50ul;
+const auto blockSize = 11u;
+
+auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+auto loop = MakeLoop();
+loop.Overdub();
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_ADC, 1.0f);
+loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+PlayOneBlock(loop, sink, blockSize);
+
+ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Overdub_WritesBounceBeforePunchIn)
+{
+const auto loopLength = 50ul;
+const auto blockSize = 11u;
+
+auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+auto loop = MakeLoop();
+loop.Overdub();
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
+loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+PlayOneBlock(loop, sink, blockSize);
+
+ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, PunchedIn_MixesBounceWithAdc)
+{
+const auto loopLength = 50ul;
+const auto blockSize = 11u;
+const auto adcValue = 0.25f;
+const auto bounceValue = 0.5f;
+
+auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+auto loop = MakeLoop();
+loop.Overdub();
+loop.PunchIn();
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_ADC, adcValue);
+WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, bounceValue);
+loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+PlayOneBlock(loop, sink, blockSize);
+
+ASSERT_FLOAT_EQ(adcValue + bounceValue, sink->GetSamples().at(0));
 }
 
 // -- Playback-behaviour tests -----------------------------------------------

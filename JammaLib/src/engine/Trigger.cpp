@@ -539,9 +539,7 @@ bool Trigger::StateMachine(bool isDown,
 		{
 			if (isDown)
 			{
-				StartPunchIn(cfg, params);
 				_isDitchDown = true;
-				changedState = true;
 			}
 			else if (_isDitchDown)
 			{
@@ -565,11 +563,8 @@ bool Trigger::StateMachine(bool isDown,
 		{
 			if (isDown)
 				_isDitchDown = true;
-			else if (_isDitchDown)
-			{
-				EndPunchIn(cfg, params);
-				changedState = true;
-			}
+			else
+				_isDitchDown = false;
 		}
 
 		break;
@@ -782,7 +777,7 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
-	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
+	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
@@ -790,6 +785,7 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 		_receiver->OnAction(trigAction);
@@ -811,6 +807,7 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
