@@ -95,6 +95,7 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void Reset() override;
 		
+		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const { return _loopTakes; }
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
