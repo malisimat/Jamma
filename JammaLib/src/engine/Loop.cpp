@@ -189,10 +189,6 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 	}
 	else
 	{
-		if ((STATE_PUNCHEDIN == _playState) &&
-			(AUDIOSOURCE_BOUNCE == request.source))
-			return;  // During punch-in, only ADC is recorded; suppress bounce
-
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];

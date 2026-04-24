@@ -519,7 +519,7 @@ PlayOneBlock(loop, sink, blockSize);
 ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
-TEST(Loop, PunchedIn_WritesAdcAndSuppressesBounce)
+TEST(Loop, PunchedIn_MixesBounceWithAdc)
 {
 const auto loopLength = 50ul;
 const auto blockSize = 11u;
@@ -538,8 +538,7 @@ ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 
 PlayOneBlock(loop, sink, blockSize);
 
-// During punch-in, bounce is suppressed; only ADC is written to the buffer.
-ASSERT_FLOAT_EQ(adcValue, sink->GetSamples().at(0));
+ASSERT_FLOAT_EQ(adcValue + bounceValue, sink->GetSamples().at(0));
 }
 
 TEST(Loop, PunchedIn_BounceAfterPunchOutRestoresBounce)
