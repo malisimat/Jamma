@@ -69,7 +69,13 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <NinjamRoot Condition="'$(NinjamRoot)'==''">C:\Users\matto\Source\Repos\NinjamLib\ninjam</NinjamRoot>
+    <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''">$(NinjamRoot)\bin\x64\Debug\MD</NinjamLibDirDebug>
+    <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''">$(NinjamRoot)\bin\x64\Release\MD</NinjamLibDirRelease>
+    <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\debug\lib</VcpkgMachineLibDirDebug>
+    <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\lib</VcpkgMachineLibDirRelease>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
     <OutDir>bin\$(Platform)\$(Configuration)\</OutDir>
@@ -132,8 +138,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(VcpkgMachineLibDirDebug);$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -179,8 +185,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(VcpkgMachineLibDirRelease);$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
