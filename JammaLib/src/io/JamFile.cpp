@@ -107,8 +107,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	                    { return quoted(k) + ":" + quoted(v); };
 	auto kvUlong  = [&](const std::string& k, unsigned long v)
 	                    { return quoted(k) + ":" + std::to_string(v); };
-	auto kvDouble = [&](const std::string& k, double v)
-	                    { std::ostringstream o; o << v; return quoted(k) + ":" + o.str(); };
+	auto kvDouble = [&](const std::string& k, double v) -> std::string {
+		std::ostringstream o;
+		o << v;
+		auto s = o.str();
+		if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
+			s += ".0";
+		return quoted(k) + ":" + s;
+	};
 	auto kvBool   = [&](const std::string& k, bool v)
 	                    { return quoted(k) + ":" + (v ? std::string("true") : std::string("false")); };
 
@@ -134,7 +140,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			{
 				std::ostringstream o;
 				o << v[i];
-				chans += (i ? "," : "") + o.str();
+				auto s = o.str();
+				if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
+					s += ".0";
+				chans += (i ? "," : "") + s;
 			}
 		}
 		return "{" + kvStr("type", typeStr) + "," + quoted("chans") + ":[" + chans + "]}";

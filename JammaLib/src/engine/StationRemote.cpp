@@ -108,10 +108,16 @@ void StationRemote::IngestStereoBlock(const float* left,
 	const float* right,
 	unsigned int numSamps)
 {
+	// Audio callback path: must be real-time safe.
+	// EnsureRemoteTake() and SetMeasureLength() are not safe here (allocations).
+	// The job thread (_ReconcileRemoteStations) guarantees the take and loops
+	// are created and measure length is set before this is called.
+	// Early-out if loops are not yet ready.
 	if (!left || !right || numSamps == 0u)
 		return;
 
-	EnsureRemoteTake();
+	if (!_leftLoop || !_rightLoop)
+		return;
 
 	base::AudioWriteRequest req;
 	req.numSamps = numSamps;
@@ -128,15 +134,6 @@ void StationRemote::IngestStereoBlock(const float* left,
 
 	EndMultiWrite(numSamps, true, base::Audible::AUDIOSOURCE_MIXER);
 
-	if (_leftLoop)
-	{
-		_leftLoop->SetMeasureLength(_intervalLengthSamps.load());
-		_leftLoop->IngestSamples(left, numSamps);
-	}
-
-	if (_rightLoop)
-	{
-		_rightLoop->SetMeasureLength(_intervalLengthSamps.load());
-		_rightLoop->IngestSamples(right, numSamps);
-	}
+	_leftLoop->IngestSamples(left, numSamps);
+	_rightLoop->IngestSamples(right, numSamps);
 }

@@ -70,7 +70,7 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
-    <NinjamRoot Condition="'$(NinjamRoot)'==''">C:\Users\matto\Source\Repos\NinjamLib\ninjam</NinjamRoot>
+    <NinjamRoot Condition="'$(NinjamRoot)'==''"></NinjamRoot>
     <NinjamIncludeDir Condition="'$(NinjamIncludeDir)'==''">$(NinjamRoot)</NinjamIncludeDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -80,7 +81,7 @@ namespace io
 		std::string _user;
 		std::string _pass;
 		std::string _workDir;
-		bool _isConnected;
+		std::atomic_bool _isConnected;
 
 		unsigned int _sampleRate;
 		unsigned int _blockSize;

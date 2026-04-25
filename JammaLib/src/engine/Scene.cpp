@@ -1187,75 +1187,83 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
+
 void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
 {
-_ninjamConnection.reset();
+	_ninjamConnection.reset();
 
-if (!config.has_value())
-return;
+	if (!config.has_value())
+		return;
 
-const auto& ninjam = config.value();
-if (ninjam.Host.empty() || ninjam.User.empty())
-return;
+	const auto& ninjam = config.value();
+	if (ninjam.Host.empty() || ninjam.User.empty())
+		return;
 
-_ninjamConnection = std::make_unique<io::NinjamConnection>(
-ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
-if (!_ninjamConnection->Connect())
-_ninjamConnection.reset();
+	_ninjamConnection = std::make_unique<io::NinjamConnection>(
+		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
+	if (!_ninjamConnection->Connect())
+		_ninjamConnection.reset();
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 {
-std::set<std::string> seenUsers;
+	std::set<std::string> seenUsers;
 
-for (const auto& user : snapshot.Users)
-{
-seenUsers.insert(user.UserName);
+	for (const auto& user : snapshot.Users)
+	{
+		seenUsers.insert(user.UserName);
 
-auto match = _remoteStations.find(user.UserName);
-std::shared_ptr<StationRemote> remoteStation;
-if (match == _remoteStations.end())
-{
-StationParams stationParams;
-stationParams.Name = user.UserName;
-stationParams.Size = { 200, 280 };
-stationParams.Index = static_cast<unsigned int>(_stations.size());
-stationParams.Position = {
-static_cast<int>(stationParams.Index) * 600,
-0 };
-stationParams.ModelPosition = {
-static_cast<float>(stationParams.Index) * 600.0f,
-0.0f,
-0.0f };
+		auto match = _remoteStations.find(user.UserName);
+		std::shared_ptr<StationRemote> remoteStation;
 
-audio::MergeMixBehaviourParams merge;
-auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
-remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
-remoteStation->SetRemoteUserName(user.UserName);
-remoteStation->SetNumBusChannels(2);
-remoteStation->SetNumDacChannels(2);
-_remoteStations[user.UserName] = remoteStation;
-_AddStation(remoteStation);
-}
-else
-{
-remoteStation = match->second;
-}
+		if (match == _remoteStations.end())
+		{
+			StationParams stationParams;
+			stationParams.Name = user.UserName;
+			stationParams.Size = { 200, 280 };
+			stationParams.Index = static_cast<unsigned int>(_stations.size());
+			stationParams.Position = {
+				static_cast<int>(stationParams.Index) * 600,
+				0 };
+			stationParams.ModelPosition = {
+				static_cast<float>(stationParams.Index) * 600.0f,
+				0.0f,
+				0.0f };
 
-remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
-remoteStation->SetRemoteChannelCount(user.ChannelCount);
-remoteStation->SetConnectedRemote(true);
+			audio::MergeMixBehaviourParams merge;
+			auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
+			remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
+			remoteStation->SetRemoteUserName(user.UserName);
+			remoteStation->SetNumBusChannels(2);
+			remoteStation->SetNumDacChannels(2);
+			_remoteStations[user.UserName] = remoteStation;
+			_AddStation(remoteStation);
+		}
+		else
+		{
+			remoteStation = match->second;
+		}
 
-if (snapshot.IntervalLengthSamps > 0)
-remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
+		remoteStation->SetRemoteChannelCount(user.ChannelCount);
+		remoteStation->SetConnectedRemote(true);
 
-remoteStation->EnsureRemoteTake();
-}
+		if (snapshot.IntervalLengthSamps > 0)
+		{
+			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		}
 
-// Remove stations for users who have left
-for (auto& [userName, station] : _remoteStations)
-{
-if (seenUsers.find(userName) == seenUsers.end())
-station->SetConnectedRemote(false);
-}
+		// EnsureRemoteTake runs on the job thread so the audio callback can
+		// early-out safely if loops are not yet initialised.
+		remoteStation->EnsureRemoteTake();
+	}
+
+	// Remove stations for users who have left
+	for (auto& [userName, station] : _remoteStations)
+	{
+		if (seenUsers.find(userName) == seenUsers.end())
+		{
+			station->SetConnectedRemote(false);
+		}
+	}
 }

@@ -70,11 +70,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
-    <NinjamRoot Condition="'$(NinjamRoot)'==''">C:\Users\matto\Source\Repos\NinjamLib\ninjam</NinjamRoot>
+    <NinjamRoot Condition="'$(NinjamRoot)'==''"></NinjamRoot>
     <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''">$(NinjamRoot)\bin\x64\Debug\MD</NinjamLibDirDebug>
     <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''">$(NinjamRoot)\bin\x64\Release\MD</NinjamLibDirRelease>
-    <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\debug\lib</VcpkgMachineLibDirDebug>
-    <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\lib</VcpkgMachineLibDirRelease>
+    <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''"></VcpkgMachineLibDirDebug>
+    <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''"></VcpkgMachineLibDirRelease>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>

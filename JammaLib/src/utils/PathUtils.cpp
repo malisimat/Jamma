@@ -36,31 +36,38 @@ std::wstring utils::GetParentDirectory(std::wstring dir)
 std::wstring utils::PickDirectory(const std::wstring& title)
 {
 	std::wstring result;
+
+	const HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+	const bool needsUninit = SUCCEEDED(hrInit);
+
 	IFileOpenDialog* pfd = nullptr;
-
-	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+	if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
 		CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd))))
-		return result;
-
-	DWORD opts = 0;
-	pfd->GetOptions(&opts);
-	pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-	pfd->SetTitle(title.c_str());
-
-	if (SUCCEEDED(pfd->Show(nullptr)))
 	{
-		IShellItem* psi = nullptr;
-		if (SUCCEEDED(pfd->GetResult(&psi)))
+		DWORD opts = 0;
+		pfd->GetOptions(&opts);
+		pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+		pfd->SetTitle(title.c_str());
+
+		if (SUCCEEDED(pfd->Show(nullptr)))
 		{
-			PWSTR path = nullptr;
-			if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+			IShellItem* psi = nullptr;
+			if (SUCCEEDED(pfd->GetResult(&psi)))
 			{
-				result = path;
-				CoTaskMemFree(path);
+				PWSTR path = nullptr;
+				if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+				{
+					result = path;
+					CoTaskMemFree(path);
+				}
+				psi->Release();
 			}
-			psi->Release();
 		}
+		pfd->Release();
 	}
-	pfd->Release();
+
+	if (needsUninit)
+		CoUninitialize();
+
 	return result;
 }
