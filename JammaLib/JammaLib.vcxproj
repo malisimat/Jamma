@@ -99,7 +99,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)..\..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -128,7 +128,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)..\..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -156,7 +156,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_WASAPI__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)..\..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -187,7 +187,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)..\..\NinjamLib\ninjam\ninjam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
