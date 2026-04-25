@@ -17,6 +17,8 @@ VU::VU(VuParams params) :
 		params.FallRate,
 		params.HoldFallRate,
 		params.HoldSamps })),
+	_displayValue(0.0f),
+	_displayHold(0.0f),
 	_vuParams(params)
 {
 }
@@ -29,8 +31,8 @@ void VU::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
-	auto val = _value.Current();
-	auto hold = _value.HoldValue();
+	auto val = (double)_displayValue.load(std::memory_order_relaxed);
+	auto hold = (double)_displayHold.load(std::memory_order_relaxed);
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto totalNumLeds = TotalNumLeds(_sizeParams.Size.Height,
 		_vuParams.LedHeight);
@@ -55,7 +57,7 @@ void VU::Draw3d(DrawContext& ctx,
 
 double VU::Value() const
 {
-	return _value.Current();
+	return _displayValue.load(std::memory_order_relaxed);
 }
 
 void VU::SetValue(double value, unsigned int numUpdates)
@@ -64,6 +66,9 @@ void VU::SetValue(double value, unsigned int numUpdates)
 
 	for (auto i = 0u; i < numUpdates; i++)
 		_value.Next();
+
+	_displayValue.store((float)_value.Current(), std::memory_order_relaxed);
+	_displayHold.store((float)_value.HoldValue(), std::memory_order_relaxed);
 }
 
 double VU::FallRate() const
@@ -73,7 +78,7 @@ double VU::FallRate() const
 
 double VU::HoldValue() const
 {
-	return _value.HoldValue();
+	return _displayHold.load(std::memory_order_relaxed);
 }
 
 double VU::HoldFallRate() const

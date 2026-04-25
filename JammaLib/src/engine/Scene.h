@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <shared_mutex>
 #include "../resources/ResourceLib.h"
@@ -66,8 +67,9 @@ namespace engine
 		{
 			ReleaseResources();
 
-			_isSceneQuitting = true;
-			_jobRunner.join();
+			_isSceneQuitting.store(true, std::memory_order_relaxed);
+			if (_jobRunner.joinable())
+				_jobRunner.join();
 		}
 
 		// Copy
@@ -213,8 +215,8 @@ namespace engine
 
 	protected:
 		bool _isSceneTouching;
-		bool _isSceneQuitting;
-		bool _isSceneReset;
+		std::atomic_bool _isSceneQuitting;
+		std::atomic_bool _isSceneReset;
 		bool _isSceneDragged;
 		utils::Position2d _initTouchDownPosition;
 		utils::Position3d _initTouchCamPosition;

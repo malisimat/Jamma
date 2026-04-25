@@ -423,7 +423,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			switch (res.ResultType)
 			{
 			case ACTIONRESULT_ACTIVATE:
-				_isSceneReset = false;
+				_isSceneReset.store(false, std::memory_order_relaxed);
 				/*case ACTIONRESULT_ID:
 					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
 					break;*/
@@ -432,7 +432,7 @@ ActionResult Scene::OnAction(KeyAction action)
 				break;
 			}
 
-			if (checkReset && !_isSceneReset)
+			if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
 			{
 				unsigned int numTakes = 0;
 				for (auto& station : _stations)
@@ -493,7 +493,7 @@ void Scene::OnTick(Time curTime,
 		totalNumLoops += station->NumTakes();
 	}
 
-	if ((0u == totalNumLoops) && !_isSceneReset)
+	if ((0u == totalNumLoops) && !_isSceneReset.load(std::memory_order_relaxed))
 	{
 		Reset();
 	}
@@ -507,7 +507,7 @@ void Scene::OnJobTick(Time curTime)
 	job.SetAudioParams(_audioDevice->GetAudioStreamParams());
 
 	{
-		std::shared_lock lock(_jobMutex);
+		std::scoped_lock lock(_jobMutex);
 
 		if (_jobList.empty())
 			return;
@@ -574,7 +574,7 @@ void Scene::Reset()
 {
 	std::cout << "Reset" << std::endl;
 	_clock->Clear();
-	_isSceneReset = true;
+	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
 void Scene::InitGui()
@@ -954,7 +954,7 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 
 void Scene::_JobLoop()
 {
-	while (!_isSceneQuitting)
+	while (!_isSceneQuitting.load(std::memory_order_relaxed))
 	{
 		OnJobTick(Timer::GetTime());
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));

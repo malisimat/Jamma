@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 namespace base
 {
 	class TweakableParams
@@ -10,7 +12,7 @@ namespace base
 	{
 	public:
 		Tweakable(TweakableParams params) :
-			_tweakState(TWEAKSTATE_NONE) {}
+			_tweakState(static_cast<int>(TWEAKSTATE_NONE)) {}
 		~Tweakable() {}
 
 		enum TweakState
@@ -44,32 +46,28 @@ namespace base
 
 	public:
 		TweakState GetTweakState() const {
-			return _tweakState;
+			return static_cast<TweakState>(_tweakState.load(std::memory_order_relaxed));
 		}
 
 		bool IsMuted() const
 		{
-			return _tweakState & TWEAKSTATE_MUTED;
+			return GetTweakState() & TWEAKSTATE_MUTED;
 		}
 
 		virtual bool Mute()
 		{
-			bool isAlreadySet = IsMuted();
-			_tweakState |= TWEAKSTATE_MUTED;
-
-			return !isAlreadySet;
+			auto prev = _tweakState.fetch_or(static_cast<int>(TWEAKSTATE_MUTED), std::memory_order_relaxed);
+			return 0 == (prev & static_cast<int>(TWEAKSTATE_MUTED));
 		}
 
 		virtual bool UnMute()
 		{
-			bool isAlreadyUnset = !IsMuted();
-			_tweakState &= ~TWEAKSTATE_MUTED;
-
-			return !isAlreadyUnset;
+			auto prev = _tweakState.fetch_and(static_cast<int>(~TWEAKSTATE_MUTED), std::memory_order_relaxed);
+			return 0 != (prev & static_cast<int>(TWEAKSTATE_MUTED));
 		}
 
 	protected:
-		TweakState _tweakState;
+		std::atomic<int> _tweakState;
 
 	};
 }

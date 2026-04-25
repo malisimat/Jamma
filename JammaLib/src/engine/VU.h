@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "../audio/FallingValue.h"
@@ -69,7 +70,10 @@ namespace engine
 		static const float _LedDy;
 		static const double _MaxValue;
 
+		// FallingValue is audio-thread-only; render reads published snapshots.
 		audio::FallingValue _value;
+		std::atomic<float> _displayValue;
+		std::atomic<float> _displayHold;
 		VuParams _vuParams;
 	};
 }

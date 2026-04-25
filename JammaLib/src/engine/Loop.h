@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <memory>
 #include "Trigger.h"
@@ -104,9 +105,9 @@ namespace engine
 			Jammable(other._loopParams),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
-			_loopLength(other._loopLength),
-			_playState(other._playState),
-			_playIndex(other._playIndex),
+			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
+			_playState(other._playState.load(std::memory_order_relaxed)),
+			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
 			_hanning(std::move(other._hanning)),
@@ -115,7 +116,7 @@ namespace engine
 			_bufferBank(std::move(other._bufferBank)),
 			_monitorBufferBank(std::move(other._monitorBufferBank))
 		{
-			other._writeIndex = 0ul;
+			other._writeIndex.store(0ul, std::memory_order_relaxed);
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 		}
@@ -127,11 +128,16 @@ namespace engine
 				ReleaseResources();
 				std::swap(_lastPeak, other._lastPeak);
 				std::swap(_pitch, other._pitch);
-				std::swap(_loopLength, other._loopLength);
 				std::swap(_state, other._state);
 				std::swap(_guiParams, other._guiParams);
-				std::swap(_writeIndex, other._writeIndex);
-				std::swap(_playIndex, other._playIndex);
+				auto loopLength = _loopLength.load(std::memory_order_relaxed);
+				_loopLength.store(other._loopLength.exchange(loopLength, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
+				_writeIndex.store(other._writeIndex.exchange(writeIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto playIndex = _playIndex.load(std::memory_order_relaxed);
+				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto playState = _playState.load(std::memory_order_relaxed);
+				_playState.store(other._playState.exchange(playState, std::memory_order_relaxed), std::memory_order_relaxed);
 				std::swap(_loopParams, other._loopParams);
 				_mixer.swap(other._mixer);
 				_hanning.swap(other._hanning);
@@ -177,7 +183,7 @@ namespace engine
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
-		LoopPlayState PlayState() const { return _playState; }
+		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 
 		void Update();
 		void SetMixerLevel(double level);
@@ -200,11 +206,11 @@ namespace engine
 		void _UpdateLoopModel();
 
 	protected:
-		unsigned long _playIndex;
+		std::atomic<unsigned long> _playIndex;
 		float _lastPeak;
 		double _pitch;
-		unsigned long _loopLength;
-		LoopPlayState _playState;
+		std::atomic<unsigned long> _loopLength;
+		std::atomic<LoopPlayState> _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;
