@@ -9,25 +9,25 @@ LoopRemote::LoopRemote(LoopParams params,
 	_measureLengthSamps(constants::DefaultSampleRate),
 	_measurePositionSamps(0u)
 {
-	SetMeasureLength(_measureLengthSamps);
+	SetMeasureLength(_measureLengthSamps.load());
 	SetMeasurePosition(0u);
 }
 
 void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
 {
 	auto safeMeasureLength = std::max(1u, measureLengthSamps);
-	if (safeMeasureLength == _measureLengthSamps)
+	if (safeMeasureLength == _measureLengthSamps.load())
 		return;
 
-	_measureLengthSamps = safeMeasureLength;
+	_measureLengthSamps.store(safeMeasureLength);
 
-	auto targetLength = constants::MaxLoopFadeSamps + static_cast<unsigned long>(_measureLengthSamps);
+	auto targetLength = constants::MaxLoopFadeSamps + static_cast<unsigned long>(safeMeasureLength);
 	_bufferBank.Resize(targetLength);
 	_monitorBufferBank.Resize(targetLength);
 	_bufferBank.SetLength(targetLength);
 	_monitorBufferBank.SetLength(targetLength);
 
-	_loopLength = _measureLengthSamps;
+	_loopLength = safeMeasureLength;
 	_playState = STATE_PLAYING;
 	_playIndex = constants::MaxLoopFadeSamps;
 	_UpdateLoopModel();
@@ -35,35 +35,40 @@ void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
 
 void LoopRemote::SetMeasurePosition(unsigned int positionSamps)
 {
-	if (_measureLengthSamps == 0u)
+	const auto len = _measureLengthSamps.load();
+	if (len == 0u)
 	{
-		_measurePositionSamps = 0u;
+		_measurePositionSamps.store(0u);
 		return;
 	}
 
-	_measurePositionSamps = positionSamps % _measureLengthSamps;
-	_loopLength = _measureLengthSamps;
+	const auto pos = positionSamps % len;
+	_measurePositionSamps.store(pos);
+	_loopLength = len;
 	_playState = STATE_PLAYING;
-	_playIndex = constants::MaxLoopFadeSamps + _measurePositionSamps;
+	_playIndex = constants::MaxLoopFadeSamps + pos;
 }
 
 void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 {
-	if (!samples || numSamps == 0u || _measureLengthSamps == 0u)
+	const auto len = _measureLengthSamps.load();
+	if (!samples || numSamps == 0u || len == 0u)
 		return;
 
 	const auto baseIndex = constants::MaxLoopFadeSamps;
+	auto pos = _measurePositionSamps.load();
 	for (auto samp = 0u; samp < numSamps; samp++)
 	{
-		auto writeIndex = baseIndex + ((_measurePositionSamps + samp) % _measureLengthSamps);
+		auto writeIndex = baseIndex + ((pos + samp) % len);
 		_bufferBank[writeIndex] = samples[samp];
 		_monitorBufferBank[writeIndex] = samples[samp];
 	}
 
-	_measurePositionSamps = (_measurePositionSamps + numSamps) % _measureLengthSamps;
+	pos = (pos + numSamps) % len;
+	_measurePositionSamps.store(pos);
 	_playState = STATE_PLAYING;
-	_loopLength = _measureLengthSamps;
-	_playIndex = constants::MaxLoopFadeSamps + _measurePositionSamps;
+	_loopLength = len;
+	_playIndex = constants::MaxLoopFadeSamps + pos;
 
 	// Do not rebuild LoopModel/VU geometry here: this path is used from audio ingest
 	// and must remain real-time-safe. Refresh should be deferred to a non-audio thread.

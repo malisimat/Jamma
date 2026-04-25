@@ -443,7 +443,22 @@ ActionResult Scene::OnAction(KeyAction action)
 			std::vector<TakeSnapshot> takes;
 		};
 
-		std::vector<StationSnapshot> stationSnapshots;
+		// Capture the info needed to collect loop refs under lock (no heavy work)
+		struct LoopRef {
+			std::shared_ptr<Loop> loop;
+			std::string           wavFilename;
+		};
+		struct TakeRef {
+			std::string          takeId;
+			std::vector<LoopRef> loops;
+		};
+		struct StationRef {
+			std::string           stationName;
+			unsigned int          stationType;
+			std::vector<TakeRef>  takes;
+		};
+
+		std::vector<StationRef> stationRefs;
 		auto sampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
 
 		{
@@ -454,36 +469,65 @@ ActionResult Scene::OnAction(KeyAction action)
 				if (station->IsRemote())
 					continue;
 
-				StationSnapshot ss;
-				ss.stationName = station->Name();
-				ss.stationType = 0;
+				StationRef sr;
+				sr.stationName = station->Name();
+				sr.stationType = 0;
 
 				for (auto& take : station->GetLoopTakes())
 				{
-					TakeSnapshot ts;
-					ts.takeId = take->Id();
+					TakeRef tr;
+					tr.takeId = take->Id();
 
 					for (auto& loop : take->GetLoops())
 					{
-						auto samples = loop->ExportSamples();
-						if (samples.empty())
-							continue;
-
-						auto wavFilename = loop->Id() + ".wav";
-						LoopSnapshot ls;
-						ls.loopId  = loop->Id();
-						ls.samples = std::move(samples);
-						ls.jamLoop = loop->ToJamFile(wavFilename);
-						ts.loops.push_back(std::move(ls));
+						LoopRef lr;
+						lr.loop        = loop;
+						lr.wavFilename = loop->Id() + ".wav";
+						tr.loops.push_back(std::move(lr));
 					}
 
-					if (!ts.loops.empty())
-						ss.takes.push_back(std::move(ts));
+					if (!tr.loops.empty())
+						sr.takes.push_back(std::move(tr));
 				}
 
-				if (!ss.takes.empty())
-					stationSnapshots.push_back(std::move(ss));
+				if (!sr.takes.empty())
+					stationRefs.push_back(std::move(sr));
 			}
+		}
+
+		// Heavy work (sample copy, WAV metadata) happens outside _audioMutex
+		// so the audio callback is never blocked by the export.
+		std::vector<StationSnapshot> stationSnapshots;
+		for (auto& sr : stationRefs)
+		{
+			StationSnapshot ss;
+			ss.stationName = sr.stationName;
+			ss.stationType = sr.stationType;
+
+			for (auto& tr : sr.takes)
+			{
+				TakeSnapshot ts;
+				ts.takeId = tr.takeId;
+
+				for (auto& lr : tr.loops)
+				{
+					auto samples = lr.loop->ExportSamples();
+					if (samples.empty())
+						continue;
+
+					LoopSnapshot ls;
+					ls.loopId  = lr.loop->Id();
+					ls.samples = std::move(samples);
+					ls.jamLoop = lr.loop->ToJamFile(lr.wavFilename);
+					ts.loops.push_back(std::move(ls));
+				}
+
+				if (!ts.loops.empty())
+					ss.takes.push_back(std::move(ts));
+			}
+
+			if (!ss.takes.empty())
+				stationSnapshots.push_back(std::move(ss));
 		}
 
 		if (stationSnapshots.empty())

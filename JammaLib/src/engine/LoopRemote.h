@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include "Loop.h"
 
 namespace engine
@@ -23,11 +24,11 @@ namespace engine
 		// Called from the audio callback. Writes decoded samples into the ring buffer.
 		void IngestSamples(const float* samples, unsigned int numSamps);
 
-		unsigned int MeasureLength() const { return _measureLengthSamps; }
-		unsigned int MeasurePosition() const { return _measurePositionSamps; }
+		unsigned int MeasureLength() const { return _measureLengthSamps.load(); }
+		unsigned int MeasurePosition() const { return _measurePositionSamps.load(); }
 
 	private:
-		unsigned int _measureLengthSamps;
-		unsigned int _measurePositionSamps;
+		std::atomic<unsigned int> _measureLengthSamps;
+		std::atomic<unsigned int> _measurePositionSamps;
 	};
 }
