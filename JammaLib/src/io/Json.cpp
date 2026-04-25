@@ -180,16 +180,81 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 		else if ('"' == c)
 		{
 			charBuf.clear();
+			bool isEscaped = false;
 
-			while (ss >> c)
+			while (ss.get(c))
 			{
+				if (isEscaped)
+				{
+					switch (c)
+					{
+					case '"':
+						charBuf.push_back('"');
+						break;
+					case '\\':
+						charBuf.push_back('\\');
+						break;
+					case '/':
+						charBuf.push_back('/');
+						break;
+					case 'b':
+						charBuf.push_back('\b');
+						break;
+					case 'f':
+						charBuf.push_back('\f');
+						break;
+					case 'n':
+						charBuf.push_back('\n');
+						break;
+					case 'r':
+						charBuf.push_back('\r');
+						break;
+					case 't':
+						charBuf.push_back('\t');
+						break;
+					case 'u':
+					{
+						// Minimal unicode handling: consume 4 hex digits and preserve
+						// ASCII code points directly. Non-ASCII code points are ignored.
+						char hex[4];
+						if (ss.get(hex[0]) && ss.get(hex[1]) && ss.get(hex[2]) && ss.get(hex[3]))
+						{
+							unsigned int codePoint = 0u;
+							for (auto i = 0; i < 4; i++)
+							{
+								codePoint <<= 4;
+								if (hex[i] >= '0' && hex[i] <= '9') codePoint += static_cast<unsigned int>(hex[i] - '0');
+								else if (hex[i] >= 'a' && hex[i] <= 'f') codePoint += static_cast<unsigned int>(hex[i] - 'a' + 10);
+								else if (hex[i] >= 'A' && hex[i] <= 'F') codePoint += static_cast<unsigned int>(hex[i] - 'A' + 10);
+							}
+
+							if (codePoint <= 0x7f)
+								charBuf.push_back(static_cast<char>(codePoint));
+						}
+						break;
+					}
+					default:
+						charBuf.push_back(c);
+						break;
+					}
+
+					isEscaped = false;
+					continue;
+				}
+
+				if ('\\' == c)
+				{
+					isEscaped = true;
+					continue;
+				}
+
 				if ('"' == c)
 				{
 					charBuf.push_back('\0');
 					return { std::move(ss), std::string(charBuf.data()) };
 				}
-				else
-					charBuf.push_back(c);
+
+				charBuf.push_back(c);
 			}
 		}
 		else

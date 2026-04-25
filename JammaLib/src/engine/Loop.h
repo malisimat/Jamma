@@ -172,6 +172,8 @@ namespace engine
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 		virtual void Reset() override;
 
 		unsigned int LoopChannel() const;

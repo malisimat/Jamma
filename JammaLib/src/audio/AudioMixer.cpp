@@ -247,7 +247,19 @@ void BounceMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,
 	unsigned int numSamps,
 	unsigned int startIndex) const
 {
-	_ApplyBlockToChannels(dest, srcBuf, 1.0f - fadeLevel, fadeLevel, numSamps, startIndex);
+	if (nullptr == dest)
+		return;
+
+	base::AudioWriteRequest request;
+	request.samples = srcBuf;
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeCurrent = 1.0f - fadeLevel;
+	request.fadeNew = fadeLevel;
+	request.source = base::Audible::AUDIOSOURCE_BOUNCE;
+
+	for (auto chan : _mixParams.Channels)
+		dest->OnBlockWriteChannel(chan, request, startIndex);
 }
 
 void MergeMixBehaviour::ApplyBlock(const std::shared_ptr<MultiAudioSink>& dest,

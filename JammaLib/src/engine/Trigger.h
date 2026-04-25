@@ -266,6 +266,14 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
+		struct DelayedTriggerAction
+		{
+			unsigned int SampsLeft;
+			actions::TriggerAction Action;
+			std::optional<io::UserConfig> UserConfig;
+			std::optional<audio::AudioStreamParams> AudioParams;
+		};
+
 		bool IgnoreRepeats(bool isActivate,
 			DualBinding::TestResult trigResult);
 		bool Debounce(bool isActivate,
@@ -291,6 +299,12 @@ namespace engine
 		void DitchOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void StartPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
+		unsigned int CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params) const;
+		void QueueDelayedTriggerAction(unsigned int sampsDelay,
+			const actions::TriggerAction& action,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
 
 	private:
 		std::string _name;
@@ -314,6 +328,7 @@ namespace engine
 		graphics::Image _texturePunchedIn;
 		std::vector<TriggerTake> _loopTakeHistory;
 		std::vector<actions::DelayedAction> _delayedActions;
+		std::vector<DelayedTriggerAction> _delayedTriggerActions;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 	};
 }

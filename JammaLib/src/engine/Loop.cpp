@@ -164,6 +164,10 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBINGRECORDING != _playState))
 		return;
 
+	if ((STATE_OVERDUBBING == _playState) &&
+		(AUDIOSOURCE_BOUNCE != request.source))
+		return;
+
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
 		float peak = _lastPeak;
@@ -591,6 +595,26 @@ Reset();
 _bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 std::cout << "-=-=- Loop DITCH" << std::endl;
+}
+
+bool Loop::Mute()
+{
+	auto isNewState = Tweakable::Mute();
+
+	if (isNewState && _mixer)
+		_mixer->Mute();
+
+	return isNewState;
+}
+
+bool Loop::UnMute()
+{
+	auto isNewState = Tweakable::UnMute();
+
+	if (isNewState && _mixer)
+		_mixer->UnMute();
+
+	return isNewState;
 }
 
 void Loop::Overdub()
