@@ -32,13 +32,24 @@ Current Version: v5.0.2
 
 ### Setup (First Time or Fresh Worktree)
 
-Before building, restore NuGet packages for the test suite:
+Before building, install the repo dependencies with vcpkg:
 
 ```powershell
-& "C:\Users\matto\Downloads\nuget.exe" restore
+# Install/bootstrap vcpkg once per machine (skip if already done)
+git clone https://github.com/microsoft/vcpkg C:\Users\matto\Source\Repos\vcpkg
+& "C:\Users\matto\Source\Repos\vcpkg\bootstrap-vcpkg.bat"
+
+# Enable Visual Studio/MSBuild integration once per machine
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" integrate install
+
+# From the Jamma repo root, install manifest dependencies into .\vcpkg_installed\
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" install --triplet x64-windows
+
+# feature/ninjam-integration also needs NINJAM link dependencies
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" install libogg:x64-windows libvorbis:x64-windows
 ```
 
-**Note:** The `packages/` directory is excluded from git. You must run `nuget restore` when setting up a fresh clone or worktree.
+**Note:** The repo-local `vcpkg_installed/` directory is excluded from git. You must install dependencies when setting up a fresh clone or worktree.
 
 ### Build
 

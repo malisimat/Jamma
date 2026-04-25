@@ -46,20 +46,30 @@ Config:
 - Language standard: stdcpplatest
 - Platform: x64
 
-### NuGet Restore
+### vcpkg Setup
 
 When setting up a fresh worktree or clone:
 
 ```powershell
-# Use the NuGet CLI to restore packages (required for Google Test)
-& "C:\Users\matto\Downloads\nuget.exe" restore
+# Install/bootstrap vcpkg once per machine (skip if already done)
+git clone https://github.com/microsoft/vcpkg C:\Users\matto\Source\Repos\vcpkg
+& "C:\Users\matto\Source\Repos\vcpkg\bootstrap-vcpkg.bat"
+
+# Enable MSBuild/Visual Studio integration once per machine
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" integrate install
+
+# From the Jamma repo root, install manifest dependencies into .\vcpkg_installed\
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" install --triplet x64-windows
+
+# feature/ninjam-integration also needs NINJAM link dependencies available in vcpkg
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" install libogg:x64-windows libvorbis:x64-windows
 ```
 
-The `packages/` directory is in `.gitignore` so NuGet packages are not tracked in git. The `msbuild /t:Restore` command does not work for the legacy C++ `packages.config` format used by Google Test; use `nuget restore` instead.
+The repo-local `vcpkg_installed/` directory is in `.gitignore` and is not tracked. The Google Test binaries used by `JammaLib.Tests` are now sourced from the repo manifest in `vcpkg.json`, not from NuGet.
 
 Build rules:
 
-1. **Restore NuGet packages first on fresh setup:** Run `nuget restore` before building tests.
+1. **Install vcpkg dependencies first on fresh setup:** Run the vcpkg setup above before building tests.
 2. Use incremental `Build` by default; avoid `Clean`/`Rebuild` unless required.
 3. Build only affected projects:
 	- Jamma/src only -> Jamma/Jamma.vcxproj
@@ -73,12 +83,14 @@ MSBuild path:
 C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe
 ```
 
-### Troubleshooting NuGet Restore
+### Troubleshooting vcpkg Setup
 
-If you encounter a build error about missing Google Test targets (`Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.targets`), ensure:
+If you encounter missing Google Test headers/libs/DLLs or missing Ogg/Vorbis link dependencies, ensure:
 
-1. `nuget restore` has been run and succeeded (you should see `Installed: 1 package(s) to packages.config projects`)
-2. The `packages/` directory exists at the solution root and contains the Google Test folder
+1. `vcpkg.exe install --triplet x64-windows` has been run from the repo root and succeeded.
+2. `vcpkg_installed\x64-windows\` exists at the solution root.
+3. `vcpkg.exe integrate install` has been run on the machine used to build Visual Studio/MSBuild projects.
+4. On `feature/ninjam-integration`, `libogg:x64-windows` and `libvorbis:x64-windows` have been installed in the machine-level vcpkg checkout.
 
 ### Preprocessor Directives
 
@@ -100,14 +112,14 @@ If you encounter a build error about missing Google Test targets (`Microsoft.goo
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
 & $msbuild JammaLib\JammaLib.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 & $msbuild Jamma\Jamma.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
+& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$(Get-Location)\\"
 ```
 
 **Important:** When building `JammaLib.Tests.vcxproj` directly (not via the solution), always pass `/p:SolutionDir="$(pwd)\\"` — otherwise `$(SolutionDir)` is unset and include paths fail.
 
 ### Running tests:
 
-Run all tests (assumes `nuget restore` has been run):
+Run all tests (assumes vcpkg dependencies have been installed):
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
@@ -115,10 +127,10 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe
 ```
 
-If you haven't yet restored NuGet packages in a fresh clone/worktree, run this first:
+If you haven't yet installed the repo's vcpkg dependencies in a fresh clone/worktree, run this first:
 
 ```powershell
-& "C:\Users\matto\Downloads\nuget.exe" restore
+& "C:\Users\matto\Source\Repos\vcpkg\vcpkg.exe" install --triplet x64-windows
 ```
 
 Run a specific test (no rebuild needed if already built):
@@ -139,7 +151,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 
 - Build/run JammaLib.Tests.
 - For behavior changes in JammaLib, add/update tests when feasible.
-- **Note:** Tests require Google Test (gtest) via NuGet package `Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn`.
+- **Note:** Tests require Google Test (gtest) from the repo manifest in `vcpkg.json` and the generated repo-local `vcpkg_installed/` tree.
 - See "Running tests" section above for the exact commands.
 
 ## Coding Guidance
