@@ -412,8 +412,18 @@ std::vector<float> Loop::ExportSamples() const
 		return {};
 
 	std::vector<float> out(_loopLength);
-	for (unsigned long i = 0; i < _loopLength; ++i)
-		out[i] = _bufferBank[constants::MaxLoopFadeSamps + i];
+	unsigned long copied = 0;
+	while (copied < _loopLength)
+	{
+		const unsigned long idx = constants::MaxLoopFadeSamps + copied;
+		const unsigned long bankOffset = idx % BufferBank::_BufferBankSize;
+		const unsigned long samplesInBank = BufferBank::_BufferBankSize - bankOffset;
+		const unsigned long chunkSize = std::min(_loopLength - copied, samplesInBank);
+		const float* ptr = _bufferBank.BlockPtr(idx);
+		if (ptr != nullptr)
+			std::copy_n(ptr, chunkSize, out.data() + copied);
+		copied += chunkSize;
+	}
 	return out;
 }
 
