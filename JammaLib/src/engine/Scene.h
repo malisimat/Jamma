@@ -26,6 +26,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "UndoHistory.h"
+#include "../io/NinjamConnection.h"
 
 namespace engine
 {
@@ -231,6 +232,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::unique_ptr<jamma::io::NinjamConnection> _ninjamConnection;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -112,8 +112,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Debug;$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -132,8 +132,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Debug;$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -157,8 +157,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Release;$(ProjectDir)lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Release;$(ProjectDir)lib\x86;$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -179,8 +179,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

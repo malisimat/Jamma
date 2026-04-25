@@ -92,6 +92,21 @@ If you encounter missing Google Test headers/libs/DLLs or missing Ogg/Vorbis lin
 3. `vcpkg.exe integrate install` has been run on the machine used to build Visual Studio/MSBuild projects.
 4. On `feature/ninjam-integration`, `libogg:x64-windows` and `libvorbis:x64-windows` have been installed in the machine-level vcpkg checkout.
 
+### Troubleshooting: gtest DLL mismatch (tests crash silently on startup)
+
+Symptom: exe exits with code 1, no output. Cause: MSBuild skips the PostBuildEvent when up-to-date, leaving stale Release DLLs; the Debug exe crashes on them.
+
+Fix:
+
+```powershell
+$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
+Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
+Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
+```
+
+Verify: `gtest.dll` in the Debug output dir should be ~1.8 MB (Release is ~448 KB).
+
 ### Preprocessor Directives
 
 **JammaLib (all configurations):**
@@ -116,6 +131,10 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 ```
 
 **Important:** When building `JammaLib.Tests.vcxproj` directly (not via the solution), always pass `/p:SolutionDir="$(pwd)\\"` — otherwise `$(SolutionDir)` is unset and include paths fail.
+
+### Clashing build processes
+
+Since building JammaLib and JammaLib.Tests can take a long time, always monitor regularly flushed build output and allow plenty of time for completion before trying to set another build task running. The result is builds clashing, manifesting as locked files or weird errors, so kill dead msbuild processes.
 
 ### Running tests:
 

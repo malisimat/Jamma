@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include "StationRemote.h"
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
@@ -110,6 +111,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
+	_ninjamConnection = std::make_unique<jamma::io::NinjamConnection>();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -750,6 +752,7 @@ void Scene::InitAudio()
 void Scene::CloseAudio()
 {
 	std::scoped_lock lock(_audioMutex);
+	if (_ninjamConnection) _ninjamConnection->Disconnect();
 	_audioDevice->Stop();
 }
 
@@ -862,6 +865,23 @@ void Scene::_OnAudio(float* inBuf,
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
+
+		if (_ninjamConnection) {
+			auto sampleRate = audioStreamParams.SampleRate;
+			_ninjamConnection->ProcessAudioBlock(numSamps, sampleRate);
+			
+			for (auto& s : _stations) {
+				auto sr = std::dynamic_pointer_cast<StationRemote>(s);
+				if (sr) {
+					float* left = nullptr;
+					float* right = nullptr;
+					unsigned int frames = 0;
+					if (_ninjamConnection->ConsumeRemoteMixForUser(sr->GetRemoteUserName(), left, right, frames)) {
+						sr->IngestStereoBlock(left, right, frames);
+					}
+				}
+			}
+		}
 
 		for (auto& station : _stations)
 		{

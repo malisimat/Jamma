@@ -407,6 +407,15 @@
     <ClInclude Include="src\gui\GuiRack.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\io\NinjamConnection.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\StationRemote.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\LoopRemote.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lib\glew\glew.c">
@@ -627,6 +636,15 @@
     </ClCompile>
     <ClCompile Include="src\gui\GuiRack.cpp">
       <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\NinjamConnection.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\StationRemote.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\LoopRemote.cpp">
+      <Filter>src\engine</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

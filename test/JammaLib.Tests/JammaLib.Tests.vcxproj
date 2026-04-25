@@ -84,8 +84,8 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
@@ -127,8 +127,8 @@ xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gte
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;njclient.lib;ws2_32.lib;ogg.lib;vorbis.lib;vorbisfile.lib;vorbisenc.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\NinjamLib\ninjam\bin\x64\$(Configuration)\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
