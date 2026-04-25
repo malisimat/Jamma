@@ -32,14 +32,28 @@ Current Version: v5.0.2
 
 ### Setup (First Time or Fresh Worktree)
 
-Before building, restore NuGet packages for the test suite:
+Before building, install dependencies with vcpkg from the repository root:
 
 ```powershell
-& "C:\Users\matto\Downloads\nuget.exe" restore
+vcpkg integrate install
+vcpkg install
 ```
 
-**Note:** The `packages/` directory is excluded from git. You must run `nuget restore` when setting up a fresh clone or worktree.
+This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
 
 ### Build
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
+
+### Troubleshooting: tests crash silently on startup
+
+If `JammaLib.Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
+
+```powershell
+$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
+Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
+Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
+```
+
+After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
