@@ -18,8 +18,9 @@ and add:
 
 ## Approach
 
-- Keep a note of tasks and progress in .copilot/ninjam-tasks.md, update it regularly so it can be easily resumed by passing this plan and the ninjam-tasks.md file.
-- Once plan has been fully executed/completed, write this session history to HTML and open.
+- keep a note of tasks and progress in .copilot/ninjam-tasks.md, update it regularly so it can be easily resumed by passing this plan and the ninjam-tasks.md file
+- once plan has been fully executed/completed, write this session history to HTML and open in browser
+- raise a PR in github, if not already in existence
 
 ## Important repo findings
 
@@ -58,7 +59,8 @@ From `NinjamLib/ninjam/README.md`, `deps.props`, and `ninjam/njclient.h`:
 
 - Jamma is MIT licensed, so the GPL dependency is a **merge/distribution gate**
 - the provided library is `Release/MD`, so runtime/ABI must match the consuming build
-- `njclient` also depends on Ogg/Vorbis libs at final link time (and likely runtime DLLs when using the dynamic CRT + dynamic codec build)
+- `njclient` also depends on Ogg/Vorbis libs at final link time. Must first run the following in Jamma repo root to install dependencies `.\vcpkg.exe install libogg:x64-windows libvorbis:x64-windows`
+- also link to built static library (MD Multithreaded type) at `C:\Users\matto\Source\Repos\NinjamLib\ninjam\bin\x64\Release\MD\njclient.lib`
 
 ## Recommended minimal-change architecture
 
@@ -321,7 +323,7 @@ This can follow the pattern in:
 ### Manual/integration checks
 
 1. launch Jamma
-2. connect to a known NINJAM server
+2. connect to a known NINJAM server (web search if needed - store host in jamma config)
 3. verify remote users appear as stations
 4. verify remote audio is audible through the normal output path
 5. verify user join/leave updates stations cleanly
