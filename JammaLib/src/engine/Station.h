@@ -101,6 +101,7 @@ namespace engine
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
+		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const { return _loopTakes; }
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);

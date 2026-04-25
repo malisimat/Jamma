@@ -27,7 +27,7 @@ namespace io
 		}
 
 		bool Write(std::wstring fileName,
-			T data,
+			const T& data,
 			unsigned int numVals,
 			unsigned int sampleRate) const
 		{
@@ -44,7 +44,7 @@ namespace io
 			_Read(const std::wstring& fileName, unsigned int maxVals) const = 0;
 
 		virtual bool _Write(std::wstring fileName,
-			T data,
+			const T& data,
 			unsigned int numVals,
 			unsigned int sampleRate) const = 0;
 	};

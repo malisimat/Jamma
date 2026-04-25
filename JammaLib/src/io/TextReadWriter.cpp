@@ -18,7 +18,7 @@ std::optional<std::tuple<std::string, unsigned int, unsigned int>>
 }
 
 bool TextReadWriter::_Write(std::wstring fileName,
-	std::string data,
+	const std::string& data,
 	unsigned int numVals,
 	unsigned int sampleRate) const
 {

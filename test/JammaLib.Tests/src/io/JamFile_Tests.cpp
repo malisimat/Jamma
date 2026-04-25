@@ -184,3 +184,63 @@ TEST(JamFile, ParsesFile) {
 	ASSERT_EQ(4321, jam.value().QuantiseSamps);
 	ASSERT_EQ(engine::Timer::QUANTISE_POWER, jam.value().Quantisation);
 }
+
+TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "jam\"name\\path";
+	jam.TimerTicks = 12;
+	jam.QuantiseSamps = 960;
+	jam.Quantisation = engine::Timer::QUANTISE_MULTIPLE;
+
+	JamFile::Loop loop;
+	loop.Name = "loop\"1.wav";
+	loop.Length = 220;
+	loop.Index = 3;
+	loop.MasterLoopCount = 1;
+	loop.Level = 1.0;
+	loop.Speed = 2.0;
+	loop.MuteGroups = 0;
+	loop.SelectGroups = 0;
+	loop.Muted = false;
+	loop.Mix.Mix = JamFile::LoopMix::MIX_PAN;
+	loop.Mix.Params = std::vector<double>{ 1.0, 0.0 };
+
+	JamFile::LoopTake take;
+	take.Name = "take";
+	take.Loops.push_back(loop);
+
+	JamFile::Station station;
+	station.Name = "station";
+	station.StationType = 0;
+	station.LoopTakes.push_back(take);
+
+	jam.Stations.push_back(station);
+
+	std::stringstream out;
+	ASSERT_TRUE(JamFile::ToStream(jam, out));
+
+	auto parsed = JamFile::FromStream(std::move(out));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ("jam\"name\\path", parsed->Name);
+	ASSERT_EQ(12, parsed->TimerTicks);
+	ASSERT_EQ(960, parsed->QuantiseSamps);
+	ASSERT_EQ(engine::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());
+
+	const auto& parsedLoop = parsed->Stations[0].LoopTakes[0].Loops[0];
+	ASSERT_EQ("loop\"1.wav", parsedLoop.Name);
+	ASSERT_EQ(1.0, parsedLoop.Level);
+	ASSERT_EQ(2.0, parsedLoop.Speed);
+	ASSERT_EQ(JamFile::LoopMix::MIX_PAN, parsedLoop.Mix.Mix);
+	ASSERT_EQ(1, parsedLoop.Mix.Params.index());
+
+	auto panParamsPtr = std::get_if<std::vector<double>>(&parsedLoop.Mix.Params);
+	ASSERT_NE(nullptr, panParamsPtr);
+	auto panParams = *panParamsPtr;
+	ASSERT_EQ(2, panParams.size());
+	ASSERT_EQ(1.0, panParams[0]);
+	ASSERT_EQ(0.0, panParams[1]);
+}
