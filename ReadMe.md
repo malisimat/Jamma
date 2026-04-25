@@ -43,3 +43,26 @@ Before building, restore NuGet packages for the test suite:
 ### Build
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
+
+### Ninjam Integration Prerequisites
+
+Jamma integrates with [NinjamLib](https://github.com/justinfrankel/ninjam) (njclient) for live networked jamming.
+
+The project files contain MSBuild UserMacros with default paths that point to a local developer machine. Override them for your environment — **you do not need to edit the project files directly**. The easiest approach is to set the properties in a `Directory.Build.props` or in Visual Studio's user `.props` file:
+
+```xml
+<!-- e.g. %LOCALAPPDATA%\Microsoft\MSBuild\v4.0\Microsoft.Cpp.x64.user.props -->
+<PropertyGroup>
+  <NinjamRoot>C:\path\to\NinjamLib\ninjam</NinjamRoot>
+  <NinjamLibDirDebug>$(NinjamRoot)\bin\x64\Debug\MD</NinjamLibDirDebug>
+  <NinjamLibDirRelease>$(NinjamRoot)\bin\x64\Release\MD</NinjamLibDirRelease>
+  <!-- vcpkg (ogg/vorbis) – only needed for Jamma.exe link step -->
+  <VcpkgMachineLibDirDebug>C:\path\to\vcpkg\installed\x64-windows\debug\lib</VcpkgMachineLibDirDebug>
+  <VcpkgMachineLibDirRelease>C:\path\to\vcpkg\installed\x64-windows\lib</VcpkgMachineLibDirRelease>
+</PropertyGroup>
+```
+
+Required ninjam libraries (linked by Jamma.exe):
+- `njclient.lib` — NinjamLib client
+- `ogg.lib`, `vorbis.lib`, `vorbisenc.lib`, `vorbisfile.lib` — Xiph codecs (install via `vcpkg install libogg libvorbis`)
+- `ws2_32.lib` — Winsock (system library, no installation needed)
