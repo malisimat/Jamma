@@ -508,6 +508,10 @@ bool Trigger::StateMachine(bool isDown,
 				{
 					StartOverdub(cfg, params);
 					_isDitchDown = false; // Prevent next release ditching the playing loop
+					_isLastDitchDownRaw = false;
+					_isLastDitchDown = false;
+					for (auto& binding : _ditchBindings)
+						binding.Reset();
 				}
 				else
 					StartRecording(cfg, params);
@@ -534,6 +538,10 @@ bool Trigger::StateMachine(bool isDown,
 			{
 				EndRecording(cfg, params);
 				_isDitchDown = false; // Prevent next release ditching the playing loop
+				_isLastDitchDownRaw = false;
+				_isLastDitchDown = false;
+				for (auto& binding : _ditchBindings)
+					binding.Reset();
 				changedState = true;
 			}
 		}
@@ -558,6 +566,10 @@ bool Trigger::StateMachine(bool isDown,
 				{
 					EndOverdub(cfg, params);
 					_isDitchDown = false; // Prevent next release ditching the playing loop
+					_isLastDitchDownRaw = false;
+					_isLastDitchDown = false;
+					for (auto& binding : _ditchBindings)
+						binding.Reset();
 					changedState = true;
 				}
 				else
