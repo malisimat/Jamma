@@ -413,16 +413,21 @@ std::vector<float> Loop::ExportSamples() const
 
 	std::vector<float> out(_loopLength);
 	unsigned long copied = 0;
+	// Compute bank offset once for the first chunk; subsequent chunks always
+	// start at a bank boundary (offset 0) so bankOffset resets to 0 after the first.
+	unsigned long bankOffset = constants::MaxLoopFadeSamps % BufferBank::_BufferBankSize;
 	while (copied < _loopLength)
 	{
 		const unsigned long idx = constants::MaxLoopFadeSamps + copied;
-		const unsigned long bankOffset = idx % BufferBank::_BufferBankSize;
 		const unsigned long samplesInBank = BufferBank::_BufferBankSize - bankOffset;
 		const unsigned long chunkSize = std::min(_loopLength - copied, samplesInBank);
 		const float* ptr = _bufferBank.BlockPtr(idx);
+		// ptr is null only if idx >= Capacity(), which cannot happen for a
+		// properly-initialised loop; if it does, leave those samples as 0.
 		if (ptr != nullptr)
 			std::copy_n(ptr, chunkSize, out.data() + copied);
 		copied += chunkSize;
+		bankOffset = 0; // all subsequent chunks start at a bank boundary
 	}
 	return out;
 }
