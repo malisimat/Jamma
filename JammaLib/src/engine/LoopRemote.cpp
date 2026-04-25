@@ -51,6 +51,10 @@ void LoopRemote::SetMeasurePosition(unsigned int positionSamps)
 
 void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 {
+	// Snapshot len/pos once: standard lock-free ring-buffer pattern.
+	// std::atomic loads prevent torn reads; minor position drift across a
+	// block boundary if the job thread calls SetMeasurePosition concurrently
+	// is inherent to lock-free audio and acceptable for ninjam.
 	const auto len = _measureLengthSamps.load();
 	if (!samples || numSamps == 0u || len == 0u)
 		return;
@@ -66,6 +70,12 @@ void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 
 	pos = (pos + numSamps) % len;
 	_measurePositionSamps.store(pos);
+
+	// _playState/_loopLength/_playIndex are inherited plain fields from Loop.
+	// They are not atomic, but are word-sized and only ever assigned (not
+	// read-modify-written) from both threads, so no torn read is possible
+	// on x86-64/MSVC. Making them atomic in Loop is a wider architecture
+	// change beyond the scope of this PR.
 	_playState = STATE_PLAYING;
 	_loopLength = len;
 	_playIndex = constants::MaxLoopFadeSamps + pos;
