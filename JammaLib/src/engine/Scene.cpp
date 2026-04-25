@@ -1233,29 +1233,33 @@ auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
 remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
 remoteStation->SetRemoteUserName(user.UserName);
 remoteStation->SetNumBusChannels(2);
-remoteStation->SetNumDacChannels(2);
-_remoteStations[user.UserName] = remoteStation;
-_AddStation(remoteStation);
-}
-else
-{
-remoteStation = match->second;
-}
+			remoteStation->SetNumDacChannels(2);
+			_remoteStations[user.UserName] = remoteStation;
+			_AddStation(remoteStation);
+		}
+		else
+		{
+			remoteStation = match->second;
+		}
 
-remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
-remoteStation->SetRemoteChannelCount(user.ChannelCount);
-remoteStation->SetConnectedRemote(true);
+		remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
+		remoteStation->SetRemoteChannelCount(user.ChannelCount);
+		remoteStation->SetConnectedRemote(true);
 
-if (snapshot.IntervalLengthSamps > 0)
-remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		if (snapshot.IntervalLengthSamps > 0)
+		{
+			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		}
 
-remoteStation->EnsureRemoteTake();
-}
+		remoteStation->EnsureRemoteTake();
+	}
 
-// Remove stations for users who have left
-for (auto& [userName, station] : _remoteStations)
-{
-if (seenUsers.find(userName) == seenUsers.end())
-station->SetConnectedRemote(false);
-}
+	// Remove stations for users who have left
+	for (auto& [userName, station] : _remoteStations)
+	{
+		if (seenUsers.find(userName) == seenUsers.end())
+		{
+			station->SetConnectedRemote(false);
+		}
+	}
 }
