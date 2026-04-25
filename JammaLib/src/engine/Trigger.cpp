@@ -766,6 +766,11 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
 
+	// Cancel pending punch-in latency actions so they cannot unmute the source
+	// after overdub has already been finalized.
+	_delayedActions.clear();
+	_delayedTriggerActions.clear();
+
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
