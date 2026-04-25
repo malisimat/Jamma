@@ -56,18 +56,14 @@ namespace base
 
 		virtual bool Mute()
 		{
-			bool isAlreadySet = IsMuted();
-			_tweakState.fetch_or(static_cast<int>(TWEAKSTATE_MUTED), std::memory_order_relaxed);
-
-			return !isAlreadySet;
+			auto prev = _tweakState.fetch_or(static_cast<int>(TWEAKSTATE_MUTED), std::memory_order_relaxed);
+			return 0 == (prev & static_cast<int>(TWEAKSTATE_MUTED));
 		}
 
 		virtual bool UnMute()
 		{
-			bool isAlreadyUnset = !IsMuted();
-			_tweakState.fetch_and(static_cast<int>(~TWEAKSTATE_MUTED), std::memory_order_relaxed);
-
-			return !isAlreadyUnset;
+			auto prev = _tweakState.fetch_and(static_cast<int>(~TWEAKSTATE_MUTED), std::memory_order_relaxed);
+			return 0 != (prev & static_cast<int>(TWEAKSTATE_MUTED));
 		}
 
 	protected:
