@@ -89,6 +89,11 @@
       <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
+xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
+      <Message>Copying debug gtest DLLs</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
