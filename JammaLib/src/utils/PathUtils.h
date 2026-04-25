@@ -21,4 +21,5 @@ namespace utils
 
 	std::wstring GetPath(PathType pathType);
 	std::wstring GetParentDirectory(std::wstring dir);
+	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory");
 }

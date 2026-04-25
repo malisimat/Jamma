@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include <iomanip>
 
 using namespace io;
 using audio::BehaviourParams;
@@ -89,39 +90,174 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 
 bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
-	ss << "Version: " << jam.Version << std::endl;
-	ss << "Name: " << jam.Name << std::endl;
-	ss << "TimerTicks: " << jam.TimerTicks << std::endl;
-	ss << "QuantiseSamps: " << jam.QuantiseSamps << std::endl;
-	ss << "Quantisation: " << jam.Quantisation << std::endl;
+	auto escapeJsonString = [](const std::string& s) -> std::string {
+		std::string escaped;
+		escaped.reserve(s.size());
+		const char* HEX_DIGITS = "0123456789abcdef";
 
-	for (auto &station : jam.Stations)
-	{
-		ss << "=== Station ===" << std::endl;
-		ss << "Name: " << station.Name << std::endl;
-		ss << "StationType: " << station.StationType << std::endl;
-
-		for (auto& loopTake : station.LoopTakes)
+		for (unsigned char c : s)
 		{
-			ss << "====== LoopTake ======" << std::endl;
-			ss << "Name: " << loopTake.Name << std::endl;
-
-			for (auto& loop: loopTake.Loops)
+			switch (c)
 			{
-				ss << "========= Loop =========" << std::endl;
-				ss << "Name: " << loop.Name << std::endl;
-				ss << "Length: " << loop.Length << std::endl;
-				ss << "Index: " << loop.Index << std::endl;
-				ss << "MasterLoopCount: " << loop.MasterLoopCount << std::endl;
-				ss << "Level: " << loop.Level << std::endl;
-				ss << "Muted: " << loop.Muted << std::endl;
-				ss << "MixType: " << loop.Mix.Mix << std::endl;
-				ss << "MuteGroups: " << loop.MuteGroups << std::endl;
-				ss << "SelectGroups: " << loop.SelectGroups << std::endl;
+			case '\"':
+				escaped += "\\\"";
+				break;
+			case '\\':
+				escaped += "\\\\";
+				break;
+			case '\b':
+				escaped += "\\b";
+				break;
+			case '\f':
+				escaped += "\\f";
+				break;
+			case '\n':
+				escaped += "\\n";
+				break;
+			case '\r':
+				escaped += "\\r";
+				break;
+			case '\t':
+				escaped += "\\t";
+				break;
+			default:
+				if (c < 0x20)
+				{
+					escaped += "\\u00";
+					escaped += HEX_DIGITS[(c >> 4) & 0x0f];
+					escaped += HEX_DIGITS[c & 0x0f];
+				}
+				else
+				{
+					escaped += static_cast<char>(c);
+				}
+				break;
 			}
 		}
+
+		return escaped;
+	};
+	auto quoted = [&](const std::string& s) { return "\"" + escapeJsonString(s) + "\""; };
+	auto formatDouble = [](double value) -> std::string
+		{
+			std::ostringstream out;
+			out << std::setprecision(15) << std::defaultfloat << value;
+			auto str = out.str();
+			if (str.find('.') == std::string::npos && str.find('e') == std::string::npos && str.find('E') == std::string::npos)
+				str += ".0";
+			return str;
+		};
+	auto kvStr = [&](const std::string& key, const std::string& value)
+		{ return quoted(key) + ":" + quoted(value); };
+	auto kvUlong = [&](const std::string& key, unsigned long value)
+		{ return quoted(key) + ":" + std::to_string(value); };
+	auto kvDouble = [&](const std::string& key, double value)
+		{ return quoted(key) + ":" + formatDouble(value); };
+	auto kvBool = [&](const std::string& key, bool value)
+		{ return quoted(key) + ":" + (value ? "true" : "false"); };
+
+	auto quantStr = [](engine::Timer::QuantisationType quant) -> std::string {
+		switch (quant)
+		{
+		case engine::Timer::QUANTISE_MULTIPLE:
+			return "multiple";
+		case engine::Timer::QUANTISE_POWER:
+			return "power";
+		case engine::Timer::QUANTISE_OFF:
+		default:
+			return "off";
+		}
+	};
+
+	auto mixToJson = [&](const JamFile::LoopMix& mix) -> std::string {
+		std::string chans;
+		const auto mixType = (mix.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
+		if (mix.Mix == LoopMix::MIX_WIRE)
+		{
+			if (auto values = std::get_if<std::vector<unsigned long>>(&mix.Params))
+			{
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += std::to_string((*values)[i]);
+				}
+			}
+		}
+		else
+		{
+			if (auto values = std::get_if<std::vector<double>>(&mix.Params))
+			{
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += formatDouble((*values)[i]);
+				}
+			}
+		}
+
+		return "{"
+			+ kvStr("type", mixType)
+			+ ","
+			+ quoted("chans")
+			+ ":["
+			+ chans
+			+ "]}";
+	};
+
+	ss << "{";
+	ss << kvStr("name", jam.Name) << ",";
+	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
+	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
+	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	ss << quoted("stations") << ":[";
+
+	for (size_t stationIndex = 0; stationIndex < jam.Stations.size(); ++stationIndex)
+	{
+		const auto& station = jam.Stations[stationIndex];
+		if (stationIndex > 0) ss << ",";
+		ss << "{"
+			<< kvStr("name", station.Name)
+			<< ","
+			<< kvUlong("stationtype", station.StationType)
+			<< ","
+			<< quoted("takes")
+			<< ":[";
+
+		for (size_t takeIndex = 0; takeIndex < station.LoopTakes.size(); ++takeIndex)
+		{
+			const auto& take = station.LoopTakes[takeIndex];
+			if (takeIndex > 0) ss << ",";
+			ss << "{"
+				<< kvStr("name", take.Name)
+				<< ","
+				<< quoted("loops")
+				<< ":[";
+
+			for (size_t loopIndex = 0; loopIndex < take.Loops.size(); ++loopIndex)
+			{
+				const auto& loop = take.Loops[loopIndex];
+				if (loopIndex > 0) ss << ",";
+				ss << "{"
+					<< kvStr("name", loop.Name) << ","
+					<< kvUlong("length", loop.Length) << ","
+					<< kvUlong("index", loop.Index) << ","
+					<< kvUlong("masterloopcount", loop.MasterLoopCount) << ","
+					<< kvDouble("level", loop.Level) << ","
+					<< kvDouble("speed", loop.Speed) << ","
+					<< kvUlong("mutegroups", loop.MuteGroups) << ","
+					<< kvUlong("selectgroups", loop.SelectGroups) << ","
+					<< kvBool("muted", loop.Muted) << ","
+					<< quoted("mix") << ":" << mixToJson(loop.Mix)
+					<< "}";
+			}
+
+			ss << "]}";
+		}
+
+		ss << "]}";
 	}
 
+	ss << "]}";
 	return true;
 }
 

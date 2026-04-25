@@ -180,6 +180,8 @@ namespace engine
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState; }
+		std::vector<float> ExportSamples() const;
+		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 
 		void Update();
 		void SetMixerLevel(double level);
