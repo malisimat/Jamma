@@ -44,9 +44,6 @@
     <ClCompile Include="src\graphics\Window_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\NinePatchImageTest.cpp">
-      <Filter>src\graphics</Filter>
-    </ClCompile>
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
@@ -82,8 +79,5 @@
     <Filter Include="src\io">
       <UniqueIdentifier>{a4ba3b1e-e149-4a44-a69d-22c4b3d645b4}</UniqueIdentifier>
     </Filter>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="packages.config" />
   </ItemGroup>
 </Project>
