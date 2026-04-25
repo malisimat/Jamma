@@ -71,8 +71,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
     <NinjamRoot Condition="'$(NinjamRoot)'==''"></NinjamRoot>
-    <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''">$(NinjamRoot)\bin\x64\Debug\MD</NinjamLibDirDebug>
-    <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''">$(NinjamRoot)\bin\x64\Release\MD</NinjamLibDirRelease>
+    <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''"></NinjamLibDirDebug>
+    <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''"></NinjamLibDirRelease>
     <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''"></VcpkgMachineLibDirDebug>
     <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''"></VcpkgMachineLibDirRelease>
   </PropertyGroup>
