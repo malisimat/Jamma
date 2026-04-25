@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include <iomanip>
 
 using namespace io;
 using audio::BehaviourParams;
@@ -89,17 +90,69 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 
 bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
-	auto quoted = [](const std::string& s) { return "\"" + s + "\""; };
+	auto escapeJsonString = [](const std::string& s) -> std::string {
+		std::string escaped;
+		escaped.reserve(s.size());
+		const char* HEX_DIGITS = "0123456789abcdef";
+
+		for (unsigned char c : s)
+		{
+			switch (c)
+			{
+			case '\"':
+				escaped += "\\\"";
+				break;
+			case '\\':
+				escaped += "\\\\";
+				break;
+			case '\b':
+				escaped += "\\b";
+				break;
+			case '\f':
+				escaped += "\\f";
+				break;
+			case '\n':
+				escaped += "\\n";
+				break;
+			case '\r':
+				escaped += "\\r";
+				break;
+			case '\t':
+				escaped += "\\t";
+				break;
+			default:
+				if (c < 0x20)
+				{
+					escaped += "\\u00";
+					escaped += HEX_DIGITS[(c >> 4) & 0x0f];
+					escaped += HEX_DIGITS[c & 0x0f];
+				}
+				else
+				{
+					escaped += static_cast<char>(c);
+				}
+				break;
+			}
+		}
+
+		return escaped;
+	};
+	auto quoted = [&](const std::string& s) { return "\"" + escapeJsonString(s) + "\""; };
+	auto formatDouble = [](double value) -> std::string
+		{
+			std::ostringstream out;
+			out << std::setprecision(15) << std::defaultfloat << value;
+			auto str = out.str();
+			if (str.find('.') == std::string::npos && str.find('e') == std::string::npos && str.find('E') == std::string::npos)
+				str += ".0";
+			return str;
+		};
 	auto kvStr = [&](const std::string& key, const std::string& value)
 		{ return quoted(key) + ":" + quoted(value); };
 	auto kvUlong = [&](const std::string& key, unsigned long value)
 		{ return quoted(key) + ":" + std::to_string(value); };
 	auto kvDouble = [&](const std::string& key, double value)
-		{
-			std::ostringstream out;
-			out << value;
-			return quoted(key) + ":" + out.str();
-		};
+		{ return quoted(key) + ":" + formatDouble(value); };
 	auto kvBool = [&](const std::string& key, bool value)
 		{ return quoted(key) + ":" + (value ? "true" : "false"); };
 
@@ -121,22 +174,24 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		const auto mixType = (mix.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
 		if (mix.Mix == LoopMix::MIX_WIRE)
 		{
-			const auto& values = std::get<std::vector<unsigned long>>(mix.Params);
-			for (size_t i = 0; i < values.size(); ++i)
+			if (auto values = std::get_if<std::vector<unsigned long>>(&mix.Params))
 			{
-				if (i > 0) chans += ",";
-				chans += std::to_string(values[i]);
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += std::to_string((*values)[i]);
+				}
 			}
 		}
 		else
 		{
-			const auto& values = std::get<std::vector<double>>(mix.Params);
-			for (size_t i = 0; i < values.size(); ++i)
+			if (auto values = std::get_if<std::vector<double>>(&mix.Params))
 			{
-				if (i > 0) chans += ",";
-				std::ostringstream out;
-				out << values[i];
-				chans += out.str();
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += formatDouble((*values)[i]);
+				}
 			}
 		}
 

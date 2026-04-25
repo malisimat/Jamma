@@ -46,6 +46,7 @@ namespace audio
 	private:
 		AudioStreamParams _audioStreamParams;
 		std::unique_ptr<RtAudio> _stream;
+		bool _pausedByUs;
 
 	public:
 		static std::optional<std::unique_ptr<AudioDevice>> Open(

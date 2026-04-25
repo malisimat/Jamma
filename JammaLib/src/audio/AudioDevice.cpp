@@ -17,14 +17,16 @@ void AudioStreamParams::PrintParams()
 
 AudioDevice::AudioDevice() :
 	_audioStreamParams(),
-	_stream(std::unique_ptr<RtAudio>())
+	_stream(std::unique_ptr<RtAudio>()),
+	_pausedByUs(false)
 {
 }
 
 AudioDevice::AudioDevice(AudioStreamParams audioStreamParams,
 	std::unique_ptr<RtAudio> stream) :
 	_audioStreamParams(audioStreamParams),
-	_stream(std::move(stream))
+	_stream(std::move(stream)),
+	_pausedByUs(false)
 {
 }
 
@@ -39,6 +41,7 @@ AudioDevice::~AudioDevice()
 void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 {
 	_stream = std::move(device);
+	_pausedByUs = false;
 }
 
 void AudioDevice::Start()
@@ -46,6 +49,7 @@ void AudioDevice::Start()
 	if (_stream)
 	{
 		_stream->startStream();
+		_pausedByUs = false;
 		_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 		_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
 	}
@@ -57,6 +61,7 @@ void AudioDevice::Stop()
 	{
 		if (_stream->isStreamRunning())
 			_stream->stopStream();
+		_pausedByUs = false;
 
 		if (_stream->isStreamOpen())
 			_stream->closeStream();
@@ -66,26 +71,31 @@ void AudioDevice::Stop()
 bool AudioDevice::Pause()
 {
 	if (!_stream)
-		return true;
+		return false;
 
 	try
 	{
-		if (_stream->isStreamRunning())
-			_stream->stopStream();
+		if (!_stream->isStreamRunning())
+			return false;
+
+		_stream->stopStream();
+		_pausedByUs = true;
+		return true;
 	}
 	catch (RtAudioError& err)
 	{
 		std::cout << "Error pausing audio stream: " << err.getMessage() << std::endl;
 		return false;
 	}
-
-	return true;
 }
 
 bool AudioDevice::Resume()
 {
 	if (!_stream)
-		return true;
+		return false;
+
+	if (!_pausedByUs)
+		return false;
 
 	try
 	{
@@ -95,14 +105,14 @@ bool AudioDevice::Resume()
 			_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 			_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
 		}
+		_pausedByUs = false;
+		return true;
 	}
 	catch (RtAudioError& err)
 	{
 		std::cout << "Error resuming audio stream: " << err.getMessage() << std::endl;
 		return false;
 	}
-
-	return true;
 }
 
 AudioStreamParams AudioDevice::GetAudioStreamParams()

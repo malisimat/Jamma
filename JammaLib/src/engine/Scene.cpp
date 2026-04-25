@@ -443,18 +443,19 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
+		struct LoopSnapshot
+		{
+			std::wstring Path;
+			std::vector<float> Samples;
+		};
+
 		const auto exportDir = utils::PickDirectory(L"Choose export directory");
 		if (exportDir.empty())
 			return ActionResult::NoAction();
 
 		AudioPauseGuard pauseGuard(_audioDevice.get());
 		if (!pauseGuard.Paused)
-		{
-			std::cout << "Export: failed to pause audio stream" << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		std::scoped_lock lock(_audioMutex);
+			std::cout << "Export: audio stream not running or pause failed; exporting without pause" << std::endl;
 
 		const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
 		const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
@@ -466,41 +467,45 @@ ActionResult Scene::OnAction(KeyAction action)
 		jam.QuantiseSamps = 0;
 		jam.Quantisation = engine::Timer::QUANTISE_OFF;
 
-		io::WavReadWriter wavWriter;
-		unsigned int wavCount = 0;
+		std::vector<LoopSnapshot> loops;
 
-		for (const auto& station : _stations)
 		{
-			io::JamFile::Station jamStation;
-			jamStation.Name = station->Name();
-			jamStation.StationType = 0;
+			std::scoped_lock lock(_audioMutex);
 
-			for (const auto& take : station->GetLoopTakes())
+			for (const auto& station : _stations)
 			{
-				io::JamFile::LoopTake jamTake;
-				jamTake.Name = take->Id();
+				io::JamFile::Station jamStation;
+				jamStation.Name = station->Name();
+				jamStation.StationType = 0;
 
-				for (const auto& loop : take->GetLoops())
+				for (const auto& take : station->GetLoopTakes())
 				{
-					auto samples = loop->ExportSamples();
-					if (samples.empty())
-						continue;
+					io::JamFile::LoopTake jamTake;
+					jamTake.Name = take->Id();
 
-					const auto wavFilename = loop->Id() + ".wav";
-					const auto wavPath = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-					if (!wavWriter.Write(wavPath, samples, (unsigned int)samples.size(), sampleRate))
-						continue;
+					for (const auto& loop : take->GetLoops())
+					{
+						auto samples = loop->ExportSamples();
+						if (samples.empty())
+							continue;
 
-					++wavCount;
-					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
+						const auto wavFilename = loop->Id() + ".wav";
+						const auto wavPath = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
+
+						LoopSnapshot snap;
+						snap.Path = wavPath;
+						snap.Samples = std::move(samples);
+						loops.push_back(std::move(snap));
+						jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
+					}
+
+					if (!jamTake.Loops.empty())
+						jamStation.LoopTakes.push_back(std::move(jamTake));
 				}
 
-				if (!jamTake.Loops.empty())
-					jamStation.LoopTakes.push_back(std::move(jamTake));
+				if (!jamStation.LoopTakes.empty())
+					jam.Stations.push_back(std::move(jamStation));
 			}
-
-			if (!jamStation.LoopTakes.empty())
-				jam.Stations.push_back(std::move(jamStation));
 		}
 
 		if (jam.Stations.empty())
@@ -509,10 +514,24 @@ ActionResult Scene::OnAction(KeyAction action)
 			return ActionResult::NoAction();
 		}
 
+		io::WavReadWriter wavWriter;
+		unsigned int wavCount = 0;
+		for (const auto& loop : loops)
+		{
+			if (wavWriter.Write(loop.Path, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
+				++wavCount;
+		}
+
 		std::stringstream jamStream;
 		io::JamFile::ToStream(jam, jamStream);
 		const auto jamPath = exportDir + L"\\session.jam";
-		io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
+		const auto wroteJamFile = io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
+		if (!wroteJamFile)
+		{
+			std::cout << "Export: failed to write session.jam to "
+				<< utils::EncodeUtf8(jamPath) << std::endl;
+			return ActionResult::NoAction();
+		}
 
 		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
 			<< utils::EncodeUtf8(exportDir) << std::endl;
