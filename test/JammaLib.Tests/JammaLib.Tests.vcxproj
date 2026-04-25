@@ -34,7 +34,13 @@
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" />
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <NinjamRoot Condition="'$(NinjamRoot)'==''">C:\Users\matto\Source\Repos\NinjamLib\ninjam</NinjamRoot>
+    <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''">$(NinjamRoot)\bin\x64\Debug\MD</NinjamLibDirDebug>
+    <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''">$(NinjamRoot)\bin\x64\Release\MD</NinjamLibDirRelease>
+    <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\debug\lib</VcpkgMachineLibDirDebug>
+    <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''">C:\Users\matto\Source\Repos\vcpkg\installed\x64-windows\lib</VcpkgMachineLibDirRelease>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>obj\$(Platform)\$(Configuration)\</IntDir>
@@ -84,8 +90,8 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(VcpkgMachineLibDirDebug);$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib;$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
@@ -127,8 +133,8 @@ xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gte
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(VcpkgMachineLibDirRelease);$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -144,6 +150,7 @@ xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gte
     <ClCompile Include="src\audio\MixBehaviour_Tests.cpp" />
     <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
     <ClCompile Include="src\engine\LoopModel_Tests.cpp" />
+    <ClCompile Include="src\engine\StationRemote_Tests.cpp" />
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />

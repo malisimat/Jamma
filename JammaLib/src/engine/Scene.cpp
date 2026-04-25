@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
@@ -13,6 +14,14 @@ using namespace graphics;
 using namespace resources;
 using namespace utils;
 using namespace std::placeholders;
+
+namespace
+{
+	bool IsRemoteStation(const std::shared_ptr<Station>& station)
+	{
+		return std::dynamic_pointer_cast<StationRemote>(station) != nullptr;
+	}
+}
 
 Scene::Scene(SceneParams params,
 	UserConfig user) :
@@ -38,6 +47,9 @@ Scene::Scene(SceneParams params,
 	_audioDevice(nullptr),
 	_masterLoop(nullptr),
 	_stations(),
+	_ninjamConfig(std::nullopt),
+	_remoteStations(),
+	_ninjamConnection(nullptr),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -165,6 +177,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->_ninjamConfig = jamStruct.Ninjam;
+	scene->_InitNinjamConnection(scene->_ninjamConfig);
 	scene->InitReceivers();
 
 	return scene;
@@ -486,6 +500,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		io::JamFile jam;
 		jam.Version       = io::JamFile::VERSION_V;
 		jam.Name          = "export";
+		jam.Ninjam        = _ninjamConfig;
 		jam.TimerTicks    = 0;
 		jam.QuantiseSamps = 0;
 		jam.Quantisation  = engine::Timer::QUANTISE_OFF;
@@ -623,6 +638,15 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	if (_ninjamConnection)
+	{
+		_ninjamConnection->Pump();
+		auto snapshot = _ninjamConnection->Snapshot();
+
+		std::scoped_lock lock(_audioMutex);
+		_ReconcileRemoteStations(snapshot);
+	}
+
 	actions::JobAction job;
 	job.SetActionTime(Timer::GetTime());
 	job.SetUserConfig(_userConfig);
@@ -744,6 +768,15 @@ void Scene::InitAudio()
 				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
 			}
 		}
+
+		if (_ninjamConnection)
+		{
+			_ninjamConnection->SetAudioFormat(
+				audioStreamParams.SampleRate,
+				audioStreamParams.BufSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels);
+		}
 	}
 }
 
@@ -751,6 +784,9 @@ void Scene::CloseAudio()
 {
 	std::scoped_lock lock(_audioMutex);
 	_audioDevice->Stop();
+
+	if (_ninjamConnection)
+		_ninjamConnection->Disconnect();
 }
 
 void Scene::CommitChanges()
@@ -824,6 +860,9 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			if (IsRemoteStation(station))
+				continue;
+
 			_channelMixer->WriteToSink(station, numSamps);
 		}
 
@@ -832,6 +871,9 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			if (IsRemoteStation(station))
+				continue;
+
 			_channelMixer->WriteToSink(station, numSamps);
 		
 			// Overdubbing / bouncing
@@ -856,6 +898,29 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+
+	if (_ninjamConnection)
+	{
+		auto audioStreamParams = nullptr == _audioDevice ?
+			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		_ninjamConnection->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
+
+		for (auto& remotePair : _remoteStations)
+		{
+			auto station = remotePair.second;
+			if (!station || !station->IsConnectedRemote())
+				continue;
+
+			const float* left = nullptr;
+			const float* right = nullptr;
+			unsigned int frameCount = 0u;
+			if (_ninjamConnection->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+			{
+				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
+				station->IngestStereoBlock(left, right, ingestFrames);
+			}
+		}
+	}
 
 	if (nullptr != outBuf)
 	{
@@ -1067,6 +1132,86 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		selectDepth = (unsigned int)DEPTH_LOOP;
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
+}
+
+void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
+{
+	_ninjamConnection.reset();
+
+	if (!config.has_value())
+		return;
+
+	const auto& ninjam = config.value();
+	if (ninjam.Host.empty() || ninjam.User.empty())
+		return;
+
+	_ninjamConnection = std::make_unique<io::NinjamConnection>(ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
+	if (!_ninjamConnection->Connect())
+		_ninjamConnection.reset();
+}
+
+void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
+{
+	std::set<std::string> seenUsers;
+
+	for (const auto& user : snapshot.Users)
+	{
+		seenUsers.insert(user.UserName);
+
+		auto match = _remoteStations.find(user.UserName);
+		std::shared_ptr<StationRemote> remoteStation;
+		if (match == _remoteStations.end())
+		{
+			StationParams stationParams;
+			stationParams.Name = user.UserName;
+			stationParams.Size = { 140, 300 };
+			stationParams.FadeSamps = _userConfig.Loop.FadeSamps > constants::MaxLoopFadeSamps ?
+				constants::MaxLoopFadeSamps :
+				_userConfig.Loop.FadeSamps;
+			stationParams.Position = { 20 + static_cast<int>(_stations.size()) * 160, 20 };
+			stationParams.ModelPosition = { -50.0f + static_cast<float>(_stations.size()) * 120.0f, 140.0f };
+
+			audio::MergeMixBehaviourParams mergeParams;
+			auto mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
+			remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
+			_AddStation(remoteStation);
+			remoteStation->EnsureRemoteTake();
+			_remoteStations[user.UserName] = remoteStation;
+		}
+		else
+		{
+			remoteStation = match->second;
+		}
+
+		if (!remoteStation)
+			continue;
+
+		remoteStation->SetRemoteUserName(user.UserName);
+		remoteStation->SetRemoteChannelCount(user.ChannelCount);
+		remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
+		remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		remoteStation->SetConnectedRemote(true);
+	}
+
+	for (auto it = _remoteStations.begin(); it != _remoteStations.end();)
+	{
+		if (seenUsers.find(it->first) == seenUsers.end())
+		{
+			auto removed = it->second;
+			if (removed)
+			{
+				auto match = std::find(_stations.begin(), _stations.end(), removed);
+				if (match != _stations.end())
+					_stations.erase(match);
+			}
+
+			it = _remoteStations.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)

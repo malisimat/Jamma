@@ -184,3 +184,42 @@ TEST(JamFile, ParsesFile) {
 	ASSERT_EQ(4321, jam.value().QuantiseSamps);
 	ASSERT_EQ(engine::Timer::QUANTISE_POWER, jam.value().Quantisation);
 }
+
+TEST(JamFile, ParsesNinjamConfig) {
+	auto str = "{\"name\":\"jam\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"guest\",\"pass\":\"secret\",\"workdir\":\"C:/Temp/JammaNinjam\"},\"stations\":[],\"quantisesamps\":0,\"quantisation\":\"off\"}";
+	auto testStream = std::stringstream(str);
+	auto jam = JamFile::FromStream(std::move(testStream));
+
+	ASSERT_TRUE(jam.has_value());
+	ASSERT_TRUE(jam.value().Ninjam.has_value());
+	ASSERT_EQ("ninjam.com:2049", jam.value().Ninjam.value().Host);
+	ASSERT_EQ("guest", jam.value().Ninjam.value().User);
+	ASSERT_EQ("secret", jam.value().Ninjam.value().Pass);
+	ASSERT_EQ("C:/Temp/JammaNinjam", jam.value().Ninjam.value().WorkDir);
+}
+
+TEST(JamFile, SerializesNinjamConfig) {
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "jam";
+	jam.TimerTicks = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation = engine::Timer::QUANTISE_OFF;
+	jam.Ninjam = JamFile::NinjamConfig{
+		"ninjam.com:2049",
+		"guest",
+		"secret",
+		"C:/Temp/JammaNinjam"
+	};
+
+	std::stringstream stream;
+	ASSERT_TRUE(JamFile::ToStream(jam, stream));
+
+	auto reparsed = JamFile::FromStream(std::move(stream));
+	ASSERT_TRUE(reparsed.has_value());
+	ASSERT_TRUE(reparsed.value().Ninjam.has_value());
+	ASSERT_EQ("ninjam.com:2049", reparsed.value().Ninjam.value().Host);
+	ASSERT_EQ("guest", reparsed.value().Ninjam.value().User);
+	ASSERT_EQ("secret", reparsed.value().Ninjam.value().Pass);
+	ASSERT_EQ("C:/Temp/JammaNinjam", reparsed.value().Ninjam.value().WorkDir);
+}

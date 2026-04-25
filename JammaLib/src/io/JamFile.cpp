@@ -10,7 +10,7 @@
 using namespace io;
 using audio::BehaviourParams;
 
-const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
+const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
 
 std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 {
@@ -33,9 +33,22 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	JamFile jam;
 	jam.Version = VERSION_V;
 	jam.TimerTicks = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation = engine::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
 
-	auto iter = jamParams.KeyValues.find("stations");
+	auto iter = jamParams.KeyValues.find("ninjam");
+	if (iter != jamParams.KeyValues.end())
+	{
+		if (jamParams.KeyValues["ninjam"].index() == 6)
+		{
+			auto ninjamOpt = NinjamConfig::FromJson(std::get<Json::JsonPart>(jamParams.KeyValues["ninjam"]));
+			if (ninjamOpt.has_value())
+				jam.Ninjam = ninjamOpt.value();
+		}
+	}
+
+	iter = jamParams.KeyValues.find("stations");
 	if (iter != jamParams.KeyValues.end())
 	{
 		if (jamParams.KeyValues["stations"].index() == 5)
@@ -127,11 +140,21 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		return "{" + kvStr("type", typeStr) + "," + quoted("chans") + ":[" + chans + "]}";
 	};
 
+	auto ninjamStr = [&](const JamFile::NinjamConfig& n) -> std::string {
+		return "{" + kvStr("host", n.Host)
+			+ "," + kvStr("user", n.User)
+			+ "," + kvStr("pass", n.Pass)
+			+ "," + kvStr("workdir", n.WorkDir)
+			+ "}";
+	};
+
 	ss << "{";
 	ss << kvStr("name", jam.Name) << ",";
 	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	if (jam.Ninjam.has_value())
+		ss << quoted("ninjam") << ":" << ninjamStr(jam.Ninjam.value()) << ",";
 	ss << quoted("stations") << ":[";
 
 	for (size_t si = 0; si < jam.Stations.size(); ++si)
@@ -172,6 +195,32 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	}
 	ss << "]}";
 	return true;
+}
+
+std::optional<JamFile::NinjamConfig> JamFile::NinjamConfig::FromJson(Json::JsonPart json)
+{
+	NinjamConfig config;
+
+	auto iter = json.KeyValues.find("host");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["host"].index() == 4))
+		config.Host = std::get<std::string>(json.KeyValues["host"]);
+
+	iter = json.KeyValues.find("user");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["user"].index() == 4))
+		config.User = std::get<std::string>(json.KeyValues["user"]);
+
+	iter = json.KeyValues.find("pass");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["pass"].index() == 4))
+		config.Pass = std::get<std::string>(json.KeyValues["pass"]);
+
+	iter = json.KeyValues.find("workdir");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["workdir"].index() == 4))
+		config.WorkDir = std::get<std::string>(json.KeyValues["workdir"]);
+
+	if (config.Host.empty() && config.User.empty() && config.Pass.empty() && config.WorkDir.empty())
+		return std::nullopt;
+
+	return config;
 }
 
 std::optional<JamFile::LoopMix> JamFile::LoopMix::FromJson(Json::JsonPart json)

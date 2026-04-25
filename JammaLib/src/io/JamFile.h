@@ -32,6 +32,16 @@ namespace io
 		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
 
+		struct NinjamConfig
+		{
+			std::string Host;
+			std::string User;
+			std::string Pass;
+			std::string WorkDir;
+
+			static std::optional<NinjamConfig> FromJson(Json::JsonPart json);
+		};
+
 		struct LoopMix
 		{
 			enum MixType
@@ -81,6 +91,7 @@ namespace io
 
 		Version Version;
 		std::string Name;
+		std::optional<NinjamConfig> Ninjam;
 		std::vector<Station> Stations;
 		unsigned long TimerTicks;
 		unsigned int QuantiseSamps;
