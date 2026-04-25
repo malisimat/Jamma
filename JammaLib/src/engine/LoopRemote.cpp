@@ -64,5 +64,7 @@ void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 	_playState = STATE_PLAYING;
 	_loopLength = _measureLengthSamps;
 	_playIndex = constants::MaxLoopFadeSamps + _measurePositionSamps;
-	_UpdateLoopModel();
+
+	// Do not rebuild LoopModel/VU geometry here: this path is used from audio ingest
+	// and must remain real-time-safe. Refresh should be deferred to a non-audio thread.
 }
