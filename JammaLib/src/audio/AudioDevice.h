@@ -29,6 +29,15 @@ namespace audio
 
 	class AudioDevice
 	{
+	private:
+		enum class StreamState
+		{
+			CLOSED,
+			STOPPED,
+			RUNNING,
+			PAUSED
+		};
+
 	public:
 		AudioDevice();
 		AudioDevice(AudioStreamParams audioStreamParams,
@@ -46,7 +55,7 @@ namespace audio
 	private:
 		AudioStreamParams _audioStreamParams;
 		std::unique_ptr<RtAudio> _stream;
-		bool _pausedByUs;
+		StreamState _streamState;
 
 	public:
 		static std::optional<std::unique_ptr<AudioDevice>> Open(

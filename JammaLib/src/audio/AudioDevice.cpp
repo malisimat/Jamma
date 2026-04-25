@@ -18,7 +18,7 @@ void AudioStreamParams::PrintParams()
 AudioDevice::AudioDevice() :
 	_audioStreamParams(),
 	_stream(std::unique_ptr<RtAudio>()),
-	_pausedByUs(false)
+	_streamState(StreamState::CLOSED)
 {
 }
 
@@ -26,8 +26,15 @@ AudioDevice::AudioDevice(AudioStreamParams audioStreamParams,
 	std::unique_ptr<RtAudio> stream) :
 	_audioStreamParams(audioStreamParams),
 	_stream(std::move(stream)),
-	_pausedByUs(false)
+	_streamState(StreamState::CLOSED)
 {
+	if (_stream)
+	{
+		if (_stream->isStreamRunning())
+			_streamState = StreamState::RUNNING;
+		else if (_stream->isStreamOpen())
+			_streamState = StreamState::STOPPED;
+	}
 }
 
 AudioDevice::~AudioDevice()
@@ -41,7 +48,15 @@ AudioDevice::~AudioDevice()
 void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 {
 	_stream = std::move(device);
-	_pausedByUs = false;
+	_streamState = StreamState::CLOSED;
+
+	if (_stream)
+	{
+		if (_stream->isStreamRunning())
+			_streamState = StreamState::RUNNING;
+		else if (_stream->isStreamOpen())
+			_streamState = StreamState::STOPPED;
+	}
 }
 
 void AudioDevice::Start()
@@ -49,7 +64,7 @@ void AudioDevice::Start()
 	if (_stream)
 	{
 		_stream->startStream();
-		_pausedByUs = false;
+		_streamState = StreamState::RUNNING;
 		_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 		_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
 	}
@@ -61,10 +76,12 @@ void AudioDevice::Stop()
 	{
 		if (_stream->isStreamRunning())
 			_stream->stopStream();
-		_pausedByUs = false;
+		_streamState = StreamState::STOPPED;
 
 		if (_stream->isStreamOpen())
 			_stream->closeStream();
+
+		_streamState = StreamState::CLOSED;
 	}
 }
 
@@ -79,7 +96,7 @@ bool AudioDevice::Pause()
 			return false;
 
 		_stream->stopStream();
-		_pausedByUs = true;
+		_streamState = StreamState::PAUSED;
 		return true;
 	}
 	catch (RtAudioError& err)
@@ -94,7 +111,7 @@ bool AudioDevice::Resume()
 	if (!_stream)
 		return false;
 
-	if (!_pausedByUs)
+	if (_streamState != StreamState::PAUSED)
 		return false;
 
 	try
@@ -105,7 +122,7 @@ bool AudioDevice::Resume()
 			_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 			_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
 		}
-		_pausedByUs = false;
+		_streamState = StreamState::RUNNING;
 		return true;
 	}
 	catch (RtAudioError& err)

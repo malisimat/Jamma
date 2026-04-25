@@ -399,31 +399,6 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
-	struct AudioPauseGuard
-	{
-		explicit AudioPauseGuard(AudioDevice* audioDevice) :
-			Device(audioDevice),
-			Paused(false)
-		{
-			if (Device != nullptr)
-				Paused = Device->Pause();
-		}
-
-		~AudioPauseGuard()
-		{
-			if (Paused && Device != nullptr)
-				Device->Resume();
-		}
-
-		AudioPauseGuard(const AudioPauseGuard&) = delete;
-		AudioPauseGuard& operator=(const AudioPauseGuard&) = delete;
-		AudioPauseGuard(AudioPauseGuard&&) = delete;
-		AudioPauseGuard& operator=(AudioPauseGuard&&) = delete;
-
-		AudioDevice* Device;
-		bool Paused;
-	};
-
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioDevice->GetAudioStreamParams());
@@ -452,10 +427,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		const auto exportDir = utils::PickDirectory(L"Choose export directory");
 		if (exportDir.empty())
 			return ActionResult::NoAction();
-
-		AudioPauseGuard pauseGuard(_audioDevice.get());
-		if (!pauseGuard.Paused)
-			std::cout << "Export: audio stream not running or pause failed; exporting without pause" << std::endl;
 
 		const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
 		const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
