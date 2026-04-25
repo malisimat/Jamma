@@ -147,6 +147,7 @@ xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gte
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
+    <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />

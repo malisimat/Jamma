@@ -44,6 +44,9 @@
     <ClCompile Include="src\graphics\Window_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
