@@ -1,5 +1,8 @@
 #include "Scene.h"
 #include "glm/ext.hpp"
+#include "../io/WavReadWriter.h"
+#include "../io/TextReadWriter.h"
+#include "../utils/PathUtils.h"
 
 using namespace base;
 using namespace actions;
@@ -396,6 +399,26 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 ActionResult Scene::OnAction(KeyAction action)
 {
+	struct AudioPauseGuard
+	{
+		explicit AudioPauseGuard(AudioDevice* audioDevice) :
+			Device(audioDevice),
+			Paused(false)
+		{
+			if (Device != nullptr)
+				Paused = Device->Pause();
+		}
+
+		~AudioPauseGuard()
+		{
+			if (Paused && Device != nullptr)
+				Device->Resume();
+		}
+
+		AudioDevice* Device;
+		bool Paused;
+	};
+
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	action.SetAudioParams(_audioDevice->GetAudioStreamParams());
@@ -409,6 +432,87 @@ ActionResult Scene::OnAction(KeyAction action)
 		auto res = _undoHistory.Undo();
 
 		return { res };
+	}
+
+	if ((83 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers))
+	{
+		const auto exportDir = utils::PickDirectory(L"Choose export directory");
+		if (exportDir.empty())
+			return ActionResult::NoAction();
+
+		AudioPauseGuard pauseGuard(_audioDevice.get());
+		if (!pauseGuard.Paused)
+		{
+			std::cout << "Export: failed to pause audio stream" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		std::scoped_lock lock(_audioMutex);
+
+		const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
+		const auto sampleRate = (0u == streamSampleRate) ? _userConfig.Audio.SampleRate : streamSampleRate;
+
+		io::JamFile jam;
+		jam.Version = io::JamFile::VERSION_V;
+		jam.Name = "export";
+		jam.TimerTicks = 0;
+		jam.QuantiseSamps = 0;
+		jam.Quantisation = engine::Timer::QUANTISE_OFF;
+
+		io::WavReadWriter wavWriter;
+		unsigned int wavCount = 0;
+
+		for (const auto& station : _stations)
+		{
+			io::JamFile::Station jamStation;
+			jamStation.Name = station->Name();
+			jamStation.StationType = 0;
+
+			for (const auto& take : station->GetLoopTakes())
+			{
+				io::JamFile::LoopTake jamTake;
+				jamTake.Name = take->Id();
+
+				for (const auto& loop : take->GetLoops())
+				{
+					auto samples = loop->ExportSamples();
+					if (samples.empty())
+						continue;
+
+					const auto wavFilename = loop->Id() + ".wav";
+					const auto wavPath = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
+					if (!wavWriter.Write(wavPath, samples, (unsigned int)samples.size(), sampleRate))
+						continue;
+
+					++wavCount;
+					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
+				}
+
+				if (!jamTake.Loops.empty())
+					jamStation.LoopTakes.push_back(std::move(jamTake));
+			}
+
+			if (!jamStation.LoopTakes.empty())
+				jam.Stations.push_back(std::move(jamStation));
+		}
+
+		if (jam.Stations.empty())
+		{
+			std::cout << "Export: nothing to export" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		std::stringstream jamStream;
+		io::JamFile::ToStream(jam, jamStream);
+		const auto jamPath = exportDir + L"\\session.jam";
+		io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
+
+		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
+			<< utils::EncodeUtf8(exportDir) << std::endl;
+
+		return ActionResult::NoAction();
 	}
 
 	bool checkReset = false;

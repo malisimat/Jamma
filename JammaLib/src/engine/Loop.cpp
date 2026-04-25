@@ -1,4 +1,5 @@
 #include "Loop.h"
+#include <algorithm>
 
 using namespace base;
 using namespace engine;
@@ -60,7 +61,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	switch (loopStruct.Mix.Mix)
 	{
 	case io::JamFile::LoopMix::MIX_WIRE:
-		if (loopStruct.Mix.Params.index() == 1)
+		if (loopStruct.Mix.Params.index() == 0)
 			chans = std::get<std::vector<unsigned long>>(loopStruct.Mix.Params);
 
 		for (auto chan : chans)
@@ -404,6 +405,73 @@ void Loop::SetLoopChannel(unsigned int channel)
 std::string Loop::Id() const
 {
 	return _loopParams.Id;
+}
+
+std::vector<float> Loop::ExportSamples() const
+{
+	if (_loopLength == 0 || _playState == STATE_INACTIVE)
+		return {};
+
+	std::vector<float> out(_loopLength);
+	unsigned long copied = 0;
+	while (copied < _loopLength)
+	{
+		const auto idx = constants::MaxLoopFadeSamps + copied;
+		const auto bankOffset = idx % BufferBank::_BufferBankSize;
+		const auto samplesInBank = BufferBank::_BufferBankSize - bankOffset;
+		const auto chunkSize = std::min(_loopLength - copied, samplesInBank);
+		const auto* ptr = _bufferBank.BlockPtr(idx);
+
+		if (ptr != nullptr)
+			std::copy_n(ptr, chunkSize, out.data() + copied);
+		else
+			std::fill(out.data() + copied, out.data() + copied + chunkSize, 0.0f);
+
+		copied += chunkSize;
+	}
+
+	return out;
+}
+
+io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
+{
+	io::JamFile::Loop loop;
+	loop.Name = wavFilename;
+	loop.Length = _loopLength;
+	loop.Index = (_playIndex >= constants::MaxLoopFadeSamps) ?
+		(_playIndex - constants::MaxLoopFadeSamps) :
+		0ul;
+	loop.MasterLoopCount = 0;
+	loop.Level = _mixer->UnmutedLevel();
+	loop.Speed = _pitch;
+	loop.MuteGroups = 0;
+	loop.SelectGroups = 0;
+	loop.Muted = IsMuted();
+
+	auto params = _mixer->GetBehaviourParams();
+	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_WIRE;
+		std::vector<unsigned long> channels;
+		for (auto chan : wire->Channels)
+			channels.push_back(chan);
+		loop.Mix.Params = std::move(channels);
+	}
+	else if (auto* pan = std::get_if<audio::PanMixBehaviourParams>(&params))
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		std::vector<double> levels;
+		for (auto level : pan->ChannelLevels)
+			levels.push_back(level);
+		loop.Mix.Params = std::move(levels);
+	}
+	else
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
+	}
+
+	return loop;
 }
 
 void Loop::Update()

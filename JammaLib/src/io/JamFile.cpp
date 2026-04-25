@@ -89,39 +89,115 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 
 bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
-	ss << "Version: " << jam.Version << std::endl;
-	ss << "Name: " << jam.Name << std::endl;
-	ss << "TimerTicks: " << jam.TimerTicks << std::endl;
-	ss << "QuantiseSamps: " << jam.QuantiseSamps << std::endl;
-	ss << "Quantisation: " << jam.Quantisation << std::endl;
-
-	for (auto &station : jam.Stations)
-	{
-		ss << "=== Station ===" << std::endl;
-		ss << "Name: " << station.Name << std::endl;
-		ss << "StationType: " << station.StationType << std::endl;
-
-		for (auto& loopTake : station.LoopTakes)
+	auto quoted = [](const std::string& s) { return "\"" + s + "\""; };
+	auto kvStr = [&](const std::string& key, const std::string& value)
+		{ return quoted(key) + ":" + quoted(value); };
+	auto kvUlong = [&](const std::string& key, unsigned long value)
+		{ return quoted(key) + ":" + std::to_string(value); };
+	auto kvDouble = [&](const std::string& key, double value)
 		{
-			ss << "====== LoopTake ======" << std::endl;
-			ss << "Name: " << loopTake.Name << std::endl;
+			std::ostringstream out;
+			out << value;
+			return quoted(key) + ":" + out.str();
+		};
+	auto kvBool = [&](const std::string& key, bool value)
+		{ return quoted(key) + ":" + (value ? "true" : "false"); };
 
-			for (auto& loop: loopTake.Loops)
+	auto quantStr = [](engine::Timer::QuantisationType quant) -> std::string {
+		if (quant == engine::Timer::QUANTISE_MULTIPLE)
+			return "multiple";
+		if (quant == engine::Timer::QUANTISE_POWER)
+			return "power";
+		return "off";
+	};
+
+	auto mixToJson = [&](const JamFile::LoopMix& mix) -> std::string {
+		std::string chans;
+		const auto mixType = (mix.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
+		if (mix.Mix == LoopMix::MIX_WIRE)
+		{
+			const auto& values = std::get<std::vector<unsigned long>>(mix.Params);
+			for (size_t i = 0; i < values.size(); ++i)
 			{
-				ss << "========= Loop =========" << std::endl;
-				ss << "Name: " << loop.Name << std::endl;
-				ss << "Length: " << loop.Length << std::endl;
-				ss << "Index: " << loop.Index << std::endl;
-				ss << "MasterLoopCount: " << loop.MasterLoopCount << std::endl;
-				ss << "Level: " << loop.Level << std::endl;
-				ss << "Muted: " << loop.Muted << std::endl;
-				ss << "MixType: " << loop.Mix.Mix << std::endl;
-				ss << "MuteGroups: " << loop.MuteGroups << std::endl;
-				ss << "SelectGroups: " << loop.SelectGroups << std::endl;
+				if (i > 0) chans += ",";
+				chans += std::to_string(values[i]);
 			}
 		}
+		else
+		{
+			const auto& values = std::get<std::vector<double>>(mix.Params);
+			for (size_t i = 0; i < values.size(); ++i)
+			{
+				if (i > 0) chans += ",";
+				std::ostringstream out;
+				out << values[i];
+				chans += out.str();
+			}
+		}
+
+		return "{"
+			+ kvStr("type", mixType)
+			+ ","
+			+ quoted("chans")
+			+ ":["
+			+ chans
+			+ "]}";
+	};
+
+	ss << "{";
+	ss << kvStr("name", jam.Name) << ",";
+	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
+	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
+	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	ss << quoted("stations") << ":[";
+
+	for (size_t stationIndex = 0; stationIndex < jam.Stations.size(); ++stationIndex)
+	{
+		const auto& station = jam.Stations[stationIndex];
+		if (stationIndex > 0) ss << ",";
+		ss << "{"
+			<< kvStr("name", station.Name)
+			<< ","
+			<< kvUlong("stationtype", station.StationType)
+			<< ","
+			<< quoted("takes")
+			<< ":[";
+
+		for (size_t takeIndex = 0; takeIndex < station.LoopTakes.size(); ++takeIndex)
+		{
+			const auto& take = station.LoopTakes[takeIndex];
+			if (takeIndex > 0) ss << ",";
+			ss << "{"
+				<< kvStr("name", take.Name)
+				<< ","
+				<< quoted("loops")
+				<< ":[";
+
+			for (size_t loopIndex = 0; loopIndex < take.Loops.size(); ++loopIndex)
+			{
+				const auto& loop = take.Loops[loopIndex];
+				if (loopIndex > 0) ss << ",";
+				ss << "{"
+					<< kvStr("name", loop.Name) << ","
+					<< kvUlong("length", loop.Length) << ","
+					<< kvUlong("index", loop.Index) << ","
+					<< kvUlong("masterloopcount", loop.MasterLoopCount) << ","
+					<< kvDouble("level", loop.Level) << ","
+					<< kvDouble("speed", loop.Speed) << ","
+					<< kvUlong("mutegroups", loop.MuteGroups) << ","
+					<< kvUlong("selectgroups", loop.SelectGroups) << ","
+					<< kvBool("muted", loop.Muted) << ","
+					<< quoted("mix") << ":" << mixToJson(loop.Mix)
+					<< "}";
+			}
+
+			ss << "]}";
+		}
+
+		ss << "]}";
 	}
 
+	ss << "]}";
 	return true;
 }
 

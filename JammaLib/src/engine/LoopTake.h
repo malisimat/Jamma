@@ -117,6 +117,7 @@ namespace engine
 		std::string Id() const;
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
+		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);

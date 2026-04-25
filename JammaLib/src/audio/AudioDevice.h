@@ -39,6 +39,8 @@ namespace audio
 		void SetDevice(std::unique_ptr<RtAudio> device);
 		void Start();
 		void Stop();
+		bool Pause();
+		bool Resume();
 		AudioStreamParams GetAudioStreamParams();
 
 	private:

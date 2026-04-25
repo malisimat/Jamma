@@ -63,6 +63,48 @@ void AudioDevice::Stop()
 	}
 }
 
+bool AudioDevice::Pause()
+{
+	if (!_stream)
+		return true;
+
+	try
+	{
+		if (_stream->isStreamRunning())
+			_stream->stopStream();
+	}
+	catch (RtAudioError& err)
+	{
+		std::cout << "Error pausing audio stream: " << err.getMessage() << std::endl;
+		return false;
+	}
+
+	return true;
+}
+
+bool AudioDevice::Resume()
+{
+	if (!_stream)
+		return true;
+
+	try
+	{
+		if (_stream->isStreamOpen() && !_stream->isStreamRunning())
+		{
+			_stream->startStream();
+			_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
+			_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
+		}
+	}
+	catch (RtAudioError& err)
+	{
+		std::cout << "Error resuming audio stream: " << err.getMessage() << std::endl;
+		return false;
+	}
+
+	return true;
+}
+
 AudioStreamParams AudioDevice::GetAudioStreamParams()
 {
 	return _audioStreamParams;
