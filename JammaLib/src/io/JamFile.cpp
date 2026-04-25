@@ -104,11 +104,16 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{ return quoted(key) + ":" + (value ? "true" : "false"); };
 
 	auto quantStr = [](engine::Timer::QuantisationType quant) -> std::string {
-		if (quant == engine::Timer::QUANTISE_MULTIPLE)
+		switch (quant)
+		{
+		case engine::Timer::QUANTISE_MULTIPLE:
 			return "multiple";
-		if (quant == engine::Timer::QUANTISE_POWER)
+		case engine::Timer::QUANTISE_POWER:
 			return "power";
-		return "off";
+		case engine::Timer::QUANTISE_OFF:
+		default:
+			return "off";
+		}
 	};
 
 	auto mixToJson = [&](const JamFile::LoopMix& mix) -> std::string {

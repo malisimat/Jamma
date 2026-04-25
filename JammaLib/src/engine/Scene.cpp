@@ -415,6 +415,11 @@ ActionResult Scene::OnAction(KeyAction action)
 				Device->Resume();
 		}
 
+		AudioPauseGuard(const AudioPauseGuard&) = delete;
+		AudioPauseGuard& operator=(const AudioPauseGuard&) = delete;
+		AudioPauseGuard(AudioPauseGuard&&) = delete;
+		AudioPauseGuard& operator=(AudioPauseGuard&&) = delete;
+
 		AudioDevice* Device;
 		bool Paused;
 	};
@@ -452,7 +457,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		std::scoped_lock lock(_audioMutex);
 
 		const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
-		const auto sampleRate = (0u == streamSampleRate) ? _userConfig.Audio.SampleRate : streamSampleRate;
+		const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
 
 		io::JamFile jam;
 		jam.Version = io::JamFile::VERSION_V;

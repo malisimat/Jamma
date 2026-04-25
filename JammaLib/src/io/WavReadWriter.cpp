@@ -181,7 +181,7 @@ void WavReadWriter::FillHeader(struct SoundHeader &hdr)
 
 void WavReadWriter::FloatToChar(float f, char* c)
 {
-	auto clamped = std::max(-1.0f, std::min(1.0f, f));
+	auto clamped = std::clamp(f, -1.0f, 1.0f);
 	int tempint = (int)(clamped * 32767.0f);
 
 	*c = (char)(tempint & 0xFF);

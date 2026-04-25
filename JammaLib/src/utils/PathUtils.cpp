@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <shobjidl_core.h>
+#include <wrl/client.h>
 #include "PathUtils.h"
 
 std::wstring utils::GetPath(PathType pathType)
@@ -35,24 +36,26 @@ std::wstring utils::GetParentDirectory(std::wstring dir)
 
 std::wstring utils::PickDirectory(const std::wstring& title)
 {
+	using Microsoft::WRL::ComPtr;
+
 	std::wstring result;
 
-	struct ComGuard
+	struct ComInitGuard
 	{
 		bool DidInit = false;
-		ComGuard()
+		ComInitGuard()
 		{
 			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 			DidInit = SUCCEEDED(hr);
 		}
-		~ComGuard()
+		~ComInitGuard()
 		{
 			if (DidInit)
 				CoUninitialize();
 		}
-	} comGuard;
+	} comInitGuard;
 
-	IFileOpenDialog* dialog = nullptr;
+	ComPtr<IFileOpenDialog> dialog;
 	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog,
 		nullptr,
 		CLSCTX_INPROC_SERVER,
@@ -66,7 +69,7 @@ std::wstring utils::PickDirectory(const std::wstring& title)
 
 	if (SUCCEEDED(dialog->Show(nullptr)))
 	{
-		IShellItem* item = nullptr;
+		ComPtr<IShellItem> item;
 		if (SUCCEEDED(dialog->GetResult(&item)))
 		{
 			PWSTR path = nullptr;
@@ -75,10 +78,8 @@ std::wstring utils::PickDirectory(const std::wstring& title)
 				result = path;
 				CoTaskMemFree(path);
 			}
-			item->Release();
 		}
 	}
 
-	dialog->Release();
 	return result;
 }
