@@ -88,8 +88,8 @@
       <AdditionalLibraryDirectories>$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
-xcopy /y /d "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
+      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
+xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
       <Message>Copying debug gtest DLLs</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
