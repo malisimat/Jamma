@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "Loop.h"
@@ -162,7 +163,7 @@ namespace engine
 		bool _flipLoopBuffer;
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
-		LoopTakeState _state;
+		std::atomic<LoopTakeState> _state;
 		std::string _id;
 		std::string _sourceId;
 		unsigned int _lastBufSize;

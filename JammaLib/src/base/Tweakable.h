@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 namespace base
 {
 	class TweakableParams
@@ -44,18 +46,20 @@ namespace base
 
 	public:
 		TweakState GetTweakState() const {
-			return _tweakState;
+			return _tweakState.load(std::memory_order_relaxed);
 		}
 
 		bool IsMuted() const
 		{
-			return _tweakState & TWEAKSTATE_MUTED;
+			return GetTweakState() & TWEAKSTATE_MUTED;
 		}
 
 		virtual bool Mute()
 		{
 			bool isAlreadySet = IsMuted();
-			_tweakState |= TWEAKSTATE_MUTED;
+			auto tweakState = GetTweakState();
+			tweakState |= TWEAKSTATE_MUTED;
+			_tweakState.store(tweakState, std::memory_order_relaxed);
 
 			return !isAlreadySet;
 		}
@@ -63,13 +67,15 @@ namespace base
 		virtual bool UnMute()
 		{
 			bool isAlreadyUnset = !IsMuted();
-			_tweakState &= ~TWEAKSTATE_MUTED;
+			auto tweakState = GetTweakState();
+			tweakState &= ~TWEAKSTATE_MUTED;
+			_tweakState.store(tweakState, std::memory_order_relaxed);
 
 			return !isAlreadyUnset;
 		}
 
 	protected:
-		TweakState _tweakState;
+		std::atomic<TweakState> _tweakState;
 
 	};
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "Audible.h"
@@ -88,6 +89,6 @@ namespace base
 		}
 
 	protected:
-		unsigned long _writeIndex;
+		std::atomic<unsigned long> _writeIndex;
 	};
 }
