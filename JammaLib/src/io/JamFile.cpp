@@ -94,17 +94,18 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
 	// Local helpers
 	auto quoted  = [](const std::string& s) { return '"' + s + '"'; };
+	auto fmtDouble = [](double v) -> std::string {
+	                     std::ostringstream o;
+	                     o.imbue(std::locale::classic());
+	                     o << std::fixed << std::setprecision(10) << v;
+	                     return o.str();
+	                 };
 	auto kvStr   = [&](const std::string& k, const std::string& v)
 	                   { return quoted(k) + ":" + quoted(v); };
 	auto kvUlong = [&](const std::string& k, unsigned long v)
 	                   { return quoted(k) + ":" + std::to_string(v); };
 	auto kvDouble = [&](const std::string& k, double v)
-	                   {
-	                       std::ostringstream o;
-	                       o.imbue(std::locale::classic());
-	                       o << std::fixed << std::setprecision(10) << v;
-	                       return quoted(k) + ":" + o.str();
-	                   };
+	                   { return quoted(k) + ":" + fmtDouble(v); };
 	auto kvBool  = [&](const std::string& k, bool v)
 	                   { return quoted(k) + ":" + (v ? "true" : "false"); };
 
@@ -127,12 +128,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{
 			const auto& v = std::get<std::vector<double>>(m.Params);
 			for (size_t i = 0; i < v.size(); ++i)
-			{
-				std::ostringstream o;
-				o.imbue(std::locale::classic());
-				o << std::fixed << std::setprecision(10) << v[i];
-				chans += (i ? "," : "") + o.str();
-			}
+				chans += (i ? "," : "") + fmtDouble(v[i]);
 		}
 		return "{" + kvStr("type", typeStr) + "," + quoted("chans") + ":[" + chans + "]}";
 	};
