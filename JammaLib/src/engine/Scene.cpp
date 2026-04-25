@@ -526,10 +526,14 @@ ActionResult Scene::OnAction(KeyAction action)
 
 		io::TextReadWriter textWriter;
 		const auto jamPath = exportDir + L"\\session.jam";
-		textWriter.Write(jamPath, jamStream.str(), 0, 0);
+		const bool jamOk = textWriter.Write(jamPath, jamStream.str(), 0, 0);
 
-		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
-		          << utils::EncodeUtf8(exportDir) << std::endl;
+		if (jamOk)
+			std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
+			          << utils::EncodeUtf8(exportDir) << std::endl;
+		else
+			std::cout << "Export: wrote " << wavCount << " WAV(s) but failed to write session.jam to "
+			          << utils::EncodeUtf8(exportDir) << std::endl;
 
 		return ActionResult::NoAction();
 	}

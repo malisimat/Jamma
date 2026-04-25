@@ -184,3 +184,258 @@ TEST(JamFile, ParsesFile) {
 	ASSERT_EQ(4321, jam.value().QuantiseSamps);
 	ASSERT_EQ(engine::Timer::QUANTISE_POWER, jam.value().Quantisation);
 }
+
+// ---------------------------------------------------------------------------
+// ToStream -> FromStream round-trip tests
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	// Helper: build a minimal Loop with a pan mix.
+	JamFile::Loop MakePanLoop(const std::string& name,
+	                          unsigned long length,
+	                          unsigned long index,
+	                          double level,
+	                          double speed)
+	{
+		JamFile::LoopMix mix;
+		mix.Mix = JamFile::LoopMix::MIX_PAN;
+		mix.Params = std::vector<double>{ 0.25, 0.75 };
+
+		JamFile::Loop loop;
+		loop.Name            = name;
+		loop.Length          = length;
+		loop.Index           = index;
+		loop.MasterLoopCount = 2;
+		loop.Level           = level;
+		loop.Speed           = speed;
+		loop.MuteGroups      = 0;
+		loop.SelectGroups    = 0;
+		loop.Muted           = false;
+		loop.Mix             = mix;
+		return loop;
+	}
+
+	// Helper: build a minimal Loop with a wire mix.
+	JamFile::Loop MakeWireLoop(const std::string& name)
+	{
+		JamFile::LoopMix mix;
+		mix.Mix    = JamFile::LoopMix::MIX_WIRE;
+		mix.Params = std::vector<unsigned long>{ 0, 1 };
+
+		JamFile::Loop loop;
+		loop.Name            = name;
+		loop.Length          = 44100;
+		loop.Index           = 0;
+		loop.MasterLoopCount = 0;
+		loop.Level           = 1.0;
+		loop.Speed           = 1.0;
+		loop.MuteGroups      = 0;
+		loop.SelectGroups    = 0;
+		loop.Muted           = true;
+		loop.Mix             = mix;
+		return loop;
+	}
+} // anonymous namespace
+
+TEST(JamFile, ToStream_RoundTrip_Basic) {
+	JamFile::LoopTake take;
+	take.Name  = "take1";
+	take.Loops = { MakePanLoop("loop1.wav", 100000, 42, 0.75, 1.0) };
+
+	JamFile::Station station;
+	station.Name       = "station1";
+	station.StationType = 0;
+	station.LoopTakes  = { take };
+
+	JamFile jam;
+	jam.Version       = JamFile::VERSION_V;
+	jam.Name          = "mysession";
+	jam.TimerTicks    = 12345;
+	jam.QuantiseSamps = 77911;
+	jam.Quantisation  = engine::Timer::QUANTISE_MULTIPLE;
+	jam.Stations      = { station };
+
+	std::stringstream ss;
+	ASSERT_TRUE(JamFile::ToStream(jam, ss));
+
+	auto result = JamFile::FromStream(std::move(ss));
+	ASSERT_TRUE(result.has_value());
+
+	ASSERT_EQ(0, result.value().Name.compare("mysession"));
+	ASSERT_EQ(12345ul, result.value().TimerTicks);
+	ASSERT_EQ(77911u, result.value().QuantiseSamps);
+	ASSERT_EQ(engine::Timer::QUANTISE_MULTIPLE, result.value().Quantisation);
+
+	ASSERT_EQ(1u, result.value().Stations.size());
+	ASSERT_EQ(0, result.value().Stations[0].Name.compare("station1"));
+
+	ASSERT_EQ(1u, result.value().Stations[0].LoopTakes.size());
+	ASSERT_EQ(0, result.value().Stations[0].LoopTakes[0].Name.compare("take1"));
+
+	ASSERT_EQ(1u, result.value().Stations[0].LoopTakes[0].Loops.size());
+	const auto& lp = result.value().Stations[0].LoopTakes[0].Loops[0];
+	ASSERT_EQ(0, lp.Name.compare("loop1.wav"));
+	ASSERT_EQ(100000ul, lp.Length);
+	ASSERT_EQ(42ul, lp.Index);
+	ASSERT_EQ(2ul, lp.MasterLoopCount);
+	ASSERT_DOUBLE_EQ(0.75, lp.Level);
+	ASSERT_DOUBLE_EQ(1.0,  lp.Speed);
+	ASSERT_EQ(false, lp.Muted);
+
+	ASSERT_EQ(JamFile::LoopMix::MIX_PAN, lp.Mix.Mix);
+	const auto& chans = std::get<std::vector<double>>(lp.Mix.Params);
+	ASSERT_EQ(2u, chans.size());
+	ASSERT_DOUBLE_EQ(0.25, chans[0]);
+	ASSERT_DOUBLE_EQ(0.75, chans[1]);
+}
+
+TEST(JamFile, ToStream_RoundTrip_WireMix) {
+	JamFile::LoopTake take;
+	take.Name  = "take1";
+	take.Loops = { MakeWireLoop("loop1.wav") };
+
+	JamFile::Station station;
+	station.Name        = "station1";
+	station.StationType = 0;
+	station.LoopTakes   = { take };
+
+	JamFile jam;
+	jam.Version       = JamFile::VERSION_V;
+	jam.Name          = "wiresession";
+	jam.TimerTicks    = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation  = engine::Timer::QUANTISE_OFF;
+	jam.Stations      = { station };
+
+	std::stringstream ss;
+	ASSERT_TRUE(JamFile::ToStream(jam, ss));
+
+	auto result = JamFile::FromStream(std::move(ss));
+	ASSERT_TRUE(result.has_value());
+
+	ASSERT_EQ(0, result.value().Name.compare("wiresession"));
+	ASSERT_EQ(engine::Timer::QUANTISE_OFF, result.value().Quantisation);
+
+	ASSERT_EQ(1u, result.value().Stations.size());
+	ASSERT_EQ(1u, result.value().Stations[0].LoopTakes.size());
+	ASSERT_EQ(1u, result.value().Stations[0].LoopTakes[0].Loops.size());
+
+	const auto& lp = result.value().Stations[0].LoopTakes[0].Loops[0];
+	ASSERT_EQ(true, lp.Muted);
+	ASSERT_EQ(JamFile::LoopMix::MIX_WIRE, lp.Mix.Mix);
+	const auto& chans = std::get<std::vector<unsigned long>>(lp.Mix.Params);
+	ASSERT_EQ(2u, chans.size());
+	ASSERT_EQ(0ul, chans[0]);
+	ASSERT_EQ(1ul, chans[1]);
+}
+
+TEST(JamFile, ToStream_RoundTrip_MultipleStations) {
+	JamFile::LoopTake take1;
+	take1.Name  = "take1";
+	take1.Loops = { MakePanLoop("a.wav", 1000, 1, 0.5, 1.0),
+	                MakePanLoop("b.wav", 2000, 2, 0.8, 0.5) };
+
+	JamFile::LoopTake take2;
+	take2.Name  = "take2";
+	take2.Loops = { MakePanLoop("c.wav", 3000, 3, 1.0, 2.0) };
+
+	JamFile::Station st1;
+	st1.Name        = "drums";
+	st1.StationType = 0;
+	st1.LoopTakes   = { take1, take2 };
+
+	JamFile::LoopTake take3;
+	take3.Name  = "take3";
+	take3.Loops = { MakePanLoop("d.wav", 4000, 4, 0.6, 1.0) };
+
+	JamFile::Station st2;
+	st2.Name        = "bass";
+	st2.StationType = 0;
+	st2.LoopTakes   = { take3 };
+
+	JamFile jam;
+	jam.Version       = JamFile::VERSION_V;
+	jam.Name          = "multisession";
+	jam.TimerTicks    = 99;
+	jam.QuantiseSamps = 4410;
+	jam.Quantisation  = engine::Timer::QUANTISE_POWER;
+	jam.Stations      = { st1, st2 };
+
+	std::stringstream ss;
+	ASSERT_TRUE(JamFile::ToStream(jam, ss));
+
+	auto result = JamFile::FromStream(std::move(ss));
+	ASSERT_TRUE(result.has_value());
+
+	ASSERT_EQ(0, result.value().Name.compare("multisession"));
+	ASSERT_EQ(99ul, result.value().TimerTicks);
+	ASSERT_EQ(4410u, result.value().QuantiseSamps);
+	ASSERT_EQ(engine::Timer::QUANTISE_POWER, result.value().Quantisation);
+
+	ASSERT_EQ(2u, result.value().Stations.size());
+
+	ASSERT_EQ(0, result.value().Stations[0].Name.compare("drums"));
+	ASSERT_EQ(2u, result.value().Stations[0].LoopTakes.size());
+	ASSERT_EQ(2u, result.value().Stations[0].LoopTakes[0].Loops.size());
+	ASSERT_EQ(1u, result.value().Stations[0].LoopTakes[1].Loops.size());
+	ASSERT_EQ(0, result.value().Stations[0].LoopTakes[0].Loops[0].Name.compare("a.wav"));
+	ASSERT_EQ(1ul, result.value().Stations[0].LoopTakes[0].Loops[0].Index);
+	ASSERT_EQ(0, result.value().Stations[0].LoopTakes[0].Loops[1].Name.compare("b.wav"));
+	ASSERT_EQ(2ul, result.value().Stations[0].LoopTakes[0].Loops[1].Index);
+	ASSERT_EQ(0, result.value().Stations[0].LoopTakes[1].Loops[0].Name.compare("c.wav"));
+	ASSERT_EQ(3ul, result.value().Stations[0].LoopTakes[1].Loops[0].Index);
+
+	ASSERT_EQ(0, result.value().Stations[1].Name.compare("bass"));
+	ASSERT_EQ(1u, result.value().Stations[1].LoopTakes.size());
+	ASSERT_EQ(0, result.value().Stations[1].LoopTakes[0].Loops[0].Name.compare("d.wav"));
+	ASSERT_EQ(4ul, result.value().Stations[1].LoopTakes[0].Loops[0].Index);
+}
+
+TEST(JamFile, ToStream_RoundTrip_EmptyStations) {
+	JamFile jam;
+	jam.Version       = JamFile::VERSION_V;
+	jam.Name          = "empty";
+	jam.TimerTicks    = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation  = engine::Timer::QUANTISE_OFF;
+
+	std::stringstream ss;
+	ASSERT_TRUE(JamFile::ToStream(jam, ss));
+
+	auto result = JamFile::FromStream(std::move(ss));
+	ASSERT_TRUE(result.has_value());
+	ASSERT_EQ(0, result.value().Name.compare("empty"));
+	ASSERT_EQ(0u, result.value().Stations.size());
+	ASSERT_EQ(engine::Timer::QUANTISE_OFF, result.value().Quantisation);
+}
+
+TEST(JamFile, ToStream_RoundTrip_DoublesPrecision) {
+	// Verify that level/speed survive the ToStream→FromStream round-trip
+	// accurately regardless of the active locale.
+	JamFile::LoopTake take;
+	take.Name  = "take1";
+	take.Loops = { MakePanLoop("loop.wav", 1000, 0, 0.123456789, 0.987654321) };
+
+	JamFile::Station station;
+	station.Name        = "st";
+	station.StationType = 0;
+	station.LoopTakes   = { take };
+
+	JamFile jam;
+	jam.Version       = JamFile::VERSION_V;
+	jam.Name          = "precision";
+	jam.TimerTicks    = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation  = engine::Timer::QUANTISE_OFF;
+	jam.Stations      = { station };
+
+	std::stringstream ss;
+	ASSERT_TRUE(JamFile::ToStream(jam, ss));
+
+	auto result = JamFile::FromStream(std::move(ss));
+	ASSERT_TRUE(result.has_value());
+	const auto& lp = result.value().Stations[0].LoopTakes[0].Loops[0];
+	ASSERT_NEAR(0.123456789, lp.Level, 1e-9);
+	ASSERT_NEAR(0.987654321, lp.Speed, 1e-9);
+}

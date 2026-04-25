@@ -7,6 +7,8 @@
 
 #include "JamFile.h"
 #include <sstream>
+#include <iomanip>
+#include <locale>
 
 using namespace io;
 using audio::BehaviourParams;
@@ -97,7 +99,12 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	auto kvUlong = [&](const std::string& k, unsigned long v)
 	                   { return quoted(k) + ":" + std::to_string(v); };
 	auto kvDouble = [&](const std::string& k, double v)
-	                   { std::ostringstream o; o << v; return quoted(k) + ":" + o.str(); };
+	                   {
+	                       std::ostringstream o;
+	                       o.imbue(std::locale::classic());
+	                       o << std::fixed << std::setprecision(10) << v;
+	                       return quoted(k) + ":" + o.str();
+	                   };
 	auto kvBool  = [&](const std::string& k, bool v)
 	                   { return quoted(k) + ":" + (v ? "true" : "false"); };
 
@@ -120,7 +127,12 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{
 			const auto& v = std::get<std::vector<double>>(m.Params);
 			for (size_t i = 0; i < v.size(); ++i)
-			{ std::ostringstream o; o << v[i]; chans += (i ? "," : "") + o.str(); }
+			{
+				std::ostringstream o;
+				o.imbue(std::locale::classic());
+				o << std::fixed << std::setprecision(10) << v[i];
+				chans += (i ? "," : "") + o.str();
+			}
 		}
 		return "{" + kvStr("type", typeStr) + "," + quoted("chans") + ":[" + chans + "]}";
 	};
