@@ -82,6 +82,21 @@ If you encounter a build error about missing Google Test headers/libraries, ensu
 2. `vcpkg install` has been run at the solution root
 3. The `vcpkg_installed/` directory exists and contains `gtest`
 
+### Troubleshooting: gtest DLL mismatch (tests crash silently on startup)
+
+Symptom: exe exits with code 1, no output. Cause: MSBuild skips the PostBuildEvent when up-to-date, leaving stale Release DLLs; the Debug exe crashes on them.
+
+Fix:
+
+```powershell
+$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
+Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
+Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
+```
+
+Verify: `gtest.dll` in the Debug output dir should be ~1.8 MB (Release is ~448 KB).
+
 ### Preprocessor Directives
 
 **JammaLib (all configurations):**
