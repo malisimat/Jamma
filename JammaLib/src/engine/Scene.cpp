@@ -42,7 +42,12 @@ Scene::Scene(SceneParams params,
 	_stations(),
 	_ninjamConfig(std::nullopt),
 	_remoteStations(),
+	_lastRemoteUsers(),
 	_ninjamConnection(nullptr),
+	_ninjamRetryAttempts(0u),
+	_ninjamMaxRetryAttempts(4u),
+	_ninjamNextRetryAt(std::chrono::steady_clock::now()),
+	_ninjamRetryDelay(std::chrono::milliseconds(1500)),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -650,11 +655,16 @@ void Scene::OnJobTick(Time curTime)
 {
 	if (_ninjamConnection)
 	{
-		_ninjamConnection->Pump();
-		auto snapshot = _ninjamConnection->Snapshot();
+		_TryAutoConnectNinjam();
 
-		std::scoped_lock lock(_audioMutex);
-		_ReconcileRemoteStations(snapshot);
+		if (_ninjamConnection->IsConnected())
+		{
+			_ninjamConnection->Pump();
+			auto snapshot = _ninjamConnection->Snapshot();
+
+			std::scoped_lock lock(_audioMutex);
+			_ReconcileRemoteStations(snapshot);
+		}
 	}
 
 	actions::JobAction job;
@@ -1206,6 +1216,10 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
 {
 	_ninjamConnection.reset();
+	_remoteStations.clear();
+	_lastRemoteUsers.clear();
+	_ninjamRetryAttempts = 0u;
+	_ninjamNextRetryAt = std::chrono::steady_clock::now();
 
 	if (!config.has_value())
 		return;
@@ -1216,8 +1230,51 @@ void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>
 
 	_ninjamConnection = std::make_unique<io::NinjamConnection>(
 		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
-	if (!_ninjamConnection->Connect())
-		_ninjamConnection.reset();
+
+	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
+	_TryAutoConnectNinjam();
+}
+
+void Scene::_TryAutoConnectNinjam()
+{
+	if (!_ninjamConnection)
+		return;
+
+	if (_ninjamConnection->IsConnected())
+		return;
+
+	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
+		return;
+
+	auto now = std::chrono::steady_clock::now();
+	if (now < _ninjamNextRetryAt)
+		return;
+
+	const auto attemptNumber = _ninjamRetryAttempts + 1u;
+	std::cout << "[NINJAM] Connect attempt " << attemptNumber
+		<< "/" << _ninjamMaxRetryAttempts << std::endl;
+
+	if (_ninjamConnection->Connect())
+	{
+		_ninjamRetryAttempts = 0u;
+		_ninjamNextRetryAt = now;
+		return;
+	}
+
+	_ninjamRetryAttempts = attemptNumber;
+	_ninjamNextRetryAt = now + _ninjamRetryDelay;
+
+	auto lastError = _ninjamConnection->LastError();
+	if (lastError.empty())
+		lastError = "Unknown error";
+
+	std::cout << "[NINJAM] Connect attempt failed: " << lastError << std::endl;
+
+	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
+	{
+		std::cout << "[NINJAM] Stopping retries after " << _ninjamRetryAttempts
+			<< " failed attempt(s)" << std::endl;
+	}
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
@@ -1253,6 +1310,7 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 			remoteStation->SetNumDacChannels(2);
 			_remoteStations[user.UserName] = remoteStation;
 			_AddStation(remoteStation);
+			std::cout << "[NINJAM] User joined: " << user.UserName << std::endl;
 		}
 		else
 		{
@@ -1273,12 +1331,28 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 		remoteStation->EnsureRemoteTake();
 	}
 
-	// Remove stations for users who have left
-	for (auto& [userName, station] : _remoteStations)
+	// Remove stations for users who have left.
+	for (auto it = _remoteStations.begin(); it != _remoteStations.end();)
 	{
-		if (seenUsers.find(userName) == seenUsers.end())
+		if (seenUsers.find(it->first) == seenUsers.end())
 		{
-			station->SetConnectedRemote(false);
+			auto station = it->second;
+			if (station)
+			{
+				station->SetConnectedRemote(false);
+				auto stationMatch = std::find(_stations.begin(), _stations.end(), station);
+				if (stationMatch != _stations.end())
+					_stations.erase(stationMatch);
+			}
+
+			std::cout << "[NINJAM] User left: " << it->first << std::endl;
+			it = _remoteStations.erase(it);
+		}
+		else
+		{
+			++it;
 		}
 	}
+
+	_lastRemoteUsers = std::move(seenUsers);
 }

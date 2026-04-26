@@ -244,3 +244,11 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ(1.0, panParams[0]);
 	ASSERT_EQ(0.0, panParams[1]);
 }
+
+TEST(JamFile, DefaultJsonIncludesNinjamConnectionIdentity) {
+	auto parsed = JamFile::FromStream(std::stringstream(JamFile::DefaultJson));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_TRUE(parsed->Ninjam.has_value());
+	ASSERT_FALSE(parsed->Ninjam->Host.empty());
+	ASSERT_FALSE(parsed->Ninjam->User.empty());
+}

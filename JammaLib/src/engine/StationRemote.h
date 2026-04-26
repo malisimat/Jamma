@@ -5,6 +5,7 @@
 #include <string>
 
 #include "Station.h"
+#include "../gui/GuiLabel.h"
 
 namespace engine
 {
@@ -60,5 +61,6 @@ namespace engine
 		std::shared_ptr<LoopTake> _remoteTake;
 		std::shared_ptr<LoopRemote> _leftLoop;
 		std::shared_ptr<LoopRemote> _rightLoop;
+		std::shared_ptr<gui::GuiLabel> _nameLabel;
 	};
 }

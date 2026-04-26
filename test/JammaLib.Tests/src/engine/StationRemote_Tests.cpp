@@ -133,6 +133,15 @@ TEST(StationRemote, IsRemoteReturnsTrueForRemoteStation)
 	EXPECT_TRUE(station->IsRemote());
 }
 
+TEST(StationRemote, SetRemoteUserNameUpdatesStationName)
+{
+	auto station = MakeRemoteStation();
+	station->SetRemoteUserName("alice");
+
+	EXPECT_EQ("alice", station->RemoteUserName());
+	EXPECT_EQ("alice", station->Name());
+}
+
 TEST(LoopRemote, MeasureMetadataTracksIngestProgress)
 {
 	audio::WireMixBehaviourParams wire;

@@ -16,10 +16,19 @@ StationRemote::StationRemote(StationParams params,
 	_intervalPositionSamps(0u),
 	_remoteTake(nullptr),
 	_leftLoop(nullptr),
-	_rightLoop(nullptr)
+	_rightLoop(nullptr),
+	_nameLabel(nullptr)
 {
 	SetNumBusChannels(2);
 	SetModelScale(2.0);
+
+	gui::GuiLabelParams labelParams;
+	labelParams.String = _remoteUserName;
+	labelParams.Position = { 6, 8 };
+	labelParams.ModelPosition = { 6.0f, 8.0f, 0.0f };
+	labelParams.Size = { 180, 18 };
+	_nameLabel = std::make_shared<gui::GuiLabel>(labelParams);
+	_children.push_back(_nameLabel);
 }
 
 void StationRemote::EnsureRemoteTake()
@@ -68,6 +77,9 @@ void StationRemote::SetRemoteUserName(const std::string& userName)
 {
 	_remoteUserName = userName;
 	SetName(userName);
+
+	if (_nameLabel)
+		_nameLabel->SetString(_remoteUserName);
 }
 
 void StationRemote::SetRemoteChannelCount(unsigned int channelCount)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 #include <set>
 
 #include "njclient.h"
@@ -18,6 +19,7 @@ NinjamConnection::NinjamConnection(std::string host,
 	_pass(std::move(pass)),
 	_workDir(std::move(workDir)),
 	_isConnected(false),
+	_state(ConnectionState::Disconnected),
 	_sampleRate(constants::DefaultSampleRate),
 	_blockSize(constants::DefaultBufferSizeSamps),
 	_numInputChannels(0),
@@ -29,6 +31,7 @@ NinjamConnection::NinjamConnection(std::string host,
 	_inPtrs(),
 	_userOutputChannels(),
 	_snapshot(),
+	_lastError(),
 	_snapshotMutex(),
 	_audioBufferMutex(),
 	_connectionMutex(),
@@ -47,8 +50,25 @@ bool NinjamConnection::Connect()
 {
 	std::scoped_lock lock(_connectionMutex);
 
-	if (_host.empty() || _user.empty() || !_clientRaw)
+	if (!_clientRaw)
+	{
+		_lastError = "NJClient unavailable";
+		_state = ConnectionState::Failed;
+		std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 		return false;
+	}
+
+	if (_host.empty() || _user.empty())
+	{
+		_lastError = "Host/user not configured";
+		_state = ConnectionState::Failed;
+		std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
+		return false;
+	}
+
+	_state = ConnectionState::Connecting;
+	_lastError.clear();
+	std::cout << "[NINJAM] Connecting to " << _host << " as " << _user << std::endl;
 
 	_EnsureWorkDir();
 
@@ -66,7 +86,9 @@ bool NinjamConnection::Connect()
 
 	_clientRaw->Connect(_host.c_str(), _user.c_str(), _pass.c_str());
 	_isConnected = true;
+	_state = ConnectionState::Connected;
 	_ConfigureLocalChannels();
+	std::cout << "[NINJAM] Connected" << std::endl;
 
 	return true;
 }
@@ -78,7 +100,11 @@ void NinjamConnection::Disconnect()
 	if (_clientRaw)
 		_clientRaw->Disconnect();
 
+	if (_isConnected)
+		std::cout << "[NINJAM] Disconnected" << std::endl;
+
 	_isConnected = false;
+	_state = ConnectionState::Disconnected;
 	_userOutputChannels.clear();
 	_lastNumFrames = 0;
 
@@ -89,6 +115,17 @@ void NinjamConnection::Disconnect()
 bool NinjamConnection::IsConnected() const noexcept
 {
 	return _isConnected;
+}
+
+NinjamConnection::ConnectionState NinjamConnection::State() const noexcept
+{
+	return _state.load();
+}
+
+std::string NinjamConnection::LastError() const
+{
+	std::scoped_lock lock(_connectionMutex);
+	return _lastError;
 }
 
 void NinjamConnection::Pump()

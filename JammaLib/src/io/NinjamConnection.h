@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -39,6 +40,15 @@ namespace io
 	class NinjamConnection
 	{
 	public:
+		enum class ConnectionState
+		{
+			Disconnected,
+			Connecting,
+			Connected,
+			Retrying,
+			Failed
+		};
+
 		NinjamConnection(std::string host,
 			std::string user,
 			std::string pass,
@@ -48,6 +58,8 @@ namespace io
 		bool Connect();
 		void Disconnect();
 		bool IsConnected() const noexcept;
+		ConnectionState State() const noexcept;
+		std::string LastError() const;
 		void Pump();
 
 		void SetAudioFormat(unsigned int sampleRate,
@@ -82,6 +94,7 @@ namespace io
 		std::string _pass;
 		std::string _workDir;
 		std::atomic_bool _isConnected;
+		std::atomic<ConnectionState> _state;
 
 		unsigned int _sampleRate;
 		unsigned int _blockSize;
@@ -96,10 +109,11 @@ namespace io
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
 		NinjamRemoteSnapshot _snapshot;
+		std::string _lastError;
 
 		mutable std::mutex _snapshotMutex;
 		mutable std::mutex _audioBufferMutex;
-		std::mutex _connectionMutex;
+		mutable std::mutex _connectionMutex;
 		NJClient* _clientRaw;
 	};
 }

@@ -30,6 +30,7 @@ namespace gui
 	{
 	public:
 		GuiLabel(GuiLabelParams guiParams);
+		void SetString(const std::string& str);
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
