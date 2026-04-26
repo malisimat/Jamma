@@ -108,6 +108,7 @@ namespace io
 		std::vector<float*> _inPtrs;
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
+		std::vector<std::string> _lastLoggedUserNames;
 		NinjamRemoteSnapshot _snapshot;
 		std::string _lastError;
 

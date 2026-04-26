@@ -656,10 +656,10 @@ void Scene::OnJobTick(Time curTime)
 	if (_ninjamConnection)
 	{
 		_TryAutoConnectNinjam();
+		_ninjamConnection->Pump();
 
 		if (_ninjamConnection->IsConnected())
 		{
-			_ninjamConnection->Pump();
 			auto snapshot = _ninjamConnection->Snapshot();
 
 			std::scoped_lock lock(_audioMutex);
@@ -1241,6 +1241,13 @@ void Scene::_TryAutoConnectNinjam()
 		return;
 
 	if (_ninjamConnection->IsConnected())
+	{
+		_ninjamRetryAttempts = 0u;
+		_ninjamNextRetryAt = std::chrono::steady_clock::now();
+		return;
+	}
+
+	if (_ninjamConnection->State() == io::NinjamConnection::ConnectionState::Connecting)
 		return;
 
 	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
@@ -1256,8 +1263,8 @@ void Scene::_TryAutoConnectNinjam()
 
 	if (_ninjamConnection->Connect())
 	{
-		_ninjamRetryAttempts = 0u;
-		_ninjamNextRetryAt = now;
+		_ninjamRetryAttempts = attemptNumber;
+		_ninjamNextRetryAt = now + _ninjamRetryDelay;
 		return;
 	}
 

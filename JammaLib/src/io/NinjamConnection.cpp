@@ -66,6 +66,12 @@ bool NinjamConnection::Connect()
 		return false;
 	}
 
+	if (_state == ConnectionState::Connecting)
+		return true;
+
+	if (_isConnected)
+		return true;
+
 	_state = ConnectionState::Connecting;
 	_lastError.clear();
 	std::cout << "[NINJAM] Connecting to " << _host << " as " << _user << std::endl;
@@ -85,10 +91,8 @@ bool NinjamConnection::Connect()
 	}
 
 	_clientRaw->Connect(_host.c_str(), _user.c_str(), _pass.c_str());
-	_isConnected = true;
-	_state = ConnectionState::Connected;
-	_ConfigureLocalChannels();
-	std::cout << "[NINJAM] Connected" << std::endl;
+	_isConnected = false;
+	_state = ConnectionState::Connecting;
 
 	return true;
 }
@@ -106,6 +110,7 @@ void NinjamConnection::Disconnect()
 	_isConnected = false;
 	_state = ConnectionState::Disconnected;
 	_userOutputChannels.clear();
+	_lastLoggedUserNames.clear();
 	_lastNumFrames = 0;
 
 	std::scoped_lock snapshotLock(_snapshotMutex);
@@ -130,10 +135,64 @@ std::string NinjamConnection::LastError() const
 
 void NinjamConnection::Pump()
 {
-	if (!_isConnected || !_clientRaw)
+	if (!_clientRaw)
+		return;
+
+	if ((_state == ConnectionState::Disconnected) || (_state == ConnectionState::Failed))
 		return;
 
 	while (!_clientRaw->Run()) {}
+
+	const auto status = _clientRaw->GetStatus();
+	if (status == NJClient::NJC_STATUS_OK)
+	{
+		if (!_isConnected)
+		{
+			_isConnected = true;
+			_state = ConnectionState::Connected;
+			_ConfigureLocalChannels();
+			std::cout << "[NINJAM] Connected" << std::endl;
+		}
+	}
+	else if (status == NJClient::NJC_STATUS_PRECONNECT)
+	{
+		_state = ConnectionState::Connecting;
+	}
+	else
+	{
+		if (_isConnected || (_state == ConnectionState::Connecting))
+		{
+			auto err = std::string(_clientRaw->GetErrorStr() ? _clientRaw->GetErrorStr() : "");
+			if (err.empty())
+			{
+				switch (status)
+				{
+				case NJClient::NJC_STATUS_INVALIDAUTH:
+					err = "Invalid credentials";
+					break;
+				case NJClient::NJC_STATUS_CANTCONNECT:
+					err = "Could not reach server";
+					break;
+				case NJClient::NJC_STATUS_DISCONNECTED:
+					err = "Disconnected";
+					break;
+				default:
+					err = "NINJAM connection error";
+					break;
+				}
+			}
+
+			_lastError = err;
+			std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
+		}
+
+		_isConnected = false;
+		_state = ConnectionState::Failed;
+	}
+
+	if (!_isConnected)
+		return;
+
 	_RefreshSnapshot();
 }
 
@@ -330,14 +389,19 @@ void NinjamConnection::_RefreshSnapshot()
 
 	std::set<std::string> activeUsers;
 	const auto userCount = _clientRaw->GetNumUsers();
+	std::vector<std::string> currentUserNames;
+	currentUserNames.reserve(static_cast<size_t>(userCount));
 	for (auto userIndex = 0; userIndex < userCount; userIndex++)
 	{
 		const auto* userNameC = _clientRaw->GetUserState(userIndex);
+		const auto userName = std::string(userNameC ? userNameC : "");
+		currentUserNames.push_back(userName);
+
 		if (!userNameC || (*userNameC == '\0'))
 			continue;
 
 		NinjamRemoteUser user;
-		user.UserName = userNameC;
+		user.UserName = userName;
 		activeUsers.insert(user.UserName);
 		user.AssignedOutputChannel = _AssignOutputChannel(user.UserName);
 
@@ -408,6 +472,25 @@ void NinjamConnection::_RefreshSnapshot()
 	std::sort(snapshot.Users.begin(), snapshot.Users.end(), [](const NinjamRemoteUser& a, const NinjamRemoteUser& b) {
 		return a.UserName < b.UserName;
 		});
+
+	if (currentUserNames != _lastLoggedUserNames)
+	{
+		std::cout << "[NINJAM] Connected users (" << currentUserNames.size() << ")";
+
+		if (!currentUserNames.empty())
+		{
+			std::cout << ": ";
+			for (size_t i = 0; i < currentUserNames.size(); i++)
+			{
+				if (i > 0)
+					std::cout << ", ";
+				std::cout << currentUserNames[i];
+			}
+		}
+		std::cout << std::endl;
+
+		_lastLoggedUserNames = std::move(currentUserNames);
+	}
 
 	std::scoped_lock lock(_snapshotMutex);
 	_snapshot = std::move(snapshot);
