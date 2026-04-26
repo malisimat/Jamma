@@ -46,20 +46,21 @@ Config:
 - Language standard: stdcpplatest
 - Platform: x64
 
-### NuGet Restore
+### vcpkg setup
 
 When setting up a fresh worktree or clone:
 
 ```powershell
-# Use the NuGet CLI to restore packages (required for Google Test)
-& "C:\Users\matto\Downloads\nuget.exe" restore
+# Enable MSBuild integration once per machine and install manifest dependencies
+vcpkg integrate install
+vcpkg install
 ```
 
-The `packages/` directory is in `.gitignore` so NuGet packages are not tracked in git. The `msbuild /t:Restore` command does not work for the legacy C++ `packages.config` format used by Google Test; use `nuget restore` instead.
+The repository uses `vcpkg.json` manifest mode for native dependencies (including Google Test).
 
 Build rules:
 
-1. **Restore NuGet packages first on fresh setup:** Run `nuget restore` before building tests.
+1. **Install vcpkg dependencies first on fresh setup:** Run `vcpkg install` before building tests.
 2. Use incremental `Build` by default; avoid `Clean`/`Rebuild` unless required.
 3. Build only affected projects:
 	- Jamma/src only -> Jamma/Jamma.vcxproj
@@ -73,12 +74,28 @@ MSBuild path:
 C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe
 ```
 
-### Troubleshooting NuGet Restore
+### Troubleshooting vcpkg
 
-If you encounter a build error about missing Google Test targets (`Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn.targets`), ensure:
+If you encounter a build error about missing Google Test headers/libraries, ensure:
 
-1. `nuget restore` has been run and succeeded (you should see `Installed: 1 package(s) to packages.config projects`)
-2. The `packages/` directory exists at the solution root and contains the Google Test folder
+1. `vcpkg integrate install` has been run on your machine
+2. `vcpkg install` has been run at the solution root
+3. The `vcpkg_installed/` directory exists and contains `gtest`
+
+### Troubleshooting: gtest DLL mismatch (tests crash silently on startup)
+
+Symptom: exe exits with code 1, no output. Cause: MSBuild skips the PostBuildEvent when up-to-date, leaving stale Release DLLs; the Debug exe crashes on them.
+
+Fix:
+
+```powershell
+$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
+Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
+Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
+```
+
+Verify: `gtest.dll` in the Debug output dir should be ~1.8 MB (Release is ~448 KB).
 
 ### Preprocessor Directives
 
@@ -107,7 +124,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 
 ### Running tests:
 
-Run all tests (assumes `nuget restore` has been run):
+Run all tests (assumes `vcpkg install` has been run):
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
@@ -115,10 +132,11 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe
 ```
 
-If you haven't yet restored NuGet packages in a fresh clone/worktree, run this first:
+If you haven't yet installed vcpkg dependencies in a fresh clone/worktree, run this first:
 
 ```powershell
-& "C:\Users\matto\Downloads\nuget.exe" restore
+vcpkg integrate install
+vcpkg install
 ```
 
 Run a specific test (no rebuild needed if already built):
@@ -139,7 +157,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 
 - Build/run JammaLib.Tests.
 - For behavior changes in JammaLib, add/update tests when feasible.
-- **Note:** Tests require Google Test (gtest) via NuGet package `Microsoft.googletest.v140.windesktop.msvcstl.static.rt-dyn`.
+- **Note:** Tests require Google Test (gtest) via the vcpkg manifest (`vcpkg.json`).
 - See "Running tests" section above for the exact commands.
 
 ## Coding Guidance

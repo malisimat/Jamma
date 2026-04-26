@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include <iomanip>
 
 using namespace io;
 using audio::BehaviourParams;
@@ -102,58 +103,106 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 
 bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 {
-	auto quoted   = [](const std::string& s) { return "\"" + s + "\""; };
-	auto kvStr    = [&](const std::string& k, const std::string& v)
-	                    { return quoted(k) + ":" + quoted(v); };
-	auto kvUlong  = [&](const std::string& k, unsigned long v)
-	                    { return quoted(k) + ":" + std::to_string(v); };
-	auto kvDouble = [&](const std::string& k, double v) -> std::string {
-		std::ostringstream o;
-		o << v;
-		auto s = o.str();
-		if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
-			s += ".0";
-		return quoted(k) + ":" + s;
-	};
-	auto kvBool   = [&](const std::string& k, bool v)
-	                    { return quoted(k) + ":" + (v ? std::string("true") : std::string("false")); };
+	auto escapeJsonString = [](const std::string& s) -> std::string {
+		std::string escaped;
+		escaped.reserve(s.size());
+		const char* HEX_DIGITS = "0123456789abcdef";
 
-	auto quantStr = [](engine::Timer::QuantisationType q) -> std::string {
-		if (q == engine::Timer::QUANTISE_MULTIPLE) return "multiple";
-		if (q == engine::Timer::QUANTISE_POWER)    return "power";
-		return "off";
-	};
-
-	auto mixStr = [&](const JamFile::LoopMix& m) -> std::string {
-		std::string typeStr = (m.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
-		std::string chans;
-		if (m.Mix == LoopMix::MIX_WIRE)
+		for (unsigned char c : s)
 		{
-			auto& v = std::get<std::vector<unsigned long>>(m.Params);
-			for (size_t i = 0; i < v.size(); ++i)
-				chans += (i ? "," : "") + std::to_string(v[i]);
+			switch (c)
+			{
+			case '\"': escaped += "\\\""; break;
+			case '\\': escaped += "\\\\"; break;
+			case '\b': escaped += "\\b"; break;
+			case '\f': escaped += "\\f"; break;
+			case '\n': escaped += "\\n"; break;
+			case '\r': escaped += "\\r"; break;
+			case '\t': escaped += "\\t"; break;
+			default:
+				if (c < 0x20)
+				{
+					escaped += "\\u00";
+					escaped += HEX_DIGITS[(c >> 4) & 0x0f];
+					escaped += HEX_DIGITS[c & 0x0f];
+				}
+				else
+				{
+					escaped += static_cast<char>(c);
+				}
+				break;
+			}
+		}
+
+		return escaped;
+	};
+
+	auto quoted = [&](const std::string& s) { return "\"" + escapeJsonString(s) + "\""; };
+	auto formatDouble = [](double value) -> std::string {
+		std::ostringstream out;
+		out << std::setprecision(15) << std::defaultfloat << value;
+		auto str = out.str();
+		if (str.find('.') == std::string::npos && str.find('e') == std::string::npos && str.find('E') == std::string::npos)
+			str += ".0";
+		return str;
+	};
+	auto kvStr = [&](const std::string& key, const std::string& value)
+		{ return quoted(key) + ":" + quoted(value); };
+	auto kvUlong = [&](const std::string& key, unsigned long value)
+		{ return quoted(key) + ":" + std::to_string(value); };
+	auto kvDouble = [&](const std::string& key, double value)
+		{ return quoted(key) + ":" + formatDouble(value); };
+	auto kvBool = [&](const std::string& key, bool value)
+		{ return quoted(key) + ":" + (value ? "true" : "false"); };
+
+	auto quantStr = [](engine::Timer::QuantisationType quant) -> std::string {
+		switch (quant)
+		{
+		case engine::Timer::QUANTISE_MULTIPLE:
+			return "multiple";
+		case engine::Timer::QUANTISE_POWER:
+			return "power";
+		case engine::Timer::QUANTISE_OFF:
+		default:
+			return "off";
+		}
+	};
+
+	auto mixToJson = [&](const JamFile::LoopMix& mix) -> std::string {
+		std::string chans;
+		const auto mixType = (mix.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
+
+		if (mix.Mix == LoopMix::MIX_WIRE)
+		{
+			if (auto values = std::get_if<std::vector<unsigned long>>(&mix.Params))
+			{
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += std::to_string((*values)[i]);
+				}
+			}
 		}
 		else
 		{
-			auto& v = std::get<std::vector<double>>(m.Params);
-			for (size_t i = 0; i < v.size(); ++i)
+			if (auto values = std::get_if<std::vector<double>>(&mix.Params))
 			{
-				std::ostringstream o;
-				o << v[i];
-				auto s = o.str();
-				if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
-					s += ".0";
-				chans += (i ? "," : "") + s;
+				for (size_t i = 0; i < values->size(); ++i)
+				{
+					if (i > 0) chans += ",";
+					chans += formatDouble((*values)[i]);
+				}
 			}
 		}
-		return "{" + kvStr("type", typeStr) + "," + quoted("chans") + ":[" + chans + "]}";
+
+		return "{" + kvStr("type", mixType) + "," + quoted("chans") + ":[" + chans + "]}";
 	};
 
-	auto ninjamStr = [&](const JamFile::NinjamConfig& n) -> std::string {
-		return "{" + kvStr("host", n.Host)
-			+ "," + kvStr("user", n.User)
-			+ "," + kvStr("pass", n.Pass)
-			+ "," + kvStr("workdir", n.WorkDir)
+	auto ninjamToJson = [&](const JamFile::NinjamConfig& ninjam) -> std::string {
+		return "{" + kvStr("host", ninjam.Host)
+			+ "," + kvStr("user", ninjam.User)
+			+ "," + kvStr("pass", ninjam.Pass)
+			+ "," + kvStr("workdir", ninjam.WorkDir)
 			+ "}";
 	};
 
@@ -163,45 +212,48 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
-		ss << quoted("ninjam") << ":" << ninjamStr(jam.Ninjam.value()) << ",";
+		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";
 	ss << quoted("stations") << ":[";
 
-	for (size_t si = 0; si < jam.Stations.size(); ++si)
+	for (size_t stationIndex = 0; stationIndex < jam.Stations.size(); ++stationIndex)
 	{
-		const auto& st = jam.Stations[si];
-		if (si) ss << ",";
-		ss << "{" << kvStr("name", st.Name) << ","
-		          << kvUlong("stationtype", st.StationType) << ","
-		          << quoted("takes") << ":[";
+		const auto& station = jam.Stations[stationIndex];
+		if (stationIndex > 0) ss << ",";
+		ss << "{" << kvStr("name", station.Name) << ","
+			<< kvUlong("stationtype", station.StationType) << ","
+			<< quoted("takes") << ":[";
 
-		for (size_t ti = 0; ti < st.LoopTakes.size(); ++ti)
+		for (size_t takeIndex = 0; takeIndex < station.LoopTakes.size(); ++takeIndex)
 		{
-			const auto& take = st.LoopTakes[ti];
-			if (ti) ss << ",";
+			const auto& take = station.LoopTakes[takeIndex];
+			if (takeIndex > 0) ss << ",";
 			ss << "{" << kvStr("name", take.Name) << ","
-			          << quoted("loops") << ":[";
+				<< quoted("loops") << ":[";
 
-			for (size_t li = 0; li < take.Loops.size(); ++li)
+			for (size_t loopIndex = 0; loopIndex < take.Loops.size(); ++loopIndex)
 			{
-				const auto& lp = take.Loops[li];
-				if (li) ss << ",";
+				const auto& loop = take.Loops[loopIndex];
+				if (loopIndex > 0) ss << ",";
 				ss << "{"
-				   << kvStr("name",             lp.Name)               << ","
-				   << kvUlong("length",          lp.Length)             << ","
-				   << kvUlong("index",           lp.Index)              << ","
-				   << kvUlong("masterloopcount", lp.MasterLoopCount)    << ","
-				   << kvDouble("level",          lp.Level)              << ","
-				   << kvDouble("speed",          lp.Speed)              << ","
-				   << kvUlong("mutegroups",      lp.MuteGroups)         << ","
-				   << kvUlong("selectgroups",    lp.SelectGroups)       << ","
-				   << kvBool("muted",            lp.Muted)              << ","
-				   << quoted("mix") << ":" << mixStr(lp.Mix)
-				   << "}";
+					<< kvStr("name", loop.Name) << ","
+					<< kvUlong("length", loop.Length) << ","
+					<< kvUlong("index", loop.Index) << ","
+					<< kvUlong("masterloopcount", loop.MasterLoopCount) << ","
+					<< kvDouble("level", loop.Level) << ","
+					<< kvDouble("speed", loop.Speed) << ","
+					<< kvUlong("mutegroups", loop.MuteGroups) << ","
+					<< kvUlong("selectgroups", loop.SelectGroups) << ","
+					<< kvBool("muted", loop.Muted) << ","
+					<< quoted("mix") << ":" << mixToJson(loop.Mix)
+					<< "}";
 			}
+
 			ss << "]}";
 		}
+
 		ss << "]}";
 	}
+
 	ss << "]}";
 	return true;
 }

@@ -1,4 +1,5 @@
 #include "Loop.h"
+#include <algorithm>
 
 using namespace base;
 using namespace engine;
@@ -60,7 +61,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	switch (loopStruct.Mix.Mix)
 	{
 	case io::JamFile::LoopMix::MIX_WIRE:
-		if (loopStruct.Mix.Params.index() == 1)
+		if (loopStruct.Mix.Params.index() == 0)
 			chans = std::get<std::vector<unsigned long>>(loopStruct.Mix.Params);
 
 		for (auto chan : chans)
@@ -161,6 +162,10 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBING != _playState) &&
 		(STATE_PUNCHEDIN != _playState) &&
 		(STATE_OVERDUBBINGRECORDING != _playState))
+		return;
+
+	if ((STATE_OVERDUBBING == _playState) &&
+		(AUDIOSOURCE_BOUNCE != request.source))
 		return;
 
 	if (AUDIOSOURCE_MONITOR == request.source)
@@ -406,6 +411,73 @@ std::string Loop::Id() const
 	return _loopParams.Id;
 }
 
+std::vector<float> Loop::ExportSamples() const
+{
+	if (_loopLength == 0 || _playState == STATE_INACTIVE)
+		return {};
+
+	std::vector<float> out(_loopLength);
+	unsigned long copied = 0;
+	while (copied < _loopLength)
+	{
+		const auto idx = constants::MaxLoopFadeSamps + copied;
+		const auto bankOffset = idx % BufferBank::_BufferBankSize;
+		const auto samplesInBank = BufferBank::_BufferBankSize - bankOffset;
+		const auto chunkSize = std::min(_loopLength - copied, samplesInBank);
+		const auto* ptr = _bufferBank.BlockPtr(idx);
+
+		if (ptr != nullptr)
+			std::copy_n(ptr, chunkSize, out.data() + copied);
+		else
+			std::fill(out.data() + copied, out.data() + copied + chunkSize, 0.0f);
+
+		copied += chunkSize;
+	}
+
+	return out;
+}
+
+io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
+{
+	io::JamFile::Loop loop;
+	loop.Name = wavFilename;
+	loop.Length = _loopLength;
+	loop.Index = (_playIndex >= constants::MaxLoopFadeSamps) ?
+		(_playIndex - constants::MaxLoopFadeSamps) :
+		0ul;
+	loop.MasterLoopCount = 0;
+	loop.Level = _mixer->UnmutedLevel();
+	loop.Speed = _pitch;
+	loop.MuteGroups = 0;
+	loop.SelectGroups = 0;
+	loop.Muted = IsMuted();
+
+	auto params = _mixer->GetBehaviourParams();
+	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_WIRE;
+		std::vector<unsigned long> channels;
+		for (auto chan : wire->Channels)
+			channels.push_back(chan);
+		loop.Mix.Params = std::move(channels);
+	}
+	else if (auto* pan = std::get_if<audio::PanMixBehaviourParams>(&params))
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		std::vector<double> levels;
+		for (auto level : pan->ChannelLevels)
+			levels.push_back(level);
+		loop.Mix.Params = std::move(levels);
+	}
+	else
+	{
+		loop.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
+		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
+	}
+
+	return loop;
+}
+
 void Loop::Update()
 {
 	_UpdateLoopModel();
@@ -417,55 +489,6 @@ void Loop::Update()
 void Loop::SetMixerLevel(double level)
 {
 	_mixer->SetUnmutedLevel(level);
-}
-
-std::vector<float> Loop::ExportSamples() const
-{
-	if (_loopLength == 0 || _playState == STATE_INACTIVE)
-		return {};
-
-	std::vector<float> out(_loopLength);
-	for (unsigned long i = 0; i < _loopLength; ++i)
-		out[i] = _bufferBank[constants::MaxLoopFadeSamps + i];
-	return out;
-}
-
-io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
-{
-	io::JamFile::Loop s;
-	s.Name   = wavFilename;
-	s.Length = _loopLength;
-	s.Index  = (_playIndex >= constants::MaxLoopFadeSamps)
-	               ? _playIndex - constants::MaxLoopFadeSamps : 0ul;
-	s.MasterLoopCount = 0;
-	s.Level  = _mixer->UnmutedLevel();
-	s.Speed  = _pitch;
-	s.Muted  = IsMuted();
-	s.MuteGroups   = 0;
-	s.SelectGroups = 0;
-
-	auto params = _mixer->GetBehaviourParams();
-	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
-	{
-		s.Mix.Mix = io::JamFile::LoopMix::MIX_WIRE;
-		std::vector<unsigned long> chans;
-		for (auto c : wire->Channels) chans.push_back(static_cast<unsigned long>(c));
-		s.Mix.Params = chans;
-	}
-	else if (auto* pan = std::get_if<audio::PanMixBehaviourParams>(&params))
-	{
-		s.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
-		std::vector<double> levels;
-		for (auto l : pan->ChannelLevels) levels.push_back(static_cast<double>(l));
-		s.Mix.Params = levels;
-	}
-	else
-	{
-		s.Mix.Mix = io::JamFile::LoopMix::MIX_PAN;
-		s.Mix.Params = std::vector<double>{ 0.5, 0.5 };
-	}
-
-	return s;
 }
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
@@ -572,6 +595,26 @@ Reset();
 _bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 std::cout << "-=-=- Loop DITCH" << std::endl;
+}
+
+bool Loop::Mute()
+{
+	auto isNewState = Tweakable::Mute();
+
+	if (isNewState && _mixer)
+		_mixer->Mute();
+
+	return isNewState;
+}
+
+bool Loop::UnMute()
+{
+	auto isNewState = Tweakable::UnMute();
+
+	if (isNewState && _mixer)
+		_mixer->UnMute();
+
+	return isNewState;
 }
 
 void Loop::Overdub()

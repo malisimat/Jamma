@@ -235,6 +235,8 @@ namespace audio
 		double Level() const;
 		double UnmutedLevel() const;
 		void SetUnmutedLevel(double level);
+		BehaviourParams GetBehaviourParams() const
+			{ return _behaviour ? _behaviour->GetParams() : BehaviourParams{}; }
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink>& dest,
 			const float* srcBuf,
 			unsigned int numSamps);

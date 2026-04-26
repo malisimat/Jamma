@@ -1,4 +1,5 @@
 #include "WavReadWriter.h"
+#include <algorithm>
 
 using namespace io;
 
@@ -19,7 +20,7 @@ std::optional<std::tuple<std::vector<float>, unsigned int, unsigned int>>
 
 	auto fid = OpenSoundIn(cname, pinfo);
 
-	delete cname;
+	delete[] cname;
 
 	if (fid == NULL)
 		return {};
@@ -54,13 +55,13 @@ std::optional<std::tuple<std::vector<float>, unsigned int, unsigned int>>
 		buffer[i] = CharToFloat(bufferIn + (i * 2));
 	}
 
-	delete bufferIn;
+	delete[] bufferIn;
 
 	return std::make_tuple(std::move(buffer), (unsigned int)numSampsLoaded, info.srate);
 }
 
 bool WavReadWriter::_Write(std::wstring fileName,
-	std::vector<float> data,
+	const std::vector<float>& data,
 	unsigned int numVals,
 	unsigned int sampleRate) const
 {
@@ -76,7 +77,7 @@ bool WavReadWriter::_Write(std::wstring fileName,
 
 	if (numVals < 1)
 	{
-		delete cname;
+		delete[] cname;
 		return false;
 	}
 
@@ -88,7 +89,7 @@ bool WavReadWriter::_Write(std::wstring fileName,
 
 	fid = OpenSoundOut(cname, pinfo);
 
-	delete cname;
+	delete[] cname;
 
 	if (fid == NULL)
 		return false;
@@ -103,7 +104,7 @@ bool WavReadWriter::_Write(std::wstring fileName,
 	fwrite(bufferOut, 1, numVals * 2, fid);
 
 	fclose(fid);
-	delete bufferOut;
+	delete[] bufferOut;
 
 	return true;
 }
@@ -180,7 +181,8 @@ void WavReadWriter::FillHeader(struct SoundHeader &hdr)
 
 void WavReadWriter::FloatToChar(float f, char* c)
 {
-	int tempint = (int)(f*32767.5f);
+	auto clamped = std::clamp(f, -1.0f, 1.0f);
+	int tempint = (int)(clamped * 32767.0f);
 
 	*c = (char)(tempint & 0xFF);
 	*(c + 1) = (char)((tempint >> 8) & 0xFF);

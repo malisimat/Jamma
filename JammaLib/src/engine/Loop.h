@@ -172,16 +172,15 @@ namespace engine
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
+		virtual bool Mute() override;
+		virtual bool UnMute() override;
 		virtual void Reset() override;
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState; }
-
-		// Returns the loop's audio samples for WAV export (empty if inactive).
 		std::vector<float> ExportSamples() const;
-		// Fills a JamFile::Loop struct from current engine state.
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 
 		void Update();

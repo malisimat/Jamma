@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <shobjidl_core.h>
+#include <wrl/client.h>
 #include "PathUtils.h"
 
 std::wstring utils::GetPath(PathType pathType)
@@ -35,39 +36,50 @@ std::wstring utils::GetParentDirectory(std::wstring dir)
 
 std::wstring utils::PickDirectory(const std::wstring& title)
 {
+	using Microsoft::WRL::ComPtr;
+
 	std::wstring result;
 
-	const HRESULT hrInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-	const bool needsUninit = SUCCEEDED(hrInit);
-
-	IFileOpenDialog* pfd = nullptr;
-	if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-		CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd))))
+	struct ComInitGuard
 	{
-		DWORD opts = 0;
-		pfd->GetOptions(&opts);
-		pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-		pfd->SetTitle(title.c_str());
-
-		if (SUCCEEDED(pfd->Show(nullptr)))
+		bool DidInit = false;
+		ComInitGuard()
 		{
-			IShellItem* psi = nullptr;
-			if (SUCCEEDED(pfd->GetResult(&psi)))
+			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+			DidInit = SUCCEEDED(hr);
+		}
+		~ComInitGuard()
+		{
+			if (DidInit)
+				CoUninitialize();
+		}
+	} comInitGuard;
+
+	ComPtr<IFileOpenDialog> dialog;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog,
+		nullptr,
+		CLSCTX_INPROC_SERVER,
+		IID_PPV_ARGS(&dialog))))
+		return result;
+
+	DWORD options = 0;
+	dialog->GetOptions(&options);
+	dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+	dialog->SetTitle(title.c_str());
+
+	if (SUCCEEDED(dialog->Show(nullptr)))
+	{
+		ComPtr<IShellItem> item;
+		if (SUCCEEDED(dialog->GetResult(&item)))
+		{
+			PWSTR path = nullptr;
+			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
 			{
-				PWSTR path = nullptr;
-				if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)))
-				{
-					result = path;
-					CoTaskMemFree(path);
-				}
-				psi->Release();
+				result = path;
+				CoTaskMemFree(path);
 			}
 		}
-		pfd->Release();
 	}
-
-	if (needsUninit)
-		CoUninitialize();
 
 	return result;
 }
