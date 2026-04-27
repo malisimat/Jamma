@@ -244,9 +244,12 @@ namespace engine
 		std::set<std::string> _lastRemoteUsers;
 		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
 		unsigned int _ninjamRetryAttempts;
-		unsigned int _ninjamMaxRetryAttempts;
 		std::chrono::steady_clock::time_point _ninjamNextRetryAt;
+		std::chrono::steady_clock::time_point _ninjamConnectStartedAt;
+		std::chrono::milliseconds _ninjamRetryDelayMin;
 		std::chrono::milliseconds _ninjamRetryDelay;
+		std::chrono::milliseconds _ninjamRetryDelayMax;
+		std::chrono::milliseconds _ninjamConnectTimeout;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

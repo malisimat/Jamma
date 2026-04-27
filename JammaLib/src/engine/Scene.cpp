@@ -45,9 +45,12 @@ Scene::Scene(SceneParams params,
 	_lastRemoteUsers(),
 	_ninjamConnection(nullptr),
 	_ninjamRetryAttempts(0u),
-	_ninjamMaxRetryAttempts(4u),
 	_ninjamNextRetryAt(std::chrono::steady_clock::now()),
+	_ninjamConnectStartedAt(),
+	_ninjamRetryDelayMin(std::chrono::milliseconds(1500)),
 	_ninjamRetryDelay(std::chrono::milliseconds(1500)),
+	_ninjamRetryDelayMax(std::chrono::milliseconds(30000)),
+	_ninjamConnectTimeout(std::chrono::seconds(20)),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -655,8 +658,8 @@ void Scene::OnJobTick(Time curTime)
 {
 	if (_ninjamConnection)
 	{
-		_TryAutoConnectNinjam();
 		_ninjamConnection->Pump();
+		_TryAutoConnectNinjam();
 
 		if (_ninjamConnection->IsConnected())
 		{
@@ -1220,6 +1223,8 @@ void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>
 	_lastRemoteUsers.clear();
 	_ninjamRetryAttempts = 0u;
 	_ninjamNextRetryAt = std::chrono::steady_clock::now();
+	_ninjamConnectStartedAt = {};
+	_ninjamRetryDelay = _ninjamRetryDelayMin;
 
 	if (!config.has_value())
 		return;
@@ -1240,48 +1245,90 @@ void Scene::_TryAutoConnectNinjam()
 	if (!_ninjamConnection)
 		return;
 
+	auto now = std::chrono::steady_clock::now();
+	auto state = _ninjamConnection->State();
+
+	auto resetRetryState = [&]() {
+		_ninjamRetryAttempts = 0u;
+		_ninjamConnectStartedAt = {};
+		_ninjamRetryDelay = _ninjamRetryDelayMin;
+		_ninjamNextRetryAt = now;
+	};
+
+	auto growRetryDelay = [&]() {
+		auto nextDelayMs = std::min(_ninjamRetryDelay.count() * 2, _ninjamRetryDelayMax.count());
+		_ninjamRetryDelay = std::chrono::milliseconds(nextDelayMs);
+	};
+
 	if (_ninjamConnection->IsConnected())
 	{
-		_ninjamRetryAttempts = 0u;
-		_ninjamNextRetryAt = std::chrono::steady_clock::now();
+		resetRetryState();
 		return;
 	}
 
-	if (_ninjamConnection->State() == io::NinjamConnection::ConnectionState::Connecting)
-		return;
+	if (state == io::NinjamConnection::ConnectionState::Connecting)
+	{
+		if ((_ninjamConnectStartedAt.time_since_epoch().count() == 0)
+			|| ((now - _ninjamConnectStartedAt) < _ninjamConnectTimeout))
+			return;
 
-	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
-		return;
+		const auto retryDelay = _ninjamRetryDelay;
+		std::cout << "[NINJAM] Connect attempt timed out after "
+			<< std::chrono::duration_cast<std::chrono::seconds>(_ninjamConnectTimeout).count()
+			<< "s; retrying in " << retryDelay.count() << " ms" << std::endl;
 
-	auto now = std::chrono::steady_clock::now();
+		_ninjamConnection->Disconnect();
+		_ninjamConnectStartedAt = {};
+		_ninjamNextRetryAt = now + retryDelay;
+		growRetryDelay();
+		return;
+	}
+
+	if (((state == io::NinjamConnection::ConnectionState::Failed)
+			|| (state == io::NinjamConnection::ConnectionState::Disconnected))
+		&& (_ninjamConnectStartedAt.time_since_epoch().count() != 0))
+	{
+		const auto retryDelay = _ninjamRetryDelay;
+		auto lastError = _ninjamConnection->LastError();
+		if (lastError.empty())
+			lastError = "Unknown error";
+
+		std::cout << "[NINJAM] Connect attempt " << _ninjamRetryAttempts
+			<< " failed: " << lastError
+			<< "; retrying in " << retryDelay.count() << " ms" << std::endl;
+
+		_ninjamConnectStartedAt = {};
+		_ninjamNextRetryAt = now + retryDelay;
+		growRetryDelay();
+		return;
+	}
+
 	if (now < _ninjamNextRetryAt)
 		return;
 
 	const auto attemptNumber = _ninjamRetryAttempts + 1u;
-	std::cout << "[NINJAM] Connect attempt " << attemptNumber
-		<< "/" << _ninjamMaxRetryAttempts << std::endl;
+	std::cout << "[NINJAM] Connect attempt " << attemptNumber << std::endl;
 
 	if (_ninjamConnection->Connect())
 	{
 		_ninjamRetryAttempts = attemptNumber;
-		_ninjamNextRetryAt = now + _ninjamRetryDelay;
+		_ninjamConnectStartedAt = now;
 		return;
 	}
 
 	_ninjamRetryAttempts = attemptNumber;
-	_ninjamNextRetryAt = now + _ninjamRetryDelay;
+	_ninjamConnectStartedAt = {};
+
+	const auto retryDelay = _ninjamRetryDelay;
+	_ninjamNextRetryAt = now + retryDelay;
+	growRetryDelay();
 
 	auto lastError = _ninjamConnection->LastError();
 	if (lastError.empty())
 		lastError = "Unknown error";
 
-	std::cout << "[NINJAM] Connect attempt failed: " << lastError << std::endl;
-
-	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
-	{
-		std::cout << "[NINJAM] Stopping retries after " << _ninjamRetryAttempts
-			<< " failed attempt(s)" << std::endl;
-	}
+	std::cout << "[NINJAM] Connect attempt failed immediately: " << lastError
+		<< "; retrying in " << retryDelay.count() << " ms" << std::endl;
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
