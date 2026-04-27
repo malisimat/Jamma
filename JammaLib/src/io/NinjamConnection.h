@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -82,14 +83,14 @@ namespace io
 			unsigned int& numFrames) const;
 
 	private:
-		bool _BeginConnectAttempt(std::chrono::steady_clock::time_point now);
+		bool _StartConnectAttempt(std::chrono::steady_clock::time_point now);
+		bool _HasActiveConnectAttempt() const noexcept;
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);
 		void _ScheduleRetry(std::chrono::steady_clock::time_point now);
-		std::string _DescribeStatusError(int status) const;
 		void _EnsureWorkDir();
-		void _EnsureScratchBuffers(unsigned int numFrames);
-		void _ConfigureLocalChannels();
-		void _RefreshSnapshot();
+		void _ResizeScratchBuffers(unsigned int numFrames);
+		void _ApplyLocalChannels();
+		void _UpdateSnapshot();
 		unsigned int _AssignOutputChannel(const std::string& userName);
 
 	private:
@@ -97,22 +98,22 @@ namespace io
 		std::string _user;
 		std::string _pass;
 		std::string _workDir;
-		bool _autoReconnect;
-		unsigned int _connectAttempts;
-		std::chrono::steady_clock::time_point _nextRetryAt;
-		std::chrono::steady_clock::time_point _connectStartedAt;
-		std::chrono::milliseconds _retryDelayMin;
-		std::chrono::milliseconds _retryDelay;
-		std::chrono::milliseconds _retryDelayMax;
-		std::chrono::milliseconds _connectTimeout;
-		std::atomic_bool _isConnected;
-		std::atomic<ConnectionState> _state;
+		bool _autoReconnect = false;
+		unsigned int _connectAttempts = 0u;
+		std::chrono::steady_clock::time_point _nextRetryAt{};
+		std::chrono::steady_clock::time_point _connectStartedAt{};
+		std::chrono::milliseconds _retryDelayMin{ std::chrono::milliseconds(1500) };
+		std::chrono::milliseconds _retryDelay{ std::chrono::milliseconds(1500) };
+		std::chrono::milliseconds _retryDelayMax{ std::chrono::milliseconds(30000) };
+		std::chrono::milliseconds _connectTimeout{ std::chrono::seconds(20) };
+		std::atomic_bool _isConnected{ false };
+		std::atomic<ConnectionState> _state{ ConnectionState::Disconnected };
 
-		unsigned int _sampleRate;
-		unsigned int _blockSize;
-		unsigned int _numInputChannels;
-		unsigned int _numOutputChannels;
-		unsigned int _lastNumFrames;
+		unsigned int _sampleRate = 0u;
+		unsigned int _blockSize = 0u;
+		unsigned int _numInputChannels = 0u;
+		unsigned int _numOutputChannels = 2u;
+		std::atomic_uint _lastNumFrames{ 0u };
 
 		std::vector<std::vector<float>> _outScratch;
 		std::vector<std::vector<float>> _inScratch;
@@ -120,13 +121,13 @@ namespace io
 		std::vector<float*> _inPtrs;
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
-		std::vector<std::string> _lastLoggedUserNames;
+		std::vector<std::string> _lastLoggedUsers;
 		NinjamRemoteSnapshot _snapshot;
 		std::string _lastError;
 
 		mutable std::mutex _snapshotMutex;
 		mutable std::mutex _audioBufferMutex;
 		mutable std::mutex _connectionMutex;
-		NJClient* _clientRaw;
+		std::unique_ptr<NJClient> _client;
 	};
 }

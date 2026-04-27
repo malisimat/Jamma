@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 #include <set>
+#include "njclient.h"
 
 namespace
 {
@@ -13,9 +14,26 @@ namespace
 			|| err.find("invalid credentials") != std::string::npos
 			|| err.find("authentication") != std::string::npos;
 	}
-}
 
-#include "njclient.h"
+	std::string DescribeStatusError(NJClient* client, int status)
+	{
+		auto err = std::string(client && client->GetErrorStr() ? client->GetErrorStr() : "");
+		if (!err.empty())
+			return err;
+
+		switch (status)
+		{
+		case NJClient::NJC_STATUS_INVALIDAUTH:
+			return "Invalid credentials";
+		case NJClient::NJC_STATUS_CANTCONNECT:
+			return "Could not reach server";
+		case NJClient::NJC_STATUS_DISCONNECTED:
+			return "Disconnected";
+		default:
+			return "NINJAM connection error";
+		}
+	}
+}
 #include "../../include/Constants.h"
 
 using namespace io;
@@ -28,38 +46,15 @@ NinjamConnection::NinjamConnection(std::string host,
 	_user(std::move(user)),
 	_pass(std::move(pass)),
 	_workDir(std::move(workDir)),
-	_autoReconnect(false),
-	_connectAttempts(0u),
-	_nextRetryAt(std::chrono::steady_clock::now()),
-	_connectStartedAt(),
-	_retryDelayMin(std::chrono::milliseconds(1500)),
-	_retryDelay(std::chrono::milliseconds(1500)),
-	_retryDelayMax(std::chrono::milliseconds(30000)),
-	_connectTimeout(std::chrono::seconds(20)),
-	_isConnected(false),
-	_state(ConnectionState::Disconnected),
 	_sampleRate(constants::DefaultSampleRate),
 	_blockSize(constants::DefaultBufferSizeSamps),
-	_numInputChannels(0),
-	_numOutputChannels(2),
-	_lastNumFrames(0),
-	_outScratch(),
-	_inScratch(),
-	_outPtrs(),
-	_inPtrs(),
-	_userOutputChannels(),
-	_snapshot(),
-	_lastError(),
-	_snapshotMutex(),
-	_audioBufferMutex(),
-	_connectionMutex(),
-	_clientRaw(new NJClient())
+	_client(std::make_unique<NJClient>())
 {
 }
 
-bool NinjamConnection::_BeginConnectAttempt(std::chrono::steady_clock::time_point now)
+bool NinjamConnection::_StartConnectAttempt(std::chrono::steady_clock::time_point now)
 {
-	if (!_clientRaw)
+	if (!_client)
 	{
 		_lastError = "NJClient unavailable";
 		_state = ConnectionState::Failed;
@@ -75,16 +70,16 @@ bool NinjamConnection::_BeginConnectAttempt(std::chrono::steady_clock::time_poin
 
 	_EnsureWorkDir();
 
-	_clientRaw->LicenseAgreementCallback = [](void*, const char*) { return 1; };
-	_clientRaw->config_savelocalaudio = -1;
-	_clientRaw->config_remote_autochan = 0;
-	_clientRaw->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
+	_client->LicenseAgreementCallback = [](void*, const char*) { return 1; };
+	_client->config_savelocalaudio = -1;
+	_client->config_remote_autochan = 0;
+	_client->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
 
 	if (!_workDir.empty())
 	{
 		std::vector<char> mutablePath(_workDir.begin(), _workDir.end());
 		mutablePath.push_back('\0');
-		_clientRaw->SetWorkDir(mutablePath.data());
+		_client->SetWorkDir(mutablePath.data());
 	}
 
 	_lastError.clear();
@@ -97,9 +92,14 @@ bool NinjamConnection::_BeginConnectAttempt(std::chrono::steady_clock::time_poin
 	std::cout << "[NINJAM] Connect attempt " << _connectAttempts
 		<< " to " << _host << " as " << connectUser << std::endl;
 
-	_clientRaw->Connect(_host.c_str(), connectUser.c_str(), _pass.c_str());
+	_client->Connect(_host.c_str(), connectUser.c_str(), _pass.c_str());
 	_isConnected = false;
 	return true;
+}
+
+bool NinjamConnection::_HasActiveConnectAttempt() const noexcept
+{
+	return _connectStartedAt.time_since_epoch().count() != 0;
 }
 
 void NinjamConnection::_ResetReconnectState(std::chrono::steady_clock::time_point now)
@@ -122,31 +122,7 @@ void NinjamConnection::_ScheduleRetry(std::chrono::steady_clock::time_point now)
 	std::cout << "[NINJAM] Retrying in " << retryDelay.count() << " ms" << std::endl;
 }
 
-std::string NinjamConnection::_DescribeStatusError(int status) const
-{
-	auto err = std::string(_clientRaw && _clientRaw->GetErrorStr() ? _clientRaw->GetErrorStr() : "");
-	if (!err.empty())
-		return err;
-
-	switch (status)
-	{
-	case NJClient::NJC_STATUS_INVALIDAUTH:
-		return "Invalid credentials";
-	case NJClient::NJC_STATUS_CANTCONNECT:
-		return "Could not reach server";
-	case NJClient::NJC_STATUS_DISCONNECTED:
-		return "Disconnected";
-	default:
-		return "NINJAM connection error";
-	}
-}
-
-NinjamConnection::~NinjamConnection()
-{
-	Disconnect();
-	delete _clientRaw;
-	_clientRaw = nullptr;
-}
+NinjamConnection::~NinjamConnection() { Disconnect(); }
 
 bool NinjamConnection::Connect()
 {
@@ -160,7 +136,7 @@ bool NinjamConnection::Connect()
 
 	_autoReconnect = true;
 	_ResetReconnectState(std::chrono::steady_clock::now());
-	return _BeginConnectAttempt(std::chrono::steady_clock::now());
+	return _StartConnectAttempt(std::chrono::steady_clock::now());
 }
 
 void NinjamConnection::Disconnect()
@@ -168,8 +144,8 @@ void NinjamConnection::Disconnect()
 	std::scoped_lock lock(_connectionMutex);
 	_autoReconnect = false;
 
-	if (_clientRaw)
-		_clientRaw->Disconnect();
+	if (_client)
+		_client->Disconnect();
 
 	if (_isConnected)
 		std::cout << "[NINJAM] Disconnected" << std::endl;
@@ -178,7 +154,7 @@ void NinjamConnection::Disconnect()
 	_state = ConnectionState::Disconnected;
 	_ResetReconnectState(std::chrono::steady_clock::now());
 	_userOutputChannels.clear();
-	_lastLoggedUserNames.clear();
+	_lastLoggedUsers.clear();
 	_lastNumFrames = 0;
 
 	std::scoped_lock snapshotLock(_snapshotMutex);
@@ -203,13 +179,13 @@ std::string NinjamConnection::LastError() const
 
 void NinjamConnection::Pump()
 {
-	if (!_clientRaw)
+	if (!_client)
 		return;
 
 	auto now = std::chrono::steady_clock::now();
 	{
 		std::scoped_lock lock(_connectionMutex);
-		const auto hasActiveAttempt = _connectStartedAt.time_since_epoch().count() != 0;
+		const auto hasActiveAttempt = _HasActiveConnectAttempt();
 
 		if (_autoReconnect)
 		{
@@ -230,7 +206,7 @@ void NinjamConnection::Pump()
 				&& (now >= _nextRetryAt))
 			{
 				std::cout << "[NINJAM] Restarting stalled connect attempt" << std::endl;
-				_clientRaw->Disconnect();
+				_client->Disconnect();
 				_isConnected = false;
 				_ScheduleRetry(now);
 				return;
@@ -241,7 +217,7 @@ void NinjamConnection::Pump()
 					|| ((_state == ConnectionState::Retrying) && !hasActiveAttempt))
 				&& (now >= _nextRetryAt))
 			{
-				if (!_BeginConnectAttempt(now))
+				if (!_StartConnectAttempt(now))
 				{
 					std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 				}
@@ -255,9 +231,9 @@ void NinjamConnection::Pump()
 		}
 	}
 
-	while (!_clientRaw->Run()) {}
+	while (!_client->Run()) {}
 
-	const auto status = _clientRaw->GetStatus();
+	const auto status = _client->GetStatus();
 	if (status == NJClient::NJC_STATUS_OK)
 	{
 		if (!_isConnected)
@@ -266,7 +242,7 @@ void NinjamConnection::Pump()
 			_state = ConnectionState::Connected;
 			std::scoped_lock lock(_connectionMutex);
 			_ResetReconnectState(now);
-			_ConfigureLocalChannels();
+			_ApplyLocalChannels();
 			std::cout << "[NINJAM] Connected" << std::endl;
 		}
 	}
@@ -279,7 +255,7 @@ void NinjamConnection::Pump()
 	{
 		if (_isConnected || (_state == ConnectionState::Connecting) || (_state == ConnectionState::Retrying))
 		{
-			_lastError = _DescribeStatusError(status);
+			_lastError = DescribeStatusError(_client.get(), status);
 			std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 		}
 
@@ -304,7 +280,7 @@ void NinjamConnection::Pump()
 	if (!_isConnected)
 		return;
 
-	_RefreshSnapshot();
+	_UpdateSnapshot();
 }
 
 void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
@@ -317,12 +293,12 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	_numInputChannels = numInputChannels;
 	_numOutputChannels = numOutputChannels > 0 ? numOutputChannels : 2u;
 
-	_EnsureScratchBuffers(_blockSize);
+	_ResizeScratchBuffers(_blockSize);
 
-	if (_clientRaw)
+	if (_client)
 	{
-		_clientRaw->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
-		_ConfigureLocalChannels();
+		_client->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
+		_ApplyLocalChannels();
 	}
 }
 
@@ -330,7 +306,7 @@ void NinjamConnection::ProcessAudioBlock(const float* interleavedInput,
 	unsigned int numFrames,
 	unsigned int sampleRate)
 {
-	if (!_isConnected || !_clientRaw || numFrames == 0u)
+	if (!_isConnected || !_client || numFrames == 0u)
 		return;
 
 	if (sampleRate > 0)
@@ -365,7 +341,7 @@ void NinjamConnection::ProcessAudioBlock(const float* interleavedInput,
 			std::fill(_inScratch[chan].begin(), _inScratch[chan].begin() + numFrames, 0.0f);
 	}
 
-	_clientRaw->AudioProc(
+	_client->AudioProc(
 		_numInputChannels > 0 ? _inPtrs.data() : nullptr,
 		static_cast<int>(_numInputChannels),
 		_numOutputChannels > 0 ? _outPtrs.data() : nullptr,
@@ -391,7 +367,8 @@ bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	right = nullptr;
 	numFrames = 0;
 
-	if (!_isConnected || _lastNumFrames == 0u)
+	const auto lastFrames = _lastNumFrames.load();
+	if (!_isConnected || lastFrames == 0u)
 		return false;
 
 	auto rightIndex = outChannelLeft + 1u;
@@ -401,7 +378,7 @@ bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	std::scoped_lock audioLock(_audioBufferMutex);
 	left = _outScratch[outChannelLeft].data();
 	right = _outScratch[rightIndex].data();
-	numFrames = _lastNumFrames;
+	numFrames = _lastNumFrames.load();
 	return true;
 }
 
@@ -429,7 +406,7 @@ void NinjamConnection::_EnsureWorkDir()
 	}
 }
 
-void NinjamConnection::_EnsureScratchBuffers(unsigned int numFrames)
+void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames)
 {
 	std::scoped_lock audioLock(_audioBufferMutex);
 
@@ -460,18 +437,18 @@ void NinjamConnection::_EnsureScratchBuffers(unsigned int numFrames)
 		_inPtrs[chan] = _inScratch[chan].data();
 }
 
-void NinjamConnection::_ConfigureLocalChannels()
+void NinjamConnection::_ApplyLocalChannels()
 {
-	if (!_isConnected || !_clientRaw)
+	if (!_isConnected || !_client)
 		return;
 
-	const auto maxLocalChannels = std::max(0, _clientRaw->GetMaxLocalChannels());
+	const auto maxLocalChannels = std::max(0, _client->GetMaxLocalChannels());
 	const auto configuredChannels = std::min(static_cast<unsigned int>(maxLocalChannels), _numInputChannels);
 
 	for (auto chan = 0u; chan < configuredChannels; chan++)
 	{
 		auto name = std::string("Jamma In ") + std::to_string(chan + 1u);
-		_clientRaw->SetLocalChannelInfo(
+		_client->SetLocalChannelInfo(
 			static_cast<int>(chan),
 			name.c_str(),
 			true,
@@ -482,29 +459,29 @@ void NinjamConnection::_ConfigureLocalChannels()
 			true);
 	}
 
-	_clientRaw->NotifyServerOfChannelChange();
+	_client->NotifyServerOfChannelChange();
 }
 
-void NinjamConnection::_RefreshSnapshot()
+void NinjamConnection::_UpdateSnapshot()
 {
-	if (!_isConnected || !_clientRaw)
+	if (!_isConnected || !_client)
 		return;
 
 	NinjamRemoteSnapshot snapshot;
 
 	int intervalPos = 0;
 	int intervalLength = 0;
-	_clientRaw->GetPosition(&intervalPos, &intervalLength);
+	_client->GetPosition(&intervalPos, &intervalLength);
 	snapshot.IntervalPositionSamps = intervalPos > 0 ? static_cast<unsigned int>(intervalPos) : 0u;
 	snapshot.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
 
 	std::set<std::string> activeUsers;
-	const auto userCount = _clientRaw->GetNumUsers();
+	const auto userCount = _client->GetNumUsers();
 	std::vector<std::string> currentUserNames;
 	currentUserNames.reserve(static_cast<size_t>(userCount));
 	for (auto userIndex = 0; userIndex < userCount; userIndex++)
 	{
-		const auto* userNameC = _clientRaw->GetUserState(userIndex);
+		const auto* userNameC = _client->GetUserState(userIndex);
 		const auto userName = std::string(userNameC ? userNameC : "");
 		currentUserNames.push_back(userName);
 
@@ -518,14 +495,14 @@ void NinjamConnection::_RefreshSnapshot()
 
 		for (auto ordinal = 0;; ordinal++)
 		{
-			auto channelIndex = _clientRaw->EnumUserChannels(userIndex, ordinal);
+			auto channelIndex = _client->EnumUserChannels(userIndex, ordinal);
 			if (channelIndex < 0)
 				break;
 
 			bool subscribed = false;
-			_clientRaw->GetUserChannelState(userIndex, channelIndex, &subscribed);
+			_client->GetUserChannelState(userIndex, channelIndex, &subscribed);
 
-			_clientRaw->SetUserChannelState(
+			_client->SetUserChannelState(
 				userIndex,
 				channelIndex,
 				true,
@@ -548,7 +525,7 @@ void NinjamConnection::_RefreshSnapshot()
 			bool solo = false;
 			int outChannel = 0;
 			int flags = 0;
-			const auto* channelNameC = _clientRaw->GetUserChannelState(
+			const auto* channelNameC = _client->GetUserChannelState(
 				userIndex,
 				channelIndex,
 				&subState,
@@ -563,8 +540,8 @@ void NinjamConnection::_RefreshSnapshot()
 			channel.ChannelIndex = channelIndex;
 			channel.Name = channelNameC ? channelNameC : "";
 			channel.Subscribed = subState;
-			channel.PeakLeft = _clientRaw->GetUserChannelPeak(userIndex, channelIndex, 0);
-			channel.PeakRight = _clientRaw->GetUserChannelPeak(userIndex, channelIndex, 1);
+			channel.PeakLeft = _client->GetUserChannelPeak(userIndex, channelIndex, 0);
+			channel.PeakRight = _client->GetUserChannelPeak(userIndex, channelIndex, 1);
 			user.Channels.push_back(channel);
 		}
 
@@ -584,7 +561,7 @@ void NinjamConnection::_RefreshSnapshot()
 		return a.UserName < b.UserName;
 		});
 
-	if (currentUserNames != _lastLoggedUserNames)
+	if (currentUserNames != _lastLoggedUsers)
 	{
 		std::cout << "[NINJAM] Connected users (" << currentUserNames.size() << ")";
 
@@ -600,7 +577,7 @@ void NinjamConnection::_RefreshSnapshot()
 		}
 		std::cout << std::endl;
 
-		_lastLoggedUserNames = std::move(currentUserNames);
+		_lastLoggedUsers = std::move(currentUserNames);
 	}
 
 	std::scoped_lock lock(_snapshotMutex);

@@ -326,7 +326,7 @@
     <ClInclude Include="src\io\InitFile.h">
       <Filter>src\io</Filter>
     </ClInclude>
-    <ClInclude Include="src\io\Socket.h">
+    <ClInclude Include="src\io\NetworkSession.h">
       <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\io\NinjamConnection.h">
@@ -583,7 +583,7 @@
     <ClCompile Include="src\io\InitFile.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
-    <ClCompile Include="src\io\Socket.cpp">
+    <ClCompile Include="src\io\NetworkSession.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NinjamConnection.cpp">
