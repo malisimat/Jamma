@@ -4,8 +4,6 @@
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
-#include <set>
-#include <unordered_map>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -216,7 +214,6 @@ namespace engine
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
-		void _TryAutoConnectNinjam();
 		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
 
 	protected:
@@ -240,16 +237,7 @@ namespace engine
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
-		std::unordered_map<std::string, std::shared_ptr<StationRemote>> _remoteStations;
-		std::set<std::string> _lastRemoteUsers;
 		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
-		unsigned int _ninjamRetryAttempts;
-		std::chrono::steady_clock::time_point _ninjamNextRetryAt;
-		std::chrono::steady_clock::time_point _ninjamConnectStartedAt;
-		std::chrono::milliseconds _ninjamRetryDelayMin;
-		std::chrono::milliseconds _ninjamRetryDelay;
-		std::chrono::milliseconds _ninjamRetryDelayMax;
-		std::chrono::milliseconds _ninjamConnectTimeout;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

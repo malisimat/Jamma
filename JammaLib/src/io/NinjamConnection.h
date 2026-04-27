@@ -82,6 +82,10 @@ namespace io
 			unsigned int& numFrames) const;
 
 	private:
+		bool _BeginConnectAttempt(std::chrono::steady_clock::time_point now);
+		void _ResetReconnectState(std::chrono::steady_clock::time_point now);
+		void _ScheduleRetry(std::chrono::steady_clock::time_point now);
+		std::string _DescribeStatusError(int status) const;
 		void _EnsureWorkDir();
 		void _EnsureScratchBuffers(unsigned int numFrames);
 		void _ConfigureLocalChannels();
@@ -93,6 +97,14 @@ namespace io
 		std::string _user;
 		std::string _pass;
 		std::string _workDir;
+		bool _autoReconnect;
+		unsigned int _connectAttempts;
+		std::chrono::steady_clock::time_point _nextRetryAt;
+		std::chrono::steady_clock::time_point _connectStartedAt;
+		std::chrono::milliseconds _retryDelayMin;
+		std::chrono::milliseconds _retryDelay;
+		std::chrono::milliseconds _retryDelayMax;
+		std::chrono::milliseconds _connectTimeout;
 		std::atomic_bool _isConnected;
 		std::atomic<ConnectionState> _state;
 

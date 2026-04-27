@@ -5,10 +5,10 @@
 //
 ///////////////////////////////////////////////////////////
 
+#include "Socket.h"
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
-#include "WDL/jnetlib/util.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include <vector>
@@ -23,32 +23,6 @@ using namespace utils;
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
-
-namespace
-{
-	class SocketLibraryScope
-	{
-	public:
-		SocketLibraryScope() noexcept :
-			_isOpen(JNL::open_socketlib() == 0)
-		{
-		}
-
-		~SocketLibraryScope()
-		{
-			if (_isOpen)
-				JNL::close_socketlib();
-		}
-
-		bool IsOpen() const noexcept
-		{
-			return _isOpen;
-		}
-
-	private:
-		bool _isOpen;
-	};
-}
 
 void SetupConsole()
 {
@@ -134,8 +108,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 {
 	SetupConsole();
 
-	SocketLibraryScope socketLibrary;
-	if (!socketLibrary.IsOpen())
+	WinsockSession socketSession;
+	if (!socketSession.IsStarted())
 	{
 		std::cerr << "[NINJAM] Failed to initialise socket library" << std::endl;
 		return -1;

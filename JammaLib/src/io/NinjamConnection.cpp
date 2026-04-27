@@ -18,6 +18,14 @@ NinjamConnection::NinjamConnection(std::string host,
 	_user(std::move(user)),
 	_pass(std::move(pass)),
 	_workDir(std::move(workDir)),
+	_autoReconnect(false),
+	_connectAttempts(0u),
+	_nextRetryAt(std::chrono::steady_clock::now()),
+	_connectStartedAt(),
+	_retryDelayMin(std::chrono::milliseconds(1500)),
+	_retryDelay(std::chrono::milliseconds(1500)),
+	_retryDelayMax(std::chrono::milliseconds(30000)),
+	_connectTimeout(std::chrono::seconds(20)),
 	_isConnected(false),
 	_state(ConnectionState::Disconnected),
 	_sampleRate(constants::DefaultSampleRate),
@@ -39,22 +47,12 @@ NinjamConnection::NinjamConnection(std::string host,
 {
 }
 
-NinjamConnection::~NinjamConnection()
+bool NinjamConnection::_BeginConnectAttempt(std::chrono::steady_clock::time_point now)
 {
-	Disconnect();
-	delete _clientRaw;
-	_clientRaw = nullptr;
-}
-
-bool NinjamConnection::Connect()
-{
-	std::scoped_lock lock(_connectionMutex);
-
 	if (!_clientRaw)
 	{
 		_lastError = "NJClient unavailable";
 		_state = ConnectionState::Failed;
-		std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 		return false;
 	}
 
@@ -62,19 +60,8 @@ bool NinjamConnection::Connect()
 	{
 		_lastError = "Host/user not configured";
 		_state = ConnectionState::Failed;
-		std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 		return false;
 	}
-
-	if (_state == ConnectionState::Connecting)
-		return true;
-
-	if (_isConnected)
-		return true;
-
-	_state = ConnectionState::Connecting;
-	_lastError.clear();
-	std::cout << "[NINJAM] Connecting to " << _host << " as " << _user << std::endl;
 
 	_EnsureWorkDir();
 
@@ -90,16 +77,83 @@ bool NinjamConnection::Connect()
 		_clientRaw->SetWorkDir(mutablePath.data());
 	}
 
+	_lastError.clear();
+	_connectAttempts += 1u;
+	_connectStartedAt = now;
+	_state = ConnectionState::Connecting;
+	std::cout << "[NINJAM] Connect attempt " << _connectAttempts
+		<< " to " << _host << " as " << _user << std::endl;
+
 	_clientRaw->Connect(_host.c_str(), _user.c_str(), _pass.c_str());
 	_isConnected = false;
-	_state = ConnectionState::Connecting;
-
 	return true;
+}
+
+void NinjamConnection::_ResetReconnectState(std::chrono::steady_clock::time_point now)
+{
+	_connectAttempts = 0u;
+	_connectStartedAt = {};
+	_retryDelay = _retryDelayMin;
+	_nextRetryAt = now;
+}
+
+void NinjamConnection::_ScheduleRetry(std::chrono::steady_clock::time_point now)
+{
+	const auto retryDelay = _retryDelay;
+	_nextRetryAt = now + retryDelay;
+	auto nextDelayMs = std::min(_retryDelay.count() * 2, _retryDelayMax.count());
+	_retryDelay = std::chrono::milliseconds(nextDelayMs);
+	_state = ConnectionState::Retrying;
+	_connectStartedAt = {};
+
+	std::cout << "[NINJAM] Retrying in " << retryDelay.count() << " ms" << std::endl;
+}
+
+std::string NinjamConnection::_DescribeStatusError(int status) const
+{
+	auto err = std::string(_clientRaw && _clientRaw->GetErrorStr() ? _clientRaw->GetErrorStr() : "");
+	if (!err.empty())
+		return err;
+
+	switch (status)
+	{
+	case NJClient::NJC_STATUS_INVALIDAUTH:
+		return "Invalid credentials";
+	case NJClient::NJC_STATUS_CANTCONNECT:
+		return "Could not reach server";
+	case NJClient::NJC_STATUS_DISCONNECTED:
+		return "Disconnected";
+	default:
+		return "NINJAM connection error";
+	}
+}
+
+NinjamConnection::~NinjamConnection()
+{
+	Disconnect();
+	delete _clientRaw;
+	_clientRaw = nullptr;
+}
+
+bool NinjamConnection::Connect()
+{
+	std::scoped_lock lock(_connectionMutex);
+
+	if (_state == ConnectionState::Connecting)
+		return true;
+
+	if (_isConnected)
+		return true;
+
+	_autoReconnect = true;
+	_ResetReconnectState(std::chrono::steady_clock::now());
+	return _BeginConnectAttempt(std::chrono::steady_clock::now());
 }
 
 void NinjamConnection::Disconnect()
 {
 	std::scoped_lock lock(_connectionMutex);
+	_autoReconnect = false;
 
 	if (_clientRaw)
 		_clientRaw->Disconnect();
@@ -109,6 +163,7 @@ void NinjamConnection::Disconnect()
 
 	_isConnected = false;
 	_state = ConnectionState::Disconnected;
+	_ResetReconnectState(std::chrono::steady_clock::now());
 	_userOutputChannels.clear();
 	_lastLoggedUserNames.clear();
 	_lastNumFrames = 0;
@@ -138,8 +193,44 @@ void NinjamConnection::Pump()
 	if (!_clientRaw)
 		return;
 
-	if ((_state == ConnectionState::Disconnected) || (_state == ConnectionState::Failed))
-		return;
+	auto now = std::chrono::steady_clock::now();
+	{
+		std::scoped_lock lock(_connectionMutex);
+
+		if (_autoReconnect)
+		{
+			if ((_state == ConnectionState::Connecting)
+				&& (_connectStartedAt.time_since_epoch().count() != 0)
+				&& ((now - _connectStartedAt) >= _connectTimeout))
+			{
+				std::cout << "[NINJAM] Connect attempt timed out after "
+					<< std::chrono::duration_cast<std::chrono::seconds>(_connectTimeout).count()
+					<< "s" << std::endl;
+				_clientRaw->Disconnect();
+				_isConnected = false;
+				_lastError = "Connection timed out";
+				_ScheduleRetry(now);
+				return;
+			}
+
+			if (((_state == ConnectionState::Disconnected)
+					|| (_state == ConnectionState::Failed)
+					|| (_state == ConnectionState::Retrying))
+				&& (now >= _nextRetryAt))
+			{
+				if (!_BeginConnectAttempt(now))
+				{
+					std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
+				}
+			}
+		}
+		else if ((_state == ConnectionState::Disconnected)
+			|| (_state == ConnectionState::Failed)
+			|| (_state == ConnectionState::Retrying))
+		{
+			return;
+		}
+	}
 
 	while (!_clientRaw->Run()) {}
 
@@ -150,6 +241,8 @@ void NinjamConnection::Pump()
 		{
 			_isConnected = true;
 			_state = ConnectionState::Connected;
+			std::scoped_lock lock(_connectionMutex);
+			_ResetReconnectState(now);
 			_ConfigureLocalChannels();
 			std::cout << "[NINJAM] Connected" << std::endl;
 		}
@@ -162,32 +255,20 @@ void NinjamConnection::Pump()
 	{
 		if (_isConnected || (_state == ConnectionState::Connecting))
 		{
-			auto err = std::string(_clientRaw->GetErrorStr() ? _clientRaw->GetErrorStr() : "");
-			if (err.empty())
-			{
-				switch (status)
-				{
-				case NJClient::NJC_STATUS_INVALIDAUTH:
-					err = "Invalid credentials";
-					break;
-				case NJClient::NJC_STATUS_CANTCONNECT:
-					err = "Could not reach server";
-					break;
-				case NJClient::NJC_STATUS_DISCONNECTED:
-					err = "Disconnected";
-					break;
-				default:
-					err = "NINJAM connection error";
-					break;
-				}
-			}
-
-			_lastError = err;
+			_lastError = _DescribeStatusError(status);
 			std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
 		}
 
 		_isConnected = false;
-		_state = ConnectionState::Failed;
+		if (_autoReconnect)
+		{
+			std::scoped_lock lock(_connectionMutex);
+			_ScheduleRetry(now);
+		}
+		else
+		{
+			_state = ConnectionState::Failed;
+		}
 	}
 
 	if (!_isConnected)

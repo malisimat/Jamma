@@ -16,6 +16,22 @@ using namespace resources;
 using namespace utils;
 using namespace std::placeholders;
 
+namespace
+{
+	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
+		const std::string& userName)
+	{
+		for (const auto& station : stations)
+		{
+			auto remote = std::dynamic_pointer_cast<StationRemote>(station);
+			if (remote && remote->RemoteUserName() == userName)
+				return remote;
+		}
+
+		return nullptr;
+	}
+}
+
 Scene::Scene(SceneParams params,
 	UserConfig user) :
 	Drawable(params),
@@ -41,16 +57,7 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
-	_remoteStations(),
-	_lastRemoteUsers(),
 	_ninjamConnection(nullptr),
-	_ninjamRetryAttempts(0u),
-	_ninjamNextRetryAt(std::chrono::steady_clock::now()),
-	_ninjamConnectStartedAt(),
-	_ninjamRetryDelayMin(std::chrono::milliseconds(1500)),
-	_ninjamRetryDelay(std::chrono::milliseconds(1500)),
-	_ninjamRetryDelayMax(std::chrono::milliseconds(30000)),
-	_ninjamConnectTimeout(std::chrono::seconds(20)),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -659,7 +666,6 @@ void Scene::OnJobTick(Time curTime)
 	if (_ninjamConnection)
 	{
 		_ninjamConnection->Pump();
-		_TryAutoConnectNinjam();
 
 		if (_ninjamConnection->IsConnected())
 		{
@@ -929,10 +935,13 @@ void Scene::_OnAudio(float* inBuf,
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		_ninjamConnection->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
-		for (auto& remotePair : _remoteStations)
+		for (const auto& stationBase : _stations)
 		{
-			auto station = remotePair.second;
-			if (!station || !station->IsConnectedRemote())
+			if (!stationBase || !stationBase->IsRemote())
+				continue;
+
+			auto station = std::static_pointer_cast<StationRemote>(stationBase);
+			if (!station->IsConnectedRemote())
 				continue;
 
 			const float* left = nullptr;
@@ -1219,12 +1228,6 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
 {
 	_ninjamConnection.reset();
-	_remoteStations.clear();
-	_lastRemoteUsers.clear();
-	_ninjamRetryAttempts = 0u;
-	_ninjamNextRetryAt = std::chrono::steady_clock::now();
-	_ninjamConnectStartedAt = {};
-	_ninjamRetryDelay = _ninjamRetryDelayMin;
 
 	if (!config.has_value())
 		return;
@@ -1237,115 +1240,23 @@ void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>
 		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
 
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
-	_TryAutoConnectNinjam();
-}
-
-void Scene::_TryAutoConnectNinjam()
-{
-	if (!_ninjamConnection)
-		return;
-
-	auto now = std::chrono::steady_clock::now();
-	auto state = _ninjamConnection->State();
-
-	auto resetRetryState = [&]() {
-		_ninjamRetryAttempts = 0u;
-		_ninjamConnectStartedAt = {};
-		_ninjamRetryDelay = _ninjamRetryDelayMin;
-		_ninjamNextRetryAt = now;
-	};
-
-	auto growRetryDelay = [&]() {
-		auto nextDelayMs = std::min(_ninjamRetryDelay.count() * 2, _ninjamRetryDelayMax.count());
-		_ninjamRetryDelay = std::chrono::milliseconds(nextDelayMs);
-	};
-
-	if (_ninjamConnection->IsConnected())
-	{
-		resetRetryState();
-		return;
-	}
-
-	if (state == io::NinjamConnection::ConnectionState::Connecting)
-	{
-		if ((_ninjamConnectStartedAt.time_since_epoch().count() == 0)
-			|| ((now - _ninjamConnectStartedAt) < _ninjamConnectTimeout))
-			return;
-
-		const auto retryDelay = _ninjamRetryDelay;
-		std::cout << "[NINJAM] Connect attempt timed out after "
-			<< std::chrono::duration_cast<std::chrono::seconds>(_ninjamConnectTimeout).count()
-			<< "s; retrying in " << retryDelay.count() << " ms" << std::endl;
-
-		_ninjamConnection->Disconnect();
-		_ninjamConnectStartedAt = {};
-		_ninjamNextRetryAt = now + retryDelay;
-		growRetryDelay();
-		return;
-	}
-
-	if (((state == io::NinjamConnection::ConnectionState::Failed)
-			|| (state == io::NinjamConnection::ConnectionState::Disconnected))
-		&& (_ninjamConnectStartedAt.time_since_epoch().count() != 0))
-	{
-		const auto retryDelay = _ninjamRetryDelay;
-		auto lastError = _ninjamConnection->LastError();
-		if (lastError.empty())
-			lastError = "Unknown error";
-
-		std::cout << "[NINJAM] Connect attempt " << _ninjamRetryAttempts
-			<< " failed: " << lastError
-			<< "; retrying in " << retryDelay.count() << " ms" << std::endl;
-
-		_ninjamConnectStartedAt = {};
-		_ninjamNextRetryAt = now + retryDelay;
-		growRetryDelay();
-		return;
-	}
-
-	if (now < _ninjamNextRetryAt)
-		return;
-
-	const auto attemptNumber = _ninjamRetryAttempts + 1u;
-	std::cout << "[NINJAM] Connect attempt " << attemptNumber << std::endl;
-
-	if (_ninjamConnection->Connect())
-	{
-		_ninjamRetryAttempts = attemptNumber;
-		_ninjamConnectStartedAt = now;
-		return;
-	}
-
-	_ninjamRetryAttempts = attemptNumber;
-	_ninjamConnectStartedAt = {};
-
-	const auto retryDelay = _ninjamRetryDelay;
-	_ninjamNextRetryAt = now + retryDelay;
-	growRetryDelay();
-
-	auto lastError = _ninjamConnection->LastError();
-	if (lastError.empty())
-		lastError = "Unknown error";
-
-	std::cout << "[NINJAM] Connect attempt failed immediately: " << lastError
-		<< "; retrying in " << retryDelay.count() << " ms" << std::endl;
+	_ninjamConnection->Connect();
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 {
 	std::set<std::string> seenUsers;
 
-	for (const auto& user : snapshot.Users)
+	for (const auto& remoteUser : snapshot.Users)
 	{
-		seenUsers.insert(user.UserName);
+		seenUsers.insert(remoteUser.UserName);
 
-		auto match = _remoteStations.find(user.UserName);
-		std::shared_ptr<StationRemote> remoteStation;
+		auto remoteStation = FindRemoteStation(_stations, remoteUser.UserName);
 
-		if (match == _remoteStations.end())
+		if (!remoteStation)
 		{
 			StationParams stationParams;
-			stationParams.Name = user.UserName;
+			stationParams.Name = remoteUser.UserName;
 			stationParams.Size = { 200, 280 };
 			stationParams.Index = static_cast<unsigned int>(_stations.size());
 			stationParams.Position = {
@@ -1359,20 +1270,15 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 			audio::MergeMixBehaviourParams merge;
 			auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
 			remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
-			remoteStation->SetRemoteUserName(user.UserName);
+			remoteStation->SetRemoteUserName(remoteUser.UserName);
 			remoteStation->SetNumBusChannels(2);
 			remoteStation->SetNumDacChannels(2);
-			_remoteStations[user.UserName] = remoteStation;
 			_AddStation(remoteStation);
-			std::cout << "[NINJAM] User joined: " << user.UserName << std::endl;
-		}
-		else
-		{
-			remoteStation = match->second;
+			std::cout << "[NINJAM] User joined: " << remoteUser.UserName << std::endl;
 		}
 
-		remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
-		remoteStation->SetRemoteChannelCount(user.ChannelCount);
+		remoteStation->SetAssignedOutputChannel(remoteUser.AssignedOutputChannel);
+		remoteStation->SetRemoteChannelCount(remoteUser.ChannelCount);
 		remoteStation->SetConnectedRemote(true);
 
 		if (snapshot.IntervalLengthSamps > 0)
@@ -1386,27 +1292,24 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 	}
 
 	// Remove stations for users who have left.
-	for (auto it = _remoteStations.begin(); it != _remoteStations.end();)
+	for (auto it = _stations.begin(); it != _stations.end();)
 	{
-		if (seenUsers.find(it->first) == seenUsers.end())
+		auto remoteStation = std::dynamic_pointer_cast<StationRemote>(*it);
+		if (!remoteStation)
 		{
-			auto station = it->second;
-			if (station)
-			{
-				station->SetConnectedRemote(false);
-				auto stationMatch = std::find(_stations.begin(), _stations.end(), station);
-				if (stationMatch != _stations.end())
-					_stations.erase(stationMatch);
-			}
+			++it;
+			continue;
+		}
 
-			std::cout << "[NINJAM] User left: " << it->first << std::endl;
-			it = _remoteStations.erase(it);
+		if (seenUsers.find(remoteStation->RemoteUserName()) == seenUsers.end())
+		{
+			remoteStation->SetConnectedRemote(false);
+			std::cout << "[NINJAM] User left: " << remoteStation->RemoteUserName() << std::endl;
+			it = _stations.erase(it);
 		}
 		else
 		{
 			++it;
 		}
 	}
-
-	_lastRemoteUsers = std::move(seenUsers);
 }
