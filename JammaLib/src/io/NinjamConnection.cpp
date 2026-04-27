@@ -5,6 +5,16 @@
 #include <iostream>
 #include <set>
 
+namespace
+{
+	bool IsAuthFailure(const std::string& err)
+	{
+		return err.find("invalid login/password") != std::string::npos
+			|| err.find("invalid credentials") != std::string::npos
+			|| err.find("authentication") != std::string::npos;
+	}
+}
+
 #include "njclient.h"
 #include "../../include/Constants.h"
 
@@ -81,10 +91,13 @@ bool NinjamConnection::_BeginConnectAttempt(std::chrono::steady_clock::time_poin
 	_connectAttempts += 1u;
 	_connectStartedAt = now;
 	_state = ConnectionState::Connecting;
+	const auto connectUser = (_pass.empty() && !_user.starts_with("anonymous:"))
+		? std::string("anonymous:") + _user
+		: _user;
 	std::cout << "[NINJAM] Connect attempt " << _connectAttempts
-		<< " to " << _host << " as " << _user << std::endl;
+		<< " to " << _host << " as " << connectUser << std::endl;
 
-	_clientRaw->Connect(_host.c_str(), _user.c_str(), _pass.c_str());
+	_clientRaw->Connect(_host.c_str(), connectUser.c_str(), _pass.c_str());
 	_isConnected = false;
 	return true;
 }
@@ -271,7 +284,13 @@ void NinjamConnection::Pump()
 		}
 
 		_isConnected = false;
-		if (_autoReconnect)
+		const auto isAuthFailure = status == NJClient::NJC_STATUS_INVALIDAUTH || IsAuthFailure(_lastError);
+		if (isAuthFailure)
+		{
+			_autoReconnect = false;
+			_state = ConnectionState::Failed;
+		}
+		else if (_autoReconnect)
 		{
 			std::scoped_lock lock(_connectionMutex);
 			_ScheduleRetry(now);
