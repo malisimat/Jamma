@@ -139,7 +139,7 @@ bool NinjamConnection::Connect()
 {
 	std::scoped_lock lock(_connectionMutex);
 
-	if (_state == ConnectionState::Connecting)
+	if (_state == ConnectionState::Connecting || _state == ConnectionState::Retrying)
 		return true;
 
 	if (_isConnected)
@@ -196,26 +196,36 @@ void NinjamConnection::Pump()
 	auto now = std::chrono::steady_clock::now();
 	{
 		std::scoped_lock lock(_connectionMutex);
+		const auto hasActiveAttempt = _connectStartedAt.time_since_epoch().count() != 0;
 
 		if (_autoReconnect)
 		{
 			if ((_state == ConnectionState::Connecting)
-				&& (_connectStartedAt.time_since_epoch().count() != 0)
+				&& hasActiveAttempt
 				&& ((now - _connectStartedAt) >= _connectTimeout))
 			{
 				std::cout << "[NINJAM] Connect attempt timed out after "
 					<< std::chrono::duration_cast<std::chrono::seconds>(_connectTimeout).count()
-					<< "s" << std::endl;
+					<< "s, allowing DNS resolution to finish before retry" << std::endl;
+				_lastError = "Connection timed out";
+				_state = ConnectionState::Retrying;
+				_nextRetryAt = now + _connectTimeout;
+			}
+
+			if ((_state == ConnectionState::Retrying)
+				&& hasActiveAttempt
+				&& (now >= _nextRetryAt))
+			{
+				std::cout << "[NINJAM] Restarting stalled connect attempt" << std::endl;
 				_clientRaw->Disconnect();
 				_isConnected = false;
-				_lastError = "Connection timed out";
 				_ScheduleRetry(now);
 				return;
 			}
 
 			if (((_state == ConnectionState::Disconnected)
 					|| (_state == ConnectionState::Failed)
-					|| (_state == ConnectionState::Retrying))
+					|| ((_state == ConnectionState::Retrying) && !hasActiveAttempt))
 				&& (now >= _nextRetryAt))
 			{
 				if (!_BeginConnectAttempt(now))
@@ -249,11 +259,12 @@ void NinjamConnection::Pump()
 	}
 	else if (status == NJClient::NJC_STATUS_PRECONNECT)
 	{
-		_state = ConnectionState::Connecting;
+		if (_state != ConnectionState::Retrying)
+			_state = ConnectionState::Connecting;
 	}
 	else
 	{
-		if (_isConnected || (_state == ConnectionState::Connecting))
+		if (_isConnected || (_state == ConnectionState::Connecting) || (_state == ConnectionState::Retrying))
 		{
 			_lastError = _DescribeStatusError(status);
 			std::cout << "[NINJAM] Connection failed: " << _lastError << std::endl;
