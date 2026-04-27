@@ -95,13 +95,16 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void Reset() override;
 		
+		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const { return _loopTakes; }
+		// Returns true if this station receives audio from a remote ninjam user.
+		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
+		virtual bool IsRemote() const noexcept { return false; }
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
-		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const { return _loopTakes; }
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);

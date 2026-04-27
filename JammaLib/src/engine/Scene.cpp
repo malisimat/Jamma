@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
@@ -39,6 +40,14 @@ Scene::Scene(SceneParams params,
 	_audioDevice(nullptr),
 	_masterLoop(nullptr),
 	_stations(),
+	_ninjamConfig(std::nullopt),
+	_remoteStations(),
+	_lastRemoteUsers(),
+	_ninjamConnection(nullptr),
+	_ninjamRetryAttempts(0u),
+	_ninjamMaxRetryAttempts(4u),
+	_ninjamNextRetryAt(std::chrono::steady_clock::now()),
+	_ninjamRetryDelay(std::chrono::milliseconds(1500)),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -166,6 +175,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->_ninjamConfig = jamStruct.Ninjam;
+	scene->_InitNinjamConnection(scene->_ninjamConfig);
 	scene->InitReceivers();
 
 	return scene;
@@ -414,6 +425,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		return { res };
 	}
 
+	// Ctrl+S - export session to directory.
 	if ((83 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
@@ -422,6 +434,22 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			std::wstring Path;
 			std::vector<float> Samples;
+		};
+
+		struct LoopRef
+		{
+			std::shared_ptr<Loop> Loop;
+			std::string WavFilename;
+		};
+
+		struct TakeRef
+		{
+			std::vector<LoopRef> Loops;
+		};
+
+		struct StationRef
+		{
+			std::vector<TakeRef> Takes;
 		};
 
 		const auto exportDir = utils::PickDirectory(L"Choose export directory");
@@ -434,10 +462,12 @@ ActionResult Scene::OnAction(KeyAction action)
 		io::JamFile jam;
 		jam.Version = io::JamFile::VERSION_V;
 		jam.Name = "export";
+		jam.Ninjam = _ninjamConfig;
 		jam.TimerTicks = 0;
 		jam.QuantiseSamps = 0;
 		jam.Quantisation = engine::Timer::QUANTISE_OFF;
 
+		std::vector<StationRef> stationRefs;
 		std::vector<LoopSnapshot> loops;
 
 		{
@@ -445,34 +475,38 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			for (const auto& station : _stations)
 			{
+				if (station->IsRemote())
+					continue;
+
+				StationRef stationRef;
+
 				io::JamFile::Station jamStation;
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
 
 				for (const auto& take : station->GetLoopTakes())
 				{
+					TakeRef takeRef;
+
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
 
 					for (const auto& loop : take->GetLoops())
 					{
-						auto samples = loop->ExportSamples();
-						if (samples.empty())
-							continue;
-
 						const auto wavFilename = loop->Id() + ".wav";
-						const auto wavPath = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-
-						LoopSnapshot snap;
-						snap.Path = wavPath;
-						snap.Samples = std::move(samples);
-						loops.push_back(std::move(snap));
+						takeRef.Loops.push_back({ loop, wavFilename });
 						jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
 					}
+
+					if (!takeRef.Loops.empty())
+						stationRef.Takes.push_back(std::move(takeRef));
 
 					if (!jamTake.Loops.empty())
 						jamStation.LoopTakes.push_back(std::move(jamTake));
 				}
+
+				if (!stationRef.Takes.empty())
+					stationRefs.push_back(std::move(stationRef));
 
 				if (!jamStation.LoopTakes.empty())
 					jam.Stations.push_back(std::move(jamStation));
@@ -483,6 +517,25 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			std::cout << "Export: nothing to export" << std::endl;
 			return ActionResult::NoAction();
+		}
+
+		// Copy loop samples outside the audio lock to avoid callback stalls.
+		for (const auto& stationRef : stationRefs)
+		{
+			for (const auto& takeRef : stationRef.Takes)
+			{
+				for (const auto& loopRef : takeRef.Loops)
+				{
+					auto samples = loopRef.Loop->ExportSamples();
+					if (samples.empty())
+						continue;
+
+					LoopSnapshot snap;
+					snap.Path = exportDir + L"\\" + utils::DecodeUtf8(loopRef.WavFilename);
+					snap.Samples = std::move(samples);
+					loops.push_back(std::move(snap));
+				}
+			}
 		}
 
 		io::WavReadWriter wavWriter;
@@ -600,6 +653,20 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	if (_ninjamConnection)
+	{
+		_TryAutoConnectNinjam();
+		_ninjamConnection->Pump();
+
+		if (_ninjamConnection->IsConnected())
+		{
+			auto snapshot = _ninjamConnection->Snapshot();
+
+			std::scoped_lock lock(_audioMutex);
+			_ReconcileRemoteStations(snapshot);
+		}
+	}
+
 	actions::JobAction job;
 	job.SetActionTime(Timer::GetTime());
 	job.SetUserConfig(_userConfig);
@@ -721,12 +788,25 @@ void Scene::InitAudio()
 				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
 			}
 		}
+
+		if (_ninjamConnection)
+		{
+			_ninjamConnection->SetAudioFormat(
+				audioStreamParams.SampleRate,
+				audioStreamParams.BufSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels);
+		}
 	}
 }
 
 void Scene::CloseAudio()
 {
 	std::scoped_lock lock(_audioMutex);
+
+	if (_ninjamConnection)
+		_ninjamConnection->Disconnect();
+
 	_audioDevice->Stop();
 }
 
@@ -801,6 +881,9 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			if (station->IsRemote())
+				continue;
+
 			_channelMixer->WriteToSink(station, numSamps);
 		}
 
@@ -809,6 +892,9 @@ void Scene::_OnAudio(float* inBuf,
 
 		for (auto& station : _stations)
 		{
+			if (station->IsRemote())
+				continue;
+
 			_channelMixer->WriteToSink(station, numSamps);
 		
 			// Overdubbing / bouncing
@@ -833,6 +919,29 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+
+	if (_ninjamConnection)
+	{
+		auto audioStreamParams = nullptr == _audioDevice ?
+			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		_ninjamConnection->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
+
+		for (auto& remotePair : _remoteStations)
+		{
+			auto station = remotePair.second;
+			if (!station || !station->IsConnectedRemote())
+				continue;
+
+			const float* left = nullptr;
+			const float* right = nullptr;
+			unsigned int frameCount = 0u;
+			if (_ninjamConnection->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+			{
+				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
+				station->IngestStereoBlock(left, right, ingestFrames);
+			}
+		}
+	}
 
 	if (nullptr != outBuf)
 	{
@@ -1102,4 +1211,155 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 		station->SetSelectDepth(selectDepth);
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
+}
+
+void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
+{
+	_ninjamConnection.reset();
+	_remoteStations.clear();
+	_lastRemoteUsers.clear();
+	_ninjamRetryAttempts = 0u;
+	_ninjamNextRetryAt = std::chrono::steady_clock::now();
+
+	if (!config.has_value())
+		return;
+
+	const auto& ninjam = config.value();
+	if (ninjam.Host.empty() || ninjam.User.empty())
+		return;
+
+	_ninjamConnection = std::make_unique<io::NinjamConnection>(
+		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
+
+	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
+	_TryAutoConnectNinjam();
+}
+
+void Scene::_TryAutoConnectNinjam()
+{
+	if (!_ninjamConnection)
+		return;
+
+	if (_ninjamConnection->IsConnected())
+	{
+		_ninjamRetryAttempts = 0u;
+		_ninjamNextRetryAt = std::chrono::steady_clock::now();
+		return;
+	}
+
+	if (_ninjamConnection->State() == io::NinjamConnection::ConnectionState::Connecting)
+		return;
+
+	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
+		return;
+
+	auto now = std::chrono::steady_clock::now();
+	if (now < _ninjamNextRetryAt)
+		return;
+
+	const auto attemptNumber = _ninjamRetryAttempts + 1u;
+	std::cout << "[NINJAM] Connect attempt " << attemptNumber
+		<< "/" << _ninjamMaxRetryAttempts << std::endl;
+
+	if (_ninjamConnection->Connect())
+	{
+		_ninjamRetryAttempts = attemptNumber;
+		_ninjamNextRetryAt = now + _ninjamRetryDelay;
+		return;
+	}
+
+	_ninjamRetryAttempts = attemptNumber;
+	_ninjamNextRetryAt = now + _ninjamRetryDelay;
+
+	auto lastError = _ninjamConnection->LastError();
+	if (lastError.empty())
+		lastError = "Unknown error";
+
+	std::cout << "[NINJAM] Connect attempt failed: " << lastError << std::endl;
+
+	if (_ninjamRetryAttempts >= _ninjamMaxRetryAttempts)
+	{
+		std::cout << "[NINJAM] Stopping retries after " << _ninjamRetryAttempts
+			<< " failed attempt(s)" << std::endl;
+	}
+}
+
+void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
+{
+	std::set<std::string> seenUsers;
+
+	for (const auto& user : snapshot.Users)
+	{
+		seenUsers.insert(user.UserName);
+
+		auto match = _remoteStations.find(user.UserName);
+		std::shared_ptr<StationRemote> remoteStation;
+
+		if (match == _remoteStations.end())
+		{
+			StationParams stationParams;
+			stationParams.Name = user.UserName;
+			stationParams.Size = { 200, 280 };
+			stationParams.Index = static_cast<unsigned int>(_stations.size());
+			stationParams.Position = {
+				static_cast<int>(stationParams.Index) * 600,
+				0 };
+			stationParams.ModelPosition = {
+				static_cast<float>(stationParams.Index) * 600.0f,
+				0.0f,
+				0.0f };
+
+			audio::MergeMixBehaviourParams merge;
+			auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
+			remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
+			remoteStation->SetRemoteUserName(user.UserName);
+			remoteStation->SetNumBusChannels(2);
+			remoteStation->SetNumDacChannels(2);
+			_remoteStations[user.UserName] = remoteStation;
+			_AddStation(remoteStation);
+			std::cout << "[NINJAM] User joined: " << user.UserName << std::endl;
+		}
+		else
+		{
+			remoteStation = match->second;
+		}
+
+		remoteStation->SetAssignedOutputChannel(user.AssignedOutputChannel);
+		remoteStation->SetRemoteChannelCount(user.ChannelCount);
+		remoteStation->SetConnectedRemote(true);
+
+		if (snapshot.IntervalLengthSamps > 0)
+		{
+			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+		}
+
+		// EnsureRemoteTake runs on the job thread so the audio callback can
+		// early-out safely if loops are not yet initialised.
+		remoteStation->EnsureRemoteTake();
+	}
+
+	// Remove stations for users who have left.
+	for (auto it = _remoteStations.begin(); it != _remoteStations.end();)
+	{
+		if (seenUsers.find(it->first) == seenUsers.end())
+		{
+			auto station = it->second;
+			if (station)
+			{
+				station->SetConnectedRemote(false);
+				auto stationMatch = std::find(_stations.begin(), _stations.end(), station);
+				if (stationMatch != _stations.end())
+					_stations.erase(stationMatch);
+			}
+
+			std::cout << "[NINJAM] User left: " << it->first << std::endl;
+			it = _remoteStations.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	_lastRemoteUsers = std::move(seenUsers);
 }

@@ -1,8 +1,11 @@
 #pragma once
 #include <memory>
 #include <algorithm>
+#include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <set>
+#include <unordered_map>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -17,6 +20,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/NinjamConnection.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -25,6 +29,7 @@
 #include "Sizeable.h"
 #include "GuiElement.h"
 #include "Station.h"
+#include "StationRemote.h"
 #include "UndoHistory.h"
 
 namespace engine
@@ -210,6 +215,9 @@ namespace engine
 		void _JobLoop();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
+		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
+		void _TryAutoConnectNinjam();
+		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
 
 	protected:
 		bool _isSceneTouching;
@@ -231,6 +239,14 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
+		std::unordered_map<std::string, std::shared_ptr<StationRemote>> _remoteStations;
+		std::set<std::string> _lastRemoteUsers;
+		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
+		unsigned int _ninjamRetryAttempts;
+		unsigned int _ninjamMaxRetryAttempts;
+		std::chrono::steady_clock::time_point _ninjamNextRetryAt;
+		std::chrono::milliseconds _ninjamRetryDelay;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

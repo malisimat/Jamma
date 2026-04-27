@@ -45,7 +45,7 @@ std::wstring utils::PickDirectory(const std::wstring& title)
 		bool DidInit = false;
 		ComInitGuard()
 		{
-			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 			DidInit = SUCCEEDED(hr);
 		}
 		~ComInitGuard()

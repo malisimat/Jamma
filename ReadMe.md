@@ -57,3 +57,38 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 ```
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
+
+### Ninjam Integration Prerequisites
+
+Jamma links against `njclient.lib` from the Ninjam repo. To compile successfully, set up the Ninjam dependency first.
+
+1. Clone Ninjam:
+
+```powershell
+git clone https://github.com/malisimat/ninjam C:\Users\<you>\Source\Repos\ninjam
+```
+
+2. Build Ninjam for `x64` in both `Debug` and `Release` (Visual Studio 2022).
+The Jamma project expects `njclient.lib` under these folders by default:
+- `...\ninjam\bin\x64\Debug\MD`
+- `...\ninjam\bin\x64\Release\MD`
+
+3. Point Jamma to your local Ninjam checkout by editing `Directory.Build.local.props` in this repo root:
+
+```xml
+<Project>
+  <PropertyGroup>
+    <NinjamRoot>C:/Users/<you>/Source/Repos/ninjam</NinjamRoot>
+    <NinjamIncludeDir>$(NinjamRoot)</NinjamIncludeDir>
+    <NinjamLibDirDebug>$(NinjamRoot)/bin/x64/Debug/MD</NinjamLibDirDebug>
+    <NinjamLibDirRelease>$(NinjamRoot)/bin/x64/Release/MD</NinjamLibDirRelease>
+  </PropertyGroup>
+</Project>
+```
+
+If your Ninjam build outputs to different folders, update `NinjamLibDirDebug` and `NinjamLibDirRelease` to match where `njclient.lib` is produced.
+
+Required Ninjam-related link dependencies:
+- `njclient.lib` from the Ninjam build
+- `ogg.lib`, `vorbis.lib`, `vorbisenc.lib`, `vorbisfile.lib` (provided via vcpkg)
+- `ws2_32.lib` (Windows SDK)

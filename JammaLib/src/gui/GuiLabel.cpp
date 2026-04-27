@@ -17,6 +17,23 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 {
 }
 
+void GuiLabel::SetString(const std::string& str)
+{
+	if (_str == str)
+		return;
+
+	_str = str;
+
+	auto font = _font.lock();
+	if (!font)
+		return;
+
+	if (_vertexArray != 0)
+		glDeleteVertexArrays(1, &_vertexArray);
+
+	_vertexArray = font->InitVertexArray(_str, GL_STATIC_DRAW);
+}
+
 void GuiLabel::Draw(DrawContext& ctx)
 {
 	auto font = _font.lock();
