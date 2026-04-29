@@ -227,11 +227,12 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 
 bool LoopTake::IsArmed() const
 {
-	return (STATE_RECORDING == _state) ||
-		(STATE_PLAYINGRECORDING == _state) ||
-		(STATE_OVERDUBBING == _state) ||
-		(STATE_PUNCHEDIN == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state);
+	auto state = _state.load(std::memory_order_relaxed);
+	return (STATE_RECORDING == state) ||
+		(STATE_PLAYINGRECORDING == state) ||
+		(STATE_OVERDUBBING == state) ||
+		(STATE_PUNCHEDIN == state) ||
+		(STATE_OVERDUBBINGRECORDING == state);
 }
 
 void LoopTake::EndMultiWrite(unsigned int numSamps,
@@ -242,8 +243,9 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 		 loop->EndWrite(numSamps, updateIndex);
 
 	auto isRecording = IsArmed();
-	auto isEndRecording = (STATE_PLAYINGRECORDING == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state);
+	auto state = _state.load(std::memory_order_relaxed);
+	auto isEndRecording = (STATE_PLAYINGRECORDING == state) ||
+		(STATE_OVERDUBBINGRECORDING == state);
 
 	if (isEndRecording)
 	{
@@ -367,7 +369,7 @@ LoopTake::LoopTakeSource LoopTake::TakeSourceType() const
 
 LoopTake::LoopTakeState LoopTake::TakeState() const
 {
-	return _state;
+	return _state.load(std::memory_order_relaxed);
 }
 
 unsigned long LoopTake::NumRecordedSamps() const
@@ -457,10 +459,10 @@ void LoopTake::SetNumBusChannels(unsigned int chans)
 
 void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName)
 {
-	if (STATE_INACTIVE != _state)
+	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
 
-	_state = STATE_RECORDING;
+	_state.store(STATE_RECORDING, std::memory_order_relaxed);
 
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
@@ -482,9 +484,10 @@ void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps)
 {
-	if ((STATE_RECORDING != _state) &&
-		(STATE_OVERDUBBING != _state) &&
-		(STATE_PUNCHEDIN != _state))
+	auto state = _state.load(std::memory_order_relaxed);
+	if ((STATE_RECORDING != state) &&
+		(STATE_OVERDUBBING != state) &&
+		(STATE_PUNCHEDIN != state))
 		return;
 
 	_endRecordSampCount = 0;
@@ -495,10 +498,10 @@ void LoopTake::Play(unsigned long index,
 		loop->Play(index, loopLength, endRecordSamps > 0);
 	}
 
-	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
+	auto isOverdubbing = (STATE_OVERDUBBING == state) || (STATE_PUNCHEDIN == state);
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = endRecordSamps > 0 ? recordState : STATE_PLAYING;
-	_state = loopLength > 0 ? playState : STATE_INACTIVE;
+	_state.store(loopLength > 0 ? playState : STATE_INACTIVE, std::memory_order_relaxed);
 }
 
 bool LoopTake::Select()
@@ -572,8 +575,8 @@ void LoopTake::SetPickingFromState(EditMode mode, bool flipState)
 		break;
 	case EDIT_MUTE:
 		_isPicking3d = flipState ? 
-			!(TWEAKSTATE_MUTED & _tweakState)
-			: (TWEAKSTATE_MUTED & _tweakState);
+			!(TWEAKSTATE_MUTED & GetTweakState())
+			: (TWEAKSTATE_MUTED & GetTweakState());
 		break;
 	}
 
@@ -605,11 +608,12 @@ void LoopTake::SetStateFromPicking(EditMode mode, bool flipState)
 
 void LoopTake::EndRecording()
 {
-	if ((STATE_PLAYINGRECORDING != _state) &&
-		(STATE_OVERDUBBINGRECORDING != _state))
+	auto state = _state.load(std::memory_order_relaxed);
+	if ((STATE_PLAYINGRECORDING != state) &&
+		(STATE_OVERDUBBINGRECORDING != state))
 		return;
 
-	_state = STATE_PLAYING;
+	_state.store(STATE_PLAYING, std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{
@@ -635,10 +639,10 @@ void LoopTake::Ditch()
 
 void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationName)
 {
-	if (STATE_INACTIVE != _state)
+	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
 
-	_state = STATE_OVERDUBBING;
+	_state.store(STATE_OVERDUBBING, std::memory_order_relaxed);
 
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
@@ -657,10 +661,10 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 
 void LoopTake::PunchIn()
 {
-	if (STATE_OVERDUBBING != _state)
+	if (STATE_OVERDUBBING != _state.load(std::memory_order_relaxed))
 		return;
 
-	_state = STATE_PUNCHEDIN;
+	_state.store(STATE_PUNCHEDIN, std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{
@@ -670,10 +674,10 @@ void LoopTake::PunchIn()
 
 void LoopTake::PunchOut()
 {
-	if (STATE_PUNCHEDIN != _state)
+	if (STATE_PUNCHEDIN != _state.load(std::memory_order_relaxed))
 		return;
 
-	_state = STATE_OVERDUBBING;
+	_state.store(STATE_OVERDUBBING, std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{

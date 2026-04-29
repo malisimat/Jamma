@@ -52,7 +52,7 @@ void AudioBuffer::EndWrite(unsigned int numSamps, bool updateIndex)
 		_sampsRecorded = (unsigned int)_buffer.size();
 
 	if (updateIndex)
-		_SetWriteIndex(_writeIndex + numSamps);
+		_SetWriteIndex((unsigned int)(_writeIndex.load(std::memory_order_relaxed) + numSamps));
 }
 
 void AudioBuffer::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
@@ -61,11 +61,12 @@ void AudioBuffer::OnBlockWrite(const base::AudioWriteRequest& request, int write
 
 	if (0 == bufSize)
 	{
-		_writeIndex = 0;
+		_writeIndex.store(0, std::memory_order_relaxed);
 		return;
 	}
 
-	long startIdx = (long)_writeIndex + writeOffset;
+	auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
+	long startIdx = (long)writeIndex + writeOffset;
 	startIdx = ((startIdx % (long)bufSize) + (long)bufSize) % (long)bufSize;
 
 	auto idx = (unsigned int)startIdx;
@@ -104,14 +105,14 @@ void AudioBuffer::_SetWriteIndex(unsigned int index)
 
 	if (0 == bufSize)
 	{
-		_writeIndex = 0;
+		_writeIndex.store(0, std::memory_order_relaxed);
 		return;
 	}
 
 	while (index >= bufSize)
 		index-= bufSize;
 
-	_writeIndex = index;
+	_writeIndex.store(index, std::memory_order_relaxed);
 }
 
 unsigned int AudioBuffer::SampsRecorded() const
@@ -147,7 +148,8 @@ unsigned int AudioBuffer::Delay(unsigned int sampsDelay)
 	{
 		auto bufSize = (unsigned int)_buffer.size();
 		auto sampsBehind = sampsDelay > bufSize ? bufSize : sampsDelay;
-		_playIndex = sampsBehind > _writeIndex ? (_writeIndex + bufSize) - sampsBehind : _writeIndex - sampsBehind;
+		auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
+		_playIndex = sampsBehind > writeIndex ? (writeIndex + bufSize) - sampsBehind : writeIndex - sampsBehind;
 	}
 	
 	return _playIndex;
