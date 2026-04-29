@@ -16,3 +16,4 @@
 .vscode/
 packages/
 vcpkg_installed/
+Directory.Build.local.props

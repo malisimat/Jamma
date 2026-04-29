@@ -5,6 +5,7 @@
 //
 ///////////////////////////////////////////////////////////
 
+#include "NetworkSession.h"
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -106,6 +107,13 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
 	SetupConsole();
+
+	NetworkSession socketSession;
+	if (!socketSession.IsInitialised())
+	{
+		std::cerr << "[NINJAM] Failed to initialise socket library" << std::endl;
+		return -1;
+	}
 
 	auto defaults = LoadIni();
 

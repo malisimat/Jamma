@@ -69,7 +69,14 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Label="UserMacros">
+    <NinjamRoot Condition="'$(NinjamRoot)'==''"></NinjamRoot>
+    <NinjamIncludeDir Condition="'$(NinjamIncludeDir)'==''">$(NinjamRoot)</NinjamIncludeDir>
+    <NinjamLibDirDebug Condition="'$(NinjamLibDirDebug)'==''"></NinjamLibDirDebug>
+    <NinjamLibDirRelease Condition="'$(NinjamLibDirRelease)'==''"></NinjamLibDirRelease>
+    <VcpkgMachineLibDirDebug Condition="'$(VcpkgMachineLibDirDebug)'==''"></VcpkgMachineLibDirDebug>
+    <VcpkgMachineLibDirRelease Condition="'$(VcpkgMachineLibDirRelease)'==''"></VcpkgMachineLibDirRelease>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
     <OutDir>bin\$(Platform)\$(Configuration)\</OutDir>
@@ -101,7 +108,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;GLEW_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;$(ProjectDir)include\opengl;$(ProjectDir)dependencies\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\src\io;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;$(ProjectDir)include\opengl;$(ProjectDir)dependencies\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <EnablePREfast>true</EnablePREfast>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -112,7 +119,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -123,7 +130,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\src\io;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>
       </AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -132,8 +139,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(VcpkgMachineLibDirDebug);$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -145,7 +152,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -157,7 +164,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\Win32\Release;$(ProjectDir)lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -170,7 +177,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(ProjectDir)include;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\graphics;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\src\io;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>
       </AdditionalOptions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -179,8 +186,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(VcpkgMachineLibDirRelease);$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

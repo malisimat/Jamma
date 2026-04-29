@@ -21,5 +21,7 @@ namespace utils
 
 	std::wstring GetPath(PathType pathType);
 	std::wstring GetParentDirectory(std::wstring dir);
+	// Shows a native folder-picker dialog.
+	// Returns the chosen path, or an empty wstring if the user cancelled.
 	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory");
 }
