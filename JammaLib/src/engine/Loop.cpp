@@ -167,7 +167,7 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBINGRECORDING != playState))
 		return;
 
-	if ((STATE_OVERDUBBING == _playState) &&
+	if ((STATE_OVERDUBBING == playState) &&
 		(AUDIOSOURCE_BOUNCE != request.source))
 		return;
 
