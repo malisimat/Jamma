@@ -15,3 +15,5 @@
 !.github/copilot-instructions.md
 .vscode/
 packages/
+vcpkg_installed/
+Directory.Build.local.props

@@ -36,7 +36,8 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
 	_loopTakeHistory({}),
 	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
-	_delayedActions({})
+	_delayedActions({}),
+	_delayedTriggerActions({})
 {
 	_overdubMixer = std::make_shared<AudioMixer>(
 		GetOverdubMixerParams(trigParams.InputChannels));
@@ -160,6 +161,35 @@ void Trigger::OnTick(Time curTime,
 	{
 		action.OnTick(curTime, samps, cfg, params);
 	}
+
+	for (auto& delayed : _delayedTriggerActions)
+	{
+		if (samps >= delayed.SampsLeft)
+		{
+			delayed.SampsLeft = 0u;
+			if (_receiver)
+			{
+				auto action = delayed.Action;
+
+				if (delayed.UserConfig.has_value())
+					action.SetUserConfig(delayed.UserConfig.value());
+
+				if (delayed.AudioParams.has_value())
+					action.SetAudioParams(delayed.AudioParams.value());
+
+				_receiver->OnAction(action);
+			}
+		}
+		else
+		{
+			delayed.SampsLeft -= samps;
+		}
+	}
+
+	_delayedTriggerActions.erase(
+		std::remove_if(_delayedTriggerActions.begin(), _delayedTriggerActions.end(),
+			[](const DelayedTriggerAction& action) { return action.SampsLeft == 0u; }),
+		_delayedTriggerActions.end());
 
 	if (0 == _debounceTimeMs)
 		return;
@@ -293,6 +323,8 @@ void Trigger::Reset()
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_recordSampCount = 0;
 	_loopTakeHistory.clear();
+	_delayedActions.clear();
+	_delayedTriggerActions.clear();
 }
 
 std::string Trigger::Name() const
@@ -476,6 +508,10 @@ bool Trigger::StateMachine(bool isDown,
 				{
 					StartOverdub(cfg, params);
 					_isDitchDown = false; // Prevent next release ditching the playing loop
+					_isLastDitchDownRaw = false;
+					_isLastDitchDown = false;
+					for (auto& binding : _ditchBindings)
+						binding.Reset();
 				}
 				else
 					StartRecording(cfg, params);
@@ -502,6 +538,10 @@ bool Trigger::StateMachine(bool isDown,
 			{
 				EndRecording(cfg, params);
 				_isDitchDown = false; // Prevent next release ditching the playing loop
+				_isLastDitchDownRaw = false;
+				_isLastDitchDown = false;
+				for (auto& binding : _ditchBindings)
+					binding.Reset();
 				changedState = true;
 			}
 		}
@@ -526,6 +566,10 @@ bool Trigger::StateMachine(bool isDown,
 				{
 					EndOverdub(cfg, params);
 					_isDitchDown = false; // Prevent next release ditching the playing loop
+					_isLastDitchDownRaw = false;
+					_isLastDitchDown = false;
+					for (auto& binding : _ditchBindings)
+						binding.Reset();
 					changedState = true;
 				}
 				else
@@ -539,9 +583,7 @@ bool Trigger::StateMachine(bool isDown,
 		{
 			if (isDown)
 			{
-				StartPunchIn(cfg, params);
 				_isDitchDown = true;
-				changedState = true;
 			}
 			else if (_isDitchDown)
 			{
@@ -565,11 +607,8 @@ bool Trigger::StateMachine(bool isDown,
 		{
 			if (isDown)
 				_isDitchDown = true;
-			else if (_isDitchDown)
-			{
-				EndPunchIn(cfg, params);
-				changedState = true;
-			}
+			else
+				_isDitchDown = false;
 		}
 
 		break;
@@ -587,6 +626,7 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 
 	_recordSampCount = 0;
 	_delayedActions.clear();
+	_delayedTriggerActions.clear();
 
 	if (_receiver)
 	{
@@ -648,6 +688,7 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger DITCH" << std::endl;
 
 	_delayedActions.clear();
+	_delayedTriggerActions.clear();
 	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
@@ -693,6 +734,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 
 	_recordSampCount = 0;
 	_delayedActions.clear();
+	_delayedTriggerActions.clear();
 	_overdubMixer->SetUnmutedLevel(1.0);
 
 	if (_receiver)
@@ -724,6 +766,11 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
 
+	// Cancel pending punch-in latency actions so they cannot unmute the source
+	// after overdub has already been finalized.
+	_delayedActions.clear();
+	_delayedTriggerActions.clear();
+
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
@@ -752,6 +799,7 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger DITCH OVERDUB" << std::endl;
 
 	_delayedActions.clear();
+	_delayedTriggerActions.clear();
 	auto popBack = !_loopTakeHistory.empty();
 
 	if ((_receiver) && popBack)
@@ -782,7 +830,11 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
-	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 0.0));
+	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
+	if (sampsDelay == 0u)
+		_overdubMixer->SetUnmutedLevel(0.0);
+	else
+		_delayedActions.push_back(DelayedAction(sampsDelay, 0.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
@@ -790,9 +842,24 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
-		_receiver->OnAction(trigAction);
+
+		if (sampsDelay == 0u)
+		{
+			if (cfg.has_value())
+				trigAction.SetUserConfig(cfg.value());
+
+			if (params.has_value())
+				trigAction.SetAudioParams(params.value());
+
+			_receiver->OnAction(trigAction);
+		}
+		else
+		{
+			QueueDelayedTriggerAction(sampsDelay, trigAction, cfg, params);
+		}
 	}
 }
 
@@ -803,7 +870,11 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 	std::cout << "~~~~ Trigger END PUNCHIN" << std::endl;
 
-	_delayedActions.push_back(DelayedAction(constants::MaxLoopFadeSamps, 1.0));
+	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
+	if (sampsDelay == 0u)
+		_overdubMixer->SetUnmutedLevel(1.0);
+	else
+		_delayedActions.push_back(DelayedAction(sampsDelay, 1.0));
 
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
@@ -811,6 +882,7 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+		trigAction.SourceId = lastTake.SourceTakeId;
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
@@ -820,8 +892,46 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 		if (params.has_value())
 			trigAction.SetAudioParams(params.value());
 
-		_receiver->OnAction(trigAction);
+		if (sampsDelay == 0u)
+			_receiver->OnAction(trigAction);
+		else
+			QueueDelayedTriggerAction(sampsDelay, trigAction, cfg, params);
 	}
+}
+
+unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params) const
+{
+	if (!cfg.has_value())
+		return 0u;
+
+	// Resolve latency from runtime stream params first; fallback to configured
+	// input latency if stream params are unavailable or report 0.
+	auto inputLatency = params.has_value() ?
+		params.value().InputLatency :
+		0u;
+
+	if (0u == inputLatency)
+		inputLatency = cfg.value().Audio.LatencyIn;
+
+	// Audio written this callback corresponds to older captured ADC samples:
+	// hardware input latency + additional ring-buffer read delay.
+	auto readDelay = cfg.value().AdcBufferDelay(inputLatency);
+	return inputLatency + readDelay;
+}
+
+void Trigger::QueueDelayedTriggerAction(unsigned int sampsDelay,
+	const actions::TriggerAction& action,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	DelayedTriggerAction delayed;
+	delayed.SampsLeft = sampsDelay;
+	delayed.Action = action;
+	delayed.UserConfig = cfg;
+	delayed.AudioParams = params;
+
+	_delayedTriggerActions.push_back(delayed);
 }
 
 void Trigger::_InitResources(ResourceLib& resourceLib, bool forceInit)

@@ -35,7 +35,7 @@ namespace io
 			_Read(const std::wstring& fileName, unsigned int maxVals) const;
 
 		bool _Write(std::wstring fileName,
-			std::vector<float> buffer,
+			const std::vector<float>& buffer,
 			unsigned int numSamps,
 			unsigned int sampleRate) const;
 

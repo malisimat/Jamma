@@ -542,6 +542,26 @@ ActionResult Station::OnAction(TriggerAction action)
 		}
 		break;
 	}
+	case TriggerAction::TRIGGER_PUNCHIN_START:
+		if (loopTake.has_value())
+			loopTake.value()->PunchIn();
+
+		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+			sourceLoopTake.value()->Mute();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
+	case TriggerAction::TRIGGER_PUNCHIN_END:
+		if (loopTake.has_value())
+			loopTake.value()->PunchOut();
+
+		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+			sourceLoopTake.value()->UnMute();
+
+		res.IsEaten = true;
+		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
@@ -767,14 +787,14 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 		{
 			std::string sourceId = take.SourceTakeId;
 			std::string targetId = take.TargetTakeId;
-			auto sourceMatch = std::find_if(_backLoopTakes.begin(),
-				_backLoopTakes.end(),
+			auto sourceMatch = std::find_if(_loopTakes.begin(),
+				_loopTakes.end(),
 				[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
-			auto targetMatch = std::find_if(_backLoopTakes.begin(),
-				_backLoopTakes.end(),
+			auto targetMatch = std::find_if(_loopTakes.begin(),
+				_loopTakes.end(),
 				[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
 
-			if ((_backLoopTakes.end() != sourceMatch) && (_backLoopTakes.end() != targetMatch))
+			if ((_loopTakes.end() != sourceMatch) && (_loopTakes.end() != targetMatch))
 			{
 				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
 			}

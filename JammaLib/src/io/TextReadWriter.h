@@ -17,7 +17,7 @@ namespace io
 			_Read(const std::wstring& fileName, unsigned int maxVals) const;
 
 		bool _Write(std::wstring fileName,
-			std::string data,
+			const std::string& data,
 			unsigned int numVals,
 			unsigned int sampleRate) const;
 	};

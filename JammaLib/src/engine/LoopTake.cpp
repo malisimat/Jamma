@@ -167,12 +167,18 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 
 	auto ptr = Sharable::shared_from_this();
+	auto loopDest = trigger == nullptr ?
+		std::dynamic_pointer_cast<MultiAudioSink>(ptr) :
+		dest;
 
 	for (const auto& loop : _loops)
-		loop->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
+		loop->WriteBlock(loopDest,
 			trigger,
 			indexOffset,
 			numSamps);
+
+	if (nullptr != trigger)
+		return;
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());

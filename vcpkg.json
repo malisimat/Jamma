@@ -1,0 +1,9 @@
+{
+  "name": "jamma",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "gtest",
+    "libogg",
+    "libvorbis"
+  ]
+}

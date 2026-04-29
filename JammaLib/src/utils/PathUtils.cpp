@@ -6,6 +6,8 @@
 ///////////////////////////////////////////////////////////
 
 #include <windows.h>
+#include <shobjidl_core.h>
+#include <wrl/client.h>
 #include "PathUtils.h"
 
 std::wstring utils::GetPath(PathType pathType)
@@ -30,4 +32,54 @@ std::wstring utils::GetParentDirectory(std::wstring dir)
 {
 	std::filesystem::path p(dir);
 	return p.parent_path();
+}
+
+std::wstring utils::PickDirectory(const std::wstring& title)
+{
+	using Microsoft::WRL::ComPtr;
+
+	std::wstring result;
+
+	struct ComInitGuard
+	{
+		bool DidInit = false;
+		ComInitGuard()
+		{
+			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+			DidInit = SUCCEEDED(hr);
+		}
+		~ComInitGuard()
+		{
+			if (DidInit)
+				CoUninitialize();
+		}
+	} comInitGuard;
+
+	ComPtr<IFileOpenDialog> dialog;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog,
+		nullptr,
+		CLSCTX_INPROC_SERVER,
+		IID_PPV_ARGS(&dialog))))
+		return result;
+
+	DWORD options = 0;
+	dialog->GetOptions(&options);
+	dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+	dialog->SetTitle(title.c_str());
+
+	if (SUCCEEDED(dialog->Show(nullptr)))
+	{
+		ComPtr<IShellItem> item;
+		if (SUCCEEDED(dialog->GetResult(&item)))
+		{
+			PWSTR path = nullptr;
+			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+			{
+				result = path;
+				CoTaskMemFree(path);
+			}
+		}
+	}
+
+	return result;
 }
