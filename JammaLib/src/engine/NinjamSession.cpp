@@ -91,14 +91,29 @@ void NinjamSession::_ChatInputLoop()
 {
 	// Poll stdin with a short timeout so the loop responds promptly to Stop().
 	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+	if (hStdin == nullptr || hStdin == INVALID_HANDLE_VALUE)
+	{
+		std::cout << "[NINJAM] Chat input unavailable - no stdin handle" << std::endl;
+		return;
+	}
+
 	std::string line;
 
 	while (!_chatInputStop.load())
 	{
 		DWORD waitResult = WaitForSingleObject(hStdin, 100 /*ms*/);
-		if (waitResult != WAIT_OBJECT_0)
+		if (waitResult == WAIT_TIMEOUT)
 			continue;
 
+		if (waitResult == WAIT_FAILED)
+		{
+			DWORD error = GetLastError();
+			std::cout << "[NINJAM] Chat input unavailable - stdin wait failed (" << error << ")" << std::endl;
+			break;
+		}
+
+		if (waitResult != WAIT_OBJECT_0)
+			break;
 		if (_chatInputStop.load())
 			break;
 
