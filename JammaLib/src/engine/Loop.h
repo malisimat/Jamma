@@ -203,6 +203,7 @@ namespace engine
 		
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
+		void _ForceUpdateLoopModel();
 
 	protected:
 		unsigned long _playIndex;

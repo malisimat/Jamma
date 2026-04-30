@@ -9,11 +9,12 @@ LoopRemote::LoopRemote(LoopParams params,
 	_measureLengthSamps(constants::DefaultSampleRate),
 	_measurePositionSamps(0u)
 {
-	// Remote loop visuals are default-disabled for now to avoid expensive
-	// model/VU refresh work while audio sync issues are investigated.
-	SetVisualUpdatesEnabled(false);
 	SetMeasureLength(_measureLengthSamps.load());
 	SetMeasurePosition(0u);
+	// Render the remote loop once so something is visible, then keep further
+	// remote visual updates disabled while the slowdown issue is investigated.
+	_ForceUpdateLoopModel();
+	SetVisualUpdatesEnabled(false);
 }
 
 void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
@@ -33,7 +34,7 @@ void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
 	_loopLength = safeMeasureLength;
 	_playState = STATE_PLAYING;
 	_playIndex = constants::MaxLoopFadeSamps;
-	_UpdateLoopModel();
+	_ForceUpdateLoopModel();
 }
 
 void LoopRemote::SetMeasurePosition(unsigned int positionSamps)

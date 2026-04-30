@@ -704,6 +704,12 @@ void Loop::_UpdateLoopModel()
 	if (!_visualUpdatesEnabled)
 		return;
 
+	_ForceUpdateLoopModel();
+}
+
+void Loop::_ForceUpdateLoopModel()
+{
+
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
 		(STATE_PUNCHEDIN == _playState);
