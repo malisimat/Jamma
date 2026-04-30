@@ -16,6 +16,7 @@ namespace engine
 			audio::AudioMixerParams mixerParams);
 
 		virtual std::string ClassName() const override { return "LoopRemote"; }
+		virtual void Update() override;
 
 		// Called from the job thread. Resizes buffer to match the ninjam interval.
 		void SetMeasureLength(unsigned int measureLengthSamps);
@@ -31,8 +32,9 @@ namespace engine
 
 	protected:
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const override;
+		virtual double _DrawRadiusScale() const noexcept override { return 0.5; }
 
-	private:
+		std::atomic<bool> _modelDirty;
 		std::atomic<unsigned int> _measureLengthSamps;
 		std::atomic<unsigned int> _measurePositionSamps;
 		std::atomic<unsigned int> _visualLengthSamps;

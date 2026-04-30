@@ -6,12 +6,13 @@ using namespace engine;
 LoopRemote::LoopRemote(LoopParams params,
 	audio::AudioMixerParams mixerParams) :
 	Loop(params, mixerParams),
+	_modelDirty(false),
 	_measureLengthSamps(0u),
 	_measurePositionSamps(0u),
 	_visualLengthSamps(0u)
 {
-	SetMeasureLength(_measureLengthSamps.load());
-	SetVisualLength(_measureLengthSamps.load());
+	SetMeasureLength(constants::DefaultSampleRate);
+	SetVisualLength(constants::DefaultSampleRate);
 	SetMeasurePosition(0u);
 	// Render the remote loop once so something is visible, then keep further
 	// remote visual updates disabled while the slowdown issue is investigated.
@@ -26,7 +27,22 @@ void LoopRemote::SetVisualLength(unsigned int visualLengthSamps)
 		return;
 
 	_visualLengthSamps.store(safeVisualLength);
-	_ForceUpdateLoopModel();
+	_modelDirty.store(true);
+}
+
+void LoopRemote::Update()
+{
+	if (!_modelDirty.exchange(false))
+		return;
+
+	if (!_visualUpdatesEnabled)
+	{
+		_bufferBank.UpdateCapacity();
+		_monitorBufferBank.UpdateCapacity();
+		return;
+	}
+
+	Loop::Update();
 }
 
 void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
@@ -46,7 +62,7 @@ void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
 	_loopLength = safeMeasureLength;
 	_playState = STATE_PLAYING;
 	_playIndex = constants::MaxLoopFadeSamps;
-	_ForceUpdateLoopModel();
+	_modelDirty.store(true);
 }
 
 void LoopRemote::SetMeasurePosition(unsigned int positionSamps)
@@ -105,5 +121,7 @@ void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 	_playIndex = constants::MaxLoopFadeSamps + pos;
 
 	// Do not rebuild LoopModel/VU geometry here: this path is used from audio ingest
-	// and must remain real-time-safe. Refresh should be deferred to a non-audio thread.
+	// and must remain real-time-safe. Remote visuals are refreshed only when the
+	// interval size changes, not for every arriving audio block.
 }
+

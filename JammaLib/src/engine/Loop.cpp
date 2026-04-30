@@ -479,14 +479,6 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 	return loop;
 }
 
-void Loop::Update()
-{
-	_UpdateLoopModel();
-
-	_bufferBank.UpdateCapacity();
-	_monitorBufferBank.UpdateCapacity();
-}
-
 void Loop::SetMixerLevel(double level)
 {
 	_mixer->SetUnmutedLevel(level);
@@ -578,6 +570,14 @@ void Loop::Reset()
 	_loopLength = 0ul;
 	_mixer->UnMute();
 	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
+}
+
+void Loop::Update()
+{
+	_UpdateLoopModel();
+
+	_bufferBank.UpdateCapacity();
+	_monitorBufferBank.UpdateCapacity();
 }
 
 void Loop::EndRecording()
@@ -722,7 +722,7 @@ void Loop::_ForceUpdateLoopModel()
 	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)_CalcDrawRadius(displayLength);
+	auto radius = (float)(_CalcDrawRadius(displayLength) * _DrawRadiusScale());
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, actualLength, displayLength, offset, radius);
 	_vu->UpdateModel(radius);

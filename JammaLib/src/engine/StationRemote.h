@@ -24,9 +24,11 @@ namespace engine
 
 		virtual std::string ClassName() const override { return "StationRemote"; }
 		virtual bool IsRemote() const noexcept override { return true; }
+		virtual void SetSelectDepth(base::SelectDepth depth) override;
 
 		// Creates the LoopTake + LoopRemote pair if not already present.
 		void EnsureRemoteTake();
+		void UpdateRemoteVisuals();
 
 		void SetRemoteUserName(const std::string& userName);
 		const std::string& RemoteUserName() const { return _remoteUserName; }

@@ -175,6 +175,7 @@ namespace engine
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 		virtual void Reset() override;
+		virtual void Update();
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
@@ -182,8 +183,6 @@ namespace engine
 		LoopPlayState PlayState() const { return _playState; }
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
-
-		void Update();
 		void SetMixerLevel(double level);
 		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
@@ -201,6 +200,7 @@ namespace engine
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
+		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
 		
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
