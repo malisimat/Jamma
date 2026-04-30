@@ -73,7 +73,7 @@ namespace engine
 
 			_chatInputStop = true;
 			if (_chatInputThread.joinable())
-				_chatInputThread.detach();
+				_chatInputThread.join();
 
 			_isSceneQuitting = true;
 			_jobRunner.join();

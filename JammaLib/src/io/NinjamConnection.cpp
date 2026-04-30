@@ -618,11 +618,14 @@ void NinjamConnection::SendChat(const std::string& message)
 	_client->ChatMessage_Send("MSG", message.c_str());
 }
 
-void NinjamConnection::_OnChatMessage(void* /*userData*/,
+void NinjamConnection::_OnChatMessage(void* userData,
 	NJClient* /*inst*/,
 	const char** parms,
 	int nparms)
 {
+	// userData is the NinjamConnection instance; reserved for future use.
+	(void)userData;
+
 	if (!parms || nparms < 1 || !parms[0])
 		return;
 

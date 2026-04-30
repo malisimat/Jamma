@@ -1250,9 +1250,20 @@ void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>
 
 void Scene::_ChatInputLoop()
 {
+	// Use WaitForSingleObject with a short timeout so the loop can check
+	// _chatInputStop promptly after the Scene destructor sets it.
+	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
 	std::string line;
+
 	while (!_chatInputStop.load())
 	{
+		DWORD waitResult = WaitForSingleObject(hStdin, 100 /*ms*/);
+		if (waitResult != WAIT_OBJECT_0)
+			continue;
+
+		if (_chatInputStop.load())
+			break;
+
 		if (!std::getline(std::cin, line))
 			break;
 
@@ -1262,6 +1273,9 @@ void Scene::_ChatInputLoop()
 		if (line.empty())
 			continue;
 
+		// Writes from this thread and from the NJClient callback thread can
+		// interleave on cout; individual lines remain intact thanks to endl
+		// flushing, though output may occasionally overlap while typing.
 		if (_ninjamConnection && _ninjamConnection->IsConnected())
 		{
 			_ninjamConnection->SendChat(line);
