@@ -67,6 +67,7 @@ Build rules:
 	- JammaLib/src or JammaLib/include -> JammaLib/JammaLib.vcxproj, then dependents as needed
 	- test/JammaLib.Tests/src only -> test/JammaLib.Tests/JammaLib.Tests.vcxproj
 4. Use solution build only when project targeting is unclear.
+5. Centralize compiler PDB safeguards in `Directory.Build.props` for all `.vcxproj` builds (`/FS` + project-specific `ProgramDataBaseFileName`); avoid project-local overrides unless justified.
 
 MSBuild path:
 
@@ -149,8 +150,8 @@ Run a specific test (no rebuild needed if already built):
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-& $msbuild Jamma.sln /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& $msbuild Jamma.sln /m /t:Build /p:Configuration=Release /p:Platform=x64
+& $msbuild Jamma.sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
+& $msbuild Jamma.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
 ### Testing:

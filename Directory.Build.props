@@ -1,3 +1,10 @@
 <Project>
   <Import Project="Directory.Build.local.props" Condition="Exists('Directory.Build.local.props')" />
+
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectExtension)'=='.vcxproj'">
+    <ClCompile>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <ProgramDataBaseFileName>$(IntDir)$(MSBuildProjectName).Compiler.pdb</ProgramDataBaseFileName>
+    </ClCompile>
+  </ItemDefinitionGroup>
 </Project>
