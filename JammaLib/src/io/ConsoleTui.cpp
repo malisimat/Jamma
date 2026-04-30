@@ -23,6 +23,20 @@ namespace
 	constexpr const char* kFgBrCyan   = "\x1b[96m";
 	constexpr const char* kPromptStyle = "\x1b[1;36m";
 
+	// Emoji glyphs as raw UTF-8 byte sequences so this file compiles cleanly
+	// regardless of the source encoding the toolchain decides to use.
+	constexpr const char* kEmojiBullet  = u8"\xE2\x80\xA2 ";   // •
+	constexpr const char* kEmojiOutbox  = u8"\xF0\x9F\x93\xA4 "; // 📤  (you)
+	constexpr const char* kEmojiSpeech  = u8"\xF0\x9F\x92\xAC "; // 💬  (chat)
+	constexpr const char* kEmojiLock    = u8"\xF0\x9F\x94\x92 "; // 🔒  (private)
+	constexpr const char* kEmojiPin     = u8"\xF0\x9F\x93\x8C "; // 📌  (topic)
+	constexpr const char* kEmojiGreen   = u8"\xF0\x9F\x9F\xA2 "; // 🟢  (join)
+	constexpr const char* kEmojiRed     = u8"\xF0\x9F\x94\xB4 "; // 🔴  (part)
+	constexpr const char* kEmojiSparkle = u8"\xE2\x9C\xA8 ";     // ✨  (sysmsg)
+	constexpr const char* kEmojiPlug    = u8"\xF0\x9F\x94\x8C "; // 🔌  (connect)
+	constexpr const char* kEmojiKeys    = u8"\xE2\x8C\xA8 ";     // ⌨   (hint)
+	constexpr const char* kEmojiWarn    = u8"\xE2\x9A\xA0 ";     // ⚠   (warn)
+
 	// Returns a styled, emoji-prefixed version of `line` for known [NINJAM]
 	// log shapes. Lines without the [NINJAM] tag are returned unchanged so
 	// non-ninjam logs continue to look exactly as they did before.
@@ -43,21 +57,21 @@ namespace
 			return rest.size() >= n && rest.compare(0, n, p) == 0;
 		};
 
-		const char* emoji = u8"\xE2\x80\xA2 "; // bullet
+		const char* emoji = kEmojiBullet;
 		const char* color = kFgGray;
 
-		if (starts("<you>"))                      { emoji = u8"\xF0\x9F\x93\xA4 "; color = kFgBrGreen; }   // outbox
-		else if (starts("<"))                     { emoji = u8"\xF0\x9F\x92\xAC "; color = kFgBrCyan;  }   // speech balloon
-		else if (starts("(private)"))             { emoji = u8"\xF0\x9F\x94\x92 "; color = kFgMagenta; }   // lock
-		else if (starts("Topic"))                 { emoji = u8"\xF0\x9F\x93\x8C "; color = kFgCyan;    }   // pushpin
-		else if (starts("-->"))                   { emoji = u8"\xF0\x9F\x9F\xA2 "; color = kFgGreen;   }   // green circle
-		else if (starts("<--"))                   { emoji = u8"\xF0\x9F\x94\xB4 "; color = kFgYellow;  }   // red circle
-		else if (starts("**"))                    { emoji = u8"\xE2\x9C\xA8 ";     color = kFgMagenta; }   // sparkles
-		else if (starts("Auto-connect"))          { emoji = u8"\xF0\x9F\x94\x8C "; color = kFgCyan;    }   // plug
-		else if (starts("Type a message"))        { emoji = u8"\xE2\x8C\xA8 ";     color = kFgGray;    }   // keyboard
-		else if (starts("Not connected"))         { emoji = u8"\xE2\x9A\xA0 ";     color = kFgYellow;  }   // warn
-		else if (starts("Chat input"))            { emoji = u8"\xE2\x9A\xA0 ";     color = kFgYellow;  }
-		else if (starts("Console TUI disabled"))  { emoji = u8"\xE2\x9A\xA0 ";     color = kFgYellow;  }
+		if (starts("<you>"))                      { emoji = kEmojiOutbox;  color = kFgBrGreen; }
+		else if (starts("<"))                     { emoji = kEmojiSpeech;  color = kFgBrCyan;  }
+		else if (starts("(private)"))             { emoji = kEmojiLock;    color = kFgMagenta; }
+		else if (starts("Topic"))                 { emoji = kEmojiPin;     color = kFgCyan;    }
+		else if (starts("-->"))                   { emoji = kEmojiGreen;   color = kFgGreen;   }
+		else if (starts("<--"))                   { emoji = kEmojiRed;     color = kFgYellow;  }
+		else if (starts("**"))                    { emoji = kEmojiSparkle; color = kFgMagenta; }
+		else if (starts("Auto-connect"))          { emoji = kEmojiPlug;    color = kFgCyan;    }
+		else if (starts("Type a message"))        { emoji = kEmojiKeys;    color = kFgGray;    }
+		else if (starts("Not connected"))         { emoji = kEmojiWarn;    color = kFgYellow;  }
+		else if (starts("Chat input"))            { emoji = kEmojiWarn;    color = kFgYellow;  }
+		else if (starts("Console TUI disabled"))  { emoji = kEmojiWarn;    color = kFgYellow;  }
 
 		std::string out;
 		out.reserve(line.size() + 32);
@@ -365,6 +379,10 @@ void ConsoleTui::_InputLoop()
 				}
 				else if (wch >= 0x20)
 				{
+					// A single WCHAR encodes at most one BMP code point, which
+					// fits in 1-3 UTF-8 bytes; 4 is enough for any single-WCHAR
+					// conversion. The extra slack just avoids any temptation to
+					// reason about WideCharToMultiByte boundary behaviour.
 					char utf8[8];
 					const int n = WideCharToMultiByte(CP_UTF8, 0, &wch, 1,
 						utf8, sizeof(utf8), nullptr, nullptr);
