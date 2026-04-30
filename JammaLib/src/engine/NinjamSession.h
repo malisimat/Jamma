@@ -1,17 +1,16 @@
 #pragma once
 
-#include <atomic>
 #include <memory>
 #include <optional>
-#include <thread>
+#include "../io/ConsoleTui.h"
 #include "../io/JamFile.h"
 #include "../io/NinjamConnection.h"
 
 namespace engine
 {
-	// Owns a NinjamConnection together with the console chat-input thread.
-	// All ninjam-specific lifecycle, threading, and chat I/O lives here so
-	// that Scene stays free of those concerns.
+	// Owns a NinjamConnection together with the console TUI used to drive
+	// chat I/O. All ninjam-specific lifecycle, threading, and chat I/O lives
+	// here so that Scene stays free of those concerns.
 	class NinjamSession
 	{
 	public:
@@ -24,7 +23,8 @@ namespace engine
 		// Start the session from config. No-op if host/user are empty.
 		void Start(const io::JamFile::NinjamConfig& config);
 
-		// Disconnect and stop the chat thread. Idempotent.
+		// Disconnect, stop the chat TUI, and restore console state.
+		// Idempotent.
 		void Stop();
 
 		bool IsConnected() const noexcept;
@@ -50,11 +50,7 @@ namespace engine
 			unsigned int& numFrames) const;
 
 	private:
-		void _ChatInputLoop();
-
-	private:
 		std::unique_ptr<io::NinjamConnection> _connection;
-		std::thread _chatInputThread;
-		std::atomic_bool _chatInputStop{ false };
+		std::unique_ptr<io::ConsoleTui> _tui;
 	};
 }

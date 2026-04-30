@@ -247,6 +247,7 @@
     <ClInclude Include="src\utils\ArrayUtils.h" />
     <ClInclude Include="src\io\InitFile.h" />
     <ClInclude Include="src\io\NetworkSession.h" />
+    <ClInclude Include="src\io\ConsoleTui.h" />
     <ClInclude Include="src\io\NinjamConnection.h" />
     <ClInclude Include="src\io\RigFile.h" />
     <ClInclude Include="src\io\Json.h" />
@@ -355,6 +356,7 @@
     <ClCompile Include="src\gui\GuiRack.cpp" />
     <ClCompile Include="src\io\InitFile.cpp" />
     <ClCompile Include="src\io\NetworkSession.cpp" />
+    <ClCompile Include="src\io\ConsoleTui.cpp" />
     <ClCompile Include="src\io\NinjamConnection.cpp" />
     <ClCompile Include="src\io\RigFile.cpp" />
     <ClCompile Include="src\io\Json.cpp" />

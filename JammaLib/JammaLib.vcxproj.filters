@@ -332,6 +332,9 @@
     <ClInclude Include="src\io\NetworkSession.h">
       <Filter>src\io</Filter>
     </ClInclude>
+    <ClInclude Include="src\io\ConsoleTui.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\NinjamConnection.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -590,6 +593,9 @@
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NetworkSession.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\ConsoleTui.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NinjamConnection.cpp">
