@@ -612,6 +612,10 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 
 void NinjamConnection::SendChat(const std::string& message)
 {
+	// Serialize with Disconnect() so we cannot call ChatMessage_Send
+	// concurrently with or after NJClient::Disconnect().
+	std::scoped_lock lock(_connectionMutex);
+
 	if (!_isConnected || !_client || message.empty())
 		return;
 
