@@ -691,6 +691,11 @@ LoopModel::LoopModelState Loop::_GetLoopModelState(base::DrawPass pass, LoopPlay
 	}
 }
 
+unsigned long Loop::_ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const
+{
+	return actualLoopLength;
+}
+
 unsigned long Loop::_LoopIndex() const
 {
 	if (constants::MaxLoopFadeSamps > _playIndex)
@@ -713,11 +718,12 @@ void Loop::_ForceUpdateLoopModel()
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
 		(STATE_PUNCHEDIN == _playState);
-	auto length = isRecording ? _writeIndex : _loopLength;
+	auto actualLength = isRecording ? _writeIndex : _loopLength;
+	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)_CalcDrawRadius(length);
+	auto radius = (float)_CalcDrawRadius(displayLength);
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
-	_model->UpdateModel(bufBank, length, offset, radius);
+	_model->UpdateModel(bufBank, actualLength, displayLength, offset, radius);
 	_vu->UpdateModel(radius);
 }

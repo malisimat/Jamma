@@ -838,12 +838,16 @@ void Scene::InitAudio()
 
 void Scene::CloseAudio()
 {
+	// Do not hold the audio callback mutex while stopping the stream.
+	// RtAudio shutdown may wait for the callback thread to return, and the
+	// callback takes this same mutex.
+	if (_audioDevice)
+		_audioDevice->Stop();
+
 	std::scoped_lock lock(_audioMutex);
 
 	if (_ninjamConnection)
 		_ninjamConnection->Disconnect();
-
-	_audioDevice->Stop();
 }
 
 void Scene::CommitChanges()
@@ -1310,7 +1314,15 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 
 		if (snapshot.IntervalLengthSamps > 0)
 		{
-			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+			auto visualIntervalSamps = snapshot.IntervalLengthSamps;
+			if (snapshot.HasTiming)
+			{
+				const auto derivedInterval = static_cast<unsigned int>(((static_cast<double>(snapshot.SampleRate) * 60.0 * static_cast<double>(snapshot.Bpi)) / static_cast<double>(snapshot.Bpm)) + 0.5);
+				if (derivedInterval > 0u)
+					visualIntervalSamps = std::max(visualIntervalSamps, derivedInterval);
+			}
+
+			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
 		}
 
 		// EnsureRemoteTake runs on the job thread so the audio callback can

@@ -200,6 +200,7 @@ namespace engine
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
+		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();

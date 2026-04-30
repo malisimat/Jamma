@@ -23,12 +23,18 @@ namespace engine
 		void SetMeasurePosition(unsigned int positionSamps);
 		// Called from the audio callback. Writes decoded samples into the ring buffer.
 		void IngestSamples(const float* samples, unsigned int numSamps);
+		void SetVisualLength(unsigned int visualLengthSamps);
 
 		unsigned int MeasureLength() const { return _measureLengthSamps.load(); }
 		unsigned int MeasurePosition() const { return _measurePositionSamps.load(); }
+		unsigned int VisualLength() const { return _visualLengthSamps.load(); }
+
+	protected:
+		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const override;
 
 	private:
 		std::atomic<unsigned int> _measureLengthSamps;
 		std::atomic<unsigned int> _measurePositionSamps;
+		std::atomic<unsigned int> _visualLengthSamps;
 	};
 }
