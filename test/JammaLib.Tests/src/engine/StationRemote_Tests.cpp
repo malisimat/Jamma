@@ -45,6 +45,11 @@ namespace
 		{
 			return _DrawRadiusScale();
 		}
+
+		unsigned long BufferLength() const
+		{
+			return _bufferBank.Length();
+		}
 	};
 
 	class CaptureSink :
@@ -213,7 +218,7 @@ TEST(LoopRemote, MeasureMetadataTracksIngestProgress)
 	EXPECT_EQ((1000u + 128u) % 1024u, loop->MeasurePosition());
 }
 
-TEST(LoopRemote, IngestMarksModelDirtyUntilUpdateRuns)
+TEST(LoopRemote, ConstructorSizesDefaultMeasureBuffer)
 {
 	audio::WireMixBehaviourParams wire;
 	audio::AudioMixerParams mixerParams;
@@ -225,14 +230,52 @@ TEST(LoopRemote, IngestMarksModelDirtyUntilUpdateRuns)
 	params.Wav = "remote-loop";
 	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
 
+	EXPECT_EQ(constants::MaxLoopFadeSamps + constants::DefaultSampleRate, loop->BufferLength());
+	EXPECT_TRUE(loop->ModelDirty());
+}
+
+TEST(LoopRemote, MeasureLengthMarksModelDirtyUntilUpdateRuns)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	loop->Update();
+	EXPECT_FALSE(loop->ModelDirty());
+
 	loop->SetMeasureLength(1024);
+	EXPECT_TRUE(loop->ModelDirty());
+
+	loop->Update();
+
+	EXPECT_FALSE(loop->ModelDirty());
+}
+
+TEST(LoopRemote, IngestDoesNotMarkModelDirtyAfterInitialRefresh)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	loop->Update();
+	loop->SetMeasureLength(1024);
+	loop->Update();
 	EXPECT_FALSE(loop->ModelDirty());
 
 	std::vector<float> block(128, 0.3f);
 	loop->IngestSamples(block.data(), static_cast<unsigned int>(block.size()));
-	EXPECT_TRUE(loop->ModelDirty());
-
-	loop->Update();
 
 	EXPECT_FALSE(loop->ModelDirty());
 }

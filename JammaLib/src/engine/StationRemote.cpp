@@ -20,7 +20,7 @@ StationRemote::StationRemote(StationParams params,
 	_nameLabel(nullptr)
 {
 	SetNumBusChannels(2);
-	SetModelScale(2.0);
+	SetModelScale(1.0);
 
 	gui::GuiLabelParams labelParams;
 	labelParams.String = _remoteUserName;
