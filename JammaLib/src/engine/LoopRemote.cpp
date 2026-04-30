@@ -6,7 +6,7 @@ using namespace engine;
 LoopRemote::LoopRemote(LoopParams params,
 	audio::AudioMixerParams mixerParams) :
 	Loop(params, mixerParams),
-	_measureLengthSamps(constants::DefaultSampleRate),
+	_measureLengthSamps(0u),
 	_measurePositionSamps(0u)
 {
 	SetMeasureLength(_measureLengthSamps.load());
