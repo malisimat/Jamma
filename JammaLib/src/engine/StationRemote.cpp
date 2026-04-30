@@ -31,6 +31,14 @@ StationRemote::StationRemote(StationParams params,
 	_children.push_back(_nameLabel);
 }
 
+void StationRemote::SetSelectDepth(base::SelectDepth depth)
+{
+	Station::SetSelectDepth(depth);
+
+	if (_guiRack)
+		_guiRack->SetVisible(true);
+}
+
 void StationRemote::EnsureRemoteTake()
 {
 	if (_remoteTake)
@@ -70,7 +78,16 @@ void StationRemote::EnsureRemoteTake()
 	AddTake(_remoteTake);
 	CommitChanges();
 
-	SetRackVisibility(false, false);
+	SetRackVisibility(true, false);
+}
+
+void StationRemote::UpdateRemoteVisuals()
+{
+	if (_leftLoop)
+		_leftLoop->Update();
+
+	if (_rightLoop)
+		_rightLoop->Update();
 }
 
 void StationRemote::SetRemoteUserName(const std::string& userName)

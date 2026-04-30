@@ -6,11 +6,20 @@ using namespace engine;
 LoopRemote::LoopRemote(LoopParams params,
 	audio::AudioMixerParams mixerParams) :
 	Loop(params, mixerParams),
+	_modelDirty(false),
 	_measureLengthSamps(constants::DefaultSampleRate),
 	_measurePositionSamps(0u)
 {
 	SetMeasureLength(_measureLengthSamps.load());
 	SetMeasurePosition(0u);
+}
+
+void LoopRemote::Update()
+{
+	if (!_modelDirty.exchange(false))
+		return;
+
+	Loop::Update();
 }
 
 void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
@@ -31,6 +40,7 @@ void LoopRemote::SetMeasureLength(unsigned int measureLengthSamps)
 	_playState = STATE_PLAYING;
 	_playIndex = constants::MaxLoopFadeSamps;
 	_UpdateLoopModel();
+	_modelDirty.store(false);
 }
 
 void LoopRemote::SetMeasurePosition(unsigned int positionSamps)
@@ -82,4 +92,6 @@ void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)
 
 	// Do not rebuild LoopModel/VU geometry here: this path is used from audio ingest
 	// and must remain real-time-safe. Refresh should be deferred to a non-audio thread.
+	_modelDirty.store(true);
 }
+

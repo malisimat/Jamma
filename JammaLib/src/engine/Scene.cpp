@@ -1289,6 +1289,7 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 		// EnsureRemoteTake runs on the job thread so the audio callback can
 		// early-out safely if loops are not yet initialised.
 		remoteStation->EnsureRemoteTake();
+		remoteStation->UpdateRemoteVisuals();
 	}
 
 	// Remove stations for users who have left.
