@@ -1,9 +1,11 @@
 #pragma once
+#include <atomic>
 #include <memory>
 #include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -68,6 +70,10 @@ namespace engine
 		~Scene()
 		{
 			ReleaseResources();
+
+			_chatInputStop = true;
+			if (_chatInputThread.joinable())
+				_chatInputThread.detach();
 
 			_isSceneQuitting = true;
 			_jobRunner.join();
@@ -215,6 +221,7 @@ namespace engine
 		void _UpdateSelectDepth(unsigned int depth);
 		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
 		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
+		void _ChatInputLoop();
 
 	protected:
 		bool _isSceneTouching;
@@ -251,5 +258,7 @@ namespace engine
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
+		std::thread _chatInputThread;
+		std::atomic_bool _chatInputStop{ false };
 	};
 }

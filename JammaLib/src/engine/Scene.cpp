@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include <iostream>
 #include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
@@ -1240,7 +1241,37 @@ void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>
 		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
 
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
+	std::cout << "[NINJAM] Type a message and press Enter to chat" << std::endl;
 	_ninjamConnection->Connect();
+
+	_chatInputStop = false;
+	_chatInputThread = std::thread([this]() { _ChatInputLoop(); });
+}
+
+void Scene::_ChatInputLoop()
+{
+	std::string line;
+	while (!_chatInputStop.load())
+	{
+		if (!std::getline(std::cin, line))
+			break;
+
+		if (_chatInputStop.load())
+			break;
+
+		if (line.empty())
+			continue;
+
+		if (_ninjamConnection && _ninjamConnection->IsConnected())
+		{
+			_ninjamConnection->SendChat(line);
+			std::cout << "[NINJAM] <you> " << line << std::endl;
+		}
+		else
+		{
+			std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
+		}
+	}
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
