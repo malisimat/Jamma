@@ -811,12 +811,16 @@ void Scene::InitAudio()
 
 void Scene::CloseAudio()
 {
+	// Do not hold the audio callback mutex while stopping the stream.
+	// RtAudio shutdown may wait for the callback thread to return, and the
+	// callback takes this same mutex.
+	if (_audioDevice)
+		_audioDevice->Stop();
+
 	std::scoped_lock lock(_audioMutex);
 
 	if (_ninjamConnection)
 		_ninjamConnection->Disconnect();
-
-	_audioDevice->Stop();
 }
 
 void Scene::CommitChanges()
