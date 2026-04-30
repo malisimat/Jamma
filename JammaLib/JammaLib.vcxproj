@@ -299,6 +299,7 @@
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
     <ClInclude Include="src\engine\Scene.h" />
+    <ClInclude Include="src\engine\NinjamSession.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />
@@ -386,6 +387,7 @@
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
     <ClCompile Include="src\engine\Scene.cpp" />
+    <ClCompile Include="src\engine\NinjamSession.cpp" />
     <ClCompile Include="src\graphics\Shader.cpp" />
     <ClCompile Include="src\graphics\Image.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage.cpp" />

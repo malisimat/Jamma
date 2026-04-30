@@ -1,5 +1,4 @@
 #pragma once
-#include <atomic>
 #include <memory>
 #include <algorithm>
 #include <chrono>
@@ -20,7 +19,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
-#include "../io/NinjamConnection.h"
+#include "NinjamSession.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -71,12 +70,11 @@ namespace engine
 		{
 			ReleaseResources();
 
-			_chatInputStop = true;
-			if (_chatInputThread.joinable())
-				_chatInputThread.join();
-
 			_isSceneQuitting = true;
 			_jobRunner.join();
+			// NinjamSession destructs after _jobRunner exits, so Pump() can no
+			// longer be called when the session tears down.
+			_ninjamSession.reset();
 		}
 
 		// Copy
@@ -219,9 +217,7 @@ namespace engine
 		void _JobLoop();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
 		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
-		void _ChatInputLoop();
 
 	protected:
 		bool _isSceneTouching;
@@ -244,7 +240,7 @@ namespace engine
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
-		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
+		std::unique_ptr<NinjamSession> _ninjamSession;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
@@ -258,7 +254,5 @@ namespace engine
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
-		std::thread _chatInputThread;
-		std::atomic_bool _chatInputStop{ false };
 	};
 }

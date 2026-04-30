@@ -176,6 +176,9 @@
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\NinjamSession.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\InterpolatedValue.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -489,6 +492,9 @@
     </ClCompile>
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\NinjamSession.cpp">
+      <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\InterpolatedValue.cpp">
       <Filter>src\audio</Filter>
