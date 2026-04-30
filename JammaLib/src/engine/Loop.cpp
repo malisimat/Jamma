@@ -24,7 +24,8 @@ Loop::Loop(LoopParams params,
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
-	_bufferBank(BufferBank())
+	_bufferBank(BufferBank()),
+	_visualUpdatesEnabled(true)
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
@@ -491,6 +492,11 @@ void Loop::SetMixerLevel(double level)
 	_mixer->SetUnmutedLevel(level);
 }
 
+void Loop::SetVisualUpdatesEnabled(bool enabled)
+{
+	_visualUpdatesEnabled = enabled;
+}
+
 bool Loop::Load(const io::WavReadWriter& readWriter)
 {
 	auto loadOpt = readWriter.Read(utils::DecodeUtf8(_loopParams.Wav), constants::MaxLoopBufferSize);
@@ -695,6 +701,9 @@ unsigned long Loop::_LoopIndex() const
 
 void Loop::_UpdateLoopModel()
 {
+	if (!_visualUpdatesEnabled)
+		return;
+
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
 		(STATE_PUNCHEDIN == _playState);

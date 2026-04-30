@@ -185,6 +185,7 @@ namespace engine
 
 		void Update();
 		void SetMixerLevel(double level);
+		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
 		void Play(unsigned long index,
@@ -216,5 +217,6 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
+		bool _visualUpdatesEnabled;
 	};
 }

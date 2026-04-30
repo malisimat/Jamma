@@ -150,6 +150,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
     <ClCompile Include="src\engine\StationRemote_Tests.cpp" />
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
+    <ClCompile Include="src\engine\Timer_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />

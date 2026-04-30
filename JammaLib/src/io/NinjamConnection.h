@@ -35,6 +35,10 @@ namespace io
 	{
 		unsigned int IntervalPositionSamps = 0;
 		unsigned int IntervalLengthSamps = 0;
+		unsigned int SampleRate = 0;
+		float Bpm = 0.0f;
+		int Bpi = 0;
+		bool HasTiming = false;
 		std::vector<NinjamRemoteUser> Users;
 	};
 
@@ -74,6 +78,11 @@ namespace io
 			unsigned int sampleRate);
 
 		NinjamRemoteSnapshot Snapshot() const;
+
+		// Sends NINJAM admin commands to update server tempo (BPM and BPI).
+		// Only takes effect if the connected user has admin privileges on the
+		// server. Safe to call from job thread; returns false if not connected.
+		bool RequestServerTempo(float bpm, int bpi);
 
 		// Fills left/right with the decoded stereo pair for the given output-channel
 		// index (assigned by NinjamConnection). Returns false if no audio is ready.

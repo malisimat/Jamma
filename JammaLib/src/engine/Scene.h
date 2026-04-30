@@ -215,6 +215,12 @@ namespace engine
 		void _UpdateSelectDepth(unsigned int depth);
 		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
 		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
+		void _SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot);
+		void _QueueTempoUpdateFromReclock();
+		void _SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
+		static unsigned int _ComputeQuantiseSamps(float bpm,
+			int bpi,
+			unsigned int sampleRate);
 
 	protected:
 		bool _isSceneTouching;
@@ -251,5 +257,16 @@ namespace engine
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
+
+		// NINJAM tempo / reclock state (job-thread owned).
+		float _remoteBpm = 0.0f;
+		int _remoteBpi = 0;
+		unsigned int _remoteSampleRate = 0u;
+		unsigned int _effectiveQuantiseSamps = 0u;
+		unsigned int _lastRemoteIntervalPos = 0u;
+		bool _armReclock = false;
+		bool _hasPendingTempo = false;
+		float _pendingTempoBpm = 0.0f;
+		int _pendingTempoBpi = 0;
 	};
 }

@@ -31,6 +31,8 @@ namespace engine
 		void Clear();
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
+		unsigned int QuantiseSamps() const;
+		QuantisationType Quantisation() const;
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
 	private:

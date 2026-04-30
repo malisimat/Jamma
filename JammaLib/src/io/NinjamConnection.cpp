@@ -358,6 +358,26 @@ NinjamRemoteSnapshot NinjamConnection::Snapshot() const
 	return _snapshot;
 }
 
+bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
+{
+	if (!_isConnected || !_client)
+		return false;
+
+	if (bpm <= 0.0f || bpi <= 0)
+		return false;
+
+	auto bpmCmd = std::string("/bpm ") + std::to_string(static_cast<int>(bpm + 0.5f));
+	auto bpiCmd = std::string("/bpi ") + std::to_string(bpi);
+
+	// NINJAM admin commands are sent as broadcast chat messages; the server
+	// only honours them for users with admin privileges.
+	_client->ChatMessage_Send("MSG", bpmCmd.c_str());
+	_client->ChatMessage_Send("MSG", bpiCmd.c_str());
+
+	std::cout << "[NINJAM] Requested server tempo " << bpmCmd << ", " << bpiCmd << std::endl;
+	return true;
+}
+
 bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	const float*& left,
 	const float*& right,
@@ -474,6 +494,10 @@ void NinjamConnection::_UpdateSnapshot()
 	_client->GetPosition(&intervalPos, &intervalLength);
 	snapshot.IntervalPositionSamps = intervalPos > 0 ? static_cast<unsigned int>(intervalPos) : 0u;
 	snapshot.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
+	snapshot.SampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
+	snapshot.Bpm = _client->GetActualBPM();
+	snapshot.Bpi = _client->GetBPI();
+	snapshot.HasTiming = (snapshot.Bpm > 0.0f) && (snapshot.Bpi > 0) && (snapshot.SampleRate > 0u);
 
 	std::set<std::string> activeUsers;
 	const auto userCount = _client->GetNumUsers();

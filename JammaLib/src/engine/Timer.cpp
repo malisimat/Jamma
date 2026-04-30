@@ -58,6 +58,16 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 	_quantisation = quantisation;
 }
 
+unsigned int Timer::QuantiseSamps() const
+{
+	return _quantiseSamps;
+}
+
+Timer::QuantisationType Timer::Quantisation() const
+{
+	return _quantisation;
+}
+
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
 {
 	if (0u == _quantiseSamps)

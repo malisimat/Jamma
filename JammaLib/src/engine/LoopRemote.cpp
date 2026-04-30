@@ -9,6 +9,9 @@ LoopRemote::LoopRemote(LoopParams params,
 	_measureLengthSamps(constants::DefaultSampleRate),
 	_measurePositionSamps(0u)
 {
+	// Remote loop visuals are default-disabled for now to avoid expensive
+	// model/VU refresh work while audio sync issues are investigated.
+	SetVisualUpdatesEnabled(false);
 	SetMeasureLength(_measureLengthSamps.load());
 	SetMeasurePosition(0u);
 }

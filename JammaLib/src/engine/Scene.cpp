@@ -426,6 +426,27 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
+	// Ctrl+Shift+R - arm one-shot reclock: clear quantisation so the next
+	// completed recording becomes the new master quantisation. After completion the
+	// derived BPM/BPI is queued and sent to the NINJAM server at the next
+	// interval boundary.
+	if ((82 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
+		{
+			std::scoped_lock lock(_audioMutex);
+			if (_clock)
+				_clock->Clear();
+			_armReclock = true;
+			_effectiveQuantiseSamps = 0u;
+			_hasPendingTempo = false;
+		}
+		return ActionResult::NoAction();
+	}
+
 	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
 	{
 		std::cout << ">> Undo <<" << std::endl;
@@ -671,8 +692,14 @@ void Scene::OnJobTick(Time curTime)
 		{
 			auto snapshot = _ninjamConnection->Snapshot();
 
-			std::scoped_lock lock(_audioMutex);
-			_ReconcileRemoteStations(snapshot);
+			{
+				std::scoped_lock lock(_audioMutex);
+				_ReconcileRemoteStations(snapshot);
+				_SyncQuantiseToRemoteTempo(snapshot);
+				_QueueTempoUpdateFromReclock();
+			}
+
+			_SendQueuedTempoOnIntervalWrap(snapshot);
 		}
 	}
 
@@ -1311,5 +1338,138 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 		{
 			++it;
 		}
+	}
+}
+
+unsigned int Scene::_ComputeQuantiseSamps(float bpm,
+	int bpi,
+	unsigned int sampleRate)
+{
+	// Hybrid quantisation policy:
+	// 1. beatSamps = 60 * sr / BPM
+	// 2. quantiseSamps = smallest integer multiple of beatSamps where duration >= 400ms
+	// 3. interval safeguard: if intervalSec < 3s, use full interval as quantiseSamps
+	if ((bpm <= 0.0f) || (bpi <= 0) || (sampleRate == 0u))
+		return 0u;
+
+	const auto beatSamps = static_cast<double>(sampleRate) * 60.0 / static_cast<double>(bpm);
+	if (beatSamps <= 0.0)
+		return 0u;
+
+	const auto intervalSamps = beatSamps * static_cast<double>(bpi);
+	const auto intervalSec = intervalSamps / static_cast<double>(sampleRate);
+
+	if (intervalSec < 3.0)
+		return static_cast<unsigned int>(intervalSamps + 0.5);
+
+	const auto minQuantiseSamps = static_cast<double>(sampleRate) * 0.4; // 400ms
+	auto multiplier = 1;
+	while ((beatSamps * multiplier) < minQuantiseSamps)
+		++multiplier;
+
+	return static_cast<unsigned int>((beatSamps * multiplier) + 0.5);
+}
+
+void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
+{
+	if (!_clock || !snapshot.HasTiming)
+		return;
+
+	// Don't override quantisation while a one-shot reclock is armed -
+	// the next recording will establish the new quantisation.
+	if (_armReclock)
+		return;
+
+	const auto bpmChanged = (snapshot.Bpm != _remoteBpm)
+		|| (snapshot.Bpi != _remoteBpi)
+		|| (snapshot.SampleRate != _remoteSampleRate);
+
+	if (!bpmChanged && (_effectiveQuantiseSamps != 0u) && _clock->IsQuantisable())
+		return;
+
+	const auto quantiseSamps = _ComputeQuantiseSamps(snapshot.Bpm,
+		snapshot.Bpi,
+		snapshot.SampleRate);
+
+	if (quantiseSamps == 0u)
+		return;
+
+	_remoteBpm = snapshot.Bpm;
+	_remoteBpi = snapshot.Bpi;
+	_remoteSampleRate = snapshot.SampleRate;
+	_effectiveQuantiseSamps = quantiseSamps;
+
+	_clock->SetQuantisation(quantiseSamps, Timer::QUANTISE_MULTIPLE);
+
+	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
+		<< " bpi=" << snapshot.Bpi
+		<< " sr=" << snapshot.SampleRate
+		<< " quantiseSamps=" << quantiseSamps << std::endl;
+}
+
+void Scene::_QueueTempoUpdateFromReclock()
+{
+	if (!_armReclock || !_clock)
+		return;
+
+	if (!_clock->IsQuantisable())
+		return;
+
+	// The next completed recording established a new quantisation via Station's
+	// existing logic (SetQuantisation(sampleCount/4, MULTIPLE)). Derive
+	// BPM/BPI from that quantisation and the implied master loop length.
+	const auto quantiseSamps = _clock->QuantiseSamps();
+	if (quantiseSamps == 0u)
+		return;
+
+	auto sampleRate = _remoteSampleRate;
+	if (sampleRate == 0u)
+		sampleRate = _audioDevice ? _audioDevice->GetAudioStreamParams().SampleRate : 0u;
+	if (sampleRate == 0u)
+		sampleRate = _userConfig.Audio.SampleRate;
+	if (sampleRate == 0u)
+	{
+		_armReclock = false;
+		return;
+	}
+
+	const auto bpm = 60.0f * static_cast<float>(sampleRate) / static_cast<float>(quantiseSamps);
+
+	// Station seeds the new quantisation as recordedLoopLength/4, so rawBpi = 4.
+	// Apply user rule: double until BPI >= 12.
+	auto bpi = 4;
+	while (bpi < 12)
+		bpi *= 2;
+
+	_pendingTempoBpm = bpm;
+	_pendingTempoBpi = bpi;
+	_hasPendingTempo = true;
+	_armReclock = false;
+	_effectiveQuantiseSamps = quantiseSamps;
+
+	std::cout << "[NINJAM] Reclock complete: bpm=" << bpm
+		<< " bpi=" << bpi
+		<< " quantiseSamps=" << quantiseSamps
+		<< " (queued for next interval boundary)" << std::endl;
+}
+
+void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
+{
+	if (!_hasPendingTempo || !_ninjamConnection)
+		return;
+
+	// Detect interval wrap: position decreased from last poll.
+	const auto pos = snapshot.IntervalPositionSamps;
+	const bool wrapped = (pos < _lastRemoteIntervalPos);
+	_lastRemoteIntervalPos = pos;
+
+	if (!wrapped)
+		return;
+
+	if (_ninjamConnection->RequestServerTempo(_pendingTempoBpm, _pendingTempoBpi))
+	{
+		_hasPendingTempo = false;
+		_remoteBpm = _pendingTempoBpm;
+		_remoteBpi = _pendingTempoBpi;
 	}
 }

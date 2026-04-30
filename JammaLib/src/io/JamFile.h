@@ -38,6 +38,8 @@ namespace io
 			std::string User;
 			std::string Pass;
 			std::string WorkDir;
+			std::optional<double> Bpm;
+			std::optional<unsigned long> Bpi;
 
 			static std::optional<NinjamConfig> FromJson(Json::JsonPart json);
 		};
