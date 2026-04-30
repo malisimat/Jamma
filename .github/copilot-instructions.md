@@ -67,7 +67,7 @@ Build rules:
 	- JammaLib/src or JammaLib/include -> JammaLib/JammaLib.vcxproj, then dependents as needed
 	- test/JammaLib.Tests/src only -> test/JammaLib.Tests/JammaLib.Tests.vcxproj
 4. Use solution build only when project targeting is unclear.
-5. Centralize compiler PDB safeguards in `Directory.Build.props` for all `.vcxproj` builds (`/FS` + project-specific `ProgramDataBaseFileName`); avoid project-local overrides unless justified.
+5. If you hit C1041 PDB contention, apply `/FS` and a project-specific `ProgramDataBaseFileName` in the affected project.
 
 MSBuild path:
 
