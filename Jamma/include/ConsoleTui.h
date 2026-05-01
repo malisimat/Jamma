@@ -23,7 +23,4 @@ private:
 
 private:
 	bool _ownsConsole = false;
-	FILE* _stdoutStream = nullptr;
-	FILE* _stderrStream = nullptr;
-	FILE* _stdinStream = nullptr;
 };
