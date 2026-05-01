@@ -191,9 +191,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\ConsoleTui.cpp" />
     <ClCompile Include="src\Main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\ConsoleTui.h" />
     <ClInclude Include="include\Main.h" />
   </ItemGroup>
   <ItemGroup>

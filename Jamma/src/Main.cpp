@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "NetworkSession.h"
+#include "ConsoleTui.h"
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -23,17 +24,6 @@ using namespace utils;
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
-
-void SetupConsole()
-{
-	AllocConsole();
-	FILE* newStdout = nullptr;
-	FILE* newStderr = nullptr;
-	FILE* newStdin = nullptr;
-	freopen_s(&newStdout, "CONOUT$", "w", stdout);
-	freopen_s(&newStderr, "CONOUT$", "w", stderr);
-	freopen_s(&newStdin, "CONIN$", "r", stdin);
-}
 
 std::optional<io::InitFile> LoadIni()
 {
@@ -106,7 +96,7 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
-	SetupConsole();
+	ConsoleTui consoleTui;
 
 	NetworkSession socketSession;
 	if (!socketSession.IsInitialised())
