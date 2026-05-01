@@ -838,6 +838,12 @@ std::mutex& Scene::GetAudioMutex()
 	return _audioMutex;
 }
 
+void Scene::SendNinjamChat(const std::string& msg)
+{
+	if (_ninjamSession)
+		_ninjamSession->SendChat(msg);
+}
+
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
 {
 	unsigned int pathLength = depth <= path.size() ?

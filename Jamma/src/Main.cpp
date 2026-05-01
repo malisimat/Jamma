@@ -11,6 +11,9 @@
 #include "PathUtils.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
+#include "../io/ConsoleTui.h"
+#include <atomic>
+#include <memory>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -108,6 +111,24 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 {
 	SetupConsole();
 
+	// Bring up the console TUI immediately after SetupConsole() so that
+	// ALL application logs (socket init, file load, connection lifecycle, etc.)
+	// get the coloured/emoji treatment. The TUI's lifetime spans the entire
+	// application run and is independent of any NINJAM session.
+	//
+	// An atomic scene pointer lets the submit handler forward chat safely once
+	// the scene is wired in below; before that it prints a "not connected"
+	// notice. std::atomic<Scene*> is write-once from the main thread.
+	auto tui = std::make_unique<io::ConsoleTui>();
+	std::atomic<Scene*> sceneRaw{ nullptr };
+	tui->Start("> ", [&sceneRaw](const std::string& msg) {
+		auto* s = sceneRaw.load(std::memory_order_acquire);
+		if (s)
+			s->SendNinjamChat(msg);
+		else
+			std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
+	});
+
 	NetworkSession socketSession;
 	if (!socketSession.IsInitialised())
 	{
@@ -153,6 +174,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		return -1;
 	}
 
+	// Wire the scene pointer so the TUI submit handler can forward chat.
+	sceneRaw.store(scene.value().get(), std::memory_order_release);
+
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
 
@@ -182,6 +206,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 
 	window.Release();
+
+	// Stop the TUI before returning so console mode and cout/cerr rdbufs
+	// are fully restored before the CRT shuts down.
+	tui->Stop();
 
 	return (int)msg.wParam;
 }

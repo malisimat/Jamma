@@ -191,6 +191,9 @@ namespace engine
 		void CloseAudio();
 		void CommitChanges();
 		std::mutex& GetAudioMutex();
+
+		// Send a chat message on the active ninjam session (no-op if none).
+		void SendNinjamChat(const std::string& msg);
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

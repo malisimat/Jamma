@@ -2,15 +2,17 @@
 
 #include <memory>
 #include <optional>
-#include "../io/ConsoleTui.h"
+#include <string>
 #include "../io/JamFile.h"
 #include "../io/NinjamConnection.h"
 
 namespace engine
 {
-	// Owns a NinjamConnection together with the console TUI used to drive
-	// chat I/O. All ninjam-specific lifecycle, threading, and chat I/O lives
-	// here so that Scene stays free of those concerns.
+	// Owns a NinjamConnection and manages all ninjam-specific lifecycle so
+	// that Scene stays free of those concerns.
+	// Chat I/O is driven externally: the caller sends messages via SendChat()
+	// and inbound messages are surfaced through std::cout (which the
+	// application-level ConsoleTui may intercept).
 	class NinjamSession
 	{
 	public:
@@ -23,8 +25,7 @@ namespace engine
 		// Start the session from config. No-op if host/user are empty.
 		void Start(const io::JamFile::NinjamConfig& config);
 
-		// Disconnect, stop the chat TUI, and restore console state.
-		// Idempotent.
+		// Disconnect and clean up. Idempotent.
 		void Stop();
 
 		bool IsConnected() const noexcept;
@@ -49,8 +50,11 @@ namespace engine
 			const float*& right,
 			unsigned int& numFrames) const;
 
+		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
+		// No-op if not connected.
+		void SendChat(const std::string& msg);
+
 	private:
 		std::unique_ptr<io::NinjamConnection> _connection;
-		std::unique_ptr<io::ConsoleTui> _tui;
 	};
 }
