@@ -1,6 +1,5 @@
 #include "ConsoleTui.h"
 
-#define NOMINMAX
 #include <windows.h>
 
 #include <cstring>
@@ -25,17 +24,17 @@ namespace
 
 	// Emoji glyphs as raw UTF-8 byte sequences so this file compiles cleanly
 	// regardless of the source encoding the toolchain decides to use.
-	constexpr const char* kEmojiBullet  = u8"\xE2\x80\xA2 ";   // •
-	constexpr const char* kEmojiOutbox  = u8"\xF0\x9F\x93\xA4 "; // 📤  (you)
-	constexpr const char* kEmojiSpeech  = u8"\xF0\x9F\x92\xAC "; // 💬  (chat)
-	constexpr const char* kEmojiLock    = u8"\xF0\x9F\x94\x92 "; // 🔒  (private)
-	constexpr const char* kEmojiPin     = u8"\xF0\x9F\x93\x8C "; // 📌  (topic)
-	constexpr const char* kEmojiGreen   = u8"\xF0\x9F\x9F\xA2 "; // 🟢  (join)
-	constexpr const char* kEmojiRed     = u8"\xF0\x9F\x94\xB4 "; // 🔴  (part)
-	constexpr const char* kEmojiSparkle = u8"\xE2\x9C\xA8 ";     // ✨  (sysmsg)
-	constexpr const char* kEmojiPlug    = u8"\xF0\x9F\x94\x8C "; // 🔌  (connect)
-	constexpr const char* kEmojiKeys    = u8"\xE2\x8C\xA8 ";     // ⌨   (hint)
-	constexpr const char* kEmojiWarn    = u8"\xE2\x9A\xA0 ";     // ⚠   (warn)
+	constexpr const char* kEmojiBullet  = "\xE2\x80\xA2 ";   // •
+	constexpr const char* kEmojiOutbox  = "\xF0\x9F\x93\xA4 "; // 📤  (you)
+	constexpr const char* kEmojiSpeech  = "\xF0\x9F\x92\xAC "; // 💬  (chat)
+	constexpr const char* kEmojiLock    = "\xF0\x9F\x94\x92 "; // 🔒  (private)
+	constexpr const char* kEmojiPin     = "\xF0\x9F\x93\x8C "; // 📌  (topic)
+	constexpr const char* kEmojiGreen   = "\xF0\x9F\x9F\xA2 "; // 🟢  (join)
+	constexpr const char* kEmojiRed     = "\xF0\x9F\x94\xB4 "; // 🔴  (part)
+	constexpr const char* kEmojiSparkle = "\xE2\x9C\xA8 ";     // ✨  (sysmsg)
+	constexpr const char* kEmojiPlug    = "\xF0\x9F\x94\x8C "; // 🔌  (connect)
+	constexpr const char* kEmojiKeys    = "\xE2\x8C\xA8 ";     // ⌨   (hint)
+	constexpr const char* kEmojiWarn    = "\xE2\x9A\xA0 ";     // ⚠   (warn)
 
 	// Returns a styled, emoji-prefixed version of `line` for known [NINJAM]
 	// log shapes. Lines without the [NINJAM] tag are returned unchanged so
