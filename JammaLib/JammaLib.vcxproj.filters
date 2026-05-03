@@ -176,6 +176,9 @@
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\NinjamSession.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\InterpolatedValue.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -327,6 +330,9 @@
       <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\io\NetworkSession.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
+    <ClInclude Include="src\io\ConsoleTui.h">
       <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\io\NinjamConnection.h">
@@ -490,6 +496,9 @@
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\NinjamSession.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\InterpolatedValue.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -584,6 +593,9 @@
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NetworkSession.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\ConsoleTui.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NinjamConnection.cpp">
