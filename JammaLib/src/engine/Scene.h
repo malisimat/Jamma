@@ -254,6 +254,7 @@ namespace engine
 		std::shared_mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
+		std::mutex _tempoMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;

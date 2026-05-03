@@ -360,19 +360,24 @@ NinjamRemoteSnapshot NinjamConnection::Snapshot() const
 
 bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 {
-	if (!_isConnected || !_client)
-		return false;
-
 	if (bpm <= 0.0f || bpi <= 0)
 		return false;
 
 	auto bpmCmd = std::string("/bpm ") + std::to_string(static_cast<int>(bpm + 0.5f));
 	auto bpiCmd = std::string("/bpi ") + std::to_string(bpi);
 
-	// NINJAM admin commands are sent as broadcast chat messages; the server
-	// only honours them for users with admin privileges.
-	_client->ChatMessage_Send("MSG", bpmCmd.c_str());
-	_client->ChatMessage_Send("MSG", bpiCmd.c_str());
+	{
+		// Guard NJClient usage against concurrent Disconnect/Pump calls.
+		std::scoped_lock lock(_connectionMutex);
+
+		if (!_isConnected || !_client)
+			return false;
+
+		// NINJAM admin commands are sent as broadcast chat messages; the server
+		// only honours them for users with admin privileges.
+		_client->ChatMessage_Send("MSG", bpmCmd.c_str());
+		_client->ChatMessage_Send("MSG", bpiCmd.c_str());
+	}
 
 	std::cout << "[NINJAM] Requested server tempo " << bpmCmd << ", " << bpiCmd << std::endl;
 	return true;

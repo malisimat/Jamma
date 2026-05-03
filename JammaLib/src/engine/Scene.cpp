@@ -437,7 +437,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
 		{
-			std::scoped_lock lock(_audioMutex);
+			std::scoped_lock lock(_audioMutex, _tempoMutex);
 			if (_clock)
 				_clock->Clear();
 			_armReclock = true;
@@ -1454,9 +1454,12 @@ void Scene::_QueueTempoUpdateFromReclock()
 	while (bpi < 12)
 		bpi *= 2;
 
-	_pendingTempoBpm = bpm;
-	_pendingTempoBpi = bpi;
-	_hasPendingTempo = true;
+	{
+		std::scoped_lock tempoLock(_tempoMutex);
+		_pendingTempoBpm = bpm;
+		_pendingTempoBpi = bpi;
+		_hasPendingTempo = true;
+	}
 	_armReclock = false;
 	_effectiveQuantiseSamps = quantiseSamps;
 
@@ -1468,7 +1471,18 @@ void Scene::_QueueTempoUpdateFromReclock()
 
 void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
 {
-	if (!_hasPendingTempo || !_ninjamConnection)
+	// Copy pending tempo under lock to avoid racing with OnAction (UI thread).
+	float pendingBpm;
+	int pendingBpi;
+	{
+		std::scoped_lock lock(_tempoMutex);
+		if (!_hasPendingTempo)
+			return;
+		pendingBpm = _pendingTempoBpm;
+		pendingBpi = _pendingTempoBpi;
+	}
+
+	if (!_ninjamConnection)
 		return;
 
 	// Detect interval wrap: position decreased from last poll.
@@ -1479,10 +1493,11 @@ void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	if (!wrapped)
 		return;
 
-	if (_ninjamConnection->RequestServerTempo(_pendingTempoBpm, _pendingTempoBpi))
+	if (_ninjamConnection->RequestServerTempo(pendingBpm, pendingBpi))
 	{
+		std::scoped_lock lock(_tempoMutex);
 		_hasPendingTempo = false;
-		_remoteBpm = _pendingTempoBpm;
-		_remoteBpi = _pendingTempoBpi;
+		_remoteBpm = pendingBpm;
+		_remoteBpi = pendingBpi;
 	}
 }
