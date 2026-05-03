@@ -18,6 +18,40 @@ using engine::StationRemote;
 
 namespace
 {
+	class InspectableStationRemote :
+		public StationRemote
+	{
+	public:
+		using StationRemote::StationRemote;
+
+		std::shared_ptr<gui::GuiRack> Rack() const
+		{
+			return _guiRack;
+		}
+	};
+
+	class InspectableLoopRemote :
+		public LoopRemote
+	{
+	public:
+		using LoopRemote::LoopRemote;
+
+		bool ModelDirty() const
+		{
+			return _modelDirty.load();
+		}
+
+		double DrawRadiusScale() const
+		{
+			return _DrawRadiusScale();
+		}
+
+		unsigned long BufferLength() const
+		{
+			return _bufferBank.Length();
+		}
+	};
+
 	class CaptureSink :
 		public AudioSink
 	{
@@ -142,6 +176,26 @@ TEST(StationRemote, SetRemoteUserNameUpdatesStationName)
 	EXPECT_EQ("alice", station->Name());
 }
 
+TEST(StationRemote, RackStaysVisibleAcrossDepthChanges)
+{
+	StationParams params;
+	params.Name = "remote-user";
+	params.Size = { 200, 280 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	auto station = std::make_shared<InspectableStationRemote>(params, mixerParams);
+	station->SetNumBusChannels(2);
+	station->SetNumDacChannels(2);
+	station->EnsureRemoteTake();
+
+	ASSERT_NE(nullptr, station->Rack());
+	EXPECT_TRUE(station->Rack()->IsVisible());
+
+	station->SetSelectDepth(base::DEPTH_LOOP);
+
+	EXPECT_TRUE(station->Rack()->IsVisible());
+}
+
 TEST(LoopRemote, MeasureMetadataTracksIngestProgress)
 {
 	audio::WireMixBehaviourParams wire;
@@ -162,4 +216,81 @@ TEST(LoopRemote, MeasureMetadataTracksIngestProgress)
 
 	EXPECT_EQ(1024u, loop->MeasureLength());
 	EXPECT_EQ((1000u + 128u) % 1024u, loop->MeasurePosition());
+}
+
+TEST(LoopRemote, ConstructorSizesDefaultMeasureBuffer)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	EXPECT_EQ(constants::MaxLoopFadeSamps + constants::DefaultSampleRate, loop->BufferLength());
+	EXPECT_TRUE(loop->ModelDirty());
+}
+
+TEST(LoopRemote, MeasureLengthMarksModelDirtyUntilUpdateRuns)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	loop->Update();
+	EXPECT_FALSE(loop->ModelDirty());
+
+	loop->SetMeasureLength(1024);
+	EXPECT_TRUE(loop->ModelDirty());
+
+	loop->Update();
+
+	EXPECT_FALSE(loop->ModelDirty());
+}
+
+TEST(LoopRemote, IngestDoesNotMarkModelDirtyAfterInitialRefresh)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	loop->Update();
+	loop->SetMeasureLength(1024);
+	loop->Update();
+	EXPECT_FALSE(loop->ModelDirty());
+
+	std::vector<float> block(128, 0.3f);
+	loop->IngestSamples(block.data(), static_cast<unsigned int>(block.size()));
+
+	EXPECT_FALSE(loop->ModelDirty());
+}
+
+TEST(LoopRemote, UsesHalfDrawRadiusScaleForRemoteStations)
+{
+	audio::WireMixBehaviourParams wire;
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Behaviour = wire;
+
+	LoopParams params;
+	params.Id = "remote-loop";
+	params.TakeId = "remote-take";
+	params.Wav = "remote-loop";
+	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+
+	EXPECT_DOUBLE_EQ(0.5, loop->DrawRadiusScale());
 }

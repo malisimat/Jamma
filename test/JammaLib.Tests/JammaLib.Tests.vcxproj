@@ -54,7 +54,6 @@
     <OutDir>bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>obj\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
-  <ItemDefinitionGroup />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

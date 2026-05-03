@@ -16,6 +16,7 @@ namespace engine
 			audio::AudioMixerParams mixerParams);
 
 		virtual std::string ClassName() const override { return "LoopRemote"; }
+		virtual void Update() override;
 
 		// Called from the job thread. Resizes buffer to match the ninjam interval.
 		void SetMeasureLength(unsigned int measureLengthSamps);
@@ -27,8 +28,13 @@ namespace engine
 		unsigned int MeasureLength() const { return _measureLengthSamps.load(); }
 		unsigned int MeasurePosition() const { return _measurePositionSamps.load(); }
 
-	private:
+	protected:
+		virtual double _DrawRadiusScale() const noexcept override { return 0.5; }
+
+		std::atomic<bool> _modelDirty;
 		std::atomic<unsigned int> _measureLengthSamps;
 		std::atomic<unsigned int> _measurePositionSamps;
+
+	private:
 	};
 }

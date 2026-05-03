@@ -804,6 +804,12 @@ void Scene::InitAudio()
 
 void Scene::CloseAudio()
 {
+	// Do not hold the audio callback mutex while stopping the stream.
+	// RtAudio shutdown may wait for the callback thread to return, and the
+	// callback takes this same mutex.
+	if (_audioDevice)
+		_audioDevice->Stop();
+
 	std::scoped_lock lock(_audioMutex);
 
 	_ninjamSession->Stop();
@@ -1269,6 +1275,7 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 		// EnsureRemoteTake runs on the job thread so the audio callback can
 		// early-out safely if loops are not yet initialised.
 		remoteStation->EnsureRemoteTake();
+		remoteStation->UpdateRemoteVisuals();
 	}
 
 	// Remove stations for users who have left.

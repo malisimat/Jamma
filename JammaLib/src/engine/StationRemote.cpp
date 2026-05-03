@@ -20,7 +20,7 @@ StationRemote::StationRemote(StationParams params,
 	_nameLabel(nullptr)
 {
 	SetNumBusChannels(2);
-	SetModelScale(2.0);
+	SetModelScale(1.0);
 
 	gui::GuiLabelParams labelParams;
 	labelParams.String = _remoteUserName;
@@ -29,6 +29,14 @@ StationRemote::StationRemote(StationParams params,
 	labelParams.Size = { 180, 18 };
 	_nameLabel = std::make_shared<gui::GuiLabel>(labelParams);
 	_children.push_back(_nameLabel);
+}
+
+void StationRemote::SetSelectDepth(base::SelectDepth depth)
+{
+	Station::SetSelectDepth(depth);
+
+	if (_guiRack)
+		_guiRack->SetVisible(true);
 }
 
 void StationRemote::EnsureRemoteTake()
@@ -70,7 +78,16 @@ void StationRemote::EnsureRemoteTake()
 	AddTake(_remoteTake);
 	CommitChanges();
 
-	SetRackVisibility(false, false);
+	SetRackVisibility(true, false);
+}
+
+void StationRemote::UpdateRemoteVisuals()
+{
+	if (_leftLoop)
+		_leftLoop->Update();
+
+	if (_rightLoop)
+		_rightLoop->Update();
 }
 
 void StationRemote::SetRemoteUserName(const std::string& userName)

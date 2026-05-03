@@ -195,11 +195,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			{
 				scene.value()->CloseAudio();
 				active = false;
+				break;
 			}
 
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+
+		if (!active)
+			break;
 
 		window.Render();
 		window.Swap();
