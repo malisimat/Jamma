@@ -873,6 +873,31 @@ void Scene::SendNinjamChat(const std::string& msg)
 		_ninjamSession->SendChat(msg);
 }
 
+void Scene::ConnectNinjam(const std::string& host)
+{
+	if (!_ninjamSession)
+		return;
+
+	io::JamFile::NinjamConfig config;
+	if (_ninjamConfig.has_value())
+		config = _ninjamConfig.value();
+
+	config.Host = host;
+	_ninjamConfig = config;
+
+	std::cout << "[NINJAM] Connecting to " << host << std::endl;
+	_ninjamSession->Start(config);
+}
+
+void Scene::DisconnectNinjam()
+{
+	if (!_ninjamSession)
+		return;
+
+	std::cout << "[NINJAM] Disconnecting" << std::endl;
+	_ninjamSession->Stop();
+}
+
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
 {
 	unsigned int pathLength = depth <= path.size() ?

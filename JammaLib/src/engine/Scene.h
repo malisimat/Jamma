@@ -194,6 +194,13 @@ namespace engine
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
+
+		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
+		// from the loaded jam config when available; falls back to anonymous.
+		void ConnectNinjam(const std::string& host);
+
+		// Disconnect the active NINJAM session. No-op if not connected.
+		void DisconnectNinjam();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

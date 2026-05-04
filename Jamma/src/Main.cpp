@@ -13,7 +13,12 @@
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
 #include <atomic>
+#include <cctype>
+#include <cstddef>
+#include <iostream>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -23,6 +28,111 @@ using namespace base;
 using namespace resources;
 using namespace graphics;
 using namespace utils;
+
+// ---------------------------------------------------------------------------
+// Known public NINJAM servers
+// ---------------------------------------------------------------------------
+namespace
+{
+	struct NinjamServer { const char* name; const char* host; };
+
+	constexpr NinjamServer kServerList[] = {
+		{ "ninjamer.com #1",          "ninjamer.com:2049"                  },
+		{ "ninjamer.com #2",          "ninjamer.com:2050"                  },
+		{ "ninjamer.com #3",          "ninjamer.com:2051"                  },
+		{ "ninjamer.com #4",          "ninjamer.com:2052"                  },
+		{ "ninbot.com #1",            "ninbot.com:2049"                    },
+		{ "ninbot.com #2",            "ninbot.com:2050"                    },
+		{ "ninbot.com #3",            "ninbot.com:2051"                    },
+		{ "ninbot.com #4",            "ninbot.com:2052"                    },
+		{ "ninbot.com #5",            "ninbot.com:2053"                    },
+		{ "ninbot.com #6",            "ninbot.com:2054"                    },
+		{ "mutantlab.com",            "mutantlab.com:2049"                 },
+		{ "musicorner",               "musicorner.redirectme.net:2050"     },
+		{ "ninbot.rootsociety.nl",    "ninbot.rootsociety.nl:8001"         },
+		{ "getaroom (NA)",            "getaroom-na.ninjam.com:2049"        },
+		{ "getaroom (EU)",            "getaroom-eu.ninjam.com:2049"        },
+		{ "ninjam.com",               "ninjam.com:2049"                    },
+		{ "autosong.ninjam.com",      "autosong.ninjam.com:2049"           },
+	};
+	constexpr int kServerCount = static_cast<int>(std::size(kServerList));
+
+	void PrintNinjamHelp()
+	{
+		std::cout << "[NINJAM] Commands:\n"
+		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
+		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
+		          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
+		          << "[NINJAM] Servers:\n";
+		for (int i = 0; i < kServerCount; ++i)
+			std::cout << "[NINJAM]   " << (i + 1) << ". "
+			          << kServerList[i].name
+			          << " (" << kServerList[i].host << ")\n";
+		std::cout << std::flush;
+	}
+
+	// Returns true when the message was a slash command (consumed; should NOT
+	// be forwarded as chat). Returns false for ordinary chat text.
+	bool HandleSlashCommand(const std::string& msg, Scene* scene)
+	{
+		if (msg.empty() || msg[0] != '/')
+			return false;
+
+		const std::string rest = msg.substr(1);
+		const auto sp = rest.find(' ');
+		std::string verb = (sp == std::string::npos) ? rest : rest.substr(0, sp);
+		std::string args = (sp == std::string::npos) ? std::string{} : rest.substr(sp + 1);
+
+		for (auto& c : verb)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		while (!args.empty() && args.front() == ' ')
+			args.erase(0, 1);
+
+		if (verb.empty() || verb == "?" || verb == "help")
+		{
+			PrintNinjamHelp();
+			return true;
+		}
+
+		if (verb == "c" || verb == "connect")
+		{
+			if (args.empty())
+			{
+				std::cout << "[NINJAM] Usage: /c <number>  (type / for list)" << std::endl;
+				return true;
+			}
+			int idx = 0;
+			try { idx = std::stoi(args); }
+			catch (const std::exception&) { idx = 0; }
+
+			if (idx < 1 || idx > kServerCount)
+			{
+				std::cout << "[NINJAM] Server number must be 1-" << kServerCount
+				          << "  (type / for list)" << std::endl;
+				return true;
+			}
+			if (scene)
+				scene->ConnectNinjam(kServerList[idx - 1].host);
+			else
+				std::cout << "[NINJAM] Not ready yet" << std::endl;
+			return true;
+		}
+
+		if (verb == "d" || verb == "q" || verb == "quit"
+			|| verb == "exit" || verb == "disconnect")
+		{
+			if (scene)
+				scene->DisconnectNinjam();
+			else
+				std::cout << "[NINJAM] Not connected" << std::endl;
+			return true;
+		}
+
+		std::cout << "[NINJAM] Unknown command /" << verb
+		          << "  (type / for help)" << std::endl;
+		return true;
+	}
+} // namespace
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
@@ -123,6 +233,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	std::atomic<Scene*> sceneRaw{ nullptr };
 	tui->Start("> ", [&sceneRaw](const std::string& msg) {
 		auto* s = sceneRaw.load(std::memory_order_acquire);
+		if (HandleSlashCommand(msg, s))
+			return;
 		if (s)
 			s->SendNinjamChat(msg);
 		else
