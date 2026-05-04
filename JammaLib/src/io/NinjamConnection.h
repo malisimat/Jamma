@@ -79,9 +79,19 @@ namespace io
 
 		NinjamRemoteSnapshot Snapshot() const;
 
-		// Sends NINJAM admin commands to update server tempo (BPM and BPI).
-		// Only takes effect if the connected user has admin privileges on the
-		// server. Safe to call from job thread; returns false if not connected.
+		// Sends NINJAM tempo-change commands to the server for BPM and BPI.
+		// Two forms are sent in parallel:
+		//   - Admin form (/bpm N, /bpi N): applied immediately if the connected
+		//     user has admin privileges on the server.
+		//   - Vote form (/vote bpm N, /vote bpi N): non-admin fallback; the server
+		//     counts votes across all participants and applies the change once a
+		//     majority (>50% of non-silent users) agree.
+		// Server vote-progress and confirmation announcements are delivered back
+		// as MSG chat messages with no sender, which _OnChatMessage prints to the
+		// console.  When the change takes effect (via either path), GetActualBPM()
+		// updates and Flow 1 (_SyncQuantiseToRemoteTempo) picks it up within one
+		// job tick (~20 ms).
+		// Safe to call from the job thread; returns false if not connected.
 		bool RequestServerTempo(float bpm, int bpi);
 
 		// Fills left/right with the decoded stereo pair for the given output-channel

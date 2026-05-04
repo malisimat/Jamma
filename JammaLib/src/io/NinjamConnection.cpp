@@ -366,8 +366,17 @@ bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 	if (bpm <= 0.0f || bpi <= 0)
 		return false;
 
-	auto bpmCmd = std::string("/bpm ") + std::to_string(static_cast<int>(bpm + 0.5f));
-	auto bpiCmd = std::string("/bpi ") + std::to_string(bpi);
+	const auto bpmVal = std::to_string(static_cast<int>(bpm + 0.5f));
+	const auto bpiVal = std::to_string(bpi);
+
+	// Admin form: honoured immediately if the connected user has admin privileges.
+	auto adminBpmCmd = std::string("/bpm ") + bpmVal;
+	auto adminBpiCmd = std::string("/bpi ") + bpiVal;
+
+	// Vote form: non-admin path; the server counts votes across all participants
+	// and applies the change once a majority (>50%) agrees.
+	auto voteBpmCmd = std::string("/vote bpm ") + bpmVal;
+	auto voteBpiCmd = std::string("/vote bpi ") + bpiVal;
 
 	{
 		// Guard NJClient usage against concurrent Disconnect/Pump calls.
@@ -376,13 +385,19 @@ bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 		if (!_isConnected || !_client)
 			return false;
 
-		// NINJAM admin commands are sent as broadcast chat messages; the server
-		// only honours them for users with admin privileges.
-		_client->ChatMessage_Send("MSG", bpmCmd.c_str());
-		_client->ChatMessage_Send("MSG", bpiCmd.c_str());
+		// Send both forms: admin command applies immediately for privileged users;
+		// vote command is the automatic fallback for non-admins.  Server vote-progress
+		// and confirmation announcements arrive as server MSG messages, which
+		// _OnChatMessage prints to the console as "[NINJAM] ** <text>".
+		_client->ChatMessage_Send("MSG", adminBpmCmd.c_str());
+		_client->ChatMessage_Send("MSG", adminBpiCmd.c_str());
+		_client->ChatMessage_Send("MSG", voteBpmCmd.c_str());
+		_client->ChatMessage_Send("MSG", voteBpiCmd.c_str());
 	}
 
-	std::cout << "[NINJAM] Requested server tempo " << bpmCmd << ", " << bpiCmd << std::endl;
+	std::cout << "[NINJAM] Requested server tempo bpm=" << bpmVal
+		<< " bpi=" << bpiVal
+		<< " (admin + vote)" << std::endl;
 	return true;
 }
 
