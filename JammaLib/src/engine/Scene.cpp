@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include <iostream>
 #include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
@@ -57,7 +58,7 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
-	_ninjamConnection(nullptr),
+	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
@@ -186,7 +187,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_ninjamConfig = jamStruct.Ninjam;
-	scene->_InitNinjamConnection(scene->_ninjamConfig);
+	if (jamStruct.Ninjam.has_value())
+		scene->_ninjamSession->Start(jamStruct.Ninjam.value());
 	scene->InitReceivers();
 
 	return scene;
@@ -684,23 +686,13 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
-	if (_ninjamConnection)
+	auto snapshot = _ninjamSession->Pump();
+	if (snapshot.has_value())
 	{
-		_ninjamConnection->Pump();
-
-		if (_ninjamConnection->IsConnected())
-		{
-			auto snapshot = _ninjamConnection->Snapshot();
-
-			{
-				std::scoped_lock lock(_audioMutex);
-				_ReconcileRemoteStations(snapshot);
-				_SyncQuantiseToRemoteTempo(snapshot);
-				_QueueTempoUpdateFromReclock();
-			}
-
-			_SendQueuedTempoOnIntervalWrap(snapshot);
-		}
+		std::scoped_lock lock(_audioMutex);
+		_ReconcileRemoteStations(snapshot.value());
+		_SyncQuantiseToRemoteTempo(snapshot.value());
+		_QueueTempoUpdateFromReclock();
 	}
 
 	actions::JobAction job;
@@ -825,14 +817,11 @@ void Scene::InitAudio()
 			}
 		}
 
-		if (_ninjamConnection)
-		{
-			_ninjamConnection->SetAudioFormat(
-				audioStreamParams.SampleRate,
-				audioStreamParams.BufSize,
-				audioStreamParams.NumInputChannels,
-				audioStreamParams.NumOutputChannels);
-		}
+		_ninjamSession->SetAudioFormat(
+			audioStreamParams.SampleRate,
+			audioStreamParams.BufSize,
+			audioStreamParams.NumInputChannels,
+			audioStreamParams.NumOutputChannels);
 	}
 }
 
@@ -846,8 +835,9 @@ void Scene::CloseAudio()
 
 	std::scoped_lock lock(_audioMutex);
 
-	if (_ninjamConnection)
-		_ninjamConnection->Disconnect();
+	_ninjamSession->Stop();
+
+	_audioDevice->Stop();
 }
 
 void Scene::CommitChanges()
@@ -875,6 +865,12 @@ void Scene::CommitChanges()
 std::mutex& Scene::GetAudioMutex()
 {
 	return _audioMutex;
+}
+
+void Scene::SendNinjamChat(const std::string& msg)
+{
+	if (_ninjamSession)
+		_ninjamSession->SendChat(msg);
 }
 
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
@@ -960,11 +956,11 @@ void Scene::_OnAudio(float* inBuf,
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 
-	if (_ninjamConnection)
+	if (_ninjamSession->IsConnected())
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-		_ninjamConnection->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
+		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 		for (const auto& stationBase : _stations)
 		{
@@ -978,7 +974,7 @@ void Scene::_OnAudio(float* inBuf,
 			const float* left = nullptr;
 			const float* right = nullptr;
 			unsigned int frameCount = 0u;
-			if (_ninjamConnection->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+			if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
 			{
 				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
 				station->IngestStereoBlock(left, right, ingestFrames);
@@ -1254,24 +1250,6 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 		station->SetSelectDepth(selectDepth);
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
-}
-
-void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
-{
-	_ninjamConnection.reset();
-
-	if (!config.has_value())
-		return;
-
-	const auto& ninjam = config.value();
-	if (ninjam.Host.empty() || ninjam.User.empty())
-		return;
-
-	_ninjamConnection = std::make_unique<io::NinjamConnection>(
-		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
-
-	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
-	_ninjamConnection->Connect();
 }
 
 void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)

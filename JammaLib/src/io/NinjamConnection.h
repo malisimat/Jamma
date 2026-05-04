@@ -91,7 +91,15 @@ namespace io
 			const float*& right,
 			unsigned int& numFrames) const;
 
+		// Broadcasts a text message to all users in the current session.
+		// Safe to call from any thread while connected.
+		void SendChat(const std::string& message);
+
 	private:
+		static void _OnChatMessage(void* userData,
+			NJClient* inst,
+			const char** parms,
+			int nparms);
 		bool _StartConnectAttempt(std::chrono::steady_clock::time_point now);
 		bool _HasActiveConnectAttempt() const noexcept;
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);

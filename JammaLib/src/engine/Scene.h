@@ -4,6 +4,7 @@
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -18,7 +19,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
-#include "../io/NinjamConnection.h"
+#include "NinjamSession.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -71,6 +72,9 @@ namespace engine
 
 			_isSceneQuitting = true;
 			_jobRunner.join();
+			// NinjamSession destructs after _jobRunner exits, so Pump() can no
+			// longer be called when the session tears down.
+			_ninjamSession.reset();
 		}
 
 		// Copy
@@ -187,6 +191,9 @@ namespace engine
 		void CloseAudio();
 		void CommitChanges();
 		std::mutex& GetAudioMutex();
+
+		// Send a chat message on the active ninjam session (no-op if none).
+		void SendNinjamChat(const std::string& msg);
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -213,7 +220,6 @@ namespace engine
 		void _JobLoop();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
 		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
 		void _SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot);
 		void _QueueTempoUpdateFromReclock();
@@ -243,7 +249,7 @@ namespace engine
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
-		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
+		std::unique_ptr<NinjamSession> _ninjamSession;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

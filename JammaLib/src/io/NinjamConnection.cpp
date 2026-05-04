@@ -92,6 +92,9 @@ bool NinjamConnection::_StartConnectAttempt(std::chrono::steady_clock::time_poin
 	std::cout << "[NINJAM] Connect attempt " << _connectAttempts
 		<< " to " << _host << " as " << connectUser << std::endl;
 
+	_client->ChatMessage_Callback = &NinjamConnection::_OnChatMessage;
+	_client->ChatMessage_User = this;
+
 	_client->Connect(_host.c_str(), connectUser.c_str(), _pass.c_str());
 	_isConnected = false;
 	return true;
@@ -634,4 +637,65 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 
 	_userOutputChannels[userName] = 0u;
 	return 0u;
+}
+
+void NinjamConnection::SendChat(const std::string& message)
+{
+	// Serialize with Disconnect() so we cannot call ChatMessage_Send
+	// concurrently with or after NJClient::Disconnect().
+	std::scoped_lock lock(_connectionMutex);
+
+	if (!_isConnected || !_client || message.empty())
+		return;
+
+	_client->ChatMessage_Send("MSG", message.c_str());
+}
+
+void NinjamConnection::_OnChatMessage(void* userData,
+	NJClient* /*inst*/,
+	const char** parms,
+	int nparms)
+{
+	// userData is the NinjamConnection instance; reserved for future use.
+	(void)userData;
+
+	if (!parms || nparms < 1 || !parms[0])
+		return;
+
+	const std::string type(parms[0]);
+
+	if (type == "MSG")
+	{
+		const auto* user = (nparms > 1 && parms[1]) ? parms[1] : "";
+		const auto* text = (nparms > 2 && parms[2]) ? parms[2] : "";
+		if (*user != '\0')
+			std::cout << "[NINJAM] <" << user << "> " << text << std::endl;
+		else
+			std::cout << "[NINJAM] ** " << text << std::endl;
+	}
+	else if (type == "PRIVMSG")
+	{
+		const auto* user = (nparms > 1 && parms[1]) ? parms[1] : "";
+		const auto* text = (nparms > 2 && parms[2]) ? parms[2] : "";
+		std::cout << "[NINJAM] (private) <" << user << "> " << text << std::endl;
+	}
+	else if (type == "TOPIC")
+	{
+		const auto* user = (nparms > 1 && parms[1]) ? parms[1] : "";
+		const auto* text = (nparms > 2 && parms[2]) ? parms[2] : "";
+		if (*user != '\0')
+			std::cout << "[NINJAM] Topic set by <" << user << ">: " << text << std::endl;
+		else
+			std::cout << "[NINJAM] Topic: " << text << std::endl;
+	}
+	else if (type == "JOIN")
+	{
+		const auto* user = (nparms > 1 && parms[1]) ? parms[1] : "";
+		std::cout << "[NINJAM] --> " << user << " joined" << std::endl;
+	}
+	else if (type == "PART")
+	{
+		const auto* user = (nparms > 1 && parms[1]) ? parms[1] : "";
+		std::cout << "[NINJAM] <-- " << user << " left" << std::endl;
+	}
 }
