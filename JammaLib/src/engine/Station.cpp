@@ -78,7 +78,22 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 		takeCount++;
 	}
-		
+
+	// Queue load jobs for any VST plugins serialised in the station's chain.
+	for (const auto& vstEntry : stationStruct.VstChain)
+	{
+		// Convert UTF-8 path to wstring for LoadLibraryW
+		std::wstring wpath(vstEntry.Path.size() + 1, L'\0');
+		size_t converted = 0;
+		mbstowcs_s(&converted, wpath.data(), vstEntry.Path.size() + 1,
+			vstEntry.Path.c_str(), vstEntry.Path.size());
+		if (converted > 1)
+		{
+			wpath.resize(converted - 1);
+			station->LoadVstPlugin(wpath);
+		}
+	}
+
 	return station;
 }
 
@@ -206,6 +221,10 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
 		}
+
+		// Apply station-output VST insert chain (if any active plugins)
+		if (_vstChain && _vstChain->IsActive())
+			_vstChain->ProcessBlock(tempBuf, sampsToRead);
 
 		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
 	}
@@ -690,6 +709,7 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 void Station::SetupBuffers(unsigned int bufSize)
 {
 	_lastBufSize = bufSize;
+	_blockSize = bufSize;
 
 	auto& buffers = (_flipAudioBuffer && _changesMade) ?
 		_backAudioBuffers :
@@ -884,9 +904,38 @@ std::vector<JobAction> Station::_CommitChanges()
 		_WireVuSliders();
 	}
 
+	// Swap in the VST chain if the job thread has delivered a new one.
+	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+	{
+		_vstChain = _backVstChain;
+	}
+
+	// Detect pending VST load/unload requests and queue a job for them.
+	std::vector<JobAction> jobs;
+
+	if (_hasPendingVstUnload)
+	{
+		_hasPendingVstUnload = false;
+		// Unload is handled directly under the audio mutex (unloading is
+		// infrequent and DLL cleanup is brief).
+		if (_vstChain)
+			_vstChain->RemovePlugin(_pendingVstUnload);
+	}
+
+	if (!_pendingVstLoad.empty())
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_LOADVST;
+		job.SourceId = _name;
+		job.VstPath = _pendingVstLoad;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
+		_pendingVstLoad.clear();
+	}
+
 	GuiElement::_CommitChanges();
 
-	return {};
+	return jobs;
 }
 
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
@@ -984,4 +1033,50 @@ void Station::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
+}
+
+void Station::LoadVstPlugin(std::wstring path)
+{
+	_pendingVstLoad = std::move(path);
+	_changesMade = true;
+}
+
+void Station::UnloadVstPlugin(size_t index)
+{
+	_pendingVstUnload = index;
+	_hasPendingVstUnload = true;
+	_changesMade = true;
+}
+
+ActionResult Station::OnAction(JobAction action)
+{
+	switch (action.JobActionType)
+	{
+	case JobAction::JOB_LOADVST:
+	{
+		// Running on the job thread — safe to do heavy work here.
+		// Build/get the back chain
+		if (!_backVstChain)
+			_backVstChain = std::make_shared<vst::VstChain>();
+
+		auto plugin = std::make_shared<vst::VstPlugin>();
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, NumBusChannels()))
+		{
+			_backVstChain->AddPlugin(plugin);
+			// Signal _CommitChanges() (running on main thread under audioMutex)
+			// to swap the chain in.
+			_flipVstChain.store(true, std::memory_order_release);
+			_changesMade = true;
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	default:
+		break;
+	}
+
+	return ActionResult::NoAction();
 }

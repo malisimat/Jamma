@@ -25,11 +25,19 @@ namespace actions
 		enum JobType
 		{
 			JOB_UPDATELOOPS,
-			JOB_ENDRECORDING
+			JOB_ENDRECORDING,
+			JOB_LOADVST,
+			JOB_UNLOADVST
 		};
 
 		JobType JobActionType;
 		std::string SourceId;
 		std::weak_ptr<base::ActionReceiver> Receiver;
+
+		// Payload for JOB_LOADVST: path to the .vst3 plugin.
+		std::wstring VstPath;
+
+		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
+		size_t VstIndex = 0;
 	};
 }

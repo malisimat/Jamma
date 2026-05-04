@@ -89,6 +89,19 @@ namespace graphics
 		static ATOM Register(HINSTANCE hInstance);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
+		// Shared helper: register a named window class (idempotent — safe to call
+		// multiple times) then create and return a plain Win32 HWND.
+		// Used by both Window::Create() (main app window) and VstEditorWindow.
+		// Returns nullptr on failure.
+		static HWND CreateSimpleWindow(HINSTANCE hInstance,
+			LPCWSTR className,
+			LPCWSTR title,
+			DWORD style,
+			int x, int y, int width, int height,
+			HWND parent,
+			WNDPROC wndProc,
+			void* userParam);
+
 	private:
 		void LoadResources();
 		void InitScene();

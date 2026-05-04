@@ -574,6 +574,38 @@ void Window::InitStyle(WNDCLASSEX& wcex) noexcept
 	wcex.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 }
 
+HWND Window::CreateSimpleWindow(HINSTANCE hInstance,
+	LPCWSTR className,
+	LPCWSTR title,
+	DWORD style,
+	int x, int y, int width, int height,
+	HWND parent,
+	WNDPROC wndProc,
+	void* userParam)
+{
+	// Register the window class if it has not been registered yet.
+	WNDCLASSEX wcex;
+	ZeroMemory(&wcex, sizeof(wcex));
+	wcex.cbSize = sizeof(wcex);
+	wcex.style = CS_HREDRAW | CS_VREDRAW;
+	wcex.lpfnWndProc = wndProc;
+	wcex.hInstance = hInstance;
+	wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+	wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+	wcex.lpszClassName = className;
+
+	// RegisterClassEx returns 0 if the class already exists; that is fine.
+	RegisterClassEx(&wcex);
+
+	return CreateWindowEx(
+		0,
+		className, title,
+		style,
+		x, y, width, height,
+		parent, nullptr,
+		hInstance, userParam);
+}
+
 LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wParam, LPARAM lParam) noexcept
 {
 	Window* window = nullptr;

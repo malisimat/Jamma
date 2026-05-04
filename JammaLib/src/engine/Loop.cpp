@@ -355,6 +355,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
+		// Apply the loop-output VST insert chain (if any active plugins)
+		if (_vstChain && _vstChain->IsActive())
+			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
 		if (nullptr == trigger)
@@ -705,4 +709,22 @@ void Loop::_UpdateLoopModel()
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
+}
+
+void Loop::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize)
+{
+	// Lazily create the chain
+	if (!_vstChain)
+		_vstChain = std::make_shared<vst::VstChain>();
+
+	auto plugin = std::make_shared<vst::VstPlugin>();
+	// numChannels = 1 (mono loop buffer)
+	if (plugin->Load(path, sampleRate, blockSize, 1u))
+		_vstChain->AddPlugin(plugin);
+}
+
+void Loop::UnloadVstPlugin(size_t index)
+{
+	if (_vstChain)
+		_vstChain->RemovePlugin(index);
 }

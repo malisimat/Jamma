@@ -102,7 +102,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -127,7 +127,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -157,7 +157,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -188,7 +188,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
@@ -320,6 +320,9 @@
     <ClInclude Include="src\engine\StationRemote.h" />
     <ClInclude Include="src\io\JamFile.h" />
     <ClInclude Include="src\vst\Vst.h" />
+    <ClInclude Include="src\vst\VstPlugin.h" />
+    <ClInclude Include="src\vst\VstChain.h" />
+    <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
     <ClInclude Include="src\engine\UndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
@@ -404,6 +407,9 @@
     <ClCompile Include="src\io\JamFile.cpp" />
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
+    <ClCompile Include="src\vst\VstPlugin.cpp" />
+    <ClCompile Include="src\vst\VstChain.cpp" />
+    <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
     <ClCompile Include="src\engine\UndoHistory.cpp" />
     <ClCompile Include="src\io\WavReadWriter.cpp" />

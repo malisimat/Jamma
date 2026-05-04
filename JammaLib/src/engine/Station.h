@@ -7,6 +7,7 @@
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
+#include "../vst/VstChain.h"
 
 namespace engine
 {
@@ -114,6 +115,15 @@ namespace engine
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 
+		// VST chain management (non-RT, queued through the job thread).
+		// LoadVstPlugin queues an async load; once the load completes the plugin
+		// is inserted at the end of the station's effect chain.
+		void LoadVstPlugin(std::wstring path);
+		void UnloadVstPlugin(size_t index);
+
+		// Called on the job thread to actually perform the load / unload.
+		virtual actions::ActionResult OnAction(actions::JobAction action) override;
+
 	protected:
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
@@ -151,5 +161,23 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+
+		// VST insert chain applied after all LoopTakes are mixed down,
+		// just before each channel is sent to the output AudioMixer.
+		// Swapped in under _audioMutex via the CommitChanges double-buffer pattern.
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+
+		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
+		// Read only on the job thread (from OnAction(JobAction)).
+		std::wstring _pendingVstLoad;
+		size_t _pendingVstUnload = 0;
+		bool _hasPendingVstUnload = false;
+
+		// Sample rate and block size captured at SetupBuffers time; needed to
+		// initialise a newly loaded VstPlugin.
+		float _sampleRate = 44100.0f;
+		unsigned int _blockSize = 512u;
 	};
 }

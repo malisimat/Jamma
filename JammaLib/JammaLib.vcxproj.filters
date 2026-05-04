@@ -77,6 +77,12 @@
     <ClInclude Include="src\vst\Vst.h">
       <Filter>src\vst</Filter>
     </ClInclude>
+    <ClInclude Include="src\vst\VstPlugin.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstChain.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
     <ClInclude Include="src\engine\UndoHistory.h">
       <Filter>src\engine</Filter>
     </ClInclude>
@@ -269,6 +275,9 @@
     <ClInclude Include="src\graphics\Window.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\graphics\VstEditorWindow.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="lib\rtaudio\include\asio.h">
       <Filter>lib\rtaudio\include</Filter>
     </ClInclude>
@@ -435,6 +444,15 @@
     </ClCompile>
     <ClCompile Include="src\vst\Vst.cpp">
       <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\VstPlugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\VstChain.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\VstEditorWindow.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Station.cpp">
       <Filter>src\engine</Filter>

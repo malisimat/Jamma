@@ -18,6 +18,7 @@
 #include "../audio/Hanning.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
+#include "../vst/VstChain.h"
 
 namespace engine
 {
@@ -195,6 +196,10 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 
+		// VST chain management.  Not RT-safe; call from a non-audio thread.
+		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
+		void UnloadVstPlugin(size_t index);
+
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
@@ -216,5 +221,11 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
+
+		// Loop-output VST insert chain.  Applied to the ReadBlock output buffer
+		// before it is sent to the AudioMixer.  Null / empty == bypass.
+		// Swapped atomically: set by LoadVstPlugin/UnloadVstPlugin from a
+		// non-RT thread; read by WriteBlock from the audio callback.
+		std::shared_ptr<vst::VstChain> _vstChain;
 	};
 }

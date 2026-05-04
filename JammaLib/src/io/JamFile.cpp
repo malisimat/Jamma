@@ -206,6 +206,23 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			+ "}";
 	};
 
+	auto vstEntryToJson = [&](const JamFile::VstEntry& entry) -> std::string {
+		return "{" + kvStr("path", entry.Path)
+			+ "," + kvBool("bypass", entry.Bypass)
+			+ "}";
+	};
+
+	auto vstChainToJson = [&](const std::vector<JamFile::VstEntry>& chain) -> std::string {
+		std::string out = "[";
+		for (size_t i = 0; i < chain.size(); ++i)
+		{
+			if (i > 0) out += ",";
+			out += vstEntryToJson(chain[i]);
+		}
+		out += "]";
+		return out;
+	};
+
 	ss << "{";
 	ss << kvStr("name", jam.Name) << ",";
 	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
@@ -244,14 +261,19 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 					<< kvUlong("mutegroups", loop.MuteGroups) << ","
 					<< kvUlong("selectgroups", loop.SelectGroups) << ","
 					<< kvBool("muted", loop.Muted) << ","
-					<< quoted("mix") << ":" << mixToJson(loop.Mix)
-					<< "}";
+					<< quoted("mix") << ":" << mixToJson(loop.Mix);
+				if (!loop.VstChain.empty())
+					ss << "," << quoted("vst") << ":" << vstChainToJson(loop.VstChain);
+				ss << "}";
 			}
 
 			ss << "]}";
 		}
 
-		ss << "]}";
+		ss << "]";
+		if (!station.VstChain.empty())
+			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
+		ss << "}";
 	}
 
 	ss << "]}";
@@ -282,6 +304,30 @@ std::optional<JamFile::NinjamConfig> JamFile::NinjamConfig::FromJson(Json::JsonP
 		return std::nullopt;
 
 	return config;
+}
+
+std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json)
+{
+	VstEntry entry;
+
+	auto iter = json.KeyValues.find("path");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["path"].index() == 4)
+			entry.Path = std::get<std::string>(json.KeyValues["path"]);
+	}
+
+	if (entry.Path.empty())
+		return std::nullopt;
+
+	iter = json.KeyValues.find("bypass");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["bypass"].index() == 0)
+			entry.Bypass = std::get<bool>(json.KeyValues["bypass"]);
+	}
+
+	return entry;
 }
 
 std::optional<JamFile::LoopMix> JamFile::LoopMix::FromJson(Json::JsonPart json)
@@ -426,6 +472,25 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 		}
 	}
 
+	std::vector<VstEntry> vstChain;
+	iter = json.KeyValues.find("vst");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["vst"].index() == 5)
+		{
+			auto arr = std::get<Json::JsonArray>(json.KeyValues["vst"]);
+			if (arr.Array.index() == 5)
+			{
+				for (auto& entryJson : std::get<std::vector<Json::JsonPart>>(arr.Array))
+				{
+					auto entryOpt = VstEntry::FromJson(entryJson);
+					if (entryOpt.has_value())
+						vstChain.push_back(entryOpt.value());
+				}
+			}
+		}
+	}
+
 	Loop loop;
 	loop.Name = name;
 	loop.Length = length;
@@ -437,6 +502,7 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	loop.SelectGroups = selectGroups;
 	loop.Muted = isMuted;
 	loop.Mix = mix;
+	loop.VstChain = vstChain;
 	return loop;
 }
 
@@ -521,6 +587,25 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
+	std::vector<VstEntry> vstChain;
+	iter = json.KeyValues.find("vst");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["vst"].index() == 5)
+		{
+			auto arr = std::get<Json::JsonArray>(json.KeyValues["vst"]);
+			if (arr.Array.index() == 5)
+			{
+				for (auto& entryJson : std::get<std::vector<Json::JsonPart>>(arr.Array))
+				{
+					auto entryOpt = VstEntry::FromJson(entryJson);
+					if (entryOpt.has_value())
+						vstChain.push_back(entryOpt.value());
+				}
+			}
+		}
+	}
+
 	if (name.empty())
 		return std::nullopt;
 
@@ -528,5 +613,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	station.Name = name;
 	station.StationType = stationType;
 	station.LoopTakes = takes;
+	station.VstChain = vstChain;
 	return station;
 }
