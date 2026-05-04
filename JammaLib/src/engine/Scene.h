@@ -224,9 +224,6 @@ namespace engine
 		void _SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot);
 		void _QueueTempoUpdateFromReclock();
 		void _SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
-		static unsigned int _ComputeQuantiseSamps(float bpm,
-			int bpi,
-			unsigned int sampleRate);
 
 	protected:
 		bool _isSceneTouching;

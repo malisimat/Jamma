@@ -10,6 +10,21 @@ using utils::Size2d;
 using gui::GuiRackParams;
 using gui::GuiToggleParams;
 
+namespace
+{
+	unsigned int ResolveSampleRate(std::optional<io::UserConfig> cfg,
+		std::optional<audio::AudioStreamParams> params)
+	{
+		if (params.has_value() && (params.value().SampleRate > 0u))
+			return params.value().SampleRate;
+
+		if (cfg.has_value() && (cfg.value().Audio.SampleRate > 0u))
+			return cfg.value().Audio.SampleRate;
+
+		return constants::DefaultSampleRate;
+	}
+}
+
 const utils::Size2d Station::_Gap = { 5, 5 };
 const unsigned int Station::_DefaultNumBusChannels = 8;
 
@@ -416,6 +431,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
 
 			if (_clock)
 			{
@@ -428,13 +445,21 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+					auto policyCfg = cfg.value_or(io::UserConfig());
+					const auto sampleRate = ResolveSampleRate(cfg, streamParams);
+					if (auto timing = policyCfg.DeduceLoopTiming(action.SampleCount, sampleRate); timing.has_value())
+					{
+						const auto quantisation = policyCfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
+						_clock->SetQuantisation(timing->GrainSamps, quantisation);
+						_clock->SetSeedSourceLength(action.SampleCount);
+						std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
+							<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
+							<< " loopGrains=" << timing->LoopGrains
+							<< " bpm=" << timing->Bpm
+							<< " bpi=" << timing->Bpi << std::endl;
+					}
 				}
 			}
-
-			auto cfg = action.GetUserConfig();
-			auto streamParams = action.GetAudioParams();
 			auto outLatency = streamParams.has_value() ?
 				streamParams.value().OutputLatency :
 				0u;
@@ -491,6 +516,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
 
 			if (_clock)
 			{
@@ -503,13 +530,21 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+					auto policyCfg = cfg.value_or(io::UserConfig());
+					const auto sampleRate = ResolveSampleRate(cfg, streamParams);
+					if (auto timing = policyCfg.DeduceLoopTiming(action.SampleCount, sampleRate); timing.has_value())
+					{
+						const auto quantisation = policyCfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
+						_clock->SetQuantisation(timing->GrainSamps, quantisation);
+						_clock->SetSeedSourceLength(action.SampleCount);
+						std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
+							<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
+							<< " loopGrains=" << timing->LoopGrains
+							<< " bpm=" << timing->Bpm
+							<< " bpi=" << timing->Bpi << std::endl;
+					}
 				}
 			}
-
-			auto cfg = action.GetUserConfig();
-			auto streamParams = action.GetAudioParams();
 			auto outLatency = streamParams.has_value() ?
 				streamParams.value().OutputLatency :
 				0u;

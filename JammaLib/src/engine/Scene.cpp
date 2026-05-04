@@ -1332,35 +1332,6 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 	}
 }
 
-unsigned int Scene::_ComputeQuantiseSamps(float bpm,
-	int bpi,
-	unsigned int sampleRate)
-{
-	// Hybrid quantisation policy:
-	// 1. beatSamps = 60 * sr / BPM
-	// 2. quantiseSamps = smallest integer multiple of beatSamps where duration >= 400ms
-	// 3. interval safeguard: if intervalSec < 3s, use full interval as quantiseSamps
-	if ((bpm <= 0.0f) || (bpi <= 0) || (sampleRate == 0u))
-		return 0u;
-
-	const auto beatSamps = static_cast<double>(sampleRate) * 60.0 / static_cast<double>(bpm);
-	if (beatSamps <= 0.0)
-		return 0u;
-
-	const auto intervalSamps = beatSamps * static_cast<double>(bpi);
-	const auto intervalSec = intervalSamps / static_cast<double>(sampleRate);
-
-	if (intervalSec < 3.0)
-		return static_cast<unsigned int>(intervalSamps + 0.5);
-
-	const auto minQuantiseSamps = static_cast<double>(sampleRate) * 0.4; // 400ms
-	auto multiplier = 1;
-	while ((beatSamps * multiplier) < minQuantiseSamps)
-		++multiplier;
-
-	return static_cast<unsigned int>((beatSamps * multiplier) + 0.5);
-}
-
 void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
 {
 	if (!_clock || !snapshot.HasTiming)
@@ -1378,24 +1349,34 @@ void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
 	if (!bpmChanged && (_effectiveQuantiseSamps != 0u) && _clock->IsQuantisable())
 		return;
 
-	const auto quantiseSamps = _ComputeQuantiseSamps(snapshot.Bpm,
-		snapshot.Bpi,
-		snapshot.SampleRate);
+	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
+	if (intervalLengthSamps == 0u)
+	{
+		// snapshot.HasTiming above guarantees bpm/bpi/sampleRate are all > 0.
+		const auto beatSamps = static_cast<double>(snapshot.SampleRate) * 60.0 / static_cast<double>(snapshot.Bpm);
+		intervalLengthSamps = beatSamps > 0.0
+			? static_cast<unsigned int>((beatSamps * static_cast<double>(snapshot.Bpi)) + 0.5)
+			: 0u;
+	}
 
-	if (quantiseSamps == 0u)
+	const auto timing = _userConfig.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
+	if (!timing.has_value() || (timing->GrainSamps == 0u))
 		return;
 
 	_remoteBpm = snapshot.Bpm;
 	_remoteBpi = snapshot.Bpi;
 	_remoteSampleRate = snapshot.SampleRate;
-	_effectiveQuantiseSamps = quantiseSamps;
+	_effectiveQuantiseSamps = timing->GrainSamps;
 
-	_clock->SetQuantisation(quantiseSamps, Timer::QUANTISE_MULTIPLE);
+	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
+	_clock->SetQuantisation(timing->GrainSamps, quantisation);
 
 	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
 		<< " bpi=" << snapshot.Bpi
 		<< " sr=" << snapshot.SampleRate
-		<< " quantiseSamps=" << quantiseSamps << std::endl;
+		<< " intervalSamps=" << intervalLengthSamps
+		<< " mode=" << (_userConfig.Loop.SeedUsesPowers ? "power" : "multiple")
+		<< " grain=" << timing->GrainSamps << std::endl;
 }
 
 void Scene::_QueueTempoUpdateFromReclock()
@@ -1406,11 +1387,11 @@ void Scene::_QueueTempoUpdateFromReclock()
 	if (!_clock->IsQuantisable())
 		return;
 
-	// The next completed recording established a new quantisation via Station's
-	// existing logic (SetQuantisation(sampleCount/4, MULTIPLE)). Derive
-	// BPM/BPI from that quantisation and the implied master loop length.
-	const auto quantiseSamps = _clock->QuantiseSamps();
-	if (quantiseSamps == 0u)
+	// The next completed recording established a new grain via the configured
+	// first-loop policy. Reuse that same policy to derive BPM/BPI so connected
+	// and offline quantisation stay aligned.
+	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
+	if (seedLoopLengthSamps == 0u)
 		return;
 
 	auto sampleRate = _remoteSampleRate;
@@ -1424,26 +1405,26 @@ void Scene::_QueueTempoUpdateFromReclock()
 		return;
 	}
 
-	const auto bpm = 60.0f * static_cast<float>(sampleRate) / static_cast<float>(quantiseSamps);
-
-	// Station seeds the new quantisation as recordedLoopLength/4, so rawBpi = 4.
-	// Apply user rule: double until BPI >= 12.
-	auto bpi = 4;
-	while (bpi < 12)
-		bpi *= 2;
+	const auto timing = _userConfig.DeduceLoopTiming(seedLoopLengthSamps, sampleRate);
+	if (!timing.has_value())
+	{
+		_armReclock = false;
+		return;
+	}
 
 	{
 		std::scoped_lock tempoLock(_tempoMutex);
-		_pendingTempoBpm = bpm;
-		_pendingTempoBpi = bpi;
+		_pendingTempoBpm = timing->Bpm;
+		_pendingTempoBpi = static_cast<int>(timing->Bpi);
 		_hasPendingTempo = true;
 	}
 	_armReclock = false;
-	_effectiveQuantiseSamps = quantiseSamps;
+	_effectiveQuantiseSamps = timing->GrainSamps;
 
-	std::cout << "[NINJAM] Reclock complete: bpm=" << bpm
-		<< " bpi=" << bpi
-		<< " quantiseSamps=" << quantiseSamps
+	std::cout << "[NINJAM] Reclock complete: bpm=" << timing->Bpm
+		<< " bpi=" << timing->Bpi
+		<< " grain=" << timing->GrainSamps
+		<< " seedLoopLength=" << seedLoopLengthSamps
 		<< " (queued for next interval boundary)" << std::endl;
 }
 

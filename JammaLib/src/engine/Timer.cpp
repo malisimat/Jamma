@@ -6,6 +6,7 @@ Timer::Timer() :
 	_loopCount(0ul),
 	_sampOffset(0u),
 	_quantiseSamps(0u),
+	_seedSourceLengthSamps(0ul),
 	_quantisation(QUANTISE_OFF)
 {
 }
@@ -44,6 +45,7 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 void Timer::Clear()
 {
 	_quantiseSamps = 0u;
+	_seedSourceLengthSamps = 0ul;
 }
 
 bool Timer::IsQuantisable() const
@@ -55,7 +57,13 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 	QuantisationType quantisation)
 {
 	_quantiseSamps = quantiseSamps;
+	_seedSourceLengthSamps = 0ul;
 	_quantisation = quantisation;
+}
+
+void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
+{
+	_seedSourceLengthSamps = loopLengthSamps;
 }
 
 unsigned int Timer::QuantiseSamps() const
@@ -66,6 +74,11 @@ unsigned int Timer::QuantiseSamps() const
 Timer::QuantisationType Timer::Quantisation() const
 {
 	return _quantisation;
+}
+
+unsigned long Timer::SeedSourceLength() const
+{
+	return _seedSourceLengthSamps;
 }
 
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
