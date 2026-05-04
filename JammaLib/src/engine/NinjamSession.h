@@ -54,6 +54,10 @@ namespace engine
 		// No-op if not connected.
 		void SendChat(const std::string& msg);
 
+		// Request a tempo change on the server. Returns true on success.
+		// No-op (returns false) if not connected.
+		bool RequestServerTempo(float bpm, int bpi);
+
 	private:
 		std::unique_ptr<io::NinjamConnection> _connection;
 	};

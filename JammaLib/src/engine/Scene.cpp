@@ -1460,7 +1460,7 @@ void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 		pendingBpi = _pendingTempoBpi;
 	}
 
-	if (!_ninjamConnection)
+	if (!_ninjamSession || !_ninjamSession->IsConnected())
 		return;
 
 	// Detect interval wrap: position decreased from last poll.
@@ -1471,7 +1471,7 @@ void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	if (!wrapped)
 		return;
 
-	if (_ninjamConnection->RequestServerTempo(pendingBpm, pendingBpi))
+	if (_ninjamSession->RequestServerTempo(pendingBpm, pendingBpi))
 	{
 		std::scoped_lock lock(_tempoMutex);
 		_hasPendingTempo = false;

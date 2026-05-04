@@ -92,3 +92,11 @@ bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
 
 	return _connection->ConsumeStereoPair(outChannelLeft, left, right, numFrames);
 }
+
+bool NinjamSession::RequestServerTempo(float bpm, int bpi)
+{
+	if (!_connection || !_connection->IsConnected())
+		return false;
+
+	return _connection->RequestServerTempo(bpm, bpi);
+}
