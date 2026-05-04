@@ -71,6 +71,14 @@ namespace
 		else if (starts("Not connected"))         { emoji = kEmojiWarn;    color = kFgYellow;  }
 		else if (starts("Chat input"))            { emoji = kEmojiWarn;    color = kFgYellow;  }
 		else if (starts("Console TUI disabled"))  { emoji = kEmojiWarn;    color = kFgYellow;  }
+		else if (starts("Connecting to"))         { emoji = kEmojiPlug;    color = kFgCyan;    }
+		else if (starts("Disconnecting"))         { emoji = kEmojiRed;     color = kFgYellow;  }
+		else if (starts("Commands:"))             { emoji = kEmojiKeys;    color = kFgCyan;    }
+		else if (starts("Servers:"))              { emoji = kEmojiBullet;  color = kFgCyan;    }
+		else if (starts("Unknown command"))       { emoji = kEmojiWarn;    color = kFgYellow;  }
+		else if (starts("Usage:"))                { emoji = kEmojiKeys;    color = kFgGray;    }
+		else if (starts("Server number"))         { emoji = kEmojiWarn;    color = kFgYellow;  }
+		else if (starts("Not ready"))             { emoji = kEmojiWarn;    color = kFgYellow;  }
 
 		std::string out;
 		out.reserve(line.size() + 32);
