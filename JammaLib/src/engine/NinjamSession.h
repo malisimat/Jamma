@@ -60,5 +60,10 @@ namespace engine
 
 	private:
 		std::unique_ptr<io::NinjamConnection> _connection;
+
+		unsigned int _audioSampleRate = 0u;
+		unsigned int _audioBlockSize = 0u;
+		unsigned int _audioNumInputChannels = 0u;
+		unsigned int _audioNumOutputChannels = 0u;
 	};
 }
