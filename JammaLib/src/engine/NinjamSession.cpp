@@ -19,6 +19,10 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	_connection = std::make_unique<io::NinjamConnection>(
 		config.Host, config.User, config.Pass, config.WorkDir);
 
+	_connection->SetAudioFormat(
+		_audioSampleRate, _audioBlockSize,
+		_audioNumInputChannels, _audioNumOutputChannels);
+
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
 	std::cout << "[NINJAM] Type a message and press Enter to chat" << std::endl;
 
@@ -70,6 +74,11 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	unsigned int numInputChannels,
 	unsigned int numOutputChannels)
 {
+	_audioSampleRate = sampleRate;
+	_audioBlockSize = blockSize;
+	_audioNumInputChannels = numInputChannels;
+	_audioNumOutputChannels = numOutputChannels;
+
 	if (_connection)
 		_connection->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
 }

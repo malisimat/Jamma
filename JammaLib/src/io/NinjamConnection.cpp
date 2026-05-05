@@ -486,7 +486,7 @@ void NinjamConnection::_ApplyLocalChannels()
 		return;
 
 	const auto maxLocalChannels = std::max(0, _client->GetMaxLocalChannels());
-	const auto configuredChannels = std::min(static_cast<unsigned int>(maxLocalChannels), _numInputChannels / 2u);
+	const auto configuredChannels = std::min(static_cast<unsigned int>(maxLocalChannels), _numInputChannels);
 
 	for (auto chan = 0u; chan < configuredChannels; chan++)
 	{
@@ -495,7 +495,7 @@ void NinjamConnection::_ApplyLocalChannels()
 			static_cast<int>(chan),
 			name.c_str(),
 			true,
-			static_cast<int>(chan * 2u),
+			static_cast<int>(chan),
 			true,
 			96,
 			true,
