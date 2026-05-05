@@ -455,7 +455,7 @@ void NinjamConnection::_ApplyLocalChannels()
 			static_cast<int>(chan),
 			name.c_str(),
 			true,
-			static_cast<int>(chan * 2u),
+			static_cast<int>(chan * 2u) | 1024,
 			true,
 			96,
 			true,

@@ -933,30 +933,14 @@ void Scene::_OnAudio(float* inBuf,
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 
+	// Process ninjam audio (decodes remote interval audio into output scratch buffers).
+	// ConsumeStereoPair / IngestStereoBlock are deferred to the DAC output loop below
+	// so that station->Zero runs before IngestStereoBlock writes, not after.
 	if (_ninjamSession->IsConnected())
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-
-		for (const auto& stationBase : _stations)
-		{
-			if (!stationBase || !stationBase->IsRemote())
-				continue;
-
-			auto station = std::static_pointer_cast<StationRemote>(stationBase);
-			if (!station->IsConnectedRemote())
-				continue;
-
-			const float* left = nullptr;
-			const float* right = nullptr;
-			unsigned int frameCount = 0u;
-			if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
-			{
-				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
-				station->IngestStereoBlock(left, right, ingestFrames);
-			}
-		}
 	}
 
 	if (nullptr != outBuf)
@@ -965,11 +949,30 @@ void Scene::_OnAudio(float* inBuf,
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
 
-		for (auto& station : _stations)
+		for (auto& stationBase : _stations)
 		{
-			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
-			station->EndMultiPlay(numSamps);
+			stationBase->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+
+			// For remote stations, ingest decoded ninjam audio AFTER Zero so the write
+			// is not overwritten before WriteBlock reads it.
+			if (stationBase->IsRemote() && _ninjamSession->IsConnected())
+			{
+				auto station = std::static_pointer_cast<StationRemote>(stationBase);
+				if (station->IsConnectedRemote())
+				{
+					const float* left = nullptr;
+					const float* right = nullptr;
+					unsigned int frameCount = 0u;
+					if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+					{
+						auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
+						station->IngestStereoBlock(left, right, ingestFrames);
+					}
+				}
+			}
+
+			stationBase->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
+			stationBase->EndMultiPlay(numSamps);
 		}
 
 		_channelMixer->ToDac(outBuf, audioStreamParams.NumOutputChannels, numSamps);

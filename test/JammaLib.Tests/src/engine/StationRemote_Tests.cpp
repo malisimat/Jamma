@@ -161,6 +161,41 @@ TEST(StationRemote, IngestStereoBlockFeedsStationMixPath)
 	EXPECT_TRUE(hasRight);
 }
 
+// Scene::_OnAudio calls station->Zero before station->WriteBlock. Remote stations
+// must survive this zero pass: the correct order is Zero -> IngestStereoBlock ->
+// WriteBlock. This test mirrors that order so a regression is immediately visible.
+TEST(StationRemote, ZeroThenIngestThenWriteBlockProducesAudio)
+{
+	const auto blockSize = 256u;
+	auto station = MakeRemoteStation();
+	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+
+	std::vector<float> left(blockSize, 0.0f);
+	std::vector<float> right(blockSize, 0.0f);
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		left[i] = (i % 7 == 0) ? 0.7f : 0.0f;
+		right[i] = (i % 9 == 0) ? -0.5f : 0.0f;
+	}
+
+	// Mirrors Scene::_OnAudio: Zero clears buffers, then ingest writes audio,
+	// then WriteBlock must output non-silence.
+	station->Zero(blockSize, Audible::AUDIOSOURCE_LOOPS);
+	station->IngestStereoBlock(left.data(), right.data(), blockSize);
+	station->WriteBlock(sink, nullptr, 0, blockSize);
+
+	bool hasLeft = false;
+	bool hasRight = false;
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		hasLeft = hasLeft || (sink->Left()[i] != 0.0f);
+		hasRight = hasRight || (sink->Right()[i] != 0.0f);
+	}
+
+	EXPECT_TRUE(hasLeft);
+	EXPECT_TRUE(hasRight);
+}
+
 TEST(StationRemote, IsRemoteReturnsTrueForRemoteStation)
 {
 	auto station = MakeRemoteStation();
