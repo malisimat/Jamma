@@ -980,32 +980,29 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+	const auto ninjamConnected = _ninjamSession->IsConnected();
 
-	if (_ninjamSession->IsConnected())
+	if (ninjamConnected)
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-
-		for (const auto& stationBase : _stations)
-		{
-			if (!stationBase || !stationBase->IsRemote())
-				continue;
-
-			auto station = std::static_pointer_cast<StationRemote>(stationBase);
-			if (!station->IsConnectedRemote())
-				continue;
-
-			const float* left = nullptr;
-			const float* right = nullptr;
-			unsigned int frameCount = 0u;
-			if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
-			{
-				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
-				station->IngestStereoBlock(left, right, ingestFrames);
-			}
-		}
 	}
+
+	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
+		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
+		if (!ninjamConnected || !station || !station->IsConnectedRemote())
+			return;
+
+		const float* left = nullptr;
+		const float* right = nullptr;
+		unsigned int frameCount = 0u;
+		if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+		{
+			auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
+			station->IngestStereoBlock(left, right, ingestFrames);
+		}
+	};
 
 	if (nullptr != outBuf)
 	{
@@ -1016,6 +1013,7 @@ void Scene::_OnAudio(float* inBuf,
 		for (auto& station : _stations)
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+			ingestRemoteStation(station);
 			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
@@ -1026,6 +1024,7 @@ void Scene::_OnAudio(float* inBuf,
 	{
 		for (auto& station : _stations)
 		{
+			ingestRemoteStation(station);
 			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}

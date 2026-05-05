@@ -1,6 +1,7 @@
 #include "NinjamConnection.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <set>
@@ -8,11 +9,29 @@
 
 namespace
 {
+	constexpr unsigned int kMinimumNinjamOutputChannels = 4u;
+	constexpr unsigned int kReservedMonitorOutputChannels = 2u;
+
 	bool IsAuthFailure(const std::string& err)
 	{
 		return err.find("invalid login/password") != std::string::npos
 			|| err.find("invalid credentials") != std::string::npos
 			|| err.find("authentication") != std::string::npos;
+	}
+
+	bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs)
+	{
+		if (lhs.size() != rhs.size())
+			return false;
+
+		for (size_t i = 0; i < lhs.size(); i++)
+		{
+			if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+				std::tolower(static_cast<unsigned char>(rhs[i])))
+				return false;
+		}
+
+		return true;
 	}
 
 	std::string DescribeStatusError(NJClient* client, int status)
@@ -294,7 +313,9 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	_sampleRate = sampleRate > 0 ? sampleRate : constants::DefaultSampleRate;
 	_blockSize = blockSize > 0 ? blockSize : constants::DefaultBufferSizeSamps;
 	_numInputChannels = numInputChannels;
-	_numOutputChannels = numOutputChannels > 0 ? numOutputChannels : 2u;
+	_numOutputChannels = std::max(
+		numOutputChannels > 0 ? numOutputChannels : 2u,
+		kMinimumNinjamOutputChannels);
 
 	_ResizeScratchBuffers(_blockSize);
 
@@ -485,21 +506,44 @@ void NinjamConnection::_ApplyLocalChannels()
 	if (!_isConnected || !_client)
 		return;
 
-	const auto maxLocalChannels = std::max(0, _client->GetMaxLocalChannels());
-	const auto configuredChannels = std::min(static_cast<unsigned int>(maxLocalChannels), _numInputChannels);
-
-	for (auto chan = 0u; chan < configuredChannels; chan++)
+	for (auto existingChannel = _client->EnumLocalChannels(0);
+		existingChannel >= 0;
+		existingChannel = _client->EnumLocalChannels(0))
 	{
-		auto name = std::string("Jamma In ") + std::to_string(chan + 1u);
+		_client->DeleteLocalChannel(existingChannel);
+	}
+
+	const auto maxLocalChannels = std::max(0, _client->GetMaxLocalChannels());
+	auto configuredChannel = 0;
+	auto inputChannel = 0u;
+
+	while ((configuredChannel < maxLocalChannels) && (inputChannel < _numInputChannels))
+	{
+		auto sourceChannel = static_cast<int>(inputChannel);
+		auto name = std::string("Jamma In ") + std::to_string(inputChannel + 1u);
+
+		if ((inputChannel + 1u) < _numInputChannels)
+		{
+			sourceChannel |= 1024;
+			name += "/" + std::to_string(inputChannel + 2u);
+			inputChannel += 2u;
+		}
+		else
+		{
+			inputChannel += 1u;
+		}
+
 		_client->SetLocalChannelInfo(
-			static_cast<int>(chan),
+			configuredChannel,
 			name.c_str(),
 			true,
-			static_cast<int>(chan),
+			sourceChannel,
 			true,
 			96,
 			true,
 			true);
+
+		configuredChannel++;
 	}
 
 	_client->NotifyServerOfChannelChange();
@@ -521,6 +565,7 @@ void NinjamConnection::_UpdateSnapshot()
 	snapshot.Bpm = _client->GetActualBPM();
 	snapshot.Bpi = _client->GetBPI();
 	snapshot.HasTiming = (snapshot.Bpm > 0.0f) && (snapshot.Bpi > 0) && (snapshot.SampleRate > 0u);
+	const auto localUserName = std::string(_client->GetUser() ? _client->GetUser() : "");
 
 	std::set<std::string> activeUsers;
 	const auto userCount = _client->GetNumUsers();
@@ -533,6 +578,9 @@ void NinjamConnection::_UpdateSnapshot()
 		currentUserNames.push_back(userName);
 
 		if (!userNameC || (*userNameC == '\0'))
+			continue;
+
+		if (!localUserName.empty() && EqualsIgnoreCase(userName, localUserName))
 			continue;
 
 		NinjamRemoteUser user;
@@ -641,7 +689,9 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 	for (const auto& pair : _userOutputChannels)
 		usedChannels.insert(pair.second);
 
-	for (auto outChannel = 0u; (outChannel + 1u) < _numOutputChannels; outChannel += 2u)
+	for (auto outChannel = kReservedMonitorOutputChannels;
+		(outChannel + 1u) < _numOutputChannels;
+		outChannel += 2u)
 	{
 		if (usedChannels.find(outChannel) == usedChannels.end())
 		{
@@ -650,8 +700,11 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 		}
 	}
 
-	_userOutputChannels[userName] = 0u;
-	return 0u;
+	const auto fallbackChannel = (_numOutputChannels > kReservedMonitorOutputChannels + 1u) ?
+		kReservedMonitorOutputChannels :
+		0u;
+	_userOutputChannels[userName] = fallbackChannel;
+	return fallbackChannel;
 }
 
 void NinjamConnection::SendChat(const std::string& message)
