@@ -144,7 +144,7 @@ void StationRemote::IngestStereoBlock(const float* left,
 {
 	// Audio callback path: must be real-time safe.
 	// EnsureRemoteTake() and SetMeasureLength() are not safe here (allocations).
-	// The job thread (_ReconcileRemoteStations) guarantees the take and loops
+	// The job thread (_UpdateRemoteStationsFromSnapshot) guarantees the take and loops
 	// are created and measure length is set before this is called.
 	// Early-out if loops are not yet ready.
 	if (!left || !right || numSamps == 0u)

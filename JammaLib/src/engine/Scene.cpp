@@ -690,9 +690,10 @@ void Scene::OnJobTick(Time curTime)
 	if (snapshot.has_value())
 	{
 		std::scoped_lock lock(_audioMutex);
-		_ReconcileRemoteStations(snapshot.value());
-		_SyncQuantiseToRemoteTempo(snapshot.value());
-		_QueueTempoUpdateFromReclock();
+		_UpdateRemoteStationsFromSnapshot(snapshot.value());
+		_QueueLocalTempoFromClock();
+		_SendQueuedTempoAtIntervalWrap(snapshot.value());
+		_ApplyRemoteTempoToClock(snapshot.value());
 	}
 
 	actions::JobAction job;
@@ -1276,7 +1277,7 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
-void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot)
 {
 	std::set<std::string> seenUsers;
 
@@ -1356,7 +1357,7 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 	}
 }
 
-void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
 {
 	if (!_clock || !snapshot.HasTiming)
 		return;
@@ -1365,6 +1366,12 @@ void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
 	// the next recording will establish the new quantisation.
 	if (_armReclock)
 		return;
+
+	{
+		std::scoped_lock tempoLock(_tempoMutex);
+		if (_hasPendingTempo)
+			return;
+	}
 
 	const auto bpmChanged = (snapshot.Bpm != _remoteBpm)
 		|| (snapshot.Bpi != _remoteBpi)
@@ -1403,20 +1410,22 @@ void Scene::_SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot)
 		<< " grain=" << timing->GrainSamps << std::endl;
 }
 
-void Scene::_QueueTempoUpdateFromReclock()
+void Scene::_QueueLocalTempoFromClock()
 {
-	if (!_armReclock || !_clock)
+	if (!_clock || !_clock->IsQuantisable())
 		return;
 
-	if (!_clock->IsQuantisable())
+	const auto quantiseSamps = _clock->QuantiseSamps();
+	if ((0u == quantiseSamps) || (quantiseSamps == _effectiveQuantiseSamps))
 		return;
 
-	// The next completed recording established a new grain via the configured
-	// first-loop policy. Reuse that same policy to derive BPM/BPI so connected
-	// and offline quantisation stay aligned.
 	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
 	if (seedLoopLengthSamps == 0u)
+	{
+		_effectiveQuantiseSamps = quantiseSamps;
+		_armReclock = false;
 		return;
+	}
 
 	auto sampleRate = _remoteSampleRate;
 	if (sampleRate == 0u)
@@ -1425,17 +1434,16 @@ void Scene::_QueueTempoUpdateFromReclock()
 		sampleRate = _userConfig.Audio.SampleRate;
 	if (sampleRate == 0u)
 	{
-		_armReclock = false;
 		return;
 	}
 
 	const auto timing = _userConfig.DeduceLoopTiming(seedLoopLengthSamps, sampleRate);
 	if (!timing.has_value())
 	{
-		_armReclock = false;
 		return;
 	}
 
+	_effectiveQuantiseSamps = timing->GrainSamps;
 	{
 		std::scoped_lock tempoLock(_tempoMutex);
 		_pendingTempoBpm = timing->Bpm;
@@ -1443,17 +1451,21 @@ void Scene::_QueueTempoUpdateFromReclock()
 		_hasPendingTempo = true;
 	}
 	_armReclock = false;
-	_effectiveQuantiseSamps = timing->GrainSamps;
 
-	std::cout << "[NINJAM] Reclock complete: bpm=" << timing->Bpm
+	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
 		<< " bpi=" << timing->Bpi
 		<< " grain=" << timing->GrainSamps
 		<< " seedLoopLength=" << seedLoopLengthSamps
 		<< " (queued for next interval boundary)" << std::endl;
 }
 
-void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
 {
+	// Detect interval wrap from the latest remote snapshot.
+	const auto pos = snapshot.IntervalPositionSamps;
+	const bool wrapped = (pos < _lastRemoteIntervalPos);
+	_lastRemoteIntervalPos = pos;
+
 	// Copy pending tempo under lock to avoid racing with OnAction (UI thread).
 	float pendingBpm;
 	int pendingBpi;
@@ -1468,11 +1480,6 @@ void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	if (!_ninjamSession || !_ninjamSession->IsConnected())
 		return;
 
-	// Detect interval wrap: position decreased from last poll.
-	const auto pos = snapshot.IntervalPositionSamps;
-	const bool wrapped = (pos < _lastRemoteIntervalPos);
-	_lastRemoteIntervalPos = pos;
-
 	if (!wrapped)
 		return;
 
@@ -1480,7 +1487,5 @@ void Scene::_SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	{
 		std::scoped_lock lock(_tempoMutex);
 		_hasPendingTempo = false;
-		_remoteBpm = pendingBpm;
-		_remoteBpi = pendingBpi;
 	}
 }

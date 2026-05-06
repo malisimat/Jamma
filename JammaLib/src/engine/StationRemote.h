@@ -12,7 +12,7 @@ namespace engine
 	class LoopRemote;
 
 	// A Station that receives audio from a single remote ninjam user.
-	// One StationRemote is created per user when _ReconcileRemoteStations runs.
+	// One StationRemote is created per user when _UpdateRemoteStationsFromSnapshot runs.
 	// It owns a LoopTake containing two LoopRemote loops (L/R) that buffer
 	// the ninjam-decoded audio so it can be played back and visualised.
 	class StationRemote :

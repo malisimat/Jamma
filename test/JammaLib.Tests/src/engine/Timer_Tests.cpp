@@ -34,7 +34,7 @@ TEST(Timer, SetQuantisationResetsSeedSourceLength) {
 	ASSERT_EQ(192000ul, t.SeedSourceLength());
 
 	// Changing quantisation must clear the seed length so stale reclock data
-	// doesn't mislead _QueueTempoUpdateFromReclock.
+	// doesn't mislead the local-tempo queue path.
 	t.SetQuantisation(24000u, Timer::QUANTISE_MULTIPLE);
 	ASSERT_EQ(0ul, t.SeedSourceLength());
 }

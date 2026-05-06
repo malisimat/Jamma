@@ -23,6 +23,29 @@ namespace
 
 		return constants::DefaultSampleRate;
 	}
+
+	void TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+		unsigned long loopLengthSamps,
+		std::optional<io::UserConfig> cfg,
+		std::optional<audio::AudioStreamParams> params)
+	{
+		if (!clock)
+			return;
+
+		auto policyCfg = cfg.value_or(io::UserConfig());
+		const auto sampleRate = ResolveSampleRate(cfg, params);
+		if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
+		{
+			const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
+			clock->SetQuantisation(timing->GrainSamps, quantisation);
+			clock->SetSeedSourceLength(loopLengthSamps);
+			std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
+				<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
+				<< " loopGrains=" << timing->LoopGrains
+				<< " bpm=" << timing->Bpm
+				<< " bpi=" << timing->Bpi << std::endl;
+		}
+	}
 }
 
 const utils::Size2d Station::_Gap = { 5, 5 };
@@ -445,19 +468,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					auto policyCfg = cfg.value_or(io::UserConfig());
-					const auto sampleRate = ResolveSampleRate(cfg, streamParams);
-					if (auto timing = policyCfg.DeduceLoopTiming(action.SampleCount, sampleRate); timing.has_value())
-					{
-						const auto quantisation = policyCfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
-						_clock->SetQuantisation(timing->GrainSamps, quantisation);
-						_clock->SetSeedSourceLength(action.SampleCount);
-						std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
-							<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
-							<< " loopGrains=" << timing->LoopGrains
-							<< " bpm=" << timing->Bpm
-							<< " bpi=" << timing->Bpi << std::endl;
-					}
+					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -530,19 +541,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					auto policyCfg = cfg.value_or(io::UserConfig());
-					const auto sampleRate = ResolveSampleRate(cfg, streamParams);
-					if (auto timing = policyCfg.DeduceLoopTiming(action.SampleCount, sampleRate); timing.has_value())
-					{
-						const auto quantisation = policyCfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
-						_clock->SetQuantisation(timing->GrainSamps, quantisation);
-						_clock->SetSeedSourceLength(action.SampleCount);
-						std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
-							<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
-							<< " loopGrains=" << timing->LoopGrains
-							<< " bpm=" << timing->Bpm
-							<< " bpi=" << timing->Bpi << std::endl;
-					}
+					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
 			auto outLatency = streamParams.has_value() ?

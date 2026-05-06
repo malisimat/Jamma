@@ -396,8 +396,8 @@ bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 
 	// Vote form: non-admin path; the server counts votes across all participants
 	// and applies the change once a majority (>50%) agrees.
-	auto voteBpmCmd = std::string("/vote bpm ") + bpmVal;
-	auto voteBpiCmd = std::string("/vote bpi ") + bpiVal;
+	auto voteBpmCmd = std::string("!vote bpm ") + bpmVal;
+	auto voteBpiCmd = std::string("!vote bpi ") + bpiVal;
 
 	{
 		// Guard NJClient usage against concurrent Disconnect/Pump calls.

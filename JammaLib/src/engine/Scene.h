@@ -227,10 +227,10 @@ namespace engine
 		void _JobLoop();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
-		void _SyncQuantiseToRemoteTempo(const io::NinjamRemoteSnapshot& snapshot);
-		void _QueueTempoUpdateFromReclock();
-		void _SendQueuedTempoOnIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
+		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
+		void _QueueLocalTempoFromClock();
+		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
+		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
 
 	protected:
 		bool _isSceneTouching;
