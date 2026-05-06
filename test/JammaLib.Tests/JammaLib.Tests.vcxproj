@@ -87,11 +87,11 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
-xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
+      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
+xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
       <Message>Copying debug gtest DLLs</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -130,7 +130,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

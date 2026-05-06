@@ -1,0 +1,9 @@
+{
+    "gtest-adapter.debugConfig": [
+        "Run JammaLib GoogleTests (Debug x64)"
+    ],
+    "gtest-adapter.refreshAfterBuild": true,
+    "gtest-adapter.supportLocation": true,
+    "chat.tools.terminal.autoApprove": {
+        ".\\test\\JammaLib.Tests\\bin\\x64\\Debug\\JammaLib.Tests.exe": true
+    }
