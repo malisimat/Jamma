@@ -1,8 +1,10 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 #include "../io/JamFile.h"
 #include "../io/NinjamConnection.h"
 
@@ -16,6 +18,28 @@ namespace engine
 	class NinjamSession
 	{
 	public:
+		struct PublicServerInfo
+		{
+			std::string Name;
+			std::string Host;
+			std::string Description;
+			std::string Topic;
+			std::string Status;
+			int ActiveUsers = -1;
+			int Capacity = -1;
+			int Bpi = 0;
+			float Bpm = 0.0f;
+			bool HasLiveData = false;
+			bool IsReachable = true;
+		};
+
+		struct PublicServerDirectorySnapshot
+		{
+			std::vector<PublicServerInfo> Servers;
+			bool RefreshInFlight = false;
+			bool HasLiveData = false;
+		};
+
 		NinjamSession() = default;
 		~NinjamSession();
 
@@ -57,6 +81,10 @@ namespace engine
 		// Request a tempo change on the server. Returns true on success.
 		// No-op (returns false) if not connected.
 		bool RequestServerTempo(float bpm, int bpi);
+
+		static PublicServerDirectorySnapshot GetPublicServerDirectorySnapshot();
+		static void RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {});
+		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
 		std::unique_ptr<io::NinjamConnection> _connection;
