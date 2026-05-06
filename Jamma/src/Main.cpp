@@ -38,6 +38,7 @@ namespace
 	void PrintNinjamHelp()
 	{
 		auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
+		auto servers = NinjamSession::GetReachablePublicServers();
 		std::cout << "[NINJAM] Commands:\n"
 		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
 		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
@@ -46,16 +47,12 @@ namespace
 		if (snapshot.RefreshInFlight)
 			std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
 
-		for (std::size_t i = 0; i < snapshot.Servers.size(); ++i)
+		for (std::size_t i = 0; i < servers.size(); ++i)
 		{
 			std::cout << "[NINJAM]   " << (i + 1) << ". "
-			          << snapshot.Servers[i].Name
-			          << " (" << snapshot.Servers[i].Host << ")"
-			          << NinjamSession::FormatPublicServerSummary(snapshot.Servers[i])
+			          << servers[i].Host
+			          << NinjamSession::FormatPublicServerSummary(servers[i])
 			          << "\n";
-
-			if (!snapshot.Servers[i].Topic.empty())
-				std::cout << "[NINJAM]      Topic: " << snapshot.Servers[i].Topic << "\n";
 		}
 		std::cout << std::flush;
 	}
@@ -79,8 +76,16 @@ namespace
 
 		if (verb.empty() || verb == "?" || verb == "help")
 		{
-			NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
-			PrintNinjamHelp();
+			const auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
+			const bool refreshStarted = NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
+			if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
+			{
+				std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
+			}
+			else
+			{
+				PrintNinjamHelp();
+			}
 			return true;
 		}
 
@@ -96,7 +101,14 @@ namespace
 			catch (const std::exception&) { idx = 0; }
 
 			auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-			const auto serverCount = static_cast<int>(snapshot.Servers.size());
+			auto servers = NinjamSession::GetReachablePublicServers();
+			const auto serverCount = static_cast<int>(servers.size());
+
+			if (serverCount == 0)
+			{
+				std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
+				return true;
+			}
 
 			if (idx < 1 || idx > serverCount)
 			{
@@ -105,7 +117,7 @@ namespace
 				return true;
 			}
 			if (scene)
-				scene->ConnectNinjam(snapshot.Servers[idx - 1].Host);
+				scene->ConnectNinjam(servers[idx - 1].Host);
 			else
 				std::cout << "[NINJAM] Not ready yet" << std::endl;
 			return true;

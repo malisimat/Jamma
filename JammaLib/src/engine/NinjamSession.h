@@ -1,7 +1,11 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,6 +29,7 @@ namespace engine
 			std::string Description;
 			std::string Topic;
 			std::string Status;
+			std::vector<std::string> UserNames;
 			int ActiveUsers = -1;
 			int Capacity = -1;
 			int Bpi = 0;
@@ -83,10 +88,26 @@ namespace engine
 		bool RequestServerTempo(float bpm, int bpi);
 
 		static PublicServerDirectorySnapshot GetPublicServerDirectorySnapshot();
-		static void RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {});
+		static std::vector<PublicServerInfo> GetReachablePublicServers();
+		static bool RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {});
 		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
+		static const std::array<const char*, 17> _StaticServerHosts;
+		static constexpr auto _ServerListFetchTtl = std::chrono::seconds(30);
+		static constexpr int _ServerListFetchTimeoutMs = 6500;
+
+		static std::mutex _PublicServerListMutex;
+		static std::vector<PublicServerInfo> _PublicServerListCache;
+		static std::chrono::steady_clock::time_point _PublicServerListLastFetch;
+		static std::atomic_bool _PublicServerListFetchInFlight;
+		static bool _PublicServerListHasLiveData;
+
+		static std::vector<PublicServerInfo> BuildStaticServerList();
+		static std::optional<std::string> FetchAutosongServerListHtml();
+		static std::vector<PublicServerInfo> ParseAutosongServerList(const std::string& html);
+		static std::vector<PublicServerInfo> MergeServerLists(const std::vector<PublicServerInfo>& fetched);
+
 		std::unique_ptr<io::NinjamConnection> _connection;
 
 		unsigned int _audioSampleRate = 0u;
