@@ -8,15 +8,16 @@
 #include "NetworkSession.h"
 #include "Main.h"
 #include "Window.h"
+#include "../engine/NinjamSession.h"
 #include "PathUtils.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
 #include <atomic>
 #include <cctype>
-#include <cstddef>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -34,40 +35,25 @@ using namespace utils;
 // ---------------------------------------------------------------------------
 namespace
 {
-	struct NinjamServer { const char* name; const char* host; };
-
-	constexpr NinjamServer kServerList[] = {
-		{ "ninjamer.com #1",          "ninjamer.com:2049"                  },
-		{ "ninjamer.com #2",          "ninjamer.com:2050"                  },
-		{ "ninjamer.com #3",          "ninjamer.com:2051"                  },
-		{ "ninjamer.com #4",          "ninjamer.com:2052"                  },
-		{ "ninbot.com #1",            "ninbot.com:2049"                    },
-		{ "ninbot.com #2",            "ninbot.com:2050"                    },
-		{ "ninbot.com #3",            "ninbot.com:2051"                    },
-		{ "ninbot.com #4",            "ninbot.com:2052"                    },
-		{ "ninbot.com #5",            "ninbot.com:2053"                    },
-		{ "ninbot.com #6",            "ninbot.com:2054"                    },
-		{ "mutantlab.com",            "mutantlab.com:2049"                 },
-		{ "musicorner",               "musicorner.redirectme.net:2050"     },
-		{ "ninbot.rootsociety.nl",    "ninbot.rootsociety.nl:8001"         },
-		{ "getaroom (NA)",            "getaroom-na.ninjam.com:2049"        },
-		{ "getaroom (EU)",            "getaroom-eu.ninjam.com:2049"        },
-		{ "ninjam.com",               "ninjam.com:2049"                    },
-		{ "autosong.ninjam.com",      "autosong.ninjam.com:2049"           },
-	};
-	constexpr int kServerCount = static_cast<int>(std::size(kServerList));
-
 	void PrintNinjamHelp()
 	{
+		auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
+		auto servers = NinjamSession::GetReachablePublicServers();
 		std::cout << "[NINJAM] Commands:\n"
 		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
 		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
 		          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
 		          << "[NINJAM] Servers:\n";
-		for (int i = 0; i < kServerCount; ++i)
+		if (snapshot.RefreshInFlight)
+			std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
+
+		for (std::size_t i = 0; i < servers.size(); ++i)
+		{
 			std::cout << "[NINJAM]   " << (i + 1) << ". "
-			          << kServerList[i].name
-			          << " (" << kServerList[i].host << ")\n";
+			          << servers[i].Host
+			          << NinjamSession::FormatPublicServerSummary(servers[i])
+			          << "\n";
+		}
 		std::cout << std::flush;
 	}
 
@@ -90,7 +76,16 @@ namespace
 
 		if (verb.empty() || verb == "?" || verb == "help")
 		{
-			PrintNinjamHelp();
+			const auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
+			const bool refreshStarted = NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
+			if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
+			{
+				std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
+			}
+			else
+			{
+				PrintNinjamHelp();
+			}
 			return true;
 		}
 
@@ -105,14 +100,24 @@ namespace
 			try { idx = std::stoi(args); }
 			catch (const std::exception&) { idx = 0; }
 
-			if (idx < 1 || idx > kServerCount)
+			auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
+			auto servers = NinjamSession::GetReachablePublicServers();
+			const auto serverCount = static_cast<int>(servers.size());
+
+			if (serverCount == 0)
 			{
-				std::cout << "[NINJAM] Server number must be 1-" << kServerCount
+				std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
+				return true;
+			}
+
+			if (idx < 1 || idx > serverCount)
+			{
+				std::cout << "[NINJAM] Server number must be 1-" << serverCount
 				          << "  (type / for list)" << std::endl;
 				return true;
 			}
 			if (scene)
-				scene->ConnectNinjam(kServerList[idx - 1].host);
+				scene->ConnectNinjam(servers[idx - 1].Host);
 			else
 				std::cout << "[NINJAM] Not ready yet" << std::endl;
 			return true;
