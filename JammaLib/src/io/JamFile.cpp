@@ -199,16 +199,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	};
 
 	auto ninjamToJson = [&](const JamFile::NinjamConfig& ninjam) -> std::string {
-		auto out = std::string("{") + kvStr("host", ninjam.Host)
+		return "{" + kvStr("host", ninjam.Host)
 			+ "," + kvStr("user", ninjam.User)
 			+ "," + kvStr("pass", ninjam.Pass)
-			+ "," + kvStr("workdir", ninjam.WorkDir);
-		if (ninjam.Bpm.has_value())
-			out += "," + kvDouble("bpm", ninjam.Bpm.value());
-		if (ninjam.Bpi.has_value())
-			out += "," + kvUlong("bpi", ninjam.Bpi.value());
-		out += "}";
-		return out;
+			+ "," + kvStr("workdir", ninjam.WorkDir)
+			+ "}";
 	};
 
 	ss << "{";
@@ -282,23 +277,6 @@ std::optional<JamFile::NinjamConfig> JamFile::NinjamConfig::FromJson(Json::JsonP
 	iter = json.KeyValues.find("workdir");
 	if ((iter != json.KeyValues.end()) && (json.KeyValues["workdir"].index() == 4))
 		config.WorkDir = std::get<std::string>(json.KeyValues["workdir"]);
-
-	iter = json.KeyValues.find("bpm");
-	if (iter != json.KeyValues.end())
-	{
-		// JsonValue layout: bool=0, long=1, unsigned long=2, double=3, string=4
-		const auto idx = json.KeyValues["bpm"].index();
-		if (idx == 3)
-			config.Bpm = std::get<double>(json.KeyValues["bpm"]);
-		else if (idx == 2)
-			config.Bpm = static_cast<double>(std::get<unsigned long>(json.KeyValues["bpm"]));
-		else if (idx == 1)
-			config.Bpm = static_cast<double>(std::get<long>(json.KeyValues["bpm"]));
-	}
-
-	iter = json.KeyValues.find("bpi");
-	if ((iter != json.KeyValues.end()) && (json.KeyValues["bpi"].index() == 2))
-		config.Bpi = std::get<unsigned long>(json.KeyValues["bpi"]);
 
 	if (config.Host.empty() && config.User.empty() && config.Pass.empty() && config.WorkDir.empty())
 		return std::nullopt;

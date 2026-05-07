@@ -24,8 +24,7 @@ Loop::Loop(LoopParams params,
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
-	_bufferBank(BufferBank()),
-	_visualUpdatesEnabled(true)
+	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
@@ -484,11 +483,6 @@ void Loop::SetMixerLevel(double level)
 	_mixer->SetUnmutedLevel(level);
 }
 
-void Loop::SetVisualUpdatesEnabled(bool enabled)
-{
-	_visualUpdatesEnabled = enabled;
-}
-
 bool Loop::Load(const io::WavReadWriter& readWriter)
 {
 	auto loadOpt = readWriter.Read(utils::DecodeUtf8(_loopParams.Wav), constants::MaxLoopBufferSize);
@@ -557,15 +551,6 @@ void Loop::Play(unsigned long index,
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = continueRecording ? recordState : STATE_PLAYING;
 	_playState = loopLength > 0 ? playState : STATE_INACTIVE;
-
-	// Pre-allocate buffer capacity for recording state to prevent SetLength clamping.
-	// This ensures the full loop length can be written during overdub/recording.
-	if ((STATE_OVERDUBBINGRECORDING == _playState) || (STATE_PLAYINGRECORDING == _playState))
-	{
-		auto requiredCapacity = logicalBufSize + constants::MaxLoopFadeSamps;
-		if (_bufferBank.Capacity() < requiredCapacity)
-			_bufferBank.Resize(requiredCapacity);
-	}
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
@@ -700,11 +685,6 @@ LoopModel::LoopModelState Loop::_GetLoopModelState(base::DrawPass pass, LoopPlay
 	}
 }
 
-unsigned long Loop::_ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const
-{
-	return actualLoopLength;
-}
-
 unsigned long Loop::_LoopIndex() const
 {
 	if (constants::MaxLoopFadeSamps > _playIndex)
@@ -715,24 +695,14 @@ unsigned long Loop::_LoopIndex() const
 
 void Loop::_UpdateLoopModel()
 {
-	if (!_visualUpdatesEnabled)
-		return;
-
-	_ForceUpdateLoopModel();
-}
-
-void Loop::_ForceUpdateLoopModel()
-{
-
 	auto isRecording = (STATE_RECORDING == _playState) ||
 		(STATE_OVERDUBBING == _playState) ||
 		(STATE_PUNCHEDIN == _playState);
-	auto actualLength = isRecording ? _writeIndex : _loopLength;
-	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
+	auto length = isRecording ? _writeIndex : _loopLength;
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)(_CalcDrawRadius(displayLength) * _DrawRadiusScale());
+	auto radius = (float)(_CalcDrawRadius(length) * _DrawRadiusScale());
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
-	_model->UpdateModel(bufBank, actualLength, displayLength, offset, radius);
+	_model->UpdateModel(bufBank, length, offset, radius);
 	_vu->UpdateModel(radius);
 }

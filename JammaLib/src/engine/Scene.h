@@ -194,13 +194,6 @@ namespace engine
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
-
-		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
-		// from the loaded jam config when available; falls back to anonymous.
-		void ConnectNinjam(const std::string& host);
-
-		// Disconnect the active NINJAM session. No-op if not connected.
-		void DisconnectNinjam();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -227,10 +220,7 @@ namespace engine
 		void _JobLoop();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
-		void _QueueLocalTempoFromClock();
-		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
-		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
+		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
 
 	protected:
 		bool _isSceneTouching;
@@ -264,20 +254,8 @@ namespace engine
 		std::shared_mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
-		std::mutex _tempoMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
-
-		// NINJAM tempo / reclock state (job-thread owned).
-		float _remoteBpm = 0.0f;
-		int _remoteBpi = 0;
-		unsigned int _remoteSampleRate = 0u;
-		unsigned int _effectiveQuantiseSamps = 0u;
-		unsigned int _lastRemoteIntervalPos = 0u;
-		bool _armReclock = false;
-		bool _hasPendingTempo = false;
-		float _pendingTempoBpm = 0.0f;
-		int _pendingTempoBpi = 0;
 	};
 }

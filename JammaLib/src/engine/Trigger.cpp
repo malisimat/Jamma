@@ -831,7 +831,6 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
 
 	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
-	// Mute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
 		_overdubMixer->SetUnmutedLevel(0.0);
 	else
@@ -847,15 +846,20 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 		trigAction.TargetId = lastTake.TargetTakeId;
 		trigAction.SampleCount = _recordSampCount;
 
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
+		if (sampsDelay == 0u)
+		{
+			if (cfg.has_value())
+				trigAction.SetUserConfig(cfg.value());
 
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
+			if (params.has_value())
+				trigAction.SetAudioParams(params.value());
 
-		// Execute state change immediately; do NOT delay TriggerAction.
-		// Only audio mixer level fade is latency-compensated above.
-		_receiver->OnAction(trigAction);
+			_receiver->OnAction(trigAction);
+		}
+		else
+		{
+			QueueDelayedTriggerAction(sampsDelay, trigAction, cfg, params);
+		}
 	}
 }
 
@@ -867,7 +871,6 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	std::cout << "~~~~ Trigger END PUNCHIN" << std::endl;
 
 	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
-	// Unmute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
 		_overdubMixer->SetUnmutedLevel(1.0);
 	else
@@ -889,9 +892,10 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 		if (params.has_value())
 			trigAction.SetAudioParams(params.value());
 
-		// Execute state change immediately; do NOT delay TriggerAction.
-		// Only audio mixer level fade is latency-compensated above.
-		_receiver->OnAction(trigAction);
+		if (sampsDelay == 0u)
+			_receiver->OnAction(trigAction);
+		else
+			QueueDelayedTriggerAction(sampsDelay, trigAction, cfg, params);
 	}
 }
 

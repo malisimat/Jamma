@@ -252,25 +252,3 @@ TEST(JamFile, DefaultJsonIncludesNinjamConnectionIdentity) {
 	ASSERT_FALSE(parsed->Ninjam->Host.empty());
 	ASSERT_FALSE(parsed->Ninjam->User.empty());
 }
-
-TEST(JamFile, NinjamConfigParsesOptionalBpmAndBpi) {
-	auto str = std::string("{\"host\":\"h\",\"user\":\"u\",\"pass\":\"\",\"workdir\":\"\",\"bpm\":120.5,\"bpi\":16}");
-	auto json = std::get<Json::JsonPart>(Json::FromStream(std::stringstream(str)).value());
-	auto cfg = JamFile::NinjamConfig::FromJson(json);
-
-	ASSERT_TRUE(cfg.has_value());
-	ASSERT_TRUE(cfg->Bpm.has_value());
-	ASSERT_DOUBLE_EQ(120.5, cfg->Bpm.value());
-	ASSERT_TRUE(cfg->Bpi.has_value());
-	ASSERT_EQ(16u, cfg->Bpi.value());
-}
-
-TEST(JamFile, NinjamConfigOmitsBpmAndBpiWhenAbsent) {
-	auto str = std::string("{\"host\":\"h\",\"user\":\"u\",\"pass\":\"\",\"workdir\":\"\"}");
-	auto json = std::get<Json::JsonPart>(Json::FromStream(std::stringstream(str)).value());
-	auto cfg = JamFile::NinjamConfig::FromJson(json);
-
-	ASSERT_TRUE(cfg.has_value());
-	ASSERT_FALSE(cfg->Bpm.has_value());
-	ASSERT_FALSE(cfg->Bpi.has_value());
-}

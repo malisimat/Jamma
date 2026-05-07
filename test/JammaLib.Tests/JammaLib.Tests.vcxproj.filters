@@ -38,9 +38,6 @@
     <ClCompile Include="src\engine\Trigger_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\Timer_Tests.cpp">
-      <Filter>src\engine</Filter>
-    </ClCompile>
     <ClCompile Include="src\io\UserConfig_Tests.cpp">
       <Filter>src\io</Filter>
     </ClCompile>

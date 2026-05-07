@@ -6,24 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include <windows.h>
-#include <algorithm>
-#include <cctype>
-#include <sstream>
 #include "StringUtils.h"
-
-namespace
-{
-	std::string DecodeHtmlEntity(const std::string& entity)
-	{
-		if (entity == "amp") return "&";
-		if (entity == "lt") return "<";
-		if (entity == "gt") return ">";
-		if (entity == "quot") return "\"";
-		if (entity == "nbsp") return " ";
-		if (entity == "#39") return "'";
-		return "&" + entity + ";";
-	}
-}
 
 LPCWSTR utils::CharsToUnicodeString(const char* str)
 {
@@ -105,102 +88,6 @@ std::string utils::GetGuid()
 	}
 
 	return str;
-}
-
-std::string utils::Trim(std::string str)
-{
-	auto isSpace = [](unsigned char c) { return 0 != std::isspace(c); };
-	while (!str.empty() && isSpace(static_cast<unsigned char>(str.front())))
-		str.erase(str.begin());
-	while (!str.empty() && isSpace(static_cast<unsigned char>(str.back())))
-		str.pop_back();
-	return str;
-}
-
-std::string utils::CollapseWhitespace(std::string str)
-{
-	std::string out;
-	out.reserve(str.size());
-	bool lastWasSpace = false;
-	for (const auto ch : str)
-	{
-		if (0 != std::isspace(static_cast<unsigned char>(ch)))
-		{
-			if (!lastWasSpace)
-				out.push_back(' ');
-			lastWasSpace = true;
-		}
-		else
-		{
-			out.push_back(ch);
-			lastWasSpace = false;
-		}
-	}
-	return Trim(std::move(out));
-}
-
-std::string utils::ToLower(std::string str)
-{
-	std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
-		return static_cast<char>(std::tolower(c));
-	});
-	return str;
-}
-
-std::string utils::HtmlToText(const std::string& html, bool preserveLineBreaks)
-{
-	std::string out;
-	out.reserve(html.size());
-
-	for (std::size_t i = 0; i < html.size(); ++i)
-	{
-		if (html[i] == '<')
-		{
-			const auto close = html.find('>', i + 1);
-			if (close == std::string::npos)
-				break;
-
-			auto tag = ToLower(html.substr(i + 1, close - i - 1));
-			tag = Trim(std::move(tag));
-			const auto spacePos = tag.find(' ');
-			if (spacePos != std::string::npos)
-				tag.erase(spacePos);
-
-			if (tag == "br" || tag == "br/" || tag == "ul" || tag == "/ul"
-				|| tag == "li" || tag == "/li" || tag == "p" || tag == "/p")
-			{
-				out.push_back(preserveLineBreaks ? '\n' : ' ');
-			}
-
-			i = close;
-			continue;
-		}
-
-		if (html[i] == '&')
-		{
-			const auto semi = html.find(';', i + 1);
-			if (semi != std::string::npos)
-			{
-				out += DecodeHtmlEntity(html.substr(i + 1, semi - i - 1));
-				i = semi;
-				continue;
-			}
-		}
-
-		out.push_back(html[i]);
-	}
-
-	return out;
-}
-
-std::vector<std::string> utils::SplitLines(const std::string& text)
-{
-	std::vector<std::string> lines;
-	std::stringstream ss(text);
-	std::string line;
-	while (std::getline(ss, line))
-		lines.push_back(line);
-	return lines;
 }
 
 bool utils::StringReplace(std::string& str, const std::string& from, const std::string& to)

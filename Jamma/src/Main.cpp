@@ -8,18 +8,12 @@
 #include "NetworkSession.h"
 #include "Main.h"
 #include "Window.h"
-#include "../engine/NinjamSession.h"
 #include "PathUtils.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
 #include <atomic>
-#include <cctype>
-#include <iostream>
 #include <memory>
-#include <optional>
-#include <stdexcept>
-#include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -29,115 +23,6 @@ using namespace base;
 using namespace resources;
 using namespace graphics;
 using namespace utils;
-
-// ---------------------------------------------------------------------------
-// Known public NINJAM servers
-// ---------------------------------------------------------------------------
-namespace
-{
-	void PrintNinjamHelp()
-	{
-		auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-		auto servers = NinjamSession::GetReachablePublicServers();
-		std::cout << "[NINJAM] Commands:\n"
-		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
-		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
-		          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
-		          << "[NINJAM] Servers:\n";
-		if (snapshot.RefreshInFlight)
-			std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
-
-		for (std::size_t i = 0; i < servers.size(); ++i)
-		{
-			std::cout << "[NINJAM]   " << (i + 1) << ". "
-			          << servers[i].Host
-			          << NinjamSession::FormatPublicServerSummary(servers[i])
-			          << "\n";
-		}
-		std::cout << std::flush;
-	}
-
-	// Returns true when the message was a slash command (consumed; should NOT
-	// be forwarded as chat). Returns false for ordinary chat text.
-	bool HandleSlashCommand(const std::string& msg, Scene* scene)
-	{
-		if (msg.empty() || msg[0] != '/')
-			return false;
-
-		const std::string rest = msg.substr(1);
-		const auto sp = rest.find(' ');
-		std::string verb = (sp == std::string::npos) ? rest : rest.substr(0, sp);
-		std::string args = (sp == std::string::npos) ? std::string{} : rest.substr(sp + 1);
-
-		for (auto& c : verb)
-			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-		while (!args.empty() && args.front() == ' ')
-			args.erase(0, 1);
-
-		if (verb.empty() || verb == "?" || verb == "help")
-		{
-			const auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-			const bool refreshStarted = NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
-			if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
-			{
-				std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
-			}
-			else
-			{
-				PrintNinjamHelp();
-			}
-			return true;
-		}
-
-		if (verb == "c" || verb == "connect")
-		{
-			if (args.empty())
-			{
-				std::cout << "[NINJAM] Usage: /c <number>  (type / for list)" << std::endl;
-				return true;
-			}
-			int idx = 0;
-			try { idx = std::stoi(args); }
-			catch (const std::exception&) { idx = 0; }
-
-			auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-			auto servers = NinjamSession::GetReachablePublicServers();
-			const auto serverCount = static_cast<int>(servers.size());
-
-			if (serverCount == 0)
-			{
-				std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
-				return true;
-			}
-
-			if (idx < 1 || idx > serverCount)
-			{
-				std::cout << "[NINJAM] Server number must be 1-" << serverCount
-				          << "  (type / for list)" << std::endl;
-				return true;
-			}
-			if (scene)
-				scene->ConnectNinjam(servers[idx - 1].Host);
-			else
-				std::cout << "[NINJAM] Not ready yet" << std::endl;
-			return true;
-		}
-
-		if (verb == "d" || verb == "q" || verb == "quit"
-			|| verb == "exit" || verb == "disconnect")
-		{
-			if (scene)
-				scene->DisconnectNinjam();
-			else
-				std::cout << "[NINJAM] Not connected" << std::endl;
-			return true;
-		}
-
-		std::cout << "[NINJAM] Unknown command /" << verb
-		          << "  (type / for help)" << std::endl;
-		return true;
-	}
-} // namespace
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
@@ -238,8 +123,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	std::atomic<Scene*> sceneRaw{ nullptr };
 	tui->Start("> ", [&sceneRaw](const std::string& msg) {
 		auto* s = sceneRaw.load(std::memory_order_acquire);
-		if (HandleSlashCommand(msg, s))
-			return;
 		if (s)
 			s->SendNinjamChat(msg);
 		else

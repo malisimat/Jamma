@@ -13,8 +13,7 @@
 !.github/
 .github/*
 !.github/copilot-instructions.md
-.vscode/launch.json
-.vscode/tasks.json
+.vscode/
 packages/
 vcpkg_installed/
 Directory.Build.local.props
