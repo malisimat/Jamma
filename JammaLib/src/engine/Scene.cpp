@@ -991,8 +991,11 @@ void Scene::_OnAudio(float* inBuf,
 	}
 
 	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
-		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
-		if (!ninjamConnected || !station || !station->IsConnectedRemote())
+		if (!ninjamConnected || !stationBase->IsRemote())
+			return;
+
+		auto station = std::static_pointer_cast<StationRemote>(stationBase);
+		if (!station->IsConnectedRemote())
 			return;
 
 		const float* left = nullptr;
