@@ -90,7 +90,7 @@ Symptom: exe exits with code 1, no output. Cause: MSBuild skips the PostBuildEve
 Fix:
 
 ```powershell
-$src = ".\vcpkg_installed\debug\bin"
+$src = ".\vcpkg_installed\x64-windows\debug\bin"
 $dst = ".\test\JammaLib.Tests\bin\x64\Debug"
 Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
 Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
