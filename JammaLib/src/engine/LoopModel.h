@@ -61,6 +61,11 @@ namespace engine
 			unsigned long loopLength,
 			unsigned long offset,
 			float radius);
+		void UpdateModel(const audio::BufferBank& buffer,
+			unsigned long sourceLoopLength,
+			unsigned long displayLoopLength,
+			unsigned long offset,
+			float radius);
 
 	protected:
 		static unsigned int TotalNumLeds(unsigned int vuHeight, unsigned int ledHeight);
@@ -70,6 +75,16 @@ namespace engine
 
 		std::tuple<std::vector<float>, std::vector<float>, float, float>
 			CalcGrainGeometry(const audio::BufferBank& buffer,
+				unsigned int grain,
+				unsigned int numGrains,
+				unsigned long offset,
+				float lastYMin,
+				float lastYMax,
+				float radius);
+
+		std::tuple<std::vector<float>, std::vector<float>, float, float>
+			CalcGrainGeometry(const audio::BufferBank& buffer,
+				unsigned long sourceLoopLength,
 				unsigned int grain,
 				unsigned int numGrains,
 				unsigned long offset,

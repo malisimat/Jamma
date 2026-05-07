@@ -184,6 +184,7 @@ namespace engine
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
+		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
 		void Play(unsigned long index,
@@ -198,10 +199,12 @@ namespace engine
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
+		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
 		
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
+		void _ForceUpdateLoopModel();
 
 	protected:
 		unsigned long _playIndex;
@@ -216,5 +219,6 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
+		bool _visualUpdatesEnabled;
 	};
 }

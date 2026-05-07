@@ -2,19 +2,18 @@
 
 [Bb]in/
 [Oo]bj/
-[Xx]64/
 [Ww]in32/
 *.suo
 *.sdf
 *.user
 *.opendb
 .vs/
-.github/
-!.github/
+.vscode/
 .github/*
 !.github/copilot-instructions.md
 .vscode/launch.json
 .vscode/tasks.json
 packages/
 vcpkg_installed/
+test/JammaLib.Tests/x64/
 Directory.Build.local.props
