@@ -58,59 +58,44 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
 
-### Ninjam Integration Prerequisites
+### Ninjam Integration
 
-Jamma links against `njclient.lib` and headers from the Ninjam repo. To compile successfully, set up the Ninjam dependency first.
+Jamma now uses vendored Ninjam client files under `lib/`:
 
-1. Clone Ninjam:
+- Header include root: `lib\njclient\njclient.h`
+- x64 Debug lib: `lib\njclient\x64\Debug\MD\njclient.lib`
+- x64 Release lib: `lib\njclient\x64\Release\MD\njclient.lib`
 
-```powershell
-git clone https://github.com/malisimat/ninjam C:\Users\<you>\Source\Repos\ninjam
-```
+You do **not** need `Directory.Build.local.props` for Ninjam paths anymore.
 
-2. Build Ninjam for `x64` in both `Debug` and `Release` (Visual Studio 2022).
-The Jamma project expects `njclient.lib` under these folders by default:
-- `...\ninjam\bin\x64\Debug\MD`
-- `...\ninjam\bin\x64\Release\MD`
+### Refreshing Vendored Ninjam Files (Only When Updating Them)
 
-3. Create `Directory.Build.local.props` in this repo root (this file is intentionally gitignored, so each developer/machine must create it locally):
+You only need this step when you intentionally update the vendored Ninjam artifacts.
 
-```xml
-<Project>
-  <PropertyGroup>
-    <NinjamRoot>C:/Users/<you>/Source/Repos/ninjam</NinjamRoot>
-    <NinjamIncludeDir>$(NinjamRoot)</NinjamIncludeDir>
-    <NinjamLibDirDebug>$(NinjamRoot)/bin/x64/Debug/MD</NinjamLibDirDebug>
-    <NinjamLibDirRelease>$(NinjamRoot)/bin/x64/Release/MD</NinjamLibDirRelease>
-  </PropertyGroup>
-</Project>
-```
-
-If your Ninjam build outputs to different folders, update `NinjamLibDirDebug` and `NinjamLibDirRelease` to match where `njclient.lib` is produced.
-
-4. Verify paths before building:
+1. Build Ninjam in the other repo for `x64` `Debug` and `Release` (`MD` runtime).
+2. Copy updated headers/libs into this repo:
 
 ```powershell
-$root = "C:/Users/<you>/Source/Repos/ninjam"
-Test-Path "$root/njclient.h"
-Test-Path "$root/WDL/jnetlib/util.h"
-Test-Path "$root/bin/x64/Debug/MD/njclient.lib"
-Test-Path "$root/bin/x64/Release/MD/njclient.lib"
-```
+$ninjam = "C:\Users\<you>\Source\Repos\NinjamLib\ninjam"
 
-All four commands should return `True`.
+Copy-Item "$ninjam\ninjam\njclient.h" ".\lib\njclient\njclient.h" -Force
+
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.lib" ".\lib\njclient\x64\Debug\MD\njclient.lib" -Force
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.pdb" ".\lib\njclient\x64\Debug\MD\njclient.pdb" -Force
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.idb" ".\lib\njclient\x64\Debug\MD\njclient.idb" -Force
+Copy-Item "$ninjam\bin\x64\Release\MD\njclient.lib" ".\lib\njclient\x64\Release\MD\njclient.lib" -Force
+```
 
 ### Troubleshooting: Ninjam include/link errors
 
 If you see errors like:
 
 - `Cannot open include file: 'njclient.h'`
-- `Cannot open include file: 'WDL/jnetlib/util.h'`
 - linker errors for `njclient.lib`
 
-then `NinjamIncludeDir`/`NinjamLibDir*` are not resolving to a valid Ninjam checkout. Re-check `Directory.Build.local.props` and the actual output folders from your Ninjam build.
+verify the vendored files above exist in `lib\njclient`.
 
 Required Ninjam-related link dependencies:
-- `njclient.lib` from the Ninjam build
+- `njclient.lib` from `lib\njclient\x64\...`
 - `ogg.lib`, `vorbis.lib`, `vorbisenc.lib`, `vorbisfile.lib` (provided via vcpkg)
 - `ws2_32.lib` (Windows SDK)
