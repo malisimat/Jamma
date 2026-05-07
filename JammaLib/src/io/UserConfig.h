@@ -24,6 +24,15 @@ namespace io
 	{
 		static std::optional<UserConfig> FromJson(Json::JsonPart json);
 
+		struct SeedLoopTiming
+		{
+			unsigned int GrainSamps = 0u;
+			unsigned int LoopGrains = 0u;
+			unsigned int BeatsPerGrain = 0u;
+			float Bpm = 0.0f;
+			unsigned int Bpi = 0u;
+		};
+
 		struct AudioSettings
 		{
 			std::string Name; // The name of the device (used for matching rig preferences)
@@ -40,7 +49,11 @@ namespace io
 
 		struct LoopSettings
 		{
-			unsigned int FadeSamps; // The number of samples to fade in/out the start/end of a loop
+			unsigned int FadeSamps = constants::DefaultFadeSamps; // The number of samples to fade in/out the start/end of a loop
+			unsigned int SeedGrainMinMs = 400u; // Never halve below this grain length
+			unsigned int SeedGrainTargetMaxMs = 3000u; // Prefer grains below this duration
+			unsigned int SeedBpmMin = 80u; // Choose beats-per-grain so BPM is at least this value
+			bool SeedUsesPowers = true; // true => 1x,2x,4x... ; false => 1x,2x,3x...
 
 			static std::optional<LoopSettings> FromJson(Json::JsonPart json);
 		};
@@ -64,6 +77,8 @@ namespace io
 		unsigned long LoopPlayPos(int error,
 			unsigned long loopLength,
 			unsigned int outLatency) const;
+		std::optional<SeedLoopTiming> DeduceLoopTiming(unsigned long loopLengthSamps,
+			unsigned int sampleRate) const;
 
 		AudioSettings Audio;
 		LoopSettings Loop;
