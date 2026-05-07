@@ -90,8 +90,8 @@
       <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
-xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
+      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
+xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
       <Message>Copying debug gtest DLLs</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
