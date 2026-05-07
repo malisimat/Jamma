@@ -562,9 +562,8 @@ void Loop::Play(unsigned long index,
 	// This ensures the full loop length can be written during overdub/recording.
 	if ((STATE_OVERDUBBINGRECORDING == _playState) || (STATE_PLAYINGRECORDING == _playState))
 	{
-		auto requiredCapacity = logicalBufSize + constants::MaxLoopFadeSamps;
-		if (_bufferBank.Capacity() < requiredCapacity)
-			_bufferBank.Resize(requiredCapacity);
+		if (_bufferBank.Capacity() < logicalBufSize)
+			_bufferBank.Resize(logicalBufSize);
 	}
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;

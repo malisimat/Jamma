@@ -1,6 +1,6 @@
 {
     "recommendations": [
-        "matepek.vscode-catch2-test-adapter",
+        "hbenl.vscode-gtest-adapter",
         "ms-vscode.cpptools"
     ]
 }
