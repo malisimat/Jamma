@@ -702,7 +702,7 @@ void Scene::OnJobTick(Time curTime)
 	job.SetAudioParams(_audioDevice->GetAudioStreamParams());
 
 	{
-		std::shared_lock lock(_jobMutex);
+		std::scoped_lock lock(_jobMutex);
 
 		if (_jobList.empty())
 			return;
