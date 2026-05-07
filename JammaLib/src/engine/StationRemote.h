@@ -12,7 +12,7 @@ namespace engine
 	class LoopRemote;
 
 	// A Station that receives audio from a single remote ninjam user.
-	// One StationRemote is created per user when _ReconcileRemoteStations runs.
+	// One StationRemote is created per user when _UpdateRemoteStationsFromSnapshot runs.
 	// It owns a LoopTake containing two LoopRemote loops (L/R) that buffer
 	// the ninjam-decoded audio so it can be played back and visualised.
 	class StationRemote :
@@ -43,7 +43,7 @@ namespace engine
 		bool IsConnectedRemote() const { return _isConnectedRemote; }
 
 		// Synchronise loop cursors to the ninjam interval on the job thread.
-		void SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps);
+		void SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps, unsigned int visualLengthSamps = 0u);
 
 		// Write a decoded stereo block into the station's LoopRemote buffers.
 		// Called from the audio callback.

@@ -122,7 +122,16 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	unsigned long offset,
 	float radius)
 {
-	if (loopLength == 0ul)
+	UpdateModel(buffer, loopLength, loopLength, offset, radius);
+}
+
+void LoopModel::UpdateModel(const BufferBank& buffer,
+	unsigned long sourceLoopLength,
+	unsigned long displayLoopLength,
+	unsigned long offset,
+	float radius)
+{
+	if (sourceLoopLength == 0ul || displayLoopLength == 0ul)
 	{
 		SetGeometry({}, {});
 		return;
@@ -133,7 +142,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 
 	auto lastYMin = -_MinHeight;
 	auto lastYMax = _MinHeight;
-	auto numGrains = (unsigned int)ceil((double)loopLength / (double)constants::GrainSamps);
+	auto numGrains = (unsigned int)ceil((double)displayLoopLength / (double)constants::GrainSamps);
 	if (numGrains == 0u)
 	{
 		SetGeometry({}, {});
@@ -144,6 +153,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	{
 		auto [grainVerts, grainUvs, nextYMin, nextYMax] =
 			CalcGrainGeometry(buffer,
+				sourceLoopLength,
 				grain,
 				numGrains,
 				offset,
@@ -163,6 +173,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 
 	auto [grainVerts, grainUvs, nextYMin, nextYMax] =
 		CalcGrainGeometry(buffer,
+			sourceLoopLength,
 			numGrains,
 			numGrains,
 			offset,
@@ -188,7 +199,28 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 	float lastYMax,
 	float radius)
 {
-	if (numGrains == 0u)
+	auto sourceLoopLength = buffer.Length() > offset ? buffer.Length() - offset : 0ul;
+	return CalcGrainGeometry(buffer,
+		sourceLoopLength,
+		grain,
+		numGrains,
+		offset,
+		lastYMin,
+		lastYMax,
+		radius);
+}
+
+std::tuple<std::vector<float>, std::vector<float>, float, float>
+LoopModel::CalcGrainGeometry(const BufferBank& buffer,
+	unsigned long sourceLoopLength,
+	unsigned int grain,
+	unsigned int numGrains,
+	unsigned long offset,
+	float lastYMin,
+	float lastYMax,
+	float radius)
+{
+	if (sourceLoopLength == 0ul || numGrains == 0u)
 		return std::make_tuple(std::vector<float>(), std::vector<float>(), lastYMin, lastYMax);
 
 	const float radialThickness = radius * _RadialThicknessFrac;
@@ -201,8 +233,10 @@ LoopModel::CalcGrainGeometry(const BufferBank& buffer,
 
 	auto angle1 = ((float)constants::TWOPI) * ((float)(grain - 1) / (float)numGrains);
 	auto angle2 = ((float)constants::TWOPI) * ((float)grain / (float)numGrains);
-	auto i1 = offset + (grain - 1) * (unsigned long)constants::GrainSamps;
-	auto i2 = offset + grain * (unsigned long)constants::GrainSamps;
+	auto sourceStart = static_cast<unsigned long>((static_cast<double>(grain - 1u) * static_cast<double>(sourceLoopLength)) / static_cast<double>(numGrains));
+	auto sourceEnd = static_cast<unsigned long>(ceil((static_cast<double>(grain) * static_cast<double>(sourceLoopLength)) / static_cast<double>(numGrains)));
+	auto i1 = offset + std::min(sourceStart, sourceLoopLength);
+	auto i2 = offset + std::min(std::max(sourceEnd, sourceStart + 1ul), sourceLoopLength);
 	auto gMin = buffer.SubMin(i1, i2);
 	auto gMax = buffer.SubMax(i1, i2);
 
