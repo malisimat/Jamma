@@ -4,6 +4,7 @@
   "dependencies": [
     "gtest",
     "libogg",
-    "libvorbis"
+    "libvorbis",
+    "vst3sdk"
   ]
 }

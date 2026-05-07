@@ -227,5 +227,7 @@ namespace engine
 		// Swapped atomically: set by LoadVstPlugin/UnloadVstPlugin from a
 		// non-RT thread; read by WriteBlock from the audio callback.
 		std::shared_ptr<vst::VstChain> _vstChain;
+		// Non-RT metadata to persist loop VST chains in jam exports.
+		std::vector<std::wstring> _vstPluginPaths;
 	};
 }

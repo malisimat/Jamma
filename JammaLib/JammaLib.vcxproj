@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -101,8 +101,8 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)vcpkg_installed\x64-windows\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -126,8 +126,8 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)vcpkg_installed\x64-windows\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -156,8 +156,8 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)vcpkg_installed\x64-windows\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -187,8 +187,8 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(ProjectDir)lib\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NinjamIncludeDir);$(NinjamIncludeDir)\ninjam;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(SolutionDir)vcpkg_installed\x64-windows\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>

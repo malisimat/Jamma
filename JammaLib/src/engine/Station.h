@@ -114,6 +114,7 @@ namespace engine
 		unsigned int NumBusChannels() const;
 		void OnBounce(unsigned int numSamps, io::UserConfig config);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
+		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -174,6 +175,7 @@ namespace engine
 		std::wstring _pendingVstLoad;
 		size_t _pendingVstUnload = 0;
 		bool _hasPendingVstUnload = false;
+		std::vector<std::wstring> _vstPluginPaths;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded VstPlugin.

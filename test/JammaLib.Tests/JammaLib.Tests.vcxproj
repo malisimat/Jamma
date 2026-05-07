@@ -86,8 +86,8 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirDebug);$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
@@ -129,8 +129,8 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NinjamLibDirRelease);$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

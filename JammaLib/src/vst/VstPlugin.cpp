@@ -9,11 +9,52 @@
 #include <algorithm>
 #include <iostream>
 
+#ifdef JAMMA_VST3_ENABLED
+#include "vst3sdk/pluginterfaces/base/ipluginbase.h"
+#include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
+#include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
+#include "vst3sdk/pluginterfaces/gui/iplugview.h"
+#endif
+
 using namespace vst;
 
 #ifdef JAMMA_VST3_ENABLED
 using namespace Steinberg;
 using namespace Steinberg::Vst;
+
+class VstPlugin::Impl
+{
+public:
+	static constexpr Steinberg::int32 NumChannels = 1;
+
+	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
+	Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor;
+	Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
+	Steinberg::IPtr<Steinberg::IPlugView> plugView;
+
+	Steinberg::Vst::ProcessData processData;
+	Steinberg::Vst::AudioBusBuffers inputBus;
+	Steinberg::Vst::AudioBusBuffers outputBus;
+	float* inputChannelPtr;
+	float* outputChannelPtr;
+	float inputScratch[constants::MaxBlockSize];
+	float outputScratch[constants::MaxBlockSize];
+
+	Impl() :
+		component(nullptr),
+		processor(nullptr),
+		controller(nullptr),
+		plugView(nullptr),
+		processData(),
+		inputBus(),
+		outputBus(),
+		inputChannelPtr(nullptr),
+		outputChannelPtr(nullptr)
+	{
+		std::fill(std::begin(inputScratch), std::end(inputScratch), 0.0f);
+		std::fill(std::begin(outputScratch), std::end(outputScratch), 0.0f);
+	}
+};
 #endif
 
 VstPlugin::VstPlugin() :
@@ -21,23 +62,15 @@ VstPlugin::VstPlugin() :
 	_name(),
 	_isBypassed(false),
 	_editorSize({ 0, 0 }),
-	_moduleHandle(nullptr)
-#ifdef JAMMA_VST3_ENABLED
-	, _component(nullptr)
-	, _processor(nullptr)
-	, _controller(nullptr)
-	, _plugView(nullptr)
-	, _processData()
-	, _inputBus()
-	, _outputBus()
-	, _inputChannelPtr(nullptr)
-	, _outputChannelPtr(nullptr)
-#endif
+	_moduleHandle(nullptr),
+	_impl(
+	#ifdef JAMMA_VST3_ENABLED
+		std::make_unique<Impl>()
+	#else
+		nullptr
+	#endif
+	)
 {
-#ifdef JAMMA_VST3_ENABLED
-	std::fill(std::begin(_inputScratch), std::end(_inputScratch), 0.0f);
-	std::fill(std::begin(_outputScratch), std::end(_outputScratch), 0.0f);
-#endif
 }
 
 VstPlugin::~VstPlugin()
@@ -121,10 +154,10 @@ bool VstPlugin::Load(const std::wstring& path,
 		Unload();
 		return false;
 	}
-	_component = IPtr<IComponent>(rawComponent, false);
+	_impl->component = IPtr<IComponent>(rawComponent, false);
 
 	// 5. Initialize the component (nullptr host context is accepted by most plugins)
-	if (_component->initialize(nullptr) != kResultOk)
+	if (_impl->component->initialize(nullptr) != kResultOk)
 	{
 		std::cerr << "[VstPlugin] IComponent::initialize() failed" << std::endl;
 		Unload();
@@ -133,14 +166,14 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	// 6. Query IAudioProcessor
 	IAudioProcessor* rawProcessor = nullptr;
-	if (_component->queryInterface(IAudioProcessor::iid, (void**)&rawProcessor) != kResultOk
+	if (_impl->component->queryInterface(IAudioProcessor::iid, (void**)&rawProcessor) != kResultOk
 		|| !rawProcessor)
 	{
 		std::cerr << "[VstPlugin] queryInterface(IAudioProcessor) failed" << std::endl;
 		Unload();
 		return false;
 	}
-	_processor = IPtr<IAudioProcessor>(rawProcessor, false);
+	_impl->processor = IPtr<IAudioProcessor>(rawProcessor, false);
 
 	// 7. Setup processing
 	ProcessSetup setup;
@@ -149,7 +182,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	setup.maxSamplesPerBlock = static_cast<int32>(blockSize);
 	setup.sampleRate = static_cast<SampleRate>(sampleRate);
 
-	if (_processor->setupProcessing(setup) != kResultOk)
+	if (_impl->processor->setupProcessing(setup) != kResultOk)
 	{
 		std::cerr << "[VstPlugin] setupProcessing() failed" << std::endl;
 		Unload();
@@ -159,41 +192,41 @@ bool VstPlugin::Load(const std::wstring& path,
 	// 8. Activate buses and component
 	// Attempt to activate the first input/output audio bus (index 0).
 	// Plugins that have no bus at index 0 will gracefully return kResultFalse.
-	_component->activateBus(kAudio, kInput, 0, true);
-	_component->activateBus(kAudio, kOutput, 0, true);
-	_component->setActive(true);
+	_impl->component->activateBus(kAudio, kInput, 0, true);
+	_impl->component->activateBus(kAudio, kOutput, 0, true);
+	_impl->component->setActive(true);
 
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
-	_inputChannelPtr = _inputScratch;
-	_outputChannelPtr = _outputScratch;
+	_impl->inputChannelPtr = _impl->inputScratch;
+	_impl->outputChannelPtr = _impl->outputScratch;
 
-	_inputBus.numChannels = _NumChannels;
-	_inputBus.channelBuffers32 = &_inputChannelPtr;
-	_inputBus.silenceFlags = 0;
+	_impl->inputBus.numChannels = Impl::NumChannels;
+	_impl->inputBus.channelBuffers32 = &_impl->inputChannelPtr;
+	_impl->inputBus.silenceFlags = 0;
 
-	_outputBus.numChannels = _NumChannels;
-	_outputBus.channelBuffers32 = &_outputChannelPtr;
-	_outputBus.silenceFlags = 0;
+	_impl->outputBus.numChannels = Impl::NumChannels;
+	_impl->outputBus.channelBuffers32 = &_impl->outputChannelPtr;
+	_impl->outputBus.silenceFlags = 0;
 
-	_processData.processMode = kRealtime;
-	_processData.symbolicSampleSize = kSample32;
-	_processData.numSamples = static_cast<int32>(blockSize);
-	_processData.numInputs = 1;
-	_processData.numOutputs = 1;
-	_processData.inputs = &_inputBus;
-	_processData.outputs = &_outputBus;
-	_processData.inputEvents = nullptr;
-	_processData.outputEvents = nullptr;
-	_processData.inputParameterChanges = nullptr;
-	_processData.outputParameterChanges = nullptr;
-	_processData.processContext = nullptr;
+	_impl->processData.processMode = kRealtime;
+	_impl->processData.symbolicSampleSize = kSample32;
+	_impl->processData.numSamples = static_cast<int32>(blockSize);
+	_impl->processData.numInputs = 1;
+	_impl->processData.numOutputs = 1;
+	_impl->processData.inputs = &_impl->inputBus;
+	_impl->processData.outputs = &_impl->outputBus;
+	_impl->processData.inputEvents = nullptr;
+	_impl->processData.outputEvents = nullptr;
+	_impl->processData.inputParameterChanges = nullptr;
+	_impl->processData.outputParameterChanges = nullptr;
+	_impl->processData.processContext = nullptr;
 
 	// 10. Optionally retrieve IEditController (may be the same object or separate)
 	IEditController* rawController = nullptr;
-	if (_component->queryInterface(IEditController::iid, (void**)&rawController) == kResultOk
+	if (_impl->component->queryInterface(IEditController::iid, (void**)&rawController) == kResultOk
 		&& rawController)
 	{
-		_controller = IPtr<IEditController>(rawController, false);
+		_impl->controller = IPtr<IEditController>(rawController, false);
 	}
 	else
 	{
@@ -202,13 +235,13 @@ bool VstPlugin::Load(const std::wstring& path,
 		// the component and the controller into distinct CIDs.)
 		// For now we just leave _controller null — OpenEditor will be a no-op.
 		TUID controllerCid;
-		if (_component->getControllerClassId(controllerCid) == kResultOk)
+		if (_impl->component->getControllerClassId(controllerCid) == kResultOk)
 		{
 			if (factory->createInstance(controllerCid, IEditController::iid, (void**)&rawController) == kResultOk
 				&& rawController)
 			{
-				_controller = IPtr<IEditController>(rawController, false);
-				_controller->initialize(nullptr);
+				_impl->controller = IPtr<IEditController>(rawController, false);
+				_impl->controller->initialize(nullptr);
 			}
 		}
 	}
@@ -229,16 +262,19 @@ void VstPlugin::Unload()
 #ifdef JAMMA_VST3_ENABLED
 	CloseEditor();
 
-	if (_component)
+	if (_impl && _impl->component)
 	{
-		_component->setActive(false);
-		_component->terminate();
-		_component = nullptr;
+		_impl->component->setActive(false);
+		_impl->component->terminate();
+		_impl->component = nullptr;
 	}
 
-	_processor = nullptr;
-	_controller = nullptr;
-	_plugView = nullptr;
+	if (_impl)
+	{
+		_impl->processor = nullptr;
+		_impl->controller = nullptr;
+		_impl->plugView = nullptr;
+	}
 
 	if (_moduleHandle)
 	{
@@ -259,15 +295,15 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 		return;
 
 	// Copy mono input into the scratch buffer
-	std::copy(monoBuf, monoBuf + numSamples, _inputScratch);
+	std::copy(monoBuf, monoBuf + numSamples, _impl->inputScratch);
 
 	// Update sample count (other ProcessData fields are fixed from Load())
-	_processData.numSamples = numSamples;
+	_impl->processData.numSamples = numSamples;
 
-	_processor->process(_processData);
+	_impl->processor->process(_impl->processData);
 
 	// Copy processed output back to the caller's buffer
-	std::copy(_outputScratch, _outputScratch + numSamples, monoBuf);
+	std::copy(_impl->outputScratch, _impl->outputScratch + numSamples, monoBuf);
 #else
 	(void)monoBuf; (void)numSamples;
 #endif
@@ -276,30 +312,30 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 bool VstPlugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (!_isLoaded || !_controller)
+	if (!_isLoaded || !_impl || !_impl->controller)
 		return false;
 
-	IPlugView* rawView = _controller->createView(Steinberg::Vst::ViewType::kEditor);
+	IPlugView* rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
 	if (!rawView)
 		return false;
 
-	_plugView = IPtr<IPlugView>(rawView, false);
+	_impl->plugView = IPtr<IPlugView>(rawView, false);
 
-	if (_plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
+	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
-		_plugView = nullptr;
+		_impl->plugView = nullptr;
 		return false;
 	}
 
-	if (_plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND) != kResultOk)
+	if (_impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND) != kResultOk)
 	{
-		_plugView = nullptr;
+		_impl->plugView = nullptr;
 		return false;
 	}
 
 	// Query preferred size
 	ViewRect rect{};
-	if (_plugView->getSize(&rect) == kResultOk)
+	if (_impl->plugView->getSize(&rect) == kResultOk)
 	{
 		_editorSize = {
 			static_cast<unsigned int>(rect.getWidth()),
@@ -317,10 +353,10 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 void VstPlugin::CloseEditor()
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (_plugView)
+	if (_impl && _impl->plugView)
 	{
-		_plugView->removed();
-		_plugView = nullptr;
+		_impl->plugView->removed();
+		_impl->plugView = nullptr;
 		_editorSize = { 0, 0 };
 	}
 #endif

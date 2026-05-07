@@ -73,7 +73,29 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		auto loop = Loop::FromFile(loopParams, loopStruct, dir);
 		
 		if (loop.has_value())
+		{
+			for (const auto& vstEntry : loopStruct.VstChain)
+			{
+				std::wstring wpath(vstEntry.Path.size() + 1, L'\0');
+				size_t converted = 0;
+				mbstowcs_s(&converted,
+					wpath.data(),
+					vstEntry.Path.size() + 1,
+					vstEntry.Path.c_str(),
+					vstEntry.Path.size());
+
+				if (converted > 1)
+				{
+					wpath.resize(converted - 1);
+					loop.value()->LoadVstPlugin(
+						wpath,
+						static_cast<float>(constants::DefaultSampleRate),
+						constants::DefaultBufferSizeSamps);
+				}
+			}
+
 			take->AddLoop(loop.value());
+		}
 	}
 
 	return take;

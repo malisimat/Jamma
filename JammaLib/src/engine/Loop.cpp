@@ -479,6 +479,14 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
 	}
 
+	for (const auto& vstPath : _vstPluginPaths)
+	{
+		io::JamFile::VstEntry entry;
+		entry.Path = utils::EncodeUtf8(vstPath);
+		entry.Bypass = false;
+		loop.VstChain.push_back(std::move(entry));
+	}
+
 	return loop;
 }
 
@@ -720,11 +728,17 @@ void Loop::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int block
 	auto plugin = std::make_shared<vst::VstPlugin>();
 	// numChannels = 1 (mono loop buffer)
 	if (plugin->Load(path, sampleRate, blockSize, 1u))
+	{
 		_vstChain->AddPlugin(plugin);
+		_vstPluginPaths.push_back(std::move(path));
+	}
 }
 
 void Loop::UnloadVstPlugin(size_t index)
 {
 	if (_vstChain)
 		_vstChain->RemovePlugin(index);
+
+	if (index < _vstPluginPaths.size())
+		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
 }

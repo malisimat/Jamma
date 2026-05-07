@@ -41,6 +41,8 @@ vcpkg install
 
 This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
 
+Windows builds also compile VST3 hosting support by default via the `vst3sdk` vcpkg dependency declared in `vcpkg.json`.
+
 ### Build
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.

@@ -24,4 +24,7 @@ namespace utils
 	// Shows a native folder-picker dialog.
 	// Returns the chosen path, or an empty wstring if the user cancelled.
 	std::wstring PickDirectory(const std::wstring& title = L"Choose export directory");
+	// Shows a native file-picker dialog for VST plugins.
+	// Returns the chosen file path, or an empty wstring if the user cancelled.
+	std::wstring PickFile(const std::wstring& title = L"Choose VST plugin");
 }

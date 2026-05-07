@@ -437,6 +437,82 @@ ActionResult Scene::OnAction(KeyAction action)
 		return { res };
 	}
 
+	// Ctrl+Shift+V - insert a VST on the hovered station/take/loop.
+	if ((86 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		const auto pluginPath = utils::PickFile(L"Choose VST plugin");
+		if (pluginPath.empty())
+			return ActionResult::NoAction();
+
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		if (!hovering)
+		{
+			std::cout << "VST insert: no hovered target" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		auto sampleRate = static_cast<float>(constants::DefaultSampleRate);
+		auto blockSize = constants::DefaultBufferSizeSamps;
+		if (_audioDevice)
+		{
+			auto params = _audioDevice->GetAudioStreamParams();
+			if (params.SampleRate > 0)
+				sampleRate = static_cast<float>(params.SampleRate);
+			if (params.BufSize > 0)
+				blockSize = params.BufSize;
+		}
+
+		switch (_selector->CurrentSelectDepth())
+		{
+		case base::SelectDepth::DEPTH_STATION:
+		{
+			auto station = std::dynamic_pointer_cast<Station>(hovering);
+			if (!station)
+				return ActionResult::NoAction();
+
+			if (station->IsRemote())
+			{
+				std::cout << "VST insert: remote stations are read-only" << std::endl;
+				return ActionResult::NoAction();
+			}
+
+			station->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+		{
+			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+			if (!take)
+				return ActionResult::NoAction();
+
+			for (const auto& loop : take->GetLoops())
+				loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
+
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOP:
+		{
+			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+			if (!loop)
+				return ActionResult::NoAction();
+
+			loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
+			break;
+		}
+		}
+
+		std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+
 	// Ctrl+S - export session to directory.
 	if ((83 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -495,6 +571,7 @@ ActionResult Scene::OnAction(KeyAction action)
 				io::JamFile::Station jamStation;
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
+				jamStation.VstChain = station->VstEntries();
 
 				for (const auto& take : station->GetLoopTakes())
 				{

@@ -9,19 +9,10 @@
 
 #include <string>
 #include <atomic>
+#include <memory>
 #include <windows.h>
 #include "../../include/Constants.h"
 #include "../utils/CommonTypes.h"
-
-// Define JAMMA_VST3_ENABLED in the project preprocessor definitions once the
-// VST3 SDK has been placed under JammaLib/lib/vst3sdk/.
-// e.g. add JAMMA_VST3_ENABLED to PreprocessorDefinitions in JammaLib.vcxproj.
-#ifdef JAMMA_VST3_ENABLED
-#include "pluginterfaces/base/ipluginbase.h"
-#include "pluginterfaces/vst/ivstaudioprocessor.h"
-#include "pluginterfaces/vst/ivsteditcontroller.h"
-#include "pluginterfaces/gui/iplugview.h"
-#endif
 
 namespace vst
 {
@@ -90,31 +81,13 @@ namespace vst
 		}
 
 	private:
+		class Impl;
+
 		bool _isLoaded;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
 		utils::Size2d _editorSize;
 		HMODULE _moduleHandle;
-
-#ifdef JAMMA_VST3_ENABLED
-		// Mono-only processing: 1 input bus, 1 output bus, each 1 channel.
-		static constexpr Steinberg::int32 _NumChannels = 1;
-
-		Steinberg::IPtr<Steinberg::Vst::IComponent> _component;
-		Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> _processor;
-		Steinberg::IPtr<Steinberg::Vst::IEditController> _controller;
-		Steinberg::IPtr<Steinberg::IPlugView> _plugView;
-
-		// Pre-allocated ProcessData fields — zero heap allocation in ProcessBlock.
-		Steinberg::Vst::ProcessData _processData;
-		Steinberg::Vst::AudioBusBuffers _inputBus;
-		Steinberg::Vst::AudioBusBuffers _outputBus;
-		float* _inputChannelPtr;
-		float* _outputChannelPtr;
-
-		// Scratch buffers (on struct, not heap) for ProcessBlock.
-		float _inputScratch[constants::MaxBlockSize];
-		float _outputScratch[constants::MaxBlockSize];
-#endif
+		std::unique_ptr<Impl> _impl;
 	};
 }

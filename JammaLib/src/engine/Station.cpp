@@ -920,6 +920,9 @@ std::vector<JobAction> Station::_CommitChanges()
 		// infrequent and DLL cleanup is brief).
 		if (_vstChain)
 			_vstChain->RemovePlugin(_pendingVstUnload);
+
+		if (_pendingVstUnload < _vstPluginPaths.size())
+			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(_pendingVstUnload));
 	}
 
 	if (!_pendingVstLoad.empty())
@@ -1048,6 +1051,22 @@ void Station::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
+std::vector<io::JamFile::VstEntry> Station::VstEntries() const
+{
+	std::vector<io::JamFile::VstEntry> entries;
+	entries.reserve(_vstPluginPaths.size());
+
+	for (const auto& path : _vstPluginPaths)
+	{
+		io::JamFile::VstEntry entry;
+		entry.Path = utils::EncodeUtf8(path);
+		entry.Bypass = false;
+		entries.push_back(std::move(entry));
+	}
+
+	return entries;
+}
+
 ActionResult Station::OnAction(JobAction action)
 {
 	switch (action.JobActionType)
@@ -1063,6 +1082,7 @@ ActionResult Station::OnAction(JobAction action)
 		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, NumBusChannels()))
 		{
 			_backVstChain->AddPlugin(plugin);
+			_vstPluginPaths.push_back(action.VstPath);
 			// Signal _CommitChanges() (running on main thread under audioMutex)
 			// to swap the chain in.
 			_flipVstChain.store(true, std::memory_order_release);
