@@ -546,8 +546,8 @@ void Loop::Play(unsigned long index,
 	}
 
 	// Clamp against the smaller of the logical loop size and the currently
-	// recorded physical size. This prevents reads past the current BufferBank
-	// length while still ignoring any physical tail beyond the logical loop.
+	// recorded physical size. Keep the MaxLoopFadeSamps logical offset in this
+	// bound: playback indices are in [fadeOffset, fadeOffset + loopLength).
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex = (effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index;

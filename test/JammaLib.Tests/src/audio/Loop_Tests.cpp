@@ -710,6 +710,24 @@ TEST(Loop, Play_IndexUnchangedWhenWithinPhysicalBuffer)
     EXPECT_EQ(normalIndex, loop.PlayIndex());
 }
 
+// Regression: logical loop indexing must keep the MaxLoopFadeSamps offset.
+// If Play() clamps against loopLength alone (without the fade offset), a valid
+// tail index in the logical buffer would be incorrectly clamped.
+TEST(Loop, Play_IndexAtLogicalTailPreservesFadeOffset)
+{
+    const auto loopLength = 50ul;
+    const auto logicalBufSize = loopLength + static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+
+    auto loop = MakeLoopProbe();
+    loop.Record();
+    WriteData(loop, loopLength, 1.0f);
+
+    const auto logicalTailIndex = logicalBufSize - 1ul;
+    loop.Play(logicalTailIndex, loopLength, /*continueRecording=*/true);
+
+    EXPECT_EQ(logicalTailIndex, loop.PlayIndex());
+}
+
 TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
     const auto fadeSamps = constants::DefaultFadeSamps;
     const auto loopLength = 50ul;
