@@ -200,6 +200,9 @@ namespace engine
 		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
 		void UnloadVstPlugin(size_t index);
 
+		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
+		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);

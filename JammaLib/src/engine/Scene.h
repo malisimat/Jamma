@@ -20,6 +20,7 @@
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "NinjamSession.h"
+#include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -248,6 +249,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
+		// Open plugin editor windows created from the UI (main thread only).
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;
 		std::thread _jobRunner;

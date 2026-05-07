@@ -742,3 +742,11 @@ void Loop::UnloadVstPlugin(size_t index)
 	if (index < _vstPluginPaths.size())
 		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
 }
+
+std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
+{
+	if (!_vstChain)
+		return nullptr;
+
+	return _vstChain->GetPlugin(index);
+}

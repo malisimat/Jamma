@@ -5,6 +5,7 @@
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
+#include "../graphics/VstEditorWindow.h"
 
 using namespace base;
 using namespace actions;
@@ -512,6 +513,110 @@ ActionResult Scene::OnAction(KeyAction action)
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;
 		return res;
 	}
+
+// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
+if ((69 == action.KeyChar)
+	&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+	&& (Action::MODIFIER_CTRL & action.Modifiers)
+	&& (Action::MODIFIER_SHIFT & action.Modifiers))
+{
+	auto hovering = _ChildFromPath(_selector->CurrentHover());
+	if (!hovering)
+	{
+		std::cout << "VST editor open: no hovered target" << std::endl;
+		return ActionResult::NoAction();
+	}
+
+	// Clean up any closed editor windows
+	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& w) {
+		return !w || !w->IsOpen();
+	}), _vstEditorWindows.end());
+
+	// Helper to open editor for a loop's first plugin
+	auto tryOpenForLoop = [this](std::shared_ptr<Loop> loop)->bool {
+		if (!loop)
+			return false;
+
+		auto plugin = loop->GetVstPlugin(0);
+		if (!plugin || !plugin->IsLoaded())
+			return false;
+
+		auto wnd = std::make_unique<graphics::VstEditorWindow>();
+		HINSTANCE hinst = GetModuleHandle(nullptr);
+		if (!wnd->Create(hinst, plugin))
+			return false;
+
+		_vstEditorWindows.push_back(std::move(wnd));
+		return true;
+	};
+
+	switch (_selector->CurrentSelectDepth())
+	{
+	case base::SelectDepth::DEPTH_STATION:
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		if (!station)
+			return ActionResult::NoAction();
+
+		if (station->IsRemote())
+		{
+			std::cout << "VST editor open: remote stations are read-only" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			for (const auto& loop : take->GetLoops())
+			{
+				if (tryOpenForLoop(loop))
+				{
+					ActionResult res;
+					res.IsEaten = true;
+					res.ResultType = actions::ACTIONRESULT_DEFAULT;
+					return res;
+				}
+			}
+		}
+		break;
+	}
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+		if (!take)
+			return ActionResult::NoAction();
+
+		for (const auto& loop : take->GetLoops())
+		{
+			if (tryOpenForLoop(loop))
+			{
+				ActionResult res;
+				res.IsEaten = true;
+				res.ResultType = actions::ACTIONRESULT_DEFAULT;
+				return res;
+			}
+		}
+		break;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		if (!loop)
+			return ActionResult::NoAction();
+
+		if (tryOpenForLoop(loop))
+		{
+			ActionResult res;
+			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_DEFAULT;
+			return res;
+		}
+		break;
+	}
+	}
+
+	std::cout << "VST editor open: no loaded plugin found" << std::endl;
+	return ActionResult::NoAction();
+}
 
 	// Ctrl+S - export session to directory.
 	if ((83 == action.KeyChar)
