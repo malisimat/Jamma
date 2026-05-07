@@ -11,6 +11,8 @@
 .vscode/
 .github/*
 !.github/copilot-instructions.md
+.vscode/launch.json
+.vscode/tasks.json
 packages/
 vcpkg_installed/
 test/JammaLib.Tests/x64/

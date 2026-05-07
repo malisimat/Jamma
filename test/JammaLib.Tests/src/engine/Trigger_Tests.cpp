@@ -436,7 +436,7 @@ TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
 	action.KeyActionType = KeyAction::KEY_DOWN;
 	trigger->OnAction(action);
 
-	// Punch in/out queue delayed trigger actions because cfg latency is non-zero.
+	// Punch in and out; trigger actions now execute immediately (not delayed).
 	action.KeyChar = ActivateChar;
 	action.KeyActionType = KeyAction::KEY_UP;
 	trigger->OnAction(action);
@@ -459,15 +459,19 @@ TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
 	trigger->OnAction(action);
 
 	auto actionsBeforeTick = receiver->Actions();
-	ASSERT_EQ(2u, actionsBeforeTick.size());
+	ASSERT_EQ(4u, actionsBeforeTick.size());
 	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0]);
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsBeforeTick[1]);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[1]);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[2]);
+	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsBeforeTick[3]);
 
-	// Flush delayed queues; delayed punch actions were cleared by EndOverdub.
+	// Flush delayed queues; no additional actions should be emitted.
 	trigger->OnTick(GetTime(), 1000000, cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
-	ASSERT_EQ(2u, actionsAfterTick.size());
+	ASSERT_EQ(4u, actionsAfterTick.size());
 	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsAfterTick[0]);
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsAfterTick[1]);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsAfterTick[1]);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[2]);
+	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsAfterTick[3]);
 }

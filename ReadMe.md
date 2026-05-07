@@ -50,7 +50,7 @@ Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/c
 If `JammaLib.Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
 
 ```powershell
-$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$src = ".\vcpkg_installed\x64-windows\debug\bin"
 $dst = ".\test\JammaLib.Tests\bin\x64\Debug"
 Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
 Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
