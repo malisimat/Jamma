@@ -54,6 +54,11 @@ namespace vst
 		// Real-time safe: no heap allocation, no locks.
 		void ProcessBlock(float* monoBuf, int32_t numSamples) noexcept;
 
+		// Process numSamples of stereo audio in-place.
+		// leftBuf and rightBuf are read and overwritten. If the plugin is
+		// configured as mono, each channel is processed independently.
+		void ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept;
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		// Returns true if the editor was opened successfully.

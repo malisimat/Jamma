@@ -64,3 +64,18 @@ void VstChain::ProcessBlock(float* monoBuf, int numSamps) noexcept
 			p->ProcessBlock(monoBuf, static_cast<int32_t>(numSamps));
 	}
 }
+
+void VstChain::ProcessBlockStereo(float* leftBuf, float* rightBuf, int numSamps) noexcept
+{
+	if (_plugins.empty())
+		return;
+
+	if (numSamps <= 0 || static_cast<unsigned int>(numSamps) > constants::MaxBlockSize)
+		return;
+
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			p->ProcessBlockStereo(leftBuf, rightBuf, static_cast<int32_t>(numSamps));
+	}
+}

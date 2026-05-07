@@ -466,6 +466,11 @@ ActionResult Scene::OnAction(KeyAction action)
 				blockSize = params.BufSize;
 		}
 
+		std::cout << "VST insert request: depth=" << static_cast<int>(_selector->CurrentSelectDepth())
+			<< ", sampleRate=" << sampleRate
+			<< ", blockSize=" << blockSize
+			<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
+
 		switch (_selector->CurrentSelectDepth())
 		{
 		case base::SelectDepth::DEPTH_STATION:
@@ -473,6 +478,8 @@ ActionResult Scene::OnAction(KeyAction action)
 			auto station = std::dynamic_pointer_cast<Station>(hovering);
 			if (!station)
 				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
 
 			if (station->IsRemote())
 			{
@@ -490,6 +497,8 @@ ActionResult Scene::OnAction(KeyAction action)
 			if (!take)
 				return ActionResult::NoAction();
 
+			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
+
 			for (const auto& loop : take->GetLoops())
 				loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
 
@@ -500,6 +509,8 @@ ActionResult Scene::OnAction(KeyAction action)
 			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
 			if (!loop)
 				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: single loop" << std::endl;
 
 			loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
 			break;
@@ -521,16 +532,18 @@ if ((69 == action.KeyChar)
 	&& (Action::MODIFIER_SHIFT & action.Modifiers))
 {
 	auto hovering = _ChildFromPath(_selector->CurrentHover());
-	if (!hovering)
-	{
-		std::cout << "VST editor open: no hovered target" << std::endl;
-		return ActionResult::NoAction();
-	}
 
 	// Clean up any closed editor windows
 	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& w) {
 		return !w || !w->IsOpen();
 	}), _vstEditorWindows.end());
+
+	auto eatAction = []() {
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	};
 
 	// Helper to open editor for a loop's first plugin
 	auto tryOpenForLoop = [this](std::shared_ptr<Loop> loop)->bool {
@@ -550,68 +563,96 @@ if ((69 == action.KeyChar)
 		return true;
 	};
 
-	switch (_selector->CurrentSelectDepth())
-	{
-	case base::SelectDepth::DEPTH_STATION:
-	{
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
+	// Helper to open editor for a station's first plugin
+	auto tryOpenForStation = [this](std::shared_ptr<Station> station)->bool {
 		if (!station)
-			return ActionResult::NoAction();
+			return false;
 
-		if (station->IsRemote())
+		auto plugin = station->GetVstPlugin(0);
+		if (!plugin || !plugin->IsLoaded())
+			return false;
+
+		auto wnd = std::make_unique<graphics::VstEditorWindow>();
+		HINSTANCE hinst = GetModuleHandle(nullptr);
+		if (!wnd->Create(hinst, plugin))
+			return false;
+
+		_vstEditorWindows.push_back(std::move(wnd));
+		return true;
+	};
+
+	if (hovering)
+	{
+		switch (_selector->CurrentSelectDepth())
 		{
-			std::cout << "VST editor open: remote stations are read-only" << std::endl;
-			return ActionResult::NoAction();
+		case base::SelectDepth::DEPTH_STATION:
+		{
+			auto station = std::dynamic_pointer_cast<Station>(hovering);
+			if (!station)
+				break;
+
+			if (station->IsRemote())
+			{
+				std::cout << "VST editor open: remote stations are read-only" << std::endl;
+				return ActionResult::NoAction();
+			}
+
+			if (tryOpenForStation(station))
+				return eatAction();
+
+			for (const auto& take : station->GetLoopTakes())
+			{
+				for (const auto& loop : take->GetLoops())
+				{
+					if (tryOpenForLoop(loop))
+						return eatAction();
+				}
+			}
+			break;
 		}
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+		{
+			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+			if (!take)
+				break;
+
+			for (const auto& loop : take->GetLoops())
+			{
+				if (tryOpenForLoop(loop))
+					return eatAction();
+			}
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOP:
+		{
+			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+			if (!loop)
+				break;
+
+			if (tryOpenForLoop(loop))
+				return eatAction();
+			break;
+		}
+		}
+	}
+
+	// Fallback: if hover/depth mismatch, open the first available local plugin editor.
+	for (const auto& station : _stations)
+	{
+		if (!station || station->IsRemote())
+			continue;
+
+		if (tryOpenForStation(station))
+			return eatAction();
 
 		for (const auto& take : station->GetLoopTakes())
 		{
 			for (const auto& loop : take->GetLoops())
 			{
 				if (tryOpenForLoop(loop))
-				{
-					ActionResult res;
-					res.IsEaten = true;
-					res.ResultType = actions::ACTIONRESULT_DEFAULT;
-					return res;
-				}
+					return eatAction();
 			}
 		}
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-		if (!take)
-			return ActionResult::NoAction();
-
-		for (const auto& loop : take->GetLoops())
-		{
-			if (tryOpenForLoop(loop))
-			{
-				ActionResult res;
-				res.IsEaten = true;
-				res.ResultType = actions::ACTIONRESULT_DEFAULT;
-				return res;
-			}
-		}
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-		if (!loop)
-			return ActionResult::NoAction();
-
-		if (tryOpenForLoop(loop))
-		{
-			ActionResult res;
-			res.IsEaten = true;
-			res.ResultType = actions::ACTIONRESULT_DEFAULT;
-			return res;
-		}
-		break;
-	}
 	}
 
 	std::cout << "VST editor open: no loaded plugin found" << std::endl;

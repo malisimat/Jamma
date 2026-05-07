@@ -61,8 +61,9 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
 	auto takeHeight = numTakes > 0 ?
-		std::max(1u, stationParams.Size.Height - ((2 + numTakes - 1) * gap.Height) / numTakes) :
-		std::max(1u, stationParams.Size.Height - (2 * gap.Height));
+		stationParams.Size.Height - ((2 + numTakes - 1) * gap.Height) / numTakes :
+		stationParams.Size.Height - (2 * gap.Height);
+	takeHeight = takeHeight < 1u ? 1u : takeHeight;
 	Size2d takeSize = { stationParams.Size.Width - (2 * gap.Width), takeHeight };
 	LoopTakeParams takeParams;
 	takeParams.Size = { 80, 80 };
@@ -201,32 +202,71 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto masterPeak = 0.0f;
 	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
 	{
-		const auto& buf = _audioBuffers[i];
-		float tempBuf[constants::MaxBlockSize];
-		buf->Delay(sampsToRead);
-		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+		const auto hasStereoMate = (i + 1 < _audioBuffers.size()) && (i + 1 < _audioMixers.size());
+		if (hasStereoMate)
+		{
+			float leftBuf[constants::MaxBlockSize];
+			float rightBuf[constants::MaxBlockSize];
 
-		// When PlaybackRead returns a direct pointer into the ring buffer
-		// (no wrap-around), we must copy into tempBuf before scaling.
-		if (srcPtr != tempBuf)
-			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
+			const auto& leftSrc = _audioBuffers[i];
+			const auto& rightSrc = _audioBuffers[i + 1];
+			leftSrc->Delay(sampsToRead);
+			rightSrc->Delay(sampsToRead);
+
+			auto leftPtr = leftSrc->PlaybackRead(leftBuf, sampsToRead);
+			auto rightPtr = rightSrc->PlaybackRead(rightBuf, sampsToRead);
+
+			if (leftPtr != leftBuf)
+				std::copy(leftPtr, leftPtr + sampsToRead, leftBuf);
+			if (rightPtr != rightBuf)
+				std::copy(rightPtr, rightPtr + sampsToRead, rightBuf);
+
+			for (auto samp = 0u; samp < sampsToRead; samp++)
+			{
+				leftBuf[samp] *= masterLevel;
+				rightBuf[samp] *= masterLevel;
+			}
+
+			if (_vstChain && _vstChain->IsActive())
+				_vstChain->ProcessBlockStereo(leftBuf, rightBuf, sampsToRead);
+
+			for (auto samp = 0u; samp < sampsToRead; samp++)
+			{
+				auto leftAbs = std::abs(leftBuf[samp]);
+				auto rightAbs = std::abs(rightBuf[samp]);
+				if (leftAbs > masterPeak)
+					masterPeak = leftAbs;
+				if (rightAbs > masterPeak)
+					masterPeak = rightAbs;
+			}
+
+			_audioMixers[i]->WriteBlock(dest, leftBuf, sampsToRead);
+			_audioMixers[i + 1]->WriteBlock(dest, rightBuf, sampsToRead);
+			i++;
+			continue;
+		}
+
+		const auto& monoSrc = _audioBuffers[i];
+		float monoBuf[constants::MaxBlockSize];
+		monoSrc->Delay(sampsToRead);
+		auto monoPtr = monoSrc->PlaybackRead(monoBuf, sampsToRead);
+		if (monoPtr != monoBuf)
+			std::copy(monoPtr, monoPtr + sampsToRead, monoBuf);
 
 		for (auto samp = 0u; samp < sampsToRead; samp++)
-			tempBuf[samp] *= masterLevel;
+			monoBuf[samp] *= masterLevel;
 
-		// Track max peak across all channels for the master VU.
+		if (_vstChain && _vstChain->IsActive())
+			_vstChain->ProcessBlock(monoBuf, sampsToRead);
+
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
-			auto absSamp = std::abs(tempBuf[samp]);
+			auto absSamp = std::abs(monoBuf[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
 		}
 
-		// Apply station-output VST insert chain (if any active plugins)
-		if (_vstChain && _vstChain->IsActive())
-			_vstChain->ProcessBlock(tempBuf, sampsToRead);
-
-		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
+		_audioMixers[i]->WriteBlock(dest, monoBuf, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -1051,6 +1091,14 @@ void Station::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
+std::shared_ptr<vst::VstPlugin> Station::GetVstPlugin(size_t index) const
+{
+	if (!_vstChain)
+		return nullptr;
+
+	return _vstChain->GetPlugin(index);
+}
+
 std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 {
 	std::vector<io::JamFile::VstEntry> entries;
@@ -1074,19 +1122,37 @@ ActionResult Station::OnAction(JobAction action)
 	case JobAction::JOB_LOADVST:
 	{
 		// Running on the job thread — safe to do heavy work here.
+		std::cout << "[Station] JOB_LOADVST begin: station='" << _name
+			<< "', path='" << utils::EncodeUtf8(action.VstPath)
+			<< "', sampleRate=" << _sampleRate
+			<< ", blockSize=" << _blockSize
+			<< ", busChannels=" << NumBusChannels()
+			<< std::endl;
+
 		// Build/get the back chain
 		if (!_backVstChain)
 			_backVstChain = std::make_shared<vst::VstChain>();
 
 		auto plugin = std::make_shared<vst::VstPlugin>();
-		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, NumBusChannels()))
+		auto hostChannels = std::min(2u, NumBusChannels());
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels))
 		{
 			_backVstChain->AddPlugin(plugin);
 			_vstPluginPaths.push_back(action.VstPath);
+			std::cout << "[Station] JOB_LOADVST success: station='" << _name
+				<< "', plugin='" << plugin->Name()
+				<< "', chainSize=" << _backVstChain->NumPlugins()
+				<< std::endl;
 			// Signal _CommitChanges() (running on main thread under audioMutex)
 			// to swap the chain in.
 			_flipVstChain.store(true, std::memory_order_release);
 			_changesMade = true;
+		}
+		else
+		{
+			std::cout << "[Station] JOB_LOADVST failed: station='" << _name
+				<< "', path='" << utils::EncodeUtf8(action.VstPath)
+				<< "'" << std::endl;
 		}
 
 		ActionResult res;

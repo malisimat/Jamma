@@ -11,6 +11,7 @@
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
+#include "vst3sdk/pluginterfaces/vst/ivstmessage.h"
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
 #include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
 #include "vst3sdk/pluginterfaces/gui/iplugview.h"
@@ -25,20 +26,23 @@ using namespace Steinberg::Vst;
 class VstPlugin::Impl
 {
 public:
-	static constexpr Steinberg::int32 NumChannels = 1;
+	static constexpr Steinberg::int32 MaxHostedChannels = 2;
 
 	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
 	Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor;
 	Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
+	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentConnection;
+	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerConnection;
 	Steinberg::IPtr<Steinberg::IPlugView> plugView;
 
 	Steinberg::Vst::ProcessData processData;
 	Steinberg::Vst::AudioBusBuffers inputBus;
 	Steinberg::Vst::AudioBusBuffers outputBus;
-	float* inputChannelPtr;
-	float* outputChannelPtr;
-	float inputScratch[constants::MaxBlockSize];
-	float outputScratch[constants::MaxBlockSize];
+	Steinberg::int32 hostedChannels;
+	float* inputChannelPtrs[MaxHostedChannels];
+	float* outputChannelPtrs[MaxHostedChannels];
+	float inputScratch[MaxHostedChannels][constants::MaxBlockSize];
+	float outputScratch[MaxHostedChannels][constants::MaxBlockSize];
 
 	Impl() :
 		component(nullptr),
@@ -48,11 +52,15 @@ public:
 		processData(),
 		inputBus(),
 		outputBus(),
-		inputChannelPtr(nullptr),
-		outputChannelPtr(nullptr)
+		hostedChannels(1),
+		inputChannelPtrs{ nullptr, nullptr },
+		outputChannelPtrs{ nullptr, nullptr }
 	{
-		std::fill(std::begin(inputScratch), std::end(inputScratch), 0.0f);
-		std::fill(std::begin(outputScratch), std::end(outputScratch), 0.0f);
+		for (Steinberg::int32 c = 0; c < MaxHostedChannels; c++)
+		{
+			std::fill(std::begin(inputScratch[c]), std::end(inputScratch[c]), 0.0f);
+			std::fill(std::begin(outputScratch[c]), std::end(outputScratch[c]), 0.0f);
+		}
 	}
 };
 #endif
@@ -85,6 +93,14 @@ bool VstPlugin::Load(const std::wstring& path,
 {
 #ifdef JAMMA_VST3_ENABLED
 	Unload();
+	std::wcout << L"[VstPlugin] Load request: path='" << path
+		<< L"', sampleRate=" << sampleRate
+		<< L", blockSize=" << blockSize
+		<< L", requestedChannels=" << numChannels
+		<< std::endl;
+
+	_impl->hostedChannels = static_cast<Steinberg::int32>(std::max(1u, std::min(numChannels, static_cast<unsigned int>(Impl::MaxHostedChannels))));
+	std::cout << "[VstPlugin] Hosted channels=" << _impl->hostedChannels << std::endl;
 
 	// 1. Load the DLL
 	_moduleHandle = LoadLibraryW(path.c_str());
@@ -164,6 +180,33 @@ bool VstPlugin::Load(const std::wstring& path,
 		return false;
 	}
 
+	auto inputBusCount = _impl->component->getBusCount(kAudio, kInput);
+	auto outputBusCount = _impl->component->getBusCount(kAudio, kOutput);
+	std::cout << "[VstPlugin] Audio buses: inputs=" << inputBusCount
+		<< ", outputs=" << outputBusCount << std::endl;
+
+	if (inputBusCount > 0)
+	{
+		BusInfo inBus{};
+		if (_impl->component->getBusInfo(kAudio, kInput, 0, inBus) == kResultOk)
+			std::cout << "[VstPlugin] Input bus 0 channels=" << inBus.channelCount << std::endl;
+	}
+
+	if (outputBusCount > 0)
+	{
+		BusInfo outBus{};
+		if (_impl->component->getBusInfo(kAudio, kOutput, 0, outBus) == kResultOk)
+		{
+			std::cout << "[VstPlugin] Output bus 0 channels=" << outBus.channelCount << std::endl;
+			if (outBus.channelCount != _impl->hostedChannels)
+			{
+				std::cout << "[VstPlugin] Warning: host currently processes " << _impl->hostedChannels
+					<< " channel(s), plugin output bus wants " << outBus.channelCount
+					<< " channel(s). Audio result may be unchanged or degraded." << std::endl;
+			}
+		}
+	}
+
 	// 6. Query IAudioProcessor
 	IAudioProcessor* rawProcessor = nullptr;
 	if (_impl->component->queryInterface(IAudioProcessor::iid, (void**)&rawProcessor) != kResultOk
@@ -192,20 +235,28 @@ bool VstPlugin::Load(const std::wstring& path,
 	// 8. Activate buses and component
 	// Attempt to activate the first input/output audio bus (index 0).
 	// Plugins that have no bus at index 0 will gracefully return kResultFalse.
-	_impl->component->activateBus(kAudio, kInput, 0, true);
-	_impl->component->activateBus(kAudio, kOutput, 0, true);
-	_impl->component->setActive(true);
+	auto inActivateRes = _impl->component->activateBus(kAudio, kInput, 0, true);
+	auto outActivateRes = _impl->component->activateBus(kAudio, kOutput, 0, true);
+	auto activeRes = _impl->component->setActive(true);
+	auto processingRes = _impl->processor->setProcessing(true);
+	std::cout << "[VstPlugin] activateBus results: input=" << inActivateRes
+		<< ", output=" << outActivateRes
+		<< ", setActive=" << activeRes
+		<< ", setProcessing=" << processingRes << std::endl;
 
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
-	_impl->inputChannelPtr = _impl->inputScratch;
-	_impl->outputChannelPtr = _impl->outputScratch;
+	for (Steinberg::int32 c = 0; c < _impl->hostedChannels; c++)
+	{
+		_impl->inputChannelPtrs[c] = _impl->inputScratch[c];
+		_impl->outputChannelPtrs[c] = _impl->outputScratch[c];
+	}
 
-	_impl->inputBus.numChannels = Impl::NumChannels;
-	_impl->inputBus.channelBuffers32 = &_impl->inputChannelPtr;
+	_impl->inputBus.numChannels = _impl->hostedChannels;
+	_impl->inputBus.channelBuffers32 = _impl->inputChannelPtrs;
 	_impl->inputBus.silenceFlags = 0;
 
-	_impl->outputBus.numChannels = Impl::NumChannels;
-	_impl->outputBus.channelBuffers32 = &_impl->outputChannelPtr;
+	_impl->outputBus.numChannels = _impl->hostedChannels;
+	_impl->outputBus.channelBuffers32 = _impl->outputChannelPtrs;
 	_impl->outputBus.silenceFlags = 0;
 
 	_impl->processData.processMode = kRealtime;
@@ -227,6 +278,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		&& rawController)
 	{
 		_impl->controller = IPtr<IEditController>(rawController, false);
+		std::cout << "[VstPlugin] Controller queryInterface: ok" << std::endl;
 	}
 	else
 	{
@@ -241,8 +293,37 @@ bool VstPlugin::Load(const std::wstring& path,
 				&& rawController)
 			{
 				_impl->controller = IPtr<IEditController>(rawController, false);
-				_impl->controller->initialize(nullptr);
+				auto initRes = _impl->controller->initialize(nullptr);
+				std::cout << "[VstPlugin] Separate controller created, initialize=" << initRes << std::endl;
 			}
+		}
+	}
+
+	if (!_impl->controller)
+		std::cout << "[VstPlugin] No controller available (editor may not open)" << std::endl;
+
+	// For separate component/controller plugins, connect both endpoints so
+	// the UI and processor can exchange state/parameter messages.
+	if (_impl->controller)
+	{
+		IConnectionPoint* rawComponentConn = nullptr;
+		IConnectionPoint* rawControllerConn = nullptr;
+		if (_impl->component->queryInterface(IConnectionPoint::iid, (void**)&rawComponentConn) == kResultOk && rawComponentConn)
+			_impl->componentConnection = IPtr<IConnectionPoint>(rawComponentConn, false);
+
+		if (_impl->controller->queryInterface(IConnectionPoint::iid, (void**)&rawControllerConn) == kResultOk && rawControllerConn)
+			_impl->controllerConnection = IPtr<IConnectionPoint>(rawControllerConn, false);
+
+		if (_impl->componentConnection && _impl->controllerConnection)
+		{
+			auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
+			auto k2c = _impl->controllerConnection->connect(_impl->componentConnection);
+			std::cout << "[VstPlugin] ConnectionPoint connect: component->controller=" << c2k
+				<< ", controller->component=" << k2c << std::endl;
+		}
+		else
+		{
+			std::cout << "[VstPlugin] ConnectionPoint not available on component/controller" << std::endl;
 		}
 	}
 
@@ -264,6 +345,15 @@ void VstPlugin::Unload()
 
 	if (_impl && _impl->component)
 	{
+		if (_impl->processor)
+			_impl->processor->setProcessing(false);
+
+		if (_impl->componentConnection && _impl->controllerConnection)
+		{
+			_impl->componentConnection->disconnect(_impl->controllerConnection);
+			_impl->controllerConnection->disconnect(_impl->componentConnection);
+		}
+
 		_impl->component->setActive(false);
 		_impl->component->terminate();
 		_impl->component = nullptr;
@@ -273,6 +363,8 @@ void VstPlugin::Unload()
 	{
 		_impl->processor = nullptr;
 		_impl->controller = nullptr;
+		_impl->componentConnection = nullptr;
+		_impl->controllerConnection = nullptr;
 		_impl->plugView = nullptr;
 	}
 
@@ -294,18 +386,56 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed))
 		return;
 
-	// Copy mono input into the scratch buffer
-	std::copy(monoBuf, monoBuf + numSamples, _impl->inputScratch);
+	if (!_impl)
+		return;
+
+	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
+		return;
+
+	std::copy(monoBuf, monoBuf + numSamples, _impl->inputScratch[0]);
+	if (_impl->hostedChannels > 1)
+		std::fill(_impl->inputScratch[1], _impl->inputScratch[1] + numSamples, 0.0f);
 
 	// Update sample count (other ProcessData fields are fixed from Load())
 	_impl->processData.numSamples = numSamples;
 
 	_impl->processor->process(_impl->processData);
 
-	// Copy processed output back to the caller's buffer
-	std::copy(_impl->outputScratch, _impl->outputScratch + numSamples, monoBuf);
+	std::copy(_impl->outputScratch[0], _impl->outputScratch[0] + numSamples, monoBuf);
 #else
 	(void)monoBuf; (void)numSamples;
+#endif
+}
+
+void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed))
+		return;
+
+	if (!_impl)
+		return;
+
+	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
+		return;
+
+	if (_impl->hostedChannels < 2)
+	{
+		ProcessBlock(leftBuf, numSamples);
+		ProcessBlock(rightBuf, numSamples);
+		return;
+	}
+
+	std::copy(leftBuf, leftBuf + numSamples, _impl->inputScratch[0]);
+	std::copy(rightBuf, rightBuf + numSamples, _impl->inputScratch[1]);
+
+	_impl->processData.numSamples = numSamples;
+	_impl->processor->process(_impl->processData);
+
+	std::copy(_impl->outputScratch[0], _impl->outputScratch[0] + numSamples, leftBuf);
+	std::copy(_impl->outputScratch[1], _impl->outputScratch[1] + numSamples, rightBuf);
+#else
+	(void)leftBuf; (void)rightBuf; (void)numSamples;
 #endif
 }
 
@@ -313,22 +443,33 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (!_isLoaded || !_impl || !_impl->controller)
+	{
+		std::cout << "[VstPlugin] OpenEditor failed: loaded=" << _isLoaded
+			<< ", hasImpl=" << (_impl ? 1 : 0)
+			<< ", hasController=" << ((_impl && _impl->controller) ? 1 : 0)
+			<< std::endl;
 		return false;
+	}
 
 	IPlugView* rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
 	if (!rawView)
+	{
+		std::cout << "[VstPlugin] OpenEditor failed: createView returned null" << std::endl;
 		return false;
+	}
 
 	_impl->plugView = IPtr<IPlugView>(rawView, false);
 
 	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
+		std::cout << "[VstPlugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
 		_impl->plugView = nullptr;
 		return false;
 	}
 
 	if (_impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND) != kResultOk)
 	{
+		std::cout << "[VstPlugin] OpenEditor failed: attached(HWND) failed" << std::endl;
 		_impl->plugView = nullptr;
 		return false;
 	}
@@ -342,6 +483,8 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 			static_cast<unsigned int>(rect.getHeight())
 		};
 	}
+
+	std::cout << "[VstPlugin] OpenEditor success: size=" << _editorSize.Width << "x" << _editorSize.Height << std::endl;
 
 	return true;
 #else

@@ -53,6 +53,10 @@ namespace vst
 		// Real-time safe: no heap allocation.
 		void ProcessBlock(float* monoBuf, int numSamps) noexcept;
 
+		// Apply all active plugins in series to numSamps of stereo audio.
+		// leftBuf/rightBuf are modified in-place.
+		void ProcessBlockStereo(float* leftBuf, float* rightBuf, int numSamps) noexcept;
+
 	private:
 		std::vector<std::shared_ptr<VstPlugin>> _plugins;
 
