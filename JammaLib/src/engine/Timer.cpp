@@ -104,12 +104,11 @@ std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long lengt
 	case QUANTISE_POWER:
 	{
 		unsigned long lenCur = 0;
-		unsigned long lenLast = lenCur;
+		unsigned long lenLast = 0;
 		auto currentMultiplier = 1u;
 
-		while (currentMultiplier < 128)
+		while (currentMultiplier <= 128)
 		{
-			currentMultiplier *= 2;
 			lenCur = currentMultiplier * _quantiseSamps;
 
 			if (lenCur >= length)
@@ -124,6 +123,7 @@ std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long lengt
 			}
 
 			lenLast = lenCur;
+			currentMultiplier *= 2;
 		}
 	}
 	}

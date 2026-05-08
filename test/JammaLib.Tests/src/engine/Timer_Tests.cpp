@@ -111,9 +111,19 @@ TEST(Timer, QuantiseMultiple_LengthShorterThanOneGrain_SnapsToZero) {
 }
 
 // ── QUANTISE_POWER ───────────────────────────────────────────────────────────
-// Candidates are 2×, 4×, 8×, 16×, … grain (powers of 2 starting at 2).
+// Candidates are 1×, 2×, 4×, 8×, 16×, … grain.
 // Error convention: positive → snap lengthened the loop (recorded too short);
 //                  negative → snap shortened the loop (recorded too long).
+
+TEST(Timer, QuantisePower_Exactly1xGrain_ZeroError) {
+	Timer t;
+	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
+
+	auto [len, err] = t.QuantiseLength(12000ul); // exactly 1×
+
+	ASSERT_EQ(12000ul, len);
+	ASSERT_EQ(0, err);
+}
 
 TEST(Timer, QuantisePower_Exactly2xGrain_ZeroError) {
 	Timer t;
@@ -183,11 +193,22 @@ TEST(Timer, QuantisePower_LengthShorterThanOneGrain_SnapsDown_NegativeError) {
 	Timer t;
 	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
 
-	// 4000 < 12000: first candidate is 2×(24000).
-	// dLast = 4000 (distance to 0), dCur = 20000 (distance to 24000)
+	// 4000 < 12000: compare against 0 and 1×(12000).
+	// dLast = 4000 (distance to 0), dCur = 8000 (distance to 12000)
 	// → snaps DOWN to 0 (the implicit lower bound before first power).
 	auto [len, err] = t.QuantiseLength(4000ul);
 
 	ASSERT_EQ(0ul, len);
 	ASSERT_EQ(-4000, err);
+}
+
+TEST(Timer, QuantisePower_NearOneGrain_DoesNotSnapToZero) {
+	Timer t;
+	t.SetQuantisation(88200u, Timer::QUANTISE_POWER);
+
+	// Regression: lengths near 1× grain must quantise to 1×, not 0 or 2×.
+	auto [len, err] = t.QuantiseLength(85000ul);
+
+	ASSERT_EQ(88200ul, len);
+	ASSERT_EQ(3200, err);
 }
