@@ -182,7 +182,7 @@ void ConsoleTui::Start(std::string prompt, SubmitHandler onSubmit)
 		_origCerr = std::cerr.rdbuf(_cerrBuf.get());
 
 		{
-			std::lock_guard<std::mutex> lk(_renderMutex);
+			std::scoped_lock lock(_renderMutex);
 			_RedrawInputLocked();
 		}
 
@@ -288,7 +288,7 @@ void ConsoleTui::_OnLogChar(char c)
 	std::string formatted = FormatLine(pending);
 	pending.clear();
 
-	std::lock_guard<std::mutex> lk(_renderMutex);
+	std::scoped_lock lock(_renderMutex);
 
 	// Sequence:
 	//   \r \x1b[2K   wipe whatever is on the current (input) line
@@ -328,7 +328,7 @@ void ConsoleTui::_InputLoop()
 		bool haveSubmit = false;
 
 		{
-			std::lock_guard<std::mutex> lk(_renderMutex);
+			std::scoped_lock lock(_renderMutex);
 			bool dirty = false;
 
 			for (DWORD i = 0; i < numRead; ++i)
