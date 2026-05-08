@@ -254,7 +254,7 @@ namespace engine
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
-		std::shared_mutex _jobMutex;
+		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
 		io::UserConfig _userConfig;
