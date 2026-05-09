@@ -8,51 +8,7 @@
 #include "VstEditorWindow.h"
 #include "Window.h"
 #include "../vst/VstPlugin.h"
-#include <chrono>
-#include <filesystem>
-#include <fstream>
-#include <mutex>
 #include <ole2.h>
-
-namespace
-{
-	bool ReadVstWindowDebugFlag(const wchar_t* name)
-	{
-		wchar_t value[32]{};
-		const auto len = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
-		if (len == 0 || len >= _countof(value))
-			return false;
-
-		return (_wcsicmp(value, L"0") != 0)
-			&& (_wcsicmp(value, L"false") != 0)
-			&& (_wcsicmp(value, L"off") != 0)
-			&& (_wcsicmp(value, L"no") != 0);
-	}
-
-	void AppendWindowDebugEvent(const std::string& message)
-	{
-		static const bool enabled = ReadVstWindowDebugFlag(L"JAMMA_VST_DEBUG");
-		if (!enabled)
-			return;
-
-		wchar_t appData[MAX_PATH]{};
-		if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) == 0)
-			return;
-
-		static std::mutex logMutex;
-		std::scoped_lock lock(logMutex);
-
-		const auto logPath = std::filesystem::path(appData) / "Jamma" / "vst-debug-events.log";
-		std::ofstream out(logPath, std::ios::app);
-		if (!out.is_open())
-			return;
-
-		SYSTEMTIME now{};
-		GetLocalTime(&now);
-		out << now.wHour << ':' << now.wMinute << ':' << now.wSecond << '.' << now.wMilliseconds
-			<< " [VstEditorWindow] " << message << std::endl;
-	}
-}
 
 using namespace graphics;
 using namespace actions;
@@ -76,8 +32,6 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	std::shared_ptr<vst::VstPlugin> plugin,
 	HWND /*parentHwnd*/)
 {
-	AppendWindowDebugEvent("Create begin");
-
 	if (!plugin || !plugin->IsLoaded())
 		return false;
 
@@ -108,7 +62,6 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	// plug-ins, may pump messages internally). Blocking the main render
 	// thread here would freeze the entire host. Return immediately; callers
 	// can poll IsOpen() to learn when the editor is actually visible.
-	AppendWindowDebugEvent("Create launched UI thread");
 	return true;
 }
 
@@ -118,7 +71,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	const HRESULT oleHr = OleInitialize(nullptr);
 	const bool oleOk = SUCCEEDED(oleHr);
-	AppendWindowDebugEvent(oleOk ? "UI thread OleInitialize ok" : "UI thread OleInitialize failed");
 
 	HWND wnd = Window::CreateSimpleWindow(
 		hInstance,
@@ -132,7 +84,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	if (!wnd)
 	{
-		AppendWindowDebugEvent("UI thread CreateWindow failed");
 		_failed.store(true, std::memory_order_release);
 		if (oleOk)
 			OleUninitialize();
@@ -141,15 +92,12 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	_editorWnd.store(wnd, std::memory_order_release);
 	_editorHostWnd = wnd;
-	AppendWindowDebugEvent("UI thread host window created");
 
 	ShowWindow(wnd, SW_SHOWNORMAL);
 	UpdateWindow(wnd);
-	AppendWindowDebugEvent("UI thread host window shown");
 
 	if (!_plugin)
 	{
-		AppendWindowDebugEvent("UI thread no plugin");
 		DestroyWindow(wnd);
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_failed.store(true, std::memory_order_release);
@@ -169,10 +117,7 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 	std::thread openThread([this, wnd, openEvent, &openResult]() {
 		const HRESULT workerOle = OleInitialize(nullptr);
 		const bool workerOleOk = SUCCEEDED(workerOle);
-		AppendWindowDebugEvent(workerOleOk ? "Open worker OleInitialize ok" : "Open worker OleInitialize failed");
-		AppendWindowDebugEvent("Open worker calling OpenEditor");
 		openResult = _plugin->OpenEditor(wnd);
-		AppendWindowDebugEvent(openResult ? "Open worker OpenEditor true" : "Open worker OpenEditor false");
 		if (workerOleOk)
 			OleUninitialize();
 		SetEvent(openEvent);
@@ -201,7 +146,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 		}
 		else
 		{
-			AppendWindowDebugEvent("MsgWaitForMultipleObjectsEx failed");
 			break;
 		}
 	}
@@ -211,7 +155,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	if (!openResult)
 	{
-		AppendWindowDebugEvent("UI thread OpenEditor failed");
 		DestroyWindow(wnd);
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_failed.store(true, std::memory_order_release);
@@ -219,8 +162,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 			OleUninitialize();
 		return;
 	}
-
-	AppendWindowDebugEvent("UI thread OpenEditor succeeded");
 
 	// Resize to the editor's preferred size now that the view is attached.
 	auto sz = _plugin->GetEditorSize();
@@ -240,7 +181,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 	UpdateWindow(wnd);
 
 	_ready.store(true, std::memory_order_release);
-	AppendWindowDebugEvent("UI thread entering message loop");
 
 	MSG msg{};
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0)
@@ -248,8 +188,6 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
 	}
-
-	AppendWindowDebugEvent("UI thread leaving message loop");
 
 	if (_plugin)
 		_plugin->CloseEditor();
@@ -272,7 +210,6 @@ void VstEditorWindow::Destroy()
 
 	if (wnd)
 	{
-		AppendWindowDebugEvent("Destroy posting WM_CLOSE");
 		PostMessageW(wnd, WM_CLOSE, 0, 0);
 	}
 	else if (tid != 0)
@@ -297,7 +234,6 @@ void VstEditorWindow::OnAction(const WindowAction& action)
 	switch (action.WindowEventType)
 	{
 	case WindowAction::DESTROY:
-		AppendWindowDebugEvent("WM_DESTROY handled");
 		// Mark the window gone; the UI thread will exit its message loop and
 		// perform CloseEditor / cleanup before returning.
 		_editorWnd.store(nullptr, std::memory_order_release);
@@ -346,7 +282,6 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	}
 	case WM_CLOSE:
 	{
-		AppendWindowDebugEvent("WM_CLOSE received");
 		if (self->_plugin)
 			self->_plugin->CloseEditor();
 		DestroyWindow(hWnd);

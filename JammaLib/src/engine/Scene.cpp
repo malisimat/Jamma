@@ -888,8 +888,6 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
-	_jobTickCount.fetch_add(1, std::memory_order_relaxed);
-
 	auto snapshot = _ninjamSession->Pump();
 	if (snapshot.has_value())
 	{
@@ -1042,88 +1040,6 @@ void Scene::CloseAudio()
 	_audioDevice->Stop();
 }
 
-bool Scene::TryOpenFirstAvailableVstEditor()
-{
-	_vstEditorOpenAttempts.fetch_add(1, std::memory_order_relaxed);
-
-	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& w) {
-		return !w || !w->IsOpen();
-	}), _vstEditorWindows.end());
-
-	auto tryOpenForLoop = [this](std::shared_ptr<Loop> loop)->bool {
-		if (!loop)
-			return false;
-
-		auto plugin = loop->GetVstPlugin(0);
-		if (!plugin || !plugin->IsLoaded())
-			return false;
-
-		auto wnd = std::make_unique<graphics::VstEditorWindow>();
-		HINSTANCE hinst = GetModuleHandle(nullptr);
-		if (!wnd->Create(hinst, plugin))
-			return false;
-
-		_vstEditorWindows.push_back(std::move(wnd));
-		return true;
-	};
-
-	auto tryOpenForStation = [this](std::shared_ptr<Station> station)->bool {
-		if (!station)
-			return false;
-
-		auto plugin = station->GetVstPlugin(0);
-		if (!plugin || !plugin->IsLoaded())
-			return false;
-
-		auto wnd = std::make_unique<graphics::VstEditorWindow>();
-		HINSTANCE hinst = GetModuleHandle(nullptr);
-		if (!wnd->Create(hinst, plugin))
-			return false;
-
-		_vstEditorWindows.push_back(std::move(wnd));
-		return true;
-	};
-
-	for (const auto& station : _stations)
-	{
-		if (!station || station->IsRemote())
-			continue;
-
-		if (tryOpenForStation(station))
-		{
-			_vstEditorOpenSuccesses.fetch_add(1, std::memory_order_relaxed);
-			std::cout << "[Debug] Auto-opened station VST editor" << std::endl;
-			return true;
-		}
-
-		for (const auto& take : station->GetLoopTakes())
-		{
-			for (const auto& loop : take->GetLoops())
-			{
-				if (tryOpenForLoop(loop))
-				{
-					_vstEditorOpenSuccesses.fetch_add(1, std::memory_order_relaxed);
-					std::cout << "[Debug] Auto-opened loop VST editor" << std::endl;
-					return true;
-				}
-			}
-		}
-	}
-
-	std::cout << "[Debug] Auto-open VST editor found no loaded plugin" << std::endl;
-	return false;
-}
-
-Scene::DebugSnapshot Scene::GetDebugSnapshot() const noexcept
-{
-	DebugSnapshot snapshot;
-	snapshot.AudioCallbackCount = _audioCallbackCount.load(std::memory_order_relaxed);
-	snapshot.JobTickCount = _jobTickCount.load(std::memory_order_relaxed);
-	snapshot.VstEditorOpenAttempts = _vstEditorOpenAttempts.load(std::memory_order_relaxed);
-	snapshot.VstEditorOpenSuccesses = _vstEditorOpenSuccesses.load(std::memory_order_relaxed);
-	return snapshot;
-}
-
 void Scene::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
@@ -1176,7 +1092,6 @@ int Scene::AudioCallback(void* outBuffer,
 	void* userData)
 {
 	Scene* scene = (Scene*)userData;
-	scene->_audioCallbackCount.fetch_add(1, std::memory_order_relaxed);
 	std::scoped_lock lock(scene->GetAudioMutex());
 	scene->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
 
