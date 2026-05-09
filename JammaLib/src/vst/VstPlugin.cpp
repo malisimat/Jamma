@@ -24,17 +24,19 @@ using namespace vst;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+// Host-side adapter required by VST3 API: plug-ins call IPlugFrame::resizeView
+// to request editor window resizing. This object is host-owned and must not be
+// destroyed by a plug-in release() call.
 class HostPlugFrame final : public IPlugFrame
 {
 public:
 	HostPlugFrame() :
 		_hostWindow(nullptr),
-		_frameWindow(nullptr)
-	{
-		FUNKNOWN_CTOR
-	}
+		_frameWindow(nullptr),
+		_resizeViewRecursionGuard(false)
+	{}
 
-	~HostPlugFrame() noexcept { FUNKNOWN_DTOR }
+	~HostPlugFrame() noexcept = default;
 
 	void SetHostWindow(HWND hostWindow) noexcept
 	{
@@ -48,6 +50,28 @@ public:
 	{
 		if (!view || !newSize || !_hostWindow)
 			return kInvalidArgument;
+
+		const auto sameRect = [](const ViewRect& a, const ViewRect& b) noexcept {
+			return a.left == b.left && a.top == b.top &&
+				a.right == b.right && a.bottom == b.bottom;
+		};
+
+		if (_resizeViewRecursionGuard)
+			return kResultFalse;
+
+		ViewRect currentSize{};
+		if (view->getSize(&currentSize) != kResultTrue)
+			return kInternalError;
+
+		if (sameRect(currentSize, *newSize))
+			return kResultTrue;
+
+		struct ResizeGuard final
+		{
+			explicit ResizeGuard(bool& flagRef) : flag(flagRef) { flag = true; }
+			~ResizeGuard() { flag = false; }
+			bool& flag;
+		} guard(_resizeViewRecursionGuard);
 
 		const auto width = std::max<int32>(0, newSize->getWidth());
 		const auto height = std::max<int32>(0, newSize->getHeight());
@@ -79,28 +103,50 @@ public:
 				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 		}
 
-		const auto onSizeResult = view->onSize(newSize);
-		return onSizeResult;
+		ViewRect resizedSize{};
+		if (view->getSize(&resizedSize) != kResultTrue)
+			return kInternalError;
+
+		if (!sameRect(resizedSize, *newSize))
+			view->onSize(newSize);
+
+		return kResultTrue;
 	}
 
-	DECLARE_FUNKNOWN_METHODS
+	tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+	{
+		if (!obj)
+			return kInvalidArgument;
+
+		if (FUnknownPrivate::iidEqual(iid, IPlugFrame::iid) ||
+			FUnknownPrivate::iidEqual(iid, FUnknown::iid))
+		{
+			*obj = static_cast<IPlugFrame*>(this);
+			addRef();
+			return kResultTrue;
+		}
+
+		*obj = nullptr;
+		return kNoInterface;
+	}
+
+	uint32 PLUGIN_API addRef() override { return 1000; }
+	uint32 PLUGIN_API release() override { return 1000; }
 
 private:
 	HWND _hostWindow;
 	HWND _frameWindow;
+	bool _resizeViewRecursionGuard;
 };
 
-IMPLEMENT_FUNKNOWN_METHODS(HostPlugFrame, IPlugFrame, IPlugFrame::iid)
-
+// Host-side adapter required by VST3 API: controller->setComponentHandler()
+// expects an implementation from the host process.
 class HostComponentHandler final : public IComponentHandler
 {
 public:
-	HostComponentHandler()
-	{
-		FUNKNOWN_CTOR
-	}
+	HostComponentHandler() = default;
 
-	~HostComponentHandler() noexcept { FUNKNOWN_DTOR }
+	~HostComponentHandler() noexcept = default;
 
 	tresult PLUGIN_API beginEdit(ParamID id) override
 	{
@@ -124,13 +170,29 @@ public:
 	tresult PLUGIN_API restartComponent(int32 flags) override
 	{
 		(void)flags;
-		return kResultOk;
+		return kNotImplemented;
 	}
 
-	DECLARE_FUNKNOWN_METHODS
-};
+	tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+	{
+		if (!obj)
+			return kInvalidArgument;
 
-IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
+		if (FUnknownPrivate::iidEqual(iid, IComponentHandler::iid) ||
+			FUnknownPrivate::iidEqual(iid, FUnknown::iid))
+		{
+			*obj = static_cast<IComponentHandler*>(this);
+			addRef();
+			return kResultTrue;
+		}
+
+		*obj = nullptr;
+		return kNoInterface;
+	}
+
+	uint32 PLUGIN_API addRef() override { return 1000; }
+	uint32 PLUGIN_API release() override { return 1000; }
+};
 
 class VstPlugin::Impl
 {

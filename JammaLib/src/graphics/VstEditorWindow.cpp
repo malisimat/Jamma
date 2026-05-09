@@ -106,52 +106,18 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 		return;
 	}
 
-	// Call OpenEditor on a worker thread while THIS thread (the HWND owner)
-	// pumps messages. Many VST3 plug-ins do internal PostMessage/SendMessage
-	// or COM marshalling round-trips inside IPlugView::attached() and require
-	// the HWND owner thread to be pumping messages while attached() runs. If
-	// we called OpenEditor directly here we would block our own message pump
-	// and deadlock the plug-in.
-	HANDLE openEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	bool openResult = false;
-	std::thread openThread([this, wnd, openEvent, &openResult]() {
-		const HRESULT workerOle = OleInitialize(nullptr);
-		const bool workerOleOk = SUCCEEDED(workerOle);
-		openResult = _plugin->OpenEditor(wnd);
-		if (workerOleOk)
-			OleUninitialize();
-		SetEvent(openEvent);
-	});
-
-	// Pump messages until the worker signals completion.
-	for (;;)
-	{
-		const DWORD waitRes = MsgWaitForMultipleObjectsEx(
-			1, &openEvent,
-			INFINITE,
-			QS_ALLINPUT,
-			MWMO_INPUTAVAILABLE);
-
-		if (waitRes == WAIT_OBJECT_0)
-			break;
-
-		if (waitRes == WAIT_OBJECT_0 + 1)
-		{
-			MSG pm{};
-			while (PeekMessageW(&pm, nullptr, 0, 0, PM_REMOVE))
-			{
-				TranslateMessage(&pm);
-				DispatchMessageW(&pm);
-			}
-		}
-		else
-		{
-			break;
-		}
-	}
-
-	openThread.join();
-	CloseHandle(openEvent);
+	// Call OpenEditor directly on this thread (the HWND owner) so that any
+	// Win32 child HWNDs the plugin creates during IPlugView::attached() are
+	// owned by this thread. That guarantees the GetMessageW loop below will
+	// dispatch WM_PAINT, WM_TIMER, and input events for the plugin's view —
+	// the root cause of the blank-window bug when a worker thread was used.
+	//
+	// Same-thread SendMessage calls (the most common internal plug-in pattern)
+	// are handled by Win32 re-entrancy and never require the pump to be idle.
+	// For the rare plug-in that PostMessages to the parent during attached()
+	// those messages queue up and are drained immediately after this call
+	// returns, before the main GetMessageW loop starts.
+	const bool openResult = _plugin->OpenEditor(wnd);
 
 	if (!openResult)
 	{
@@ -282,8 +248,12 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	}
 	case WM_CLOSE:
 	{
-		if (self->_plugin)
-			self->_plugin->CloseEditor();
+		// Do NOT call CloseEditor() here. removed() may itself need messages
+		// pumped (e.g. COM STA teardown), and calling it from inside the
+		// WM_CLOSE handler would block the pump and risk a deadlock.
+		// DestroyWindow posts WM_DESTROY → PostQuitMessage, which exits the
+		// GetMessageW loop. CloseEditor() is called there, safely outside
+		// any message handler.
 		DestroyWindow(hWnd);
 		return 0;
 	}
