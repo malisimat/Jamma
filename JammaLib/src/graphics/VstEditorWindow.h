@@ -7,7 +7,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <windows.h>
 #include "../actions/WindowAction.h"
 #include "../utils/CommonTypes.h"
@@ -52,18 +54,27 @@ namespace graphics
 		// Detach the plugin view and destroy the HWND.
 		void Destroy();
 
-		bool IsOpen() const noexcept { return _editorWnd != nullptr; }
+		bool IsOpen() const noexcept { return _editorWnd.load() != nullptr; }
 
 		// Called by the window's WNDPROC for WM_SIZE and WM_CLOSE.
 		void OnAction(const actions::WindowAction& action);
+		void ResizeEditorHostWindow() noexcept;
 
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message,
 			WPARAM wParam, LPARAM lParam) noexcept;
 
 	private:
+		void UiThreadProc(HINSTANCE hInstance, std::wstring title);
+
 		static constexpr LPCWSTR _ClassName = L"JammaVstEditorWindow";
 
-		HWND _editorWnd;
+		std::atomic<HWND> _editorWnd;
+		HWND _editorHostWnd;
 		std::shared_ptr<vst::VstPlugin> _plugin;
+
+		std::thread _uiThread;
+		std::atomic<DWORD> _uiThreadId;
+		std::atomic<bool> _ready;
+		std::atomic<bool> _failed;
 	};
 }

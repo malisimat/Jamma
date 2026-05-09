@@ -91,6 +91,7 @@ namespace vst
 		bool _isLoaded;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
+		std::atomic<bool> _editorOpening;
 		utils::Size2d _editorSize;
 		HMODULE _moduleHandle;
 		std::unique_ptr<Impl> _impl;

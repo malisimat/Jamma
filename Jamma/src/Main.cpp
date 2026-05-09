@@ -12,6 +12,7 @@
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
+#include <objbase.h>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -148,6 +149,12 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
 	SetupConsole();
+	// VST3 plug-ins built on VSTGUI (e.g. Valhalla) call RegisterDragDrop /
+	// OLE APIs from inside IPlugView::attached(). Use OleInitialize (which
+	// also performs CoInitializeEx as STA) so attach() does not deadlock or
+	// fail because the host thread isn't OLE-initialized.
+	const HRESULT uiComInit = OleInitialize(nullptr);
+	const bool uiComInitialized = SUCCEEDED(uiComInit);
 
 	// Bring up the console TUI immediately after SetupConsole() so that
 	// ALL application logs (socket init, file load, connection lifecycle, etc.)
@@ -260,6 +267,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	MSG msg;
 	bool active = true;
 	uint64_t nextAutoOpenFrame = 30;
+	uint64_t nextUiHeartbeatFrame = 300;
 	while (active)
 	{
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -279,6 +287,16 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			break;
 
 		const auto currentRenderHeartbeat = renderHeartbeat.load(std::memory_order_relaxed);
+		if (debugEnabled && currentRenderHeartbeat >= nextUiHeartbeatFrame)
+		{
+			auto snapshot = scene.value()->GetDebugSnapshot();
+			std::cout << "[Debug] UI still pumping: render=" << currentRenderHeartbeat
+				<< ", audio=" << snapshot.AudioCallbackCount
+				<< ", job=" << snapshot.JobTickCount
+				<< std::endl;
+			nextUiHeartbeatFrame += 300;
+		}
+
 		if (debugAutoOpenEnabled
 			&& !autoOpenSucceeded.load(std::memory_order_relaxed)
 			&& currentRenderHeartbeat >= nextAutoOpenFrame)
@@ -303,6 +321,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
 	tui->Stop();
+
+	if (uiComInitialized)
+		OleUninitialize();
 
 	return (int)msg.wParam;
 }

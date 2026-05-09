@@ -58,6 +58,7 @@ namespace
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
 #include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
 #include "vst3sdk/pluginterfaces/gui/iplugview.h"
+#include "vst3sdk/public.sdk/source/vst/hosting/hostclasses.h"
 #endif
 
 using namespace vst;
@@ -66,17 +67,130 @@ using namespace vst;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+class HostPlugFrame final : public IPlugFrame
+{
+public:
+	HostPlugFrame() :
+		_hostWindow(nullptr),
+		_frameWindow(nullptr)
+	{
+		FUNKNOWN_CTOR
+	}
+
+	~HostPlugFrame() noexcept { FUNKNOWN_DTOR }
+
+	void SetHostWindow(HWND hostWindow) noexcept
+	{
+		_hostWindow = hostWindow;
+		_frameWindow = hostWindow ? GetAncestor(hostWindow, GA_ROOT) : nullptr;
+		if (!_frameWindow)
+			_frameWindow = hostWindow;
+	}
+
+	tresult PLUGIN_API resizeView(IPlugView* view, ViewRect* newSize) override
+	{
+		if (!view || !newSize || !_hostWindow)
+			return kInvalidArgument;
+
+		const auto width = std::max<int32>(0, newSize->getWidth());
+		const auto height = std::max<int32>(0, newSize->getHeight());
+		AppendVstDebugEvent("VstPlugin", "HostPlugFrame resizeView requested " + std::to_string(width) + "x" + std::to_string(height));
+
+		if (_frameWindow)
+		{
+			RECT frameRect{ 0, 0, width, height };
+			const auto style = static_cast<DWORD>(GetWindowLongPtr(_frameWindow, GWL_STYLE));
+			const auto exStyle = static_cast<DWORD>(GetWindowLongPtr(_frameWindow, GWL_EXSTYLE));
+			AdjustWindowRectEx(&frameRect, style, FALSE, exStyle);
+
+			SetWindowPos(_frameWindow,
+				nullptr,
+				0,
+				0,
+				frameRect.right - frameRect.left,
+				frameRect.bottom - frameRect.top,
+				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+
+		if (_hostWindow != _frameWindow)
+		{
+			SetWindowPos(_hostWindow,
+				nullptr,
+				0,
+				0,
+				width,
+				height,
+				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+
+		const auto onSizeResult = view->onSize(newSize);
+		AppendVstDebugEvent("VstPlugin", "HostPlugFrame onSize result=" + std::to_string(onSizeResult));
+		return onSizeResult;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+
+private:
+	HWND _hostWindow;
+	HWND _frameWindow;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(HostPlugFrame, IPlugFrame, IPlugFrame::iid)
+
+class HostComponentHandler final : public IComponentHandler
+{
+public:
+	HostComponentHandler()
+	{
+		FUNKNOWN_CTOR
+	}
+
+	~HostComponentHandler() noexcept { FUNKNOWN_DTOR }
+
+	tresult PLUGIN_API beginEdit(ParamID id) override
+	{
+		AppendVstDebugEvent("VstPlugin", "HostComponentHandler beginEdit id=" + std::to_string(id));
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API performEdit(ParamID id, ParamValue valueNormalized) override
+	{
+		(void)valueNormalized;
+		AppendVstDebugEvent("VstPlugin", "HostComponentHandler performEdit id=" + std::to_string(id));
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API endEdit(ParamID id) override
+	{
+		AppendVstDebugEvent("VstPlugin", "HostComponentHandler endEdit id=" + std::to_string(id));
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API restartComponent(int32 flags) override
+	{
+		AppendVstDebugEvent("VstPlugin", "HostComponentHandler restartComponent flags=" + std::to_string(flags));
+		return kResultOk;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
+
 class VstPlugin::Impl
 {
 public:
 	static constexpr Steinberg::int32 MaxHostedChannels = 2;
 
+	Steinberg::IPtr<Steinberg::Vst::HostApplication> hostApplication;
 	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
 	Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor;
 	Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentConnection;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerConnection;
 	Steinberg::IPtr<Steinberg::IPlugView> plugView;
+	std::unique_ptr<HostComponentHandler> componentHandler;
+	std::unique_ptr<HostPlugFrame> plugFrame;
 
 	Steinberg::Vst::ProcessData processData;
 	Steinberg::Vst::AudioBusBuffers inputBus;
@@ -88,9 +202,12 @@ public:
 	float outputScratch[MaxHostedChannels][constants::MaxBlockSize];
 
 	Impl() :
+		hostApplication(Steinberg::IPtr<Steinberg::Vst::HostApplication>(new Steinberg::Vst::HostApplication(), false)),
 		component(nullptr),
 		processor(nullptr),
 		controller(nullptr),
+		componentHandler(std::make_unique<HostComponentHandler>()),
+		plugFrame(std::make_unique<HostPlugFrame>()),
 		plugView(nullptr),
 		processData(),
 		inputBus(),
@@ -112,6 +229,7 @@ VstPlugin::VstPlugin() :
 	_isLoaded(false),
 	_name(),
 	_isBypassed(false),
+	_editorOpening(false),
 	_editorSize({ 0, 0 }),
 	_moduleHandle(nullptr),
 	_impl(
@@ -215,8 +333,8 @@ bool VstPlugin::Load(const std::wstring& path,
 	}
 	_impl->component = IPtr<IComponent>(rawComponent, false);
 
-	// 5. Initialize the component (nullptr host context is accepted by most plugins)
-	if (_impl->component->initialize(nullptr) != kResultOk)
+	// 5. Initialize the component with a real host application context.
+	if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 	{
 		std::cerr << "[VstPlugin] IComponent::initialize() failed" << std::endl;
 		Unload();
@@ -336,7 +454,7 @@ bool VstPlugin::Load(const std::wstring& path,
 				&& rawController)
 			{
 				_impl->controller = IPtr<IEditController>(rawController, false);
-				auto initRes = _impl->controller->initialize(nullptr);
+				auto initRes = _impl->controller->initialize(_impl->hostApplication);
 				std::cout << "[VstPlugin] Separate controller created, initialize=" << initRes << std::endl;
 			}
 		}
@@ -344,6 +462,11 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	if (!_impl->controller)
 		std::cout << "[VstPlugin] No controller available (editor may not open)" << std::endl;
+	else
+	{
+		const auto setHandlerResult = _impl->controller->setComponentHandler(_impl->componentHandler.get());
+		AppendVstDebugEvent("VstPlugin", "setComponentHandler result=" + std::to_string(setHandlerResult));
+	}
 
 	// For separate component/controller plugins, connect both endpoints so
 	// the UI and processor can exchange state/parameter messages.
@@ -426,7 +549,8 @@ void VstPlugin::Unload()
 void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed))
+	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed)
+		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
 	if (!_impl)
@@ -453,7 +577,8 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed))
+	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed)
+		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
 	if (!_impl)
@@ -487,6 +612,16 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 #ifdef JAMMA_VST3_ENABLED
 	AppendVstDebugEvent("VstPlugin", "OpenEditor begin");
 
+	// Pause real-time audio processing while opening the editor. Some VST3
+	// plug-ins (e.g. Valhalla VSTGUI-based plug-ins) deadlock inside
+	// IPlugView::attached() if process() runs concurrently because their
+	// internal initialization grabs locks shared with the audio path.
+	_editorOpening.store(true, std::memory_order_release);
+	struct ResetOnExit {
+		std::atomic<bool>& flag;
+		~ResetOnExit() { flag.store(false, std::memory_order_release); }
+	} resetOnExit{ _editorOpening };
+
 	if (!_isLoaded || !_impl || !_impl->controller)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: loaded=" << _isLoaded
@@ -516,7 +651,14 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	}
 	AppendVstDebugEvent("VstPlugin", "HWND platform supported");
 
-	if (_impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND) != kResultOk)
+	_impl->plugFrame->SetHostWindow(parentHwnd);
+	const auto setFrameResult = _impl->plugView->setFrame(_impl->plugFrame.get());
+	AppendVstDebugEvent("VstPlugin", "setFrame result=" + std::to_string(setFrameResult));
+
+	AppendVstDebugEvent("VstPlugin", "calling attached(HWND)");
+	const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
+	AppendVstDebugEvent("VstPlugin", "attached(HWND) returned " + std::to_string(attachedResult));
+	if (attachedResult != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: attached(HWND) failed" << std::endl;
 		AppendVstDebugEvent("VstPlugin", "OpenEditor failed: attached(HWND) failed");
@@ -552,6 +694,7 @@ void VstPlugin::CloseEditor()
 	if (_impl && _impl->plugView)
 	{
 		AppendVstDebugEvent("VstPlugin", "CloseEditor begin");
+		_impl->plugView->setFrame(nullptr);
 		_impl->plugView->removed();
 		_impl->plugView = nullptr;
 		_editorSize = { 0, 0 };
