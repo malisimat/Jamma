@@ -47,6 +47,8 @@ Windows builds also compile VST3 hosting support by default via the `vst3sdk` vc
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
 
+Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.props](Directory.Build.props), so running MSBuild against an individual project from the repo root no longer needs a manual `/p:SolutionDir=...` workaround.
+
 ### Troubleshooting: tests crash silently on startup
 
 If `JammaLib.Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:

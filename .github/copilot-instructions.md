@@ -121,7 +121,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 & $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 ```
 
-**Important:** When building `JammaLib.Tests.vcxproj` directly (not via the solution), always pass `/p:SolutionDir="$(pwd)\\"` — otherwise `$(SolutionDir)` is unset and include paths fail.
+**Important:** `Directory.Build.props` now defaults `$(SolutionDir)` to the repo root when it is unset, so direct `*.vcxproj` builds from this repo should not need a manual `/p:SolutionDir=...` override anymore.
 
 ### Running tests:
 
@@ -129,7 +129,7 @@ Run all tests (assumes `vcpkg install` has been run):
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$(pwd)\\"
+& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 & .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe
 ```
 
