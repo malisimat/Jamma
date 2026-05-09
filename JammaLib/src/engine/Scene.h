@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
@@ -57,6 +58,14 @@ namespace engine
 		public base::ActionReceiver
 	{
 	public:
+		struct DebugSnapshot
+		{
+			uint64_t AudioCallbackCount = 0;
+			uint64_t JobTickCount = 0;
+			uint64_t VstEditorOpenAttempts = 0;
+			uint64_t VstEditorOpenSuccesses = 0;
+		};
+
 		enum ViewMode
 		{
 			VIEW_STATION = 0,
@@ -192,6 +201,8 @@ namespace engine
 		void CloseAudio();
 		void CommitChanges();
 		std::mutex& GetAudioMutex();
+		bool TryOpenFirstAvailableVstEditor();
+		DebugSnapshot GetDebugSnapshot() const noexcept;
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
@@ -251,7 +262,10 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
-		unsigned int _audioCallbackCount;
+		std::atomic<uint64_t> _audioCallbackCount;
+		std::atomic<uint64_t> _jobTickCount{ 0 };
+		std::atomic<uint64_t> _vstEditorOpenAttempts{ 0 };
+		std::atomic<uint64_t> _vstEditorOpenSuccesses{ 0 };
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

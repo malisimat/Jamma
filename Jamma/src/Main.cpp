@@ -13,7 +13,9 @@
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -26,6 +28,42 @@ using namespace utils;
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
+
+namespace
+{
+	bool ReadEnvFlag(const wchar_t* name)
+	{
+		wchar_t value[32]{};
+		const auto len = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
+		if (len == 0 || len >= _countof(value))
+			return false;
+
+		return (_wcsicmp(value, L"0") != 0)
+			&& (_wcsicmp(value, L"false") != 0)
+			&& (_wcsicmp(value, L"off") != 0)
+			&& (_wcsicmp(value, L"no") != 0);
+	}
+
+	std::string BuildDebugStatus(const engine::Scene& scene,
+		uint64_t renderHeartbeat,
+		bool autoOpenEnabled,
+		uint64_t autoOpenAttempts,
+		bool autoOpenSucceeded)
+	{
+		auto snapshot = scene.GetDebugSnapshot();
+
+		std::ostringstream ss;
+		ss << "render_heartbeat=" << renderHeartbeat << '\n';
+		ss << "audio_callback_count=" << snapshot.AudioCallbackCount << '\n';
+		ss << "job_tick_count=" << snapshot.JobTickCount << '\n';
+		ss << "scene_vst_editor_open_attempts=" << snapshot.VstEditorOpenAttempts << '\n';
+		ss << "scene_vst_editor_open_successes=" << snapshot.VstEditorOpenSuccesses << '\n';
+		ss << "auto_open_enabled=" << (autoOpenEnabled ? 1 : 0) << '\n';
+		ss << "auto_open_attempts=" << autoOpenAttempts << '\n';
+		ss << "auto_open_succeeded=" << (autoOpenSucceeded ? 1 : 0) << '\n';
+		return ss.str();
+	}
+}
 
 void SetupConsole()
 {
@@ -179,14 +217,49 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
+	const bool debugEnabled = ReadEnvFlag(L"JAMMA_VST_DEBUG");
+	const bool debugAutoOpenEnabled = ReadEnvFlag(L"JAMMA_VST_DEBUG_AUTO_OPEN");
+	const auto debugDir = GetPath(PATH_ROAMING) + L"\\Jamma";
+	const auto debugStatusPath = debugDir + L"\\debug-status.txt";
+	std::atomic<uint64_t> renderHeartbeat{ 0 };
+	std::atomic<uint64_t> autoOpenAttempts{ 0 };
+	std::atomic<bool> autoOpenSucceeded{ false };
+	std::atomic<bool> debugThreadQuit{ false };
+	std::thread debugWriter;
 
 	if (window.Create(hInstance, nCmdShow) != 0)
 		PostQuitMessage(1);
 	
 	scene.value()->InitAudio();
 
+	if (debugEnabled)
+	{
+		std::wcout << L"[Debug] Live status path: " << debugStatusPath << std::endl;
+		debugWriter = std::thread([&]() {
+			io::TextReadWriter writer;
+			while (!debugThreadQuit.load(std::memory_order_relaxed))
+			{
+				auto status = BuildDebugStatus(*scene.value(),
+					renderHeartbeat.load(std::memory_order_relaxed),
+					debugAutoOpenEnabled,
+					autoOpenAttempts.load(std::memory_order_relaxed),
+					autoOpenSucceeded.load(std::memory_order_relaxed));
+				writer.Write(debugStatusPath, status, static_cast<unsigned int>(status.size()), 0);
+				std::this_thread::sleep_for(std::chrono::milliseconds(250));
+			}
+
+			auto status = BuildDebugStatus(*scene.value(),
+				renderHeartbeat.load(std::memory_order_relaxed),
+				debugAutoOpenEnabled,
+				autoOpenAttempts.load(std::memory_order_relaxed),
+				autoOpenSucceeded.load(std::memory_order_relaxed));
+			writer.Write(debugStatusPath, status, static_cast<unsigned int>(status.size()), 0);
+		});
+	}
+
 	MSG msg;
 	bool active = true;
+	uint64_t nextAutoOpenFrame = 30;
 	while (active)
 	{
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -205,9 +278,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		if (!active)
 			break;
 
+		const auto currentRenderHeartbeat = renderHeartbeat.load(std::memory_order_relaxed);
+		if (debugAutoOpenEnabled
+			&& !autoOpenSucceeded.load(std::memory_order_relaxed)
+			&& currentRenderHeartbeat >= nextAutoOpenFrame)
+		{
+			autoOpenAttempts.fetch_add(1, std::memory_order_relaxed);
+			const bool opened = scene.value()->TryOpenFirstAvailableVstEditor();
+			autoOpenSucceeded.store(opened, std::memory_order_relaxed);
+			nextAutoOpenFrame += 120;
+		}
+
 		window.Render();
+		renderHeartbeat.fetch_add(1, std::memory_order_relaxed);
 		window.Swap();
 	}
+
+	debugThreadQuit.store(true, std::memory_order_relaxed);
+	if (debugWriter.joinable())
+		debugWriter.join();
 
 	window.Release();
 

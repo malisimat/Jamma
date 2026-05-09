@@ -7,7 +7,50 @@
 
 #include "VstPlugin.h"
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <mutex>
+
+namespace
+{
+	bool ReadVstDebugFlag(const wchar_t* name)
+	{
+		wchar_t value[32]{};
+		const auto len = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
+		if (len == 0 || len >= _countof(value))
+			return false;
+
+		return (_wcsicmp(value, L"0") != 0)
+			&& (_wcsicmp(value, L"false") != 0)
+			&& (_wcsicmp(value, L"off") != 0)
+			&& (_wcsicmp(value, L"no") != 0);
+	}
+
+	void AppendVstDebugEvent(const std::string& source, const std::string& message)
+	{
+		static const bool enabled = ReadVstDebugFlag(L"JAMMA_VST_DEBUG");
+		if (!enabled)
+			return;
+
+		wchar_t appData[MAX_PATH]{};
+		if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) == 0)
+			return;
+
+		static std::mutex logMutex;
+		std::scoped_lock lock(logMutex);
+
+		const auto logPath = std::filesystem::path(appData) / "Jamma" / "vst-debug-events.log";
+		std::ofstream out(logPath, std::ios::app);
+		if (!out.is_open())
+			return;
+
+		SYSTEMTIME now{};
+		GetLocalTime(&now);
+		out << now.wHour << ':' << now.wMinute << ':' << now.wSecond << '.' << now.wMilliseconds
+			<< " [" << source << "] " << message << std::endl;
+	}
+}
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
@@ -442,6 +485,8 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 bool VstPlugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
+	AppendVstDebugEvent("VstPlugin", "OpenEditor begin");
+
 	if (!_isLoaded || !_impl || !_impl->controller)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: loaded=" << _isLoaded
@@ -455,24 +500,30 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	if (!rawView)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: createView returned null" << std::endl;
+		AppendVstDebugEvent("VstPlugin", "OpenEditor failed: createView returned null");
 		return false;
 	}
+	AppendVstDebugEvent("VstPlugin", "createView returned non-null");
 
 	_impl->plugView = IPtr<IPlugView>(rawView, false);
 
 	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
+		AppendVstDebugEvent("VstPlugin", "OpenEditor failed: HWND platform unsupported");
 		_impl->plugView = nullptr;
 		return false;
 	}
+	AppendVstDebugEvent("VstPlugin", "HWND platform supported");
 
 	if (_impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND) != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: attached(HWND) failed" << std::endl;
+		AppendVstDebugEvent("VstPlugin", "OpenEditor failed: attached(HWND) failed");
 		_impl->plugView = nullptr;
 		return false;
 	}
+	AppendVstDebugEvent("VstPlugin", "attached(HWND) succeeded");
 
 	// Query preferred size
 	ViewRect rect{};
@@ -482,9 +533,11 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 			static_cast<unsigned int>(rect.getWidth()),
 			static_cast<unsigned int>(rect.getHeight())
 		};
+		AppendVstDebugEvent("VstPlugin", "getSize returned " + std::to_string(_editorSize.Width) + "x" + std::to_string(_editorSize.Height));
 	}
 
 	std::cout << "[VstPlugin] OpenEditor success: size=" << _editorSize.Width << "x" << _editorSize.Height << std::endl;
+	AppendVstDebugEvent("VstPlugin", "OpenEditor success");
 
 	return true;
 #else
@@ -498,9 +551,11 @@ void VstPlugin::CloseEditor()
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl && _impl->plugView)
 	{
+		AppendVstDebugEvent("VstPlugin", "CloseEditor begin");
 		_impl->plugView->removed();
 		_impl->plugView = nullptr;
 		_editorSize = { 0, 0 };
+		AppendVstDebugEvent("VstPlugin", "CloseEditor done");
 	}
 #endif
 }

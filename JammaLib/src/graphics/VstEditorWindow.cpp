@@ -8,6 +8,49 @@
 #include "VstEditorWindow.h"
 #include "Window.h"
 #include "../vst/VstPlugin.h"
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+
+namespace
+{
+	bool ReadVstWindowDebugFlag(const wchar_t* name)
+	{
+		wchar_t value[32]{};
+		const auto len = GetEnvironmentVariableW(name, value, static_cast<DWORD>(_countof(value)));
+		if (len == 0 || len >= _countof(value))
+			return false;
+
+		return (_wcsicmp(value, L"0") != 0)
+			&& (_wcsicmp(value, L"false") != 0)
+			&& (_wcsicmp(value, L"off") != 0)
+			&& (_wcsicmp(value, L"no") != 0);
+	}
+
+	void AppendWindowDebugEvent(const std::string& message)
+	{
+		static const bool enabled = ReadVstWindowDebugFlag(L"JAMMA_VST_DEBUG");
+		if (!enabled)
+			return;
+
+		wchar_t appData[MAX_PATH]{};
+		if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) == 0)
+			return;
+
+		static std::mutex logMutex;
+		std::scoped_lock lock(logMutex);
+
+		const auto logPath = std::filesystem::path(appData) / "Jamma" / "vst-debug-events.log";
+		std::ofstream out(logPath, std::ios::app);
+		if (!out.is_open())
+			return;
+
+		SYSTEMTIME now{};
+		GetLocalTime(&now);
+		out << now.wHour << ':' << now.wMinute << ':' << now.wSecond << '.' << now.wMilliseconds
+			<< " [VstEditorWindow] " << message << std::endl;
+	}
+}
 
 using namespace graphics;
 using namespace actions;
@@ -27,6 +70,8 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	std::shared_ptr<vst::VstPlugin> plugin,
 	HWND parentHwnd)
 {
+	AppendWindowDebugEvent("Create begin");
+
 	if (!plugin || !plugin->IsLoaded())
 		return false;
 
@@ -55,15 +100,24 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 		this);
 
 	if (!_editorWnd)
+	{
+		AppendWindowDebugEvent("CreateWindow failed");
 		return false;
+	}
+
+	AppendWindowDebugEvent("Host window created");
 
 	// Attach the plugin's editor view to our HWND
 	if (!_plugin->OpenEditor(_editorWnd))
 	{
+		AppendWindowDebugEvent("OpenEditor failed");
 		DestroyWindow(_editorWnd);
 		_editorWnd = nullptr;
+		_plugin.reset();
 		return false;
 	}
+
+	AppendWindowDebugEvent("OpenEditor succeeded");
 
 	// Resize to the editor's preferred size
 	auto sz = _plugin->GetEditorSize();
@@ -81,6 +135,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	}
 
 	ShowWindow(_editorWnd, SW_SHOW);
+	AppendWindowDebugEvent("Create complete");
 	return true;
 }
 
@@ -88,6 +143,7 @@ void VstEditorWindow::Destroy()
 {
 	if (_plugin)
 	{
+		AppendWindowDebugEvent("Destroy closing plugin editor");
 		_plugin->CloseEditor();
 		_plugin.reset();
 	}
@@ -107,6 +163,8 @@ void VstEditorWindow::OnAction(const WindowAction& action)
 		// Plugin CloseEditor is called before DestroyWindow, so just clear the handle.
 		if (_plugin)
 			_plugin->CloseEditor();
+
+		AppendWindowDebugEvent("WM_DESTROY handled");
 
 		_editorWnd = nullptr;
 		_plugin.reset();
@@ -152,6 +210,7 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	{
 		// Detach the plugin view before destroying the window so the plugin
 		// has a chance to clean up before the HWND becomes invalid.
+		AppendWindowDebugEvent("WM_CLOSE received");
 		if (self->_plugin)
 			self->_plugin->CloseEditor();
 
