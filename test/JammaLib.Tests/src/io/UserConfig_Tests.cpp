@@ -116,3 +116,13 @@ TEST(UserConfig, LoopTimingHonoursConfiguredTargetMaxGrain) {
 	ASSERT_FLOAT_EQ(80.0f, timing->Bpm);
 	ASSERT_EQ(8u, timing->Bpi);
 }
+
+TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
+	UserConfig cfg;
+	cfg.Trigger.PreDelay = 128u;
+
+	EXPECT_EQ(constants::MaxLoopFadeSamps + 128u, cfg.TriggerLoopAlignmentSamps());
+	EXPECT_EQ(-static_cast<long>(constants::MaxLoopFadeSamps + 128u + 96u),
+		cfg.OverdubSourceReadOffset(96u));
+	EXPECT_EQ(cfg.LoopPlayPos(0, 4096ul, 0u), cfg.OverdubPlayPos(0, 4096ul));
+}

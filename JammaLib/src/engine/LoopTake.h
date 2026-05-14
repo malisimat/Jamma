@@ -136,6 +136,7 @@ namespace engine
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);
 		void PunchIn();
 		void PunchOut();
+		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -172,6 +173,7 @@ namespace engine
 		unsigned long _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
+		bool _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;

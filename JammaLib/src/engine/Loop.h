@@ -195,6 +195,7 @@ namespace engine
 		void Overdub();
 		void PunchIn();
 		void PunchOut();
+		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
 
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
@@ -220,5 +221,6 @@ namespace engine
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
 		bool _visualUpdatesEnabled;
+		bool _isPunchInActive;
 	};
 }

@@ -656,7 +656,63 @@ TEST(Loop, Playback_ProducesOutputInOverdubbingRecordingState)
 
     PlayOneBlock(loop, sink, blockSize);
 
-    ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_ProducesOutputInPunchedInState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+
+	auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Overdub();
+	WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
+	loop.PunchIn();
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+	ASSERT_TRUE(loop.IsPunchInActive());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, PunchOutAfterPlayKeepsPlaybackWhileStoppingAdcCapture)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+
+	auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Overdub();
+	loop.PunchIn();
+	WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+	ASSERT_TRUE(loop.IsPunchInActive());
+
+	loop.PunchOut();
+	ASSERT_FALSE(loop.IsPunchInActive());
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+
+	auto before = loop.ExportSamples();
+	float adcBuf[8] = { 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f };
+	AudioWriteRequest adcRequest;
+	adcRequest.samples = adcBuf;
+	adcRequest.numSamps = 8u;
+	adcRequest.stride = 1;
+	adcRequest.fadeCurrent = 0.0f;
+	adcRequest.fadeNew = 1.0f;
+	adcRequest.source = base::Audible::AUDIOSOURCE_ADC;
+	loop.OnBlockWrite(adcRequest, 0);
+	auto after = loop.ExportSamples();
+	ASSERT_EQ(before, after);
 }
 
 // Regression: when loopLength is quantised upward so that logicalBufSize >

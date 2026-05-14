@@ -77,6 +77,9 @@ namespace io
 		unsigned long LoopPlayPos(int error,
 			unsigned long loopLength,
 			unsigned int outLatency) const;
+		unsigned int TriggerLoopAlignmentSamps() const;
+		long OverdubSourceReadOffset(unsigned int outLatency) const;
+		unsigned long OverdubPlayPos(int error, unsigned long loopLength) const;
 		std::optional<SeedLoopTiming> DeduceLoopTiming(unsigned long loopLengthSamps,
 			unsigned int sampleRate) const;
 
