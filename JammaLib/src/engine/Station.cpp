@@ -1,5 +1,6 @@
 #include "Station.h"
 #include <memory>
+#include "../vst/VstDiagnostics.h"
 
 using namespace engine;
 using namespace audio;
@@ -1122,6 +1123,8 @@ ActionResult Station::OnAction(JobAction action)
 	case JobAction::JOB_LOADVST:
 	{
 		// Running on the job thread — safe to do heavy work here.
+		vst::VstDiagnostics::Log("Station", "load-vst-begin", std::string("station=") + _name
+			+ ", path=" + utils::EncodeUtf8(action.VstPath));
 		std::cout << "[Station] JOB_LOADVST begin: station='" << _name
 			<< "', path='" << utils::EncodeUtf8(action.VstPath)
 			<< "', sampleRate=" << _sampleRate
@@ -1143,6 +1146,8 @@ ActionResult Station::OnAction(JobAction action)
 				<< "', plugin='" << plugin->Name()
 				<< "', chainSize=" << _backVstChain->NumPlugins()
 				<< std::endl;
+			vst::VstDiagnostics::Log("Station", "load-vst-success", std::string("station=") + _name
+				+ ", plugin=" + plugin->Name());
 			// Signal _CommitChanges() (running on main thread under audioMutex)
 			// to swap the chain in.
 			_flipVstChain.store(true, std::memory_order_release);
@@ -1153,6 +1158,8 @@ ActionResult Station::OnAction(JobAction action)
 			std::cout << "[Station] JOB_LOADVST failed: station='" << _name
 				<< "', path='" << utils::EncodeUtf8(action.VstPath)
 				<< "'" << std::endl;
+			vst::VstDiagnostics::Log("Station", "load-vst-failed", std::string("station=") + _name
+				+ ", path=" + utils::EncodeUtf8(action.VstPath));
 		}
 
 		ActionResult res;

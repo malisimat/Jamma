@@ -6,6 +6,7 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
+#include "../vst/VstDiagnostics.h"
 
 using namespace base;
 using namespace actions;
@@ -35,7 +36,8 @@ namespace
 }
 
 Scene::Scene(SceneParams params,
-	UserConfig user) :
+	UserConfig user,
+	vst::DebugOptions vstDebugOptions) :
 	Drawable(params),
 	Moveable(params),
 	Sizeable(params),
@@ -70,6 +72,9 @@ Scene::Scene(SceneParams params,
 			1.0),
 		0)),
 	_userConfig(user),
+	_vstDebugOptions(std::move(vstDebugOptions)),
+	_vstDebugAutoOpenPending(_vstDebugOptions.AutoOpenEditor),
+	_vstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Idle),
 	_clock(std::make_shared<Timer>()),
 	_viewMode(VIEW_STATION)
 {
@@ -139,9 +144,10 @@ Scene::Scene(SceneParams params,
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	io::JamFile jamStruct,
 	io::RigFile rigStruct,
-	std::wstring dir)
+	std::wstring dir,
+	vst::DebugOptions vstDebugOptions)
 {
-	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
+	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User, std::move(vstDebugOptions));
 
 	TriggerParams trigParams;
 	trigParams.Size = { 24, 24 };
@@ -193,6 +199,166 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->InitReceivers();
 
 	return scene;
+}
+
+void Scene::_PruneClosedVstEditorWindows()
+{
+	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
+		return !window || !window->IsOpen();
+	}), _vstEditorWindows.end());
+}
+
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin, const std::string& reason)
+{
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	auto window = std::make_unique<graphics::VstEditorWindow>();
+	const auto hInstance = GetModuleHandle(nullptr);
+	if (!window->Create(hInstance, plugin))
+	{
+		vst::VstDiagnostics::Log("Scene", "open-editor-create-failed", reason + ", plugin=" + plugin->Name());
+		return false;
+	}
+
+	vst::VstDiagnostics::Log("Scene", "open-editor-created", reason + ", plugin=" + plugin->Name());
+	_vstEditorWindows.push_back(std::move(window));
+	return true;
+}
+
+bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
+{
+	if (!loop)
+		return false;
+
+	auto plugin = loop->GetVstPlugin(pluginIndex);
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	return _OpenVstEditorForPlugin(plugin, std::string("loop-plugin-index=") + std::to_string(pluginIndex));
+}
+
+bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
+{
+	if (!station || station->IsRemote())
+		return false;
+
+	auto stationPlugin = station->GetVstPlugin(pluginIndex);
+	if (stationPlugin && stationPlugin->IsLoaded())
+		return _OpenVstEditorForPlugin(stationPlugin,
+			std::string("station=") + station->Name() + ", plugin-index=" + std::to_string(pluginIndex));
+
+	for (const auto& take : station->GetLoopTakes())
+	{
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+	base::SelectDepth depth,
+	size_t pluginIndex)
+{
+	if (!hovering)
+		return false;
+
+	switch (depth)
+	{
+	case base::SelectDepth::DEPTH_STATION:
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		return _TryOpenVstEditorForStation(station, pluginIndex);
+	}
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+		if (!take)
+			return false;
+
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+
+		return false;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		return _TryOpenVstEditorForLoop(loop, pluginIndex);
+	}
+	default:
+		return false;
+	}
+}
+
+void Scene::_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus status, const std::string& detail)
+{
+	if (_vstDebugAutoOpenStatus == status)
+		return;
+
+	_vstDebugAutoOpenStatus = status;
+
+	const char* statusText = "idle";
+	switch (status)
+	{
+	case VstDebugAutoOpenStatus::WaitingForPlugin:
+		statusText = "waiting-for-plugin";
+		break;
+	case VstDebugAutoOpenStatus::Opened:
+		statusText = "opened";
+		break;
+	case VstDebugAutoOpenStatus::Failed:
+		statusText = "failed";
+		break;
+	case VstDebugAutoOpenStatus::Idle:
+	default:
+		break;
+	}
+
+	vst::VstDiagnostics::Log("Scene", "auto-open-status", std::string(statusText) + (detail.empty() ? "" : ", " + detail));
+}
+
+void Scene::_RunPendingVstDebugAutoOpen()
+{
+	if (!_vstDebugAutoOpenPending)
+		return;
+
+	_PruneClosedVstEditorWindows();
+
+	if (_vstDebugOptions.StationIndex >= _stations.size())
+	{
+		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Failed,
+			"station index out of range: " + std::to_string(_vstDebugOptions.StationIndex));
+		_vstDebugAutoOpenPending = false;
+		return;
+	}
+
+	const auto& station = _stations[_vstDebugOptions.StationIndex];
+	if (!station || station->IsRemote())
+	{
+		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Failed,
+			"station unavailable or remote: " + std::to_string(_vstDebugOptions.StationIndex));
+		_vstDebugAutoOpenPending = false;
+		return;
+	}
+
+	if (_TryOpenVstEditorForStation(station, _vstDebugOptions.PluginIndex))
+	{
+		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Opened,
+			"station=" + station->Name() + ", pluginIndex=" + std::to_string(_vstDebugOptions.PluginIndex));
+		_vstDebugAutoOpenPending = false;
+		return;
+	}
+
+	_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::WaitingForPlugin,
+		"station=" + station->Name() + ", pluginIndex=" + std::to_string(_vstDebugOptions.PluginIndex));
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -525,139 +691,34 @@ ActionResult Scene::OnAction(KeyAction action)
 		return res;
 	}
 
-// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
-if ((69 == action.KeyChar)
-	&& (actions::KeyAction::KEY_UP == action.KeyActionType)
-	&& (Action::MODIFIER_CTRL & action.Modifiers)
-	&& (Action::MODIFIER_SHIFT & action.Modifiers))
-{
-	auto hovering = _ChildFromPath(_selector->CurrentHover());
-
-	// Clean up any closed editor windows
-	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& w) {
-		return !w || !w->IsOpen();
-	}), _vstEditorWindows.end());
-
-	auto eatAction = []() {
-		ActionResult res;
-		res.IsEaten = true;
-		res.ResultType = actions::ACTIONRESULT_DEFAULT;
-		return res;
-	};
-
-	// Helper to open editor for a loop's first plugin
-	auto tryOpenForLoop = [this](std::shared_ptr<Loop> loop)->bool {
-		if (!loop)
-			return false;
-
-		auto plugin = loop->GetVstPlugin(0);
-		if (!plugin || !plugin->IsLoaded())
-			return false;
-
-		auto wnd = std::make_unique<graphics::VstEditorWindow>();
-		HINSTANCE hinst = GetModuleHandle(nullptr);
-		if (!wnd->Create(hinst, plugin))
-			return false;
-
-		_vstEditorWindows.push_back(std::move(wnd));
-		return true;
-	};
-
-	// Helper to open editor for a station's first plugin
-	auto tryOpenForStation = [this](std::shared_ptr<Station> station)->bool {
-		if (!station)
-			return false;
-
-		auto plugin = station->GetVstPlugin(0);
-		if (!plugin || !plugin->IsLoaded())
-			return false;
-
-		auto wnd = std::make_unique<graphics::VstEditorWindow>();
-		HINSTANCE hinst = GetModuleHandle(nullptr);
-		if (!wnd->Create(hinst, plugin))
-			return false;
-
-		_vstEditorWindows.push_back(std::move(wnd));
-		return true;
-	};
-
-	if (hovering)
+	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
+	if ((69 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		switch (_selector->CurrentSelectDepth())
-		{
-		case base::SelectDepth::DEPTH_STATION:
-		{
-			auto station = std::dynamic_pointer_cast<Station>(hovering);
-			if (!station)
-				break;
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		_PruneClosedVstEditorWindows();
 
-			if (station->IsRemote())
-			{
-				std::cout << "VST editor open: remote stations are read-only" << std::endl;
-				return ActionResult::NoAction();
-			}
+		auto eatAction = []() {
+			ActionResult res;
+			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_DEFAULT;
+			return res;
+		};
 
-			if (tryOpenForStation(station))
-				return eatAction();
-
-			for (const auto& take : station->GetLoopTakes())
-			{
-				for (const auto& loop : take->GetLoops())
-				{
-					if (tryOpenForLoop(loop))
-						return eatAction();
-				}
-			}
-			break;
-		}
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-		{
-			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-			if (!take)
-				break;
-
-			for (const auto& loop : take->GetLoops())
-			{
-				if (tryOpenForLoop(loop))
-					return eatAction();
-			}
-			break;
-		}
-		case base::SelectDepth::DEPTH_LOOP:
-		{
-			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-			if (!loop)
-				break;
-
-			if (tryOpenForLoop(loop))
-				return eatAction();
-			break;
-		}
-		}
-	}
-
-	// Fallback: if hover/depth mismatch, open the first available local plugin editor.
-	for (const auto& station : _stations)
-	{
-		if (!station || station->IsRemote())
-			continue;
-
-		if (tryOpenForStation(station))
+		if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
 			return eatAction();
 
-		for (const auto& take : station->GetLoopTakes())
+		for (const auto& station : _stations)
 		{
-			for (const auto& loop : take->GetLoops())
-			{
-				if (tryOpenForLoop(loop))
-					return eatAction();
-			}
+			if (_TryOpenVstEditorForStation(station, 0))
+				return eatAction();
 		}
-	}
 
-	std::cout << "VST editor open: no loaded plugin found" << std::endl;
-	return ActionResult::NoAction();
-}
+		std::cout << "VST editor open: no loaded plugin found" << std::endl;
+		return ActionResult::NoAction();
+	}
 
 	// Ctrl+S - export session to directory.
 	if ((83 == action.KeyChar)
@@ -1060,6 +1121,8 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
+
+	_RunPendingVstDebugAutoOpen();
 }
 
 std::mutex& Scene::GetAudioMutex()

@@ -7,12 +7,68 @@
 
 #include "InitFile.h"
 
+namespace
+{
+	std::string EscapeJsonString(const std::string& value)
+	{
+		std::string escaped;
+		escaped.reserve(value.size());
+
+		for (const char ch : value)
+		{
+			switch (ch)
+			{
+			case '\\':
+				escaped += "\\\\";
+				break;
+			case '"':
+				escaped += "\\\"";
+				break;
+			default:
+				escaped.push_back(ch);
+				break;
+			}
+		}
+
+		return escaped;
+	}
+
+	void ParseVstDebug(io::InitFile& ini, const io::Json::JsonPart& json)
+	{
+		auto iter = json.KeyValues.find("autoopen");
+		if (iter != json.KeyValues.end() && iter->second.index() == 0)
+			ini.VstDebug.AutoOpenEditor = std::get<bool>(iter->second);
+
+		iter = json.KeyValues.find("logtofile");
+		if (iter != json.KeyValues.end() && iter->second.index() == 0)
+			ini.VstDebug.LogToFile = std::get<bool>(iter->second);
+
+		iter = json.KeyValues.find("logpath");
+		if (iter != json.KeyValues.end() && iter->second.index() == 4)
+			ini.VstDebug.LogPath = utils::DecodeUtf8(std::get<std::string>(iter->second));
+
+		iter = json.KeyValues.find("stationindex");
+		if (iter != json.KeyValues.end() && iter->second.index() == 2)
+			ini.VstDebug.StationIndex = static_cast<unsigned int>(std::get<unsigned long>(iter->second));
+
+		iter = json.KeyValues.find("pluginindex");
+		if (iter != json.KeyValues.end() && iter->second.index() == 2)
+			ini.VstDebug.PluginIndex = static_cast<unsigned int>(std::get<unsigned long>(iter->second));
+	}
+}
+
 using namespace io;
 using audio::BehaviourParams;
 
 const std::string InitFile::DefaultJson(std::string roamingPath)
 {
-	return "{\"rig\":\"" + roamingPath + "\\default.rig\",\"jam\":\"" + roamingPath + "\\default.jam\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000]}";
+	const auto rigPath = EscapeJsonString(roamingPath + "\\default.rig");
+	const auto jamPath = EscapeJsonString(roamingPath + "\\default.jam");
+	const auto logPath = EscapeJsonString(roamingPath + "\\vst-diagnostic.log");
+	return "{\"rig\":\"" + rigPath + "\",\"jam\":\"" + jamPath
+		+ "\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000],"
+		+ "\"vstdebug\":{\"autoopen\":false,\"logtofile\":false,\"logpath\":\""
+		+ logPath + "\",\"stationindex\":0,\"pluginindex\":0}}";
 }
 
 const void InitFile::SetWinParams(InitFile& ini, const Json::JsonArray& array)
@@ -123,6 +179,13 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 		}
 	}
 
+	iter = iniParams.KeyValues.find("vstdebug");
+	if (iter != iniParams.KeyValues.end())
+	{
+		if (iter->second.index() == 6)
+			ParseVstDebug(ini, std::get<Json::JsonPart>(iter->second));
+	}
+
 	return ini;
 }
 
@@ -132,6 +195,11 @@ bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 	ss << "JamLoadType: " << ini.JamLoadType << std::endl;
 	ss << "Rig: " << utils::EncodeUtf8(ini.Rig) << std::endl;
 	ss << "RigLoadType: " << ini.RigLoadType << std::endl;
+	ss << "VstDebug.AutoOpenEditor: " << ini.VstDebug.AutoOpenEditor << std::endl;
+	ss << "VstDebug.LogToFile: " << ini.VstDebug.LogToFile << std::endl;
+	ss << "VstDebug.LogPath: " << utils::EncodeUtf8(ini.VstDebug.LogPath) << std::endl;
+	ss << "VstDebug.StationIndex: " << ini.VstDebug.StationIndex << std::endl;
+	ss << "VstDebug.PluginIndex: " << ini.VstDebug.PluginIndex << std::endl;
 
 	ss << "WinPos: " << ini.WinPos.X << "," << ini.WinPos.Y << std::endl;
 	ss << "WinSize: " << ini.WinSize.Width << "," << ini.WinSize.Height << std::endl;

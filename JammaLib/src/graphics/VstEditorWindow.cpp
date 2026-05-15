@@ -8,10 +8,57 @@
 #include "VstEditorWindow.h"
 #include "Window.h"
 #include "../vst/VstPlugin.h"
+#include "../vst/VstDiagnostics.h"
 #include <ole2.h>
+#include <sstream>
 
 using namespace graphics;
 using namespace actions;
+
+namespace
+{
+	std::string PointerString(const void* ptr)
+	{
+		std::ostringstream ss;
+		ss << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(ptr);
+		return ss.str();
+	}
+
+	const char* WindowMessageName(UINT message)
+	{
+		switch (message)
+		{
+		case WM_NCCREATE: return "WM_NCCREATE";
+		case WM_CREATE: return "WM_CREATE";
+		case WM_SHOWWINDOW: return "WM_SHOWWINDOW";
+		case WM_WINDOWPOSCHANGING: return "WM_WINDOWPOSCHANGING";
+		case WM_WINDOWPOSCHANGED: return "WM_WINDOWPOSCHANGED";
+		case WM_SIZE: return "WM_SIZE";
+		case WM_PAINT: return "WM_PAINT";
+		case WM_NCPAINT: return "WM_NCPAINT";
+		case WM_ERASEBKGND: return "WM_ERASEBKGND";
+		case WM_TIMER: return "WM_TIMER";
+		case WM_SETFOCUS: return "WM_SETFOCUS";
+		case WM_KILLFOCUS: return "WM_KILLFOCUS";
+		case WM_ACTIVATE: return "WM_ACTIVATE";
+		case WM_CLOSE: return "WM_CLOSE";
+		case WM_DESTROY: return "WM_DESTROY";
+		default: return nullptr;
+		}
+	}
+
+	void LogWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+	{
+		const auto* name = WindowMessageName(message);
+		if (!name)
+			return;
+
+		vst::VstDiagnostics::Log("VstEditorWindow", "window-message",
+			std::string(name) + ", hwnd=" + PointerString(hWnd)
+			+ ", wParam=" + std::to_string(static_cast<unsigned long long>(wParam))
+			+ ", lParam=" + std::to_string(static_cast<long long>(lParam)));
+	}
+}
 
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
@@ -36,6 +83,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 		return false;
 
 	_plugin = plugin;
+	vst::VstDiagnostics::Log("VstEditorWindow", "create-request", std::string("plugin=") + plugin->Name());
 
 	// Build a title from the plugin name
 	auto nameStr = plugin->Name();
@@ -68,9 +116,11 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 {
 	_uiThreadId.store(GetCurrentThreadId(), std::memory_order_release);
+	vst::VstDiagnostics::Log("VstEditorWindow", "ui-thread-start", std::string("threadId=") + std::to_string(GetCurrentThreadId()));
 
 	const HRESULT oleHr = OleInitialize(nullptr);
 	const bool oleOk = SUCCEEDED(oleHr);
+	vst::VstDiagnostics::Log("VstEditorWindow", "ole-initialize", std::string("result=") + std::to_string(oleHr));
 
 	HWND wnd = Window::CreateSimpleWindow(
 		hInstance,
@@ -85,6 +135,7 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 	if (!wnd)
 	{
 		_failed.store(true, std::memory_order_release);
+		vst::VstDiagnostics::Log("VstEditorWindow", "host-window-create-failed");
 		if (oleOk)
 			OleUninitialize();
 		return;
@@ -92,9 +143,11 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	_editorWnd.store(wnd, std::memory_order_release);
 	_editorHostWnd = wnd;
+	vst::VstDiagnostics::Log("VstEditorWindow", "host-window-created", std::string("hwnd=") + PointerString(wnd));
 
 	ShowWindow(wnd, SW_SHOWNORMAL);
 	UpdateWindow(wnd);
+	vst::VstDiagnostics::Log("VstEditorWindow", "host-window-shown", std::string("hwnd=") + PointerString(wnd));
 
 	if (!_plugin)
 	{
@@ -121,6 +174,7 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	if (!openResult)
 	{
+		vst::VstDiagnostics::Log("VstEditorWindow", "plugin-open-failed", std::string("hwnd=") + PointerString(wnd));
 		DestroyWindow(wnd);
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_failed.store(true, std::memory_order_release);
@@ -147,13 +201,16 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 	UpdateWindow(wnd);
 
 	_ready.store(true, std::memory_order_release);
+	vst::VstDiagnostics::Log("VstEditorWindow", "editor-ready", std::string("hwnd=") + PointerString(wnd));
 
 	MSG msg{};
+	vst::VstDiagnostics::Log("VstEditorWindow", "message-loop-start", std::string("hwnd=") + PointerString(wnd));
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0)
 	{
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
 	}
+	vst::VstDiagnostics::Log("VstEditorWindow", "message-loop-exit", std::string("hwnd=") + PointerString(wnd));
 
 	if (_plugin)
 		_plugin->CloseEditor();
@@ -167,12 +224,14 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 
 	if (oleOk)
 		OleUninitialize();
+	vst::VstDiagnostics::Log("VstEditorWindow", "ui-thread-exit", std::string("threadId=") + std::to_string(GetCurrentThreadId()));
 }
 
 void VstEditorWindow::Destroy()
 {
 	const DWORD tid = _uiThreadId.load(std::memory_order_acquire);
 	HWND wnd = _editorWnd.load(std::memory_order_acquire);
+	vst::VstDiagnostics::Log("VstEditorWindow", "destroy-request", std::string("hwnd=") + PointerString(wnd) + ", threadId=" + std::to_string(tid));
 
 	if (wnd)
 	{
@@ -232,6 +291,8 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 
 	if (!self)
 		return DefWindowProc(hWnd, message, wParam, lParam);
+
+	LogWindowMessage(hWnd, message, wParam, lParam);
 
 	switch (message)
 	{

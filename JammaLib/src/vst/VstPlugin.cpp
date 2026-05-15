@@ -8,6 +8,9 @@
 #include "VstPlugin.h"
 #include <algorithm>
 #include <iostream>
+#include <sstream>
+#include "VstDiagnostics.h"
+#include "../utils/StringUtils.h"
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
@@ -19,6 +22,21 @@
 #endif
 
 using namespace vst;
+
+namespace
+{
+	std::string BoolString(const bool value)
+	{
+		return value ? "true" : "false";
+	}
+
+	std::string PointerString(const void* ptr)
+	{
+		std::ostringstream ss;
+		ss << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(ptr);
+		return ss.str();
+	}
+}
 
 #ifdef JAMMA_VST3_ENABLED
 using namespace Steinberg;
@@ -208,6 +226,10 @@ bool VstPlugin::Load(const std::wstring& path,
 	unsigned int numChannels)
 {
 #ifdef JAMMA_VST3_ENABLED
+	vst::VstDiagnostics::Log("VstPlugin", "load-begin", std::string("path=") + utils::EncodeUtf8(path)
+		+ ", sampleRate=" + std::to_string(sampleRate)
+		+ ", blockSize=" + std::to_string(blockSize)
+		+ ", channels=" + std::to_string(numChannels));
 	Unload();
 	std::wcout << L"[VstPlugin] Load request: path='" << path
 		<< L"', sampleRate=" << sampleRate
@@ -223,6 +245,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	if (!_moduleHandle)
 	{
 		std::cerr << "[VstPlugin] LoadLibraryW failed: " << GetLastError() << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "load-failed", std::string("LoadLibraryW error=") + std::to_string(GetLastError()));
 		return false;
 	}
 
@@ -449,6 +472,7 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	_isLoaded = true;
 	std::cout << "[VstPlugin] Loaded: " << _name << std::endl;
+	vst::VstDiagnostics::Log("VstPlugin", "load-success", std::string("plugin=") + _name);
 	return true;
 
 #else
@@ -461,6 +485,7 @@ bool VstPlugin::Load(const std::wstring& path,
 void VstPlugin::Unload()
 {
 #ifdef JAMMA_VST3_ENABLED
+	vst::VstDiagnostics::Log("VstPlugin", "unload-begin", _name.empty() ? std::string("plugin=<unknown>") : std::string("plugin=") + _name);
 	CloseEditor();
 
 	if (_impl && _impl->component)
@@ -498,6 +523,7 @@ void VstPlugin::Unload()
 	_isLoaded = false;
 	_name.clear();
 	_editorSize = { 0, 0 };
+	vst::VstDiagnostics::Log("VstPlugin", "unload-complete");
 }
 
 void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
@@ -564,6 +590,8 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 bool VstPlugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
+	const auto openStart = std::chrono::steady_clock::now();
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-begin", std::string("plugin=") + _name + ", hwnd=" + PointerString(parentHwnd));
 	// Pause real-time audio processing while opening the editor. Some VST3
 	// plug-ins (e.g. Valhalla VSTGUI-based plug-ins) deadlock inside
 	// IPlugView::attached() if process() runs concurrently because their
@@ -580,6 +608,10 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 			<< ", hasImpl=" << (_impl ? 1 : 0)
 			<< ", hasController=" << ((_impl && _impl->controller) ? 1 : 0)
 			<< std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "open-editor-failed",
+			std::string("loaded=") + BoolString(_isLoaded)
+			+ ", hasImpl=" + BoolString(_impl != nullptr)
+			+ ", hasController=" + BoolString(_impl && _impl->controller));
 		return false;
 	}
 
@@ -587,6 +619,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	if (!rawView)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: createView returned null" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "open-editor-failed", "createView returned null");
 		return false;
 	}
 
@@ -595,6 +628,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "open-editor-failed", "kPlatformTypeHWND unsupported");
 		_impl->plugView = nullptr;
 		return false;
 	}
@@ -602,10 +636,15 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	_impl->plugFrame->SetHostWindow(parentHwnd);
 	_impl->plugView->setFrame(_impl->plugFrame.get());
 
+	const auto attachStart = std::chrono::steady_clock::now();
 	const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
+	const auto attachMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - attachStart).count();
 	if (attachedResult != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: attached(HWND) failed" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "open-editor-failed",
+			std::string("attached failed, result=") + std::to_string(attachedResult)
+			+ ", attachMs=" + std::to_string(attachMs));
 		_impl->plugView = nullptr;
 		return false;
 	}
@@ -621,6 +660,11 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	}
 
 	std::cout << "[VstPlugin] OpenEditor success: size=" << _editorSize.Width << "x" << _editorSize.Height << std::endl;
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-success",
+		std::string("plugin=") + _name
+		+ ", attachMs=" + std::to_string(attachMs)
+		+ ", totalMs=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - openStart).count())
+		+ ", size=" + std::to_string(_editorSize.Width) + "x" + std::to_string(_editorSize.Height));
 
 	return true;
 #else
@@ -634,10 +678,15 @@ void VstPlugin::CloseEditor()
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl && _impl->plugView)
 	{
+		const auto closeStart = std::chrono::steady_clock::now();
+		vst::VstDiagnostics::Log("VstPlugin", "close-editor-begin", std::string("plugin=") + _name);
 		_impl->plugView->setFrame(nullptr);
 		_impl->plugView->removed();
 		_impl->plugView = nullptr;
 		_editorSize = { 0, 0 };
+		vst::VstDiagnostics::Log("VstPlugin", "close-editor-complete",
+			std::string("plugin=") + _name
+			+ ", totalMs=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - closeStart).count()));
 	}
 #endif
 }
