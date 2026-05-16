@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 #include "gtest/gtest.h"
 #include "actions/KeyAction.h"
 #include "audio/AudioDevice.h"
@@ -30,6 +31,7 @@ namespace {
 constexpr auto ActivateChar = 49u;
 constexpr auto DitchChar = 50u;
 constexpr auto OutputPathDelayBlocks = 2u;
+constexpr auto MaxExtraSettleBlocks = 3u;
 
 std::shared_ptr<Station> MakeStation(unsigned int numChans)
 {
@@ -85,6 +87,46 @@ float MaxAbs(const float* buf, unsigned int count)
 	}
 
 	return maxVal;
+}
+
+int BestLag(const float* left,
+	const float* right,
+	unsigned int count,
+	int maxLag,
+	float& outMse)
+{
+	auto bestLag = 0;
+	auto bestMse = (std::numeric_limits<float>::max)();
+
+	for (auto lag = -maxLag; lag <= maxLag; lag++)
+	{
+		auto sqErr = 0.0;
+		auto overlap = 0u;
+
+		for (auto i = 0u; i < count; i++)
+		{
+			auto rightIndex = static_cast<int>(i) + lag;
+			if ((rightIndex < 0) || (rightIndex >= static_cast<int>(count)))
+				continue;
+
+			auto diff = static_cast<double>(left[i]) - static_cast<double>(right[rightIndex]);
+			sqErr += diff * diff;
+			overlap++;
+		}
+
+		if (0u == overlap)
+			continue;
+
+		auto mse = static_cast<float>(sqErr / static_cast<double>(overlap));
+		if (mse < bestMse)
+		{
+			bestMse = mse;
+			bestLag = lag;
+		}
+	}
+
+	outMse = bestMse;
+	return bestLag;
 }
 
 void SetRackRoutes(base::ActionReceiver& receiver,
@@ -509,8 +551,11 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 	DrainCommitJobs(station);
 
 	std::optional<size_t> firstMismatch;
+	std::optional<int> bestLagAtMismatch;
+	std::optional<float> bestLagMseAtMismatch;
+	std::optional<unsigned int> steadyStartBlock;
 	auto readMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
-	bool startedComparing = false;
+	bool foundSteadyStart = false;
 	bool leftObserved = false;
 	bool rightObserved = false;
 	unsigned int comparedBlocks = 0u;
@@ -529,48 +574,72 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 
 		leftObserved = leftObserved || HasNonZero(leftBuf.data(), blockSize);
 		rightObserved = rightObserved || HasNonZero(rightBuf.data(), blockSize);
-
-		if (!startedComparing)
-		{
-			if (!leftObserved || !rightObserved)
-				continue;
-
-			startedComparing = true;
-		}
-
-		if (comparedBlocks >= captureBlocks)
-			break;
-
-		if (!HasNonZero(leftBuf.data(), blockSize) || !HasNonZero(rightBuf.data(), blockSize))
+		auto leftHasAudio = HasNonZero(leftBuf.data(), blockSize);
+		auto rightHasAudio = HasNonZero(rightBuf.data(), blockSize);
+		if (!leftHasAudio || !rightHasAudio)
 			continue;
+
+		auto blockMatches = true;
 
 		for (unsigned int sample = 0; sample < blockSize; sample++)
 		{
-			auto sampleIndex = static_cast<size_t>(comparedBlocks * blockSize) + sample;
+			auto sampleIndex = static_cast<size_t>(block * blockSize) + sample;
 			auto left = leftBuf[sample];
 			auto right = rightBuf[sample];
 			if (std::abs(left - right) > 1e-6f)
 			{
-				firstMismatch = sampleIndex;
+				blockMatches = false;
+
+				if (foundSteadyStart)
+				{
+					firstMismatch = sampleIndex;
+					float bestMse = 0.0f;
+					bestLagAtMismatch = BestLag(leftBuf.data(), rightBuf.data(), blockSize, 256, bestMse);
+					bestLagMseAtMismatch = bestMse;
+				}
 				break;
 			}
 		}
 
-		if (firstMismatch.has_value())
-			break;
+		if (!foundSteadyStart)
+		{
+			if (!blockMatches)
+				continue;
 
-		comparedBlocks++;
+			foundSteadyStart = true;
+			steadyStartBlock = block;
+			comparedBlocks = 1u;
+		}
+		else
+		{
+			if (!blockMatches)
+				break;
+
+			comparedBlocks++;
+		}
+
+		if (comparedBlocks >= captureBlocks)
+			break;
 	}
 
-	if (!startedComparing)
+	if (!foundSteadyStart)
 		ADD_FAILURE() << "Did not observe both routed channels becoming non-zero after unmuting the source take and rerouting source/overdub takes to opposite channels"
 			<< " (leftObserved=" << leftObserved << ", rightObserved=" << rightObserved << ")";
+	else if (steadyStartBlock.value() > (OutputPathDelayBlocks + MaxExtraSettleBlocks))
+		ADD_FAILURE() << "Aligned comparison window started too late after rerouting"
+			<< " (steadyStartBlock=" << steadyStartBlock.value()
+			<< ", maxExpected=" << (OutputPathDelayBlocks + MaxExtraSettleBlocks)
+			<< ", captureBlocks=" << captureBlocks << ")";
 	else if (comparedBlocks != captureBlocks)
-		ADD_FAILURE() << "Only compared " << comparedBlocks << " stereo blocks after rerouting; expected " << captureBlocks;
+		ADD_FAILURE() << "Only compared " << comparedBlocks << " stereo blocks after steady alignment; expected " << captureBlocks
+			<< " (steadyStartBlock=" << (steadyStartBlock.has_value() ? std::to_string(steadyStartBlock.value()) : std::string("none")) << ")";
 
 	if (firstMismatch.has_value())
 	{
 		ADD_FAILURE() << "Mismatch at output sample " << firstMismatch.value()
-			<< " between source left and overdub right channels";
+			<< " between source left and overdub right channels"
+			<< " (bestLag=" << (bestLagAtMismatch.has_value() ? std::to_string(bestLagAtMismatch.value()) : std::string("none"))
+			<< ", bestLagMse=" << (bestLagMseAtMismatch.has_value() ? std::to_string(bestLagMseAtMismatch.value()) : std::string("none"))
+			<< ")";
 	}
 }
