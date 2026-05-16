@@ -207,6 +207,21 @@ namespace engine
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
+
+		// Close all open VST editor windows immediately.
+		// Call this on the main thread before OleUninitialize() during shutdown.
+		void CloseAllVstEditorWindows();
+
+		// Returns true while a debug auto-open is still pending (plugin not yet
+		// loaded or editor not yet opened). Becomes false on success, failure, or
+		// after CancelVstAutoOpen() is called.
+		bool IsVstAutoOpenPending() const;
+
+		// Permanently clears the pending auto-open flag so the render loop will
+		// not attempt to open the editor after InitAudio() starts the audio thread.
+		// Call this after a pre-audio polling loop if the timeout elapses before
+		// the editor successfully opens.
+		void CancelVstAutoOpen();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

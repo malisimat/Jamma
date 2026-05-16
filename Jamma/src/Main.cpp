@@ -18,6 +18,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <chrono>
 #include <string_view>
 
 using namespace engine;
@@ -193,11 +194,16 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
 	SetupConsole();
-	// VST3 plug-ins built on VSTGUI (e.g. Valhalla) call RegisterDragDrop /
-	// OLE APIs from inside IPlugView::attached(). Use OleInitialize (which
-	// also performs CoInitializeEx as STA) so attach() does not deadlock or
-	// fail because the host thread isn't OLE-initialized.
-	const HRESULT uiComInit = OleInitialize(nullptr);
+	// Initialize COM as STA matching the Steinberg editorhost pattern.
+	// CoInitializeEx (not OleInitialize) is used here so that VSTGUI's own
+	// OleInitialize call inside Win32Frame::Win32Frame() receives S_OK (first
+	// OLE init on this thread) rather than S_FALSE.  Getting S_OK means VSTGUI
+	// owns the OLE reference it acquired and will call OleUninitialize on
+	// teardown correctly.  Using OleInitialize here steals that reference and
+	// causes S_FALSE, which subtly breaks OLE drag-and-drop setup inside
+	// attached().  RegisterDragDrop and DirectComposition still work with
+	// CoInitializeEx because the thread is still an STA.
+	const HRESULT uiComInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	const bool uiComInitialized = SUCCEEDED(uiComInit);
 
 	// Bring up the console TUI immediately after SetupConsole() so that
@@ -284,6 +290,49 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (window.Create(hInstance, nCmdShow) != 0)
 		PostQuitMessage(1);
 
+	// Pre-audio polling loop: trigger plugin load and editor open BEFORE starting
+	// the audio thread. This matches editorhost's approach (attached() is called
+	// with no competing audio threads). The loop pumps Win32 messages while
+	// waiting for CommitChanges() to detect the plugin load and open the editor.
+	// If the editor opens successfully (or the auto-open flag was never set),
+	// we fall through. On timeout we cancel the pending auto-open so the render
+	// loop cannot trigger it later with a live audio thread.
+	if (vstDebugOptions.AutoOpenEditor)
+	{
+		vst::VstDiagnostics::Log("Main", "pre-audio-loop-begin");
+		MSG preMsg{};
+		bool preQuit = false;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (scene.value()->IsVstAutoOpenPending() && !preQuit)
+		{
+			if (std::chrono::steady_clock::now() >= deadline)
+			{
+				vst::VstDiagnostics::Log("Main", "pre-audio-loop-timeout");
+				scene.value()->CancelVstAutoOpen();
+				break;
+			}
+
+			scene.value()->CommitChanges();
+
+			while (PeekMessage(&preMsg, nullptr, 0, 0, PM_REMOVE))
+			{
+				if (preMsg.message == WM_QUIT)
+				{
+					PostQuitMessage(static_cast<int>(preMsg.wParam));
+					preQuit = true;
+					break;
+				}
+				TranslateMessage(&preMsg);
+				DispatchMessage(&preMsg);
+			}
+
+			if (!preQuit && scene.value()->IsVstAutoOpenPending())
+				Sleep(10);
+		}
+		vst::VstDiagnostics::Log("Main", "pre-audio-loop-done",
+			std::string("pending=") + (scene.value()->IsVstAutoOpenPending() ? "true" : "false"));
+	}
+
 	scene.value()->InitAudio();
 
 	MSG msg;
@@ -312,12 +361,18 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	window.Release();
 
+	// Close VST editor windows while the main thread's COM STA is still valid.
+	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
+	// undefined behaviour. scene is still alive here since it goes out of scope
+	// after the explicit CoUninitialize() call below.
+	scene.value()->CloseAllVstEditorWindows();
+
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
 	tui->Stop();
 
 	if (uiComInitialized)
-		OleUninitialize();
+		CoUninitialize();
 
 	return (int)msg.wParam;
 }

@@ -6,10 +6,8 @@
 ///////////////////////////////////////////////////////////
 
 #include "VstEditorWindow.h"
-#include "Window.h"
 #include "../vst/VstPlugin.h"
 #include "../vst/VstDiagnostics.h"
-#include <ole2.h>
 #include <sstream>
 
 using namespace graphics;
@@ -63,10 +61,7 @@ namespace
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
 	_editorHostWnd(nullptr),
-	_plugin(nullptr),
-	_uiThreadId(0),
-	_ready(false),
-	_failed(false)
+	_plugin(nullptr)
 {
 }
 
@@ -85,7 +80,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	_plugin = plugin;
 	vst::VstDiagnostics::Log("VstEditorWindow", "create-request", std::string("plugin=") + plugin->Name());
 
-	// Build a title from the plugin name
+	// Build a title from the plugin name.
 	auto nameStr = plugin->Name();
 	auto nameLen = nameStr.size();
 	std::wstring title(nameLen + 1, L'\0');
@@ -94,103 +89,86 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	if (converted > 0)
 		title.resize(converted - 1);
 
-	// Run the entire VST editor lifecycle (window creation, IPlugView::attached,
-	// message pump, IPlugView::removed, destroy) on its own dedicated UI
-	// thread. Many VST3 plug-ins (notably VSTGUI-based ones such as Valhalla)
-	// block inside attached() while waiting for messages to be pumped on the
-	// thread that owns the parent HWND. Giving the editor its own thread lets
-	// the host's main render thread keep pumping its own messages, eliminating
-	// the deadlock.
-	_ready.store(false, std::memory_order_release);
-	_failed.store(false, std::memory_order_release);
-	_uiThread = std::thread(&VstEditorWindow::UiThreadProc, this, hInstance, std::move(title));
+	// Register the window class with editorhost-compatible style the first
+	// time. CS_DBLCLKS matches the reference implementation. hbrBackground=nullptr
+	// prevents Win32 from filling the client area with a colour brush, which
+	// would paint over the plugin's child window content.
+	{
+		WNDCLASSEX existing{};
+		existing.cbSize = sizeof(existing);
+		if (!GetClassInfoEx(hInstance, _ClassName, &existing))
+		{
+			WNDCLASSEX wcex{};
+			wcex.cbSize = sizeof(wcex);
+			wcex.style = CS_DBLCLKS;
+			wcex.lpfnWndProc = VstEditorWindow::WindowProcedure;
+			wcex.hInstance = hInstance;
+			wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+			wcex.hbrBackground = nullptr;
+			wcex.lpszClassName = _ClassName;
+			if (!RegisterClassEx(&wcex))
+			{
+				vst::VstDiagnostics::Log("VstEditorWindow", "class-register-failed",
+					std::string("error=") + std::to_string(GetLastError()));
+				_plugin.reset();
+				return false;
+			}
+		}
+	}
 
-	// Do NOT wait for the UI thread to finish attaching. The plug-in's
-	// IPlugView::attached() may take a long time (or, for misbehaving
-	// plug-ins, may pump messages internally). Blocking the main render
-	// thread here would freeze the entire host. Return immediately; callers
-	// can poll IsOpen() to learn when the editor is actually visible.
-	return true;
-}
+	// WS_CLIPCHILDREN prevents the frame from painting over the plugin's child
+	// HWND. WS_CLIPSIBLINGS follows the editorhost convention.
+	constexpr DWORD kEditorStyle =
+		WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
-void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
-{
-	_uiThreadId.store(GetCurrentThreadId(), std::memory_order_release);
-	vst::VstDiagnostics::Log("VstEditorWindow", "ui-thread-start", std::string("threadId=") + std::to_string(GetCurrentThreadId()));
-
-	const HRESULT oleHr = OleInitialize(nullptr);
-	const bool oleOk = SUCCEEDED(oleHr);
-	vst::VstDiagnostics::Log("VstEditorWindow", "ole-initialize", std::string("result=") + std::to_string(oleHr));
-
-	HWND wnd = Window::CreateSimpleWindow(
-		hInstance,
+	HWND wnd = CreateWindowEx(
+		0,
 		_ClassName,
 		title.c_str(),
-		WS_OVERLAPPEDWINDOW,
+		kEditorStyle,
 		100, 100, 600, 400,
 		nullptr,
-		VstEditorWindow::WindowProcedure,
+		nullptr,
+		hInstance,
 		this);
 
 	if (!wnd)
 	{
-		_failed.store(true, std::memory_order_release);
-		vst::VstDiagnostics::Log("VstEditorWindow", "host-window-create-failed");
-		if (oleOk)
-			OleUninitialize();
-		return;
+		vst::VstDiagnostics::Log("VstEditorWindow", "host-window-create-failed",
+			std::string("error=") + std::to_string(GetLastError()));
+		_plugin.reset();
+		return false;
 	}
 
 	_editorWnd.store(wnd, std::memory_order_release);
 	_editorHostWnd = wnd;
 	vst::VstDiagnostics::Log("VstEditorWindow", "host-window-created", std::string("hwnd=") + PointerString(wnd));
 
-	ShowWindow(wnd, SW_SHOWNORMAL);
-	UpdateWindow(wnd);
-	vst::VstDiagnostics::Log("VstEditorWindow", "host-window-shown", std::string("hwnd=") + PointerString(wnd));
-
-	if (!_plugin)
+	// Call attached() directly, matching the Steinberg editorhost pattern.
+	// This must be called outside DispatchMessage so that any PostMessage-based
+	// callbacks inside attached() can be queued and processed by the caller's
+	// message pump after Create() returns.
+	vst::VstDiagnostics::Log("VstEditorWindow", "calling-open-editor", std::string("hwnd=") + PointerString(wnd));
+	const bool ok = _plugin->OpenEditor(wnd);
+	if (!ok)
 	{
-		DestroyWindow(wnd);
+		vst::VstDiagnostics::Log("VstEditorWindow", "plugin-open-failed",
+			std::string("hwnd=") + PointerString(wnd));
 		_editorWnd.store(nullptr, std::memory_order_release);
-		_failed.store(true, std::memory_order_release);
-		if (oleOk)
-			OleUninitialize();
-		return;
+		_editorHostWnd = nullptr;
+		_plugin.reset();
+		DestroyWindow(wnd);
+		return false;
 	}
 
-	// Call OpenEditor directly on this thread (the HWND owner) so that any
-	// Win32 child HWNDs the plugin creates during IPlugView::attached() are
-	// owned by this thread. That guarantees the GetMessageW loop below will
-	// dispatch WM_PAINT, WM_TIMER, and input events for the plugin's view —
-	// the root cause of the blank-window bug when a worker thread was used.
-	//
-	// Same-thread SendMessage calls (the most common internal plug-in pattern)
-	// are handled by Win32 re-entrancy and never require the pump to be idle.
-	// For the rare plug-in that PostMessages to the parent during attached()
-	// those messages queue up and are drained immediately after this call
-	// returns, before the main GetMessageW loop starts.
-	const bool openResult = _plugin->OpenEditor(wnd);
-
-	if (!openResult)
-	{
-		vst::VstDiagnostics::Log("VstEditorWindow", "plugin-open-failed", std::string("hwnd=") + PointerString(wnd));
-		DestroyWindow(wnd);
-		_editorWnd.store(nullptr, std::memory_order_release);
-		_failed.store(true, std::memory_order_release);
-		if (oleOk)
-			OleUninitialize();
-		return;
-	}
-
-	// Resize to the editor's preferred size now that the view is attached.
+	// Resize the frame to the plugin's preferred client size.
 	auto sz = _plugin->GetEditorSize();
 	if (sz.Width > 0 && sz.Height > 0)
 	{
 		RECT rect{ 0, 0,
 			static_cast<LONG>(sz.Width),
 			static_cast<LONG>(sz.Height) };
-		AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+		AdjustWindowRect(&rect, kEditorStyle, FALSE);
 		SetWindowPos(wnd, nullptr, 0, 0,
 			rect.right - rect.left,
 			rect.bottom - rect.top,
@@ -200,50 +178,27 @@ void VstEditorWindow::UiThreadProc(HINSTANCE hInstance, std::wstring title)
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
 
-	_ready.store(true, std::memory_order_release);
-	vst::VstDiagnostics::Log("VstEditorWindow", "editor-ready", std::string("hwnd=") + PointerString(wnd));
-
-	MSG msg{};
-	vst::VstDiagnostics::Log("VstEditorWindow", "message-loop-start", std::string("hwnd=") + PointerString(wnd));
-	while (GetMessageW(&msg, nullptr, 0, 0) > 0)
-	{
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
-	}
-	vst::VstDiagnostics::Log("VstEditorWindow", "message-loop-exit", std::string("hwnd=") + PointerString(wnd));
-
-	if (_plugin)
-		_plugin->CloseEditor();
-
-	if (HWND existing = _editorWnd.exchange(nullptr, std::memory_order_acq_rel))
-	{
-		if (IsWindow(existing))
-			DestroyWindow(existing);
-	}
-	_editorHostWnd = nullptr;
-
-	if (oleOk)
-		OleUninitialize();
-	vst::VstDiagnostics::Log("VstEditorWindow", "ui-thread-exit", std::string("threadId=") + std::to_string(GetCurrentThreadId()));
+	vst::VstDiagnostics::Log("VstEditorWindow", "editor-ready",
+		std::string("hwnd=") + PointerString(wnd));
+	return true;
 }
 
 void VstEditorWindow::Destroy()
 {
-	const DWORD tid = _uiThreadId.load(std::memory_order_acquire);
-	HWND wnd = _editorWnd.load(std::memory_order_acquire);
-	vst::VstDiagnostics::Log("VstEditorWindow", "destroy-request", std::string("hwnd=") + PointerString(wnd) + ", threadId=" + std::to_string(tid));
+	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
+	vst::VstDiagnostics::Log("VstEditorWindow", "destroy-request",
+		std::string("hwnd=") + PointerString(wnd));
 
 	if (wnd)
 	{
-		PostMessageW(wnd, WM_CLOSE, 0, 0);
-	}
-	else if (tid != 0)
-	{
-		PostThreadMessageW(tid, WM_QUIT, 0, 0);
-	}
+		// CloseEditor (IPlugView::removed) before DestroyWindow so the plugin
+		// can clean up while the HWND is still valid.
+		if (_plugin)
+			_plugin->CloseEditor();
 
-	if (_uiThread.joinable())
-		_uiThread.join();
+		if (IsWindow(wnd))
+			DestroyWindow(wnd);  // WM_DESTROY fires; _editorWnd is null, skips CloseEditor
+	}
 
 	_plugin.reset();
 	_editorHostWnd = nullptr;
@@ -254,13 +209,11 @@ void VstEditorWindow::ResizeEditorHostWindow() noexcept
 	// Plug-in is parented directly to the editor frame; nothing to size here.
 }
 
-void VstEditorWindow::OnAction(const WindowAction& action)
+void VstEditorWindow::OnAction(const actions::WindowAction& action)
 {
 	switch (action.WindowEventType)
 	{
 	case WindowAction::DESTROY:
-		// Mark the window gone; the UI thread will exit its message loop and
-		// perform CloseEditor / cleanup before returning.
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_editorHostWnd = nullptr;
 		break;
@@ -296,28 +249,53 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 
 	switch (message)
 	{
+	case WM_ERASEBKGND:
+		// Suppress background painting. The plugin's child HWND owns its own
+		// rendering; letting Win32 fill the parent area would paint over it.
+		return TRUE;
+
+	case WM_PAINT:
+	{
+		// Validate the update region without drawing anything.
+		PAINTSTRUCT ps{};
+		BeginPaint(hWnd, &ps);
+		EndPaint(hWnd, &ps);
+		return 0;
+	}
+
 	case WM_SIZE:
 		self->ResizeEditorHostWindow();
 		return 0;
-	case WM_DESTROY:
-	{
-		WindowAction action;
-		action.WindowEventType = WindowAction::DESTROY;
-		self->OnAction(action);
-		PostQuitMessage(0);
-		return 0;
-	}
+
 	case WM_CLOSE:
 	{
-		// Do NOT call CloseEditor() here. removed() may itself need messages
-		// pumped (e.g. COM STA teardown), and calling it from inside the
-		// WM_CLOSE handler would block the pump and risk a deadlock.
-		// DestroyWindow posts WM_DESTROY → PostQuitMessage, which exits the
-		// GetMessageW loop. CloseEditor() is called there, safely outside
-		// any message handler.
+		// Atomically take ownership of the HWND before calling CloseEditor.
+		// The exchange guards against re-entrant WM_CLOSE if the plugin pumps
+		// messages internally during IPlugView::removed().
+		HWND owned = self->_editorWnd.exchange(nullptr, std::memory_order_acq_rel);
+		if (!owned)
+			return 0;
+
+		self->_editorHostWnd = nullptr;
+		if (self->_plugin)
+			self->_plugin->CloseEditor();
+
 		DestroyWindow(hWnd);
 		return 0;
 	}
+
+	case WM_DESTROY:
+	{
+		// CloseEditor was already called from WM_CLOSE or Destroy().
+		// Just update bookkeeping and notify any listeners.
+		// NOTE: do NOT call PostQuitMessage here — the main PeekMessage loop
+		// must keep running after the editor window closes.
+		WindowAction action;
+		action.WindowEventType = WindowAction::DESTROY;
+		self->OnAction(action);
+		return 0;
+	}
+
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}

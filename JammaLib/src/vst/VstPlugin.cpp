@@ -155,12 +155,17 @@ class VstPlugin::Impl
 public:
 	static constexpr Steinberg::int32 MaxHostedChannels = 2;
 
+	// Pre-init state: populated by PreInit() on the main thread.
+	Steinberg::IPtr<Steinberg::IPluginFactory> factory;
+	bool moduleInitialized = false; // true if InitDll() was called
+
 	Steinberg::IPtr<Steinberg::Vst::HostApplication> hostApplication;
 	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
 	Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor;
 	Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentConnection;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerConnection;
+	bool _connectionsDone = false; // true after connect() called in OpenEditor()
 	Steinberg::IPtr<Steinberg::IPlugView> plugView;
 	std::unique_ptr<HostComponentHandler> componentHandler;
 	std::unique_ptr<HostPlugFrame> plugFrame;
@@ -175,6 +180,8 @@ public:
 	float outputScratch[MaxHostedChannels][constants::MaxBlockSize];
 
 	Impl() :
+		factory(nullptr),
+		moduleInitialized(false),
 		hostApplication(Steinberg::IPtr<Steinberg::Vst::HostApplication>(new Steinberg::Vst::HostApplication(), false)),
 		component(nullptr),
 		processor(nullptr),
@@ -182,6 +189,7 @@ public:
 		componentHandler(std::make_unique<HostComponentHandler>()),
 		plugFrame(std::make_unique<HostPlugFrame>()),
 		plugView(nullptr),
+		_connectionsDone(false),
 		processData(),
 		inputBus(),
 		outputBus(),
@@ -200,6 +208,7 @@ public:
 
 VstPlugin::VstPlugin() :
 	_isLoaded(false),
+	_isActivated(false),
 	_name(),
 	_isBypassed(false),
 	_editorOpening(false),
@@ -220,69 +229,89 @@ VstPlugin::~VstPlugin()
 	Unload();
 }
 
-bool VstPlugin::Load(const std::wstring& path,
-	float sampleRate,
-	unsigned int blockSize,
-	unsigned int numChannels)
+bool VstPlugin::PreInit(const std::wstring& path)
 {
 #ifdef JAMMA_VST3_ENABLED
-	vst::VstDiagnostics::Log("VstPlugin", "load-begin", std::string("path=") + utils::EncodeUtf8(path)
-		+ ", sampleRate=" + std::to_string(sampleRate)
-		+ ", blockSize=" + std::to_string(blockSize)
-		+ ", channels=" + std::to_string(numChannels));
-	Unload();
-	std::wcout << L"[VstPlugin] Load request: path='" << path
-		<< L"', sampleRate=" << sampleRate
-		<< L", blockSize=" << blockSize
-		<< L", requestedChannels=" << numChannels
-		<< std::endl;
+	if (_moduleHandle)
+		return true; // Already pre-initialised (e.g. called twice)
 
-	_impl->hostedChannels = static_cast<Steinberg::int32>(std::max(1u, std::min(numChannels, static_cast<unsigned int>(Impl::MaxHostedChannels))));
-	std::cout << "[VstPlugin] Hosted channels=" << _impl->hostedChannels << std::endl;
+	vst::VstDiagnostics::Log("VstPlugin", "preinit-begin", utils::EncodeUtf8(path));
+	std::wcout << L"[VstPlugin] PreInit (main thread): path='" << path << L"'" << std::endl;
 
-	// 1. Load the DLL
 	_moduleHandle = LoadLibraryW(path.c_str());
 	if (!_moduleHandle)
 	{
-		std::cerr << "[VstPlugin] LoadLibraryW failed: " << GetLastError() << std::endl;
-		vst::VstDiagnostics::Log("VstPlugin", "load-failed", std::string("LoadLibraryW error=") + std::to_string(GetLastError()));
+		std::cerr << "[VstPlugin] PreInit: LoadLibraryW failed: " << GetLastError() << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", std::string("LoadLibraryW error=") + std::to_string(GetLastError()));
 		return false;
 	}
 
-	// 2. Get the factory function
-	typedef IPluginFactory* (PLUGIN_API* GetFactoryProc)();
-	auto getFactory = reinterpret_cast<GetFactoryProc>(
-		GetProcAddress(_moduleHandle, "GetPluginFactory"));
+	// Call InitDll() if exported (VST3 spec says hosts SHOULD call it).
+	// This is paired with ExitDll() in Unload().
+	using InitModuleFunc = bool (PLUGIN_API*)();
+	auto initDll = reinterpret_cast<InitModuleFunc>(GetProcAddress(_moduleHandle, "InitDll"));
+	if (initDll)
+	{
+		initDll();
+		_impl->moduleInitialized = true;
+		std::cout << "[VstPlugin] PreInit: InitDll() called" << std::endl;
+	}
+
+	// Call GetPluginFactory() on the main/UI thread. JUCE-based plugins call
+	// initialiseJuce_GUI() and capture the calling thread as JUCE's message thread
+	// during GetPluginFactory() or the first createInstance()/initialize() call.
+	// All of these MUST happen on the main thread so that plugView->attached()
+	// (also main thread) never deadlocks waiting for a job-thread message pump.
+	using GetFactoryProc = IPluginFactory* (PLUGIN_API*)();
+	auto getFactory = reinterpret_cast<GetFactoryProc>(GetProcAddress(_moduleHandle, "GetPluginFactory"));
 	if (!getFactory)
 	{
-		std::cerr << "[VstPlugin] GetPluginFactory not found" << std::endl;
-		Unload();
+		std::cerr << "[VstPlugin] PreInit: GetPluginFactory not found" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", "GetPluginFactory not found");
+		if (_impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll) exitDll();
+			_impl->moduleInitialized = false;
+		}
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
 		return false;
 	}
 
 	IPluginFactory* rawFactory = getFactory();
 	if (!rawFactory)
 	{
-		std::cerr << "[VstPlugin] GetPluginFactory() returned null" << std::endl;
-		Unload();
+		std::cerr << "[VstPlugin] PreInit: GetPluginFactory() returned null" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", "GetPluginFactory returned null");
+		if (_impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll) exitDll();
+			_impl->moduleInitialized = false;
+		}
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
 		return false;
 	}
 
-	IPtr<IPluginFactory> factory(rawFactory, false);
+	_impl->factory = IPtr<IPluginFactory>(rawFactory, false);
 
-	// 3. Find the first IAudioProcessor class
+	// Find the first kVstAudioEffectClass component CID.
 	PFactoryInfo factoryInfo;
-	factory->getFactoryInfo(&factoryInfo);
+	_impl->factory->getFactoryInfo(&factoryInfo);
 	_name = factoryInfo.vendor;
 
-	int32 numClasses = factory->countClasses();
+	int32 numClasses = _impl->factory->countClasses();
 	FUID componentCid;
 	bool found = false;
 
 	for (int32 i = 0; i < numClasses; i++)
 	{
 		PClassInfo classInfo;
-		factory->getClassInfo(i, &classInfo);
+		_impl->factory->getClassInfo(i, &classInfo);
 
 		if (std::string(classInfo.category) == kVstAudioEffectClass)
 		{
@@ -295,28 +324,214 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	if (!found)
 	{
-		std::cerr << "[VstPlugin] No audio effect class found in plugin" << std::endl;
-		Unload();
+		std::cerr << "[VstPlugin] PreInit: no audio effect class found in plugin" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", "no audio effect class");
+		_impl->factory = nullptr;
+		if (_impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll) exitDll();
+			_impl->moduleInitialized = false;
+		}
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
 		return false;
 	}
 
-	// 4. Create IComponent
+	// createInstance() and initialize() are called on the main thread here
+	// (not in Load() on the job thread) because JUCE's MessageManager singleton
+	// is created on the first call to initialiseJuce_GUI(), which JUCE triggers
+	// inside initialize(). By doing this on the main thread, JUCE's message thread
+	// == main thread, so attached() on the main thread can call
+	// callFunctionOnMessageThread() without needing a job-thread message pump.
 	IComponent* rawComponent = nullptr;
-	if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
+	if (_impl->factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 		|| !rawComponent)
 	{
-		std::cerr << "[VstPlugin] createInstance(IComponent) failed" << std::endl;
-		Unload();
+		std::cerr << "[VstPlugin] PreInit: createInstance(IComponent) failed" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", "createInstance failed");
+		_impl->factory = nullptr;
+		if (_impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll) exitDll();
+			_impl->moduleInitialized = false;
+		}
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
 		return false;
 	}
 	_impl->component = IPtr<IComponent>(rawComponent, false);
 
-	// 5. Initialize the component with a real host application context.
 	if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 	{
-		std::cerr << "[VstPlugin] IComponent::initialize() failed" << std::endl;
-		Unload();
+		std::cerr << "[VstPlugin] PreInit: IComponent::initialize() failed" << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "preinit-failed", "initialize failed");
+		_impl->component = nullptr;
+		_impl->factory = nullptr;
+		if (_impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll) exitDll();
+			_impl->moduleInitialized = false;
+		}
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
 		return false;
+	}
+
+	std::cout << "[VstPlugin] PreInit: success — factory, component, and initialize on main thread, plugin=" << _name << std::endl;
+	vst::VstDiagnostics::Log("VstPlugin", "preinit-success", utils::EncodeUtf8(path));
+	return true;
+#else
+	(void)path;
+	return false;
+#endif
+}
+
+bool VstPlugin::Load(const std::wstring& path,
+	float sampleRate,
+	unsigned int blockSize,
+	unsigned int numChannels)
+{
+#ifdef JAMMA_VST3_ENABLED
+	vst::VstDiagnostics::Log("VstPlugin", "load-begin", std::string("path=") + utils::EncodeUtf8(path)
+		+ ", sampleRate=" + std::to_string(sampleRate)
+		+ ", blockSize=" + std::to_string(blockSize)
+		+ ", channels=" + std::to_string(numChannels));
+
+	// Only do a full unload if we're replacing a previously loaded plugin.
+	// If PreInit() ran, _moduleHandle is set but _isLoaded is false — we must
+	// NOT unload here or we'd throw away the main-thread pre-initialisation.
+	if (_isLoaded)
+		Unload();
+
+	std::wcout << L"[VstPlugin] Load request: path='" << path
+		<< L"', sampleRate=" << sampleRate
+		<< L", blockSize=" << blockSize
+		<< L", requestedChannels=" << numChannels
+		<< std::endl;
+
+	_impl->hostedChannels = static_cast<Steinberg::int32>(std::max(1u, std::min(numChannels, static_cast<unsigned int>(Impl::MaxHostedChannels))));
+	std::cout << "[VstPlugin] Hosted channels=" << _impl->hostedChannels << std::endl;
+
+	// 1. Load the DLL — skip if PreInit() already loaded it on the main thread
+	if (!_moduleHandle)
+	{
+		_moduleHandle = LoadLibraryW(path.c_str());
+		if (!_moduleHandle)
+		{
+			std::cerr << "[VstPlugin] LoadLibraryW failed: " << GetLastError() << std::endl;
+			vst::VstDiagnostics::Log("VstPlugin", "load-failed", std::string("LoadLibraryW error=") + std::to_string(GetLastError()));
+			return false;
+		}
+
+		// Call InitDll() if exported and we didn't already do so in PreInit().
+		using InitModuleFunc = bool (PLUGIN_API*)();
+		auto initDll = reinterpret_cast<InitModuleFunc>(GetProcAddress(_moduleHandle, "InitDll"));
+		if (initDll)
+		{
+			initDll();
+			_impl->moduleInitialized = true;
+		}
+	}
+	else
+	{
+		std::cout << "[VstPlugin] Load: reusing pre-loaded DLL handle from PreInit()" << std::endl;
+	}
+
+	// 2. Get the factory — use cached value from PreInit() when available
+	IPtr<IPluginFactory> factory = _impl->factory;
+	if (!factory)
+	{
+		typedef IPluginFactory* (PLUGIN_API* GetFactoryProc)();
+		auto getFactory = reinterpret_cast<GetFactoryProc>(
+			GetProcAddress(_moduleHandle, "GetPluginFactory"));
+		if (!getFactory)
+		{
+			std::cerr << "[VstPlugin] GetPluginFactory not found" << std::endl;
+			Unload();
+			return false;
+		}
+
+		IPluginFactory* rawFactory = getFactory();
+		if (!rawFactory)
+		{
+			std::cerr << "[VstPlugin] GetPluginFactory() returned null" << std::endl;
+			Unload();
+			return false;
+		}
+
+		factory = IPtr<IPluginFactory>(rawFactory, false);
+		_impl->factory = factory; // cache for later
+	}
+	else
+	{
+		std::cout << "[VstPlugin] Load: reusing pre-loaded factory from PreInit()" << std::endl;
+	}
+
+	// 3. Find the first IAudioProcessor class (skip if PreInit() already found
+	//    the component and name)
+	if (!_impl->component)
+	{
+		PFactoryInfo factoryInfo;
+		factory->getFactoryInfo(&factoryInfo);
+		_name = factoryInfo.vendor;
+
+		int32 numClasses = factory->countClasses();
+		FUID componentCid;
+		bool found = false;
+
+		for (int32 i = 0; i < numClasses; i++)
+		{
+			PClassInfo classInfo;
+			factory->getClassInfo(i, &classInfo);
+
+			if (std::string(classInfo.category) == kVstAudioEffectClass)
+			{
+				componentCid = FUID::fromTUID(classInfo.cid);
+				_name = classInfo.name;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			std::cerr << "[VstPlugin] No audio effect class found in plugin" << std::endl;
+			Unload();
+			return false;
+		}
+
+		// 4. Create IComponent (only if PreInit() didn't already do it on the main thread)
+		// NOTE: If PreInit() ran, createInstance() + initialize() were already called on the
+		// main thread — critical for JUCE-based plugins whose MessageManager is captured
+		// on the first initialize() call. Calling them here (job thread) would anchor JUCE's
+		// message thread to the job thread, causing attached() on the main thread to deadlock.
+		IComponent* rawComponent = nullptr;
+		if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
+			|| !rawComponent)
+		{
+			std::cerr << "[VstPlugin] createInstance(IComponent) failed" << std::endl;
+			Unload();
+			return false;
+		}
+		_impl->component = IPtr<IComponent>(rawComponent, false);
+
+		// 5. Initialize the component
+		if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
+		{
+			std::cerr << "[VstPlugin] IComponent::initialize() failed" << std::endl;
+			Unload();
+			return false;
+		}
+	}
+	else
+	{
+		std::cout << "[VstPlugin] Load: reusing pre-initialized component from PreInit()" << std::endl;
 	}
 
 	auto inputBusCount = _impl->component->getBusCount(kAudio, kInput);
@@ -371,17 +586,29 @@ bool VstPlugin::Load(const std::wstring& path,
 		return false;
 	}
 
-	// 8. Activate buses and component
-	// Attempt to activate the first input/output audio bus (index 0).
-	// Plugins that have no bus at index 0 will gracefully return kResultFalse.
+	// 8. Activate buses, then set component active and start processing.
+	// setActive/setProcessing are called here (on the job thread) because audio
+	// processing must be active regardless of whether an editor is ever opened.
+	// This is now safe for JUCE-based plugins because PreInit() called
+	// createInstance()+initialize() on the main thread, anchoring JUCE's
+	// MessageManager to the main thread. setProcessing(true) here only invokes
+	// the audio-processor path (prepareToPlay), which does not require the
+	// message thread. attached() on the main thread will therefore call
+	// callFunctionOnMessageThread() inline (already on message thread), not block.
 	auto inActivateRes = _impl->component->activateBus(kAudio, kInput, 0, true);
 	auto outActivateRes = _impl->component->activateBus(kAudio, kOutput, 0, true);
 	auto activeRes = _impl->component->setActive(true);
 	auto processingRes = _impl->processor->setProcessing(true);
-	std::cout << "[VstPlugin] activateBus results: input=" << inActivateRes
+	_isActivated.store(true, std::memory_order_release);
+	std::cout << "[VstPlugin] activateBus/setActive/setProcessing: input=" << inActivateRes
 		<< ", output=" << outActivateRes
 		<< ", setActive=" << activeRes
 		<< ", setProcessing=" << processingRes << std::endl;
+	vst::VstDiagnostics::Log("VstPlugin", "load-activated",
+		std::string("input=") + std::to_string(inActivateRes)
+		+ ", output=" + std::to_string(outActivateRes)
+		+ ", setActive=" + std::to_string(activeRes)
+		+ ", setProcessing=" + std::to_string(processingRes));
 
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
 	for (Steinberg::int32 c = 0; c < _impl->hostedChannels; c++)
@@ -445,8 +672,11 @@ bool VstPlugin::Load(const std::wstring& path,
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
 	}
 
-	// For separate component/controller plugins, connect both endpoints so
-	// the UI and processor can exchange state/parameter messages.
+	// IConnectionPoint::connect() is deferred from Load() to OpenEditor() (called
+	// after attached() succeeds) to match editorhost's behavior. editorhost never
+	// calls connect() at all, and calling it on the job thread before attached()
+	// may anchor JUCE cross-thread message dispatch to the job thread, causing
+	// attached() on the main thread to deadlock waiting for the job-thread pump.
 	if (_impl->controller)
 	{
 		IConnectionPoint* rawComponentConn = nullptr;
@@ -458,16 +688,9 @@ bool VstPlugin::Load(const std::wstring& path,
 			_impl->controllerConnection = IPtr<IConnectionPoint>(rawControllerConn, false);
 
 		if (_impl->componentConnection && _impl->controllerConnection)
-		{
-			auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
-			auto k2c = _impl->controllerConnection->connect(_impl->componentConnection);
-			std::cout << "[VstPlugin] ConnectionPoint connect: component->controller=" << c2k
-				<< ", controller->component=" << k2c << std::endl;
-		}
+			std::cout << "[VstPlugin] ConnectionPoint available, will connect in OpenEditor()" << std::endl;
 		else
-		{
 			std::cout << "[VstPlugin] ConnectionPoint not available on component/controller" << std::endl;
-		}
 	}
 
 	_isLoaded = true;
@@ -490,16 +713,20 @@ void VstPlugin::Unload()
 
 	if (_impl && _impl->component)
 	{
-		if (_impl->processor)
-			_impl->processor->setProcessing(false);
+		if (_isActivated.exchange(false, std::memory_order_acq_rel))
+		{
+			if (_impl->processor)
+				_impl->processor->setProcessing(false);
+			_impl->component->setActive(false);
+		}
 
 		if (_impl->componentConnection && _impl->controllerConnection)
 		{
 			_impl->componentConnection->disconnect(_impl->controllerConnection);
 			_impl->controllerConnection->disconnect(_impl->componentConnection);
 		}
+		_impl->_connectionsDone = false;
 
-		_impl->component->setActive(false);
 		_impl->component->terminate();
 		_impl->component = nullptr;
 	}
@@ -511,10 +738,23 @@ void VstPlugin::Unload()
 		_impl->componentConnection = nullptr;
 		_impl->controllerConnection = nullptr;
 		_impl->plugView = nullptr;
+
+		// Release factory before FreeLibrary: factory COM vtable lives inside
+		// the DLL; releasing after FreeLibrary would call into unloaded code.
+		_impl->factory = nullptr;
 	}
 
 	if (_moduleHandle)
 	{
+		// Pair the InitDll() call made in PreInit() or Load() with ExitDll().
+		if (_impl && _impl->moduleInitialized)
+		{
+			using ExitModuleFunc = bool (PLUGIN_API*)();
+			auto exitDll = reinterpret_cast<ExitModuleFunc>(GetProcAddress(_moduleHandle, "ExitDll"));
+			if (exitDll)
+				exitDll();
+			_impl->moduleInitialized = false;
+		}
 		FreeLibrary(_moduleHandle);
 		_moduleHandle = nullptr;
 	}
@@ -529,7 +769,8 @@ void VstPlugin::Unload()
 void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed)
+	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
+		|| _isBypassed.load(std::memory_order_relaxed)
 		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
@@ -557,7 +798,8 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (!_isLoaded || _isBypassed.load(std::memory_order_relaxed)
+	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
+		|| _isBypassed.load(std::memory_order_relaxed)
 		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
@@ -615,6 +857,24 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		return false;
 	}
 
+	// Connect component↔controller IConnectionPoint endpoints here on the main thread,
+	// BEFORE createView(). In JUCE's single-object VST3 design, connect() transfers the
+	// shared AudioProcessor reference from the component side to the controller side;
+	// without it createView() returns null. Calling connect() on the job thread (in
+	// Load()) caused a hang in attached() because JUCE posted cross-thread messages
+	// anchored to the job thread. Main-thread connect() avoids that.
+	if (!_impl->_connectionsDone && _impl->componentConnection && _impl->controllerConnection)
+	{
+		auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
+		auto k2c = _impl->controllerConnection->connect(_impl->componentConnection);
+		_impl->_connectionsDone = true;
+		std::cout << "[VstPlugin] ConnectionPoint connect: c2k=" << c2k
+			<< ", k2c=" << k2c << std::endl;
+		vst::VstDiagnostics::Log("VstPlugin", "open-editor-connect",
+			std::string("c2k=") + std::to_string(c2k) + ", k2c=" + std::to_string(k2c));
+	}
+
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-step", "calling createView");
 	IPlugView* rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
 	if (!rawView)
 	{
@@ -622,9 +882,11 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		vst::VstDiagnostics::Log("VstPlugin", "open-editor-failed", "createView returned null");
 		return false;
 	}
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-step", "createView ok, wrapping view");
 
 	_impl->plugView = IPtr<IPlugView>(rawView, false);
 
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-step", "calling isPlatformTypeSupported");
 	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
 		std::cout << "[VstPlugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
@@ -632,9 +894,11 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		_impl->plugView = nullptr;
 		return false;
 	}
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-step", "isPlatformTypeSupported ok, setting frame");
 
 	_impl->plugFrame->SetHostWindow(parentHwnd);
 	_impl->plugView->setFrame(_impl->plugFrame.get());
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-step", "setFrame ok, calling attached");
 
 	const auto attachStart = std::chrono::steady_clock::now();
 	const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
@@ -648,6 +912,8 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		_impl->plugView = nullptr;
 		return false;
 	}
+	vst::VstDiagnostics::Log("VstPlugin", "open-editor-attached",
+		std::string("attachMs=") + std::to_string(attachMs));
 
 	// Query preferred size
 	ViewRect rect{};

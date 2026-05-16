@@ -7,6 +7,7 @@
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../vst/VstDiagnostics.h"
+#include "../vst/VstPlugin.h"
 
 using namespace base;
 using namespace actions;
@@ -199,6 +200,30 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->InitReceivers();
 
 	return scene;
+}
+
+void Scene::CloseAllVstEditorWindows()
+{
+	for (auto& window : _vstEditorWindows)
+	{
+		if (window)
+			window->Destroy();
+	}
+	_vstEditorWindows.clear();
+}
+
+bool Scene::IsVstAutoOpenPending() const
+{
+	return _vstDebugAutoOpenPending;
+}
+
+void Scene::CancelVstAutoOpen()
+{
+	if (_vstDebugAutoOpenPending)
+	{
+		_vstDebugAutoOpenPending = false;
+		vst::VstDiagnostics::Log("Scene", "auto-open-cancelled", "pre-audio timeout");
+	}
 }
 
 void Scene::_PruneClosedVstEditorWindows()
@@ -1113,6 +1138,28 @@ void Scene::CommitChanges()
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 				jobList.insert(jobList.end(), jobs.begin(), jobs.end());
+		}
+	}
+
+	// Pre-initialise VST DLLs on the main/UI thread before handing jobs to
+	// the job thread.  This must happen here (after the audioMutex is
+	// released) so LoadLibraryW doesn't stall inside the audio lock.
+	//
+	// For JUCE-based plugins GetPluginFactory() runs initialiseJuce_GUI()
+	// which captures the calling thread as the JUCE "message thread".  By
+	// doing this on the main thread we ensure that later plugView->attached()
+	// calls (also on the main thread) never deadlock waiting for the job
+	// thread to pump JUCE messages.
+	for (auto& job : jobList)
+	{
+		if (job.JobActionType == JobAction::JOB_LOADVST)
+		{
+			auto plugin = std::make_shared<vst::VstPlugin>();
+			if (plugin->PreInit(job.VstPath))
+				job.PreInitPlugin = std::move(plugin);
+			// If PreInit fails the job thread falls back to creating a fresh
+			// VstPlugin — correct for non-JUCE plugins; JUCE plugins will
+			// likely hang, but that's no worse than the pre-fix behaviour.
 		}
 	}
 
