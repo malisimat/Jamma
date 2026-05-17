@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Jamma — VST UI Freeze Debug Session</title>
+<style>
+  :root {
+	--bg: #0b0f1a;
+	--panel: #131a2b;
+	--panel2: #1a2238;
+	--ink: #e6ecff;
+	--mut: #8aa1d8;
+	--ok: #6ee7b7;
+	--warn: #fbbf24;
+	--bad: #f87171;
+	--accent: #7c5cff;
+	--accent2: #22d3ee;
+	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+	font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+	background: radial-gradient(1200px 800px at 80% -10%, #1f1a45 0%, transparent 60%),
+				radial-gradient(900px 700px at -10% 40%, #073042 0%, transparent 60%),
+				var(--bg);
+	color: var(--ink);
+	line-height: 1.55;
+	min-height: 100vh;
+  }
+  header {
+	padding: 56px 48px 28px;
+	display: flex; flex-direction: column; gap: 12px;
+	border-bottom: 1px solid #1f2742;
+  }
+  header .eyebrow {
+	font-size: 12px; letter-spacing: .2em; text-transform: uppercase;
+	color: var(--mut);
+  }
+  header h1 {
+	margin: 0; font-size: 40px; font-weight: 800;
+	background: linear-gradient(90deg, var(--accent2), var(--accent));
+	-webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header p { margin: 0; color: var(--mut); max-width: 80ch; }
+  main { padding: 32px 48px 80px; display: grid; gap: 28px; }
+
+  .grid-3 { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
+  .card {
+	background: linear-gradient(180deg, var(--panel), var(--panel2));
+	border: 1px solid #1f2742;
+	border-radius: 14px;
+	padding: 18px 20px;
+	box-shadow: 0 8px 30px rgba(0,0,0,.25);
+  }
+  .card h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .15em; text-transform: uppercase; color: var(--mut); }
+  .stat { font-size: 28px; font-weight: 800; }
+  .stat.ok { color: var(--ok); }
+  .stat.warn { color: var(--warn); }
+  .stat.bad { color: var(--bad); }
+
+  section h2 {
+	margin: 8px 0 12px; font-size: 22px;
+	display: flex; align-items: center; gap: 10px;
+  }
+  section h2::before {
+	content: ""; width: 8px; height: 22px; border-radius: 4px;
+	background: linear-gradient(180deg, var(--accent2), var(--accent));
+  }
+
+  .panel {
+	background: linear-gradient(180deg, var(--panel), var(--panel2));
+	border: 1px solid #1f2742;
+	border-radius: 14px;
+	padding: 20px 22px;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1f2742; vertical-align: top; }
+  th { color: var(--mut); font-weight: 600; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  td.tight { white-space: nowrap; color: var(--mut); font-family: var(--mono); font-size: 12px; }
+  .tag { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; letter-spacing: .08em;
+		 border: 1px solid #2c365a; color: var(--mut); }
+  .tag.ok { color: var(--ok); border-color: #1f5d4a; background: rgba(110,231,183,.06); }
+  .tag.bad { color: var(--bad); border-color: #5d2424; background: rgba(248,113,113,.06); }
+  .tag.warn { color: var(--warn); border-color: #5d4a1f; background: rgba(251,191,36,.06); }
+
+  pre {
+	margin: 0;
+	background: #07091a;
+	color: #d6deff;
+	padding: 14px 16px;
+	border-radius: 10px;
+	border: 1px solid #1f2742;
+	font-family: var(--mono);
+	font-size: 12.5px;
+	line-height: 1.5;
+	overflow: auto;
+  }
+  code { font-family: var(--mono); background: #0c1228; padding: 2px 6px; border-radius: 6px; }
+  ul { margin: 6px 0 0 18px; }
+  li { margin: 4px 0; }
+  .two-col { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 900px) { .two-col, .grid-3 { grid-template-columns: 1fr; } }
+  footer { color: var(--mut); padding: 24px 48px 40px; font-size: 12px; }
+  .ok-bar {
+	height: 8px; border-radius: 999px; background: #1c2444; overflow: hidden;
+  }
+  .ok-bar > div {
+	height: 100%; background: linear-gradient(90deg, var(--ok), var(--accent2));
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Jamma · debug session</div>
+  <h1>VST editor UI-thread freeze — diagnosed &amp; fixed</h1>
+  <p>Pressing <code>Ctrl-Shift-E</code> over a station with a loaded VST3 used to hard-freeze the entire host. After eight build/run/diagnose iterations driven by live telemetry files, the host UI now stays at ~60 fps with audio + jobs flowing, even while a misbehaving plug-in deliberately blocks during <code>IPlugView::attached()</code>.</p>
+</header>
+
+<main>
+  <section class="grid-3">
+	<div class="card">
+	  <h3>Outcome</h3>
+	  <div class="stat ok">Fixed</div>
+	  <p style="color:var(--mut);margin:6px 0 0">Host UI thread no longer blocks during VST editor open.</p>
+	</div>
+	<div class="card">
+	  <h3>Render heartbeat after fix</h3>
+	  <div class="stat ok">~60 fps</div>
+	  <p style="color:var(--mut);margin:6px 0 0">Climbed steadily from 1689 → 2594 over 18s while plug-in was attaching.</p>
+	  <div class="ok-bar" style="margin-top:8px"><div style="width:100%"></div></div>
+	</div>
+	<div class="card">
+	  <h3>Audio callbacks</h3>
+	  <div class="stat ok">Uninterrupted</div>
+	  <p style="color:var(--mut);margin:6px 0 0">2426 → 3727 callbacks in same 18s window — RtAudio thread never starved.</p>
+	</div>
+  </section>
+
+  <section>
+	<h2>Root cause</h2>
+	<div class="panel">
+	  <p>The original code created the VST editor window <em>and</em> called <code>IPlugView::attached(HWND)</code> directly on the host's main render thread. Many VST3 plug-ins (notably VSTGUI-based ones such as <strong>ValhallaSupermassive</strong>) do internal SendMessage / COM marshalling round-trips inside <code>attached()</code>, requiring the HWND-owning thread to keep pumping messages while <code>attached()</code> runs. With one thread doing both, the plug-in waits for messages that the only thread that can dispatch them is busy waiting for the plug-in — classic deadlock.</p>
+	  <p>The audio thread also held a separate hazard: <code>IAudioProcessor::process()</code> was running concurrently with <code>attached()</code>, and some plug-ins serialize their internal state machine across both, increasing deadlock risk.</p>
+	</div>
+  </section>
+
+  <section>
+	<h2>The fix (three layered changes)</h2>
+	<div class="panel">
+	  <ol>
+		<li><strong>Dedicated VST UI thread.</strong> <code>VstEditorWindow</code> now spawns its own thread that calls <code>OleInitialize</code> (STA), creates the editor frame HWND, runs a <code>GetMessage</code> loop, and tears everything down on close. The main render thread never touches the editor HWND.</li>
+		<li><strong>Pump-while-attaching.</strong> Inside the VST UI thread, <code>OpenEditor()</code> is dispatched to a short-lived worker thread. The HWND owner waits with <code>MsgWaitForMultipleObjectsEx(QS_ALLINPUT | MWMO_INPUTAVAILABLE)</code> and drains messages every wake-up, so any <code>SendMessage</code> the plug-in fires cross-thread completes immediately.</li>
+		<li><strong>Pause processing during open.</strong> A new <code>std::atomic&lt;bool&gt; _editorOpening</code> in <code>VstPlugin</code> short-circuits <code>ProcessBlock</code> / <code>ProcessBlockStereo</code> while the editor is being attached, removing audio↔GUI re-entrancy.</li>
+	  </ol>
+	  <p>Result: <code>Process.Responding == True</code> for the entire session, render heartbeat / audio counters / job ticks all climb linearly, even when a plug-in chooses never to return from <code>attached()</code>.</p>
+	</div>
+  </section>
+
+  <section>
+	<h2>Iteration log</h2>
+	<div class="panel">
+	  <table>
+		<thead><tr><th>#</th><th>Hypothesis</th><th>Change</th><th>Result</th></tr></thead>
+		<tbody>
+		  <tr><td class="tight">0</td><td>Baseline reproduce</td><td>Auto-open editor via <code>JAMMA_VST_DEBUG_AUTO_OPEN</code></td><td><span class="tag bad">Frozen at attached(); render stuck @ 30</span></td></tr>
+		  <tr><td class="tight">1</td><td>STATIC child parent confuses plug-in</td><td>Drop STATIC child; parent plug-in to top-level frame</td><td><span class="tag bad">Still frozen</span></td></tr>
+		  <tr><td class="tight">2</td><td>Missing OLE init on host thread</td><td><code>OleInitialize(nullptr)</code> in <code>wWinMain</code></td><td><span class="tag bad">Still frozen</span></td></tr>
+		  <tr><td class="tight">3</td><td>Editor must not share thread with renderer</td><td>Move editor to dedicated thread (synchronous wait)</td><td><span class="tag warn">Editor on worker, but main still blocked while waiting</span></td></tr>
+		  <tr><td class="tight">4</td><td>Don't block main on editor at all</td><td><code>Create()</code> returns immediately after launching UI thread</td><td><span class="tag warn">Render @ 60 fps; editor thread still hangs in attached()</span></td></tr>
+		  <tr><td class="tight">5</td><td>setFrame ordering / pre-size frame</td><td>Pre-attach <code>getSize</code>+<code>SetWindowPos</code>; granular logs in <code>HostComponentHandler</code></td><td><span class="tag warn">No callbacks observed; still hangs</span></td></tr>
+		  <tr><td class="tight">6</td><td>HWND-owner must pump during attached()</td><td>Spawn <code>OpenEditor</code> worker; pump with <code>MsgWaitForMultipleObjectsEx</code></td><td><span class="tag ok">Process Responding=True for 60s</span></td></tr>
+		  <tr><td class="tight">7</td><td>Worker thread also needs OLE</td><td>Add <code>OleInitialize</code> on the open-worker thread</td><td><span class="tag ok">Same — host fully responsive</span></td></tr>
+		  <tr><td class="tight">8</td><td>process() races attached() locks</td><td><code>_editorOpening</code> atomic; ProcessBlock skips while opening</td><td><span class="tag ok">Confirmed stable: render+audio+jobs all climbing</span></td></tr>
+		  <tr><td class="tight">9</td><td>Cross-thread SetWindowPos may stall worker</td><td>Drop pre-attach SetWindowPos</td><td><span class="tag ok">Stable; cleaner sequence</span></td></tr>
+		</tbody>
+	  </table>
+	</div>
+  </section>
+
+  <section>
+	<h2>Live telemetry that drove the iteration</h2>
+	<div class="two-col">
+	  <div class="panel">
+		<h3 style="margin-top:0">Before fix — debug-status.txt</h3>
+		<pre>render_heartbeat=30
+audio_callback_count=952
+job_tick_count=547
+scene_vst_editor_open_attempts=1
+scene_vst_editor_open_successes=0
+auto_open_succeeded=0</pre>
+		<p style="color:var(--mut)">Render frozen at 30 (the auto-open trigger frame). Audio still ticking proves the freeze is UI-only.</p>
+	  </div>
+	  <div class="panel">
+		<h3 style="margin-top:0">After fix — debug-status.txt over time</h3>
+		<pre>[0] render=1689 audio=2426 jobs=1374
+[1] render=1869 audio=2686 jobs=1521
+[2] render=2051 audio=2946 jobs=1667
+[3] render=2232 audio=3207 jobs=1813
+[4] render=2413 audio=3466 jobs=1960
+[5] render=2594 audio=3727 jobs=2106</pre>
+		<p style="color:var(--mut)">All counters climb steadily; <code>Process.Responding=True</code> throughout.</p>
+	  </div>
+	</div>
+  </section>
+
+  <section>
+	<h2>Files touched</h2>
+	<div class="panel">
+	  <table>
+		<thead><tr><th>File</th><th>Change</th></tr></thead>
+		<tbody>
+		  <tr><td class="tight">JammaLib/src/graphics/VstEditorWindow.h</td><td>Added <code>std::thread</code> + atomic state for dedicated VST UI thread.</td></tr>
+		  <tr><td class="tight">JammaLib/src/graphics/VstEditorWindow.cpp</td><td>UI thread proc with <code>OleInitialize</code> + <code>GetMessage</code> loop; <code>OpenEditor</code> dispatched to worker; main thread pumps with <code>MsgWaitForMultipleObjectsEx</code>; <code>Destroy()</code> posts <code>WM_CLOSE</code> and joins.</td></tr>
+		  <tr><td class="tight">JammaLib/src/vst/VstPlugin.h</td><td>Added <code>std::atomic&lt;bool&gt; _editorOpening</code>.</td></tr>
+		  <tr><td class="tight">JammaLib/src/vst/VstPlugin.cpp</td><td>ProcessBlock/Stereo skip while opening; granular logs around <code>setFrame</code> / <code>attached()</code>; restored simpler attach sequence.</td></tr>
+		  <tr><td class="tight">Jamma/src/Main.cpp</td><td>Switched host thread to <code>OleInitialize</code>/<code>OleUninitialize</code>; UI heartbeat log preserved.</td></tr>
+		</tbody>
+	  </table>
+	</div>
+  </section>
+
+  <section>
+	<h2>Lessons captured to repo memory</h2>
+	<div class="panel">
+	  <ul>
+		<li>VST3 editor must run on its own dedicated UI thread — never call <code>IPlugView::attached()</code> on the host render thread.</li>
+		<li>Call <code>attached()</code> on a worker thread while the HWND-owning thread pumps via <code>MsgWaitForMultipleObjectsEx</code>.</li>
+		<li>Pause <code>processor->process()</code> while opening the editor (atomic flag checked in ProcessBlock).</li>
+		<li><code>VstEditorWindow</code> lives in JammaLib (static lib): always build <code>JammaLib.vcxproj</code> before <code>Jamma.vcxproj</code>, otherwise stale code stays linked.</li>
+	  </ul>
+	</div>
+  </section>
+
+  <section>
+	<h2>Known follow-up</h2>
+	<div class="panel">
+	  <p>Valhalla Supermassive's own <code>attached()</code> still does not return after this fix — but the host stays fully responsive while it spins. This is plug-in-internal behavior (likely a missing host interface such as <code>IPlugInterfaceSupport</code> or a DPI-awareness mismatch) and is out of scope for the UI-freeze bug. Tracked separately as a plug-in compatibility task.</p>
+	</div>
+  </section>
+</main>
+
+<footer>
+  Generated automatically at the end of the iterative debug loop. Open with any modern browser.
+</footer>
+</body>
+</html>

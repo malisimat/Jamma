@@ -35,6 +35,19 @@ namespace vst
 		VstPlugin& operator=(const VstPlugin&) = delete;
 
 	public:
+		// Pre-initialise the plugin DLL on the main/UI thread BEFORE Load() is
+		// called on the job thread.  This ensures that frameworks such as JUCE
+		// (which capture the calling thread as their "message thread" inside
+		// GetPluginFactory()) are anchored to the main thread so that
+		// plugView->attached() — also called on the main thread — never
+		// deadlocks waiting for a job-thread message pump.
+		//
+		// Must be called from the Win32 UI (message-pump) thread only.
+		// If PreInit() succeeds, Load() will reuse the DLL handle and factory
+		// it pre-loaded; it never calls LoadLibraryW or GetPluginFactory again.
+		// Returns true on success; false leaves the object in an unloaded state.
+		bool PreInit(const std::wstring& path);
+
 		// Load a VST3 plugin from path (the .vst3 bundle or DLL path).
 		// sampleRate, blockSize and numChannels are forwarded to the plugin's
 		// IAudioProcessor::setupProcessing call.
@@ -89,8 +102,13 @@ namespace vst
 		class Impl;
 
 		bool _isLoaded;
+		// True only after setActive(true) + setProcessing(true) have been called.
+		// ProcessBlock is a no-op until this is set, preventing process() calls
+		// before the plugin's audio lifecycle has been started.
+		std::atomic<bool> _isActivated;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
+		std::atomic<bool> _editorOpening;
 		utils::Size2d _editorSize;
 		HMODULE _moduleHandle;
 		std::unique_ptr<Impl> _impl;

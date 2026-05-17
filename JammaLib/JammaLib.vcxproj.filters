@@ -77,6 +77,12 @@
     <ClInclude Include="src\vst\Vst.h">
       <Filter>src\vst</Filter>
     </ClInclude>
+    <ClInclude Include="src\vst\VstDebug.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstDiagnostics.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
     <ClInclude Include="src\vst\VstPlugin.h">
       <Filter>src\vst</Filter>
     </ClInclude>

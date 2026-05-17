@@ -2,8 +2,10 @@
 
 #include "Action.h"
 #include "CommonTypes.h"
+#include <memory>
 
 namespace base { class ActionReceiver; }
+namespace vst { class VstPlugin; }
 
 namespace actions
 {
@@ -36,6 +38,12 @@ namespace actions
 
 		// Payload for JOB_LOADVST: path to the .vst3 plugin.
 		std::wstring VstPath;
+
+		// Optional: VstPlugin pre-initialised on the main thread (DLL loaded,
+		// InitDll + GetPluginFactory called) before the job is dispatched to
+		// the job thread.  If non-null, Station::OnAction uses this instance
+		// directly instead of creating a fresh one.
+		std::shared_ptr<vst::VstPlugin> PreInitPlugin;
 
 		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
 		size_t VstIndex = 0;

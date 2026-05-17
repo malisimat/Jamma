@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <SolutionDir Condition="'$(SolutionDir)' == ''">$(MSBuildThisFileDirectory)</SolutionDir>
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <VcpkgManifestRoot>$(MSBuildThisFileDirectory)</VcpkgManifestRoot>
     <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\</VcpkgInstalledDir>

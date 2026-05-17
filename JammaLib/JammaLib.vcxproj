@@ -320,6 +320,8 @@
     <ClInclude Include="src\engine\StationRemote.h" />
     <ClInclude Include="src\io\JamFile.h" />
     <ClInclude Include="src\vst\Vst.h" />
+    <ClInclude Include="src\vst\VstDebug.h" />
+    <ClInclude Include="src\vst\VstDiagnostics.h" />
     <ClInclude Include="src\vst\VstPlugin.h" />
     <ClInclude Include="src\vst\VstChain.h" />
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
