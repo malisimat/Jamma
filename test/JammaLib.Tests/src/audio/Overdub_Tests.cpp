@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include "gtest/gtest.h"
@@ -32,6 +33,38 @@ constexpr auto ActivateChar = 49u;
 constexpr auto DitchChar = 50u;
 constexpr auto OutputPathDelayBlocks = 2u;
 constexpr auto MaxExtraSettleBlocks = 3u;
+
+struct OverdubScenarioConfig
+{
+	unsigned int BlockSize;
+	unsigned int LoopLengthBlocks;
+	unsigned int SeedPlaybackBlocks;
+	int TriggerErrorBlocks;
+
+	unsigned int CaptureBlocksBeforeEnd() const
+	{
+		auto blocks = static_cast<long long>(LoopLengthBlocks) + static_cast<long long>(TriggerErrorBlocks);
+		if (blocks < 1ll)
+			return 1u;
+
+		return static_cast<unsigned int>(blocks);
+	}
+};
+
+OverdubScenarioConfig MakeOverdubScenarioConfig()
+{
+	const auto blockSize = 512u;
+	const auto loopLengthBlocks = static_cast<unsigned int>((constants::MaxLoopFadeSamps / blockSize) + 1u);
+	const auto seedPlaybackBlocks = (loopLengthBlocks * 2u) + (loopLengthBlocks / 2u);
+	const auto triggerErrorBlocks = 0;
+
+	return {
+		blockSize,
+		loopLengthBlocks,
+		seedPlaybackBlocks,
+		triggerErrorBlocks
+	};
+}
 
 std::shared_ptr<Station> MakeStation(unsigned int numChans)
 {
@@ -255,6 +288,17 @@ void ReadStationOutput(ChannelMixer& chanMixer,
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 }
 
+void AdvancePlayback(ChannelMixer& chanMixer,
+	const std::shared_ptr<Station>& station,
+	unsigned int numChans,
+	unsigned int blockSize,
+	unsigned int numBlocks)
+{
+	std::vector<float> outBuf(numChans * blockSize, 0.0f);
+	for (auto block = 0u; block < numBlocks; block++)
+		ReadStationOutput(chanMixer, station, outBuf.data(), numChans, blockSize);
+}
+
 void SimulateAudioCallback(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* inBuf,
@@ -330,10 +374,13 @@ void SimulateRemainingRecordTail(ChannelMixer& chanMixer,
 TEST(Overdub, BounceGeneratesNonZeroOutput)
 {
 	const unsigned int numChans = 2u;
-	const unsigned int blockSize = 512u;
-	const unsigned long loopLength =
-		static_cast<unsigned long>(((constants::MaxLoopFadeSamps / blockSize) + 1u) * blockSize);
-	const unsigned int captureBlocks = static_cast<unsigned int>(loopLength / blockSize);
+	const auto scenario = MakeOverdubScenarioConfig();
+	const auto blockSize = scenario.BlockSize;
+	const auto sourceLoopBlocks = scenario.LoopLengthBlocks;
+	const auto seedPlaybackBlocks = scenario.SeedPlaybackBlocks;
+	const auto captureBlocksBeforeEnd = scenario.CaptureBlocksBeforeEnd();
+	const unsigned long loopLength = static_cast<unsigned long>(sourceLoopBlocks) * blockSize;
+	const unsigned long expectedRecordedBeforeEnd = static_cast<unsigned long>(captureBlocksBeforeEnd) * blockSize;
 	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
 
 	UserConfig cfg;
@@ -367,6 +414,8 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 	auto trigger = MakeOverdubTrigger(0u);
 	station->AddTrigger(trigger);
 	DrainCommitJobs(station);
+	auto seedPlaybackMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	AdvancePlayback(seedPlaybackMixer, station, numChans, blockSize, seedPlaybackBlocks);
 
 	StartOverdub(station, cfg, streamParams);
 	ASSERT_EQ(2u, station->NumTakes());
@@ -380,7 +429,7 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 	std::vector<float> inBuf(numChans * blockSize, 0.0f);
 	std::vector<float> outBuf(numChans * blockSize, 0.0f);
 
-	for (unsigned int block = 0; block < captureBlocks; block++)
+	for (unsigned int block = 0; block < captureBlocksBeforeEnd; block++)
 	{
 		SimulateAudioCallback(callbackMixer,
 			station,
@@ -392,13 +441,13 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 			streamParams);
 	}
 
-	ASSERT_EQ(loopLength, targetTake->NumRecordedSamps());
+	ASSERT_EQ(expectedRecordedBeforeEnd, targetTake->NumRecordedSamps());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
 
 	EndOverdub(station, cfg, streamParams);
 	ASSERT_TRUE(sourceTake->IsMuted());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, targetTake->TakeState());
-	ASSERT_EQ(loopLength, targetTake->NumRecordedSamps());
+	ASSERT_EQ(expectedRecordedBeforeEnd, targetTake->NumRecordedSamps());
 
 	SimulateRemainingRecordTail(callbackMixer,
 		station,
@@ -408,7 +457,7 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 		cfg,
 		streamParams);
 
-	EXPECT_EQ(loopLength + constants::MaxLoopFadeSamps, targetTake->NumRecordedSamps());
+	EXPECT_EQ(expectedRecordedBeforeEnd + constants::MaxLoopFadeSamps, targetTake->NumRecordedSamps());
 	EXPECT_EQ(LoopTake::STATE_PLAYING, targetTake->TakeState());
 
 	sourceTake->UnMute();
@@ -423,7 +472,8 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 	bool leftObserved = false;
 	float maxRight = 0.0f;
 	std::optional<unsigned int> firstRightNonZeroBlock;
-	for (unsigned int block = 0; block < OutputPathDelayBlocks + captureBlocks + 32u; block++)
+	const auto outputProbeBlocks = OutputPathDelayBlocks + (std::max)(sourceLoopBlocks, captureBlocksBeforeEnd) + 32u;
+	for (unsigned int block = 0; block < outputProbeBlocks; block++)
 	{
 		std::vector<float> compareBuf(numChans * blockSize, 0.0f);
 		ReadStationOutput(readMixer, station, compareBuf.data(), numChans, blockSize);
@@ -454,7 +504,10 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 			<< " (leftObserved=" << leftObserved
 			<< ", maxRight=" << maxRight
 			<< ", loopLength=" << loopLength
-			<< ", captureBlocks=" << captureBlocks
+			<< ", sourceLoopBlocks=" << sourceLoopBlocks
+			<< ", captureBlocksBeforeEnd=" << captureBlocksBeforeEnd
+			<< ", seedPlaybackBlocks=" << seedPlaybackBlocks
+			<< ", triggerErrorBlocks=" << scenario.TriggerErrorBlocks
 			<< ", rightFirstBlock=" << (firstRightNonZeroBlock.has_value() ? std::to_string(firstRightNonZeroBlock.value()) : std::string("none"))
 			<< ")";
 }
@@ -462,10 +515,14 @@ TEST(Overdub, BounceGeneratesNonZeroOutput)
 TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 {
 	const unsigned int numChans = 2u;
-	const unsigned int blockSize = 512u;
-	const unsigned long loopLength =
-		static_cast<unsigned long>(((constants::MaxLoopFadeSamps / blockSize) + 1u) * blockSize);
-	const unsigned int captureBlocks = static_cast<unsigned int>(loopLength / blockSize);
+	const auto scenario = MakeOverdubScenarioConfig();
+	const auto blockSize = scenario.BlockSize;
+	const auto sourceLoopBlocks = scenario.LoopLengthBlocks;
+	const auto seedPlaybackBlocks = scenario.SeedPlaybackBlocks;
+	const auto captureBlocksBeforeEnd = scenario.CaptureBlocksBeforeEnd();
+	const auto compareBlocks = (std::min)(sourceLoopBlocks, captureBlocksBeforeEnd);
+	const unsigned long loopLength = static_cast<unsigned long>(sourceLoopBlocks) * blockSize;
+	const unsigned long expectedRecordedBeforeEnd = static_cast<unsigned long>(captureBlocksBeforeEnd) * blockSize;
 	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
 
 	UserConfig cfg;
@@ -499,6 +556,8 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 	auto trigger = MakeOverdubTrigger(0u);
 	station->AddTrigger(trigger);
 	DrainCommitJobs(station);
+	auto seedPlaybackMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	AdvancePlayback(seedPlaybackMixer, station, numChans, blockSize, seedPlaybackBlocks);
 
 	StartOverdub(station, cfg, streamParams);
 	ASSERT_EQ(2u, station->NumTakes());
@@ -512,7 +571,7 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 	std::vector<float> inBuf(numChans * blockSize, 0.0f);
 	std::vector<float> outBuf(numChans * blockSize, 0.0f);
 
-	for (unsigned int block = 0; block < captureBlocks; block++)
+	for (unsigned int block = 0; block < captureBlocksBeforeEnd; block++)
 	{
 		SimulateAudioCallback(callbackMixer,
 			station,
@@ -524,13 +583,13 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 			streamParams);
 	}
 
-	ASSERT_EQ(loopLength, targetTake->NumRecordedSamps());
+	ASSERT_EQ(expectedRecordedBeforeEnd, targetTake->NumRecordedSamps());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
 
 	EndOverdub(station, cfg, streamParams);
 	ASSERT_TRUE(sourceTake->IsMuted());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, targetTake->TakeState());
-	ASSERT_EQ(loopLength, targetTake->NumRecordedSamps());
+	ASSERT_EQ(expectedRecordedBeforeEnd, targetTake->NumRecordedSamps());
 
 	SimulateRemainingRecordTail(callbackMixer,
 		station,
@@ -540,7 +599,7 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 		cfg,
 		streamParams);
 
-	EXPECT_EQ(loopLength + constants::MaxLoopFadeSamps, targetTake->NumRecordedSamps());
+	EXPECT_EQ(expectedRecordedBeforeEnd + constants::MaxLoopFadeSamps, targetTake->NumRecordedSamps());
 	EXPECT_EQ(LoopTake::STATE_PLAYING, targetTake->TakeState());
 
 	sourceTake->UnMute();
@@ -559,7 +618,7 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 	bool leftObserved = false;
 	bool rightObserved = false;
 	unsigned int comparedBlocks = 0u;
-	for (unsigned int block = 0; block < OutputPathDelayBlocks + captureBlocks + 32u; block++)
+	for (unsigned int block = 0; block < OutputPathDelayBlocks + compareBlocks + 32u; block++)
 	{
 		std::vector<float> compareBuf(numChans * blockSize, 0.0f);
 		ReadStationOutput(readMixer, station, compareBuf.data(), numChans, blockSize);
@@ -618,7 +677,7 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 			comparedBlocks++;
 		}
 
-		if (comparedBlocks >= captureBlocks)
+		if (comparedBlocks >= compareBlocks)
 			break;
 	}
 
@@ -629,9 +688,13 @@ TEST(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 		ADD_FAILURE() << "Aligned comparison window started too late after rerouting"
 			<< " (steadyStartBlock=" << steadyStartBlock.value()
 			<< ", maxExpected=" << (OutputPathDelayBlocks + MaxExtraSettleBlocks)
-			<< ", captureBlocks=" << captureBlocks << ")";
-	else if (comparedBlocks != captureBlocks)
-		ADD_FAILURE() << "Only compared " << comparedBlocks << " stereo blocks after steady alignment; expected " << captureBlocks
+			<< ", compareBlocks=" << compareBlocks
+			<< ", sourceLoopBlocks=" << sourceLoopBlocks
+			<< ", captureBlocksBeforeEnd=" << captureBlocksBeforeEnd
+			<< ", seedPlaybackBlocks=" << seedPlaybackBlocks
+			<< ", triggerErrorBlocks=" << scenario.TriggerErrorBlocks << ")";
+	else if (comparedBlocks != compareBlocks)
+		ADD_FAILURE() << "Only compared " << comparedBlocks << " stereo blocks after steady alignment; expected " << compareBlocks
 			<< " (steadyStartBlock=" << (steadyStartBlock.has_value() ? std::to_string(steadyStartBlock.value()) : std::string("none")) << ")";
 
 	if (firstMismatch.has_value())
