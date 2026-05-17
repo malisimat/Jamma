@@ -8,6 +8,7 @@
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
+#include "engine/Timer.h"
 #include "engine/Trigger.h"
 #include "io/UserConfig.h"
 
@@ -22,6 +23,7 @@ using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Station;
 using engine::StationParams;
+using engine::Timer;
 using engine::Trigger;
 using engine::TriggerBinding;
 using engine::TriggerParams;
@@ -646,3 +648,142 @@ INSTANTIATE_TEST_SUITE_P(
 			+ "_pre" + std::to_string(p.PreStartBlocks)
 			+ "_ofs" + sign + std::to_string(absOfs);
 	});
+
+// ── Quantisation error sign end-to-end tests ────────────────────────────────
+// These tests pre-seed the station clock with QUANTISE_POWER so that
+// QuantiseLength is called when the overdub end-trigger fires.  A non-zero
+// trigger offset exercises the error-sign path: positive error (late trigger)
+// must shift the overdub play position forward by |error| so the two loops
+// stay in phase during playback.
+//
+// BEFORE the fix:  POWER returns an inverted error sign, placing the overdub
+// play start near the *end* of the loop → audible offset of ~(loopLength - 2*|error|).
+// AFTER the fix:   play position is set correctly and both channels align.
+
+TEST(Overdub, SeededClock_LateTrigger_LoopAlignedWithSource)
+{
+	const auto blockSize = 512u;
+	const auto numChans = 2u;
+	// loopSamps = 137 * 512 = 70144: just above MaxLoopFadeSamps (70000)
+	const unsigned long loopSamps = 137ul * blockSize;
+	// Record 1 extra block (late trigger by 512 samples)
+	const auto overdubBlocks = 138u;
+	const unsigned long overdubSamps = static_cast<unsigned long>(overdubBlocks) * blockSize;
+
+	auto [cfg, streamParams] = MakeAudioConfig(numChans, blockSize);
+	auto seedData = MakeSeedData(loopSamps);
+	auto [station, sourceTake] = MakeSeedStation(numChans, loopSamps,
+		constants::MaxLoopFadeSamps, seedData);
+	station->AddTrigger(MakeOverdubTrigger(0u));
+
+	// Pre-seed clock: grain = loopSamps, QUANTISE_POWER.
+	// When the late end-trigger fires, QuantiseLength(overdubSamps) returns
+	// (loopSamps, +blockSize) after fix, or (loopSamps, -blockSize) before fix.
+	{
+		auto clock = std::make_shared<Timer>();
+		clock->SetQuantisation(static_cast<unsigned int>(loopSamps), Timer::QUANTISE_POWER);
+		station->SetClock(clock);
+	}
+	DrainCommitJobs(station);
+
+	StartOverdub(station, cfg, streamParams);
+	ASSERT_EQ(2u, station->NumTakes());
+	auto targetTake = station->GetLoopTakes().back();
+	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
+
+	auto callbackMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> inBuf(numChans * blockSize, 0.0f);
+	std::vector<float> outBuf(numChans * blockSize, 0.0f);
+
+	for (auto block = 0u; block < overdubBlocks; block++)
+		SimulateAudioCallback(callbackMixer, station, inBuf.data(), outBuf.data(),
+			numChans, blockSize, cfg, streamParams);
+
+	ASSERT_EQ(overdubSamps, targetTake->NumRecordedSamps());
+	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
+
+	EndOverdub(station, cfg, streamParams);
+	ASSERT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, targetTake->TakeState());
+
+	// Tail: simulate enough samples to cover both BUG (endRecordSamps = MaxFade + blockSize)
+	// and FIXED (endRecordSamps = MaxFade - blockSize) cases.
+	// BUG endRecordSamps = MaxFade + blockSize = 70512 → needs 138 blocks of 512.
+	// Use MaxFade + 2*blockSize to guarantee completion in either case.
+	const auto tailSamps = constants::MaxLoopFadeSamps + 2u * blockSize;
+	SimulateRemainingRecordTail(callbackMixer, station, numChans, blockSize,
+		tailSamps, cfg, streamParams);
+
+	EXPECT_EQ(LoopTake::STATE_PLAYING, targetTake->TakeState());
+
+	// After fix: total recorded ≈ loopSamps + MaxLoopFadeSamps (within 1 block overshoot
+	// due to block-granular endRecordSampCount checking).
+	// Before fix (wrong error sign): endRecordSamps is ~2×blockSize larger, so total
+	// recorded overshoots by ~2×blockSize beyond loopSamps + MaxLoopFadeSamps.
+	EXPECT_LE(targetTake->NumRecordedSamps(),
+		loopSamps + constants::MaxLoopFadeSamps + static_cast<unsigned long>(blockSize));
+
+	// Alignment check: route source → left, overdub → right; verify channels match.
+	sourceTake->UnMute();
+	targetTake->UnMute();
+	SetRackRoutes(*sourceTake, { {0u, 0u} });
+	SetRackRoutes(*targetTake, { {0u, 1u} });
+	SetRackRoutes(*station, { {0u, 0u}, {1u, 1u} });
+	DrainCommitJobs(station);
+
+	auto readMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::optional<size_t> firstMismatch;
+	bool foundSteadyStart = false;
+	unsigned int comparedBlocks = 0u;
+	const auto probeBlocks = OutputPathDelayBlocks + 137u + MaxExtraSettleBlocks + 32u;
+
+	for (auto block = 0u; block < probeBlocks; block++)
+	{
+		std::vector<float> buf(numChans * blockSize, 0.0f);
+		ReadStationOutput(readMixer, station, buf.data(), numChans, blockSize);
+
+		std::vector<float> leftBuf(blockSize), rightBuf(blockSize);
+		for (auto s = 0u; s < blockSize; s++)
+		{
+			leftBuf[s]  = buf[s * numChans + 0u];
+			rightBuf[s] = buf[s * numChans + 1u];
+		}
+
+		if (!HasNonZero(leftBuf.data(), blockSize) || !HasNonZero(rightBuf.data(), blockSize))
+			continue;
+
+		auto blockMatches = true;
+		for (auto s = 0u; s < blockSize; s++)
+		{
+			if (std::abs(leftBuf[s] - rightBuf[s]) > 1e-6f)
+			{
+				blockMatches = false;
+				if (foundSteadyStart)
+				{
+					if (!firstMismatch.has_value())
+						firstMismatch = static_cast<size_t>(block) * blockSize + s;
+				}
+				break;
+			}
+		}
+
+		if (!foundSteadyStart)
+		{
+			if (!blockMatches) continue;
+			foundSteadyStart = true;
+			comparedBlocks = 1u;
+		}
+		else
+		{
+			if (!blockMatches) break;
+			comparedBlocks++;
+		}
+
+		if (comparedBlocks >= 16u) break; // 8192 samples of steady alignment is sufficient
+	}
+
+	if (!foundSteadyStart)
+		ADD_FAILURE() << "Source and overdub channels never aligned (late trigger test)";
+	else if (firstMismatch.has_value())
+		ADD_FAILURE() << "Alignment mismatch at sample " << firstMismatch.value()
+			<< " after " << comparedBlocks << " aligned blocks";
+}
