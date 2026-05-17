@@ -483,7 +483,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 
 			auto playPos = cfg.has_value() ?
-				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+				cfg.value().OverdubPlayPos(errorSamps, loopLength) :
 				0;
 			auto endRecordSamps = cfg.has_value() ?
 				cfg.value().EndRecordingSamps(errorSamps) :
@@ -577,21 +577,27 @@ ActionResult Station::OnAction(TriggerAction action)
 		break;
 	}
 	case TriggerAction::TRIGGER_PUNCHIN_START:
-		if (loopTake.has_value())
+		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchIn();
 
-		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
-			sourceLoopTake.value()->Mute();
+		if (action.ApplyToSourceTake)
+		{
+			if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+				sourceLoopTake.value()->Mute();
+		}
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
-		if (loopTake.has_value())
+		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchOut();
 
-		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
-			sourceLoopTake.value()->UnMute();
+		if (action.ApplyToSourceTake)
+		{
+			if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+				sourceLoopTake.value()->UnMute();
+		}
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
@@ -811,8 +817,15 @@ unsigned int Station::NumBusChannels() const
 		(unsigned int)_audioBuffers.size();
 }
 
-void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
+void Station::OnBounce(unsigned int numSamps,
+	io::UserConfig config,
+	std::optional<audio::AudioStreamParams> params)
 {
+	auto outLatency = params.has_value() ? params.value().OutputLatency : 0u;
+	if (0u == outLatency)
+		outLatency = config.Audio.LatencyOut;
+
+	auto sourceOffset = config.OverdubSourceReadOffset(outLatency);
 	for (auto& trigger : _triggers)
 	{
 		auto takes = trigger->GetTakes();
@@ -830,7 +843,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 			if ((_loopTakes.end() != sourceMatch) && (_loopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				(*sourceMatch)->WriteBlock(*targetMatch, trigger, sourceOffset, numSamps);
 			}
 		}
 	}

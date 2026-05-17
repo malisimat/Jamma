@@ -295,6 +295,21 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	return playPos;
 }
 
+unsigned int UserConfig::TriggerLoopAlignmentSamps() const
+{
+	return Trigger.PreDelay + constants::MaxLoopFadeSamps;
+}
+
+long UserConfig::OverdubSourceReadOffset(unsigned int outLatency) const
+{
+	return -static_cast<long>(TriggerLoopAlignmentSamps() + outLatency);
+}
+
+unsigned long UserConfig::OverdubPlayPos(int error, unsigned long loopLength) const
+{
+	return LoopPlayPos(error, loopLength, 0u);
+}
+
 std::optional<UserConfig::SeedLoopTiming> UserConfig::DeduceLoopTiming(unsigned long loopLengthSamps,
 	unsigned int sampleRate) const
 {

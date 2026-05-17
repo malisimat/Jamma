@@ -220,6 +220,12 @@ namespace engine
 		TRIGSTATE_OVERDUBBING,
 		TRIGSTATE_PUNCHEDIN
 	};
+
+	struct DelayedTriggerAction
+	{
+		actions::TriggerAction Action;
+		unsigned int SampsLeft;
+	};
 	
 	class Trigger :
 		public base::Tickable,
@@ -266,14 +272,6 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
-		struct DelayedTriggerAction
-		{
-			unsigned int SampsLeft;
-			actions::TriggerAction Action;
-			std::optional<io::UserConfig> UserConfig;
-			std::optional<audio::AudioStreamParams> AudioParams;
-		};
-
 		bool IgnoreRepeats(bool isActivate,
 			DualBinding::TestResult trigResult);
 		bool Debounce(bool isActivate,
@@ -301,8 +299,11 @@ namespace engine
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		unsigned int CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) const;
-		void QueueDelayedTriggerAction(unsigned int sampsDelay,
-			const actions::TriggerAction& action,
+		unsigned int CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const;
+		void QueueTriggerAction(const actions::TriggerAction& action, unsigned int sampsDelay);
+		void DispatchTriggerAction(const actions::TriggerAction& action);
+		void FlushDelayedTriggerActions(Time curTime,
+			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
 
