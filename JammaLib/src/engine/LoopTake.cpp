@@ -39,6 +39,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_recordedSampCount(0),
 	_endRecordSampCount(0),
 	_endRecordSamps(0),
+	_isPunchInActive(false),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
 	_loops(),
@@ -231,7 +232,8 @@ bool LoopTake::IsArmed() const
 		(STATE_PLAYINGRECORDING == _state) ||
 		(STATE_OVERDUBBING == _state) ||
 		(STATE_PUNCHEDIN == _state) ||
-		(STATE_OVERDUBBINGRECORDING == _state);
+		(STATE_OVERDUBBINGRECORDING == _state) ||
+		_isPunchInActive;
 }
 
 void LoopTake::EndMultiWrite(unsigned int numSamps,
@@ -248,7 +250,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	if (isEndRecording)
 	{
 		_endRecordSampCount += numSamps;
-		if (_endRecordSampCount >= _endRecordSamps)
+		if ((_endRecordSampCount >= _endRecordSamps) && !_isPunchInActive)
 			_endRecordingCompleted = true;
 	}
 
@@ -465,6 +467,7 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_isPunchInActive = false;
 	_backLoops.clear();
 
 	for (auto chan : channels)
@@ -489,15 +492,18 @@ void LoopTake::Play(unsigned long index,
 
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
+	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive;
 
 	for (auto& loop : _loops)
 	{
-		loop->Play(index, loopLength, endRecordSamps > 0);
+		loop->Play(index, loopLength, continueCapture);
 	}
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
+	if (_isPunchInActive)
+		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
-	auto playState = endRecordSamps > 0 ? recordState : STATE_PLAYING;
+	auto playState = continueCapture ? recordState : STATE_PLAYING;
 	_state = loopLength > 0 ? playState : STATE_INACTIVE;
 }
 
@@ -609,6 +615,9 @@ void LoopTake::EndRecording()
 		(STATE_OVERDUBBINGRECORDING != _state))
 		return;
 
+	if (_isPunchInActive)
+		return;
+
 	_state = STATE_PLAYING;
 
 	for (auto& loop : _loops)
@@ -622,6 +631,7 @@ void LoopTake::Ditch()
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_isPunchInActive = false;
 
 	for (auto& loop : _loops)
 	{
@@ -643,6 +653,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_isPunchInActive = false;
 	_backLoops.clear();
 
 	for (auto chan : channels)
@@ -657,10 +668,14 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 
 void LoopTake::PunchIn()
 {
-	if (STATE_OVERDUBBING != _state)
+	if ((STATE_OVERDUBBING != _state) &&
+		(STATE_OVERDUBBINGRECORDING != _state) &&
+		(STATE_PLAYING != _state))
 		return;
 
-	_state = STATE_PUNCHEDIN;
+	_isPunchInActive = true;
+	if (STATE_OVERDUBBING == _state)
+		_state = STATE_PUNCHEDIN;
 
 	for (auto& loop : _loops)
 	{
@@ -670,15 +685,23 @@ void LoopTake::PunchIn()
 
 void LoopTake::PunchOut()
 {
-	if (STATE_PUNCHEDIN != _state)
+	if (!_isPunchInActive && (STATE_PUNCHEDIN != _state))
 		return;
 
-	_state = STATE_OVERDUBBING;
+	_isPunchInActive = false;
+	if (STATE_PUNCHEDIN == _state)
+		_state = STATE_OVERDUBBING;
 
 	for (auto& loop : _loops)
 	{
 		loop->PunchOut();
 	}
+
+	auto canFinishRecording = ((STATE_PLAYINGRECORDING == _state) ||
+		(STATE_OVERDUBBINGRECORDING == _state)) &&
+		(_endRecordSampCount >= _endRecordSamps);
+	if (canFinishRecording)
+		_endRecordingCompleted = true;
 }
 
 void LoopTake::SetRackVisibility(bool visible)

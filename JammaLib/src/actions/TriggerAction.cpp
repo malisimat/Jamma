@@ -7,7 +7,9 @@ TriggerAction::TriggerAction() :
 	TargetId(""),
 	SourceId(""),
 	SampleCount(0),
-	InputChannels({})
+	InputChannels({}),
+	ApplyToTargetTake(true),
+	ApplyToSourceTake(true)
 {
 }
 

@@ -220,6 +220,12 @@ namespace engine
 		TRIGSTATE_OVERDUBBING,
 		TRIGSTATE_PUNCHEDIN
 	};
+
+	struct DelayedTriggerAction
+	{
+		actions::TriggerAction Action;
+		unsigned int SampsLeft;
+	};
 	
 	class Trigger :
 		public base::Tickable,
@@ -293,6 +299,13 @@ namespace engine
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		unsigned int CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) const;
+		unsigned int CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const;
+		void QueueTriggerAction(const actions::TriggerAction& action, unsigned int sampsDelay);
+		void DispatchTriggerAction(const actions::TriggerAction& action);
+		void FlushDelayedTriggerActions(Time curTime,
+			unsigned int samps,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
 
 	private:
 		std::string _name;
@@ -316,6 +329,7 @@ namespace engine
 		graphics::Image _texturePunchedIn;
 		std::vector<TriggerTake> _loopTakeHistory;
 		std::vector<actions::DelayedAction> _delayedActions;
+		std::vector<DelayedTriggerAction> _delayedTriggerActions;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
 	};
 }
