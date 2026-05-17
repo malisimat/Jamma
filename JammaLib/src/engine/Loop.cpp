@@ -356,9 +356,11 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		// Apply the loop-output VST insert chain (if any active plugins)
-		if (_vstChain && _vstChain->IsActive())
-			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		// Atomically load the chain pointer — safe to read from the audio callback
+		// while the main thread atomically stores a new chain in LoadVstPlugin.
+		auto chain = _vstChain.load(std::memory_order_acquire);
+		if (chain && chain->IsActive())
+			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
@@ -742,32 +744,63 @@ void Loop::_ForceUpdateLoopModel()
 
 void Loop::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize)
 {
-	// Lazily create the chain
-	if (!_vstChain)
-		_vstChain = std::make_shared<vst::VstChain>();
+	// Build a new chain from the current one (copy-on-write), then add the plugin.
+	// Atomically publish the new chain so WriteBlock (audio callback) sees a
+	// consistent snapshot without holding a lock.
+	auto current = _vstChain.load(std::memory_order_acquire);
+	auto newChain = std::make_shared<vst::VstChain>();
+
+	// Copy existing plugins into the new chain
+	if (current)
+	{
+		for (size_t i = 0; i < current->NumPlugins(); ++i)
+		{
+			auto existing = current->GetPlugin(i);
+			if (existing)
+				newChain->AddPlugin(existing);
+		}
+	}
 
 	auto plugin = std::make_shared<vst::VstPlugin>();
 	// numChannels = 1 (mono loop buffer)
 	if (plugin->Load(path, sampleRate, blockSize, 1u))
 	{
-		_vstChain->AddPlugin(plugin);
+		newChain->AddPlugin(plugin);
 		_vstPluginPaths.push_back(std::move(path));
 	}
+
+	_vstChain.store(newChain, std::memory_order_release);
 }
 
 void Loop::UnloadVstPlugin(size_t index)
 {
-	if (_vstChain)
-		_vstChain->RemovePlugin(index);
+	// Build a new chain omitting the plugin at index, then atomically publish.
+	auto current = _vstChain.load(std::memory_order_acquire);
+	auto newChain = std::make_shared<vst::VstChain>();
+
+	if (current)
+	{
+		for (size_t i = 0; i < current->NumPlugins(); ++i)
+		{
+			if (i == index)
+				continue;
+			auto existing = current->GetPlugin(i);
+			if (existing)
+				newChain->AddPlugin(existing);
+		}
+	}
 
 	if (index < _vstPluginPaths.size())
 		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
+
+	_vstChain.store(newChain, std::memory_order_release);
 }
 
 std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
 {
-	if (!_vstChain)
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain)
 		return nullptr;
 
-	return _vstChain->GetPlugin(index);
+	return chain->GetPlugin(index);
 }

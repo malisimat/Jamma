@@ -1033,6 +1033,7 @@ void Scene::InitAudio()
 			if (station)
 			{
 				station->SetupBuffers(audioStreamParams.BufSize);
+				station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
 				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
 				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
 				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);

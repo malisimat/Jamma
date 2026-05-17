@@ -4,6 +4,10 @@
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <VcpkgManifestRoot>$(MSBuildThisFileDirectory)</VcpkgManifestRoot>
     <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\</VcpkgInstalledDir>
+    <!-- Map MSBuild $(Platform) to the correct vcpkg triplet directory name. -->
+    <VcpkgTriplet Condition="'$(VcpkgTriplet)' == '' AND '$(Platform)' == 'x64'">x64-windows</VcpkgTriplet>
+    <VcpkgTriplet Condition="'$(VcpkgTriplet)' == '' AND '$(Platform)' == 'Win32'">x86-windows</VcpkgTriplet>
+    <VcpkgTriplet Condition="'$(VcpkgTriplet)' == '' AND '$(Platform)' == 'ARM64'">arm64-windows</VcpkgTriplet>
   </PropertyGroup>
   <Import Project="Directory.Build.local.props" Condition="Exists('Directory.Build.local.props')" />
 </Project>

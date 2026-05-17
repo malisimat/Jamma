@@ -2,6 +2,7 @@
 
 #include <string>
 #include <memory>
+#include <atomic>
 #include "Trigger.h"
 #include "ActionReceiver.h"
 #include "Tweakable.h"
@@ -228,7 +229,7 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-		std::shared_ptr<vst::VstChain> _vstChain;
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		// Non-RT metadata to persist loop VST chains in jam exports.
 		std::vector<std::wstring> _vstPluginPaths;
 	};

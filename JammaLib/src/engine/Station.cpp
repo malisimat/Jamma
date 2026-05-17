@@ -120,18 +120,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 	// Queue load jobs for any VST plugins serialised in the station's chain.
 	for (const auto& vstEntry : stationStruct.VstChain)
-	{
-		// Convert UTF-8 path to wstring for LoadLibraryW
-		std::wstring wpath(vstEntry.Path.size() + 1, L'\0');
-		size_t converted = 0;
-		mbstowcs_s(&converted, wpath.data(), vstEntry.Path.size() + 1,
-			vstEntry.Path.c_str(), vstEntry.Path.size());
-		if (converted > 1)
-		{
-			wpath.resize(converted - 1);
-			station->LoadVstPlugin(wpath);
-		}
-	}
+		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
 
 	return station;
 }
@@ -798,6 +787,11 @@ void Station::SetupBuffers(unsigned int bufSize)
 		take->SetupBuffers(bufSize);
 }
 
+void Station::SetSampleRate(float sampleRate)
+{
+	_sampleRate = sampleRate;
+}
+
 void Station::SetNumBusChannels(unsigned int chans)
 {
 	_backAudioBuffers.clear();
@@ -990,24 +984,28 @@ std::vector<JobAction> Station::_CommitChanges()
 	if (_hasPendingVstUnload)
 	{
 		_hasPendingVstUnload = false;
-		// Unload is handled directly under the audio mutex (unloading is
-		// infrequent and DLL cleanup is brief).
-		if (_vstChain)
-			_vstChain->RemovePlugin(_pendingVstUnload);
-
-		if (_pendingVstUnload < _vstPluginPaths.size())
-			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(_pendingVstUnload));
+		// Queue removal to the job thread so DLL teardown does not happen
+		// under the audio mutex.
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UNLOADVST;
+		job.SourceId = _name;
+		job.VstIndex = _pendingVstUnload;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
 	}
 
-	if (!_pendingVstLoad.empty())
+	// Drain pending load paths into jobs, then clear.  Move the vector out
+	// first so the for-loop iterates a local copy (avoids moving from a
+	// reference to a live vector element).
+	auto pendingLoads = std::move(_pendingVstLoads);
+	for (auto& path : pendingLoads)
 	{
 		JobAction job;
 		job.JobActionType = JobAction::JOB_LOADVST;
 		job.SourceId = _name;
-		job.VstPath = _pendingVstLoad;
+		job.VstPath = std::move(path);
 		job.Receiver = ActionReceiver::shared_from_this();
-		jobs.push_back(job);
-		_pendingVstLoad.clear();
+		jobs.push_back(std::move(job));
 	}
 
 	GuiElement::_CommitChanges();
@@ -1114,7 +1112,7 @@ void Station::_WireVuSliders()
 
 void Station::LoadVstPlugin(std::wstring path)
 {
-	_pendingVstLoad = std::move(path);
+	_pendingVstLoads.push_back(std::move(path));
 	_changesMade = true;
 }
 
@@ -1156,16 +1154,19 @@ ActionResult Station::OnAction(JobAction action)
 	case JobAction::JOB_LOADVST:
 	{
 		// Running on the job thread — safe to do heavy work here.
-		std::cout << "[Station] JOB_LOADVST begin: station='" << _name
-			<< "', path='" << utils::EncodeUtf8(action.VstPath)
-			<< "', sampleRate=" << _sampleRate
-			<< ", blockSize=" << _blockSize
-			<< ", busChannels=" << NumBusChannels()
-			<< std::endl;
-
-		// Build/get the back chain
-		if (!_backVstChain)
-			_backVstChain = std::make_shared<vst::VstChain>();
+		// Always build a brand-new VstChain so _backVstChain never aliases
+		// the live _vstChain (which the audio callback reads concurrently).
+		// Copy any plugins already in the front chain, then add the new one.
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (_vstChain)
+		{
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
 
 		// Use the pre-initialised plugin instance when Scene::CommitChanges()
 		// prepared one on the UI thread; otherwise create a fresh plugin.
@@ -1175,23 +1176,43 @@ ActionResult Station::OnAction(JobAction action)
 		auto hostChannels = std::min(2u, NumBusChannels());
 		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels))
 		{
-			_backVstChain->AddPlugin(plugin);
+			newChain->AddPlugin(plugin);
 			_vstPluginPaths.push_back(action.VstPath);
-			std::cout << "[Station] JOB_LOADVST success: station='" << _name
-				<< "', plugin='" << plugin->Name()
-				<< "', chainSize=" << _backVstChain->NumPlugins()
-				<< std::endl;
-			// Signal _CommitChanges() (running on main thread under audioMutex)
-			// to swap the chain in.
+			// Publish the new chain and signal _CommitChanges() to swap it in.
+			_backVstChain = std::move(newChain);
 			_flipVstChain.store(true, std::memory_order_release);
 			_changesMade = true;
 		}
-		else
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	case JobAction::JOB_UNLOADVST:
+	{
+		// Build a new chain omitting the plugin at the requested index.
+		// This runs on the job thread so DLL teardown is not under the audio mutex.
+		auto newChain = std::make_shared<vst::VstChain>();
+		const auto removeIndex = action.VstIndex;
+		if (_vstChain)
 		{
-			std::cout << "[Station] JOB_LOADVST failed: station='" << _name
-				<< "', path='" << utils::EncodeUtf8(action.VstPath)
-				<< "'" << std::endl;
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				if (i == removeIndex)
+					continue;
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
 		}
+
+		if (removeIndex < _vstPluginPaths.size())
+			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+
+		_backVstChain = std::move(newChain);
+		_flipVstChain.store(true, std::memory_order_release);
+		_changesMade = true;
 
 		ActionResult res;
 		res.IsEaten = true;

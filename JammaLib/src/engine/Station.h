@@ -108,6 +108,7 @@ namespace engine
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetupBuffers(unsigned int bufSize);
+		void SetSampleRate(float sampleRate);
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
@@ -175,7 +176,7 @@ namespace engine
 
 		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
 		// Read only on the job thread (from OnAction(JobAction)).
-		std::wstring _pendingVstLoad;
+		std::vector<std::wstring> _pendingVstLoads;
 		size_t _pendingVstUnload = 0;
 		bool _hasPendingVstUnload = false;
 		std::vector<std::wstring> _vstPluginPaths;
