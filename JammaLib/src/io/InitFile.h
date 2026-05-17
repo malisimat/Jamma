@@ -17,7 +17,6 @@
 #include "Json.h"
 #include "../audio/AudioMixer.h"
 #include "../utils/CommonTypes.h"
-#include "../vst/VstDebug.h"
 
 namespace io
 {
@@ -39,7 +38,6 @@ namespace io
 		std::wstring Rig;
 		LoadType JamLoadType;
 		LoadType RigLoadType;
-		vst::DebugOptions VstDebug;
 
 		utils::Position2d WinPos;
 		utils::Size2d WinSize;

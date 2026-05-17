@@ -7,56 +7,9 @@
 
 #include "VstEditorWindow.h"
 #include "../vst/VstPlugin.h"
-#include "../vst/VstDiagnostics.h"
-#include <sstream>
 
 using namespace graphics;
 using namespace actions;
-
-namespace
-{
-	std::string PointerString(const void* ptr)
-	{
-		std::ostringstream ss;
-		ss << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(ptr);
-		return ss.str();
-	}
-
-	const char* WindowMessageName(UINT message)
-	{
-		switch (message)
-		{
-		case WM_NCCREATE: return "WM_NCCREATE";
-		case WM_CREATE: return "WM_CREATE";
-		case WM_SHOWWINDOW: return "WM_SHOWWINDOW";
-		case WM_WINDOWPOSCHANGING: return "WM_WINDOWPOSCHANGING";
-		case WM_WINDOWPOSCHANGED: return "WM_WINDOWPOSCHANGED";
-		case WM_SIZE: return "WM_SIZE";
-		case WM_PAINT: return "WM_PAINT";
-		case WM_NCPAINT: return "WM_NCPAINT";
-		case WM_ERASEBKGND: return "WM_ERASEBKGND";
-		case WM_TIMER: return "WM_TIMER";
-		case WM_SETFOCUS: return "WM_SETFOCUS";
-		case WM_KILLFOCUS: return "WM_KILLFOCUS";
-		case WM_ACTIVATE: return "WM_ACTIVATE";
-		case WM_CLOSE: return "WM_CLOSE";
-		case WM_DESTROY: return "WM_DESTROY";
-		default: return nullptr;
-		}
-	}
-
-	void LogWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-	{
-		const auto* name = WindowMessageName(message);
-		if (!name)
-			return;
-
-		vst::VstDiagnostics::Log("VstEditorWindow", "window-message",
-			std::string(name) + ", hwnd=" + PointerString(hWnd)
-			+ ", wParam=" + std::to_string(static_cast<unsigned long long>(wParam))
-			+ ", lParam=" + std::to_string(static_cast<long long>(lParam)));
-	}
-}
 
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
@@ -78,7 +31,6 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 		return false;
 
 	_plugin = plugin;
-	vst::VstDiagnostics::Log("VstEditorWindow", "create-request", std::string("plugin=") + plugin->Name());
 
 	// Build a title from the plugin name.
 	auto nameStr = plugin->Name();
@@ -108,8 +60,6 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 			wcex.lpszClassName = _ClassName;
 			if (!RegisterClassEx(&wcex))
 			{
-				vst::VstDiagnostics::Log("VstEditorWindow", "class-register-failed",
-					std::string("error=") + std::to_string(GetLastError()));
 				_plugin.reset();
 				return false;
 			}
@@ -134,26 +84,20 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 
 	if (!wnd)
 	{
-		vst::VstDiagnostics::Log("VstEditorWindow", "host-window-create-failed",
-			std::string("error=") + std::to_string(GetLastError()));
 		_plugin.reset();
 		return false;
 	}
 
 	_editorWnd.store(wnd, std::memory_order_release);
 	_editorHostWnd = wnd;
-	vst::VstDiagnostics::Log("VstEditorWindow", "host-window-created", std::string("hwnd=") + PointerString(wnd));
 
 	// Call attached() directly, matching the Steinberg editorhost pattern.
 	// This must be called outside DispatchMessage so that any PostMessage-based
 	// callbacks inside attached() can be queued and processed by the caller's
 	// message pump after Create() returns.
-	vst::VstDiagnostics::Log("VstEditorWindow", "calling-open-editor", std::string("hwnd=") + PointerString(wnd));
 	const bool ok = _plugin->OpenEditor(wnd);
 	if (!ok)
 	{
-		vst::VstDiagnostics::Log("VstEditorWindow", "plugin-open-failed",
-			std::string("hwnd=") + PointerString(wnd));
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_editorHostWnd = nullptr;
 		_plugin.reset();
@@ -177,17 +121,12 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
-
-	vst::VstDiagnostics::Log("VstEditorWindow", "editor-ready",
-		std::string("hwnd=") + PointerString(wnd));
 	return true;
 }
 
 void VstEditorWindow::Destroy()
 {
 	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
-	vst::VstDiagnostics::Log("VstEditorWindow", "destroy-request",
-		std::string("hwnd=") + PointerString(wnd));
 
 	if (wnd)
 	{
@@ -244,8 +183,6 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 
 	if (!self)
 		return DefWindowProc(hWnd, message, wParam, lParam);
-
-	LogWindowMessage(hWnd, message, wParam, lParam);
 
 	switch (message)
 	{

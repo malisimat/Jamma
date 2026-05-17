@@ -13,7 +13,6 @@
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
-#include "../vst/VstDiagnostics.h"
 #include <objbase.h>
 #include <atomic>
 #include <cctype>
@@ -25,7 +24,6 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
-#include <chrono>
 #include <string_view>
 
 using namespace engine;
@@ -159,34 +157,6 @@ namespace
 		return value;
 	}
 
-	bool ParseBoolText(std::wstring value, bool fallback)
-	{
-		if (value.empty())
-			return fallback;
-
-		std::transform(value.begin(), value.end(), value.begin(), towlower);
-		if (value == L"1" || value == L"true" || value == L"yes" || value == L"on")
-			return true;
-		if (value == L"0" || value == L"false" || value == L"no" || value == L"off")
-			return false;
-		return fallback;
-	}
-
-	unsigned int ParseUnsignedText(const std::wstring& value, unsigned int fallback)
-	{
-		if (value.empty())
-			return fallback;
-
-		try
-		{
-			return static_cast<unsigned int>(std::stoul(value));
-		}
-		catch (...)
-		{
-			return fallback;
-		}
-	}
-
 	std::wstring DefaultIniPath()
 	{
 		return GetPath(PATH_ROAMING) + L"\\Jamma\\defaults.json";
@@ -198,33 +168,6 @@ namespace
 			return initPath.value();
 
 		return DefaultIniPath();
-	}
-
-	vst::DebugOptions ResolveVstDebugOptions(const std::optional<io::InitFile>& defaults)
-	{
-		vst::DebugOptions options;
-		if (defaults.has_value())
-			options = defaults->VstDebug;
-
-		if (auto value = ReadEnvironmentVariable(L"JAMMA_VST_DEBUG_AUTO_OPEN"); value.has_value())
-			options.AutoOpenEditor = ParseBoolText(value.value(), options.AutoOpenEditor);
-
-		if (auto value = ReadEnvironmentVariable(L"JAMMA_VST_DEBUG_LOG_TO_FILE"); value.has_value())
-			options.LogToFile = ParseBoolText(value.value(), options.LogToFile);
-
-		if (auto value = ReadEnvironmentVariable(L"JAMMA_VST_DEBUG_LOG_PATH"); value.has_value() && !value->empty())
-			options.LogPath = value.value();
-
-		if (auto value = ReadEnvironmentVariable(L"JAMMA_VST_DEBUG_STATION_INDEX"); value.has_value())
-			options.StationIndex = ParseUnsignedText(value.value(), options.StationIndex);
-
-		if (auto value = ReadEnvironmentVariable(L"JAMMA_VST_DEBUG_PLUGIN_INDEX"); value.has_value())
-			options.PluginIndex = ParseUnsignedText(value.value(), options.PluginIndex);
-
-		if (options.LogPath.empty())
-			options.LogPath = GetPath(PATH_ROAMING) + L"\\Jamma\\vst-diagnostic.log";
-
-		return options;
 	}
 }
 
@@ -351,13 +294,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	const auto initPath = ResolveIniPath();
 	auto defaults = LoadIni(initPath);
-	const auto vstDebugOptions = ResolveVstDebugOptions(defaults);
-	vst::VstDiagnostics::Configure(vstDebugOptions, GetPath(PATH_ROAMING) + L"\\Jamma\\vst-diagnostic.log");
-	vst::VstDiagnostics::Log("Main", "startup", std::string("initPath=") + utils::EncodeUtf8(initPath)
-		+ ", autoOpen=" + (vstDebugOptions.AutoOpenEditor ? "true" : "false")
-		+ ", logToFile=" + (vstDebugOptions.LogToFile ? "true" : "false")
-		+ ", stationIndex=" + std::to_string(vstDebugOptions.StationIndex)
-		+ ", pluginIndex=" + std::to_string(vstDebugOptions.PluginIndex));
 
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
@@ -391,11 +327,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto jamDirectory = defaults.has_value() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
-	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory, vstDebugOptions);
+	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory);
 	if (!scene.has_value())
 	{
 		std::cout << "Failed to create Scene... quitting" << std::endl;
-		vst::VstDiagnostics::Log("Main", "scene-create-failed");
 		return -1;
 	}
 
@@ -407,49 +342,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (window.Create(hInstance, nCmdShow) != 0)
 		PostQuitMessage(1);
-
-	// Pre-audio polling loop: trigger plugin load and editor open BEFORE starting
-	// the audio thread. This matches editorhost's approach (attached() is called
-	// with no competing audio threads). The loop pumps Win32 messages while
-	// waiting for CommitChanges() to detect the plugin load and open the editor.
-	// If the editor opens successfully (or the auto-open flag was never set),
-	// we fall through. On timeout we cancel the pending auto-open so the render
-	// loop cannot trigger it later with a live audio thread.
-	if (vstDebugOptions.AutoOpenEditor)
-	{
-		vst::VstDiagnostics::Log("Main", "pre-audio-loop-begin");
-		MSG preMsg{};
-		bool preQuit = false;
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-		while (scene.value()->IsVstAutoOpenPending() && !preQuit)
-		{
-			if (std::chrono::steady_clock::now() >= deadline)
-			{
-				vst::VstDiagnostics::Log("Main", "pre-audio-loop-timeout");
-				scene.value()->CancelVstAutoOpen();
-				break;
-			}
-
-			scene.value()->CommitChanges();
-
-			while (PeekMessage(&preMsg, nullptr, 0, 0, PM_REMOVE))
-			{
-				if (preMsg.message == WM_QUIT)
-				{
-					PostQuitMessage(static_cast<int>(preMsg.wParam));
-					preQuit = true;
-					break;
-				}
-				TranslateMessage(&preMsg);
-				DispatchMessage(&preMsg);
-			}
-
-			if (!preQuit && scene.value()->IsVstAutoOpenPending())
-				Sleep(10);
-		}
-		vst::VstDiagnostics::Log("Main", "pre-audio-loop-done",
-			std::string("pending=") + (scene.value()->IsVstAutoOpenPending() ? "true" : "false"));
-	}
 
 	scene.value()->InitAudio();
 

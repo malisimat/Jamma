@@ -119,37 +119,7 @@ TEST(UserConfig, LoopTimingHonoursConfiguredTargetMaxGrain) {
 	ASSERT_EQ(8u, timing->Bpi);
 }
 
-TEST(InitFile, ParsesVstDebugSettings) {
-	auto str = R"json({
-		"rig":"C:\\Jamma\\default.rig",
-		"jam":"C:\\Jamma\\default.jam",
-		"jamload":1,
-		"rigload":0,
-		"win":[1,2,3,4],
-		"vstdebug":{
-			"autoopen":true,
-			"logtofile":true,
-			"logpath":"C:\\Jamma\\trace.log",
-			"stationindex":2,
-			"pluginindex":3
-		}
-	})json";
-
-	auto parsed = InitFile::FromStream(std::stringstream(str));
-	ASSERT_TRUE(parsed.has_value());
-	EXPECT_TRUE(parsed->VstDebug.AutoOpenEditor);
-	EXPECT_TRUE(parsed->VstDebug.LogToFile);
-	EXPECT_EQ(L"C:\\Jamma\\trace.log", parsed->VstDebug.LogPath);
-	EXPECT_EQ(2u, parsed->VstDebug.StationIndex);
-	EXPECT_EQ(3u, parsed->VstDebug.PluginIndex);
-}
-
-TEST(InitFile, DefaultJsonIncludesVstDebugBlock) {
+TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
 	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Users\\tester\\AppData\\Roaming\\Jamma")));
 	ASSERT_TRUE(parsed.has_value());
-	EXPECT_FALSE(parsed->VstDebug.AutoOpenEditor);
-	EXPECT_FALSE(parsed->VstDebug.LogToFile);
-	EXPECT_EQ(L"C:\\Users\\tester\\AppData\\Roaming\\Jamma\\vst-diagnostic.log", parsed->VstDebug.LogPath);
-	EXPECT_EQ(0u, parsed->VstDebug.StationIndex);
-	EXPECT_EQ(0u, parsed->VstDebug.PluginIndex);
 }

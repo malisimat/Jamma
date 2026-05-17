@@ -6,7 +6,6 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
-#include "../vst/VstDiagnostics.h"
 #include "../vst/VstPlugin.h"
 
 using namespace base;
@@ -37,8 +36,7 @@ namespace
 }
 
 Scene::Scene(SceneParams params,
-	UserConfig user,
-	vst::DebugOptions vstDebugOptions) :
+	UserConfig user) :
 	Drawable(params),
 	Moveable(params),
 	Sizeable(params),
@@ -73,9 +71,6 @@ Scene::Scene(SceneParams params,
 			1.0),
 		0)),
 	_userConfig(user),
-	_vstDebugOptions(std::move(vstDebugOptions)),
-	_vstDebugAutoOpenPending(_vstDebugOptions.AutoOpenEditor),
-	_vstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Idle),
 	_clock(std::make_shared<Timer>()),
 	_viewMode(VIEW_STATION)
 {
@@ -145,10 +140,9 @@ Scene::Scene(SceneParams params,
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	io::JamFile jamStruct,
 	io::RigFile rigStruct,
-	std::wstring dir,
-	vst::DebugOptions vstDebugOptions)
+	std::wstring dir)
 {
-	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User, std::move(vstDebugOptions));
+	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
 
 	TriggerParams trigParams;
 	trigParams.Size = { 24, 24 };
@@ -212,20 +206,6 @@ void Scene::CloseAllVstEditorWindows()
 	_vstEditorWindows.clear();
 }
 
-bool Scene::IsVstAutoOpenPending() const
-{
-	return _vstDebugAutoOpenPending;
-}
-
-void Scene::CancelVstAutoOpen()
-{
-	if (_vstDebugAutoOpenPending)
-	{
-		_vstDebugAutoOpenPending = false;
-		vst::VstDiagnostics::Log("Scene", "auto-open-cancelled", "pre-audio timeout");
-	}
-}
-
 void Scene::_PruneClosedVstEditorWindows()
 {
 	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
@@ -233,7 +213,7 @@ void Scene::_PruneClosedVstEditorWindows()
 	}), _vstEditorWindows.end());
 }
 
-bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin, const std::string& reason)
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin)
 {
 	if (!plugin || !plugin->IsLoaded())
 		return false;
@@ -241,12 +221,8 @@ bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugi
 	auto window = std::make_unique<graphics::VstEditorWindow>();
 	const auto hInstance = GetModuleHandle(nullptr);
 	if (!window->Create(hInstance, plugin))
-	{
-		vst::VstDiagnostics::Log("Scene", "open-editor-create-failed", reason + ", plugin=" + plugin->Name());
 		return false;
-	}
 
-	vst::VstDiagnostics::Log("Scene", "open-editor-created", reason + ", plugin=" + plugin->Name());
 	_vstEditorWindows.push_back(std::move(window));
 	return true;
 }
@@ -260,7 +236,7 @@ bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t p
 	if (!plugin || !plugin->IsLoaded())
 		return false;
 
-	return _OpenVstEditorForPlugin(plugin, std::string("loop-plugin-index=") + std::to_string(pluginIndex));
+	return _OpenVstEditorForPlugin(plugin);
 }
 
 bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
@@ -270,8 +246,7 @@ bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station,
 
 	auto stationPlugin = station->GetVstPlugin(pluginIndex);
 	if (stationPlugin && stationPlugin->IsLoaded())
-		return _OpenVstEditorForPlugin(stationPlugin,
-			std::string("station=") + station->Name() + ", plugin-index=" + std::to_string(pluginIndex));
+		return _OpenVstEditorForPlugin(stationPlugin);
 
 	for (const auto& take : station->GetLoopTakes())
 	{
@@ -321,69 +296,6 @@ bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& h
 	default:
 		return false;
 	}
-}
-
-void Scene::_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus status, const std::string& detail)
-{
-	if (_vstDebugAutoOpenStatus == status)
-		return;
-
-	_vstDebugAutoOpenStatus = status;
-
-	const char* statusText = "idle";
-	switch (status)
-	{
-	case VstDebugAutoOpenStatus::WaitingForPlugin:
-		statusText = "waiting-for-plugin";
-		break;
-	case VstDebugAutoOpenStatus::Opened:
-		statusText = "opened";
-		break;
-	case VstDebugAutoOpenStatus::Failed:
-		statusText = "failed";
-		break;
-	case VstDebugAutoOpenStatus::Idle:
-	default:
-		break;
-	}
-
-	vst::VstDiagnostics::Log("Scene", "auto-open-status", std::string(statusText) + (detail.empty() ? "" : ", " + detail));
-}
-
-void Scene::_RunPendingVstDebugAutoOpen()
-{
-	if (!_vstDebugAutoOpenPending)
-		return;
-
-	_PruneClosedVstEditorWindows();
-
-	if (_vstDebugOptions.StationIndex >= _stations.size())
-	{
-		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Failed,
-			"station index out of range: " + std::to_string(_vstDebugOptions.StationIndex));
-		_vstDebugAutoOpenPending = false;
-		return;
-	}
-
-	const auto& station = _stations[_vstDebugOptions.StationIndex];
-	if (!station || station->IsRemote())
-	{
-		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Failed,
-			"station unavailable or remote: " + std::to_string(_vstDebugOptions.StationIndex));
-		_vstDebugAutoOpenPending = false;
-		return;
-	}
-
-	if (_TryOpenVstEditorForStation(station, _vstDebugOptions.PluginIndex))
-	{
-		_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::Opened,
-			"station=" + station->Name() + ", pluginIndex=" + std::to_string(_vstDebugOptions.PluginIndex));
-		_vstDebugAutoOpenPending = false;
-		return;
-	}
-
-	_SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus::WaitingForPlugin,
-		"station=" + station->Name() + ", pluginIndex=" + std::to_string(_vstDebugOptions.PluginIndex));
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -1192,8 +1104,6 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
-
-	_RunPendingVstDebugAutoOpen();
 }
 
 std::mutex& Scene::GetAudioMutex()

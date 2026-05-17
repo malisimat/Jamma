@@ -31,7 +31,6 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "../vst/VstDebug.h"
 
 namespace engine
 {
@@ -66,18 +65,8 @@ namespace engine
 		};
 
 	public:
-		enum class VstDebugAutoOpenStatus
-		{
-			Idle,
-			WaitingForPlugin,
-			Opened,
-			Failed
-		};
-
-	public:
 		Scene(SceneParams params,
-			io::UserConfig user,
-			vst::DebugOptions vstDebugOptions = {});
+			io::UserConfig user);
 		~Scene()
 		{
 			ReleaseResources();
@@ -171,8 +160,7 @@ namespace engine
 		static std::optional<std::shared_ptr<Scene>> FromFile(SceneParams sceneParams,
 			io::JamFile jam,
 			io::RigFile rig,
-			std::wstring dir,
-			vst::DebugOptions vstDebugOptions = {});
+			std::wstring dir);
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
@@ -212,17 +200,6 @@ namespace engine
 		// Call this on the main thread before OleUninitialize() during shutdown.
 		void CloseAllVstEditorWindows();
 
-		// Returns true while a debug auto-open is still pending (plugin not yet
-		// loaded or editor not yet opened). Becomes false on success, failure, or
-		// after CancelVstAutoOpen() is called.
-		bool IsVstAutoOpenPending() const;
-
-		// Permanently clears the pending auto-open flag so the render loop will
-		// not attempt to open the editor after InitAudio() starts the audio thread.
-		// Call this after a pre-audio polling loop if the timeout elapses before
-		// the editor successfully opens.
-		void CancelVstAutoOpen();
-
 		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
 		// from the loaded jam config when available; falls back to anonymous.
 		void ConnectNinjam(const std::string& host);
@@ -260,14 +237,12 @@ namespace engine
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
 		void _PruneClosedVstEditorWindows();
-		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin, const std::string& reason);
+		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
-		void _SetVstDebugAutoOpenStatus(VstDebugAutoOpenStatus status, const std::string& detail);
-		void _RunPendingVstDebugAutoOpen();
 
 	protected:
 		bool _isSceneTouching;
@@ -305,9 +280,6 @@ namespace engine
 		std::mutex _audioMutex;
 		std::mutex _tempoMutex;
 		io::UserConfig _userConfig;
-		vst::DebugOptions _vstDebugOptions;
-		bool _vstDebugAutoOpenPending;
-		VstDebugAutoOpenStatus _vstDebugAutoOpenStatus;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
 
