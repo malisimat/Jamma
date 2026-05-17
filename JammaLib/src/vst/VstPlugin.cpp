@@ -31,10 +31,30 @@ public:
 		_hostWindow(nullptr),
 		_frameWindow(nullptr)
 	{
-		FUNKNOWN_CTOR
 	}
 
-	~HostPlugFrame() noexcept { FUNKNOWN_DTOR }
+	~HostPlugFrame() noexcept = default;
+
+	tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+	{
+		if (!obj)
+			return kInvalidArgument;
+
+		QUERY_INTERFACE(iid, obj, FUnknown::iid, IPlugFrame)
+		QUERY_INTERFACE(iid, obj, IPlugFrame::iid, IPlugFrame)
+		*obj = nullptr;
+		return kNoInterface;
+	}
+
+	uint32 PLUGIN_API addRef() override
+	{
+		return 1;
+	}
+
+	uint32 PLUGIN_API release() override
+	{
+		return 1;
+	}
 
 	void SetHostWindow(HWND hostWindow) noexcept
 	{
@@ -83,24 +103,38 @@ public:
 		return onSizeResult;
 	}
 
-	DECLARE_FUNKNOWN_METHODS
-
 private:
 	HWND _hostWindow;
 	HWND _frameWindow;
 };
 
-IMPLEMENT_FUNKNOWN_METHODS(HostPlugFrame, IPlugFrame, IPlugFrame::iid)
-
 class HostComponentHandler final : public IComponentHandler
 {
 public:
-	HostComponentHandler()
+	HostComponentHandler() = default;
+
+	~HostComponentHandler() noexcept = default;
+
+	tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
 	{
-		FUNKNOWN_CTOR
+		if (!obj)
+			return kInvalidArgument;
+
+		QUERY_INTERFACE(iid, obj, FUnknown::iid, IComponentHandler)
+		QUERY_INTERFACE(iid, obj, IComponentHandler::iid, IComponentHandler)
+		*obj = nullptr;
+		return kNoInterface;
 	}
 
-	~HostComponentHandler() noexcept { FUNKNOWN_DTOR }
+	uint32 PLUGIN_API addRef() override
+	{
+		return 1;
+	}
+
+	uint32 PLUGIN_API release() override
+	{
+		return 1;
+	}
 
 	tresult PLUGIN_API beginEdit(ParamID id) override
 	{
@@ -126,19 +160,13 @@ public:
 		(void)flags;
 		return kResultOk;
 	}
-
-	DECLARE_FUNKNOWN_METHODS
 };
-
-IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
 
 class VstPlugin::Impl
 {
 public:
-	static constexpr Steinberg::int32 MaxHostedChannels = 2;
-
 	// Pre-init state: populated by PreInit() on the main thread.
-	Steinberg::IPtr<Steinberg::IPluginFactory> factory;
+	Steinberg::IPluginFactory* factory = nullptr;
 	bool moduleInitialized = false; // true if InitDll() was called
 
 	Steinberg::IPtr<Steinberg::Vst::HostApplication> hostApplication;
@@ -155,11 +183,13 @@ public:
 	Steinberg::Vst::ProcessData processData;
 	Steinberg::Vst::AudioBusBuffers inputBus;
 	Steinberg::Vst::AudioBusBuffers outputBus;
-	Steinberg::int32 hostedChannels;
-	float* inputChannelPtrs[MaxHostedChannels];
-	float* outputChannelPtrs[MaxHostedChannels];
-	float inputScratch[MaxHostedChannels][constants::MaxBlockSize];
-	float outputScratch[MaxHostedChannels][constants::MaxBlockSize];
+	Steinberg::int32 requestedChannels;
+	Steinberg::int32 inputChannels;
+	Steinberg::int32 outputChannels;
+	std::vector<float*> inputChannelPtrs;
+	std::vector<float*> outputChannelPtrs;
+	std::vector<float> inputScratchStorage;
+	std::vector<float> outputScratchStorage;
 
 	Impl() :
 		factory(nullptr),
@@ -175,15 +205,14 @@ public:
 		processData(),
 		inputBus(),
 		outputBus(),
-		hostedChannels(1),
-		inputChannelPtrs{ nullptr, nullptr },
-		outputChannelPtrs{ nullptr, nullptr }
+		requestedChannels(1),
+		inputChannels(1),
+		outputChannels(1),
+		inputChannelPtrs(),
+		outputChannelPtrs(),
+		inputScratchStorage(),
+		outputScratchStorage()
 	{
-		for (Steinberg::int32 c = 0; c < MaxHostedChannels; c++)
-		{
-			std::fill(std::begin(inputScratch[c]), std::end(inputScratch[c]), 0.0f);
-			std::fill(std::begin(outputScratch[c]), std::end(outputScratch[c]), 0.0f);
-		}
 	}
 };
 #endif
@@ -272,7 +301,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 		return false;
 	}
 
-	_impl->factory = IPtr<IPluginFactory>(rawFactory, false);
+	_impl->factory = rawFactory;
 
 	// Find the first kVstAudioEffectClass component CID.
 	PFactoryInfo factoryInfo;
@@ -362,7 +391,8 @@ bool VstPlugin::PreInit(const std::wstring& path)
 bool VstPlugin::Load(const std::wstring& path,
 	float sampleRate,
 	unsigned int blockSize,
-	unsigned int numChannels)
+	unsigned int numChannels,
+	HostedLayoutMode layoutMode)
 {
 #ifdef JAMMA_VST3_ENABLED
 	// Only do a full unload if we're replacing a previously loaded plugin.
@@ -377,8 +407,9 @@ bool VstPlugin::Load(const std::wstring& path,
 		<< L", requestedChannels=" << numChannels
 		<< std::endl;
 
-	_impl->hostedChannels = static_cast<Steinberg::int32>(std::max(1u, std::min(numChannels, static_cast<unsigned int>(Impl::MaxHostedChannels))));
-	std::cout << "[VstPlugin] Hosted channels=" << _impl->hostedChannels << std::endl;
+	const auto requestedChannels = static_cast<Steinberg::int32>(std::max(1u, numChannels));
+	std::cout << "[VstPlugin] Requested host channels=" << requestedChannels << std::endl;
+	_impl->requestedChannels = requestedChannels;
 
 	// 1. Load the DLL — skip if PreInit() already loaded it on the main thread
 	if (!_moduleHandle)
@@ -405,7 +436,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	}
 
 	// 2. Get the factory — use cached value from PreInit() when available
-	IPtr<IPluginFactory> factory = _impl->factory;
+	IPluginFactory* factory = _impl->factory;
 	if (!factory)
 	{
 		typedef IPluginFactory* (PLUGIN_API* GetFactoryProc)();
@@ -426,8 +457,8 @@ bool VstPlugin::Load(const std::wstring& path,
 			return false;
 		}
 
-		factory = IPtr<IPluginFactory>(rawFactory, false);
-		_impl->factory = factory; // cache for later
+		_impl->factory = rawFactory;
+		factory = _impl->factory; // cache for later
 	}
 	else
 	{
@@ -496,12 +527,17 @@ bool VstPlugin::Load(const std::wstring& path,
 	auto outputBusCount = _impl->component->getBusCount(kAudio, kOutput);
 	std::cout << "[VstPlugin] Audio buses: inputs=" << inputBusCount
 		<< ", outputs=" << outputBusCount << std::endl;
+	int32_t inputBusChannels = 0;
+	int32_t outputBusChannels = 0;
 
 	if (inputBusCount > 0)
 	{
 		BusInfo inBus{};
 		if (_impl->component->getBusInfo(kAudio, kInput, 0, inBus) == kResultOk)
+		{
+			inputBusChannels = inBus.channelCount;
 			std::cout << "[VstPlugin] Input bus 0 channels=" << inBus.channelCount << std::endl;
+		}
 	}
 
 	if (outputBusCount > 0)
@@ -509,15 +545,17 @@ bool VstPlugin::Load(const std::wstring& path,
 		BusInfo outBus{};
 		if (_impl->component->getBusInfo(kAudio, kOutput, 0, outBus) == kResultOk)
 		{
+			outputBusChannels = outBus.channelCount;
 			std::cout << "[VstPlugin] Output bus 0 channels=" << outBus.channelCount << std::endl;
-			if (outBus.channelCount != _impl->hostedChannels)
-			{
-				std::cout << "[VstPlugin] Warning: host currently processes " << _impl->hostedChannels
-					<< " channel(s), plugin output bus wants " << outBus.channelCount
-					<< " channel(s). Audio result may be unchanged or degraded." << std::endl;
-			}
 		}
 	}
+
+	auto hostedLayout = ResolveHostedBusLayout(layoutMode, numChannels, inputBusChannels, outputBusChannels);
+	_impl->inputChannels = hostedLayout.InputChannels;
+	_impl->outputChannels = hostedLayout.OutputChannels;
+	std::cout << "[VstPlugin] Negotiated layout: requested=" << hostedLayout.RequestedChannels
+		<< ", input=" << _impl->inputChannels
+		<< ", output=" << _impl->outputChannels << std::endl;
 
 	// 6. Query IAudioProcessor
 	IAudioProcessor* rawProcessor = nullptr;
@@ -529,6 +567,58 @@ bool VstPlugin::Load(const std::wstring& path,
 		return false;
 	}
 	_impl->processor = IPtr<IAudioProcessor>(rawProcessor, false);
+
+	if (inputBusCount > 0 || outputBusCount > 0)
+	{
+		SpeakerArrangement inputArrangement = 0;
+		SpeakerArrangement outputArrangement = 0;
+		const auto hasInputArrangement = (inputBusCount <= 0)
+			|| TryGetSpeakerArrangementForChannelCount(_impl->inputChannels, inputArrangement);
+		const auto hasOutputArrangement = (outputBusCount <= 0)
+			|| TryGetSpeakerArrangementForChannelCount(_impl->outputChannels, outputArrangement);
+
+		if (hasInputArrangement && hasOutputArrangement)
+		{
+			auto busArrangementRes = _impl->processor->setBusArrangements(
+				(inputBusCount > 0) ? &inputArrangement : nullptr,
+				(inputBusCount > 0) ? 1 : 0,
+				(outputBusCount > 0) ? &outputArrangement : nullptr,
+				(outputBusCount > 0) ? 1 : 0);
+			std::cout << "[VstPlugin] setBusArrangements=" << busArrangementRes << std::endl;
+		}
+		else
+		{
+			std::cout << "[VstPlugin] Skipping setBusArrangements: unsupported requested channel count"
+				<< " input=" << _impl->inputChannels
+				<< " output=" << _impl->outputChannels << std::endl;
+		}
+
+		if (inputBusCount > 0)
+		{
+			SpeakerArrangement actualInputArrangement = SpeakerArr::kMono;
+			if (_impl->processor->getBusArrangement(kInput, 0, actualInputArrangement) == kResultOk)
+				_impl->inputChannels = (std::max)(int32{ 1 }, SpeakerArr::getChannelCount(actualInputArrangement));
+		}
+
+		if (outputBusCount > 0)
+		{
+			SpeakerArrangement actualOutputArrangement = SpeakerArr::kMono;
+			if (_impl->processor->getBusArrangement(kOutput, 0, actualOutputArrangement) == kResultOk)
+				_impl->outputChannels = (std::max)(int32{ 1 }, SpeakerArr::getChannelCount(actualOutputArrangement));
+		}
+
+		std::cout << "[VstPlugin] Active layout after setBusArrangements: input=" << _impl->inputChannels
+			<< ", output=" << _impl->outputChannels << std::endl;
+	}
+
+	if (!IsHostedLayoutCompatible(hostedLayout, _impl->inputChannels, _impl->outputChannels))
+	{
+		std::cerr << "[VstPlugin] Incompatible negotiated layout: requested=" << hostedLayout.RequestedChannels
+			<< ", input=" << _impl->inputChannels
+			<< ", output=" << _impl->outputChannels << std::endl;
+		Unload();
+		return false;
+	}
 
 	// 7. Setup processing
 	ProcessSetup setup;
@@ -546,8 +636,8 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	// 8. Activate buses, then start processing on the job thread.
 	// This is safe because PreInit() already performed the UI-thread setup.
-	auto inActivateRes = _impl->component->activateBus(kAudio, kInput, 0, true);
-	auto outActivateRes = _impl->component->activateBus(kAudio, kOutput, 0, true);
+	auto inActivateRes = (inputBusCount > 0) ? _impl->component->activateBus(kAudio, kInput, 0, true) : kResultOk;
+	auto outActivateRes = (outputBusCount > 0) ? _impl->component->activateBus(kAudio, kOutput, 0, true) : kResultOk;
 	auto activeRes = _impl->component->setActive(true);
 	auto processingRes = _impl->processor->setProcessing(true);
 	_isActivated.store(true, std::memory_order_release);
@@ -557,27 +647,30 @@ bool VstPlugin::Load(const std::wstring& path,
 		<< ", setProcessing=" << processingRes << std::endl;
 
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
-	for (Steinberg::int32 c = 0; c < _impl->hostedChannels; c++)
-	{
-		_impl->inputChannelPtrs[c] = _impl->inputScratch[c];
-		_impl->outputChannelPtrs[c] = _impl->outputScratch[c];
-	}
+	_impl->inputScratchStorage.assign(static_cast<size_t>(_impl->inputChannels) * constants::MaxBlockSize, 0.0f);
+	_impl->outputScratchStorage.assign(static_cast<size_t>(_impl->outputChannels) * constants::MaxBlockSize, 0.0f);
+	_impl->inputChannelPtrs.resize(_impl->inputChannels);
+	_impl->outputChannelPtrs.resize(_impl->outputChannels);
+	for (Steinberg::int32 c = 0; c < _impl->inputChannels; c++)
+		_impl->inputChannelPtrs[c] = _impl->inputScratchStorage.data() + (static_cast<size_t>(c) * constants::MaxBlockSize);
+	for (Steinberg::int32 c = 0; c < _impl->outputChannels; c++)
+		_impl->outputChannelPtrs[c] = _impl->outputScratchStorage.data() + (static_cast<size_t>(c) * constants::MaxBlockSize);
 
-	_impl->inputBus.numChannels = _impl->hostedChannels;
-	_impl->inputBus.channelBuffers32 = _impl->inputChannelPtrs;
+	_impl->inputBus.numChannels = _impl->inputChannels;
+	_impl->inputBus.channelBuffers32 = _impl->inputChannelPtrs.data();
 	_impl->inputBus.silenceFlags = 0;
 
-	_impl->outputBus.numChannels = _impl->hostedChannels;
-	_impl->outputBus.channelBuffers32 = _impl->outputChannelPtrs;
+	_impl->outputBus.numChannels = _impl->outputChannels;
+	_impl->outputBus.channelBuffers32 = _impl->outputChannelPtrs.data();
 	_impl->outputBus.silenceFlags = 0;
 
 	_impl->processData.processMode = kRealtime;
 	_impl->processData.symbolicSampleSize = kSample32;
 	_impl->processData.numSamples = static_cast<int32>(blockSize);
-	_impl->processData.numInputs = 1;
-	_impl->processData.numOutputs = 1;
-	_impl->processData.inputs = &_impl->inputBus;
-	_impl->processData.outputs = &_impl->outputBus;
+	_impl->processData.numInputs = (inputBusCount > 0) ? 1 : 0;
+	_impl->processData.numOutputs = (outputBusCount > 0) ? 1 : 0;
+	_impl->processData.inputs = (inputBusCount > 0) ? &_impl->inputBus : nullptr;
+	_impl->processData.outputs = (outputBusCount > 0) ? &_impl->outputBus : nullptr;
 	_impl->processData.inputEvents = nullptr;
 	_impl->processData.outputEvents = nullptr;
 	_impl->processData.inputParameterChanges = nullptr;
@@ -652,13 +745,14 @@ void VstPlugin::Unload()
 #ifdef JAMMA_VST3_ENABLED
 	CloseEditor();
 
-	if (_impl && _impl->component)
+	if (_impl)
 	{
 		if (_isActivated.exchange(false, std::memory_order_acq_rel))
 		{
 			if (_impl->processor)
 				_impl->processor->setProcessing(false);
-			_impl->component->setActive(false);
+			if (_impl->component)
+				_impl->component->setActive(false);
 		}
 
 		if (_impl->componentConnection && _impl->controllerConnection)
@@ -668,17 +762,25 @@ void VstPlugin::Unload()
 		}
 		_impl->_connectionsDone = false;
 
-		_impl->component->terminate();
-		_impl->component = nullptr;
-	}
+		if (_impl->controller)
+			_impl->controller->setComponentHandler(nullptr);
 
-	if (_impl)
-	{
 		_impl->processor = nullptr;
 		_impl->controller = nullptr;
 		_impl->componentConnection = nullptr;
 		_impl->controllerConnection = nullptr;
 		_impl->plugView = nullptr;
+
+		if (_impl->component)
+		{
+			_impl->component->terminate();
+			_impl->component = nullptr;
+		}
+
+		_impl->inputChannelPtrs.clear();
+		_impl->outputChannelPtrs.clear();
+		_impl->inputScratchStorage.clear();
+		_impl->outputScratchStorage.clear();
 
 		// Release factory before FreeLibrary: factory COM vtable lives inside
 		// the DLL; releasing after FreeLibrary would call into unloaded code.
@@ -720,16 +822,14 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
 		return;
 
-	std::copy(monoBuf, monoBuf + numSamples, _impl->inputScratch[0]);
-	if (_impl->hostedChannels > 1)
-		std::fill(_impl->inputScratch[1], _impl->inputScratch[1] + numSamples, 0.0f);
+	CopyMonoToInputBuffers(monoBuf, numSamples, _impl->inputChannels, _impl->inputChannelPtrs.data());
 
 	// Update sample count (other ProcessData fields are fixed from Load())
 	_impl->processData.numSamples = numSamples;
 
 	_impl->processor->process(_impl->processData);
 
-	std::copy(_impl->outputScratch[0], _impl->outputScratch[0] + numSamples, monoBuf);
+	FoldOutputToMono(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, monoBuf);
 #else
 	(void)monoBuf; (void)numSamples;
 #endif
@@ -749,23 +849,47 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
 		return;
 
-	if (_impl->hostedChannels < 2)
+	if ((_impl->inputChannels != 2) || (_impl->outputChannels != 2))
 	{
 		ProcessBlock(leftBuf, numSamples);
 		ProcessBlock(rightBuf, numSamples);
 		return;
 	}
 
-	std::copy(leftBuf, leftBuf + numSamples, _impl->inputScratch[0]);
-	std::copy(rightBuf, rightBuf + numSamples, _impl->inputScratch[1]);
+	float* inputChannels[] = { leftBuf, rightBuf };
+	CopyMultiToInputBuffers(inputChannels, 2, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
 
 	_impl->processData.numSamples = numSamples;
 	_impl->processor->process(_impl->processData);
 
-	std::copy(_impl->outputScratch[0], _impl->outputScratch[0] + numSamples, leftBuf);
-	std::copy(_impl->outputScratch[1], _impl->outputScratch[1] + numSamples, rightBuf);
+	float* outputChannels[] = { leftBuf, rightBuf };
+	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, outputChannels, 2);
 #else
 	(void)leftBuf; (void)rightBuf; (void)numSamples;
+#endif
+}
+
+void VstPlugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
+		|| _isBypassed.load(std::memory_order_relaxed)
+		|| _editorOpening.load(std::memory_order_acquire))
+		return;
+
+	if (!_impl || !channelBufs)
+		return;
+
+	if ((numChannels <= 0) || (numChannels != _impl->requestedChannels)
+		|| (numSamples <= 0) || (static_cast<unsigned int>(numSamples) > constants::MaxBlockSize))
+		return;
+
+	CopyMultiToInputBuffers(channelBufs, numChannels, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
+	_impl->processData.numSamples = numSamples;
+	_impl->processor->process(_impl->processData);
+	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
+#else
+	(void)channelBufs; (void)numChannels; (void)numSamples;
 #endif
 }
 
