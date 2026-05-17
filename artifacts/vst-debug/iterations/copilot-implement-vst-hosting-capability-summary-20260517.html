@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>copilot/implement-vst-hosting-capability Session Summary</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --ink: #1f1a17;
+      --muted: #5f564e;
+      --line: #d8c7b0;
+      --accent: #1d5c63;
+      --accent-soft: #d7ebe7;
+      --ok: #1f6b3b;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Aptos", sans-serif;
+      background: linear-gradient(180deg, #efe4d2 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    h1, h2 {
+      font-family: "Bahnschrift", "Segoe UI Semibold", sans-serif;
+      letter-spacing: 0.02em;
+      margin: 0 0 12px;
+    }
+
+    h1 {
+      font-size: 2rem;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+      margin-top: 28px;
+    }
+
+    p, li {
+      line-height: 1.5;
+    }
+
+    .hero, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(31, 26, 23, 0.08);
+    }
+
+    .hero {
+      padding: 24px;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, var(--panel) 0%, #f8f0e3 60%, var(--accent-soft) 100%);
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid var(--line);
+    }
+
+    .chip strong {
+      display: block;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+
+    .panel {
+      padding: 22px;
+      margin-top: 18px;
+    }
+
+    ul {
+      margin: 10px 0 0 20px;
+      padding: 0;
+    }
+
+    code {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      background: #f2e8da;
+      border-radius: 6px;
+      padding: 1px 6px;
+    }
+
+    .ok {
+      color: var(--ok);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>VST Hosting Capability Port Summary</h1>
+      <p>Implemented only the first fix from <code>bugfix/vst-audio-garble</code> on <code>copilot/implement-vst-hosting-capability</code>: correct hosted bus negotiation and channel adaptation for loop and station VST processing. The port was adjusted to avoid reintroducing the startup regression while deliberately not bringing over the later quit-path/editor teardown work.</p>
+      <div class="meta">
+        <div class="chip">
+          <strong>Branch</strong>
+          copilot/implement-vst-hosting-capability
+        </div>
+        <div class="chip">
+          <strong>Commit</strong>
+          ead0169
+        </div>
+        <div class="chip">
+          <strong>Date</strong>
+          2026-05-17
+        </div>
+        <div class="chip">
+          <strong>Status</strong>
+          <span class="ok">Validated</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>What Changed</h2>
+      <ul>
+        <li>Added <code>JammaLib/src/vst/VstAudioBuffers.h</code> with hosted layout negotiation helpers and buffer copy/fold helpers.</li>
+        <li>Updated <code>VstPlugin</code> to negotiate VST input/output bus widths separately, call <code>setBusArrangements()</code> before <code>setupProcessing()</code>, read back active arrangements, and process mono, stereo, or exact-match multichannel buffers using preallocated scratch storage.</li>
+        <li>Updated loop VST loading to use <code>HostedLayoutMode::MonoFlexible</code>, allowing mono loop audio to drive stereo-capable plug-ins safely and fold output back to mono.</li>
+        <li>Updated station VST loading and playback to use exact full-bus processing in one pass via <code>ProcessBlockMulti()</code> instead of pairwise mono/stereo slices.</li>
+        <li>Added focused tests for the new layout and buffer helpers and wired them into <code>JammaLib.Tests</code>.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Startup-Safe Adjustments</h2>
+      <ul>
+        <li>The initial first-fix port reproduced the startup crash path described in the branch summary.</li>
+        <li>To avoid that regression, <code>VstPlugin</code> now treats <code>GetPluginFactory()</code> as a module-owned raw pointer instead of a cached <code>IPtr&lt;IPluginFactory&gt;</code>.</li>
+        <li>Host callback adapters for <code>IPlugFrame</code> and <code>IComponentHandler</code> were made host-owned and non-destroyable with fixed <code>addRef()</code>/<code>release()</code> behavior.</li>
+        <li>Teardown order in <code>VstPlugin::Unload()</code> was tightened just enough to release controller hookups and interfaces before module unload.</li>
+        <li>No <code>Main.cpp</code>, <code>Window.cpp</code>, <code>Scene.cpp</code>, or <code>VstEditorWindow.*</code> changes were brought over, so the later quit-path mitigation work was intentionally not ported.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Validation</h2>
+      <ul>
+        <li><span class="ok">Build passed:</span> <code>JammaLib/JammaLib.vcxproj</code> Debug x64.</li>
+        <li><span class="ok">Build passed:</span> <code>test/JammaLib.Tests/JammaLib.Tests.vcxproj</code> Debug x64.</li>
+        <li><span class="ok">Full native suite passed:</span> 256 tests from 32 suites.</li>
+        <li><span class="ok">Build passed:</span> <code>Jamma/Jamma.vcxproj</code> Debug x64 after relinking against the updated static library.</li>
+        <li><span class="ok">Startup smoke test passed:</span> the rebuilt app stayed alive for the full 120-second wait window instead of exiting immediately with <code>0xC0000005</code>.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Files In Scope</h2>
+      <ul>
+        <li><code>JammaLib/src/vst/VstAudioBuffers.h</code></li>
+        <li><code>JammaLib/src/vst/VstPlugin.h</code> and <code>JammaLib/src/vst/VstPlugin.cpp</code></li>
+        <li><code>JammaLib/src/vst/VstChain.h</code> and <code>JammaLib/src/vst/VstChain.cpp</code></li>
+        <li><code>JammaLib/src/engine/Loop.cpp</code></li>
+        <li><code>JammaLib/src/engine/Station.h</code> and <code>JammaLib/src/engine/Station.cpp</code></li>
+        <li><code>test/JammaLib.Tests/src/vst/VstAudioBuffers_Tests.cpp</code> plus project wiring</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
