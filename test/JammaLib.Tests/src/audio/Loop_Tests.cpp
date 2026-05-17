@@ -834,3 +834,49 @@ TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
             << "Gain bump at crossfade sample " << s;
     }
 }
+
+// -- Two-loop sync test ------------------------------------------------------
+// Two loops loaded with identical content and started at the same play position
+// (simulating a second loop recording the same source) must produce sample-
+// identical output — the L-channel loop and R-channel loop stay in phase.
+TEST(Loop, TwoLoopsWithSameContentProduceSameSamples)
+{
+    const auto loopLength = 50ul;
+    const auto blockSize = 11u;
+    const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+    // Non-uniform ramp in the loop body so any phase offset would be detected.
+    std::vector<float> seedData(totalRecordSamps, 0.0f);
+    for (auto i = 0u; i < loopLength; i++)
+        seedData[constants::MaxLoopFadeSamps + i] = static_cast<float>(i + 1) * 0.01f;
+
+    auto makeSeededLoop = [&]()
+    {
+        auto loop = MakeLoop();
+        loop.Record();
+        AudioWriteRequest writeReq;
+        writeReq.samples    = seedData.data();
+        writeReq.numSamps   = static_cast<unsigned int>(totalRecordSamps);
+        writeReq.stride     = 1;
+        writeReq.fadeCurrent = 0.0f;
+        writeReq.fadeNew    = 1.0f;
+        writeReq.source     = base::Audible::AUDIOSOURCE_ADC;
+        loop.OnBlockWrite(writeReq, 0);
+        loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+        loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+        return loop;
+    };
+
+    auto loopL = makeSeededLoop();
+    auto loopR = makeSeededLoop();
+
+    auto sinkL = std::make_shared<MockMultiSink>(blockSize);
+    auto sinkR = std::make_shared<MockMultiSink>(blockSize);
+    PlayOneBlock(loopL, sinkL, blockSize);
+    PlayOneBlock(loopR, sinkR, blockSize);
+
+    const auto& samplesL = sinkL->GetSamples();
+    const auto& samplesR = sinkR->GetSamples();
+    for (auto s = 0u; s < blockSize; s++)
+        EXPECT_FLOAT_EQ(samplesL[s], samplesR[s]) << "sample " << s;
+}
