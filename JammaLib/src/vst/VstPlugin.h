@@ -35,12 +35,8 @@ namespace vst
 		VstPlugin& operator=(const VstPlugin&) = delete;
 
 	public:
-		// Pre-initialise the plugin DLL on the main/UI thread BEFORE Load() is
-		// called on the job thread.  This ensures that frameworks such as JUCE
-		// (which capture the calling thread as their "message thread" inside
-		// GetPluginFactory()) are anchored to the main thread so that
-		// plugView->attached() — also called on the main thread — never
-		// deadlocks waiting for a job-thread message pump.
+		// Pre-initialise the plugin DLL on the UI thread before Load() runs on
+		// the job thread so editor attach work stays bound to the UI thread.
 		//
 		// Must be called from the Win32 UI (message-pump) thread only.
 		// If PreInit() succeeds, Load() will reuse the DLL handle and factory

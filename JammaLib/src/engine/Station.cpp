@@ -1167,10 +1167,8 @@ ActionResult Station::OnAction(JobAction action)
 		if (!_backVstChain)
 			_backVstChain = std::make_shared<vst::VstChain>();
 
-		// Use the pre-initialised plugin instance if Scene::CommitChanges()
-		// set one up on the main thread; otherwise create a fresh plugin.
-		// The pre-init path loads the DLL and calls GetPluginFactory() on the
-		// main thread so JUCE-based plugins don't deadlock in attached().
+		// Use the pre-initialised plugin instance when Scene::CommitChanges()
+		// prepared one on the UI thread; otherwise create a fresh plugin.
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
 			: std::make_shared<vst::VstPlugin>();

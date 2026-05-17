@@ -1077,15 +1077,9 @@ void Scene::CommitChanges()
 		}
 	}
 
-	// Pre-initialise VST DLLs on the main/UI thread before handing jobs to
-	// the job thread.  This must happen here (after the audioMutex is
-	// released) so LoadLibraryW doesn't stall inside the audio lock.
-	//
-	// For JUCE-based plugins GetPluginFactory() runs initialiseJuce_GUI()
-	// which captures the calling thread as the JUCE "message thread".  By
-	// doing this on the main thread we ensure that later plugView->attached()
-	// calls (also on the main thread) never deadlock waiting for the job
-	// thread to pump JUCE messages.
+	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
+	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
+	// the audio lock and later attached() calls remain UI-thread bound.
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
@@ -1093,9 +1087,8 @@ void Scene::CommitChanges()
 			auto plugin = std::make_shared<vst::VstPlugin>();
 			if (plugin->PreInit(job.VstPath))
 				job.PreInitPlugin = std::move(plugin);
-			// If PreInit fails the job thread falls back to creating a fresh
-			// VstPlugin — correct for non-JUCE plugins; JUCE plugins will
-			// likely hang, but that's no worse than the pre-fix behaviour.
+			// If PreInit fails, fall back to a fresh VstPlugin on the job thread.
+			// That may still hang in attached(), but it matches the old behaviour.
 		}
 	}
 

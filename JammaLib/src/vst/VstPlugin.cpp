@@ -237,11 +237,8 @@ bool VstPlugin::PreInit(const std::wstring& path)
 		std::cout << "[VstPlugin] PreInit: InitDll() called" << std::endl;
 	}
 
-	// Call GetPluginFactory() on the main/UI thread. JUCE-based plugins call
-	// initialiseJuce_GUI() and capture the calling thread as JUCE's message thread
-	// during GetPluginFactory() or the first createInstance()/initialize() call.
-	// All of these MUST happen on the main thread so that plugView->attached()
-	// (also main thread) never deadlocks waiting for a job-thread message pump.
+	// Call GetPluginFactory() on the UI thread so thread-affine GUI state binds
+	// there before attached() runs on the same thread.
 	using GetFactoryProc = IPluginFactory* (PLUGIN_API*)();
 	auto getFactory = reinterpret_cast<GetFactoryProc>(GetProcAddress(_moduleHandle, "GetPluginFactory"));
 	if (!getFactory)
@@ -316,12 +313,8 @@ bool VstPlugin::PreInit(const std::wstring& path)
 		return false;
 	}
 
-	// createInstance() and initialize() are called on the main thread here
-	// (not in Load() on the job thread) because JUCE's MessageManager singleton
-	// is created on the first call to initialiseJuce_GUI(), which JUCE triggers
-	// inside initialize(). By doing this on the main thread, JUCE's message thread
-	// == main thread, so attached() on the main thread can call
-	// callFunctionOnMessageThread() without needing a job-thread message pump.
+	// Create and initialize on the UI thread so later editor attach work does
+	// not depend on a job-thread message pump.
 	IComponent* rawComponent = nullptr;
 	if (_impl->factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 		|| !rawComponent)
@@ -474,11 +467,8 @@ bool VstPlugin::Load(const std::wstring& path,
 			return false;
 		}
 
-		// 4. Create IComponent (only if PreInit() didn't already do it on the main thread)
-		// NOTE: If PreInit() ran, createInstance() + initialize() were already called on the
-		// main thread — critical for JUCE-based plugins whose MessageManager is captured
-		// on the first initialize() call. Calling them here (job thread) would anchor JUCE's
-		// message thread to the job thread, causing attached() on the main thread to deadlock.
+		// 4. Create IComponent only when PreInit() did not already do the UI-thread setup.
+		// Doing this here can bind editor-thread state to the job thread and hang attached().
 		IComponent* rawComponent = nullptr;
 		if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 			|| !rawComponent)
@@ -554,15 +544,8 @@ bool VstPlugin::Load(const std::wstring& path,
 		return false;
 	}
 
-	// 8. Activate buses, then set component active and start processing.
-	// setActive/setProcessing are called here (on the job thread) because audio
-	// processing must be active regardless of whether an editor is ever opened.
-	// This is now safe for JUCE-based plugins because PreInit() called
-	// createInstance()+initialize() on the main thread, anchoring JUCE's
-	// MessageManager to the main thread. setProcessing(true) here only invokes
-	// the audio-processor path (prepareToPlay), which does not require the
-	// message thread. attached() on the main thread will therefore call
-	// callFunctionOnMessageThread() inline (already on message thread), not block.
+	// 8. Activate buses, then start processing on the job thread.
+	// This is safe because PreInit() already performed the UI-thread setup.
 	auto inActivateRes = _impl->component->activateBus(kAudio, kInput, 0, true);
 	auto outActivateRes = _impl->component->activateBus(kAudio, kOutput, 0, true);
 	auto activeRes = _impl->component->setActive(true);
@@ -635,11 +618,8 @@ bool VstPlugin::Load(const std::wstring& path,
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
 	}
 
-	// IConnectionPoint::connect() is deferred from Load() to OpenEditor() (called
-	// after attached() succeeds) to match editorhost's behavior. editorhost never
-	// calls connect() at all, and calling it on the job thread before attached()
-	// may anchor JUCE cross-thread message dispatch to the job thread, causing
-	// attached() on the main thread to deadlock waiting for the job-thread pump.
+	// Defer connect() to OpenEditor() on the main thread.
+	// Calling it here can route editor work through the job thread and hang attached().
 	if (_impl->controller)
 	{
 		IConnectionPoint* rawComponentConn = nullptr;
@@ -811,12 +791,9 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		return false;
 	}
 
-	// Connect component↔controller IConnectionPoint endpoints here on the main thread,
-	// BEFORE createView(). In JUCE's single-object VST3 design, connect() transfers the
-	// shared AudioProcessor reference from the component side to the controller side;
-	// without it createView() returns null. Calling connect() on the job thread (in
-	// Load()) caused a hang in attached() because JUCE posted cross-thread messages
-	// anchored to the job thread. Main-thread connect() avoids that.
+	// Connect on the main thread before createView().
+	// Some plugins require this to expose the editor, and doing it on the job
+	// thread can hang attached().
 	if (!_impl->_connectionsDone && _impl->componentConnection && _impl->controllerConnection)
 	{
 		auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
