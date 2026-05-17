@@ -161,6 +161,36 @@ TEST(StationRemote, IngestStereoBlockFeedsStationMixPath)
 	EXPECT_TRUE(hasRight);
 }
 
+TEST(StationRemote, ZeroThenIngestStereoBlockFeedsStationMixPath)
+{
+	const auto blockSize = 256u;
+	auto station = MakeRemoteStation();
+	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+
+	std::vector<float> left(blockSize, 0.0f);
+	std::vector<float> right(blockSize, 0.0f);
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		left[i] = (i % 5 == 0) ? 0.4f : 0.0f;
+		right[i] = (i % 7 == 0) ? -0.6f : 0.0f;
+	}
+
+	station->Zero(blockSize, Audible::AUDIOSOURCE_LOOPS);
+	station->IngestStereoBlock(left.data(), right.data(), blockSize);
+	station->WriteBlock(sink, nullptr, 0, blockSize);
+
+	bool hasLeft = false;
+	bool hasRight = false;
+	for (auto i = 0u; i < blockSize; i++)
+	{
+		hasLeft = hasLeft || (sink->Left()[i] != 0.0f);
+		hasRight = hasRight || (sink->Right()[i] != 0.0f);
+	}
+
+	EXPECT_TRUE(hasLeft);
+	EXPECT_TRUE(hasRight);
+}
+
 TEST(StationRemote, IsRemoteReturnsTrueForRemoteStation)
 {
 	auto station = MakeRemoteStation();

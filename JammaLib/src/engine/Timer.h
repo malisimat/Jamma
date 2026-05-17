@@ -31,13 +31,17 @@ namespace engine
 		void Clear();
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
+		void SetSeedSourceLength(unsigned long loopLengthSamps);
+		unsigned int QuantiseSamps() const;
+		QuantisationType Quantisation() const;
+		unsigned long SeedSourceLength() const;
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
 	private:
 		unsigned long _loopCount;
 		unsigned int _sampOffset;
 		unsigned int _quantiseSamps;
+		unsigned long _seedSourceLengthSamps;
 		QuantisationType _quantisation;
 	};
 }
-

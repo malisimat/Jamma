@@ -185,6 +185,7 @@ namespace engine
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
+		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
 		void Play(unsigned long index,
@@ -206,16 +207,19 @@ namespace engine
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
+		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
 		
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
+		void _ForceUpdateLoopModel();
 
 	protected:
+		bool _visualUpdatesEnabled;
 		unsigned long _playIndex;
+		unsigned long _loopLength;
 		float _lastPeak;
 		double _pitch;
-		unsigned long _loopLength;
 		LoopPlayState _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
@@ -224,11 +228,6 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-
-		// Loop-output VST insert chain.  Applied to the ReadBlock output buffer
-		// before it is sent to the AudioMixer.  Null / empty == bypass.
-		// Swapped atomically: set by LoadVstPlugin/UnloadVstPlugin from a
-		// non-RT thread; read by WriteBlock from the audio callback.
 		std::shared_ptr<vst::VstChain> _vstChain;
 		// Non-RT metadata to persist loop VST chains in jam exports.
 		std::vector<std::wstring> _vstPluginPaths;

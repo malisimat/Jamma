@@ -8,16 +8,39 @@ LoopRemote::LoopRemote(LoopParams params,
 	Loop(params, mixerParams),
 	_modelDirty(false),
 	_measureLengthSamps(0u),
-	_measurePositionSamps(0u)
+	_measurePositionSamps(0u),
+	_visualLengthSamps(0u)
 {
 	SetMeasureLength(constants::DefaultSampleRate);
+	SetVisualLength(constants::DefaultSampleRate);
 	SetMeasurePosition(0u);
+	// Render the remote loop once so something is visible, then keep further
+	// remote visual updates disabled while the slowdown issue is investigated.
+	_ForceUpdateLoopModel();
+	SetVisualUpdatesEnabled(false);
+}
+
+void LoopRemote::SetVisualLength(unsigned int visualLengthSamps)
+{
+	auto safeVisualLength = std::max(1u, visualLengthSamps);
+	if (safeVisualLength == _visualLengthSamps.load())
+		return;
+
+	_visualLengthSamps.store(safeVisualLength);
+	_modelDirty.store(true);
 }
 
 void LoopRemote::Update()
 {
 	if (!_modelDirty.exchange(false))
 		return;
+
+	if (!_visualUpdatesEnabled)
+	{
+		_bufferBank.UpdateCapacity();
+		_monitorBufferBank.UpdateCapacity();
+		return;
+	}
 
 	Loop::Update();
 }
@@ -56,6 +79,14 @@ void LoopRemote::SetMeasurePosition(unsigned int positionSamps)
 	_loopLength = len;
 	_playState = STATE_PLAYING;
 	_playIndex = constants::MaxLoopFadeSamps + pos;
+}
+
+unsigned long LoopRemote::_ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const
+{
+	if (isRecording)
+		return actualLoopLength;
+
+	return std::max<unsigned long>(actualLoopLength, _visualLengthSamps.load());
 }
 
 void LoopRemote::IngestSamples(const float* samples, unsigned int numSamps)

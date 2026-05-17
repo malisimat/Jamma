@@ -65,6 +65,7 @@ void StationRemote::EnsureRemoteTake()
 	leftParams.FadeSamps = _fadeSamps;
 	_leftLoop = std::make_shared<LoopRemote>(leftParams, loopMixerParams);
 	_leftLoop->SetMeasureLength(_intervalLengthSamps.load());
+	_leftLoop->SetVisualLength(_intervalLengthSamps.load());
 
 	LoopParams rightParams = leftParams;
 	rightParams.Id = _name + "-REMOTE-R";
@@ -72,6 +73,7 @@ void StationRemote::EnsureRemoteTake()
 	rightParams.Channel = 1;
 	_rightLoop = std::make_shared<LoopRemote>(rightParams, loopMixerParams);
 	_rightLoop->SetMeasureLength(_intervalLengthSamps.load());
+	_rightLoop->SetVisualLength(_intervalLengthSamps.load());
 
 	_remoteTake->AddLoop(_leftLoop);
 	_remoteTake->AddLoop(_rightLoop);
@@ -114,21 +116,24 @@ void StationRemote::SetConnectedRemote(bool connected)
 	_isConnectedRemote = connected;
 }
 
-void StationRemote::SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps)
+void StationRemote::SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps, unsigned int visualLengthSamps)
 {
 	const auto safeLength = std::max(1u, lengthSamps);
+	const auto safeVisualLength = std::max(safeLength, visualLengthSamps);
 	_intervalLengthSamps.store(safeLength);
 	_intervalPositionSamps.store(positionSamps % safeLength);
 
 	if (_leftLoop)
 	{
 		_leftLoop->SetMeasureLength(safeLength);
+		_leftLoop->SetVisualLength(safeVisualLength);
 		_leftLoop->SetMeasurePosition(_intervalPositionSamps.load());
 	}
 
 	if (_rightLoop)
 	{
 		_rightLoop->SetMeasureLength(safeLength);
+		_rightLoop->SetVisualLength(safeVisualLength);
 		_rightLoop->SetMeasurePosition(_intervalPositionSamps.load());
 	}
 }
@@ -139,7 +144,7 @@ void StationRemote::IngestStereoBlock(const float* left,
 {
 	// Audio callback path: must be real-time safe.
 	// EnsureRemoteTake() and SetMeasureLength() are not safe here (allocations).
-	// The job thread (_ReconcileRemoteStations) guarantees the take and loops
+	// The job thread (_UpdateRemoteStationsFromSnapshot) guarantees the take and loops
 	// are created and measure length is set before this is called.
 	// Early-out if loops are not yet ready.
 	if (!left || !right || numSamps == 0u)
