@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <tuple>
 #include <memory>
 #include "../include/Constants.h"
 #include "../utils/ArrayUtils.h"
@@ -67,11 +68,18 @@ namespace engine
 			unsigned long offset,
 			float radius);
 
+		// Waveform Decimation & Texture Data Generation
+		static std::vector<glm::vec2> DecimateWaveform(const audio::BufferBank& buffer, unsigned long offset, unsigned long length, unsigned int numSegments);
+
 	protected:
+		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
+
 		static unsigned int TotalNumLeds(unsigned int vuHeight, unsigned int ledHeight);
 		static unsigned int CurrentNumLeds(unsigned int vuHeight, unsigned int ledHeight, double value);
 
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
+		void UploadWaveformTexture();
 
 		std::tuple<std::vector<float>, std::vector<float>, float, float>
 			CalcGrainGeometry(const audio::BufferBank& buffer,
@@ -92,13 +100,29 @@ namespace engine
 				float lastYMax,
 				float radius);
 
+		static void DecimateWaveformInto(const audio::BufferBank& buffer,
+			unsigned long offset,
+			unsigned long length,
+			std::vector<glm::vec2>& outSegments);
+		static std::tuple<std::vector<float>, std::vector<float>> BuildFixedGeometry(unsigned int numSegments, float radius);
+
 	protected:
 		static const utils::Size2d _LedGap;
 		static const float _MinHeight;
 		static const float _RadialThicknessFrac;
 		static const float _HeightScale;
+		static const float _UnitMeshRadius;
+		static const unsigned int _WaveformSegments;
+		static const unsigned int _WaveformPboCount;
 
 		double _loopIndexFrac;
 		LoopModelState _modelState;
+		float _waveformRadius;
+		bool _hasWaveformData;
+		bool _waveformNeedsUpload;
+		unsigned int _waveformTexture;
+		unsigned int _waveformPbos[2];
+		unsigned int _waveformWritePboIndex;
+		std::vector<glm::vec2> _waveformDecimated;
 	};
 }
