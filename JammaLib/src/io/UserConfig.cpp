@@ -60,6 +60,19 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 		}
 	}
 
+	iter = json.KeyValues.find("midi");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["midi"].index() == 6)
+		{
+			auto midiJson = std::get<Json::JsonPart>(json.KeyValues["midi"]);
+			auto midiOpt = MidiSettings::FromJson(midiJson);
+
+			if (midiOpt.has_value())
+				cfg.Midi = midiOpt.value();
+		}
+	}
+
 	return cfg;
 }
 
@@ -214,6 +227,31 @@ std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson
 	trig.PreDelay = preDelay;
 	trig.DebounceSamps = debounceSamps;
 	return trig;
+}
+
+std::optional<UserConfig::MidiSettings> UserConfig::MidiSettings::FromJson(Json::JsonPart json)
+{
+	std::string name = "default";
+	bool enabled = true;
+
+	auto iter = json.KeyValues.find("name");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["name"].index() == 4)
+			name = std::get<std::string>(json.KeyValues["name"]);
+	}
+
+	iter = json.KeyValues.find("enabled");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["enabled"].index() == 0)
+			enabled = std::get<bool>(json.KeyValues["enabled"]);
+	}
+
+	MidiSettings midi;
+	midi.Name = name;
+	midi.Enabled = enabled;
+	return midi;
 }
 
 

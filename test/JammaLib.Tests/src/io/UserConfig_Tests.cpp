@@ -48,12 +48,24 @@ TEST(UserConfig, ParsesTriggerSettings) {
 	ASSERT_EQ(59, trig.value().DebounceSamps);
 }
 
+TEST(UserConfig, ParsesMidiSettings) {
+	auto str = "{\"name\":\"MPK mini\",\"enabled\":true}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto midi = UserConfig::MidiSettings::FromJson(json);
+
+	ASSERT_TRUE(midi.has_value());
+	ASSERT_EQ(0, midi.value().Name.compare("MPK mini"));
+	ASSERT_TRUE(midi.value().Enabled);
+}
+
 TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
 	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
+	std::string midi = "{\"name\":\"Launchkey\",\"enabled\":true}";
 	
-	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + "}";
+	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + "}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto cfg = UserConfig::FromJson(json);
@@ -75,6 +87,8 @@ TEST(UserConfig, ParsesFile) {
 
 	ASSERT_EQ(21, cfg.value().Trigger.PreDelay);
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
+	ASSERT_EQ(0, cfg.value().Midi.Name.compare("Launchkey"));
+	ASSERT_TRUE(cfg.value().Midi.Enabled);
 }
 
 TEST(UserConfig, DeducesDefaultLoopTimingFromLongLoop) {

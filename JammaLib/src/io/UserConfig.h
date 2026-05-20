@@ -66,6 +66,14 @@ namespace io
 			static std::optional<TriggerSettings> FromJson(Json::JsonPart json);
 		};
 
+		struct MidiSettings
+		{
+			std::string Name = "default"; // Preferred MIDI input device name
+			bool Enabled = true;
+
+			static std::optional<MidiSettings> FromJson(Json::JsonPart json);
+		};
+
 		// How much to (further) delay input signal from ADC, in samples
 		unsigned int AdcBufferDelay(unsigned int inLatency) const;
 
@@ -86,5 +94,6 @@ namespace io
 		AudioSettings Audio;
 		LoopSettings Loop;
 		TriggerSettings Trigger;
+		MidiSettings Midi;
 	};
 }

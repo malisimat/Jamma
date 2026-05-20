@@ -55,6 +55,8 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
+	_midiDevice(nullptr),
+	_lastMidiDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
@@ -131,6 +133,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
+	_midiDevice = std::make_unique<MidiDevice>();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -686,6 +689,8 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	_PumpMidi();
+
 	auto snapshot = _ninjamSession->Pump();
 	if (snapshot.has_value())
 	{
@@ -724,6 +729,45 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+}
+
+void Scene::_PumpMidi()
+{
+	MidiEvent ev{};
+	while (_midiIngress.Pop(ev))
+	{
+		const auto msgType = ev.MessageType();
+		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
+			continue;
+
+		const auto note = static_cast<unsigned int>(ev.data1);
+		const auto velocity = static_cast<unsigned int>(ev.data2);
+		const auto channel = static_cast<unsigned int>(ev.Channel());
+		const auto isDown = ev.IsNoteOn();
+
+		std::cout << "[MIDI] Note " << note
+			<< (isDown ? " down" : " up")
+			<< " vel=" << velocity
+			<< " ch=" << channel
+			<< " -> trigger value " << note
+			<< std::endl;
+
+		KeyAction mappedAction;
+		mappedAction.KeyActionType = isDown ? KeyAction::KEY_DOWN : KeyAction::KEY_UP;
+		mappedAction.KeyChar = note;
+		mappedAction.IsSystem = false;
+		mappedAction.Modifiers = Action::MODIFIER_NONE;
+
+		OnAction(mappedAction);
+	}
+
+	auto dropped = _midiIngress.DroppedCount();
+	if (dropped != _lastMidiDropCount)
+	{
+		std::cout << "[MIDI] Ingress queue dropped " << (dropped - _lastMidiDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastMidiDropCount = dropped;
+	}
 }
 
 void Scene::InitReceivers()
@@ -823,11 +867,52 @@ void Scene::InitAudio()
 			audioStreamParams.BufSize,
 			audioStreamParams.NumInputChannels,
 			audioStreamParams.NumOutputChannels);
+
+		InitMidi();
 	}
+}
+
+void Scene::InitMidi()
+{
+	if (!_midiDevice)
+		_midiDevice = std::make_unique<MidiDevice>();
+
+	_midiIngress.Clear();
+	_lastMidiDropCount = 0u;
+
+	if (!_userConfig.Midi.Enabled)
+	{
+		std::cout << "[MIDI] MIDI input disabled by rig settings." << std::endl;
+		return;
+	}
+
+	auto opened = _midiDevice->Open(
+		_userConfig.Midi.Name,
+		[this](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+		{
+			MidiEvent ev{};
+			ev.sampleOffset = 0u;
+			ev.status = status;
+			ev.data1 = data1;
+			ev.data2 = data2;
+			ev._pad = 0u;
+			_midiIngress.Push(ev);
+		});
+
+	if (!opened)
+		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+}
+
+void Scene::CloseMidi()
+{
+	if (_midiDevice)
+		_midiDevice->Close();
 }
 
 void Scene::CloseAudio()
 {
+	CloseMidi();
+
 	// Do not hold the audio callback mutex while stopping the stream.
 	// RtAudio shutdown may wait for the callback thread to return, and the
 	// callback takes this same mutex.

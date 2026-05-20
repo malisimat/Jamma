@@ -138,6 +138,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp" />
+    <ClCompile Include="src\audio\MidiDevice_Tests.cpp" />
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\Overdub_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />

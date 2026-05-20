@@ -2,12 +2,14 @@
 #include <memory>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
+#include "../audio/MidiDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -30,6 +32,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
+#include "MidiQueue.h"
 
 namespace engine
 {
@@ -69,6 +72,7 @@ namespace engine
 		~Scene()
 		{
 			ReleaseResources();
+			CloseMidi();
 
 			_isSceneQuitting = true;
 			_jobRunner.join();
@@ -189,6 +193,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		void InitMidi();
+		void CloseMidi();
 		void CommitChanges();
 		std::mutex& GetAudioMutex();
 
@@ -225,6 +231,7 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
+		void _PumpMidi();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
@@ -248,6 +255,9 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
+		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		MidiQueue<1024> _midiIngress;
+		std::uint64_t _lastMidiDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;

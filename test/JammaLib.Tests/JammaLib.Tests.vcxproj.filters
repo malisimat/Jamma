@@ -8,6 +8,9 @@
     <ClCompile Include="src\audio\Overdub_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\MidiDevice_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\BufferBank_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
