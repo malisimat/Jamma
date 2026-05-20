@@ -353,7 +353,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		{
 			if (msg.message == WM_QUIT)
 			{
-				scene.value()->CloseAllVstEditorWindows();
 				scene.value()->CloseAudio();
 				active = false;
 				break;
