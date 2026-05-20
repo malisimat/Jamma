@@ -185,5 +185,7 @@ namespace engine
 		// initialise a newly loaded VstPlugin.
 		float _sampleRate = 44100.0f;
 		unsigned int _blockSize = 512u;
+		std::vector<float> _vstBlockScratch;
+		std::vector<float*> _vstBlockPtrs;
 	};
 }

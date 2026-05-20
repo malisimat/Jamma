@@ -400,6 +400,15 @@ void Window::Swap()
 
 void Window::Release()
 {
+	if (_rc && _dc)
+	{
+		if (wglGetCurrentContext() != _rc)
+			wglMakeCurrent(_dc, _rc);
+
+		glDebugMessageCallback(nullptr, nullptr);
+		glDisable(GL_DEBUG_OUTPUT);
+	}
+
 	wglMakeCurrent(nullptr, nullptr);
 
 	if (_rc)
@@ -1030,7 +1039,6 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		window->OnAction(winAction);
 
-		FreeConsole();
 		PostQuitMessage(0);
 		return 0;
 	}

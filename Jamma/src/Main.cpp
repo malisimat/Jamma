@@ -353,6 +353,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		{
 			if (msg.message == WM_QUIT)
 			{
+				scene.value()->CloseAllVstEditorWindows();
 				scene.value()->CloseAudio();
 				active = false;
 				break;
@@ -380,6 +381,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
 	tui->Stop();
+	FreeConsole();
 
 	if (uiComInitialized)
 		CoUninitialize();

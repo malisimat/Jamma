@@ -623,8 +623,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
 
-			for (const auto& loop : take->GetLoops())
-				loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
+			take->LoadVstPlugin(pluginPath, sampleRate, blockSize);
 
 			break;
 		}
@@ -744,6 +743,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
+					jamTake.VstChain = take->VstEntries();
 
 					for (const auto& loop : take->GetLoops())
 					{

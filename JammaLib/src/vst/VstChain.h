@@ -16,7 +16,7 @@
 namespace vst
 {
 	// VstChain holds an ordered sequence of VstPlugin instances and applies
-	// them in series to a mono audio buffer.
+	// them in series to mono, stereo, or exact-match multichannel buffers.
 	//
 	// Threading contract:
 	//   AddPlugin / RemovePlugin – call from a non-RT thread only.
@@ -57,11 +57,11 @@ namespace vst
 		// leftBuf/rightBuf are modified in-place.
 		void ProcessBlockStereo(float* leftBuf, float* rightBuf, int numSamps) noexcept;
 
+		// Apply all active plugins in series to numSamps of an exact-match
+		// multichannel bus. channelBufs are modified in-place.
+		void ProcessBlockMulti(float* const* channelBufs, int numChannels, int numSamps) noexcept;
+
 	private:
 		std::vector<std::shared_ptr<VstPlugin>> _plugins;
-
-		// Scratch buffer used as the working copy between plugin stages.
-		// On struct (not heap) to avoid RT-path allocations.
-		float _scratch[constants::MaxBlockSize];
 	};
 }

@@ -46,7 +46,11 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
-	_backAudioBuffers()
+	_backAudioBuffers(),
+	_vstChain(nullptr),
+	_vstPluginPaths(),
+	_vstBlockScratch(),
+	_vstBlockPtrs()
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -84,6 +88,14 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 
 			take->AddLoop(loop.value());
 		}
+	}
+
+	for (const auto& vstEntry : takeStruct.VstChain)
+	{
+		take->LoadVstPlugin(
+			utils::DecodeUtf8(vstEntry.Path),
+			static_cast<float>(constants::DefaultSampleRate),
+			constants::DefaultBufferSizeSamps);
 	}
 
 	return take;
@@ -193,30 +205,52 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
+	const auto channelCount = (_audioBuffers.size() < _audioMixers.size()) ? _audioBuffers.size() : _audioMixers.size();
+	if (channelCount == 0u)
 	{
+		_masterMixer->UpdateVu(0.0f, sampsToRead);
+		_masterMixer->Offset(sampsToRead);
+		return;
+	}
+
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = (i < _vstBlockPtrs.size()) ? _vstBlockPtrs[i] : nullptr;
+		if (!scratch)
+			continue;
+
 		auto& buf = _audioBuffers[i];
-		float tempBuf[constants::MaxBlockSize];
 		buf->Delay(sampsToRead);
-		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+		auto srcPtr = buf->PlaybackRead(scratch, sampsToRead);
 
 		// When PlaybackRead returns a direct pointer into the ring buffer
-		// (no wrap-around), we must copy into tempBuf before scaling.
-		if (srcPtr != tempBuf)
-			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
+		// (no wrap-around), we must copy into scratch before processing.
+		if (srcPtr != scratch)
+			std::copy(srcPtr, srcPtr + sampsToRead, scratch);
 
 		for (auto samp = 0u; samp < sampsToRead; samp++)
-			tempBuf[samp] *= masterLevel;
+			scratch[samp] *= masterLevel;
+	}
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain && chain->IsActive() && (_vstBlockPtrs.size() >= channelCount))
+		chain->ProcessBlockMulti(_vstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = _vstBlockPtrs[i];
+		if (!scratch)
+			continue;
 
 		// Track max peak across all channels for the master VU.
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
-			auto absSamp = std::abs(tempBuf[samp]);
+			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
 		}
 
-		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
+		_audioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -775,6 +809,7 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		_loops = _backLoops; // TODO: Undo?
 		_audioBuffers = _backAudioBuffers;
 		_audioMixers = _backAudioMixers;
+		_ResizeVstScratch((unsigned int)_audioBuffers.size());
 
 		_guiRack->SetNumInputChannels((unsigned int)_loops.size());
 
@@ -896,4 +931,89 @@ void LoopTake::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
+}
+
+void LoopTake::_ResizeVstScratch(unsigned int channelCount)
+{
+	_vstBlockScratch.resize(static_cast<size_t>(channelCount) * constants::MaxBlockSize);
+	_vstBlockPtrs.resize(channelCount);
+	for (unsigned int i = 0; i < channelCount; i++)
+		_vstBlockPtrs[i] = _vstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+}
+
+void LoopTake::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize)
+{
+	auto current = _vstChain.load(std::memory_order_acquire);
+	auto newChain = std::make_shared<vst::VstChain>();
+
+	if (current)
+	{
+		for (size_t i = 0; i < current->NumPlugins(); ++i)
+		{
+			auto existing = current->GetPlugin(i);
+			if (existing)
+				newChain->AddPlugin(existing);
+		}
+	}
+
+	auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
+	if (hostChannels == 0u)
+		hostChannels = 1u;
+
+	auto plugin = std::make_shared<vst::VstPlugin>();
+	if (plugin->Load(path, sampleRate, blockSize, hostChannels, vst::HostedLayoutMode::Exact))
+	{
+		newChain->AddPlugin(plugin);
+		_vstPluginPaths.push_back(std::move(path));
+	}
+
+	_vstChain.store(newChain, std::memory_order_release);
+}
+
+void LoopTake::UnloadVstPlugin(size_t index)
+{
+	auto current = _vstChain.load(std::memory_order_acquire);
+	auto newChain = std::make_shared<vst::VstChain>();
+
+	if (current)
+	{
+		for (size_t i = 0; i < current->NumPlugins(); ++i)
+		{
+			if (i == index)
+				continue;
+			auto existing = current->GetPlugin(i);
+			if (existing)
+				newChain->AddPlugin(existing);
+		}
+	}
+
+	if (index < _vstPluginPaths.size())
+		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
+
+	_vstChain.store(newChain, std::memory_order_release);
+}
+
+std::shared_ptr<vst::VstPlugin> LoopTake::GetVstPlugin(size_t index) const
+{
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain)
+		return nullptr;
+
+	return chain->GetPlugin(index);
+}
+
+std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
+{
+	std::vector<io::JamFile::VstEntry> entries;
+	entries.reserve(_vstPluginPaths.size());
+
+	for (const auto& path : _vstPluginPaths)
+	{
+		io::JamFile::VstEntry entry;
+		entry.Path = utils::EncodeUtf8(path);
+		entry.Bypass = false;
+		entries.push_back(std::move(entry));
+	}
+
+	return entries;
 }

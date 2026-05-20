@@ -272,7 +272,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 				ss << "}";
 			}
 
-			ss << "]}";
+			ss << "]";
+			if (!take.VstChain.empty())
+				ss << "," << quoted("vst") << ":" << vstChainToJson(take.VstChain);
+			ss << "}";
 		}
 
 		ss << "]";
@@ -532,6 +535,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 {
 	std::string name;
 	std::vector<Loop> loops;
+	std::vector<VstEntry> vstChain;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -563,9 +567,28 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	if (loops.empty() || name.empty())
 		return std::nullopt;
 
+	iter = json.KeyValues.find("vst");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["vst"].index() == 5)
+		{
+			auto arr = std::get<Json::JsonArray>(json.KeyValues["vst"]);
+			if (arr.Array.index() == 5)
+			{
+				for (auto& entryJson : std::get<std::vector<Json::JsonPart>>(arr.Array))
+				{
+					auto entryOpt = VstEntry::FromJson(entryJson);
+					if (entryOpt.has_value())
+						vstChain.push_back(entryOpt.value());
+				}
+			}
+		}
+	}
+
 	LoopTake take;
 	take.Name = name;
 	take.Loops = loops;
+	take.VstChain = vstChain;
 	return take;
 }
 
