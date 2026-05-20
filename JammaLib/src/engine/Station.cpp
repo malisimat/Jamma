@@ -442,7 +442,6 @@ ActionResult Station::OnAction(TriggerAction action)
 	ActionResult res;
 	res.IsEaten = false;
 
-	auto loopCount = 0u;
 	auto loopTake = _TryGetTake(action.TargetId);
 
 	switch (action.ActionType)

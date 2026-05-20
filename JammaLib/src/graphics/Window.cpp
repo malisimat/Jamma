@@ -116,7 +116,6 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 		hInstance, nullptr);			// instance, param
 
 	if (fakeWND == 0) {
-		auto errCode = GetLastError();
 		ShowMessage(L"CreateWindowEx() failed.");
 		return 1;
 	}
@@ -140,7 +139,6 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	if (SetPixelFormat(fakeDC, fakePFDID, &fakePFD) == false) {
-		auto errCode = GetLastError();
 		ShowMessage(L"SetPixelFormat() failed.");
 		return 1;
 	}
@@ -278,10 +276,6 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	LoadResources();
 	InitScene();
 
-	const char* glVersion = (const char *)glGetString(GL_VERSION);
-	size_t versionStrSize = strlen(glVersion) + 1;
-	wchar_t* glVersionStr = new wchar_t[versionStrSize];
-
 	std::stringstream titleStringStream;
 	titleStringStream << "Jamma (v" << LIB_VERSION << ")";
 	auto titleStr = titleStringStream.str();
@@ -289,7 +283,6 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 
 	size_t outSize;
 	mbstowcs_s(&outSize, titleChars, titleStr.size() + 1, titleStr.c_str(), titleStr.size());
-	//mbstowcs_s(&outSize, glVersionStr, versionStrSize, glVersion, versionStrSize - 1);
 	SetWindowText(_wnd, titleChars);
 	ShowWindow(_wnd, nCmdShow);
 
@@ -1011,8 +1004,6 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_SYSKEYUP:
 	{
 		std::cout << "SysKeyUp " << wParam << "\n";
-
-		bool repeatkey = false;
 
 		KeyAction keyAction;
 		keyAction.KeyChar = (unsigned int)wParam;
