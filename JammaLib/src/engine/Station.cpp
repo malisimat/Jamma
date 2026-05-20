@@ -227,73 +227,44 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
+	const auto channelCount = (_audioBuffers.size() < _audioMixers.size()) ? _audioBuffers.size() : _audioMixers.size();
+	if (channelCount == 0u)
 	{
-		const auto hasStereoMate = (i + 1 < _audioBuffers.size()) && (i + 1 < _audioMixers.size());
-		if (hasStereoMate)
-		{
-			float leftBuf[constants::MaxBlockSize];
-			float rightBuf[constants::MaxBlockSize];
+		_masterMixer->UpdateVu(0.0f, sampsToRead);
+		_masterMixer->Offset(sampsToRead);
+		return;
+	}
 
-			const auto& leftSrc = _audioBuffers[i];
-			const auto& rightSrc = _audioBuffers[i + 1];
-			leftSrc->Delay(sampsToRead);
-			rightSrc->Delay(sampsToRead);
-
-			auto leftPtr = leftSrc->PlaybackRead(leftBuf, sampsToRead);
-			auto rightPtr = rightSrc->PlaybackRead(rightBuf, sampsToRead);
-
-			if (leftPtr != leftBuf)
-				std::copy(leftPtr, leftPtr + sampsToRead, leftBuf);
-			if (rightPtr != rightBuf)
-				std::copy(rightPtr, rightPtr + sampsToRead, rightBuf);
-
-			for (auto samp = 0u; samp < sampsToRead; samp++)
-			{
-				leftBuf[samp] *= masterLevel;
-				rightBuf[samp] *= masterLevel;
-			}
-
-			if (_vstChain && _vstChain->IsActive())
-				_vstChain->ProcessBlockStereo(leftBuf, rightBuf, sampsToRead);
-
-			for (auto samp = 0u; samp < sampsToRead; samp++)
-			{
-				auto leftAbs = std::abs(leftBuf[samp]);
-				auto rightAbs = std::abs(rightBuf[samp]);
-				if (leftAbs > masterPeak)
-					masterPeak = leftAbs;
-				if (rightAbs > masterPeak)
-					masterPeak = rightAbs;
-			}
-
-			_audioMixers[i]->WriteBlock(dest, leftBuf, sampsToRead);
-			_audioMixers[i + 1]->WriteBlock(dest, rightBuf, sampsToRead);
-			i++;
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = (i < _vstBlockPtrs.size()) ? _vstBlockPtrs[i] : nullptr;
+		if (!scratch)
 			continue;
-		}
 
-		const auto& monoSrc = _audioBuffers[i];
-		float monoBuf[constants::MaxBlockSize];
-		monoSrc->Delay(sampsToRead);
-		auto monoPtr = monoSrc->PlaybackRead(monoBuf, sampsToRead);
-		if (monoPtr != monoBuf)
-			std::copy(monoPtr, monoPtr + sampsToRead, monoBuf);
+		const auto& source = _audioBuffers[i];
+		source->Delay(sampsToRead);
+		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
+		if (sourcePtr != scratch)
+			std::copy(sourcePtr, sourcePtr + sampsToRead, scratch);
 
 		for (auto samp = 0u; samp < sampsToRead; samp++)
-			monoBuf[samp] *= masterLevel;
+			scratch[samp] *= masterLevel;
+	}
 
-		if (_vstChain && _vstChain->IsActive())
-			_vstChain->ProcessBlock(monoBuf, sampsToRead);
+	if (_vstChain && _vstChain->IsActive() && (_vstBlockPtrs.size() >= channelCount))
+		_vstChain->ProcessBlockMulti(_vstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = _vstBlockPtrs[i];
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
-			auto absSamp = std::abs(monoBuf[samp]);
+			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
 		}
 
-		_audioMixers[i]->WriteBlock(dest, monoBuf, sampsToRead);
+		_audioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -816,6 +787,11 @@ void Station::SetNumBusChannels(unsigned int chans)
 			_guiRack->AddRoute(i, i);
 	}
 
+	_vstBlockScratch.resize(static_cast<size_t>(chans) * constants::MaxBlockSize);
+	_vstBlockPtrs.resize(chans);
+	for (unsigned int i = 0; i < chans; i++)
+		_vstBlockPtrs[i] = _vstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+
 	_flipAudioBuffer = true;
 	_changesMade = true;
 
@@ -1173,8 +1149,10 @@ ActionResult Station::OnAction(JobAction action)
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
 			: std::make_shared<vst::VstPlugin>();
-		auto hostChannels = std::min(2u, NumBusChannels());
-		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels))
+		auto hostChannels = NumBusChannels();
+		if (hostChannels == 0u)
+			hostChannels = 1u;
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
 		{
 			newChain->AddPlugin(plugin);
 			_vstPluginPaths.push_back(action.VstPath);

@@ -762,8 +762,10 @@ void Loop::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int block
 	}
 
 	auto plugin = std::make_shared<vst::VstPlugin>();
-	// numChannels = 1 (mono loop buffer)
-	if (plugin->Load(path, sampleRate, blockSize, 1u))
+	// Prefer mono for loop buffers; VstPlugin::Load may still negotiate stereo
+	// if the plugin exposes stereo buses, and ProcessBlock() will fold the
+	// plugin output back to mono safely.
+	if (plugin->Load(path, sampleRate, blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
 	{
 		newChain->AddPlugin(plugin);
 		_vstPluginPaths.push_back(std::move(path));
