@@ -1216,10 +1216,10 @@ void Scene::_OnAudio(float* inBuf,
 			// We call a method on station to wind all these internal looptake bounces
 			// forward, according to the triggers that are in overdub mode.
 			station->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
-			station->OnBounce(numSamps, _userConfig);
+			station->OnBounce(numSamps, _userConfig, audioStreamParams);
 
 			station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
-			station->OnBounce(numSamps, _userConfig);
+			station->OnBounce(numSamps, _userConfig, audioStreamParams);
 
 			station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_BOUNCE);
 		}

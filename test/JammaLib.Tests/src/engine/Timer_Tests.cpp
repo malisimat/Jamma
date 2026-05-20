@@ -111,9 +111,20 @@ TEST(Timer, QuantiseMultiple_LengthShorterThanOneGrain_SnapsToZero) {
 }
 
 // ── QUANTISE_POWER ───────────────────────────────────────────────────────────
-// Candidates are 2×, 4×, 8×, 16×, … grain (powers of 2 starting at 2).
-// Error convention: positive → snap lengthened the loop (recorded too short);
-//                  negative → snap shortened the loop (recorded too long).
+// Candidates are 1×, 2×, 4×, 8×, 16×, … grain.
+// Error convention: positive → recorded too long (actual > quantised, late trigger);
+//                  negative → recorded too short (actual < quantised, early trigger).
+// This matches QUANTISE_MULTIPLE so that LoopPlayPos works identically for both.
+
+TEST(Timer, QuantisePower_Exactly1xGrain_ZeroError) {
+	Timer t;
+	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
+
+	auto [len, err] = t.QuantiseLength(12000ul); // exactly 1×
+
+	ASSERT_EQ(12000ul, len);
+	ASSERT_EQ(0, err);
+}
 
 TEST(Timer, QuantisePower_Exactly2xGrain_ZeroError) {
 	Timer t;
@@ -145,26 +156,28 @@ TEST(Timer, QuantisePower_Exactly8xGrain_ZeroError) {
 	ASSERT_EQ(0, err);
 }
 
-TEST(Timer, QuantisePower_NearerLower_SnapsDown_NegativeError) {
+TEST(Timer, QuantisePower_NearerLower_SnapsDown_PositiveError) {
 	Timer t;
 	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
 
 	// 30000 is 6000 above 2×(24000), 18000 below 4×(48000) → snap to 2×.
+	// Actual > quantised (late trigger) → positive error.
 	auto [len, err] = t.QuantiseLength(30000ul);
 
 	ASSERT_EQ(24000ul, len);
-	ASSERT_EQ(-6000, err); // recorded 6000 samps too long relative to 2×
+	ASSERT_EQ(6000, err); // recorded 6000 samps too long relative to 2×
 }
 
-TEST(Timer, QuantisePower_NearerUpper_SnapsUp_PositiveError) {
+TEST(Timer, QuantisePower_NearerUpper_SnapsUp_NegativeError) {
 	Timer t;
 	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
 
 	// 42000 is 18000 above 2×(24000), 6000 below 4×(48000) → snap to 4×.
+	// Actual < quantised (early trigger) → negative error.
 	auto [len, err] = t.QuantiseLength(42000ul);
 
 	ASSERT_EQ(48000ul, len);
-	ASSERT_EQ(6000, err); // recorded 6000 samps too short relative to 4×
+	ASSERT_EQ(-6000, err); // recorded 6000 samps too short relative to 4×
 }
 
 TEST(Timer, QuantisePower_ExactlyBetweenTwoPowers_SnapsUp) {
@@ -173,21 +186,92 @@ TEST(Timer, QuantisePower_ExactlyBetweenTwoPowers_SnapsUp) {
 
 	// 36000 is exactly halfway between 2×(24000) and 4×(48000).
 	// Tie-break: snaps UP to the larger power.
+	// Actual < quantised (early trigger) → negative error.
 	auto [len, err] = t.QuantiseLength(36000ul);
 
 	ASSERT_EQ(48000ul, len);
-	ASSERT_EQ(12000, err);
+	ASSERT_EQ(-12000, err);
 }
 
-TEST(Timer, QuantisePower_LengthShorterThanOneGrain_SnapsDown_NegativeError) {
+TEST(Timer, QuantisePower_LengthShorterThanOneGrain_SnapsDown_PositiveError) {
 	Timer t;
 	t.SetQuantisation(12000u, Timer::QUANTISE_POWER);
 
-	// 4000 < 12000: first candidate is 2×(24000).
-	// dLast = 4000 (distance to 0), dCur = 20000 (distance to 24000)
+	// 4000 < 12000: compare against 0 and 1×(12000).
+	// dLast = 4000 (distance to 0), dCur = 8000 (distance to 12000)
 	// → snaps DOWN to 0 (the implicit lower bound before first power).
+	// Actual > quantised (4000 > 0, late relative to 0) → positive error.
 	auto [len, err] = t.QuantiseLength(4000ul);
 
 	ASSERT_EQ(0ul, len);
-	ASSERT_EQ(-4000, err);
+	ASSERT_EQ(4000, err);
+}
+
+TEST(Timer, QuantisePower_NearOneGrain_DoesNotSnapToZero) {
+	Timer t;
+	t.SetQuantisation(88200u, Timer::QUANTISE_POWER);
+
+	// Regression: lengths near 1× grain must quantise to 1×, not 0 or 2×.
+	// Actual < quantised (85000 < 88200, early trigger) → negative error.
+	auto [len, err] = t.QuantiseLength(85000ul);
+
+	ASSERT_EQ(88200ul, len);
+	ASSERT_EQ(-3200, err);
+}
+
+// ── Error-sign consistency between MULTIPLE and POWER ───────────────────────
+// Both modes must use the same convention: positive error = recorded too long
+// (late trigger, actual > quantised); negative error = recorded too short
+// (early trigger, actual < quantised).  LoopPlayPos depends on this to compute
+// the correct playback start position.
+
+TEST(Timer, QuantisePower_ErrorSignConsistentWithMultiple_LateTrigger) {
+	// A late trigger records more samples than the nearest quantised length.
+	// Both QUANTISE_MULTIPLE and QUANTISE_POWER must return positive error.
+	const auto grain = 44100u;
+	const auto lateSamps = 512ul;
+	const auto actual = (unsigned long)grain + lateSamps; // 1 grain + 512
+
+	Timer tMultiple, tPower;
+	tMultiple.SetQuantisation(grain, Timer::QUANTISE_MULTIPLE);
+	tPower.SetQuantisation(grain, Timer::QUANTISE_POWER);
+
+	auto [lenM, errM] = tMultiple.QuantiseLength(actual);
+	auto [lenP, errP] = tPower.QuantiseLength(actual);
+
+	// Both snap down to 1× grain
+	ASSERT_EQ((unsigned long)grain, lenM);
+	ASSERT_EQ((unsigned long)grain, lenP);
+
+	// Late trigger → positive error in both modes.
+	// (POWER currently returns -512 here, causing LoopPlayPos to move
+	// the play position to the wrong end of the loop.)
+	EXPECT_GT(errM, 0);
+	EXPECT_GT(errP, 0);
+	EXPECT_EQ(errM, errP);
+}
+
+TEST(Timer, QuantisePower_ErrorSignConsistentWithMultiple_EarlyTrigger) {
+	// An early trigger records fewer samples than the nearest quantised length.
+	// Both QUANTISE_MULTIPLE and QUANTISE_POWER must return negative error.
+	const auto grain = 44100u;
+	const auto earlySamps = 512ul;
+	const auto actual = (unsigned long)grain * 2ul - earlySamps; // 2 grains - 512
+
+	Timer tMultiple, tPower;
+	tMultiple.SetQuantisation(grain, Timer::QUANTISE_MULTIPLE);
+	tPower.SetQuantisation(grain, Timer::QUANTISE_POWER);
+
+	auto [lenM, errM] = tMultiple.QuantiseLength(actual);
+	auto [lenP, errP] = tPower.QuantiseLength(actual);
+
+	// Both snap up to 2× grain
+	ASSERT_EQ((unsigned long)grain * 2ul, lenM);
+	ASSERT_EQ((unsigned long)grain * 2ul, lenP);
+
+	// Early trigger → negative error in both modes.
+	// (POWER currently returns +512 here.)
+	EXPECT_LT(errM, 0);
+	EXPECT_LT(errP, 0);
+	EXPECT_EQ(errM, errP);
 }

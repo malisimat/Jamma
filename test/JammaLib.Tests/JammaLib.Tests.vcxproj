@@ -63,7 +63,7 @@
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(SolutionDir)vcpkg_installed\x64-windows\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -80,7 +80,7 @@
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(SolutionDir)vcpkg_installed\x64-windows\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
@@ -90,8 +90,8 @@
       <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest.dll" "$(OutDir)"
-xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
+      <Command>xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest.dll" "$(OutDir)"
+xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDir)"</Command>
       <Message>Copying debug gtest DLLs</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -103,7 +103,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>$(SolutionDir)vcpkg_installed\x64-windows\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -121,7 +121,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>$(SolutionDir)vcpkg_installed\x64-windows\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
@@ -139,6 +139,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
   <ItemGroup>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp" />
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
+    <ClCompile Include="src\audio\Overdub_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
     <ClCompile Include="src\audio\ChannelMixer_Tests.cpp" />
     <ClCompile Include="src\audio\Loop_Tests.cpp" />

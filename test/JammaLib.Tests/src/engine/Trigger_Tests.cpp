@@ -65,7 +65,7 @@ class SequenceTriggerReceiver :
 public:
 	virtual actions::ActionResult OnAction(actions::TriggerAction action)
 	{
-		_actions.push_back(action.ActionType);
+		_actions.push_back(action);
 
 		return {
 			true,
@@ -77,13 +77,13 @@ public:
 		};
 	}
 
-	const std::vector<TriggerAction::TriggerActionType>& Actions() const
+	const std::vector<TriggerAction>& Actions() const
 	{
 		return _actions;
 	}
 
 private:
-	std::vector<TriggerAction::TriggerActionType> _actions;
+	std::vector<TriggerAction> _actions;
 };
 
 std::unique_ptr<Trigger> MakeDefaultTrigger(std::shared_ptr<ActionReceiver> receiver,
@@ -406,7 +406,7 @@ TEST(Trigger, DebounceSimpleTest) {
 	ASSERT_EQ(2, receiver->GetNumTimesCalled());
 }
 
-TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
+TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 
@@ -422,7 +422,7 @@ TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
 		2
 	};
 	cfg.Loop = { 0 };
-	cfg.Trigger = { 0, 0 };
+	cfg.Trigger = { 64, 0 };
 
 	auto action = KeyAction();
 	action.SetUserConfig(cfg);
@@ -436,7 +436,7 @@ TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
 	action.KeyActionType = KeyAction::KEY_DOWN;
 	trigger->OnAction(action);
 
-	// Punch in/out queue delayed trigger actions because cfg latency is non-zero.
+	// Punch in and out: source mute/unmute happens immediately, target-state changes are delayed.
 	action.KeyChar = ActivateChar;
 	action.KeyActionType = KeyAction::KEY_UP;
 	trigger->OnAction(action);
@@ -459,15 +459,25 @@ TEST(Trigger, EndOverdubClearsDelayedPunchActions) {
 	trigger->OnAction(action);
 
 	auto actionsBeforeTick = receiver->Actions();
-	ASSERT_EQ(2u, actionsBeforeTick.size());
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0]);
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsBeforeTick[1]);
+	ASSERT_EQ(4u, actionsBeforeTick.size());
+	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[1].ActionType);
+	EXPECT_FALSE(actionsBeforeTick[1].ApplyToTargetTake);
+	EXPECT_TRUE(actionsBeforeTick[1].ApplyToSourceTake);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[2].ActionType);
+	EXPECT_FALSE(actionsBeforeTick[2].ApplyToTargetTake);
+	EXPECT_TRUE(actionsBeforeTick[2].ApplyToSourceTake);
+	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsBeforeTick[3].ActionType);
 
-	// Flush delayed queues; delayed punch actions were cleared by EndOverdub.
-	trigger->OnTick(GetTime(), 1000000, cfg, std::nullopt);
+	// Flush delayed queues; target-side punch actions should still be emitted after overdub ends.
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
-	ASSERT_EQ(2u, actionsAfterTick.size());
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsAfterTick[0]);
-	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsAfterTick[1]);
+	ASSERT_EQ(6u, actionsAfterTick.size());
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsAfterTick[4].ActionType);
+	EXPECT_TRUE(actionsAfterTick[4].ApplyToTargetTake);
+	EXPECT_FALSE(actionsAfterTick[4].ApplyToSourceTake);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[5].ActionType);
+	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetTake);
+	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
 }

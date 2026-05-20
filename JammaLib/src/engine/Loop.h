@@ -197,6 +197,7 @@ namespace engine
 		void Overdub();
 		void PunchIn();
 		void PunchOut();
+		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
 
 		// VST chain management.  Not RT-safe; call from a non-audio thread.
 		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
@@ -217,6 +218,7 @@ namespace engine
 
 	protected:
 		bool _visualUpdatesEnabled;
+		bool _isPunchInActive;
 		unsigned long _playIndex;
 		unsigned long _loopLength;
 		float _lastPeak;

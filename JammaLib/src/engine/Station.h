@@ -113,7 +113,9 @@ namespace engine
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
-		void OnBounce(unsigned int numSamps, io::UserConfig config);
+		void OnBounce(unsigned int numSamps,
+			io::UserConfig config,
+			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 

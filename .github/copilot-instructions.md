@@ -54,18 +54,57 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Curren
 Preferred targeted builds:
 
 ```powershell
-& $msbuild JammaLib\JammaLib.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& $msbuild Jamma\Jamma.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+
+# Resolve repo root by walking upward until Jamma.sln is found.
+$repoRoot = (Get-Location).Path
+while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
+	$parent = Split-Path $repoRoot -Parent
+	if ($parent -eq $repoRoot) {
+		throw "Could not find Jamma.sln. Start in this repository or set `$repoRoot explicitly."
+	}
+	$repoRoot = $parent
+}
+
+# Always pass absolute paths. For direct .vcxproj builds, pass SolutionDir explicitly.
+$sln = Join-Path $repoRoot "Jamma.sln"
+$jammaLibProj = Join-Path $repoRoot "JammaLib\JammaLib.vcxproj"
+$jammaProj = Join-Path $repoRoot "Jamma\Jamma.vcxproj"
+$testsProj = Join-Path $repoRoot "test\JammaLib.Tests\JammaLib.Tests.vcxproj"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+
+& $msbuild $jammaLibProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& $msbuild $jammaProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+
+# Optional: solution build if project targeting is unclear.
+# & $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
-`Directory.Build.props` defaults `$(SolutionDir)` to the repo root when unset, so direct `*.vcxproj` builds should not need a manual `/p:SolutionDir=...` override.
+**Important:** Never rely on `$(pwd)` for `SolutionDir`; it may point to the wrong folder in agent sessions. Always derive repo root from `Jamma.sln` and pass `/p:SolutionDir=<repo-root>\\` explicitly for direct `.vcxproj` builds.
+
+### Running tests:
 
 Use solution builds sparingly:
 
 ```powershell
-& $msbuild Jamma.sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
-& $msbuild Jamma.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=true
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+
+$repoRoot = (Get-Location).Path
+while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
+	$parent = Split-Path $repoRoot -Parent
+	if ($parent -eq $repoRoot) {
+		throw "Could not find Jamma.sln. Start in this repository or set `$repoRoot explicitly."
+	}
+	$repoRoot = $parent
+}
+
+$testsProj = Join-Path $repoRoot "test\JammaLib.Tests\JammaLib.Tests.vcxproj"
+$testsExe = Join-Path $repoRoot "test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+
+& $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& $testsExe
 ```
 
 ## Tests
@@ -81,7 +120,17 @@ Use solution builds sparingly:
 - Run a specific test with:
 
 ```powershell
-& .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe --gtest_filter="SuiteName.TestName"
+$repoRoot = (Get-Location).Path
+while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
+	$parent = Split-Path $repoRoot -Parent
+	if ($parent -eq $repoRoot) {
+		throw "Could not find Jamma.sln. Start in this repository or set `$repoRoot explicitly."
+	}
+	$repoRoot = $parent
+}
+
+$testsExe = Join-Path $repoRoot "test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe"
+& $testsExe --gtest_filter="SuiteName.TestName"
 ```
 
 Troubleshooting:
@@ -90,10 +139,20 @@ Troubleshooting:
 - If the test exe exits with code `1` and no output, stale Release gtest DLLs may be in the Debug output folder. Copy the Debug DLLs back in:
 
 ```powershell
-$src = ".\vcpkg_installed\x64-windows\debug\bin"
-$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
-Copy-Item "$src\gtest.dll" "$dst\gtest.dll" -Force
-Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+
+$repoRoot = (Get-Location).Path
+while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
+	$parent = Split-Path $repoRoot -Parent
+	if ($parent -eq $repoRoot) {
+		throw "Could not find Jamma.sln. Start in this repository or set `$repoRoot explicitly."
+	}
+	$repoRoot = $parent
+}
+
+$sln = Join-Path $repoRoot "Jamma.sln"
+& $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
+& $msbuild $sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
 ## Coding Guidance

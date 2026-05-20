@@ -25,7 +25,8 @@ Loop::Loop(LoopParams params,
 	_hanning(nullptr),
 	_model(nullptr),
 	_bufferBank(BufferBank()),
-	_visualUpdatesEnabled(true)
+	_visualUpdatesEnabled(true),
+	_isPunchInActive(false)
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
@@ -162,12 +163,29 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_PLAYINGRECORDING != _playState) &&
 		(STATE_OVERDUBBING != _playState) &&
 		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState))
+		(STATE_OVERDUBBINGRECORDING != _playState) &&
+		!_isPunchInActive)
 		return;
 
-	if ((STATE_OVERDUBBING == _playState) &&
-		(AUDIOSOURCE_BOUNCE != request.source))
+	if (AUDIOSOURCE_ADC == request.source)
+	{
+		auto canWriteAdc = (STATE_RECORDING == _playState) ||
+			(STATE_PLAYINGRECORDING == _playState) ||
+			(STATE_PUNCHEDIN == _playState) ||
+			_isPunchInActive;
+		if (!canWriteAdc)
+			return;
+	}
+	else if ((AUDIOSOURCE_BOUNCE == request.source) &&
+		(STATE_RECORDING == _playState))
+	{
 		return;
+	}
+	else if ((STATE_OVERDUBBING == _playState) &&
+		(AUDIOSOURCE_BOUNCE != request.source))
+	{
+		return;
+	}
 
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
@@ -208,7 +226,8 @@ void Loop::EndWrite(unsigned int numSamps,
 		(STATE_PLAYINGRECORDING != _playState) &&
 		(STATE_OVERDUBBING != _playState) &&
 		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState))
+		(STATE_OVERDUBBINGRECORDING != _playState) &&
+		!_isPunchInActive)
 		return;
 
 	if (!updateIndex)
@@ -234,7 +253,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
 {
 	auto isPlaying = (STATE_PLAYING == _playState) ||
 		(STATE_PLAYINGRECORDING == _playState) ||
-		(STATE_OVERDUBBINGRECORDING == _playState);
+		(STATE_OVERDUBBINGRECORDING == _playState) ||
+		(STATE_PUNCHEDIN == _playState);
 
 	if (!isPlaying)
 		return 0;
@@ -560,17 +580,29 @@ void Loop::Play(unsigned long index,
 	}
 
 	// Clamp against the smaller of the logical loop size and the currently
-	// recorded physical size. This prevents reads past the current BufferBank
-	// length while still ignoring any physical tail beyond the logical loop.
+	// recorded physical size. Keep the MaxLoopFadeSamps logical offset in this
+	// bound: playback indices are in [fadeOffset, fadeOffset + loopLength).
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex = (effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index;
 	_loopLength = loopLength;
+	if (_isPunchInActive)
+		continueRecording = true;
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _playState) || (STATE_PUNCHEDIN == _playState);
+	if (_isPunchInActive)
+		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = continueRecording ? recordState : STATE_PLAYING;
 	_playState = loopLength > 0 ? playState : STATE_INACTIVE;
+
+	// Pre-allocate buffer capacity for recording state to prevent SetLength clamping.
+	// This ensures the full loop length can be written during overdub/recording.
+	if ((STATE_OVERDUBBINGRECORDING == _playState) || (STATE_PLAYINGRECORDING == _playState))
+	{
+		if (_bufferBank.Capacity() < logicalBufSize)
+			_bufferBank.Resize(logicalBufSize);
+	}
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
@@ -578,6 +610,7 @@ void Loop::Play(unsigned long index,
 void Loop::Reset()
 {
 	_playState = STATE_INACTIVE;
+	_isPunchInActive = false;
 
 	_writeIndex = 0ul;
 	_playIndex = 0ul;
@@ -645,6 +678,7 @@ void Loop::Overdub()
 	Reset();
 
 	_playState = STATE_OVERDUBBING;
+	_isPunchInActive = false;
 	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
@@ -654,20 +688,26 @@ void Loop::Overdub()
 
 void Loop::PunchIn()
 {
-	if (STATE_OVERDUBBING != _playState)
+	if ((STATE_OVERDUBBING != _playState) &&
+		(STATE_OVERDUBBINGRECORDING != _playState) &&
+		(STATE_PLAYING != _playState))
 		return;
 
-	_playState = STATE_PUNCHEDIN;
+	_isPunchInActive = true;
+	if (STATE_OVERDUBBING == _playState)
+		_playState = STATE_PUNCHEDIN;
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchOut()
 {
-	if (STATE_PUNCHEDIN != _playState)
+	if (!_isPunchInActive && (STATE_PUNCHEDIN != _playState))
 		return;
 
-	_playState = STATE_OVERDUBBING;
+	_isPunchInActive = false;
+	if (STATE_PUNCHEDIN == _playState)
+		_playState = STATE_OVERDUBBING;
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
 }

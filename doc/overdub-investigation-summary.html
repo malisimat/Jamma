@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Overdub Timing Investigation Summary</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #171c23;
+      --text: #e8edf3;
+      --muted: #9aa7b5;
+      --ok: #5cd6a5;
+      --warn: #ffd166;
+      --bad: #ff6b6b;
+      --accent: #5aa9ff;
+      --border: #2a3440;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1d2733 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+    h1, h2 { margin: 0 0 12px; }
+    h1 { font-size: 30px; }
+    h2 { font-size: 20px; margin-top: 26px; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .panel {
+      background: linear-gradient(180deg, #1a212a, var(--panel));
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 14px;
+    }
+    .chips {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .chip {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #121821;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #121821; }
+    .ok { color: var(--ok); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+    code {
+      background: #111821;
+      border: 1px solid #2a3440;
+      border-radius: 6px;
+      padding: 1px 6px;
+      color: #d6e7ff;
+    }
+    pre {
+      background: #111821;
+      border: 1px solid #2a3440;
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+      color: #d6e7ff;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      padding: 10px 12px;
+      background: #111821;
+      border-radius: 6px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Overdub Timing Investigation Summary</h1>
+    <p class="muted">Repository: Jamma | Branch: bugfix/overdub-timing-2 | Date: 2026-05-17</p>
+
+    <div class="panel">
+      <strong>Bottom line:</strong>
+      <p>
+        The strongest reproduced cause of large real-world misalignment is quantised overdub end timing in
+        <code>QUANTISE_POWER</code> mode combined with non-boundary stop timing, plus a test waveform periodicity that can mask absolute delay.
+      </p>
+      <div class="chips">
+        <span class="chip">Existing alignment test passes</span>
+        <span class="chip">Live symptom reproduced in tests</span>
+        <span class="chip">Absolute lag measured at 8192 samples (16 blocks @ 512)</span>
+      </div>
+    </div>
+
+    <h2>Hypotheses Checked</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Hypothesis</th>
+            <th>Verdict</th>
+            <th>Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Existing test does not represent real-world overdub timing.</td>
+            <td class="ok">Supported</td>
+            <td>
+              Existing test uses <code>LatencyIn=0</code>, <code>LatencyOut=0</code>, <code>PreDelay=0</code>, no station clock quantisation, and trigger debounce disabled.
+              Live app path uses station clock and runtime-trigger behavior.
+            </td>
+          </tr>
+          <tr>
+            <td>Test is accidentally measuring only overdub loop (not source + overdub together).</td>
+            <td class="warn">Mostly ruled out</td>
+            <td>
+              Added explicit route/mute-isolation test confirms both source and target are present when measured (after output settle).
+            </td>
+          </tr>
+          <tr>
+            <td>Something in real app flow is missing in test and causes delay.</td>
+            <td class="ok">Supported</td>
+            <td>
+              Quantisation path in <code>Station::OnAction(TRIGGER_OVERDUB_END)</code> with <code>Timer::QUANTISE_POWER</code> can produce large correction error,
+              and with non-boundary end offset this produced large absolute lag in new tests.
+            </td>
+          </tr>
+          <tr>
+            <td>Current parameters are lucky (block-aligned and too narrow).</td>
+            <td class="ok">Supported</td>
+            <td>
+              Expanded parameter tests with <code>EndTriggerOffsetBlocks = +/-1, +/-8</code> show measurable lag; offset 0 remains aligned.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Important Technical Finding</h2>
+    <div class="panel">
+      <p>
+        The original seed pattern in overdub tests repeats every 2000 samples. That periodicity can alias large true shifts into small apparent lags.
+      </p>
+      <div class="callout">
+        Example: a true shift of 4096 samples can appear as residual 96 samples against a 2000-sample periodic signal.
+      </div>
+      <p>
+        To break this aliasing, a non-periodic seed probe was added. With that probe plus power quantisation and non-boundary stop,
+        measured absolute lag became:
+      </p>
+      <pre>[OverdubTimingInvestigation] uniqueSeed powerQuantisedLag=8192 mse=0 samples=16384</pre>
+      <p>
+        That is <strong>16 blocks at 512 samples/block</strong>, matching the “many blocks” symptom.
+      </p>
+    </div>
+
+    <h2>New Investigation Tests Added</h2>
+    <div class="panel">
+      <ul>
+        <li><code>OverdubTimingInvestigation.SourceAndTargetAreBothMeasuredAtOutput</code></li>
+        <li><code>OverdubTimingInvestigation.ReportsLagAcrossLatencyScenarios</code></li>
+        <li><code>OverdubTimingInvestigation.ReportsLagAcrossParameterVariants</code></li>
+        <li><code>OverdubTimingInvestigation.ReportsLagWithClockQuantisation</code></li>
+        <li><code>OverdubTimingInvestigation.PowerQuantisationShowsLargeAbsoluteLagWithUniqueSeed</code></li>
+      </ul>
+      <p class="muted">All investigation tests pass. Overdub-related suite run reported 26 tests across 5 suites with no failures.</p>
+    </div>
+
+    <h2>Likely Root Cause Chain</h2>
+    <div class="panel">
+      <ol>
+        <li>Overdub ends slightly off loop boundary (human timing and/or trigger processing timing).</li>
+        <li>Clock quantisation in <code>QUANTISE_POWER</code> mode snaps loop length and produces large error correction (observed +/-4096 sample cases).</li>
+        <li>Playback start correction then shifts overdub take phase relative to source.</li>
+        <li>Periodic test data can hide this in baseline test, so test passes while app can sound delayed by many blocks.</li>
+      </ol>
+    </div>
+
+    <h2>Suggested Next Actions</h2>
+    <div class="panel">
+      <ol>
+        <li>Decide intended behavior for overdub end when quantising: <code>QUANTISE_POWER</code> vs <code>QUANTISE_MULTIPLE</code> for overdub specifically.</li>
+        <li>Use non-periodic seed data in the core alignment test (or add an additional non-periodic strict test) to prevent alias-masked false passes.</li>
+        <li>Add a dedicated app-like test path with realistic trigger timings and configured clock quantisation defaults.</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

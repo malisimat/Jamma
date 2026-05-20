@@ -123,3 +123,12 @@ TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
 	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Users\\tester\\AppData\\Roaming\\Jamma")));
 	ASSERT_TRUE(parsed.has_value());
 }
+TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
+	UserConfig cfg;
+	cfg.Trigger.PreDelay = 128u;
+
+	EXPECT_EQ(constants::MaxLoopFadeSamps + 128u, cfg.TriggerLoopAlignmentSamps());
+	EXPECT_EQ(-static_cast<long>(constants::MaxLoopFadeSamps + 128u + 96u),
+		cfg.OverdubSourceReadOffset(96u));
+	EXPECT_EQ(cfg.LoopPlayPos(0, 4096ul, 0u), cfg.OverdubPlayPos(0, 4096ul));
+}
