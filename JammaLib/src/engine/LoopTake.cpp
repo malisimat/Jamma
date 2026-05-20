@@ -457,7 +457,7 @@ void LoopTake::SetNumBusChannels(unsigned int chans)
 	_guiRack->SetNumOutputChannels(chans);
 }
 
-void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName)
+void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels)
 {
 	if (STATE_INACTIVE != _state)
 		return;
@@ -476,9 +476,46 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 		loop->Record();
 	}
 
+	_midiLoops.clear();
+	_midiLoopChannels.clear();
+	for (auto midiChan : midiChannels)
+	{
+		auto midiLoop = std::make_shared<MidiLoop>();
+		midiLoop->StartRecord();
+		_midiLoops.push_back(midiLoop);
+		_midiLoopChannels.push_back(midiChan);
+	}
+
 	//_flipLoopBuffer = true;
 	_loopsNeedUpdating = true;
 	_changesMade = true;
+}
+
+bool LoopTake::RecordMidiEvent(const MidiEvent& ev) noexcept
+{
+	if (_midiLoops.empty())
+		return false;
+
+	const auto midiChan = ev.Channel();
+	bool recorded = false;
+
+	for (auto i = 0u; i < _midiLoops.size(); ++i)
+	{
+		if (_midiLoopChannels[i] != midiChan)
+			continue;
+
+		if (_midiLoops[i]->State() != MidiLoopState::Recording)
+			continue;
+
+		// Best-effort timestamp: _recordedSampCount is updated on the audio
+		// callback thread; this read from the job thread is a deliberate tradeoff.
+		MidiEvent stamped = ev;
+		stamped.sampleOffset = static_cast<std::uint32_t>(_recordedSampCount);
+		_midiLoops[i]->RecordEvent(stamped);
+		recorded = true;
+	}
+
+	return recorded;
 }
 
 void LoopTake::Play(unsigned long index,
@@ -497,6 +534,12 @@ void LoopTake::Play(unsigned long index,
 	for (auto& loop : _loops)
 	{
 		loop->Play(index, loopLength, continueCapture);
+	}
+
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (midiLoop->State() == MidiLoopState::Recording)
+			midiLoop->EndRecord(static_cast<std::uint32_t>(loopLength));
 	}
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
@@ -641,6 +684,11 @@ void LoopTake::Ditch()
 	Zero(_lastBufSize, Audible::AUDIOSOURCE_LOOPS);
 
 	_loops.clear();
+
+	for (auto& midiLoop : _midiLoops)
+		midiLoop->Reset();
+	_midiLoops.clear();
+	_midiLoopChannels.clear();
 }
 
 void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationName)

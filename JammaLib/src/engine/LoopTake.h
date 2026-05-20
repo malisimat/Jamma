@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
+#include "MidiLoop.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
@@ -127,7 +128,7 @@ namespace engine
 		void SetNumBusChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
 
-		void Record(std::vector<unsigned int> channels, std::string stationName);
+		void Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels = {});
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
@@ -137,6 +138,7 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		bool RecordMidiEvent(const MidiEvent& ev) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -178,6 +180,8 @@ namespace engine
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
+		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

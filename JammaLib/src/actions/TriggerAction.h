@@ -33,6 +33,7 @@ namespace actions
 		std::string SourceId;
 		unsigned long SampleCount;
 		std::vector<unsigned int> InputChannels;
+		std::vector<unsigned int> MidiInputChannels;
 		bool ApplyToTargetTake;
 		bool ApplyToSourceTake;
 	};

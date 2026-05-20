@@ -740,25 +740,21 @@ void Scene::_PumpMidi()
 		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 			continue;
 
-		const auto note = static_cast<unsigned int>(ev.data1);
-		const auto velocity = static_cast<unsigned int>(ev.data2);
-		const auto channel = static_cast<unsigned int>(ev.Channel());
-		const auto isDown = ev.IsNoteOn();
-
-		std::cout << "[MIDI] Note " << note
-			<< (isDown ? " down" : " up")
-			<< " vel=" << velocity
-			<< " ch=" << channel
-			<< " -> trigger value " << note
+		std::cout << "[MIDI] Note " << static_cast<unsigned int>(ev.data1)
+			<< (ev.IsNoteOn() ? " down" : " up")
+			<< " vel=" << static_cast<unsigned int>(ev.data2)
+			<< " ch=" << static_cast<unsigned int>(ev.Channel())
 			<< std::endl;
 
-		KeyAction mappedAction;
-		mappedAction.KeyActionType = isDown ? KeyAction::KEY_DOWN : KeyAction::KEY_UP;
-		mappedAction.KeyChar = note;
-		mappedAction.IsSystem = false;
-		mappedAction.Modifiers = Action::MODIFIER_NONE;
-
-		OnAction(mappedAction);
+		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
+		for (auto& station : _stations)
+		{
+			for (auto& take : station->GetLoopTakes())
+			{
+				if (take->IsArmed())
+					take->RecordMidiEvent(ev);
+			}
+		}
 	}
 
 	auto dropped = _midiIngress.DroppedCount();
