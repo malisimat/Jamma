@@ -12,6 +12,7 @@ uniform sampler1D WaveformSampler;
 uniform float WaveformRadius;
 uniform float WaveformHeightScale;
 uniform float WaveformMinHeight;
+uniform float WaveformColorMultiplier;
 
 void main()
 {
@@ -28,7 +29,8 @@ void main()
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
-    UV = vec2(u, PositionIN.y >= 0.0 ? 1.0 : 0.0);
+    float colorV = clamp(0.5 - (y * WaveformColorMultiplier), 0.0, 1.0);
+    UV = vec2(u, colorV);
 
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));
     vec4 normScreen = MVP * vec4(NormalIN, 0.0);

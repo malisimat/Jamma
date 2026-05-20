@@ -26,6 +26,7 @@ LoopModel::LoopModel(LoopModelParams params) :
 	_loopIndexFrac(0),
 	_modelState(STATE_RECORDING),
 	_waveformRadius(_UnitMeshRadius),
+	_waveformColorMultiplier(0.5f / (_HeightScale + _MinHeight)),
 	_hasWaveformData(false),
 	_waveformNeedsUpload(false),
 	_waveformTexture(0u),
@@ -92,6 +93,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformRadius", _waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
+	glCtx.SetUniform("WaveformColorMultiplier", _waveformColorMultiplier);
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
@@ -244,6 +246,7 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	if (!_hasWaveformData)
 	{
 		std::fill(_waveformDecimated.begin(), _waveformDecimated.end(), glm::vec2(0.0f, 0.0f));
+		_waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
 		_waveformNeedsUpload = true;
 		return;
 	}
@@ -252,6 +255,17 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 		offset,
 		clampedLength,
 		_waveformDecimated);
+
+	auto maxPeakLevel = 0.0f;
+	for (const auto& minMax : _waveformDecimated)
+	{
+		auto maxAbs = std::max(std::fabs(minMax.x), std::fabs(minMax.y));
+		if (maxAbs > maxPeakLevel)
+			maxPeakLevel = maxAbs;
+	}
+
+	const auto peakDenominator = (_HeightScale * std::max(maxPeakLevel, 0.0001f)) + _MinHeight;
+	_waveformColorMultiplier = peakDenominator > 0.0f ? (0.5f / peakDenominator) : 0.5f;
 
 	_waveformNeedsUpload = true;
 }

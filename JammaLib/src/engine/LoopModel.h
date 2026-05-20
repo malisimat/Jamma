@@ -118,6 +118,7 @@ namespace engine
 		double _loopIndexFrac;
 		LoopModelState _modelState;
 		float _waveformRadius;
+		float _waveformColorMultiplier;
 		bool _hasWaveformData;
 		bool _waveformNeedsUpload;
 		unsigned int _waveformTexture;
