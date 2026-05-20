@@ -18,7 +18,37 @@ TEST(VstAudioBuffers, ResolveHostedBusLayoutKeepsExactStationBusWidth)
 	EXPECT_EQ(6, layout.InputChannels);
 	EXPECT_EQ(6, layout.OutputChannels);
 	EXPECT_TRUE(vst::IsHostedLayoutCompatible(layout, 6, 6));
-	EXPECT_FALSE(vst::IsHostedLayoutCompatible(layout, 2, 2));
+	// Plugin reporting a narrower natural layout (e.g. stereo on an 8-channel
+	// station) is now accepted; the host pass-through routes the extras.
+	EXPECT_TRUE(vst::IsHostedLayoutCompatible(layout, 2, 2));
+	// Wider than requested is still rejected to avoid surprising fan-out.
+	EXPECT_FALSE(vst::IsHostedLayoutCompatible(layout, 8, 8));
+	EXPECT_FALSE(vst::IsHostedLayoutCompatible(layout, 0, 2));
+}
+
+TEST(VstAudioBuffers, CopyOutputToMultiLeavesExtraDestinationChannelsUntouched)
+{
+	float plugChan0[] = { 0.1f, 0.2f };
+	float plugChan1[] = { 0.3f, 0.4f };
+	float* pluginOutputs[] = { plugChan0, plugChan1 };
+
+	float dest0[] = { 9.0f, 9.0f };
+	float dest1[] = { 9.0f, 9.0f };
+	float dest2[] = { 9.0f, 9.0f };
+	float dest3[] = { 9.0f, 9.0f };
+	float* dest[] = { dest0, dest1, dest2, dest3 };
+
+	vst::CopyOutputToMulti(pluginOutputs, 2, 2, dest, 4);
+
+	EXPECT_FLOAT_EQ(0.1f, dest0[0]);
+	EXPECT_FLOAT_EQ(0.2f, dest0[1]);
+	EXPECT_FLOAT_EQ(0.3f, dest1[0]);
+	EXPECT_FLOAT_EQ(0.4f, dest1[1]);
+	// Channels beyond the plugin's output width are preserved as-is.
+	EXPECT_FLOAT_EQ(9.0f, dest2[0]);
+	EXPECT_FLOAT_EQ(9.0f, dest2[1]);
+	EXPECT_FLOAT_EQ(9.0f, dest3[0]);
+	EXPECT_FLOAT_EQ(9.0f, dest3[1]);
 }
 
 TEST(VstAudioBuffers, CopyMonoToInputBuffersDuplicatesSignalAcrossStereoInputs)

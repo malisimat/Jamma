@@ -400,15 +400,6 @@ void Window::Swap()
 
 void Window::Release()
 {
-	if (_rc && _dc)
-	{
-		if (wglGetCurrentContext() != _rc)
-			wglMakeCurrent(_dc, _rc);
-
-		glDebugMessageCallback(nullptr, nullptr);
-		glDisable(GL_DEBUG_OUTPUT);
-	}
-
 	wglMakeCurrent(nullptr, nullptr);
 
 	if (_rc)

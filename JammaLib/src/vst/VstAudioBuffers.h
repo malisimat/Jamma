@@ -59,8 +59,16 @@ namespace vst
 			return false;
 
 		if (layout.Mode == HostedLayoutMode::Exact)
-			return (actualInputChannels == layout.RequestedChannels)
-				&& (actualOutputChannels == layout.RequestedChannels);
+		{
+			// Accept the plugin's natural layout even when it is narrower than
+			// what the station requested. ProcessBlockMulti will route only
+			// the matching channels through the plugin and pass through the
+			// remaining host channels untouched. This lets, for example, a
+			// stereo plugin sit on an 8-channel station instead of failing to
+			// load outright.
+			return (actualInputChannels <= layout.RequestedChannels)
+				&& (actualOutputChannels <= layout.RequestedChannels);
+		}
 
 		return true;
 	}
@@ -146,12 +154,12 @@ namespace vst
 			|| outputChannels <= 0 || destinationChannels <= 0)
 			return;
 
-		for (int32_t channel = 0; channel < destinationChannels; ++channel)
-		{
-			if (channel < outputChannels)
-				std::copy(outputChannelBuffers[channel], outputChannelBuffers[channel] + numSamples, destinationChannelBuffers[channel]);
-			else
-				std::fill(destinationChannelBuffers[channel], destinationChannelBuffers[channel] + numSamples, 0.0f);
-		}
+		// Copy plugin outputs into matching destination channels.
+		// Destination channels beyond the plugin's output width are left
+		// untouched so the caller can pass them through unchanged (e.g. a
+		// stereo plugin on an 8-channel station leaves channels 2..7 alone).
+		const auto copyChannels = (std::min)(outputChannels, destinationChannels);
+		for (int32_t channel = 0; channel < copyChannels; ++channel)
+			std::copy(outputChannelBuffers[channel], outputChannelBuffers[channel] + numSamples, destinationChannelBuffers[channel]);
 	}
 }

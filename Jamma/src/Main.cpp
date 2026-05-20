@@ -13,6 +13,7 @@
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
+#include "../vst/VstPlugin.h"
 #include <objbase.h>
 #include <atomic>
 #include <cctype>
@@ -367,9 +368,16 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 		window.Render();
 		window.Swap();
+
+		// Destroy any VST plugins that failed to load on the job thread.
+		// They were PreInit'd on this thread, so cleanup must run here too.
+		vst::DrainUiThreadDestroyQueue();
 	}
 
 	window.Release();
+
+	// Final drain for any plugins queued after the last render iteration.
+	vst::DrainUiThreadDestroyQueue();
 
 	// Close VST editor windows while the main thread's COM STA is still valid.
 	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks

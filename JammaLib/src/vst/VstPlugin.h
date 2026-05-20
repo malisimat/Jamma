@@ -120,4 +120,21 @@ namespace vst
 		HMODULE _moduleHandle;
 		std::unique_ptr<Impl> _impl;
 	};
+
+	// Queue a VstPlugin shared_ptr to be destroyed on the UI thread.
+	//
+	// Required when a VstPlugin was PreInit()'d on the UI thread (so its
+	// IComponent::initialize() ran there) but Load() later failed on the job
+	// thread. Releasing the last ref on the job thread would run
+	// ~VstPlugin → Unload → IComponent::terminate() / FreeLibrary on the wrong
+	// thread, which violates VST3's threading contract and can crash plugins or
+	// leave dangling state that blows up later (e.g. on window close).
+	//
+	// Safe to call from any thread. The plugin is destroyed when
+	// DrainUiThreadDestroyQueue() is next called from the UI thread.
+	void QueueForUiThreadDestroy(std::shared_ptr<VstPlugin> plugin);
+
+	// Drop all queued VstPlugin refs. Must be called from the UI thread.
+	// Returns the number of plugins released.
+	std::size_t DrainUiThreadDestroyQueue() noexcept;
 }

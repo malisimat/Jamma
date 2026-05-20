@@ -8,6 +8,8 @@
 #include "VstPlugin.h"
 #include <algorithm>
 #include <iostream>
+#include <mutex>
+#include <vector>
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
@@ -973,4 +975,41 @@ void VstPlugin::CloseEditor()
 utils::Size2d VstPlugin::GetEditorSize() const noexcept
 {
 	return _editorSize;
+}
+
+namespace
+{
+	std::mutex& UiDestroyQueueMutex() noexcept
+	{
+		static std::mutex m;
+		return m;
+	}
+
+	std::vector<std::shared_ptr<vst::VstPlugin>>& UiDestroyQueue()
+	{
+		static std::vector<std::shared_ptr<vst::VstPlugin>> q;
+		return q;
+	}
+}
+
+void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::VstPlugin> plugin)
+{
+	if (!plugin)
+		return;
+
+	std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
+	UiDestroyQueue().push_back(std::move(plugin));
+}
+
+std::size_t vst::DrainUiThreadDestroyQueue() noexcept
+{
+	std::vector<std::shared_ptr<vst::VstPlugin>> drained;
+	{
+		std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
+		drained.swap(UiDestroyQueue());
+	}
+	const std::size_t count = drained.size();
+	// drained destructs here on the UI thread, running ~VstPlugin → Unload →
+	// IComponent::terminate() and FreeLibrary on the correct thread.
+	return count;
 }

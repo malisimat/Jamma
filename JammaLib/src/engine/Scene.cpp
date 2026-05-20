@@ -945,6 +945,16 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+
+	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
+	// thread for destruction. On success the chain holds its own ref so this
+	// queued ref is a no-op; on failure (Load returned false) this is the only
+	// remaining ref, and draining it on the UI thread ensures ~VstPlugin →
+	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
+	// the plugin. Releasing on this job thread instead violates VST3 threading
+	// and can crash plugins or leave dangling state until window close.
+	if (job.PreInitPlugin)
+		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
 
 void Scene::InitReceivers()
