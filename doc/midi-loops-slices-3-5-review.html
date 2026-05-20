@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Jamma · MIDI Loops · Slices 3–5 Review</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#121826; --panel2:#0f1422; --ink:#e6edf6; --muted:#8aa0b4;
+    --acc:#7c9cff; --acc2:#9b7cff; --ok:#34d399; --warn:#fbbf24; --danger:#f87171;
+    --code:#0a0f1a; --border:#1f2937;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:radial-gradient(1200px 800px at 20% -10%,#1a2244 0%,transparent 60%),radial-gradient(1000px 700px at 110% 10%,#2a1140 0%,transparent 55%),var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Inter,system-ui,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 80px}
+  header{display:flex;align-items:center;gap:18px;margin-bottom:28px}
+  .logo{width:56px;height:56px;border-radius:14px;background:conic-gradient(from 220deg,#7c9cff,#9b7cff,#34d399,#7c9cff);box-shadow:0 8px 30px rgba(124,156,255,.35);display:grid;place-items:center;font-weight:800;font-size:22px;color:#0b0f17}
+  h1{font-size:30px;margin:0;letter-spacing:-.02em}
+  h1 small{display:block;font-weight:500;font-size:14px;color:var(--muted);letter-spacing:0}
+  .grid{display:grid;gap:18px}
+  .grid.two{grid-template-columns:1fr 1fr}
+  .grid.three{grid-template-columns:repeat(3,1fr)}
+  @media (max-width:780px){.grid.two,.grid.three{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel) 0,var(--panel2) 100%);border:1px solid var(--border);border-radius:16px;padding:20px 22px;box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 30px rgba(0,0,0,.25)}
+  .card h2{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
+  .card h3{margin:18px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:#0c1322;color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.08)}
+  .pill.warn{color:var(--warn);border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.07)}
+  .pill.acc{color:var(--acc);border-color:rgba(124,156,255,.35);background:rgba(124,156,255,.08)}
+  .pill.acc2{color:var(--acc2);border-color:rgba(155,124,255,.35);background:rgba(155,124,255,.08)}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:6px 0 6px}
+  .stat{background:#0c1322;border:1px solid var(--border);border-radius:12px;padding:14px}
+  .stat .v{font-size:26px;font-weight:800;letter-spacing:-.02em}
+  .stat .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  code,kbd,pre{font-family:JetBrains Mono,Consolas,ui-monospace,monospace}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:12px;padding:14px 16px;overflow:auto;font-size:13px;line-height:1.5;color:#cfe1f7}
+  .kv{display:grid;grid-template-columns:200px 1fr;gap:6px 18px;font-size:14px}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0}
+  ul.clean{margin:0;padding-left:18px}
+  ul.clean li{margin:4px 0}
+  .file{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#0c1322;border:1px solid var(--border);color:#cfe1f7;font:12px/1 JetBrains Mono,Consolas,monospace}
+  .ok-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 12px var(--ok)}
+  .arrow{color:var(--muted)}
+  .accent{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .timeline{position:relative;padding-left:22px}
+  .timeline::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:linear-gradient(180deg,var(--acc),var(--acc2))}
+  .step{position:relative;padding:8px 0 14px}
+  .step::before{content:"";position:absolute;left:-22px;top:12px;width:14px;height:14px;border-radius:50%;background:#0b0f17;border:2px solid var(--acc);box-shadow:0 0 0 4px rgba(124,156,255,.15)}
+  .step.done::before{background:var(--ok);border-color:var(--ok);box-shadow:0 0 0 4px rgba(52,211,153,.15)}
+  .step.todo::before{background:#0b0f17;border-color:#3a4a66}
+  .step h4{margin:0 0 4px;font-size:15px}
+  .step p{margin:0;color:var(--muted);font-size:13.5px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .table{width:100%;border-collapse:collapse;font-size:14px}
+  .table th,.table td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border)}
+  .table th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .table tr:last-child td{border-bottom:none}
+  footer{margin-top:32px;color:var(--muted);font-size:12.5px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">J</div>
+    <div>
+      <h1><span class="accent">MIDI Loops</span> · Slices 3 – 5 · Review</h1>
+      <small>feature/midi-loops · Jamma · low-latency MIDI engine groundwork</small>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>TL;DR</h2>
+    <p style="margin:6px 0 14px;color:var(--muted)">
+      Foundation laid for MIDI looping with a lock-free ingress queue, an in-memory MIDI loop with
+      sample-accurate playback and forced-note-off on wrap, and quantised record-end aligned to the
+      existing <code>Timer::QuantiseLength</code>. Audio path is untouched. All tests green.
+    </p>
+    <div class="stats">
+      <div class="stat"><div class="v">+5</div><div class="l">Source files</div></div>
+      <div class="stat"><div class="v">+20</div><div class="l">New tests</div></div>
+      <div class="stat"><div class="v">288 / 288</div><div class="l">Suite passing</div></div>
+      <div class="stat"><div class="v">0</div><div class="l">Audio regressions</div></div>
+    </div>
+    <div class="legend">
+      <span><span class="pill ok">RT-safe</span> no heap, no locks in hot path</span>
+      <span><span class="pill acc">SPSC ring</span> producer = MIDI callback, consumer = job thread</span>
+      <span><span class="pill acc2">Sample-relative</span> never wall-clock</span>
+    </div>
+  </div>
+
+  <div class="grid two" style="margin-top:18px">
+    <div class="card">
+      <h2>What landed</h2>
+      <div class="timeline">
+        <div class="step done">
+          <h4>Slice 3 — MIDI event + lock-free ingress queue <span class="pill ok">✓ done</span></h4>
+          <p>POD <code>MidiEvent</code> (8 bytes, static_asserted) and template <code>MidiQueue&lt;Capacity&gt;</code>
+             SPSC ring with drop-oldest overflow, acquire/release atomics, no allocation in push/pop.</p>
+        </div>
+        <div class="step done">
+          <h4>Slice 4 — In-memory MIDI loop engine <span class="pill ok">✓ done</span></h4>
+          <p>Fixed-capacity <code>MidiLoop</code> with <code>StartRecord / RecordEvent / EndRecord / ReadBlock</code>.
+             Playback is sample-accurate across arbitrary block sizes; loop wrap flushes held notes via synthetic NoteOffs.</p>
+        </div>
+        <div class="step done">
+          <h4>Slice 5 — Quantised record-end <span class="pill ok">✓ done</span></h4>
+          <p>Pinned the seam: callers feed <code>Timer::QuantiseLength</code> output straight into
+             <code>EndRecord(loopLengthSamps)</code>. Verified for both <code>QUANTISE_MULTIPLE</code> and
+             <code>QUANTISE_POWER</code>.</p>
+        </div>
+        <div class="step todo">
+          <h4>Slice 6 — Mixed audio + MIDI station <span class="pill">next</span></h4>
+          <p>Extend <code>Station</code> to hold MIDI takes alongside <code>_loopTakes</code> without
+             branching on media type in the hot path.</p>
+        </div>
+        <div class="step todo">
+          <h4>Slice 7 — MIDI overdub + punch <span class="pill">queued</span></h4>
+          <p>Merge semantics, held-note carryover, forced NoteOff at punch-out and wrap.</p>
+        </div>
+        <div class="step todo">
+          <h4>Slice 8 — Scene-level MIDI device <span class="pill">queued</span></h4>
+          <p>Callback enqueues into <code>MidiQueue</code>; job thread drains and routes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Real-time safety scorecard</h2>
+      <table class="table">
+        <thead><tr><th>Invariant</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>No heap alloc in <code>Push</code> / <code>Pop</code></td><td><span class="pill ok"><span class="ok-dot"></span> guaranteed</span></td></tr>
+          <tr><td>No locks anywhere on MIDI ingress</td><td><span class="pill ok"><span class="ok-dot"></span> atomics only</span></td></tr>
+          <tr><td>No heap alloc in <code>MidiLoop::RecordEvent</code> / <code>ReadBlock</code></td><td><span class="pill ok"><span class="ok-dot"></span> fixed <code>std::array</code> storage</span></td></tr>
+          <tr><td>Sample-relative timestamps (never wall-clock)</td><td><span class="pill ok"><span class="ok-dot"></span> all offsets in samples</span></td></tr>
+          <tr><td>No exceptions in hot paths</td><td><span class="pill ok"><span class="ok-dot"></span> <code>noexcept</code> end-to-end</span></td></tr>
+          <tr><td>Loop-wrap stuck-note safety</td><td><span class="pill ok"><span class="ok-dot"></span> forced NoteOff at wrap sample</span></td></tr>
+          <tr><td>Overflow policy under producer pressure</td><td><span class="pill warn">drop oldest, count surfaced via <code>DroppedCount()</code></span></td></tr>
+          <tr><td>Audio pipeline unchanged</td><td><span class="pill ok"><span class="ok-dot"></span> zero edits to audio code</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid two" style="margin-top:18px">
+    <div class="card">
+      <h2>New & touched files</h2>
+      <h3>Engine</h3>
+      <ul class="clean">
+        <li><span class="file">JammaLib/src/engine/MidiEvent.h</span> &nbsp;<span class="pill acc">new</span> · 8-byte POD, NoteOn/NoteOff factories</li>
+        <li><span class="file">JammaLib/src/engine/MidiQueue.h</span> &nbsp;<span class="pill acc">new</span> · template SPSC ring, power-of-two capacity</li>
+        <li><span class="file">JammaLib/src/engine/MidiLoop.h</span> &nbsp;<span class="pill acc">new</span> · state machine + held-note bitset</li>
+        <li><span class="file">JammaLib/src/engine/MidiLoop.cpp</span> &nbsp;<span class="pill acc">new</span> · playback with wrap-flush</li>
+      </ul>
+      <h3>Tests</h3>
+      <ul class="clean">
+        <li><span class="file">test/JammaLib.Tests/src/engine/MidiQueue_Tests.cpp</span> &nbsp;<span class="pill acc2">new</span> · 7 cases</li>
+        <li><span class="file">test/JammaLib.Tests/src/engine/MidiLoop_Tests.cpp</span> &nbsp;<span class="pill acc2">new</span> · 13 cases</li>
+      </ul>
+      <h3>Project glue</h3>
+      <ul class="clean">
+        <li><span class="file">JammaLib/JammaLib.vcxproj</span> + filters · added MIDI sources</li>
+        <li><span class="file">test/JammaLib.Tests/JammaLib.Tests.vcxproj</span> + filters · added MIDI tests</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Public API at a glance</h2>
+<pre><span style="color:#9b7cff">struct</span> <span style="color:#7c9cff">MidiEvent</span> {
+  uint32_t sampleOffset;
+  uint8_t  status, data1, data2, _pad;
+  <span style="color:#8aa0b4">// classification + factories</span>
+  <span style="color:#9b7cff">constexpr</span> bool IsNoteOn()  <span style="color:#9b7cff">const noexcept</span>;
+  <span style="color:#9b7cff">constexpr</span> bool IsNoteOff() <span style="color:#9b7cff">const noexcept</span>;
+  <span style="color:#9b7cff">static constexpr</span> MidiEvent MakeNoteOn (uint32_t,uint8_t,uint8_t,uint8_t);
+  <span style="color:#9b7cff">static constexpr</span> MidiEvent MakeNoteOff(uint32_t,uint8_t,uint8_t,uint8_t=0);
+};
+
+<span style="color:#9b7cff">template</span>&lt;size_t Capacity&gt;
+<span style="color:#9b7cff">class</span> <span style="color:#7c9cff">MidiQueue</span> {           <span style="color:#8aa0b4">// SPSC, drop-oldest</span>
+  bool Push(<span style="color:#9b7cff">const</span> MidiEvent&amp;) <span style="color:#9b7cff">noexcept</span>;
+  bool Pop (MidiEvent&amp;)        <span style="color:#9b7cff">noexcept</span>;
+  size_t Size() <span style="color:#9b7cff">const noexcept</span>;
+  uint64_t DroppedCount() <span style="color:#9b7cff">const noexcept</span>;
+};
+
+<span style="color:#9b7cff">class</span> <span style="color:#7c9cff">MidiLoop</span> {
+  <span style="color:#9b7cff">void</span> StartRecord() <span style="color:#9b7cff">noexcept</span>;
+  bool RecordEvent(<span style="color:#9b7cff">const</span> MidiEvent&amp;) <span style="color:#9b7cff">noexcept</span>;
+  <span style="color:#9b7cff">void</span> EndRecord(uint32_t loopLengthSamps) <span style="color:#9b7cff">noexcept</span>;
+  <span style="color:#9b7cff">void</span> ReadBlock(uint64_t globalSample,
+                 uint32_t numSamples,
+                 IMidiSink&amp; sink) <span style="color:#9b7cff">noexcept</span>;
+};</pre>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>Test results</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" style="color:var(--ok)">20 / 20</div><div class="l">New MIDI tests</div></div>
+      <div class="stat"><div class="v" style="color:var(--ok)">288 / 288</div><div class="l">Full suite</div></div>
+      <div class="stat"><div class="v">~21.4s</div><div class="l">Full run</div></div>
+      <div class="stat"><div class="v">12 ms</div><div class="l">MIDI-only run</div></div>
+    </div>
+    <h3>MIDI test inventory</h3>
+    <table class="table">
+      <thead><tr><th>Suite</th><th>Case</th><th>Asserts</th></tr></thead>
+      <tbody>
+        <tr><td>MidiEvent</td><td>NoteOnAndNoteOffClassification</td><td>velocity-0 NoteOn ⇒ NoteOff; channel masking</td></tr>
+        <tr><td rowspan="6">MidiQueue</td><td>NewQueueIsEmpty</td><td>empty sentinel + zero size</td></tr>
+        <tr><td>PushPopRoundTripPreservesEvent</td><td>byte-for-byte equality</td></tr>
+        <tr><td>PreservesPushOrder</td><td>FIFO across fill</td></tr>
+        <tr><td>WrapsAroundInternalIndices</td><td>head/tail crossing buffer end</td></tr>
+        <tr><td>OverflowDropsOldestAndKeepsNewest</td><td>drop-oldest policy + counter</td></tr>
+        <tr><td>ClearResetsState</td><td>head/tail/dropped reset</td></tr>
+        <tr><td rowspan="13">MidiLoop</td><td>DefaultStateIsEmpty</td><td>initial invariants</td></tr>
+        <tr><td>RecordEventRejectedWhenNotRecording</td><td>state-machine guard</td></tr>
+        <tr><td>StartRecordTransitionsAndAcceptsEvents</td><td>state + count</td></tr>
+        <tr><td>EmptyLoopProducesNoEvents</td><td>silence on empty</td></tr>
+        <tr><td>PlaysBackEventsAtCorrectGlobalSamples</td><td>NoteOn/Off offsets</td></tr>
+        <tr><td>EventOnBlockBoundaryEmittedExactlyOnce</td><td>half-open boundary semantics</td></tr>
+        <tr><td>EventsSplitAcrossMultipleSmallBlocks</td><td>64-sample blocks, 6 events</td></tr>
+        <tr><td>LoopWrapRebasesGlobalTimestamps</td><td>wrap → global-sample arithmetic</td></tr>
+        <tr><td>LoopWrapEmitsForcedNoteOffForHeldNote</td><td>stuck-note safety</td></tr>
+        <tr><td>ResetReturnsToEmpty</td><td>state cleanup</td></tr>
+        <tr><td>EventsBeyondLoopLengthAreNotPlayed</td><td>out-of-window clipping</td></tr>
+        <tr><td>EndRecordUsesQuantisedLengthFromTimer</td><td>QUANTISE_MULTIPLE alignment</td></tr>
+        <tr><td>EndRecordWithPowerQuantisationSnapsToPowerOfTwo</td><td>QUANTISE_POWER alignment</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid two" style="margin-top:18px">
+    <div class="card">
+      <h2>Design notes</h2>
+      <dl class="kv">
+        <dt>Storage</dt><dd>Fixed <code>std::array&lt;MidiEvent, 4096&gt;</code> per loop; no growth in RT path.</dd>
+        <dt>Capacity policy</dt><dd>Drop-newest on record overflow (loop is what it is); drop-oldest on ingress queue overflow (newest events always reach the consumer).</dd>
+        <dt>Held-note tracking</dt><dd><code>std::bitset&lt;16×128&gt;</code> (256 B). Flushed on wrap and on <code>StartRecord / EndRecord / Reset</code>.</dd>
+        <dt>Block semantics</dt><dd>Half-open: an event at sample <code>S</code> fires in the block <code>[S, S+N)</code>, never the previous one.</dd>
+        <dt>Time mapping</dt><dd><code>loopOffset = globalSample % loopLength</code>; sink receives globally-rebased <code>sampleOffset</code>.</dd>
+        <dt>Quantisation</dt><dd>MidiLoop has zero Timer coupling; callers pass the snapped length, mirroring audio Loop’s convention.</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h2>Risks &amp; open questions</h2>
+      <ul class="clean">
+        <li><b>Linear event scan</b> in <code>ReadBlock</code> is O(n) per block. Fine for typical loop sizes; revisit if loops grow beyond a few thousand events.</li>
+        <li><b>Drop-newest on record</b> matches the audio philosophy but should be visible in UI (counter surfaced as <code>DroppedEventCount()</code>).</li>
+        <li><b>Held-note flush on EndRecord</b> currently resets the bitset without emitting NoteOffs; correct because Recording doesn’t drive a sink, but worth a comment when Slice 7 adds live monitoring.</li>
+        <li><b>Station seam (Slice 6)</b> still TBD. Needs a minimal <code>IMidiTake</code>-style abstraction so callers don’t branch on media type in the hot path.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    Generated for review · <code>feature/midi-loops</code> · 288 tests · 0 audio regressions
+  </footer>
+</div>
+</body>
+</html>

@@ -263,6 +263,15 @@
     <ClInclude Include="src\engine\Timer.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\MidiEvent.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiQueue.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiLoop.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
     </ClInclude>
@@ -554,6 +563,9 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Timer.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiLoop.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">

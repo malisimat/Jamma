@@ -3,5 +3,17 @@
         "Run JammaLib GoogleTests (Debug x64)"
     ],
     "gtest-adapter.refreshAfterBuild": true,
-    "gtest-adapter.supportLocation": true
+    "gtest-adapter.supportLocation": true,
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#224b94",
+        "titleBar.inactiveBackground": "#333333",
+        "terminal.background": "#0f1425",
+        "activityBar.background": "#875000",
+        "statusBar.background": "#875000",
+        "statusBar.foreground": "#FFFAF2",
+        "statusBar.debuggingBackground": "#875000",
+        "statusBar.debuggingForeground": "#FFFAF2",
+        "statusBar.noFolderBackground": "#875000",
+        "statusBar.noFolderForeground": "#FFFAF2"
+    }
 }
