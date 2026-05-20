@@ -160,6 +160,7 @@ xcopy /y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\gtest_main.dll" "$
     <ClCompile Include="src\io\Json_Tests.cpp" />
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
+    <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

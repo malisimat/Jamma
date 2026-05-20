@@ -89,6 +89,7 @@ namespace io
 		{
 			std::string Name;
 			std::vector<Loop> Loops;
+			std::vector<VstEntry> VstChain;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};

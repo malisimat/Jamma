@@ -1030,7 +1030,6 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		window->OnAction(winAction);
 
-		FreeConsole();
 		PostQuitMessage(0);
 		return 0;
 	}

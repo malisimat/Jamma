@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "Loop.h"
@@ -9,6 +10,7 @@
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRack.h"
+#include "../vst/VstChain.h"
 
 using base::Audible;
 
@@ -126,6 +128,10 @@ namespace engine
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
+		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
+		void UnloadVstPlugin(size_t index);
+		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
 		void Record(std::vector<unsigned int> channels, std::string stationName);
 		void Play(unsigned long index,
@@ -154,6 +160,7 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
 		void _WireVuSliders();
+		void _ResizeVstScratch(unsigned int channelCount);
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -180,5 +187,9 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		std::vector<std::wstring> _vstPluginPaths;
+		std::vector<float> _vstBlockScratch;
+		std::vector<float*> _vstBlockPtrs;
 	};
 }

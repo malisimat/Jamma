@@ -11,8 +11,7 @@
 using namespace vst;
 
 VstChain::VstChain() :
-	_plugins(),
-	_scratch{}
+	_plugins()
 {
 }
 
@@ -77,5 +76,21 @@ void VstChain::ProcessBlockStereo(float* leftBuf, float* rightBuf, int numSamps)
 	{
 		if (p)
 			p->ProcessBlockStereo(leftBuf, rightBuf, static_cast<int32_t>(numSamps));
+	}
+}
+
+void VstChain::ProcessBlockMulti(float* const* channelBufs, int numChannels, int numSamps) noexcept
+{
+	if (_plugins.empty())
+		return;
+
+	if (!channelBufs || numChannels <= 0 || numSamps <= 0
+		|| static_cast<unsigned int>(numSamps) > constants::MaxBlockSize)
+		return;
+
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			p->ProcessBlockMulti(channelBufs, numChannels, static_cast<int32_t>(numSamps));
 	}
 }
