@@ -13,11 +13,10 @@ uniform float WaveformRadius;
 uniform float WaveformHeightScale;
 uniform float WaveformMinHeight;
 uniform float WaveformColorMultiplier;
+uniform float WaveformUnitMeshRadius;
 
 void main()
 {
-    const float UnitMeshRadius = 100.0;
-
     float u = clamp(UvIN.x, 0.0, 1.0);
     float segmentCount = float(textureSize(WaveformSampler, 0));
     float segmentIndex = clamp(floor(u * segmentCount), 0.0, segmentCount - 1.0);
@@ -28,7 +27,7 @@ void main()
     float yMax = (WaveformHeightScale * minMax.y) + WaveformMinHeight;
     float y = PositionIN.y >= 0.0 ? yMax : yMin;
 
-    float radiusScale = WaveformRadius / UnitMeshRadius;
+    float radiusScale = WaveformRadius / WaveformUnitMeshRadius;
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);

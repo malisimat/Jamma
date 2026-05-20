@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <mutex>
 #include <vector>
 #include <tuple>
 #include <memory>
@@ -112,8 +114,8 @@ namespace engine
 		static const float _RadialThicknessFrac;
 		static const float _HeightScale;
 		static const float _UnitMeshRadius;
-		static const unsigned int _WaveformSegments;
-		static const unsigned int _WaveformPboCount;
+		static constexpr unsigned int _WaveformSegments = 2048u;
+		static constexpr unsigned int _WaveformPboCount = 2u;
 
 		double _loopIndexFrac;
 		LoopModelState _modelState;
@@ -122,8 +124,9 @@ namespace engine
 		bool _hasWaveformData;
 		bool _waveformNeedsUpload;
 		unsigned int _waveformTexture;
-		unsigned int _waveformPbos[2];
+		std::array<unsigned int, _WaveformPboCount> _waveformPbos;
 		unsigned int _waveformWritePboIndex;
 		std::vector<glm::vec2> _waveformDecimated;
+		std::mutex _waveformMutex;
 	};
 }

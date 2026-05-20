@@ -18,8 +18,6 @@ const float LoopModel::_MinHeight = 1.0f;
 const float LoopModel::_RadialThicknessFrac = 1.0f / 20.0f;
 const float LoopModel::_HeightScale = 100.0f;
 const float LoopModel::_UnitMeshRadius = 100.0f;
-const unsigned int LoopModel::_WaveformSegments = 2048u;
-const unsigned int LoopModel::_WaveformPboCount = 2u;
 
 LoopModel::LoopModel(LoopModelParams params) :
 	GuiModel(params),
@@ -30,7 +28,7 @@ LoopModel::LoopModel(LoopModelParams params) :
 	_hasWaveformData(false),
 	_waveformNeedsUpload(false),
 	_waveformTexture(0u),
-	_waveformPbos{ 0u, 0u },
+	_waveformPbos{},
 	_waveformWritePboIndex(0u),
 	_waveformDecimated(_WaveformSegments, glm::vec2(0.0f, 0.0f))
 {
@@ -49,6 +47,14 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0), (float)(constants::TWOPI * (_loopIndexFrac + 0.0)), glm::vec3(0.0f, 1.0f, 0.0f)));
+
+	float waveformRadius = _UnitMeshRadius;
+	float waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
+	{
+		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+		waveformRadius = _waveformRadius;
+		waveformColorMultiplier = _waveformColorMultiplier;
+	}
 
 	unsigned int id;
 	std::vector<unsigned int> idVec;
@@ -73,8 +79,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 		break;
 	}
 
-	if (_waveformNeedsUpload)
-		UploadWaveformTexture();
+	UploadWaveformTexture();
 
 	auto modelTexture = GetTexture();
 	auto modelShader = GetShader();
@@ -90,10 +95,11 @@ void LoopModel::Draw3d(DrawContext& ctx,
 
 	glCtx.SetUniform("TextureSampler", 0u);
 	glCtx.SetUniform("WaveformSampler", 1u);
-	glCtx.SetUniform("WaveformRadius", _waveformRadius);
+	glCtx.SetUniform("WaveformRadius", waveformRadius);
 	glCtx.SetUniform("WaveformHeightScale", _HeightScale);
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
-	glCtx.SetUniform("WaveformColorMultiplier", _waveformColorMultiplier);
+	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
+	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
@@ -184,18 +190,21 @@ void LoopModel::_InitResources(resources::ResourceLib& resourceLib, bool forceIn
 	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexImage1D(GL_TEXTURE_1D,
-		0,
-		GL_RG16F,
-		(GLsizei)_WaveformSegments,
-		0,
-		GL_RG,
-		GL_FLOAT,
-		_waveformDecimated.data());
+	{
+		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+		glTexImage1D(GL_TEXTURE_1D,
+			0,
+			GL_RG16F,
+			(GLsizei)_WaveformSegments,
+			0,
+			GL_RG,
+			GL_FLOAT,
+			_waveformDecimated.data());
+	}
 	glBindTexture(GL_TEXTURE_1D, 0);
 
 	if ((0u == _waveformPbos[0]) && (0u == _waveformPbos[1]))
-		glGenBuffers(_WaveformPboCount, _waveformPbos);
+		glGenBuffers(_WaveformPboCount, _waveformPbos.data());
 
 	auto waveformBytes = static_cast<GLsizeiptr>(_WaveformSegments * sizeof(glm::vec2));
 	for (auto pbo = 0u; pbo < _WaveformPboCount; pbo++)
@@ -205,7 +214,10 @@ void LoopModel::_InitResources(resources::ResourceLib& resourceLib, bool forceIn
 	}
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
-	_waveformNeedsUpload = true;
+	{
+		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+		_waveformNeedsUpload = true;
+	}
 }
 
 void LoopModel::_ReleaseResources()
@@ -216,9 +228,8 @@ void LoopModel::_ReleaseResources()
 		_waveformTexture = 0u;
 	}
 
-	glDeleteBuffers(_WaveformPboCount, _waveformPbos);
-	_waveformPbos[0] = 0u;
-	_waveformPbos[1] = 0u;
+	glDeleteBuffers(_WaveformPboCount, _waveformPbos.data());
+	_waveformPbos.fill(0u);
 
 	GuiModel::_ReleaseResources();
 }
@@ -240,34 +251,38 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 	auto availableSamples = buffer.Length() > offset ? buffer.Length() - offset : 0ul;
 	auto clampedLength = std::min(sourceLoopLength, availableSamples);
 
-	_waveformRadius = std::max(radius, 1.0f);
-	_hasWaveformData = (displayLoopLength > 0ul) && (clampedLength > 0ul);
+	auto waveformRadius = std::max(radius, 1.0f);
+	auto hasWaveformData = (displayLoopLength > 0ul) && (clampedLength > 0ul);
+	auto waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
+	auto waveformDecimated = std::vector<glm::vec2>(_WaveformSegments, glm::vec2(0.0f, 0.0f));
 
-	if (!_hasWaveformData)
+	if (hasWaveformData)
 	{
-		std::fill(_waveformDecimated.begin(), _waveformDecimated.end(), glm::vec2(0.0f, 0.0f));
-		_waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
+		DecimateWaveformInto(buffer,
+			offset,
+			clampedLength,
+			waveformDecimated);
+
+		auto maxPeakLevel = 0.0f;
+		for (const auto& minMax : waveformDecimated)
+		{
+			auto maxAbs = std::max(std::fabs(minMax.x), std::fabs(minMax.y));
+			if (maxAbs > maxPeakLevel)
+				maxPeakLevel = maxAbs;
+		}
+
+		const auto peakDenominator = (_HeightScale * std::max(maxPeakLevel, 0.0001f)) + _MinHeight;
+		waveformColorMultiplier = peakDenominator > 0.0f ? (0.5f / peakDenominator) : 0.5f;
+	}
+
+	{
+		std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+		_waveformRadius = waveformRadius;
+		_hasWaveformData = hasWaveformData;
+		_waveformColorMultiplier = waveformColorMultiplier;
+		_waveformDecimated = std::move(waveformDecimated);
 		_waveformNeedsUpload = true;
-		return;
 	}
-
-	DecimateWaveformInto(buffer,
-		offset,
-		clampedLength,
-		_waveformDecimated);
-
-	auto maxPeakLevel = 0.0f;
-	for (const auto& minMax : _waveformDecimated)
-	{
-		auto maxAbs = std::max(std::fabs(minMax.x), std::fabs(minMax.y));
-		if (maxAbs > maxPeakLevel)
-			maxPeakLevel = maxAbs;
-	}
-
-	const auto peakDenominator = (_HeightScale * std::max(maxPeakLevel, 0.0001f)) + _MinHeight;
-	_waveformColorMultiplier = peakDenominator > 0.0f ? (0.5f / peakDenominator) : 0.5f;
-
-	_waveformNeedsUpload = true;
 }
 
 std::vector<glm::vec2> LoopModel::DecimateWaveform(const BufferBank& buffer, unsigned long offset, unsigned long length, unsigned int numSegments)
@@ -422,7 +437,8 @@ std::tuple<std::vector<float>, std::vector<float>> LoopModel::BuildFixedGeometry
 
 void LoopModel::UploadWaveformTexture()
 {
-	if ((0u == _waveformTexture) || _waveformDecimated.empty())
+	std::lock_guard<std::mutex> waveformLock(_waveformMutex);
+	if ((0u == _waveformTexture) || !_waveformNeedsUpload || _waveformDecimated.empty())
 		return;
 
 	auto waveformBytes = static_cast<GLsizeiptr>(_waveformDecimated.size() * sizeof(glm::vec2));
