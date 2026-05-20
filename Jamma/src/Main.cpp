@@ -387,8 +387,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
+	sceneRaw.store(nullptr, std::memory_order_release);
 	tui->Stop();
 	FreeConsole();
+
+	// Tear down Scene (joins job thread) before COM teardown, then drain once
+	// more for any failed-load plugins queued late during job-thread shutdown.
+	scene.reset();
+	vst::DrainUiThreadDestroyQueue();
 
 	if (uiComInitialized)
 		CoUninitialize();
