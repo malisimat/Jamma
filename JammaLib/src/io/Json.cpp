@@ -268,10 +268,18 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 			{
 				char peeked = ss.peek();
 
-				if (('}' == peeked) || ('\n' == peeked))
+				if (('}' == peeked) || (']' == peeked) || ('\n' == peeked))
 					finished = true;
 				else if (ss >> c)
-					finished = (',' == c);
+				{
+					if (('}' == c) || (']' == c))
+					{
+						ss.putback(c);
+						finished = true;
+					}
+					else
+						finished = (',' == c);
+				}
 
 				if (finished)
 				{
