@@ -19,7 +19,10 @@ void main()
     const float UnitMeshRadius = 100.0;
 
     float u = clamp(UvIN.x, 0.0, 1.0);
-    vec2 minMax = texture(WaveformSampler, u).rg;
+    float segmentCount = float(textureSize(WaveformSampler, 0));
+    float segmentIndex = clamp(floor(u * segmentCount), 0.0, segmentCount - 1.0);
+    float waveformU = (segmentIndex + 0.5) / segmentCount;
+    vec2 minMax = texture(WaveformSampler, waveformU).rg;
 
     float yMin = (WaveformHeightScale * minMax.x) - WaveformMinHeight;
     float yMax = (WaveformHeightScale * minMax.y) + WaveformMinHeight;

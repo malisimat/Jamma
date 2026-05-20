@@ -149,12 +149,12 @@ TEST(LoopModelWaveform, DecimateWaveformHonorsOffsetAndLength)
 
 	ASSERT_EQ(4u, result.size());
 	EXPECT_FLOAT_EQ(-0.4f, result[0].x);
-	EXPECT_FLOAT_EQ(-0.4f, result[0].y);
-	EXPECT_FLOAT_EQ(0.1f, result[1].x);
+	EXPECT_FLOAT_EQ(0.0f, result[0].y);
+	EXPECT_FLOAT_EQ(0.0f, result[1].x);
 	EXPECT_FLOAT_EQ(0.1f, result[1].y);
 	EXPECT_FLOAT_EQ(-0.6f, result[2].x);
-	EXPECT_FLOAT_EQ(-0.6f, result[2].y);
-	EXPECT_FLOAT_EQ(0.3f, result[3].x);
+	EXPECT_FLOAT_EQ(0.0f, result[2].y);
+	EXPECT_FLOAT_EQ(0.0f, result[3].x);
 	EXPECT_FLOAT_EQ(0.3f, result[3].y);
 }
 
@@ -167,14 +167,42 @@ TEST(LoopModelWaveform, DecimateWaveformRepeatsCoverageWhenSegmentsExceedSamples
 	auto result = LoopModel::DecimateWaveform(buffer, 0ul, 2ul, 4u);
 
 	ASSERT_EQ(4u, result.size());
-	EXPECT_FLOAT_EQ(0.25f, result[0].x);
+	EXPECT_FLOAT_EQ(0.0f, result[0].x);
 	EXPECT_FLOAT_EQ(0.25f, result[0].y);
-	EXPECT_FLOAT_EQ(0.25f, result[1].x);
+	EXPECT_FLOAT_EQ(0.0f, result[1].x);
 	EXPECT_FLOAT_EQ(0.25f, result[1].y);
 	EXPECT_FLOAT_EQ(-0.5f, result[2].x);
-	EXPECT_FLOAT_EQ(-0.5f, result[2].y);
+	EXPECT_FLOAT_EQ(0.0f, result[2].y);
 	EXPECT_FLOAT_EQ(-0.5f, result[3].x);
-	EXPECT_FLOAT_EQ(-0.5f, result[3].y);
+	EXPECT_FLOAT_EQ(0.0f, result[3].y);
+}
+
+TEST(LoopModelWaveform, DecimateWaveformUsesNonOverlappingChunkPeaks)
+{
+	auto buffer = MakeBuffer(10ul);
+	buffer[0] = 0.1f;
+	buffer[1] = -0.9f;
+	buffer[2] = 0.3f;
+	buffer[3] = 0.4f;
+	buffer[4] = -0.1f;
+	buffer[5] = -0.8f;
+	buffer[6] = 0.2f;
+	buffer[7] = -0.05f;
+	buffer[8] = 0.7f;
+	buffer[9] = -0.2f;
+
+	auto result = LoopModel::DecimateWaveform(buffer, 0ul, 10ul, 4u);
+
+	ASSERT_EQ(4u, result.size());
+	// Chunks are [0,2), [2,5), [5,7), [7,10)
+	EXPECT_FLOAT_EQ(-0.9f, result[0].x);
+	EXPECT_FLOAT_EQ(0.1f, result[0].y);
+	EXPECT_FLOAT_EQ(-0.1f, result[1].x);
+	EXPECT_FLOAT_EQ(0.4f, result[1].y);
+	EXPECT_FLOAT_EQ(-0.8f, result[2].x);
+	EXPECT_FLOAT_EQ(0.2f, result[2].y);
+	EXPECT_FLOAT_EQ(-0.2f, result[3].x);
+	EXPECT_FLOAT_EQ(0.7f, result[3].y);
 }
 
 TEST(LoopModelWaveform, DecimateWaveformReturnsEmptyForZeroSegments)

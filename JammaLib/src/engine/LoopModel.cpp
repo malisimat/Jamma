@@ -299,25 +299,26 @@ void LoopModel::DecimateWaveformInto(const BufferBank& buffer,
 	for (auto segment = 0ul; segment < segmentCount; segment++)
 	{
 		auto segmentStart = (segment * clampedLength) / segmentCount;
-		auto segmentEnd = (((segment + 1ul) * clampedLength) + segmentCount - 1ul) / segmentCount;
+		auto segmentEnd = ((segment + 1ul) * clampedLength) / segmentCount;
 		if (segmentEnd <= segmentStart)
-			segmentEnd = segmentStart + 1ul;
-		if (segmentEnd > clampedLength)
-			segmentEnd = clampedLength;
-
-		auto minSamp = buffer[offset + segmentStart];
-		auto maxSamp = minSamp;
-
-		for (auto sampleIndex = segmentStart + 1ul; sampleIndex < segmentEnd; sampleIndex++)
 		{
-			auto sample = buffer[offset + sampleIndex];
-			if (sample < minSamp)
-				minSamp = sample;
-			if (sample > maxSamp)
-				maxSamp = sample;
+			segmentStart = std::min(segmentStart, clampedLength - 1ul);
+			segmentEnd = segmentStart + 1ul;
 		}
 
-		outSegments[segment] = glm::vec2(minSamp, maxSamp);
+		auto maxPositive = 0.0f;
+		auto maxNegativeAbs = 0.0f;
+
+		for (auto sampleIndex = segmentStart; sampleIndex < segmentEnd; sampleIndex++)
+		{
+			auto sample = buffer[offset + sampleIndex];
+			if (sample >= 0.0f)
+				maxPositive = std::max(maxPositive, sample);
+			else
+				maxNegativeAbs = std::max(maxNegativeAbs, std::fabs(sample));
+		}
+
+		outSegments[segment] = glm::vec2(-maxNegativeAbs, maxPositive);
 	}
 }
 
