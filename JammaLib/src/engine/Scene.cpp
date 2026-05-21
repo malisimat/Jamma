@@ -579,20 +579,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			return ActionResult::NoAction();
 		}
 
-		auto sampleRate = static_cast<float>(constants::DefaultSampleRate);
-		auto blockSize = constants::DefaultBufferSizeSamps;
-		if (_audioDevice)
-		{
-			auto params = _audioDevice->GetAudioStreamParams();
-			if (params.SampleRate > 0)
-				sampleRate = static_cast<float>(params.SampleRate);
-			if (params.BufSize > 0)
-				blockSize = params.BufSize;
-		}
-
 		std::cout << "VST insert request: depth=" << static_cast<int>(_selector->CurrentSelectDepth())
-			<< ", sampleRate=" << sampleRate
-			<< ", blockSize=" << blockSize
 			<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
 
 		switch (_selector->CurrentSelectDepth())
@@ -623,8 +610,8 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
 
-			take->LoadVstPlugin(pluginPath, sampleRate, blockSize);
-
+			take->LoadVstPlugin(pluginPath);
+			CommitChanges();
 			break;
 		}
 		case base::SelectDepth::DEPTH_LOOP:
@@ -635,7 +622,8 @@ ActionResult Scene::OnAction(KeyAction action)
 
 			std::cout << "VST insert target: single loop" << std::endl;
 
-			loop->LoadVstPlugin(pluginPath, sampleRate, blockSize);
+			loop->LoadVstPlugin(pluginPath);
+			CommitChanges();
 			break;
 		}
 		}
@@ -1011,51 +999,57 @@ void Scene::InitGui()
 
 void Scene::InitAudio()
 {
-	std::scoped_lock lock(_audioMutex);
-
-	auto dev = AudioDevice::Open(Scene::AudioCallback,
-		[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-		_userConfig.Audio,
-		this);
-
-	if (dev.has_value())
 	{
-		_audioDevice = std::move(dev.value());
+		std::scoped_lock lock(_audioMutex);
 
-		_audioCallbackCount = 0;
-		_audioDevice->Start();
+		auto dev = AudioDevice::Open(Scene::AudioCallback,
+			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
+			_userConfig.Audio,
+			this);
 
-		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-		audioStreamParams.PrintParams();
-
-		auto inLatency = (0u == audioStreamParams.InputLatency) ?
-			_userConfig.Audio.LatencyIn :
-			audioStreamParams.InputLatency;
-
-		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
-				ChannelMixer::DefaultBufferSize,
-				audioStreamParams.NumInputChannels,
-				audioStreamParams.NumOutputChannels }));
-
-		for (auto& station : _stations)
+		if (dev.has_value())
 		{
-			if (station)
-			{
-				station->SetupBuffers(audioStreamParams.BufSize);
-				station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
-				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
-				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
-				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
-			}
-		}
+			_audioDevice = std::move(dev.value());
 
-		_ninjamSession->SetAudioFormat(
-			audioStreamParams.SampleRate,
-			audioStreamParams.BufSize,
-			audioStreamParams.NumInputChannels,
-			audioStreamParams.NumOutputChannels);
+			_audioCallbackCount = 0;
+			_audioDevice->Start();
+
+			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+			audioStreamParams.PrintParams();
+
+			auto inLatency = (0u == audioStreamParams.InputLatency) ?
+				_userConfig.Audio.LatencyIn :
+				audioStreamParams.InputLatency;
+
+			_channelMixer->SetParams(ChannelMixerParams({
+					_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
+					ChannelMixer::DefaultBufferSize,
+					audioStreamParams.NumInputChannels,
+					audioStreamParams.NumOutputChannels }));
+
+			for (auto& station : _stations)
+			{
+				if (station)
+				{
+					station->SetupBuffers(audioStreamParams.BufSize);
+					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
+					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+					station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
+					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+				}
+			}
+
+			_ninjamSession->SetAudioFormat(
+				audioStreamParams.SampleRate,
+				audioStreamParams.BufSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels);
+		}
 	}
+
+	// Dispatch any VST loads that were staged during scene FromFile so they run
+	// with the real audio device sample rate and buffer size.
+	CommitChanges();
 }
 
 void Scene::CloseAudio()

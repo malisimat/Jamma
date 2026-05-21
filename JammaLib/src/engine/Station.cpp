@@ -766,6 +766,8 @@ void Station::SetupBuffers(unsigned int bufSize)
 void Station::SetSampleRate(float sampleRate)
 {
 	_sampleRate = sampleRate;
+	for (auto& take : _loopTakes)
+		take->SetSampleRate(sampleRate);
 }
 
 void Station::SetNumBusChannels(unsigned int chans)

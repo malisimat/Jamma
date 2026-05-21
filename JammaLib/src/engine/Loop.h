@@ -199,19 +199,25 @@ namespace engine
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
 
-		// VST chain management.  Not RT-safe; call from a non-audio thread.
-		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
+		// VST chain management — staging only; actual load/unload happens on the
+		// job thread after CommitChanges() queues the appropriate job.
+		void LoadVstPlugin(std::wstring path);
 		void UnloadVstPlugin(size_t index);
+		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
+		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+
+		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
-		
+		virtual std::vector<actions::JobAction> _CommitChanges() override;
+
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
 		void _ForceUpdateLoopModel();
@@ -231,7 +237,16 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
+		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+		std::vector<std::wstring> _pendingVstLoads;
+		bool _hasPendingVstUnload{ false };
+		size_t _pendingVstUnload{ 0 };
+		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		unsigned int _blockSize{ constants::DefaultBufferSizeSamps };
 		// Non-RT metadata to persist loop VST chains in jam exports.
 		std::vector<std::wstring> _vstPluginPaths;
 	};

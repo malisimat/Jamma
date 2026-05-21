@@ -80,24 +80,14 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		if (loop.has_value())
 		{
 			for (const auto& vstEntry : loopStruct.VstChain)
-			{
-				loop.value()->LoadVstPlugin(
-					utils::DecodeUtf8(vstEntry.Path),
-					static_cast<float>(constants::DefaultSampleRate),
-					constants::DefaultBufferSizeSamps);
-			}
+				loop.value()->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
 
 			take->AddLoop(loop.value());
 		}
 	}
 
 	for (const auto& vstEntry : takeStruct.VstChain)
-	{
-		take->LoadVstPlugin(
-			utils::DecodeUtf8(vstEntry.Path),
-			static_cast<float>(constants::DefaultSampleRate),
-			constants::DefaultBufferSizeSamps);
-	}
+		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
 
 	return take;
 }
@@ -233,7 +223,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			scratch[samp] *= masterLevel;
 	}
 
-	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto chain = _vstChain;
 	if (chain && chain->IsActive() && (_vstBlockPtrs.size() >= channelCount))
 		chain->ProcessBlockMulti(_vstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
@@ -368,6 +358,67 @@ ActionResult LoopTake::OnAction(JobAction action)
 {
 	switch (action.JobActionType)
 	{
+	case JobAction::JOB_LOADVST:
+	{
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (_vstChain)
+		{
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		auto plugin = action.PreInitPlugin
+			? action.PreInitPlugin
+			: std::make_shared<vst::VstPlugin>();
+		auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
+		if (hostChannels == 0u)
+			hostChannels = 1u;
+		if (plugin->Load(action.VstPath, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact))
+		{
+			newChain->AddPlugin(plugin);
+			_vstPluginPaths.push_back(action.VstPath);
+			_backVstChain = std::move(newChain);
+			_flipVstChain.store(true, std::memory_order_release);
+			_changesMade = true;
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	case JobAction::JOB_UNLOADVST:
+	{
+		auto newChain = std::make_shared<vst::VstChain>();
+		const auto removeIndex = action.VstIndex;
+		if (_vstChain)
+		{
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				if (i == removeIndex)
+					continue;
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		if (removeIndex < _vstPluginPaths.size())
+			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+
+		_backVstChain = std::move(newChain);
+		_flipVstChain.store(true, std::memory_order_release);
+		_changesMade = true;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
 	case JobAction::JOB_UPDATELOOPS:
 	{
 		_UpdateLoops();
@@ -479,6 +530,9 @@ void LoopTake::SetMixerLevel(unsigned int chan, double level)
 void LoopTake::SetupBuffers(unsigned int bufSize)
 {
 	_lastBufSize = bufSize;
+
+	for (auto& loop : _loops)
+		loop->SetBlockSize(bufSize);
 
 	auto& buffers = (_flipLoopBuffer && _changesMade) ?
 		_backAudioBuffers :
@@ -839,6 +893,10 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		_WireVuSliders();
 	}
 
+	// Swap in the VST chain when the job thread has delivered a new one.
+	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+		_vstChain = _backVstChain;
+
 	std::vector<JobAction> jobs;
 
 	if (_loopsNeedUpdating)
@@ -861,6 +919,29 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		job.SourceId = Id();
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(job);
+	}
+
+	if (_hasPendingVstUnload)
+	{
+		_hasPendingVstUnload = false;
+
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UNLOADVST;
+		job.SourceId = Id();
+		job.VstIndex = _pendingVstUnload;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
+	}
+
+	auto pendingLoads = std::move(_pendingVstLoads);
+	for (auto& path : pendingLoads)
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_LOADVST;
+		job.SourceId = Id();
+		job.VstPath = std::move(path);
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(std::move(job));
 	}
 
 	GuiElement::_CommitChanges();
@@ -964,65 +1045,32 @@ void LoopTake::_ResizeVstScratch(unsigned int channelCount)
 		_vstBlockPtrs[i] = _vstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
 }
 
-void LoopTake::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize)
+void LoopTake::SetSampleRate(float sampleRate)
 {
-	auto current = _vstChain.load(std::memory_order_acquire);
-	auto newChain = std::make_shared<vst::VstChain>();
+	_sampleRate = sampleRate;
+	for (auto& loop : _loops)
+		loop->SetSampleRate(sampleRate);
+}
 
-	if (current)
-	{
-		for (size_t i = 0; i < current->NumPlugins(); ++i)
-		{
-			auto existing = current->GetPlugin(i);
-			if (existing)
-				newChain->AddPlugin(existing);
-		}
-	}
-
-	auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
-	if (hostChannels == 0u)
-		hostChannels = 1u;
-
-	auto plugin = std::make_shared<vst::VstPlugin>();
-	if (plugin->Load(path, sampleRate, blockSize, hostChannels, vst::HostedLayoutMode::Exact))
-	{
-		newChain->AddPlugin(plugin);
-		_vstPluginPaths.push_back(std::move(path));
-	}
-
-	_vstChain.store(newChain, std::memory_order_release);
+void LoopTake::LoadVstPlugin(std::wstring path)
+{
+	_pendingVstLoads.push_back(std::move(path));
+	_changesMade = true;
 }
 
 void LoopTake::UnloadVstPlugin(size_t index)
 {
-	auto current = _vstChain.load(std::memory_order_acquire);
-	auto newChain = std::make_shared<vst::VstChain>();
-
-	if (current)
-	{
-		for (size_t i = 0; i < current->NumPlugins(); ++i)
-		{
-			if (i == index)
-				continue;
-			auto existing = current->GetPlugin(i);
-			if (existing)
-				newChain->AddPlugin(existing);
-		}
-	}
-
-	if (index < _vstPluginPaths.size())
-		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
-
-	_vstChain.store(newChain, std::memory_order_release);
+	_pendingVstUnload = index;
+	_hasPendingVstUnload = true;
+	_changesMade = true;
 }
 
 std::shared_ptr<vst::VstPlugin> LoopTake::GetVstPlugin(size_t index) const
 {
-	auto chain = _vstChain.load(std::memory_order_acquire);
-	if (!chain)
+	if (!_vstChain)
 		return nullptr;
 
-	return chain->GetPlugin(index);
+	return _vstChain->GetPlugin(index);
 }
 
 std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const

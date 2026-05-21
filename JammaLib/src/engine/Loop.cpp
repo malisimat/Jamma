@@ -10,6 +10,8 @@ using audio::AudioMixer;
 using audio::Hanning;
 using audio::AudioMixerParams;
 using graphics::GlDrawContext;
+using actions::JobAction;
+using actions::ActionResult;
 
 Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :
@@ -376,11 +378,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		// Atomically load the chain pointer — safe to read from the audio callback
-		// while the main thread atomically stores a new chain in LoadVstPlugin.
-		auto chain = _vstChain.load(std::memory_order_acquire);
-		if (chain && chain->IsActive())
-			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		// _vstChain is a plain shared_ptr protected by Scene::_audioMutex,
+		// which the audio callback (and CommitChanges) both hold.
+		if (_vstChain && _vstChain->IsActive())
+			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
@@ -782,67 +783,128 @@ void Loop::_ForceUpdateLoopModel()
 	_vu->UpdateModel(radius);
 }
 
-void Loop::LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize)
+void Loop::LoadVstPlugin(std::wstring path)
 {
-	// Build a new chain from the current one (copy-on-write), then add the plugin.
-	// Atomically publish the new chain so WriteBlock (audio callback) sees a
-	// consistent snapshot without holding a lock.
-	auto current = _vstChain.load(std::memory_order_acquire);
-	auto newChain = std::make_shared<vst::VstChain>();
-
-	// Copy existing plugins into the new chain
-	if (current)
-	{
-		for (size_t i = 0; i < current->NumPlugins(); ++i)
-		{
-			auto existing = current->GetPlugin(i);
-			if (existing)
-				newChain->AddPlugin(existing);
-		}
-	}
-
-	auto plugin = std::make_shared<vst::VstPlugin>();
-	// Prefer mono for loop buffers; VstPlugin::Load may still negotiate stereo
-	// if the plugin exposes stereo buses, and ProcessBlock() will fold the
-	// plugin output back to mono safely.
-	if (plugin->Load(path, sampleRate, blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
-	{
-		newChain->AddPlugin(plugin);
-		_vstPluginPaths.push_back(std::move(path));
-	}
-
-	_vstChain.store(newChain, std::memory_order_release);
+	_pendingVstLoads.push_back(std::move(path));
+	_changesMade = true;
 }
 
 void Loop::UnloadVstPlugin(size_t index)
 {
-	// Build a new chain omitting the plugin at index, then atomically publish.
-	auto current = _vstChain.load(std::memory_order_acquire);
-	auto newChain = std::make_shared<vst::VstChain>();
-
-	if (current)
-	{
-		for (size_t i = 0; i < current->NumPlugins(); ++i)
-		{
-			if (i == index)
-				continue;
-			auto existing = current->GetPlugin(i);
-			if (existing)
-				newChain->AddPlugin(existing);
-		}
-	}
-
-	if (index < _vstPluginPaths.size())
-		_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(index));
-
-	_vstChain.store(newChain, std::memory_order_release);
+	_pendingVstUnload = index;
+	_hasPendingVstUnload = true;
+	_changesMade = true;
 }
 
 std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
 {
-	auto chain = _vstChain.load(std::memory_order_acquire);
-	if (!chain)
+	if (!_vstChain)
 		return nullptr;
 
-	return chain->GetPlugin(index);
+	return _vstChain->GetPlugin(index);
+}
+
+std::vector<JobAction> Loop::_CommitChanges()
+{
+	// Swap in a new VST chain when the job thread has delivered one.
+	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+		_vstChain = _backVstChain;
+
+	std::vector<JobAction> jobs;
+
+	if (_hasPendingVstUnload)
+	{
+		_hasPendingVstUnload = false;
+
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UNLOADVST;
+		job.SourceId = Id();
+		job.VstIndex = _pendingVstUnload;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
+	}
+
+	auto pendingLoads = std::move(_pendingVstLoads);
+	for (auto& path : pendingLoads)
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_LOADVST;
+		job.SourceId = Id();
+		job.VstPath = std::move(path);
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(std::move(job));
+	}
+
+	GuiElement::_CommitChanges();
+
+	return jobs;
+}
+
+ActionResult Loop::OnAction(JobAction action)
+{
+	switch (action.JobActionType)
+	{
+	case JobAction::JOB_LOADVST:
+	{
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (_vstChain)
+		{
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		auto plugin = action.PreInitPlugin
+			? action.PreInitPlugin
+			: std::make_shared<vst::VstPlugin>();
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
+		{
+			newChain->AddPlugin(plugin);
+			_vstPluginPaths.push_back(action.VstPath);
+			_backVstChain = std::move(newChain);
+			_flipVstChain.store(true, std::memory_order_release);
+			_changesMade = true;
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	case JobAction::JOB_UNLOADVST:
+	{
+		auto newChain = std::make_shared<vst::VstChain>();
+		const auto removeIndex = action.VstIndex;
+		if (_vstChain)
+		{
+			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			{
+				if (i == removeIndex)
+					continue;
+				auto existing = _vstChain->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		if (removeIndex < _vstPluginPaths.size())
+			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+
+		_backVstChain = std::move(newChain);
+		_flipVstChain.store(true, std::memory_order_release);
+		_changesMade = true;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	default:
+		break;
+	}
+
+	return ActionResult::NoAction();
 }

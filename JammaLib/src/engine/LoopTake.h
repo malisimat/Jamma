@@ -128,8 +128,11 @@ namespace engine
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
-		void LoadVstPlugin(std::wstring path, float sampleRate, unsigned int blockSize);
+		// Staging only — actual load/unload happens on the job thread after
+		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
+		void LoadVstPlugin(std::wstring path);
 		void UnloadVstPlugin(size_t index);
+		void SetSampleRate(float sampleRate);
 		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
@@ -189,7 +192,15 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
+		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
+		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+		std::vector<std::wstring> _pendingVstLoads;
+		bool _hasPendingVstUnload{ false };
+		size_t _pendingVstUnload{ 0 };
+		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
