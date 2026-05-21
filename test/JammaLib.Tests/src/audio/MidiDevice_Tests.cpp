@@ -1,5 +1,7 @@
 #include <atomic>
+#include <cstdlib>
 #include <thread>
+#include <unordered_set>
 
 #include "gtest/gtest.h"
 #include "audio/MidiDevice.h"
@@ -7,16 +9,20 @@
 using audio::MidiDevice;
 
 TEST(MidiDevice, EnumeratesInputDevices) {
-	auto devices = MidiDevice::EnumerateInputDevices();
-	std::cout << "[TEST][MIDI] Enumerated devices: " << devices.size() << std::endl;
-	for (const auto& d : devices)
-		std::cout << "[TEST][MIDI]   #" << d.DeviceId << " " << d.Name << std::endl;
+	std::vector<audio::MidiInputDeviceInfo> devices;
+	ASSERT_NO_THROW(devices = MidiDevice::EnumerateInputDevices());
 
-	// This environment may legitimately have zero MIDI input devices attached.
-	ASSERT_GE(devices.size(), 0u);
+	std::unordered_set<unsigned int> ids;
+	for (const auto& d : devices)
+	{
+		ASSERT_TRUE(ids.insert(d.DeviceId).second);
+	}
 }
 
 TEST(MidiDevice, OpensPreferredDeviceWhenAvailable) {
+	if (nullptr == std::getenv("JAMMA_ENABLE_MIDI_HARDWARE_TESTS"))
+		GTEST_SKIP() << "Set JAMMA_ENABLE_MIDI_HARDWARE_TESTS=1 to run MIDI hardware tests.";
+
 	auto devices = MidiDevice::EnumerateInputDevices();
 	if (devices.empty())
 		GTEST_SKIP() << "No MIDI devices available on this machine.";

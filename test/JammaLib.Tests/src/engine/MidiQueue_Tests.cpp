@@ -75,7 +75,7 @@ TEST(MidiQueue, WrapsAroundInternalIndices) {
 	ASSERT_EQ(0u, q.DroppedCount());
 }
 
-TEST(MidiQueue, OverflowDropsOldestAndKeepsNewest) {
+TEST(MidiQueue, OverflowDropsNewestAndKeepsExistingBufferedEvents) {
 	MidiQueue<kCap> q;
 	// Push kCap events; the SPSC ring holds kCap-1, so the last push overflows.
 	for (std::uint32_t i = 0; i < kCap; ++i)
@@ -89,15 +89,15 @@ TEST(MidiQueue, OverflowDropsOldestAndKeepsNewest) {
 
 	ASSERT_EQ(1u, q.DroppedCount());
 
-	// Oldest (offset 0) should have been dropped; remaining offsets begin at 1.
-	std::uint32_t expected = 1;
+	// Existing buffered events are preserved; overflow drops the newest push.
+	std::uint32_t expected = 0;
 	MidiEvent out{};
 	while (q.Pop(out))
 	{
 		ASSERT_EQ(expected, out.sampleOffset);
 		++expected;
 	}
-	ASSERT_EQ(kCap, expected); // we popped events 1..kCap-1 inclusive
+	ASSERT_EQ(kCap - 1, expected); // we popped events 0..kCap-2 inclusive
 }
 
 TEST(MidiQueue, ClearResetsState) {

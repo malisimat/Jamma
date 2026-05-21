@@ -50,7 +50,7 @@ void MidiLoop::Reset() noexcept
 	_held.reset();
 }
 
-void MidiLoop::ReadBlock(std::uint64_t globalSample,
+void MidiLoop::ReadBlock(std::uint32_t globalSample,
                          std::uint32_t numSamples,
                          IMidiSink& sink) noexcept
 {
@@ -58,7 +58,7 @@ void MidiLoop::ReadBlock(std::uint64_t globalSample,
 		return;
 
 	std::uint32_t remaining = numSamples;
-	std::uint64_t cursor = globalSample;
+	std::uint32_t cursor = globalSample;
 
 	while (remaining > 0u)
 	{
@@ -68,14 +68,14 @@ void MidiLoop::ReadBlock(std::uint64_t globalSample,
 		const std::uint32_t segment = (remaining < roomInLoop) ? remaining : roomInLoop;
 
 		// globalBase is the absolute sample corresponding to loopOffset.
-		const std::uint64_t globalBase = cursor - loopOffset;
+		const std::uint32_t globalBase = cursor - loopOffset;
 		EmitEventsInRange(loopOffset, loopOffset + segment, globalBase, sink);
 
 		const bool wraps = (segment == roomInLoop) && (remaining > roomInLoop);
 		if (wraps)
 		{
 			// Wrap boundary: flush held notes at the exact wrap sample.
-			const std::uint64_t wrapSample = globalBase + _loopLengthSamps;
+			const std::uint32_t wrapSample = globalBase + _loopLengthSamps;
 			FlushHeldNotes(wrapSample, sink);
 		}
 
@@ -86,7 +86,7 @@ void MidiLoop::ReadBlock(std::uint64_t globalSample,
 
 void MidiLoop::EmitEventsInRange(std::uint32_t lo,
                                  std::uint32_t hi,
-                                 std::uint64_t globalBase,
+                                 std::uint32_t globalBase,
                                  IMidiSink& sink) noexcept
 {
 	// Linear scan: small N expected, and storage is contiguous.
@@ -100,7 +100,7 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 			continue;
 
 		MidiEvent out = src;
-		out.sampleOffset = static_cast<std::uint32_t>(globalBase + off);
+		out.sampleOffset = globalBase + off;
 		sink.OnEvent(out);
 
 		// Track held notes for wrap flushing.
@@ -111,7 +111,7 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
 	}
 }
 
-void MidiLoop::FlushHeldNotes(std::uint64_t atGlobalSample, IMidiSink& sink) noexcept
+void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept
 {
 	if (_held.none())
 		return;

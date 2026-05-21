@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "Loop.h"
@@ -172,7 +173,7 @@ namespace engine
 		unsigned int _lastBufSize;
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
-		unsigned long _recordedSampCount;
+		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
 		bool _isPunchInActive;

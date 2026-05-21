@@ -256,7 +256,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 
 	if (isRecording)
 	{
-		_recordedSampCount += numSamps;
+		_recordedSampCount.fetch_add(numSamps, std::memory_order_relaxed);
 		_loopsNeedUpdating = true;
 		_changesMade = true;
 	}
@@ -374,7 +374,7 @@ LoopTake::LoopTakeState LoopTake::TakeState() const
 
 unsigned long LoopTake::NumRecordedSamps() const
 {
-	return _recordedSampCount;
+	return _recordedSampCount.load(std::memory_order_relaxed);
 }
 
 std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationName)
@@ -507,10 +507,8 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev) noexcept
 		if (_midiLoops[i]->State() != MidiLoopState::Recording)
 			continue;
 
-		// Best-effort timestamp: _recordedSampCount is updated on the audio
-		// callback thread; this read from the job thread is a deliberate tradeoff.
 		MidiEvent stamped = ev;
-		stamped.sampleOffset = static_cast<std::uint32_t>(_recordedSampCount);
+		stamped.sampleOffset = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		_midiLoops[i]->RecordEvent(stamped);
 		recorded = true;
 	}

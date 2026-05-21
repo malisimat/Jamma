@@ -16,10 +16,9 @@ namespace engine
 	//   - No locks: only acquire/release atomics.
 	//   - Push (producer / MIDI device callback) and Pop (consumer / job thread) are wait-free.
 	//
-	// Overflow policy: drop-oldest.
-	// When the ring is full, Push() advances the read cursor by one slot, overwrites the oldest
-	// event, and returns false so the caller can count drops. This guarantees the newest events
-	// are never lost even if the consumer stalls briefly.
+	// Overflow policy: drop-newest.
+	// When the ring is full, Push() leaves queued events untouched, increments dropped count,
+	// and returns false so the caller can count drops.
 	//
 	// Capacity is a compile-time power of two so head/tail can be masked instead of modded.
 	template <std::size_t Capacity>
@@ -48,18 +47,16 @@ namespace engine
 			const auto head = _head.load(std::memory_order_acquire);
 			const auto next = (tail + 1) & Mask;
 
-			bool overflow = false;
 			if (next == head)
 			{
-				// Full: drop oldest by advancing head.
-				_head.store((head + 1) & Mask, std::memory_order_release);
+				// Full: drop newest to preserve SPSC single-writer ownership of _head.
 				_dropped.fetch_add(1, std::memory_order_relaxed);
-				overflow = true;
+				return false;
 			}
 
 			_buffer[tail] = ev;
 			_tail.store(next, std::memory_order_release);
-			return !overflow;
+			return true;
 		}
 
 		// Consumer side. Returns false if empty.

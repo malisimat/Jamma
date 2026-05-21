@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <exception>
 #include <iostream>
 
 #include "rtmidi/RtMidi.h"
@@ -38,13 +39,22 @@ std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 {
 	std::vector<MidiInputDeviceInfo> devices;
 
-	rt::midi::RtMidiIn midiIn;
-	const auto count = midiIn.getPortCount();
-	devices.reserve(count);
-
-	for (unsigned int i = 0; i < count; ++i)
+	try
 	{
-		devices.push_back({ i, midiIn.getPortName(i) });
+		rt::midi::RtMidiIn midiIn;
+		const auto count = midiIn.getPortCount();
+		devices.reserve(count);
+
+		for (unsigned int i = 0; i < count; ++i)
+			devices.push_back({ i, midiIn.getPortName(i) });
+	}
+	catch (const rt::midi::RtMidiError& err)
+	{
+		std::cout << "[MIDI] Failed to enumerate MIDI input devices: " << err.getMessage() << std::endl;
+	}
+	catch (const std::exception& err)
+	{
+		std::cout << "[MIDI] Failed to enumerate MIDI input devices: " << err.what() << std::endl;
 	}
 
 	return devices;
@@ -111,6 +121,8 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 		}
 	}
 
+	_callback = std::move(callback);
+
 	try
 	{
 		_midiIn->ignoreTypes(false, false, false);
@@ -121,11 +133,11 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 	{
 		std::cout << "[MIDI] Failed to open input device #" << selected.DeviceId
 			<< " (" << selected.Name << "): " << err.getMessage() << std::endl;
+		_callback = MidiMessageCallback();
 		_midiIn.reset();
 		return false;
 	}
 
-	_callback = std::move(callback);
 	_deviceName = selected.Name;
 	_deviceId = selected.DeviceId;
 	_isOpen = true;
@@ -157,11 +169,11 @@ void MidiDevice::Close()
 		          << " (" << _deviceName << ")" << std::endl;
 	}
 
+	_callback = MidiMessageCallback();
 	_midiIn.reset();
 	_isOpen = false;
 	_deviceName.clear();
 	_deviceId = 0u;
-	_callback = MidiMessageCallback();
 }
 
 void MidiDevice::_RtMidiCallback(double,

@@ -58,7 +58,7 @@ namespace engine
 		// Emitted events' `sampleOffset` is rewritten to the absolute global sample at
 		// which the sink should treat them as occurring. If the block crosses a loop
 		// boundary, held notes are flushed with synthetic NoteOffs at the wrap sample.
-		void ReadBlock(std::uint64_t globalSample,
+		void ReadBlock(std::uint32_t globalSample,
 		               std::uint32_t numSamples,
 		               IMidiSink& sink) noexcept;
 
@@ -72,9 +72,9 @@ namespace engine
 	private:
 		void EmitEventsInRange(std::uint32_t lo,
 		                       std::uint32_t hi,
-		                       std::uint64_t globalBase,
+		                       std::uint32_t globalBase,
 		                       IMidiSink& sink) noexcept;
-		void FlushHeldNotes(std::uint64_t atGlobalSample, IMidiSink& sink) noexcept;
+		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
 		{
 			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);

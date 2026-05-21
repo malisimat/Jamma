@@ -740,12 +740,6 @@ void Scene::_PumpMidi()
 		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 			continue;
 
-		std::cout << "[MIDI] Note " << static_cast<unsigned int>(ev.data1)
-			<< (ev.IsNoteOn() ? " down" : " up")
-			<< " vel=" << static_cast<unsigned int>(ev.data2)
-			<< " ch=" << static_cast<unsigned int>(ev.Channel())
-			<< std::endl;
-
 		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
 		for (auto& station : _stations)
 		{

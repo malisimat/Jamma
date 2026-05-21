@@ -51,7 +51,7 @@ TEST(MidiLoop, EmptyLoopProducesNoEvents) {
 	loop.EndRecord(1000u);
 
 	CapturingSink sink;
-	loop.ReadBlock(0ull, 1000u, sink);
+	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_TRUE(sink.events.empty());
 }
 
@@ -63,7 +63,7 @@ TEST(MidiLoop, PlaysBackEventsAtCorrectGlobalSamples) {
 	loop.EndRecord(1000u);
 
 	CapturingSink sink;
-	loop.ReadBlock(0ull, 1000u, sink);
+	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	ASSERT_EQ(100u, sink.events[0].sampleOffset);
 	ASSERT_TRUE(sink.events[0].IsNoteOn());
@@ -79,11 +79,11 @@ TEST(MidiLoop, EventOnBlockBoundaryEmittedExactlyOnce) {
 
 	CapturingSink sink;
 	// First block ends at 256 exclusive — event at 256 must NOT fire here.
-	loop.ReadBlock(0ull, 256u, sink);
+	loop.ReadBlock(0u, 256u, sink);
 	ASSERT_TRUE(sink.events.empty());
 
 	// Next block [256, 512) — event at 256 fires exactly once.
-	loop.ReadBlock(256ull, 256u, sink);
+	loop.ReadBlock(256u, 256u, sink);
 	ASSERT_EQ(1u, sink.events.size());
 	ASSERT_EQ(256u, sink.events[0].sampleOffset);
 }
@@ -100,7 +100,7 @@ TEST(MidiLoop, EventsSplitAcrossMultipleSmallBlocks) {
 	loop.EndRecord(1000u);
 
 	CapturingSink sink;
-	for (std::uint64_t s = 0; s < 1000; s += 64)
+	for (std::uint32_t s = 0; s < 1000u; s += 64u)
 		loop.ReadBlock(s, 64u, sink);
 
 	ASSERT_EQ(6u, sink.events.size());
@@ -122,7 +122,7 @@ TEST(MidiLoop, LoopWrapRebasesGlobalTimestamps) {
 
 	CapturingSink sink;
 	// One block that wraps the loop boundary at sample 1000.
-	loop.ReadBlock(900ull, 400u, sink);
+	loop.ReadBlock(900u, 400u, sink);
 	// Expect: nothing in 900..999 (no events in that span), then events at 1100, 1200.
 	ASSERT_EQ(2u, sink.events.size());
 	ASSERT_EQ(1100u, sink.events[0].sampleOffset);
@@ -140,7 +140,7 @@ TEST(MidiLoop, LoopWrapEmitsForcedNoteOffForHeldNote) {
 
 	CapturingSink sink;
 	// Block that spans 900..1100 — crosses the loop wrap.
-	loop.ReadBlock(900ull, 200u, sink);
+	loop.ReadBlock(900u, 200u, sink);
 
 	// Expect three events:
 	//   1) NoteOn at 1000+100 ... wait, first pass plays 100 (in 900..1000 we hit the
@@ -155,7 +155,7 @@ TEST(MidiLoop, LoopWrapEmitsForcedNoteOffForHeldNote) {
 
 	// Now play a block that captures the NoteOn then wraps.
 	sink.Clear();
-	loop.ReadBlock(100ull, 1000u, sink); // covers loopOffsets [100, 1000) then wraps to [0,100)
+	loop.ReadBlock(100u, 1000u, sink); // covers loopOffsets [100, 1000) then wraps to [0,100)
 	// First pass: NoteOn at globalSample 100 (loopOffset 100, globalBase 0).
 	// Wrap: held NoteOff for note 60 at globalSample 1000.
 	// Second pass segment [0,100): no NoteOn at offset 0..99.
@@ -188,7 +188,7 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	loop.EndRecord(1000u);
 
 	CapturingSink sink;
-	loop.ReadBlock(0ull, 1000u, sink);
+	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(1u, sink.events.size());
 	ASSERT_EQ(60u, sink.events[0].data1);
 }
@@ -222,7 +222,7 @@ TEST(MidiLoop, EndRecordUsesQuantisedLengthFromTimer) {
 
     // Playback wraps at the snapped boundary, not at the raw record end.
     CapturingSink sink;
-    loop.ReadBlock(0ull, 3072u + 200u, sink);
+    loop.ReadBlock(0u, 3072u + 200u, sink);
     // Events: NoteOn@100, NoteOff@2000 (first pass), NoteOn@(3072+100)=3172 (second pass start).
     ASSERT_GE(sink.events.size(), 3u);
     ASSERT_EQ(100u, sink.events[0].sampleOffset);
@@ -249,7 +249,7 @@ TEST(MidiLoop, EndRecordWithPowerQuantisationSnapsToPowerOfTwo) {
     ASSERT_EQ(2048u, loop.LoopLengthSamps());
 
     CapturingSink sink;
-    loop.ReadBlock(0ull, 2048u, sink);
+    loop.ReadBlock(0u, 2048u, sink);
     ASSERT_EQ(2u, sink.events.size());
     ASSERT_EQ(0u, sink.events[0].sampleOffset);
     ASSERT_EQ(1024u, sink.events[1].sampleOffset);
