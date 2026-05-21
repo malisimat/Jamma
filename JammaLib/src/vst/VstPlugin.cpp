@@ -837,8 +837,13 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 
 	if ((_impl->inputChannels != 2) || (_impl->outputChannels != 2))
 	{
+		// Plugin is not natively stereo.  Process once using the left channel
+		// (downmix-to-mono path) and copy the result to the right channel.
+		// Calling ProcessBlock twice would let the second pass observe state
+		// advanced by the first, causing unintended cross-channel interaction
+		// in stateful effects such as delay or reverb.
 		ProcessBlock(leftBuf, numSamples);
-		ProcessBlock(rightBuf, numSamples);
+		std::copy(leftBuf, leftBuf + static_cast<std::ptrdiff_t>(numSamples), rightBuf);
 		return;
 	}
 

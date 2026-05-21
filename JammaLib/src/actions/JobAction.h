@@ -17,10 +17,15 @@ namespace actions
 		~JobAction();
 
 		bool operator==(const JobAction& other) const {
-			if (other.JobActionType == JobActionType)
-				return other.SourceId == SourceId;
-
-			return false;
+			if (other.JobActionType != JobActionType)
+				return false;
+			if (other.SourceId != SourceId)
+				return false;
+			// VST jobs carry path/index payloads — two jobs for the same source
+			// but different plugins must not be treated as duplicates.
+			if (JobActionType == JOB_LOADVST || JobActionType == JOB_UNLOADVST)
+				return other.VstPath == VstPath && other.VstIndex == VstIndex;
+			return true;
 		}
 
 	public:
