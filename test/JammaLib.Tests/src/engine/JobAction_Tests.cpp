@@ -103,3 +103,37 @@ TEST(JobAction, UnloadVstJobsWithSameIndexAreEqual)
 
 	EXPECT_TRUE(a == b);
 }
+
+// JOB_LOADVST equality must not depend on VstIndex (LOADVST doesn't use it).
+TEST(JobAction, LoadVstJobsEqualityIgnoresVstIndex)
+{
+	JobAction a, b;
+	a.JobActionType = JobAction::JOB_LOADVST;
+	a.SourceId = "station-1";
+	a.VstPath = L"C:\\Plugins\\Comp.vst3";
+	a.VstIndex = 0;
+
+	b.JobActionType = JobAction::JOB_LOADVST;
+	b.SourceId = "station-1";
+	b.VstPath = L"C:\\Plugins\\Comp.vst3";
+	b.VstIndex = 99;
+
+	EXPECT_TRUE(a == b);
+}
+
+// JOB_UNLOADVST equality must not depend on VstPath (UNLOADVST doesn't use it).
+TEST(JobAction, UnloadVstJobsEqualityIgnoresVstPath)
+{
+	JobAction a, b;
+	a.JobActionType = JobAction::JOB_UNLOADVST;
+	a.SourceId = "station-1";
+	a.VstIndex = 1;
+	a.VstPath = L"C:\\Plugins\\SomePlugin.vst3";
+
+	b.JobActionType = JobAction::JOB_UNLOADVST;
+	b.SourceId = "station-1";
+	b.VstIndex = 1;
+	b.VstPath = L"C:\\Plugins\\DifferentPlugin.vst3";
+
+	EXPECT_TRUE(a == b);
+}

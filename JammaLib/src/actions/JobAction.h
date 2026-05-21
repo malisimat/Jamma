@@ -23,8 +23,11 @@ namespace actions
 				return false;
 			// VST jobs carry path/index payloads — two jobs for the same source
 			// but different plugins must not be treated as duplicates.
-			if (JobActionType == JOB_LOADVST || JobActionType == JOB_UNLOADVST)
-				return other.VstPath == VstPath && other.VstIndex == VstIndex;
+			// LOADVST is keyed on path; UNLOADVST is keyed on slot index.
+			if (JobActionType == JOB_LOADVST)
+				return other.VstPath == VstPath;
+			if (JobActionType == JOB_UNLOADVST)
+				return other.VstIndex == VstIndex;
 			return true;
 		}
 

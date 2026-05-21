@@ -163,8 +163,14 @@ TEST(VstStaging, Loop_SetSampleRateAndBlockSize_PropagateToFields)
 	loop->SetSampleRate(48000.0f);
 	loop->SetBlockSize(256u);
 
-	// There is no public accessor for _sampleRate/_blockSize, but we can
-	// indirectly verify they are accepted without crash or assertion failure.
-	// The real validation happens in OnAction(JOB_LOADVST) on the job thread.
-	SUCCEED();
+	// Staging a load after SetSampleRate/SetBlockSize must still produce the
+	// correct JOB_LOADVST job — verifies the setters don't corrupt staging state.
+	loop->LoadVstPlugin(L"after_rate_change.vst3");
+	auto jobs = loop->CommitChanges();
+
+	auto it = std::find_if(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_LOADVST;
+	});
+	ASSERT_NE(it, jobs.end());
+	EXPECT_EQ(it->VstPath, L"after_rate_change.vst3");
 }
