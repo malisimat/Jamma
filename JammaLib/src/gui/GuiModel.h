@@ -43,12 +43,21 @@ namespace gui
 		public base::GuiElement
 	{
 	public:
+		struct InstanceAttribute
+		{
+			unsigned int AttributeIndex;
+			unsigned int ComponentCount;
+			std::vector<float> Data;
+		};
+
 		GuiModel(GuiModelParams params);
 
 	public:
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 
 		void SetGeometry(std::vector<float> coords, std::vector<float> uvs);
+		void SetInstanceAttributes(std::vector<InstanceAttribute> attributes, unsigned int instanceCount);
+		unsigned int InstanceCount() const noexcept { return _instanceCount; }
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -57,6 +66,7 @@ namespace gui
 		bool InitTextures(resources::ResourceLib& resourceLib);
 		bool InitShaders(resources::ResourceLib& resourceLib);
 		bool InitVertexArray(std::vector<float> verts, std::vector<float> uvs);
+		bool InitInstanceAttributes();
 		virtual std::weak_ptr<resources::TextureResource> GetTexture()
 		{
 			if (!_modelTextures.empty())
@@ -75,12 +85,19 @@ namespace gui
 	protected:
 		bool _resourcesInitialised;
 		bool _geometryNeedsUpdating;
+		bool _instanceAttributesNeedUpdating;
+		bool _usesInstanceAttributes;
 		GuiModelParams _modelParams;
 		std::vector<float> _backVerts;
 		std::vector<float> _backUvs;
+		std::vector<InstanceAttribute> _backInstanceAttributes;
+		std::vector<InstanceAttribute> _instanceAttributes;
 		GLuint _vertexArray;
 		GLuint _vertexBuffer[3];
+		std::vector<GLuint> _instanceBuffers;
 		unsigned int _numTris;
+		unsigned int _backInstanceCount;
+		unsigned int _instanceCount;
 		std::vector<std::weak_ptr<resources::TextureResource>> _modelTextures;
 		std::vector<std::weak_ptr<resources::ShaderResource>> _modelShaders;
 	};

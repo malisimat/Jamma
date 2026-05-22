@@ -67,6 +67,8 @@ namespace engine
 		std::size_t EventCount() const noexcept { return _eventCount; }
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
+		std::uint64_t Revision() const noexcept { return _revision; }
+		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
 	private:
@@ -84,6 +86,7 @@ namespace engine
 		std::size_t _eventCount;
 		std::uint32_t _loopLengthSamps;
 		std::uint64_t _dropped;
+		std::uint64_t _revision;
 		MidiLoopState _state;
 		std::bitset<TotalNoteSlots> _held;
 	};

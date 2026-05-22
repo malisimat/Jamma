@@ -330,6 +330,8 @@
     <ClInclude Include="src\engine\MidiEvent.h" />
     <ClInclude Include="src\engine\MidiQueue.h" />
     <ClInclude Include="src\engine\MidiLoop.h" />
+    <ClInclude Include="src\engine\MidiNoteSpan.h" />
+    <ClInclude Include="src\engine\MidiModel.h" />
     <ClInclude Include="src\base\Tickable.h" />
   </ItemGroup>
   <ItemGroup>
@@ -418,6 +420,8 @@
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\engine\Timer.cpp" />
     <ClCompile Include="src\engine\MidiLoop.cpp" />
+    <ClCompile Include="src\engine\MidiNoteSpan.cpp" />
+    <ClCompile Include="src\engine\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\graphics\Window.h" />

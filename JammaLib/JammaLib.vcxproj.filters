@@ -281,6 +281,12 @@
     <ClInclude Include="src\engine\MidiLoop.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\MidiNoteSpan.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiModel.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
     </ClInclude>
@@ -582,6 +588,12 @@
     </ClCompile>
     <ClCompile Include="src\engine\MidiLoop.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiNoteSpan.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiModel.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>

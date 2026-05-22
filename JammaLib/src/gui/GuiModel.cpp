@@ -11,12 +11,19 @@ using graphics::GlDrawContext;
 GuiModel::GuiModel(GuiModelParams params) :
 	GuiElement(params),
 	_geometryNeedsUpdating(false),
+	_instanceAttributesNeedUpdating(false),
+	_usesInstanceAttributes(false),
 	_modelParams(params),
 	_vertexArray(0),
 	_vertexBuffer{0,0,0},
+	_instanceBuffers({}),
 	_numTris(0),
+	_backInstanceCount(0),
+	_instanceCount(0),
 	_backVerts({}),
-	_backUvs({})
+	_backUvs({}),
+	_backInstanceAttributes({}),
+	_instanceAttributes({})
 {
 }
 
@@ -47,8 +54,9 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glBindVertexArray(_vertexArray);
 
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
-	if (numInstances > 1)
-		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
+	const auto drawInstances = _usesInstanceAttributes ? _instanceCount : numInstances;
+	if (drawInstances > 1 || _usesInstanceAttributes)
+		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, drawInstances);
 	else
 		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 
@@ -72,6 +80,15 @@ void GuiModel::SetGeometry(std::vector<float> verts, std::vector<float> uvs)
 	_resourcesNeedInitialising = true;
 }
 
+void GuiModel::SetInstanceAttributes(std::vector<InstanceAttribute> attributes, unsigned int instanceCount)
+{
+	_backInstanceAttributes = attributes;
+	_backInstanceCount = instanceCount;
+	_instanceAttributesNeedUpdating = true;
+	_usesInstanceAttributes = true;
+	_resourcesNeedInitialising = true;
+}
+
 void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	auto validated = true;
@@ -89,6 +106,13 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 			_modelParams.Uvs = _backUvs;
 		}
 
+		if (_instanceAttributesNeedUpdating)
+		{
+			_instanceAttributesNeedUpdating = false;
+			_instanceAttributes = _backInstanceAttributes;
+			_instanceCount = _backInstanceCount;
+		}
+
 		validated = InitVertexArray(_modelParams.Verts, _modelParams.Uvs);
 	}
 
@@ -97,9 +121,16 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiModel::_ReleaseResources()
 {
-	glDeleteBuffers(2, _vertexBuffer);
+	glDeleteBuffers(3, _vertexBuffer);
 	_vertexBuffer[0] = 0;
 	_vertexBuffer[1] = 0;
+	_vertexBuffer[2] = 0;
+
+	if (!_instanceBuffers.empty())
+	{
+		glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+		_instanceBuffers.clear();
+	}
 
 	glDeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
@@ -175,6 +206,8 @@ bool GuiModel::InitShaders(ResourceLib & resourceLib)
 
 bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)
 {
+	_ReleaseResources();
+
 	_numTris = (unsigned int)verts.size() / 9;
 	auto numFaces = _numTris / 2;
 
@@ -216,10 +249,45 @@ bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)
 	glEnableVertexAttribArray(2);
 	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
+	if (!InitInstanceAttributes())
+		return false;
+
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
 
 	GlUtils::CheckError("GuiModel::InitVertexArray");
+
+	return true;
+}
+
+bool GuiModel::InitInstanceAttributes()
+{
+	if (!_usesInstanceAttributes || _instanceAttributes.empty())
+		return true;
+
+	_instanceBuffers.resize(_instanceAttributes.size(), 0);
+	glGenBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+
+	for (auto i = 0u; i < _instanceAttributes.size(); ++i)
+	{
+		const auto& attribute = _instanceAttributes[i];
+		if (0u == attribute.ComponentCount)
+			return false;
+
+		glBindBuffer(GL_ARRAY_BUFFER, _instanceBuffers[i]);
+		glBufferData(GL_ARRAY_BUFFER,
+			attribute.Data.size() * sizeof(GLfloat),
+			attribute.Data.data(),
+			GL_DYNAMIC_DRAW);
+		glEnableVertexAttribArray(attribute.AttributeIndex);
+		glVertexAttribPointer(attribute.AttributeIndex,
+			attribute.ComponentCount,
+			GL_FLOAT,
+			GL_FALSE,
+			0,
+			0);
+		glVertexAttribDivisor(attribute.AttributeIndex, 1);
+	}
 
 	return true;
 }

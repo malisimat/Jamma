@@ -188,7 +188,7 @@ This feature should not force a false ownership link between audio `Loop` and MI
 - Geometry rebuilds occur only on non-real-time paths.
 - Live updates are throttled during recording and finalized at record end.
 - `MidiModel` uses the generic instanced rendering path rather than one-off custom draw code.
-- Scene rendering remains correct without picker/highlight integration for MIDI arcs.
+- Scene rendering remains correct including picker/highlight integration for MIDI arcs.
 - Code duplication minimalised, for example common code in LoopModel and MidiModel to be extracted.
 
 ### Edge-case acceptance

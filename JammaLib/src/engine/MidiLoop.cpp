@@ -6,6 +6,7 @@ MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
 	  _loopLengthSamps(0),
 	  _dropped(0),
+	  _revision(0),
 	  _state(MidiLoopState::Empty)
 {
 }
@@ -17,6 +18,7 @@ void MidiLoop::StartRecord() noexcept
 	_dropped = 0;
 	_state = MidiLoopState::Recording;
 	_held.reset();
+	++_revision;
 }
 
 bool MidiLoop::RecordEvent(const MidiEvent& ev) noexcept
@@ -31,6 +33,7 @@ bool MidiLoop::RecordEvent(const MidiEvent& ev) noexcept
 	}
 
 	_events[_eventCount++] = ev;
+	++_revision;
 	return true;
 }
 
@@ -39,6 +42,7 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps) noexcept
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	_held.reset();
+	++_revision;
 }
 
 void MidiLoop::Reset() noexcept
@@ -48,6 +52,16 @@ void MidiLoop::Reset() noexcept
 	_dropped = 0;
 	_state = MidiLoopState::Empty;
 	_held.reset();
+	++_revision;
+}
+
+bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
+{
+	if (index >= _eventCount)
+		return false;
+
+	ev = _events[index];
+	return true;
 }
 
 void MidiLoop::ReadBlock(std::uint32_t globalSample,
