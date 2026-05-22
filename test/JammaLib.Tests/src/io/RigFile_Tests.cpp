@@ -65,6 +65,19 @@ TEST(RigFile, ParsesTrigger) {
 	ASSERT_EQ(6, trig.value().TriggerPairs[2].DitchDown);
 }
 
+TEST(RigFile, ParsesMidiInputChannelsAsOneBasedRigValues) {
+	auto pair = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "51"), std::regex("%DDOWN%"), "52");
+	auto str = "{\"name\":\"Trig2\",\"stationtype\":0,\"pairs\":[" + pair + "],\"midiinput\":[1,16,1,0,17]}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	ASSERT_TRUE(trig.has_value());
+	ASSERT_EQ(2u, trig.value().MidiInputChannels.size());
+	EXPECT_EQ(0u, trig.value().MidiInputChannels[0]);
+	EXPECT_EQ(15u, trig.value().MidiInputChannels[1]);
+}
+
 TEST(RigFile, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	

@@ -973,8 +973,9 @@ void LoopTake::_ArrangeChildren()
 		loopCount++;
 	}
 
-	for (auto& midiLoop : _midiLoops)
+	for (auto midiLoopIndex = 0u; midiLoopIndex < _midiLoops.size(); ++midiLoopIndex)
 	{
+		auto& midiLoop = _midiLoops[midiLoopIndex];
 		if (!midiLoop)
 			continue;
 
@@ -984,6 +985,13 @@ void LoopTake::_ArrangeChildren()
 
 		midiModel->SetModelPosition({ 0.0f, 0.0f, 0.0f });
 		midiModel->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
+
+		const auto displayChannel = (midiLoopIndex < _midiLoopChannels.size()) ?
+			(_midiLoopChannels[midiLoopIndex] + 1u) :
+			0u;
+		std::cout << "[Arranging MIDI loop channel " << displayChannel << "] Scale: "
+			<< 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << std::endl;
+
 		loopCount++;
 	}
 }

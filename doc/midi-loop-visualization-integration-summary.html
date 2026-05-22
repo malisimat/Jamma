@@ -172,7 +172,7 @@
     <div class="wrap">
       <p class="eyebrow">Jamma MIDI loop visualization</p>
       <h1>Integration slice complete</h1>
-      <p class="subtitle">This pass connected the previously built MIDI span extraction, instanced note model, and shader foundation into LoopTake scene ownership and update flow.</p>
+      <p class="subtitle">This pass connected the previously built MIDI span extraction, instanced note model, and shader foundation into LoopTake scene ownership and update flow, then fixed the Trig2 runtime channel wiring found during manual validation.</p>
     </div>
   </header>
 
@@ -185,6 +185,7 @@
           <li>MIDI loops now own an attached <code>MidiModel</code>.</li>
           <li>LoopTake creates, arranges, draws, and updates MIDI rings.</li>
           <li>Record-end model rebuild produces final note spans immediately.</li>
+          <li>Rig <code>midiinput</code> values are parsed as human MIDI channels 1-16 and normalized internally to 0-15.</li>
         </ul>
       </article>
 
@@ -196,8 +197,8 @@
       <article class="card span-4">
         <h3>Verification</h3>
         <ul>
-          <li>Focused MIDI visualization tests: 26 passed.</li>
-          <li>Full native suite: 308 passed, 1 skipped.</li>
+          <li>Focused rig/trigger/MIDI visualization tests: 39 passed.</li>
+          <li>Full native suite: 309 passed, 1 skipped.</li>
           <li>Debug x64 app target: build succeeded.</li>
         </ul>
       </article>
@@ -214,6 +215,8 @@
           <li><code>LoopTake::Play</code> forces a final MIDI model rebuild after <code>EndRecord</code>, so clamped/unmatched notes are visible immediately.</li>
           <li><code>Loop</code> exposes its display fraction so MIDI rings can follow audio ring rotation when audio loops are present.</li>
           <li><code>LoopTake</code> tracks a lightweight MIDI visual playback cursor for MIDI-only takes.</li>
+          <li><code>RigFile::Trigger::FromJson</code> now treats <code>midiinput</code> as user-facing MIDI channel numbers, so <code>"midiinput":[1]</code> matches incoming MIDI channel 1 events.</li>
+          <li><code>LoopTake::_ArrangeChildren</code> logs MIDI ring arrangement by display channel, making the third visual ring visible in console diagnostics.</li>
         </ul>
       </article>
 
@@ -224,6 +227,7 @@
           <li><code>MidiLoop.AttachedModelClampsRecordingNoteToDisplayLength</code> verifies live recording display length clamps an open note.</li>
           <li><code>LoopTakeMidiVisualization.RecordCreatesMidiModelChild</code> verifies MIDI recording creates a model child.</li>
           <li><code>LoopTakeMidiVisualization.PlayFinalizesMidiModelSpans</code> verifies record end finalizes note-span instances through LoopTake.</li>
+          <li><code>RigFile.ParsesMidiInputChannelsAsOneBasedRigValues</code> verifies Trig2-style <code>midiinput</code> values normalize to internal zero-based MIDI channels.</li>
         </ul>
       </article>
     </section>
@@ -243,12 +247,12 @@
             <td>Build succeeded with 0 warnings and 0 errors.</td>
           </tr>
           <tr>
-            <td><code>JammaLib.Tests.exe --gtest_filter="MidiNoteSpan.*:MidiLoop.*:LoopTakeMidiVisualization.*"</code></td>
-            <td>26 tests passed.</td>
+            <td><code>JammaLib.Tests.exe --gtest_filter="RigFile.*:Trigger.*:MidiLoop.*:MidiNoteSpan.*:LoopTakeMidiVisualization.*"</code></td>
+            <td>39 tests passed.</td>
           </tr>
           <tr>
             <td><code>JammaLib.Tests.exe</code></td>
-            <td>308 tests passed, 1 skipped: <code>MidiDevice.OpensPreferredDeviceWhenAvailable</code>.</td>
+            <td>309 tests passed, 1 skipped: <code>MidiDevice.OpensPreferredDeviceWhenAvailable</code>.</td>
           </tr>
           <tr>
             <td><code>MSBuild.exe Jamma.sln /m /t:Jamma /p:Configuration=Debug /p:Platform=x64</code></td>
@@ -266,15 +270,17 @@
           <li><code>JammaLib/src/engine/LoopTake.h</code> and <code>LoopTake.cpp</code></li>
           <li><code>JammaLib/src/engine/Loop.h</code> and <code>Loop.cpp</code></li>
           <li><code>JammaLib/src/engine/MidiModel.h</code></li>
+          <li><code>JammaLib/src/io/RigFile.cpp</code></li>
           <li><code>test/JammaLib.Tests/src/engine/MidiLoop_Tests.cpp</code></li>
+          <li><code>test/JammaLib.Tests/src/io/RigFile_Tests.cpp</code></li>
           <li><code>doc/midi-loop-visualization-integration-summary.html</code></li>
         </ul>
       </article>
 
       <article class="card span-4">
-        <h2>Remaining Check</h2>
-        <p><span class="status pending">Manual</span></p>
-        <p style="margin-top: 10px;">The app compiles, but live visual confirmation still needs a MIDI-capable manual run: record short and long notes, confirm concentric MIDI rings, hover/picker behavior, and rotation alignment in the actual scene.</p>
+        <h2>Manual Follow-Up</h2>
+        <p><span class="status pending">Ready</span></p>
+        <p style="margin-top: 10px;">Manual Trig2 validation should now show a MIDI arrangement log for channel 1, followed by note arcs when recording on a MIDI instrument set to channel 1. The app compiles, but hardware visual confirmation still needs the local MIDI device run.</p>
       </article>
     </section>
 

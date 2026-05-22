@@ -226,8 +226,12 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 				auto inChans = std::get<std::vector<unsigned long>>(jsonArray.Array);
 				for (auto chan : inChans)
 				{
-					if (midiInputChannels.end() == std::find(midiInputChannels.begin(), midiInputChannels.end(), chan))
-						midiInputChannels.push_back((unsigned int)chan);
+					if ((chan < 1ul) || (chan > 16ul))
+						continue;
+
+					const auto zeroBasedChan = static_cast<unsigned int>(chan - 1ul);
+					if (midiInputChannels.end() == std::find(midiInputChannels.begin(), midiInputChannels.end(), zeroBasedChan))
+						midiInputChannels.push_back(zeroBasedChan);
 				}
 			}
 		}
