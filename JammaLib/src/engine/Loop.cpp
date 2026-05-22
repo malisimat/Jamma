@@ -1,6 +1,22 @@
 #include "Loop.h"
 #include <algorithm>
 
+namespace
+{
+	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	{
+		if (!chain)
+			return;
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+				vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+		chain.reset();
+	}
+}
+
 using namespace base;
 using namespace engine;
 using namespace resources;
@@ -12,6 +28,13 @@ using audio::AudioMixerParams;
 using graphics::GlDrawContext;
 using actions::JobAction;
 using actions::ActionResult;
+
+Loop::~Loop()
+{
+	DrainVstChain(_vstChain);
+	DrainVstChain(_backVstChain);
+	ReleaseResources();
+}
 
 Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :

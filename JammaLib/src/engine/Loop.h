@@ -95,7 +95,7 @@ namespace engine
 	public:
 		Loop(LoopParams params,
 			audio::AudioMixerParams mixerParams);
-		~Loop() { ReleaseResources(); }
+		~Loop();
 
 		// Copy
 		Loop(const Loop&) = delete;

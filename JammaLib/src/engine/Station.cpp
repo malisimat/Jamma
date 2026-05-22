@@ -12,6 +12,19 @@ using gui::GuiToggleParams;
 
 namespace
 {
+	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	{
+		if (!chain)
+			return;
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+				vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+		chain.reset();
+	}
+
 	unsigned int ResolveSampleRate(std::optional<io::UserConfig> cfg,
 		std::optional<audio::AudioStreamParams> params)
 	{
@@ -86,6 +99,8 @@ Station::Station(StationParams params,
 
 Station::~Station()
 {
+	DrainVstChain(_vstChain);
+	DrainVstChain(_backVstChain);
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,

@@ -1,5 +1,21 @@
 #include "LoopTake.h"
 
+namespace
+{
+	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	{
+		if (!chain)
+			return;
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+				vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+		chain.reset();
+	}
+}
+
 using namespace engine;
 using base::AudioSink;
 using base::AudioSource;
@@ -63,6 +79,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 
 LoopTake::~LoopTake()
 {
+	DrainVstChain(_vstChain);
+	DrainVstChain(_backVstChain);
 }
 
 std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeParams, io::JamFile::LoopTake takeStruct, std::wstring dir)
