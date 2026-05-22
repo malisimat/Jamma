@@ -8,6 +8,27 @@
 
 using audio::MidiDevice;
 
+TEST(MidiDevice, IsClosedBeforeOpen) {
+	MidiDevice device;
+	ASSERT_FALSE(device.IsOpen());
+}
+
+TEST(MidiDevice, CloseOnUnopenedDeviceIsSafe) {
+	MidiDevice device;
+	ASSERT_NO_THROW(device.Close());
+	ASSERT_FALSE(device.IsOpen());
+}
+
+// When a name has no match, Open() falls back to the first available device (returns true)
+// or returns false if no devices exist at all. Either way, the return value must match IsOpen().
+TEST(MidiDevice, OpenWithUnknownNameIsConsistent) {
+	MidiDevice device;
+	auto result = device.Open("__jamma_bogus_device_xyzzy_12345__",
+		[](std::uint8_t, std::uint8_t, std::uint8_t) {});
+	ASSERT_EQ(result, device.IsOpen());
+	device.Close();
+}
+
 TEST(MidiDevice, EnumeratesInputDevices) {
 	std::vector<audio::MidiInputDeviceInfo> devices;
 	ASSERT_NO_THROW(devices = MidiDevice::EnumerateInputDevices());
@@ -20,7 +41,12 @@ TEST(MidiDevice, EnumeratesInputDevices) {
 }
 
 TEST(MidiDevice, OpensPreferredDeviceWhenAvailable) {
-	if (nullptr == std::getenv("JAMMA_ENABLE_MIDI_HARDWARE_TESTS"))
+	char* envVal = nullptr;
+	size_t envLen = 0;
+	_dupenv_s(&envVal, &envLen, "JAMMA_ENABLE_MIDI_HARDWARE_TESTS");
+	bool hasEnvVar = (envVal != nullptr);
+	free(envVal);
+	if (!hasEnvVar)
 		GTEST_SKIP() << "Set JAMMA_ENABLE_MIDI_HARDWARE_TESTS=1 to run MIDI hardware tests.";
 
 	auto devices = MidiDevice::EnumerateInputDevices();
