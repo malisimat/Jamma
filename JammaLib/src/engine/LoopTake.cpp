@@ -493,18 +493,20 @@ unsigned long LoopTake::NumRecordedSamps() const
 std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationName)
 {
 	auto newNumLoops = (unsigned int)_loops.size() + 1;
+	const auto loopSlot = static_cast<unsigned int>(_backLoops.size());
+	(void)chan;
 
 	auto loopHeight = _CalcLoopHeight(_sizeParams.Size.Height, newNumLoops);
 
 	audio::WireMixBehaviourParams wire;
-	wire.Channels = { chan };
+	wire.Channels = { loopSlot };
 	auto mixerParams = Loop::GetMixerParams({ 110, loopHeight }, wire);
 	
 	LoopParams loopParams;
 	loopParams.Wav = stationName;
 	loopParams.Id = stationName + "-" + utils::GetGuid();
 	loopParams.TakeId = _id;
-	loopParams.Channel = chan;
+	loopParams.Channel = loopSlot;
 	loopParams.FadeSamps = _fadeSamps;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 	AddLoop(loop);
@@ -970,19 +972,27 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
+	const auto useBackState = _changesMade && _flipLoopBuffer;
+	const auto& loops = useBackState ? _backLoops : _loops;
+	const auto& audioBuffers = useBackState ? _backAudioBuffers : _audioBuffers;
+
 	switch (source)
 	{
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
-		if (channel < _loops.size())
-			return _loops[channel];
+		if (channel < loops.size())
+			return loops[channel];
 
 		break;
 	case Audible::AUDIOSOURCE_LOOPS:
+		if (channel < audioBuffers.size())
+			return audioBuffers[channel];
+
+		break;
 	case Audible::AUDIOSOURCE_MIXER:
-		if (channel < _audioBuffers.size())
-			return _audioBuffers[channel];
+		if (channel < audioBuffers.size())
+			return audioBuffers[channel];
 
 		break;
 	}

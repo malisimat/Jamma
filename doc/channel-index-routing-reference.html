@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jamma Channel Index and Routing Reference</title>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Jamma Channel Indexing and Routing: What the Code Actually Does</h1>
+      <p class="subtitle">
+        This document validates the current implementation for record and playback routing across
+        <code>ChannelMixer</code>, <code>Station</code>, <code>LoopTake</code>, and <code>Loop</code>,
+        with special attention to channel index transforms, trigger behavior, and practical edge cases.
+      </p>
+      <div class="stamp">Derived from source review on 2026-05-22 (Jamma-vst3 worktree)</div>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <h2>1) Quick Verdict on Your Assumptions</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Assumption</th>
+              <th>Verdict</th>
+              <th>What Actually Happens</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ADC input 0..N-1 maps 1:1 to ChannelMixer</td>
+              <td><span class="ok">Confirmed</span></td>
+              <td><code>ChannelMixer::FromAdc</code> writes each hardware channel index directly into per-channel ADC ring buffers.</td>
+            </tr>
+            <tr>
+              <td>ChannelMixer maps to Station based on Trigger wiring</td>
+              <td><span class="nope">Incorrect</span></td>
+              <td><code>ChannelMixer::WriteToSink</code> always calls <code>dest->OnBlockWriteChannel(chan,...)</code> by channel index. Trigger wiring does not participate in this index map.</td>
+            </tr>
+            <tr>
+              <td>Station passes to LoopTake based on Trigger wiring</td>
+              <td><span class="partial">Partial</span></td>
+              <td>Station fans record sources (<code>ADC</code>/<code>MONITOR</code>/<code>BOUNCE</code>) to all takes by the same <code>channel</code>. Triggers decide which takes are armed/created, not per-sample channel remap.</td>
+            </tr>
+            <tr>
+              <td>LoopTake 0..numLoops-1 maps based on Trigger wiring to Loop</td>
+              <td><span class="nope">Incorrect</span></td>
+              <td><code>LoopTake::_InputChannel</code> maps directly by index: <code>channel -> _loops[channel]</code> for record sources.</td>
+            </tr>
+            <tr>
+              <td>Loop is mono (single stream)</td>
+              <td><span class="ok">Confirmed</span></td>
+              <td>Loop reads mono sample stream, then mixer/trigger behavior distributes to destination channels.</td>
+            </tr>
+            <tr>
+              <td>Playback Loop to LoopTake buffer is 1:1 first loop to first buffer</td>
+              <td><span class="partial">Conditionally true</span></td>
+              <td>Loop output channel is seeded from <code>LoopParams.Channel</code> (ADC channel at creation), so routing is by loop channel tag, not guaranteed loop slot index.</td>
+            </tr>
+            <tr>
+              <td>LoopTake to Station buffer is matched by index</td>
+              <td><span class="partial">Default only</span></td>
+              <td>Default route is <code>i -> i</code>, but <code>LoopTake</code> per-buffer mixers can route any loop buffer to any Station bus channel via rack routing.</td>
+            </tr>
+            <tr>
+              <td>Station to DAC is routed by GuiRack/Wire behavior</td>
+              <td><span class="ok">Confirmed</span></td>
+              <td>Station per-bus mixers route bus buffers into ChannelMixer DAC sink channels; <code>ChannelMixer::ToDac</code> then copies sink channels to hardware outputs.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card half">
+        <h2>2) Record Path (Exact)</h2>
+        <div class="flow">
+          <span class="chip">ADC in[ch]</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">ChannelMixer ADC buffer[ch]</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">Station OnBlockWriteChannel(ch)</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">LoopTake OnBlockWriteChannel(ch)</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">LoopTake _loops[ch]</span>
+        </div>
+        <ul>
+          <li>Each callback writes monitor then ADC pass (different <code>request.source</code> values), but channel indices are unchanged.</li>
+          <li>Station does not remap channel numbers for record sources; it fans out by same channel index to each take.</li>
+          <li>LoopTake record-source mapping is strict index lookup (<code>_loops[channel]</code>), so loop count must cover the channel index.</li>
+        </ul>
+        <div class="callout bad">
+          Important implication: recording channels like [2,3] into a take with two loops can miss writes, because valid loop slots are [0,1] while incoming channels are [2,3].
+        </div>
+      </section>
+
+      <section class="card half">
+        <h2>3) Playback Path (Exact)</h2>
+        <div class="flow">
+          <span class="chip">Loop mono read</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">Loop mixer (Wire/Pan/etc.)</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">LoopTake audioBuffers[*]</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">LoopTake per-buffer mixers</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">Station audioBuffers[*]</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">Station per-bus mixers</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">ChannelMixer DAC sink[*]</span>
+          <span class="arrow">-&gt;</span>
+          <span class="chip">Hardware out[*]</span>
+        </div>
+        <ul>
+          <li>Loop sends with source type <code>AUDIOSOURCE_MIXER</code>; LoopTake maps that to <code>_audioBuffers[channel]</code>.</li>
+          <li>LoopTake and Station each run a two-stage model: aggregate into intermediate buffers, then route/mix out through their own mixer arrays.</li>
+          <li>Both stages can run VST chains before final per-channel routing to parent sink.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>4) Trigger Wiring: Where It Matters vs Where It Does Not</h2>
+        <ul>
+          <li>Trigger input channels define which channels are requested when creating new record/overdub takes.</li>
+          <li>Trigger does not remap regular ADC channel numbers during ChannelMixer -> Station -> LoopTake record fanout.</li>
+          <li>During overdub bounce (<code>Station::OnBounce</code>), Trigger participates by routing loop audio through <code>Trigger::_overdubMixer</code> using Bounce behavior channels.</li>
+          <li>So trigger wiring matters strongly for overdub control path, but not for base ADC channel-index transport.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>5) Your 2-Loops to Separate Stereo Pairs Scenario</h2>
+        <p>
+          Goal: Loop A -> out 0/1 with its own pan, Loop B -> out 2/3 with its own pan.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Part</th>
+              <th>Current Status</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Separate stereo-pair assignment</td>
+              <td><span class="ok">Supported</span></td>
+              <td>Set LoopTake mixer routes so buffer 0 routes to {0,1}, buffer 1 routes to {2,3}.</td>
+            </tr>
+            <tr>
+              <td>Independent per-loop panning (different L/R gains)</td>
+              <td><span class="partial">Not fully supported in LoopTake stage</span></td>
+              <td>LoopTake per-buffer mixers are Merge/Wire-style channel selection. No per-output gain vector at that stage without behavior changes.</td>
+            </tr>
+            <tr>
+              <td>Works with non-contiguous source channels (e.g., input 2 and 3)</td>
+              <td><span class="nope">Broken today</span></td>
+              <td>Code currently conflates channel index and loop slot in both record and playback handoff points.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>6) Confirmed Divergences and Bugs</h2>
+        <div class="callout warn">
+          A separate fix plan is provided in <strong>doc/channel-routing-fix-plan.md</strong>.
+        </div>
+        <ul>
+          <li><strong>Confirmed bug:</strong> LoopTake assumes <code>loop slot index == channel index</code> in record and playback handoff code paths.</li>
+          <li><strong>Confirmed bug:</strong> ChannelMixer channel count shrink path does not actually shrink internal buffers due incorrect resize target.</li>
+          <li><strong>Divergence from assumption:</strong> Trigger wiring is not the primary index mapper for normal record fanout; direct channel index transport is.</li>
+        </ul>
+        <p class="muted">If these bugs are fixed, the routing model will align much better with user mental model and multichannel edge cases.</p>
+      </section>
+    </div>
+  </div>
+</body>
+</html>

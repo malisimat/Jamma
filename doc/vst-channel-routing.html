@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jamma VST Channel Routing Reference</title>
+<style>
+  :root {
+    --bg: #1a1d23;
+    --surface: #23272f;
+    --surface2: #2c3040;
+    --border: #3a3f52;
+    --accent: #5b8dd9;
+    --accent2: #7ecba1;
+    --accent3: #e0a850;
+    --accent4: #d9605b;
+    --text: #d4d8e8;
+    --text-dim: #8890a8;
+    --code-bg: #1a1f2e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.9rem; color: var(--accent); margin-bottom: 0.3rem; }
+  .subtitle { color: var(--text-dim); margin-bottom: 2.5rem; font-size: 0.95rem; }
+  h2 { font-size: 1.3rem; color: var(--accent2); margin: 2.2rem 0 0.8rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h3 { font-size: 1.05rem; color: var(--accent3); margin: 1.4rem 0 0.5rem; }
+  h4 { font-size: 0.95rem; color: var(--text-dim); margin: 1rem 0 0.3rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin-bottom: 0.8rem; }
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    color: #c9d1e8;
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 1rem 1.2rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 0.8rem 0 1.2rem;
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 0.85em;
+    line-height: 1.55;
+    color: #c9d1e8;
+  }
+  pre .kw  { color: #7eb8f7; }
+  pre .cm  { color: #5a6680; font-style: italic; }
+  pre .str { color: #7ecba1; }
+  pre .num { color: #e0a850; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.9em;
+  }
+  th {
+    background: var(--surface2);
+    color: var(--accent);
+    text-align: left;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    padding: 0.5rem 0.9rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: var(--surface); }
+  .tag {
+    display: inline-block;
+    padding: 0.15em 0.6em;
+    border-radius: 3px;
+    font-size: 0.8em;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+  .tag-ok    { background: #1e3a2a; color: #7ecba1; border: 1px solid #3a6a50; }
+  .tag-warn  { background: #3a2e10; color: #e0a850; border: 1px solid #6a5820; }
+  .tag-err   { background: #3a1818; color: #d9605b; border: 1px solid #6a3030; }
+  .tag-info  { background: #1a2640; color: #7eb8f7; border: 1px solid #2a4070; }
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent3);
+    padding: 0.9rem 1.1rem;
+    border-radius: 5px;
+    margin: 1rem 0 1.5rem;
+  }
+  .callout.info  { border-left-color: var(--accent); }
+  .callout.warn  { border-left-color: var(--accent3); }
+  .callout.error { border-left-color: var(--accent4); }
+  .callout strong { color: var(--accent3); }
+  .callout.info strong { color: var(--accent); }
+  .callout.error strong { color: var(--accent4); }
+  .flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.8rem 0 1.2rem;
+  }
+  .flow-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.88em;
+    color: var(--text);
+  }
+  .flow-box.highlight { border-color: var(--accent); color: var(--accent); }
+  .flow-arrow { color: var(--text-dim); font-size: 1.1em; }
+  ul, ol { margin: 0.4rem 0 0.8rem 1.6rem; }
+  li { margin-bottom: 0.3rem; }
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.4rem 1.6rem; margin-bottom: 1.8rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin: 0.8rem 0 1.2rem; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .mini-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+  }
+  .mini-card h4 { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<h1>Jamma &mdash; VST Channel Routing Reference</h1>
+<p class="subtitle">How audio channels are defined, negotiated, and routed through the Station &rarr; LoopTake &rarr; Loop hierarchy and their VST insert chains.</p>
+
+<!-- ================================================================ -->
+<h2>1. Audio Architecture Overview</h2>
+
+<div class="section">
+<p>Audio flows through three nested levels. Each level owns a <code>VstChain</code> and calls the appropriate <code>ProcessBlock*</code> variant:</p>
+
+<div class="flow">
+  <div class="flow-box highlight">ADC input channels</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-box">ChannelMixer</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-box highlight">Loop (mono)</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-box highlight">LoopTake (N loops)</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-box highlight">Station (bus)</div>
+  <span class="flow-arrow">&#8594;</span>
+  <div class="flow-box">DAC output channels</div>
+</div>
+
+<table>
+  <tr>
+    <th>Level</th>
+    <th>Channel model</th>
+    <th>ProcessBlock variant</th>
+    <th>HostedLayoutMode</th>
+  </tr>
+  <tr>
+    <td><strong>Loop</strong></td>
+    <td>Always 1 (mono BufferBank)</td>
+    <td><code>ProcessBlock(monoBuf)</code></td>
+    <td><code>MonoFlexible</code></td>
+  </tr>
+  <tr>
+    <td><strong>LoopTake</strong></td>
+    <td>One channel per Loop in the take</td>
+    <td><code>ProcessBlockMulti(ptrs, loopCount)</code></td>
+    <td><code>Exact</code></td>
+  </tr>
+  <tr>
+    <td><strong>Station</strong></td>
+    <td>NumBusChannels (default&nbsp;8, user-configurable)</td>
+    <td><code>ProcessBlockMulti(ptrs, busCount)</code></td>
+    <td><code>Exact</code></td>
+  </tr>
+</table>
+</div>
+
+<!-- ================================================================ -->
+<h2>2. Station &mdash; Channel Count</h2>
+
+<div class="section">
+<h3>How it is defined</h3>
+<p>Station has a <em>bus channel count</em> that drives all its internal buffer, mixer, and VST scratch allocation:</p>
+
+<pre>
+<span class="cm">// Station.cpp</span>
+<span class="kw">const</span> unsigned <span class="kw">int</span> Station::_DefaultNumBusChannels = <span class="num">8</span>;
+
+Station::Station(...)
+{
+    SetNumBusChannels(_DefaultNumBusChannels); <span class="cm">// called in constructor</span>
+}
+</pre>
+
+<p><code>SetNumBusChannels(chans)</code> rebuilds:</p>
+<ul>
+  <li><code>_audioBuffers</code> &mdash; one ring-buffer per bus channel (latency-compensated mix-down target).</li>
+  <li><code>_audioMixers</code> &mdash; one <code>AudioMixer</code> per bus channel (routes to DAC outputs via routing matrix).</li>
+  <li><code>_vstBlockScratch</code> / <code>_vstBlockPtrs</code> &mdash; flat scratch storage and pointer array, sized <code>chans * MaxBlockSize</code>.</li>
+</ul>
+
+<p>It is called again whenever the user changes the channel count via the <strong>GuiRack</strong> UI panel, and also propagated to all child LoopTakes via <code>take-&gt;SetNumBusChannels(chans)</code>.</p>
+
+<h3>NumInputChannels / NumOutputChannels</h3>
+<table>
+  <tr><th>AudioSourceType</th><th>Returns</th></tr>
+  <tr><td><code>AUDIOSOURCE_LOOPS</code>, <code>AUDIOSOURCE_MIXER</code></td><td><code>NumBusChannels()</code></td></tr>
+  <tr><td><code>AUDIOSOURCE_ADC</code>, <code>AUDIOSOURCE_MONITOR</code>, <code>AUDIOSOURCE_BOUNCE</code></td><td><code>NumBusChannels()</code> for output; max of all LoopTakes&rsquo; channel counts for input</td></tr>
+</table>
+
+<h3>WriteBlock (DAC output path)</h3>
+<p>Each audio block the station plays back:</p>
+<ol>
+  <li>Each LoopTake writes its mix-down samples into the Station&rsquo;s <code>_audioBuffers</code> via <code>OnBlockWriteChannel</code>.</li>
+  <li>Station reads each buffer into the corresponding <code>_vstBlockPtrs[i]</code> scratch slot and applies <code>masterLevel</code>.</li>
+  <li>The VST chain is called: <code>_vstChain-&gt;ProcessBlockMulti(_vstBlockPtrs.data(), channelCount, sampsToRead)</code> where <code>channelCount = min(_audioBuffers.size(), _audioMixers.size())</code>.</li>
+  <li>Each processed channel is forwarded to the DAC via its <code>_audioMixers[i]-&gt;WriteBlock()</code>.</li>
+</ol>
+</div>
+
+<!-- ================================================================ -->
+<h2>3. LoopTake &mdash; Channel Count</h2>
+
+<div class="section">
+<h3>How it is defined</h3>
+<p>A LoopTake holds one <strong>Loop per recorded input channel</strong>. Its channel count is therefore dynamic &mdash; it grows as loops are added during recording:</p>
+
+<pre>
+<span class="cm">// LoopTake.cpp — NumInputChannels</span>
+<span class="kw">unsigned int</span> LoopTake::NumInputChannels(Audible::AudioSourceType source) <span class="kw">const</span>
+{
+    <span class="kw">return</span> (_changesMade &amp;&amp; _flipLoopBuffer) ?
+        (unsigned <span class="kw">int</span>)_backLoops.size() :
+        (unsigned <span class="kw">int</span>)_loops.size();  <span class="cm">// one Loop per input channel</span>
+}
+</pre>
+
+<p><code>NumOutputChannels</code> for <code>AUDIOSOURCE_LOOPS</code>/<code>AUDIOSOURCE_MIXER</code> returns <code>NumBusChannels()</code> (the station bus size, propagated from parent Station). For ADC/MONITOR it also returns the loop count.</p>
+
+<h3>Scratch buffer sizing</h3>
+<p>Whenever loops are committed in <code>_CommitChanges()</code>, <code>_ResizeVstScratch(_audioBuffers.size())</code> is called, keeping <code>_vstBlockPtrs</code> in sync with the loop count:</p>
+
+<pre>
+<span class="cm">// LoopTake.cpp — _CommitChanges</span>
+_loops       = _backLoops;
+_audioBuffers = _backAudioBuffers;
+_audioMixers  = _backAudioMixers;
+_ResizeVstScratch((unsigned <span class="kw">int</span>)_audioBuffers.size());
+</pre>
+
+<h3>WriteBlock (DAC output path)</h3>
+<p>Each Loop in the take reads its mono audio into the corresponding <code>_audioBuffers[i]</code> via <code>_audioMixers[i]-&gt;WriteBlock</code>. The LoopTake then:</p>
+<ol>
+  <li>Copies each buffer into <code>_vstBlockPtrs[i]</code>.</li>
+  <li>Calls <code>chain-&gt;ProcessBlockMulti(_vstBlockPtrs.data(), channelCount, sampsToRead)</code> where <code>channelCount = min(_audioBuffers.size(), _audioMixers.size())</code>.</li>
+  <li>Passes each processed channel to its output AudioMixer (which routes it to the Station bus).</li>
+</ol>
+
+<div class="callout info">
+  <strong>Note:</strong> The guard <code>_vstBlockPtrs.size() &gt;= channelCount</code> (checked before the ProcessBlockMulti call) is a runtime safety check to ensure the scratch array is large enough. Since <code>_ResizeVstScratch</code> always sets it to <code>_audioBuffers.size()</code>, this should always pass in normal operation.
+</div>
+</div>
+
+<!-- ================================================================ -->
+<h2>4. Loop &mdash; Channel Count</h2>
+
+<div class="section">
+<p>Loop is always <strong>mono</strong>. It records a single stream from one ADC input channel (identified by <code>LoopParams::Channel</code>) into a single <code>BufferBank</code>. There is no multichannel concept at the Loop level.</p>
+
+<p>Its <code>AudioMixer</code> can spread the mono signal to one or more output channels (wire or pan behaviour), but the raw loop audio itself is always a single float stream.</p>
+
+<pre>
+<span class="cm">// Loop.cpp — WriteBlock reads mono into tempBuf, then calls VST</span>
+<span class="kw">float</span> tempBuf[constants::MaxBlockSize];
+<span class="kw">auto</span> sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps);
+
+<span class="kw">if</span> (sampsToWrite > <span class="num">0</span>)
+{
+    <span class="kw">if</span> (_vstChain &amp;&amp; _vstChain-&gt;IsActive())
+        _vstChain-&gt;ProcessBlock(tempBuf, <span class="kw">static_cast</span>&lt;<span class="kw">int</span>&gt;(sampsToWrite));
+
+    _mixer-&gt;WriteBlock(dest, tempBuf, sampsToWrite);
+}
+</pre>
+</div>
+
+<!-- ================================================================ -->
+<h2>5. VST Plugin Configuration at Each Level</h2>
+
+<div class="section">
+<h3>5.1 Station &mdash; VST load</h3>
+
+<pre>
+<span class="cm">// Station.cpp — JOB_LOADVST handler</span>
+<span class="kw">auto</span> hostChannels = NumBusChannels();    <span class="cm">// e.g. 8</span>
+<span class="kw">if</span> (hostChannels == <span class="num">0u</span>) hostChannels = <span class="num">1u</span>;
+plugin-&gt;Load(action.VstPath, _sampleRate, _blockSize,
+             hostChannels, vst::HostedLayoutMode::Exact);
+</pre>
+
+<p>The plugin is loaded with <strong>exactly</strong> the current bus channel count and <code>HostedLayoutMode::Exact</code>. This means:</p>
+<ul>
+  <li><code>setBusArrangements</code> requests a speaker arrangement matching <code>hostChannels</code> (e.g. <code>kStereo</code> for 2, <code>k71Music</code> for 8).</li>
+  <li>After negotiation, <code>IsHostedLayoutCompatible</code> requires that the plugin&rsquo;s <em>actual</em> channels after negotiation are &le; <code>hostChannels</code>. This allows a stereo plugin (2 ch) to load on an 8-bus station; it rejects a plugin that insists on more channels than the station offers.</li>
+</ul>
+
+<p>At runtime, <code>ProcessBlockMulti</code> is called with <code>numChannels = channelCount</code> (the live bus size). The updated guard <code>numChannels &lt; requestedChannels</code> ensures:</p>
+<ul>
+  <li>If the bus grew &ge; <code>requestedChannels</code>: the plugin processes its channels; extra channels pass through untouched.</li>
+  <li>If the bus shrank below <code>requestedChannels</code>: the plugin call is a silent no-op.</li>
+</ul>
+
+<h3>5.2 LoopTake &mdash; VST load</h3>
+
+<pre>
+<span class="cm">// LoopTake.cpp — JOB_LOADVST handler</span>
+<span class="kw">auto</span> hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);  <span class="cm">// = _loops.size()</span>
+<span class="kw">if</span> (hostChannels == <span class="num">0u</span>) hostChannels = <span class="num">1u</span>;
+plugin-&gt;Load(action.VstPath, _sampleRate, _lastBufSize,
+             hostChannels, vst::HostedLayoutMode::Exact);
+</pre>
+
+<p>The plugin is loaded with the current loop count as the channel count. Since <code>NumInputChannels</code> ignores the source type and always returns the loop count, this is straightforward:</p>
+<ul>
+  <li>A take with 4 loops loads its VST as a 4-channel plugin.</li>
+  <li>A stereo plugin loaded on that 4-loop take will process loops 0&ndash;1 and leave loops 2&ndash;3 untouched (after the fix to <code>ProcessBlockMulti</code>).</li>
+</ul>
+
+<h3>5.3 Loop &mdash; VST load</h3>
+
+<pre>
+<span class="cm">// Loop.cpp — JOB_LOADVST handler</span>
+plugin-&gt;Load(action.VstPath, _sampleRate, _blockSize,
+             <span class="num">1u</span>, vst::HostedLayoutMode::MonoFlexible);
+</pre>
+
+<p><strong>Always mono, always <code>MonoFlexible</code>.</strong></p>
+<ul>
+  <li><code>ResolveHostedBusLayout(MonoFlexible, 1, inputBusChans, outputBusChans)</code> uses the plugin&rsquo;s own natural bus width rather than insisting on 1.</li>
+  <li><code>IsHostedLayoutCompatible</code> under <code>MonoFlexible</code> always returns true (any positive channel count accepted).</li>
+  <li>At runtime: <code>CopyMonoToInputBuffers</code> broadcasts the mono buffer to all N plugin input channels. <code>FoldOutputToMono</code> averages all M plugin output channels back to mono.</li>
+  <li>A 6-channel plugin on a mono loop source is perfectly legal and works correctly.</li>
+</ul>
+
+<table>
+  <tr>
+    <th>Level</th>
+    <th>numChannels passed to Load()</th>
+    <th>HostedLayoutMode</th>
+    <th>Compatibility rule</th>
+  </tr>
+  <tr>
+    <td>Station</td>
+    <td><code>NumBusChannels()</code> at load time</td>
+    <td><code>Exact</code></td>
+    <td>Plugin actual channels &le; requested (narrower ok; wider rejected)</td>
+  </tr>
+  <tr>
+    <td>LoopTake</td>
+    <td><code>_loops.size()</code> at load time</td>
+    <td><code>Exact</code></td>
+    <td>Same as Station</td>
+  </tr>
+  <tr>
+    <td>Loop</td>
+    <td>Always <code>1</code></td>
+    <td><code>MonoFlexible</code></td>
+    <td>Always compatible; any channel count accepted</td>
+  </tr>
+</table>
+</div>
+
+<!-- ================================================================ -->
+<h2>6. Channel Mixing: What Happens at Each Width Combination</h2>
+
+<div class="section">
+<h3>6.1 At the Loop level (MonoFlexible)</h3>
+
+<table>
+  <tr><th>Plugin channels</th><th>Input path</th><th>Output path</th></tr>
+  <tr>
+    <td>1 (mono)</td>
+    <td>Mono buffer copied to channel 0</td>
+    <td>Channel 0 written back to mono output</td>
+  </tr>
+  <tr>
+    <td>2 (stereo)</td>
+    <td>Mono buffer broadcast to ch 0 and ch 1 (<code>CopyMonoToInputBuffers</code>)</td>
+    <td>Ch 0 + ch 1 averaged &divide; 2 back to mono (<code>FoldOutputToMono</code>)</td>
+  </tr>
+  <tr>
+    <td>N &gt; 1</td>
+    <td>Mono buffer broadcast to all N channels</td>
+    <td>All N channels summed and divided by N back to mono</td>
+  </tr>
+</table>
+
+<div class="callout info">
+  <strong>Fold-to-mono note:</strong> <code>FoldOutputToMono</code> uses a simple equal-weight average. For a reverb or stereo-widener this collapses both sides into centre, which is correct behaviour for a mono loop source.
+</div>
+
+<h3>6.2 At the Station / LoopTake level (Exact, ProcessBlockMulti)</h3>
+
+<p>The key functions are <code>CopyMultiToInputBuffers</code> and <code>CopyOutputToMulti</code>:</p>
+
+<div class="grid2">
+  <div class="mini-card">
+    <h4>CopyMultiToInputBuffers</h4>
+    <p>Copies source channel <em>i</em> to plugin input channel <em>i</em> for <em>i = 0 &hellip; inputChannels-1</em>. Source channels beyond the plugin width are simply not read. Plugin input channels beyond the source width are zero-filled.</p>
+  </div>
+  <div class="mini-card">
+    <h4>CopyOutputToMulti</h4>
+    <p>Copies plugin output channel <em>i</em> to destination channel <em>i</em> for <em>i = 0 &hellip; min(outputChannels, destChannels)-1</em>. Destination channels beyond the plugin&rsquo;s output width are <strong>left untouched</strong> (pass-through). No mixing occurs.</p>
+  </div>
+</div>
+
+<table>
+  <tr>
+    <th>Host bus N</th>
+    <th>Plugin width P</th>
+    <th>Input to plugin</th>
+    <th>Output from plugin</th>
+    <th>Channels N &gt; P</th>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td>8 (exact match)</td>
+    <td>All 8 host channels</td>
+    <td>All 8 channels written back</td>
+    <td><span class="tag tag-ok">N/A</span></td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td>2 (stereo plugin)</td>
+    <td>Host channels 0&ndash;1 copied to plugin inputs</td>
+    <td>Plugin outputs 0&ndash;1 written back to host channels 0&ndash;1</td>
+    <td><span class="tag tag-ok">Pass-through unchanged</span></td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td>1 (mono plugin)</td>
+    <td>Host channel 0 copied to plugin input 0</td>
+    <td>Plugin output 0 written back to host channel 0</td>
+    <td><span class="tag tag-ok">Channels 1&ndash;7 pass through</span></td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>6 (wider than host)</td>
+    <td colspan="3"><span class="tag tag-err">Load fails</span> &mdash; <code>IsHostedLayoutCompatible</code> rejects actual channels &gt; requested. Plugin is not activated.</td>
+  </tr>
+  <tr>
+    <td>1</td>
+    <td>2 (stereo plugin)</td>
+    <td colspan="3"><span class="tag tag-warn">ProcessBlockMulti silent no-op</span> &mdash; numChannels (1) &lt; requestedChannels (2). Guard rejects the call.</td>
+  </tr>
+</table>
+
+<h3>6.3 The &ldquo;5-channel source, 6-channel VST&rdquo; question</h3>
+
+<p>With <code>HostedLayoutMode::Exact</code> (Station and LoopTake):</p>
+<ol>
+  <li>Host requests <code>numChannels = 5</code>. <code>ResolveHostedBusLayout(Exact, 5, &hellip;)</code> yields <code>{ requested=5, input=5, output=5 }</code>.</li>
+  <li><code>setBusArrangements</code> asks the plugin to accept a 5-channel speaker arrangement.</li>
+  <li><code>getBusArrangement</code> reads back what the plugin actually agreed to.</li>
+  <li><code>IsHostedLayoutCompatible</code> checks <code>actualInputChannels &le; 5 &amp;&amp; actualOutputChannels &le; 5</code>.</li>
+  <li>If the plugin insists on 6 channels regardless: <code>6 &le; 5</code> is false &rarr; <strong><code>Load()</code> returns false</strong>. The plugin is not added to the chain.</li>
+  <li>If the plugin negotiates down to 5 (or fewer): <strong>loading succeeds</strong>, and it operates as a 5-channel (or narrower) plugin on the 5-channel bus.</li>
+</ol>
+
+<div class="callout warn">
+  <strong>Practical note:</strong> Most professional VST3 plugins honour <code>setBusArrangements</code> and will negotiate to any requested count up to their maximum. A plugin that hard-codes 6 channels and cannot be configured for fewer will simply fail to load on a 5-bus station. The user would need to set the station to 6 (or more) bus channels first, then load the plugin.
+</div>
+</div>
+
+<!-- ================================================================ -->
+<h2>7. Dynamic Channel Count Changes</h2>
+
+<div class="section">
+<p>Channel counts at all three levels can change after plugins are loaded. The table below summarises what happens in each case.</p>
+
+<table>
+  <tr>
+    <th>Event</th>
+    <th>What is updated</th>
+    <th>Is the VST reloaded?</th>
+    <th>Resulting behaviour</th>
+  </tr>
+  <tr>
+    <td><strong>Station bus channel count changed</strong> (user adjusts GuiRack)</td>
+    <td><code>_audioBuffers</code>, <code>_audioMixers</code>, <code>_vstBlockScratch</code>, <code>_vstBlockPtrs</code> all resized.<br>Child LoopTakes notified via <code>SetNumBusChannels</code>.</td>
+    <td><span class="tag tag-warn">No</span> &mdash; loaded VSTs retain their frozen <code>requestedChannels</code>.</td>
+    <td>
+      New bus &ge; requestedChannels: plugin processes its channels, excess pass through.<br>
+      New bus &lt; requestedChannels: <code>ProcessBlockMulti</code> guard fires; plugin is silently skipped.
+    </td>
+  </tr>
+  <tr>
+    <td><strong>New Loop recorded in a LoopTake</strong></td>
+    <td><code>_backLoops</code>, <code>_backAudioBuffers</code> grow by one. <code>_CommitChanges</code> calls <code>_ResizeVstScratch</code> to grow <code>_vstBlockPtrs</code>.</td>
+    <td><span class="tag tag-warn">No</span></td>
+    <td>
+      New loop count &ge; requestedChannels: plugin processes its channels, new loop channel passes through.<br>
+      New loop count &lt; requestedChannels: plugin silently skipped (no regression from original behaviour).
+    </td>
+  </tr>
+  <tr>
+    <td><strong>New VST loaded on a Station or LoopTake</strong></td>
+    <td>New plugin loaded on the job thread with the <em>current</em> channel count. Swapped in via <code>_backVstChain</code>/<code>_flipVstChain</code>.</td>
+    <td>N/A (fresh load)</td>
+    <td>Plugin&rsquo;s <code>requestedChannels</code> is set to the current bus/loop count. All normal routing applies.</td>
+  </tr>
+  <tr>
+    <td><strong>VstChain with multiple plugins, mixed widths</strong></td>
+    <td>Each plugin in the chain is called sequentially by <code>VstChain::ProcessBlockMulti</code>.</td>
+    <td>N/A</td>
+    <td>
+      Each plugin applies its own guard independently. A mono plugin &rarr; stereo plugin &rarr; 8-channel plugin chain on an 8-bus station: the mono plugin modifies channel 0 only, the stereo plugin then sees the updated channels 0&ndash;1, and the 8-channel plugin sees all 8. Channels not touched by a plugin retain the values from the previous stage.
+    </td>
+  </tr>
+</table>
+
+<h3>The mismatch risk</h3>
+
+<div class="callout warn">
+  <strong>Known gap:</strong> There is no mechanism to automatically reload (or reload-and-renegotiate) a loaded VST plugin when the Station bus count or LoopTake loop count changes <em>after</em> the plugin was loaded. The plugin&rsquo;s <code>requestedChannels</code> is frozen at load time. The immediate consequence:
+  <ul style="margin-top:0.5rem">
+    <li>Station bus shrinks below the plugin&rsquo;s channel count &rarr; plugin is silently bypassed until bus grows back.</li>
+    <li>LoopTake loop count shrinks below the plugin&rsquo;s channel count &rarr; same silent bypass.</li>
+  </ul>
+  If the user needs the plugin to work at a different channel width they must unload and reload it after the channel count change.
+</div>
+</div>
+
+<!-- ================================================================ -->
+<h2>8. Key Helper Functions (VstAudioBuffers.h)</h2>
+
+<div class="section">
+<table>
+  <tr>
+    <th>Function</th>
+    <th>Signature</th>
+    <th>Behaviour</th>
+  </tr>
+  <tr>
+    <td><code>CopyMonoToInputBuffers</code></td>
+    <td><code>(monoInput, numSamples, inputChannels, inputChannelBuffers)</code></td>
+    <td>Broadcast: copies mono buffer into every plugin input channel. Used by <code>ProcessBlock</code>.</td>
+  </tr>
+  <tr>
+    <td><code>CopyMultiToInputBuffers</code></td>
+    <td><code>(sourceChannelBuffers, sourceChannels, numSamples, inputChannelBuffers, inputChannels)</code></td>
+    <td>Copies source channel i &rarr; plugin input i, for i &lt; min(source, input). Plugin inputs beyond source width are zero-filled.</td>
+  </tr>
+  <tr>
+    <td><code>FoldOutputToMono</code></td>
+    <td><code>(outputChannelBuffers, outputChannels, numSamples, monoOutput)</code></td>
+    <td>Averages all plugin output channels into one mono buffer (equal-weight mix). Used by <code>ProcessBlock</code>.</td>
+  </tr>
+  <tr>
+    <td><code>CopyOutputToMulti</code></td>
+    <td><code>(outputChannelBuffers, outputChannels, numSamples, destinationChannelBuffers, destinationChannels)</code></td>
+    <td>Copies plugin output i &rarr; destination i for i &lt; min(output, dest). Destination channels beyond the plugin width are <strong>left untouched</strong> (pass-through). Used by <code>ProcessBlockMulti</code>.</td>
+  </tr>
+  <tr>
+    <td><code>ResolveHostedBusLayout</code></td>
+    <td><code>(mode, requestedChannels, inputBusChannels, outputBusChannels)</code></td>
+    <td><code>Exact</code>: forces requested &times; requested. <code>MonoFlexible</code>: uses the plugin&rsquo;s own natural bus sizes.</td>
+  </tr>
+  <tr>
+    <td><code>IsHostedLayoutCompatible</code></td>
+    <td><code>(layout, actualInputChannels, actualOutputChannels)</code></td>
+    <td><code>Exact</code>: requires actual &le; requested (allows narrower plugin). <code>MonoFlexible</code>: always true.</td>
+  </tr>
+</table>
+</div>
+
+<!-- ================================================================ -->
+<h2>9. ProcessBlockMulti Guard Logic (after fix)</h2>
+
+<div class="section">
+<pre>
+<span class="cm">// VstPlugin.cpp — ProcessBlockMulti</span>
+<span class="cm">// Old: numChannels != _impl->requestedChannels  → exact match only</span>
+<span class="cm">// New: numChannels &lt;  _impl->requestedChannels  → allow caller to be wider</span>
+<span class="kw">if</span> ((numChannels &lt;= <span class="num">0</span>) || (numChannels &lt; _impl-&gt;requestedChannels)
+    || (numSamples &lt;= <span class="num">0</span>) || (static_cast&lt;unsigned <span class="kw">int</span>&gt;(numSamples) &gt; constants::MaxBlockSize))
+    <span class="kw">return</span>;
+</pre>
+
+<p>Consequences of the change:</p>
+<table>
+  <tr>
+    <th>Condition</th>
+    <th>Old behaviour</th>
+    <th>New behaviour</th>
+  </tr>
+  <tr>
+    <td><code>numChannels == requestedChannels</code></td>
+    <td><span class="tag tag-ok">Processes normally</span></td>
+    <td><span class="tag tag-ok">Processes normally</span></td>
+  </tr>
+  <tr>
+    <td><code>numChannels &gt; requestedChannels</code> (wider bus than plugin)</td>
+    <td><span class="tag tag-err">Silent no-op</span></td>
+    <td><span class="tag tag-ok">Plugin processes its channels; excess pass through</span></td>
+  </tr>
+  <tr>
+    <td><code>numChannels &lt; requestedChannels</code> (bus shrank)</td>
+    <td><span class="tag tag-warn">Silent no-op</span></td>
+    <td><span class="tag tag-warn">Silent no-op (unchanged)</span></td>
+  </tr>
+</table>
+
+<p>The pass-through behaviour for extra channels is guaranteed by <code>CopyOutputToMulti</code>, which only writes <code>min(outputChannels, numChannels)</code> channels back and leaves the rest of the destination array untouched.</p>
+</div>
+
+</body>
+</html>
