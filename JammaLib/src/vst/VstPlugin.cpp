@@ -871,7 +871,13 @@ void VstPlugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels
 	if (!_impl || !channelBufs)
 		return;
 
-	if ((numChannels <= 0) || (numChannels != _impl->requestedChannels)
+	// Accept numChannels >= requestedChannels: a narrow plugin (e.g. stereo)
+	// inserted on a wide bus (e.g. 8-ch Station) should process only its
+	// channels and leave the rest of the destination untouched.
+	// CopyMultiToInputBuffers reads only up to inputChannels from the source,
+	// and CopyOutputToMulti writes only min(outputChannels, numChannels) back,
+	// so channels beyond the plugin's width pass through unchanged.
+	if ((numChannels <= 0) || (numChannels < _impl->requestedChannels)
 		|| (numSamples <= 0) || (static_cast<unsigned int>(numSamples) > constants::MaxBlockSize))
 		return;
 
