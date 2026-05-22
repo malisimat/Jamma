@@ -1,5 +1,9 @@
 #include "LoopTake.h"
 
+#include <algorithm>
+
+#include "MidiModel.h"
+
 using namespace engine;
 using base::AudioSink;
 using base::AudioSource;
@@ -39,6 +43,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_recordedSampCount(0),
 	_endRecordSampCount(0),
 	_endRecordSamps(0),
+	_midiVisualPlayIndex(0ul),
+	_midiVisualLoopLength(0ul),
 	_isPunchInActive(false),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
@@ -107,6 +113,14 @@ void LoopTake::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 
 	_ArrangeChildren();
+}
+
+void LoopTake::Draw3d(DrawContext& ctx,
+	unsigned int numInstances,
+	base::DrawPass pass)
+{
+	_UpdateMidiModelRotation();
+	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
 
 unsigned int LoopTake::NumInputChannels(Audible::AudioSourceType source) const
@@ -223,6 +237,13 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	{
 		buffer->EndWrite(numSamps, true);
 		buffer->EndPlay(numSamps);
+	}
+
+	if (_midiVisualLoopLength > 0ul)
+	{
+		_midiVisualPlayIndex += numSamps;
+		while (_midiVisualPlayIndex >= _midiVisualLoopLength)
+			_midiVisualPlayIndex -= _midiVisualLoopLength;
 	}
 }
 
@@ -467,8 +488,11 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_midiVisualPlayIndex = 0ul;
+	_midiVisualLoopLength = 0ul;
 	_isPunchInActive = false;
 	_backLoops.clear();
+	_RemoveMidiModelChildren();
 
 	for (auto chan : channels)
 	{
@@ -481,9 +505,20 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 	for (auto midiChan : midiChannels)
 	{
 		auto midiLoop = std::make_shared<MidiLoop>();
+		MidiModelParams modelParams;
+		modelParams.ModelScale = 1.0f;
+		auto midiModel = std::make_shared<MidiModel>(modelParams);
+		midiLoop->AttachModel(midiModel);
 		midiLoop->StartRecord();
 		_midiLoops.push_back(midiLoop);
 		_midiLoopChannels.push_back(midiChan);
+		_children.push_back(midiModel);
+	}
+
+	if (!midiChannels.empty())
+	{
+		Init();
+		_ArrangeChildren();
 	}
 
 	//_flipLoopBuffer = true;
@@ -527,6 +562,12 @@ void LoopTake::Play(unsigned long index,
 
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
+	_midiVisualLoopLength = loopLength;
+	_midiVisualPlayIndex = index >= constants::MaxLoopFadeSamps ?
+		index - constants::MaxLoopFadeSamps :
+		index;
+	while (_midiVisualLoopLength > 0ul && _midiVisualPlayIndex >= _midiVisualLoopLength)
+		_midiVisualPlayIndex -= _midiVisualLoopLength;
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive;
 
 	for (auto& loop : _loops)
@@ -537,7 +578,10 @@ void LoopTake::Play(unsigned long index,
 	for (auto& midiLoop : _midiLoops)
 	{
 		if (midiLoop->State() == MidiLoopState::Recording)
+		{
 			midiLoop->EndRecord(static_cast<std::uint32_t>(loopLength));
+			midiLoop->UpdateModelFromEvents(static_cast<std::uint32_t>(loopLength), true);
+		}
 	}
 
 	auto isOverdubbing = (STATE_OVERDUBBING == _state) || (STATE_PUNCHEDIN == _state);
@@ -672,6 +716,8 @@ void LoopTake::Ditch()
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_midiVisualPlayIndex = 0ul;
+	_midiVisualLoopLength = 0ul;
 	_isPunchInActive = false;
 
 	for (auto& loop : _loops)
@@ -685,6 +731,7 @@ void LoopTake::Ditch()
 
 	for (auto& midiLoop : _midiLoops)
 		midiLoop->Reset();
+	_RemoveMidiModelChildren();
 	_midiLoops.clear();
 	_midiLoopChannels.clear();
 }
@@ -699,6 +746,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
+	_midiVisualPlayIndex = 0ul;
+	_midiVisualLoopLength = 0ul;
 	_isPunchInActive = false;
 	_backLoops.clear();
 
@@ -895,15 +944,22 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 void LoopTake::_ArrangeChildren()
 {
 	auto numLoops = (unsigned int)_backLoops.size();
+	auto numMidiLoops = 0u;
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (midiLoop && midiLoop->Model())
+			numMidiLoops++;
+	}
+	auto numVisualRings = numLoops + numMidiLoops;
 
-	if (0 == numLoops)
+	if (0 == numVisualRings)
 		return;
 
 	utils::Size2d loopSize = { _sizeParams.Size.Width - (2 * _Gap.Width), _sizeParams.Size.Height - (2 * _Gap.Height) };
 
 	auto loopCount = 0u;
 	auto dScale = 0.1;
-	auto dTotalScale = 0.4 / ((double)numLoops);
+	auto dTotalScale = 0.4 / ((double)numVisualRings);
 
 	for (auto& loop : _backLoops)
 	{
@@ -914,6 +970,20 @@ void LoopTake::_ArrangeChildren()
 
 		std::cout << "[Arranging loop " << loop->Id() << "] Scale: " << 1.0 + (loopCount * dScale) - (dTotalScale * 0.5) << ", Position: " << loop->Position().X << std::endl;
 
+		loopCount++;
+	}
+
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (!midiLoop)
+			continue;
+
+		auto midiModel = midiLoop->Model();
+		if (!midiModel)
+			continue;
+
+		midiModel->SetModelPosition({ 0.0f, 0.0f, 0.0f });
+		midiModel->SetModelScale(1.0 + (loopCount * dScale) - (dTotalScale * 0.5));
 		loopCount++;
 	}
 }
@@ -938,6 +1008,63 @@ void LoopTake::_UpdateLoops()
 	{
 		loop->Update();
 	}
+
+	_UpdateMidiModels(false);
+}
+
+void LoopTake::_UpdateMidiModels(bool force)
+{
+	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (midiLoop)
+			midiLoop->UpdateModelFromEvents(displayLength, force);
+	}
+}
+
+void LoopTake::_UpdateMidiModelRotation()
+{
+	double loopIndexFrac = 0.0;
+	const auto isRecording = (STATE_RECORDING == _state) ||
+		(STATE_OVERDUBBING == _state) ||
+		(STATE_PUNCHEDIN == _state);
+
+	if (isRecording)
+	{
+		loopIndexFrac = 0.0;
+	}
+	else if (!_loops.empty())
+	{
+		loopIndexFrac = _loops.front()->LoopIndexFrac();
+	}
+	else if (_midiVisualLoopLength > 0ul)
+	{
+		loopIndexFrac = 1.0 - std::max(0.0, std::min(1.0,
+			((double)(_midiVisualPlayIndex % _midiVisualLoopLength)) / ((double)_midiVisualLoopLength)));
+	}
+
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (midiLoop && midiLoop->Model())
+			midiLoop->Model()->SetLoopIndexFrac(loopIndexFrac);
+	}
+}
+
+void LoopTake::_RemoveMidiModelChildren()
+{
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (!midiLoop || !midiLoop->Model())
+			continue;
+
+		auto midiModel = midiLoop->Model();
+		auto child = std::find(_children.begin(), _children.end(), midiModel);
+		if (_children.end() != child)
+			_children.erase(child);
+	}
+
+	for (auto i = 0u; i < _children.size(); i++)
+		_children[i]->SetIndex(i);
 }
 
 void LoopTake::_WireVuSliders()

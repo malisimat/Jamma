@@ -4,11 +4,14 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 #include "MidiEvent.h"
 
 namespace engine
 {
+	class MidiModel;
+
 	// Sink for MIDI playback. Implementations should not allocate or block.
 	class IMidiSink
 	{
@@ -69,6 +72,9 @@ namespace engine
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
+		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
+		std::shared_ptr<MidiModel> Model() const noexcept { return _model; }
+		bool UpdateModelFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
 	private:
@@ -87,7 +93,10 @@ namespace engine
 		std::uint32_t _loopLengthSamps;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;
+		std::uint64_t _modelRevision;
+		std::uint32_t _modelLengthSamps;
 		MidiLoopState _state;
 		std::bitset<TotalNoteSlots> _held;
+		std::shared_ptr<MidiModel> _model;
 	};
 }

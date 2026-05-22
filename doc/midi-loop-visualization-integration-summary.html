@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDI Loop Visualization - Integration Summary</title>
+  <style>
+    :root {
+      --ink: #18202a;
+      --muted: #596675;
+      --line: #d8dee8;
+      --panel: #ffffff;
+      --wash: #f4f7fb;
+      --blue: #2f6fed;
+      --green: #168a5b;
+      --amber: #b86e00;
+      --code: #102033;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--wash);
+      line-height: 1.5;
+    }
+
+    header {
+      background: #102033;
+      color: white;
+      padding: 46px 32px 34px;
+      border-bottom: 6px solid var(--blue);
+    }
+
+    main { padding: 28px 32px 48px; }
+
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: #a9c4ff;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 38px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 780px;
+      margin: 14px 0 0;
+      color: #d7e2f4;
+      font-size: 18px;
+    }
+
+    section {
+      max-width: 1120px;
+      margin: 20px auto;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 8px 22px rgba(16, 32, 51, .06);
+    }
+
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: white;
+      background: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .status.pending { background: var(--amber); }
+
+    p { margin: 0; }
+
+    .card p { color: var(--muted); }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    li { margin: 6px 0; }
+
+    code {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      color: var(--code);
+      background: #eef3f9;
+      border: 1px solid #dbe4ef;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: .94em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      color: #33465c;
+      background: #f3f6fa;
+    }
+
+    .note {
+      border-left: 4px solid var(--blue);
+      background: #edf4ff;
+      padding: 14px 16px;
+      border-radius: 8px;
+      color: #2d4565;
+    }
+
+    @media (max-width: 800px) {
+      .span-4, .span-6, .span-8, .span-12 { grid-column: span 12; }
+      header, main { padding-left: 20px; padding-right: 20px; }
+      h1 { font-size: 30px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">Jamma MIDI loop visualization</p>
+      <h1>Integration slice complete</h1>
+      <p class="subtitle">This pass connected the previously built MIDI span extraction, instanced note model, and shader foundation into LoopTake scene ownership and update flow.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid">
+      <article class="card span-4">
+        <h3>Status</h3>
+        <p><span class="status">Implemented</span></p>
+        <ul>
+          <li>MIDI loops now own an attached <code>MidiModel</code>.</li>
+          <li>LoopTake creates, arranges, draws, and updates MIDI rings.</li>
+          <li>Record-end model rebuild produces final note spans immediately.</li>
+        </ul>
+      </article>
+
+      <article class="card span-4">
+        <h3>Realtime Boundary</h3>
+        <p>MIDI event ingestion remains lightweight. <code>RecordMidiEvent</code> only stamps and records events; model extraction and GL-facing instance data staging happen through non-realtime update paths.</p>
+      </article>
+
+      <article class="card span-4">
+        <h3>Verification</h3>
+        <ul>
+          <li>Focused MIDI visualization tests: 26 passed.</li>
+          <li>Full native suite: 308 passed, 1 skipped.</li>
+          <li>Debug x64 app target: build succeeded.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="card span-6">
+        <h2>What Changed</h2>
+        <ul>
+          <li><code>MidiLoop</code> gained model attachment, cached revision/length tracking, and a non-realtime <code>UpdateModelFromEvents</code> path.</li>
+          <li><code>LoopTake::Record</code> now creates a <code>MidiModel</code> for each armed MIDI channel and adds it as a 3D child.</li>
+          <li><code>LoopTake::_ArrangeChildren</code> now lays out audio and MIDI rings as one concentric visual set.</li>
+          <li><code>LoopTake::_UpdateLoops</code> updates MIDI models from recorded events outside the MIDI hot path.</li>
+          <li><code>LoopTake::Play</code> forces a final MIDI model rebuild after <code>EndRecord</code>, so clamped/unmatched notes are visible immediately.</li>
+          <li><code>Loop</code> exposes its display fraction so MIDI rings can follow audio ring rotation when audio loops are present.</li>
+          <li><code>LoopTake</code> tracks a lightweight MIDI visual playback cursor for MIDI-only takes.</li>
+        </ul>
+      </article>
+
+      <article class="card span-6">
+        <h2>Tests Added</h2>
+        <ul>
+          <li><code>MidiLoop.AttachedModelUpdatesFromRecordedNoteSpans</code> verifies note spans reach the attached model.</li>
+          <li><code>MidiLoop.AttachedModelClampsRecordingNoteToDisplayLength</code> verifies live recording display length clamps an open note.</li>
+          <li><code>LoopTakeMidiVisualization.RecordCreatesMidiModelChild</code> verifies MIDI recording creates a model child.</li>
+          <li><code>LoopTakeMidiVisualization.PlayFinalizesMidiModelSpans</code> verifies record end finalizes note-span instances through LoopTake.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Verification Commands</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>MSBuild.exe Jamma.sln /m /t:JammaLib_Tests /p:Configuration=Debug /p:Platform=x64</code></td>
+            <td>Build succeeded with 0 warnings and 0 errors.</td>
+          </tr>
+          <tr>
+            <td><code>JammaLib.Tests.exe --gtest_filter="MidiNoteSpan.*:MidiLoop.*:LoopTakeMidiVisualization.*"</code></td>
+            <td>26 tests passed.</td>
+          </tr>
+          <tr>
+            <td><code>JammaLib.Tests.exe</code></td>
+            <td>308 tests passed, 1 skipped: <code>MidiDevice.OpensPreferredDeviceWhenAvailable</code>.</td>
+          </tr>
+          <tr>
+            <td><code>MSBuild.exe Jamma.sln /m /t:Jamma /p:Configuration=Debug /p:Platform=x64</code></td>
+            <td>Build succeeded with 0 warnings and 0 errors.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="grid">
+      <article class="card span-8">
+        <h2>Files Touched</h2>
+        <ul>
+          <li><code>JammaLib/src/engine/MidiLoop.h</code> and <code>MidiLoop.cpp</code></li>
+          <li><code>JammaLib/src/engine/LoopTake.h</code> and <code>LoopTake.cpp</code></li>
+          <li><code>JammaLib/src/engine/Loop.h</code> and <code>Loop.cpp</code></li>
+          <li><code>JammaLib/src/engine/MidiModel.h</code></li>
+          <li><code>test/JammaLib.Tests/src/engine/MidiLoop_Tests.cpp</code></li>
+          <li><code>doc/midi-loop-visualization-integration-summary.html</code></li>
+        </ul>
+      </article>
+
+      <article class="card span-4">
+        <h2>Remaining Check</h2>
+        <p><span class="status pending">Manual</span></p>
+        <p style="margin-top: 10px;">The app compiles, but live visual confirmation still needs a MIDI-capable manual run: record short and long notes, confirm concentric MIDI rings, hover/picker behavior, and rotation alignment in the actual scene.</p>
+      </article>
+    </section>
+
+    <section class="note">
+      <strong>Implementation note:</strong> The live update path uses <code>MidiLoop::Revision()</code> plus display length throttling, so repeated jobs do not rebuild unchanged MIDI geometry every block. The final record-end update is forced to catch unmatched notes clamped to the loop end.
+    </section>
+  </main>
+</body>
+</html>

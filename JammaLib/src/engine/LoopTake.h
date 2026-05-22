@@ -93,6 +93,7 @@ namespace engine
 		virtual std::string ClassName() const override { return "LoopTake"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual unsigned int NumInputChannels(Audible::AudioSourceType) const override;
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
@@ -157,6 +158,9 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
+		void _UpdateMidiModels(bool force = false);
+		void _UpdateMidiModelRotation();
+		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
 
 	protected:
@@ -176,6 +180,8 @@ namespace engine
 		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
+		unsigned long _midiVisualPlayIndex;
+		unsigned long _midiVisualLoopLength;
 		bool _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;

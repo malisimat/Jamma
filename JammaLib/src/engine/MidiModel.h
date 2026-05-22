@@ -36,6 +36,7 @@ namespace engine
 
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
+		unsigned int NoteInstanceCount() const noexcept { return _backInstanceCount; }
 		void UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps);
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);

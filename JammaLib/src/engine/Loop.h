@@ -196,6 +196,7 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		double LoopIndexFrac() const noexcept;
 
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);

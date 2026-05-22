@@ -1,13 +1,27 @@
 #include "MidiLoop.h"
 
+#include <vector>
+
+#include "MidiModel.h"
+#include "MidiNoteSpan.h"
+#include "../include/Constants.h"
+
 using namespace engine;
+
+namespace
+{
+	static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
+}
 
 MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
 	  _loopLengthSamps(0),
 	  _dropped(0),
 	  _revision(0),
-	  _state(MidiLoopState::Empty)
+	  _modelRevision(0),
+	  _modelLengthSamps(0),
+	  _state(MidiLoopState::Empty),
+	  _model(nullptr)
 {
 }
 
@@ -61,6 +75,59 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 		return false;
 
 	ev = _events[index];
+	return true;
+}
+
+void MidiLoop::AttachModel(std::shared_ptr<MidiModel> model) noexcept
+{
+	_model = std::move(model);
+	_modelRevision = 0u;
+	_modelLengthSamps = 0u;
+}
+
+bool MidiLoop::UpdateModelFromEvents(std::uint32_t displayLengthSamps, bool force)
+{
+	if (!_model)
+		return false;
+
+	const auto modelLength = (MidiLoopState::Playing == _state && _loopLengthSamps > 0u) ?
+		_loopLengthSamps :
+		displayLengthSamps;
+	const auto effectiveLength = (modelLength > 0u) ? modelLength : _loopLengthSamps;
+	const auto lengthDelta = (_modelLengthSamps > effectiveLength) ?
+		(_modelLengthSamps - effectiveLength) :
+		(effectiveLength - _modelLengthSamps);
+	const auto revisionChanged = _modelRevision != _revision;
+
+	if (!force)
+	{
+		if (!revisionChanged && 0u == _eventCount)
+			return false;
+
+		if (!revisionChanged)
+		{
+			if (effectiveLength == _modelLengthSamps)
+				return false;
+
+			if (MidiLoopState::Recording != _state || lengthDelta < MidiModelUpdateIntervalSamps)
+				return false;
+		}
+	}
+
+	std::vector<MidiEvent> events;
+	events.reserve(_eventCount);
+	for (std::size_t i = 0; i < _eventCount; ++i)
+	{
+		MidiEvent ev;
+		if (TryGetEvent(i, ev))
+			events.push_back(ev);
+	}
+
+	auto spans = ExtractMidiNoteSpans(events.data(), events.size(), effectiveLength);
+	_model->UpdateModel(spans, effectiveLength);
+	_modelRevision = _revision;
+	_modelLengthSamps = effectiveLength;
+
 	return true;
 }
 

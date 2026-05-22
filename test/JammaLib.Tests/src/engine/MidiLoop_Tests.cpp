@@ -2,14 +2,22 @@
 
 #include "gtest/gtest.h"
 #include "engine/MidiEvent.h"
+#include "engine/LoopTake.h"
 #include "engine/MidiLoop.h"
+#include "engine/MidiModel.h"
 #include "engine/Timer.h"
 
 using engine::IMidiSink;
+using engine::LoopTake;
+using engine::LoopTakeParams;
 using engine::MidiEvent;
 using engine::MidiLoop;
 using engine::MidiLoopState;
+using engine::MidiModel;
+using engine::MidiModelParams;
 using engine::Timer;
+using audio::MergeMixBehaviourParams;
+using base::Audible;
 
 namespace
 {
@@ -20,6 +28,16 @@ namespace
 		void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
 		void Clear() noexcept { events.clear(); }
 	};
+
+	std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
+	{
+		LoopTakeParams params;
+		params.Id = id;
+		params.Size = { 100, 100 };
+		MergeMixBehaviourParams merge;
+		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+		return std::make_shared<LoopTake>(params, mixerParams);
+	}
 }
 
 TEST(MidiLoop, DefaultStateIsEmpty) {
@@ -191,6 +209,60 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(1u, sink.events.size());
 	ASSERT_EQ(60u, sink.events[0].data1);
+}
+
+TEST(MidiLoop, AttachedModelUpdatesFromRecordedNoteSpans) {
+	MidiLoop loop;
+	auto model = std::make_shared<MidiModel>(MidiModelParams());
+	loop.AttachModel(model);
+
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0, 60, 100));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(500u, 0, 60));
+
+	ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+	EXPECT_FALSE(loop.UpdateModelFromEvents(1000u, false));
+}
+
+TEST(MidiLoop, AttachedModelClampsRecordingNoteToDisplayLength) {
+	MidiLoop loop;
+	auto model = std::make_shared<MidiModel>(MidiModelParams());
+	loop.AttachModel(model);
+
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(250u, 0, 64, 90));
+
+	ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+}
+
+TEST(LoopTakeMidiVisualization, RecordCreatesMidiModelChild)
+{
+	auto take = MakeLoopTake();
+
+	take->Record({}, "station", { 3u });
+
+	auto child = take->TryGetChild(1u);
+	auto midiModel = std::dynamic_pointer_cast<MidiModel>(child);
+	ASSERT_NE(nullptr, midiModel);
+	EXPECT_EQ(0u, midiModel->NoteInstanceCount());
+}
+
+TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 3u });
+	auto midiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(1u));
+	ASSERT_NE(nullptr, midiModel);
+
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100)));
+	take->EndMultiWrite(480u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 3, 60)));
+
+	take->Play(0ul, 960ul, 0u);
+
+	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
 
 // ── Slice 5: Quantised record-end ─────────────────────────────────────────────
