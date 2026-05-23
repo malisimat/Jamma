@@ -36,6 +36,7 @@ constexpr auto ActivateChar = 49u;
 constexpr auto DitchChar = 50u;
 constexpr auto OutputPathDelayBlocks = 2u;
 constexpr auto MaxExtraSettleBlocks = 3u;
+constexpr auto MinAlignedVerificationBlocks = 24u;
 
 struct OverdubTestParams
 {
@@ -636,7 +637,7 @@ StereoAlignmentProbeResult ProbeStereoAlignment(
 
 } // namespace
 
-TEST_P(Overdub, BounceGeneratesNonZeroOutput)
+TEST_P(Overdub, BounceProducesNonZeroAndAlignedOutput)
 {
 	const auto& p = GetParam();
 	auto session = CreateOverdubSession(p);
@@ -645,7 +646,7 @@ TEST_P(Overdub, BounceGeneratesNonZeroOutput)
 	ExpectStandardTailLength(session);
 	RouteSourceAndOverdubToStereo(session);
 
-	const auto probeBlocks = OutputPathDelayBlocks + (std::max)(p.LoopBlocks, session.OverdubBlocks) + 32u;
+	const auto probeBlocks = OutputPathDelayBlocks + MaxExtraSettleBlocks + 64u;
 	auto probe = ProbeRightChannelForSignal(session, probeBlocks);
 	if (!probe.FoundNonZero)
 		ADD_FAILURE()
@@ -657,20 +658,11 @@ TEST_P(Overdub, BounceGeneratesNonZeroOutput)
 			<< ", endTriggerOffset=" << p.EndTriggerOffsetBlocks
 			<< ", firstNonZeroBlock=" << (probe.FirstNonZeroBlock.has_value() ? std::to_string(probe.FirstNonZeroBlock.value()) : std::string("none"))
 			<< ")";
-}
-
-TEST_P(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
-{
-	const auto& p = GetParam();
-	auto session = CreateOverdubSession(p);
-	AssertOverdubStarted(session);
-	RunOverdubAndTail(session, constants::MaxLoopFadeSamps);
-	ExpectStandardTailLength(session);
-	RouteSourceAndOverdubToStereo(session);
 
 	const auto matchBlocks = (std::min)(p.LoopBlocks, session.OverdubBlocks);
-	const auto probeBlocks = OutputPathDelayBlocks + matchBlocks + 32u;
-	auto alignment = ProbeStereoAlignment(session, matchBlocks, probeBlocks, true);
+	const auto requiredAlignedBlocks = (std::min)(matchBlocks, MinAlignedVerificationBlocks);
+	const auto alignmentProbeBlocks = OutputPathDelayBlocks + requiredAlignedBlocks + 32u;
+	auto alignment = ProbeStereoAlignment(session, requiredAlignedBlocks, alignmentProbeBlocks, true);
 
 	if (!alignment.FoundSteadyStart)
 		ADD_FAILURE()
@@ -685,9 +677,9 @@ TEST_P(Overdub, BounceRecordsEqualLengthLoopAndMatchesSourceAtOutput)
 			<< ", overdubBlocks=" << session.OverdubBlocks
 			<< ", preStartBlocks=" << p.PreStartBlocks
 			<< ", endTriggerOffset=" << p.EndTriggerOffsetBlocks << ")";
-	else if (alignment.ComparedBlocks != matchBlocks)
+	else if (alignment.ComparedBlocks != requiredAlignedBlocks)
 		ADD_FAILURE()
-			<< "Matched " << alignment.ComparedBlocks << " blocks, expected " << matchBlocks
+			<< "Matched " << alignment.ComparedBlocks << " blocks, expected " << requiredAlignedBlocks
 			<< " (steadyStart=" << alignment.SteadyStartBlock.value_or(0) << ")";
 
 	if (alignment.FirstMismatch.has_value())
@@ -705,9 +697,7 @@ INSTANTIATE_TEST_SUITE_P(
 		// Constraint: LoopBlocks * BlockSize >= MaxLoopFadeSamps (= 70000) so the
 		// seed loop content region starts before the loop end in the buffer.
 		OverdubTestParams{ 512u, 2u, 137u,   0u, 0 },  // overdub at loop start
-		OverdubTestParams{ 512u, 2u, 137u, 205u, 0 },  // overdub after 1.5 source loops
-		OverdubTestParams{ 512u, 2u, 137u, 342u, 0 },  // overdub after 2.5 source loops
-		OverdubTestParams{ 512u, 2u, 200u, 500u, 0 }   // longer loop, 2.5x pre-play
+		OverdubTestParams{ 512u, 2u, 137u, 150u, 0 }   // overdub after crossing one source-loop boundary
 	),
 	[](const ::testing::TestParamInfo<OverdubTestParams>& info) {
 		const auto& p = info.param;

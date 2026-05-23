@@ -46,7 +46,7 @@
   <text x="690" y="359" class="small">Recording and mix/read</text>
 
   <rect class="box tests" x="40" y="300" width="280" height="110" />
-  <text x="60" y="332" class="label">JammaLib.Tests</text>
+  <text x="60" y="332" class="label">JammaLib_Tests</text>
   <text x="60" y="354" class="small">GoogleTest coverage</text>
   <text x="60" y="376" class="small">Engine and audio behavior checks</text>
 
