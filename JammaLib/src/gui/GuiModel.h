@@ -62,6 +62,9 @@ namespace gui
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
+		bool SyncInstanceAttributes();
+		static bool HasSameInstanceAttributeLayout(const std::vector<InstanceAttribute>& lhs,
+			const std::vector<InstanceAttribute>& rhs);
 
 		bool InitTextures(resources::ResourceLib& resourceLib);
 		bool InitShaders(resources::ResourceLib& resourceLib);

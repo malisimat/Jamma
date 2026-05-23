@@ -39,6 +39,12 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
+	if (_instanceAttributesNeedUpdating)
+	{
+		if (!SyncInstanceAttributes())
+			_resourcesNeedInitialising = true;
+	}
+
 	auto modelTexture = GetTexture();
 	auto modelShader = GetShader();
 
@@ -46,6 +52,13 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	auto shader = modelShader.lock();
 
 	if (!texture || !shader)
+	{
+		glCtx.PopMvp();
+		glCtx.PopMvp();
+		return;
+	}
+
+	if (0u == _vertexArray || 0u == _numTris)
 	{
 		glCtx.PopMvp();
 		glCtx.PopMvp();
@@ -90,7 +103,6 @@ void GuiModel::SetInstanceAttributes(std::vector<InstanceAttribute> attributes, 
 	_backInstanceCount = instanceCount;
 	_instanceAttributesNeedUpdating = true;
 	_usesInstanceAttributes = true;
-	_resourcesNeedInitialising = true;
 }
 
 void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -295,6 +307,115 @@ bool GuiModel::InitInstanceAttributes()
 			0);
 		glVertexAttribDivisor(attribute.AttributeIndex, 1);
 	}
+
+	return true;
+}
+
+bool GuiModel::HasSameInstanceAttributeLayout(const std::vector<InstanceAttribute>& lhs,
+	const std::vector<InstanceAttribute>& rhs)
+{
+	if (lhs.size() != rhs.size())
+		return false;
+
+	for (auto i = 0u; i < lhs.size(); ++i)
+	{
+		if ((lhs[i].AttributeIndex != rhs[i].AttributeIndex) ||
+			(lhs[i].ComponentCount != rhs[i].ComponentCount))
+			return false;
+	}
+
+	return true;
+}
+
+bool GuiModel::SyncInstanceAttributes()
+{
+	if (!_instanceAttributesNeedUpdating)
+		return true;
+
+	const auto nextAttributes = _backInstanceAttributes;
+	const auto nextInstanceCount = _backInstanceCount;
+	const auto layoutChanged = !HasSameInstanceAttributeLayout(_instanceAttributes, nextAttributes);
+
+	_instanceAttributes = nextAttributes;
+	_instanceCount = nextInstanceCount;
+	_instanceAttributesNeedUpdating = false;
+
+	if (0u == _vertexArray)
+		return false;
+
+	if (!_usesInstanceAttributes || _instanceAttributes.empty())
+	{
+		if (!_instanceBuffers.empty())
+		{
+			glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+			_instanceBuffers.clear();
+		}
+
+		return true;
+	}
+
+	glBindVertexArray(_vertexArray);
+
+	if (layoutChanged || (_instanceBuffers.size() != _instanceAttributes.size()))
+	{
+		if (!_instanceBuffers.empty())
+		{
+			glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+			_instanceBuffers.clear();
+		}
+
+		_instanceBuffers.resize(_instanceAttributes.size(), 0u);
+		glGenBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+
+		for (auto i = 0u; i < _instanceAttributes.size(); ++i)
+		{
+			const auto& attribute = _instanceAttributes[i];
+			if (0u == attribute.ComponentCount)
+			{
+				glBindBuffer(GL_ARRAY_BUFFER, 0);
+				glBindVertexArray(0);
+				return false;
+			}
+
+			glBindBuffer(GL_ARRAY_BUFFER, _instanceBuffers[i]);
+			glBufferData(GL_ARRAY_BUFFER,
+				attribute.Data.size() * sizeof(GLfloat),
+				attribute.Data.data(),
+				GL_DYNAMIC_DRAW);
+			glEnableVertexAttribArray(attribute.AttributeIndex);
+			glVertexAttribPointer(attribute.AttributeIndex,
+				attribute.ComponentCount,
+				GL_FLOAT,
+				GL_FALSE,
+				0,
+				0);
+			glVertexAttribDivisor(attribute.AttributeIndex, 1);
+		}
+	}
+	else
+	{
+		for (auto i = 0u; i < _instanceAttributes.size(); ++i)
+		{
+			const auto& attribute = _instanceAttributes[i];
+			if (0u == attribute.ComponentCount)
+			{
+				glBindBuffer(GL_ARRAY_BUFFER, 0);
+				glBindVertexArray(0);
+				return false;
+			}
+
+			glBindBuffer(GL_ARRAY_BUFFER, _instanceBuffers[i]);
+			glBufferData(GL_ARRAY_BUFFER,
+				attribute.Data.size() * sizeof(GLfloat),
+				attribute.Data.data(),
+				GL_DYNAMIC_DRAW);
+		}
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindVertexArray(0);
+
+	GlUtils::CheckError("GuiModel::SyncInstanceAttributes");
 
 	return true;
 }

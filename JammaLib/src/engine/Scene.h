@@ -271,10 +271,7 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		unsigned int _audioCallbackCount;
 		std::atomic<std::uint64_t> _audioSampleCounter;
-		std::atomic<std::uint64_t> _midiAnchorSample;
-		std::atomic<std::int64_t> _midiAnchorMicros;
-		std::atomic<std::uint32_t> _midiAnchorBlockSamps;
-		std::atomic<std::uint32_t> _midiAnchorSampleRate;
+			std::atomic<std::int64_t> _midiAnchorMicros;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::shared_mutex _jobMutex;

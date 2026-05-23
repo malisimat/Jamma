@@ -284,9 +284,9 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	auto midiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(1u));
 	ASSERT_NE(nullptr, midiModel);
 
-	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100)));
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100), 0u));
 	take->EndMultiWrite(480u, true, Audible::AUDIOSOURCE_ADC);
-	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 3, 60)));
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 3, 60), 0u));
 
 	take->Play(0ul, 960ul, 0u);
 

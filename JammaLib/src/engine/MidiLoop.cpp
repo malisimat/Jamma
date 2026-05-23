@@ -1,7 +1,5 @@
 #include "MidiLoop.h"
 
-#include <vector>
-
 #include "MidiModel.h"
 #include "MidiNoteSpan.h"
 #include "../include/Constants.h"
@@ -114,16 +112,7 @@ bool MidiLoop::UpdateModelFromEvents(std::uint32_t displayLengthSamps, bool forc
 		}
 	}
 
-	std::vector<MidiEvent> events;
-	events.reserve(_eventCount);
-	for (std::size_t i = 0; i < _eventCount; ++i)
-	{
-		MidiEvent ev;
-		if (TryGetEvent(i, ev))
-			events.push_back(ev);
-	}
-
-	auto spans = ExtractMidiNoteSpans(events.data(), events.size(), effectiveLength);
+	auto spans = ExtractMidiNoteSpans(_events.data(), _eventCount, effectiveLength);
 	_model->UpdateModel(spans, effectiveLength);
 	_modelRevision = _revision;
 	_modelLengthSamps = effectiveLength;

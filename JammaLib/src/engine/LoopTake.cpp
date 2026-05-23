@@ -526,31 +526,6 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 	_changesMade = true;
 }
 
-bool LoopTake::RecordMidiEvent(const MidiEvent& ev) noexcept
-{
-	if (_midiLoops.empty())
-		return false;
-
-	const auto midiChan = ev.Channel();
-	bool recorded = false;
-
-	for (auto i = 0u; i < _midiLoops.size(); ++i)
-	{
-		if (_midiLoopChannels[i] != midiChan)
-			continue;
-
-		if (_midiLoops[i]->State() != MidiLoopState::Recording)
-			continue;
-
-		MidiEvent stamped = ev;
-		stamped.sampleOffset = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
-		_midiLoops[i]->RecordEvent(stamped);
-		recorded = true;
-	}
-
-	return recorded;
-}
-
 bool LoopTake::RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept
 {
 	if (_midiLoops.empty())

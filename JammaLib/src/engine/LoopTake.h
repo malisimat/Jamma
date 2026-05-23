@@ -140,7 +140,7 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
-		bool RecordMidiEvent(const MidiEvent& ev) noexcept;
+
 		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
