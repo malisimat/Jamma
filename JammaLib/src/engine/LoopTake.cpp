@@ -378,12 +378,20 @@ ActionResult LoopTake::OnAction(JobAction action)
 	{
 	case JobAction::JOB_LOADVST:
 	{
-		auto newChain = std::make_shared<vst::VstChain>();
-		if (_vstChain)
+		// Take a snapshot of the current live chain under _vstChainMutex so we
+		// don't race with _CommitChanges() swapping it on the main thread.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
 		{
-			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (chainSnapshot)
+		{
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
 			{
-				auto existing = _vstChain->GetPlugin(i);
+				auto existing = chainSnapshot->GetPlugin(i);
 				if (existing)
 					newChain->AddPlugin(existing);
 			}
@@ -398,7 +406,10 @@ ActionResult LoopTake::OnAction(JobAction action)
 		if (plugin->Load(action.VstPath, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact))
 		{
 			newChain->AddPlugin(plugin);
-			_vstPluginPaths.push_back(action.VstPath);
+			{
+				std::lock_guard<std::mutex> lock(_vstPathsMutex);
+				_vstPluginPaths.push_back(action.VstPath);
+			}
 			_backVstChain = std::move(newChain);
 			_flipVstChain.store(true, std::memory_order_release);
 			_changesMade = true;
@@ -411,22 +422,32 @@ ActionResult LoopTake::OnAction(JobAction action)
 	}
 	case JobAction::JOB_UNLOADVST:
 	{
+		// Take a snapshot of the current live chain under _vstChainMutex.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
+		{
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
 		auto newChain = std::make_shared<vst::VstChain>();
 		const auto removeIndex = action.VstIndex;
-		if (_vstChain)
+		if (chainSnapshot)
 		{
-			for (size_t i = 0; i < _vstChain->NumPlugins(); ++i)
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
 			{
 				if (i == removeIndex)
 					continue;
-				auto existing = _vstChain->GetPlugin(i);
+				auto existing = chainSnapshot->GetPlugin(i);
 				if (existing)
 					newChain->AddPlugin(existing);
 			}
 		}
 
-		if (removeIndex < _vstPluginPaths.size())
-			_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+		{
+			std::lock_guard<std::mutex> lock(_vstPathsMutex);
+			if (removeIndex < _vstPluginPaths.size())
+				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+		}
 
 		_backVstChain = std::move(newChain);
 		_flipVstChain.store(true, std::memory_order_release);
@@ -917,7 +938,10 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 
 	// Swap in the VST chain when the job thread has delivered a new one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+	{
+		std::lock_guard<std::mutex> lock(_vstChainMutex);
 		_vstChain = _backVstChain;
+	}
 
 	std::vector<JobAction> jobs;
 
@@ -943,14 +967,15 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		jobs.push_back(job);
 	}
 
-	if (_hasPendingVstUnload)
+	// Drain pending unload indices — emit one JOB_UNLOADVST per entry so
+	// rapid back-to-back UnloadVstPlugin() calls are not silently dropped.
+	auto pendingUnloads = std::move(_pendingVstUnloads);
+	for (auto idx : pendingUnloads)
 	{
-		_hasPendingVstUnload = false;
-
 		JobAction job;
 		job.JobActionType = JobAction::JOB_UNLOADVST;
 		job.SourceId = Id();
-		job.VstIndex = _pendingVstUnload;
+		job.VstIndex = idx;
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(job);
 	}
@@ -1092,8 +1117,7 @@ void LoopTake::LoadVstPlugin(std::wstring path)
 
 void LoopTake::UnloadVstPlugin(size_t index)
 {
-	_pendingVstUnload = index;
-	_hasPendingVstUnload = true;
+	_pendingVstUnloads.push_back(index);
 	_changesMade = true;
 }
 
@@ -1108,6 +1132,7 @@ std::shared_ptr<vst::VstPlugin> LoopTake::GetVstPlugin(size_t index) const
 std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 {
 	std::vector<io::JamFile::VstEntry> entries;
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
 	entries.reserve(_vstPluginPaths.size());
 
 	for (const auto& path : _vstPluginPaths)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <tuple>
 #include <vector>
 #include "CommonTypes.h"
@@ -145,7 +146,7 @@ namespace base
 		virtual bool _HitTest(utils::Position2d localPos);
 
 	protected:
-		bool _changesMade;
+		std::atomic<bool> _changesMade;
 		bool _isVisible;
 		bool _isEnabled;
 		bool _isSelected;

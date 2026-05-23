@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include "Trigger.h"
 #include "ActionReceiver.h"
 #include "Tweakable.h"
@@ -244,12 +245,15 @@ namespace engine
 		std::shared_ptr<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
+		std::mutex _vstChainMutex;
 		std::vector<std::wstring> _pendingVstLoads;
-		bool _hasPendingVstUnload{ false };
-		size_t _pendingVstUnload{ 0 };
+		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		unsigned int _blockSize{ constants::DefaultBufferSizeSamps };
-		// Non-RT metadata to persist loop VST chains in jam exports.
+		// Non-RT metadata: written on job thread (OnAction), read on main thread (VstEntries).
+		// Access is guarded by _vstPathsMutex in both directions.
+		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 	};
 }

@@ -105,6 +105,32 @@ TEST(VstStaging, LoopTake_UnloadVstPlugin_CreatesJobOnCommit)
 	EXPECT_EQ(vstJobs, 1);
 }
 
+// Two rapid UnloadVstPlugin() calls must each produce their own JOB_UNLOADVST job.
+// Previously the second call silently overwrote the first (_pendingVstUnload was
+// a single size_t), so only index 1 would be removed.
+TEST(VstStaging, LoopTake_TwoRapidUnloads_BothJobsEmitted)
+{
+	auto take = MakeTake();
+	take->UnloadVstPlugin(0u);
+	take->UnloadVstPlugin(1u);
+
+	auto jobs = take->CommitChanges();
+	auto unloadJobs = std::count_if(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST;
+	});
+	EXPECT_EQ(unloadJobs, 2);
+
+	// Verify both indices are present.
+	auto hasIdx0 = std::any_of(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST && j.VstIndex == 0u;
+	});
+	auto hasIdx1 = std::any_of(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST && j.VstIndex == 1u;
+	});
+	EXPECT_TRUE(hasIdx0);
+	EXPECT_TRUE(hasIdx1);
+}
+
 // ---------------------------------------------------------------------------
 // Loop staging tests
 // ---------------------------------------------------------------------------
@@ -155,6 +181,29 @@ TEST(VstStaging, Loop_UnloadVstPlugin_CreatesJobOnCommit)
 		return j.JobActionType == JobAction::JOB_UNLOADVST;
 	});
 	EXPECT_EQ(vstJobs, 1);
+}
+
+// Two rapid UnloadVstPlugin() calls must each produce their own JOB_UNLOADVST job.
+TEST(VstStaging, Loop_TwoRapidUnloads_BothJobsEmitted)
+{
+	auto loop = MakeLoop();
+	loop->UnloadVstPlugin(0u);
+	loop->UnloadVstPlugin(1u);
+
+	auto jobs = loop->CommitChanges();
+	auto unloadJobs = std::count_if(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST;
+	});
+	EXPECT_EQ(unloadJobs, 2);
+
+	auto hasIdx0 = std::any_of(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST && j.VstIndex == 0u;
+	});
+	auto hasIdx1 = std::any_of(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_UNLOADVST && j.VstIndex == 1u;
+	});
+	EXPECT_TRUE(hasIdx0);
+	EXPECT_TRUE(hasIdx1);
 }
 
 TEST(VstStaging, Loop_SetSampleRateAndBlockSize_PropagateToFields)
