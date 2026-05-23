@@ -7,12 +7,42 @@
 
 #include "InitFile.h"
 
+namespace
+{
+	std::string EscapeJsonString(const std::string& value)
+	{
+		std::string escaped;
+		escaped.reserve(value.size());
+
+		for (const char ch : value)
+		{
+			switch (ch)
+			{
+			case '\\':
+				escaped += "\\\\";
+				break;
+			case '"':
+				escaped += "\\\"";
+				break;
+			default:
+				escaped.push_back(ch);
+				break;
+			}
+		}
+
+		return escaped;
+	}
+}
+
 using namespace io;
 using audio::BehaviourParams;
 
 const std::string InitFile::DefaultJson(std::string roamingPath)
 {
-	return "{\"rig\":\"" + roamingPath + "\\default.rig\",\"jam\":\"" + roamingPath + "\\default.jam\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000]}";
+	const auto rigPath = EscapeJsonString(roamingPath + "\\default.rig");
+	const auto jamPath = EscapeJsonString(roamingPath + "\\default.jam");
+	return "{\"rig\":\"" + rigPath + "\",\"jam\":\"" + jamPath
+		+ "\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000]}";
 }
 
 const void InitFile::SetWinParams(InitFile& ini, const Json::JsonArray& array)

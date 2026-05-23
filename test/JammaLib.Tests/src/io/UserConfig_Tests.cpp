@@ -2,10 +2,12 @@
 #include "gtest/gtest.h"
 #include <regex>
 #include "resources/ResourceLib.h"
+#include "io/InitFile.h"
 #include "io/Json.h"
 #include "io/UserConfig.h"
 
 using io::Json;
+using io::InitFile;
 using io::UserConfig;
 
 TEST(UserConfig, ParsesAudioSettings) {
@@ -131,6 +133,10 @@ TEST(UserConfig, LoopTimingHonoursConfiguredTargetMaxGrain) {
 	ASSERT_EQ(8u, timing->Bpi);
 }
 
+TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
+	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Users\\tester\\AppData\\Roaming\\Jamma")));
+	ASSERT_TRUE(parsed.has_value());
+}
 TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
 	UserConfig cfg;
 	cfg.Trigger.PreDelay = 128u;

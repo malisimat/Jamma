@@ -140,6 +140,20 @@ void SetRackRoutes(base::ActionReceiver& receiver,
 	receiver.OnAction(action);
 }
 
+void WriteLoopSamples(const std::shared_ptr<Loop>& loop,
+	const std::vector<float>& samples)
+{
+	AudioWriteRequest writeReq;
+	writeReq.samples = samples.data();
+	writeReq.numSamps = static_cast<unsigned int>(samples.size());
+	writeReq.stride = 1;
+	writeReq.fadeCurrent = 0.0f;
+	writeReq.fadeNew = 1.0f;
+	writeReq.source = Audible::AUDIOSOURCE_ADC;
+	loop->OnBlockWrite(writeReq, 0);
+	loop->EndWrite(static_cast<unsigned int>(samples.size()), true);
+}
+
 bool HasNonZero(const float* buf, unsigned int count)
 {
 	for (unsigned int i = 0; i < count; i++)
@@ -317,6 +331,61 @@ TEST(AudioFlow, TwoChannel_WriteReachesBothLoops)
 	ASSERT_EQ(take->NumInputChannels(Audible::AUDIOSOURCE_ADC), 2u);
 }
 
+TEST(AudioFlow, SparseInputConfig_RecordUsesSequentialLoopSlots)
+{
+	const unsigned int numChans = 2;
+	const unsigned int blockSize = 512;
+	const unsigned long loopLength = 2048ul;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+	const unsigned int totalBlocks =
+		static_cast<unsigned int>((totalRecord + blockSize - 1) / blockSize);
+
+	auto station = MakeStation(numChans);
+	auto take = MakeTake();
+	station->AddTake(take);
+	take->Record({ 2u, 4u }, "test");
+	station->CommitChanges();
+
+	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
+	std::vector<float> inBuf(numChans * blockSize);
+	std::vector<float> writtenCh0;
+	std::vector<float> writtenCh1;
+	writtenCh0.reserve(totalBlocks * blockSize);
+	writtenCh1.reserve(totalBlocks * blockSize);
+
+	for (unsigned int block = 0; block < totalBlocks; ++block)
+	{
+		FillTestData(inBuf.data(), numChans, blockSize, block);
+		WriteBlock(chanMixer, station, inBuf.data(), numChans, blockSize);
+
+		for (unsigned int sample = 0; sample < blockSize; ++sample)
+		{
+			writtenCh0.push_back(inBuf[sample * numChans + 0u]);
+			writtenCh1.push_back(inBuf[sample * numChans + 1u]);
+		}
+	}
+
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+	const auto& loops = take->GetLoops();
+	ASSERT_EQ(2u, loops.size());
+	ASSERT_EQ(0u, loops[0]->LoopChannel());
+	ASSERT_EQ(1u, loops[1]->LoopChannel());
+
+	auto loop0Samples = loops[0]->ExportSamples();
+	auto loop1Samples = loops[1]->ExportSamples();
+	ASSERT_EQ(static_cast<size_t>(loopLength), loop0Samples.size());
+	ASSERT_EQ(static_cast<size_t>(loopLength), loop1Samples.size());
+
+	for (unsigned long sample = 0; sample < loopLength; ++sample)
+	{
+		const auto expectedIndex = constants::MaxLoopFadeSamps + sample;
+		ASSERT_LT(expectedIndex, writtenCh0.size());
+		ASSERT_LT(expectedIndex, writtenCh1.size());
+		ASSERT_FLOAT_EQ(writtenCh0[expectedIndex], loop0Samples[sample]);
+		ASSERT_FLOAT_EQ(writtenCh1[expectedIndex], loop1Samples[sample]);
+	}
+}
+
 // ===========================================================================
 // Read-path tests
 // ===========================================================================
@@ -432,6 +501,74 @@ TEST(AudioFlow, TwoChannel_LoopPlaybackProducesOutput)
 	}
 	ASSERT_TRUE(ch0NonZero);
 	ASSERT_TRUE(ch1NonZero);
+}
+
+TEST(AudioFlow, LoopPlaybackUsesSequentialLoopSlots)
+{
+	const unsigned int numChans = 2;
+	const unsigned int blockSize = 32;
+	const unsigned long loopLength = 64ul;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto take = MakeTake();
+	take->SetNumBusChannels(numChans);
+
+	take->Record({ 2u, 4u }, "test");
+	take->CommitChanges();
+
+	const auto& loops = take->GetLoops();
+	ASSERT_EQ(2u, loops.size());
+	ASSERT_EQ(0u, loops[0]->LoopChannel());
+	ASSERT_EQ(1u, loops[1]->LoopChannel());
+	auto loop0 = loops[0];
+	auto loop1 = loops[1];
+
+	std::vector<float> recordData0(totalRecord, 0.0f);
+	std::vector<float> recordData1(totalRecord, 0.0f);
+	for (unsigned long i = constants::MaxLoopFadeSamps; i < totalRecord; ++i)
+	{
+		recordData0[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.01f;
+		recordData1[i] = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1) * 0.02f;
+	}
+
+	WriteLoopSamples(loop0, recordData0);
+	WriteLoopSamples(loop1, recordData1);
+	take->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+
+	class CaptureStereoSink : public base::MultiAudioSink
+	{
+	public:
+		explicit CaptureStereoSink(unsigned int bufSize) :
+			_sinks{
+				std::make_shared<CaptureSink>(bufSize),
+				std::make_shared<CaptureSink>(bufSize)
+			}
+		{}
+
+		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 2u; }
+
+		std::shared_ptr<CaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
+
+	protected:
+		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+			base::Audible::AudioSourceType) override
+		{
+			return channel < _sinks.size() ? _sinks[channel] : nullptr;
+		}
+
+	private:
+		std::vector<std::shared_ptr<CaptureSink>> _sinks;
+	};
+
+	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
+	take->WriteBlock(sink, nullptr, 0, blockSize);
+	take->EndMultiPlay(blockSize);
+
+	for (unsigned int sample = 0; sample < blockSize; ++sample)
+	{
+		ASSERT_FLOAT_EQ(sink->GetSink(0u)->Samples[sample], static_cast<float>(sample + 1u) * 0.01f);
+		ASSERT_FLOAT_EQ(sink->GetSink(1u)->Samples[sample], static_cast<float>(sample + 1u) * 0.02f);
+	}
 }
 
 // ===========================================================================

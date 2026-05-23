@@ -8,11 +8,13 @@
 #include "NetworkSession.h"
 #include "Main.h"
 #include "Window.h"
-#include "../engine/NinjamSession.h"
 #include "PathUtils.h"
+#include "../engine/NinjamSession.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
+#include "../vst/VstPlugin.h"
+#include <objbase.h>
 #include <atomic>
 #include <cctype>
 #include <iostream>
@@ -23,6 +25,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 
 using namespace engine;
 using namespace base;
@@ -142,6 +145,33 @@ using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
 
+namespace
+{
+	std::optional<std::wstring> ReadEnvironmentVariable(const wchar_t* name)
+	{
+		const auto required = GetEnvironmentVariableW(name, nullptr, 0);
+		if (required == 0)
+			return std::nullopt;
+
+		std::wstring value(required - 1, L'\0');
+		GetEnvironmentVariableW(name, value.data(), required);
+		return value;
+	}
+
+	std::wstring DefaultIniPath()
+	{
+		return GetPath(PATH_ROAMING) + L"\\Jamma\\defaults.json";
+	}
+
+	std::wstring ResolveIniPath()
+	{
+		if (auto initPath = ReadEnvironmentVariable(L"JAMMA_DEFAULTS_PATH"); initPath.has_value() && !initPath->empty())
+			return initPath.value();
+
+		return DefaultIniPath();
+	}
+}
+
 void SetupConsole()
 {
 	AllocConsole();
@@ -153,10 +183,9 @@ void SetupConsole()
 	freopen_s(&newStdin, "CONIN$", "r", stdin);
 }
 
-std::optional<io::InitFile> LoadIni()
+std::optional<io::InitFile> LoadIni(const std::wstring& initPath)
 {
-	std::wstring roamingPath = GetPath(PATH_ROAMING) + L"\\Jamma";
-	std::wstring initPath = roamingPath + L"/defaults.json";
+	const std::wstring roamingPath = utils::GetParentDirectory(initPath);
 	io::TextReadWriter txtFile;
 	auto res = txtFile.Read(initPath, MAX_JSON_CHARS);
 
@@ -225,6 +254,17 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
 	SetupConsole();
+	// Initialize COM as STA matching the Steinberg editorhost pattern.
+	// CoInitializeEx (not OleInitialize) is used here so that VSTGUI's own
+	// OleInitialize call inside Win32Frame::Win32Frame() receives S_OK (first
+	// OLE init on this thread) rather than S_FALSE.  Getting S_OK means VSTGUI
+	// owns the OLE reference it acquired and will call OleUninitialize on
+	// teardown correctly.  Using OleInitialize here steals that reference and
+	// causes S_FALSE, which subtly breaks OLE drag-and-drop setup inside
+	// attached().  RegisterDragDrop and DirectComposition still work with
+	// CoInitializeEx because the thread is still an STA.
+	const HRESULT uiComInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	const bool uiComInitialized = SUCCEEDED(uiComInit);
 
 	// Bring up the console TUI immediately after SetupConsole() so that
 	// ALL application logs (socket init, file load, connection lifecycle, etc.)
@@ -253,7 +293,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		return -1;
 	}
 
-	auto defaults = LoadIni();
+	const auto initPath = ResolveIniPath();
+	auto defaults = LoadIni(initPath);
 
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
@@ -284,7 +325,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::cout << ss.str() << std::endl;
 	}
 
-	auto scene = Scene::FromFile(sceneParams, jam, rig, utils::GetParentDirectory(defaults.value().Jam));
+	const auto jamDirectory = defaults.has_value() ?
+		utils::GetParentDirectory(defaults->Jam) :
+		utils::GetParentDirectory(initPath);
+	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory);
 	if (!scene.has_value())
 	{
 		std::cout << "Failed to create Scene... quitting" << std::endl;
@@ -299,7 +343,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	if (window.Create(hInstance, nCmdShow) != 0)
 		PostQuitMessage(1);
-	
+
 	scene.value()->InitAudio();
 
 	MSG msg;
@@ -324,13 +368,36 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 		window.Render();
 		window.Swap();
+
+		// Destroy any VST plugins that failed to load on the job thread.
+		// They were PreInit'd on this thread, so cleanup must run here too.
+		vst::DrainUiThreadDestroyQueue();
 	}
 
 	window.Release();
 
+	// Final drain for any plugins queued after the last render iteration.
+	vst::DrainUiThreadDestroyQueue();
+
+	// Close VST editor windows while the main thread's COM STA is still valid.
+	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
+	// undefined behaviour. scene is still alive here since it goes out of scope
+	// after the explicit CoUninitialize() call below.
+	scene.value()->CloseAllVstEditorWindows();
+
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
+	sceneRaw.store(nullptr, std::memory_order_release);
 	tui->Stop();
+	FreeConsole();
+
+	// Tear down Scene (joins job thread) before COM teardown, then drain once
+	// more for any failed-load plugins queued late during job-thread shutdown.
+	scene.reset();
+	vst::DrainUiThreadDestroyQueue();
+
+	if (uiComInitialized)
+		CoUninitialize();
 
 	return (int)msg.wParam;
 }

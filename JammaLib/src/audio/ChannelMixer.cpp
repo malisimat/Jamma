@@ -157,7 +157,7 @@ void ChannelMixer::BufferMixer::SetNumChannels(unsigned int numChans, unsigned i
 	}
 
 	if (numChans < numInputs)
-		_buffers.resize(numInputs);
+		_buffers.resize(numChans);
 
 	for (auto& buf : _buffers)
 		buf->SetSize(bufSize);

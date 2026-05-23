@@ -5,6 +5,8 @@
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
+#include "../graphics/VstEditorWindow.h"
+#include "../vst/VstPlugin.h"
 
 using namespace base;
 using namespace actions;
@@ -197,6 +199,108 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->InitReceivers();
 
 	return scene;
+}
+
+void Scene::CloseAllVstEditorWindows()
+{
+	for (auto& window : _vstEditorWindows)
+	{
+		if (window)
+			window->Destroy();
+	}
+	_vstEditorWindows.clear();
+}
+
+void Scene::_PruneClosedVstEditorWindows()
+{
+	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
+		return !window || !window->IsOpen();
+	}), _vstEditorWindows.end());
+}
+
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin)
+{
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	auto window = std::make_unique<graphics::VstEditorWindow>();
+	const auto hInstance = GetModuleHandle(nullptr);
+	if (!window->Create(hInstance, plugin))
+		return false;
+
+	_vstEditorWindows.push_back(std::move(window));
+	return true;
+}
+
+bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
+{
+	if (!loop)
+		return false;
+
+	auto plugin = loop->GetVstPlugin(pluginIndex);
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	return _OpenVstEditorForPlugin(plugin);
+}
+
+bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
+{
+	if (!station || station->IsRemote())
+		return false;
+
+	auto stationPlugin = station->GetVstPlugin(pluginIndex);
+	if (stationPlugin && stationPlugin->IsLoaded())
+		return _OpenVstEditorForPlugin(stationPlugin);
+
+	for (const auto& take : station->GetLoopTakes())
+	{
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+	base::SelectDepth depth,
+	size_t pluginIndex)
+{
+	if (!hovering)
+		return false;
+
+	switch (depth)
+	{
+	case base::SelectDepth::DEPTH_STATION:
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		return _TryOpenVstEditorForStation(station, pluginIndex);
+	}
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+		if (!take)
+			return false;
+
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+
+		return false;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		return _TryOpenVstEditorForLoop(loop, pluginIndex);
+	}
+	default:
+		return false;
+	}
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -463,6 +567,109 @@ ActionResult Scene::OnAction(KeyAction action)
 		return { res };
 	}
 
+	// Ctrl+Shift+V - insert a VST on the hovered station/take/loop.
+	if ((86 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		const auto pluginPath = utils::PickFile(L"Choose VST plugin");
+		if (pluginPath.empty())
+			return ActionResult::NoAction();
+
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		if (!hovering)
+		{
+			std::cout << "VST insert: no hovered target" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		std::cout << "VST insert request: depth=" << static_cast<int>(_selector->CurrentSelectDepth())
+			<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
+
+		switch (_selector->CurrentSelectDepth())
+		{
+		case base::SelectDepth::DEPTH_STATION:
+		{
+			auto station = std::dynamic_pointer_cast<Station>(hovering);
+			if (!station)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
+
+			if (station->IsRemote())
+			{
+				std::cout << "VST insert: remote stations are read-only" << std::endl;
+				return ActionResult::NoAction();
+			}
+
+			station->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+		{
+			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+			if (!take)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
+
+			take->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOP:
+		{
+			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+			if (!loop)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: single loop" << std::endl;
+
+			loop->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		}
+
+		std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+
+	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
+	if ((69 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		_PruneClosedVstEditorWindows();
+
+		auto eatAction = []() {
+			ActionResult res;
+			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_DEFAULT;
+			return res;
+		};
+
+		if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
+			return eatAction();
+
+		for (const auto& station : _stations)
+		{
+			if (_TryOpenVstEditorForStation(station, 0))
+				return eatAction();
+		}
+
+		std::cout << "VST editor open: no loaded plugin found" << std::endl;
+		return ActionResult::NoAction();
+	}
+
 	// Ctrl+S - export session to directory.
 	if ((83 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
@@ -521,6 +728,7 @@ ActionResult Scene::OnAction(KeyAction action)
 				io::JamFile::Station jamStation;
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
+				jamStation.VstChain = station->VstEntries();
 
 				for (const auto& take : station->GetLoopTakes())
 				{
@@ -528,6 +736,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
+					jamTake.VstChain = take->VstEntries();
 
 					for (const auto& loop : take->GetLoops())
 					{
@@ -709,7 +918,7 @@ void Scene::OnJobTick(Time curTime)
 	job.SetAudioParams(_audioDevice->GetAudioStreamParams());
 
 	{
-		std::shared_lock lock(_jobMutex);
+		std::scoped_lock lock(_jobMutex);
 
 		if (_jobList.empty())
 			return;
@@ -731,6 +940,16 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+
+	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
+	// thread for destruction. On success the chain holds its own ref so this
+	// queued ref is a no-op; on failure (Load returned false) this is the only
+	// remaining ref, and draining it on the UI thread ensures ~VstPlugin →
+	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
+	// the plugin. Releasing on this job thread instead violates VST3 threading
+	// and can crash plugins or leave dangling state until window close.
+	if (job.PreInitPlugin)
+		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
 
 void Scene::_PumpMidi()
@@ -817,53 +1036,58 @@ void Scene::InitGui()
 
 void Scene::InitAudio()
 {
-	std::scoped_lock lock(_audioMutex);
-
-	auto dev = AudioDevice::Open(Scene::AudioCallback,
-		[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-		_userConfig.Audio,
-		this);
-
-	if (dev.has_value())
 	{
-		_audioDevice = std::move(dev.value());
+		std::scoped_lock lock(_audioMutex);
 
-		_audioCallbackCount = 0;
-		_audioSampleCounter.store(0u, std::memory_order_release);
-		_audioDevice->Start();
+		auto dev = AudioDevice::Open(Scene::AudioCallback,
+			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
+			_userConfig.Audio,
+			this);
 
-		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-		audioStreamParams.PrintParams();
-
-		auto inLatency = (0u == audioStreamParams.InputLatency) ?
-			_userConfig.Audio.LatencyIn :
-			audioStreamParams.InputLatency;
-
-		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
-				ChannelMixer::DefaultBufferSize,
-				audioStreamParams.NumInputChannels,
-				audioStreamParams.NumOutputChannels }));
-
-		for (auto& station : _stations)
+		if (dev.has_value())
 		{
-			if (station)
+			_audioDevice = std::move(dev.value());
+			_audioCallbackCount = 0;
+			_audioSampleCounter.store(0u, std::memory_order_release);
+			_audioDevice->Start();
+
+			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+			audioStreamParams.PrintParams();
+
+			auto inLatency = (0u == audioStreamParams.InputLatency) ?
+				_userConfig.Audio.LatencyIn :
+				audioStreamParams.InputLatency;
+
+			_channelMixer->SetParams(ChannelMixerParams({
+					_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
+					ChannelMixer::DefaultBufferSize,
+					audioStreamParams.NumInputChannels,
+					audioStreamParams.NumOutputChannels }));
+
+			for (auto& station : _stations)
 			{
-				station->SetupBuffers(audioStreamParams.BufSize);
-				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
-				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
-				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+				if (station)
+				{
+					station->SetupBuffers(audioStreamParams.BufSize);
+					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
+					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+					station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
+					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+				}
 			}
+			_ninjamSession->SetAudioFormat(
+				audioStreamParams.SampleRate,
+				audioStreamParams.BufSize,
+				audioStreamParams.NumInputChannels,
+				audioStreamParams.NumOutputChannels);
+
+			InitMidi();
 		}
-
-		_ninjamSession->SetAudioFormat(
-			audioStreamParams.SampleRate,
-			audioStreamParams.BufSize,
-			audioStreamParams.NumInputChannels,
-			audioStreamParams.NumOutputChannels);
-
-		InitMidi();
 	}
+
+	// Dispatch any VST loads that were staged during scene FromFile so they run
+	// with the real audio device sample rate and buffer size.
+	CommitChanges();
 }
 
 void Scene::InitMidi()
@@ -947,6 +1171,21 @@ void Scene::CommitChanges()
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 				jobList.insert(jobList.end(), jobs.begin(), jobs.end());
+		}
+	}
+
+	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
+	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
+	// the audio lock and later attached() calls remain UI-thread bound.
+	for (auto& job : jobList)
+	{
+		if (job.JobActionType == JobAction::JOB_LOADVST)
+		{
+			auto plugin = std::make_shared<vst::VstPlugin>();
+			if (plugin->PreInit(job.VstPath))
+				job.PreInitPlugin = std::move(plugin);
+			// If PreInit fails, fall back to a fresh VstPlugin on the job thread.
+			// That may still hang in attached(), but it matches the old behaviour.
 		}
 	}
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <vector>
 #include <memory>
 #include "Loop.h"
@@ -11,6 +12,7 @@
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRack.h"
+#include "../vst/VstChain.h"
 
 using base::Audible;
 
@@ -129,6 +131,15 @@ namespace engine
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
+		// Staging only — actual load/unload happens on the job thread after
+		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
+		void LoadVstPlugin(std::wstring path);
+		void UnloadVstPlugin(size_t index);
+		void SetSampleRate(float sampleRate);
+		float GetSampleRate() const noexcept { return _sampleRate; }
+		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
+		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
 		void Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels = {});
 		void Play(unsigned long index,
@@ -166,6 +177,7 @@ namespace engine
 		void _UpdateMidiModelRotation();
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
+		void _ResizeVstScratch(unsigned int channelCount);
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -197,5 +209,21 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
+		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
+		std::mutex _vstChainMutex;
+		std::vector<std::wstring> _pendingVstLoads;
+		std::vector<size_t> _pendingVstUnloads;
+		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
+		// Access is guarded by _vstPathsMutex in both directions.
+		mutable std::mutex _vstPathsMutex;
+		std::vector<std::wstring> _vstPluginPaths;
+		std::vector<float> _vstBlockScratch;
+		std::vector<float*> _vstBlockPtrs;
 	};
 }
