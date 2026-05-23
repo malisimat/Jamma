@@ -63,6 +63,34 @@ TEST(MidiLoop, StartRecordTransitionsAndAcceptsEvents) {
 	ASSERT_EQ(2u, loop.EventCount());
 }
 
+TEST(MidiLoop, DefaultCapacityDropsNewestEventsWhenFull) {
+	MidiLoop loop;
+	loop.StartRecord();
+
+	const auto capacity = MidiLoop::Capacity();
+	for (std::size_t i = 0; i < capacity; ++i)
+	{
+		ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(static_cast<std::uint32_t>(i), 0u, static_cast<std::uint8_t>(i % 128u), 100u)));
+	}
+
+	ASSERT_EQ(capacity, loop.EventCount());
+	ASSERT_EQ(0u, loop.DroppedEventCount());
+
+	ASSERT_FALSE(loop.RecordEvent(MidiEvent::MakeNoteOn(static_cast<std::uint32_t>(capacity), 0u, 64u, 100u)));
+	ASSERT_FALSE(loop.RecordEvent(MidiEvent::MakeNoteOff(static_cast<std::uint32_t>(capacity + 1u), 0u, 64u)));
+
+	ASSERT_EQ(capacity, loop.EventCount());
+	ASSERT_EQ(2u, loop.DroppedEventCount());
+
+	loop.EndRecord(static_cast<std::uint32_t>(capacity + 2u));
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, static_cast<std::uint32_t>(capacity + 2u), sink);
+	ASSERT_EQ(capacity, sink.events.size());
+	ASSERT_EQ(0u, sink.events.front().sampleOffset);
+	ASSERT_EQ(static_cast<std::uint32_t>(capacity - 1u), sink.events.back().sampleOffset);
+}
+
 TEST(MidiLoop, EmptyLoopProducesNoEvents) {
 	MidiLoop loop;
 	loop.StartRecord();
