@@ -27,7 +27,8 @@ void main()
     float yMax = (WaveformHeightScale * minMax.y) + WaveformMinHeight;
     float y = PositionIN.y >= 0.0 ? yMax : yMin;
 
-    float radiusScale = WaveformRadius / WaveformUnitMeshRadius;
+    float safeUnitRadius = max(WaveformUnitMeshRadius, 0.0001);
+    float radiusScale = WaveformRadius / safeUnitRadius; 
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
