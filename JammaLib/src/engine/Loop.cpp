@@ -923,6 +923,12 @@ ActionResult Loop::OnAction(JobAction action)
 			_flipVstChain.store(true, std::memory_order_release);
 			_changesMade = true;
 		}
+		else if (action.PreInitPlugin)
+		{
+			// Load failed but plugin was pre-initialised on the UI thread;
+			// destroying it here (job thread) would violate VST3 threading.
+			vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
 
 		ActionResult res;
 		res.IsEaten = true;
