@@ -35,6 +35,10 @@ namespace io
 	{
 		unsigned int IntervalPositionSamps = 0;
 		unsigned int IntervalLengthSamps = 0;
+		unsigned int SampleRate = 0;
+		float Bpm = 0.0f;
+		int Bpi = 0;
+		bool HasTiming = false;
 		std::vector<NinjamRemoteUser> Users;
 	};
 
@@ -75,6 +79,21 @@ namespace io
 
 		NinjamRemoteSnapshot Snapshot() const;
 
+		// Sends NINJAM tempo-change commands to the server for BPM and BPI.
+		// Two forms are sent in parallel:
+		//   - Admin form (/bpm N, /bpi N): applied immediately if the connected
+		//     user has admin privileges on the server.
+		//   - Vote form (!vote bpm N, !vote bpi N): non-admin fallback; the server
+		//     counts votes across all participants and applies the change once a
+		//     majority (>50% of non-silent users) agree.
+		// Server vote-progress and confirmation announcements are delivered back
+		// as MSG chat messages with no sender, which _OnChatMessage prints to the
+		// console.  When the change takes effect (via either path), GetActualBPM()
+		// updates and Scene applies it to the local clock within one
+		// job tick (~20 ms).
+		// Safe to call from the job thread; returns false if not connected.
+		bool RequestServerTempo(float bpm, int bpi);
+
 		// Fills left/right with the decoded stereo pair for the given output-channel
 		// index (assigned by NinjamConnection). Returns false if no audio is ready.
 		bool ConsumeStereoPair(unsigned int outChannelLeft,
@@ -82,7 +101,15 @@ namespace io
 			const float*& right,
 			unsigned int& numFrames) const;
 
+		// Broadcasts a text message to all users in the current session.
+		// Safe to call from any thread while connected.
+		void SendChat(const std::string& message);
+
 	private:
+		static void _OnChatMessage(void* userData,
+			NJClient* inst,
+			const char** parms,
+			int nparms);
 		bool _StartConnectAttempt(std::chrono::steady_clock::time_point now);
 		bool _HasActiveConnectAttempt() const noexcept;
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);

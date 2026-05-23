@@ -1,9 +1,12 @@
 #include "Scene.h"
+#include <iostream>
 #include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
+#include "../graphics/VstEditorWindow.h"
+#include "../vst/VstPlugin.h"
 
 using namespace base;
 using namespace actions;
@@ -54,13 +57,17 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
+	_midiDevice(nullptr),
+	_lastMidiDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
-	_ninjamConnection(nullptr),
+	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
+	_audioSampleCounter(0u),
+	_midiAnchorMicros(0),
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -130,6 +137,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
+	_midiDevice = std::make_unique<MidiDevice>();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -186,10 +194,113 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_ninjamConfig = jamStruct.Ninjam;
-	scene->_InitNinjamConnection(scene->_ninjamConfig);
+	if (jamStruct.Ninjam.has_value())
+		scene->_ninjamSession->Start(jamStruct.Ninjam.value());
 	scene->InitReceivers();
 
 	return scene;
+}
+
+void Scene::CloseAllVstEditorWindows()
+{
+	for (auto& window : _vstEditorWindows)
+	{
+		if (window)
+			window->Destroy();
+	}
+	_vstEditorWindows.clear();
+}
+
+void Scene::_PruneClosedVstEditorWindows()
+{
+	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
+		return !window || !window->IsOpen();
+	}), _vstEditorWindows.end());
+}
+
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin)
+{
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	auto window = std::make_unique<graphics::VstEditorWindow>();
+	const auto hInstance = GetModuleHandle(nullptr);
+	if (!window->Create(hInstance, plugin))
+		return false;
+
+	_vstEditorWindows.push_back(std::move(window));
+	return true;
+}
+
+bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
+{
+	if (!loop)
+		return false;
+
+	auto plugin = loop->GetVstPlugin(pluginIndex);
+	if (!plugin || !plugin->IsLoaded())
+		return false;
+
+	return _OpenVstEditorForPlugin(plugin);
+}
+
+bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
+{
+	if (!station || station->IsRemote())
+		return false;
+
+	auto stationPlugin = station->GetVstPlugin(pluginIndex);
+	if (stationPlugin && stationPlugin->IsLoaded())
+		return _OpenVstEditorForPlugin(stationPlugin);
+
+	for (const auto& take : station->GetLoopTakes())
+	{
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+	base::SelectDepth depth,
+	size_t pluginIndex)
+{
+	if (!hovering)
+		return false;
+
+	switch (depth)
+	{
+	case base::SelectDepth::DEPTH_STATION:
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		return _TryOpenVstEditorForStation(station, pluginIndex);
+	}
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+		if (!take)
+			return false;
+
+		for (const auto& loop : take->GetLoops())
+		{
+			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
+				return true;
+		}
+
+		return false;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		return _TryOpenVstEditorForLoop(loop, pluginIndex);
+	}
+	default:
+		return false;
+	}
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -426,6 +537,27 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
+	// Ctrl+Shift+R - arm one-shot reclock: clear quantisation so the next
+	// completed recording becomes the new master quantisation. After completion the
+	// derived BPM/BPI is queued and sent to the NINJAM server at the next
+	// interval boundary.
+	if ((82 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
+		{
+			std::scoped_lock lock(_audioMutex, _tempoMutex);
+			if (_clock)
+				_clock->Clear();
+			_armReclock = true;
+			_effectiveQuantiseSamps = 0u;
+			_hasPendingTempo = false;
+		}
+		return ActionResult::NoAction();
+	}
+
 	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
 	{
 		std::cout << ">> Undo <<" << std::endl;
@@ -433,6 +565,109 @@ ActionResult Scene::OnAction(KeyAction action)
 		auto res = _undoHistory.Undo();
 
 		return { res };
+	}
+
+	// Ctrl+Shift+V - insert a VST on the hovered station/take/loop.
+	if ((86 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		const auto pluginPath = utils::PickFile(L"Choose VST plugin");
+		if (pluginPath.empty())
+			return ActionResult::NoAction();
+
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		if (!hovering)
+		{
+			std::cout << "VST insert: no hovered target" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		std::cout << "VST insert request: depth=" << static_cast<int>(_selector->CurrentSelectDepth())
+			<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
+
+		switch (_selector->CurrentSelectDepth())
+		{
+		case base::SelectDepth::DEPTH_STATION:
+		{
+			auto station = std::dynamic_pointer_cast<Station>(hovering);
+			if (!station)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
+
+			if (station->IsRemote())
+			{
+				std::cout << "VST insert: remote stations are read-only" << std::endl;
+				return ActionResult::NoAction();
+			}
+
+			station->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+		{
+			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+			if (!take)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
+
+			take->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOP:
+		{
+			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+			if (!loop)
+				return ActionResult::NoAction();
+
+			std::cout << "VST insert target: single loop" << std::endl;
+
+			loop->LoadVstPlugin(pluginPath);
+			CommitChanges();
+			break;
+		}
+		}
+
+		std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+
+	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
+	if ((69 == action.KeyChar)
+		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		_PruneClosedVstEditorWindows();
+
+		auto eatAction = []() {
+			ActionResult res;
+			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_DEFAULT;
+			return res;
+		};
+
+		if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
+			return eatAction();
+
+		for (const auto& station : _stations)
+		{
+			if (_TryOpenVstEditorForStation(station, 0))
+				return eatAction();
+		}
+
+		std::cout << "VST editor open: no loaded plugin found" << std::endl;
+		return ActionResult::NoAction();
 	}
 
 	// Ctrl+S - export session to directory.
@@ -493,6 +728,7 @@ ActionResult Scene::OnAction(KeyAction action)
 				io::JamFile::Station jamStation;
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
+				jamStation.VstChain = station->VstEntries();
 
 				for (const auto& take : station->GetLoopTakes())
 				{
@@ -500,6 +736,7 @@ ActionResult Scene::OnAction(KeyAction action)
 
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
+					jamTake.VstChain = take->VstEntries();
 
 					for (const auto& loop : take->GetLoops())
 					{
@@ -663,17 +900,16 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
-	if (_ninjamConnection)
+	_PumpMidi();
+
+	auto snapshot = _ninjamSession->Pump();
+	if (snapshot.has_value())
 	{
-		_ninjamConnection->Pump();
-
-		if (_ninjamConnection->IsConnected())
-		{
-			auto snapshot = _ninjamConnection->Snapshot();
-
-			std::scoped_lock lock(_audioMutex);
-			_ReconcileRemoteStations(snapshot);
-		}
+		std::scoped_lock lock(_audioMutex);
+		_UpdateRemoteStationsFromSnapshot(snapshot.value());
+		_QueueLocalTempoFromClock();
+		_SendQueuedTempoAtIntervalWrap(snapshot.value());
+		_ApplyRemoteTempoToClock(snapshot.value());
 	}
 
 	actions::JobAction job;
@@ -704,6 +940,46 @@ void Scene::OnJobTick(Time curTime)
 	auto receiver = job.Receiver.lock();
 	if (receiver)
 		receiver->OnAction(job);
+
+	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
+	// thread for destruction. On success the chain holds its own ref so this
+	// queued ref is a no-op; on failure (Load returned false) this is the only
+	// remaining ref, and draining it on the UI thread ensures ~VstPlugin →
+	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
+	// the plugin. Releasing on this job thread instead violates VST3 threading
+	// and can crash plugins or leave dangling state until window close.
+	if (job.PreInitPlugin)
+		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+}
+
+void Scene::_PumpMidi()
+{
+	MidiEvent ev{};
+	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
+	while (_midiIngress.Pop(ev))
+	{
+		const auto msgType = ev.MessageType();
+		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
+			continue;
+
+		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
+		for (auto& station : _stations)
+		{
+			for (auto& take : station->GetLoopTakes())
+			{
+				if (take->IsArmed())
+					take->RecordMidiEvent(ev, globalSampleNow);
+			}
+		}
+	}
+
+	auto dropped = _midiIngress.DroppedCount();
+	if (dropped != _lastMidiDropCount)
+	{
+		std::cout << "[MIDI] Ingress queue dropped " << (dropped - _lastMidiDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastMidiDropCount = dropped;
+	}
 }
 
 void Scene::InitReceivers()
@@ -760,61 +1036,125 @@ void Scene::InitGui()
 
 void Scene::InitAudio()
 {
-	std::scoped_lock lock(_audioMutex);
-
-	auto dev = AudioDevice::Open(Scene::AudioCallback,
-		[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-		_userConfig.Audio,
-		this);
-
-	if (dev.has_value())
 	{
-		_audioDevice = std::move(dev.value());
+		std::scoped_lock lock(_audioMutex);
 
-		_audioCallbackCount = 0;
-		_audioDevice->Start();
+		auto dev = AudioDevice::Open(Scene::AudioCallback,
+			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
+			_userConfig.Audio,
+			this);
 
-		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-		audioStreamParams.PrintParams();
-
-		auto inLatency = (0u == audioStreamParams.InputLatency) ?
-			_userConfig.Audio.LatencyIn :
-			audioStreamParams.InputLatency;
-
-		_channelMixer->SetParams(ChannelMixerParams({
-				_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
-				ChannelMixer::DefaultBufferSize,
-				audioStreamParams.NumInputChannels,
-				audioStreamParams.NumOutputChannels }));
-
-		for (auto& station : _stations)
+		if (dev.has_value())
 		{
-			if (station)
+			_audioDevice = std::move(dev.value());
+			_audioCallbackCount = 0;
+			_audioSampleCounter.store(0u, std::memory_order_release);
+			_audioDevice->Start();
+
+			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+			audioStreamParams.PrintParams();
+
+			auto inLatency = (0u == audioStreamParams.InputLatency) ?
+				_userConfig.Audio.LatencyIn :
+				audioStreamParams.InputLatency;
+
+			_channelMixer->SetParams(ChannelMixerParams({
+					_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
+					ChannelMixer::DefaultBufferSize,
+					audioStreamParams.NumInputChannels,
+					audioStreamParams.NumOutputChannels }));
+
+			for (auto& station : _stations)
 			{
-				station->SetupBuffers(audioStreamParams.BufSize);
-				station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
-				station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
-				//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+				if (station)
+				{
+					station->SetupBuffers(audioStreamParams.BufSize);
+					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
+					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
+					station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
+					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
+				}
 			}
-		}
-
-		if (_ninjamConnection)
-		{
-			_ninjamConnection->SetAudioFormat(
+			_ninjamSession->SetAudioFormat(
 				audioStreamParams.SampleRate,
 				audioStreamParams.BufSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels);
+
+			InitMidi();
 		}
 	}
+
+	// Dispatch any VST loads that were staged during scene FromFile so they run
+	// with the real audio device sample rate and buffer size.
+	CommitChanges();
+}
+
+void Scene::InitMidi()
+{
+	if (!_midiDevice)
+		_midiDevice = std::make_unique<MidiDevice>();
+
+	_midiIngress.Clear();
+	_lastMidiDropCount = 0u;
+	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+
+	if (!_userConfig.Midi.Enabled)
+	{
+		std::cout << "[MIDI] MIDI input disabled by rig settings." << std::endl;
+		return;
+	}
+
+	const auto sampleRate = _userConfig.Audio.SampleRate;
+	auto opened = _midiDevice->Open(
+		_userConfig.Midi.Name,
+		[this, sampleRate](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+		{
+			MidiEvent ev{};
+			const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
+			const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+
+			std::uint64_t mappedSample = anchorSample;
+			if (sampleRate > 0u && nowMicros > anchorMicros)
+			{
+				const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+				mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+			}
+
+			ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+			ev.status = status;
+			ev.data1 = data1;
+			ev.data2 = data2;
+			ev._pad = 0u;
+			_midiIngress.Push(ev);
+		});
+
+	if (!opened)
+		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+}
+
+void Scene::CloseMidi()
+{
+	if (_midiDevice)
+		_midiDevice->Close();
 }
 
 void Scene::CloseAudio()
 {
+	CloseMidi();
+
+	// Do not hold the audio callback mutex while stopping the stream.
+	// RtAudio shutdown may wait for the callback thread to return, and the
+	// callback takes this same mutex.
+	if (_audioDevice)
+		_audioDevice->Stop();
+
 	std::scoped_lock lock(_audioMutex);
 
-	if (_ninjamConnection)
-		_ninjamConnection->Disconnect();
+	_ninjamSession->Stop();
 
 	_audioDevice->Stop();
 }
@@ -834,6 +1174,21 @@ void Scene::CommitChanges()
 		}
 	}
 
+	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
+	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
+	// the audio lock and later attached() calls remain UI-thread bound.
+	for (auto& job : jobList)
+	{
+		if (job.JobActionType == JobAction::JOB_LOADVST)
+		{
+			auto plugin = std::make_shared<vst::VstPlugin>();
+			if (plugin->PreInit(job.VstPath))
+				job.PreInitPlugin = std::move(plugin);
+			// If PreInit fails, fall back to a fresh VstPlugin on the job thread.
+			// That may still hang in attached(), but it matches the old behaviour.
+		}
+	}
+
 	if (!jobList.empty())
 	{
 		std::scoped_lock lock(_jobMutex);
@@ -844,6 +1199,37 @@ void Scene::CommitChanges()
 std::mutex& Scene::GetAudioMutex()
 {
 	return _audioMutex;
+}
+
+void Scene::SendNinjamChat(const std::string& msg)
+{
+	if (_ninjamSession)
+		_ninjamSession->SendChat(msg);
+}
+
+void Scene::ConnectNinjam(const std::string& host)
+{
+	if (!_ninjamSession)
+		return;
+
+	io::JamFile::NinjamConfig config;
+	if (_ninjamConfig.has_value())
+		config = _ninjamConfig.value();
+
+	config.Host = host;
+	_ninjamConfig = config;
+
+	std::cout << "[NINJAM] Connecting to " << host << std::endl;
+	_ninjamSession->Start(config);
+}
+
+void Scene::DisconnectNinjam()
+{
+	if (!_ninjamSession)
+		return;
+
+	std::cout << "[NINJAM] Disconnecting" << std::endl;
+	_ninjamSession->Stop();
 }
 
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
@@ -875,10 +1261,12 @@ void Scene::_OnAudio(float* inBuf,
 	float* outBuf,
 	unsigned int numSamps)
 {
+	const auto audioStreamParams = nullptr == _audioDevice ?
+		AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+	const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
+
 	if (nullptr != inBuf)
 	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		auto inLatency = (0u == audioStreamParams.InputLatency) ?
 			_userConfig.Audio.LatencyIn :
 			audioStreamParams.InputLatency;
@@ -916,10 +1304,10 @@ void Scene::_OnAudio(float* inBuf,
 			// We call a method on station to wind all these internal looptake bounces
 			// forward, according to the triggers that are in overdub mode.
 			station->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
-			station->OnBounce(numSamps, _userConfig);
+			station->OnBounce(numSamps, _userConfig, audioStreamParams);
 
 			station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
-			station->OnBounce(numSamps, _userConfig);
+			station->OnBounce(numSamps, _userConfig, audioStreamParams);
 
 			station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_BOUNCE);
 		}
@@ -928,32 +1316,29 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+	const auto ninjamConnected = _ninjamSession->IsConnected();
 
-	if (_ninjamConnection)
+	if (ninjamConnected)
 	{
 		auto audioStreamParams = nullptr == _audioDevice ?
 			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-		_ninjamConnection->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-
-		for (const auto& stationBase : _stations)
-		{
-			if (!stationBase || !stationBase->IsRemote())
-				continue;
-
-			auto station = std::static_pointer_cast<StationRemote>(stationBase);
-			if (!station->IsConnectedRemote())
-				continue;
-
-			const float* left = nullptr;
-			const float* right = nullptr;
-			unsigned int frameCount = 0u;
-			if (_ninjamConnection->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
-			{
-				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
-				station->IngestStereoBlock(left, right, ingestFrames);
-			}
-		}
+		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 	}
+
+	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
+		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
+		if (!ninjamConnected || !station || !station->IsConnectedRemote())
+			return;
+
+		const float* left = nullptr;
+		const float* right = nullptr;
+		unsigned int frameCount = 0u;
+		if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+		{
+			auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
+			station->IngestStereoBlock(left, right, ingestFrames);
+		}
+	};
 
 	if (nullptr != outBuf)
 	{
@@ -964,6 +1349,7 @@ void Scene::_OnAudio(float* inBuf,
 		for (auto& station : _stations)
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
+			ingestRemoteStation(station);
 			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
@@ -974,6 +1360,7 @@ void Scene::_OnAudio(float* inBuf,
 	{
 		for (auto& station : _stations)
 		{
+			ingestRemoteStation(station);
 			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
 			station->EndMultiPlay(numSamps);
 		}
@@ -985,6 +1372,10 @@ void Scene::_OnAudio(float* inBuf,
 		numSamps,
 		_userConfig,
 		_audioDevice->GetAudioStreamParams());
+
+	_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
+	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
 }
 
 bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
@@ -1225,25 +1616,7 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
-void Scene::_InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config)
-{
-	_ninjamConnection.reset();
-
-	if (!config.has_value())
-		return;
-
-	const auto& ninjam = config.value();
-	if (ninjam.Host.empty() || ninjam.User.empty())
-		return;
-
-	_ninjamConnection = std::make_unique<io::NinjamConnection>(
-		ninjam.Host, ninjam.User, ninjam.Pass, ninjam.WorkDir);
-
-	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
-	_ninjamConnection->Connect();
-}
-
-void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot)
 {
 	std::set<std::string> seenUsers;
 
@@ -1283,12 +1656,21 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 
 		if (snapshot.IntervalLengthSamps > 0)
 		{
-			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps);
+			auto visualIntervalSamps = snapshot.IntervalLengthSamps;
+			if (snapshot.HasTiming)
+			{
+				const auto derivedInterval = static_cast<unsigned int>(((static_cast<double>(snapshot.SampleRate) * 60.0 * static_cast<double>(snapshot.Bpi)) / static_cast<double>(snapshot.Bpm)) + 0.5);
+				if (derivedInterval > 0u)
+					visualIntervalSamps = std::max(visualIntervalSamps, derivedInterval);
+			}
+
+			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
 		}
 
 		// EnsureRemoteTake runs on the job thread so the audio callback can
 		// early-out safely if loops are not yet initialised.
 		remoteStation->EnsureRemoteTake();
+		remoteStation->UpdateRemoteVisuals();
 	}
 
 	// Remove stations for users who have left.
@@ -1311,5 +1693,138 @@ void Scene::_ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot)
 		{
 			++it;
 		}
+	}
+}
+
+void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
+{
+	if (!_clock || !snapshot.HasTiming)
+		return;
+
+	// Don't override quantisation while a one-shot reclock is armed -
+	// the next recording will establish the new quantisation.
+	if (_armReclock)
+		return;
+
+	{
+		std::scoped_lock tempoLock(_tempoMutex);
+		if (_hasPendingTempo)
+			return;
+	}
+
+	const auto bpmChanged = (snapshot.Bpm != _remoteBpm)
+		|| (snapshot.Bpi != _remoteBpi)
+		|| (snapshot.SampleRate != _remoteSampleRate);
+
+	if (!bpmChanged && (_effectiveQuantiseSamps != 0u) && _clock->IsQuantisable())
+		return;
+
+	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
+	if (intervalLengthSamps == 0u)
+	{
+		// snapshot.HasTiming above guarantees bpm/bpi/sampleRate are all > 0.
+		const auto beatSamps = static_cast<double>(snapshot.SampleRate) * 60.0 / static_cast<double>(snapshot.Bpm);
+		intervalLengthSamps = beatSamps > 0.0
+			? static_cast<unsigned int>((beatSamps * static_cast<double>(snapshot.Bpi)) + 0.5)
+			: 0u;
+	}
+
+	const auto timing = _userConfig.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
+	if (!timing.has_value() || (timing->GrainSamps == 0u))
+		return;
+
+	_remoteBpm = snapshot.Bpm;
+	_remoteBpi = snapshot.Bpi;
+	_remoteSampleRate = snapshot.SampleRate;
+	_effectiveQuantiseSamps = timing->GrainSamps;
+
+	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
+	_clock->SetQuantisation(timing->GrainSamps, quantisation);
+
+	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
+		<< " bpi=" << snapshot.Bpi
+		<< " sr=" << snapshot.SampleRate
+		<< " intervalSamps=" << intervalLengthSamps
+		<< " mode=" << (_userConfig.Loop.SeedUsesPowers ? "power" : "multiple")
+		<< " grain=" << timing->GrainSamps << std::endl;
+}
+
+void Scene::_QueueLocalTempoFromClock()
+{
+	if (!_clock || !_clock->IsQuantisable())
+		return;
+
+	const auto quantiseSamps = _clock->QuantiseSamps();
+	if ((0u == quantiseSamps) || (quantiseSamps == _effectiveQuantiseSamps))
+		return;
+
+	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
+	if (seedLoopLengthSamps == 0u)
+	{
+		_effectiveQuantiseSamps = quantiseSamps;
+		_armReclock = false;
+		return;
+	}
+
+	auto sampleRate = _remoteSampleRate;
+	if (sampleRate == 0u)
+		sampleRate = _audioDevice ? _audioDevice->GetAudioStreamParams().SampleRate : 0u;
+	if (sampleRate == 0u)
+		sampleRate = _userConfig.Audio.SampleRate;
+	if (sampleRate == 0u)
+	{
+		return;
+	}
+
+	const auto timing = _userConfig.DeduceLoopTiming(seedLoopLengthSamps, sampleRate);
+	if (!timing.has_value())
+	{
+		return;
+	}
+
+	_effectiveQuantiseSamps = timing->GrainSamps;
+	{
+		std::scoped_lock tempoLock(_tempoMutex);
+		_pendingTempoBpm = timing->Bpm;
+		_pendingTempoBpi = static_cast<int>(timing->Bpi);
+		_hasPendingTempo = true;
+	}
+	_armReclock = false;
+
+	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
+		<< " bpi=" << timing->Bpi
+		<< " grain=" << timing->GrainSamps
+		<< " seedLoopLength=" << seedLoopLengthSamps
+		<< " (queued for next interval boundary)" << std::endl;
+}
+
+void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
+{
+	// Detect interval wrap from the latest remote snapshot.
+	const auto pos = snapshot.IntervalPositionSamps;
+	const bool wrapped = (pos < _lastRemoteIntervalPos);
+	_lastRemoteIntervalPos = pos;
+
+	// Copy pending tempo under lock to avoid racing with OnAction (UI thread).
+	float pendingBpm;
+	int pendingBpi;
+	{
+		std::scoped_lock lock(_tempoMutex);
+		if (!_hasPendingTempo)
+			return;
+		pendingBpm = _pendingTempoBpm;
+		pendingBpi = _pendingTempoBpi;
+	}
+
+	if (!_ninjamSession || !_ninjamSession->IsConnected())
+		return;
+
+	if (!wrapped)
+		return;
+
+	if (_ninjamSession->RequestServerTempo(pendingBpm, pendingBpi))
+	{
+		std::scoped_lock lock(_tempoMutex);
+		_hasPendingTempo = false;
 	}
 }

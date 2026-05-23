@@ -206,6 +206,7 @@ namespace engine
 		std::vector<DualBinding> Activate;
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
+		std::vector<unsigned int> MidiInputChannels;
 		std::string TextureRecording;
 		std::string TextureDitchDown;
 		std::string TextureOverdubbing;
@@ -219,6 +220,12 @@ namespace engine
 		TRIGSTATE_RECORDING,
 		TRIGSTATE_OVERDUBBING,
 		TRIGSTATE_PUNCHEDIN
+	};
+
+	struct DelayedTriggerAction
+	{
+		actions::TriggerAction Action;
+		unsigned int SampsLeft;
 	};
 	
 	class Trigger :
@@ -249,6 +256,7 @@ namespace engine
 		void AddInputChannel(unsigned int chan);
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
+		void AddMidiInputChannel(unsigned int chan);
 		TriggerState GetState() const;
 		bool IsDitchDown() const;
 		void Reset();
@@ -266,14 +274,6 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
-		struct DelayedTriggerAction
-		{
-			unsigned int SampsLeft;
-			actions::TriggerAction Action;
-			std::optional<io::UserConfig> UserConfig;
-			std::optional<audio::AudioStreamParams> AudioParams;
-		};
-
 		bool IgnoreRepeats(bool isActivate,
 			DualBinding::TestResult trigResult);
 		bool Debounce(bool isActivate,
@@ -301,8 +301,11 @@ namespace engine
 		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
 		unsigned int CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) const;
-		void QueueDelayedTriggerAction(unsigned int sampsDelay,
-			const actions::TriggerAction& action,
+		unsigned int CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const;
+		void QueueTriggerAction(const actions::TriggerAction& action, unsigned int sampsDelay);
+		void DispatchTriggerAction(const actions::TriggerAction& action);
+		void FlushDelayedTriggerActions(Time curTime,
+			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
 
@@ -312,6 +315,7 @@ namespace engine
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
 		std::vector<unsigned int> _inputChannels;
+		std::vector<unsigned int> _midiInputChannels;
 		TriggerState _state;
 		std::string _overdubSourceId;
 		unsigned long _recordSampCount;

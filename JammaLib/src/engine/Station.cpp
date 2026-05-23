@@ -10,6 +10,57 @@ using utils::Size2d;
 using gui::GuiRackParams;
 using gui::GuiToggleParams;
 
+namespace
+{
+	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	{
+		if (!chain)
+			return;
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+				vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+		chain.reset();
+	}
+
+	unsigned int ResolveSampleRate(std::optional<io::UserConfig> cfg,
+		std::optional<audio::AudioStreamParams> params)
+	{
+		if (params.has_value() && (params.value().SampleRate > 0u))
+			return params.value().SampleRate;
+
+		if (cfg.has_value() && (cfg.value().Audio.SampleRate > 0u))
+			return cfg.value().Audio.SampleRate;
+
+		return constants::DefaultSampleRate;
+	}
+
+	void TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+		unsigned long loopLengthSamps,
+		std::optional<io::UserConfig> cfg,
+		std::optional<audio::AudioStreamParams> params)
+	{
+		if (!clock)
+			return;
+
+		auto policyCfg = cfg.value_or(io::UserConfig());
+		const auto sampleRate = ResolveSampleRate(cfg, params);
+		if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
+		{
+			const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
+			clock->SetQuantisation(timing->GrainSamps, quantisation);
+			clock->SetSeedSourceLength(loopLengthSamps);
+			std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
+				<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
+				<< " loopGrains=" << timing->LoopGrains
+				<< " bpm=" << timing->Bpm
+				<< " bpi=" << timing->Bpi << std::endl;
+		}
+	}
+}
+
 const utils::Size2d Station::_Gap = { 5, 5 };
 const unsigned int Station::_DefaultNumBusChannels = 8;
 
@@ -48,6 +99,8 @@ Station::Station(StationParams params,
 
 Station::~Station()
 {
+	DrainVstChain(_vstChain);
+	DrainVstChain(_backVstChain);
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,
@@ -61,8 +114,9 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
 	auto takeHeight = numTakes > 0 ?
-		std::max(1u, stationParams.Size.Height - ((2 + numTakes - 1) * gap.Height) / numTakes) :
-		std::max(1u, stationParams.Size.Height - (2 * gap.Height));
+		stationParams.Size.Height - ((2 + numTakes - 1) * gap.Height) / numTakes :
+		stationParams.Size.Height - (2 * gap.Height);
+	takeHeight = takeHeight < 1u ? 1u : takeHeight;
 	Size2d takeSize = { stationParams.Size.Width - (2 * gap.Width), takeHeight };
 	LoopTakeParams takeParams;
 	takeParams.Size = { 80, 80 };
@@ -78,7 +132,11 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 		takeCount++;
 	}
-		
+
+	// Queue load jobs for any VST plugins serialised in the station's chain.
+	for (const auto& vstEntry : stationStruct.VstChain)
+		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
+
 	return station;
 }
 
@@ -184,30 +242,44 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	for (auto i = 0u; i < _audioBuffers.size() && i < _audioMixers.size(); i++)
+	const auto channelCount = (_audioBuffers.size() < _audioMixers.size()) ? _audioBuffers.size() : _audioMixers.size();
+	if (channelCount == 0u)
 	{
-		const auto& buf = _audioBuffers[i];
-		float tempBuf[constants::MaxBlockSize];
-		buf->Delay(sampsToRead);
-		auto srcPtr = buf->PlaybackRead(tempBuf, sampsToRead);
+		_masterMixer->UpdateVu(0.0f, sampsToRead);
+		_masterMixer->Offset(sampsToRead);
+		return;
+	}
 
-		// When PlaybackRead returns a direct pointer into the ring buffer
-		// (no wrap-around), we must copy into tempBuf before scaling.
-		if (srcPtr != tempBuf)
-			std::copy(srcPtr, srcPtr + sampsToRead, tempBuf);
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = (i < _vstBlockPtrs.size()) ? _vstBlockPtrs[i] : nullptr;
+		if (!scratch)
+			continue;
+
+		const auto& source = _audioBuffers[i];
+		source->Delay(sampsToRead);
+		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
+		if (sourcePtr != scratch)
+			std::copy(sourcePtr, sourcePtr + sampsToRead, scratch);
 
 		for (auto samp = 0u; samp < sampsToRead; samp++)
-			tempBuf[samp] *= masterLevel;
+			scratch[samp] *= masterLevel;
+	}
 
-		// Track max peak across all channels for the master VU.
+	if (_vstChain && _vstChain->IsActive() && (_vstBlockPtrs.size() >= channelCount))
+		_vstChain->ProcessBlockMulti(_vstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = _vstBlockPtrs[i];
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
-			auto absSamp = std::abs(tempBuf[samp]);
+			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
 		}
 
-		_audioMixers[i]->WriteBlock(dest, tempBuf, sampsToRead);
+		_audioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -385,7 +457,6 @@ ActionResult Station::OnAction(TriggerAction action)
 	ActionResult res;
 	res.IsEaten = false;
 
-	auto loopCount = 0u;
 	auto loopTake = _TryGetTake(action.TargetId);
 
 	switch (action.ActionType)
@@ -393,7 +464,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name());
+		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels);
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -416,6 +487,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
 
 			if (_clock)
 			{
@@ -428,13 +501,9 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
-
-			auto cfg = action.GetUserConfig();
-			auto streamParams = action.GetAudioParams();
 			auto outLatency = streamParams.has_value() ?
 				streamParams.value().OutputLatency :
 				0u;
@@ -447,7 +516,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 
 			auto playPos = cfg.has_value() ?
-				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
+				cfg.value().OverdubPlayPos(errorSamps, loopLength) :
 				0;
 			auto endRecordSamps = cfg.has_value() ?
 				cfg.value().EndRecordingSamps(errorSamps) :
@@ -491,6 +560,8 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			auto cfg = action.GetUserConfig();
+			auto streamParams = action.GetAudioParams();
 
 			if (_clock)
 			{
@@ -503,13 +574,9 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					_clock->SetQuantisation(action.SampleCount / 4, Timer::QUANTISE_MULTIPLE);
-					std::cout << "Set clock to " << (action.SampleCount / 4) << std::endl;
+					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
-
-			auto cfg = action.GetUserConfig();
-			auto streamParams = action.GetAudioParams();
 			auto outLatency = streamParams.has_value() ?
 				streamParams.value().OutputLatency :
 				0u;
@@ -543,21 +610,27 @@ ActionResult Station::OnAction(TriggerAction action)
 		break;
 	}
 	case TriggerAction::TRIGGER_PUNCHIN_START:
-		if (loopTake.has_value())
+		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchIn();
 
-		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
-			sourceLoopTake.value()->Mute();
+		if (action.ApplyToSourceTake)
+		{
+			if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+				sourceLoopTake.value()->Mute();
+		}
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
-		if (loopTake.has_value())
+		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchOut();
 
-		if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
-			sourceLoopTake.value()->UnMute();
+		if (action.ApplyToSourceTake)
+		{
+			if (auto sourceLoopTake = _TryGetTake(action.SourceId); sourceLoopTake.has_value())
+				sourceLoopTake.value()->UnMute();
+		}
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
@@ -690,6 +763,7 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 void Station::SetupBuffers(unsigned int bufSize)
 {
 	_lastBufSize = bufSize;
+	_blockSize = bufSize;
 
 	auto& buffers = (_flipAudioBuffer && _changesMade) ?
 		_backAudioBuffers :
@@ -702,6 +776,17 @@ void Station::SetupBuffers(unsigned int bufSize)
 
 	for (auto& take : _loopTakes)
 		take->SetupBuffers(bufSize);
+	for (auto& take : _backLoopTakes)
+		take->SetupBuffers(bufSize);
+}
+
+void Station::SetSampleRate(float sampleRate)
+{
+	_sampleRate = sampleRate;
+	for (auto& take : _loopTakes)
+		take->SetSampleRate(sampleRate);
+	for (auto& take : _backLoopTakes)
+		take->SetSampleRate(sampleRate);
 }
 
 void Station::SetNumBusChannels(unsigned int chans)
@@ -727,6 +812,11 @@ void Station::SetNumBusChannels(unsigned int chans)
 		if (i < _guiRack->NumOutputChannels())
 			_guiRack->AddRoute(i, i);
 	}
+
+	_vstBlockScratch.resize(static_cast<size_t>(chans) * constants::MaxBlockSize);
+	_vstBlockPtrs.resize(chans);
+	for (unsigned int i = 0; i < chans; i++)
+		_vstBlockPtrs[i] = _vstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
 
 	_flipAudioBuffer = true;
 	_changesMade = true;
@@ -777,8 +867,15 @@ unsigned int Station::NumBusChannels() const
 		(unsigned int)_audioBuffers.size();
 }
 
-void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
+void Station::OnBounce(unsigned int numSamps,
+	io::UserConfig config,
+	std::optional<audio::AudioStreamParams> params)
 {
+	auto outLatency = params.has_value() ? params.value().OutputLatency : 0u;
+	if (0u == outLatency)
+		outLatency = config.Audio.LatencyOut;
+
+	auto sourceOffset = config.OverdubSourceReadOffset(outLatency);
 	for (auto& trigger : _triggers)
 	{
 		auto takes = trigger->GetTakes();
@@ -796,7 +893,7 @@ void Station::OnBounce(unsigned int numSamps, io::UserConfig config)
 
 			if ((_loopTakes.end() != sourceMatch) && (_loopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->WriteBlock(*targetMatch, trigger, -((long)constants::MaxLoopFadeSamps), numSamps);
+				(*sourceMatch)->WriteBlock(*targetMatch, trigger, sourceOffset, numSamps);
 			}
 		}
 	}
@@ -884,9 +981,48 @@ std::vector<JobAction> Station::_CommitChanges()
 		_WireVuSliders();
 	}
 
+	// Swap in the VST chain if the job thread has delivered a new one.
+	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+	{
+		std::lock_guard<std::mutex> lock(_vstChainMutex);
+		_vstChain = _backVstChain;
+	}
+
+	// Detect pending VST load/unload requests and queue a job for them.
+	std::vector<JobAction> jobs;
+
+	// Drain pending unload indices — emit one JOB_UNLOADVST per entry so
+	// rapid back-to-back UnloadVstPlugin() calls are not silently dropped.
+	auto pendingUnloads = std::move(_pendingVstUnloads);
+	for (auto idx : pendingUnloads)
+	{
+		// Queue removal to the job thread so DLL teardown does not happen
+		// under the audio mutex.
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UNLOADVST;
+		job.SourceId = _name;
+		job.VstIndex = idx;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
+	}
+
+	// Drain pending load paths into jobs, then clear.  Move the vector out
+	// first so the for-loop iterates a local copy (avoids moving from a
+	// reference to a live vector element).
+	auto pendingLoads = std::move(_pendingVstLoads);
+	for (auto& path : pendingLoads)
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_LOADVST;
+		job.SourceId = _name;
+		job.VstPath = std::move(path);
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(std::move(job));
+	}
+
 	GuiElement::_CommitChanges();
 
-	return {};
+	return jobs;
 }
 
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
@@ -984,4 +1120,148 @@ void Station::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
+}
+
+void Station::LoadVstPlugin(std::wstring path)
+{
+	_pendingVstLoads.push_back(std::move(path));
+	_changesMade = true;
+}
+
+void Station::UnloadVstPlugin(size_t index)
+{
+	_pendingVstUnloads.push_back(index);
+	_changesMade = true;
+}
+
+std::shared_ptr<vst::VstPlugin> Station::GetVstPlugin(size_t index) const
+{
+	if (!_vstChain)
+		return nullptr;
+
+	return _vstChain->GetPlugin(index);
+}
+
+std::vector<io::JamFile::VstEntry> Station::VstEntries() const
+{
+	std::vector<io::JamFile::VstEntry> entries;
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	entries.reserve(_vstPluginPaths.size());
+
+	for (const auto& path : _vstPluginPaths)
+	{
+		io::JamFile::VstEntry entry;
+		entry.Path = utils::EncodeUtf8(path);
+		entry.Bypass = false;
+		entries.push_back(std::move(entry));
+	}
+
+	return entries;
+}
+
+ActionResult Station::OnAction(JobAction action)
+{
+	switch (action.JobActionType)
+	{
+	case JobAction::JOB_LOADVST:
+	{
+		// Running on the job thread — safe to do heavy work here.
+		// Always build a brand-new VstChain so _backVstChain never aliases
+		// the live _vstChain (which the audio callback reads concurrently).
+		// Take a snapshot of the current live chain under _vstChainMutex so
+		// we don't race with _CommitChanges() swapping it on the main thread.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
+		{
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (chainSnapshot)
+		{
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
+			{
+				auto existing = chainSnapshot->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		// Use the pre-initialised plugin instance when Scene::CommitChanges()
+		// prepared one on the UI thread; otherwise create a fresh plugin.
+		auto plugin = action.PreInitPlugin
+			? action.PreInitPlugin
+			: std::make_shared<vst::VstPlugin>();
+		auto hostChannels = NumBusChannels();
+		if (hostChannels == 0u)
+			hostChannels = 1u;
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
+		{
+			newChain->AddPlugin(plugin);
+			{
+				std::lock_guard<std::mutex> lock(_vstPathsMutex);
+				_vstPluginPaths.push_back(action.VstPath);
+			}
+			// Publish the new chain and signal _CommitChanges() to swap it in.
+			_backVstChain = std::move(newChain);
+			_flipVstChain.store(true, std::memory_order_release);
+			_changesMade = true;
+		}
+		else if (action.PreInitPlugin)
+		{
+			// Load failed but plugin was pre-initialised on the UI thread;
+			// destroying it here (job thread) would violate VST3 threading.
+			vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	case JobAction::JOB_UNLOADVST:
+	{
+		// Build a new chain omitting the plugin at the requested index.
+		// This runs on the job thread so DLL teardown is not under the audio mutex.
+		// Take a snapshot of the current live chain under _vstChainMutex.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
+		{
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
+		auto newChain = std::make_shared<vst::VstChain>();
+		const auto removeIndex = action.VstIndex;
+		if (chainSnapshot)
+		{
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
+			{
+				if (i == removeIndex)
+					continue;
+				auto existing = chainSnapshot->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		{
+			std::lock_guard<std::mutex> lock(_vstPathsMutex);
+			if (removeIndex < _vstPluginPaths.size())
+				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+		}
+
+		_backVstChain = std::move(newChain);
+		_flipVstChain.store(true, std::memory_order_release);
+		_changesMade = true;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	default:
+		break;
+	}
+
+	return ActionResult::NoAction();
 }

@@ -60,6 +60,9 @@
     <Filter Include="lib\stb">
       <UniqueIdentifier>{8c0a127c-8f8e-41fe-9d45-94e9a2c6327f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="lib\rtmidi">
+      <UniqueIdentifier>{f2ecbe9b-e5ba-4d09-8250-0f4f27f5c4df}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\stdafx.h">
@@ -75,6 +78,18 @@
       <Filter>lib\glew</Filter>
     </ClInclude>
     <ClInclude Include="src\vst\Vst.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstDebug.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstDiagnostics.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstPlugin.h">
+      <Filter>src\vst</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vst\VstChain.h">
       <Filter>src\vst</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\UndoHistory.h">
@@ -176,6 +191,9 @@
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\NinjamSession.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\InterpolatedValue.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -208,6 +226,12 @@
     </ClInclude>
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audio\MidiDevice.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\rtmidi\RtMidi.h">
+      <Filter>lib\rtmidi</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
@@ -260,10 +284,28 @@
     <ClInclude Include="src\engine\Timer.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\MidiEvent.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiQueue.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiLoop.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiNoteSpan.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiModel.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\Window.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\VstEditorWindow.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="lib\rtaudio\include\asio.h">
@@ -327,6 +369,9 @@
       <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\io\NetworkSession.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
+    <ClInclude Include="src\io\ConsoleTui.h">
       <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\io\NinjamConnection.h">
@@ -430,6 +475,15 @@
     <ClCompile Include="src\vst\Vst.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\VstPlugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\VstChain.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\VstEditorWindow.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
     <ClCompile Include="src\engine\Station.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
@@ -490,6 +544,9 @@
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\NinjamSession.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\InterpolatedValue.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -529,6 +586,12 @@
     <ClCompile Include="src\audio\AudioDevice.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\MidiDevice.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\rtmidi\RtMidi.cpp">
+      <Filter>lib\rtmidi</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\AudioMixer.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -546,6 +609,15 @@
     </ClCompile>
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiLoop.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiNoteSpan.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiModel.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>
@@ -584,6 +656,9 @@
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NetworkSession.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\ConsoleTui.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\io\NinjamConnection.cpp">

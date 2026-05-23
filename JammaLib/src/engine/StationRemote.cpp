@@ -20,7 +20,7 @@ StationRemote::StationRemote(StationParams params,
 	_nameLabel(nullptr)
 {
 	SetNumBusChannels(2);
-	SetModelScale(2.0);
+	SetModelScale(1.0);
 
 	gui::GuiLabelParams labelParams;
 	labelParams.String = _remoteUserName;
@@ -29,6 +29,14 @@ StationRemote::StationRemote(StationParams params,
 	labelParams.Size = { 180, 18 };
 	_nameLabel = std::make_shared<gui::GuiLabel>(labelParams);
 	_children.push_back(_nameLabel);
+}
+
+void StationRemote::SetSelectDepth(base::SelectDepth depth)
+{
+	Station::SetSelectDepth(depth);
+
+	if (_guiRack)
+		_guiRack->SetVisible(true);
 }
 
 void StationRemote::EnsureRemoteTake()
@@ -57,6 +65,7 @@ void StationRemote::EnsureRemoteTake()
 	leftParams.FadeSamps = _fadeSamps;
 	_leftLoop = std::make_shared<LoopRemote>(leftParams, loopMixerParams);
 	_leftLoop->SetMeasureLength(_intervalLengthSamps.load());
+	_leftLoop->SetVisualLength(_intervalLengthSamps.load());
 
 	LoopParams rightParams = leftParams;
 	rightParams.Id = _name + "-REMOTE-R";
@@ -64,13 +73,23 @@ void StationRemote::EnsureRemoteTake()
 	rightParams.Channel = 1;
 	_rightLoop = std::make_shared<LoopRemote>(rightParams, loopMixerParams);
 	_rightLoop->SetMeasureLength(_intervalLengthSamps.load());
+	_rightLoop->SetVisualLength(_intervalLengthSamps.load());
 
 	_remoteTake->AddLoop(_leftLoop);
 	_remoteTake->AddLoop(_rightLoop);
 	AddTake(_remoteTake);
 	CommitChanges();
 
-	SetRackVisibility(false, false);
+	SetRackVisibility(true, false);
+}
+
+void StationRemote::UpdateRemoteVisuals()
+{
+	if (_leftLoop)
+		_leftLoop->Update();
+
+	if (_rightLoop)
+		_rightLoop->Update();
 }
 
 void StationRemote::SetRemoteUserName(const std::string& userName)
@@ -97,21 +116,24 @@ void StationRemote::SetConnectedRemote(bool connected)
 	_isConnectedRemote = connected;
 }
 
-void StationRemote::SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps)
+void StationRemote::SetRemoteInterval(unsigned int lengthSamps, unsigned int positionSamps, unsigned int visualLengthSamps)
 {
 	const auto safeLength = std::max(1u, lengthSamps);
+	const auto safeVisualLength = std::max(safeLength, visualLengthSamps);
 	_intervalLengthSamps.store(safeLength);
 	_intervalPositionSamps.store(positionSamps % safeLength);
 
 	if (_leftLoop)
 	{
 		_leftLoop->SetMeasureLength(safeLength);
+		_leftLoop->SetVisualLength(safeVisualLength);
 		_leftLoop->SetMeasurePosition(_intervalPositionSamps.load());
 	}
 
 	if (_rightLoop)
 	{
 		_rightLoop->SetMeasureLength(safeLength);
+		_rightLoop->SetVisualLength(safeVisualLength);
 		_rightLoop->SetMeasurePosition(_intervalPositionSamps.load());
 	}
 }
@@ -122,7 +144,7 @@ void StationRemote::IngestStereoBlock(const float* left,
 {
 	// Audio callback path: must be real-time safe.
 	// EnsureRemoteTake() and SetMeasureLength() are not safe here (allocations).
-	// The job thread (_ReconcileRemoteStations) guarantees the take and loops
+	// The job thread (_UpdateRemoteStationsFromSnapshot) guarantees the take and loops
 	// are created and measure length is set before this is called.
 	// Early-out if loops are not yet ready.
 	if (!left || !right || numSamps == 0u)

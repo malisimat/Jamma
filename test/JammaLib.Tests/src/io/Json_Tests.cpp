@@ -204,3 +204,77 @@ TEST(Json, ParsesStruct) {
 	ASSERT_EQ("you", res1);
 	ASSERT_EQ("monkeying", res2);
 }
+
+TEST(Json, ParsesJamFile) {
+	static const char* jamJson = R"(
+		{
+			"name": "default",
+			"stations": [
+				{ "name": "Mic", "takes": [] },
+				{ "name": "HiHat", "takes": [] }
+			],
+			"quantisesamps": 0,
+			"quantisation": "multiple"
+		}
+	)";
+
+	auto testStream = std::stringstream(jamJson);
+	auto json = JsonMock::FromStream(std::move(testStream));
+
+	ASSERT_TRUE(json.has_value());
+
+	auto kv = json.value().KeyValues["stations"];
+	auto arr = std::get<Json::JsonArray>(kv);
+	auto stations = std::get<std::vector<Json::JsonPart>>(arr.Array);
+
+	ASSERT_EQ(2u, stations.size());
+
+	auto name0 = std::get<std::string>(stations[0].KeyValues["name"]);
+	auto name1 = std::get<std::string>(stations[1].KeyValues["name"]);
+
+	ASSERT_EQ("Mic", name0);
+	ASSERT_EQ("HiHat", name1);
+}
+
+TEST(Json, ParsesJamFileWithVst) {
+	static const char* jamJson = R"(
+		{
+			"name": "default",
+			"stations": [
+				{ "name": "Mic", "takes": [], "vst": [{ "path": "C:/VST/test.vst3", "bypass": false }] },
+				{ "name": "HiHat", "takes": [] }
+			],
+			"quantisesamps": 0,
+			"quantisation": "multiple"
+		}
+	)";
+
+	auto testStream = std::stringstream(jamJson);
+	auto json = JsonMock::FromStream(std::move(testStream));
+
+	ASSERT_TRUE(json.has_value());
+
+	auto kv = json.value().KeyValues["stations"];
+	auto arr = std::get<Json::JsonArray>(kv);
+	auto stations = std::get<std::vector<Json::JsonPart>>(arr.Array);
+
+	ASSERT_EQ(2u, stations.size());
+
+	auto name0 = std::get<std::string>(stations[0].KeyValues["name"]);
+	auto name1 = std::get<std::string>(stations[1].KeyValues["name"]);
+
+	ASSERT_EQ("Mic", name0);
+	ASSERT_EQ("HiHat", name1);
+
+	auto vstKv = stations[0].KeyValues["vst"];
+	auto vstArr = std::get<Json::JsonArray>(vstKv);
+	auto vstParts = std::get<std::vector<Json::JsonPart>>(vstArr.Array);
+
+	ASSERT_EQ(1u, vstParts.size());
+
+	auto path = std::get<std::string>(vstParts[0].KeyValues["path"]);
+	auto bypass = std::get<bool>(vstParts[0].KeyValues["bypass"]);
+
+	ASSERT_EQ("C:/VST/test.vst3", path);
+	ASSERT_EQ(false, bypass);
+}

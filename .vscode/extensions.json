@@ -1,0 +1,6 @@
+{
+    "recommendations": [
+        "hbenl.vscode-gtest-adapter",
+        "ms-vscode.cpptools"
+    ]
+}

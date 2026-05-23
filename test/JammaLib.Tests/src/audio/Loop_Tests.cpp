@@ -656,7 +656,63 @@ TEST(Loop, Playback_ProducesOutputInOverdubbingRecordingState)
 
     PlayOneBlock(loop, sink, blockSize);
 
-    ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, Playback_ProducesOutputInPunchedInState)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+
+	auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Overdub();
+	WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
+	loop.PunchIn();
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+	ASSERT_TRUE(loop.IsPunchInActive());
+
+	PlayOneBlock(loop, sink, blockSize);
+
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+}
+
+TEST(Loop, PunchOutAfterPlayKeepsPlaybackWhileStoppingAdcCapture)
+{
+	const auto loopLength = 50ul;
+	const auto blockSize = 11u;
+
+	auto sink = std::make_shared<MockMultiSink>(blockSize);
+
+	auto loop = MakeLoop();
+	loop.Overdub();
+	loop.PunchIn();
+	WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
+	loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+	ASSERT_TRUE(loop.IsPunchInActive());
+
+	loop.PunchOut();
+	ASSERT_FALSE(loop.IsPunchInActive());
+	ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
+
+	PlayOneBlock(loop, sink, blockSize);
+	ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
+
+	auto before = loop.ExportSamples();
+	float adcBuf[8] = { 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f };
+	AudioWriteRequest adcRequest;
+	adcRequest.samples = adcBuf;
+	adcRequest.numSamps = 8u;
+	adcRequest.stride = 1;
+	adcRequest.fadeCurrent = 0.0f;
+	adcRequest.fadeNew = 1.0f;
+	adcRequest.source = base::Audible::AUDIOSOURCE_ADC;
+	loop.OnBlockWrite(adcRequest, 0);
+	auto after = loop.ExportSamples();
+	ASSERT_EQ(before, after);
 }
 
 // Regression: when loopLength is quantised upward so that logicalBufSize >
@@ -710,6 +766,24 @@ TEST(Loop, Play_IndexUnchangedWhenWithinPhysicalBuffer)
     EXPECT_EQ(normalIndex, loop.PlayIndex());
 }
 
+// Regression: logical loop indexing must keep the MaxLoopFadeSamps offset.
+// If Play() clamps against loopLength alone (without the fade offset), a valid
+// tail index in the logical buffer would be incorrectly clamped.
+TEST(Loop, Play_IndexAtLogicalTailPreservesFadeOffset)
+{
+    const auto loopLength = 50ul;
+    const auto logicalBufSize = loopLength + static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+
+    auto loop = MakeLoopProbe();
+    loop.Record();
+    WriteData(loop, loopLength, 1.0f);
+
+    const auto logicalTailIndex = logicalBufSize - 1ul;
+    loop.Play(logicalTailIndex, loopLength, /*continueRecording=*/true);
+
+    EXPECT_EQ(logicalTailIndex, loop.PlayIndex());
+}
+
 TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
     const auto fadeSamps = constants::DefaultFadeSamps;
     const auto loopLength = 50ul;
@@ -759,4 +833,50 @@ TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
         EXPECT_NEAR(samples[s], inputVal, 1e-5f)
             << "Gain bump at crossfade sample " << s;
     }
+}
+
+// -- Two-loop sync test ------------------------------------------------------
+// Two loops loaded with identical content and started at the same play position
+// (simulating a second loop recording the same source) must produce sample-
+// identical output — the L-channel loop and R-channel loop stay in phase.
+TEST(Loop, TwoLoopsWithSameContentProduceSameSamples)
+{
+    const auto loopLength = 50ul;
+    const auto blockSize = 11u;
+    const auto totalRecordSamps = constants::MaxLoopFadeSamps + loopLength;
+
+    // Non-uniform ramp in the loop body so any phase offset would be detected.
+    std::vector<float> seedData(totalRecordSamps, 0.0f);
+    for (auto i = 0u; i < loopLength; i++)
+        seedData[constants::MaxLoopFadeSamps + i] = static_cast<float>(i + 1) * 0.01f;
+
+    auto makeSeededLoop = [&]()
+    {
+        auto loop = MakeLoop();
+        loop.Record();
+        AudioWriteRequest writeReq;
+        writeReq.samples    = seedData.data();
+        writeReq.numSamps   = static_cast<unsigned int>(totalRecordSamps);
+        writeReq.stride     = 1;
+        writeReq.fadeCurrent = 0.0f;
+        writeReq.fadeNew    = 1.0f;
+        writeReq.source     = base::Audible::AUDIOSOURCE_ADC;
+        loop.OnBlockWrite(writeReq, 0);
+        loop.EndWrite(static_cast<unsigned int>(totalRecordSamps), true);
+        loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
+        return loop;
+    };
+
+    auto loopL = makeSeededLoop();
+    auto loopR = makeSeededLoop();
+
+    auto sinkL = std::make_shared<MockMultiSink>(blockSize);
+    auto sinkR = std::make_shared<MockMultiSink>(blockSize);
+    PlayOneBlock(loopL, sinkL, blockSize);
+    PlayOneBlock(loopR, sinkR, blockSize);
+
+    const auto& samplesL = sinkL->GetSamples();
+    const auto& samplesR = sinkR->GetSamples();
+    for (auto s = 0u; s < blockSize; s++)
+        EXPECT_FLOAT_EQ(samplesL[s], samplesR[s]) << "sample " << s;
 }

@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "UserConfig.h"
+#include <limits>
 
 using namespace io;
 
@@ -56,6 +57,19 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 
 			if (trigOpt.has_value())
 				cfg.Trigger = trigOpt.value();
+		}
+	}
+
+	iter = json.KeyValues.find("midi");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["midi"].index() == 6)
+		{
+			auto midiJson = std::get<Json::JsonPart>(json.KeyValues["midi"]);
+			auto midiOpt = MidiSettings::FromJson(midiJson);
+
+			if (midiOpt.has_value())
+				cfg.Midi = midiOpt.value();
 		}
 	}
 
@@ -144,6 +158,10 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json::JsonPart json)
 {
 	unsigned int fadeSamps = constants::DefaultFadeSamps;
+	unsigned int seedGrainMinMs = 400u;
+	unsigned int seedGrainTargetMaxMs = 3000u;
+	unsigned int seedBpmMin = 80u;
+	auto seedUsesPowers = true;
 
 	auto iter = json.KeyValues.find("fadeSamps");
 	if (iter != json.KeyValues.end())
@@ -152,8 +170,37 @@ std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json:
 			fadeSamps = std::get<unsigned long>(json.KeyValues["fadeSamps"]);
 	}
 
+	iter = json.KeyValues.find("seedGrainMinMs");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["seedGrainMinMs"].index() == 2)
+			seedGrainMinMs = std::get<unsigned long>(json.KeyValues["seedGrainMinMs"]);
+	}
+
+	iter = json.KeyValues.find("seedGrainTargetMaxMs");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["seedGrainTargetMaxMs"].index() == 2)
+			seedGrainTargetMaxMs = std::get<unsigned long>(json.KeyValues["seedGrainTargetMaxMs"]);
+	}
+
+	iter = json.KeyValues.find("seedBpmMin");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["seedBpmMin"].index() == 2)
+			seedBpmMin = std::get<unsigned long>(json.KeyValues["seedBpmMin"]);
+	}
+
+	iter = json.KeyValues.find("seedQuantisation");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["seedQuantisation"].index() == 4))
+		seedUsesPowers = std::get<std::string>(json.KeyValues["seedQuantisation"]) != "multiple";
+
 	LoopSettings loop;
 	loop.FadeSamps = fadeSamps;
+	loop.SeedGrainMinMs = seedGrainMinMs;
+	loop.SeedGrainTargetMaxMs = seedGrainTargetMaxMs;
+	loop.SeedBpmMin = seedBpmMin;
+	loop.SeedUsesPowers = seedUsesPowers;
 	return loop;
 }
 
@@ -180,6 +227,31 @@ std::optional<UserConfig::TriggerSettings> UserConfig::TriggerSettings::FromJson
 	trig.PreDelay = preDelay;
 	trig.DebounceSamps = debounceSamps;
 	return trig;
+}
+
+std::optional<UserConfig::MidiSettings> UserConfig::MidiSettings::FromJson(Json::JsonPart json)
+{
+	std::string name = "default";
+	bool enabled = true;
+
+	auto iter = json.KeyValues.find("name");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["name"].index() == 4)
+			name = std::get<std::string>(json.KeyValues["name"]);
+	}
+
+	iter = json.KeyValues.find("enabled");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["enabled"].index() == 0)
+			enabled = std::get<bool>(json.KeyValues["enabled"]);
+	}
+
+	MidiSettings midi;
+	midi.Name = name;
+	midi.Enabled = enabled;
+	return midi;
 }
 
 
@@ -259,4 +331,64 @@ unsigned long UserConfig::LoopPlayPos(int error,
 	}
 
 	return playPos;
+}
+
+unsigned int UserConfig::TriggerLoopAlignmentSamps() const
+{
+	return Trigger.PreDelay + constants::MaxLoopFadeSamps;
+}
+
+long UserConfig::OverdubSourceReadOffset(unsigned int outLatency) const
+{
+	return -static_cast<long>(TriggerLoopAlignmentSamps() + outLatency);
+}
+
+unsigned long UserConfig::OverdubPlayPos(int error, unsigned long loopLength) const
+{
+	return LoopPlayPos(error, loopLength, 0u);
+}
+
+std::optional<UserConfig::SeedLoopTiming> UserConfig::DeduceLoopTiming(unsigned long loopLengthSamps,
+	unsigned int sampleRate) const
+{
+	if ((0ul == loopLengthSamps) || (0u == sampleRate))
+		return std::nullopt;
+
+	auto grainSamps = loopLengthSamps;
+	auto loopGrains = 1u;
+	const auto seedGrainMinMs = std::max(1u, Loop.SeedGrainMinMs);
+	const auto seedGrainTargetMaxMs = std::max(seedGrainMinMs, Loop.SeedGrainTargetMaxMs);
+	const auto minGrainSamps = static_cast<unsigned long>(std::max(1.0, (static_cast<double>(sampleRate) * static_cast<double>(seedGrainMinMs)) / 1000.0));
+	const auto targetMaxGrainSamps = static_cast<unsigned long>(std::max(static_cast<double>(minGrainSamps),
+		(static_cast<double>(sampleRate) * static_cast<double>(seedGrainTargetMaxMs)) / 1000.0));
+
+	while ((grainSamps >= targetMaxGrainSamps) && ((grainSamps / 2ul) >= minGrainSamps))
+	{
+		grainSamps /= 2ul;
+		loopGrains *= 2u;
+	}
+
+	auto bpm = (60.0f * static_cast<float>(sampleRate)) / static_cast<float>(grainSamps);
+	auto beatsPerGrain = 1u;
+	while (bpm < static_cast<float>(Loop.SeedBpmMin))
+	{
+		if (beatsPerGrain > (std::numeric_limits<unsigned int>::max() / 2u))
+			return std::nullopt;
+		beatsPerGrain *= 2u;
+		bpm *= 2.0f;
+	}
+
+	if (grainSamps > std::numeric_limits<unsigned int>::max())
+		return std::nullopt;
+
+	if (loopGrains > (std::numeric_limits<unsigned int>::max() / beatsPerGrain))
+		return std::nullopt;
+
+	SeedLoopTiming timing;
+	timing.GrainSamps = static_cast<unsigned int>(grainSamps);
+	timing.LoopGrains = loopGrains;
+	timing.BeatsPerGrain = beatsPerGrain;
+	timing.Bpm = bpm;
+	timing.Bpi = loopGrains * beatsPerGrain;
+	return timing;
 }

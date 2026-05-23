@@ -38,6 +38,8 @@ namespace io
 			std::string User;
 			std::string Pass;
 			std::string WorkDir;
+			std::optional<double> Bpm;
+			std::optional<unsigned long> Bpi;
 
 			static std::optional<NinjamConfig> FromJson(Json::JsonPart json);
 		};
@@ -56,6 +58,16 @@ namespace io
 			static std::optional<LoopMix> FromJson(Json::JsonPart json);
 		};
 
+		// Describes a single VST3 entry in a VstChain.
+		struct VstEntry
+		{
+			// UTF-8 path to the .vst3 bundle or DLL.
+			std::string Path;
+			bool Bypass = false;
+
+			static std::optional<VstEntry> FromJson(Json::JsonPart json);
+		};
+
 		struct Loop
 		{
 			std::string Name;
@@ -68,6 +80,7 @@ namespace io
 			unsigned int SelectGroups;
 			bool Muted;
 			LoopMix Mix;
+			std::vector<VstEntry> VstChain;
 
 			static std::optional<Loop> FromJson(Json::JsonPart json);
 		};
@@ -76,6 +89,7 @@ namespace io
 		{
 			std::string Name;
 			std::vector<Loop> Loops;
+			std::vector<VstEntry> VstChain;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};
@@ -85,6 +99,7 @@ namespace io
 			std::string Name;
 			unsigned int StationType;
 			std::vector<LoopTake> LoopTakes;
+			std::vector<VstEntry> VstChain;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};

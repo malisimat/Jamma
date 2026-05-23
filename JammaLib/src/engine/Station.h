@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include "LoopTake.h"
 #include "Trigger.h"
 #include "AudioSink.h"
@@ -7,6 +9,7 @@
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
+#include "../vst/VstChain.h"
 
 namespace engine
 {
@@ -107,12 +110,28 @@ namespace engine
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetupBuffers(unsigned int bufSize);
+		void SetSampleRate(float sampleRate);
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
-		void OnBounce(unsigned int numSamps, io::UserConfig config);
+		void OnBounce(unsigned int numSamps,
+			io::UserConfig config,
+			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
+		std::vector<io::JamFile::VstEntry> VstEntries() const;
+
+		// VST chain management (non-RT, queued through the job thread).
+		// LoadVstPlugin queues an async load; once the load completes the plugin
+		// is inserted at the end of the station's effect chain.
+		void LoadVstPlugin(std::wstring path);
+		void UnloadVstPlugin(size_t index);
+
+		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
+		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+
+		// Called on the job thread to actually perform the load / unload.
+		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
@@ -151,5 +170,30 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+
+		// VST insert chain applied after all LoopTakes are mixed down,
+		// just before each channel is sent to the output AudioMixer.
+		// Swapped in under _audioMutex via the CommitChanges double-buffer pattern.
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
+		std::mutex _vstChainMutex;
+
+		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
+		// Read only on the job thread (from OnAction(JobAction)).
+		std::vector<std::wstring> _pendingVstLoads;
+		std::vector<size_t> _pendingVstUnloads;
+		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
+		// Access is guarded by _vstPathsMutex in both directions.
+		mutable std::mutex _vstPathsMutex;
+		std::vector<std::wstring> _vstPluginPaths;
+
+		// Sample rate and block size captured at SetupBuffers time; needed to
+		// initialise a newly loaded VstPlugin.
+		float _sampleRate = 44100.0f;
+		unsigned int _blockSize = 512u;
+		std::vector<float> _vstBlockScratch;
+		std::vector<float*> _vstBlockPtrs;
 	};
 }

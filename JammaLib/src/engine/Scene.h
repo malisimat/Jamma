@@ -1,12 +1,16 @@
 #pragma once
+#include <atomic>
 #include <memory>
 #include <algorithm>
-#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
+#include <shared_mutex>
+#include <thread>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
+#include "../audio/MidiDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -18,7 +22,8 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
-#include "../io/NinjamConnection.h"
+#include "NinjamSession.h"
+#include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -29,6 +34,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
+#include "MidiQueue.h"
 
 namespace engine
 {
@@ -68,10 +74,14 @@ namespace engine
 		~Scene()
 		{
 			ReleaseResources();
+			CloseMidi();
 
 			_isSceneQuitting.store(true, std::memory_order_relaxed);
 			if (_jobRunner.joinable())
 				_jobRunner.join();
+			// NinjamSession destructs after _jobRunner exits, so Pump() can no
+			// longer be called when the session tears down.
+			_ninjamSession.reset();
 		}
 
 		// Copy
@@ -186,8 +196,24 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		void InitMidi();
+		void CloseMidi();
 		void CommitChanges();
 		std::mutex& GetAudioMutex();
+
+		// Send a chat message on the active ninjam session (no-op if none).
+		void SendNinjamChat(const std::string& msg);
+
+		// Close all open VST editor windows immediately.
+		// Call this on the main thread before OleUninitialize() during shutdown.
+		void CloseAllVstEditorWindows();
+
+		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
+		// from the loaded jam config when available; falls back to anonymous.
+		void ConnectNinjam(const std::string& host);
+
+		// Disconnect the active NINJAM session. No-op if not connected.
+		void DisconnectNinjam();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -212,10 +238,20 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
+		void _PumpMidi();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _InitNinjamConnection(const std::optional<io::JamFile::NinjamConfig>& config);
-		void _ReconcileRemoteStations(const io::NinjamRemoteSnapshot& snapshot);
+		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
+		void _QueueLocalTempoFromClock();
+		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
+		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
+		void _PruneClosedVstEditorWindows();
+		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin);
+		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
+		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
+		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+			base::SelectDepth depth,
+			size_t pluginIndex);
 
 	protected:
 		bool _isSceneTouching;
@@ -233,24 +269,43 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
+		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		MidiQueue<1024> _midiIngress;
+		std::uint64_t _lastMidiDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
-		std::unique_ptr<io::NinjamConnection> _ninjamConnection;
+		std::unique_ptr<NinjamSession> _ninjamSession;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
+		// Open plugin editor windows created from the UI (main thread only).
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		unsigned int _audioCallbackCount;
+		std::atomic<std::uint64_t> _audioSampleCounter;
+			std::atomic<std::int64_t> _midiAnchorMicros;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
+		std::mutex _tempoMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
+
+		// NINJAM tempo / reclock state (job-thread owned).
+		float _remoteBpm = 0.0f;
+		int _remoteBpi = 0;
+		unsigned int _remoteSampleRate = 0u;
+		unsigned int _effectiveQuantiseSamps = 0u;
+		unsigned int _lastRemoteIntervalPos = 0u;
+		bool _armReclock = false;
+		bool _hasPendingTempo = false;
+		float _pendingTempoBpm = 0.0f;
+		int _pendingTempoBpi = 0;
 	};
 }

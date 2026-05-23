@@ -1,4 +1,5 @@
 #include "JobAction.h"
+#include "../vst/VstPlugin.h"
 
 using namespace actions;
 

@@ -1,5 +1,22 @@
 #include "Loop.h"
 #include <algorithm>
+#include <cmath>
+
+namespace
+{
+	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	{
+		if (!chain)
+			return;
+		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+				vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+		chain.reset();
+	}
+}
 
 using namespace base;
 using namespace engine;
@@ -10,15 +27,26 @@ using audio::AudioMixer;
 using audio::Hanning;
 using audio::AudioMixerParams;
 using graphics::GlDrawContext;
+using actions::JobAction;
+using actions::ActionResult;
+
+Loop::~Loop()
+{
+	DrainVstChain(_vstChain);
+	DrainVstChain(_backVstChain);
+	ReleaseResources();
+}
 
 Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :
 	Jammable(params),
 	AudioSink(),
+	_visualUpdatesEnabled(true),
+	_isPunchInActive(false),
 	_playIndex(0),
+	_loopLength(0),
 	_lastPeak(0.0f),
 	_pitch(1.0),
-	_loopLength(0),
 	_playState(STATE_INACTIVE),
 	_loopParams(params),
 	_mixer(nullptr),
@@ -33,7 +61,7 @@ Loop::Loop(LoopParams params,
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
 	modelParams.ModelTextures = { "levels" };
-	modelParams.ModelShaders = { "texture_shaded", "picker", "white"};
+	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
@@ -131,11 +159,8 @@ void Loop::Draw3d(DrawContext& ctx,
 		_writeIndex.load(std::memory_order_relaxed) :
 		_playIndex.load(std::memory_order_relaxed);
 
-	if (!isRecording)
-	{
-		if (index >= constants::MaxLoopFadeSamps)
-			index -= constants::MaxLoopFadeSamps;
-	}
+	if (!isRecording && index >= constants::MaxLoopFadeSamps)
+		index -= constants::MaxLoopFadeSamps;
 
 	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 	_model->SetLoopIndexFrac(frac);
@@ -164,15 +189,32 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_PLAYINGRECORDING != playState) &&
 		(STATE_OVERDUBBING != playState) &&
 		(STATE_PUNCHEDIN != playState) &&
-		(STATE_OVERDUBBINGRECORDING != playState))
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		!_isPunchInActive)
 		return;
 
-	if ((STATE_OVERDUBBING == playState) &&
-		(AUDIOSOURCE_BOUNCE != request.source))
+	if (AUDIOSOURCE_ADC == request.source)
+	{
+		auto canWriteAdc = (STATE_RECORDING == playState) ||
+			(STATE_PLAYINGRECORDING == playState) ||
+			(STATE_PUNCHEDIN == playState) ||
+			_isPunchInActive;
+		if (!canWriteAdc)
+			return;
+	}
+	else if ((AUDIOSOURCE_BOUNCE == request.source) &&
+		(STATE_RECORDING == playState))
+	{
 		return;
+	}
+	else if ((STATE_OVERDUBBING == playState) &&
+		(AUDIOSOURCE_BOUNCE != request.source))
+	{
+		return;
+	}
 
 	auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
-  
+
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
 		float peak = _lastPeak;
@@ -213,7 +255,8 @@ void Loop::EndWrite(unsigned int numSamps,
 		(STATE_PLAYINGRECORDING != playState) &&
 		(STATE_OVERDUBBING != playState) &&
 		(STATE_PUNCHEDIN != playState) &&
-		(STATE_OVERDUBBINGRECORDING != playState))
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		!_isPunchInActive)
 		return;
 
 	if (!updateIndex)
@@ -242,7 +285,8 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 	auto isPlaying = (STATE_PLAYING == playState) ||
 		(STATE_PLAYINGRECORDING == playState) ||
-		(STATE_OVERDUBBINGRECORDING == playState);
+		(STATE_OVERDUBBINGRECORDING == playState) ||
+		(STATE_PUNCHEDIN == playState);
 
 	if (!isPlaying || (0 == loopLength))
 		return 0;
@@ -366,6 +410,11 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
+		// _vstChain is a plain shared_ptr protected by Scene::_audioMutex,
+		// which the audio callback (and CommitChanges) both hold.
+		if (_vstChain && _vstChain->IsActive())
+			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
 		if (nullptr == trigger)
@@ -495,20 +544,28 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 		loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
 	}
 
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		for (const auto& vstPath : _vstPluginPaths)
+		{
+			io::JamFile::VstEntry entry;
+			entry.Path = utils::EncodeUtf8(vstPath);
+			entry.Bypass = false;
+			loop.VstChain.push_back(std::move(entry));
+		}
+	}
+
 	return loop;
-}
-
-void Loop::Update()
-{
-	_UpdateLoopModel();
-
-	_bufferBank.UpdateCapacity();
-	_monitorBufferBank.UpdateCapacity();
 }
 
 void Loop::SetMixerLevel(double level)
 {
 	_mixer->SetUnmutedLevel(level);
+}
+
+void Loop::SetVisualUpdatesEnabled(bool enabled)
+{
+	_visualUpdatesEnabled = enabled;
 }
 
 bool Loop::Load(const io::WavReadWriter& readWriter)
@@ -567,17 +624,31 @@ void Loop::Play(unsigned long index,
 	}
 
 	// Clamp against the smaller of the logical loop size and the currently
-	// recorded physical size. This prevents reads past the current BufferBank
-	// length while still ignoring any physical tail beyond the logical loop.
+	// recorded physical size. Keep the MaxLoopFadeSamps logical offset in this
+	// bound: playback indices are in [fadeOffset, fadeOffset + loopLength).
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex.store((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index, std::memory_order_relaxed);
 	_loopLength.store(loopLength, std::memory_order_relaxed);
+	if (_isPunchInActive)
+		continueRecording = true;
 
 	auto playState = _playState.load(std::memory_order_relaxed);
 	auto isOverdubbing = (STATE_OVERDUBBING == playState) || (STATE_PUNCHEDIN == playState);
+	if (_isPunchInActive)
+		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto nextPlayState = continueRecording ? recordState : STATE_PLAYING;
+
+	// Pre-allocate buffer capacity for recording state to prevent SetLength clamping.
+	// This ensures the full loop length can be written during overdub/recording.
+	if ((loopLength > 0) &&
+		((STATE_OVERDUBBINGRECORDING == nextPlayState) || (STATE_PLAYINGRECORDING == nextPlayState)) &&
+		(_bufferBank.Capacity() < logicalBufSize))
+	{
+		_bufferBank.Resize(logicalBufSize);
+	}
+
 	_playState.store(loopLength > 0 ? nextPlayState : STATE_INACTIVE, std::memory_order_release);
 
 	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
@@ -585,12 +656,22 @@ void Loop::Play(unsigned long index,
 
 void Loop::Reset()
 {
+	_isPunchInActive = false;
+
 	_writeIndex.store(0ul, std::memory_order_relaxed);
 	_playIndex.store(0ul, std::memory_order_relaxed);
 	_loopLength.store(0ul, std::memory_order_relaxed);
 	_playState.store(STATE_INACTIVE, std::memory_order_release);
 	_mixer->UnMute();
 	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
+}
+
+void Loop::Update()
+{
+	_UpdateLoopModel();
+
+	_bufferBank.UpdateCapacity();
+	_monitorBufferBank.UpdateCapacity();
 }
 
 void Loop::EndRecording()
@@ -653,22 +734,50 @@ void Loop::Overdub()
 
 void Loop::PunchIn()
 {
-	if (STATE_OVERDUBBING != _playState.load(std::memory_order_relaxed))
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if ((STATE_OVERDUBBING != playState) &&
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		(STATE_PLAYING != playState))
 		return;
 
-	_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
+	_isPunchInActive = true;
+	if (STATE_OVERDUBBING == playState)
+		_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
 
 	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchOut()
 {
-	if (STATE_PUNCHEDIN != _playState.load(std::memory_order_relaxed))
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if (!_isPunchInActive && (STATE_PUNCHEDIN != playState))
 		return;
 
-	_playState.store(STATE_OVERDUBBING, std::memory_order_release);
+	_isPunchInActive = false;
+	if (STATE_PUNCHEDIN == playState)
+		_playState.store(STATE_OVERDUBBING, std::memory_order_release);
 
 	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
+}
+
+double Loop::LoopIndexFrac() const noexcept
+{
+	auto playState = _playState.load(std::memory_order_relaxed);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto isRecording = (STATE_RECORDING == playState) ||
+		(STATE_OVERDUBBING == playState) ||
+		(STATE_PUNCHEDIN == playState);
+	auto index = isRecording ?
+		_writeIndex.load(std::memory_order_relaxed) :
+		_playIndex.load(std::memory_order_relaxed);
+
+	if (!isRecording && index >= constants::MaxLoopFadeSamps)
+		index -= constants::MaxLoopFadeSamps;
+
+	if (0ul == loopLength)
+		return 0.0;
+
+	return 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 }
 
 double Loop::_CalcDrawRadius(unsigned long loopLength)
@@ -704,6 +813,11 @@ LoopModel::LoopModelState Loop::_GetLoopModelState(base::DrawPass pass, LoopPlay
 	}
 }
 
+unsigned long Loop::_ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const
+{
+	return actualLoopLength;
+}
+
 unsigned long Loop::_LoopIndex() const
 {
 	auto playIndex = _playIndex.load(std::memory_order_relaxed);
@@ -715,15 +829,190 @@ unsigned long Loop::_LoopIndex() const
 
 void Loop::_UpdateLoopModel()
 {
+	if (!_visualUpdatesEnabled)
+		return;
+
+	_ForceUpdateLoopModel();
+}
+
+void Loop::_ForceUpdateLoopModel()
+{
 	auto playState = _playState.load(std::memory_order_relaxed);
 	auto isRecording = (STATE_RECORDING == playState) ||
 		(STATE_OVERDUBBING == playState) ||
 		(STATE_PUNCHEDIN == playState);
-	auto length = isRecording ? _writeIndex.load(std::memory_order_relaxed) : _loopLength.load(std::memory_order_relaxed);
+	auto actualLength = isRecording ? _writeIndex.load(std::memory_order_relaxed) : _loopLength.load(std::memory_order_relaxed);
+	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)_CalcDrawRadius(length);
+	auto radius = (float)(_CalcDrawRadius(displayLength) * _DrawRadiusScale());
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
-	_model->UpdateModel(bufBank, length, offset, radius);
+	_ApplyLoopVisualModel(bufBank, actualLength, displayLength, offset, radius);
+}
+
+void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
+	unsigned long actualLength,
+	unsigned long displayLength,
+	unsigned long offset,
+	float radius)
+{
+	const auto allowUnchangedSkip = (STATE_PLAYING == _playState.load(std::memory_order_relaxed));
+	_model->UpdateModel(buffer, actualLength, displayLength, offset, radius, allowUnchangedSkip);
 	_vu->UpdateModel(radius);
+}
+
+void Loop::LoadVstPlugin(std::wstring path)
+{
+	_pendingVstLoads.push_back(std::move(path));
+	_changesMade = true;
+}
+
+void Loop::UnloadVstPlugin(size_t index)
+{
+	_pendingVstUnloads.push_back(index);
+	_changesMade = true;
+}
+
+std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
+{
+	if (!_vstChain)
+		return nullptr;
+
+	return _vstChain->GetPlugin(index);
+}
+
+std::vector<JobAction> Loop::_CommitChanges()
+{
+	// Swap in a new VST chain when the job thread has delivered one.
+	if (_flipVstChain.exchange(false, std::memory_order_acquire))
+	{
+		std::lock_guard<std::mutex> lock(_vstChainMutex);
+		_vstChain = _backVstChain;
+	}
+
+	std::vector<JobAction> jobs;
+
+	// Drain pending unload indices — emit one JOB_UNLOADVST per entry so
+	// rapid back-to-back UnloadVstPlugin() calls are not silently dropped.
+	auto pendingUnloads = std::move(_pendingVstUnloads);
+	for (auto idx : pendingUnloads)
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UNLOADVST;
+		job.SourceId = Id();
+		job.VstIndex = idx;
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(job);
+	}
+
+	auto pendingLoads = std::move(_pendingVstLoads);
+	for (auto& path : pendingLoads)
+	{
+		JobAction job;
+		job.JobActionType = JobAction::JOB_LOADVST;
+		job.SourceId = Id();
+		job.VstPath = std::move(path);
+		job.Receiver = ActionReceiver::shared_from_this();
+		jobs.push_back(std::move(job));
+	}
+
+	GuiElement::_CommitChanges();
+
+	return jobs;
+}
+
+ActionResult Loop::OnAction(JobAction action)
+{
+	switch (action.JobActionType)
+	{
+	case JobAction::JOB_LOADVST:
+	{
+		// Take a snapshot of the current live chain under _vstChainMutex so we
+		// don't race with _CommitChanges() swapping it on the main thread.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
+		{
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
+		auto newChain = std::make_shared<vst::VstChain>();
+		if (chainSnapshot)
+		{
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
+			{
+				auto existing = chainSnapshot->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		auto plugin = action.PreInitPlugin
+			? action.PreInitPlugin
+			: std::make_shared<vst::VstPlugin>();
+		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
+		{
+			newChain->AddPlugin(plugin);
+			{
+				std::lock_guard<std::mutex> lock(_vstPathsMutex);
+				_vstPluginPaths.push_back(action.VstPath);
+			}
+			_backVstChain = std::move(newChain);
+			_flipVstChain.store(true, std::memory_order_release);
+			_changesMade = true;
+		}
+		else if (action.PreInitPlugin)
+		{
+			// Load failed but plugin was pre-initialised on the UI thread;
+			// destroying it here (job thread) would violate VST3 threading.
+			vst::QueueForUiThreadDestroy(std::move(plugin));
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	case JobAction::JOB_UNLOADVST:
+	{
+		// Take a snapshot of the current live chain under _vstChainMutex.
+		std::shared_ptr<vst::VstChain> chainSnapshot;
+		{
+			std::lock_guard<std::mutex> lock(_vstChainMutex);
+			chainSnapshot = _vstChain;
+		}
+
+		auto newChain = std::make_shared<vst::VstChain>();
+		const auto removeIndex = action.VstIndex;
+		if (chainSnapshot)
+		{
+			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
+			{
+				if (i == removeIndex)
+					continue;
+				auto existing = chainSnapshot->GetPlugin(i);
+				if (existing)
+					newChain->AddPlugin(existing);
+			}
+		}
+
+		{
+			std::lock_guard<std::mutex> lock(_vstPathsMutex);
+			if (removeIndex < _vstPluginPaths.size())
+				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+		}
+
+		_backVstChain = std::move(newChain);
+		_flipVstChain.store(true, std::memory_order_release);
+		_changesMade = true;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	}
+	default:
+		break;
+	}
+
+	return ActionResult::NoAction();
 }

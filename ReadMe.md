@@ -41,16 +41,20 @@ vcpkg install
 
 This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
 
+Windows builds also compile VST3 hosting support by default via the `vst3sdk` vcpkg dependency declared in `vcpkg.json`.
+
 ### Build
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
+
+Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.props](Directory.Build.props), so running MSBuild against an individual project from the repo root no longer needs a manual `/p:SolutionDir=...` workaround.
 
 ### Troubleshooting: tests crash silently on startup
 
 If `JammaLib.Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
 
 ```powershell
-$src = ".\vcpkg_installed\x64-windows\x64-windows\debug\bin"
+$src = ".\vcpkg_installed\x64-windows\debug\bin"
 $dst = ".\test\JammaLib.Tests\bin\x64\Debug"
 Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
 Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
@@ -58,37 +62,44 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
 
-### Ninjam Integration Prerequisites
+### Ninjam Integration
 
-Jamma links against `njclient.lib` from the Ninjam repo. To compile successfully, set up the Ninjam dependency first.
+Jamma now uses vendored Ninjam client files under `lib/`:
 
-1. Clone Ninjam:
+- Header include root: `lib\njclient\njclient.h`
+- x64 Debug lib: `lib\njclient\x64\Debug\MD\njclient.lib`
+- x64 Release lib: `lib\njclient\x64\Release\MD\njclient.lib`
+
+You do **not** need `Directory.Build.local.props` for Ninjam paths anymore.
+
+### Refreshing Vendored Ninjam Files (Only When Updating Them)
+
+You only need this step when you intentionally update the vendored Ninjam artifacts.
+
+1. Build Ninjam in the other repo for `x64` `Debug` and `Release` (`MD` runtime).
+2. Copy updated headers/libs into this repo:
 
 ```powershell
-git clone https://github.com/malisimat/ninjam C:\Users\<you>\Source\Repos\ninjam
+$ninjam = "C:\Users\<you>\Source\Repos\NinjamLib\ninjam"
+
+Copy-Item "$ninjam\ninjam\njclient.h" ".\lib\njclient\njclient.h" -Force
+
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.lib" ".\lib\njclient\x64\Debug\MD\njclient.lib" -Force
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.pdb" ".\lib\njclient\x64\Debug\MD\njclient.pdb" -Force
+Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.idb" ".\lib\njclient\x64\Debug\MD\njclient.idb" -Force
+Copy-Item "$ninjam\bin\x64\Release\MD\njclient.lib" ".\lib\njclient\x64\Release\MD\njclient.lib" -Force
 ```
 
-2. Build Ninjam for `x64` in both `Debug` and `Release` (Visual Studio 2022).
-The Jamma project expects `njclient.lib` under these folders by default:
-- `...\ninjam\bin\x64\Debug\MD`
-- `...\ninjam\bin\x64\Release\MD`
+### Troubleshooting: Ninjam include/link errors
 
-3. Point Jamma to your local Ninjam checkout by editing `Directory.Build.local.props` in this repo root:
+If you see errors like:
 
-```xml
-<Project>
-  <PropertyGroup>
-    <NinjamRoot>C:/Users/<you>/Source/Repos/ninjam</NinjamRoot>
-    <NinjamIncludeDir>$(NinjamRoot)</NinjamIncludeDir>
-    <NinjamLibDirDebug>$(NinjamRoot)/bin/x64/Debug/MD</NinjamLibDirDebug>
-    <NinjamLibDirRelease>$(NinjamRoot)/bin/x64/Release/MD</NinjamLibDirRelease>
-  </PropertyGroup>
-</Project>
-```
+- `Cannot open include file: 'njclient.h'`
+- linker errors for `njclient.lib`
 
-If your Ninjam build outputs to different folders, update `NinjamLibDirDebug` and `NinjamLibDirRelease` to match where `njclient.lib` is produced.
+verify the vendored files above exist in `lib\njclient`.
 
 Required Ninjam-related link dependencies:
-- `njclient.lib` from the Ninjam build
+- `njclient.lib` from `lib\njclient\x64\...`
 - `ogg.lib`, `vorbis.lib`, `vorbisenc.lib`, `vorbisfile.lib` (provided via vcpkg)
 - `ws2_32.lib` (Windows SDK)

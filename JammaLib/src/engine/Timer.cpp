@@ -6,6 +6,7 @@ Timer::Timer() :
 	_loopCount(0ul),
 	_sampOffset(0u),
 	_quantiseSamps(0u),
+	_seedSourceLengthSamps(0ul),
 	_quantisation(QUANTISE_OFF)
 {
 }
@@ -44,6 +45,7 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 void Timer::Clear()
 {
 	_quantiseSamps = 0u;
+	_seedSourceLengthSamps = 0ul;
 }
 
 bool Timer::IsQuantisable() const
@@ -55,7 +57,28 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 	QuantisationType quantisation)
 {
 	_quantiseSamps = quantiseSamps;
+	_seedSourceLengthSamps = 0ul;
 	_quantisation = quantisation;
+}
+
+void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
+{
+	_seedSourceLengthSamps = loopLengthSamps;
+}
+
+unsigned int Timer::QuantiseSamps() const
+{
+	return _quantiseSamps;
+}
+
+Timer::QuantisationType Timer::Quantisation() const
+{
+	return _quantisation;
+}
+
+unsigned long Timer::SeedSourceLength() const
+{
+	return _seedSourceLengthSamps;
 }
 
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
@@ -81,12 +104,11 @@ std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long lengt
 	case QUANTISE_POWER:
 	{
 		unsigned long lenCur = 0;
-		unsigned long lenLast = lenCur;
+		unsigned long lenLast = 0;
 		auto currentMultiplier = 1u;
 
-		while (currentMultiplier < 128)
+		while (currentMultiplier <= 128)
 		{
-			currentMultiplier *= 2;
 			lenCur = currentMultiplier * _quantiseSamps;
 
 			if (lenCur >= length)
@@ -95,12 +117,13 @@ std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long lengt
 				auto dCur = lenCur - length;
 
 				if (dLast < dCur)
-					return std::make_tuple(lenLast, -1 * ((int)dLast));
+					return std::make_tuple(lenLast, (int)dLast);
 				else
-					return std::make_tuple(lenCur, (int)dCur);
+					return std::make_tuple(lenCur, -1 * ((int)dCur));
 			}
 
 			lenLast = lenCur;
+			currentMultiplier *= 2;
 		}
 	}
 	}
