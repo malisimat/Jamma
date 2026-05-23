@@ -41,9 +41,13 @@ vcpkg install
 
 This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
 
+Windows builds also compile VST3 hosting support by default via the `vst3sdk` vcpkg dependency declared in `vcpkg.json`.
+
 ### Build
 
 Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
+
+Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.props](Directory.Build.props), so running MSBuild against an individual project from the repo root no longer needs a manual `/p:SolutionDir=...` workaround.
 
 ### Troubleshooting: tests crash silently on startup
 

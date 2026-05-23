@@ -95,6 +95,42 @@ private:
     std::shared_ptr<ChannelMixerMockedSink> _sink;
 };
 
+class MultiChannelCaptureSink :
+    public MultiAudioSink
+{
+public:
+    MultiChannelCaptureSink(unsigned int numChannels, unsigned int bufSize)
+        : _sinks()
+    {
+        for (auto channel = 0u; channel < numChannels; ++channel)
+            _sinks.push_back(std::make_shared<ChannelMixerMockedSink>(bufSize));
+    }
+
+public:
+    virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override
+    {
+        return static_cast<unsigned int>(_sinks.size());
+    }
+
+    const std::vector<float>& Samples(unsigned int channel) const
+    {
+        return _sinks.at(channel)->Samples;
+    }
+
+protected:
+    virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
+        base::Audible::AudioSourceType source) override
+    {
+        if (channel < _sinks.size())
+            return _sinks[channel];
+
+        return std::shared_ptr<AudioSink>();
+    }
+
+private:
+    std::vector<std::shared_ptr<ChannelMixerMockedSink>> _sinks;
+};
+
 TEST(ChannelMixer, PlayWrapsAroundAndMatches)
 {
     const auto bufSize = 100u;
@@ -182,4 +218,48 @@ TEST(ChannelMixer, WriteWrapsAroundAndMatches)
         ASSERT_EQ(sourceData[samp], outputBuf[samp])
             << "Mismatch at sample " << samp;
     }
+}
+
+TEST(ChannelMixer, ShrinkRemovesChannelsAndExpandRestoresThem)
+{
+    const auto bufSize = 16u;
+    const auto blockSize = 4u;
+
+    ChannelMixerParams chanParams;
+    chanParams.InputBufferSize = bufSize;
+    chanParams.OutputBufferSize = bufSize;
+    chanParams.NumInputChannels = 4u;
+    chanParams.NumOutputChannels = 4u;
+
+    auto chanMixer = ChannelMixer(chanParams);
+    EXPECT_EQ(4u, chanMixer.Source()->NumOutputChannels(base::Audible::AUDIOSOURCE_ADC));
+    EXPECT_EQ(4u, chanMixer.Sink()->NumInputChannels(base::Audible::AUDIOSOURCE_MIXER));
+
+    chanParams.NumInputChannels = 2u;
+    chanParams.NumOutputChannels = 2u;
+    chanMixer.SetParams(chanParams);
+    EXPECT_EQ(2u, chanMixer.Source()->NumOutputChannels(base::Audible::AUDIOSOURCE_ADC));
+    EXPECT_EQ(2u, chanMixer.Sink()->NumInputChannels(base::Audible::AUDIOSOURCE_MIXER));
+
+    chanParams.NumInputChannels = 3u;
+    chanParams.NumOutputChannels = 3u;
+    chanMixer.SetParams(chanParams);
+    EXPECT_EQ(3u, chanMixer.Source()->NumOutputChannels(base::Audible::AUDIOSOURCE_ADC));
+    EXPECT_EQ(3u, chanMixer.Sink()->NumInputChannels(base::Audible::AUDIOSOURCE_MIXER));
+
+    std::vector<float> inBuf = {
+        1.0f, 10.0f, 100.0f,
+        2.0f, 20.0f, 200.0f,
+        3.0f, 30.0f, 300.0f,
+        4.0f, 40.0f, 400.0f,
+    };
+    auto sink = std::make_shared<MultiChannelCaptureSink>(3u, blockSize);
+
+    chanMixer.FromAdc(inBuf.data(), 3u, blockSize);
+    chanMixer.InitPlay(0u, blockSize);
+    chanMixer.WriteToSink(sink, blockSize);
+    chanMixer.Source()->EndMultiPlay(blockSize);
+    sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
+
+    EXPECT_EQ(std::vector<float>({ 100.0f, 200.0f, 300.0f, 400.0f }), sink->Samples(2u));
 }

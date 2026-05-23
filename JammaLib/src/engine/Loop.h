@@ -2,6 +2,8 @@
 
 #include <string>
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include "Trigger.h"
 #include "ActionReceiver.h"
 #include "Tweakable.h"
@@ -18,6 +20,7 @@
 #include "../audio/Hanning.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
+#include "../vst/VstChain.h"
 
 namespace engine
 {
@@ -93,7 +96,7 @@ namespace engine
 	public:
 		Loop(LoopParams params,
 			audio::AudioMixerParams mixerParams);
-		~Loop() { ReleaseResources(); }
+		~Loop();
 
 		// Copy
 		Loop(const Loop&) = delete;
@@ -197,21 +200,38 @@ namespace engine
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
 
+		// VST chain management — staging only; actual load/unload happens on the
+		// job thread after CommitChanges() queues the appropriate job.
+		void LoadVstPlugin(std::wstring path);
+		void UnloadVstPlugin(size_t index);
+		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
+		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
+		float GetSampleRate() const noexcept { return _sampleRate; }
+		unsigned int GetBlockSize() const noexcept { return _blockSize; }
+
+		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
+		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+
+		virtual actions::ActionResult OnAction(actions::JobAction action) override;
+
 	protected:
 		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
-		
+		virtual std::vector<actions::JobAction> _CommitChanges() override;
+
 		unsigned long _LoopIndex() const;
 		void _UpdateLoopModel();
 		void _ForceUpdateLoopModel();
 
 	protected:
+		bool _visualUpdatesEnabled;
+		bool _isPunchInActive;
 		unsigned long _playIndex;
+		unsigned long _loopLength;
 		float _lastPeak;
 		double _pitch;
-		unsigned long _loopLength;
 		LoopPlayState _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
@@ -220,7 +240,20 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-		bool _visualUpdatesEnabled;
-		bool _isPunchInActive;
+		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
+		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
+		std::shared_ptr<vst::VstChain> _vstChain;
+		std::shared_ptr<vst::VstChain> _backVstChain;
+		std::atomic<bool> _flipVstChain{ false };
+		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
+		std::mutex _vstChainMutex;
+		std::vector<std::wstring> _pendingVstLoads;
+		std::vector<size_t> _pendingVstUnloads;
+		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		unsigned int _blockSize{ constants::DefaultBufferSizeSamps };
+		// Non-RT metadata: written on job thread (OnAction), read on main thread (VstEntries).
+		// Access is guarded by _vstPathsMutex in both directions.
+		mutable std::mutex _vstPathsMutex;
+		std::vector<std::wstring> _vstPluginPaths;
 	};
 }

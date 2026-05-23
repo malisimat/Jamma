@@ -20,6 +20,7 @@
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "NinjamSession.h"
+#include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -195,6 +196,10 @@ namespace engine
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
 
+		// Close all open VST editor windows immediately.
+		// Call this on the main thread before OleUninitialize() during shutdown.
+		void CloseAllVstEditorWindows();
+
 		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
 		// from the loaded jam config when available; falls back to anonymous.
 		void ConnectNinjam(const std::string& host);
@@ -231,6 +236,13 @@ namespace engine
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
+		void _PruneClosedVstEditorWindows();
+		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin);
+		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
+		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
+		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+			base::SelectDepth depth,
+			size_t pluginIndex);
 
 	protected:
 		bool _isSceneTouching;
@@ -258,10 +270,12 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
+		// Open plugin editor windows created from the UI (main thread only).
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
-		std::shared_mutex _jobMutex;
+		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
 		std::mutex _tempoMutex;

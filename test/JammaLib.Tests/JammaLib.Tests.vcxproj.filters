@@ -65,6 +65,9 @@
     <ClCompile Include="src\engine\StationRack_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
@@ -90,6 +93,9 @@
     </Filter>
     <Filter Include="src\io">
       <UniqueIdentifier>{a4ba3b1e-e149-4a44-a69d-22c4b3d645b4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\vst">
+      <UniqueIdentifier>{98d36462-8bc0-4421-9456-316ad72f98d7}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

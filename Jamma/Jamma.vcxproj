@@ -133,8 +133,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Debug;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -180,8 +180,8 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
