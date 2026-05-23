@@ -35,7 +35,7 @@ Loop::Loop(LoopParams params,
 	modelParams.Size = { 12, 14 };
 	modelParams.ModelScale = 1.0f;
 	modelParams.ModelTextures = { "levels" };
-	modelParams.ModelShaders = { "texture_shaded", "picker", "white"};
+	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
 	VuParams vuParams;
