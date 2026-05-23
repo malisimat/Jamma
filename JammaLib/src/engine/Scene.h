@@ -4,7 +4,6 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
-#include <shared_mutex>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -247,7 +246,7 @@ namespace engine
 		unsigned int _audioCallbackCount;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
-		std::shared_mutex _jobMutex;
+		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
 		io::UserConfig _userConfig;
