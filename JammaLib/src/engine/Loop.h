@@ -116,11 +116,20 @@ namespace engine
 			_model(std::move(other._model)),
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
-			_monitorBufferBank(std::move(other._monitorBufferBank))
+			_monitorBufferBank(std::move(other._monitorBufferBank)),
+			_vstChain(std::move(other._vstChain)),
+			_backVstChain(std::move(other._backVstChain)),
+			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
+			_pendingVstLoads(std::move(other._pendingVstLoads)),
+			_pendingVstUnloads(std::move(other._pendingVstUnloads)),
+			_sampleRate(other._sampleRate),
+			_blockSize(other._blockSize),
+			_vstPluginPaths(std::move(other._vstPluginPaths))
 		{
 			other._writeIndex = 0ul;
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
+			other._flipVstChain.store(false, std::memory_order_relaxed);
 		}
 
 		Loop& operator=(Loop&& other)
@@ -142,6 +151,16 @@ namespace engine
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
 				std::swap(_monitorBufferBank, other._monitorBufferBank);
+				_vstChain.swap(other._vstChain);
+				_backVstChain.swap(other._backVstChain);
+				bool flip = _flipVstChain.load(std::memory_order_relaxed);
+				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
+				other._flipVstChain.store(flip, std::memory_order_relaxed);
+				std::swap(_pendingVstLoads, other._pendingVstLoads);
+				std::swap(_pendingVstUnloads, other._pendingVstUnloads);
+				std::swap(_sampleRate, other._sampleRate);
+				std::swap(_blockSize, other._blockSize);
+				std::swap(_vstPluginPaths, other._vstPluginPaths);
 			}
 
 			return *this;

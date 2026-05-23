@@ -22,7 +22,11 @@ std::wstring utils::GetPath(PathType pathType)
 			&path);
 
 		if (SUCCEEDED(hr))
-			return std::wstring(path);
+		{
+			std::wstring result(path);
+			CoTaskMemFree(path);
+			return result;
+		}
 	}
 
 	return std::wstring();
