@@ -186,7 +186,7 @@ std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 	if (0u == segments)
 		return verts;
 
-	verts.reserve(segments * 8u * 9u);
+	verts.reserve((segments * 8u + 4u) * 9u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
@@ -203,6 +203,14 @@ std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f, -1.0f, x2, -0.5f,  1.0f);
 	}
 
+	// Start cap (x=0, outward normal in -x direction)
+	AddTri(verts, 0.0f, -0.5f, -1.0f,  0.0f, -0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
+	AddTri(verts, 0.0f, -0.5f,  1.0f,  0.0f,  0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
+
+	// End cap (x=1, outward normal in +x direction)
+	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f, -1.0f,  1.0f,  0.5f,  1.0f);
+	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f,  1.0f,  1.0f, -0.5f,  1.0f);
+
 	return verts;
 }
 
@@ -212,7 +220,7 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 	if (0u == segments)
 		return uvs;
 
-	uvs.reserve(segments * 8u * 6u);
+	uvs.reserve((segments * 8u + 4u) * 6u);
 
 	for (auto segment = 0u; segment < segments; ++segment)
 	{
@@ -224,6 +232,14 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 			AddUvTri(uvs, x1, 1.0f, x2, 0.0f, x2, 1.0f);
 		}
 	}
+
+	// Start cap UVs (u=0.0, v mapped from y: -0.5->0.0, +0.5->1.0)
+	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 1.0f);
+	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 1.0f,  0.0f, 1.0f);
+
+	// End cap UVs (u=1.0, v mapped from y: -0.5->0.0, +0.5->1.0)
+	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 1.0f);
+	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 0.0f);
 
 	return uvs;
 }
