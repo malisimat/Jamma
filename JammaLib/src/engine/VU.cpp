@@ -128,8 +128,8 @@ VU::CalcLedGeometry(float radius,
 	auto xInner2 = sin(angle2) * (radius - radialThickness);
 	auto xOuter1 = sin(angle1) * (radius + radialThickness);
 	auto xOuter2 = sin(angle2) * (radius + radialThickness);
-	auto yMin = (ledHeight * 0.5f);
-	auto yMax = -(ledHeight * 0.5f);
+	auto yMin = -(ledHeight * 0.5f);
+	auto yMax = (ledHeight * 0.5f);
 	auto yMid = (yMin + yMax) * 0.5f;
 	auto zInner1 = cos(angle1) * (radius - radialThickness);
 	auto zInner2 = cos(angle2) * (radius - radialThickness);

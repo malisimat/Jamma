@@ -105,6 +105,8 @@ namespace engine
 		// Move
 		Loop(Loop&& other) :
 			Jammable(other._loopParams),
+			_visualUpdatesEnabled(other._visualUpdatesEnabled),
+			_isPunchInActive(other._isPunchInActive),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
 			_loopLength(other._loopLength),
@@ -119,6 +121,8 @@ namespace engine
 			_monitorBufferBank(std::move(other._monitorBufferBank))
 		{
 			other._writeIndex = 0ul;
+			other._visualUpdatesEnabled = true;
+			other._isPunchInActive = false;
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 		}
@@ -128,9 +132,12 @@ namespace engine
 			if (this != &other)
 			{
 				ReleaseResources();
+				std::swap(_visualUpdatesEnabled, other._visualUpdatesEnabled);
+				std::swap(_isPunchInActive, other._isPunchInActive);
 				std::swap(_lastPeak, other._lastPeak);
 				std::swap(_pitch, other._pitch);
 				std::swap(_loopLength, other._loopLength);
+				std::swap(_playState, other._playState);
 				std::swap(_state, other._state);
 				std::swap(_guiParams, other._guiParams);
 				std::swap(_writeIndex, other._writeIndex);
@@ -220,6 +227,11 @@ namespace engine
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }
+		virtual void _ApplyLoopVisualModel(const audio::BufferBank& buffer,
+			unsigned long actualLength,
+			unsigned long displayLength,
+			unsigned long offset,
+			float radius);
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
 
 		unsigned long _LoopIndex() const;

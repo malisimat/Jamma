@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 using namespace engine;
 using base::DrawContext;
@@ -30,7 +31,13 @@ LoopModel::LoopModel(LoopModelParams params) :
 	_waveformTexture(0u),
 	_waveformPbos{},
 	_waveformWritePboIndex(0u),
-	_waveformDecimated(_WaveformSegments, glm::vec2(0.0f, 0.0f))
+	_waveformDecimated(_WaveformSegments, glm::vec2(0.0f, 0.0f)),
+	_waveformWorkDecimated(_WaveformSegments, glm::vec2(0.0f, 0.0f)),
+	_hasWaveformUpdateSignature(false),
+	_lastWaveformSourceLength(0ul),
+	_lastWaveformDisplayLength(0ul),
+	_lastWaveformOffset(0ul),
+	_lastWaveformRadius(0.0f)
 {
 	auto [fixedVerts, fixedUvs] = BuildFixedGeometry(_WaveformSegments, _UnitMeshRadius);
 	SetGeometry(std::move(fixedVerts), std::move(fixedUvs));
@@ -237,30 +244,63 @@ void LoopModel::_ReleaseResources()
 void LoopModel::UpdateModel(const BufferBank& buffer,
 	unsigned long loopLength,
 	unsigned long offset,
-	float radius)
+	float radius,
+	bool allowUnchangedSkip)
 {
-	UpdateModel(buffer, loopLength, loopLength, offset, radius);
+	UpdateModel(buffer, loopLength, loopLength, offset, radius, allowUnchangedSkip);
 }
 
 void LoopModel::UpdateModel(const BufferBank& buffer,
 	unsigned long sourceLoopLength,
 	unsigned long displayLoopLength,
 	unsigned long offset,
-	float radius)
+	float radius,
+	bool allowUnchangedSkip)
 {
 	auto availableSamples = buffer.Length() > offset ? buffer.Length() - offset : 0ul;
-	auto clampedLength = std::min(sourceLoopLength, availableSamples);
+	auto clampedSourceLength = std::min(sourceLoopLength, availableSamples);
+	auto clampedDisplayLength = std::min(displayLoopLength, clampedSourceLength);
 
 	auto waveformRadius = std::max(radius, 1.0f);
-	auto hasWaveformData = (displayLoopLength > 0ul) && (clampedLength > 0ul);
+	if (allowUnchangedSkip &&
+		_hasWaveformUpdateSignature &&
+		(clampedSourceLength == _lastWaveformSourceLength) &&
+		(clampedDisplayLength == _lastWaveformDisplayLength) &&
+		(offset == _lastWaveformOffset) &&
+		(std::fabs(waveformRadius - _lastWaveformRadius) <= 0.0001f))
+	{
+		return;
+	}
+
+	if (!allowUnchangedSkip && _hasWaveformUpdateSignature)
+	{
+		const auto isLikelyRecordingUpdate =
+			(offset == 0ul) &&
+			(clampedSourceLength >= _lastWaveformSourceLength) &&
+			(clampedDisplayLength >= _lastWaveformDisplayLength);
+		const auto radiusUnchanged = std::fabs(waveformRadius - _lastWaveformRadius) <= 0.0001f;
+
+		if (isLikelyRecordingUpdate && radiusUnchanged)
+		{
+			auto displayLengthDelta = clampedDisplayLength - _lastWaveformDisplayLength;
+			if (displayLengthDelta < _RecordingWaveformUpdateIntervalSamps)
+				return;
+		}
+	}
+
+	auto hasWaveformData = clampedDisplayLength > 0ul;
 	auto waveformColorMultiplier = 0.5f / (_HeightScale + _MinHeight);
-	auto waveformDecimated = std::vector<glm::vec2>(_WaveformSegments, glm::vec2(0.0f, 0.0f));
+	auto& waveformDecimated = _waveformWorkDecimated;
+	if (waveformDecimated.size() != _WaveformSegments)
+		waveformDecimated.assign(_WaveformSegments, glm::vec2(0.0f, 0.0f));
+	else
+		std::fill(waveformDecimated.begin(), waveformDecimated.end(), glm::vec2(0.0f, 0.0f));
 
 	if (hasWaveformData)
 	{
 		DecimateWaveformInto(buffer,
 			offset,
-			clampedLength,
+			clampedDisplayLength,
 			waveformDecimated);
 
 		auto maxPeakLevel = 0.0f;
@@ -280,8 +320,13 @@ void LoopModel::UpdateModel(const BufferBank& buffer,
 		_waveformRadius = waveformRadius;
 		_hasWaveformData = hasWaveformData;
 		_waveformColorMultiplier = waveformColorMultiplier;
-		_waveformDecimated = std::move(waveformDecimated);
+		_waveformDecimated.swap(waveformDecimated);
 		_waveformNeedsUpload = true;
+		_hasWaveformUpdateSignature = true;
+		_lastWaveformSourceLength = clampedSourceLength;
+		_lastWaveformDisplayLength = clampedDisplayLength;
+		_lastWaveformOffset = offset;
+		_lastWaveformRadius = waveformRadius;
 	}
 }
 
@@ -321,19 +366,17 @@ void LoopModel::DecimateWaveformInto(const BufferBank& buffer,
 			segmentEnd = segmentStart + 1ul;
 		}
 
-		auto maxPositive = 0.0f;
-		auto maxNegativeAbs = 0.0f;
+		auto segmentMin = std::numeric_limits<float>::max();
+		auto segmentMax = std::numeric_limits<float>::lowest();
 
 		for (auto sampleIndex = segmentStart; sampleIndex < segmentEnd; sampleIndex++)
 		{
 			auto sample = buffer[offset + sampleIndex];
-			if (sample >= 0.0f)
-				maxPositive = std::max(maxPositive, sample);
-			else
-				maxNegativeAbs = std::max(maxNegativeAbs, std::fabs(sample));
+			segmentMin = std::min(segmentMin, sample);
+			segmentMax = std::max(segmentMax, sample);
 		}
 
-		outSegments[segment] = glm::vec2(-maxNegativeAbs, maxPositive);
+		outSegments[segment] = glm::vec2(segmentMin, segmentMax);
 	}
 }
 
@@ -448,16 +491,17 @@ void LoopModel::UploadWaveformTexture()
 		auto writePbo = _waveformPbos[pboIndex];
 
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, writePbo);
-		glBufferData(GL_PIXEL_UNPACK_BUFFER, waveformBytes, nullptr, GL_STREAM_DRAW);
 
 		void* pboMem = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER,
 			0,
 			waveformBytes,
 			GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+		auto usePboUpload = false;
 		if (nullptr != pboMem)
 		{
 			std::memcpy(pboMem, _waveformDecimated.data(), (size_t)waveformBytes);
 			glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+			usePboUpload = true;
 		}
 
 		glBindTexture(GL_TEXTURE_1D, _waveformTexture);
@@ -467,10 +511,10 @@ void LoopModel::UploadWaveformTexture()
 			(GLsizei)_waveformDecimated.size(),
 			GL_RG,
 			GL_FLOAT,
-			0);
+			usePboUpload ? 0 : _waveformDecimated.data());
 		glBindTexture(GL_TEXTURE_1D, 0);
-
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
 		_waveformWritePboIndex = (_waveformWritePboIndex + 1u) % _WaveformPboCount;
 	}
 	else
