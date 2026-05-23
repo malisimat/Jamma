@@ -1,10 +1,15 @@
 
 #include "gtest/gtest.h"
 #include "engine/LoopModel.h"
+#include "engine/VU.h"
+
+#include <cmath>
 
 using audio::BufferBank;
 using engine::LoopModel;
 using engine::LoopModelParams;
+using engine::VU;
+using engine::VuParams;
 
 namespace
 {
@@ -35,6 +40,34 @@ namespace
 		{
 			return _backUvs;
 		}
+
+		bool WaveformNeedsUpload() const
+		{
+			return _waveformNeedsUpload;
+		}
+
+		void SetWaveformNeedsUpload(bool needsUpload)
+		{
+			_waveformNeedsUpload = needsUpload;
+		}
+
+		static unsigned long RecordingUpdateIntervalSamps()
+		{
+			return _RecordingWaveformUpdateIntervalSamps;
+		}
+	};
+
+	class TestVu :
+		public VU
+	{
+	public:
+		TestVu() :
+			GuiModel(VuParams()),
+			VU(VuParams())
+		{
+		}
+
+		using VU::CalcLedGeometry;
 	};
 
 	BufferBank MakeBuffer(unsigned long length)
@@ -149,12 +182,12 @@ TEST(LoopModelWaveform, DecimateWaveformHonorsOffsetAndLength)
 
 	ASSERT_EQ(4u, result.size());
 	EXPECT_FLOAT_EQ(-0.4f, result[0].x);
-	EXPECT_FLOAT_EQ(0.0f, result[0].y);
-	EXPECT_FLOAT_EQ(0.0f, result[1].x);
+	EXPECT_FLOAT_EQ(-0.4f, result[0].y);
+	EXPECT_FLOAT_EQ(0.1f, result[1].x);
 	EXPECT_FLOAT_EQ(0.1f, result[1].y);
 	EXPECT_FLOAT_EQ(-0.6f, result[2].x);
-	EXPECT_FLOAT_EQ(0.0f, result[2].y);
-	EXPECT_FLOAT_EQ(0.0f, result[3].x);
+	EXPECT_FLOAT_EQ(-0.6f, result[2].y);
+	EXPECT_FLOAT_EQ(0.3f, result[3].x);
 	EXPECT_FLOAT_EQ(0.3f, result[3].y);
 }
 
@@ -167,14 +200,14 @@ TEST(LoopModelWaveform, DecimateWaveformRepeatsCoverageWhenSegmentsExceedSamples
 	auto result = LoopModel::DecimateWaveform(buffer, 0ul, 2ul, 4u);
 
 	ASSERT_EQ(4u, result.size());
-	EXPECT_FLOAT_EQ(0.0f, result[0].x);
+	EXPECT_FLOAT_EQ(0.25f, result[0].x);
 	EXPECT_FLOAT_EQ(0.25f, result[0].y);
-	EXPECT_FLOAT_EQ(0.0f, result[1].x);
+	EXPECT_FLOAT_EQ(0.25f, result[1].x);
 	EXPECT_FLOAT_EQ(0.25f, result[1].y);
 	EXPECT_FLOAT_EQ(-0.5f, result[2].x);
-	EXPECT_FLOAT_EQ(0.0f, result[2].y);
+	EXPECT_FLOAT_EQ(-0.5f, result[2].y);
 	EXPECT_FLOAT_EQ(-0.5f, result[3].x);
-	EXPECT_FLOAT_EQ(0.0f, result[3].y);
+	EXPECT_FLOAT_EQ(-0.5f, result[3].y);
 }
 
 TEST(LoopModelWaveform, DecimateWaveformUsesNonOverlappingChunkPeaks)
@@ -203,6 +236,68 @@ TEST(LoopModelWaveform, DecimateWaveformUsesNonOverlappingChunkPeaks)
 	EXPECT_FLOAT_EQ(0.2f, result[2].y);
 	EXPECT_FLOAT_EQ(-0.2f, result[3].x);
 	EXPECT_FLOAT_EQ(0.7f, result[3].y);
+}
+
+TEST(LoopModelWaveform, DecimateWaveformPreservesSinglePolarityEnvelope)
+{
+	auto buffer = MakeBuffer(4ul);
+	buffer[0] = 0.2f;
+	buffer[1] = 0.6f;
+	buffer[2] = -0.8f;
+	buffer[3] = -0.2f;
+
+	auto result = LoopModel::DecimateWaveform(buffer, 0ul, 4ul, 2u);
+
+	ASSERT_EQ(2u, result.size());
+	EXPECT_FLOAT_EQ(0.2f, result[0].x);
+	EXPECT_FLOAT_EQ(0.6f, result[0].y);
+	EXPECT_FLOAT_EQ(-0.8f, result[1].x);
+	EXPECT_FLOAT_EQ(-0.2f, result[1].y);
+}
+
+TEST(VuModelMesh, CalcLedGeometryFrontFaceNormalPointsOutward)
+{
+	auto vu = TestVu();
+	auto [verts, uvs] = vu.CalcLedGeometry(100.0f, 18u, 1.0f);
+
+	ASSERT_GE(verts.size(), 9u);
+
+	auto v1x = verts[0];
+	auto v1y = verts[1];
+	auto v1z = verts[2];
+	auto v2x = verts[3];
+	auto v2y = verts[4];
+	auto v2z = verts[5];
+	auto v3x = verts[6];
+	auto v3y = verts[7];
+	auto v3z = verts[8];
+
+	auto aX = v2x - v1x;
+	auto aY = v2y - v1y;
+	auto aZ = v2z - v1z;
+	auto bX = v3x - v1x;
+	auto bY = v3y - v1y;
+	auto bZ = v3z - v1z;
+
+	auto normalX = (aY * bZ) - (aZ * bY);
+	auto normalY = (aZ * bX) - (aX * bZ);
+	auto normalZ = (aX * bY) - (aY * bX);
+
+	auto normalLen = std::sqrt((normalX * normalX) + (normalY * normalY) + (normalZ * normalZ));
+	ASSERT_GT(normalLen, 0.0f);
+	normalX /= normalLen;
+	normalY /= normalLen;
+	normalZ /= normalLen;
+
+	auto centerX = (v1x + v2x + v3x) / 3.0f;
+	auto centerZ = (v1z + v2z + v3z) / 3.0f;
+	auto radialLen = std::sqrt((centerX * centerX) + (centerZ * centerZ));
+	ASSERT_GT(radialLen, 0.0f);
+	auto radialX = centerX / radialLen;
+	auto radialZ = centerZ / radialLen;
+
+	auto outwardDot = (normalX * radialX) + (normalZ * radialZ);
+	EXPECT_GT(outwardDot, 0.0f);
 }
 
 TEST(LoopModelWaveform, DecimateWaveformReturnsEmptyForZeroSegments)
@@ -254,4 +349,42 @@ TEST(LoopModelWaveform, UpdateModelWithZeroLoopLengthKeepsFixedGeometry)
 
 	EXPECT_EQ(initialVerts, model.BackVerts());
 	EXPECT_EQ(initialUvs, model.BackUvs());
+}
+
+TEST(LoopModelWaveform, UpdateModelCanSkipUnchangedSignature)
+{
+	auto model = TestLoopModel();
+	const auto offset = static_cast<unsigned long>(constants::MaxLoopFadeSamps);
+	auto displayLength = constants::GrainSamps * 2u;
+	auto totalLength = offset + displayLength;
+	auto buffer = MakeBuffer(totalLength);
+	buffer[offset + 0ul] = -0.25f;
+	buffer[offset + 1ul] = 0.5f;
+
+	model.UpdateModel(buffer, displayLength, displayLength, offset, 120.0f, true);
+	EXPECT_TRUE(model.WaveformNeedsUpload());
+
+	model.SetWaveformNeedsUpload(false);
+	model.UpdateModel(buffer, displayLength, displayLength, offset, 120.0f, true);
+	EXPECT_FALSE(model.WaveformNeedsUpload());
+
+	model.UpdateModel(buffer, displayLength, displayLength, offset, 120.0f, false);
+	EXPECT_TRUE(model.WaveformNeedsUpload());
+}
+
+TEST(LoopModelWaveform, UpdateModelThrottlesRecordingCadence)
+{
+	auto model = TestLoopModel();
+	const auto interval = TestLoopModel::RecordingUpdateIntervalSamps();
+	auto buffer = MakeBuffer(interval * 3ul);
+
+	model.UpdateModel(buffer, interval, interval, 0ul, 120.0f, false);
+	EXPECT_TRUE(model.WaveformNeedsUpload());
+
+	model.SetWaveformNeedsUpload(false);
+	model.UpdateModel(buffer, interval + (interval / 2ul), interval + (interval / 2ul), 0ul, 120.0f, false);
+	EXPECT_FALSE(model.WaveformNeedsUpload());
+
+	model.UpdateModel(buffer, interval * 2ul, interval * 2ul, 0ul, 120.0f, false);
+	EXPECT_TRUE(model.WaveformNeedsUpload());
 }

@@ -785,6 +785,11 @@ void VstPlugin::ResetLoadedObjects(bool terminateComponent)
 		_impl->component = nullptr;
 	}
 
+	// Null out bus buffer pointers before clearing the backing storage so that
+	// a concurrent ProcessBlock (guarded by _isActivated above) cannot chase
+	// stale channelBuffers32 pointers into freed memory.
+	_impl->inputBus.channelBuffers32 = nullptr;
+	_impl->outputBus.channelBuffers32 = nullptr;
 	_impl->inputChannelPtrs.clear();
 	_impl->outputChannelPtrs.clear();
 	_impl->inputScratchStorage.clear();
@@ -797,15 +802,18 @@ void VstPlugin::ResetLoadedObjects(bool terminateComponent)
 void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
 	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
 		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
-	if (!_impl)
+	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
 		return;
 
-	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
+	if (_impl->inputChannelPtrs.empty() || _impl->outputChannelPtrs.empty())
 		return;
 
 	CopyMonoToInputBuffers(monoBuf, numSamples, _impl->inputChannels, _impl->inputChannelPtrs.data());
@@ -824,15 +832,18 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
 	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
 		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
-	if (!_impl)
+	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
 		return;
 
-	if (numSamples <= 0 || static_cast<unsigned int>(numSamples) > constants::MaxBlockSize)
+	if (_impl->inputChannelPtrs.empty() || _impl->outputChannelPtrs.empty())
 		return;
 
 	if ((_impl->inputChannels != 2) || (_impl->outputChannels != 2))
@@ -863,12 +874,15 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 void VstPlugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !channelBufs)
+		return;
+
 	if (!_isLoaded || !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
 		|| _editorOpening.load(std::memory_order_acquire))
 		return;
 
-	if (!_impl || !channelBufs)
+	if (_impl->inputChannelPtrs.empty() || _impl->outputChannelPtrs.empty())
 		return;
 
 	// Accept numChannels >= requestedChannels: a narrow plugin (e.g. stereo)
@@ -978,8 +992,10 @@ void VstPlugin::CloseEditor()
 		_impl->plugView->setFrame(nullptr);
 		_impl->plugView->removed();
 		_impl->plugView = nullptr;
-		_editorSize = { 0, 0 };
 	}
+	if (_impl && _impl->plugFrame)
+		_impl->plugFrame->SetHostWindow(nullptr);
+	_editorSize = { 0, 0 };
 #endif
 }
 

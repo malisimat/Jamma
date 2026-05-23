@@ -63,12 +63,14 @@ namespace engine
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
 			unsigned long offset,
-			float radius);
+			float radius,
+			bool allowUnchangedSkip = false);
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long sourceLoopLength,
 			unsigned long displayLoopLength,
 			unsigned long offset,
-			float radius);
+			float radius,
+			bool allowUnchangedSkip = false);
 
 		// Waveform Decimation & Texture Data Generation
 		static std::vector<glm::vec2> DecimateWaveform(const audio::BufferBank& buffer, unsigned long offset, unsigned long length, unsigned int numSegments);
@@ -116,6 +118,8 @@ namespace engine
 		static const float _UnitMeshRadius;
 		static constexpr unsigned int _WaveformSegments = 2048u;
 		static constexpr unsigned int _WaveformPboCount = 2u;
+		static constexpr unsigned long _RecordingWaveformUpdateIntervalSamps =
+			constants::DefaultSampleRate / 30ul;
 
 		double _loopIndexFrac;
 		LoopModelState _modelState;
@@ -127,6 +131,12 @@ namespace engine
 		std::array<unsigned int, _WaveformPboCount> _waveformPbos;
 		unsigned int _waveformWritePboIndex;
 		std::vector<glm::vec2> _waveformDecimated;
+		std::vector<glm::vec2> _waveformWorkDecimated;
+		bool _hasWaveformUpdateSignature;
+		unsigned long _lastWaveformSourceLength;
+		unsigned long _lastWaveformDisplayLength;
+		unsigned long _lastWaveformOffset;
+		float _lastWaveformRadius;
 		std::mutex _waveformMutex;
 	};
 }

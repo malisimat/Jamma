@@ -96,12 +96,13 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	// callbacks inside attached() can be queued and processed by the caller's
 	// message pump after Create() returns.
 	const bool ok = _plugin->OpenEditor(wnd);
-	if (!ok)
+	if (!ok || !IsWindow(wnd))
 	{
 		_editorWnd.store(nullptr, std::memory_order_release);
 		_editorHostWnd = nullptr;
 		_plugin.reset();
-		DestroyWindow(wnd);
+		if (IsWindow(wnd))
+			DestroyWindow(wnd);
 		return false;
 	}
 

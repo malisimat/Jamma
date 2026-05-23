@@ -1,5 +1,6 @@
 #include "Loop.h"
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -40,18 +41,18 @@ Loop::Loop(LoopParams params,
 	AudioMixerParams mixerParams) :
 	Jammable(params),
 	AudioSink(),
+	_visualUpdatesEnabled(true),
+	_isPunchInActive(false),
 	_playIndex(0),
+	_loopLength(0),
 	_lastPeak(0.0f),
 	_pitch(1.0),
-	_loopLength(0),
 	_playState(STATE_INACTIVE),
 	_loopParams(params),
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
-	_bufferBank(BufferBank()),
-	_visualUpdatesEnabled(true),
-	_isPunchInActive(false)
+	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
@@ -809,7 +810,17 @@ void Loop::_ForceUpdateLoopModel()
 
 	auto radius = (float)(_CalcDrawRadius(displayLength) * _DrawRadiusScale());
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
-	_model->UpdateModel(bufBank, actualLength, displayLength, offset, radius);
+	_ApplyLoopVisualModel(bufBank, actualLength, displayLength, offset, radius);
+}
+
+void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
+	unsigned long actualLength,
+	unsigned long displayLength,
+	unsigned long offset,
+	float radius)
+{
+	const auto allowUnchangedSkip = (STATE_PLAYING == _playState);
+	_model->UpdateModel(buffer, actualLength, displayLength, offset, radius, allowUnchangedSkip);
 	_vu->UpdateModel(radius);
 }
 
@@ -911,6 +922,12 @@ ActionResult Loop::OnAction(JobAction action)
 			_backVstChain = std::move(newChain);
 			_flipVstChain.store(true, std::memory_order_release);
 			_changesMade = true;
+		}
+		else if (action.PreInitPlugin)
+		{
+			// Load failed but plugin was pre-initialised on the UI thread;
+			// destroying it here (job thread) would violate VST3 threading.
+			vst::QueueForUiThreadDestroy(std::move(plugin));
 		}
 
 		ActionResult res;
