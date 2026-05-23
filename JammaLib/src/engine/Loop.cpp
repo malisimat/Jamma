@@ -149,21 +149,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
 
-	auto isRecording = (STATE_RECORDING == _playState) ||
-		(STATE_OVERDUBBING == _playState) ||
-		(STATE_PUNCHEDIN == _playState);
-	auto index = isRecording ?
-		_writeIndex :
-		_playIndex;
-
-	if (!isRecording)
-	{
-		if (index >= constants::MaxLoopFadeSamps)
-			index -= constants::MaxLoopFadeSamps;
-	}
-
-	auto frac = _loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
-	_model->SetLoopIndexFrac(frac);
+	_model->SetLoopIndexFrac(LoopIndexFrac());
 	_model->SetLoopState(_GetLoopModelState(pass, _playState, IsMuted()));
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
@@ -737,6 +723,24 @@ void Loop::PunchOut()
 		_playState = STATE_OVERDUBBING;
 
 	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+}
+
+double Loop::LoopIndexFrac() const noexcept
+{
+	auto isRecording = (STATE_RECORDING == _playState) ||
+		(STATE_OVERDUBBING == _playState) ||
+		(STATE_PUNCHEDIN == _playState);
+	auto index = isRecording ?
+		_writeIndex :
+		_playIndex;
+
+	if (!isRecording && index >= constants::MaxLoopFadeSamps)
+		index -= constants::MaxLoopFadeSamps;
+
+	if (0ul == _loopLength)
+		return 0.0;
+
+	return 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
 }
 
 double Loop::_CalcDrawRadius(unsigned long loopLength)

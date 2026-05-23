@@ -138,6 +138,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp" />
+    <ClCompile Include="src\audio\MidiDevice_Tests.cpp" />
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\Overdub_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
@@ -153,6 +154,9 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\Timer_Tests.cpp" />
+    <ClCompile Include="src\engine\MidiQueue_Tests.cpp" />
+    <ClCompile Include="src\engine\MidiLoop_Tests.cpp" />
+    <ClCompile Include="src\engine\MidiNoteSpan_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />

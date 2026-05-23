@@ -48,6 +48,7 @@ namespace io
 			unsigned int StationType;
 			std::vector<TriggerPair> TriggerPairs;
 			std::vector<unsigned int> InputChannels;
+			std::vector<unsigned int> MidiInputChannels;
 
 			static std::optional<Trigger> FromJson(Json::JsonPart json);
 		};

@@ -199,6 +199,7 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		double LoopIndexFrac() const noexcept;
 
 		// VST chain management — staging only; actual load/unload happens on the
 		// job thread after CommitChanges() queues the appropriate job.

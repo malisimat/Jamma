@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
+#include "MidiLoop.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
@@ -94,6 +95,7 @@ namespace engine
 		virtual std::string ClassName() const override { return "LoopTake"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual unsigned int NumInputChannels(Audible::AudioSourceType) const override;
 		virtual unsigned int NumOutputChannels(Audible::AudioSourceType) const override;
 		virtual void Zero(unsigned int numSamps,
@@ -139,7 +141,7 @@ namespace engine
 		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
-		void Record(std::vector<unsigned int> channels, std::string stationName);
+		void Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels = {});
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
@@ -149,6 +151,11 @@ namespace engine
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+
+		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
+		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
+			std::uint32_t globalSampleNow,
+			std::uint32_t recordedSampleCount) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -166,6 +173,9 @@ namespace engine
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
+		void _UpdateMidiModels(bool force = false);
+		void _UpdateMidiModelRotation();
+		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
 		void _ResizeVstScratch(unsigned int channelCount);
 
@@ -183,14 +193,18 @@ namespace engine
 		unsigned int _lastBufSize;
 		unsigned int _fadeSamps;
 		LoopTakeSource _sourceType;
-		unsigned long _recordedSampCount;
+		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
+		unsigned long _midiVisualPlayIndex;
+		unsigned long _midiVisualLoopLength;
 		bool _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
+		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

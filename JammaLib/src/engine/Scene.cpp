@@ -57,6 +57,8 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
+	_midiDevice(nullptr),
+	_lastMidiDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
@@ -64,6 +66,8 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
+	_audioSampleCounter(0u),
+	_midiAnchorMicros(0),
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -133,6 +137,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
+	_midiDevice = std::make_unique<MidiDevice>();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -895,6 +900,8 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	_PumpMidi();
+
 	auto snapshot = _ninjamSession->Pump();
 	if (snapshot.has_value())
 	{
@@ -943,6 +950,36 @@ void Scene::OnJobTick(Time curTime)
 	// and can crash plugins or leave dangling state until window close.
 	if (job.PreInitPlugin)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+}
+
+void Scene::_PumpMidi()
+{
+	MidiEvent ev{};
+	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
+	while (_midiIngress.Pop(ev))
+	{
+		const auto msgType = ev.MessageType();
+		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
+			continue;
+
+		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
+		for (auto& station : _stations)
+		{
+			for (auto& take : station->GetLoopTakes())
+			{
+				if (take->IsArmed())
+					take->RecordMidiEvent(ev, globalSampleNow);
+			}
+		}
+	}
+
+	auto dropped = _midiIngress.DroppedCount();
+	if (dropped != _lastMidiDropCount)
+	{
+		std::cout << "[MIDI] Ingress queue dropped " << (dropped - _lastMidiDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastMidiDropCount = dropped;
+	}
 }
 
 void Scene::InitReceivers()
@@ -1010,8 +1047,8 @@ void Scene::InitAudio()
 		if (dev.has_value())
 		{
 			_audioDevice = std::move(dev.value());
-
 			_audioCallbackCount = 0;
+			_audioSampleCounter.store(0u, std::memory_order_release);
 			_audioDevice->Start();
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
@@ -1038,12 +1075,13 @@ void Scene::InitAudio()
 					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
 				}
 			}
-
 			_ninjamSession->SetAudioFormat(
 				audioStreamParams.SampleRate,
 				audioStreamParams.BufSize,
 				audioStreamParams.NumInputChannels,
 				audioStreamParams.NumOutputChannels);
+
+			InitMidi();
 		}
 	}
 
@@ -1052,8 +1090,62 @@ void Scene::InitAudio()
 	CommitChanges();
 }
 
+void Scene::InitMidi()
+{
+	if (!_midiDevice)
+		_midiDevice = std::make_unique<MidiDevice>();
+
+	_midiIngress.Clear();
+	_lastMidiDropCount = 0u;
+	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+
+	if (!_userConfig.Midi.Enabled)
+	{
+		std::cout << "[MIDI] MIDI input disabled by rig settings." << std::endl;
+		return;
+	}
+
+	const auto sampleRate = _userConfig.Audio.SampleRate;
+	auto opened = _midiDevice->Open(
+		_userConfig.Midi.Name,
+		[this, sampleRate](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+		{
+			MidiEvent ev{};
+			const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
+			const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+
+			std::uint64_t mappedSample = anchorSample;
+			if (sampleRate > 0u && nowMicros > anchorMicros)
+			{
+				const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+				mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+			}
+
+			ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+			ev.status = status;
+			ev.data1 = data1;
+			ev.data2 = data2;
+			ev._pad = 0u;
+			_midiIngress.Push(ev);
+		});
+
+	if (!opened)
+		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+}
+
+void Scene::CloseMidi()
+{
+	if (_midiDevice)
+		_midiDevice->Close();
+}
+
 void Scene::CloseAudio()
 {
+	CloseMidi();
+
 	// Do not hold the audio callback mutex while stopping the stream.
 	// RtAudio shutdown may wait for the callback thread to return, and the
 	// callback takes this same mutex.
@@ -1169,10 +1261,12 @@ void Scene::_OnAudio(float* inBuf,
 	float* outBuf,
 	unsigned int numSamps)
 {
+	const auto audioStreamParams = nullptr == _audioDevice ?
+		AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+	const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
+
 	if (nullptr != inBuf)
 	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		auto inLatency = (0u == audioStreamParams.InputLatency) ?
 			_userConfig.Audio.LatencyIn :
 			audioStreamParams.InputLatency;
@@ -1278,6 +1372,10 @@ void Scene::_OnAudio(float* inBuf,
 		numSamps,
 		_userConfig,
 		_audioDevice->GetAudioStreamParams());
+
+	_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
+	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
 }
 
 bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)

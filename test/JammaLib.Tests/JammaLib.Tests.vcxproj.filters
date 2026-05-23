@@ -11,6 +11,9 @@
     <ClCompile Include="src\audio\Overdub_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\MidiDevice_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\BufferBank_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -45,6 +48,15 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Timer_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiQueue_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiLoop_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiNoteSpan_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\io\UserConfig_Tests.cpp">

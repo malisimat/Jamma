@@ -60,6 +60,9 @@
     <Filter Include="lib\stb">
       <UniqueIdentifier>{8c0a127c-8f8e-41fe-9d45-94e9a2c6327f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="lib\rtmidi">
+      <UniqueIdentifier>{f2ecbe9b-e5ba-4d09-8250-0f4f27f5c4df}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\stdafx.h">
@@ -224,6 +227,12 @@
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\MidiDevice.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\rtmidi\RtMidi.h">
+      <Filter>lib\rtmidi</Filter>
+    </ClInclude>
     <ClInclude Include="src\audio\AudioBuffer.h">
       <Filter>src\audio</Filter>
     </ClInclude>
@@ -274,6 +283,21 @@
     </ClInclude>
     <ClInclude Include="src\engine\Timer.h">
       <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiEvent.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiQueue.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiLoop.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiNoteSpan.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\MidiModel.h">
+      <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
@@ -562,6 +586,12 @@
     <ClCompile Include="src\audio\AudioDevice.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\MidiDevice.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\rtmidi\RtMidi.cpp">
+      <Filter>lib\rtmidi</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\AudioMixer.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
@@ -579,6 +609,15 @@
     </ClCompile>
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiLoop.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiNoteSpan.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiModel.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>
