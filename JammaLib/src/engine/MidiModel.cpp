@@ -132,6 +132,16 @@ void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_
 		return;
 	}
 
+	// Compute ring radius matching Loop::_CalcDrawRadius so MIDI rings
+	// appear at the same scale as the audio waveform rings.
+	const double rawRadius = 70.0 * std::log(static_cast<double>(loopLengthSamps)) - 600.0;
+	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));
+
+	// RadialThickness and NoteHeight stored as unit-scale fractions; multiply
+	// by baseRadius to get world-space dimensions.
+	const float radialThickness = baseRadius * _midiParams.RadialThickness;
+	const float noteHeight = baseRadius * _midiParams.NoteHeight;
+
 	timePitchData.reserve(spans.size() * 4u);
 	shapeData.reserve(spans.size() * 4u);
 
@@ -146,12 +156,12 @@ void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_
 
 		timePitchData.push_back(startFrac);
 		timePitchData.push_back(durationFrac);
-		timePitchData.push_back(PitchOffset(span.Note));
+		timePitchData.push_back(PitchOffset(span.Note) * baseRadius);
 		timePitchData.push_back(velocity);
 
-		shapeData.push_back(_midiParams.Radius);
-		shapeData.push_back(_midiParams.RadialThickness);
-		shapeData.push_back(_midiParams.NoteHeight);
+		shapeData.push_back(baseRadius);
+		shapeData.push_back(radialThickness);
+		shapeData.push_back(noteHeight);
 		shapeData.push_back(0.0f);
 	}
 

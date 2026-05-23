@@ -46,7 +46,11 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	auto shader = modelShader.lock();
 
 	if (!texture || !shader)
+	{
+		glCtx.PopMvp();
+		glCtx.PopMvp();
 		return;
+	}
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
@@ -92,6 +96,9 @@ void GuiModel::SetInstanceAttributes(std::vector<InstanceAttribute> attributes, 
 void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	auto validated = true;
+
+	_modelTextures.clear();
+	_modelShaders.clear();
 
 	if (validated)
 		validated = InitTextures(resourceLib);
