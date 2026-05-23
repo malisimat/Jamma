@@ -776,12 +776,16 @@ void Station::SetupBuffers(unsigned int bufSize)
 
 	for (auto& take : _loopTakes)
 		take->SetupBuffers(bufSize);
+	for (auto& take : _backLoopTakes)
+		take->SetupBuffers(bufSize);
 }
 
 void Station::SetSampleRate(float sampleRate)
 {
 	_sampleRate = sampleRate;
 	for (auto& take : _loopTakes)
+		take->SetSampleRate(sampleRate);
+	for (auto& take : _backLoopTakes)
 		take->SetSampleRate(sampleRate);
 }
 

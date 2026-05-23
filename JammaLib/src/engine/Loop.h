@@ -205,6 +205,8 @@ namespace engine
 		void UnloadVstPlugin(size_t index);
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
 		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
+		float GetSampleRate() const noexcept { return _sampleRate; }
+		unsigned int GetBlockSize() const noexcept { return _blockSize; }
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;

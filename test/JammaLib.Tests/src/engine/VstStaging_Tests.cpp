@@ -174,3 +174,88 @@ TEST(VstStaging, Loop_SetSampleRateAndBlockSize_PropagateToFields)
 	ASSERT_NE(it, jobs.end());
 	EXPECT_EQ(it->VstPath, L"after_rate_change.vst3");
 }
+
+// ---------------------------------------------------------------------------
+// Back-buffer param propagation tests (Task 2 correctness)
+//
+// Regression coverage for the startup ordering flaw: SetSampleRate /
+// SetupBuffers are called on Station/LoopTake BEFORE CommitChanges() swaps
+// back-buffer objects into the front buffer.  Consequently those calls must
+// propagate to BOTH the live (_loops / _loopTakes) and back-buffer
+// (_backLoops / _backLoopTakes) collections so that deferred VST loads receive
+// the real device parameters rather than the compile-time defaults.
+// ---------------------------------------------------------------------------
+
+// LoopTake::SetSampleRate must reach loops that are still in _backLoops
+// (i.e., added via AddLoop() but not yet committed).
+TEST(VstStaging, LoopTake_SetSampleRate_PropagatesTo_BackBufferLoops)
+{
+	auto take = MakeTake();
+	auto loop = MakeLoop();
+
+	// AddLoop() places the loop in _backLoops, NOT in the live _loops.
+	take->AddLoop(loop);
+
+	// Call SetSampleRate before CommitChanges — simulates InitAudio ordering.
+	const float targetRate = 48000.0f;
+	take->SetSampleRate(targetRate);
+
+	// The loop must have received the updated rate even though it is still in
+	// the back-buffer.
+	EXPECT_FLOAT_EQ(loop->GetSampleRate(), targetRate);
+}
+
+// LoopTake::SetupBuffers must reach loops that are still in _backLoops.
+TEST(VstStaging, LoopTake_SetupBuffers_PropagatesTo_BackBufferLoops)
+{
+	auto take = MakeTake();
+	auto loop = MakeLoop();
+
+	take->AddLoop(loop);
+
+	const unsigned int targetBufSize = 256u;
+	take->SetupBuffers(targetBufSize);
+
+	EXPECT_EQ(loop->GetBlockSize(), targetBufSize);
+}
+
+// After SetSampleRate+SetupBuffers propagate to the back-buffer loop, the
+// loop's JOB_LOADVST is still correctly emitted by CommitChanges().
+TEST(VstStaging, LoopTake_SetSampleRate_ThenCommit_EmitsVstJob)
+{
+	auto take = MakeTake();
+	auto loop = MakeLoop();
+
+	take->AddLoop(loop);
+	loop->LoadVstPlugin(L"effect.vst3");
+
+	take->SetSampleRate(48000.0f);
+	take->SetupBuffers(256u);
+
+	auto jobs = take->CommitChanges();
+
+	auto vstJobs = std::count_if(jobs.begin(), jobs.end(), [](const JobAction& j) {
+		return j.JobActionType == JobAction::JOB_LOADVST;
+	});
+	EXPECT_GE(vstJobs, 1);
+}
+
+// LoopTake itself must reflect the updated sample rate for its own JOB_LOADVST.
+TEST(VstStaging, LoopTake_SetSampleRate_UpdatesOwnRate)
+{
+	auto take = MakeTake();
+	const float targetRate = 44100.0f;
+	take->SetSampleRate(targetRate);
+
+	EXPECT_FLOAT_EQ(take->GetSampleRate(), targetRate);
+}
+
+// LoopTake itself must reflect the updated buffer size for its own JOB_LOADVST.
+TEST(VstStaging, LoopTake_SetupBuffers_UpdatesOwnBufSize)
+{
+	auto take = MakeTake();
+	const unsigned int targetBufSize = 512u;
+	take->SetupBuffers(targetBufSize);
+
+	EXPECT_EQ(take->GetLastBufSize(), targetBufSize);
+}

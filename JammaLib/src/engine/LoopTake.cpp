@@ -553,6 +553,8 @@ void LoopTake::SetupBuffers(unsigned int bufSize)
 
 	for (auto& loop : _loops)
 		loop->SetBlockSize(bufSize);
+	for (auto& loop : _backLoops)
+		loop->SetBlockSize(bufSize);
 
 	auto& buffers = (_flipLoopBuffer && _changesMade) ?
 		_backAudioBuffers :
@@ -1077,6 +1079,8 @@ void LoopTake::SetSampleRate(float sampleRate)
 {
 	_sampleRate = sampleRate;
 	for (auto& loop : _loops)
+		loop->SetSampleRate(sampleRate);
+	for (auto& loop : _backLoops)
 		loop->SetSampleRate(sampleRate);
 }
 

@@ -133,6 +133,8 @@ namespace engine
 		void LoadVstPlugin(std::wstring path);
 		void UnloadVstPlugin(size_t index);
 		void SetSampleRate(float sampleRate);
+		float GetSampleRate() const noexcept { return _sampleRate; }
+		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
