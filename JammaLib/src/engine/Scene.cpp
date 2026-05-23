@@ -64,6 +64,11 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_audioCallbackCount(0),
+	_audioSampleCounter(0u),
+	_midiAnchorSample(0u),
+	_midiAnchorMicros(0),
+	_midiAnchorBlockSamps(0u),
+	_midiAnchorSampleRate(0u),
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -734,6 +739,12 @@ void Scene::OnJobTick(Time curTime)
 void Scene::_PumpMidi()
 {
 	MidiEvent ev{};
+	const auto committedSampleNow = _audioSampleCounter.load(std::memory_order_acquire);
+	const auto anchorSample = _midiAnchorSample.load(std::memory_order_acquire);
+	const auto anchorBlock = _midiAnchorBlockSamps.load(std::memory_order_acquire);
+	const auto estimatedSampleNow = anchorSample + static_cast<std::uint64_t>(anchorBlock);
+	const auto globalSampleNow = static_cast<std::uint32_t>(
+		(committedSampleNow > estimatedSampleNow) ? committedSampleNow : estimatedSampleNow);
 	while (_midiIngress.Pop(ev))
 	{
 		const auto msgType = ev.MessageType();
@@ -746,7 +757,7 @@ void Scene::_PumpMidi()
 			for (auto& take : station->GetLoopTakes())
 			{
 				if (take->IsArmed())
-					take->RecordMidiEvent(ev);
+					take->RecordMidiEvent(ev, globalSampleNow);
 			}
 		}
 	}
@@ -826,6 +837,7 @@ void Scene::InitAudio()
 		_audioDevice = std::move(dev.value());
 
 		_audioCallbackCount = 0;
+		_audioSampleCounter.store(0u, std::memory_order_release);
 		_audioDevice->Start();
 
 		auto audioStreamParams = _audioDevice->GetAudioStreamParams();
@@ -869,6 +881,11 @@ void Scene::InitMidi()
 
 	_midiIngress.Clear();
 	_lastMidiDropCount = 0u;
+	_midiAnchorSample.store(_audioSampleCounter.load(std::memory_order_acquire), std::memory_order_release);
+	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+	_midiAnchorBlockSamps.store(0u, std::memory_order_release);
+	_midiAnchorSampleRate.store(_userConfig.Audio.SampleRate, std::memory_order_release);
 
 	if (!_userConfig.Midi.Enabled)
 	{
@@ -881,7 +898,30 @@ void Scene::InitMidi()
 		[this](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 		{
 			MidiEvent ev{};
-			ev.sampleOffset = 0u;
+			const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			const auto anchorSample = _midiAnchorSample.load(std::memory_order_acquire);
+			const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+			const auto blockSamps = _midiAnchorBlockSamps.load(std::memory_order_acquire);
+			const auto sampleRate = _midiAnchorSampleRate.load(std::memory_order_acquire);
+
+			std::uint64_t mappedSample = anchorSample;
+			if (sampleRate > 0u && nowMicros > anchorMicros)
+			{
+				const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+				mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+			}
+
+			if (blockSamps > 0u)
+			{
+				const auto blockEnd = anchorSample + static_cast<std::uint64_t>(blockSamps - 1u);
+				if (mappedSample < anchorSample)
+					mappedSample = anchorSample;
+				else if (mappedSample > blockEnd)
+					mappedSample = blockEnd;
+			}
+
+			ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 			ev.status = status;
 			ev.data1 = data1;
 			ev.data2 = data2;
@@ -1003,10 +1043,21 @@ void Scene::_OnAudio(float* inBuf,
 	float* outBuf,
 	unsigned int numSamps)
 {
+	const auto audioStreamParams = nullptr == _audioDevice ?
+		AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+	const auto sampleRate = (0u == audioStreamParams.SampleRate) ?
+		_userConfig.Audio.SampleRate :
+		audioStreamParams.SampleRate;
+	const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
+	const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	_midiAnchorSample.store(blockStartSample, std::memory_order_release);
+	_midiAnchorMicros.store(nowMicros, std::memory_order_release);
+	_midiAnchorBlockSamps.store(numSamps, std::memory_order_release);
+	_midiAnchorSampleRate.store(sampleRate, std::memory_order_release);
+
 	if (nullptr != inBuf)
 	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		auto inLatency = (0u == audioStreamParams.InputLatency) ?
 			_userConfig.Audio.LatencyIn :
 			audioStreamParams.InputLatency;
@@ -1112,6 +1163,8 @@ void Scene::_OnAudio(float* inBuf,
 		numSamps,
 		_userConfig,
 		_audioDevice->GetAudioStreamParams());
+
+	_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
 }
 
 bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)

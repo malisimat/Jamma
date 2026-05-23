@@ -551,6 +551,51 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev) noexcept
 	return recorded;
 }
 
+bool LoopTake::RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept
+{
+	if (_midiLoops.empty())
+		return false;
+
+	const auto midiChan = ev.Channel();
+	bool recorded = false;
+	const auto recordedNow = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+
+	for (auto i = 0u; i < _midiLoops.size(); ++i)
+	{
+		if (_midiLoopChannels[i] != midiChan)
+			continue;
+
+		if (_midiLoops[i]->State() != MidiLoopState::Recording)
+			continue;
+
+		MidiEvent stamped = ev;
+		stamped.sampleOffset = ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
+		_midiLoops[i]->RecordEvent(stamped);
+		recorded = true;
+	}
+
+	return recorded;
+}
+
+std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
+	std::uint32_t globalSampleNow,
+	std::uint32_t recordedSampleCount) noexcept
+{
+	if (0u == recordedSampleCount)
+		return 0u;
+
+	const auto samplesAgo = static_cast<std::int32_t>(globalSampleNow - eventGlobalSample);
+
+	if (samplesAgo <= 0)
+		return recordedSampleCount;
+
+	const auto delta = static_cast<std::uint32_t>(samplesAgo);
+	if (delta >= recordedSampleCount)
+		return 0u;
+
+	return recordedSampleCount - delta;
+}
+
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps)

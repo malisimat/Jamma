@@ -293,6 +293,13 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
 
+TEST(LoopTakeMidiTiming, ResolveMidiRecordSampleCompensatesQueueDelay)
+{
+	EXPECT_EQ(200u, LoopTake::ResolveMidiRecordSample(1200u, 1600u, 600u));
+	EXPECT_EQ(0u, LoopTake::ResolveMidiRecordSample(700u, 1600u, 600u));
+	EXPECT_EQ(600u, LoopTake::ResolveMidiRecordSample(1650u, 1600u, 600u));
+}
+
 // ── Slice 5: Quantised record-end ─────────────────────────────────────────────
 //
 // MidiLoop has no Timer dependency in its hot path, but record-end length
