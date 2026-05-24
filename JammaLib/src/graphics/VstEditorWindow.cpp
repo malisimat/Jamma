@@ -122,6 +122,12 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
+
+	// Drive periodic effEditIdle dispatches so VST2 plugins can repaint
+	// dynamic controls (sliders, meters, etc.) independently of mouse events.
+	// 50 ms (~20 Hz) matches common VST host practice.
+	SetTimer(wnd, 1, 50, nullptr);
+
 	return true;
 }
 
@@ -222,12 +228,18 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 		return 0;
 	}
 
+	case WM_TIMER:
+		if (self->_plugin)
+			self->_plugin->IdleEditor();
+		return 0;
+
 	case WM_DESTROY:
 	{
 		// CloseEditor was already called from WM_CLOSE or Destroy().
-		// Just update bookkeeping and notify any listeners.
+		// Kill the idle timer and update bookkeeping.
 		// NOTE: do NOT call PostQuitMessage here — the main PeekMessage loop
 		// must keep running after the editor window closes.
+		KillTimer(hWnd, 1);
 		WindowAction action;
 		action.WindowEventType = WindowAction::DESTROY;
 		self->OnAction(action);

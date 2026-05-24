@@ -394,6 +394,14 @@ void Vst2Plugin::CloseEditor()
 	_editorSize = { 0, 0 };
 }
 
+void Vst2Plugin::IdleEditor() noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect && (_effect->flags & effFlagsHasEditor))
+		_effect->dispatcher(_effect, effEditIdle, 0, 0, nullptr, 0.0f);
+#endif
+}
+
 #ifdef JAMMA_VST2_ENABLED
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float /*opt*/)

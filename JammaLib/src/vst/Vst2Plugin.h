@@ -76,6 +76,9 @@ namespace vst
 		// Must be called from the main/UI thread only.
 		void CloseEditor() override;
 
+		// Dispatch effEditIdle to let the plugin update its editor GUI.
+		void IdleEditor() noexcept override;
+
 		utils::Size2d GetEditorSize() const noexcept override { return _editorSize; }
 
 		bool IsLoaded() const noexcept override { return _isLoaded; }

@@ -59,6 +59,11 @@ namespace vst
 		// Must be called from the main/UI thread only.
 		virtual void CloseEditor() = 0;
 
+		// Called periodically by the host's idle timer to let the plugin
+		// update its editor GUI (VST2: dispatches effEditIdle; VST3: no-op).
+		// Must be called from the main/UI thread only.
+		virtual void IdleEditor() noexcept {}
+
 		// Returns the size the editor requested, or {0,0} if no editor.
 		virtual utils::Size2d GetEditorSize() const noexcept = 0;
 
