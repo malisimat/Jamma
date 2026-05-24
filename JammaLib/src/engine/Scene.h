@@ -11,7 +11,6 @@
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
 #include "../audio/MidiDevice.h"
-#include "../audio/SerialTriggerDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -23,6 +22,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/SerialDevice.h"
 #include "NinjamSession.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
@@ -36,7 +36,7 @@
 #include "StationRemote.h"
 #include "UndoHistory.h"
 #include "MidiQueue.h"
-#include "SerialTriggerQueue.h"
+#include "../io/SerialTriggerQueue.h"
 
 namespace engine
 {
@@ -276,9 +276,9 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::unique_ptr<audio::MidiDevice> _midiDevice;
-		std::unique_ptr<audio::SerialTriggerDevice> _serialTriggerDevice;
+		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		MidiQueue<1024> _midiIngress;
-		SerialTriggerQueue<256> _serialIngress;
+		io::SerialTriggerQueue<256> _serialIngress;
 		std::uint64_t _lastMidiDropCount;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;

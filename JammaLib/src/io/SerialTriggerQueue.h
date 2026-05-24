@@ -5,9 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../audio/SerialTriggerProtocol.h"
+#include "SerialTriggerProtocol.h"
 
-namespace engine
+namespace io
 {
 	template <std::size_t Capacity>
 	class SerialTriggerQueue
@@ -16,7 +16,7 @@ namespace engine
 		static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
 
 	public:
-		using value_type = audio::SerialTriggerEvent;
+		using value_type = SerialTriggerEvent;
 		static constexpr std::size_t capacity = Capacity;
 
 		SerialTriggerQueue() noexcept

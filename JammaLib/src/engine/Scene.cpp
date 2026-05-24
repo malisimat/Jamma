@@ -58,7 +58,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
 	_midiDevice(nullptr),
-	_serialTriggerDevice(nullptr),
+	_serialDevices(),
 	_lastMidiDropCount(0u),
 	_lastSerialDropCount(0u),
 	_masterLoop(nullptr),
@@ -139,7 +139,6 @@ Scene::Scene(SceneParams params,
 
 	_audioDevice = std::make_unique<AudioDevice>();
 	_midiDevice = std::make_unique<MidiDevice>();
-	_serialTriggerDevice = std::make_unique<audio::SerialTriggerDevice>();
 	_PublishAudioStations();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
@@ -991,7 +990,7 @@ void Scene::_PumpMidi()
 
 void Scene::_PumpSerial()
 {
-	audio::SerialTriggerEvent ev{};
+	io::SerialTriggerEvent ev{};
 	while (_serialIngress.Pop(ev))
 	{
 		base::Action action;
@@ -1005,7 +1004,8 @@ void Scene::_PumpSerial()
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
-				action);
+				action,
+				ev.Device);
 			if (res.IsEaten)
 				break;
 		}
@@ -1182,40 +1182,63 @@ void Scene::CloseMidi()
 
 void Scene::InitSerial()
 {
-	if (!_serialTriggerDevice)
-		_serialTriggerDevice = std::make_unique<audio::SerialTriggerDevice>();
-
+	CloseSerial();
 	_serialIngress.Clear();
 	_lastSerialDropCount = 0u;
 
-	if (!_userConfig.Serial.Enabled)
-	{
-		std::cout << "[Serial] Trigger input disabled by rig settings." << std::endl;
+	if (_userConfig.Serial.Devices.empty())
 		return;
-	}
 
-	if (_userConfig.Serial.Port.empty())
+	auto availablePorts = io::SerialDevice::EnumeratePorts();
+	std::cout << "[Serial] Ports found: " << availablePorts.size() << std::endl;
+	for (const auto& port : availablePorts)
+		std::cout << "[Serial]   " << port << std::endl;
+
+	unsigned int activeConnections = 0u;
+	for (const auto& serialConfig : _userConfig.Serial.Devices)
 	{
-		std::cout << "[Serial] No port configured for serial trigger input." << std::endl;
-		return;
-	}
-
-	auto opened = _serialTriggerDevice->Open(
-		_userConfig.Serial.Port,
-		_userConfig.Serial.BaudRate,
-		[this](const audio::SerialTriggerEvent& event)
+		if (!serialConfig.Enabled)
 		{
-			_serialIngress.Push(event);
-		});
+			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" disabled by rig settings." << std::endl;
+			continue;
+		}
 
-	if (!opened)
-		std::cout << "[Serial] No active serial trigger connection." << std::endl;
+		if (serialConfig.Port.empty())
+		{
+			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" has no port configured." << std::endl;
+			continue;
+		}
+
+		auto serialDevice = std::make_unique<io::SerialDevice>();
+		auto opened = serialDevice->Open(
+			serialConfig.Name,
+			serialConfig.Port,
+			serialConfig.BaudRate,
+			[this](const io::SerialTriggerEvent& event)
+			{
+				_serialIngress.Push(event);
+			});
+
+		if (!opened)
+			continue;
+
+		_serialDevices.push_back(std::move(serialDevice));
+		activeConnections++;
+	}
+
+	if (0u == activeConnections)
+		std::cout << "[Serial] No active serial trigger connections." << std::endl;
 }
 
 void Scene::CloseSerial()
 {
-	if (_serialTriggerDevice)
-		_serialTriggerDevice->Close();
+	for (auto& serialDevice : _serialDevices)
+	{
+		if (serialDevice)
+			serialDevice->Close();
+	}
+
+	_serialDevices.clear();
 }
 
 void Scene::CloseAudio()

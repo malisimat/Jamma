@@ -59,29 +59,34 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 		auto source = trigPair.Source == io::RigFile::TriggerPair::SOURCE_SERIAL ?
 			TriggerSource::TRIGGER_SERIAL :
 			TriggerSource::TRIGGER_KEY;
+		auto device = source == TriggerSource::TRIGGER_SERIAL ? trigPair.Device : std::string();
 
 		auto activate = DualBinding(
 			TriggerBinding{
 				source,
 				trigPair.ActivateDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
 				source,
 				trigPair.ActivateUp,
-				0
+				0,
+				device
 			});
 
 		auto ditch = DualBinding(
 			TriggerBinding{
 				source,
 				trigPair.DitchDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
 				source,
 				trigPair.DitchUp,
-				0
+				0,
+				device
 			});
 
 		trigger->AddBinding(activate, ditch);
@@ -130,7 +135,8 @@ ActionResult Trigger::OnAction(KeyAction action)
 ActionResult Trigger::OnBindingEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
-	const base::Action& action)
+	const base::Action& action,
+	const std::string& device)
 {
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
@@ -141,7 +147,7 @@ ActionResult Trigger::OnBindingEvent(TriggerSource source,
 
 	for (auto& b : _activateBindings)
 	{
-		if (TryChangeState(b, true, source, value, state, action))
+		if (TryChangeState(b, true, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
@@ -150,7 +156,7 @@ ActionResult Trigger::OnBindingEvent(TriggerSource source,
 	}
 	for (auto& b : _ditchBindings)
 	{
-		if (TryChangeState(b, false, source, value, state, action))
+		if (TryChangeState(b, false, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
@@ -492,12 +498,14 @@ bool Trigger::TryChangeState(DualBinding& binding,
 	TriggerSource source,
 	unsigned int value,
 	unsigned int state,
-	const base::Action& action)
+	const base::Action& action,
+	const std::string& device)
 {
 	auto trigResult = binding.OnTrigger(
 		source,
 		value,
-		state);
+		state,
+		device);
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)

@@ -166,7 +166,8 @@ TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
 		0u,
 		1u,
 		1u,
-		io::RigFile::TriggerPair::SOURCE_SERIAL
+		io::RigFile::TriggerPair::SOURCE_SERIAL,
+		"pedal-a"
 	});
 
 	auto triggerOpt = Trigger::FromFile(trigParams, rigTrigger);
@@ -182,7 +183,11 @@ TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
 	EXPECT_FALSE(keyboardRes.IsEaten);
 	EXPECT_EQ(0, receiver->GetNumTimesCalled());
 
-	auto serialRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action);
+	auto wrongDeviceRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-b");
+	EXPECT_FALSE(wrongDeviceRes.IsEaten);
+	EXPECT_EQ(0, receiver->GetNumTimesCalled());
+
+	auto serialRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-a");
 	EXPECT_TRUE(serialRes.IsEaten);
 	EXPECT_TRUE(receiver->GetLastMatched());
 	EXPECT_EQ(1, receiver->GetNumTimesCalled());

@@ -76,11 +76,19 @@ namespace io
 
 		struct SerialSettings
 		{
+			std::string Name = "default";
 			std::string Port = "COM3";
 			unsigned int BaudRate = 115200u;
 			bool Enabled = false;
 
 			static std::optional<SerialSettings> FromJson(Json::JsonPart json);
+		};
+
+		struct SerialConfig
+		{
+			std::vector<SerialSettings> Devices;
+
+			static std::optional<SerialConfig> FromJson(Json::JsonPart json);
 		};
 
 		// How much to (further) delay input signal from ADC, in samples
@@ -104,6 +112,6 @@ namespace io
 		LoopSettings Loop;
 		TriggerSettings Trigger;
 		MidiSettings Midi;
-		SerialSettings Serial;
+		SerialConfig Serial;
 	};
 }

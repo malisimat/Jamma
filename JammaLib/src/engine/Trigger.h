@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string>
 #include <vector>
 #include <optional>
 #include "ActionReceiver.h"
@@ -43,28 +44,33 @@ namespace engine
 		TriggerBinding() :
 			TriggerSource(TRIGGER_NOTSET),
 			Value(0),
-			State(0)
+			State(0),
+			Device()
 		{
 		}
 
 		TriggerBinding(TriggerSource source,
 			unsigned int value,
-			unsigned int state) :
+			unsigned int state,
+			std::string device = "") :
 			TriggerSource(source),
 			Value(value),
-			State(state)
+			State(state),
+			Device(std::move(device))
 		{
 		}
 
 	public:
 		bool Test(TriggerSource source,
 			unsigned int value,
-			unsigned int state)
+			unsigned int state,
+			const std::string& device = "")
 		{
 			if ((TRIGGER_NOTSET != TriggerSource) &&
 				(source == TriggerSource) &&
 				(value == Value) &&
-				(state == State))
+				(state == State) &&
+				(Device.empty() || (Device == device)))
 				return true;
 
 			return false;
@@ -77,13 +83,17 @@ namespace engine
 			if (Value != other.Value)
 				return false;
 
-			return State == other.State;
+			if (State != other.State)
+				return false;
+
+			return Device == other.Device;
 		}
 
 	public:
 		TriggerSource TriggerSource;
 		unsigned int Value;
 		unsigned int State;
+		std::string Device;
 	};
 
 	class DualBinding
@@ -119,7 +129,8 @@ namespace engine
 			{
 				_triggerRelease = TriggerBinding(_triggerDown.TriggerSource,
 					_triggerDown.Value,
-					_triggerDown.State > 0 ? 0 : 1);
+					_triggerDown.State > 0 ? 0 : 1,
+					_triggerDown.Device);
 			}
 		}
 
@@ -133,17 +144,19 @@ namespace engine
 				auto trigRelease = _triggerRelease.value();
 				_triggerDown = TriggerBinding(trigRelease.TriggerSource,
 					trigRelease.Value,
-					trigRelease.State > 0 ? 0 : 1);
+					trigRelease.State > 0 ? 0 : 1,
+					trigRelease.Device);
 			}
 		}
 
 		TestResult OnTrigger(TriggerSource source,
 			unsigned int value,
-			unsigned int state)
+			unsigned int state,
+			const std::string& device = "")
 		{
 			if (!_isDown)
 			{
-				if (_triggerDown.Test(source, value, state))
+				if (_triggerDown.Test(source, value, state, device))
 				{
 					if (_triggerRelease.has_value())
 						_isDown = true;
@@ -156,7 +169,7 @@ namespace engine
 				if (_triggerRelease.has_value())
 				{
 					auto trigRelease = _triggerRelease.value();
-					if (trigRelease.Test(source, value, state))
+					if (trigRelease.Test(source, value, state, device))
 					{
 						_isDown = false;
 						return MATCH_RELEASE;
@@ -248,7 +261,8 @@ namespace engine
 		actions::ActionResult OnBindingEvent(TriggerSource source,
 			unsigned int value,
 			unsigned int state,
-			const base::Action& action);
+			const base::Action& action,
+			const std::string& device = "");
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -289,7 +303,8 @@ namespace engine
 			TriggerSource source,
 			unsigned int value,
 			unsigned int state,
-			const base::Action& action);
+			const base::Action& action,
+			const std::string& device);
 		bool StateMachine(bool isDown,
 			bool isActivate,
 			std::optional<io::UserConfig> cfg,

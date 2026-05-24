@@ -9,7 +9,7 @@ using io::Json;
 using io::RigFile;
 
 const std::string TriggerPairString = "{\"activatedown\":%ADOWN%,\"activateup\":11,\"ditchdown\":%DDOWN%,\"ditchup\":12}";
-const std::string SerialTriggerPairString = "{\"source\":\"serial\",\"activatedown\":%ADOWN%,\"activateup\":%ADOWN%,\"ditchdown\":%DDOWN%,\"ditchup\":%DDOWN%}";
+const std::string SerialTriggerPairString = "{\"source\":\"serial\",\"device\":\"pedal-a\",\"activatedown\":%ADOWN%,\"activateup\":%ADOWN%,\"ditchdown\":%DDOWN%,\"ditchup\":%DDOWN%}";
 
 TEST(RigFile, ParsesAudioSettings) {
 	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"inlatency\":212,\"outlatency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
@@ -47,6 +47,7 @@ TEST(RigFile, ParsesSerialTriggerPairSource) {
 
 	ASSERT_TRUE(pair.has_value());
 	ASSERT_EQ(RigFile::TriggerPair::SOURCE_SERIAL, pair.value().Source);
+	ASSERT_EQ(0, pair.value().Device.compare("pedal-a"));
 	ASSERT_EQ(0u, pair.value().ActivateDown);
 	ASSERT_EQ(0u, pair.value().ActivateUp);
 	ASSERT_EQ(1u, pair.value().DitchDown);

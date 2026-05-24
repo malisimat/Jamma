@@ -371,14 +371,15 @@ ActionResult Station::OnAction(KeyAction action)
 ActionResult Station::OnTriggerInput(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
-	const base::Action& action)
+	const base::Action& action,
+	const std::string& device)
 {
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
 	for (auto& trig : _triggers)
 	{
-		auto trigResult = trig->OnBindingEvent(source, value, state, action);
+		auto trigResult = trig->OnBindingEvent(source, value, state, action, device);
 		if (trigResult.IsEaten)
 			return trigResult;
 	}

@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
-namespace audio
+namespace io
 {
 	struct SerialTriggerEvent
 	{
+		std::string Device;
 		unsigned int ButtonIndex = 0u;
 		bool IsPressed = false;
 	};

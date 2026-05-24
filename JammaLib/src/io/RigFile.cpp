@@ -115,6 +115,7 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 	auto hasDitchDown = false;
 	auto hasDitchUp = false;
 	auto source = SOURCE_KEYBOARD;
+	auto device = std::string();
 
 	auto iter = json.KeyValues.find("source");
 	if (iter != json.KeyValues.end())
@@ -123,8 +124,18 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 		{
 			auto sourceText = std::get<std::string>(json.KeyValues["source"]);
 			if (sourceText == "serial")
+			{
 				source = SOURCE_SERIAL;
+				device = "default";
+			}
 		}
+	}
+
+	iter = json.KeyValues.find("device");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["device"].index() == 4)
+			device = std::get<std::string>(json.KeyValues["device"]);
 	}
 
 	iter = json.KeyValues.find("activatedown");
@@ -179,6 +190,7 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 	pair.DitchDown = ditchDown;
 	pair.DitchUp = ditchUp;
 	pair.Source = source;
+	pair.Device = device;
 	return pair;
 }
 

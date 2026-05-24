@@ -1,9 +1,9 @@
 #include "gtest/gtest.h"
 #include <cstdint>
-#include "audio/SerialTriggerProtocol.h"
+#include "io/SerialTriggerProtocol.h"
 
-using audio::SerialTriggerEvent;
-using audio::SerialTriggerProtocol;
+using io::SerialTriggerEvent;
+using io::SerialTriggerProtocol;
 
 TEST(SerialTriggerProtocol, ParsesWholePacket) {
 	SerialTriggerProtocol protocol;
