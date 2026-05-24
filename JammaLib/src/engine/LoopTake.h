@@ -150,7 +150,7 @@ namespace engine
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);
 		void PunchIn();
 		void PunchOut();
-		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
@@ -171,12 +171,23 @@ namespace engine
 			base::AudioSource::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+		struct AudioState
+		{
+			std::vector<std::shared_ptr<Loop>> Loops;
+			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
+			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
+			std::vector<float> VstBlockScratch;
+			std::vector<float*> VstBlockPtrs;
+		};
+
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
+		void _PublishAudioState();
+		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
 
 	protected:
@@ -187,7 +198,7 @@ namespace engine
 		bool _flipLoopBuffer;
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
-		LoopTakeState _state;
+		std::atomic<LoopTakeState> _state;
 		std::string _id;
 		std::string _sourceId;
 		unsigned int _lastBufSize;
@@ -198,7 +209,7 @@ namespace engine
 		unsigned int _endRecordSamps;
 		unsigned long _midiVisualPlayIndex;
 		unsigned long _midiVisualLoopLength;
-		bool _isPunchInActive;
+		std::atomic<bool> _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
@@ -209,13 +220,11 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
-		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
-		std::shared_ptr<vst::VstChain> _vstChain;
+		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		// Live VST chain published atomically for lock-free audio-thread reads.
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
-		std::mutex _vstChainMutex;
 		std::vector<std::wstring> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

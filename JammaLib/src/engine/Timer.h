@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <tuple>
 
@@ -38,10 +39,10 @@ namespace engine
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
 	private:
-		unsigned long _loopCount;
-		unsigned int _sampOffset;
-		unsigned int _quantiseSamps;
-		unsigned long _seedSourceLengthSamps;
-		QuantisationType _quantisation;
+		std::atomic_ulong _loopCount;
+		std::atomic_uint _sampOffset;
+		std::atomic_uint _quantiseSamps;
+		std::atomic_ulong _seedSourceLengthSamps;
+		std::atomic<QuantisationType> _quantisation;
 	};
 }

@@ -1,8 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <memory>
-#include <atomic>
 #include <mutex>
 #include "Trigger.h"
 #include "ActionReceiver.h"
@@ -106,12 +106,12 @@ namespace engine
 		Loop(Loop&& other) :
 			Jammable(other._loopParams),
 			_visualUpdatesEnabled(other._visualUpdatesEnabled),
-			_isPunchInActive(other._isPunchInActive),
+			_isPunchInActive(other._isPunchInActive.load(std::memory_order_relaxed)),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
-			_loopLength(other._loopLength),
-			_playState(other._playState),
-			_playIndex(other._playIndex),
+			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
+			_playState(other._playState.load(std::memory_order_relaxed)),
+			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
 			_hanning(std::move(other._hanning)),
@@ -119,7 +119,7 @@ namespace engine
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
 			_monitorBufferBank(std::move(other._monitorBufferBank)),
-			_vstChain(std::move(other._vstChain)),
+			_vstChain(other._vstChain.exchange(nullptr, std::memory_order_acq_rel)),
 			_backVstChain(std::move(other._backVstChain)),
 			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
 			_pendingVstLoads(std::move(other._pendingVstLoads)),
@@ -128,9 +128,10 @@ namespace engine
 			_blockSize(other._blockSize),
 			_vstPluginPaths(std::move(other._vstPluginPaths))
 		{
-			other._writeIndex = 0ul;
+			_writeIndex.store(other._writeIndex.load(std::memory_order_relaxed), std::memory_order_relaxed);
+			other._writeIndex.store(0ul, std::memory_order_relaxed);
 			other._visualUpdatesEnabled = true;
-			other._isPunchInActive = false;
+			other._isPunchInActive.store(false, std::memory_order_relaxed);
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 			other._flipVstChain.store(false, std::memory_order_relaxed);
@@ -142,15 +143,20 @@ namespace engine
 			{
 				ReleaseResources();
 				std::swap(_visualUpdatesEnabled, other._visualUpdatesEnabled);
-				std::swap(_isPunchInActive, other._isPunchInActive);
+				bool punchIn = _isPunchInActive.load(std::memory_order_relaxed);
+				_isPunchInActive.store(other._isPunchInActive.exchange(punchIn, std::memory_order_relaxed), std::memory_order_relaxed);
 				std::swap(_lastPeak, other._lastPeak);
 				std::swap(_pitch, other._pitch);
-				std::swap(_loopLength, other._loopLength);
-				std::swap(_playState, other._playState);
 				std::swap(_state, other._state);
 				std::swap(_guiParams, other._guiParams);
-				std::swap(_writeIndex, other._writeIndex);
-				std::swap(_playIndex, other._playIndex);
+				auto loopLength = _loopLength.load(std::memory_order_relaxed);
+				_loopLength.store(other._loopLength.exchange(loopLength, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
+				_writeIndex.store(other._writeIndex.exchange(writeIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto playIndex = _playIndex.load(std::memory_order_relaxed);
+				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
+				auto playState = _playState.load(std::memory_order_relaxed);
+				_playState.store(other._playState.exchange(playState, std::memory_order_relaxed), std::memory_order_relaxed);
 				std::swap(_loopParams, other._loopParams);
 				_mixer.swap(other._mixer);
 				_hanning.swap(other._hanning);
@@ -158,7 +164,8 @@ namespace engine
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
 				std::swap(_monitorBufferBank, other._monitorBufferBank);
-				_vstChain.swap(other._vstChain);
+				auto chain = _vstChain.exchange(other._vstChain.load(std::memory_order_acquire), std::memory_order_acq_rel);
+				other._vstChain.store(chain, std::memory_order_release);
 				_backVstChain.swap(other._backVstChain);
 				bool flip = _flipVstChain.load(std::memory_order_relaxed);
 				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -209,7 +216,7 @@ namespace engine
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
-		LoopPlayState PlayState() const { return _playState; }
+		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
@@ -224,7 +231,7 @@ namespace engine
 		void Overdub();
 		void PunchIn();
 		void PunchOut();
-		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 		double LoopIndexFrac() const noexcept;
 
 		// VST chain management — staging only; actual load/unload happens on the
@@ -259,12 +266,12 @@ namespace engine
 
 	protected:
 		bool _visualUpdatesEnabled;
-		bool _isPunchInActive;
-		unsigned long _playIndex;
-		unsigned long _loopLength;
+		std::atomic<bool> _isPunchInActive;
+		std::atomic<unsigned long> _playIndex;
 		float _lastPeak;
 		double _pitch;
-		LoopPlayState _playState;
+		std::atomic<unsigned long> _loopLength;
+		std::atomic<LoopPlayState> _playState;
 		LoopParams _loopParams;
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;
@@ -272,13 +279,10 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
-		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
-		std::shared_ptr<vst::VstChain> _vstChain;
+		// Live VST chain published atomically for lock-free audio-thread reads.
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
-		std::mutex _vstChainMutex;
 		std::vector<std::wstring> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

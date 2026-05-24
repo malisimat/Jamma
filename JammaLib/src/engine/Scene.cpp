@@ -65,7 +65,6 @@ Scene::Scene(SceneParams params,
 	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
-	_audioCallbackCount(0),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -138,6 +137,7 @@ Scene::Scene(SceneParams params,
 
 	_audioDevice = std::make_unique<AudioDevice>();
 	_midiDevice = std::make_unique<MidiDevice>();
+	_PublishAudioStations();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -548,7 +548,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
 		{
-			std::scoped_lock lock(_audioMutex, _tempoMutex);
+			std::scoped_lock lock(_tempoMutex);
 			if (_clock)
 				_clock->Clear();
 			_armReclock = true;
@@ -822,7 +822,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			switch (res.ResultType)
 			{
 			case ACTIONRESULT_ACTIVATE:
-				_isSceneReset = false;
+				_isSceneReset.store(false, std::memory_order_relaxed);
 				/*case ACTIONRESULT_ID:
 					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
 					break;*/
@@ -831,7 +831,7 @@ ActionResult Scene::OnAction(KeyAction action)
 				break;
 			}
 
-			if (checkReset && !_isSceneReset)
+			if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
 			{
 				unsigned int numTakes = 0;
 				for (auto& station : _stations)
@@ -881,8 +881,11 @@ void Scene::OnTick(Time curTime,
 	std::optional<audio::AudioStreamParams> params)
 {
 	unsigned int totalNumLoops = 0u;
+	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
+	static const std::vector<std::shared_ptr<Station>> emptyStations;
+	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
-	for (auto& station : _stations)
+	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
@@ -892,7 +895,7 @@ void Scene::OnTick(Time curTime,
 		totalNumLoops += station->NumTakes();
 	}
 
-	if ((0u == totalNumLoops) && !_isSceneReset)
+	if ((0u == totalNumLoops) && !_isSceneReset.load(std::memory_order_relaxed))
 	{
 		Reset();
 	}
@@ -1025,7 +1028,7 @@ void Scene::Reset()
 {
 	std::cout << "Reset" << std::endl;
 	_clock->Clear();
-	_isSceneReset = true;
+	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
 void Scene::InitGui()
@@ -1047,12 +1050,9 @@ void Scene::InitAudio()
 		if (dev.has_value())
 		{
 			_audioDevice = std::move(dev.value());
-			_audioCallbackCount = 0;
 			_audioSampleCounter.store(0u, std::memory_order_release);
-			_audioDevice->Start();
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-			audioStreamParams.PrintParams();
 
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
 				_userConfig.Audio.LatencyIn :
@@ -1082,6 +1082,8 @@ void Scene::InitAudio()
 				audioStreamParams.NumOutputChannels);
 
 			InitMidi();
+			_audioDevice->Start();
+			_audioDevice->GetAudioStreamParams().PrintParams();
 		}
 	}
 
@@ -1196,11 +1198,6 @@ void Scene::CommitChanges()
 	}
 }
 
-std::mutex& Scene::GetAudioMutex()
-{
-	return _audioMutex;
-}
-
 void Scene::SendNinjamChat(const std::string& msg)
 {
 	if (_ninjamSession)
@@ -1251,7 +1248,6 @@ int Scene::AudioCallback(void* outBuffer,
 	void* userData)
 {
 	Scene* scene = (Scene*)userData;
-	std::scoped_lock lock(scene->GetAudioMutex());
 	scene->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
 
 	return 0;
@@ -1264,6 +1260,9 @@ void Scene::_OnAudio(float* inBuf,
 	const auto audioStreamParams = nullptr == _audioDevice ?
 		AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 	const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
+	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
+	static const std::vector<std::shared_ptr<Station>> emptyStations;
+	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
 	if (nullptr != inBuf)
 	{
@@ -1276,7 +1275,7 @@ void Scene::_OnAudio(float* inBuf,
 		_channelMixer->InitPlay(0u, numSamps);
 		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
 
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			if (station->IsRemote())
 				continue;
@@ -1287,7 +1286,7 @@ void Scene::_OnAudio(float* inBuf,
 		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
 		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
 
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			if (station->IsRemote())
 				continue;
@@ -1316,18 +1315,11 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-	const auto ninjamConnected = _ninjamSession->IsConnected();
-
-	if (ninjamConnected)
-	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-	}
+	_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
 		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
-		if (!ninjamConnected || !station || !station->IsConnectedRemote())
+		if (!station || !station->IsConnectedRemote())
 			return;
 
 		const float* left = nullptr;
@@ -1342,11 +1334,9 @@ void Scene::_OnAudio(float* inBuf,
 
 	if (nullptr != outBuf)
 	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
 
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 			ingestRemoteStation(station);
@@ -1358,7 +1348,7 @@ void Scene::_OnAudio(float* inBuf,
 	}
 	else
 	{
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			ingestRemoteStation(station);
 			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
@@ -1544,6 +1534,7 @@ glm::mat4 Scene::_View()
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
 	_stations.push_back(station);
+	_PublishAudioStations();
 
 	station->SetClock(_clock);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
@@ -1565,11 +1556,17 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 
 void Scene::_JobLoop()
 {
-	while (!_isSceneQuitting)
+	while (!_isSceneQuitting.load(std::memory_order_acquire))
 	{
 		OnJobTick(Timer::GetTime());
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+}
+
+void Scene::_PublishAudioStations()
+{
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(_stations.begin(), _stations.end());
+	_audioStations.store(stations, std::memory_order_release);
 }
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
@@ -1674,6 +1671,7 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 	}
 
 	// Remove stations for users who have left.
+	bool stationsChanged = false;
 	for (auto it = _stations.begin(); it != _stations.end();)
 	{
 		auto remoteStation = std::dynamic_pointer_cast<StationRemote>(*it);
@@ -1688,12 +1686,16 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 			remoteStation->SetConnectedRemote(false);
 			std::cout << "[NINJAM] User left: " << remoteStation->RemoteUserName() << std::endl;
 			it = _stations.erase(it);
+			stationsChanged = true;
 		}
 		else
 		{
 			++it;
 		}
 	}
+
+	if (stationsChanged)
+		_PublishAudioStations();
 }
 
 void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)

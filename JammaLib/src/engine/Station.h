@@ -141,8 +141,19 @@ namespace engine
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
+
+		struct AudioState
+		{
+			std::vector<std::shared_ptr<LoopTake>> LoopTakes;
+			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
+			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
+			std::vector<float> VstBlockScratch;
+			std::vector<float*> VstBlockPtrs;
+		};
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
+		void _PublishAudioState();
+		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
@@ -170,15 +181,14 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
+		std::atomic<std::shared_ptr<const AudioState>> _audioState;
 
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.
-		// Swapped in under _audioMutex via the CommitChanges double-buffer pattern.
-		std::shared_ptr<vst::VstChain> _vstChain;
+		// Published atomically for lock-free audio-thread reads.
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
-		std::mutex _vstChainMutex;
 
 		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
 		// Read only on the job thread (from OnAction(JobAction)).

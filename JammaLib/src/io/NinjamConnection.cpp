@@ -336,8 +336,6 @@ void NinjamConnection::ProcessAudioBlock(const float* interleavedInput,
 	if (sampleRate > 0)
 		_sampleRate = sampleRate;
 
-	std::scoped_lock audioLock(_audioBufferMutex);
-
 	// Scratch buffers are pre-allocated by SetAudioFormat.
 	// If the buffers aren't ready or numFrames exceeds the pre-allocated size,
 	// skip processing — callers must invoke SetAudioFormat before the audio stream starts.
@@ -439,7 +437,6 @@ bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	if ((outChannelLeft >= _numOutputChannels) || (rightIndex >= _numOutputChannels))
 		return false;
 
-	std::scoped_lock audioLock(_audioBufferMutex);
 	left = _outScratch[outChannelLeft].data();
 	right = _outScratch[rightIndex].data();
 	numFrames = _lastNumFrames.load();
@@ -472,8 +469,6 @@ void NinjamConnection::_EnsureWorkDir()
 
 void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames)
 {
-	std::scoped_lock audioLock(_audioBufferMutex);
-
 	if ((_outScratch.size() != _numOutputChannels) || (_inScratch.size() != _numInputChannels))
 	{
 		_outScratch.assign(_numOutputChannels, std::vector<float>(numFrames, 0.0f));

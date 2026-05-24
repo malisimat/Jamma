@@ -39,61 +39,63 @@ double Timer::GetElapsedSeconds(Time t1, Time t2)
 
 void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
-	_loopCount += loopCountIncrement;
+	_loopCount.fetch_add(loopCountIncrement, std::memory_order_relaxed);
 }
 
 void Timer::Clear()
 {
-	_quantiseSamps = 0u;
-	_seedSourceLengthSamps = 0ul;
+	_quantiseSamps.store(0u, std::memory_order_release);
+	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 }
 
 bool Timer::IsQuantisable() const
 {
-	return 0u != _quantiseSamps;
+	return 0u != _quantiseSamps.load(std::memory_order_acquire);
 }
 
 void Timer::SetQuantisation(unsigned int quantiseSamps,
 	QuantisationType quantisation)
 {
-	_quantiseSamps = quantiseSamps;
-	_seedSourceLengthSamps = 0ul;
-	_quantisation = quantisation;
+	_quantiseSamps.store(quantiseSamps, std::memory_order_release);
+	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
+	_quantisation.store(quantisation, std::memory_order_release);
 }
 
 void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
 {
-	_seedSourceLengthSamps = loopLengthSamps;
+	_seedSourceLengthSamps.store(loopLengthSamps, std::memory_order_release);
 }
 
 unsigned int Timer::QuantiseSamps() const
 {
-	return _quantiseSamps;
+	return _quantiseSamps.load(std::memory_order_acquire);
 }
 
 Timer::QuantisationType Timer::Quantisation() const
 {
-	return _quantisation;
+	return _quantisation.load(std::memory_order_acquire);
 }
 
 unsigned long Timer::SeedSourceLength() const
 {
-	return _seedSourceLengthSamps;
+	return _seedSourceLengthSamps.load(std::memory_order_acquire);
 }
 
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
 {
-	if (0u == _quantiseSamps)
+	const auto quantiseSamps = _quantiseSamps.load(std::memory_order_acquire);
+	const auto quantisation = _quantisation.load(std::memory_order_acquire);
+	if (0u == quantiseSamps)
 		return std::make_tuple(length, 0);
 
-	switch (_quantisation)
+	switch (quantisation)
 	{
 	case QUANTISE_MULTIPLE:
 	{
-		auto nLow = length / _quantiseSamps;
+		auto nLow = length / quantiseSamps;
 		auto nHigh = nLow + 1;
-		auto lenLow = nLow * _quantiseSamps;
-		auto lenHigh = nHigh * _quantiseSamps;
+		auto lenLow = nLow * quantiseSamps;
+		auto lenHigh = nHigh * quantiseSamps;
 		auto dLow = length - lenLow;
 		auto dHigh = lenHigh - length;
 		if (dLow < dHigh)
@@ -109,7 +111,7 @@ std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long lengt
 
 		while (currentMultiplier <= 128)
 		{
-			lenCur = currentMultiplier * _quantiseSamps;
+			lenCur = currentMultiplier * quantiseSamps;
 
 			if (lenCur >= length)
 			{
