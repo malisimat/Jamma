@@ -325,7 +325,7 @@ bool LoopTake::IsArmed() const
 		(STATE_OVERDUBBING == state) ||
 		(STATE_PUNCHEDIN == state) ||
 		(STATE_OVERDUBBINGRECORDING == state) ||
-		_isPunchInActive;
+		_isPunchInActive.load(std::memory_order_acquire);
 }
 
 void LoopTake::EndMultiWrite(unsigned int numSamps,
@@ -347,7 +347,7 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	if (isEndRecording)
 	{
 		_endRecordSampCount += numSamps;
-		if ((_endRecordSampCount >= _endRecordSamps) && !_isPunchInActive)
+		if ((_endRecordSampCount >= _endRecordSamps) && !_isPunchInActive.load(std::memory_order_acquire))
 			_endRecordingCompleted = true;
 	}
 
@@ -655,7 +655,7 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_backLoops.clear();
 	_RemoveMidiModelChildren();
 
@@ -754,7 +754,7 @@ void LoopTake::Play(unsigned long index,
 		index;
 	while (_midiVisualLoopLength > 0ul && _midiVisualPlayIndex >= _midiVisualLoopLength)
 		_midiVisualPlayIndex -= _midiVisualLoopLength;
-	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive;
+	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{
@@ -771,7 +771,7 @@ void LoopTake::Play(unsigned long index,
 	}
 
 	auto isOverdubbing = (STATE_OVERDUBBING == state) || (STATE_PUNCHEDIN == state);
-	if (_isPunchInActive)
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto playState = continueCapture ? recordState : STATE_PLAYING;
@@ -890,7 +890,7 @@ void LoopTake::EndRecording()
 		(STATE_OVERDUBBINGRECORDING != state))
 		return;
 
-	if (_isPunchInActive)
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		return;
 
 	_state.store(STATE_PLAYING, std::memory_order_release);
@@ -908,7 +908,7 @@ void LoopTake::Ditch()
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
 	{
@@ -938,7 +938,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationNa
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_backLoops.clear();
 
 	for (auto chan : channels)
@@ -959,7 +959,7 @@ void LoopTake::PunchIn()
 		(STATE_PLAYING != state))
 		return;
 
-	_isPunchInActive = true;
+	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == state)
 		_state.store(STATE_PUNCHEDIN, std::memory_order_release);
 
@@ -972,10 +972,10 @@ void LoopTake::PunchIn()
 void LoopTake::PunchOut()
 {
 	auto state = _state.load(std::memory_order_relaxed);
-	if (!_isPunchInActive && (STATE_PUNCHEDIN != state))
+	if (!_isPunchInActive.load(std::memory_order_relaxed) && (STATE_PUNCHEDIN != state))
 		return;
 
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == state)
 		_state.store(STATE_OVERDUBBING, std::memory_order_release);
 

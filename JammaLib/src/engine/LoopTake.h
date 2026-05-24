@@ -150,7 +150,7 @@ namespace engine
 		void Overdub(std::vector<unsigned int> channels, std::string stationName);
 		void PunchIn();
 		void PunchOut();
-		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
@@ -209,7 +209,7 @@ namespace engine
 		unsigned int _endRecordSamps;
 		unsigned long _midiVisualPlayIndex;
 		unsigned long _midiVisualLoopLength;
-		bool _isPunchInActive;
+		std::atomic<bool> _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
