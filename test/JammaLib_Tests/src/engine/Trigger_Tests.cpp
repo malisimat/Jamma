@@ -156,6 +156,39 @@ TEST(Trigger, RecordsTwoLoops) {
 	ASSERT_EQ(2, receiver->GetNumTimesCalled());
 }
 
+TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
+	auto receiver = std::make_shared<MockedTriggerReceiver>();
+	engine::TriggerParams trigParams;
+	auto rigTrigger = io::RigFile::Trigger();
+	rigTrigger.Name = "serial";
+	rigTrigger.TriggerPairs.push_back({
+		0u,
+		0u,
+		1u,
+		1u,
+		io::RigFile::TriggerPair::SOURCE_SERIAL
+	});
+
+	auto triggerOpt = Trigger::FromFile(trigParams, rigTrigger);
+	ASSERT_TRUE(triggerOpt.has_value());
+	auto trigger = triggerOpt.value();
+	trigger->SetReceiver(receiver);
+
+	base::Action action;
+	action.SetActionTime(GetTime());
+
+	receiver->SetExpected(TriggerAction::TRIGGER_REC_START);
+	auto keyboardRes = trigger->OnBindingEvent(engine::TRIGGER_KEY, 0u, 1u, action);
+	EXPECT_FALSE(keyboardRes.IsEaten);
+	EXPECT_EQ(0, receiver->GetNumTimesCalled());
+
+	auto serialRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action);
+	EXPECT_TRUE(serialRes.IsEaten);
+	EXPECT_TRUE(receiver->GetLastMatched());
+	EXPECT_EQ(1, receiver->GetNumTimesCalled());
+	EXPECT_EQ(actions::ACTIONRESULT_ACTIVATE, serialRes.ResultType);
+}
+
 TEST(Trigger, NoReleaseSkipsAction) {
 	auto receiver = std::make_shared<MockedTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);

@@ -61,13 +61,26 @@ TEST(UserConfig, ParsesMidiSettings) {
 	ASSERT_TRUE(midi.value().Enabled);
 }
 
+TEST(UserConfig, ParsesSerialSettings) {
+	auto str = "{\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto serial = UserConfig::SerialSettings::FromJson(json);
+
+	ASSERT_TRUE(serial.has_value());
+	ASSERT_EQ(0, serial.value().Port.compare("COM3"));
+	ASSERT_EQ(115200u, serial.value().BaudRate);
+	ASSERT_TRUE(serial.value().Enabled);
+}
+
 TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
 	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
 	std::string midi = "{\"name\":\"Launchkey\",\"enabled\":true}";
+	std::string serial = "{\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true}";
 	
-	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + "}";
+	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + ",\"serial\":" + serial + "}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto cfg = UserConfig::FromJson(json);
@@ -91,6 +104,9 @@ TEST(UserConfig, ParsesFile) {
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
 	ASSERT_EQ(0, cfg.value().Midi.Name.compare("Launchkey"));
 	ASSERT_TRUE(cfg.value().Midi.Enabled);
+	ASSERT_EQ(0, cfg.value().Serial.Port.compare("COM3"));
+	ASSERT_EQ(115200u, cfg.value().Serial.BaudRate);
+	ASSERT_TRUE(cfg.value().Serial.Enabled);
 }
 
 TEST(UserConfig, DeducesDefaultLoopTimingFromLongLoop) {

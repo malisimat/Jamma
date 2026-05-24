@@ -58,7 +58,9 @@ Scene::Scene(SceneParams params,
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
 	_midiDevice(nullptr),
+	_serialTriggerDevice(nullptr),
 	_lastMidiDropCount(0u),
+	_lastSerialDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
@@ -137,6 +139,7 @@ Scene::Scene(SceneParams params,
 
 	_audioDevice = std::make_unique<AudioDevice>();
 	_midiDevice = std::make_unique<MidiDevice>();
+	_serialTriggerDevice = std::make_unique<audio::SerialTriggerDevice>();
 	_PublishAudioStations();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
@@ -904,6 +907,7 @@ void Scene::OnTick(Time curTime,
 void Scene::OnJobTick(Time curTime)
 {
 	_PumpMidi();
+	_PumpSerial();
 
 	auto snapshot = _ninjamSession->Pump();
 	if (snapshot.has_value())
@@ -982,6 +986,37 @@ void Scene::_PumpMidi()
 		std::cout << "[MIDI] Ingress queue dropped " << (dropped - _lastMidiDropCount)
 			<< " event(s), total dropped=" << dropped << std::endl;
 		_lastMidiDropCount = dropped;
+	}
+}
+
+void Scene::_PumpSerial()
+{
+	audio::SerialTriggerEvent ev{};
+	while (_serialIngress.Pop(ev))
+	{
+		base::Action action;
+		action.SetActionTime(Timer::GetTime());
+		action.SetUserConfig(_userConfig);
+		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
+
+		for (auto& station : _stations)
+		{
+			auto res = station->OnTriggerInput(
+				TriggerSource::TRIGGER_SERIAL,
+				ev.ButtonIndex,
+				ev.IsPressed ? 1u : 0u,
+				action);
+			if (res.IsEaten)
+				break;
+		}
+	}
+
+	auto dropped = _serialIngress.DroppedCount();
+	if (dropped != _lastSerialDropCount)
+	{
+		std::cout << "[Serial] Ingress queue dropped " << (dropped - _lastSerialDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastSerialDropCount = dropped;
 	}
 }
 
@@ -1082,6 +1117,7 @@ void Scene::InitAudio()
 				audioStreamParams.NumOutputChannels);
 
 			InitMidi();
+			InitSerial();
 			_audioDevice->Start();
 			_audioDevice->GetAudioStreamParams().PrintParams();
 		}
@@ -1144,8 +1180,47 @@ void Scene::CloseMidi()
 		_midiDevice->Close();
 }
 
+void Scene::InitSerial()
+{
+	if (!_serialTriggerDevice)
+		_serialTriggerDevice = std::make_unique<audio::SerialTriggerDevice>();
+
+	_serialIngress.Clear();
+	_lastSerialDropCount = 0u;
+
+	if (!_userConfig.Serial.Enabled)
+	{
+		std::cout << "[Serial] Trigger input disabled by rig settings." << std::endl;
+		return;
+	}
+
+	if (_userConfig.Serial.Port.empty())
+	{
+		std::cout << "[Serial] No port configured for serial trigger input." << std::endl;
+		return;
+	}
+
+	auto opened = _serialTriggerDevice->Open(
+		_userConfig.Serial.Port,
+		_userConfig.Serial.BaudRate,
+		[this](const audio::SerialTriggerEvent& event)
+		{
+			_serialIngress.Push(event);
+		});
+
+	if (!opened)
+		std::cout << "[Serial] No active serial trigger connection." << std::endl;
+}
+
+void Scene::CloseSerial()
+{
+	if (_serialTriggerDevice)
+		_serialTriggerDevice->Close();
+}
+
 void Scene::CloseAudio()
 {
+	CloseSerial();
 	CloseMidi();
 
 	// Do not hold the audio callback mutex while stopping the stream.

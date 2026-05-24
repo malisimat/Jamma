@@ -33,7 +33,8 @@ namespace engine
 	{
 		TRIGGER_NOTSET,
 		TRIGGER_KEY,
-		TRIGGER_MIDI
+		TRIGGER_MIDI,
+		TRIGGER_SERIAL
 	};
 
 	class TriggerBinding
@@ -211,7 +212,7 @@ namespace engine
 		std::string TextureDitchDown;
 		std::string TextureOverdubbing;
 		std::string TexturePunchedIn;
-		unsigned int DebounceMs;
+		unsigned int DebounceMs = 0u;
 	};
 
 	enum TriggerState
@@ -244,6 +245,10 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		actions::ActionResult OnBindingEvent(TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			const base::Action& action);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -281,8 +286,10 @@ namespace engine
 			Time acionTime);
 		bool TryChangeState(DualBinding& binding,
 			bool isActivate,
-			const actions::KeyAction& action,
-			int keyState);
+			TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			const base::Action& action);
 		bool StateMachine(bool isDown,
 			bool isActivate,
 			std::optional<io::UserConfig> cfg,

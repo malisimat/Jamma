@@ -9,6 +9,7 @@ using io::Json;
 using io::RigFile;
 
 const std::string TriggerPairString = "{\"activatedown\":%ADOWN%,\"activateup\":11,\"ditchdown\":%DDOWN%,\"ditchup\":12}";
+const std::string SerialTriggerPairString = "{\"source\":\"serial\",\"activatedown\":%ADOWN%,\"activateup\":%ADOWN%,\"ditchdown\":%DDOWN%,\"ditchup\":%DDOWN%}";
 
 TEST(RigFile, ParsesAudioSettings) {
 	auto str = "{\"name\":\"Soundblaster\",\"bufsize\":12,\"inlatency\":212,\"outlatency\":212,\"numchannelsin\":6,\"numchannelsout\":8}";
@@ -36,6 +37,20 @@ TEST(RigFile, ParsesTriggerPair) {
 	ASSERT_EQ(11, pair.value().ActivateUp);
 	ASSERT_EQ(2, pair.value().DitchDown);
 	ASSERT_EQ(12, pair.value().DitchUp);
+}
+
+TEST(RigFile, ParsesSerialTriggerPairSource) {
+	auto str = std::regex_replace(std::regex_replace(SerialTriggerPairString, std::regex("%ADOWN%"), "0"), std::regex("%DDOWN%"), "1");
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto pair = RigFile::TriggerPair::FromJson(json);
+
+	ASSERT_TRUE(pair.has_value());
+	ASSERT_EQ(RigFile::TriggerPair::SOURCE_SERIAL, pair.value().Source);
+	ASSERT_EQ(0u, pair.value().ActivateDown);
+	ASSERT_EQ(0u, pair.value().ActivateUp);
+	ASSERT_EQ(1u, pair.value().DitchDown);
+	ASSERT_EQ(1u, pair.value().DitchUp);
 }
 
 TEST(RigFile, ParsesTrigger) {

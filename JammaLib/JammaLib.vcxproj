@@ -268,6 +268,8 @@
     <ClInclude Include="src\base\ResourceUser.h" />
     <ClInclude Include="src\audio\AudioDevice.h" />
     <ClInclude Include="src\audio\MidiDevice.h" />
+    <ClInclude Include="src\audio\SerialTriggerDevice.h" />
+    <ClInclude Include="src\audio\SerialTriggerProtocol.h" />
     <ClInclude Include="lib\rtmidi\RtMidi.h" />
     <ClInclude Include="src\gui\GuiSlider.h" />
     <ClInclude Include="src\gui\GuiVu.h" />
@@ -334,6 +336,7 @@
     <ClInclude Include="src\engine\Timer.h" />
     <ClInclude Include="src\engine\MidiEvent.h" />
     <ClInclude Include="src\engine\MidiQueue.h" />
+    <ClInclude Include="src\engine\SerialTriggerQueue.h" />
     <ClInclude Include="src\engine\MidiLoop.h" />
     <ClInclude Include="src\engine\MidiNoteSpan.h" />
     <ClInclude Include="src\engine\MidiModel.h" />
@@ -380,6 +383,7 @@
     <ClCompile Include="lib\rtaudio\include\iasiothiscallresolver.cpp" />
     <ClCompile Include="src\audio\AudioDevice.cpp" />
     <ClCompile Include="src\audio\MidiDevice.cpp" />
+    <ClCompile Include="src\audio\SerialTriggerDevice.cpp" />
     <ClCompile Include="lib\rtmidi\RtMidi.cpp" />
     <ClCompile Include="src\gui\GuiSlider.cpp" />
     <ClCompile Include="src\gui\GuiVu.cpp" />
