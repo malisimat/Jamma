@@ -20,6 +20,8 @@ namespace base
 		public TweakableParams
 	{
 	public:
+		JammableParams() = default;
+		explicit JammableParams(GuiElementParams gui) : GuiElementParams(gui) {}
 		std::string Texture;
 	};
 
