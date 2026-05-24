@@ -1565,7 +1565,7 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 
 void Scene::_JobLoop()
 {
-	while (!_isSceneQuitting.load(std::memory_order_relaxed))
+	while (!_isSceneQuitting.load(std::memory_order_acquire))
 	{
 		OnJobTick(Timer::GetTime());
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));

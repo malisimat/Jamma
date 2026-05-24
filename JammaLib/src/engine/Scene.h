@@ -76,7 +76,7 @@ namespace engine
 			ReleaseResources();
 			CloseMidi();
 
-			_isSceneQuitting.store(true, std::memory_order_relaxed);
+			_isSceneQuitting.store(true, std::memory_order_release);
 			if (_jobRunner.joinable())
 				_jobRunner.join();
 			// NinjamSession destructs after _jobRunner exits, so Pump() can no
