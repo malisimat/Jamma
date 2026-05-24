@@ -60,7 +60,7 @@ bool SerialDevice::Open(const std::string& deviceName,
 
 	auto handle = CreateFileA(
 		normalisedPort.c_str(),
-		GENERIC_READ,
+		GENERIC_READ | GENERIC_WRITE,
 		0,
 		nullptr,
 		OPEN_EXISTING,
@@ -69,8 +69,12 @@ bool SerialDevice::Open(const std::string& deviceName,
 
 	if (handle == INVALID_HANDLE_VALUE)
 	{
+		const auto lastError = GetLastError();
 		std::cout << "[Serial] Failed to open device \"" << deviceName << "\" on "
-			<< portName << " (error " << GetLastError() << ")" << std::endl;
+			<< portName << " (error " << lastError << ")";
+		if (lastError == ERROR_ACCESS_DENIED)
+			std::cout << " - port is busy, reserved, or rejected the requested access mode";
+		std::cout << std::endl;
 		return false;
 	}
 
