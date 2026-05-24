@@ -697,7 +697,9 @@ INSTANTIATE_TEST_SUITE_P(
 		// Constraint: LoopBlocks * BlockSize >= MaxLoopFadeSamps (= 70000) so the
 		// seed loop content region starts before the loop end in the buffer.
 		OverdubTestParams{ 512u, 2u, 137u,   0u, 0 },  // overdub at loop start
-		OverdubTestParams{ 512u, 2u, 137u, 150u, 0 }   // overdub after crossing one source-loop boundary
+		OverdubTestParams{ 512u, 2u, 137u, 150u, 0 },  // overdub after crossing one source-loop boundary
+		OverdubTestParams{ 512u, 2u, 137u, 342u, 0 },  // overdub after multiple source-loop wraps
+		OverdubTestParams{ 512u, 2u, 200u, 500u, 0 }   // longer loop with multi-wrap pre-play
 	),
 	[](const ::testing::TestParamInfo<OverdubTestParams>& info) {
 		const auto& p = info.param;
