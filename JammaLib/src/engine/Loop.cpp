@@ -190,7 +190,7 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		(STATE_OVERDUBBING != playState) &&
 		(STATE_PUNCHEDIN != playState) &&
 		(STATE_OVERDUBBINGRECORDING != playState) &&
-		!_isPunchInActive)
+		!_isPunchInActive.load(std::memory_order_acquire))
 		return;
 
 	if (AUDIOSOURCE_ADC == request.source)
@@ -198,7 +198,7 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		auto canWriteAdc = (STATE_RECORDING == playState) ||
 			(STATE_PLAYINGRECORDING == playState) ||
 			(STATE_PUNCHEDIN == playState) ||
-			_isPunchInActive;
+			_isPunchInActive.load(std::memory_order_acquire);
 		if (!canWriteAdc)
 			return;
 	}
@@ -256,7 +256,7 @@ void Loop::EndWrite(unsigned int numSamps,
 		(STATE_OVERDUBBING != playState) &&
 		(STATE_PUNCHEDIN != playState) &&
 		(STATE_OVERDUBBINGRECORDING != playState) &&
-		!_isPunchInActive)
+		!_isPunchInActive.load(std::memory_order_acquire))
 		return;
 
 	if (!updateIndex)
@@ -630,12 +630,12 @@ void Loop::Play(unsigned long index,
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex.store((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index, std::memory_order_relaxed);
 	_loopLength.store(loopLength, std::memory_order_relaxed);
-	if (_isPunchInActive)
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		continueRecording = true;
 
 	auto playState = _playState.load(std::memory_order_relaxed);
 	auto isOverdubbing = (STATE_OVERDUBBING == playState) || (STATE_PUNCHEDIN == playState);
-	if (_isPunchInActive)
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
 	auto nextPlayState = continueRecording ? recordState : STATE_PLAYING;
@@ -656,7 +656,7 @@ void Loop::Play(unsigned long index,
 
 void Loop::Reset()
 {
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_relaxed);
 
 	_writeIndex.store(0ul, std::memory_order_relaxed);
 	_playIndex.store(0ul, std::memory_order_relaxed);
@@ -740,7 +740,7 @@ void Loop::PunchIn()
 		(STATE_PLAYING != playState))
 		return;
 
-	_isPunchInActive = true;
+	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == playState)
 		_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
 
@@ -750,10 +750,10 @@ void Loop::PunchIn()
 void Loop::PunchOut()
 {
 	auto playState = _playState.load(std::memory_order_relaxed);
-	if (!_isPunchInActive && (STATE_PUNCHEDIN != playState))
+	if (!_isPunchInActive.load(std::memory_order_relaxed) && (STATE_PUNCHEDIN != playState))
 		return;
 
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == playState)
 		_playState.store(STATE_OVERDUBBING, std::memory_order_release);
 

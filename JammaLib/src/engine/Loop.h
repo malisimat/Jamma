@@ -106,7 +106,7 @@ namespace engine
 		Loop(Loop&& other) :
 			Jammable(other._loopParams),
 			_visualUpdatesEnabled(other._visualUpdatesEnabled),
-			_isPunchInActive(other._isPunchInActive),
+			_isPunchInActive(other._isPunchInActive.load(std::memory_order_relaxed)),
 			_lastPeak(other._lastPeak),
 			_pitch(other._pitch),
 			_loopLength(other._loopLength.load(std::memory_order_relaxed)),
@@ -131,7 +131,7 @@ namespace engine
 			_writeIndex.store(other._writeIndex.load(std::memory_order_relaxed), std::memory_order_relaxed);
 			other._writeIndex.store(0ul, std::memory_order_relaxed);
 			other._visualUpdatesEnabled = true;
-			other._isPunchInActive = false;
+			other._isPunchInActive.store(false, std::memory_order_relaxed);
 			other._loopParams = LoopParams();
 			other._mixer = std::make_unique<audio::AudioMixer>(audio::AudioMixerParams());
 			other._flipVstChain.store(false, std::memory_order_relaxed);
@@ -143,7 +143,8 @@ namespace engine
 			{
 				ReleaseResources();
 				std::swap(_visualUpdatesEnabled, other._visualUpdatesEnabled);
-				std::swap(_isPunchInActive, other._isPunchInActive);
+				bool punchIn = _isPunchInActive.load(std::memory_order_relaxed);
+				_isPunchInActive.store(other._isPunchInActive.exchange(punchIn, std::memory_order_relaxed), std::memory_order_relaxed);
 				std::swap(_lastPeak, other._lastPeak);
 				std::swap(_pitch, other._pitch);
 				std::swap(_state, other._state);
@@ -229,7 +230,7 @@ namespace engine
 		void Overdub();
 		void PunchIn();
 		void PunchOut();
-		bool IsPunchInActive() const noexcept { return _isPunchInActive; }
+		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 		double LoopIndexFrac() const noexcept;
 
 		// VST chain management — staging only; actual load/unload happens on the
@@ -264,7 +265,7 @@ namespace engine
 
 	protected:
 		bool _visualUpdatesEnabled;
-		bool _isPunchInActive;
+		std::atomic<bool> _isPunchInActive;
 		std::atomic<unsigned long> _playIndex;
 		float _lastPeak;
 		double _pitch;
