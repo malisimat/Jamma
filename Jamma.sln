@@ -17,7 +17,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		ReadMe.md = ReadMe.md
 	EndProjectSection
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "JammaLib.Tests", "test\JammaLib.Tests\JammaLib.Tests.vcxproj", "{B2B9A610-5106-4CA5-A719-C5762E2889A2}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "JammaLib_Tests", "test\JammaLib_Tests\JammaLib_Tests.vcxproj", "{B2B9A610-5106-4CA5-A719-C5762E2889A2}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

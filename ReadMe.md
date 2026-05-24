@@ -51,11 +51,11 @@ Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.pro
 
 ### Troubleshooting: tests crash silently on startup
 
-If `JammaLib.Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
+If `JammaLib_Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
 
 ```powershell
 $src = ".\vcpkg_installed\x64-windows\debug\bin"
-$dst = ".\test\JammaLib.Tests\bin\x64\Debug"
+$dst = ".\test\JammaLib_Tests\bin\x64\Debug"
 Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
 Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 ```

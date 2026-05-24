@@ -6,7 +6,7 @@ Jamma is a Windows multichannel loop-sampling app for recording and live perform
 
 - App shell: `Jamma`
 - Core engine: `JammaLib`
-- Native tests: `test/JammaLib.Tests`
+- Native tests: `test/JammaLib_Tests`
 
 Treat this as a real-time audio codebase: prefer predictable, low-latency-safe behavior over clever abstractions.
 
@@ -41,7 +41,7 @@ Rules:
 2. Build only affected projects:
 	- `Jamma/src` changes -> `Jamma/Jamma.vcxproj`
 	- `JammaLib/src` or `JammaLib/include` changes -> `JammaLib/JammaLib.vcxproj`, then dependents as needed
-	- `test/JammaLib.Tests/src` changes -> `test/JammaLib.Tests/JammaLib.Tests.vcxproj`
+	- `test/JammaLib_Tests/src` changes -> `test/JammaLib_Tests/JammaLib_Tests.vcxproj`
 3. Use solution builds only when project targeting is unclear.
 4. If you hit `C1041` PDB contention, apply `/FS` and a project-specific `ProgramDataBaseFileName` in the affected project.
 
@@ -70,8 +70,8 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 $sln = Join-Path $repoRoot "Jamma.sln"
 $jammaLibProj = Join-Path $repoRoot "JammaLib\JammaLib.vcxproj"
 $jammaProj = Join-Path $repoRoot "Jamma\Jamma.vcxproj"
-$testsProj = Join-Path $repoRoot "test\JammaLib.Tests\JammaLib.Tests.vcxproj"
-$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+$testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\"
 
 & $msbuild $jammaLibProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
 & $msbuild $jammaProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
@@ -81,7 +81,7 @@ $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
 # & $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
-**Important:** Never rely on `$(pwd)` for `SolutionDir`; it may point to the wrong folder in agent sessions. Always derive repo root from `Jamma.sln` and pass `/p:SolutionDir=<repo-root>\\` explicitly for direct `.vcxproj` builds.
+**Important:** For direct `.vcxproj` builds, derive repo root from `Jamma.sln` and pass `/p:SolutionDir=<repo-root>\` with exactly one trailing backslash. Do not use `$(pwd)` or a doubled trailing slash; mismatched `SolutionDir` text can invalidate `.tlog` state and trigger full test recompiles.
 
 ### Running tests:
 
@@ -99,9 +99,9 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 	$repoRoot = $parent
 }
 
-$testsProj = Join-Path $repoRoot "test\JammaLib.Tests\JammaLib.Tests.vcxproj"
-$testsExe = Join-Path $repoRoot "test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe"
-$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+$testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
+$testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\"
 
 & $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
 & $testsExe
@@ -113,8 +113,8 @@ $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
 - Build and run tests with:
 
 ```powershell
-& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& .\test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe
+& $msbuild test\JammaLib_Tests\JammaLib_Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
+& .\test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe
 ```
 
 - Run a specific test with:
@@ -129,7 +129,7 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 	$repoRoot = $parent
 }
 
-$testsExe = Join-Path $repoRoot "test\JammaLib.Tests\bin\x64\Debug\JammaLib.Tests.exe"
+$testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
 & $testsExe --gtest_filter="SuiteName.TestName"
 ```
 

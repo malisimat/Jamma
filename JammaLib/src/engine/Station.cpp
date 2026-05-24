@@ -1111,7 +1111,6 @@ void Station::_ArrangeChildren()
 		take->SetSize(takeSize);
 		take->SetModelPosition({ 0.0f, (float)(takeCount * takeHeight), 0.0f });
 		take->SetModelScale(1.0);
-		std::cout << "[Arranging take " << take->Id() << "] Y: " << (float)(takeCount * takeHeight) << std::endl;
 
 		takeCount++;
 	}

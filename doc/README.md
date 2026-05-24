@@ -35,7 +35,7 @@ If you have visual studio installed, then through PowerShell:
 $msbuild = Join-Path $env:VSINSTALLDIR "MSBuild\Current\Bin\MSBuild.exe"
 & $msbuild JammaLib\JammaLib.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 & $msbuild Jamma\Jamma.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
-& $msbuild test\JammaLib.Tests\JammaLib.Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
+& $msbuild test\JammaLib_Tests\JammaLib_Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64
 ```
 
 Solution build (sparingly):
@@ -51,7 +51,7 @@ $msbuild = Join-Path $env:VSINSTALLDIR "MSBuild\Current\Bin\MSBuild.exe"
 
 - `Jamma`: application shell, startup, and top-level wiring.
 - `JammaLib`: engine, loop model, audio behavior, rendering/audio support layers.
-- `test/JammaLib.Tests`: native GoogleTest coverage for engine/audio behavior.
+- `test/JammaLib_Tests`: native GoogleTest coverage for engine/audio behavior.
 
 ## Core Domain Model
 

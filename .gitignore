@@ -15,5 +15,5 @@
 .vscode/tasks.json
 packages/
 vcpkg_installed/
-test/JammaLib.Tests/x64/
+test/JammaLib_Tests/x64/
 Directory.Build.local.props
