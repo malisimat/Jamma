@@ -591,8 +591,6 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 	_UpdateLoopModel();
 
-	std::cout << "-=-=- Loop LOADED " << _loopParams.Wav << std::endl;
-
 	return true;
 }
 
@@ -606,8 +604,6 @@ void Loop::Record()
 
 	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 	_playState.store(STATE_RECORDING, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Play(unsigned long index,
@@ -649,8 +645,6 @@ void Loop::Play(unsigned long index,
 	}
 
 	_playState.store(loopLength > 0 ? nextPlayState : STATE_INACTIVE, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Reset()
@@ -681,8 +675,6 @@ void Loop::EndRecording()
 		return;
 	
 	_playState.store(STATE_PLAYING, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Ditch()
@@ -693,8 +685,6 @@ void Loop::Ditch()
 Reset();
 
 _bufferBank.Resize(constants::MaxLoopFadeSamps);
-
-std::cout << "-=-=- Loop DITCH" << std::endl;
 }
 
 bool Loop::Mute()
@@ -727,8 +717,6 @@ void Loop::Overdub()
 
 	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
 	_playState.store(STATE_OVERDUBBING, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchIn()
@@ -742,8 +730,6 @@ void Loop::PunchIn()
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == playState)
 		_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchOut()
@@ -755,8 +741,6 @@ void Loop::PunchOut()
 	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == playState)
 		_playState.store(STATE_OVERDUBBING, std::memory_order_release);
-
-	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 double Loop::LoopIndexFrac() const noexcept
