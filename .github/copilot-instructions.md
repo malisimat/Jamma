@@ -71,7 +71,7 @@ $sln = Join-Path $repoRoot "Jamma.sln"
 $jammaLibProj = Join-Path $repoRoot "JammaLib\JammaLib.vcxproj"
 $jammaProj = Join-Path $repoRoot "Jamma\Jamma.vcxproj"
 $testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
-$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\"
 
 & $msbuild $jammaLibProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
 & $msbuild $jammaProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
@@ -81,7 +81,7 @@ $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
 # & $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
-**Important:** Never rely on `$(pwd)` for `SolutionDir`; it may point to the wrong folder in agent sessions. Always derive repo root from `Jamma.sln` and pass `/p:SolutionDir=<repo-root>\\` explicitly for direct `.vcxproj` builds.
+**Important:** For direct `.vcxproj` builds, derive repo root from `Jamma.sln` and pass `/p:SolutionDir=<repo-root>\` with exactly one trailing backslash. Do not use `$(pwd)` or a doubled trailing slash; mismatched `SolutionDir` text can invalidate `.tlog` state and trigger full test recompiles.
 
 ### Running tests:
 
@@ -101,7 +101,7 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 
 $testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
 $testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
-$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\\"
+$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\\'))\"
 
 & $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
 & $testsExe
