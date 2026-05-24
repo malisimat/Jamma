@@ -382,8 +382,11 @@ void NinjamSession::_ReleaseConnectionUse() const noexcept
 
 void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 {
-	std::scoped_lock lifecycleLock(_lifecycleMutex);
-	auto old = _UnpublishConnectionLocked();
+	std::unique_ptr<io::NinjamConnection> old;
+	{
+		std::scoped_lock lifecycleLock(_lifecycleMutex);
+		old = _UnpublishConnectionLocked();
+	}
 	if (old)
 		old->Disconnect();
 
@@ -404,9 +407,12 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 
 	conn->Connect();
 
-	auto* published = conn.get();
-	_ownedConnection = std::move(conn);
-	_connection.store(published, std::memory_order_release);
+	{
+		std::scoped_lock lifecycleLock(_lifecycleMutex);
+		auto* published = conn.get();
+		_ownedConnection = std::move(conn);
+		_connection.store(published, std::memory_order_release);
+	}
 }
 
 void NinjamSession::Stop()
