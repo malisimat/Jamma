@@ -146,7 +146,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	auto playState = _playState.load(std::memory_order_relaxed);
+	auto playState = _playState.load(std::memory_order_acquire);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 
 	auto pos = ModelPosition();
@@ -184,7 +184,7 @@ void Loop::Draw3d(DrawContext& ctx,
 
 void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 {
-	auto playState = _playState.load(std::memory_order_relaxed);
+	auto playState = _playState.load(std::memory_order_acquire);
 	if ((STATE_RECORDING != playState) &&
 		(STATE_PLAYINGRECORDING != playState) &&
 		(STATE_OVERDUBBING != playState) &&
@@ -250,7 +250,7 @@ void Loop::EndWrite(unsigned int numSamps,
 	bool updateIndex)
 {
 	// Only update if currently recording
-	auto playState = _playState.load(std::memory_order_relaxed);
+	auto playState = _playState.load(std::memory_order_acquire);
 	if ((STATE_RECORDING != playState) &&
 		(STATE_PLAYINGRECORDING != playState) &&
 		(STATE_OVERDUBBING != playState) &&
