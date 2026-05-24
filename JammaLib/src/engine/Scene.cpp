@@ -1314,18 +1314,11 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-	const auto ninjamConnected = _ninjamSession->IsConnected();
-
-	if (ninjamConnected)
-	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-		_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-	}
+	_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
 		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
-		if (!ninjamConnected || !station || !station->IsConnectedRemote())
+		if (!station || !station->IsConnectedRemote())
 			return;
 
 		const float* left = nullptr;
@@ -1340,8 +1333,6 @@ void Scene::_OnAudio(float* inBuf,
 
 	if (nullptr != outBuf)
 	{
-		auto audioStreamParams = nullptr == _audioDevice ?
-			AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
 
 		for (auto& station : _stations)
