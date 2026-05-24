@@ -119,7 +119,7 @@ namespace engine
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
 			_monitorBufferBank(std::move(other._monitorBufferBank)),
-			_vstChain(std::move(other._vstChain)),
+			_vstChain(other._vstChain.exchange(nullptr, std::memory_order_acq_rel)),
 			_backVstChain(std::move(other._backVstChain)),
 			_flipVstChain(other._flipVstChain.load(std::memory_order_relaxed)),
 			_pendingVstLoads(std::move(other._pendingVstLoads)),
@@ -164,7 +164,8 @@ namespace engine
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
 				std::swap(_monitorBufferBank, other._monitorBufferBank);
-				_vstChain.swap(other._vstChain);
+				auto chain = _vstChain.exchange(other._vstChain.load(std::memory_order_acquire), std::memory_order_acq_rel);
+				other._vstChain.store(chain, std::memory_order_release);
 				_backVstChain.swap(other._backVstChain);
 				bool flip = _flipVstChain.load(std::memory_order_relaxed);
 				_flipVstChain.store(other._flipVstChain.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -278,13 +279,10 @@ namespace engine
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
-		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
-		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
-		std::shared_ptr<vst::VstChain> _vstChain;
+		// Live VST chain published atomically for lock-free audio-thread reads.
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
-		std::mutex _vstChainMutex;
 		std::vector<std::wstring> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

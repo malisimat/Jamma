@@ -199,7 +199,6 @@ namespace engine
 		void InitMidi();
 		void CloseMidi();
 		void CommitChanges();
-		std::mutex& GetAudioMutex();
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
@@ -239,6 +238,7 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
@@ -276,6 +276,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
 		std::unique_ptr<NinjamSession> _ninjamSession;
 		UndoHistory _undoHistory;

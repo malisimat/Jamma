@@ -171,12 +171,23 @@ namespace engine
 			base::AudioSource::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+		struct AudioState
+		{
+			std::vector<std::shared_ptr<Loop>> Loops;
+			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
+			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
+			std::vector<float> VstBlockScratch;
+			std::vector<float*> VstBlockPtrs;
+		};
+
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
+		void _PublishAudioState();
+		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
 
 	protected:
@@ -209,13 +220,11 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
-		// Live VST chain — plain shared_ptr, protected by Scene::_audioMutex
-		// (read in WriteBlock/audio callback, swapped in _CommitChanges).
-		std::shared_ptr<vst::VstChain> _vstChain;
+		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		// Live VST chain published atomically for lock-free audio-thread reads.
+		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		// Protects _vstChain reads in OnAction vs _CommitChanges writes (non-audio-callback path).
-		std::mutex _vstChainMutex;
 		std::vector<std::wstring> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };

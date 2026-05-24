@@ -4,7 +4,7 @@
 
 namespace
 {
-	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
 			return;
@@ -32,7 +32,7 @@ using actions::ActionResult;
 
 Loop::~Loop()
 {
-	DrainVstChain(_vstChain);
+	DrainVstChain(_vstChain.load(std::memory_order_acquire));
 	DrainVstChain(_backVstChain);
 	ReleaseResources();
 }
@@ -410,10 +410,9 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		// _vstChain is a plain shared_ptr protected by Scene::_audioMutex,
-		// which the audio callback (and CommitChanges) both hold.
-		if (_vstChain && _vstChain->IsActive())
-			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		auto chain = _vstChain.load(std::memory_order_acquire);
+		if (chain && chain->IsActive())
+			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
@@ -875,10 +874,11 @@ void Loop::UnloadVstPlugin(size_t index)
 
 std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
 {
-	if (!_vstChain)
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain)
 		return nullptr;
 
-	return _vstChain->GetPlugin(index);
+	return chain->GetPlugin(index);
 }
 
 std::vector<JobAction> Loop::_CommitChanges()
@@ -886,8 +886,7 @@ std::vector<JobAction> Loop::_CommitChanges()
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{
-		std::lock_guard<std::mutex> lock(_vstChainMutex);
-		_vstChain = _backVstChain;
+		_vstChain.store(_backVstChain, std::memory_order_release);
 	}
 
 	std::vector<JobAction> jobs;
@@ -930,10 +929,7 @@ ActionResult Loop::OnAction(JobAction action)
 		// Take a snapshot of the current live chain under _vstChainMutex so we
 		// don't race with _CommitChanges() swapping it on the main thread.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		if (chainSnapshot)
@@ -976,10 +972,7 @@ ActionResult Loop::OnAction(JobAction action)
 	{
 		// Take a snapshot of the current live chain under _vstChainMutex.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		const auto removeIndex = action.VstIndex;
