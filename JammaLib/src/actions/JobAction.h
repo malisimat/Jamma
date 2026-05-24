@@ -5,7 +5,7 @@
 #include <memory>
 
 namespace base { class ActionReceiver; }
-namespace vst { class VstPlugin; }
+namespace vst { class IAnyVstPlugin; }
 
 namespace actions
 {
@@ -47,11 +47,11 @@ namespace actions
 		// Payload for JOB_LOADVST: path to the .vst3 plugin.
 		std::wstring VstPath;
 
-		// Optional: VstPlugin pre-initialised on the main thread (DLL loaded,
-		// InitDll + GetPluginFactory called) before the job is dispatched to
-		// the job thread.  If non-null, Station::OnAction uses this instance
-		// directly instead of creating a fresh one.
-		std::shared_ptr<vst::VstPlugin> PreInitPlugin;
+		// Optional: plugin pre-initialised on the main thread before the job is
+		// dispatched to the job thread.  If non-null, the engine OnAction uses
+		// this instance directly instead of creating a fresh one.
+		// Can be VstPlugin (VST3) or Vst2Plugin (VST2) — determined by extension.
+		std::shared_ptr<vst::IAnyVstPlugin> PreInitPlugin;
 
 		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
 		size_t VstIndex = 0;

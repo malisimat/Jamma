@@ -6,10 +6,12 @@
 ///////////////////////////////////////////////////////////
 
 #include "VstPlugin.h"
+#include "Vst2Plugin.h"
 #include <algorithm>
 #include <iostream>
 #include <mutex>
 #include <vector>
+#include <string>
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
@@ -1012,14 +1014,14 @@ namespace
 		return m;
 	}
 
-	std::vector<std::shared_ptr<vst::VstPlugin>>& UiDestroyQueue()
+	std::vector<std::shared_ptr<vst::IAnyVstPlugin>>& UiDestroyQueue()
 	{
-		static std::vector<std::shared_ptr<vst::VstPlugin>> q;
+		static std::vector<std::shared_ptr<vst::IAnyVstPlugin>> q;
 		return q;
 	}
 }
 
-void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::VstPlugin> plugin)
+void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IAnyVstPlugin> plugin)
 {
 	if (!plugin)
 		return;
@@ -1030,7 +1032,7 @@ void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::VstPlugin> plugin)
 
 std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 {
-	std::vector<std::shared_ptr<vst::VstPlugin>> drained;
+	std::vector<std::shared_ptr<vst::IAnyVstPlugin>> drained;
 	{
 		std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
 		drained.swap(UiDestroyQueue());
@@ -1039,4 +1041,19 @@ std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 	// drained destructs here on the UI thread, running ~VstPlugin → Unload →
 	// IComponent::terminate() and FreeLibrary on the correct thread.
 	return count;
+}
+
+std::shared_ptr<vst::IAnyVstPlugin> vst::MakePluginForPath(const std::wstring& path)
+{
+	// Determine type from file extension: .dll -> VST2, anything else -> VST3.
+	const auto dotPos = path.rfind(L'.');
+	if (dotPos != std::wstring::npos)
+	{
+		std::wstring ext = path.substr(dotPos);
+		// Lowercase comparison
+		for (auto& c : ext) c = static_cast<wchar_t>(::towlower(c));
+		if (ext == L".dll")
+			return std::make_shared<vst::Vst2Plugin>();
+	}
+	return std::make_shared<vst::VstPlugin>();
 }

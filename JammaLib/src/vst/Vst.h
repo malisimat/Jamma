@@ -1,7 +1,10 @@
 #pragma once
 
-// Legacy stub retained for project-file compatibility.
-// All VST3 hosting functionality lives in vst::VstPlugin and vst::VstChain.
+// VST hosting — includes both VST3 and VST2 plugin hosts plus the common
+// interface and chain.  Use MakePluginForPath() to create the right type
+// based on file extension.
+#include "IAnyVstPlugin.h"
 #include "VstPlugin.h"
+#include "Vst2Plugin.h"
 #include "VstChain.h"
 

@@ -14,6 +14,7 @@
 #include "../../include/Constants.h"
 #include "../utils/CommonTypes.h"
 #include "VstAudioBuffers.h"
+#include "IAnyVstPlugin.h"
 
 namespace vst
 {
@@ -25,11 +26,11 @@ namespace vst
 	//
 	//   ProcessBlock – called only from the audio callback while the Scene
 	//   _audioMutex is held.  No heap allocation, no locks.
-	class VstPlugin
+	class VstPlugin final : public IAnyVstPlugin
 	{
 	public:
 		VstPlugin();
-		~VstPlugin();
+		~VstPlugin() override;
 
 		// Not copyable or moveable
 		VstPlugin(const VstPlugin&) = delete;
@@ -43,7 +44,7 @@ namespace vst
 		// If PreInit() succeeds, Load() will reuse the DLL handle and factory
 		// it pre-loaded; it never calls LoadLibraryW or GetPluginFactory again.
 		// Returns true on success; false leaves the object in an unloaded state.
-		bool PreInit(const std::wstring& path);
+		bool PreInit(const std::wstring& path) override;
 
 		// Load a VST3 plugin from path (the .vst3 bundle or DLL path).
 		// sampleRate and blockSize are forwarded to setupProcessing().
@@ -56,50 +57,50 @@ namespace vst
 			float sampleRate,
 			unsigned int blockSize,
 			unsigned int numChannels,
-			HostedLayoutMode layoutMode = HostedLayoutMode::Exact);
+			HostedLayoutMode layoutMode = HostedLayoutMode::Exact) override;
 
 		// Unload the plugin and release all resources.
 		// Do NOT call while ProcessBlock may be running.
-		void Unload();
+		void Unload() override;
 
 		// Process numSamples of mono audio in-place.
 		// monoBuf is read and overwritten. Stereo plugin output is folded back to
 		// mono when the negotiated output bus is wider than one channel.
 		// No-op when not loaded or bypassed.
 		// Real-time safe: no heap allocation, no locks.
-		void ProcessBlock(float* monoBuf, int32_t numSamples) noexcept;
+		void ProcessBlock(float* monoBuf, int32_t numSamples) noexcept override;
 
 		// Process numSamples of stereo audio in-place.
 		// leftBuf and rightBuf are read and overwritten. If the plugin is
 		// configured as mono, each channel is processed independently.
-		void ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept;
+		void ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept override;
 
 		// Process numSamples of an exact-match multichannel bus in-place.
 		// channelBufs must contain numChannels writable channel buffers.
-		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept;
+		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		// Returns true if the editor was opened successfully.
-		bool OpenEditor(HWND parentHwnd);
+		bool OpenEditor(HWND parentHwnd) override;
 
 		// Close the plugin's GUI editor.
 		// Must be called from the main/UI thread only.
-		void CloseEditor();
+		void CloseEditor() override;
 
 		// Returns the size the editor requested, or {0,0} if no editor /
 		// editor not yet opened.
-		utils::Size2d GetEditorSize() const noexcept;
+		utils::Size2d GetEditorSize() const noexcept override;
 
-		bool IsLoaded() const noexcept { return _isLoaded; }
-		const std::string& Name() const noexcept { return _name; }
+		bool IsLoaded() const noexcept override { return _isLoaded; }
+		const std::string& Name() const noexcept override { return _name; }
 
-		void SetBypassed(bool bypass) noexcept
+		void SetBypassed(bool bypass) noexcept override
 		{
 			_isBypassed.store(bypass, std::memory_order_relaxed);
 		}
 
-		bool IsBypassed() const noexcept
+		bool IsBypassed() const noexcept override
 		{
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
@@ -121,20 +122,6 @@ namespace vst
 		std::unique_ptr<Impl> _impl;
 	};
 
-	// Queue a VstPlugin shared_ptr to be destroyed on the UI thread.
-	//
-	// Required when a VstPlugin was PreInit()'d on the UI thread (so its
-	// IComponent::initialize() ran there) but Load() later failed on the job
-	// thread. Releasing the last ref on the job thread would run
-	// ~VstPlugin → Unload → IComponent::terminate() / FreeLibrary on the wrong
-	// thread, which violates VST3's threading contract and can crash plugins or
-	// leave dangling state that blows up later (e.g. on window close).
-	//
-	// Safe to call from any thread. The plugin is destroyed when
-	// DrainUiThreadDestroyQueue() is next called from the UI thread.
-	void QueueForUiThreadDestroy(std::shared_ptr<VstPlugin> plugin);
-
-	// Drop all queued VstPlugin refs. Must be called from the UI thread.
-	// Returns the number of plugins released.
-	std::size_t DrainUiThreadDestroyQueue() noexcept;
+	// Queue an IAnyVstPlugin to be destroyed on the UI thread.
+	// Declared in IAnyVstPlugin.h; implemented in VstPlugin.cpp.
 }

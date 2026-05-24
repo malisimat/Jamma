@@ -15,7 +15,7 @@ VstChain::VstChain() :
 {
 }
 
-void VstChain::AddPlugin(std::shared_ptr<VstPlugin> plugin)
+void VstChain::AddPlugin(std::shared_ptr<IAnyVstPlugin> plugin)
 {
 	if (plugin)
 		_plugins.push_back(std::move(plugin));
@@ -27,7 +27,7 @@ void VstChain::RemovePlugin(size_t index)
 		_plugins.erase(_plugins.begin() + index);
 }
 
-std::shared_ptr<VstPlugin> VstChain::GetPlugin(size_t index) const
+std::shared_ptr<IAnyVstPlugin> VstChain::GetPlugin(size_t index) const
 {
 	if (index < _plugins.size())
 		return _plugins[index];

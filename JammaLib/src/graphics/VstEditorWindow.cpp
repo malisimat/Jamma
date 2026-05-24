@@ -6,7 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "VstEditorWindow.h"
-#include "../vst/VstPlugin.h"
+#include "../vst/IAnyVstPlugin.h"
 
 using namespace graphics;
 using namespace actions;
@@ -24,7 +24,7 @@ VstEditorWindow::~VstEditorWindow()
 }
 
 bool VstEditorWindow::Create(HINSTANCE hInstance,
-	std::shared_ptr<vst::VstPlugin> plugin,
+	std::shared_ptr<vst::IAnyVstPlugin> plugin,
 	HWND /*parentHwnd*/)
 {
 	if (!plugin || !plugin->IsLoaded())

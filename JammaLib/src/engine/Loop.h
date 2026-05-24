@@ -244,7 +244,7 @@ namespace engine
 		unsigned int GetBlockSize() const noexcept { return _blockSize; }
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
-		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+		std::shared_ptr<vst::IAnyVstPlugin> GetVstPlugin(size_t index) const;
 
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 

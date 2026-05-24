@@ -13,7 +13,7 @@
 #include "../actions/WindowAction.h"
 #include "../utils/CommonTypes.h"
 
-namespace vst { class VstPlugin; }
+namespace vst { class IAnyVstPlugin; }
 
 namespace graphics
 {
@@ -46,11 +46,11 @@ namespace graphics
 		// Create the editor window and attach the plugin view.
 		// Must be called from the main thread, NOT from within DispatchMessage.
 		// hInstance   – the application HINSTANCE.
-		// plugin      – the already-loaded VstPlugin whose editor to show.
+		// plugin      – the already-loaded plugin (VST2 or VST3) whose editor to show.
 		// parentHwnd  – reserved, pass nullptr.
 		// Returns true on success.
 		bool Create(HINSTANCE hInstance,
-			std::shared_ptr<vst::VstPlugin> plugin,
+			std::shared_ptr<vst::IAnyVstPlugin> plugin,
 			HWND parentHwnd = nullptr);
 
 		// Detach the plugin view and destroy the HWND.
@@ -71,6 +71,6 @@ namespace graphics
 
 		std::atomic<HWND> _editorWnd;
 		HWND _editorHostWnd;
-		std::shared_ptr<vst::VstPlugin> _plugin;
+		std::shared_ptr<vst::IAnyVstPlugin> _plugin;
 	};
 }

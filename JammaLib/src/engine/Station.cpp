@@ -1190,7 +1190,7 @@ void Station::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::VstPlugin> Station::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IAnyVstPlugin> Station::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)
@@ -1245,7 +1245,7 @@ ActionResult Station::OnAction(JobAction action)
 		// prepared one on the UI thread; otherwise create a fresh plugin.
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
-			: std::make_shared<vst::VstPlugin>();
+			: vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u)
 			hostChannels = 1u;

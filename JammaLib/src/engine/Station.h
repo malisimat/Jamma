@@ -128,7 +128,7 @@ namespace engine
 		void UnloadVstPlugin(size_t index);
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
-		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+		std::shared_ptr<vst::IAnyVstPlugin> GetVstPlugin(size_t index) const;
 
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;

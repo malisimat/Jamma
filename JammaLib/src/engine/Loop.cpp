@@ -856,7 +856,7 @@ void Loop::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IAnyVstPlugin> Loop::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)
@@ -928,7 +928,7 @@ ActionResult Loop::OnAction(JobAction action)
 
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
-			: std::make_shared<vst::VstPlugin>();
+			: vst::MakePluginForPath(action.VstPath);
 		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
 		{
 			newChain->AddPlugin(plugin);
