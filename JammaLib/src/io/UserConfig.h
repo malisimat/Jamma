@@ -16,6 +16,7 @@
 #include <sstream>
 #include "Json.h"
 #include "../include/Constants.h"
+#include "../engine/Quantisation.h"
 #include "../utils/MathUtils.h"
 
 namespace io
@@ -50,9 +51,9 @@ namespace io
 		struct LoopSettings
 		{
 			unsigned int FadeSamps = constants::DefaultFadeSamps; // The number of samples to fade in/out the start/end of a loop
-			unsigned int SeedGrainMinMs = 400u; // Never halve below this grain length
-			unsigned int SeedGrainTargetMaxMs = 3000u; // Prefer grains below this duration
-			unsigned int SeedBpmMin = 80u; // Choose beats-per-grain so BPM is at least this value
+			unsigned int SeedGrainMinMs = constants::DefaultSeedGrainMinMs; // Never halve below this grain length
+			unsigned int SeedGrainTargetMaxMs = constants::DefaultSeedGrainTargetMaxMs; // Prefer grains below this duration
+			unsigned int SeedBpmMin = constants::DefaultSeedBpmMin; // Choose beats-per-grain so BPM is at least this value
 			bool SeedUsesPowers = true; // true => 1x,2x,4x... ; false => 1x,2x,3x...
 
 			static std::optional<LoopSettings> FromJson(Json::JsonPart json);

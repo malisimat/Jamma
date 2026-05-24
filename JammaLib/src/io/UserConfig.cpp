@@ -158,9 +158,9 @@ std::optional<UserConfig::AudioSettings> UserConfig::AudioSettings::FromJson(Jso
 std::optional<UserConfig::LoopSettings> UserConfig::LoopSettings::FromJson(Json::JsonPart json)
 {
 	unsigned int fadeSamps = constants::DefaultFadeSamps;
-	unsigned int seedGrainMinMs = 400u;
-	unsigned int seedGrainTargetMaxMs = 3000u;
-	unsigned int seedBpmMin = 80u;
+	unsigned int seedGrainMinMs = constants::DefaultSeedGrainMinMs;
+	unsigned int seedGrainTargetMaxMs = constants::DefaultSeedGrainTargetMaxMs;
+	unsigned int seedBpmMin = constants::DefaultSeedBpmMin;
 	auto seedUsesPowers = true;
 
 	auto iter = json.KeyValues.find("fadeSamps");
@@ -354,41 +354,22 @@ std::optional<UserConfig::SeedLoopTiming> UserConfig::DeduceLoopTiming(unsigned 
 	if ((0ul == loopLengthSamps) || (0u == sampleRate))
 		return std::nullopt;
 
-	auto grainSamps = loopLengthSamps;
-	auto loopGrains = 1u;
-	const auto seedGrainMinMs = std::max(1u, Loop.SeedGrainMinMs);
-	const auto seedGrainTargetMaxMs = std::max(seedGrainMinMs, Loop.SeedGrainTargetMaxMs);
-	const auto minGrainSamps = static_cast<unsigned long>(std::max(1.0, (static_cast<double>(sampleRate) * static_cast<double>(seedGrainMinMs)) / 1000.0));
-	const auto targetMaxGrainSamps = static_cast<unsigned long>(std::max(static_cast<double>(minGrainSamps),
-		(static_cast<double>(sampleRate) * static_cast<double>(seedGrainTargetMaxMs)) / 1000.0));
+	engine::QuantisationPolicy policy;
+	policy.SeedGrainMinMs = Loop.SeedGrainMinMs;
+	policy.SeedGrainTargetMaxMs = Loop.SeedGrainTargetMaxMs;
+	policy.SeedBpmMin = Loop.SeedBpmMin;
+	policy.SeedUsesPowers = Loop.SeedUsesPowers;
 
-	while ((grainSamps >= targetMaxGrainSamps) && ((grainSamps / 2ul) >= minGrainSamps))
-	{
-		grainSamps /= 2ul;
-		loopGrains *= 2u;
-	}
-
-	auto bpm = (60.0f * static_cast<float>(sampleRate)) / static_cast<float>(grainSamps);
-	auto beatsPerGrain = 1u;
-	while (bpm < static_cast<float>(Loop.SeedBpmMin))
-	{
-		if (beatsPerGrain > (std::numeric_limits<unsigned int>::max() / 2u))
-			return std::nullopt;
-		beatsPerGrain *= 2u;
-		bpm *= 2.0f;
-	}
-
-	if (grainSamps > std::numeric_limits<unsigned int>::max())
+	auto timingOpt = engine::DeduceSeedTiming(loopLengthSamps, sampleRate, policy);
+	if (!timingOpt.has_value())
 		return std::nullopt;
 
-	if (loopGrains > (std::numeric_limits<unsigned int>::max() / beatsPerGrain))
-		return std::nullopt;
-
+	const auto timingValue = timingOpt.value();
 	SeedLoopTiming timing;
-	timing.GrainSamps = static_cast<unsigned int>(grainSamps);
-	timing.LoopGrains = loopGrains;
-	timing.BeatsPerGrain = beatsPerGrain;
-	timing.Bpm = bpm;
-	timing.Bpi = loopGrains * beatsPerGrain;
+	timing.GrainSamps = timingValue.SeedSamps;
+	timing.LoopGrains = timingValue.SeedCount;
+	timing.BeatsPerGrain = timingValue.BeatsPerSeed;
+	timing.Bpm = timingValue.Bpm;
+	timing.Bpi = timingValue.Bpi;
 	return timing;
 }

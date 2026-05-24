@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jamma Quantisation Review</title>
+<style>
+:root {
+  color-scheme: dark;
+  --ink: #f5f7fb;
+  --muted: #b8c2d6;
+  --soft: #8390aa;
+  --panel: #141923;
+  --panel-2: #1c2432;
+  --line: #334055;
+  --mint: #53d6a2;
+  --blue: #70a7ff;
+  --amber: #f5c05c;
+  --rose: #ff7a90;
+  --bg: #0b0e13;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.55 "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(120deg, rgba(83, 214, 162, 0.12), transparent 32%),
+    linear-gradient(240deg, rgba(112, 167, 255, 0.12), transparent 36%),
+    var(--bg);
+}
+header {
+  min-height: 48vh;
+  display: grid;
+  align-items: end;
+  padding: 56px clamp(24px, 7vw, 96px);
+  border-bottom: 1px solid var(--line);
+}
+h1 {
+  margin: 0 0 14px;
+  max-width: 980px;
+  font-size: clamp(40px, 7vw, 92px);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+.lede {
+  max-width: 840px;
+  color: var(--muted);
+  font-size: clamp(18px, 2vw, 24px);
+}
+main {
+  width: min(1180px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 34px 0 64px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+}
+.card {
+  grid-column: span 4;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  min-height: 164px;
+}
+.card.wide { grid-column: span 8; }
+.card.full { grid-column: 1 / -1; }
+.kicker {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+h2 {
+  margin: 8px 0 12px;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+p { margin: 0 0 12px; color: var(--muted); }
+ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+li { margin: 6px 0; }
+.metric {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-top: 10px;
+}
+.metric strong { font-size: 34px; color: var(--mint); }
+.metric span { color: var(--soft); }
+.timeline {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+.step {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 18px rgba(83, 214, 162, 0.7);
+}
+.code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-wrap: anywhere;
+  color: #dce6ff;
+}
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.pass { color: var(--mint); }
+.warn { color: var(--amber); }
+.risk { color: var(--rose); }
+footer {
+  color: var(--soft);
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  margin-top: 28px;
+}
+@media (max-width: 850px) {
+  header { min-height: 42vh; padding: 40px 24px; }
+  main { width: calc(100% - 32px); }
+  .card, .card.wide { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="kicker">Rubber Duck Review</div>
+    <h1>Quantisation lands with tap tempo, master-loop sync, and NINJAM tempo flow.</h1>
+    <p class="lede">The implementation keeps existing loop timing intact, centralizes the math, and adds visual feedback as a separate overlay instead of changing the current loop and take visualisation.</p>
+  </div>
+</header>
+<main>
+  <section class="grid" aria-label="Review summary">
+    <article class="card">
+      <div class="kicker">Verification</div>
+      <h2>Native Tests</h2>
+      <p>The Debug x64 test binary built and ran without loading plugin DLLs for the new quantisation coverage.</p>
+      <div class="metric"><strong>356</strong><span>passed</span></div>
+      <div class="metric"><strong>1</strong><span>hardware-gated MIDI test skipped</span></div>
+    </article>
+
+    <article class="card">
+      <div class="kicker">Integration</div>
+      <h2>App Build</h2>
+      <p>Jamma Debug x64 linked against the updated JammaLib successfully.</p>
+      <div class="badge-row">
+        <span class="badge pass">0 errors</span>
+        <span class="badge pass">0 warnings</span>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="kicker">Hot Path</div>
+      <h2>Audio Safety</h2>
+      <p>Review found no new blocking calls, sleeps, condition variables, or heap work added to callback-owned audio bodies.</p>
+      <div class="badge-row">
+        <span class="badge pass">No locks in audio callback</span>
+        <span class="badge pass">No timing rewrite for existing loops</span>
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="kicker">What Changed</div>
+      <h2>Feature Flow</h2>
+      <div class="timeline">
+        <div class="step"><span class="dot"></span><p><strong>Tap tempo:</strong> space key release feeds a sample-estimated tap tracker, smooths new gaps 50/50, and applies a seed grain to the existing Timer.</p></div>
+        <div class="step"><span class="dot"></span><p><strong>Master selection:</strong> shift-click on a hovered loop or loop take selects a master length and derives a seed that divides it exactly.</p></div>
+        <div class="step"><span class="dot"></span><p><strong>Visual feedback:</strong> loops now own a QuantisationModel child that draws radial gates as an additive scene-pass overlay.</p></div>
+        <div class="step"><span class="dot"></span><p><strong>NINJAM:</strong> BPM/BPI to sample interval conversion now uses the shared quantisation helper for local and remote tempo paths.</p></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="kicker">TDD Notes</div>
+      <h2>New Coverage</h2>
+      <ul>
+        <li>Master loop seed derivation.</li>
+        <li>Tap seed snapping to a whole master division.</li>
+        <li>Minimum tap seed enforcement.</li>
+        <li>NINJAM tempo conversion.</li>
+        <li>Tap tempo smoothing.</li>
+      </ul>
+    </article>
+
+    <article class="card full">
+      <div class="kicker">Rubber Duck Findings</div>
+      <h2>Review Outcome</h2>
+      <p><span class="pass">Fixed during review:</span> free tap tempo was briefly treating the first completed tap interval as a master length. That would have pinned later taps to the first interval even before a real master loop was selected. The Scene tap path now leaves master length unset until shift-click chooses an actual loop or take.</p>
+      <p><span class="pass">Kept intentional:</span> master-snapped tap timing chooses the nearest exact divisor of the master loop. That means a five-part split can win when it is closer than six; the test was corrected to document that rule.</p>
+      <p><span class="warn">Manual validation still useful:</span> the visual overlay should be tried in the live app with actual 3D hover/select paths, because the current test suite validates the math and build integration rather than GPU pixels.</p>
+    </article>
+
+    <article class="card full">
+      <div class="kicker">Changed Areas</div>
+      <h2>Files</h2>
+      <div class="code">
+        JammaLib/src/engine/Quantisation.{h,cpp}<br>
+        JammaLib/src/engine/QuantisationModel.{h,cpp}<br>
+        JammaLib/src/engine/Scene.{h,cpp}<br>
+        JammaLib/src/engine/Loop.{h,cpp}<br>
+        JammaLib/src/io/UserConfig.{h,cpp}<br>
+        JammaLib/include/Constants.h<br>
+        JammaLib/JammaLib.vcxproj and .filters<br>
+        test/JammaLib_Tests/src/engine/Quantisation_Tests.cpp<br>
+        test/JammaLib_Tests/JammaLib_Tests.vcxproj and .filters
+      </div>
+    </article>
+
+    <article class="card wide">
+      <div class="kicker">Commands Run</div>
+      <h2>Evidence</h2>
+      <div class="code">
+        msbuild test\JammaLib_Tests\JammaLib_Tests.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir=&lt;repo&gt;\<br>
+        test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe<br>
+        msbuild Jamma\Jamma.vcxproj /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir=&lt;repo&gt;\
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="kicker">Verdict</div>
+      <h2>Ready For Hands-On Tryout</h2>
+      <p>The code compiles, tests pass, and the review did not find a timing regression vector in existing loop playback or recording. The next best signal is live interaction: tap space, shift-hover/select a master, and confirm the gate overlay reads clearly while loops keep their prior timing.</p>
+    </article>
+  </section>
+  <footer>Generated for the Jamma quantisation branch after implementation, test verification, and rubber-duck review.</footer>
+</main>
+</body>
+</html>

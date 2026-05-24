@@ -11,6 +11,7 @@
 #include "GlUtils.h"
 #include "VU.h"
 #include "LoopModel.h"
+#include "QuantisationModel.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"
@@ -116,6 +117,7 @@ namespace engine
 			_mixer(std::move(other._mixer)),
 			_hanning(std::move(other._hanning)),
 			_model(std::move(other._model)),
+			_quantisationModel(std::move(other._quantisationModel)),
 			_vu(std::move(other._vu)),
 			_bufferBank(std::move(other._bufferBank)),
 			_monitorBufferBank(std::move(other._monitorBufferBank)),
@@ -161,6 +163,7 @@ namespace engine
 				_mixer.swap(other._mixer);
 				_hanning.swap(other._hanning);
 				_model.swap(other._model);
+				_quantisationModel.swap(other._quantisationModel);
 				_vu.swap(other._vu);
 				std::swap(_bufferBank, other._bufferBank);
 				std::swap(_monitorBufferBank, other._monitorBufferBank);
@@ -217,8 +220,10 @@ namespace engine
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
+		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
+		void SetQuantisationOverlay(unsigned int seedSamps, unsigned int masterLoopSamps, bool visible, bool confirm);
 		void SetMixerLevel(double level);
 		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
@@ -276,6 +281,7 @@ namespace engine
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
+		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;

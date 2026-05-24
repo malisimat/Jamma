@@ -23,6 +23,7 @@
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "NinjamSession.h"
+#include "Quantisation.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
 #include "Drawable.h"
@@ -242,6 +243,16 @@ namespace engine
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
+		QuantisationPolicy _QuantisationPolicy() const;
+		unsigned int _CurrentSampleRate() const;
+		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
+		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
+		bool _HandleTapTempo(Time actionTime);
+		bool _TrySetMasterFromHover(bool confirm);
+		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
+		void _ClearQuantisationOverlays();
+		unsigned long _MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
+		std::shared_ptr<Loop> _RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
@@ -283,6 +294,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
+		unsigned long _masterLoopLengthSamps;
+		TapTempoTracker _tapTempo;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
