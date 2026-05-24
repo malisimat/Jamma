@@ -284,7 +284,6 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
-		unsigned int _audioCallbackCount;
 		std::atomic<std::uint64_t> _audioSampleCounter;
 			std::atomic<std::int64_t> _midiAnchorMicros;
 		graphics::Camera _camera;

@@ -65,7 +65,6 @@ Scene::Scene(SceneParams params,
 	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
-	_audioCallbackCount(0),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -1047,7 +1046,6 @@ void Scene::InitAudio()
 		if (dev.has_value())
 		{
 			_audioDevice = std::move(dev.value());
-			_audioCallbackCount = 0;
 			_audioSampleCounter.store(0u, std::memory_order_release);
 			_audioDevice->Start();
 
