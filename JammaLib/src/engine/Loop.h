@@ -128,6 +128,7 @@ namespace engine
 			_blockSize(other._blockSize),
 			_vstPluginPaths(std::move(other._vstPluginPaths))
 		{
+			_writeIndex.store(other._writeIndex.load(std::memory_order_relaxed), std::memory_order_relaxed);
 			other._writeIndex.store(0ul, std::memory_order_relaxed);
 			other._visualUpdatesEnabled = true;
 			other._isPunchInActive = false;
