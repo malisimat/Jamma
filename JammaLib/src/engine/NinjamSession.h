@@ -93,6 +93,38 @@ namespace engine
 		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
+		class ConnectionUse
+		{
+		public:
+			explicit ConnectionUse(const NinjamSession& session) noexcept
+				: _session(session), _connection(session._AcquireConnectionUse())
+			{
+			}
+
+			~ConnectionUse()
+			{
+				if (_connection)
+					_session._ReleaseConnectionUse();
+			}
+
+			ConnectionUse(const ConnectionUse&) = delete;
+			ConnectionUse& operator=(const ConnectionUse&) = delete;
+
+			io::NinjamConnection* operator->() const noexcept
+			{
+				return _connection;
+			}
+
+			explicit operator bool() const noexcept
+			{
+				return _connection != nullptr;
+			}
+
+		private:
+			const NinjamSession& _session;
+			io::NinjamConnection* _connection = nullptr;
+		};
+
 		static const std::array<const char*, 17> _StaticServerHosts;
 		static constexpr auto _ServerListFetchTtl = std::chrono::seconds(30);
 		static constexpr int _ServerListFetchTimeoutMs = 6500;
@@ -108,11 +140,19 @@ namespace engine
 		static std::vector<PublicServerInfo> ParseAutosongServerList(const std::string& html);
 		static std::vector<PublicServerInfo> MergeServerLists(const std::vector<PublicServerInfo>& fetched);
 
-		std::unique_ptr<io::NinjamConnection> _connection;
+		// Serializes Start/Stop while keeping audio and job paths lock-free.
+		mutable std::mutex _lifecycleMutex;
+		std::unique_ptr<io::NinjamConnection> _ownedConnection;
+		std::atomic<io::NinjamConnection*> _connection{ nullptr };
+		mutable std::atomic_uint _activeConnectionUsers{ 0u };
 
-		unsigned int _audioSampleRate = 0u;
-		unsigned int _audioBlockSize = 0u;
-		unsigned int _audioNumInputChannels = 0u;
-		unsigned int _audioNumOutputChannels = 0u;
+		std::unique_ptr<io::NinjamConnection> _UnpublishConnectionLocked();
+		io::NinjamConnection* _AcquireConnectionUse() const noexcept;
+		void _ReleaseConnectionUse() const noexcept;
+
+		std::atomic_uint _audioSampleRate{ 0u };
+		std::atomic_uint _audioBlockSize{ 0u };
+		std::atomic_uint _audioNumInputChannels{ 0u };
+		std::atomic_uint _audioNumOutputChannels{ 0u };
 	};
 }

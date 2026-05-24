@@ -153,7 +153,6 @@ namespace io
 		std::string _lastError;
 
 		mutable std::mutex _snapshotMutex;
-		mutable std::mutex _audioBufferMutex;
 		mutable std::mutex _connectionMutex;
 		std::unique_ptr<NJClient> _client;
 	};

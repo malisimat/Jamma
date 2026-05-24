@@ -4,7 +4,7 @@
 
 namespace
 {
-	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
 			return;
@@ -32,7 +32,7 @@ using actions::ActionResult;
 
 Loop::~Loop()
 {
-	DrainVstChain(_vstChain);
+	DrainVstChain(_vstChain.load(std::memory_order_acquire));
 	DrainVstChain(_backVstChain);
 	ReleaseResources();
 }
@@ -146,12 +146,25 @@ void Loop::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	auto playState = _playState.load(std::memory_order_acquire);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
 
-	_model->SetLoopIndexFrac(LoopIndexFrac());
-	_model->SetLoopState(_GetLoopModelState(pass, _playState, IsMuted()));
+	auto isRecording = (STATE_RECORDING == playState) ||
+		(STATE_OVERDUBBING == playState) ||
+		(STATE_PUNCHEDIN == playState);
+	auto index = isRecording ?
+		_writeIndex.load(std::memory_order_relaxed) :
+		_playIndex.load(std::memory_order_relaxed);
+
+	if (!isRecording && index >= constants::MaxLoopFadeSamps)
+		index -= constants::MaxLoopFadeSamps;
+
+	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
+	_model->SetLoopIndexFrac(frac);
+	_model->SetLoopState(_GetLoopModelState(pass, playState, IsMuted()));
 
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
@@ -171,33 +184,36 @@ void Loop::Draw3d(DrawContext& ctx,
 
 void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 {
-	if ((STATE_RECORDING != _playState) &&
-		(STATE_PLAYINGRECORDING != _playState) &&
-		(STATE_OVERDUBBING != _playState) &&
-		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState) &&
-		!_isPunchInActive)
+	auto playState = _playState.load(std::memory_order_acquire);
+	if ((STATE_RECORDING != playState) &&
+		(STATE_PLAYINGRECORDING != playState) &&
+		(STATE_OVERDUBBING != playState) &&
+		(STATE_PUNCHEDIN != playState) &&
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		!_isPunchInActive.load(std::memory_order_acquire))
 		return;
 
 	if (AUDIOSOURCE_ADC == request.source)
 	{
-		auto canWriteAdc = (STATE_RECORDING == _playState) ||
-			(STATE_PLAYINGRECORDING == _playState) ||
-			(STATE_PUNCHEDIN == _playState) ||
-			_isPunchInActive;
+		auto canWriteAdc = (STATE_RECORDING == playState) ||
+			(STATE_PLAYINGRECORDING == playState) ||
+			(STATE_PUNCHEDIN == playState) ||
+			_isPunchInActive.load(std::memory_order_acquire);
 		if (!canWriteAdc)
 			return;
 	}
 	else if ((AUDIOSOURCE_BOUNCE == request.source) &&
-		(STATE_RECORDING == _playState))
+		(STATE_RECORDING == playState))
 	{
 		return;
 	}
-	else if ((STATE_OVERDUBBING == _playState) &&
+	else if ((STATE_OVERDUBBING == playState) &&
 		(AUDIOSOURCE_BOUNCE != request.source))
 	{
 		return;
 	}
+
+	auto writeIndex = _writeIndex.load(std::memory_order_relaxed);
 
 	if (AUDIOSOURCE_MONITOR == request.source)
 	{
@@ -206,10 +222,10 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
-			auto idx = _writeIndex + writeOffset + i;
+			auto idx = writeIndex + writeOffset + i;
 			_monitorBufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _monitorBufferBank[idx]);
 
-			if (STATE_RECORDING == _playState)
+			if (STATE_RECORDING == playState)
 			{
 				auto absSamp = std::abs(samp);
 				if (absSamp > peak)
@@ -224,7 +240,7 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		for (unsigned int i = 0; i < request.numSamps; i++)
 		{
 			auto samp = request.samples[i * request.stride];
-			auto idx = _writeIndex + writeOffset + i;
+			auto idx = writeIndex + writeOffset + i;
 			_bufferBank[idx] = (request.fadeNew * samp) + (request.fadeCurrent * _bufferBank[idx]);
 		}
 	}
@@ -234,23 +250,25 @@ void Loop::EndWrite(unsigned int numSamps,
 	bool updateIndex)
 {
 	// Only update if currently recording
-	if ((STATE_RECORDING != _playState) &&
-		(STATE_PLAYINGRECORDING != _playState) &&
-		(STATE_OVERDUBBING != _playState) &&
-		(STATE_PUNCHEDIN != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState) &&
-		!_isPunchInActive)
+	auto playState = _playState.load(std::memory_order_acquire);
+	if ((STATE_RECORDING != playState) &&
+		(STATE_PLAYINGRECORDING != playState) &&
+		(STATE_OVERDUBBING != playState) &&
+		(STATE_PUNCHEDIN != playState) &&
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		!_isPunchInActive.load(std::memory_order_acquire))
 		return;
 
 	if (!updateIndex)
 		return;
 
-	_writeIndex += numSamps;
-	_bufferBank.SetLength(_writeIndex);
+	auto writeIndex = _writeIndex.load(std::memory_order_relaxed) + numSamps;
+	_writeIndex.store(writeIndex, std::memory_order_relaxed);
+	_bufferBank.SetLength(writeIndex);
 
-	if (STATE_RECORDING == _playState)
+	if (STATE_RECORDING == playState)
 	{
-		_monitorBufferBank.SetLength(_writeIndex);
+		_monitorBufferBank.SetLength(writeIndex);
 
 		auto newValue = _lastPeak * _mixer->Level();
 		_vu->SetValue(newValue, numSamps);
@@ -263,22 +281,24 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	int sampOffset,
 	unsigned int numSamps)
 {
-	auto isPlaying = (STATE_PLAYING == _playState) ||
-		(STATE_PLAYINGRECORDING == _playState) ||
-		(STATE_OVERDUBBINGRECORDING == _playState) ||
-		(STATE_PUNCHEDIN == _playState);
+	auto playState = _playState.load(std::memory_order_acquire);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto isPlaying = (STATE_PLAYING == playState) ||
+		(STATE_PLAYINGRECORDING == playState) ||
+		(STATE_OVERDUBBINGRECORDING == playState) ||
+		(STATE_PUNCHEDIN == playState);
 
-	if (!isPlaying)
+	if (!isPlaying || (0 == loopLength))
 		return 0;
 
 	auto peak = 0.0f;
 	auto bufBankSize = _bufferBank.Length();
-	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
+	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
 
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	auto index = _playIndex;
+	auto index = _playIndex.load(std::memory_order_relaxed);
 
 	if (sampOffset >= 0)
 	{
@@ -287,16 +307,16 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	else
 	{
 		while (index < (unsigned long)(-sampOffset))
-			index += _loopLength;
+			index += loopLength;
 
 		index += sampOffset;
 	}
 
 	while (index >= bufSize)
-		index -= _loopLength;
+		index -= loopLength;
 
 	if (index < constants::MaxLoopFadeSamps)
-		index += _loopLength;
+		index += loopLength;
 
 	// Check if we are inside crossfading region at any point
 	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
@@ -338,7 +358,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 			index++;
 			if (index >= bufSize)
-				index -= _loopLength;
+				index -= loopLength;
 		}
 	}
 	else
@@ -360,7 +380,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 			index++;
 			if (index >= bufSize)
-				index -= _loopLength;
+				index -= loopLength;
 		}
 	}
 
@@ -376,10 +396,12 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 {
 	// Mixer will stereo spread the mono wav
 	// and adjust level
-	if (0 == _loopLength)
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if (0 == loopLength)
 		return;
 
-	if (STATE_RECORDING == _playState)
+	if (STATE_RECORDING == playState)
 		_mixer->Offset(numSamps);
 
 	// Read source data from BufferBank into stack-allocated temp buffer
@@ -388,10 +410,9 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	if (sampsToWrite > 0)
 	{
-		// _vstChain is a plain shared_ptr protected by Scene::_audioMutex,
-		// which the audio callback (and CommitChanges) both hold.
-		if (_vstChain && _vstChain->IsActive())
-			_vstChain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
+		auto chain = _vstChain.load(std::memory_order_acquire);
+		if (chain && chain->IsActive())
+			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
@@ -404,23 +425,26 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 void Loop::EndMultiPlay(unsigned int numSamps)
 {
-	auto isPlaying = (STATE_PLAYING == _playState) ||
-		(STATE_PLAYINGRECORDING == _playState) ||
-		(STATE_OVERDUBBING == _playState) ||
-		(STATE_PUNCHEDIN == _playState) ||
-		(STATE_OVERDUBBINGRECORDING == _playState);
+	auto playState = _playState.load(std::memory_order_relaxed);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto isPlaying = (STATE_PLAYING == playState) ||
+		(STATE_PLAYINGRECORDING == playState) ||
+		(STATE_OVERDUBBING == playState) ||
+		(STATE_PUNCHEDIN == playState) ||
+		(STATE_OVERDUBBINGRECORDING == playState);
 
 	if (!isPlaying)
 		return;
 
-	if (0 == _loopLength)
+	if (0 == loopLength)
 		return;
 		
-	_playIndex += numSamps;
+	auto playIndex = _playIndex.load(std::memory_order_relaxed) + numSamps;
 
-	auto bufSize = _loopLength + constants::MaxLoopFadeSamps;
-	while (_playIndex >= bufSize)
-		_playIndex -= _loopLength;
+	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
+	while (playIndex >= bufSize)
+		playIndex -= loopLength;
+	_playIndex.store(playIndex, std::memory_order_relaxed);
 
 	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
 	{
@@ -451,17 +475,20 @@ std::string Loop::Id() const
 
 std::vector<float> Loop::ExportSamples() const
 {
-	if (_loopLength == 0 || _playState == STATE_INACTIVE)
+	auto playState = _playState.load(std::memory_order_acquire);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+
+	if ((0 == loopLength) || (STATE_INACTIVE == playState))
 		return {};
 
-	std::vector<float> out(_loopLength);
+	std::vector<float> out(loopLength);
 	unsigned long copied = 0;
-	while (copied < _loopLength)
+	while (copied < loopLength)
 	{
 		const auto idx = constants::MaxLoopFadeSamps + copied;
 		const auto bankOffset = idx % BufferBank::_BufferBankSize;
 		const auto samplesInBank = BufferBank::_BufferBankSize - bankOffset;
-		const auto chunkSize = std::min(_loopLength - copied, samplesInBank);
+		const auto chunkSize = std::min(loopLength - copied, samplesInBank);
 		const auto* ptr = _bufferBank.BlockPtr(idx);
 
 		if (ptr != nullptr)
@@ -477,11 +504,14 @@ std::vector<float> Loop::ExportSamples() const
 
 io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 {
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto playIndex = _playIndex.load(std::memory_order_relaxed);
+
 	io::JamFile::Loop loop;
 	loop.Name = wavFilename;
-	loop.Length = _loopLength;
-	loop.Index = (_playIndex >= constants::MaxLoopFadeSamps) ?
-		(_playIndex - constants::MaxLoopFadeSamps) :
+	loop.Length = loopLength;
+	loop.Index = (playIndex >= constants::MaxLoopFadeSamps) ?
+		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
@@ -546,7 +576,7 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 	auto [buffer, sampleRate, bitDepth] = loadOpt.value();
 
-	_loopLength = 0;
+	_loopLength.store(0, std::memory_order_relaxed);
 	_bufferBank.Init();
 
 	auto length = (unsigned long)buffer.size();
@@ -557,7 +587,7 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 		_bufferBank[i] = buffer[i];
 	}
 
-	_loopLength = length - constants::MaxLoopFadeSamps;
+	_loopLength.store(length - constants::MaxLoopFadeSamps, std::memory_order_relaxed);
 
 	_UpdateLoopModel();
 
@@ -568,17 +598,16 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 
 void Loop::Record()
 {
-	if (STATE_INACTIVE != _playState)
+	if (STATE_INACTIVE != _playState.load(std::memory_order_relaxed))
 		return;
 
 	Reset();
-
-	_playState = STATE_RECORDING;
 	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
+	_playState.store(STATE_RECORDING, std::memory_order_release);
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Play(unsigned long index,
@@ -598,37 +627,40 @@ void Loop::Play(unsigned long index,
 	// bound: playback indices are in [fadeOffset, fadeOffset + loopLength).
 	auto logicalBufSize = loopLength + constants::MaxLoopFadeSamps;
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
-	_playIndex = (effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index;
-	_loopLength = loopLength;
-	if (_isPunchInActive)
+	_playIndex.store((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index, std::memory_order_relaxed);
+	_loopLength.store(loopLength, std::memory_order_relaxed);
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		continueRecording = true;
 
-	auto isOverdubbing = (STATE_OVERDUBBING == _playState) || (STATE_PUNCHEDIN == _playState);
-	if (_isPunchInActive)
+	auto playState = _playState.load(std::memory_order_relaxed);
+	auto isOverdubbing = (STATE_OVERDUBBING == playState) || (STATE_PUNCHEDIN == playState);
+	if (_isPunchInActive.load(std::memory_order_relaxed))
 		isOverdubbing = true;
 	auto recordState = isOverdubbing ? STATE_OVERDUBBINGRECORDING : STATE_PLAYINGRECORDING;
-	auto playState = continueRecording ? recordState : STATE_PLAYING;
-	_playState = loopLength > 0 ? playState : STATE_INACTIVE;
+	auto nextPlayState = continueRecording ? recordState : STATE_PLAYING;
 
 	// Pre-allocate buffer capacity for recording state to prevent SetLength clamping.
 	// This ensures the full loop length can be written during overdub/recording.
-	if ((STATE_OVERDUBBINGRECORDING == _playState) || (STATE_PLAYINGRECORDING == _playState))
+	if ((loopLength > 0) &&
+		((STATE_OVERDUBBINGRECORDING == nextPlayState) || (STATE_PLAYINGRECORDING == nextPlayState)) &&
+		(_bufferBank.Capacity() < logicalBufSize))
 	{
-		if (_bufferBank.Capacity() < logicalBufSize)
-			_bufferBank.Resize(logicalBufSize);
+		_bufferBank.Resize(logicalBufSize);
 	}
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	_playState.store(loopLength > 0 ? nextPlayState : STATE_INACTIVE, std::memory_order_release);
+
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Reset()
 {
-	_playState = STATE_INACTIVE;
-	_isPunchInActive = false;
+	_isPunchInActive.store(false, std::memory_order_relaxed);
 
-	_writeIndex = 0ul;
-	_playIndex = 0ul;
-	_loopLength = 0ul;
+	_writeIndex.store(0ul, std::memory_order_relaxed);
+	_playIndex.store(0ul, std::memory_order_relaxed);
+	_loopLength.store(0ul, std::memory_order_relaxed);
+	_playState.store(STATE_INACTIVE, std::memory_order_release);
 	_mixer->UnMute();
 	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
 }
@@ -643,18 +675,19 @@ void Loop::Update()
 
 void Loop::EndRecording()
 {
-	if ((STATE_PLAYINGRECORDING != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState))
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if ((STATE_PLAYINGRECORDING != playState) &&
+		(STATE_OVERDUBBINGRECORDING != playState))
 		return;
 	
-	_playState = STATE_PLAYING;
+	_playState.store(STATE_PLAYING, std::memory_order_release);
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::Ditch()
 {
-	if (STATE_INACTIVE == _playState)
+	if (STATE_INACTIVE == _playState.load(std::memory_order_relaxed))
 		return;
 
 Reset();
@@ -686,62 +719,64 @@ bool Loop::UnMute()
 
 void Loop::Overdub()
 {
-	if (STATE_INACTIVE != _playState)
+	if (STATE_INACTIVE != _playState.load(std::memory_order_relaxed))
 		return;
 
 	Reset();
-
-	_playState = STATE_OVERDUBBING;
-	_isPunchInActive = false;
 	_bufferBank.Resize(constants::MaxLoopFadeSamps);
 
 	_monitorBufferBank.Resize(constants::MaxLoopFadeSamps);
+	_playState.store(STATE_OVERDUBBING, std::memory_order_release);
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchIn()
 {
-	if ((STATE_OVERDUBBING != _playState) &&
-		(STATE_OVERDUBBINGRECORDING != _playState) &&
-		(STATE_PLAYING != _playState))
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if ((STATE_OVERDUBBING != playState) &&
+		(STATE_OVERDUBBINGRECORDING != playState) &&
+		(STATE_PLAYING != playState))
 		return;
 
-	_isPunchInActive = true;
-	if (STATE_OVERDUBBING == _playState)
-		_playState = STATE_PUNCHEDIN;
+	_isPunchInActive.store(true, std::memory_order_release);
+	if (STATE_OVERDUBBING == playState)
+		_playState.store(STATE_PUNCHEDIN, std::memory_order_release);
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 void Loop::PunchOut()
 {
-	if (!_isPunchInActive && (STATE_PUNCHEDIN != _playState))
+	auto playState = _playState.load(std::memory_order_relaxed);
+	if (!_isPunchInActive.load(std::memory_order_relaxed) && (STATE_PUNCHEDIN != playState))
 		return;
 
-	_isPunchInActive = false;
-	if (STATE_PUNCHEDIN == _playState)
-		_playState = STATE_OVERDUBBING;
+	_isPunchInActive.store(false, std::memory_order_release);
+	if (STATE_PUNCHEDIN == playState)
+		_playState.store(STATE_OVERDUBBING, std::memory_order_release);
 
-	std::cout << "-=-=- Loop " << _playState << " - " << _loopParams.Id << std::endl;
+	std::cout << "-=-=- Loop " << _playState.load(std::memory_order_relaxed) << " - " << _loopParams.Id << std::endl;
 }
 
 double Loop::LoopIndexFrac() const noexcept
 {
-	auto isRecording = (STATE_RECORDING == _playState) ||
-		(STATE_OVERDUBBING == _playState) ||
-		(STATE_PUNCHEDIN == _playState);
+	auto playState = _playState.load(std::memory_order_relaxed);
+	auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	auto isRecording = (STATE_RECORDING == playState) ||
+		(STATE_OVERDUBBING == playState) ||
+		(STATE_PUNCHEDIN == playState);
 	auto index = isRecording ?
-		_writeIndex :
-		_playIndex;
+		_writeIndex.load(std::memory_order_relaxed) :
+		_playIndex.load(std::memory_order_relaxed);
 
 	if (!isRecording && index >= constants::MaxLoopFadeSamps)
 		index -= constants::MaxLoopFadeSamps;
 
-	if (0ul == _loopLength)
+	if (0ul == loopLength)
 		return 0.0;
 
-	return 1.0 - std::max(0.0, std::min(1.0, ((double)(index % _loopLength)) / ((double)_loopLength)));
+	return 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 }
 
 double Loop::_CalcDrawRadius(unsigned long loopLength)
@@ -784,10 +819,11 @@ unsigned long Loop::_ModelDisplayLength(bool isRecording, unsigned long actualLo
 
 unsigned long Loop::_LoopIndex() const
 {
-	if (constants::MaxLoopFadeSamps > _playIndex)
+	auto playIndex = _playIndex.load(std::memory_order_relaxed);
+	if (constants::MaxLoopFadeSamps > playIndex)
 		return 0;
 
-	return _playIndex - constants::MaxLoopFadeSamps;
+	return playIndex - constants::MaxLoopFadeSamps;
 }
 
 void Loop::_UpdateLoopModel()
@@ -800,11 +836,11 @@ void Loop::_UpdateLoopModel()
 
 void Loop::_ForceUpdateLoopModel()
 {
-
-	auto isRecording = (STATE_RECORDING == _playState) ||
-		(STATE_OVERDUBBING == _playState) ||
-		(STATE_PUNCHEDIN == _playState);
-	auto actualLength = isRecording ? _writeIndex : _loopLength;
+	auto playState = _playState.load(std::memory_order_relaxed);
+	auto isRecording = (STATE_RECORDING == playState) ||
+		(STATE_OVERDUBBING == playState) ||
+		(STATE_PUNCHEDIN == playState);
+	auto actualLength = isRecording ? _writeIndex.load(std::memory_order_relaxed) : _loopLength.load(std::memory_order_relaxed);
 	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
@@ -819,7 +855,7 @@ void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
 	unsigned long offset,
 	float radius)
 {
-	const auto allowUnchangedSkip = (STATE_PLAYING == _playState);
+	const auto allowUnchangedSkip = (STATE_PLAYING == _playState.load(std::memory_order_relaxed));
 	_model->UpdateModel(buffer, actualLength, displayLength, offset, radius, allowUnchangedSkip);
 	_vu->UpdateModel(radius);
 }
@@ -838,10 +874,11 @@ void Loop::UnloadVstPlugin(size_t index)
 
 std::shared_ptr<vst::VstPlugin> Loop::GetVstPlugin(size_t index) const
 {
-	if (!_vstChain)
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain)
 		return nullptr;
 
-	return _vstChain->GetPlugin(index);
+	return chain->GetPlugin(index);
 }
 
 std::vector<JobAction> Loop::_CommitChanges()
@@ -849,8 +886,7 @@ std::vector<JobAction> Loop::_CommitChanges()
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{
-		std::lock_guard<std::mutex> lock(_vstChainMutex);
-		_vstChain = _backVstChain;
+		_vstChain.store(_backVstChain, std::memory_order_release);
 	}
 
 	std::vector<JobAction> jobs;
@@ -893,10 +929,7 @@ ActionResult Loop::OnAction(JobAction action)
 		// Take a snapshot of the current live chain under _vstChainMutex so we
 		// don't race with _CommitChanges() swapping it on the main thread.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		if (chainSnapshot)
@@ -939,10 +972,7 @@ ActionResult Loop::OnAction(JobAction action)
 	{
 		// Take a snapshot of the current live chain under _vstChainMutex.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		const auto removeIndex = action.VstIndex;

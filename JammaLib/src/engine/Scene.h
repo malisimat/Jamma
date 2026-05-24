@@ -76,8 +76,9 @@ namespace engine
 			ReleaseResources();
 			CloseMidi();
 
-			_isSceneQuitting = true;
-			_jobRunner.join();
+			_isSceneQuitting.store(true, std::memory_order_release);
+			if (_jobRunner.joinable())
+				_jobRunner.join();
 			// NinjamSession destructs after _jobRunner exits, so Pump() can no
 			// longer be called when the session tears down.
 			_ninjamSession.reset();
@@ -198,7 +199,6 @@ namespace engine
 		void InitMidi();
 		void CloseMidi();
 		void CommitChanges();
-		std::mutex& GetAudioMutex();
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg);
@@ -238,6 +238,7 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
@@ -254,8 +255,8 @@ namespace engine
 
 	protected:
 		bool _isSceneTouching;
-		bool _isSceneQuitting;
-		bool _isSceneReset;
+		std::atomic_bool _isSceneQuitting;
+		std::atomic_bool _isSceneReset;
 		bool _isSceneDragged;
 		utils::Position2d _initTouchDownPosition;
 		utils::Position3d _initTouchCamPosition;
@@ -275,6 +276,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
 		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
 		std::unique_ptr<NinjamSession> _ninjamSession;
 		UndoHistory _undoHistory;
@@ -283,7 +285,6 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
-		unsigned int _audioCallbackCount;
 		std::atomic<std::uint64_t> _audioSampleCounter;
 			std::atomic<std::int64_t> _midiAnchorMicros;
 		graphics::Camera _camera;

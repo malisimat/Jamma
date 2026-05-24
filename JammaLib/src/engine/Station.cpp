@@ -12,7 +12,7 @@ using gui::GuiToggleParams;
 
 namespace
 {
-	void DrainVstChain(std::shared_ptr<vst::VstChain>& chain)
+	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
 			return;
@@ -95,11 +95,12 @@ Station::Station(StationParams params,
 	SetNumBusChannels(_DefaultNumBusChannels);
 
 	_WireVuSliders();
+	_PublishAudioState();
 }
 
 Station::~Station()
 {
-	DrainVstChain(_vstChain);
+	DrainVstChain(_vstChain.load(std::memory_order_acquire));
 	DrainVstChain(_backVstChain);
 }
 
@@ -214,14 +215,20 @@ unsigned int Station::NumOutputChannels(base::Audible::AudioSourceType source) c
 void Station::Zero(unsigned int numSamps,
 	Audible::AudioSourceType source)
 {
-	for (auto chan = 0u; chan < NumInputChannels(source); chan++)
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	if ((Audible::AUDIOSOURCE_LOOPS == source) || (Audible::AUDIOSOURCE_MIXER == source))
 	{
-		auto channel = _InputChannel(chan, source);
-		if (channel)
-			channel->Zero(numSamps);
+		for (auto& channel : state->AudioBuffers)
+		{
+			if (channel)
+				channel->Zero(numSamps);
+		}
 	}
 
-	for (auto& take : _loopTakes)
+	for (auto& take : state->LoopTakes)
 		take->Zero(numSamps, source);
 }
 
@@ -232,8 +239,11 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	unsigned int numSamps)
 {
 	auto ptr = Sharable::shared_from_this();
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
 
-	for (const auto& take : _loopTakes)
+	for (const auto& take : state->LoopTakes)
 		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
 			trigger,
 			indexOffset,
@@ -242,7 +252,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
-	const auto channelCount = (_audioBuffers.size() < _audioMixers.size()) ? _audioBuffers.size() : _audioMixers.size();
+	const auto channelCount = (state->AudioBuffers.size() < state->AudioMixers.size()) ? state->AudioBuffers.size() : state->AudioMixers.size();
 	if (channelCount == 0u)
 	{
 		_masterMixer->UpdateVu(0.0f, sampsToRead);
@@ -252,11 +262,11 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
-		auto* scratch = (i < _vstBlockPtrs.size()) ? _vstBlockPtrs[i] : nullptr;
+		auto* scratch = (i < state->VstBlockPtrs.size()) ? state->VstBlockPtrs[i] : nullptr;
 		if (!scratch)
 			continue;
 
-		const auto& source = _audioBuffers[i];
+		const auto& source = state->AudioBuffers[i];
 		source->Delay(sampsToRead);
 		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
 		if (sourcePtr != scratch)
@@ -266,12 +276,13 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			scratch[samp] *= masterLevel;
 	}
 
-	if (_vstChain && _vstChain->IsActive() && (_vstBlockPtrs.size() >= channelCount))
-		_vstChain->ProcessBlockMulti(_vstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
+		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
-		auto* scratch = _vstBlockPtrs[i];
+		auto* scratch = state->VstBlockPtrs[i];
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
 			auto absSamp = std::abs(scratch[samp]);
@@ -279,7 +290,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 				masterPeak = absSamp;
 		}
 
-		_audioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
+		state->AudioMixers[i]->WriteBlock(dest, scratch, sampsToRead);
 	}
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
@@ -288,10 +299,14 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 void Station::EndMultiPlay(unsigned int numSamps)
 {
-	for (auto& take : _loopTakes)
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (auto& take : state->LoopTakes)
 		take->EndMultiPlay(numSamps);
 
-	for (auto& buffer : _audioBuffers)
+	for (auto& buffer : state->AudioBuffers)
 	{
 		buffer->EndWrite(numSamps, true);
 		buffer->EndPlay(numSamps);
@@ -313,8 +328,14 @@ void Station::OnBlockWriteChannel(unsigned int channel,
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
-		for (auto& take : _loopTakes)
+		{
+			auto state = _AudioStateSnapshot();
+			if (!state)
+				break;
+
+			for (auto& take : state->LoopTakes)
 			take->OnBlockWriteChannel(channel, request, writeOffset);
+		}
 		break;
 	}
 }
@@ -323,7 +344,11 @@ void Station::EndMultiWrite(unsigned int numSamps,
 	bool updateIndex,
 	Audible::AudioSourceType source)
 {
-	for (auto& take : _loopTakes)
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (auto& take : state->LoopTakes)
 		take->EndMultiWrite(numSamps, updateIndex, source);
 }
 
@@ -876,6 +901,10 @@ void Station::OnBounce(unsigned int numSamps,
 		outLatency = config.Audio.LatencyOut;
 
 	auto sourceOffset = config.OverdubSourceReadOffset(outLatency);
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
 	for (auto& trigger : _triggers)
 	{
 		auto takes = trigger->GetTakes();
@@ -884,14 +913,14 @@ void Station::OnBounce(unsigned int numSamps,
 		{
 			std::string sourceId = take.SourceTakeId;
 			std::string targetId = take.TargetTakeId;
-			auto sourceMatch = std::find_if(_loopTakes.begin(),
-				_loopTakes.end(),
+			auto sourceMatch = std::find_if(state->LoopTakes.begin(),
+				state->LoopTakes.end(),
 				[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
-			auto targetMatch = std::find_if(_loopTakes.begin(),
-				_loopTakes.end(),
+			auto targetMatch = std::find_if(state->LoopTakes.begin(),
+				state->LoopTakes.end(),
 				[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
 
-			if ((_loopTakes.end() != sourceMatch) && (_loopTakes.end() != targetMatch))
+			if ((state->LoopTakes.end() != sourceMatch) && (state->LoopTakes.end() != targetMatch))
 			{
 				(*sourceMatch)->WriteBlock(*targetMatch, trigger, sourceOffset, numSamps);
 			}
@@ -933,9 +962,11 @@ void Station::_InitReceivers()
 
 std::vector<JobAction> Station::_CommitChanges()
 {
+	bool audioStateChanged = false;
 	if (_flipTakeBuffer)
 	{
 		_flipTakeBuffer = false;
+		audioStateChanged = true;
 
 		// Remove and add any children
 		// (difference between back and front LoopTake buffer)
@@ -968,6 +999,7 @@ std::vector<JobAction> Station::_CommitChanges()
 	if (_flipAudioBuffer)
 	{
 		_flipAudioBuffer = false;
+		audioStateChanged = true;
 		_audioBuffers = _backAudioBuffers;
 		_audioMixers = _backAudioMixers;
 
@@ -980,12 +1012,15 @@ std::vector<JobAction> Station::_CommitChanges()
 
 		_WireVuSliders();
 	}
+	if (audioStateChanged)
+	{
+		_PublishAudioState();
+	}
 
 	// Swap in the VST chain if the job thread has delivered a new one.
 	if (_flipVstChain.exchange(false, std::memory_order_acquire))
 	{
-		std::lock_guard<std::mutex> lock(_vstChainMutex);
-		_vstChain = _backVstChain;
+		_vstChain.store(_backVstChain, std::memory_order_release);
 	}
 
 	// Detect pending VST load/unload requests and queue a job for them.
@@ -1028,16 +1063,38 @@ std::vector<JobAction> Station::_CommitChanges()
 const std::shared_ptr<AudioSink> Station::_InputChannel(unsigned int channel,
 	Audible::AudioSourceType source)
 {
- switch (source)
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return nullptr;
+
+	switch (source)
 	{
 	case Audible::AUDIOSOURCE_LOOPS:
 	case Audible::AUDIOSOURCE_MIXER:
-		if (channel < _audioBuffers.size())
-			return _audioBuffers[channel];
+		if (channel < state->AudioBuffers.size())
+			return state->AudioBuffers[channel];
 		break;
 	}
 
 	return nullptr;
+}
+
+std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
+{
+	return _audioState.load(std::memory_order_acquire);
+}
+
+void Station::_PublishAudioState()
+{
+	auto state = std::make_shared<AudioState>();
+	state->LoopTakes = _loopTakes;
+	state->AudioMixers = _audioMixers;
+	state->AudioBuffers = _audioBuffers;
+	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
+	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
+	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
+		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
+	_audioState.store(state, std::memory_order_release);
 }
 
 void Station::_ArrangeChildren()
@@ -1136,10 +1193,11 @@ void Station::UnloadVstPlugin(size_t index)
 
 std::shared_ptr<vst::VstPlugin> Station::GetVstPlugin(size_t index) const
 {
-	if (!_vstChain)
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (!chain)
 		return nullptr;
 
-	return _vstChain->GetPlugin(index);
+	return chain->GetPlugin(index);
 }
 
 std::vector<io::JamFile::VstEntry> Station::VstEntries() const
@@ -1171,10 +1229,7 @@ ActionResult Station::OnAction(JobAction action)
 		// Take a snapshot of the current live chain under _vstChainMutex so
 		// we don't race with _CommitChanges() swapping it on the main thread.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		if (chainSnapshot)
@@ -1225,10 +1280,7 @@ ActionResult Station::OnAction(JobAction action)
 		// This runs on the job thread so DLL teardown is not under the audio mutex.
 		// Take a snapshot of the current live chain under _vstChainMutex.
 		std::shared_ptr<vst::VstChain> chainSnapshot;
-		{
-			std::lock_guard<std::mutex> lock(_vstChainMutex);
-			chainSnapshot = _vstChain;
-		}
+		chainSnapshot = _vstChain.load(std::memory_order_acquire);
 
 		auto newChain = std::make_shared<vst::VstChain>();
 		const auto removeIndex = action.VstIndex;
