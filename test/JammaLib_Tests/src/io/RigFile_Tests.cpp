@@ -54,6 +54,17 @@ TEST(RigFile, ParsesSerialTriggerPairSource) {
 	ASSERT_EQ(1u, pair.value().DitchUp);
 }
 
+TEST(RigFile, ParsesSerialTriggerPairEmptyDeviceAsDefault) {
+	auto str = "{\"source\":\"serial\",\"device\":\"\",\"activatedown\":0,\"activateup\":0,\"ditchdown\":1,\"ditchup\":1}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto pair = RigFile::TriggerPair::FromJson(json);
+
+	ASSERT_TRUE(pair.has_value());
+	ASSERT_EQ(RigFile::TriggerPair::SOURCE_SERIAL, pair.value().Source);
+	ASSERT_EQ(0, pair.value().Device.compare("default"));
+}
+
 TEST(RigFile, ParsesTrigger) {
 	auto pair1 = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "1"), std::regex("%DDOWN%"), "2");
 	auto pair2 = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "3"), std::regex("%DDOWN%"), "4");

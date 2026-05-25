@@ -990,13 +990,21 @@ void Scene::_PumpMidi()
 
 void Scene::_PumpSerial()
 {
-	io::SerialTriggerEvent ev{};
-	while (_serialIngress.Pop(ev))
+	static const std::string kEmptyDevice;
+	while (true)
 	{
+		io::SerialTriggerEvent ev{};
+		{
+			std::scoped_lock lock(_serialIngressMutex);
+			if (!_serialIngress.Pop(ev))
+				break;
+		}
+
 		base::Action action;
 		action.SetActionTime(Timer::GetTime());
 		action.SetUserConfig(_userConfig);
 		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
+		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
 
 		for (auto& station : _stations)
 		{
@@ -1005,13 +1013,17 @@ void Scene::_PumpSerial()
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
 				action,
-				ev.Device);
+				device);
 			if (res.IsEaten)
 				break;
 		}
 	}
 
-	auto dropped = _serialIngress.DroppedCount();
+	std::uint64_t dropped = 0u;
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		dropped = _serialIngress.DroppedCount();
+	}
 	if (dropped != _lastSerialDropCount)
 	{
 		std::cout << "[Serial] Ingress queue dropped " << (dropped - _lastSerialDropCount)
@@ -1183,7 +1195,10 @@ void Scene::CloseMidi()
 void Scene::InitSerial()
 {
 	CloseSerial();
-	_serialIngress.Clear();
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		_serialIngress.Clear();
+	}
 	_lastSerialDropCount = 0u;
 
 	if (_userConfig.Serial.Devices.empty())
@@ -1216,6 +1231,7 @@ void Scene::InitSerial()
 			serialConfig.BaudRate,
 			[this](const io::SerialTriggerEvent& event)
 			{
+				std::scoped_lock lock(_serialIngressMutex);
 				_serialIngress.Push(event);
 			});
 
@@ -1239,6 +1255,10 @@ void Scene::CloseSerial()
 	}
 
 	_serialDevices.clear();
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		_serialIngress.Clear();
+	}
 }
 
 void Scene::CloseAudio()

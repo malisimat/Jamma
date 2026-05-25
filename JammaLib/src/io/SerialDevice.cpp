@@ -178,7 +178,7 @@ void SerialDevice::_ReadLoop()
 		SerialTriggerEvent event{};
 		if (_callback && _protocol.PushByte(byte, event))
 		{
-			event.Device = _deviceName;
+			event.Device = &_deviceName;
 			_callback(event);
 		}
 	}

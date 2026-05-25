@@ -135,7 +135,13 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["device"].index() == 4)
-			device = std::get<std::string>(json.KeyValues["device"]);
+		{
+			auto parsedDevice = std::get<std::string>(json.KeyValues["device"]);
+			if (!parsedDevice.empty())
+				device = parsedDevice;
+			else if (source == SOURCE_SERIAL)
+				device = "default";
+		}
 	}
 
 	iter = json.KeyValues.find("activatedown");

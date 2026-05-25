@@ -7,7 +7,7 @@ namespace io
 {
 	struct SerialTriggerEvent
 	{
-		std::string Device;
+		const std::string* Device = nullptr;
 		unsigned int ButtonIndex = 0u;
 		bool IsPressed = false;
 	};

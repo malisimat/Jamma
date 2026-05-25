@@ -279,6 +279,7 @@ namespace engine
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		MidiQueue<1024> _midiIngress;
 		io::SerialTriggerQueue<256> _serialIngress;
+		std::mutex _serialIngressMutex;
 		std::uint64_t _lastMidiDropCount;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
