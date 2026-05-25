@@ -15,6 +15,7 @@ Current Version: v5.0.2
 * Designed to work with just footpedals, if needed
 * Overdubbing
 * MIDI loops with audio slicing
+* MIDI-triggered record and ditch control via rig-file mapping
 * Immersive and touch-centric user interface
 * VST effects and audio manipulation
 
@@ -61,6 +62,48 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 ```
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
+
+## MIDI Trigger Rig Config
+
+Rig files can now map a station trigger to a MIDI Note or CC without changing the existing MIDI loop-recording input path.
+
+- `user.midi.name` still selects the performance MIDI input used for MIDI loop recording.
+- `triggers[].midiinput` still controls which MIDI channels are recorded into MIDI loops.
+- `triggers[].trigger` is the new trigger-control mapping.
+
+Example:
+
+```json
+{
+	"name": "rig",
+	"user": {
+		"audio": { "name": "HDMI", "bufsize": 255, "inlatency": 414, "outlatency": 414, "numchannelsin": 0, "numchannelsout": 10 },
+		"midi": { "name": "Launchkey", "enabled": true }
+	},
+	"triggers": [
+		{
+			"name": "Trig1",
+			"stationtype": 0,
+			"midiinput": [1],
+			"trigger": {
+				"type": "midi",
+				"device": "TriggerPad",
+				"activate": { "kind": "note", "channel": 1, "id": 60 },
+				"ditch": { "kind": "cc", "channel": 1, "id": 64 }
+			}
+		}
+	]
+}
+```
+
+Notes:
+
+- `device` may match `user.midi.name` if the same controller should both play/record MIDI loops and trigger recording.
+- `channel` is one-based in the rig file. If omitted, the mapping matches any MIDI channel.
+- `kind` supports `note` and `cc`.
+- `note` uses Note On as press and Note Off or Note On with velocity 0 as release.
+- `cc` uses values greater than 0 as press and `0` as release.
+- Velocity is ignored for trigger purposes.
 
 ### Ninjam Integration
 

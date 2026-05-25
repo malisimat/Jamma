@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jamma MIDI Trigger Review</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --paper: rgba(255, 252, 246, 0.88);
+      --ink: #1e1a17;
+      --muted: #64584f;
+      --line: rgba(30, 26, 23, 0.12);
+      --accent: #b14f2b;
+      --accent-2: #1d6b66;
+      --accent-3: #d9a441;
+      --shadow: 0 24px 60px rgba(42, 27, 10, 0.16);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(177, 79, 43, 0.18), transparent 28%),
+        radial-gradient(circle at 80% 10%, rgba(29, 107, 102, 0.18), transparent 24%),
+        linear-gradient(135deg, #efe6d8 0%, #f8f3eb 45%, #ece3d2 100%);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 40px 24px 72px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(140deg, rgba(255,255,255,0.62), rgba(255,248,239,0.92));
+      box-shadow: var(--shadow);
+      padding: 36px;
+      margin-bottom: 24px;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -80px auto;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(217,164,65,0.26), transparent 60%);
+      transform: rotate(14deg);
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(177, 79, 43, 0.25);
+      background: rgba(177, 79, 43, 0.08);
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2.2rem, 5vw, 4rem);
+      line-height: 0.95;
+      font-weight: 700;
+    }
+
+    .lead {
+      max-width: 760px;
+      font-size: 1.05rem;
+      line-height: 1.65;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    .card {
+      grid-column: span 12;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      padding: 24px;
+      backdrop-filter: blur(10px);
+      animation: rise 420ms ease both;
+    }
+
+    .card:nth-child(2) { animation-delay: 60ms; }
+    .card:nth-child(3) { animation-delay: 120ms; }
+    .card:nth-child(4) { animation-delay: 180ms; }
+    .card:nth-child(5) { animation-delay: 240ms; }
+    .card:nth-child(6) { animation-delay: 300ms; }
+
+    .card.half { grid-column: span 6; }
+    .card.third { grid-column: span 4; }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 1.35rem;
+      color: var(--ink);
+    }
+
+    p, li {
+      font-size: 0.98rem;
+      line-height: 1.65;
+      color: var(--muted);
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.64);
+      font-size: 0.92rem;
+      color: var(--ink);
+    }
+
+    .pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 6px rgba(29, 107, 102, 0.12);
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .status .box {
+      border-radius: 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(250,244,235,0.86));
+    }
+
+    .status strong {
+      display: block;
+      font-size: 1.5rem;
+      color: var(--ink);
+      margin-bottom: 6px;
+    }
+
+    code, pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    pre {
+      margin: 0;
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(30, 26, 23, 0.08);
+      background: #1e1b19;
+      color: #f7f2ea;
+      overflow: auto;
+      line-height: 1.5;
+      font-size: 0.9rem;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      border-left: 4px solid var(--accent-3);
+      padding-left: 14px;
+    }
+
+    .step strong {
+      color: var(--ink);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .duck {
+      display: grid;
+      gap: 12px;
+    }
+
+    .duck-item {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      padding: 16px;
+      background: rgba(255,255,255,0.7);
+    }
+
+    .duck-item h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+
+    .footer {
+      margin-top: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 900px) {
+      .card.half, .card.third { grid-column: span 12; }
+      .status { grid-template-columns: 1fr; }
+      .hero { padding: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">Implementation Review</div>
+      <h1>MIDI Triggers<br/>for Jamma</h1>
+      <p class="lead">
+        This review captures the completed MIDI-trigger feature work: rig-file parsing, trigger state-machine reuse,
+        separate scene-level trigger routing, Windows validation, and a rubber-duck critique of the design.
+      </p>
+      <div class="pill-row">
+        <span class="pill">TDD-first slice: parser + trigger behavior</span>
+        <span class="pill">Existing MIDI loop recording preserved</span>
+        <span class="pill">Separate trigger-device routing added</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card half">
+        <h2>What Changed</h2>
+        <ul>
+          <li>Added rig-file MIDI trigger mapping under each station trigger via a new <code>trigger</code> object.</li>
+          <li>Extended <code>Trigger</code> so MIDI Note and CC events reuse the existing debounce and state-machine path.</li>
+          <li>Kept MIDI loop recording on the existing performance MIDI ingress path.</li>
+          <li>Added a second scene-level ingress path for trigger devices, with shared-main-device support when the same controller is used for both roles.</li>
+          <li>Documented the config in the repo docs.</li>
+        </ul>
+      </article>
+
+      <article class="card half">
+        <h2>Validation Snapshot</h2>
+        <div class="status">
+          <div class="box">
+            <strong>355</strong>
+            <span>native tests executed</span>
+          </div>
+          <div class="box">
+            <strong>354</strong>
+            <span>tests passed</span>
+          </div>
+          <div class="box">
+            <strong>1</strong>
+            <span>test skipped: MidiDevice.OpensPreferredDeviceWhenAvailable</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card third">
+        <h2>Key Files</h2>
+        <ul>
+          <li>JammaLib/src/io/RigFile.h / RigFile.cpp</li>
+          <li>JammaLib/src/engine/Trigger.h / Trigger.cpp</li>
+          <li>JammaLib/src/engine/Scene.h / Scene.cpp</li>
+          <li>JammaLib/src/engine/MidiQueue.h</li>
+          <li>test/JammaLib_Tests/src/io/RigFile_Tests.cpp</li>
+          <li>test/JammaLib_Tests/src/engine/Trigger_Tests.cpp</li>
+        </ul>
+      </article>
+
+      <article class="card third">
+        <h2>Design Constraints</h2>
+        <ul>
+          <li>No replacement of existing MIDI loop-recording code.</li>
+          <li>Minimal logging only for device lifecycle, drops, and eaten trigger events.</li>
+          <li>Real-time audio path stays isolated from new trigger-device work.</li>
+          <li>Rig-file channel values remain one-based for the user.</li>
+        </ul>
+      </article>
+
+      <article class="card third">
+        <h2>Behavior Notes</h2>
+        <ul>
+          <li>Note On = press.</li>
+          <li>Note Off or Note On velocity 0 = release.</li>
+          <li>CC value &gt; 0 = press.</li>
+          <li>CC value 0 = release.</li>
+          <li>Velocity is ignored for trigger decisions.</li>
+        </ul>
+      </article>
+
+      <article class="card half">
+        <h2>Rig Config Example</h2>
+        <pre>{
+  "name": "Trig1",
+  "stationtype": 0,
+  "midiinput": [1],
+  "trigger": {
+    "type": "midi",
+    "device": "TriggerPad",
+    "activate": { "kind": "note", "channel": 1, "id": 60 },
+    "ditch": { "kind": "cc", "channel": 1, "id": 64 }
+  }
+}</pre>
+      </article>
+
+      <article class="card half">
+        <h2>Execution Path</h2>
+        <div class="timeline">
+          <div class="step">
+            <strong>1. Parse</strong>
+            Rig-file parsing resolves the optional MIDI trigger binding and converts channels to zero-based internal values.
+          </div>
+          <div class="step">
+            <strong>2. Bind</strong>
+            <code>Trigger::FromFile</code> converts that config into internal trigger bindings, the same shape used for existing trigger transitions.
+          </div>
+          <div class="step">
+            <strong>3. Route</strong>
+            Scene opens shared or dedicated MIDI input devices and pushes trigger-device events onto a separate ingress queue.
+          </div>
+          <div class="step">
+            <strong>4. Apply</strong>
+            On the job thread, matching triggers receive <code>OnMidiEvent</code> and run through the same debounce and state-machine code as other trigger sources.
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Rubber Duck Review</h2>
+        <div class="duck">
+          <div class="duck-item">
+            <h3>Why not splice trigger logic into MIDI loop recording?</h3>
+            <p>Because that would have coupled two behaviors the plan explicitly wanted separated. The final shape keeps performance MIDI ingress intact and adds trigger routing alongside it.</p>
+          </div>
+          <div class="duck-item">
+            <h3>Why add MIDI bindings inside <code>Trigger</code> instead of a second state machine?</h3>
+            <p>The debounce, press/release semantics, and action sequencing were already correct there. Reusing that logic cut regression risk and kept the feature focused.</p>
+          </div>
+          <div class="duck-item">
+            <h3>What is the main residual risk?</h3>
+            <p>Device-name matching is still string-based, because that is how the current MIDI device layer selects ports. If port names drift across machines, the config may need adjustment.</p>
+          </div>
+          <div class="duck-item">
+            <h3>What would be the next hardening step?</h3>
+            <p>Add a small scene-level routing test harness that injects trigger-device ingress events directly, so shared-device and dedicated-device behavior can be exercised without physical hardware.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <div class="footer">
+      Generated for repository review on 2026-05-25.
+    </div>
+  </div>
+</body>
+</html>

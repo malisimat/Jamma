@@ -2,6 +2,8 @@
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
+#include <cstdint>
+
 using namespace base;
 using namespace engine;
 using actions::ActionResult;
@@ -13,6 +15,46 @@ using graphics::Image;
 using graphics::ImageParams;
 using audio::AudioMixer;
 using resources::ResourceLib;
+
+namespace
+{
+	constexpr std::uint8_t MidiCcStatus = 0xB0u;
+	constexpr unsigned int MidiBindingKindShift = 12u;
+	constexpr unsigned int MidiBindingChannelShift = 8u;
+
+	unsigned int EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
+		unsigned int channel,
+		unsigned int id)
+	{
+		return (static_cast<unsigned int>(kind) << MidiBindingKindShift) |
+			((channel & 0x0Fu) << MidiBindingChannelShift) |
+			(id & 0xFFu);
+	}
+
+	DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
+		unsigned int channel,
+		unsigned int id)
+	{
+		DualBinding binding;
+		binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
+			EncodeMidiBindingValue(kind, channel, id),
+			1u), true);
+		return binding;
+	}
+
+	void AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
+		const std::function<void(const DualBinding&)>& onBinding)
+	{
+		if (bindingSpec.MatchAnyChannel)
+		{
+			for (auto channel = 0u; channel < 16u; ++channel)
+				onBinding(MakeMidiBinding(bindingSpec.Kind, channel, bindingSpec.Id));
+			return;
+		}
+
+		onBinding(MakeMidiBinding(bindingSpec.Kind, bindingSpec.Channel, bindingSpec.Id));
+	}
+}
 
 Trigger::Trigger(TriggerParams trigParams) :
 	GuiElement(trigParams),
@@ -89,6 +131,20 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 	for (auto midiChan : trigStruct.MidiInputChannels)
 		trigger->AddMidiInputChannel(midiChan);
 
+	if (trigStruct.MidiTrigger.has_value())
+	{
+		AddMidiBindingForChannels(trigStruct.MidiTrigger->Activate,
+			[&trigger](const DualBinding& binding)
+			{
+				trigger->AddBinding(binding, DualBinding());
+			});
+		AddMidiBindingForChannels(trigStruct.MidiTrigger->Ditch,
+			[&trigger](const DualBinding& binding)
+			{
+				trigger->AddBinding(DualBinding(), binding);
+			});
+	}
+
 	return trigger;
 }
 
@@ -127,7 +183,14 @@ ActionResult Trigger::OnAction(KeyAction action)
 
 	for (auto& b : _activateBindings)
 	{
-		if (TryChangeState(b, true, action, keyState))
+		if (TryChangeState(b,
+			true,
+			TriggerSource::TRIGGER_KEY,
+			action.KeyChar,
+			static_cast<unsigned int>(keyState),
+			action.GetActionTime(),
+			action.GetUserConfig(),
+			action.GetAudioParams()))
 		{
 			res.IsEaten = true;
 			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
@@ -136,7 +199,86 @@ ActionResult Trigger::OnAction(KeyAction action)
 	}
 	for (auto& b : _ditchBindings)
 	{
-		if (TryChangeState(b, false, action, keyState))
+		if (TryChangeState(b,
+			false,
+			TriggerSource::TRIGGER_KEY,
+			action.KeyChar,
+			static_cast<unsigned int>(keyState),
+			action.GetActionTime(),
+			action.GetUserConfig(),
+			action.GetAudioParams()))
+		{
+			res.IsEaten = true;
+			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
+				actions::ACTIONRESULT_DITCH :
+				actions::ACTIONRESULT_DEFAULT;
+			return res;
+		}
+	}
+
+	return res;
+}
+
+ActionResult Trigger::OnMidiEvent(const MidiEvent& event,
+	Time actionTime,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	unsigned int bindingValue = 0u;
+	unsigned int bindingState = 0u;
+	if (event.IsNoteOn() || event.IsNoteOff())
+	{
+		bindingValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::NOTE,
+			event.Channel(),
+			event.data1);
+		bindingState = event.IsNoteOn() ? 1u : 0u;
+	}
+	else if (event.MessageType() == MidiCcStatus)
+	{
+		bindingValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::CC,
+			event.Channel(),
+			event.data1);
+		bindingState = event.data2 > 0u ? 1u : 0u;
+	}
+	else
+	{
+		return ActionResult::NoAction();
+	}
+
+	ActionResult res;
+	res.IsEaten = false;
+	res.ResultType = actions::ACTIONRESULT_DEFAULT;
+
+	for (auto& b : _activateBindings)
+	{
+		if (TryChangeState(b,
+			true,
+			TriggerSource::TRIGGER_MIDI,
+			bindingValue,
+			bindingState,
+			actionTime,
+			cfg,
+			params))
+		{
+			res.IsEaten = true;
+			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
+			return res;
+		}
+	}
+
+	for (auto& b : _ditchBindings)
+	{
+		if (TryChangeState(b,
+			false,
+			TriggerSource::TRIGGER_MIDI,
+			bindingValue,
+			bindingState,
+			actionTime,
+			cfg,
+			params))
 		{
 			res.IsEaten = true;
 			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
@@ -475,13 +617,17 @@ bool Trigger::Debounce(bool isActivate,
 
 bool Trigger::TryChangeState(DualBinding& binding,
 	bool isActivate,
-	const actions::KeyAction& action,
-	int keyState)
+	TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	Time actionTime,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
 {
 	auto trigResult = binding.OnTrigger(
-		TriggerSource::TRIGGER_KEY,
-		action.KeyChar,
-		keyState);
+		source,
+		value,
+		state);
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)
@@ -491,7 +637,7 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 	allowedThrough = Debounce(isActivate,
 		trigResult,
-		action.GetActionTime());
+		actionTime);
 
 	if (!allowedThrough)
 	{
@@ -501,10 +647,10 @@ bool Trigger::TryChangeState(DualBinding& binding,
 	switch (trigResult)
 	{
 	case DualBinding::MATCH_DOWN:
-		StateMachine(true, isActivate, action.GetUserConfig(), action.GetAudioParams());
+		StateMachine(true, isActivate, cfg, params);
 		return true;
 	case DualBinding::MATCH_RELEASE:
-		StateMachine(false, isActivate, action.GetUserConfig(), action.GetAudioParams());
+		StateMachine(false, isActivate, cfg, params);
 		return true;
 	}
 

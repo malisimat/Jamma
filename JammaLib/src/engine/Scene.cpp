@@ -21,6 +21,18 @@ using namespace std::placeholders;
 
 namespace
 {
+	bool ShouldUseMainMidiInput(const std::string& configuredDeviceName,
+		const io::UserConfig& userConfig)
+	{
+		if (!userConfig.Midi.Enabled)
+			return false;
+
+		if (configuredDeviceName == userConfig.Midi.Name)
+			return true;
+
+		return (configuredDeviceName == "default") && (userConfig.Midi.Name == "default");
+	}
+
 	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
 		const std::string& userName)
 	{
@@ -59,6 +71,10 @@ Scene::Scene(SceneParams params,
 	_audioDevice(nullptr),
 	_midiDevice(nullptr),
 	_lastMidiDropCount(0u),
+	_lastMidiTriggerDropCount(0u),
+	_midiTriggerRoutes(),
+	_midiTriggerInputs(),
+	_sharedMainMidiTriggerSlot(std::nullopt),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
@@ -181,7 +197,13 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
 
 				if (trigger.has_value())
+				{
+					if (rigStruct.Triggers[stationParams.Index].MidiTrigger.has_value())
+						scene->_RegisterMidiTriggerRoute(
+							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
+							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+				}
 			}
 
 			scene->_AddStation(station.value());
@@ -983,6 +1005,50 @@ void Scene::_PumpMidi()
 			<< " event(s), total dropped=" << dropped << std::endl;
 		_lastMidiDropCount = dropped;
 	}
+
+	MidiTriggerIngressEvent triggerEvent{};
+	auto audioParams = _audioDevice ?
+		std::optional<audio::AudioStreamParams>(_audioDevice->GetAudioStreamParams()) :
+		std::nullopt;
+	while (_midiTriggerIngress.Pop(triggerEvent))
+	{
+		for (auto& route : _midiTriggerRoutes)
+		{
+			if ((route.DeviceSlot != triggerEvent.DeviceSlot) || !route.Trigger)
+				continue;
+
+			auto res = route.Trigger->OnMidiEvent(
+				triggerEvent.Event,
+				Timer::GetTime(),
+				_userConfig,
+				audioParams);
+			if (res.IsEaten)
+			{
+				std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
+					<< "\" trigger=\"" << route.Trigger->Name()
+					<< "\" status=" << static_cast<unsigned int>(triggerEvent.Event.status)
+					<< " data1=" << static_cast<unsigned int>(triggerEvent.Event.data1)
+					<< " data2=" << static_cast<unsigned int>(triggerEvent.Event.data2)
+					<< std::endl;
+			}
+		}
+	}
+
+	dropped = _midiTriggerIngress.DroppedCount();
+	if (dropped != _lastMidiTriggerDropCount)
+	{
+		std::cout << "[MIDI Trigger] Ingress queue dropped " << (dropped - _lastMidiTriggerDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastMidiTriggerDropCount = dropped;
+	}
+}
+
+void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+{
+	if (!trigger)
+		return;
+
+	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, 0u, trigger });
 }
 
 void Scene::InitReceivers()
@@ -1099,6 +1165,40 @@ void Scene::InitMidi()
 
 	_midiIngress.Clear();
 	_lastMidiDropCount = 0u;
+	_midiTriggerIngress.Clear();
+	_lastMidiTriggerDropCount = 0u;
+	_midiTriggerInputs.clear();
+	_sharedMainMidiTriggerSlot.reset();
+
+	auto nextTriggerSlot = static_cast<std::uint8_t>(0u);
+	for (auto& route : _midiTriggerRoutes)
+	{
+		if (ShouldUseMainMidiInput(route.DeviceName, _userConfig))
+		{
+			if (!_sharedMainMidiTriggerSlot.has_value())
+				_sharedMainMidiTriggerSlot = nextTriggerSlot++;
+
+			route.DeviceSlot = _sharedMainMidiTriggerSlot.value();
+			continue;
+		}
+
+		auto inputIter = std::find_if(_midiTriggerInputs.begin(), _midiTriggerInputs.end(),
+			[&route](const MidiTriggerInput& input) {
+				return input.DeviceName == route.DeviceName;
+			});
+		if (inputIter == _midiTriggerInputs.end())
+		{
+			_midiTriggerInputs.push_back({
+				nextTriggerSlot++,
+				route.DeviceName,
+				std::make_unique<MidiDevice>()
+			});
+			inputIter = std::prev(_midiTriggerInputs.end());
+		}
+
+		route.DeviceSlot = inputIter->Slot;
+	}
+
 	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
 
@@ -1132,14 +1232,49 @@ void Scene::InitMidi()
 			ev.data2 = data2;
 			ev._pad = 0u;
 			_midiIngress.Push(ev);
+
+			if (_sharedMainMidiTriggerSlot.has_value())
+			{
+				MidiTriggerIngressEvent triggerEvent{};
+				triggerEvent.Event = MidiEvent{ 0u, status, data1, data2, 0u };
+				triggerEvent.DeviceSlot = _sharedMainMidiTriggerSlot.value();
+				_midiTriggerIngress.Push(triggerEvent);
+			}
 		});
 
 	if (!opened)
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+
+	for (auto& triggerInput : _midiTriggerInputs)
+	{
+		auto triggerOpened = triggerInput.Device->Open(
+			triggerInput.DeviceName,
+			[this, slot = triggerInput.Slot](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+			{
+				MidiTriggerIngressEvent triggerEvent{};
+				triggerEvent.Event = MidiEvent{ 0u, status, data1, data2, 0u };
+				triggerEvent.DeviceSlot = slot;
+				_midiTriggerIngress.Push(triggerEvent);
+			});
+
+		if (!triggerOpened)
+		{
+			std::cout << "[MIDI Trigger] No active trigger input connection for \""
+				<< triggerInput.DeviceName << "\"." << std::endl;
+		}
+	}
 }
 
 void Scene::CloseMidi()
 {
+	for (auto& triggerInput : _midiTriggerInputs)
+	{
+		if (triggerInput.Device)
+			triggerInput.Device->Close();
+	}
+	_midiTriggerInputs.clear();
+	_sharedMainMidiTriggerSlot.reset();
+
 	if (_midiDevice)
 		_midiDevice->Close();
 }

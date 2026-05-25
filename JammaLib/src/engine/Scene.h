@@ -238,6 +238,7 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
@@ -254,6 +255,27 @@ namespace engine
 			size_t pluginIndex);
 
 	protected:
+		struct MidiTriggerIngressEvent
+		{
+			MidiEvent Event;
+			std::uint8_t DeviceSlot;
+			std::uint8_t _pad[3] = { 0u, 0u, 0u };
+		};
+
+		struct MidiTriggerRoute
+		{
+			std::string DeviceName;
+			std::uint8_t DeviceSlot;
+			std::shared_ptr<Trigger> Trigger;
+		};
+
+		struct MidiTriggerInput
+		{
+			std::uint8_t Slot;
+			std::string DeviceName;
+			std::unique_ptr<audio::MidiDevice> Device;
+		};
+
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
@@ -272,6 +294,11 @@ namespace engine
 		std::unique_ptr<audio::MidiDevice> _midiDevice;
 		MidiQueue<1024> _midiIngress;
 		std::uint64_t _lastMidiDropCount;
+		MidiQueue<1024, MidiTriggerIngressEvent> _midiTriggerIngress;
+		std::uint64_t _lastMidiTriggerDropCount;
+		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
+		std::vector<MidiTriggerInput> _midiTriggerInputs;
+		std::optional<std::uint8_t> _sharedMainMidiTriggerSlot;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;

@@ -7,6 +7,29 @@
 
 #include "RigFile.h"
 
+#include <algorithm>
+
+namespace
+{
+	std::optional<std::string> GetJsonString(const io::Json::JsonPart& json, const std::string& key)
+	{
+		auto iter = json.KeyValues.find(key);
+		if ((iter == json.KeyValues.end()) || (iter->second.index() != 4))
+			return std::nullopt;
+
+		return std::get<std::string>(iter->second);
+	}
+
+	std::optional<unsigned int> GetJsonUnsigned(const io::Json::JsonPart& json, const std::string& key)
+	{
+		auto iter = json.KeyValues.find(key);
+		if ((iter == json.KeyValues.end()) || (iter->second.index() != 2))
+			return std::nullopt;
+
+		return static_cast<unsigned int>(std::get<unsigned long>(iter->second));
+	}
+}
+
 using namespace io;
 
 const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"name\":\"default\",\"enabled\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
@@ -160,6 +183,7 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	std::vector<TriggerPair> pairs;
 	std::vector<unsigned int> inputChannels;
 	std::vector<unsigned int> midiInputChannels;
+	std::optional<MidiTriggerBinding> midiTrigger;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -237,7 +261,17 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		}
 	}
 
-	if (pairs.empty() || name.empty())
+	iter = json.KeyValues.find("trigger");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["trigger"].index() == 6)
+		{
+			auto triggerJson = std::get<Json::JsonPart>(json.KeyValues["trigger"]);
+			midiTrigger = MidiTriggerBinding::FromJson(triggerJson);
+		}
+	}
+
+	if ((pairs.empty() && !midiTrigger.has_value()) || name.empty())
 		return std::nullopt;
 
 	Trigger trigger;
@@ -246,5 +280,61 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	trigger.TriggerPairs = pairs;
 	trigger.InputChannels = inputChannels;
 	trigger.MidiInputChannels = midiInputChannels;
+	trigger.MidiTrigger = midiTrigger;
 	return trigger;
+}
+
+std::optional<RigFile::Trigger::MidiTriggerBindingSpec> RigFile::Trigger::MidiTriggerBindingSpec::FromJson(Json::JsonPart json)
+{
+	auto kind = GetJsonString(json, "kind");
+	auto id = GetJsonUnsigned(json, "id");
+	if (!kind.has_value() || !id.has_value())
+		return std::nullopt;
+
+	MidiTriggerBindingSpec binding{};
+	binding.Id = id.value();
+	binding.Channel = 0u;
+	binding.MatchAnyChannel = true;
+
+	if (0 == kind.value().compare("note"))
+		binding.Kind = NOTE;
+	else if (0 == kind.value().compare("cc"))
+		binding.Kind = CC;
+	else
+		return std::nullopt;
+
+	auto channel = GetJsonUnsigned(json, "channel");
+	if (channel.has_value() && (channel.value() >= 1u) && (channel.value() <= 16u))
+	{
+		binding.Channel = channel.value() - 1u;
+		binding.MatchAnyChannel = false;
+	}
+
+	return binding;
+}
+
+std::optional<RigFile::Trigger::MidiTriggerBinding> RigFile::Trigger::MidiTriggerBinding::FromJson(Json::JsonPart json)
+{
+	auto type = GetJsonString(json, "type");
+	if (!type.has_value() || (0 != type.value().compare("midi")))
+		return std::nullopt;
+
+	auto activateIter = json.KeyValues.find("activate");
+	auto ditchIter = json.KeyValues.find("ditch");
+	if ((activateIter == json.KeyValues.end()) || (ditchIter == json.KeyValues.end()))
+		return std::nullopt;
+	if ((activateIter->second.index() != 6) || (ditchIter->second.index() != 6))
+		return std::nullopt;
+
+	auto activate = MidiTriggerBindingSpec::FromJson(std::get<Json::JsonPart>(activateIter->second));
+	auto ditch = MidiTriggerBindingSpec::FromJson(std::get<Json::JsonPart>(ditchIter->second));
+	if (!activate.has_value() || !ditch.has_value())
+		return std::nullopt;
+
+	MidiTriggerBinding binding{};
+	auto device = GetJsonString(json, "device");
+	binding.Device = device.has_value() ? device.value() : "default";
+	binding.Activate = activate.value();
+	binding.Ditch = ditch.value();
+	return binding;
 }

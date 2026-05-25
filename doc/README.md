@@ -87,3 +87,29 @@ Playback path:
 1. Loop model reads/mixes content for output.
 2. Audio data is accumulated through buffer/mixer stages.
 3. Channel mixer sends final output to DAC.
+
+## MIDI Trigger Mapping
+
+Rig files support a dedicated MIDI trigger mapping per station trigger.
+
+Example trigger block:
+
+```json
+{
+  "name": "Trig1",
+  "stationtype": 0,
+  "trigger": {
+    "type": "midi",
+    "device": "TriggerPad",
+    "activate": { "kind": "note", "channel": 1, "id": 60 },
+    "ditch": { "kind": "cc", "channel": 1, "id": 64 }
+  }
+}
+```
+
+Behavior:
+
+- The trigger device can be the same as `user.midi.name` or a separate controller.
+- Trigger handling reuses the same trigger debounce and state-machine path as existing non-MIDI trigger inputs.
+- MIDI loop recording remains controlled by `user.midi.name` and `midiinput` channel arming.
+- `channel` values in the rig file are one-based. Omitting `channel` makes the binding match any channel.

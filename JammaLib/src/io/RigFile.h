@@ -27,6 +27,12 @@ namespace io
 			VERSION_LEGACY
 		};
 
+		enum MidiTriggerEvent
+		{
+			NOTE,
+			CC
+		};
+
 		static std::optional<RigFile> FromStream(std::stringstream ss);
 		static bool ToStream(RigFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
@@ -44,11 +50,31 @@ namespace io
 
 		struct Trigger
 		{
+			struct MidiTriggerBindingSpec
+			{
+				MidiTriggerEvent Kind;
+				unsigned int Channel;
+				unsigned int Id;
+				bool MatchAnyChannel;
+
+				static std::optional<MidiTriggerBindingSpec> FromJson(Json::JsonPart json);
+			};
+
+			struct MidiTriggerBinding
+			{
+				std::string Device;
+				MidiTriggerBindingSpec Activate;
+				MidiTriggerBindingSpec Ditch;
+
+				static std::optional<MidiTriggerBinding> FromJson(Json::JsonPart json);
+			};
+
 			std::string Name;
 			unsigned int StationType;
 			std::vector<TriggerPair> TriggerPairs;
 			std::vector<unsigned int> InputChannels;
 			std::vector<unsigned int> MidiInputChannels;
+			std::optional<MidiTriggerBinding> MidiTrigger;
 
 			static std::optional<Trigger> FromJson(Json::JsonPart json);
 		};

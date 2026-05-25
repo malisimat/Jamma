@@ -1,8 +1,11 @@
 
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
+#include "engine/MidiEvent.h"
 #include "engine/Trigger.h"
 #include "io/UserConfig.h"
+#include "io/Json.h"
+#include "io/RigFile.h"
 
 using base::ActionSender;
 using base::ActionReceiver;
@@ -480,4 +483,36 @@ TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[5].ActionType);
 	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetTake);
 	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
+}
+
+TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	engine::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
+	engine::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
+	trigger.value()->OnMidiEvent(ccDown, GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	trigger.value()->OnMidiEvent(ccUp, GetTime());
+	ASSERT_EQ(3u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
 }

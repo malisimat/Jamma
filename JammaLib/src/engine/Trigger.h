@@ -7,6 +7,7 @@
 #include "GuiElement.h"
 #include "Tickable.h"
 #include "Timer.h"
+#include "MidiEvent.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
@@ -244,6 +245,10 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		virtual actions::ActionResult OnMidiEvent(const MidiEvent& event,
+			Time actionTime,
+			std::optional<io::UserConfig> cfg = std::nullopt,
+			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -281,8 +286,12 @@ namespace engine
 			Time acionTime);
 		bool TryChangeState(DualBinding& binding,
 			bool isActivate,
-			const actions::KeyAction& action,
-			int keyState);
+			TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			Time actionTime,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
 		bool StateMachine(bool isDown,
 			bool isActivate,
 			std::optional<io::UserConfig> cfg,

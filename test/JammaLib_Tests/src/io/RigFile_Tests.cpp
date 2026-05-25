@@ -78,6 +78,24 @@ TEST(RigFile, ParsesMidiInputChannelsAsOneBasedRigValues) {
 	EXPECT_EQ(15u, trig.value().MidiInputChannels[1]);
 }
 
+TEST(RigFile, ParsesMidiTriggerBinding) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":10,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	ASSERT_TRUE(trig.has_value());
+	ASSERT_TRUE(trig.value().MidiTrigger.has_value());
+	EXPECT_EQ(0, trig.value().Name.compare("TrigMidi"));
+	EXPECT_EQ(0, trig.value().MidiTrigger->Device.compare("TriggerPad"));
+	EXPECT_EQ(RigFile::MidiTriggerEvent::NOTE, trig.value().MidiTrigger->Activate.Kind);
+	EXPECT_EQ(9u, trig.value().MidiTrigger->Activate.Channel);
+	EXPECT_EQ(60u, trig.value().MidiTrigger->Activate.Id);
+	EXPECT_EQ(RigFile::MidiTriggerEvent::CC, trig.value().MidiTrigger->Ditch.Kind);
+	EXPECT_EQ(0u, trig.value().MidiTrigger->Ditch.Channel);
+	EXPECT_EQ(64u, trig.value().MidiTrigger->Ditch.Id);
+}
+
 TEST(RigFile, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	
@@ -123,4 +141,19 @@ TEST(RigFile, ParsesFile) {
 
 	ASSERT_EQ(5, rig.value().Triggers[1].TriggerPairs[0].ActivateDown);
 	ASSERT_EQ(6, rig.value().Triggers[1].TriggerPairs[0].DitchDown);
+}
+
+TEST(RigFile, ParsesFileWithMidiTriggerBinding) {
+	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
+	std::string midiTrigger = "{\"name\":\"trigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":48},\"ditch\":{\"kind\":\"note\",\"channel\":1,\"id\":49}}}";
+	auto str = "{\"name\":\"rig\",\"user\":{\"audio\":" + audio + "},\"triggers\":[" + midiTrigger + "]}";
+	auto testStream = std::stringstream(str);
+	auto rig = RigFile::FromStream(std::move(testStream));
+
+	ASSERT_TRUE(rig.has_value());
+	ASSERT_EQ(1u, rig.value().Triggers.size());
+	ASSERT_TRUE(rig.value().Triggers[0].MidiTrigger.has_value());
+	EXPECT_EQ(0, rig.value().Triggers[0].MidiTrigger->Device.compare("TriggerPad"));
+	EXPECT_EQ(48u, rig.value().Triggers[0].MidiTrigger->Activate.Id);
+	EXPECT_EQ(49u, rig.value().Triggers[0].MidiTrigger->Ditch.Id);
 }
