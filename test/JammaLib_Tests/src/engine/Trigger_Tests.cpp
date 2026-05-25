@@ -41,6 +41,15 @@ Time OffsetTime(const Time t, unsigned int ms)
 	return t + std::chrono::milliseconds(ms);
 }
 
+static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const engine::MidiEvent& event, Time t)
+{
+	unsigned int midiValue = 0u, midiState = 0u;
+	base::Action midiAction;
+	midiAction.SetActionTime(t);
+	if (Trigger::TryEncodeMidiEvent(event, midiValue, midiState))
+		trigger->OnEvent(engine::TRIGGER_MIDI, midiValue, midiState, midiAction);
+}
+
 class MockedTriggerReceiver :
 	public ActionReceiver
 {
@@ -274,15 +283,15 @@ TEST(Trigger, SerialBindingFromRigOnlyMatchesSerialSource) {
 	action.SetActionTime(GetTime());
 
 	receiver->SetExpected(TriggerAction::TRIGGER_REC_START);
-	auto keyboardRes = trigger->OnBindingEvent(engine::TRIGGER_KEY, 0u, 1u, action);
+	auto keyboardRes = trigger->OnEvent(engine::TRIGGER_KEY, 0u, 1u, action);
 	EXPECT_FALSE(keyboardRes.IsEaten);
 	EXPECT_EQ(0, receiver->GetNumTimesCalled());
 
-	auto wrongDeviceRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-b");
+	auto wrongDeviceRes = trigger->OnEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-b");
 	EXPECT_FALSE(wrongDeviceRes.IsEaten);
 	EXPECT_EQ(0, receiver->GetNumTimesCalled());
 
-	auto serialRes = trigger->OnBindingEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-a");
+	auto serialRes = trigger->OnEvent(engine::TRIGGER_SERIAL, 0u, 1u, action, "pedal-a");
 	EXPECT_TRUE(serialRes.IsEaten);
 	EXPECT_TRUE(receiver->GetLastMatched());
 	EXPECT_EQ(1, receiver->GetNumTimesCalled());
@@ -629,19 +638,19 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
 	engine::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
 	engine::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
-	trigger.value()->OnMidiEvent(ccDown, GetTime());
+	SendMidiEvent(trigger.value(), ccDown, GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	trigger.value()->OnMidiEvent(ccUp, GetTime());
+	SendMidiEvent(trigger.value(), ccUp, GetTime());
 	ASSERT_EQ(3u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
@@ -661,17 +670,17 @@ TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	EXPECT_TRUE(receiver->Actions().empty());
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
 }
@@ -690,17 +699,17 @@ TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 61u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 61u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
 	ASSERT_EQ(3u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
