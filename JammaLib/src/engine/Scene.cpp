@@ -1018,16 +1018,20 @@ void Scene::_PumpMidi()
 			if ((route.DeviceSlot != triggerEvent.DeviceSlot) || !route.Trigger)
 				continue;
 
+			const auto shouldLogEvent = triggerEvent.Event.IsNoteOn() ||
+				triggerEvent.Event.IsNoteOff() ||
+				(triggerEvent.Event.MessageType() == 0xB0u);
 			auto res = route.Trigger->OnMidiEvent(
 				triggerEvent.Event,
 				Timer::GetTime(),
 				_userConfig,
 				audioParams);
-			if (res.IsEaten)
+			if (shouldLogEvent || res.IsEaten)
 			{
 				std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
 					<< "\" trigger=\"" << route.Trigger->Name()
-					<< "\" status=" << static_cast<unsigned int>(triggerEvent.Event.status)
+					<< "\" matched=" << (res.IsEaten ? "true" : "false")
+					<< " status=" << static_cast<unsigned int>(triggerEvent.Event.status)
 					<< " data1=" << static_cast<unsigned int>(triggerEvent.Event.data1)
 					<< " data2=" << static_cast<unsigned int>(triggerEvent.Event.data2)
 					<< std::endl;

@@ -1,5 +1,6 @@
 
 #include "gtest/gtest.h"
+#include <sstream>
 #include "resources/ResourceLib.h"
 #include "engine/MidiEvent.h"
 #include "engine/LoopTake.h"
@@ -608,6 +609,65 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
 }
 
+TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	EXPECT_TRUE(receiver->Actions().empty());
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
+}
+
+TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":61}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOff(0u, 0u, 61u), GetTime());
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	trigger.value()->OnMidiEvent(engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	ASSERT_EQ(3u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
+}
+
 TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
@@ -645,4 +705,43 @@ TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 	EXPECT_TRUE(take->IsArmed());
+}
+
+TEST(Trigger, RoutedMidiTriggerLogsUnmatchedNoteAndCcEvents) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.RegisterMidiTriggerRouteForTest("default", trigger.value(), 0u);
+	scene.SetSharedMainMidiTriggerSlotForTest(0u);
+
+	std::ostringstream captured;
+	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 61u, 100u);
+	scene.PushMainMidiEventForTest(0xB0u, 65u, 127u);
+	scene.PumpMidiForTest();
+
+	std::cout.flush();
+	std::cout.rdbuf(oldBuf);
+
+	EXPECT_TRUE(receiver->Actions().empty());
+	const auto log = captured.str();
+	EXPECT_NE(std::string::npos, log.find("[MIDI Trigger] device=\"default\" trigger=\"TrigMidi\""));
+	EXPECT_NE(std::string::npos, log.find("matched=false status=144 data1=61 data2=100"));
+	EXPECT_NE(std::string::npos, log.find("matched=false status=176 data1=65 data2=127"));
 }

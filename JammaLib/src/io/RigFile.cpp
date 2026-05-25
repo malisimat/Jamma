@@ -294,10 +294,21 @@ std::optional<RigFile::Trigger::MidiTriggerBindingSpec> RigFile::Trigger::MidiTr
 	MidiTriggerBindingSpec binding{};
 	binding.Id = id.value();
 	binding.Channel = 0u;
+	binding.State = 1u;
 	binding.MatchAnyChannel = true;
 
-	if (0 == kind.value().compare("note"))
+	if ((0 == kind.value().compare("note")) ||
+		(0 == kind.value().compare("noteon")) ||
+		(0 == kind.value().compare("note-on")) ||
+		(0 == kind.value().compare("note on")))
 		binding.Kind = NOTE;
+	else if ((0 == kind.value().compare("noteoff")) ||
+		(0 == kind.value().compare("note-off")) ||
+		(0 == kind.value().compare("note off")))
+	{
+		binding.Kind = NOTE;
+		binding.State = 0u;
+	}
 	else if (0 == kind.value().compare("cc"))
 		binding.Kind = CC;
 	else

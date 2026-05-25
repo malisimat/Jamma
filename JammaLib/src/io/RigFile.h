@@ -55,6 +55,7 @@ namespace io
 				MidiTriggerEvent Kind;
 				unsigned int Channel;
 				unsigned int Id;
+				unsigned int State;
 				bool MatchAnyChannel;
 
 				static std::optional<MidiTriggerBindingSpec> FromJson(Json::JsonPart json);

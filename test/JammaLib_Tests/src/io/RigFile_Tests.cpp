@@ -91,9 +91,25 @@ TEST(RigFile, ParsesMidiTriggerBinding) {
 	EXPECT_EQ(RigFile::MidiTriggerEvent::NOTE, trig.value().MidiTrigger->Activate.Kind);
 	EXPECT_EQ(9u, trig.value().MidiTrigger->Activate.Channel);
 	EXPECT_EQ(60u, trig.value().MidiTrigger->Activate.Id);
+	EXPECT_EQ(1u, trig.value().MidiTrigger->Activate.State);
 	EXPECT_EQ(RigFile::MidiTriggerEvent::CC, trig.value().MidiTrigger->Ditch.Kind);
 	EXPECT_EQ(0u, trig.value().MidiTrigger->Ditch.Channel);
 	EXPECT_EQ(64u, trig.value().MidiTrigger->Ditch.Id);
+	EXPECT_EQ(1u, trig.value().MidiTrigger->Ditch.State);
+}
+
+TEST(RigFile, ParsesNoteOnAndNoteOffMidiTriggerBindingKinds) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"activate\":{\"kind\":\"note-on\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":61}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	ASSERT_TRUE(trig.has_value());
+	ASSERT_TRUE(trig.value().MidiTrigger.has_value());
+	EXPECT_EQ(RigFile::MidiTriggerEvent::NOTE, trig.value().MidiTrigger->Activate.Kind);
+	EXPECT_EQ(1u, trig.value().MidiTrigger->Activate.State);
+	EXPECT_EQ(RigFile::MidiTriggerEvent::NOTE, trig.value().MidiTrigger->Ditch.Kind);
+	EXPECT_EQ(0u, trig.value().MidiTrigger->Ditch.State);
 }
 
 TEST(RigFile, ParsesFile) {

@@ -33,12 +33,13 @@ namespace
 
 	DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
 		unsigned int channel,
-		unsigned int id)
+		unsigned int id,
+		unsigned int state)
 	{
 		DualBinding binding;
 		binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
 			EncodeMidiBindingValue(kind, channel, id),
-			1u), true);
+			state), true);
 		return binding;
 	}
 
@@ -48,11 +49,17 @@ namespace
 		if (bindingSpec.MatchAnyChannel)
 		{
 			for (auto channel = 0u; channel < 16u; ++channel)
-				onBinding(MakeMidiBinding(bindingSpec.Kind, channel, bindingSpec.Id));
+				onBinding(MakeMidiBinding(bindingSpec.Kind,
+					channel,
+					bindingSpec.Id,
+					bindingSpec.State));
 			return;
 		}
 
-		onBinding(MakeMidiBinding(bindingSpec.Kind, bindingSpec.Channel, bindingSpec.Id));
+		onBinding(MakeMidiBinding(bindingSpec.Kind,
+			bindingSpec.Channel,
+			bindingSpec.Id,
+			bindingSpec.State));
 	}
 }
 
