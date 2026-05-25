@@ -214,6 +214,9 @@ namespace engine
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
 		bool _quantisationOverlayPinned;
+		unsigned int _pendingQuantisationOverlaySeedSamps;
+		unsigned int _pendingQuantisationOverlayMasterLoopSamps;
+		bool _pendingQuantisationOverlayConfirm;
 
 		// Audio → render handoff for the quantisation overlay phase.
 		// Written lock-free on the audio thread (OnTick), consumed on the render thread (Draw3d).

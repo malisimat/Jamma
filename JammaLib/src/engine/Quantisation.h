@@ -30,11 +30,11 @@ namespace engine
 	unsigned int IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate);
 
 	// Computes full timing given an already-known seed and master length.
-	// Use when the first loop has been recorded and both lengths are available.
+	// Use when a seed length has already been selected and only BPM/BPI metadata
+	// needs to be derived.
 	std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
 		unsigned long masterSamps,
-		unsigned int sampleRate,
-		const QuantisationPolicy& policy);
+		unsigned int sampleRate);
 
 	// Deduces the seed by halving the master loop until it falls within the
 	// policy's target grain range and represents the BPM directly.  BPI is the
@@ -43,11 +43,9 @@ namespace engine
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);
 
-	// Snaps a tap-derived beat gap to the nearest exact divisor of masterLoopSamps
-	// while respecting the policy seed-size floor.  Use when tap tempo is active
-	// but no master loop exists yet (the tap gap becomes the candidate seed).
+	// Converts a tap-derived beat gap into a seed while respecting the policy
+	// seed-size floor. Use when tap tempo is active but no master loop exists yet.
 	std::optional<QuantisationTiming> DeduceTapSeedTiming(unsigned long requestedSeedSamps,
-		unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);
 
@@ -73,8 +71,9 @@ namespace engine
 			unsigned long masterLoopSamps,
 			const QuantisationPolicy& policy);
 
-		// Returns the current timing estimate without advancing the tracker.
-		// Use to display or apply the latest tap tempo without a new tap event.
+		// Returns the current timing estimate without advancing the tracker. With a
+		// master loop, the estimate snaps to a clean master divisor; without one,
+		// it is treated as a standalone tap-derived seed.
 		std::optional<QuantisationTiming> CurrentTiming(unsigned long masterLoopSamps,
 			unsigned int sampleRate,
 			const QuantisationPolicy& policy) const;

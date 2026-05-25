@@ -89,7 +89,10 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_quantisationOverlayPinned(false)
+	_quantisationOverlayPinned(false),
+	_pendingQuantisationOverlaySeedSamps(HiddenSeedSamps),
+	_pendingQuantisationOverlayMasterLoopSamps(HiddenMasterSamps),
+	_pendingQuantisationOverlayConfirm(false)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -182,7 +185,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
 
-	if (_quantisationModel)
+	if (_quantisationModel && (base::PASS_SCENE == pass))
 	{
 		// Refresh quantisation overlay state on the render thread (safe for
 		// geometry allocation).  The audio thread only publishes _pendingLoopIndexFrac.
@@ -844,7 +847,6 @@ void Station::SetName(std::string name)
 void Station::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = clock;
-	RefreshQuantisationOverlayFromClock();
 }
 
 void Station::SetQuantisationOverlay(unsigned int seedSamps,
@@ -855,15 +857,15 @@ void Station::SetQuantisationOverlay(unsigned int seedSamps,
 		return;
 
 	_quantisationOverlayPinned = true;
-	_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
-	_quantisationModel->SetLoopIndexFrac(_clock ? _clock->MasterLoopIndexFrac() : 0.0);
-	_quantisationModel->SetOverlayVisible(true, confirm);
+	_pendingQuantisationOverlaySeedSamps = seedSamps;
+	_pendingQuantisationOverlayMasterLoopSamps = masterLoopSamps;
+	_pendingQuantisationOverlayConfirm = _pendingQuantisationOverlayConfirm || confirm;
 }
 
 void Station::ClearQuantisationOverlay()
 {
 	_quantisationOverlayPinned = false;
-	RefreshQuantisationOverlayFromClock();
+	_pendingQuantisationOverlayConfirm = false;
 }
 
 void Station::RefreshQuantisationOverlayFromClock()
@@ -877,13 +879,26 @@ void Station::RefreshQuantisationOverlayFromClock()
 	if (!_clock || !_clock->IsQuantisable())
 	{
 		_quantisationOverlayPinned = false;
+		_pendingQuantisationOverlayConfirm = false;
 		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
 
 	if (_quantisationOverlayPinned)
+	{
+		const auto seedSamps = _pendingQuantisationOverlaySeedSamps > 0u ?
+			_pendingQuantisationOverlaySeedSamps :
+			HiddenSeedSamps;
+		const auto masterLoopSamps = _pendingQuantisationOverlayMasterLoopSamps > 0u ?
+			_pendingQuantisationOverlayMasterLoopSamps :
+			seedSamps;
+
+		_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
+		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationOverlayConfirm);
+		_pendingQuantisationOverlayConfirm = false;
 		return;
+	}
 
 	const auto seedSamps = _clock->QuantiseSamps();
 	const auto masterLoopSamps = _clock->SeedSourceLength();

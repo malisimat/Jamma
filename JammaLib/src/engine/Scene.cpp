@@ -1806,25 +1806,22 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	const auto sampleRate = _CurrentSampleRate();
 
 	std::optional<QuantisationTiming> timing;
-	unsigned long masterLen;
 	{
 		std::scoped_lock lock(_audioMutex);
+		if (_masterLoopLengthSamps == 0ul)
+		{
+			std::cout << "Tap tempo: no master loop, tap ignored" << std::endl;
+			return true;
+		}
 		timing = _tapTempo.TapAtSample(_EstimatedAudioSampleAt(actionTime),
 			sampleRate,
 			_masterLoopLengthSamps,
 			_QuantisationPolicy());
-		masterLen = _masterLoopLengthSamps;
 	}
 
 	if (!timing.has_value())
 	{
 		std::cout << "Tap tempo: first tap" << std::endl;
-		return true;
-	}
-
-	if (masterLen == 0ul)
-	{
-		std::cout << "Tap tempo: no master set, tap absorbed" << std::endl;
 		return true;
 	}
 
@@ -1844,14 +1841,13 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	if (masterLength == 0ul)
 		return false;
 
-	auto timing = _tapTempo.CurrentTiming(masterLength, _CurrentSampleRate(), _QuantisationPolicy());
-	if (!timing.has_value())
-		timing = DeduceSeedTiming(masterLength, _CurrentSampleRate(), _QuantisationPolicy());
+	auto timing = DeduceSeedTiming(masterLength, _CurrentSampleRate(), _QuantisationPolicy());
 	if (!timing.has_value())
 		return false;
 
 	_masterLoop = _RepresentativeLoopForTarget(hovering, depth);
 	_masterLoopLengthSamps = masterLength;
+	_tapTempo.Clear();
 	_ApplyQuantisationTiming(timing.value(), "master loop");
 	if (_clock && _masterLoop)
 		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
@@ -2147,7 +2143,7 @@ void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 		sampleRate = _userConfig.Audio.SampleRate;
 
 	const auto qtOpt = engine::TimingFromSeedAndMaster(
-		_effectiveQuantiseSamps, _masterLoopLengthSamps, sampleRate, _QuantisationPolicy());
+		_effectiveQuantiseSamps, _masterLoopLengthSamps, sampleRate);
 	if (!qtOpt.has_value() || (qtOpt->Bpm <= 0.0f) || (qtOpt->Bpi == 0u))
 		return;
 

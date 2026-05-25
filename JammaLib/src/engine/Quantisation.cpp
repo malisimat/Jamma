@@ -29,12 +29,11 @@ namespace
 		return static_cast<unsigned int>(value + 0.5);
 	}
 
-	unsigned int SnapSeedToMaster(unsigned long requestedSeedSamps,
-		unsigned long masterLoopSamps,
-		unsigned int minSeedSamps)
+	unsigned long SnapSeedToMasterDivisor(unsigned long requestedSeedSamps,
+		unsigned long masterLoopSamps)
 	{
 		if (masterLoopSamps == 0ul)
-			return ClampToUInt(std::max<unsigned long>(requestedSeedSamps, minSeedSamps));
+			return requestedSeedSamps;
 
 		if (requestedSeedSamps == 0ul)
 			requestedSeedSamps = masterLoopSamps;
@@ -51,9 +50,6 @@ namespace
 			const unsigned long candidates[2] = { masterLoopSamps / d, d };
 			for (auto seed : candidates)
 			{
-				if (seed < static_cast<unsigned long>(minSeedSamps))
-					continue;
-
 				const auto distance = seed > requestedSeedSamps ?
 					seed - requestedSeedSamps :
 					requestedSeedSamps - seed;
@@ -67,9 +63,9 @@ namespace
 		}
 
 		if (bestSeed == 0ul)
-			bestSeed = static_cast<unsigned long>(minSeedSamps);
+			bestSeed = requestedSeedSamps;
 
-		return ClampToUInt(bestSeed);
+		return bestSeed;
 	}
 
 	std::optional<QuantisationTiming> TimingFromSeed(unsigned int seedSamps,
@@ -115,8 +111,7 @@ unsigned int engine::IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigne
 
 std::optional<QuantisationTiming> engine::TimingFromSeedAndMaster(unsigned int seedSamps,
 	unsigned long masterSamps,
-	unsigned int sampleRate,
-	const QuantisationPolicy&)
+	unsigned int sampleRate)
 {
 	if ((seedSamps == 0u) || (masterSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;
@@ -157,7 +152,6 @@ std::optional<QuantisationTiming> engine::DeduceSeedTiming(unsigned long masterL
 }
 
 std::optional<QuantisationTiming> engine::DeduceTapSeedTiming(unsigned long requestedSeedSamps,
-	unsigned long masterLoopSamps,
 	unsigned int sampleRate,
 	const QuantisationPolicy& policy)
 {
@@ -168,9 +162,8 @@ std::optional<QuantisationTiming> engine::DeduceTapSeedTiming(unsigned long requ
 	if (minSeed == 0u)
 		return std::nullopt;
 
-	const auto seedSamps = SnapSeedToMaster(requestedSeedSamps, masterLoopSamps, minSeed);
-	const auto timingMaster = masterLoopSamps == 0ul ? seedSamps : masterLoopSamps;
-	return TimingFromSeed(seedSamps, timingMaster, sampleRate);
+	const auto seedSamps = ClampToUInt(std::max<unsigned long>(requestedSeedSamps, minSeed));
+	return TimingFromSeed(seedSamps, seedSamps, sampleRate);
 }
 
 void TapTempoTracker::Clear() noexcept
@@ -230,10 +223,11 @@ std::optional<QuantisationTiming> TapTempoTracker::CurrentTiming(unsigned long m
 	if (!_estimatedGapSamps.has_value())
 		return std::nullopt;
 
-	return DeduceTapSeedTiming(static_cast<unsigned long>(_estimatedGapSamps.value() + 0.5),
-		masterLoopSamps,
-		sampleRate,
-		policy);
+	const auto requestedSeedSamps = static_cast<unsigned long>(_estimatedGapSamps.value() + 0.5);
+	if (masterLoopSamps > 0ul)
+		return DeduceTapSeedTimingFromMaster(requestedSeedSamps, masterLoopSamps, sampleRate);
+
+	return DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
 }
 
 bool TapTempoTracker::HasEstimate() const noexcept
@@ -248,39 +242,7 @@ std::optional<QuantisationTiming> engine::DeduceTapSeedTimingFromMaster(unsigned
 	if ((tapGapSamps == 0ul) || (masterLoopSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;
 
-	// Nearest divisor of masterLoopSamps to tapGapSamps; O(sqrt(N)), no min-size floor.
-	unsigned long bestSeed = 0ul;
-	unsigned long bestDist = std::numeric_limits<unsigned long>::max();
-
-	for (unsigned long d = 1ul; d * d <= masterLoopSamps; ++d)
-	{
-		if ((masterLoopSamps % d) != 0ul)
-			continue;
-
-		const unsigned long seedLarge = masterLoopSamps / d;
-		const unsigned long seedSmall = d;
-
-		const auto distLarge = seedLarge > tapGapSamps
-			? seedLarge - tapGapSamps
-			: tapGapSamps - seedLarge;
-		if (distLarge < bestDist)
-		{
-			bestDist = distLarge;
-			bestSeed = seedLarge;
-		}
-
-		if (seedSmall != seedLarge)
-		{
-			const auto distSmall = seedSmall > tapGapSamps
-				? seedSmall - tapGapSamps
-				: tapGapSamps - seedSmall;
-			if (distSmall < bestDist)
-			{
-				bestDist = distSmall;
-				bestSeed = seedSmall;
-			}
-		}
-	}
+	const auto bestSeed = SnapSeedToMasterDivisor(tapGapSamps, masterLoopSamps);
 
 	if ((bestSeed == 0ul) || (bestSeed > std::numeric_limits<unsigned int>::max()))
 		return std::nullopt;
