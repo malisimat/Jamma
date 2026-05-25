@@ -2,6 +2,9 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/MidiEvent.h"
+#include "engine/LoopTake.h"
+#include "engine/Scene.h"
+#include "engine/Station.h"
 #include "engine/Trigger.h"
 #include "io/UserConfig.h"
 #include "io/Json.h"
@@ -9,11 +12,18 @@
 
 using base::ActionSender;
 using base::ActionReceiver;
+using engine::LoopTake;
+using engine::LoopTakeParams;
+using engine::Scene;
+using engine::SceneParams;
+using engine::Station;
+using engine::StationParams;
 using engine::Trigger;
 using engine::TriggerParams;
 using engine::Timer;
 using actions::TriggerAction;
 using actions::KeyAction;
+using audio::MergeMixBehaviourParams;
 
 const unsigned int ActivateChar = 49;
 const unsigned int DitchChar = 50;
@@ -88,6 +98,87 @@ public:
 private:
 	std::vector<TriggerAction> _actions;
 };
+
+class TestLoopTake :
+	public LoopTake
+{
+public:
+	TestLoopTake(LoopTakeParams params,
+		audio::AudioMixerParams mixerParams) :
+		LoopTake(params, mixerParams)
+	{
+	}
+
+	std::size_t MidiLoopEventCount(std::size_t index = 0u) const
+	{
+		if (index >= _midiLoops.size() || !_midiLoops[index])
+			return 0u;
+
+		return _midiLoops[index]->EventCount();
+	}
+};
+
+class TestScene :
+	public Scene
+{
+public:
+	TestScene(SceneParams params,
+		io::UserConfig user) :
+		Scene(params, user)
+	{
+	}
+
+	void AddStationForTest(const std::shared_ptr<Station>& station)
+	{
+		_AddStation(station);
+	}
+
+	void RegisterMidiTriggerRouteForTest(const std::string& deviceName,
+		const std::shared_ptr<Trigger>& trigger,
+		std::uint8_t deviceSlot)
+	{
+		_RegisterMidiTriggerRoute(deviceName, trigger);
+		_midiTriggerRoutes.back().DeviceSlot = deviceSlot;
+	}
+
+	void SetSharedMainMidiTriggerSlotForTest(std::uint8_t slot)
+	{
+		_sharedMainMidiTriggerSlot = slot;
+	}
+
+	void PushMainMidiEventForTest(std::uint8_t status,
+		std::uint8_t data1,
+		std::uint8_t data2,
+		unsigned int sampleRate = 0u)
+	{
+		_PushMainMidiEvent(status, data1, data2, sampleRate);
+	}
+
+	void PumpMidiForTest()
+	{
+		_PumpMidi();
+	}
+};
+
+std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
+{
+	StationParams params;
+	params.Name = name;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	return std::make_shared<Station>(params, mixerParams);
+}
+
+std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "take-0")
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<TestLoopTake>(params, mixerParams);
+}
 
 std::unique_ptr<Trigger> MakeDefaultTrigger(std::shared_ptr<ActionReceiver> receiver,
 	unsigned int debounceMs)
@@ -515,4 +606,43 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	ASSERT_EQ(3u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
+}
+
+TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	auto take = MakeTestLoopTake();
+	take->Record({}, "station", { 0u });
+	ASSERT_TRUE(take->IsArmed());
+
+	auto station = MakeTestStation();
+	station->AddTake(take);
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.RegisterMidiTriggerRouteForTest("default", trigger.value(), 0u);
+	scene.SetSharedMainMidiTriggerSlotForTest(0u);
+
+	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PumpMidiForTest();
+
+	ASSERT_EQ(1u, take->MidiLoopEventCount());
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	EXPECT_TRUE(take->IsArmed());
 }

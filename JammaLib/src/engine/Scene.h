@@ -238,6 +238,12 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PushMainMidiEvent(std::uint8_t status,
+			std::uint8_t data1,
+			std::uint8_t data2,
+			unsigned int sampleRate) noexcept;
+		void _PushTriggerMidiEvent(std::uint8_t deviceSlot,
+			const MidiEvent& event) noexcept;
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);

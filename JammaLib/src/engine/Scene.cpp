@@ -987,7 +987,8 @@ void Scene::_PumpMidi()
 		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 			continue;
 
-		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
+		// Shared-device trigger routing duplicates events into a separate queue, so
+		// trigger IsEaten results do not suppress MIDI loop recording.
 		for (auto& station : _stations)
 		{
 			for (auto& take : station->GetLoopTakes())
@@ -1041,6 +1042,44 @@ void Scene::_PumpMidi()
 			<< " event(s), total dropped=" << dropped << std::endl;
 		_lastMidiTriggerDropCount = dropped;
 	}
+}
+
+void Scene::_PushMainMidiEvent(std::uint8_t status,
+	std::uint8_t data1,
+	std::uint8_t data2,
+	unsigned int sampleRate) noexcept
+{
+	MidiEvent ev{};
+	const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
+	const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+
+	std::uint64_t mappedSample = anchorSample;
+	if (sampleRate > 0u && nowMicros > anchorMicros)
+	{
+		const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+		mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+	}
+
+	ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+	ev.status = status;
+	ev.data1 = data1;
+	ev.data2 = data2;
+	ev._pad = 0u;
+	_midiIngress.Push(ev);
+
+	if (_sharedMainMidiTriggerSlot.has_value())
+		_PushTriggerMidiEvent(_sharedMainMidiTriggerSlot.value(), ev);
+}
+
+void Scene::_PushTriggerMidiEvent(std::uint8_t deviceSlot,
+	const MidiEvent& event) noexcept
+{
+	MidiTriggerIngressEvent triggerEvent{};
+	triggerEvent.Event = event;
+	triggerEvent.DeviceSlot = deviceSlot;
+	_midiTriggerIngress.Push(triggerEvent);
 }
 
 void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
@@ -1213,33 +1252,7 @@ void Scene::InitMidi()
 		_userConfig.Midi.Name,
 		[this, sampleRate](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 		{
-			MidiEvent ev{};
-			const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
-			const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
-
-			std::uint64_t mappedSample = anchorSample;
-			if (sampleRate > 0u && nowMicros > anchorMicros)
-			{
-				const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-				mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-			}
-
-			ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-			ev.status = status;
-			ev.data1 = data1;
-			ev.data2 = data2;
-			ev._pad = 0u;
-			_midiIngress.Push(ev);
-
-			if (_sharedMainMidiTriggerSlot.has_value())
-			{
-				MidiTriggerIngressEvent triggerEvent{};
-				triggerEvent.Event = MidiEvent{ 0u, status, data1, data2, 0u };
-				triggerEvent.DeviceSlot = _sharedMainMidiTriggerSlot.value();
-				_midiTriggerIngress.Push(triggerEvent);
-			}
+			_PushMainMidiEvent(status, data1, data2, sampleRate);
 		});
 
 	if (!opened)
@@ -1251,10 +1264,7 @@ void Scene::InitMidi()
 			triggerInput.DeviceName,
 			[this, slot = triggerInput.Slot](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 			{
-				MidiTriggerIngressEvent triggerEvent{};
-				triggerEvent.Event = MidiEvent{ 0u, status, data1, data2, 0u };
-				triggerEvent.DeviceSlot = slot;
-				_midiTriggerIngress.Push(triggerEvent);
+				_PushTriggerMidiEvent(slot, MidiEvent{ 0u, status, data1, data2, 0u });
 			});
 
 		if (!triggerOpened)
