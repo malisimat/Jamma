@@ -1863,7 +1863,11 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 	const auto seed = _clock->QuantiseSamps();
 	const auto master = _masterLoopLengthSamps > 0ul ? static_cast<unsigned int>(_masterLoopLengthSamps) : seed;
 	if (_masterLoop)
-		_masterLoop->SetQuantisationOverlay(seed, master, true, false);
+	{
+		auto masterStation = _StationForTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
+		if (masterStation)
+			masterStation->SetQuantisationOverlay(seed, master, false);
+	}
 
 	if (!candidate)
 		return;
@@ -1872,26 +1876,64 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 	if (candidateMaster == 0ul)
 		return;
 
-	const auto candidateLoop = _RepresentativeLoopForTarget(candidate, depth);
-	if (candidateLoop)
-		candidateLoop->SetQuantisationOverlay(seed,
+	const auto candidateStation = _StationForTarget(candidate, depth);
+	if (candidateStation)
+		candidateStation->SetQuantisationOverlay(seed,
 			static_cast<unsigned int>(candidateMaster),
-			true,
 			confirmCandidate);
 }
 
 void Scene::_ClearQuantisationOverlays()
 {
 	for (const auto& station : _stations)
+		station->ClearQuantisationOverlay();
+}
+
+std::shared_ptr<Station> Scene::_StationForTarget(const std::shared_ptr<base::GuiElement>& target,
+	base::SelectDepth depth) const
+{
+	if (!target)
+		return nullptr;
+
+	switch (depth)
 	{
-		for (const auto& take : station->GetLoopTakes())
+	case base::SelectDepth::DEPTH_STATION:
+		return std::dynamic_pointer_cast<Station>(target);
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(target);
+		if (!take)
+			return nullptr;
+
+		for (const auto& station : _stations)
 		{
-			for (const auto& loop : take->GetLoops())
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+				return station;
+		}
+
+		return nullptr;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(target);
+		if (!loop)
+			return nullptr;
+
+		for (const auto& station : _stations)
+		{
+			for (const auto& take : station->GetLoopTakes())
 			{
-				if (loop)
-					loop->SetQuantisationOverlay(1u, 1u, false, false);
+				const auto& loops = take->GetLoops();
+				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
+					return station;
 			}
 		}
+
+		return nullptr;
+	}
+	default:
+		return nullptr;
 	}
 }
 

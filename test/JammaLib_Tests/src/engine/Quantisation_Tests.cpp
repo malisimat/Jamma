@@ -1,5 +1,10 @@
+#include <algorithm>
+#include <cmath>
+#include <utility>
+#include <vector>
 #include "gtest/gtest.h"
 #include "engine/Quantisation.h"
+#include "engine/QuantisationModel.h"
 
 using engine::QuantisationPolicy;
 using engine::TapTempoTracker;
@@ -443,4 +448,23 @@ TEST(Quantisation, TapSeedFromMasterRejectsZeroInputs)
 	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(0ul, 384000ul, 48000u, policy).has_value());
 	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(24000ul, 0ul, 48000u, policy).has_value());
 	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 0u, policy).has_value());
+}
+
+TEST(QuantisationModel, GateGeometryBuildsStarShapedPrisms)
+{
+	auto verts = engine::QuantisationModel::BuildGateGeometry(8u, 132.0f, 312.0f, 92.0f);
+	ASSERT_FALSE(verts.empty());
+	EXPECT_EQ(8u * 36u * 3u, verts.size());
+
+	std::vector<std::pair<int, int>> uniquePoints;
+	for (size_t i = 0; i < 36u; ++i)
+	{
+		const auto x = static_cast<int>(std::round(verts[(i * 3u) + 0u] * 100.0f));
+		const auto z = static_cast<int>(std::round(verts[(i * 3u) + 2u] * 100.0f));
+		const auto point = std::make_pair(x, z);
+		if (std::find(uniquePoints.begin(), uniquePoints.end(), point) == uniquePoints.end())
+			uniquePoints.push_back(point);
+	}
+
+	EXPECT_GE(uniquePoints.size(), 4u);
 }

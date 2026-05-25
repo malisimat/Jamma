@@ -52,7 +52,6 @@ Loop::Loop(LoopParams params,
 	_mixer(nullptr),
 	_hanning(nullptr),
 	_model(nullptr),
-	_quantisationModel(nullptr),
 	_bufferBank(BufferBank())
 {
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
@@ -64,7 +63,6 @@ Loop::Loop(LoopParams params,
 	modelParams.ModelTextures = { "levels" };
 	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
-	_quantisationModel = std::make_shared<QuantisationModel>();
 
 	VuParams vuParams;
 	vuParams.Size = { 12, 18 };
@@ -75,7 +73,6 @@ Loop::Loop(LoopParams params,
 	_vu = std::make_shared<VU>(vuParams);
 
 	_children.push_back(_model);
-	_children.push_back(_quantisationModel);
 	_children.push_back(_vu);
 	_children.push_back(_mixer);
 }
@@ -179,7 +176,6 @@ void Loop::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->UnmutedLevel(), 1.0f)));
 	
 	_model->Draw3d(ctx, 1, pass);
-	_quantisationModel->Draw3d(ctx, 1, pass);
 	
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -564,18 +560,6 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 void Loop::SetMixerLevel(double level)
 {
 	_mixer->SetUnmutedLevel(level);
-}
-
-void Loop::SetQuantisationOverlay(unsigned int seedSamps,
-	unsigned int masterLoopSamps,
-	bool visible,
-	bool confirm)
-{
-	if (!_quantisationModel)
-		return;
-
-	_quantisationModel->SetTiming(seedSamps, masterLoopSamps);
-	_quantisationModel->SetOverlayVisible(visible, confirm);
 }
 
 void Loop::SetVisualUpdatesEnabled(bool enabled)

@@ -9,14 +9,35 @@ using namespace engine;
 
 namespace
 {
-	constexpr float GateInnerRadius = 112.0f;
-	constexpr float GateOuterRadius = 154.0f;
-	constexpr float GateHalfHeight = 82.0f;
+	constexpr float GateInnerRadius = 132.0f;
+	constexpr float GateOuterRadius = 312.0f;
+	constexpr float GateHalfHeight = 92.0f;
 	constexpr unsigned int MaxVisibleGates = 128u;
+	constexpr float GateWidthFraction = 0.18f;
 
 	std::vector<float> BuildDummyUvs(size_t vertexCoordCount)
 	{
 		return std::vector<float>((vertexCoordCount / 3u) * 2u, 0.0f);
+	}
+
+	void AppendQuad(std::vector<float>& verts,
+		const glm::vec3& a,
+		const glm::vec3& b,
+		const glm::vec3& c,
+		const glm::vec3& d)
+	{
+		verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+		verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
+		verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
+
+		verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+		verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
+		verts.push_back(d.x); verts.push_back(d.y); verts.push_back(d.z);
+	}
+
+	glm::vec3 GatePoint(float radius, float angle, float y)
+	{
+		return glm::vec3(std::sin(angle) * radius, y, std::cos(angle) * radius);
 	}
 }
 
@@ -127,22 +148,30 @@ std::vector<float> QuantisationModel::BuildGateGeometry(unsigned int gateCount,
 	if (gateCount == 0u)
 		return verts;
 
-	verts.reserve(static_cast<size_t>(gateCount) * 18u);
+	verts.reserve(static_cast<size_t>(gateCount) * 108u);
+	const auto step = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
+	const auto halfSpan = step * GateWidthFraction;
 	for (auto gate = 0u; gate < gateCount; ++gate)
 	{
-		const auto angle = static_cast<float>(constants::TWOPI) * (static_cast<float>(gate) / static_cast<float>(gateCount));
-		const auto xInner = std::sin(angle) * innerRadius;
-		const auto zInner = std::cos(angle) * innerRadius;
-		const auto xOuter = std::sin(angle) * outerRadius;
-		const auto zOuter = std::cos(angle) * outerRadius;
+		const auto angle = step * static_cast<float>(gate);
+		const auto left = angle - halfSpan;
+		const auto right = angle + halfSpan;
 
-		verts.push_back(xInner); verts.push_back(-halfHeight); verts.push_back(zInner);
-		verts.push_back(xOuter); verts.push_back(halfHeight); verts.push_back(zOuter);
-		verts.push_back(xInner); verts.push_back(halfHeight); verts.push_back(zInner);
+		const auto innerTopLeft = GatePoint(innerRadius, left, halfHeight);
+		const auto innerTopRight = GatePoint(innerRadius, right, halfHeight);
+		const auto outerTopLeft = GatePoint(outerRadius, left, halfHeight);
+		const auto outerTopRight = GatePoint(outerRadius, right, halfHeight);
+		const auto innerBottomLeft = GatePoint(innerRadius, left, -halfHeight);
+		const auto innerBottomRight = GatePoint(innerRadius, right, -halfHeight);
+		const auto outerBottomLeft = GatePoint(outerRadius, left, -halfHeight);
+		const auto outerBottomRight = GatePoint(outerRadius, right, -halfHeight);
 
-		verts.push_back(xInner); verts.push_back(-halfHeight); verts.push_back(zInner);
-		verts.push_back(xOuter); verts.push_back(-halfHeight); verts.push_back(zOuter);
-		verts.push_back(xOuter); verts.push_back(halfHeight); verts.push_back(zOuter);
+		AppendQuad(verts, innerTopLeft, outerTopLeft, outerTopRight, innerTopRight);
+		AppendQuad(verts, innerBottomRight, outerBottomRight, outerBottomLeft, innerBottomLeft);
+		AppendQuad(verts, innerBottomLeft, innerBottomRight, innerTopRight, innerTopLeft);
+		AppendQuad(verts, outerBottomRight, outerBottomLeft, outerTopLeft, outerTopRight);
+		AppendQuad(verts, innerBottomLeft, outerBottomLeft, outerTopLeft, innerTopLeft);
+		AppendQuad(verts, innerBottomRight, innerTopRight, outerTopRight, outerBottomRight);
 	}
 
 	return verts;

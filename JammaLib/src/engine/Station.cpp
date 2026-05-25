@@ -12,6 +12,9 @@ using gui::GuiToggleParams;
 
 namespace
 {
+	constexpr unsigned int HiddenSeedSamps = 1u;
+	constexpr unsigned int HiddenMasterSamps = 1u;
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -73,6 +76,7 @@ Station::Station(StationParams params,
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
+	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
 	_mixerToggle(nullptr),
@@ -84,7 +88,8 @@ Station::Station(StationParams params,
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
-	_backAudioBuffers()
+	_backAudioBuffers(),
+	_quantisationOverlayPinned(false)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -157,6 +162,31 @@ void Station::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 
 	_ArrangeChildren();
+}
+
+void Station::Draw3d(base::DrawContext& ctx,
+	unsigned int numInstances,
+	base::DrawPass pass)
+{
+	if (!_isVisible)
+		return;
+
+	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+	auto pos = ModelPosition();
+	auto scale = ModelScale();
+
+	_modelScreenPos = glCtx.ProjectScreen(pos);
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+
+	if (_quantisationModel)
+		_quantisationModel->Draw3d(ctx, numInstances, pass);
+
+	for (auto& child : _children)
+		child->Draw3d(ctx, 1, pass);
+
+	glCtx.PopMvp();
+	glCtx.PopMvp();
 }
 
 utils::Position2d Station::Position() const
@@ -701,6 +731,8 @@ void Station::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	RefreshQuantisationOverlayFromClock();
+
 	for (auto& trig : _triggers)
 	{
 		trig->OnTick(curTime, samps, cfg, params);
@@ -783,6 +815,48 @@ void Station::SetName(std::string name)
 void Station::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = clock;
+	RefreshQuantisationOverlayFromClock();
+}
+
+void Station::SetQuantisationOverlay(unsigned int seedSamps,
+	unsigned int masterLoopSamps,
+	bool confirm)
+{
+	if (!_quantisationModel)
+		return;
+
+	_quantisationOverlayPinned = true;
+	_quantisationModel->SetTiming(seedSamps, masterLoopSamps);
+	_quantisationModel->SetOverlayVisible(true, confirm);
+}
+
+void Station::ClearQuantisationOverlay()
+{
+	_quantisationOverlayPinned = false;
+	RefreshQuantisationOverlayFromClock();
+}
+
+void Station::RefreshQuantisationOverlayFromClock()
+{
+	if (!_quantisationModel)
+		return;
+
+	if (!_clock || !_clock->IsQuantisable())
+	{
+		_quantisationOverlayPinned = false;
+		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
+		_quantisationModel->SetOverlayVisible(false, false);
+		return;
+	}
+
+	if (_quantisationOverlayPinned)
+		return;
+
+	const auto seedSamps = _clock->QuantiseSamps();
+	const auto masterLoopSamps = _clock->SeedSourceLength();
+	_quantisationModel->SetTiming(seedSamps,
+		(masterLoopSamps > 0ul) ? static_cast<unsigned int>(masterLoopSamps) : seedSamps);
+	_quantisationModel->SetOverlayVisible(true, false);
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -958,6 +1032,22 @@ unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int n
 void Station::_InitReceivers()
 {
 	_guiRack->SetReceiver(ActionReceiver::shared_from_this());
+}
+
+void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	if (_quantisationModel)
+		_quantisationModel->InitResources(resourceLib, forceInit);
+
+	GuiElement::_InitResources(resourceLib, forceInit);
+}
+
+void Station::_ReleaseResources()
+{
+	if (_quantisationModel)
+		_quantisationModel->ReleaseResources();
+
+	GuiElement::_ReleaseResources();
 }
 
 std::vector<JobAction> Station::_CommitChanges()

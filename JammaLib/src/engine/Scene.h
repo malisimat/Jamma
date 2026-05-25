@@ -251,6 +251,7 @@ namespace engine
 		bool _TrySetMasterFromHover(bool confirm);
 		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearQuantisationOverlays();
+		std::shared_ptr<Station> _StationForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
 		unsigned long _MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
 		std::shared_ptr<Loop> _RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
