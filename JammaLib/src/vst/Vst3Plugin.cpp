@@ -5,11 +5,14 @@
 //
 ///////////////////////////////////////////////////////////
 
-#include "VstPlugin.h"
+#include "Vst3Plugin.h"
+#include "Vst2Plugin.h"
 #include <algorithm>
+#include <cwctype>
 #include <iostream>
 #include <mutex>
 #include <vector>
+#include <string>
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
@@ -134,7 +137,7 @@ public:
 
 IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
 
-class VstPlugin::Impl
+class Vst3Plugin::Impl
 {
 public:
 	// Pre-init state: populated by PreInit() on the main thread.
@@ -189,7 +192,7 @@ public:
 };
 #endif
 
-VstPlugin::VstPlugin() :
+Vst3Plugin::Vst3Plugin() :
 	_isLoaded(false),
 	_isActivated(false),
 	_name(),
@@ -207,23 +210,23 @@ VstPlugin::VstPlugin() :
 {
 }
 
-VstPlugin::~VstPlugin()
+Vst3Plugin::~Vst3Plugin()
 {
 	Unload();
 }
 
-bool VstPlugin::PreInit(const std::wstring& path)
+bool Vst3Plugin::PreInit(const std::wstring& path)
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (_moduleHandle)
 		return true; // Already pre-initialised (e.g. called twice)
 
-	std::wcout << L"[VstPlugin] PreInit (main thread): path='" << path << L"'" << std::endl;
+	std::wcout << L"[Vst3Plugin] PreInit (main thread): path='" << path << L"'" << std::endl;
 
 	_moduleHandle = LoadLibraryW(path.c_str());
 	if (!_moduleHandle)
 	{
-		std::cerr << "[VstPlugin] PreInit: LoadLibraryW failed: " << GetLastError() << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: LoadLibraryW failed: " << GetLastError() << std::endl;
 		return false;
 	}
 
@@ -235,7 +238,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 	{
 		initDll();
 		_impl->moduleInitialized = true;
-		std::cout << "[VstPlugin] PreInit: InitDll() called" << std::endl;
+		std::cout << "[Vst3Plugin] PreInit: InitDll() called" << std::endl;
 	}
 
 	// Call GetPluginFactory() on the UI thread so thread-affine GUI state binds
@@ -244,7 +247,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 	auto getFactory = reinterpret_cast<GetFactoryProc>(GetProcAddress(_moduleHandle, "GetPluginFactory"));
 	if (!getFactory)
 	{
-		std::cerr << "[VstPlugin] PreInit: GetPluginFactory not found" << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: GetPluginFactory not found" << std::endl;
 		if (_impl->moduleInitialized)
 		{
 			using ExitModuleFunc = bool (PLUGIN_API*)();
@@ -260,7 +263,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 	IPluginFactory* rawFactory = getFactory();
 	if (!rawFactory)
 	{
-		std::cerr << "[VstPlugin] PreInit: GetPluginFactory() returned null" << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: GetPluginFactory() returned null" << std::endl;
 		if (_impl->moduleInitialized)
 		{
 			using ExitModuleFunc = bool (PLUGIN_API*)();
@@ -300,7 +303,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 
 	if (!found)
 	{
-		std::cerr << "[VstPlugin] PreInit: no audio effect class found in plugin" << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: no audio effect class found in plugin" << std::endl;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
 		{
@@ -320,7 +323,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 	if (_impl->factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 		|| !rawComponent)
 	{
-		std::cerr << "[VstPlugin] PreInit: createInstance(IComponent) failed" << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: createInstance(IComponent) failed" << std::endl;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
 		{
@@ -337,7 +340,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 
 	if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 	{
-		std::cerr << "[VstPlugin] PreInit: IComponent::initialize() failed" << std::endl;
+		std::cerr << "[Vst3Plugin] PreInit: IComponent::initialize() failed" << std::endl;
 		_impl->component = nullptr;
 		_impl->factory = nullptr;
 		if (_impl->moduleInitialized)
@@ -352,7 +355,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 		return false;
 	}
 
-	std::cout << "[VstPlugin] PreInit: success — factory, component, and initialize on main thread, plugin=" << _name << std::endl;
+	std::cout << "[Vst3Plugin] PreInit: success — factory, component, and initialize on main thread, plugin=" << _name << std::endl;
 	return true;
 #else
 	(void)path;
@@ -360,7 +363,7 @@ bool VstPlugin::PreInit(const std::wstring& path)
 #endif
 }
 
-bool VstPlugin::Load(const std::wstring& path,
+bool Vst3Plugin::Load(const std::wstring& path,
 	float sampleRate,
 	unsigned int blockSize,
 	unsigned int numChannels,
@@ -373,14 +376,14 @@ bool VstPlugin::Load(const std::wstring& path,
 	if (_isLoaded)
 		Unload();
 
-	std::wcout << L"[VstPlugin] Load request: path='" << path
+	std::wcout << L"[Vst3Plugin] Load request: path='" << path
 		<< L"', sampleRate=" << sampleRate
 		<< L", blockSize=" << blockSize
 		<< L", requestedChannels=" << numChannels
 		<< std::endl;
 
 	const auto requestedChannels = static_cast<Steinberg::int32>(std::max(1u, numChannels));
-	std::cout << "[VstPlugin] Requested host channels=" << requestedChannels << std::endl;
+	std::cout << "[Vst3Plugin] Requested host channels=" << requestedChannels << std::endl;
 	_impl->requestedChannels = requestedChannels;
 
 	// 1. Load the DLL — skip if PreInit() already loaded it on the main thread
@@ -389,7 +392,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		_moduleHandle = LoadLibraryW(path.c_str());
 		if (!_moduleHandle)
 		{
-			std::cerr << "[VstPlugin] LoadLibraryW failed: " << GetLastError() << std::endl;
+			std::cerr << "[Vst3Plugin] LoadLibraryW failed: " << GetLastError() << std::endl;
 			return false;
 		}
 
@@ -404,7 +407,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	}
 	else
 	{
-		std::cout << "[VstPlugin] Load: reusing pre-loaded DLL handle from PreInit()" << std::endl;
+		std::cout << "[Vst3Plugin] Load: reusing pre-loaded DLL handle from PreInit()" << std::endl;
 	}
 
 	// 2. Get the factory — use cached value from PreInit() when available
@@ -416,7 +419,7 @@ bool VstPlugin::Load(const std::wstring& path,
 			GetProcAddress(_moduleHandle, "GetPluginFactory"));
 		if (!getFactory)
 		{
-			std::cerr << "[VstPlugin] GetPluginFactory not found" << std::endl;
+			std::cerr << "[Vst3Plugin] GetPluginFactory not found" << std::endl;
 			Unload();
 			return false;
 		}
@@ -424,7 +427,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		IPluginFactory* rawFactory = getFactory();
 		if (!rawFactory)
 		{
-			std::cerr << "[VstPlugin] GetPluginFactory() returned null" << std::endl;
+			std::cerr << "[Vst3Plugin] GetPluginFactory() returned null" << std::endl;
 			Unload();
 			return false;
 		}
@@ -434,7 +437,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	}
 	else
 	{
-		std::cout << "[VstPlugin] Load: reusing pre-loaded factory from PreInit()" << std::endl;
+		std::cout << "[Vst3Plugin] Load: reusing pre-loaded factory from PreInit()" << std::endl;
 	}
 
 	const bool componentWasPreInitialized = _impl->component != nullptr;
@@ -473,7 +476,7 @@ bool VstPlugin::Load(const std::wstring& path,
 
 		if (!found)
 		{
-			std::cerr << "[VstPlugin] No audio effect class found in plugin" << std::endl;
+			std::cerr << "[Vst3Plugin] No audio effect class found in plugin" << std::endl;
 			return cleanupFailedLoad();
 		}
 
@@ -483,7 +486,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 			|| !rawComponent)
 		{
-			std::cerr << "[VstPlugin] createInstance(IComponent) failed" << std::endl;
+			std::cerr << "[Vst3Plugin] createInstance(IComponent) failed" << std::endl;
 			return cleanupFailedLoad();
 		}
 		_impl->component = IPtr<IComponent>(rawComponent, false);
@@ -491,18 +494,18 @@ bool VstPlugin::Load(const std::wstring& path,
 		// 5. Initialize the component
 		if (_impl->component->initialize(_impl->hostApplication) != kResultOk)
 		{
-			std::cerr << "[VstPlugin] IComponent::initialize() failed" << std::endl;
+			std::cerr << "[Vst3Plugin] IComponent::initialize() failed" << std::endl;
 			return cleanupFailedLoad();
 		}
 	}
 	else
 	{
-		std::cout << "[VstPlugin] Load: reusing pre-initialized component from PreInit()" << std::endl;
+		std::cout << "[Vst3Plugin] Load: reusing pre-initialized component from PreInit()" << std::endl;
 	}
 
 	auto inputBusCount = _impl->component->getBusCount(kAudio, kInput);
 	auto outputBusCount = _impl->component->getBusCount(kAudio, kOutput);
-	std::cout << "[VstPlugin] Audio buses: inputs=" << inputBusCount
+	std::cout << "[Vst3Plugin] Audio buses: inputs=" << inputBusCount
 		<< ", outputs=" << outputBusCount << std::endl;
 	int32_t inputBusChannels = 0;
 	int32_t outputBusChannels = 0;
@@ -513,7 +516,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		if (_impl->component->getBusInfo(kAudio, kInput, 0, inBus) == kResultOk)
 		{
 			inputBusChannels = inBus.channelCount;
-			std::cout << "[VstPlugin] Input bus 0 channels=" << inBus.channelCount << std::endl;
+			std::cout << "[Vst3Plugin] Input bus 0 channels=" << inBus.channelCount << std::endl;
 		}
 	}
 
@@ -523,14 +526,14 @@ bool VstPlugin::Load(const std::wstring& path,
 		if (_impl->component->getBusInfo(kAudio, kOutput, 0, outBus) == kResultOk)
 		{
 			outputBusChannels = outBus.channelCount;
-			std::cout << "[VstPlugin] Output bus 0 channels=" << outBus.channelCount << std::endl;
+			std::cout << "[Vst3Plugin] Output bus 0 channels=" << outBus.channelCount << std::endl;
 		}
 	}
 
 	auto hostedLayout = ResolveHostedBusLayout(layoutMode, numChannels, inputBusChannels, outputBusChannels);
 	_impl->inputChannels = hostedLayout.InputChannels;
 	_impl->outputChannels = hostedLayout.OutputChannels;
-	std::cout << "[VstPlugin] Negotiated layout: requested=" << hostedLayout.RequestedChannels
+	std::cout << "[Vst3Plugin] Negotiated layout: requested=" << hostedLayout.RequestedChannels
 		<< ", input=" << _impl->inputChannels
 		<< ", output=" << _impl->outputChannels << std::endl;
 
@@ -539,7 +542,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	if (_impl->component->queryInterface(IAudioProcessor::iid, (void**)&rawProcessor) != kResultOk
 		|| !rawProcessor)
 	{
-		std::cerr << "[VstPlugin] queryInterface(IAudioProcessor) failed" << std::endl;
+		std::cerr << "[Vst3Plugin] queryInterface(IAudioProcessor) failed" << std::endl;
 		return cleanupFailedLoad();
 	}
 	_impl->processor = IPtr<IAudioProcessor>(rawProcessor, false);
@@ -560,11 +563,11 @@ bool VstPlugin::Load(const std::wstring& path,
 				(inputBusCount > 0) ? 1 : 0,
 				(outputBusCount > 0) ? &outputArrangement : nullptr,
 				(outputBusCount > 0) ? 1 : 0);
-			std::cout << "[VstPlugin] setBusArrangements=" << busArrangementRes << std::endl;
+			std::cout << "[Vst3Plugin] setBusArrangements=" << busArrangementRes << std::endl;
 		}
 		else
 		{
-			std::cout << "[VstPlugin] Skipping setBusArrangements: unsupported requested channel count"
+			std::cout << "[Vst3Plugin] Skipping setBusArrangements: unsupported requested channel count"
 				<< " input=" << _impl->inputChannels
 				<< " output=" << _impl->outputChannels << std::endl;
 		}
@@ -583,13 +586,13 @@ bool VstPlugin::Load(const std::wstring& path,
 				_impl->outputChannels = (std::max)(int32{ 1 }, SpeakerArr::getChannelCount(actualOutputArrangement));
 		}
 
-		std::cout << "[VstPlugin] Active layout after setBusArrangements: input=" << _impl->inputChannels
+		std::cout << "[Vst3Plugin] Active layout after setBusArrangements: input=" << _impl->inputChannels
 			<< ", output=" << _impl->outputChannels << std::endl;
 	}
 
 	if (!IsHostedLayoutCompatible(hostedLayout, _impl->inputChannels, _impl->outputChannels))
 	{
-		std::cerr << "[VstPlugin] Incompatible negotiated layout: requested=" << hostedLayout.RequestedChannels
+		std::cerr << "[Vst3Plugin] Incompatible negotiated layout: requested=" << hostedLayout.RequestedChannels
 			<< ", input=" << _impl->inputChannels
 			<< ", output=" << _impl->outputChannels << std::endl;
 		return cleanupFailedLoad();
@@ -604,7 +607,7 @@ bool VstPlugin::Load(const std::wstring& path,
 
 	if (_impl->processor->setupProcessing(setup) != kResultOk)
 	{
-		std::cerr << "[VstPlugin] setupProcessing() failed" << std::endl;
+		std::cerr << "[Vst3Plugin] setupProcessing() failed" << std::endl;
 		return cleanupFailedLoad();
 	}
 
@@ -615,7 +618,7 @@ bool VstPlugin::Load(const std::wstring& path,
 	auto activeRes = _impl->component->setActive(true);
 	auto processingRes = _impl->processor->setProcessing(true);
 	_isActivated.store(true, std::memory_order_release);
-	std::cout << "[VstPlugin] activateBus/setActive/setProcessing: input=" << inActivateRes
+	std::cout << "[Vst3Plugin] activateBus/setActive/setProcessing: input=" << inActivateRes
 		<< ", output=" << outActivateRes
 		<< ", setActive=" << activeRes
 		<< ", setProcessing=" << processingRes << std::endl;
@@ -657,7 +660,7 @@ bool VstPlugin::Load(const std::wstring& path,
 		&& rawController)
 	{
 		_impl->controller = IPtr<IEditController>(rawController, false);
-		std::cout << "[VstPlugin] Controller queryInterface: ok" << std::endl;
+		std::cout << "[Vst3Plugin] Controller queryInterface: ok" << std::endl;
 	}
 	else
 	{
@@ -673,13 +676,13 @@ bool VstPlugin::Load(const std::wstring& path,
 			{
 				_impl->controller = IPtr<IEditController>(rawController, false);
 				auto initRes = _impl->controller->initialize(_impl->hostApplication);
-				std::cout << "[VstPlugin] Separate controller created, initialize=" << initRes << std::endl;
+				std::cout << "[Vst3Plugin] Separate controller created, initialize=" << initRes << std::endl;
 			}
 		}
 	}
 
 	if (!_impl->controller)
-		std::cout << "[VstPlugin] No controller available (editor may not open)" << std::endl;
+		std::cout << "[Vst3Plugin] No controller available (editor may not open)" << std::endl;
 	else
 	{
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
@@ -698,23 +701,23 @@ bool VstPlugin::Load(const std::wstring& path,
 			_impl->controllerConnection = IPtr<IConnectionPoint>(rawControllerConn, false);
 
 		if (_impl->componentConnection && _impl->controllerConnection)
-			std::cout << "[VstPlugin] ConnectionPoint available, will connect in OpenEditor()" << std::endl;
+			std::cout << "[Vst3Plugin] ConnectionPoint available, will connect in OpenEditor()" << std::endl;
 		else
-			std::cout << "[VstPlugin] ConnectionPoint not available on component/controller" << std::endl;
+			std::cout << "[Vst3Plugin] ConnectionPoint not available on component/controller" << std::endl;
 	}
 
 	_isLoaded = true;
-	std::cout << "[VstPlugin] Loaded: " << _name << std::endl;
+	std::cout << "[Vst3Plugin] Loaded: " << _name << std::endl;
 	return true;
 
 #else
 	(void)path; (void)sampleRate; (void)blockSize; (void)numChannels;
-	std::cerr << "[VstPlugin] VST3 support not compiled in (define JAMMA_VST3_ENABLED)" << std::endl;
+	std::cerr << "[Vst3Plugin] VST3 support not compiled in (define JAMMA_VST3_ENABLED)" << std::endl;
 	return false;
 #endif
 }
 
-void VstPlugin::Unload()
+void Vst3Plugin::Unload()
 {
 #ifdef JAMMA_VST3_ENABLED
 	CloseEditor();
@@ -749,7 +752,7 @@ void VstPlugin::Unload()
 	_editorSize = { 0, 0 };
 }
 
-void VstPlugin::ResetLoadedObjects(bool terminateComponent)
+void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
@@ -799,7 +802,7 @@ void VstPlugin::ResetLoadedObjects(bool terminateComponent)
 #endif
 }
 
-void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
+void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
@@ -829,7 +832,7 @@ void VstPlugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 #endif
 }
 
-void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
+void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl)
@@ -871,7 +874,7 @@ void VstPlugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numS
 #endif
 }
 
-void VstPlugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
+void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (!_impl || !channelBufs)
@@ -904,7 +907,7 @@ void VstPlugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels
 #endif
 }
 
-bool VstPlugin::OpenEditor(HWND parentHwnd)
+bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST3_ENABLED
 	// Pause real-time audio processing while opening the editor. Some VST3
@@ -919,7 +922,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 
 	if (!_isLoaded || !_impl || !_impl->controller)
 	{
-		std::cout << "[VstPlugin] OpenEditor failed: loaded=" << _isLoaded
+		std::cout << "[Vst3Plugin] OpenEditor failed: loaded=" << _isLoaded
 			<< ", hasImpl=" << (_impl ? 1 : 0)
 			<< ", hasController=" << ((_impl && _impl->controller) ? 1 : 0)
 			<< std::endl;
@@ -934,14 +937,14 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		auto c2k = _impl->componentConnection->connect(_impl->controllerConnection);
 		auto k2c = _impl->controllerConnection->connect(_impl->componentConnection);
 		_impl->_connectionsDone = true;
-		std::cout << "[VstPlugin] ConnectionPoint connect: c2k=" << c2k
+		std::cout << "[Vst3Plugin] ConnectionPoint connect: c2k=" << c2k
 			<< ", k2c=" << k2c << std::endl;
 	}
 
 	IPlugView* rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
 	if (!rawView)
 	{
-		std::cout << "[VstPlugin] OpenEditor failed: createView returned null" << std::endl;
+		std::cout << "[Vst3Plugin] OpenEditor failed: createView returned null" << std::endl;
 		return false;
 	}
 
@@ -949,7 +952,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 
 	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
 	{
-		std::cout << "[VstPlugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
+		std::cout << "[Vst3Plugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
 		_impl->plugView = nullptr;
 		return false;
 	}
@@ -960,7 +963,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 	const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
 	if (attachedResult != kResultOk)
 	{
-		std::cout << "[VstPlugin] OpenEditor failed: attached(HWND) failed" << std::endl;
+		std::cout << "[Vst3Plugin] OpenEditor failed: attached(HWND) failed" << std::endl;
 		_impl->plugView = nullptr;
 		return false;
 	}
@@ -975,7 +978,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 		};
 	}
 
-	std::cout << "[VstPlugin] OpenEditor success: size=" << _editorSize.Width << "x" << _editorSize.Height << std::endl;
+	std::cout << "[Vst3Plugin] OpenEditor success: size=" << _editorSize.Width << "x" << _editorSize.Height << std::endl;
 
 	return true;
 #else
@@ -984,7 +987,7 @@ bool VstPlugin::OpenEditor(HWND parentHwnd)
 #endif
 }
 
-void VstPlugin::CloseEditor()
+void Vst3Plugin::CloseEditor()
 {
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl && _impl->plugView)
@@ -999,7 +1002,7 @@ void VstPlugin::CloseEditor()
 #endif
 }
 
-utils::Size2d VstPlugin::GetEditorSize() const noexcept
+utils::Size2d Vst3Plugin::GetEditorSize() const noexcept
 {
 	return _editorSize;
 }
@@ -1012,14 +1015,14 @@ namespace
 		return m;
 	}
 
-	std::vector<std::shared_ptr<vst::VstPlugin>>& UiDestroyQueue()
+	std::vector<std::shared_ptr<vst::IVstPlugin>>& UiDestroyQueue()
 	{
-		static std::vector<std::shared_ptr<vst::VstPlugin>> q;
+		static std::vector<std::shared_ptr<vst::IVstPlugin>> q;
 		return q;
 	}
 }
 
-void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::VstPlugin> plugin)
+void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
 {
 	if (!plugin)
 		return;
@@ -1030,13 +1033,28 @@ void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::VstPlugin> plugin)
 
 std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 {
-	std::vector<std::shared_ptr<vst::VstPlugin>> drained;
+	std::vector<std::shared_ptr<vst::IVstPlugin>> drained;
 	{
 		std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
 		drained.swap(UiDestroyQueue());
 	}
 	const std::size_t count = drained.size();
-	// drained destructs here on the UI thread, running ~VstPlugin → Unload →
+	// drained destructs here on the UI thread, running ~Vst3Plugin → Unload →
 	// IComponent::terminate() and FreeLibrary on the correct thread.
 	return count;
+}
+
+std::shared_ptr<vst::IVstPlugin> vst::MakePluginForPath(const std::wstring& path)
+{
+	// Determine type from file extension: .dll -> VST2, anything else -> VST3.
+	const auto dotPos = path.rfind(L'.');
+	if (dotPos != std::wstring::npos)
+	{
+		std::wstring ext = path.substr(dotPos);
+		// Lowercase comparison
+		for (auto& c : ext) c = static_cast<wchar_t>(std::towlower(c));
+		if (ext == L".dll")
+			return std::make_shared<vst::Vst2Plugin>();
+	}
+	return std::make_shared<vst::Vst3Plugin>();
 }

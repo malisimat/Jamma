@@ -13,7 +13,7 @@
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
-#include "../vst/VstPlugin.h"
+#include "../vst/Vst3Plugin.h"
 #include <objbase.h>
 #include <atomic>
 #include <cctype>

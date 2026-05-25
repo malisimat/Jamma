@@ -133,7 +133,7 @@ namespace engine
 		void UnloadVstPlugin(size_t index);
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
-		std::shared_ptr<vst::VstPlugin> GetVstPlugin(size_t index) const;
+		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
@@ -205,7 +205,7 @@ namespace engine
 		std::vector<std::wstring> _vstPluginPaths;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
-		// initialise a newly loaded VstPlugin.
+		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
 		float _sampleRate = 44100.0f;
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;

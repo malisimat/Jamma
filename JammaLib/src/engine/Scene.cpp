@@ -6,7 +6,7 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
-#include "../vst/VstPlugin.h"
+#include "../vst/Vst3Plugin.h"
 
 using namespace base;
 using namespace actions;
@@ -220,7 +220,7 @@ void Scene::_PruneClosedVstEditorWindows()
 	}), _vstEditorWindows.end());
 }
 
-bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin)
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
 {
 	if (!plugin || !plugin->IsLoaded())
 		return false;
@@ -950,7 +950,7 @@ void Scene::OnJobTick(Time curTime)
 	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
 	// thread for destruction. On success the chain holds its own ref so this
 	// queued ref is a no-op; on failure (Load returned false) this is the only
-	// remaining ref, and draining it on the UI thread ensures ~VstPlugin →
+	// remaining ref, and draining it on the UI thread ensures ~Vst3Plugin →
 	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
 	// the plugin. Releasing on this job thread instead violates VST3 threading
 	// and can crash plugins or leave dangling state until window close.
@@ -1297,15 +1297,16 @@ void Scene::CommitChanges()
 	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
 	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
 	// the audio lock and later attached() calls remain UI-thread bound.
+	// MakePluginForPath selects VST3 (Vst3Plugin) or VST2 (Vst2Plugin) by
+	// file extension (.dll → VST2, anything else → VST3).
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
 		{
-			auto plugin = std::make_shared<vst::VstPlugin>();
+			auto plugin = vst::MakePluginForPath(job.VstPath);
 			if (plugin->PreInit(job.VstPath))
 				job.PreInitPlugin = std::move(plugin);
-			// If PreInit fails, fall back to a fresh VstPlugin on the job thread.
-			// That may still hang in attached(), but it matches the old behaviour.
+			// If PreInit fails, fall back to a fresh plugin on the job thread.
 		}
 	}
 

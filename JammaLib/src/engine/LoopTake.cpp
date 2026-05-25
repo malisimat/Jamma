@@ -441,7 +441,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
-			: std::make_shared<vst::VstPlugin>();
+			: vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
 		if (hostChannels == 0u)
 			hostChannels = 1u;
@@ -1371,7 +1371,7 @@ void LoopTake::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::VstPlugin> LoopTake::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IVstPlugin> LoopTake::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)

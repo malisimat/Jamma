@@ -99,8 +99,8 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;JAMMA_VST2_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\vst2sdk;$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -124,8 +124,8 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;JAMMA_VST2_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\vst2sdk;$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -154,8 +154,8 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_DEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;JAMMA_VST2_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\vst2sdk;$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
@@ -185,8 +185,8 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NDEBUG;NOMINMAX;_LIB;GLEW_STATIC;_CRT_SECURE_NO_WARNINGS;__WINDOWS_DS__;__WINDOWS_ASIO__;__WINDOWS_MM__;__STDC_LIB_EXT1__;JAMMA_VST3_ENABLED;JAMMA_VST2_ENABLED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\lib\vst2sdk;$(ProjectDir)..\lib\njclient;$(ProjectDir)..\lib;$(ProjectDir)include;$(ProjectDir)src\base;$(ProjectDir)src\utils;$(ProjectDir)lib\opengl;$(ProjectDir)lib;$(ProjectDir)lib\rtaudio\include;$(VcpkgInstalledDir)$(VcpkgTriplet)\include\vst3sdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>%(AdditionalOptions)</AdditionalOptions>
@@ -324,8 +324,11 @@
     <ClInclude Include="src\vst\Vst.h" />
     <ClInclude Include="src\vst\VstDebug.h" />
     <ClInclude Include="src\vst\VstDiagnostics.h" />
-    <ClInclude Include="src\vst\VstPlugin.h" />
+    <ClInclude Include="src\vst\IVstPlugin.h" />
+    <ClInclude Include="src\vst\Vst3Plugin.h" />
+    <ClInclude Include="src\vst\Vst2Plugin.h" />
     <ClInclude Include="src\vst\VstChain.h" />
+
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
     <ClInclude Include="src\engine\UndoHistory.h" />
@@ -420,7 +423,8 @@
     <ClCompile Include="src\io\JamFile.cpp" />
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
-    <ClCompile Include="src\vst\VstPlugin.cpp" />
+    <ClCompile Include="src\vst\Vst3Plugin.cpp" />
+    <ClCompile Include="src\vst\Vst2Plugin.cpp" />
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
