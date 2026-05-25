@@ -8,6 +8,7 @@
 #include "Vst3Plugin.h"
 #include "Vst2Plugin.h"
 #include <algorithm>
+#include <cwctype>
 #include <iostream>
 #include <mutex>
 #include <vector>
@@ -1051,7 +1052,7 @@ std::shared_ptr<vst::IVstPlugin> vst::MakePluginForPath(const std::wstring& path
 	{
 		std::wstring ext = path.substr(dotPos);
 		// Lowercase comparison
-		for (auto& c : ext) c = static_cast<wchar_t>(::towlower(c));
+		for (auto& c : ext) c = static_cast<wchar_t>(std::towlower(c));
 		if (ext == L".dll")
 			return std::make_shared<vst::Vst2Plugin>();
 	}

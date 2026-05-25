@@ -200,7 +200,7 @@ namespace engine
 		std::vector<std::wstring> _vstPluginPaths;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
-		// initialise a newly loaded Vst3Plugin.
+		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
 		float _sampleRate = 44100.0f;
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;

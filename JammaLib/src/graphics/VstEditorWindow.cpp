@@ -8,12 +8,13 @@
 #include "VstEditorWindow.h"
 #include "../vst/IVstPlugin.h"
 #include <algorithm>
+#include <iostream>
 #include <vector>
 
 using namespace graphics;
 using namespace actions;
 
-// Thread-local tracking of active VstEditorWindow instances.
+// Global tracking of active VstEditorWindow instances.
 // All VST editor operations run on the main UI thread, so a plain
 // (non-atomic) vector is safe here — every access is on that thread.
 static std::vector<VstEditorWindow*> s_activeEditorWindows;
@@ -166,8 +167,13 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	// Register for the mouse-move hook so drags repaint immediately.
 	s_activeEditorWindows.push_back(this);
 	if (!s_callWndRetHook)
+	{
 		s_callWndRetHook = SetWindowsHookEx(WH_CALLWNDPROCRET, CallWndRetProc,
-			nullptr, GetCurrentThreadId());
+			GetModuleHandle(nullptr), GetCurrentThreadId());
+		if (!s_callWndRetHook)
+			std::cerr << "VstEditorWindow: SetWindowsHookEx failed, error="
+				<< GetLastError() << "\n";
+	}
 
 	return true;
 }

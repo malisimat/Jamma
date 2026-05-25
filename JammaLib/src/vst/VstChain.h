@@ -15,8 +15,8 @@
 
 namespace vst
 {
-	// VstChain holds an ordered sequence of Vst3Plugin instances and applies
-	// them in series to mono, stereo, or exact-match multichannel buffers.
+	// VstChain holds an ordered sequence of IVstPlugin instances (VST2 or VST3)
+	// and applies them in series to mono, stereo, or exact-match multichannel buffers.
 	//
 	// Threading contract:
 	//   AddPlugin / RemovePlugin – call from a non-RT thread only.

@@ -9,9 +9,10 @@
 // All tests here exercise behaviour that does not require loading a real VST2
 // DLL, so they work in a standard CI environment.
 //
-// Tests are grouped into three suites:
+// Tests are grouped into four suites:
 //   Vst2PluginDefault   – initial state after construction
 //   Vst2PluginUnloaded  – operations on a not-loaded instance
+//   Vst2PluginBypassed  – SetBypassed / IsBypassed independent of load state
 //   Vst2PluginFactory   – MakePluginForPath factory routing
 
 #ifdef JAMMA_VST2_ENABLED
