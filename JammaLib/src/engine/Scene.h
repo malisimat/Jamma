@@ -247,6 +247,7 @@ namespace engine
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
 		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
+		void _ClearTimingState(bool clearTapTempo);
 		bool _HandleTapTempo(Time actionTime);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
@@ -296,7 +297,7 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
-		unsigned long _masterLoopLengthSamps;
+		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
@@ -307,17 +308,17 @@ namespace engine
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
-		std::mutex _tempoMutex;
+		std::mutex _tapTempoMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
 
-		// NINJAM tempo / reclock state (job-thread owned).
+		// NINJAM tempo / reclock state. Atomics are shared across UI, job, and audio reset paths.
 		unsigned int _remoteMasterLoopSamps = 0u;
 		unsigned int _remoteSampleRate = 0u;
-		unsigned int _effectiveQuantiseSamps = 0u;
+		std::atomic_uint _effectiveQuantiseSamps = 0u;
 		unsigned int _lastRemoteIntervalPos = 0u;
-		bool _armReclock = false;
-		bool _hasPendingTempo = false;
+		std::atomic_bool _armReclock = false;
+		std::atomic_bool _hasPendingTempo = false;
 	};
 }
