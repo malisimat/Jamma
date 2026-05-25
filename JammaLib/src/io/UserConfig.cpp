@@ -73,6 +73,19 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 		}
 	}
 
+	iter = json.KeyValues.find("serial");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["serial"].index() == 6)
+		{
+			auto serialJson = std::get<Json::JsonPart>(json.KeyValues["serial"]);
+			auto serialOpt = SerialConfig::FromJson(serialJson);
+
+			if (serialOpt.has_value())
+				cfg.Serial = serialOpt.value();
+		}
+	}
+
 	return cfg;
 }
 
@@ -252,6 +265,78 @@ std::optional<UserConfig::MidiSettings> UserConfig::MidiSettings::FromJson(Json:
 	midi.Name = name;
 	midi.Enabled = enabled;
 	return midi;
+}
+
+std::optional<UserConfig::SerialSettings> UserConfig::SerialSettings::FromJson(Json::JsonPart json)
+{
+	std::string name = "default";
+	std::string port = "COM3";
+	unsigned int baudRate = 115200u;
+	bool enabled = false;
+
+	auto iter = json.KeyValues.find("name");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["name"].index() == 4)
+			name = std::get<std::string>(json.KeyValues["name"]);
+	}
+
+	iter = json.KeyValues.find("port");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["port"].index() == 4)
+			port = std::get<std::string>(json.KeyValues["port"]);
+	}
+
+	iter = json.KeyValues.find("baudrate");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["baudrate"].index() == 2)
+			baudRate = std::get<unsigned long>(json.KeyValues["baudrate"]);
+	}
+
+	iter = json.KeyValues.find("enabled");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["enabled"].index() == 0)
+			enabled = std::get<bool>(json.KeyValues["enabled"]);
+	}
+
+	SerialSettings serial;
+	serial.Name = name.empty() ? "default" : name;
+	serial.Port = port;
+	serial.BaudRate = baudRate;
+	serial.Enabled = enabled;
+	return serial;
+}
+
+std::optional<UserConfig::SerialConfig> UserConfig::SerialConfig::FromJson(Json::JsonPart json)
+{
+	SerialConfig serial;
+
+	auto iter = json.KeyValues.find("devices");
+	if ((iter != json.KeyValues.end()) && (json.KeyValues["devices"].index() == 5))
+	{
+		auto devicesArray = std::get<Json::JsonArray>(json.KeyValues["devices"]);
+		if (devicesArray.Array.index() == 5)
+		{
+			auto devices = std::get<std::vector<Json::JsonPart>>(devicesArray.Array);
+			for (const auto& deviceJson : devices)
+			{
+				auto device = SerialSettings::FromJson(deviceJson);
+				if (device.has_value())
+					serial.Devices.push_back(device.value());
+			}
+		}
+
+		return serial;
+	}
+
+	auto singleDevice = SerialSettings::FromJson(json);
+	if (singleDevice.has_value())
+		serial.Devices.push_back(singleDevice.value());
+
+	return serial;
 }
 
 

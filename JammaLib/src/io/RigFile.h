@@ -34,10 +34,18 @@ namespace io
 
 		struct TriggerPair
 		{
+			enum BindingSource
+			{
+				SOURCE_KEYBOARD,
+				SOURCE_SERIAL
+			};
+
 			unsigned int ActivateDown;
 			unsigned int ActivateUp;
 			unsigned int DitchDown;
 			unsigned int DitchUp;
+			BindingSource Source = SOURCE_KEYBOARD;
+			std::string Device;
 
 			static std::optional<TriggerPair> FromJson(Json::JsonPart json);
 		};

@@ -56,28 +56,37 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	for (auto trigPair : trigStruct.TriggerPairs)
 	{
+		auto source = trigPair.Source == io::RigFile::TriggerPair::SOURCE_SERIAL ?
+			TriggerSource::TRIGGER_SERIAL :
+			TriggerSource::TRIGGER_KEY;
+		auto device = source == TriggerSource::TRIGGER_SERIAL ? trigPair.Device : std::string();
+
 		auto activate = DualBinding(
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.ActivateDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.ActivateUp,
-				0
+				0,
+				device
 			});
 
 		auto ditch = DualBinding(
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.DitchDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.DitchUp,
-				0
+				0,
+				device
 			});
 
 		trigger->AddBinding(activate, ditch);
@@ -119,15 +128,26 @@ ActionResult Trigger::OnAction(KeyAction action)
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1u : 0u;
+	return OnBindingEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
+}
+
+ActionResult Trigger::OnBindingEvent(TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	const base::Action& action,
+	const std::string& device)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;
 
-	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1 : 0;
-
 	for (auto& b : _activateBindings)
 	{
-		if (TryChangeState(b, true, action, keyState))
+		if (TryChangeState(b, true, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
@@ -136,7 +156,7 @@ ActionResult Trigger::OnAction(KeyAction action)
 	}
 	for (auto& b : _ditchBindings)
 	{
-		if (TryChangeState(b, false, action, keyState))
+		if (TryChangeState(b, false, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
@@ -475,13 +495,17 @@ bool Trigger::Debounce(bool isActivate,
 
 bool Trigger::TryChangeState(DualBinding& binding,
 	bool isActivate,
-	const actions::KeyAction& action,
-	int keyState)
+	TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	const base::Action& action,
+	const std::string& device)
 {
 	auto trigResult = binding.OnTrigger(
-		TriggerSource::TRIGGER_KEY,
-		action.KeyChar,
-		keyState);
+		source,
+		value,
+		state,
+		device);
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)

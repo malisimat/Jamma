@@ -110,39 +110,84 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 	unsigned int activateUp = 0;
 	unsigned int ditchDown = 0;
 	unsigned int ditchUp = 0;
+	auto hasActivateDown = false;
+	auto hasActivateUp = false;
+	auto hasDitchDown = false;
+	auto hasDitchUp = false;
+	auto source = SOURCE_KEYBOARD;
+	auto device = std::string();
 
-	auto iter = json.KeyValues.find("activatedown");
+	auto iter = json.KeyValues.find("source");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["source"].index() == 4)
+		{
+			auto sourceText = std::get<std::string>(json.KeyValues["source"]);
+			if (sourceText == "serial")
+			{
+				source = SOURCE_SERIAL;
+				device = "default";
+			}
+		}
+	}
+
+	iter = json.KeyValues.find("device");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["device"].index() == 4)
+		{
+			auto parsedDevice = std::get<std::string>(json.KeyValues["device"]);
+			if (!parsedDevice.empty())
+				device = parsedDevice;
+			else if (source == SOURCE_SERIAL)
+				device = "default";
+		}
+	}
+
+	iter = json.KeyValues.find("activatedown");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["activatedown"].index() == 2)
+		{
 			activateDown = std::get<unsigned long>(json.KeyValues["activatedown"]);
+			hasActivateDown = true;
+		}
 	}
 
 	iter = json.KeyValues.find("activateup");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["activateup"].index() == 2)
+		{
 			activateUp = std::get<unsigned long>(json.KeyValues["activateup"]);
+			hasActivateUp = true;
+		}
 	}
 
 	iter = json.KeyValues.find("ditchdown");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["ditchdown"].index() == 2)
+		{
 			ditchDown = std::get<unsigned long>(json.KeyValues["ditchdown"]);
+			hasDitchDown = true;
+		}
 	}
 
 	iter = json.KeyValues.find("ditchup");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["ditchup"].index() == 2)
+		{
 			ditchUp = std::get<unsigned long>(json.KeyValues["ditchup"]);
+			hasDitchUp = true;
+		}
 	}
 
-	if ((0 == activateDown) && (0 == activateUp))
+	if (!hasActivateDown && !hasActivateUp)
 		return std::nullopt;
 
-	if ((0 == ditchDown) && (0 == ditchUp))
+	if (!hasDitchDown && !hasDitchUp)
 		return std::nullopt;
 
 	TriggerPair pair;
@@ -150,6 +195,8 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 	pair.ActivateUp = activateUp;
 	pair.DitchDown = ditchDown;
 	pair.DitchUp = ditchUp;
+	pair.Source = source;
+	pair.Device = device;
 	return pair;
 }
 

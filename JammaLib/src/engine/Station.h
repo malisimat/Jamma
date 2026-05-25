@@ -90,6 +90,11 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		actions::ActionResult OnTriggerInput(TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			const base::Action& action,
+			const std::string& device = "");
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,

@@ -22,6 +22,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/SerialDevice.h"
 #include "NinjamSession.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
@@ -35,6 +36,7 @@
 #include "StationRemote.h"
 #include "UndoHistory.h"
 #include "MidiQueue.h"
+#include "../io/SerialTriggerQueue.h"
 
 namespace engine
 {
@@ -74,6 +76,7 @@ namespace engine
 		~Scene()
 		{
 			ReleaseResources();
+			CloseSerial();
 			CloseMidi();
 
 			_isSceneQuitting.store(true, std::memory_order_release);
@@ -198,6 +201,8 @@ namespace engine
 		void CloseAudio();
 		void InitMidi();
 		void CloseMidi();
+		void InitSerial();
+		void CloseSerial();
 		void CommitChanges();
 
 		// Send a chat message on the active ninjam session (no-op if none).
@@ -238,6 +243,7 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
@@ -270,8 +276,12 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		MidiQueue<1024> _midiIngress;
+		io::SerialTriggerQueue<256> _serialIngress;
+		std::mutex _serialIngressMutex;
 		std::uint64_t _lastMidiDropCount;
+		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
