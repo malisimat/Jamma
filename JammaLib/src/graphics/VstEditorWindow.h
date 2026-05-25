@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 #include <windows.h>
 #include "../actions/WindowAction.h"
 #include "../utils/CommonTypes.h"
@@ -74,6 +75,11 @@ namespace graphics
 
 	private:
 		static constexpr LPCWSTR _ClassName = L"JammaVstEditorWindow";
+
+		// All VST editor operations run on the main UI thread, so a plain
+		// (non-atomic) vector is safe here — every access is on that thread.
+		static std::vector<VstEditorWindow*> s_activeEditorWindows;
+		static HHOOK s_callWndRetHook;
 
 		std::atomic<HWND> _editorWnd;
 		HWND _editorHostWnd;

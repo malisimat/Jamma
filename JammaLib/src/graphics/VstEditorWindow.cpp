@@ -14,11 +14,8 @@
 using namespace graphics;
 using namespace actions;
 
-// Global tracking of active VstEditorWindow instances.
-// All VST editor operations run on the main UI thread, so a plain
-// (non-atomic) vector is safe here — every access is on that thread.
-static std::vector<VstEditorWindow*> s_activeEditorWindows;
-static HHOOK s_callWndRetHook = nullptr;
+std::vector<VstEditorWindow*> VstEditorWindow::s_activeEditorWindows;
+HHOOK VstEditorWindow::s_callWndRetHook = nullptr;
 
 // WH_CALLWNDPROCRET hook: fires after any window proc on this thread returns.
 // If the message was WM_MOUSEMOVE directed at a child of one of our editor
