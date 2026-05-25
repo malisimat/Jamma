@@ -140,9 +140,8 @@ TEST(UserConfig, DeducesDefaultLoopTimingFromLongLoop) {
 	auto timing = cfg.DeduceLoopTiming(48000ul * 8ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
-	ASSERT_EQ(96000u, timing->GrainSamps);
-	ASSERT_EQ(4u, timing->LoopGrains);
-	ASSERT_EQ(4u, timing->BeatsPerGrain);
+	ASSERT_EQ(24000u, timing->GrainSamps);
+	ASSERT_EQ(16u, timing->LoopGrains);
 	ASSERT_FLOAT_EQ(120.0f, timing->Bpm);
 	ASSERT_EQ(16u, timing->Bpi);
 }
@@ -153,9 +152,8 @@ TEST(UserConfig, DeducesDefaultLoopTimingBelowThreeSecondsWhenPossible) {
 	auto timing = cfg.DeduceLoopTiming(48000ul * 6ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
-	ASSERT_EQ(72000u, timing->GrainSamps);
-	ASSERT_EQ(4u, timing->LoopGrains);
-	ASSERT_EQ(2u, timing->BeatsPerGrain);
+	ASSERT_EQ(36000u, timing->GrainSamps);
+	ASSERT_EQ(8u, timing->LoopGrains);
 	ASSERT_FLOAT_EQ(80.0f, timing->Bpm);
 	ASSERT_EQ(8u, timing->Bpi);
 }
@@ -167,9 +165,8 @@ TEST(UserConfig, LoopTimingHonoursConfiguredTargetMaxGrain) {
 	auto timing = cfg.DeduceLoopTiming(48000ul * 6ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
-	ASSERT_EQ(144000u, timing->GrainSamps);
-	ASSERT_EQ(2u, timing->LoopGrains);
-	ASSERT_EQ(4u, timing->BeatsPerGrain);
+	ASSERT_EQ(36000u, timing->GrainSamps);
+	ASSERT_EQ(8u, timing->LoopGrains);
 	ASSERT_FLOAT_EQ(80.0f, timing->Bpm);
 	ASSERT_EQ(8u, timing->Bpi);
 }

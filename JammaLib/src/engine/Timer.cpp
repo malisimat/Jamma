@@ -39,13 +39,23 @@ double Timer::GetElapsedSeconds(Time t1, Time t2)
 
 void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
-	_loopCount.fetch_add(loopCountIncrement, std::memory_order_relaxed);
+	(void)loopCountIncrement;
+
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	if (0ul == loopLength)
+		return;
+
+	const auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
+	const auto next = (sampleOffset + static_cast<unsigned long>(sampsIncrement)) % loopLength;
+	_sampOffset.store(static_cast<unsigned int>(next), std::memory_order_relaxed);
 }
 
 void Timer::Clear()
 {
 	_quantiseSamps.store(0u, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
+	_sampOffset.store(0u, std::memory_order_release);
+	_loopCount.store(0ul, std::memory_order_release);
 }
 
 bool Timer::IsQuantisable() const
@@ -58,12 +68,51 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 {
 	_quantiseSamps.store(quantiseSamps, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
+	_sampOffset.store(0u, std::memory_order_release);
+	_loopCount.store(0ul, std::memory_order_release);
 	_quantisation.store(quantisation, std::memory_order_release);
 }
 
 void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
 {
 	_seedSourceLengthSamps.store(loopLengthSamps, std::memory_order_release);
+	if (0ul == loopLengthSamps)
+	{
+		_sampOffset.store(0u, std::memory_order_release);
+		return;
+	}
+
+	auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_acquire));
+	if (sampleOffset >= loopLengthSamps)
+		sampleOffset %= loopLengthSamps;
+	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
+}
+
+void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
+{
+	auto clampedFrac = loopIndexFrac;
+	if (clampedFrac < 0.0)
+		clampedFrac = 0.0;
+	else if (clampedFrac > 1.0)
+		clampedFrac = 1.0;
+
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	if (0ul == loopLength)
+	{
+		_sampOffset.store(0u, std::memory_order_release);
+		return;
+	}
+
+	unsigned long sampleOffset = 0ul;
+	if (clampedFrac <= 0.0)
+		sampleOffset = loopLength - 1ul;
+	else if (clampedFrac < 1.0)
+		sampleOffset = static_cast<unsigned long>((1.0 - clampedFrac) * static_cast<double>(loopLength));
+
+	if (sampleOffset >= loopLength)
+		sampleOffset = loopLength - 1ul;
+
+	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
 }
 
 unsigned int Timer::QuantiseSamps() const
@@ -79,6 +128,21 @@ Timer::QuantisationType Timer::Quantisation() const
 unsigned long Timer::SeedSourceLength() const
 {
 	return _seedSourceLengthSamps.load(std::memory_order_acquire);
+}
+
+double Timer::MasterLoopIndexFrac() const noexcept
+{
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	if (0ul == loopLength)
+		return 0.0;
+
+	const auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_acquire)) % loopLength;
+	const auto frac = 1.0 - (static_cast<double>(sampleOffset) / static_cast<double>(loopLength));
+	if (frac < 0.0)
+		return 0.0;
+	if (frac > 1.0)
+		return 1.0;
+	return frac;
 }
 
 std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)

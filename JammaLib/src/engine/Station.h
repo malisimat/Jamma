@@ -3,6 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include "LoopTake.h"
+#include "QuantisationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
 #include "../audio/AudioMixer.h"
@@ -72,6 +73,7 @@ namespace engine
 		virtual std::string ClassName() const override { return "Station"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
+		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
@@ -114,6 +116,9 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
+		void SetQuantisationOverlay(unsigned int seedSamps, unsigned int masterLoopSamps, bool confirm);
+		void ClearQuantisationOverlay();
+		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
 		void SetNumBusChannels(unsigned int chans);
@@ -142,6 +147,8 @@ namespace engine
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
 
 		virtual void _InitReceivers() override;
+		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges() override;
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
 			Audible::AudioSourceType source) override;
@@ -174,6 +181,7 @@ namespace engine
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
 		std::shared_ptr<Timer> _clock;
+		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
@@ -210,5 +218,13 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
+		bool _quantisationOverlayPinned;
+		unsigned int _pendingQuantisationOverlaySeedSamps;
+		unsigned int _pendingQuantisationOverlayMasterLoopSamps;
+		bool _pendingQuantisationOverlayConfirm;
+
+		// Audio → render handoff for the quantisation overlay phase.
+		// Written lock-free on the audio thread (OnTick), consumed on the render thread (Draw3d).
+		std::atomic<double> _pendingLoopIndexFrac{ 0.0 };
 	};
 }

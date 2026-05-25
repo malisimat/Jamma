@@ -217,6 +217,7 @@ namespace engine
 		void SetLoopChannel(unsigned int channel);
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
+		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);

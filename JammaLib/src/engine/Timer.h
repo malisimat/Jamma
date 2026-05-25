@@ -33,9 +33,11 @@ namespace engine
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
 		void SetSeedSourceLength(unsigned long loopLengthSamps);
+		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
 		unsigned int QuantiseSamps() const;
 		QuantisationType Quantisation() const;
 		unsigned long SeedSourceLength() const;
+		double MasterLoopIndexFrac() const noexcept;
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
 	private:
