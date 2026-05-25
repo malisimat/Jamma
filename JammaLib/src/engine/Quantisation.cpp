@@ -121,6 +121,17 @@ unsigned int engine::IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigne
 	return RoundedToUInt((static_cast<double>(sampleRate) * 60.0 * static_cast<double>(bpi)) / static_cast<double>(bpm));
 }
 
+std::optional<QuantisationTiming> engine::TimingFromSeedAndMaster(unsigned int seedSamps,
+	unsigned long masterSamps,
+	unsigned int sampleRate,
+	const QuantisationPolicy& policy)
+{
+	if ((seedSamps == 0u) || (masterSamps == 0ul) || (sampleRate == 0u))
+		return std::nullopt;
+
+	return TimingFromSeed(seedSamps, masterSamps, sampleRate, policy);
+}
+
 std::optional<QuantisationTiming> engine::DeduceSeedTiming(unsigned long masterLoopSamps,
 	unsigned int sampleRate,
 	const QuantisationPolicy& policy)

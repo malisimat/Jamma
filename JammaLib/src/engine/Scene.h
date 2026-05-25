@@ -264,6 +264,7 @@ namespace engine
 			base::SelectDepth depth,
 			size_t pluginIndex);
 
+
 	protected:
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -311,14 +312,11 @@ namespace engine
 		ViewMode _viewMode;
 
 		// NINJAM tempo / reclock state (job-thread owned).
-		float _remoteBpm = 0.0f;
-		int _remoteBpi = 0;
+		unsigned int _remoteMasterLoopSamps = 0u;
 		unsigned int _remoteSampleRate = 0u;
 		unsigned int _effectiveQuantiseSamps = 0u;
 		unsigned int _lastRemoteIntervalPos = 0u;
 		bool _armReclock = false;
 		bool _hasPendingTempo = false;
-		float _pendingTempoBpm = 0.0f;
-		int _pendingTempoBpi = 0;
 	};
 }

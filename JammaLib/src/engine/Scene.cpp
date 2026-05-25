@@ -573,6 +573,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			_effectiveQuantiseSamps = 0u;
 			_hasPendingTempo = false;
 		}
+		_masterLoopLengthSamps = 0ul;
 		return ActionResult::NoAction();
 	}
 
@@ -924,13 +925,18 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 
 	auto snapshot = _ninjamSession->Pump();
-	if (snapshot.has_value())
 	{
+		// Always sync the station clock state to the scene-level quantisation.
+		// This ensures that when the first loop seeds the station clock locally
+		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_audioMutex);
-		_UpdateRemoteStationsFromSnapshot(snapshot.value());
 		_QueueLocalTempoFromClock();
-		_SendQueuedTempoAtIntervalWrap(snapshot.value());
-		_ApplyRemoteTempoToClock(snapshot.value());
+		if (snapshot.has_value())
+		{
+			_UpdateRemoteStationsFromSnapshot(snapshot.value());
+			_SendQueuedTempoAtIntervalWrap(snapshot.value());
+			_ApplyRemoteTempoToClock(snapshot.value());
+		}
 	}
 
 	actions::JobAction job;
@@ -1779,8 +1785,6 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 	{
 		std::scoped_lock tempoLock(_tempoMutex);
 		_effectiveQuantiseSamps = timing.SeedSamps;
-		_pendingTempoBpm = timing.Bpm;
-		_pendingTempoBpi = static_cast<int>(timing.Bpi);
 		_hasPendingTempo = (timing.Bpm > 0.0f) && (timing.Bpi > 0u);
 		_armReclock = false;
 	}
@@ -1796,6 +1800,7 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 bool Scene::_HandleTapTempo(Time actionTime)
 {
 	const auto sampleRate = _CurrentSampleRate();
+
 	const auto timing = _tapTempo.TapAtSample(_EstimatedAudioSampleAt(actionTime),
 		sampleRate,
 		_masterLoopLengthSamps,
@@ -1804,6 +1809,12 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	if (!timing.has_value())
 	{
 		std::cout << "Tap tempo: first tap" << std::endl;
+		return true;
+	}
+
+	if (_masterLoopLengthSamps == 0ul)
+	{
+		std::cout << "Tap tempo: no master set, tap absorbed" << std::endl;
 		return true;
 	}
 
@@ -1961,13 +1972,6 @@ void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
 			return;
 	}
 
-	const auto bpmChanged = (snapshot.Bpm != _remoteBpm)
-		|| (snapshot.Bpi != _remoteBpi)
-		|| (snapshot.SampleRate != _remoteSampleRate);
-
-	if (!bpmChanged && (_effectiveQuantiseSamps != 0u) && _clock->IsQuantisable())
-		return;
-
 	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
 	if (intervalLengthSamps == 0u)
 	{
@@ -1976,17 +1980,24 @@ void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
 			snapshot.SampleRate);
 	}
 
+	const auto tempoChanged = (intervalLengthSamps != _remoteMasterLoopSamps)
+		|| (snapshot.SampleRate != _remoteSampleRate);
+
+	if (!tempoChanged && (_effectiveQuantiseSamps != 0u) && _clock->IsQuantisable())
+		return;
+
 	const auto timing = _userConfig.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
 	if (!timing.has_value() || (timing->GrainSamps == 0u))
 		return;
 
-	_remoteBpm = snapshot.Bpm;
-	_remoteBpi = snapshot.Bpi;
+	_remoteMasterLoopSamps = intervalLengthSamps;
 	_remoteSampleRate = snapshot.SampleRate;
 	_effectiveQuantiseSamps = timing->GrainSamps;
+	_masterLoopLengthSamps = static_cast<unsigned long>(intervalLengthSamps);
 
 	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
 	_clock->SetQuantisation(timing->GrainSamps, quantisation);
+	_clock->SetSeedSourceLength(intervalLengthSamps);
 
 	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
 		<< " bpi=" << snapshot.Bpi
@@ -2030,10 +2041,9 @@ void Scene::_QueueLocalTempoFromClock()
 	}
 
 	_effectiveQuantiseSamps = timing->GrainSamps;
+	_masterLoopLengthSamps = seedLoopLengthSamps;
 	{
 		std::scoped_lock tempoLock(_tempoMutex);
-		_pendingTempoBpm = timing->Bpm;
-		_pendingTempoBpi = static_cast<int>(timing->Bpi);
 		_hasPendingTempo = true;
 	}
 	_armReclock = false;
@@ -2052,15 +2062,10 @@ void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	const bool wrapped = (pos < _lastRemoteIntervalPos);
 	_lastRemoteIntervalPos = pos;
 
-	// Copy pending tempo under lock to avoid racing with OnAction (UI thread).
-	float pendingBpm;
-	int pendingBpi;
 	{
 		std::scoped_lock lock(_tempoMutex);
 		if (!_hasPendingTempo)
 			return;
-		pendingBpm = _pendingTempoBpm;
-		pendingBpi = _pendingTempoBpi;
 	}
 
 	if (!_ninjamSession || !_ninjamSession->IsConnected())
@@ -2069,9 +2074,23 @@ void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 	if (!wrapped)
 		return;
 
-	if (_ninjamSession->RequestServerTempo(pendingBpm, pendingBpi))
+	// Derive BPM/BPI on demand from current seed and master lengths.
+	auto sampleRate = _remoteSampleRate;
+	if (sampleRate == 0u)
+		sampleRate = _audioDevice ? _audioDevice->GetAudioStreamParams().SampleRate : 0u;
+	if (sampleRate == 0u)
+		sampleRate = _userConfig.Audio.SampleRate;
+
+	const auto qtOpt = engine::TimingFromSeedAndMaster(
+		_effectiveQuantiseSamps, _masterLoopLengthSamps, sampleRate, _QuantisationPolicy());
+	if (!qtOpt.has_value() || (qtOpt->Bpm <= 0.0f) || (qtOpt->Bpi == 0u))
+		return;
+
+	if (_ninjamSession->RequestServerTempo(qtOpt->Bpm, static_cast<int>(qtOpt->Bpi)))
 	{
 		std::scoped_lock lock(_tempoMutex);
 		_hasPendingTempo = false;
 	}
 }
+
+

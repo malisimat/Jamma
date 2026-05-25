@@ -26,6 +26,10 @@ namespace engine
 
 	unsigned int MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy);
 	unsigned int IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate);
+	std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
+		unsigned long masterSamps,
+		unsigned int sampleRate,
+		const QuantisationPolicy& policy);
 	std::optional<QuantisationTiming> DeduceSeedTiming(unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);
