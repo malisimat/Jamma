@@ -1,180 +1,143 @@
-﻿#pragma once
+﻿// vst2sdk.h - Windows-focused facade for the VST 2.4 C ABI, including aeffectx.h declarations.
+
+#pragma once
+
+#include <string.h>
 
 #ifndef __aeffect__
 #define __aeffect__
 
-// gcc based compiler, or CodeWarrior on Mac OS X
-#if ((defined(__GNUC__) && (defined(__APPLE_CPP__) || defined(__APPLE_CC__))) || (defined (__MWERKS__) && defined (__MACH__)))
-	#ifndef TARGET_API_MAC_CARBON
-		#define TARGET_API_MAC_CARBON 1
-	#endif
-	#if __ppc__
-		#ifndef VST_FORCE_DEPRECATED
-			#define VST_FORCE_DEPRECATED 0
-		#endif
-	#endif
-#endif
+#pragma pack(push, 8)
 
-#if TARGET_API_MAC_CARBON
-	#ifdef __LP64__
-		#pragma options align=power
-	#else
-		#pragma options align=mac68k
-	#endif
-	#define VSTCALLBACK
-#elif defined __BORLANDC__
-	#pragma -a8
-#elif defined(__GNUC__)
-    #pragma pack(push,8)
-    #define VSTCALLBACK __cdecl
-#elif defined(WIN32) || defined(__FLAT__) || defined CBUILDER
-	#pragma pack(push)
-	#pragma pack(8)
-	#define VSTCALLBACK __cdecl
-#else
-	#define VSTCALLBACK
+#ifndef VSTCALLBACK
+#define VSTCALLBACK __cdecl
 #endif
-//-------------------------------------------------------------------------------------------------------
-
-#include <string.h>	// for strncpy
 
 //-------------------------------------------------------------------------------------------------------
 // VST Version
 //-------------------------------------------------------------------------------------------------------
 
-/** Define SDK Version (you can generate different versions (from 2.0 to 2.4) of this SDK by setting the unwanted extensions to 0). */
-#define VST_2_1_EXTENSIONS 1 ///< Version 2.1 extensions (08-06-2000)
-#define VST_2_2_EXTENSIONS 1 ///< Version 2.2 extensions (08-06-2001)
-#define VST_2_3_EXTENSIONS 1 ///< Version 2.3 extensions (20-05-2003)
-#ifndef VST_2_4_EXTENSIONS
-#define VST_2_4_EXTENSIONS 1 ///< Version 2.4 extensions (01-01-2006)
-#endif
-
-/** Current VST Version */
-#if VST_2_4_EXTENSIONS
-	#define kVstVersion 2400
-#elif VST_2_3_EXTENSIONS
-	#define kVstVersion 2300
-#elif VST_2_2_EXTENSIONS
-	#define kVstVersion 2200
-#elif VST_2_1_EXTENSIONS
-	#define kVstVersion 2100
-#else
-	#define kVstVersion 2
-#endif
-
-/** Disable for Hosts to serve Plug-ins below VST 2.4 */
-#ifndef VST_FORCE_DEPRECATED
-#define VST_FORCE_DEPRECATED VST_2_4_EXTENSIONS 
-#endif
+/** This facade is fixed to VST 2.4 on Windows. */
+#define VST_2_1_EXTENSIONS 1
+#define VST_2_2_EXTENSIONS 1
+#define VST_2_3_EXTENSIONS 1
+#define VST_2_4_EXTENSIONS 1
+#define kVstVersion 2400
 
 /** Declares identifier as deprecated. */
-#if VST_FORCE_DEPRECATED
-#define DECLARE_VST_DEPRECATED(identifier) __##identifier##Deprecated
-#else
 #define DECLARE_VST_DEPRECATED(identifier) identifier
-#endif
 
 /** Define for 64 Bit Platform. */
 #ifndef VST_64BIT_PLATFORM
-#define VST_64BIT_PLATFORM _WIN64 || __LP64__
+#if defined(_WIN64)
+#define VST_64BIT_PLATFORM 1
+#else
+#define VST_64BIT_PLATFORM 0
+#endif
 #endif
 
 //-------------------------------------------------------------------------------------------------------
 // Integral Types
 //-------------------------------------------------------------------------------------------------------
 
-#ifdef WIN32
-typedef short VstInt16;				///< 16 bit integer type
-typedef int VstInt32;				///< 32 bit integer type
-typedef __int64 VstInt64;			///< 64 bit integer type
-#else
-#include <stdint.h>
-typedef int16_t VstInt16;			///< 16 bit integer type
-typedef int32_t VstInt32;			///< 32 bit integer type
-typedef int64_t VstInt64;			///< 64 bit integer type
-#endif
+using Vst2Int16 = short;
+using Vst2Int32 = int;
+using Vst2Int64 = __int64;
+
+using VstInt16 = Vst2Int16;
+using VstInt32 = Vst2Int32;
+using VstInt64 = Vst2Int64;
 
 //-------------------------------------------------------------------------------------------------------
 // Generic Types
 //-------------------------------------------------------------------------------------------------------
 
-#if VST_64BIT_PLATFORM
-typedef VstInt64 VstIntPtr;			///< platform-dependent integer type, same size as pointer
+#if defined(_WIN64)
+using Vst2IntPtr = Vst2Int64;
 #else
-typedef VstInt32 VstIntPtr;			///< platform-dependent integer type, same size as pointer
+using Vst2IntPtr = Vst2Int32;
 #endif
+
+using VstIntPtr = Vst2IntPtr;
 
 //-------------------------------------------------------------------------------------------------------
 // Misc. Definition
 //-------------------------------------------------------------------------------------------------------
 #undef CCONST
-struct AEffect;
+struct Vst2Effect;
+using AEffect = Vst2Effect;
 
 /// @cond ignore
-typedef	VstIntPtr (VSTCALLBACK *audioMasterCallback) (AEffect* effect, VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt);
-typedef VstIntPtr (VSTCALLBACK *AEffectDispatcherProc) (AEffect* effect, VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt);
-typedef void (VSTCALLBACK *AEffectProcessProc) (AEffect* effect, float** inputs, float** outputs, VstInt32 sampleFrames);
-typedef void (VSTCALLBACK *AEffectProcessDoubleProc) (AEffect* effect, double** inputs, double** outputs, VstInt32 sampleFrames);
-typedef void (VSTCALLBACK *AEffectSetParameterProc) (AEffect* effect, VstInt32 index, float parameter);
-typedef float (VSTCALLBACK *AEffectGetParameterProc) (AEffect* effect, VstInt32 index);
+using Vst2HostCallback = Vst2IntPtr (VSTCALLBACK *) (Vst2Effect* effect, Vst2Int32 opcode, Vst2Int32 index, Vst2IntPtr value, void* ptr, float opt);
+using Vst2DispatcherProc = Vst2IntPtr (VSTCALLBACK *) (Vst2Effect* effect, Vst2Int32 opcode, Vst2Int32 index, Vst2IntPtr value, void* ptr, float opt);
+using Vst2ProcessProc = void (VSTCALLBACK *) (Vst2Effect* effect, float** inputs, float** outputs, Vst2Int32 sampleFrames);
+using Vst2ProcessDoubleProc = void (VSTCALLBACK *) (Vst2Effect* effect, double** inputs, double** outputs, Vst2Int32 sampleFrames);
+using Vst2SetParameterProc = void (VSTCALLBACK *) (Vst2Effect* effect, Vst2Int32 index, float parameter);
+using Vst2GetParameterProc = float (VSTCALLBACK *) (Vst2Effect* effect, Vst2Int32 index);
+
+using audioMasterCallback = Vst2HostCallback;
+using AEffectDispatcherProc = Vst2DispatcherProc;
+using AEffectProcessProc = Vst2ProcessProc;
+using AEffectProcessDoubleProc = Vst2ProcessDoubleProc;
+using AEffectSetParameterProc = Vst2SetParameterProc;
+using AEffectGetParameterProc = Vst2GetParameterProc;
 /// @endcond
 
-/** Four Character Constant (for AEffect->uniqueID) */
+/** Four Character Constant (for Vst2Effect::uniqueID) */
 #define CCONST(a, b, c, d) \
-	 ((((VstInt32)a) << 24) | (((VstInt32)b) << 16) | (((VstInt32)c) << 8) | (((VstInt32)d) << 0))
+	 ((((Vst2Int32)a) << 24) | (((Vst2Int32)b) << 16) | (((Vst2Int32)c) << 8) | (((Vst2Int32)d) << 0))
 
-/** AEffect magic number */
+/** Vst2Effect magic number */
 #define kEffectMagic CCONST ('V', 's', 't', 'P')
 
 //-------------------------------------------------------------------------------------------------------
 /** Basic VST Effect "C" Interface. */
 //-------------------------------------------------------------------------------------------------------
-struct AEffect
+struct Vst2Effect
 {
 //-------------------------------------------------------------------------------------------------------
-	VstInt32 magic;			///< must be #kEffectMagic ('VstP')
+	Vst2Int32 magic;			///< must be #kEffectMagic ('VstP')
 
 	/** Host to Plug-in dispatcher @see AudioEffect::dispatcher */
-	AEffectDispatcherProc dispatcher;
+	Vst2DispatcherProc dispatcher;
 	
-	/** \deprecated Accumulating process mode is deprecated in VST 2.4! Use AEffect::processReplacing instead! */
-	AEffectProcessProc DECLARE_VST_DEPRECATED (process);
+	/** \deprecated Accumulating process mode is deprecated in VST 2.4! Use Vst2Effect::processReplacing instead! */
+	Vst2ProcessProc DECLARE_VST_DEPRECATED (process);
 	
 	/** Set new value of automatable parameter @see AudioEffect::setParameter */
-	AEffectSetParameterProc setParameter;
+	Vst2SetParameterProc setParameter;
 
 	/** Returns current value of automatable parameter @see AudioEffect::getParameter*/
-	AEffectGetParameterProc getParameter;
+	Vst2GetParameterProc getParameter;
 
-	VstInt32 numPrograms;   ///< number of programs
-	VstInt32 numParams;		///< all programs are assumed to have numParams parameters
-	VstInt32 numInputs;		///< number of audio inputs
-	VstInt32 numOutputs;	///< number of audio outputs
+	Vst2Int32 numPrograms;   ///< number of programs
+	Vst2Int32 numParams;		///< all programs are assumed to have numParams parameters
+	Vst2Int32 numInputs;		///< number of audio inputs
+	Vst2Int32 numOutputs;	///< number of audio outputs
 
-	VstInt32 flags;			///< @see VstAEffectFlags
+	Vst2Int32 flags;			///< @see VstAEffectFlags
 	
-	VstIntPtr resvd1;		///< reserved for Host, must be 0
-	VstIntPtr resvd2;		///< reserved for Host, must be 0
+	Vst2IntPtr resvd1;		///< reserved for Host, must be 0
+	Vst2IntPtr resvd2;		///< reserved for Host, must be 0
 	
-	VstInt32 initialDelay;	///< for algorithms which need input in the first place (Group delay or latency in Samples). This value should be initialized in a resume state.
+	Vst2Int32 initialDelay;	///< for algorithms which need input in the first place (Group delay or latency in Samples). This value should be initialized in a resume state.
 	
-	VstInt32 DECLARE_VST_DEPRECATED (realQualities);	///< \deprecated unused member
-	VstInt32 DECLARE_VST_DEPRECATED (offQualities);		///< \deprecated unused member
+	Vst2Int32 DECLARE_VST_DEPRECATED (realQualities);	///< \deprecated unused member
+	Vst2Int32 DECLARE_VST_DEPRECATED (offQualities);		///< \deprecated unused member
 	float    DECLARE_VST_DEPRECATED (ioRatio);			///< \deprecated unused member
 
 	void* object;			///< #AudioEffect class pointer
 	void* user;				///< user-defined pointer
 
-	VstInt32 uniqueID;		///< registered unique identifier (register it at Steinberg 3rd party support Web). This is used to identify a plug-in during save+load of preset and project.
-	VstInt32 version;		///< plug-in version (example 1100 for version 1.1.0.0)
+	Vst2Int32 uniqueID;		///< registered unique identifier (register it at Steinberg 3rd party support Web). This is used to identify a plug-in during save+load of preset and project.
+	Vst2Int32 version;		///< plug-in version (example 1100 for version 1.1.0.0)
 
 	/** Process audio samples in replacing mode @see AudioEffect::processReplacing */
-	AEffectProcessProc processReplacing;
+	Vst2ProcessProc processReplacing;
 
 #if VST_2_4_EXTENSIONS
 	/** Process double-precision audio samples in replacing mode @see AudioEffect::processDoubleReplacing */
-	AEffectProcessDoubleProc processDoubleReplacing;
+	Vst2ProcessDoubleProc processDoubleReplacing;
 	
 	char future[56];		///< reserved for future use (please zero)
 #else
@@ -281,62 +244,78 @@ enum VstStringConstants
 //-------------------------------------------------------------------------------------------------------
 /** String copy taking care of null terminator. */
 //-------------------------------------------------------------------------------------------------------
-inline char* vst_strncpy (char* dst, const char* src, size_t maxLen)
+inline char* vst2_strncpy (char* dst, const char* src, size_t maxLen)
 {
 	char* result = strncpy (dst, src, maxLen);
 	dst[maxLen] = 0;
 	return result;
 }
 
+inline char* vst_strncpy (char* dst, const char* src, size_t maxLen)
+{
+	return vst2_strncpy (dst, src, maxLen);
+}
+
 //-------------------------------------------------------------------------------------------------------
 /** String concatenation taking care of null terminator. */
 //-------------------------------------------------------------------------------------------------------
-inline char* vst_strncat (char* dst, const char* src, size_t maxLen)
+inline char* vst2_strncat (char* dst, const char* src, size_t maxLen)
 {
 	char* result = strncat (dst, src, maxLen);
 	dst[maxLen] = 0;
 	return result;
 }
 
+inline char* vst_strncat (char* dst, const char* src, size_t maxLen)
+{
+	return vst2_strncat (dst, src, maxLen);
+}
+
 //-------------------------------------------------------------------------------------------------------
 /** Cast #VstIntPtr to pointer. */
 //-------------------------------------------------------------------------------------------------------
-template <class T> inline T* FromVstPtr (VstIntPtr& arg)
+template <class T> inline T* Vst2FromPtr (Vst2IntPtr& arg)
 {
 	T** address = (T**)&arg;
 	return *address;
 }
 
+template <class T> inline T* FromVstPtr (Vst2IntPtr& arg)
+{
+	return Vst2FromPtr<T> (arg);
+}
+
 //-------------------------------------------------------------------------------------------------------
 /** Cast pointer to #VstIntPtr. */
 //-------------------------------------------------------------------------------------------------------
-template <class T> inline VstIntPtr ToVstPtr (T* ptr)
+template <class T> inline Vst2IntPtr Vst2ToPtr (T* ptr)
 {
-	VstIntPtr* address = (VstIntPtr*)&ptr;
+	Vst2IntPtr* address = (Vst2IntPtr*)&ptr;
 	return *address;
+}
+
+template <class T> inline Vst2IntPtr ToVstPtr (T* ptr)
+{
+	return Vst2ToPtr (ptr);
 }
 
 //-------------------------------------------------------------------------------------------------------
 /** Structure used for #effEditGetRect. */
 //-------------------------------------------------------------------------------------------------------
-struct ERect
+struct Vst2Rect
 {
 //-------------------------------------------------------------------------------------------------------
-	VstInt16 top;		///< top coordinate
-	VstInt16 left;		///< left coordinate
-	VstInt16 bottom;	///< bottom coordinate
-	VstInt16 right;		///< right coordinate
+	Vst2Int16 top;		///< top coordinate
+	Vst2Int16 left;		///< left coordinate
+	Vst2Int16 bottom;	///< bottom coordinate
+	Vst2Int16 right;		///< right coordinate
 //-------------------------------------------------------------------------------------------------------
 };
 
+using ERect = Vst2Rect;
+
 //-------------------------------------------------------------------------------------------------------
-#if TARGET_API_MAC_CARBON
-	#pragma options align=reset
-#elif defined(WIN32) || defined(__FLAT__) || defined(__GNUC__)
-	#pragma pack(pop)
-#elif defined __BORLANDC__
-	#pragma -a-
-#endif
+#pragma pack(pop)
 
 #endif	// __aeffect__
 
@@ -357,20 +336,7 @@ struct ERect
 
 
 //-------------------------------------------------------------------------------------------------------
-#if TARGET_API_MAC_CARBON
-	#ifdef __LP64__
-	#pragma options align=power
-	#else
-	#pragma options align=mac68k
-	#endif
-#elif defined __BORLANDC__
-	#pragma -a8
-#elif defined(__GNUC__)
-    #pragma pack(push,8)
-#elif defined(WIN32) || defined(__FLAT__)
-	#pragma pack(push)
-	#pragma pack(8)
-#endif
+#pragma pack(push, 8)
 //-------------------------------------------------------------------------------------------------------
 
 //-------------------------------------------------------------------------------------------------------
@@ -1469,14 +1435,60 @@ enum VstAutomationStates
 //-------------------------------------------------------------------------------------------------------
 };
 
+// Friendly facade names. The original VST2 names remain as compatibility aliases/constants.
+using Vst2EffectFlags = VstAEffectFlags;
+using Vst2EffectOpcode = AEffectOpcodes;
+using Vst2HostOpcode = AudioMasterOpcodes;
+using Vst2CoreStringConstants = VstStringConstants;
+using Vst2Event = VstEvent;
+using Vst2EventList = VstEvents;
+using Vst2EventType = VstEventTypes;
+using Vst2MidiEvent = VstMidiEvent;
+using Vst2MidiEventFlags = VstMidiEventFlags;
+using Vst2MidiSysexEvent = VstMidiSysexEvent;
+using Vst2TimeInfo = VstTimeInfo;
+using Vst2TimeInfoFlags = VstTimeInfoFlags;
+using Vst2SmpteFrameRate = VstSmpteFrameRate;
+using Vst2VariableIo = VstVariableIo;
+using Vst2HostLanguage = VstHostLanguage;
+using Vst2HostOpcodeX = AudioMasterOpcodesX;
+using Vst2EffectOpcodeX = AEffectXOpcodes;
+using Vst2ProcessPrecision = VstProcessPrecision;
+using Vst2ParameterProperties = VstParameterProperties;
+using Vst2ParameterFlags = VstParameterFlags;
+using Vst2PinProperties = VstPinProperties;
+using Vst2PinPropertiesFlags = VstPinPropertiesFlags;
+using Vst2PluginCategory = VstPlugCategory;
+using Vst2MidiProgramName = MidiProgramName;
+using Vst2MidiProgramNameFlags = VstMidiProgramNameFlags;
+using Vst2MidiProgramCategory = MidiProgramCategory;
+using Vst2MidiKeyName = MidiKeyName;
+using Vst2SpeakerProperties = VstSpeakerProperties;
+using Vst2SpeakerArrangement = VstSpeakerArrangement;
+using Vst2SpeakerType = VstSpeakerType;
+using Vst2UserSpeakerType = VstUserSpeakerType;
+using Vst2SpeakerArrangementType = VstSpeakerArrangementType;
+using Vst2OfflineTask = VstOfflineTask;
+using Vst2OfflineTaskFlags = VstOfflineTaskFlags;
+using Vst2OfflineOption = VstOfflineOption;
+using Vst2AudioFile = VstAudioFile;
+using Vst2AudioFileFlags = VstAudioFileFlags;
+using Vst2AudioFileMarker = VstAudioFileMarker;
+using Vst2Window = VstWindow;
+using Vst2KeyCode = VstKeyCode;
+using Vst2VirtualKey = VstVirtualKey;
+using Vst2ModifierKey = VstModifierKey;
+using Vst2FileType = VstFileType;
+using Vst2FileSelect = VstFileSelect;
+using Vst2FileSelectCommand = VstFileSelectCommand;
+using Vst2FileSelectType = VstFileSelectType;
+using Vst2PatchChunkInfo = VstPatchChunkInfo;
+using Vst2PanLawType = VstPanLawType;
+using Vst2ProcessLevel = VstProcessLevels;
+using Vst2AutomationState = VstAutomationStates;
+
 //-------------------------------------------------------------------------------------------------------
-#if TARGET_API_MAC_CARBON
-	#pragma options align=reset
-#elif defined(WIN32) || defined(__FLAT__) || defined(__GNUC__)
-	#pragma pack(pop)
-#elif defined __BORLANDC__
-	#pragma -a-
-#endif
+#pragma pack(pop)
 //-------------------------------------------------------------------------------------------------------
 
-#endif //__aeffectx__
+#endif // __aeffect__
