@@ -1023,24 +1023,14 @@ void Scene::_PumpMidi()
 			if ((route.DeviceSlot != triggerEvent.DeviceSlot) || !route.Trigger)
 				continue;
 
-			unsigned int midiValue = 0u, midiState = 0u;
-			if (!Trigger::TryEncodeMidiEvent(triggerEvent.Event, midiValue, midiState))
-				continue;
-			auto res = route.Trigger->OnEvent(
-				TriggerSource::TRIGGER_MIDI,
-				midiValue,
-				midiState,
-				triggerAction);
-			if (res.IsEaten)
-			{
-				std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
-					<< "\" trigger=\"" << route.Trigger->Name()
-					<< "\" matched=true"
-					<< " status=" << static_cast<unsigned int>(triggerEvent.Event.status)
-					<< " data1=" << static_cast<unsigned int>(triggerEvent.Event.data1)
-					<< " data2=" << static_cast<unsigned int>(triggerEvent.Event.data2)
-					<< std::endl;
-			}
+			auto res = route.Trigger->OnEvent(triggerEvent.Event, triggerAction);
+			std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
+				<< "\" trigger=\"" << route.Trigger->Name()
+				<< "\" matched=" << (res.IsEaten ? "true" : "false")
+				<< " status=" << static_cast<unsigned int>(triggerEvent.Event.status)
+				<< " data1=" << static_cast<unsigned int>(triggerEvent.Event.data1)
+				<< " data2=" << static_cast<unsigned int>(triggerEvent.Event.data2)
+				<< std::endl;
 		}
 	}
 

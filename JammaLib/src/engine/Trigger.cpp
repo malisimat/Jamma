@@ -218,6 +218,16 @@ bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
 	return false;
 }
 
+ActionResult Trigger::OnEvent(const MidiEvent& event,
+	const base::Action& action)
+{
+	unsigned int value = 0u, state = 0u;
+	if (!TryEncodeMidiEvent(event, value, state))
+		return ActionResult::NoAction();
+
+	return OnEvent(TriggerSource::TRIGGER_MIDI, value, state, action);
+}
+
 ActionResult Trigger::OnEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,

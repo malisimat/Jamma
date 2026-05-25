@@ -43,11 +43,9 @@ Time OffsetTime(const Time t, unsigned int ms)
 
 static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const engine::MidiEvent& event, Time t)
 {
-	unsigned int midiValue = 0u, midiState = 0u;
 	base::Action midiAction;
 	midiAction.SetActionTime(t);
-	if (Trigger::TryEncodeMidiEvent(event, midiValue, midiState))
-		trigger->OnEvent(engine::TRIGGER_MIDI, midiValue, midiState, midiAction);
+	trigger->OnEvent(event, midiAction);
 }
 
 class MockedTriggerReceiver :

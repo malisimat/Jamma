@@ -259,9 +259,8 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		static bool TryEncodeMidiEvent(const MidiEvent& event,
-			unsigned int& outValue,
-			unsigned int& outState);
+		actions::ActionResult OnEvent(const MidiEvent& event,
+			const base::Action& action);
 		actions::ActionResult OnEvent(TriggerSource source,
 			unsigned int value,
 			unsigned int state,
@@ -297,6 +296,9 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
+		static bool TryEncodeMidiEvent(const MidiEvent& event,
+			unsigned int& outValue,
+			unsigned int& outState);
 		bool IgnoreRepeats(bool isActivate,
 			DualBinding::TestResult trigResult);
 		bool Debounce(bool isActivate,
