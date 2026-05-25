@@ -7,9 +7,44 @@
 
 #include "VstEditorWindow.h"
 #include "../vst/IAnyVstPlugin.h"
+#include <algorithm>
+#include <vector>
 
 using namespace graphics;
 using namespace actions;
+
+// Thread-local tracking of active VstEditorWindow instances.
+// All VST editor operations run on the main UI thread, so a plain
+// (non-atomic) vector is safe here — every access is on that thread.
+static std::vector<VstEditorWindow*> s_activeEditorWindows;
+static HHOOK s_callWndRetHook = nullptr;
+
+// WH_CALLWNDPROCRET hook: fires after any window proc on this thread returns.
+// If the message was WM_MOUSEMOVE directed at a child of one of our editor
+// frames, dispatch effEditIdle immediately so the plugin can repaint the
+// updated control position without waiting for the next 50 ms timer tick.
+LRESULT CALLBACK VstEditorWindow::CallWndRetProc(int code, WPARAM /*wParam*/, LPARAM lParam) noexcept
+{
+	if (code == HC_ACTION)
+	{
+		const auto* info = reinterpret_cast<const CWPRETSTRUCT*>(lParam);
+		if (info->message == WM_MOUSEMOVE && info->hwnd)
+		{
+			HWND root = GetAncestor(info->hwnd, GA_ROOT);
+			for (auto* w : s_activeEditorWindows)
+			{
+				HWND editorHwnd = w->_editorWnd.load(std::memory_order_acquire);
+				if (editorHwnd && root == editorHwnd)
+				{
+					if (w->_plugin)
+						w->_plugin->IdleEditor();
+					break;
+				}
+			}
+		}
+	}
+	return CallNextHookEx(s_callWndRetHook, code, 0, lParam);
+}
 
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
@@ -128,11 +163,27 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	// 50 ms (~20 Hz) matches common VST host practice.
 	SetTimer(wnd, 1, 50, nullptr);
 
+	// Register for the mouse-move hook so drags repaint immediately.
+	s_activeEditorWindows.push_back(this);
+	if (!s_callWndRetHook)
+		s_callWndRetHook = SetWindowsHookEx(WH_CALLWNDPROCRET, CallWndRetProc,
+			nullptr, GetCurrentThreadId());
+
 	return true;
 }
 
 void VstEditorWindow::Destroy()
 {
+	// Unregister from the hook tracking list.
+	auto it = std::find(s_activeEditorWindows.begin(), s_activeEditorWindows.end(), this);
+	if (it != s_activeEditorWindows.end())
+		s_activeEditorWindows.erase(it);
+	if (s_activeEditorWindows.empty() && s_callWndRetHook)
+	{
+		UnhookWindowsHookEx(s_callWndRetHook);
+		s_callWndRetHook = nullptr;
+	}
+
 	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
 
 	if (wnd)

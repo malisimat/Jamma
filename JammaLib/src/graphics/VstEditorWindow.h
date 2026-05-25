@@ -66,6 +66,11 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message,
 			WPARAM wParam, LPARAM lParam) noexcept;
 
+		// WH_CALLWNDPROCRET hook proc: dispatches effEditIdle after WM_MOUSEMOVE
+		// is processed by any child of an active editor frame window.
+		static LRESULT CALLBACK CallWndRetProc(int code, WPARAM wParam,
+			LPARAM lParam) noexcept;
+
 	private:
 		static constexpr LPCWSTR _ClassName = L"JammaVstEditorWindow";
 
