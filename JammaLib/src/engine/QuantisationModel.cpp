@@ -15,8 +15,8 @@ namespace
 	constexpr float GateOuterRadius = 180.0f;
 	constexpr float GateHalfHeight = 138.0f;
 	constexpr unsigned int MaxVisibleGates = 128u;
-	constexpr float FrameWidthFraction = 0.022f;
-	constexpr float FrameDepthFraction = 0.35f;
+	constexpr float FrameWidthFraction = 0.008f;
+	constexpr float FrameDepthFraction = 0.15f;
 
 	std::vector<float> BuildDummyUvs(size_t vertexCoordCount)
 	{
@@ -81,15 +81,15 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 		return;
 	}
 
-	auto highlight = 0.70f;
-	if (!Timer::IsZero(_confirmedAt))
-	{
-		const auto elapsed = Timer::GetElapsedSeconds(_confirmedAt, Timer::GetTime());
-		if (elapsed < 0.75)
-			highlight = 1.0f - static_cast<float>(elapsed * 0.40);
-		else
-			_confirmedAt = Timer::GetZero();
-	}
+	auto highlight = 0.25f;  // lower resting alpha
+    if (!Timer::IsZero(_confirmedAt))
+    {
+        const auto elapsed = Timer::GetElapsedSeconds(_confirmedAt, Timer::GetTime());
+        if (elapsed < 1.0)
+            highlight = 1.0f - static_cast<float>(elapsed * 0.75);  // 1.0 -> 0.25 over 1.0s
+        else
+            _confirmedAt = Timer::GetZero();
+    }
 
 	const auto phaseOffset = std::fmod(
 		static_cast<float>(constants::TWOPI * _loopIndexFrac),
