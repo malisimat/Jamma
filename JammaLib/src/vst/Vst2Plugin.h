@@ -17,8 +17,7 @@
 
 // Include the VST2 SDK headers only when VST2 support is compiled in.
 #ifdef JAMMA_VST2_ENABLED
-#include "aeffect.h"
-#include "aeffectx.h"
+#include "vst2sdk.h"
 #endif
 
 namespace vst

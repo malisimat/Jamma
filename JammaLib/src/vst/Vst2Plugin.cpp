@@ -9,11 +9,6 @@
 #include <algorithm>
 #include <iostream>
 
-#ifdef JAMMA_VST2_ENABLED
-// Include the full VST2 SDK only in this translation unit.
-#include "aeffectx.h"
-#endif
-
 using namespace vst;
 
 Vst2Plugin::Vst2Plugin() :
