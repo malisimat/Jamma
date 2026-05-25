@@ -1,4 +1,4 @@
-﻿// vst2sdk.h - Windows-focused facade for the VST 2.4 C ABI, including aeffectx.h declarations.
+﻿// vst2sdk.h - Windows-focused header for the VST 2.4 C ABI
 
 #pragma once
 
@@ -17,7 +17,7 @@
 // VST Version
 //-------------------------------------------------------------------------------------------------------
 
-/** This facade is fixed to VST 2.4 on Windows. */
+/** This header is fixed to VST 2.4 on Windows. */
 #define VST_2_1_EXTENSIONS 1
 #define VST_2_2_EXTENSIONS 1
 #define VST_2_3_EXTENSIONS 1
