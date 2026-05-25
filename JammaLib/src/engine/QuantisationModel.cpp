@@ -13,7 +13,8 @@ namespace
 	constexpr float GateOuterRadius = 312.0f;
 	constexpr float GateHalfHeight = 92.0f;
 	constexpr unsigned int MaxVisibleGates = 128u;
-	constexpr float GateWidthFraction = 0.18f;
+	constexpr float FrameWidthFraction = 0.18f;
+	constexpr float FrameDepthFraction = 0.35f;
 
 	std::vector<float> BuildDummyUvs(size_t vertexCoordCount)
 	{
@@ -35,9 +36,9 @@ namespace
 		verts.push_back(d.x); verts.push_back(d.y); verts.push_back(d.z);
 	}
 
-	glm::vec3 GatePoint(float radius, float angle, float y)
+	glm::vec3 GatePoint(float x, float y, float z)
 	{
-		return glm::vec3(std::sin(angle) * radius, y, std::cos(angle) * radius);
+		return glm::vec3(x, y, z);
 	}
 }
 
@@ -49,7 +50,7 @@ QuantisationModel::QuantisationModel() :
 	_overlayVisible(false),
 	_confirmedAt(Timer::GetZero())
 {
-	_modelParams.ModelShaders = { "white" };
+	_modelParams.ModelShaders = { "quantisation" };
 	SetTiming(1u, 1u);
 	SetVisible(false);
 }
@@ -87,13 +88,18 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 			_confirmedAt = Timer::GetZero();
 	}
 
+	const auto angleStep = (_gateCount > 1u) ?
+		static_cast<float>(constants::TWOPI) / static_cast<float>(_gateCount) :
+		0.0f;
+
+	glCtx.SetUniform("AngleStep", angleStep);
 	glCtx.SetUniform("Highlight", highlight);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
 
 	glBindVertexArray(_vertexArray);
-	if (numInstances > 1)
-		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, numInstances);
+	if (_gateCount > 1u)
+		glDrawArraysInstanced(GL_TRIANGLES, 0, _numTris * 3, _gateCount);
 	else
 		glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
 
@@ -148,31 +154,82 @@ std::vector<float> QuantisationModel::BuildGateGeometry(unsigned int gateCount,
 	if (gateCount == 0u)
 		return verts;
 
-	verts.reserve(static_cast<size_t>(gateCount) * 108u);
-	const auto step = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
-	const auto halfSpan = step * GateWidthFraction;
-	for (auto gate = 0u; gate < gateCount; ++gate)
+	const auto radialSpan = std::max(outerRadius - innerRadius, 1.0f);
+	const auto frameWidth = std::clamp(radialSpan * FrameWidthFraction, 8.0f, halfHeight * 0.8f);
+	const auto frameDepthHalf = std::max(frameWidth * FrameDepthFraction, 4.0f) * 0.5f;
+
+	const auto yMin = -halfHeight;
+	const auto yInnerMin = yMin + frameWidth;
+	const auto yInnerMax = halfHeight - frameWidth;
+	const auto yMax = halfHeight;
+	const auto zMin = innerRadius;
+	const auto zInnerMax = outerRadius - frameWidth;
+	const auto zMax = outerRadius;
+	const auto xFront = frameDepthHalf;
+	const auto xBack = -frameDepthHalf;
+
+	verts.reserve(15u * 6u * 3u);
+
+	// Front faces for the top, right, and bottom beams of the half-frame.
+	AppendQuad(verts,
+		GatePoint(xFront, yInnerMax, zMin),
+		GatePoint(xFront, yMax, zMin),
+		GatePoint(xFront, yMax, zMax),
+		GatePoint(xFront, yInnerMax, zMax));
+	AppendQuad(verts,
+		GatePoint(xFront, yInnerMin, zInnerMax),
+		GatePoint(xFront, yMax, zInnerMax),
+		GatePoint(xFront, yMax, zMax),
+		GatePoint(xFront, yInnerMin, zMax));
+	AppendQuad(verts,
+		GatePoint(xFront, yMin, zMin),
+		GatePoint(xFront, yInnerMin, zMin),
+		GatePoint(xFront, yInnerMin, zMax),
+		GatePoint(xFront, yMin, zMax));
+
+	// Matching back faces.
+	AppendQuad(verts,
+		GatePoint(xBack, yInnerMax, zMax),
+		GatePoint(xBack, yMax, zMax),
+		GatePoint(xBack, yMax, zMin),
+		GatePoint(xBack, yInnerMax, zMin));
+	AppendQuad(verts,
+		GatePoint(xBack, yInnerMin, zMax),
+		GatePoint(xBack, yMax, zMax),
+		GatePoint(xBack, yMax, zInnerMax),
+		GatePoint(xBack, yInnerMin, zInnerMax));
+	AppendQuad(verts,
+		GatePoint(xBack, yMin, zMax),
+		GatePoint(xBack, yInnerMin, zMax),
+		GatePoint(xBack, yInnerMin, zMin),
+		GatePoint(xBack, yMin, zMin));
+
+	const std::array<std::pair<glm::vec2, glm::vec2>, 8u> boundary = {{
+		{ { yMin, zMin }, { yMin, zMax } },
+		{ { yMin, zMax }, { yMax, zMax } },
+		{ { yMax, zMax }, { yMax, zMin } },
+		{ { yMax, zMin }, { yInnerMax, zMin } },
+		{ { yInnerMax, zMin }, { yInnerMax, zInnerMax } },
+		{ { yInnerMax, zInnerMax }, { yInnerMin, zInnerMax } },
+		{ { yInnerMin, zInnerMax }, { yInnerMin, zMin } },
+		{ { yInnerMin, zMin }, { yMin, zMin } }
+	}};
+
+	for (const auto& [from, to] : boundary)
 	{
-		const auto angle = step * static_cast<float>(gate);
-		const auto left = angle - halfSpan;
-		const auto right = angle + halfSpan;
-
-		const auto innerTopLeft = GatePoint(innerRadius, left, halfHeight);
-		const auto innerTopRight = GatePoint(innerRadius, right, halfHeight);
-		const auto outerTopLeft = GatePoint(outerRadius, left, halfHeight);
-		const auto outerTopRight = GatePoint(outerRadius, right, halfHeight);
-		const auto innerBottomLeft = GatePoint(innerRadius, left, -halfHeight);
-		const auto innerBottomRight = GatePoint(innerRadius, right, -halfHeight);
-		const auto outerBottomLeft = GatePoint(outerRadius, left, -halfHeight);
-		const auto outerBottomRight = GatePoint(outerRadius, right, -halfHeight);
-
-		AppendQuad(verts, innerTopLeft, outerTopLeft, outerTopRight, innerTopRight);
-		AppendQuad(verts, innerBottomRight, outerBottomRight, outerBottomLeft, innerBottomLeft);
-		AppendQuad(verts, innerBottomLeft, innerBottomRight, innerTopRight, innerTopLeft);
-		AppendQuad(verts, outerBottomRight, outerBottomLeft, outerTopLeft, outerTopRight);
-		AppendQuad(verts, innerBottomLeft, outerBottomLeft, outerTopLeft, innerTopLeft);
-		AppendQuad(verts, innerBottomRight, innerTopRight, outerTopRight, outerBottomRight);
+		AppendQuad(verts,
+			GatePoint(xFront, from.x, from.y),
+			GatePoint(xFront, to.x, to.y),
+			GatePoint(xBack, to.x, to.y),
+			GatePoint(xBack, from.x, from.y));
 	}
+
+	// The backing closes the interior opening on the rear of the frame.
+	AppendQuad(verts,
+		GatePoint(xBack, yInnerMin, zMin),
+		GatePoint(xBack, yInnerMin, zInnerMax),
+		GatePoint(xBack, yInnerMax, zInnerMax),
+		GatePoint(xBack, yInnerMax, zMin));
 
 	return verts;
 }

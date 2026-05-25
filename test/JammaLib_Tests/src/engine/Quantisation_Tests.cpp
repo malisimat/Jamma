@@ -450,21 +450,34 @@ TEST(Quantisation, TapSeedFromMasterRejectsZeroInputs)
 	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 0u, policy).has_value());
 }
 
-TEST(QuantisationModel, GateGeometryBuildsStarShapedPrisms)
+TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)
 {
-	auto verts = engine::QuantisationModel::BuildGateGeometry(8u, 132.0f, 312.0f, 92.0f);
-	ASSERT_FALSE(verts.empty());
-	EXPECT_EQ(8u * 36u * 3u, verts.size());
+	auto singleGateVerts = engine::QuantisationModel::BuildGateGeometry(1u, 132.0f, 312.0f, 92.0f);
+	auto repeatedGateVerts = engine::QuantisationModel::BuildGateGeometry(8u, 132.0f, 312.0f, 92.0f);
+	ASSERT_FALSE(repeatedGateVerts.empty());
+	EXPECT_EQ(singleGateVerts, repeatedGateVerts);
+	EXPECT_EQ(15u * 6u * 3u, repeatedGateVerts.size());
 
-	std::vector<std::pair<int, int>> uniquePoints;
-	for (size_t i = 0; i < 36u; ++i)
+	auto minX = repeatedGateVerts[0];
+	auto maxX = repeatedGateVerts[0];
+	auto minY = repeatedGateVerts[1];
+	auto maxY = repeatedGateVerts[1];
+	auto minZ = repeatedGateVerts[2];
+	auto maxZ = repeatedGateVerts[2];
+	for (size_t i = 0; i < repeatedGateVerts.size(); i += 3u)
 	{
-		const auto x = static_cast<int>(std::round(verts[(i * 3u) + 0u] * 100.0f));
-		const auto z = static_cast<int>(std::round(verts[(i * 3u) + 2u] * 100.0f));
-		const auto point = std::make_pair(x, z);
-		if (std::find(uniquePoints.begin(), uniquePoints.end(), point) == uniquePoints.end())
-			uniquePoints.push_back(point);
+		minX = (std::min)(minX, repeatedGateVerts[i + 0u]);
+		maxX = (std::max)(maxX, repeatedGateVerts[i + 0u]);
+		minY = (std::min)(minY, repeatedGateVerts[i + 1u]);
+		maxY = (std::max)(maxY, repeatedGateVerts[i + 1u]);
+		minZ = (std::min)(minZ, repeatedGateVerts[i + 2u]);
+		maxZ = (std::max)(maxZ, repeatedGateVerts[i + 2u]);
 	}
 
-	EXPECT_GE(uniquePoints.size(), 4u);
+	EXPECT_LT(minX, 0.0f);
+	EXPECT_GT(maxX, 0.0f);
+	EXPECT_FLOAT_EQ(-92.0f, minY);
+	EXPECT_FLOAT_EQ(92.0f, maxY);
+	EXPECT_FLOAT_EQ(132.0f, minZ);
+	EXPECT_FLOAT_EQ(312.0f, maxZ);
 }
