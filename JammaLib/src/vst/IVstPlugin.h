@@ -15,14 +15,14 @@
 
 namespace vst
 {
-	// IAnyVstPlugin is the common interface for all hosted VST plugin types
-	// (VST2 via Vst2Plugin, VST3 via VstPlugin).
+	// IVstPlugin is the common interface for all hosted VST plugin types
+	// (VST2 via Vst2Plugin, VST3 via Vst3Plugin).
 	//
-	// Threading contract: identical to VstPlugin — see that class for details.
-	class IAnyVstPlugin
+	// Threading contract: identical to Vst3Plugin — see that class for details.
+	class IVstPlugin
 	{
 	public:
-		virtual ~IAnyVstPlugin() = default;
+		virtual ~IVstPlugin() = default;
 
 		// Pre-initialise the plugin DLL on the UI thread before Load() runs on
 		// the job thread. No-op (returns true) when not needed.
@@ -76,14 +76,14 @@ namespace vst
 
 	// Factory: creates the correct plugin type based on file extension.
 	// Extension ".dll"  -> Vst2Plugin (VST2)
-	// Any other extension (e.g. ".vst3") -> VstPlugin (VST3)
-	std::shared_ptr<IAnyVstPlugin> MakePluginForPath(const std::wstring& path);
+	// Any other extension (e.g. ".vst3") -> Vst3Plugin (VST3)
+	std::shared_ptr<IVstPlugin> MakePluginForPath(const std::wstring& path);
 
 	// Queue a plugin for destruction on the UI thread.
 	// VST3 plugins must be destroyed on the UI (message-pump) thread to avoid
 	// crashing the host.  Vst2Plugin may also be queued here for uniformity.
 	// Safe to call from any thread.
-	void QueueForUiThreadDestroy(std::shared_ptr<IAnyVstPlugin> plugin);
+	void QueueForUiThreadDestroy(std::shared_ptr<IVstPlugin> plugin);
 
 	// Drop all queued plugin refs.  Must be called from the UI thread.
 	// Returns the number of plugins released.

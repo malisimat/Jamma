@@ -5,7 +5,7 @@
 //
 ///////////////////////////////////////////////////////////
 
-#include "VstPlugin.h"
+#include "Vst3Plugin.h"
 #include "Vst2Plugin.h"
 #include <algorithm>
 #include <iostream>

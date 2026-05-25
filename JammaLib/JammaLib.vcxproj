@@ -322,8 +322,8 @@
     <ClInclude Include="src\vst\Vst.h" />
     <ClInclude Include="src\vst\VstDebug.h" />
     <ClInclude Include="src\vst\VstDiagnostics.h" />
-    <ClInclude Include="src\vst\IAnyVstPlugin.h" />
-    <ClInclude Include="src\vst\VstPlugin.h" />
+    <ClInclude Include="src\vst\IVstPlugin.h" />
+    <ClInclude Include="src\vst\Vst3Plugin.h" />
     <ClInclude Include="src\vst\Vst2Plugin.h" />
     <ClInclude Include="src\vst\VstChain.h" />
     <ClInclude Include="src\vst\aeffect.h" />
@@ -420,7 +420,7 @@
     <ClCompile Include="src\io\JamFile.cpp" />
     <ClCompile Include="src\utils\VecUtils.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
-    <ClCompile Include="src\vst\VstPlugin.cpp" />
+    <ClCompile Include="src\vst\Vst3Plugin.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin.cpp" />
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />

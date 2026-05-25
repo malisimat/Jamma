@@ -10,12 +10,12 @@
 #include <vector>
 #include <memory>
 #include <atomic>
-#include "IAnyVstPlugin.h"
+#include "IVstPlugin.h"
 #include "../../include/Constants.h"
 
 namespace vst
 {
-	// VstChain holds an ordered sequence of VstPlugin instances and applies
+	// VstChain holds an ordered sequence of Vst3Plugin instances and applies
 	// them in series to mono, stereo, or exact-match multichannel buffers.
 	//
 	// Threading contract:
@@ -34,13 +34,13 @@ namespace vst
 
 	public:
 		// Add a plugin to the end of the chain.  Not RT-safe.
-		void AddPlugin(std::shared_ptr<IAnyVstPlugin> plugin);
+		void AddPlugin(std::shared_ptr<IVstPlugin> plugin);
 
 		// Remove the plugin at the given index.  Not RT-safe.
 		void RemovePlugin(size_t index);
 
 		// Returns the plugin at index, or nullptr if out of range.
-		std::shared_ptr<IAnyVstPlugin> GetPlugin(size_t index) const;
+		std::shared_ptr<IVstPlugin> GetPlugin(size_t index) const;
 
 		size_t NumPlugins() const noexcept { return _plugins.size(); }
 
@@ -62,6 +62,6 @@ namespace vst
 		void ProcessBlockMulti(float* const* channelBufs, int numChannels, int numSamps) noexcept;
 
 	private:
-		std::vector<std::shared_ptr<IAnyVstPlugin>> _plugins;
+		std::vector<std::shared_ptr<IVstPlugin>> _plugins;
 	};
 }

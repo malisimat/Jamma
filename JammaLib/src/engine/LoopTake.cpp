@@ -1371,7 +1371,7 @@ void LoopTake::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::IAnyVstPlugin> LoopTake::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IVstPlugin> LoopTake::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)

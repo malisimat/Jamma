@@ -5,7 +5,7 @@
 #include <memory>
 
 namespace base { class ActionReceiver; }
-namespace vst { class IAnyVstPlugin; }
+namespace vst { class IVstPlugin; }
 
 namespace actions
 {
@@ -50,8 +50,8 @@ namespace actions
 		// Optional: plugin pre-initialised on the main thread before the job is
 		// dispatched to the job thread.  If non-null, the engine OnAction uses
 		// this instance directly instead of creating a fresh one.
-		// Can be VstPlugin (VST3) or Vst2Plugin (VST2) — determined by extension.
-		std::shared_ptr<vst::IAnyVstPlugin> PreInitPlugin;
+		// Can be Vst3Plugin (VST3) or Vst2Plugin (VST2) — determined by extension.
+		std::shared_ptr<vst::IVstPlugin> PreInitPlugin;
 
 		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
 		size_t VstIndex = 0;

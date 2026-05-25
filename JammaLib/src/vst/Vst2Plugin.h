@@ -12,7 +12,7 @@
 #include <atomic>
 #include <memory>
 #include <windows.h>
-#include "IAnyVstPlugin.h"
+#include "IVstPlugin.h"
 #include "../../include/Constants.h"
 
 // Include the VST2 SDK headers only when VST2 support is compiled in.
@@ -28,7 +28,7 @@ namespace vst
 	// Threading contract:
 	//   PreInit / Load / Unload / OpenEditor / CloseEditor – non-RT thread only.
 	//   ProcessBlock – audio callback only; no heap allocation, no locks.
-	class Vst2Plugin final : public IAnyVstPlugin
+	class Vst2Plugin final : public IVstPlugin
 	{
 	public:
 		Vst2Plugin();

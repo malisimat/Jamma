@@ -374,8 +374,8 @@
     <h2>1. Overview</h2>
     <p>
       This change adds first-class VST2 plugin hosting to Jamma. Previously the engine could host VST3
-      plugins via <code>VstPlugin</code>. The new <code>Vst2Plugin</code> class hosts VST2 effects
-      (.dll files using the Steinberg VST 2.4 ABI), routing them through the same <code>IAnyVstPlugin</code>
+      plugins via <code>Vst3Plugin</code>. The new <code>Vst2Plugin</code> class hosts VST2 effects
+      (.dll files using the Steinberg VST 2.4 ABI), routing them through the same <code>IVstPlugin</code>
       abstract interface used by VST3. Callers (Loop, LoopTake, Station, Scene) are completely unaware of
       which protocol is in use.
     </p>
@@ -399,7 +399,7 @@
       </div>
       <div class="card">
         <h4>Routing</h4>
-        <p>Factory <code>MakePluginForPath</code> routes <code>.dll</code> → <code>Vst2Plugin</code>, anything else → <code>VstPlugin</code> (VST3).</p>
+        <p>Factory <code>MakePluginForPath</code> routes <code>.dll</code> → <code>Vst2Plugin</code>, anything else → <code>Vst3Plugin</code> (VST3).</p>
       </div>
     </div>
   </section>
@@ -410,24 +410,24 @@
     <div class="file-tree">
       <div>JammaLib/</div>
       <div class="indent">src/vst/</div>
-      <div class="indent2"><span class="new">IAnyVstPlugin.h</span><span class="tag tag-new">NEW</span></div>
+      <div class="indent2"><span class="new">IVstPlugin.h</span><span class="tag tag-new">NEW</span></div>
       <div class="indent2"><span class="new">Vst2Plugin.h</span><span class="tag tag-new">NEW</span></div>
       <div class="indent2"><span class="new">Vst2Plugin.cpp</span><span class="tag tag-new">NEW</span></div>
       <div class="indent2"><span class="new">aeffect.h</span><span class="tag tag-new">NEW — VST2 SDK</span></div>
       <div class="indent2"><span class="new">aeffectx.h</span><span class="tag tag-new">NEW — VST2 SDK</span></div>
-      <div class="indent2"><span class="mod">VstPlugin.h</span><span class="tag tag-mod">MOD — derives IAnyVstPlugin</span></div>
-      <div class="indent2"><span class="mod">VstPlugin.cpp</span><span class="tag tag-mod">MOD — factory + destroy queue</span></div>
-      <div class="indent2"><span class="mod">VstChain.h / VstChain.cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin</span></div>
+      <div class="indent2"><span class="mod">Vst3Plugin.h</span><span class="tag tag-mod">MOD — derives IVstPlugin</span></div>
+      <div class="indent2"><span class="mod">Vst3Plugin.cpp</span><span class="tag tag-mod">MOD — factory + destroy queue</span></div>
+      <div class="indent2"><span class="mod">VstChain.h / VstChain.cpp</span><span class="tag tag-mod">MOD — IVstPlugin</span></div>
       <div class="indent2"><span class="mod">Vst.h</span><span class="tag tag-mod">MOD — includes Vst2Plugin.h</span></div>
       <div class="indent">src/engine/</div>
-      <div class="indent2"><span class="mod">Loop.h / Loop.cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin return type</span></div>
-      <div class="indent2"><span class="mod">LoopTake.h / LoopTake.cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin return type</span></div>
-      <div class="indent2"><span class="mod">Station.h / Station.cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin return type</span></div>
-      <div class="indent2"><span class="mod">Scene.h / Scene.cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin param type</span></div>
+      <div class="indent2"><span class="mod">Loop.h / Loop.cpp</span><span class="tag tag-mod">MOD — IVstPlugin return type</span></div>
+      <div class="indent2"><span class="mod">LoopTake.h / LoopTake.cpp</span><span class="tag tag-mod">MOD — IVstPlugin return type</span></div>
+      <div class="indent2"><span class="mod">Station.h / Station.cpp</span><span class="tag tag-mod">MOD — IVstPlugin return type</span></div>
+      <div class="indent2"><span class="mod">Scene.h / Scene.cpp</span><span class="tag tag-mod">MOD — IVstPlugin param type</span></div>
       <div class="indent">src/actions/</div>
-      <div class="indent2"><span class="mod">JobAction.h</span><span class="tag tag-mod">MOD — PreInitPlugin as IAnyVstPlugin</span></div>
+      <div class="indent2"><span class="mod">JobAction.h</span><span class="tag tag-mod">MOD — PreInitPlugin as IVstPlugin</span></div>
       <div class="indent">src/graphics/</div>
-      <div class="indent2"><span class="mod">VstEditorWindow.h / .cpp</span><span class="tag tag-mod">MOD — IAnyVstPlugin</span></div>
+      <div class="indent2"><span class="mod">VstEditorWindow.h / .cpp</span><span class="tag tag-mod">MOD — IVstPlugin</span></div>
       <div class="indent"><span class="config">JammaLib.vcxproj</span><span class="tag tag-cfg">CFG — JAMMA_VST2_ENABLED, new files</span></div>
       <div>test/JammaLib_Tests/</div>
       <div class="indent"><span class="new">src/vst/Vst2Plugin_Tests.cpp</span><span class="tag tag-new">NEW — 17 TDD tests</span></div>
@@ -441,12 +441,12 @@
     <p>The class hierarchy and call path after this change:</p>
     <div class="arch">
       <div>
-        <span class="node-new">IAnyVstPlugin</span>
+        <span class="node-new">IVstPlugin</span>
         <span class="arrow"> ──── abstract base (new)</span>
       </div>
       <div style="margin-left:32px; margin-top:4px">
-        <span class="arrow">├── </span><span class="node">VstPlugin</span>
-        <span class="arrow"> ── VST3 host (existing, now derives IAnyVstPlugin)</span>
+        <span class="arrow">├── </span><span class="node">Vst3Plugin</span>
+        <span class="arrow"> ── VST3 host (existing, now derives IVstPlugin)</span>
       </div>
       <div style="margin-left:32px">
         <span class="arrow">└── </span><span class="node-new">Vst2Plugin</span>
@@ -455,13 +455,13 @@
       <br>
       <div>
         <span class="node-new">MakePluginForPath</span><span class="arrow">(path)</span>
-        <span class="arrow"> ── factory (in VstPlugin.cpp)</span>
+        <span class="arrow"> ── factory (in Vst3Plugin.cpp)</span>
       </div>
       <div style="margin-left:32px; margin-top:4px">
         <span class="arrow">├── .dll  →  </span><span class="node-new">Vst2Plugin</span>
       </div>
       <div style="margin-left:32px">
-        <span class="arrow">└── else  →  </span><span class="node">VstPlugin</span><span class="arrow"> (VST3)</span>
+        <span class="arrow">└── else  →  </span><span class="node">Vst3Plugin</span><span class="arrow"> (VST3)</span>
       </div>
       <br>
       <div><span class="arrow">Consumers (unchanged interface):</span></div>
@@ -469,11 +469,11 @@
         <span class="node">Station</span><span class="arrow"> → </span>
         <span class="node">LoopTake</span><span class="arrow"> → </span>
         <span class="node">Loop</span><span class="arrow"> → </span>
-        <span class="node-new">IAnyVstPlugin</span>
+        <span class="node-new">IVstPlugin</span>
       </div>
       <div style="margin-left:32px">
         <span class="node">Scene</span><span class="arrow"> → </span>
-        <span class="node-new">IAnyVstPlugin</span><span class="arrow"> via VstEditorWindow</span>
+        <span class="node-new">IVstPlugin</span><span class="arrow"> via VstEditorWindow</span>
       </div>
     </div>
   </section>
@@ -482,12 +482,12 @@
   <section id="design">
     <h2>4. Design Decisions</h2>
 
-    <h3>Abstraction via IAnyVstPlugin</h3>
+    <h3>Abstraction via IVstPlugin</h3>
     <p>
-      Rather than exposing <code>VstPlugin</code> directly to the engine layer, a new
-      <code>IAnyVstPlugin</code> interface unifies both plugin types. All engine code that
-      previously took <code>shared_ptr&lt;VstPlugin&gt;</code> now takes
-      <code>shared_ptr&lt;IAnyVstPlugin&gt;</code>. This required touching eight engine
+      Rather than exposing <code>Vst3Plugin</code> directly to the engine layer, a new
+      <code>IVstPlugin</code> interface unifies both plugin types. All engine code that
+      previously took <code>shared_ptr&lt;Vst3Plugin&gt;</code> now takes
+      <code>shared_ptr&lt;IVstPlugin&gt;</code>. This required touching eight engine
       headers/sources, but the diff in each is minimal (one type substitution per file).
     </p>
 
@@ -525,7 +525,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
     <p>
       VST3 plugins must be destroyed on the COM/UI thread. The same
       <code>QueueForUiThreadDestroy</code> / <code>DrainUiThreadDestroyQueue</code> mechanism
-      is now shared by both plugin types (accepting <code>IAnyVstPlugin</code>), so both
+      is now shared by both plugin types (accepting <code>IVstPlugin</code>), so both
       VST2 and VST3 plugins benefit from the same safe teardown path.
     </p>
   </section>
@@ -595,7 +595,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
           in <code>Load</code>/<code>Unload</code> (non-RT thread). Per the C++ memory model this
           is technically a data race, even though the <code>_isActivated</code> atomic provides
           acquire-release ordering that makes the access safe in practice on x86-64. The existing
-          <code>VstPlugin</code> uses the same pattern. <strong>Recommendation for future work</strong>:
+          <code>Vst3Plugin</code> uses the same pattern. <strong>Recommendation for future work</strong>:
           promote <code>_isLoaded</code> to <code>std::atomic&lt;bool&gt;</code> in both classes.
         </p>
       </div>
@@ -657,7 +657,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
         <tr>
           <td><code>Vst2PluginFactory</code></td>
           <td>4</td>
-          <td>MakePluginForPath routes .dll → Vst2Plugin; .vst3 and no-extension → VstPlugin; case-insensitive .DLL</td>
+          <td>MakePluginForPath routes .dll → Vst2Plugin; .vst3 and no-extension → Vst3Plugin; case-insensitive .DLL</td>
           <td class="pass">PASS</td>
         </tr>
         <tr>
@@ -678,7 +678,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
       what it says, nothing more, nothing less?"
     </p>
 
-    <h3>IAnyVstPlugin.h</h3>
+    <h3>IVstPlugin.h</h3>
     <div class="finding finding-ok">
       <div class="finding-icon">✅</div>
       <div class="finding-body">
@@ -739,7 +739,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
       </div>
     </div>
 
-    <h3>VstPlugin.cpp — Factory and destroy queue</h3>
+    <h3>Vst3Plugin.cpp — Factory and destroy queue</h3>
     <div class="finding finding-ok">
       <div class="finding-icon">✅</div>
       <div class="finding-body">
@@ -791,7 +791,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
       deliverables:
     </p>
     <ul style="margin: 12px 0 16px 24px; line-height: 2.2">
-      <li><strong>IAnyVstPlugin</strong> — unified interface decoupling the engine from plugin protocol</li>
+      <li><strong>IVstPlugin</strong> — unified interface decoupling the engine from plugin protocol</li>
       <li><strong>Vst2Plugin</strong> — full VST2 host: load, process, editor, lifecycle</li>
       <li><strong>MakePluginForPath</strong> — transparent factory routing by file extension</li>
       <li><strong>17 TDD tests</strong> — all passing, no DLL required</li>
@@ -801,7 +801,7 @@ _outputChannelPtrs.resize(outputChannels);</pre>
       Two items are noted for follow-up in a later iteration:
     </p>
     <ul style="margin: 12px 0 0 24px; line-height: 2.2">
-      <li>Promote <code>_isLoaded</code> to <code>std::atomic&lt;bool&gt;</code> in both <code>VstPlugin</code> and <code>Vst2Plugin</code></li>
+      <li>Promote <code>_isLoaded</code> to <code>std::atomic&lt;bool&gt;</code> in both <code>Vst3Plugin</code> and <code>Vst2Plugin</code></li>
       <li>Route <code>effEditIdle</code> via <code>PostMessage</code> rather than dispatching inside the host callback</li>
     </ul>
   </section>

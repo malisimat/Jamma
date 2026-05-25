@@ -13,11 +13,12 @@
 #include "../actions/WindowAction.h"
 #include "../utils/CommonTypes.h"
 
-namespace vst { class IAnyVstPlugin; }
+namespace vst { class IVstPlugin; }
 
 namespace graphics
 {
-	// VstEditorWindow owns a Win32 HWND that hosts a VST3 plugin's IPlugView.
+	// VstEditorWindow owns a Win32 HWND that hosts a VST plugin editor
+	// (VST3 via IPlugView::attached; VST2 via effEditOpen).
 	//
 	// All methods must be called from the main (UI) thread.
 	//
@@ -50,7 +51,7 @@ namespace graphics
 		// parentHwnd  – reserved, pass nullptr.
 		// Returns true on success.
 		bool Create(HINSTANCE hInstance,
-			std::shared_ptr<vst::IAnyVstPlugin> plugin,
+			std::shared_ptr<vst::IVstPlugin> plugin,
 			HWND parentHwnd = nullptr);
 
 		// Detach the plugin view and destroy the HWND.
@@ -76,6 +77,6 @@ namespace graphics
 
 		std::atomic<HWND> _editorWnd;
 		HWND _editorHostWnd;
-		std::shared_ptr<vst::IAnyVstPlugin> _plugin;
+		std::shared_ptr<vst::IVstPlugin> _plugin;
 	};
 }

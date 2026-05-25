@@ -6,7 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "VstEditorWindow.h"
-#include "../vst/IAnyVstPlugin.h"
+#include "../vst/IVstPlugin.h"
 #include <algorithm>
 #include <vector>
 
@@ -59,7 +59,7 @@ VstEditorWindow::~VstEditorWindow()
 }
 
 bool VstEditorWindow::Create(HINSTANCE hInstance,
-	std::shared_ptr<vst::IAnyVstPlugin> plugin,
+	std::shared_ptr<vst::IVstPlugin> plugin,
 	HWND /*parentHwnd*/)
 {
 	if (!plugin || !plugin->IsLoaded())

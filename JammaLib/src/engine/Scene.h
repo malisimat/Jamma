@@ -246,7 +246,7 @@ namespace engine
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
 		void _PruneClosedVstEditorWindows();
-		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IAnyVstPlugin>& plugin);
+		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,

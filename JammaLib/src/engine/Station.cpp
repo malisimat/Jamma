@@ -1190,7 +1190,7 @@ void Station::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::IAnyVstPlugin> Station::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IVstPlugin> Station::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)

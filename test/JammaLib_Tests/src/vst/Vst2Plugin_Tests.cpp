@@ -18,7 +18,7 @@
 
 #include "gtest/gtest.h"
 #include "vst/Vst2Plugin.h"
-#include "vst/IAnyVstPlugin.h"
+#include "vst/IVstPlugin.h"
 
 // -----------------------------------------------------------------------
 // Suite: Vst2PluginDefault
@@ -141,9 +141,9 @@ TEST(Vst2PluginFactory, DllExtensionYieldsVst2Plugin)
 {
 	auto plugin = vst::MakePluginForPath(L"C:\\plugins\\some_effect.dll");
 	ASSERT_NE(plugin, nullptr);
-	// The result must be non-null and behave as IAnyVstPlugin.
+	// The result must be non-null and behave as IVstPlugin.
 	// We can further confirm it's a Vst2Plugin by verifying VST2-specific
-	// initial state (no other known IAnyVstPlugin starts with IsLoaded == false
+	// initial state (no other known IVstPlugin starts with IsLoaded == false
 	// at this path extension, and the factory returns Vst2Plugin for .dll).
 	EXPECT_FALSE(plugin->IsLoaded());
 	EXPECT_FALSE(plugin->IsBypassed());
