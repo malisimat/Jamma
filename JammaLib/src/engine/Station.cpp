@@ -183,7 +183,26 @@ void Station::Draw3d(base::DrawContext& ctx,
 		child->Draw3d(ctx, 1, pass);
 
 	if (_quantisationModel)
+	{
+		// Draw the semi-transparent quantisation overlay without writing to the
+		// depth buffer (so it blends with already-rendered geometry and does not
+		// occlude subsequent draws).  Face culling eliminates back-facing gate
+		// panels that would otherwise accumulate a second alpha layer at the same
+		// screen pixel, which pushes effective opacity well above the intended 70%.
+		GLboolean prevDepthMask = GL_TRUE;
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+		const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+
+		glDepthMask(GL_FALSE);
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_BACK);
+
 		_quantisationModel->Draw3d(ctx, numInstances, pass);
+
+		glDepthMask(prevDepthMask);
+		if (!wasCulling)
+			glDisable(GL_CULL_FACE);
+	}
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
