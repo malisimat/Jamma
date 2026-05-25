@@ -38,8 +38,10 @@ namespace engine
 		const QuantisationPolicy& policy);
 
 	// Deduces the seed by halving the master loop until it falls within the
-	// policy's target grain range.  Use after the first loop is recorded when
-	// no tap tempo is active (free-form first loop sets the master length).
+	// policy's target grain range.  Called in two situations: (a) as a fallback
+	// from _TrySetMasterFromHover when tap tempo has no usable estimate yet,
+	// and (b) from UserConfig::DeduceLoopTiming to deduce seed from a Ninjam
+	// interval length (tap tempo state is irrelevant there).
 	std::optional<QuantisationTiming> DeduceSeedTiming(unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);

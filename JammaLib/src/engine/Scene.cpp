@@ -574,6 +574,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			_hasPendingTempo = false;
 		}
 		_masterLoopLengthSamps = 0ul;
+		_tapTempo.Clear();
 		return ActionResult::NoAction();
 	}
 
@@ -1994,6 +1995,7 @@ void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
 	_remoteSampleRate = snapshot.SampleRate;
 	_effectiveQuantiseSamps = timing->GrainSamps;
 	_masterLoopLengthSamps = static_cast<unsigned long>(intervalLengthSamps);
+	_tapTempo.Clear();
 
 	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
 	_clock->SetQuantisation(timing->GrainSamps, quantisation);
