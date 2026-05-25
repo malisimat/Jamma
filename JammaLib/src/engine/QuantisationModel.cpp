@@ -9,11 +9,11 @@ using namespace engine;
 
 namespace
 {
-	constexpr float GateInnerRadius = 132.0f;
-	constexpr float GateOuterRadius = 312.0f;
-	constexpr float GateHalfHeight = 92.0f;
+	constexpr float GateInnerRadius = 0.0f;
+	constexpr float GateOuterRadius = 180.0f;
+	constexpr float GateHalfHeight = 138.0f;
 	constexpr unsigned int MaxVisibleGates = 128u;
-	constexpr float FrameWidthFraction = 0.18f;
+	constexpr float FrameWidthFraction = 0.022f;
 	constexpr float FrameDepthFraction = 0.35f;
 
 	std::vector<float> BuildDummyUvs(size_t vertexCoordCount)
@@ -47,6 +47,8 @@ QuantisationModel::QuantisationModel() :
 	_seedSamps(0u),
 	_masterLoopSamps(0u),
 	_gateCount(0u),
+	_masterLoopSecs(0.0f),
+	_rotationStartTime(Timer::GetZero()),
 	_overlayVisible(false),
 	_confirmedAt(Timer::GetZero())
 {
@@ -78,14 +80,23 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 		return;
 	}
 
-	auto highlight = 0.20f;
+	auto highlight = 0.70f;
 	if (!Timer::IsZero(_confirmedAt))
 	{
 		const auto elapsed = Timer::GetElapsedSeconds(_confirmedAt, Timer::GetTime());
 		if (elapsed < 0.75)
-			highlight = 0.55f - static_cast<float>(elapsed * 0.30);
+			highlight = 1.0f - static_cast<float>(elapsed * 0.40);
 		else
 			_confirmedAt = Timer::GetZero();
+	}
+
+	float phaseOffset = 0.0f;
+	if ((_masterLoopSecs > 0.0f) && !Timer::IsZero(_rotationStartTime))
+	{
+		const auto elapsed = Timer::GetElapsedSeconds(_rotationStartTime, Timer::GetTime());
+		phaseOffset = std::fmod(
+			static_cast<float>(elapsed) / _masterLoopSecs * static_cast<float>(constants::TWOPI),
+			static_cast<float>(constants::TWOPI));
 	}
 
 	const auto angleStep = (_gateCount > 1u) ?
@@ -93,6 +104,7 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 		0.0f;
 
 	glCtx.SetUniform("AngleStep", angleStep);
+	glCtx.SetUniform("PhaseOffset", phaseOffset);
 	glCtx.SetUniform("Highlight", highlight);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
@@ -110,7 +122,7 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps)
+void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate)
 {
 	if (seedSamps == 0u)
 		seedSamps = 1u;
@@ -122,6 +134,16 @@ void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoo
 
 	if ((seedSamps == _seedSamps) && (masterLoopSamps == _masterLoopSamps) && (gates == _gateCount))
 		return;
+
+	const auto newMasterLoopSecs = (sampleRate > 0.0f && masterLoopSamps > 0u)
+		? static_cast<float>(masterLoopSamps) / sampleRate
+		: 0.0f;
+	if (newMasterLoopSecs != _masterLoopSecs)
+	{
+		_masterLoopSecs = newMasterLoopSecs;
+		if (_masterLoopSecs > 0.0f)
+			_rotationStartTime = Timer::GetTime();
+	}
 
 	_seedSamps = seedSamps;
 	_masterLoopSamps = masterLoopSamps;
@@ -178,8 +200,8 @@ std::vector<float> QuantisationModel::BuildGateGeometry(unsigned int gateCount,
 		GatePoint(xFront, yInnerMax, zMax));
 	AppendQuad(verts,
 		GatePoint(xFront, yInnerMin, zInnerMax),
-		GatePoint(xFront, yMax, zInnerMax),
-		GatePoint(xFront, yMax, zMax),
+		GatePoint(xFront, yInnerMax, zInnerMax),
+		GatePoint(xFront, yInnerMax, zMax),
 		GatePoint(xFront, yInnerMin, zMax));
 	AppendQuad(verts,
 		GatePoint(xFront, yMin, zMin),
@@ -195,8 +217,8 @@ std::vector<float> QuantisationModel::BuildGateGeometry(unsigned int gateCount,
 		GatePoint(xBack, yInnerMax, zMin));
 	AppendQuad(verts,
 		GatePoint(xBack, yInnerMin, zMax),
-		GatePoint(xBack, yMax, zMax),
-		GatePoint(xBack, yMax, zInnerMax),
+		GatePoint(xBack, yInnerMax, zMax),
+		GatePoint(xBack, yInnerMax, zInnerMax),
 		GatePoint(xBack, yInnerMin, zInnerMax));
 	AppendQuad(verts,
 		GatePoint(xBack, yMin, zMax),

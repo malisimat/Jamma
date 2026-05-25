@@ -826,7 +826,7 @@ void Station::SetQuantisationOverlay(unsigned int seedSamps,
 		return;
 
 	_quantisationOverlayPinned = true;
-	_quantisationModel->SetTiming(seedSamps, masterLoopSamps);
+	_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
 	_quantisationModel->SetOverlayVisible(true, confirm);
 }
 
@@ -855,7 +855,8 @@ void Station::RefreshQuantisationOverlayFromClock()
 	const auto seedSamps = _clock->QuantiseSamps();
 	const auto masterLoopSamps = _clock->SeedSourceLength();
 	_quantisationModel->SetTiming(seedSamps,
-		(masterLoopSamps > 0ul) ? static_cast<unsigned int>(masterLoopSamps) : seedSamps);
+		(masterLoopSamps > 0ul) ? static_cast<unsigned int>(masterLoopSamps) : seedSamps,
+		_sampleRate);
 	_quantisationModel->SetOverlayVisible(true, false);
 }
 

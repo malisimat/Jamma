@@ -13,7 +13,7 @@ namespace engine
 		QuantisationModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		void SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps);
+		void SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate = 0.0f);
 		void SetOverlayVisible(bool visible, bool confirm);
 		bool OverlayVisible() const noexcept;
 
@@ -26,6 +26,8 @@ namespace engine
 		unsigned int _seedSamps;
 		unsigned int _masterLoopSamps;
 		unsigned int _gateCount;
+		float _masterLoopSecs;
+		Time _rotationStartTime;
 		bool _overlayVisible;
 		Time _confirmedAt;
 	};

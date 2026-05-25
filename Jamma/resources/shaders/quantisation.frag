@@ -6,5 +6,5 @@ uniform float Highlight;
 
 void main()
 {
-	ColorOUT = vec4(Highlight);
+	ColorOUT = vec4(0.4, 0.4, 1.0, Highlight);
 }
