@@ -105,28 +105,37 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	for (auto trigPair : trigStruct.TriggerPairs)
 	{
+		auto source = trigPair.Source == io::RigFile::TriggerPair::SOURCE_SERIAL ?
+			TriggerSource::TRIGGER_SERIAL :
+			TriggerSource::TRIGGER_KEY;
+		auto device = source == TriggerSource::TRIGGER_SERIAL ? trigPair.Device : std::string();
+
 		auto activate = DualBinding(
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.ActivateDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.ActivateUp,
-				0
+				0,
+				device
 			});
 
 		auto ditch = DualBinding(
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.DitchDown,
-				1
+				1,
+				device
 			},
 			TriggerBinding{
-				TriggerSource::TRIGGER_KEY,
+				source,
 				trigPair.DitchUp,
-				0
+				0,
+				device
 			});
 
 		trigger->AddBinding(activate, ditch);
@@ -182,110 +191,58 @@ ActionResult Trigger::OnAction(KeyAction action)
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
-	ActionResult res;
-	res.IsEaten = false;
-	res.ResultType = actions::ACTIONRESULT_DEFAULT;
-
-	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1 : 0;
-
-	for (auto& b : _activateBindings)
-	{
-		if (TryChangeState(b,
-			true,
-			TriggerSource::TRIGGER_KEY,
-			action.KeyChar,
-			static_cast<unsigned int>(keyState),
-			action.GetActionTime(),
-			action.GetUserConfig(),
-			action.GetAudioParams()))
-		{
-			res.IsEaten = true;
-			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
-			return res;
-		}
-	}
-	for (auto& b : _ditchBindings)
-	{
-		if (TryChangeState(b,
-			false,
-			TriggerSource::TRIGGER_KEY,
-			action.KeyChar,
-			static_cast<unsigned int>(keyState),
-			action.GetActionTime(),
-			action.GetUserConfig(),
-			action.GetAudioParams()))
-		{
-			res.IsEaten = true;
-			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
-				actions::ACTIONRESULT_DITCH :
-				actions::ACTIONRESULT_DEFAULT;
-			return res;
-		}
-	}
-
-	return res;
+	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1u : 0u;
+	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
 
-ActionResult Trigger::OnMidiEvent(const MidiEvent& event,
-	Time actionTime,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
+	unsigned int& outValue,
+	unsigned int& outState)
+{
+	if (event.IsNoteOn() || event.IsNoteOff())
+	{
+		outValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::NOTE,
+			event.Channel(),
+			event.data1);
+		outState = event.IsNoteOn() ? 1u : 0u;
+		return true;
+	}
+	if (event.MessageType() == MidiCcStatus)
+	{
+		outValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::CC,
+			event.Channel(),
+			event.data1);
+		outState = event.data2 > 0u ? 1u : 0u;
+		return true;
+	}
+	return false;
+}
+
+ActionResult Trigger::OnEvent(TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	const base::Action& action,
+	const std::string& device)
 {
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
-	unsigned int bindingValue = 0u;
-	unsigned int bindingState = 0u;
-	if (event.IsNoteOn() || event.IsNoteOff())
-	{
-		bindingValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::NOTE,
-			event.Channel(),
-			event.data1);
-		bindingState = event.IsNoteOn() ? 1u : 0u;
-	}
-	else if (event.MessageType() == MidiCcStatus)
-	{
-		bindingValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::CC,
-			event.Channel(),
-			event.data1);
-		bindingState = event.data2 > 0u ? 1u : 0u;
-	}
-	else
-	{
-		return ActionResult::NoAction();
-	}
-
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;
 
 	for (auto& b : _activateBindings)
 	{
-		if (TryChangeState(b,
-			true,
-			TriggerSource::TRIGGER_MIDI,
-			bindingValue,
-			bindingState,
-			actionTime,
-			cfg,
-			params))
+		if (TryChangeState(b, true, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
 			return res;
 		}
 	}
-
 	for (auto& b : _ditchBindings)
 	{
-		if (TryChangeState(b,
-			false,
-			TriggerSource::TRIGGER_MIDI,
-			bindingValue,
-			bindingState,
-			actionTime,
-			cfg,
-			params))
+		if (TryChangeState(b, false, source, value, state, action, device))
 		{
 			res.IsEaten = true;
 			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
@@ -627,14 +584,14 @@ bool Trigger::TryChangeState(DualBinding& binding,
 	TriggerSource source,
 	unsigned int value,
 	unsigned int state,
-	Time actionTime,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const base::Action& action,
+	const std::string& device)
 {
 	auto trigResult = binding.OnTrigger(
 		source,
 		value,
-		state);
+		state,
+		device);
 
 	bool allowedThrough = IgnoreRepeats(isActivate, trigResult);
 	if (!allowedThrough)
@@ -644,7 +601,7 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 	allowedThrough = Debounce(isActivate,
 		trigResult,
-		actionTime);
+		action.GetActionTime());
 
 	if (!allowedThrough)
 	{
@@ -654,10 +611,10 @@ bool Trigger::TryChangeState(DualBinding& binding,
 	switch (trigResult)
 	{
 	case DualBinding::MATCH_DOWN:
-		StateMachine(true, isActivate, cfg, params);
+		StateMachine(true, isActivate, action.GetUserConfig(), action.GetAudioParams());
 		return true;
 	case DualBinding::MATCH_RELEASE:
-		StateMachine(false, isActivate, cfg, params);
+		StateMachine(false, isActivate, action.GetUserConfig(), action.GetAudioParams());
 		return true;
 	}
 

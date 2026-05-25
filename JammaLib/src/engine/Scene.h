@@ -22,6 +22,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/SerialDevice.h"
 #include "NinjamSession.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
@@ -35,6 +36,7 @@
 #include "StationRemote.h"
 #include "UndoHistory.h"
 #include "MidiQueue.h"
+#include "../io/SerialTriggerQueue.h"
 
 namespace engine
 {
@@ -74,6 +76,7 @@ namespace engine
 		~Scene()
 		{
 			ReleaseResources();
+			CloseSerial();
 			CloseMidi();
 
 			_isSceneQuitting.store(true, std::memory_order_release);
@@ -198,6 +201,8 @@ namespace engine
 		void CloseAudio();
 		void InitMidi();
 		void CloseMidi();
+		void InitSerial();
+		void CloseSerial();
 		void CommitChanges();
 
 		// Send a chat message on the active ninjam session (no-op if none).
@@ -245,6 +250,7 @@ namespace engine
 		void _PushTriggerMidiEvent(std::uint8_t deviceSlot,
 			const MidiEvent& event) noexcept;
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
@@ -253,7 +259,7 @@ namespace engine
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
 		void _PruneClosedVstEditorWindows();
-		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin);
+		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
@@ -298,13 +304,17 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		MidiQueue<1024> _midiIngress;
+		io::SerialTriggerQueue<256> _serialIngress;
+		std::mutex _serialIngressMutex;
 		std::uint64_t _lastMidiDropCount;
 		MidiQueue<1024, MidiTriggerIngressEvent> _midiTriggerIngress;
 		std::uint64_t _lastMidiTriggerDropCount;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
 		std::vector<MidiTriggerInput> _midiTriggerInputs;
 		std::optional<std::uint8_t> _sharedMainMidiTriggerSlot;
+		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;

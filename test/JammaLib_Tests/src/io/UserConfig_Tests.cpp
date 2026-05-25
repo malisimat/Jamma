@@ -61,13 +61,45 @@ TEST(UserConfig, ParsesMidiSettings) {
 	ASSERT_TRUE(midi.value().Enabled);
 }
 
+TEST(UserConfig, ParsesSerialSettings) {
+	auto str = "{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto serial = UserConfig::SerialSettings::FromJson(json);
+
+	ASSERT_TRUE(serial.has_value());
+	ASSERT_EQ(0, serial.value().Name.compare("pedal-a"));
+	ASSERT_EQ(0, serial.value().Port.compare("COM3"));
+	ASSERT_EQ(115200u, serial.value().BaudRate);
+	ASSERT_TRUE(serial.value().Enabled);
+}
+
+TEST(UserConfig, ParsesSerialDeviceList) {
+	auto str = "{\"devices\":[{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true},{\"name\":\"pedal-b\",\"port\":\"COM4\",\"baudrate\":57600,\"enabled\":false}]}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto serial = UserConfig::SerialConfig::FromJson(json);
+
+	ASSERT_TRUE(serial.has_value());
+	ASSERT_EQ(2u, serial->Devices.size());
+	EXPECT_EQ(0, serial->Devices[0].Name.compare("pedal-a"));
+	EXPECT_EQ(0, serial->Devices[0].Port.compare("COM3"));
+	EXPECT_EQ(115200u, serial->Devices[0].BaudRate);
+	EXPECT_TRUE(serial->Devices[0].Enabled);
+	EXPECT_EQ(0, serial->Devices[1].Name.compare("pedal-b"));
+	EXPECT_EQ(0, serial->Devices[1].Port.compare("COM4"));
+	EXPECT_EQ(57600u, serial->Devices[1].BaudRate);
+	EXPECT_FALSE(serial->Devices[1].Enabled);
+}
+
 TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
 	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
 	std::string midi = "{\"name\":\"Launchkey\",\"enabled\":true}";
+	std::string serial = "{\"devices\":[{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true},{\"name\":\"pedal-b\",\"port\":\"COM4\",\"baudrate\":57600,\"enabled\":false}]}";
 	
-	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + "}";
+	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + ",\"serial\":" + serial + "}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto cfg = UserConfig::FromJson(json);
@@ -91,6 +123,15 @@ TEST(UserConfig, ParsesFile) {
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
 	ASSERT_EQ(0, cfg.value().Midi.Name.compare("Launchkey"));
 	ASSERT_TRUE(cfg.value().Midi.Enabled);
+	ASSERT_EQ(2u, cfg.value().Serial.Devices.size());
+	ASSERT_EQ(0, cfg.value().Serial.Devices[0].Name.compare("pedal-a"));
+	ASSERT_EQ(0, cfg.value().Serial.Devices[0].Port.compare("COM3"));
+	ASSERT_EQ(115200u, cfg.value().Serial.Devices[0].BaudRate);
+	ASSERT_TRUE(cfg.value().Serial.Devices[0].Enabled);
+	ASSERT_EQ(0, cfg.value().Serial.Devices[1].Name.compare("pedal-b"));
+	ASSERT_EQ(0, cfg.value().Serial.Devices[1].Port.compare("COM4"));
+	ASSERT_EQ(57600u, cfg.value().Serial.Devices[1].BaudRate);
+	ASSERT_FALSE(cfg.value().Serial.Devices[1].Enabled);
 }
 
 TEST(UserConfig, DeducesDefaultLoopTimingFromLongLoop) {

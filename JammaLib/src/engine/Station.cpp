@@ -364,9 +364,22 @@ ActionResult Station::OnAction(KeyAction action)
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
+	return OnTriggerInput(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
+}
+
+ActionResult Station::OnTriggerInput(TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	const base::Action& action,
+	const std::string& device)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
 	for (auto& trig : _triggers)
 	{
-		auto trigResult = trig->OnAction(action);
+		auto trigResult = trig->OnBindingEvent(source, value, state, action, device);
 		if (trigResult.IsEaten)
 			return trigResult;
 	}
@@ -1190,7 +1203,7 @@ void Station::UnloadVstPlugin(size_t index)
 	_changesMade = true;
 }
 
-std::shared_ptr<vst::VstPlugin> Station::GetVstPlugin(size_t index) const
+std::shared_ptr<vst::IVstPlugin> Station::GetVstPlugin(size_t index) const
 {
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (!chain)
@@ -1245,7 +1258,7 @@ ActionResult Station::OnAction(JobAction action)
 		// prepared one on the UI thread; otherwise create a fresh plugin.
 		auto plugin = action.PreInitPlugin
 			? action.PreInitPlugin
-			: std::make_shared<vst::VstPlugin>();
+			: vst::MakePluginForPath(action.VstPath);
 		auto hostChannels = NumBusChannels();
 		if (hostChannels == 0u)
 			hostChannels = 1u;

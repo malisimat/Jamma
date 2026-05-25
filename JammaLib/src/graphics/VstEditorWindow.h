@@ -9,15 +9,17 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 #include <windows.h>
 #include "../actions/WindowAction.h"
 #include "../utils/CommonTypes.h"
 
-namespace vst { class VstPlugin; }
+namespace vst { class IVstPlugin; }
 
 namespace graphics
 {
-	// VstEditorWindow owns a Win32 HWND that hosts a VST3 plugin's IPlugView.
+	// VstEditorWindow owns a Win32 HWND that hosts a VST plugin editor
+	// (VST3 via IPlugView::attached; VST2 via effEditOpen).
 	//
 	// All methods must be called from the main (UI) thread.
 	//
@@ -46,11 +48,11 @@ namespace graphics
 		// Create the editor window and attach the plugin view.
 		// Must be called from the main thread, NOT from within DispatchMessage.
 		// hInstance   – the application HINSTANCE.
-		// plugin      – the already-loaded VstPlugin whose editor to show.
+		// plugin      – the already-loaded plugin (VST2 or VST3) whose editor to show.
 		// parentHwnd  – reserved, pass nullptr.
 		// Returns true on success.
 		bool Create(HINSTANCE hInstance,
-			std::shared_ptr<vst::VstPlugin> plugin,
+			std::shared_ptr<vst::IVstPlugin> plugin,
 			HWND parentHwnd = nullptr);
 
 		// Detach the plugin view and destroy the HWND.
@@ -66,11 +68,21 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message,
 			WPARAM wParam, LPARAM lParam) noexcept;
 
+		// WH_CALLWNDPROCRET hook proc: dispatches effEditIdle after WM_MOUSEMOVE
+		// is processed by any child of an active editor frame window.
+		static LRESULT CALLBACK CallWndRetProc(int code, WPARAM wParam,
+			LPARAM lParam) noexcept;
+
 	private:
 		static constexpr LPCWSTR _ClassName = L"JammaVstEditorWindow";
 
+		// All VST editor operations run on the main UI thread, so a plain
+		// (non-atomic) vector is safe here — every access is on that thread.
+		static std::vector<VstEditorWindow*> s_activeEditorWindows;
+		static HHOOK s_callWndRetHook;
+
 		std::atomic<HWND> _editorWnd;
 		HWND _editorHostWnd;
-		std::shared_ptr<vst::VstPlugin> _plugin;
+		std::shared_ptr<vst::IVstPlugin> _plugin;
 	};
 }

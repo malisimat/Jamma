@@ -6,10 +6,43 @@
 ///////////////////////////////////////////////////////////
 
 #include "VstEditorWindow.h"
-#include "../vst/VstPlugin.h"
+#include "../vst/IVstPlugin.h"
+#include <algorithm>
+#include <iostream>
+#include <vector>
 
 using namespace graphics;
 using namespace actions;
+
+std::vector<VstEditorWindow*> VstEditorWindow::s_activeEditorWindows;
+HHOOK VstEditorWindow::s_callWndRetHook = nullptr;
+
+// WH_CALLWNDPROCRET hook: fires after any window proc on this thread returns.
+// If the message was WM_MOUSEMOVE directed at a child of one of our editor
+// frames, dispatch effEditIdle immediately so the plugin can repaint the
+// updated control position without waiting for the next 50 ms timer tick.
+LRESULT CALLBACK VstEditorWindow::CallWndRetProc(int code, WPARAM /*wParam*/, LPARAM lParam) noexcept
+{
+	if (code == HC_ACTION)
+	{
+		const auto* info = reinterpret_cast<const CWPRETSTRUCT*>(lParam);
+		if (info->message == WM_MOUSEMOVE && info->hwnd)
+		{
+			HWND root = GetAncestor(info->hwnd, GA_ROOT);
+			for (auto* w : s_activeEditorWindows)
+			{
+				HWND editorHwnd = w->_editorWnd.load(std::memory_order_acquire);
+				if (editorHwnd && root == editorHwnd)
+				{
+					if (w->_plugin)
+						w->_plugin->IdleEditor();
+					break;
+				}
+			}
+		}
+	}
+	return CallNextHookEx(s_callWndRetHook, code, 0, lParam);
+}
 
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
@@ -24,7 +57,7 @@ VstEditorWindow::~VstEditorWindow()
 }
 
 bool VstEditorWindow::Create(HINSTANCE hInstance,
-	std::shared_ptr<vst::VstPlugin> plugin,
+	std::shared_ptr<vst::IVstPlugin> plugin,
 	HWND /*parentHwnd*/)
 {
 	if (!plugin || !plugin->IsLoaded())
@@ -122,11 +155,38 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
+
+	// Drive periodic effEditIdle dispatches so VST2 plugins can repaint
+	// dynamic controls (sliders, meters, etc.) independently of mouse events.
+	// 50 ms (~20 Hz) matches common VST host practice.
+	SetTimer(wnd, 1, 50, nullptr);
+
+	// Register for the mouse-move hook so drags repaint immediately.
+	s_activeEditorWindows.push_back(this);
+	if (!s_callWndRetHook)
+	{
+		s_callWndRetHook = SetWindowsHookEx(WH_CALLWNDPROCRET, CallWndRetProc,
+			GetModuleHandle(nullptr), GetCurrentThreadId());
+		if (!s_callWndRetHook)
+			std::cerr << "VstEditorWindow: SetWindowsHookEx failed, error="
+				<< GetLastError() << "\n";
+	}
+
 	return true;
 }
 
 void VstEditorWindow::Destroy()
 {
+	// Unregister from the hook tracking list.
+	auto it = std::find(s_activeEditorWindows.begin(), s_activeEditorWindows.end(), this);
+	if (it != s_activeEditorWindows.end())
+		s_activeEditorWindows.erase(it);
+	if (s_activeEditorWindows.empty() && s_callWndRetHook)
+	{
+		UnhookWindowsHookEx(s_callWndRetHook);
+		s_callWndRetHook = nullptr;
+	}
+
 	HWND wnd = _editorWnd.exchange(nullptr, std::memory_order_acq_rel);
 
 	if (wnd)
@@ -222,12 +282,18 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 		return 0;
 	}
 
+	case WM_TIMER:
+		if (self->_plugin)
+			self->_plugin->IdleEditor();
+		return 0;
+
 	case WM_DESTROY:
 	{
 		// CloseEditor was already called from WM_CLOSE or Destroy().
-		// Just update bookkeeping and notify any listeners.
+		// Kill the idle timer and update bookkeeping.
 		// NOTE: do NOT call PostQuitMessage here — the main PeekMessage loop
 		// must keep running after the editor window closes.
+		KillTimer(hWnd, 1);
 		WindowAction action;
 		action.WindowEventType = WindowAction::DESTROY;
 		self->OnAction(action);

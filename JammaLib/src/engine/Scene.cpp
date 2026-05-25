@@ -6,7 +6,7 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
-#include "../vst/VstPlugin.h"
+#include "../vst/Vst3Plugin.h"
 
 using namespace base;
 using namespace actions;
@@ -70,11 +70,13 @@ Scene::Scene(SceneParams params,
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
 	_midiDevice(nullptr),
+	_serialDevices(),
 	_lastMidiDropCount(0u),
 	_lastMidiTriggerDropCount(0u),
 	_midiTriggerRoutes(),
 	_midiTriggerInputs(),
 	_sharedMainMidiTriggerSlot(std::nullopt),
+	_lastSerialDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
 	_ninjamConfig(std::nullopt),
@@ -240,7 +242,7 @@ void Scene::_PruneClosedVstEditorWindows()
 	}), _vstEditorWindows.end());
 }
 
-bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::VstPlugin>& plugin)
+bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
 {
 	if (!plugin || !plugin->IsLoaded())
 		return false;
@@ -926,6 +928,7 @@ void Scene::OnTick(Time curTime,
 void Scene::OnJobTick(Time curTime)
 {
 	_PumpMidi();
+	_PumpSerial();
 
 	auto snapshot = _ninjamSession->Pump();
 	if (snapshot.has_value())
@@ -969,7 +972,7 @@ void Scene::OnJobTick(Time curTime)
 	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
 	// thread for destruction. On success the chain holds its own ref so this
 	// queued ref is a no-op; on failure (Load returned false) this is the only
-	// remaining ref, and draining it on the UI thread ensures ~VstPlugin →
+	// remaining ref, and draining it on the UI thread ensures ~Vst3Plugin →
 	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
 	// the plugin. Releasing on this job thread instead violates VST3 threading
 	// and can crash plugins or leave dangling state until window close.
@@ -1008,29 +1011,31 @@ void Scene::_PumpMidi()
 	}
 
 	MidiTriggerIngressEvent triggerEvent{};
-	auto audioParams = _audioDevice ?
-		std::optional<audio::AudioStreamParams>(_audioDevice->GetAudioStreamParams()) :
-		std::nullopt;
+	Action triggerAction;
+	triggerAction.SetUserConfig(_userConfig);
+	if (_audioDevice)
+		triggerAction.SetAudioParams(_audioDevice->GetAudioStreamParams());
 	while (_midiTriggerIngress.Pop(triggerEvent))
 	{
+		triggerAction.SetActionTime(Timer::GetTime());
 		for (auto& route : _midiTriggerRoutes)
 		{
 			if ((route.DeviceSlot != triggerEvent.DeviceSlot) || !route.Trigger)
 				continue;
 
-			const auto shouldLogEvent = triggerEvent.Event.IsNoteOn() ||
-				triggerEvent.Event.IsNoteOff() ||
-				(triggerEvent.Event.MessageType() == 0xB0u);
-			auto res = route.Trigger->OnMidiEvent(
-				triggerEvent.Event,
-				Timer::GetTime(),
-				_userConfig,
-				audioParams);
-			if (shouldLogEvent || res.IsEaten)
+			unsigned int midiValue = 0u, midiState = 0u;
+			if (!Trigger::TryEncodeMidiEvent(triggerEvent.Event, midiValue, midiState))
+				continue;
+			auto res = route.Trigger->OnEvent(
+				TriggerSource::TRIGGER_MIDI,
+				midiValue,
+				midiState,
+				triggerAction);
+			if (res.IsEaten)
 			{
 				std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
 					<< "\" trigger=\"" << route.Trigger->Name()
-					<< "\" matched=" << (res.IsEaten ? "true" : "false")
+					<< "\" matched=true"
 					<< " status=" << static_cast<unsigned int>(triggerEvent.Event.status)
 					<< " data1=" << static_cast<unsigned int>(triggerEvent.Event.data1)
 					<< " data2=" << static_cast<unsigned int>(triggerEvent.Event.data2)
@@ -1092,6 +1097,50 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 		return;
 
 	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, 0u, trigger });
+}
+
+void Scene::_PumpSerial()
+{
+	static const std::string kEmptyDevice;
+	while (true)
+	{
+		io::SerialTriggerEvent ev{};
+		{
+			std::scoped_lock lock(_serialIngressMutex);
+			if (!_serialIngress.Pop(ev))
+				break;
+		}
+
+		base::Action action;
+		action.SetActionTime(Timer::GetTime());
+		action.SetUserConfig(_userConfig);
+		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
+		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
+
+		for (auto& station : _stations)
+		{
+			auto res = station->OnEvent(
+				TriggerSource::TRIGGER_SERIAL,
+				ev.ButtonIndex,
+				ev.IsPressed ? 1u : 0u,
+				action,
+				device);
+			if (res.IsEaten)
+				break;
+		}
+	}
+
+	std::uint64_t dropped = 0u;
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		dropped = _serialIngress.DroppedCount();
+	}
+	if (dropped != _lastSerialDropCount)
+	{
+		std::cout << "[Serial] Ingress queue dropped " << (dropped - _lastSerialDropCount)
+			<< " event(s), total dropped=" << dropped << std::endl;
+		_lastSerialDropCount = dropped;
+	}
 }
 
 void Scene::InitReceivers()
@@ -1191,6 +1240,7 @@ void Scene::InitAudio()
 				audioStreamParams.NumOutputChannels);
 
 			InitMidi();
+			InitSerial();
 			_audioDevice->Start();
 			_audioDevice->GetAudioStreamParams().PrintParams();
 		}
@@ -1293,8 +1343,78 @@ void Scene::CloseMidi()
 		_midiDevice->Close();
 }
 
+void Scene::InitSerial()
+{
+	CloseSerial();
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		_serialIngress.Clear();
+	}
+	_lastSerialDropCount = 0u;
+
+	if (_userConfig.Serial.Devices.empty())
+		return;
+
+	auto availablePorts = io::SerialDevice::EnumeratePorts();
+	std::cout << "[Serial] Ports found: " << availablePorts.size() << std::endl;
+	for (const auto& port : availablePorts)
+		std::cout << "[Serial]   " << port << std::endl;
+
+	unsigned int activeConnections = 0u;
+	for (const auto& serialConfig : _userConfig.Serial.Devices)
+	{
+		if (!serialConfig.Enabled)
+		{
+			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" disabled by rig settings." << std::endl;
+			continue;
+		}
+
+		if (serialConfig.Port.empty())
+		{
+			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" has no port configured." << std::endl;
+			continue;
+		}
+
+		auto serialDevice = std::make_unique<io::SerialDevice>();
+		auto opened = serialDevice->Open(
+			serialConfig.Name,
+			serialConfig.Port,
+			serialConfig.BaudRate,
+			[this](const io::SerialTriggerEvent& event)
+			{
+				std::scoped_lock lock(_serialIngressMutex);
+				_serialIngress.Push(event);
+			});
+
+		if (!opened)
+			continue;
+
+		_serialDevices.push_back(std::move(serialDevice));
+		activeConnections++;
+	}
+
+	if (0u == activeConnections)
+		std::cout << "[Serial] No active serial trigger connections." << std::endl;
+}
+
+void Scene::CloseSerial()
+{
+	for (auto& serialDevice : _serialDevices)
+	{
+		if (serialDevice)
+			serialDevice->Close();
+	}
+
+	_serialDevices.clear();
+	{
+		std::scoped_lock lock(_serialIngressMutex);
+		_serialIngress.Clear();
+	}
+}
+
 void Scene::CloseAudio()
 {
+	CloseSerial();
 	CloseMidi();
 
 	// Do not hold the audio callback mutex while stopping the stream.
@@ -1328,15 +1448,16 @@ void Scene::CommitChanges()
 	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
 	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
 	// the audio lock and later attached() calls remain UI-thread bound.
+	// MakePluginForPath selects VST3 (Vst3Plugin) or VST2 (Vst2Plugin) by
+	// file extension (.dll → VST2, anything else → VST3).
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
 		{
-			auto plugin = std::make_shared<vst::VstPlugin>();
+			auto plugin = vst::MakePluginForPath(job.VstPath);
 			if (plugin->PreInit(job.VstPath))
 				job.PreInitPlugin = std::move(plugin);
-			// If PreInit fails, fall back to a fresh VstPlugin on the job thread.
-			// That may still hang in attached(), but it matches the old behaviour.
+			// If PreInit fails, fall back to a fresh plugin on the job thread.
 		}
 	}
 

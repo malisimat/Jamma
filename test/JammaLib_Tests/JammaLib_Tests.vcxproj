@@ -64,11 +64,11 @@
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)lib\vst2sdk;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -85,18 +85,18 @@
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>X64;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>X64;_DEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)lib\vst2sdk;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest.dll" "$(OutDir)"
@@ -112,11 +112,11 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)lib\vst2sdk;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -134,11 +134,11 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
-      <PreprocessorDefinitions>X64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>X64;NDEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)lib\vst2sdk;$(VcpkgInstalledDir)$(VcpkgTriplet)\include;$(SolutionDir)JammaLib\src;$(SolutionDir)JammaLib\src\base;$(SolutionDir)JammaLib\src\utils;$(SolutionDir)JammaLib\lib;$(SolutionDir)JammaLib\lib\opengl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
@@ -146,8 +146,8 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -156,6 +156,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   <ItemGroup>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp" />
     <ClCompile Include="src\audio\MidiDevice_Tests.cpp" />
+    <ClCompile Include="src\audio\SerialTriggerProtocol_Tests.cpp" />
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\Overdub_Tests.cpp" />
     <ClCompile Include="src\audio\AudioBuffer_Tests.cpp" />
@@ -185,6 +186,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
+    <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
