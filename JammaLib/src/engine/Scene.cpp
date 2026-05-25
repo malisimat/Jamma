@@ -1805,10 +1805,16 @@ bool Scene::_HandleTapTempo(Time actionTime)
 {
 	const auto sampleRate = _CurrentSampleRate();
 
-	const auto timing = _tapTempo.TapAtSample(_EstimatedAudioSampleAt(actionTime),
-		sampleRate,
-		_masterLoopLengthSamps,
-		_QuantisationPolicy());
+	std::optional<QuantisationTiming> timing;
+	unsigned long masterLen;
+	{
+		std::scoped_lock lock(_audioMutex);
+		timing = _tapTempo.TapAtSample(_EstimatedAudioSampleAt(actionTime),
+			sampleRate,
+			_masterLoopLengthSamps,
+			_QuantisationPolicy());
+		masterLen = _masterLoopLengthSamps;
+	}
 
 	if (!timing.has_value())
 	{
@@ -1816,7 +1822,7 @@ bool Scene::_HandleTapTempo(Time actionTime)
 		return true;
 	}
 
-	if (_masterLoopLengthSamps == 0ul)
+	if (masterLen == 0ul)
 	{
 		std::cout << "Tap tempo: no master set, tap absorbed" << std::endl;
 		return true;

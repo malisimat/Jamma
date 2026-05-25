@@ -57,8 +57,7 @@ namespace engine
 	// applied to quantise subsequent loop lengths against it.
 	std::optional<QuantisationTiming> DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
 		unsigned long masterLoopSamps,
-		unsigned int sampleRate,
-		const QuantisationPolicy& policy);
+		unsigned int sampleRate);
 
 	// Accumulates tap events and maintains a running average beat-gap estimate.
 	class TapTempoTracker

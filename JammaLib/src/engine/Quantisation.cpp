@@ -243,8 +243,7 @@ bool TapTempoTracker::HasEstimate() const noexcept
 
 std::optional<QuantisationTiming> engine::DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
 	unsigned long masterLoopSamps,
-	unsigned int sampleRate,
-	const QuantisationPolicy& policy)
+	unsigned int sampleRate)
 {
 	if ((tapGapSamps == 0ul) || (masterLoopSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;

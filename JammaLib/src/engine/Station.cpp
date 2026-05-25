@@ -184,6 +184,10 @@ void Station::Draw3d(base::DrawContext& ctx,
 
 	if (_quantisationModel)
 	{
+		// Refresh quantisation overlay state on the render thread (safe for
+		// geometry allocation).  The audio thread only publishes _pendingLoopIndexFrac.
+		RefreshQuantisationOverlayFromClock();
+
 		// Draw the semi-transparent quantisation overlay without writing to the
 		// depth buffer (so it blends with already-rendered geometry and does not
 		// occlude subsequent draws).  Face culling eliminates back-facing gate
@@ -192,6 +196,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 		GLboolean prevDepthMask = GL_TRUE;
 		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
 		const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+		GLint prevCullFaceMode = GL_BACK;
+		glGetIntegerv(GL_CULL_FACE_MODE, &prevCullFaceMode);
 
 		glDepthMask(GL_FALSE);
 		glEnable(GL_CULL_FACE);
@@ -200,6 +206,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 		_quantisationModel->Draw3d(ctx, numInstances, pass);
 
 		glDepthMask(prevDepthMask);
+		glCullFace(prevCullFaceMode);
 		if (!wasCulling)
 			glDisable(GL_CULL_FACE);
 	}
@@ -750,7 +757,10 @@ void Station::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	RefreshQuantisationOverlayFromClock();
+	// Publish the current loop-index fraction for the render thread to pick up
+	// (lock-free; Draw3d will apply it to the quantisation model).
+	if (_clock)
+		_pendingLoopIndexFrac.store(_clock->MasterLoopIndexFrac(), std::memory_order_release);
 
 	for (auto& trig : _triggers)
 	{
@@ -861,7 +871,8 @@ void Station::RefreshQuantisationOverlayFromClock()
 	if (!_quantisationModel)
 		return;
 
-	_quantisationModel->SetLoopIndexFrac(_clock ? _clock->MasterLoopIndexFrac() : 0.0);
+	_quantisationModel->SetLoopIndexFrac(
+		_clock ? _pendingLoopIndexFrac.load(std::memory_order_acquire) : 0.0);
 
 	if (!_clock || !_clock->IsQuantisable())
 	{
