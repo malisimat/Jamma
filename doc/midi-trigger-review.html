@@ -368,39 +368,37 @@
       <article class="card">
         <h2>Verdict</h2>
         <div class="summary">
-          <div class="finding critical">
+          <div class="finding">
             <div class="finding-head">
-              <span class="badge critical">Critical</span>
-              <h3>Multiple MIDI callbacks can write into a single-producer queue</h3>
+              <span class="badge">Fixed</span>
+              <h3>Single-callback MIDI trigger fanout now owns ingress</h3>
             </div>
             <p>
-              <strong>Why it matters:</strong> the new dedicated trigger-device callbacks and the main MIDI callback can all push into the same
-              trigger ingress queue. That queue is explicitly implemented as SPSC. Once more than one producer is active, event loss, corruption,
-              and reordering become possible under real controller use.
+              <strong>What changed:</strong> the branch no longer lets multiple MIDI callbacks write into a Scene-owned SPSC queue. The main MIDI input
+              is now the single live MIDI source for both loop recording and MIDI trigger routing, and shared-main trigger fanout happens on the job thread
+              when <code>_midiIngress</code> is drained.
             </p>
             <p>
-              <strong>Evidence:</strong> the queue declares itself single-producer/single-consumer in <code>JammaLib/src/engine/MidiQueue.h:11</code>,
-              while trigger events are pushed from both the shared main-MIDI path in <code>JammaLib/src/engine/Scene.cpp:1081</code> and the per-device
-              callbacks opened in <code>JammaLib/src/engine/Scene.cpp:1295</code> and <code>JammaLib/src/engine/Scene.cpp:1307</code>.
+              <strong>Why it is fixed:</strong> there is now only one callback-owned MIDI ingress path, trigger routes all share the same main-MIDI slot,
+              and the simplified single-global behavior is locked in by focused trigger regression coverage.
             </p>
-            <div class="codebox">JammaLib/src/engine/MidiQueue.h:11<br />JammaLib/src/engine/Scene.cpp:1081<br />JammaLib/src/engine/Scene.cpp:1295<br />JammaLib/src/engine/Scene.cpp:1307</div>
+            <div class="codebox">JammaLib/src/engine/Scene.cpp:988<br />JammaLib/src/engine/Scene.cpp:1020<br />JammaLib/src/engine/Scene.cpp:1251<br />JammaLib/src/engine/Scene.cpp:1281<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:800</div>
           </div>
 
-          <div class="finding high">
+          <div class="finding">
             <div class="finding-head">
-              <span class="badge high">High</span>
-              <h3>Dedicated trigger devices are disabled by the global MIDI enable flag</h3>
+              <span class="badge">Deferred</span>
+              <h3>Multiple simultaneous MIDI devices are deferred to issue #91</h3>
             </div>
             <p>
-              <strong>Why it matters:</strong> rigs that use a separate MIDI pad or foot controller only for triggers stop working unless
-              <code>user.midi.enabled</code> is also true. That couples trigger control to loop-recording MIDI enablement and contradicts the branch docs.
+              <strong>Current scope:</strong> the branch now intentionally assumes one global MIDI input for both loop MIDI recording and MIDI triggers.
+              That keeps device ownership, ingress topology, and routing semantics aligned while the rest of the feature settles.
             </p>
             <p>
-              <strong>Evidence:</strong> trigger routes and dedicated trigger devices are prepared before the early return in
-              <code>JammaLib/src/engine/Scene.cpp:1288</code>, but the function exits before the dedicated trigger-device open loop at
-              <code>JammaLib/src/engine/Scene.cpp:1305</code>. The intended separate-device behavior is described in <code>doc/README.md:112</code>.
+              <strong>Follow-up:</strong> proper multi-device support should return only when recording and trigger paths can both carry device identity cleanly.
+              That work is now tracked separately in GitHub issue #91.
             </p>
-            <div class="codebox">JammaLib/src/engine/Scene.cpp:1257<br />JammaLib/src/engine/Scene.cpp:1288<br />JammaLib/src/engine/Scene.cpp:1305<br />doc/README.md:112</div>
+            <div class="codebox">JammaLib/src/engine/Scene.cpp:1251<br />JammaLib/src/engine/Scene.cpp:1281<br />doc/README.md:112<br />GitHub issue #91</div>
           </div>
 
           <div class="finding medium">
@@ -442,8 +440,8 @@
         <h2>Why The Review Is High Confidence</h2>
         <ul>
           <li>The architecture/API reviewer and the trigger-correctness reviewer independently landed on the same gating regression and the same routing/arbitration concern.</li>
-          <li>The concurrency defect is structural, not stylistic: the queue contract and callback topology disagree in plain code.</li>
-          <li>The trigger-only regression is observable from control flow alone. No speculative runtime interpretation is needed.</li>
+          <li>The concurrency defect was structural, not stylistic: the queue contract and callback topology disagreed in plain code, and the repair now enforces a single callback producer with job-thread fanout.</li>
+          <li>The remaining trigger behavior questions are now narrower because recording and trigger MIDI both share the same single global input again.</li>
         </ul>
       </article>
 
@@ -480,19 +478,19 @@
       </article>
 
       <article class="card">
-        <h2>Recommended Fix Order</h2>
+        <h2>Remaining Fix Order</h2>
         <ul>
-          <li>Repair the trigger ingress topology first: either make the queue truly multi-producer safe or funnel all trigger-device callbacks through a single producer boundary.</li>
-          <li>Split trigger-device enablement from main MIDI loop-recording enablement so dedicated trigger devices can open even when the main MIDI input is disabled.</li>
-          <li>Decide whether unified trigger semantics should preserve first-consumer arbitration. If yes, the MIDI route loop needs to stop on consume and tests should lock that in.</li>
-          <li>Tighten rig-file validation for invalid channels and out-of-range IDs so malformed config is rejected instead of broadened.</li>
+          <li>Done on 2026-05-25: trigger ingress topology now uses a single main MIDI callback and a single global MIDI input for both loop recording and trigger routing.</li>
+          <li>Deferred: add real multi-device MIDI support later under GitHub issue #91 instead of partially supporting separate trigger-only devices now.</li>
+          <li>Then decide whether unified trigger semantics should preserve first-consumer arbitration. If yes, the MIDI route loop needs to stop on consume and tests should lock that in.</li>
+          <li>Finally tighten rig-file validation for invalid channels and out-of-range IDs so malformed config is rejected instead of broadened.</li>
         </ul>
       </article>
     </section>
 
     <p class="footer">
       Review date: 2026-05-25. Scope: GitHub PR 90 against <code>master</code> in the local branch currently checked out.<br />
-      Recommendation: fix the two top issues before merge, then rerun focused trigger regression coverage.
+      Update: the single-producer MIDI ingress bug is fixed and the branch now intentionally uses one global MIDI device for both recording and triggers. Multi-device MIDI is deferred to GitHub issue #91; the remaining correctness work is first-consumer arbitration plus rig validation tightening.
     </p>
   </div>
 </body>

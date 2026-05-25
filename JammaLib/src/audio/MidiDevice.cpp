@@ -63,6 +63,7 @@ std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 bool MidiDevice::Open(const std::string& preferredDeviceName,
                       MidiMessageCallback callback)
 {
+	_callback = std::move(callback);
 	Close();
 
 	try
@@ -121,12 +122,11 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 		}
 	}
 
-	_callback = std::move(callback);
-
 	try
 	{
 		_midiIn->ignoreTypes(false, false, false);
-		_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
+		if (_callback)
+			_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
 		_midiIn->openPort(selected.DeviceId, "Jamma MIDI In");
 	}
 	catch (const rt::midi::RtMidiError& err)

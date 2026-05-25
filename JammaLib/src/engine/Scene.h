@@ -247,8 +247,8 @@ namespace engine
 			std::uint8_t data1,
 			std::uint8_t data2,
 			unsigned int sampleRate) noexcept;
-		void _PushTriggerMidiEvent(std::uint8_t deviceSlot,
-			const MidiEvent& event) noexcept;
+		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
+			const MidiEvent& event);
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
 		void _PumpSerial();
 		void _PublishAudioStations();
@@ -267,25 +267,11 @@ namespace engine
 			size_t pluginIndex);
 
 	protected:
-		struct MidiTriggerIngressEvent
-		{
-			MidiEvent Event;
-			std::uint8_t DeviceSlot;
-			std::uint8_t _pad[3] = { 0u, 0u, 0u };
-		};
-
 		struct MidiTriggerRoute
 		{
 			std::string DeviceName;
 			std::uint8_t DeviceSlot;
 			std::shared_ptr<Trigger> Trigger;
-		};
-
-		struct MidiTriggerInput
-		{
-			std::uint8_t Slot;
-			std::string DeviceName;
-			std::unique_ptr<audio::MidiDevice> Device;
 		};
 
 		bool _isSceneTouching;
@@ -309,10 +295,7 @@ namespace engine
 		io::SerialTriggerQueue<256> _serialIngress;
 		std::mutex _serialIngressMutex;
 		std::uint64_t _lastMidiDropCount;
-		MidiQueue<1024, MidiTriggerIngressEvent> _midiTriggerIngress;
-		std::uint64_t _lastMidiTriggerDropCount;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
-		std::vector<MidiTriggerInput> _midiTriggerInputs;
 		std::optional<std::uint8_t> _sharedMainMidiTriggerSlot;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;

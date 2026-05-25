@@ -166,6 +166,12 @@ public:
 	{
 		_PumpMidi();
 	}
+
+	void DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
+		const engine::MidiEvent& event)
+	{
+		_DispatchMidiTriggerEvent(deviceSlot, event);
+	}
 };
 
 std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
@@ -789,4 +795,33 @@ TEST(Trigger, RoutedMidiTriggerLogsUnmatchedNoteAndCcEvents) {
 	EXPECT_NE(std::string::npos, log.find("[MIDI Trigger] device=\"default\" trigger=\"TrigMidi\""));
 	EXPECT_NE(std::string::npos, log.find("matched=false status=144 data1=61 data2=100"));
 	EXPECT_NE(std::string::npos, log.find("matched=false status=176 data1=65 data2=127"));
+}
+
+TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+	trigger.value()->SetReceiver(receiver);
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.RegisterMidiTriggerRouteForTest("TriggerPad", trigger.value(), 0u);
+	scene.SetSharedMainMidiTriggerSlotForTest(0u);
+
+	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PumpMidiForTest();
+
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 }

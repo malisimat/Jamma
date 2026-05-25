@@ -109,7 +109,9 @@ Example trigger block:
 
 Behavior:
 
-- The trigger device can be the same as `user.midi.name` or a separate controller.
+- For now, MIDI triggers are sourced from the same global MIDI input as loop MIDI recording: `user.midi.name`.
+- The `trigger.device` field is still parsed and retained in rig data, but it is not currently used to open a separate MIDI device.
 - Trigger handling reuses the same trigger debounce and state-machine path as existing non-MIDI trigger inputs.
 - MIDI loop recording remains controlled by `user.midi.name` and `midiinput` channel arming.
+- Support for multiple simultaneous MIDI devices across both recording and triggers is deferred to GitHub issue #91.
 - `channel` values in the rig file are one-based. Omitting `channel` makes the binding match any channel.
