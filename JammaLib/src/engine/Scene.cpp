@@ -1119,7 +1119,7 @@ void Scene::_PumpSerial()
 
 		for (auto& station : _stations)
 		{
-			auto res = station->OnEvent(
+			auto res = station->OnTriggerEvent(
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,

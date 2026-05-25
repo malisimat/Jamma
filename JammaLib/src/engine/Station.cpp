@@ -365,10 +365,10 @@ ActionResult Station::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 
 	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
+	return OnTriggerEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
 }
 
-ActionResult Station::OnEvent(TriggerSource source,
+ActionResult Station::OnTriggerEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
 	const base::Action& action,
