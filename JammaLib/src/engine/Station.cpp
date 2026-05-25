@@ -365,10 +365,10 @@ ActionResult Station::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 
 	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-	return OnTriggerInput(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
+	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
 }
 
-ActionResult Station::OnTriggerInput(TriggerSource source,
+ActionResult Station::OnEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
 	const base::Action& action,
@@ -379,7 +379,7 @@ ActionResult Station::OnTriggerInput(TriggerSource source,
 
 	for (auto& trig : _triggers)
 	{
-		auto trigResult = trig->OnBindingEvent(source, value, state, action, device);
+		auto trigResult = trig->OnEvent(source, value, state, action, device);
 		if (trigResult.IsEaten)
 			return trigResult;
 	}
