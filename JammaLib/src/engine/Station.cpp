@@ -179,11 +179,11 @@ void Station::Draw3d(base::DrawContext& ctx,
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	if (_quantisationModel)
-		_quantisationModel->Draw3d(ctx, numInstances, pass);
-
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
+
+	if (_quantisationModel)
+		_quantisationModel->Draw3d(ctx, numInstances, pass);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -827,6 +827,7 @@ void Station::SetQuantisationOverlay(unsigned int seedSamps,
 
 	_quantisationOverlayPinned = true;
 	_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
+	_quantisationModel->SetLoopIndexFrac(_clock ? _clock->MasterLoopIndexFrac() : 0.0);
 	_quantisationModel->SetOverlayVisible(true, confirm);
 }
 
@@ -840,6 +841,8 @@ void Station::RefreshQuantisationOverlayFromClock()
 {
 	if (!_quantisationModel)
 		return;
+
+	_quantisationModel->SetLoopIndexFrac(_clock ? _clock->MasterLoopIndexFrac() : 0.0);
 
 	if (!_clock || !_clock->IsQuantisable())
 	{

@@ -47,8 +47,7 @@ QuantisationModel::QuantisationModel() :
 	_seedSamps(0u),
 	_masterLoopSamps(0u),
 	_gateCount(0u),
-	_masterLoopSecs(0.0f),
-	_rotationStartTime(Timer::GetZero()),
+	_loopIndexFrac(0.0),
 	_overlayVisible(false),
 	_confirmedAt(Timer::GetZero())
 {
@@ -90,14 +89,9 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 			_confirmedAt = Timer::GetZero();
 	}
 
-	float phaseOffset = 0.0f;
-	if ((_masterLoopSecs > 0.0f) && !Timer::IsZero(_rotationStartTime))
-	{
-		const auto elapsed = Timer::GetElapsedSeconds(_rotationStartTime, Timer::GetTime());
-		phaseOffset = std::fmod(
-			static_cast<float>(elapsed) / _masterLoopSecs * static_cast<float>(constants::TWOPI),
-			static_cast<float>(constants::TWOPI));
-	}
+	const auto phaseOffset = std::fmod(
+		static_cast<float>(constants::TWOPI * _loopIndexFrac),
+		static_cast<float>(constants::TWOPI));
 
 	const auto angleStep = (_gateCount > 1u) ?
 		static_cast<float>(constants::TWOPI) / static_cast<float>(_gateCount) :
@@ -124,6 +118,8 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 
 void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate)
 {
+	(void)sampleRate;
+
 	if (seedSamps == 0u)
 		seedSamps = 1u;
 	if (masterLoopSamps == 0u)
@@ -135,16 +131,6 @@ void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoo
 	if ((seedSamps == _seedSamps) && (masterLoopSamps == _masterLoopSamps) && (gates == _gateCount))
 		return;
 
-	const auto newMasterLoopSecs = (sampleRate > 0.0f && masterLoopSamps > 0u)
-		? static_cast<float>(masterLoopSamps) / sampleRate
-		: 0.0f;
-	if (newMasterLoopSecs != _masterLoopSecs)
-	{
-		_masterLoopSecs = newMasterLoopSecs;
-		if (_masterLoopSecs > 0.0f)
-			_rotationStartTime = Timer::GetTime();
-	}
-
 	_seedSamps = seedSamps;
 	_masterLoopSamps = masterLoopSamps;
 	_gateCount = gates;
@@ -152,6 +138,16 @@ void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoo
 	auto verts = BuildGateGeometry(gates, GateInnerRadius, GateOuterRadius, GateHalfHeight);
 	auto uvs = BuildDummyUvs(verts.size());
 	SetGeometry(std::move(verts), std::move(uvs));
+}
+
+void QuantisationModel::SetLoopIndexFrac(double loopIndexFrac) noexcept
+{
+	if (loopIndexFrac < 0.0)
+		_loopIndexFrac = 0.0;
+	else if (loopIndexFrac > 1.0)
+		_loopIndexFrac = 1.0;
+	else
+		_loopIndexFrac = loopIndexFrac;
 }
 
 void QuantisationModel::SetOverlayVisible(bool visible, bool confirm)
@@ -245,13 +241,6 @@ std::vector<float> QuantisationModel::BuildGateGeometry(unsigned int gateCount,
 			GatePoint(xBack, to.x, to.y),
 			GatePoint(xBack, from.x, from.y));
 	}
-
-	// The backing closes the interior opening on the rear of the frame.
-	AppendQuad(verts,
-		GatePoint(xBack, yInnerMin, zMin),
-		GatePoint(xBack, yInnerMin, zInnerMax),
-		GatePoint(xBack, yInnerMax, zInnerMax),
-		GatePoint(xBack, yInnerMax, zMin));
 
 	return verts;
 }

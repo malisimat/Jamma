@@ -900,6 +900,9 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	if (_clock)
+		_clock->Tick(samps, 0u);
+
 	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
@@ -1844,6 +1847,8 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	_masterLoop = _RepresentativeLoopForTarget(hovering, depth);
 	_masterLoopLengthSamps = masterLength;
 	_ApplyQuantisationTiming(timing.value(), "master loop");
+	if (_clock && _masterLoop)
+		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
 	_RefreshQuantisationOverlays(hovering, depth, confirm);
 
 	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
@@ -2042,6 +2047,16 @@ void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
 	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
 	_clock->SetQuantisation(timing->GrainSamps, quantisation);
 	_clock->SetSeedSourceLength(intervalLengthSamps);
+	if (intervalLengthSamps > 0u)
+	{
+		auto loopIndexFrac = 1.0;
+		if (snapshot.IntervalPositionSamps > 0u)
+		{
+			const auto intervalPos = snapshot.IntervalPositionSamps % intervalLengthSamps;
+			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(intervalLengthSamps));
+		}
+		_clock->SetMasterLoopIndexFrac(loopIndexFrac);
+	}
 
 	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
 		<< " bpi=" << snapshot.Bpi
