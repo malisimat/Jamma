@@ -38,6 +38,14 @@ namespace engine
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);
 
+	// Snap a tap-derived gap to the nearest whole divisor of masterLoopSamps
+	// (N * seed == masterLoopSamps) without enforcing any seed-size limits.
+	// Intended for 'first recorded loop after reclock/start' when tap tempo is active.
+	std::optional<QuantisationTiming> DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
+		unsigned long masterLoopSamps,
+		unsigned int sampleRate,
+		const QuantisationPolicy& policy);
+
 	class TapTempoTracker
 	{
 	public:

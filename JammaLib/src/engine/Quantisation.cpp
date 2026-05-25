@@ -224,3 +224,53 @@ bool TapTempoTracker::HasEstimate() const noexcept
 {
 	return _estimatedGapSamps.has_value();
 }
+
+std::optional<QuantisationTiming> engine::DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
+	unsigned long masterLoopSamps,
+	unsigned int sampleRate,
+	const QuantisationPolicy& policy)
+{
+	if ((tapGapSamps == 0ul) || (masterLoopSamps == 0ul) || (sampleRate == 0u))
+		return std::nullopt;
+
+	// Find the divisor d of masterLoopSamps such that seed = masterLoopSamps / d
+	// is closest to tapGapSamps.  Iterate d from 1 to sqrt(masterLoopSamps) to
+	// enumerate all divisor pairs efficiently.  No seed-size limits are applied.
+	unsigned long bestSeed = 0ul;
+	unsigned long bestDist = std::numeric_limits<unsigned long>::max();
+
+	for (unsigned long d = 1ul; d * d <= masterLoopSamps; ++d)
+	{
+		if ((masterLoopSamps % d) != 0ul)
+			continue;
+
+		const unsigned long seedLarge = masterLoopSamps / d;
+		const unsigned long seedSmall = d;
+
+		const auto distLarge = seedLarge > tapGapSamps
+			? seedLarge - tapGapSamps
+			: tapGapSamps - seedLarge;
+		if (distLarge < bestDist)
+		{
+			bestDist = distLarge;
+			bestSeed = seedLarge;
+		}
+
+		if (seedSmall != seedLarge)
+		{
+			const auto distSmall = seedSmall > tapGapSamps
+				? seedSmall - tapGapSamps
+				: tapGapSamps - seedSmall;
+			if (distSmall < bestDist)
+			{
+				bestDist = distSmall;
+				bestSeed = seedSmall;
+			}
+		}
+	}
+
+	if ((bestSeed == 0ul) || (bestSeed > std::numeric_limits<unsigned int>::max()))
+		return std::nullopt;
+
+	return TimingFromSeed(static_cast<unsigned int>(bestSeed), masterLoopSamps, sampleRate, policy);
+}
