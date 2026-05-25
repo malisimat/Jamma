@@ -16,10 +16,9 @@ TEST(Quantisation, DerivesSeedTimingFromMasterLoop)
 	auto timing = engine::DeduceSeedTiming(48000ul * 8ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
-	EXPECT_EQ(96000u, timing->SeedSamps);
+	EXPECT_EQ(24000u, timing->SeedSamps);
 	EXPECT_EQ(384000u, timing->MasterLoopSamps);
-	EXPECT_EQ(4u, timing->SeedCount);
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
+	EXPECT_EQ(16u, timing->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(16u, timing->Bpi);
 }
@@ -36,9 +35,8 @@ TEST(Quantisation, SnapsTapSeedToWholeMasterDivision)
 	EXPECT_EQ(76800u, timing->SeedSamps);
 	EXPECT_EQ(masterLoopSamps, timing->MasterLoopSamps);
 	EXPECT_EQ(5u, timing->SeedCount);
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
-	EXPECT_FLOAT_EQ(150.0f, timing->Bpm);
-	EXPECT_EQ(20u, timing->Bpi);
+	EXPECT_FLOAT_EQ(37.5f, timing->Bpm);
+	EXPECT_EQ(5u, timing->Bpi);
 }
 
 TEST(Quantisation, EnforcesMinimumTapSeed)
@@ -82,17 +80,16 @@ TEST(Quantisation, TimingFromSeedAndMasterDerivesBpmAndBpi)
 	QuantisationPolicy policy;
 
 	// Master = 8 seconds at 48kHz; seed = 2 seconds (quarter of master).
-	// seed=96000 => raw bpm=30; doubles beatsPerSeed until bpm >= SeedBpmMin(80):
-	// beatsPerSeed=4, bpm=120. seedCount=4. bpi=4*4=16.
+	// Direct seed timing preserves the supplied seed: BPI is the number of
+	// actual seed divisions in the master loop.
 	const auto timing = engine::TimingFromSeedAndMaster(96000u, 384000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(96000u, timing->SeedSamps);
 	EXPECT_EQ(384000u, timing->MasterLoopSamps);
 	EXPECT_EQ(4u, timing->SeedCount);
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
-	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
-	EXPECT_EQ(16u, timing->Bpi);
+	EXPECT_FLOAT_EQ(30.0f, timing->Bpm);
+	EXPECT_EQ(4u, timing->Bpi);
 }
 
 TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
@@ -109,54 +106,65 @@ TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
 
 TEST(Quantisation, SeedFromMasterNoHalvingNeeded)
 {
-	// A 2 s master (96000 samps at 48 kHz) is already below the 3 s target
-	// maximum, so DeduceSeedTiming must leave it unchanged.
+	// A 2 s master is below the 3 s target maximum, but its raw seed BPM is
+	// below the policy floor.  DeduceSeedTiming halves to an actual BPM seed,
+	// so BPI equals the number of seed gates in the master.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceSeedTiming(96000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
-	EXPECT_EQ(96000u, timing->SeedSamps);
+	EXPECT_EQ(24000u, timing->SeedSamps);
 	EXPECT_EQ(96000u, timing->MasterLoopSamps);
-	EXPECT_EQ(1u, timing->SeedCount);
-	// Raw BPM = 30 < 80: doubled twice → beatsPerSeed = 4, BPM = 120, BPI = 4.
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
+	EXPECT_EQ(4u, timing->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(4u, timing->Bpi);
 }
 
 TEST(Quantisation, SeedFromMasterRequiresMultipleHalvings)
 {
-	// A 32 s master needs four halvings before the seed falls below 3 s.
-	// 1536000 → 768000 → 384000 → 192000 → 96000 (first value < 144000).
+	// A 32 s master first halves below 3 s, then halves to an actual BPM seed.
+	// 1536000 -> 768000 -> 384000 -> 192000 -> 96000 -> 48000 -> 24000.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceSeedTiming(1536000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
-	EXPECT_EQ(96000u, timing->SeedSamps);
+	EXPECT_EQ(24000u, timing->SeedSamps);
 	EXPECT_EQ(1536000u, timing->MasterLoopSamps);
-	EXPECT_EQ(16u, timing->SeedCount);
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
+	EXPECT_EQ(64u, timing->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(64u, timing->Bpi);
 }
 
 TEST(Quantisation, SeedFromMasterAt44100SampleRate)
 {
-	// 8 s at 44100 Hz = 352800 samps.  targetMaxSeed = 132300.
-	// 352800/2 = 176400 > 132300; /2 = 88200 < 132300 → seed = 88200.
+	// 8 s at 44100 Hz = 352800 samps.  After target-max halving to 88200,
+	// the seed halves twice more so it represents 120 BPM directly.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceSeedTiming(352800ul, 44100u, policy);
 
 	ASSERT_TRUE(timing.has_value());
-	EXPECT_EQ(88200u, timing->SeedSamps);
+	EXPECT_EQ(22050u, timing->SeedSamps);
 	EXPECT_EQ(352800u, timing->MasterLoopSamps);
-	EXPECT_EQ(4u, timing->SeedCount);
-	EXPECT_EQ(4u, timing->BeatsPerSeed);
+	EXPECT_EQ(16u, timing->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(16u, timing->Bpi);
+}
+
+TEST(Quantisation, SeedFromFirstFourBeatLoopDrawsFourGates)
+{
+	QuantisationPolicy policy;
+
+	auto timing = engine::DeduceSeedTiming(124928ul, 44100u, policy);
+
+	ASSERT_TRUE(timing.has_value());
+	EXPECT_EQ(31232u, timing->SeedSamps);
+	EXPECT_EQ(124928u, timing->MasterLoopSamps);
+	EXPECT_EQ(4u, timing->SeedCount);
+	EXPECT_NEAR(84.72077f, timing->Bpm, 0.0001f);
+	EXPECT_EQ(4u, timing->Bpi);
 }
 
 TEST(Quantisation, SeedFromMasterRejectsZeroInputs)
@@ -173,46 +181,39 @@ TEST(Quantisation, SeedFromMasterRejectsZeroInputs)
 TEST(Quantisation, TapSeedAt120BpmNoMaster)
 {
 	// 120 BPM quarter note = 0.5 s = 24000 samps at 48 kHz.
-	// Raw BPM = 120 >= 80: no doubling; beatsPerSeed = 1.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceTapSeedTiming(24000ul, 0ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
-	EXPECT_EQ(1u, timing->BeatsPerSeed);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 }
 
 TEST(Quantisation, TapSeedAt90BpmNoMaster)
 {
 	// 90 BPM quarter note = 32000 samps at 48 kHz.
-	// Raw BPM = 90 >= 80: no doubling; beatsPerSeed = 1.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceTapSeedTiming(32000ul, 0ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(32000u, timing->SeedSamps);
-	EXPECT_EQ(1u, timing->BeatsPerSeed);
 	EXPECT_FLOAT_EQ(90.0f, timing->Bpm);
 }
 
 TEST(Quantisation, TapSeedAt60BpmNoMaster)
 {
 	// 60 BPM quarter note = 48000 samps at 48 kHz.
-	// Raw BPM = 60 < 80: beatsPerSeed doubled to 2, reported BPM = 120.
-	// This preserves the physical seed interval while keeping BPM in range.
+	// Explicit tap timing preserves the physical seed interval.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceTapSeedTiming(48000ul, 0ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(48000u, timing->SeedSamps);
-	EXPECT_EQ(2u, timing->BeatsPerSeed);
-	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
-	// seedCount = 1 (no master), bpi = 1 * 2 = 2.
-	EXPECT_EQ(2u, timing->Bpi);
+	EXPECT_FLOAT_EQ(60.0f, timing->Bpm);
+	EXPECT_EQ(1u, timing->Bpi);
 }
 
 // ---------------------------------------------------------------------------
@@ -252,10 +253,8 @@ TEST(Quantisation, TapTempoTrackerSnapsToMasterDivision)
 	EXPECT_EQ(48000u, timing->SeedSamps);
 	EXPECT_EQ(192000u, timing->MasterLoopSamps);
 	EXPECT_EQ(4u, timing->SeedCount);
-	// Raw BPM = 60 < 80: beatsPerSeed = 2, BPM = 120, BPI = 4*2 = 8.
-	EXPECT_EQ(2u, timing->BeatsPerSeed);
-	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
-	EXPECT_EQ(8u, timing->Bpi);
+	EXPECT_FLOAT_EQ(60.0f, timing->Bpm);
+	EXPECT_EQ(4u, timing->Bpi);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +283,6 @@ TEST(Quantisation, NinjamRoundTrip_100bpm_4bpi)
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(28800u, timingOpt->SeedSamps);
 	EXPECT_EQ(4u, timingOpt->SeedCount);
-	EXPECT_EQ(1u, timingOpt->BeatsPerSeed);  // BPM 100 >= 80: no doubling
 	EXPECT_FLOAT_EQ(100.0f, timingOpt->Bpm);
 	EXPECT_EQ(4u, timingOpt->Bpi);
 	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
@@ -307,7 +305,6 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(24000u, timingOpt->SeedSamps);
 	EXPECT_EQ(8u, timingOpt->SeedCount);
-	EXPECT_EQ(1u, timingOpt->BeatsPerSeed);  // BPM 120 >= 80: no doubling
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(8u, timingOpt->Bpi);
 	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
@@ -316,8 +313,8 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
 TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
 {
 	// 180 BPM, 16 BPI at 48 kHz → interval = 256000 samps.
-	// Seed = one beat = 60*sr/BPM = 16000 samps; BPM 180 >= 80: no doubling,
-	// so the original BPM and BPI are recovered exactly.
+	// Seed = one beat = 60*sr/BPM = 16000 samps, so the original BPM and BPI
+	// are recovered exactly.
 	QuantisationPolicy policy;
 	const unsigned int sr = 48000u;
 
@@ -331,7 +328,6 @@ TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(16000u, timingOpt->SeedSamps);
 	EXPECT_EQ(16u, timingOpt->SeedCount);
-	EXPECT_EQ(1u, timingOpt->BeatsPerSeed);  // BPM 180 >= 80: no doubling
 	EXPECT_FLOAT_EQ(180.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
 	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
@@ -354,7 +350,6 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(22050u, timingOpt->SeedSamps);
 	EXPECT_EQ(16u, timingOpt->SeedCount);
-	EXPECT_EQ(1u, timingOpt->BeatsPerSeed);  // BPM 120 >= 80: no doubling
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
 	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
@@ -374,7 +369,7 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
 TEST(Quantisation, TapSeedFromMasterExactDivisor)
 {
 	// tap = 24000 (120 BPM quarter note); master = 384000 (8 s).
-	// 384000 / 16 = 24000: exact divisor.  BPM 120 >= 80: beatsPerSeed = 1.
+	// 384000 / 16 = 24000: exact divisor.
 	QuantisationPolicy policy;
 
 	auto timing = engine::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 48000u, policy);
@@ -383,7 +378,6 @@ TEST(Quantisation, TapSeedFromMasterExactDivisor)
 	EXPECT_EQ(24000u, timing->SeedSamps);
 	EXPECT_EQ(384000u, timing->MasterLoopSamps);
 	EXPECT_EQ(16u, timing->SeedCount);
-	EXPECT_EQ(1u, timing->BeatsPerSeed);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(16u, timing->Bpi);
 }
@@ -400,7 +394,6 @@ TEST(Quantisation, TapSeedFromMasterSnapsToNearestDivisor)
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(25600u, timing->SeedSamps);
 	EXPECT_EQ(15u, timing->SeedCount);
-	EXPECT_EQ(1u, timing->BeatsPerSeed);  // 112.5 BPM >= 80: no doubling
 	EXPECT_FLOAT_EQ(112.5f, timing->Bpm);
 	EXPECT_EQ(15u, timing->Bpi);
 }
@@ -419,7 +412,6 @@ TEST(Quantisation, TapSeedFromMasterBelowMinSizeLimit)
 	EXPECT_EQ(2000u, timing->SeedSamps);
 	EXPECT_EQ(48000u, timing->MasterLoopSamps);
 	EXPECT_EQ(24u, timing->SeedCount);
-	EXPECT_EQ(1u, timing->BeatsPerSeed);  // 1440 BPM >= 80: no doubling
 	EXPECT_FLOAT_EQ(1440.0f, timing->Bpm);
 	EXPECT_EQ(24u, timing->Bpi);
 }
@@ -437,9 +429,8 @@ TEST(Quantisation, TapSeedFromMasterAbovePolicySizeMax)
 	EXPECT_EQ(240000u, timing->SeedSamps);
 	EXPECT_EQ(480000u, timing->MasterLoopSamps);
 	EXPECT_EQ(2u, timing->SeedCount);
-	EXPECT_EQ(8u, timing->BeatsPerSeed);  // 12 BPM -> doubled 3x -> 96 BPM
-	EXPECT_FLOAT_EQ(96.0f, timing->Bpm);
-	EXPECT_EQ(16u, timing->Bpi);
+	EXPECT_FLOAT_EQ(12.0f, timing->Bpm);
+	EXPECT_EQ(2u, timing->Bpi);
 }
 
 TEST(Quantisation, TapSeedFromMasterRejectsZeroInputs)

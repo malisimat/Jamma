@@ -67,8 +67,7 @@ namespace
 
 	std::optional<QuantisationTiming> TimingFromSeed(unsigned int seedSamps,
 		unsigned long masterLoopSamps,
-		unsigned int sampleRate,
-		const QuantisationPolicy& policy)
+		unsigned int sampleRate)
 	{
 		if ((seedSamps == 0u) || (sampleRate == 0u))
 			return std::nullopt;
@@ -80,26 +79,12 @@ namespace
 		if (seedCount > std::numeric_limits<unsigned int>::max())
 			return std::nullopt;
 
-		auto bpm = (60.0f * static_cast<float>(sampleRate)) / static_cast<float>(seedSamps);
-		auto beatsPerSeed = 1u;
-		while (bpm < static_cast<float>(std::max(1u, policy.SeedBpmMin)))
-		{
-			if (beatsPerSeed > (std::numeric_limits<unsigned int>::max() / 2u))
-				return std::nullopt;
-			beatsPerSeed *= 2u;
-			bpm *= 2.0f;
-		}
-
-		if (seedCount > (std::numeric_limits<unsigned int>::max() / beatsPerSeed))
-			return std::nullopt;
-
 		QuantisationTiming timing;
 		timing.SeedSamps = seedSamps;
 		timing.MasterLoopSamps = ClampToUInt(masterLoopSamps);
 		timing.SeedCount = static_cast<unsigned int>(seedCount);
-		timing.BeatsPerSeed = beatsPerSeed;
-		timing.Bpm = bpm;
-		timing.Bpi = timing.SeedCount * beatsPerSeed;
+		timing.Bpm = (60.0f * static_cast<float>(sampleRate)) / static_cast<float>(seedSamps);
+		timing.Bpi = timing.SeedCount;
 		return timing;
 	}
 }
@@ -124,12 +109,12 @@ unsigned int engine::IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigne
 std::optional<QuantisationTiming> engine::TimingFromSeedAndMaster(unsigned int seedSamps,
 	unsigned long masterSamps,
 	unsigned int sampleRate,
-	const QuantisationPolicy& policy)
+	const QuantisationPolicy&)
 {
 	if ((seedSamps == 0u) || (masterSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;
 
-	return TimingFromSeed(seedSamps, masterSamps, sampleRate, policy);
+	return TimingFromSeed(seedSamps, masterSamps, sampleRate);
 }
 
 std::optional<QuantisationTiming> engine::DeduceSeedTiming(unsigned long masterLoopSamps,
@@ -151,10 +136,17 @@ std::optional<QuantisationTiming> engine::DeduceSeedTiming(unsigned long masterL
 	while ((seedSamps >= targetMaxSeed) && ((seedSamps / 2ul) >= minSeed))
 		seedSamps /= 2ul;
 
+	const auto minBpm = static_cast<float>(std::max(1u, policy.SeedBpmMin));
+	while (((60.0f * static_cast<float>(sampleRate)) / static_cast<float>(seedSamps)) < minBpm
+		&& ((seedSamps / 2ul) >= minSeed))
+	{
+		seedSamps /= 2ul;
+	}
+
 	if (seedSamps > std::numeric_limits<unsigned int>::max())
 		return std::nullopt;
 
-	return TimingFromSeed(static_cast<unsigned int>(seedSamps), masterLoopSamps, sampleRate, policy);
+	return TimingFromSeed(static_cast<unsigned int>(seedSamps), masterLoopSamps, sampleRate);
 }
 
 std::optional<QuantisationTiming> engine::DeduceTapSeedTiming(unsigned long requestedSeedSamps,
@@ -171,7 +163,7 @@ std::optional<QuantisationTiming> engine::DeduceTapSeedTiming(unsigned long requ
 
 	const auto seedSamps = SnapSeedToMaster(requestedSeedSamps, masterLoopSamps, minSeed);
 	const auto timingMaster = masterLoopSamps == 0ul ? seedSamps : masterLoopSamps;
-	return TimingFromSeed(seedSamps, timingMaster, sampleRate, policy);
+	return TimingFromSeed(seedSamps, timingMaster, sampleRate);
 }
 
 void TapTempoTracker::Clear() noexcept
@@ -272,5 +264,5 @@ std::optional<QuantisationTiming> engine::DeduceTapSeedTimingFromMaster(unsigned
 	if ((bestSeed == 0ul) || (bestSeed > std::numeric_limits<unsigned int>::max()))
 		return std::nullopt;
 
-	return TimingFromSeed(static_cast<unsigned int>(bestSeed), masterLoopSamps, sampleRate, policy);
+	return TimingFromSeed(static_cast<unsigned int>(bestSeed), masterLoopSamps, sampleRate);
 }

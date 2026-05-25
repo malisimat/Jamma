@@ -29,7 +29,6 @@ namespace io
 		{
 			unsigned int GrainSamps = 0u;
 			unsigned int LoopGrains = 0u;
-			unsigned int BeatsPerGrain = 0u;
 			float Bpm = 0.0f;
 			unsigned int Bpi = 0u;
 		};

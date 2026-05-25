@@ -19,7 +19,6 @@ namespace engine
 		unsigned int SeedSamps = 0u;
 		unsigned int MasterLoopSamps = 0u;
 		unsigned int SeedCount = 0u;
-		unsigned int BeatsPerSeed = 0u;
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 	};
@@ -38,10 +37,8 @@ namespace engine
 		const QuantisationPolicy& policy);
 
 	// Deduces the seed by halving the master loop until it falls within the
-	// policy's target grain range.  Called in two situations: (a) as a fallback
-	// from _TrySetMasterFromHover when tap tempo has no usable estimate yet,
-	// and (b) from UserConfig::DeduceLoopTiming to deduce seed from a Ninjam
-	// interval length (tap tempo state is irrelevant there).
+	// policy's target grain range and represents the BPM directly.  BPI is the
+	// resulting number of seeds in the master loop.
 	std::optional<QuantisationTiming> DeduceSeedTiming(unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy);

@@ -368,7 +368,6 @@ std::optional<UserConfig::SeedLoopTiming> UserConfig::DeduceLoopTiming(unsigned 
 	SeedLoopTiming timing;
 	timing.GrainSamps = timingValue.SeedSamps;
 	timing.LoopGrains = timingValue.SeedCount;
-	timing.BeatsPerGrain = timingValue.BeatsPerSeed;
 	timing.Bpm = timingValue.Bpm;
 	timing.Bpi = timingValue.Bpi;
 	return timing;
