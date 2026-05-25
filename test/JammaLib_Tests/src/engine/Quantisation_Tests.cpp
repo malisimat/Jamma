@@ -39,6 +39,27 @@ TEST(Quantisation, SnapsTapSeedToWholeMasterDivision)
 	EXPECT_EQ(5u, timing->Bpi);
 }
 
+// master=132096 @ 44100 Hz (~3 s, bpi=4 @ 80 BPM).
+// Tap near 160 BPM (bpi=8): requested seed ≈16512 (374 ms).
+// With 400 ms floor the old linear loop capped maxDivisor at 7 and returned bpi=6.
+// With 300 ms floor and the sqrt divisor enumeration, bpi=8 (seed=16512) is reachable.
+TEST(Quantisation, SnapsTapSeedToHighBpiDivisorViaSqrtSearch)
+{
+	QuantisationPolicy policy;
+	policy.SeedGrainMinMs = 300u;
+
+	// 132096 = 2^10 * 3 * 43; exact divisors include 8 (seed=16512) and 6 (seed=22016).
+	// Requested seed 16512 is closest to divisor 8, so bpi=8 should win.
+	const auto masterLoopSamps = 132096ul;
+	auto timing = engine::DeduceTapSeedTiming(16512ul, masterLoopSamps, 44100u, policy);
+
+	ASSERT_TRUE(timing.has_value());
+	EXPECT_EQ(16512u, timing->SeedSamps);
+	EXPECT_EQ(masterLoopSamps, timing->MasterLoopSamps);
+	EXPECT_EQ(8u, timing->SeedCount);
+	EXPECT_EQ(8u, timing->Bpi);
+}
+
 TEST(Quantisation, EnforcesMinimumTapSeed)
 {
 	QuantisationPolicy policy;

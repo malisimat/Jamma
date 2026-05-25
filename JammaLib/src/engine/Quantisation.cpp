@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <limits>
 
 using namespace engine;
 
 namespace
 {
+	constexpr double kTapTimeoutSecs = 2.5;
+
 	unsigned int ClampToUInt(unsigned long value)
 	{
 		return value > std::numeric_limits<unsigned int>::max() ?
@@ -36,33 +39,37 @@ namespace
 		if (requestedSeedSamps == 0ul)
 			requestedSeedSamps = masterLoopSamps;
 
-		auto bestSeed = masterLoopSamps;
-		auto bestDistance = bestSeed > requestedSeedSamps ?
-			bestSeed - requestedSeedSamps :
-			requestedSeedSamps - bestSeed;
+		// O(sqrt(N)): each divisor pair yields a large seed (low bpi) and small seed (high bpi).
+		unsigned long bestSeed = 0ul;
+		unsigned long bestDistance = std::numeric_limits<unsigned long>::max();
 
-		const auto maxDivisor = masterLoopSamps / std::max(1u, minSeedSamps);
-		for (auto divisor = 1ul; divisor <= maxDivisor; ++divisor)
+		for (unsigned long d = 1ul; d * d <= masterLoopSamps; ++d)
 		{
-			if ((masterLoopSamps % divisor) != 0ul)
+			if ((masterLoopSamps % d) != 0ul)
 				continue;
 
-			const auto seed = masterLoopSamps / divisor;
-			if (seed < minSeedSamps)
-				continue;
-
-			const auto distance = seed > requestedSeedSamps ?
-				seed - requestedSeedSamps :
-				requestedSeedSamps - seed;
-
-			if (distance < bestDistance)
+			const unsigned long candidates[2] = { masterLoopSamps / d, d };
+			for (auto seed : candidates)
 			{
-				bestDistance = distance;
-				bestSeed = seed;
+				if (seed < static_cast<unsigned long>(minSeedSamps))
+					continue;
+
+				const auto distance = seed > requestedSeedSamps ?
+					seed - requestedSeedSamps :
+					requestedSeedSamps - seed;
+
+				if (distance < bestDistance)
+				{
+					bestDistance = distance;
+					bestSeed = seed;
+				}
 			}
 		}
 
-		return ClampToUInt(std::max<unsigned long>(bestSeed, minSeedSamps));
+		if (bestSeed == 0ul)
+			bestSeed = static_cast<unsigned long>(minSeedSamps);
+
+		return ClampToUInt(bestSeed);
 	}
 
 	std::optional<QuantisationTiming> TimingFromSeed(unsigned int seedSamps,
@@ -185,16 +192,33 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 
 	if (samplePosition <= _lastTapSample.value())
 	{
+		std::cout << "[tap] rejected: non-increasing\n";
 		_lastTapSample = samplePosition;
 		return std::nullopt;
 	}
 
 	const auto gap = static_cast<double>(samplePosition - _lastTapSample.value());
-	_lastTapSample = samplePosition;
 
+	// Reset if the inter-tap gap exceeds the timeout; treat this tap as a fresh first tap.
+	if (sampleRate > 0u && gap > kTapTimeoutSecs * static_cast<double>(sampleRate))
+	{
+		Clear();
+		_lastTapSample = samplePosition;
+		return std::nullopt;
+	}
+
+	_lastTapSample = samplePosition;
 	_estimatedGapSamps = _estimatedGapSamps.has_value() ?
 		((_estimatedGapSamps.value() * 0.5) + (gap * 0.5)) :
 		gap;
+
+	if (sampleRate > 0u)
+	{
+		const auto msPerSamp = 1000.0 / static_cast<double>(sampleRate);
+		std::cout << "[tap] raw=" << static_cast<int>(gap * msPerSamp + 0.5)
+			<< "ms smooth=" << static_cast<int>(_estimatedGapSamps.value() * msPerSamp + 0.5)
+			<< "ms\n";
+	}
 
 	return CurrentTiming(masterLoopSamps, sampleRate, policy);
 }
@@ -225,9 +249,7 @@ std::optional<QuantisationTiming> engine::DeduceTapSeedTimingFromMaster(unsigned
 	if ((tapGapSamps == 0ul) || (masterLoopSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;
 
-	// Find the divisor d of masterLoopSamps such that seed = masterLoopSamps / d
-	// is closest to tapGapSamps.  Iterate d from 1 to sqrt(masterLoopSamps) to
-	// enumerate all divisor pairs efficiently.  No seed-size limits are applied.
+	// Nearest divisor of masterLoopSamps to tapGapSamps; O(sqrt(N)), no min-size floor.
 	unsigned long bestSeed = 0ul;
 	unsigned long bestDist = std::numeric_limits<unsigned long>::max();
 
