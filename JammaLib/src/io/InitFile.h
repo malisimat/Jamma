@@ -20,6 +20,13 @@
 
 namespace io
 {
+	struct LoggingConfig
+	{
+		std::string Midi;   // "verbose" to enable verbose MIDI packet logging
+		std::string Audio;  // "verbose" to enable verbose audio logging
+		std::string Event;  // "verbose" to enable verbose event logging
+	};
+
 	struct InitFile
 	{
 		static std::optional<InitFile> FromStream(std::stringstream ss);
@@ -41,5 +48,6 @@ namespace io
 
 		utils::Position2d WinPos;
 		utils::Size2d WinSize;
+		LoggingConfig Logging;
 	};
 }

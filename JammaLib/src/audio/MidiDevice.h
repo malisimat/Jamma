@@ -33,8 +33,10 @@ namespace audio
 
 		// Opens and starts a MIDI input stream. If preferredDeviceName is empty, or
 		// no exact/substring match is found, the first discovered input is used.
+		// loggingVerbose: if true, logs each received MIDI packet in hex format.
 		bool Open(const std::string& preferredDeviceName,
-		          MidiMessageCallback callback);
+		          MidiMessageCallback callback,
+		          bool loggingVerbose = false);
 		void Close();
 
 		bool IsOpen() const noexcept { return _isOpen; }
@@ -51,6 +53,7 @@ namespace audio
 		bool _isOpen;
 		std::string _deviceName;
 		unsigned int _deviceId;
+		bool _loggingVerbose;
 		MidiMessageCallback _callback;
 	};
 }

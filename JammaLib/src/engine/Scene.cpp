@@ -60,6 +60,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
 	_midiInputs(),
+	_loggingConfig{},
 	_serialDevices(),
 	_midiTriggerRoutes(),
 	_midiTriggerRoutesSnapshot(),
@@ -1316,7 +1317,8 @@ void Scene::InitMidi()
 				ingress.data2 = data2;
 				ingress._pad = 0u;
 				endpoint->Ingress.Push(ingress);
-			});
+			},
+			_loggingConfig.Midi == "verbose");
 
 		if (!opened)
 			continue;

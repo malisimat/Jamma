@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 
 #include "rtmidi/RtMidi.h"
@@ -26,6 +27,7 @@ MidiDevice::MidiDevice()
 	  _isOpen(false),
 	  _deviceName(""),
 	  _deviceId(0u),
+	  _loggingVerbose(false),
 	  _callback()
 {
 }
@@ -61,9 +63,11 @@ std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 }
 
 bool MidiDevice::Open(const std::string& preferredDeviceName,
-                      MidiMessageCallback callback)
+                      MidiMessageCallback callback,
+                      bool loggingVerbose)
 {
 	_callback = std::move(callback);
+	_loggingVerbose = loggingVerbose;
 	Close();
 
 	try
@@ -193,6 +197,16 @@ void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message) noexcept
 		return;
 	if (message.empty())
 		return;
+
+	if (_loggingVerbose)
+	{
+		std::cout << "[MIDI] Device #" << _deviceId << " (" << _deviceName << ") packet: ";
+		for (size_t i = 0; i < message.size(); ++i) {
+			if (i > 0) std::cout << " ";
+			std::cout << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(message[i]);
+		}
+		std::cout << std::dec << std::endl;
+	}
 
 	const auto status = static_cast<std::uint8_t>(message[0]);
 	const auto data1 = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);

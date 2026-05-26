@@ -22,6 +22,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "NinjamSession.h"
 #include "../graphics/VstEditorWindow.h"
@@ -199,6 +200,7 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		void SetLogging(io::LoggingConfig config) noexcept { _loggingConfig = config; }
 		void InitMidi();
 		void CloseMidi();
 		void InitSerial();
@@ -301,6 +303,7 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
+		io::LoggingConfig _loggingConfig;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		io::SerialTriggerQueue<256> _serialIngress;
 		std::mutex _serialIngressMutex;

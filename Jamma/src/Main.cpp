@@ -338,6 +338,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Wire the scene pointer so the TUI submit handler can forward chat.
 	sceneRaw.store(scene.value().get(), std::memory_order_release);
 
+	if (defaults.has_value())
+		scene.value()->SetLogging(defaults.value().Logging);
+
 	ResourceLib resourceLib;
 	Window window(*(scene.value()), resourceLib);
 
