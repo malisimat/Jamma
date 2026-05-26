@@ -975,7 +975,7 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
-	MidiIngressEvent ingress{};
+	MidiEvent ingress{};
 	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
 	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
@@ -992,9 +992,9 @@ void Scene::_PumpMidi()
 
 		while (input->Ingress.Pop(ingress))
 		{
-			_DispatchMidiTriggerEvent(ingress.DeviceSlot, ingress.Event);
+			_DispatchMidiTriggerEvent(input->DeviceSlot, ingress);
 
-			const auto msgType = ingress.Event.MessageType();
+			const auto msgType = ingress.MessageType();
 			if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 				continue;
 
@@ -1006,7 +1006,7 @@ void Scene::_PumpMidi()
 				for (const auto& take : station->GetLoopTakes())
 				{
 					if (take->IsArmed())
-						take->RecordMidiEvent(ingress.Event, input->ConfiguredName, globalSampleNow);
+						take->RecordMidiEvent(ingress, input->ConfiguredName, globalSampleNow);
 				}
 			}
 		}
@@ -1037,7 +1037,7 @@ void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
 		if (!input || (input->DeviceSlot != deviceSlot))
 			continue;
 
-		MidiIngressEvent ingress{};
+		MidiEvent ingress{};
 		const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 		const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
@@ -1050,12 +1050,11 @@ void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
 			mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
 		}
 
-		ingress.DeviceSlot = deviceSlot;
-		ingress.Event.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-		ingress.Event.status = status;
-		ingress.Event.data1 = data1;
-		ingress.Event.data2 = data2;
-		ingress.Event._pad = 0u;
+		ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+		ingress.status = status;
+		ingress.data1 = data1;
+		ingress.data2 = data2;
+		ingress._pad = 0u;
 		input->Ingress.Push(ingress);
 		break;
 	}
@@ -1298,7 +1297,7 @@ void Scene::InitMidi()
 			endpoint->ConfiguredName,
 			[endpoint, sampleRate, audioSampleCounter = &_audioSampleCounter, midiAnchorMicros = &_midiAnchorMicros](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 			{
-				MidiIngressEvent ingress{};
+				MidiEvent ingress{};
 				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count();
 				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
@@ -1311,12 +1310,11 @@ void Scene::InitMidi()
 					mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
 				}
 
-				ingress.DeviceSlot = endpoint->DeviceSlot;
-				ingress.Event.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-				ingress.Event.status = status;
-				ingress.Event.data1 = data1;
-				ingress.Event.data2 = data2;
-				ingress.Event._pad = 0u;
+				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+				ingress.status = status;
+				ingress.data1 = data1;
+				ingress.data2 = data2;
+				ingress._pad = 0u;
 				endpoint->Ingress.Push(ingress);
 			});
 

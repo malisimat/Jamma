@@ -64,13 +64,13 @@ Loop::Loop(LoopParams params,
 	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
-	VuParams vuParams;
+	graphics::VuParams vuParams;
 	vuParams.Size = { 12, 18 };
 	vuParams.ModelScale = 1.0f;
 	vuParams.ModelTextures = { "blue" };
 	vuParams.ModelShaders = { "vu" };
 	vuParams.LedHeight = 1.0f;
-	_vu = std::make_shared<VU>(vuParams);
+	_vu = std::make_shared<graphics::VU>(vuParams);
 
 	_children.push_back(_model);
 	_children.push_back(_vu);

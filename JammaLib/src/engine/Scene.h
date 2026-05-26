@@ -35,7 +35,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "MidiQueue.h"
+#include "../io/MidiQueue.h"
 #include "../io/SerialTriggerQueue.h"
 
 namespace engine
@@ -269,18 +269,12 @@ namespace engine
 			size_t pluginIndex);
 
 	protected:
-		struct MidiIngressEvent
-		{
-			MidiEvent Event;
-			std::uint8_t DeviceSlot = 0u;
-		};
-
 		struct MidiInputEndpoint
 		{
 			std::uint8_t DeviceSlot = 0u;
 			std::string ConfiguredName;
 			std::unique_ptr<audio::MidiDevice> Device;
-			MidiQueue<1024, MidiIngressEvent> Ingress;
+			io::MidiQueue<1024> Ingress;
 			std::uint64_t LastDroppedCount = 0u;
 		};
 

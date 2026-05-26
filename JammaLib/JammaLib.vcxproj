@@ -224,7 +224,7 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\engine\LoopModel.h" />
     <ClInclude Include="src\base\Tweakable.h" />
-    <ClInclude Include="src\engine\VU.h" />
+    <ClInclude Include="src\graphics\VU.h" />
     <ClInclude Include="src\base\MultiAudible.h" />
     <ClInclude Include="src\base\Audible.h" />
     <ClInclude Include="src\audio\ChannelMixer.h" />
@@ -338,7 +338,7 @@
     <ClInclude Include="src\resources\WavResource.h" />
     <ClInclude Include="src\engine\Timer.h" />
     <ClInclude Include="src\engine\MidiEvent.h" />
-    <ClInclude Include="src\engine\MidiQueue.h" />
+    <ClInclude Include="src\io\MidiQueue.h" />
     <ClInclude Include="src\io\SerialTriggerQueue.h" />
     <ClInclude Include="src\engine\MidiLoop.h" />
     <ClInclude Include="src\engine\MidiNoteSpan.h" />
@@ -365,7 +365,7 @@
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\engine\LoopModel.cpp" />
-    <ClCompile Include="src\engine\VU.cpp" />
+    <ClCompile Include="src\graphics\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />
     <ClCompile Include="src\gui\GuiRadio.cpp" />
