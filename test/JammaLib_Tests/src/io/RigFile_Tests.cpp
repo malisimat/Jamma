@@ -139,6 +139,33 @@ TEST(RigFile, ParsesNoteOnAndNoteOffMidiTriggerBindingKinds) {
 	EXPECT_EQ(0u, trig.value().MidiTrigger->Ditch.State);
 }
 
+TEST(RigFile, RejectsMidiTriggerBindingWithInvalidChannel) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"activate\":{\"kind\":\"note\",\"channel\":0,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	EXPECT_FALSE(trig.has_value());
+}
+
+TEST(RigFile, RejectsMidiTriggerBindingWithChannelAboveSixteen) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"activate\":{\"kind\":\"note\",\"channel\":17,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	EXPECT_FALSE(trig.has_value());
+}
+
+TEST(RigFile, RejectsMidiTriggerBindingWithOutOfRangeId) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":128},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto trig = RigFile::Trigger::FromJson(json);
+
+	EXPECT_FALSE(trig.has_value());
+}
+
 TEST(RigFile, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	

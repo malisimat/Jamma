@@ -28,8 +28,6 @@ using audio::MergeMixBehaviourParams;
 
 const unsigned int ActivateChar = 49;
 const unsigned int DitchChar = 50;
-const unsigned int ActivateMidi = 211;
-const unsigned int DitchMidi = 212;
 
 Time GetTime()
 {
@@ -104,6 +102,38 @@ public:
 	}
 
 private:
+	std::vector<TriggerAction> _actions;
+};
+
+class ConfigurableTriggerReceiver :
+	public ActionReceiver
+{
+public:
+	explicit ConfigurableTriggerReceiver(bool eat = true) :
+		_eat(eat)
+	{
+	}
+
+	virtual actions::ActionResult OnAction(actions::TriggerAction action)
+	{
+		_actions.push_back(action);
+		return {
+			_eat,
+			"source-loop-take",
+			"target-loop-take",
+			actions::ACTIONRESULT_DEFAULT,
+			nullptr,
+			std::weak_ptr<base::GuiElement>()
+		};
+	}
+
+	const std::vector<TriggerAction>& Actions() const
+	{
+		return _actions;
+	}
+
+private:
+	bool _eat;
 	std::vector<TriggerAction> _actions;
 };
 
@@ -758,7 +788,7 @@ TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	EXPECT_TRUE(take->IsArmed());
 }
 
-TEST(Trigger, RoutedMidiTriggerLogsUnmatchedNoteAndCcEvents) {
+TEST(Trigger, RoutedMidiTriggerIgnoresUnmatchedNoteAndCcEvents) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
 	auto testStream = std::stringstream(str);
@@ -791,10 +821,7 @@ TEST(Trigger, RoutedMidiTriggerLogsUnmatchedNoteAndCcEvents) {
 	std::cout.rdbuf(oldBuf);
 
 	EXPECT_TRUE(receiver->Actions().empty());
-	const auto log = captured.str();
-	EXPECT_NE(std::string::npos, log.find("[MIDI Trigger] device=\"default\" trigger=\"TrigMidi\""));
-	EXPECT_NE(std::string::npos, log.find("matched=false status=144 data1=61 data2=100"));
-	EXPECT_NE(std::string::npos, log.find("matched=false status=176 data1=65 data2=127"));
+	EXPECT_TRUE(captured.str().empty());
 }
 
 TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
@@ -824,4 +851,72 @@ TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
 
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+}
+
+TEST(Trigger, MidiTriggerRoutingStopsAfterFirstConsumerEatsEvent) {
+	auto firstReceiver = std::make_shared<ConfigurableTriggerReceiver>(true);
+	auto secondReceiver = std::make_shared<ConfigurableTriggerReceiver>(true);
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto firstStream = std::stringstream(str);
+	auto secondStream = std::stringstream(str);
+	auto firstJson = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(firstStream)).value());
+	auto secondJson = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(secondStream)).value());
+	auto firstStruct = io::RigFile::Trigger::FromJson(firstJson);
+	auto secondStruct = io::RigFile::Trigger::FromJson(secondJson);
+	ASSERT_TRUE(firstStruct.has_value());
+	ASSERT_TRUE(secondStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto firstTrigger = Trigger::FromFile(trigParams, firstStruct.value());
+	auto secondTrigger = Trigger::FromFile(trigParams, secondStruct.value());
+	ASSERT_TRUE(firstTrigger.has_value());
+	ASSERT_TRUE(secondTrigger.has_value());
+	firstTrigger.value()->SetReceiver(firstReceiver);
+	secondTrigger.value()->SetReceiver(secondReceiver);
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.RegisterMidiTriggerRouteForTest("default", firstTrigger.value(), 0u);
+	scene.RegisterMidiTriggerRouteForTest("default", secondTrigger.value(), 0u);
+
+	engine::MidiEvent event{};
+	event.status = engine::MidiEvent::NoteOn;
+	event.data1 = 60u;
+	event.data2 = 100u;
+	scene.DispatchMidiTriggerEventForTest(0u, event);
+
+	ASSERT_EQ(1u, firstReceiver->Actions().size());
+	EXPECT_TRUE(secondReceiver->Actions().empty());
+}
+
+TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
+	io::RigFile::Trigger trigStruct{};
+	trigStruct.Name = "TrigMidi";
+	trigStruct.StationType = 0u;
+	trigStruct.MidiTrigger = io::RigFile::Trigger::MidiTriggerBinding{};
+	trigStruct.MidiTrigger->Device = "default";
+	trigStruct.MidiTrigger->Activate = {
+		io::RigFile::MidiTriggerEvent::NOTE,
+		0u,
+		128u,
+		1u,
+		false
+	};
+	trigStruct.MidiTrigger->Ditch = {
+		io::RigFile::MidiTriggerEvent::CC,
+		0u,
+		64u,
+		1u,
+		false
+	};
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct);
+
+	EXPECT_FALSE(trigger.has_value());
 }

@@ -335,7 +335,7 @@ std::optional<RigFile::Trigger::MidiTriggerBindingSpec> RigFile::Trigger::MidiTr
 {
 	auto kind = GetJsonString(json, "kind");
 	auto id = GetJsonUnsigned(json, "id");
-	if (!kind.has_value() || !id.has_value())
+	if (!kind.has_value() || !id.has_value() || (id.value() > 127u))
 		return std::nullopt;
 
 	MidiTriggerBindingSpec binding{};
@@ -361,9 +361,13 @@ std::optional<RigFile::Trigger::MidiTriggerBindingSpec> RigFile::Trigger::MidiTr
 	else
 		return std::nullopt;
 
-	auto channel = GetJsonUnsigned(json, "channel");
-	if (channel.has_value() && (channel.value() >= 1u) && (channel.value() <= 16u))
+	auto channelIter = json.KeyValues.find("channel");
+	if (channelIter != json.KeyValues.end())
 	{
+		auto channel = GetJsonUnsigned(json, "channel");
+		if (!channel.has_value() || (channel.value() < 1u) || (channel.value() > 16u))
+			return std::nullopt;
+
 		binding.Channel = channel.value() - 1u;
 		binding.MatchAnyChannel = false;
 	}

@@ -28,7 +28,7 @@ namespace
 	{
 		return (static_cast<unsigned int>(kind) << MidiBindingKindShift) |
 			((channel & 0x0Fu) << MidiBindingChannelShift) |
-			(id & 0xFFu);
+				(id & 0x7Fu);
 	}
 
 	DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
@@ -60,6 +60,17 @@ namespace
 			bindingSpec.Channel,
 			bindingSpec.Id,
 			bindingSpec.State));
+	}
+
+	bool IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec)
+	{
+		if (bindingSpec.Id > 127u)
+			return false;
+
+		if (!bindingSpec.MatchAnyChannel && (bindingSpec.Channel > 15u))
+			return false;
+
+		return true;
 	}
 }
 
@@ -149,6 +160,12 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	if (trigStruct.MidiTrigger.has_value())
 	{
+		// Rig parsing already enforces these bounds. Keep the extra guard here so
+		// direct struct construction cannot encode impossible MIDI data bytes.
+		if (!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Activate) ||
+			!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Ditch))
+			return std::nullopt;
+
 		AddMidiBindingForChannels(trigStruct.MidiTrigger->Activate,
 			[&trigger](const DualBinding& binding)
 			{

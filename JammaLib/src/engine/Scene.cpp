@@ -979,8 +979,9 @@ void Scene::_PumpMidi()
 		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 			continue;
 
-		// Shared-device trigger routing duplicates events into a separate queue, so
-		// trigger IsEaten results do not suppress MIDI loop recording.
+		// Trigger routing runs before loop recording, but both consume the same
+		// ingress event in this loop, so a trigger consuming the action does not
+		// suppress MIDI loop recording.
 		for (auto& station : _stations)
 		{
 			for (auto& take : station->GetLoopTakes())
@@ -1051,6 +1052,7 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			<< " data1=" << static_cast<unsigned int>(event.data1)
 			<< " data2=" << static_cast<unsigned int>(event.data2)
 			<< std::endl;
+		break;
 	}
 }
 
