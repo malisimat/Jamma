@@ -377,14 +377,18 @@ ActionResult Station::OnTriggerEvent(TriggerSource source,
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	auto result = ActionResult::NoAction();
 	for (auto& trig : _triggers)
 	{
 		auto trigResult = trig->OnEvent(source, value, state, action, device);
-		if (trigResult.IsEaten)
-			return trigResult;
+		if (!trigResult.IsEaten)
+			continue;
+
+		if (!result.IsEaten || (trigResult.ResultType != actions::ACTIONRESULT_DEFAULT))
+			result = trigResult;
 	}
 
-	return ActionResult::NoAction();
+	return result;
 }
 
 ActionResult Station::OnAction(GuiAction action)

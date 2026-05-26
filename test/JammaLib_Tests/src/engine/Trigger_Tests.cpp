@@ -202,6 +202,28 @@ public:
 	{
 		_DispatchMidiTriggerEvent(deviceSlot, event);
 	}
+
+	void PushSerialTriggerEventForTest(const std::string& deviceName,
+		unsigned int buttonIndex,
+		bool isPressed)
+	{
+		_testSerialDeviceName = deviceName;
+		io::SerialTriggerEvent event{};
+		event.Device = &_testSerialDeviceName;
+		event.ButtonIndex = buttonIndex;
+		event.IsPressed = isPressed;
+
+		std::scoped_lock lock(_serialIngressMutex);
+		_serialIngress.Push(event);
+	}
+
+	void PumpSerialForTest()
+	{
+		_PumpSerial();
+	}
+
+private:
+	std::string _testSerialDeviceName;
 };
 
 std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
@@ -242,6 +264,38 @@ std::unique_ptr<Trigger> MakeDefaultTrigger(std::shared_ptr<ActionReceiver> rece
 	trigger->SetReceiver(receiver);
 
 	return std::move(trigger);
+}
+
+std::shared_ptr<Trigger> MakeSharedDefaultTrigger(unsigned int debounceMs = 0u)
+{
+	auto activateBind = engine::DualBinding();
+	activateBind.SetDown(engine::TriggerBinding(engine::TRIGGER_KEY, ActivateChar, 1), true);
+
+	auto ditchBind = engine::DualBinding();
+	ditchBind.SetRelease(engine::TriggerBinding(engine::TRIGGER_KEY, DitchChar, 0), true);
+
+	TriggerParams trigParams;
+	trigParams.Activate = { activateBind };
+	trigParams.Ditch = { ditchBind };
+	trigParams.DebounceMs = debounceMs;
+	return std::make_shared<Trigger>(trigParams);
+}
+
+std::shared_ptr<Trigger> MakeTriggerFromRigJson(const std::string& jsonText,
+	unsigned int debounceMs = 0u)
+{
+	auto testStream = std::stringstream(jsonText);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	EXPECT_TRUE(trigStruct.has_value());
+	if (!trigStruct.has_value())
+		return nullptr;
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = debounceMs;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	EXPECT_TRUE(trigger.has_value());
+	return trigger.has_value() ? trigger.value() : nullptr;
 }
 
 TEST(Trigger, DitchesLoop) {
@@ -853,35 +907,82 @@ TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 }
 
-TEST(Trigger, MidiTriggerRoutingStopsAfterFirstConsumerEatsEvent) {
-	auto firstReceiver = std::make_shared<ConfigurableTriggerReceiver>(true);
-	auto secondReceiver = std::make_shared<ConfigurableTriggerReceiver>(true);
-	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
-	auto firstStream = std::stringstream(str);
-	auto secondStream = std::stringstream(str);
-	auto firstJson = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(firstStream)).value());
-	auto secondJson = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(secondStream)).value());
-	auto firstStruct = io::RigFile::Trigger::FromJson(firstJson);
-	auto secondStruct = io::RigFile::Trigger::FromJson(secondJson);
-	ASSERT_TRUE(firstStruct.has_value());
-	ASSERT_TRUE(secondStruct.has_value());
-
-	TriggerParams trigParams;
-	trigParams.DebounceMs = 0u;
-	auto firstTrigger = Trigger::FromFile(trigParams, firstStruct.value());
-	auto secondTrigger = Trigger::FromFile(trigParams, secondStruct.value());
-	ASSERT_TRUE(firstTrigger.has_value());
-	ASSERT_TRUE(secondTrigger.has_value());
-	firstTrigger.value()->SetReceiver(firstReceiver);
-	secondTrigger.value()->SetReceiver(secondReceiver);
-
+TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
 		base::SizeableParams() };
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
-	scene.RegisterMidiTriggerRouteForTest("default", firstTrigger.value(), 0u);
-	scene.RegisterMidiTriggerRouteForTest("default", secondTrigger.value(), 0u);
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->AddTrigger(MakeSharedDefaultTrigger());
+	firstStation->AddTrigger(MakeSharedDefaultTrigger());
+	scene.AddStationForTest(firstStation);
+
+	auto secondStation = MakeTestStation("station-b");
+	secondStation->AddTrigger(MakeSharedDefaultTrigger());
+	scene.AddStationForTest(secondStation);
+
+	KeyAction action;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	action.KeyChar = ActivateChar;
+	action.SetActionTime(GetTime());
+
+	auto res = scene.OnAction(action);
+
+	ASSERT_TRUE(res.IsEaten);
+	EXPECT_EQ(2u, firstStation->NumTakes());
+	EXPECT_EQ(1u, secondStation->NumTakes());
+}
+
+TEST(Trigger, SerialSceneEventHitsAllMatchingTriggers) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string("{\"name\":\"TrigSerial\",\"stationtype\":0,\"pairs\":[{\"source\":\"serial\",\"device\":\"pedal-a\",\"activatedown\":0,\"activateup\":0,\"ditchdown\":1,\"ditchup\":1}]}");
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->AddTrigger(MakeTriggerFromRigJson(triggerJson));
+	firstStation->AddTrigger(MakeTriggerFromRigJson(triggerJson));
+	scene.AddStationForTest(firstStation);
+
+	auto secondStation = MakeTestStation("station-b");
+	secondStation->AddTrigger(MakeTriggerFromRigJson(triggerJson));
+	scene.AddStationForTest(secondStation);
+
+	scene.PushSerialTriggerEventForTest("pedal-a", 0u, true);
+	scene.PumpSerialForTest();
+
+	EXPECT_EQ(2u, firstStation->NumTakes());
+	EXPECT_EQ(1u, secondStation->NumTakes());
+}
+
+TEST(Trigger, MidiTriggerRoutingHitsAllMatchingRoutes) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string("{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}");
+
+	auto firstStation = MakeTestStation("station-a");
+	auto firstTrigger = MakeTriggerFromRigJson(triggerJson);
+	auto secondTrigger = MakeTriggerFromRigJson(triggerJson);
+	firstStation->AddTrigger(firstTrigger);
+	firstStation->AddTrigger(secondTrigger);
+	scene.AddStationForTest(firstStation);
+	scene.RegisterMidiTriggerRouteForTest("default", firstTrigger, 0u);
+	scene.RegisterMidiTriggerRouteForTest("default", secondTrigger, 0u);
+
+	auto secondStation = MakeTestStation("station-b");
+	auto thirdTrigger = MakeTriggerFromRigJson(triggerJson);
+	secondStation->AddTrigger(thirdTrigger);
+	scene.AddStationForTest(secondStation);
+	scene.RegisterMidiTriggerRouteForTest("default", thirdTrigger, 0u);
 
 	engine::MidiEvent event{};
 	event.status = engine::MidiEvent::NoteOn;
@@ -889,8 +990,8 @@ TEST(Trigger, MidiTriggerRoutingStopsAfterFirstConsumerEatsEvent) {
 	event.data2 = 100u;
 	scene.DispatchMidiTriggerEventForTest(0u, event);
 
-	ASSERT_EQ(1u, firstReceiver->Actions().size());
-	EXPECT_TRUE(secondReceiver->Actions().empty());
+	EXPECT_EQ(2u, firstStation->NumTakes());
+	EXPECT_EQ(1u, secondStation->NumTakes());
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {

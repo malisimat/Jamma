@@ -344,8 +344,8 @@
       <h1>PR 90<br />Unified Trigger Interface</h1>
       <p class="lead">
         Two independent reviewers hit this branch from opposite angles: one on architecture and API shape, one on MIDI and serial trigger correctness.
-        They converged on the same two core defects. The branch now fixes the ingress concurrency bug, restores first-consumer MIDI trigger
-        arbitration, and rejects malformed MIDI trigger bindings; the only remaining follow-up in this review is deferred multi-device MIDI support.
+        They converged on the same two core defects. The branch now fixes the ingress concurrency bug, restores cross-trigger fanout for matching
+        key, serial, and MIDI events, and rejects malformed MIDI trigger bindings; the only remaining follow-up in this review is deferred multi-device MIDI support.
       </p>
 
       <div class="hero-grid">
@@ -404,17 +404,17 @@
           <div class="finding">
             <div class="finding-head">
               <span class="badge">Fixed</span>
-              <h3>MIDI trigger routing again preserves first-consumer arbitration</h3>
+              <h3>Matching trigger events now fan out across all bound triggers</h3>
             </div>
             <p>
-              <strong>What changed:</strong> the shared-main MIDI route loop now stops after the first trigger route returns <code>IsEaten</code>, matching
-              the existing key and serial trigger model instead of continuing through every bound station.
+              <strong>What changed:</strong> matching key, serial, and MIDI trigger events now continue through every bound trigger instead of stopping at the
+              first eaten station or route.
             </p>
             <p>
-              <strong>Why it is fixed:</strong> overlapping MIDI trigger bindings no longer fan one note or CC event into multiple stations, and focused
-              regression coverage now locks in both the first-consumer short-circuit and the unmatched-event no-op behavior.
+              <strong>Why it is fixed:</strong> overlapping bindings on the same key, serial input, or MIDI event now all fire, and focused regression coverage
+              locks in fanout for key, serial, and MIDI plus the unmatched-event no-op behavior.
             </p>
-            <div class="codebox">JammaLib/src/engine/Scene.cpp:1030<br />JammaLib/src/engine/Scene.cpp:1054<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:793<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:858</div>
+            <div class="codebox">JammaLib/src/engine/Station.cpp:371<br />JammaLib/src/engine/Scene.cpp:826<br />JammaLib/src/engine/Scene.cpp:1036<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:793<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:910<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:938<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:963</div>
           </div>
 
           <div class="finding">
@@ -438,9 +438,9 @@
       <article class="card half">
         <h2>Why The Review Is High Confidence</h2>
         <ul>
-          <li>The architecture/API reviewer and the trigger-correctness reviewer independently landed on the same gating regression and the same routing/arbitration concern, and both now have focused regression coverage.</li>
+          <li>The architecture/API reviewer and the trigger-correctness reviewer independently landed on the same gating regression and the same routing/fanout concern, and both now have focused regression coverage.</li>
           <li>The concurrency defect was structural, not stylistic: the queue contract and callback topology disagreed in plain code, and the repair now enforces a single callback producer with job-thread fanout.</li>
-          <li>First-consumer arbitration is restored in the exact Scene MIDI dispatch loop that owns trigger fanout, and malformed MIDI trigger config is rejected before binding encoding with a second defensive check at trigger construction.</li>
+          <li>Trigger fanout is now consistent across the station key path, serial ingress path, and shared-main MIDI route loop, and malformed MIDI trigger config is rejected before binding encoding with a second defensive check at trigger construction.</li>
         </ul>
       </article>
 
@@ -449,7 +449,7 @@
         <div class="pill-row">
           <span class="pill">Note-on and note-off semantics are covered</span>
           <span class="pill">Shared main-MIDI trigger path has dedicated tests</span>
-          <span class="pill">First-consumer MIDI arbitration is now locked in</span>
+          <span class="pill">Matching key, serial, and MIDI events now fan out</span>
           <span class="pill">Malformed MIDI trigger bindings now fail closed</span>
         </div>
       </article>
@@ -481,7 +481,7 @@
         <h2>Remaining Fix Order</h2>
         <ul>
           <li>Done on 2026-05-25: trigger ingress topology now uses a single main MIDI callback and a single global MIDI input for both loop recording and trigger routing.</li>
-          <li>Done on 2026-05-26: the MIDI trigger route loop now preserves first-consumer arbitration again, and regression tests pin both the consume-once and unmatched-event paths.</li>
+          <li>Done on 2026-05-26: key, serial, and MIDI trigger dispatch now fan out across all matching bindings, and regression tests pin key, serial, and MIDI fanout plus the unmatched-event path.</li>
           <li>Done on 2026-05-26: rig parsing now rejects invalid MIDI trigger channels and out-of-range IDs, with a defensive validation check before binding encoding.</li>
           <li>Deferred: add real multi-device MIDI support later under GitHub issue #91 instead of partially supporting separate trigger-only devices now.</li>
           <li>Optional follow-up: surface a clearer rig-load error in the UI or logs when a malformed MIDI trigger binding is rejected, so bad config is easier to diagnose live.</li>
@@ -491,7 +491,7 @@
 
     <p class="footer">
       Review date: 2026-05-25. Updated: 2026-05-26. Scope: GitHub PR 90 against <code>master</code> in the local branch currently checked out.<br />
-      Update: the single-producer MIDI ingress bug is fixed, first-consumer MIDI arbitration is restored, and malformed MIDI trigger bindings now fail closed. Multi-device MIDI remains deferred to GitHub issue #91; the only remaining follow-up from this review is better user-facing error surfacing for rejected rig bindings.
+      Update: the single-producer MIDI ingress bug is fixed, matching key, serial, and MIDI trigger events now fan out across all bound triggers, and malformed MIDI trigger bindings now fail closed. Multi-device MIDI remains deferred to GitHub issue #91; the only remaining follow-up from this review is better user-facing error surfacing for rejected rig bindings.
     </p>
   </div>
 </body>

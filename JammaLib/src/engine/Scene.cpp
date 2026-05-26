@@ -821,41 +821,46 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 
 	bool checkReset = false;
+	auto result = ActionResult::NoAction();
 
 	for (auto& station : _stations)
 	{
 		auto res = station->OnAction(action);
 
-		if (res.IsEaten)
+		if (!res.IsEaten)
+			continue;
+
+		std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
+		switch (res.ResultType)
 		{
-			std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
-			switch (res.ResultType)
-			{
-			case ACTIONRESULT_ACTIVATE:
-				_isSceneReset.store(false, std::memory_order_relaxed);
-				/*case ACTIONRESULT_ID:
-					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
-					break;*/
-			case ACTIONRESULT_DITCH:
-				checkReset = true;
-				break;
-			}
-
-			if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
-			{
-				unsigned int numTakes = 0;
-				for (auto& station : _stations)
-				{
-					numTakes += station->NumTakes();
-				}
-
-				if (0 == numTakes)
-					Reset();
-			}
-
-			return res;
+		case ACTIONRESULT_ACTIVATE:
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			/*case ACTIONRESULT_ID:
+				_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
+				break;*/
+		case ACTIONRESULT_DITCH:
+			checkReset = true;
+			break;
 		}
+
+		if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
+			result = res;
 	}
+
+	if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
+	{
+		unsigned int numTakes = 0;
+		for (auto& station : _stations)
+		{
+			numTakes += station->NumTakes();
+		}
+
+		if (0 == numTakes)
+			Reset();
+	}
+
+	if (result.IsEaten)
+		return result;
 
 	auto res = _selector->OnAction(action);
 
@@ -1052,7 +1057,6 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			<< " data1=" << static_cast<unsigned int>(event.data1)
 			<< " data2=" << static_cast<unsigned int>(event.data2)
 			<< std::endl;
-		break;
 	}
 }
 
@@ -1084,14 +1088,12 @@ void Scene::_PumpSerial()
 
 		for (auto& station : _stations)
 		{
-			auto res = station->OnTriggerEvent(
+			station->OnTriggerEvent(
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
 				action,
 				device);
-			if (res.IsEaten)
-				break;
 		}
 	}
 
