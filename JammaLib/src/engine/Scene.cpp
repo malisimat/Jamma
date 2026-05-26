@@ -23,6 +23,51 @@ namespace
 {
 	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
 
+	const char* MidiActionLabel(actions::ActionResultType rt)
+	{
+		switch (rt)
+		{
+		case actions::ACTIONRESULT_ACTIVATE: return "Activate";
+		case actions::ACTIONRESULT_DITCH:    return "Ditch";
+		case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
+		default:                             return "Action";
+		}
+	}
+
+	const char* MidiEventDirection(const engine::MidiEvent& event)
+	{
+		if (event.IsNoteOn())  return " Down";
+		if (event.IsNoteOff()) return " Up";
+		return "";
+	}
+
+	void LogMidiEventDetail(std::ostream& out, std::uint8_t deviceSlot, const engine::MidiEvent& event)
+	{
+		constexpr std::uint8_t CC            = 0xB0;
+		constexpr std::uint8_t ProgramChange = 0xC0;
+
+		out << "dev: " << (deviceSlot + 1) << ", chan " << (event.Channel() + 1) << ", ";
+
+		switch (event.MessageType())
+		{
+		case engine::MidiEvent::NoteOn:
+			out << (event.data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(event.data1);
+			break;
+		case engine::MidiEvent::NoteOff:
+			out << "noteoff: " << static_cast<int>(event.data1);
+			break;
+		case CC:
+			out << "cc " << static_cast<int>(event.data1) << ": " << static_cast<int>(event.data2);
+			break;
+		case ProgramChange:
+			out << "pc: " << static_cast<int>(event.data1);
+			break;
+		default:
+			out << "0x" << std::hex << std::uppercase << static_cast<int>(event.status) << std::dec;
+			break;
+		}
+	}
+
 	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
 		const std::string& userName)
 	{
@@ -1083,12 +1128,11 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 		if (!res.IsEaten)
 			continue;
 
-		std::cout << "[MIDI Trigger] device=\"" << route.DeviceName
-			<< "\" trigger=\"" << route.Trigger->Name()
-			<< "\" status=" << static_cast<unsigned int>(event.status)
-			<< " data1=" << static_cast<unsigned int>(event.data1)
-			<< " data2=" << static_cast<unsigned int>(event.data2)
-			<< std::endl;
+		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
+			<< "\" " << MidiActionLabel(res.ResultType)
+			<< MidiEventDirection(event) << " (";
+		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
+		std::cout << ")\n";
 	}
 }
 

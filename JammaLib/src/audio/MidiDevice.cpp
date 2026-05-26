@@ -20,6 +20,47 @@ namespace
 		               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		return str;
 	}
+
+	void LogMidiMessageDetail(std::ostream& out, const std::vector<unsigned char>& message)
+	{
+		if (message.empty())
+			return;
+
+		constexpr std::uint8_t StatusMask    = 0xF0;
+		constexpr std::uint8_t ChannelMask   = 0x0F;
+		constexpr std::uint8_t NoteOff       = 0x80;
+		constexpr std::uint8_t NoteOn        = 0x90;
+		constexpr std::uint8_t CC            = 0xB0;
+		constexpr std::uint8_t ProgramChange = 0xC0;
+
+		const auto status = static_cast<std::uint8_t>(message[0]);
+		const auto data1  = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
+		const auto data2  = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
+		const int  chan   = (status & ChannelMask) + 1;
+
+		out << "  (chan " << chan << ", ";
+
+		switch (status & StatusMask)
+		{
+		case NoteOn:
+			out << (data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(data1);
+			break;
+		case NoteOff:
+			out << "noteoff: " << static_cast<int>(data1);
+			break;
+		case CC:
+			out << "cc " << static_cast<int>(data1) << ": " << static_cast<int>(data2);
+			break;
+		case ProgramChange:
+			out << "pc: " << static_cast<int>(data1);
+			break;
+		default:
+			out << "0x" << std::hex << std::uppercase << static_cast<int>(status) << std::dec;
+			break;
+		}
+
+		out << ")";
+	}
 }
 
 MidiDevice::MidiDevice()
@@ -205,7 +246,9 @@ void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message) noexcept
 			if (i > 0) std::cout << " ";
 			std::cout << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(message[i]);
 		}
-		std::cout << std::dec << std::endl;
+		std::cout << std::dec;
+		LogMidiMessageDetail(std::cout, message);
+		std::cout << "\n";
 	}
 
 	const auto status = static_cast<std::uint8_t>(message[0]);
