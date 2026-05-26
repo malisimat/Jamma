@@ -243,6 +243,11 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PushMidiEvent(std::uint8_t deviceSlot,
+			std::uint8_t status,
+			std::uint8_t data1,
+			std::uint8_t data2,
+			unsigned int sampleRate) noexcept;
 		void _PushMainMidiEvent(std::uint8_t status,
 			std::uint8_t data1,
 			std::uint8_t data2,
@@ -250,6 +255,7 @@ namespace engine
 		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const MidiEvent& event);
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void _PublishMidiTriggerRoutes();
 		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -267,6 +273,21 @@ namespace engine
 			size_t pluginIndex);
 
 	protected:
+		struct MidiIngressEvent
+		{
+			MidiEvent Event;
+			std::uint8_t DeviceSlot = 0u;
+		};
+
+		struct MidiInputEndpoint
+		{
+			std::uint8_t DeviceSlot = 0u;
+			std::string ConfiguredName;
+			std::unique_ptr<audio::MidiDevice> Device;
+			MidiQueue<1024, MidiIngressEvent> Ingress;
+			std::uint64_t LastDroppedCount = 0u;
+		};
+
 		struct MidiTriggerRoute
 		{
 			std::string DeviceName;
@@ -289,13 +310,12 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
-		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
-		MidiQueue<1024> _midiIngress;
 		io::SerialTriggerQueue<256> _serialIngress;
 		std::mutex _serialIngressMutex;
-		std::uint64_t _lastMidiDropCount;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
+		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
 		std::optional<std::uint8_t> _sharedMainMidiTriggerSlot;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;

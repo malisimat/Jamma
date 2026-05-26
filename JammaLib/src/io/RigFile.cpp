@@ -28,11 +28,19 @@ namespace
 
 		return static_cast<unsigned int>(std::get<unsigned long>(iter->second));
 	}
+
+	std::string NormaliseJsonStringArrayValue(std::string value)
+	{
+		if ((value.size() >= 2u) && (value.front() == '"') && (value.back() == '"'))
+			value = value.substr(1u, value.size() - 2u);
+
+		return value;
+	}
 }
 
 using namespace io;
 
-const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"name\":\"default\",\"enabled\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
+const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}]},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
 
 std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 {
@@ -123,6 +131,7 @@ bool RigFile::ToStream(RigFile rig, std::stringstream& ss)
 	ss << "=== MIDI ===" << std::endl;
 	ss << "Name: " << rig.User.Midi.Name << std::endl;
 	ss << "Enabled: " << rig.User.Midi.Enabled << std::endl;
+	ss << "Devices: " << rig.User.Midi.Devices.size() << std::endl;
 
 	return true;
 }
@@ -230,6 +239,7 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	std::vector<TriggerPair> pairs;
 	std::vector<unsigned int> inputChannels;
 	std::vector<unsigned int> midiInputChannels;
+	std::vector<std::string> midiInputDevices;
 	std::optional<MidiTriggerBinding> midiTrigger;
 
 	auto iter = json.KeyValues.find("name");
@@ -308,6 +318,30 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		}
 	}
 
+	iter = json.KeyValues.find("midiinputdevices");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["midiinputdevices"].index() == 5)
+		{
+			auto jsonArray = std::get<Json::JsonArray>(json.KeyValues["midiinputdevices"]);
+
+			if (jsonArray.Array.index() == 4)
+			{
+				auto devices = std::get<std::vector<std::string>>(jsonArray.Array);
+				for (auto device : devices)
+				{
+					device = NormaliseJsonStringArrayValue(std::move(device));
+
+					if (device.empty())
+						continue;
+
+					if (midiInputDevices.end() == std::find(midiInputDevices.begin(), midiInputDevices.end(), device))
+						midiInputDevices.push_back(device);
+				}
+			}
+		}
+	}
+
 	iter = json.KeyValues.find("trigger");
 	if (iter != json.KeyValues.end())
 	{
@@ -327,6 +361,7 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	trigger.TriggerPairs = pairs;
 	trigger.InputChannels = inputChannels;
 	trigger.MidiInputChannels = midiInputChannels;
+	trigger.MidiInputDevices = midiInputDevices;
 	trigger.MidiTrigger = midiTrigger;
 	return trigger;
 }

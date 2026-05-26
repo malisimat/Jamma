@@ -506,7 +506,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels);
+		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices);
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();

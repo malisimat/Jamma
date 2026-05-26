@@ -81,6 +81,7 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
 	_midiInputChannels(trigParams.MidiInputChannels),
+	_midiInputDevices(trigParams.MidiInputDevices),
 	_state(TRIGSTATE_DEFAULT),
 	_debounceTimeMs(trigParams.DebounceMs),
 	_lastActivateTime(),
@@ -157,6 +158,9 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	for (auto midiChan : trigStruct.MidiInputChannels)
 		trigger->AddMidiInputChannel(midiChan);
+
+	for (const auto& midiDevice : trigStruct.MidiInputDevices)
+		trigger->AddMidiInputDevice(midiDevice);
 
 	if (trigStruct.MidiTrigger.has_value())
 	{
@@ -418,6 +422,15 @@ void Trigger::ClearInputChannels()
 void Trigger::AddMidiInputChannel(unsigned int chan)
 {
 	_midiInputChannels.push_back(chan);
+}
+
+void Trigger::AddMidiInputDevice(std::string device)
+{
+	if (device.empty())
+		return;
+
+	if (_midiInputDevices.end() == std::find(_midiInputDevices.begin(), _midiInputDevices.end(), device))
+		_midiInputDevices.push_back(std::move(device));
 }
 
 TriggerState Trigger::GetState() const
@@ -791,6 +804,7 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_START;
 		trigAction.InputChannels = _inputChannels;
 		trigAction.MidiInputChannels = _midiInputChannels;
+		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
@@ -900,6 +914,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 		trigAction.InputChannels = _inputChannels;
 		trigAction.MidiInputChannels = _midiInputChannels;
+		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());

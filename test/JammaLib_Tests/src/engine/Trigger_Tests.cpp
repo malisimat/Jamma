@@ -177,6 +177,23 @@ public:
 	{
 		_RegisterMidiTriggerRoute(deviceName, trigger);
 		_midiTriggerRoutes.back().DeviceSlot = deviceSlot;
+		_PublishMidiTriggerRoutes();
+	}
+
+	void AddMidiInputDeviceForTest(const std::string& deviceName,
+		std::uint8_t deviceSlot)
+	{
+		auto currentInputs = _midiInputs.load(std::memory_order_acquire);
+		auto updatedInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
+		if (currentInputs)
+			updatedInputs->insert(updatedInputs->end(), currentInputs->begin(), currentInputs->end());
+
+		auto endpoint = std::make_shared<MidiInputEndpoint>();
+		endpoint->DeviceSlot = deviceSlot;
+		endpoint->ConfiguredName = deviceName;
+		updatedInputs->push_back(endpoint);
+
+		_midiInputs.store(updatedInputs, std::memory_order_release);
 	}
 
 	void SetSharedMainMidiTriggerSlotForTest(std::uint8_t slot)
@@ -189,7 +206,20 @@ public:
 		std::uint8_t data2,
 		unsigned int sampleRate = 0u)
 	{
+		auto inputs = _midiInputs.load(std::memory_order_acquire);
+		if (!inputs || inputs->empty())
+			AddMidiInputDeviceForTest("default", 0u);
+
 		_PushMainMidiEvent(status, data1, data2, sampleRate);
+	}
+
+	void PushMidiEventForTest(std::uint8_t deviceSlot,
+		std::uint8_t status,
+		std::uint8_t data1,
+		std::uint8_t data2,
+		unsigned int sampleRate = 0u)
+	{
+		_PushMidiEvent(deviceSlot, status, data1, data2, sampleRate);
 	}
 
 	void PumpMidiForTest()
@@ -805,7 +835,7 @@ TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 
 TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
-	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"midiinput\":[1],\"midiinputdevices\":[\"default\",\"Aux Keys\"],\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
 	auto trigStruct = io::RigFile::Trigger::FromJson(json);
@@ -839,6 +869,9 @@ TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	ASSERT_EQ(1u, take->MidiLoopEventCount());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	ASSERT_EQ(2u, receiver->Actions()[0].MidiInputDevices.size());
+	EXPECT_EQ(0, receiver->Actions()[0].MidiInputDevices[0].compare("default"));
+	EXPECT_EQ(0, receiver->Actions()[0].MidiInputDevices[1].compare("Aux Keys"));
 	EXPECT_TRUE(take->IsArmed());
 }
 
@@ -905,6 +938,51 @@ TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
 
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+}
+
+TEST(Trigger, SceneRoutesAndRecordsSameChannelAcrossMultipleMidiDevices) {
+	auto receiverA = std::make_shared<SequenceTriggerReceiver>();
+	auto receiverB = std::make_shared<SequenceTriggerReceiver>();
+	auto triggerAJson = std::stringstream("{\"name\":\"TrigA\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"Keys A\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}");
+	auto triggerBJson = std::stringstream("{\"name\":\"TrigB\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"Keys B\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}");
+	auto triggerAStruct = io::RigFile::Trigger::FromJson(std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(triggerAJson)).value()));
+	auto triggerBStruct = io::RigFile::Trigger::FromJson(std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(triggerBJson)).value()));
+	ASSERT_TRUE(triggerAStruct.has_value());
+	ASSERT_TRUE(triggerBStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto triggerA = Trigger::FromFile(trigParams, triggerAStruct.value());
+	auto triggerB = Trigger::FromFile(trigParams, triggerBStruct.value());
+	ASSERT_TRUE(triggerA.has_value());
+	ASSERT_TRUE(triggerB.has_value());
+	triggerA.value()->SetReceiver(receiverA);
+	triggerB.value()->SetReceiver(receiverB);
+
+	auto take = MakeTestLoopTake();
+	take->Record({}, "station", { 0u }, { "Keys A", "Keys B" });
+	auto station = MakeTestStation();
+	station->AddTake(take);
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.AddMidiInputDeviceForTest("Keys A", 0u);
+	scene.AddMidiInputDeviceForTest("Keys B", 1u);
+	scene.RegisterMidiTriggerRouteForTest("Keys A", triggerA.value(), 0u);
+	scene.RegisterMidiTriggerRouteForTest("Keys B", triggerB.value(), 1u);
+
+	scene.PushMidiEventForTest(0u, engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMidiEventForTest(1u, engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PumpMidiForTest();
+
+	ASSERT_EQ(1u, receiverA->Actions().size());
+	ASSERT_EQ(1u, receiverB->Actions().size());
+	EXPECT_EQ(1u, take->MidiLoopEventCount(0u));
+	EXPECT_EQ(1u, take->MidiLoopEventCount(1u));
 }
 
 TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {

@@ -9,6 +9,7 @@ TriggerAction::TriggerAction() :
 	SampleCount(0),
 	InputChannels({}),
 	MidiInputChannels({}),
+	MidiInputDevices({}),
 	ApplyToTargetTake(true),
 	ApplyToSourceTake(true)
 {

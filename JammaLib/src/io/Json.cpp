@@ -110,11 +110,12 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 			auto isNextPart = false;
 			auto isArrayEnd = false;
 			auto isFirstIt = true;
+			auto isQuotedString = false;
 			std::vector<std::string> values;
 
-			while (ss >> c)
+			while (ss.get(c))
 			{
-				if (' ' == c)
+				if (!isQuotedString && std::isspace(static_cast<unsigned char>(c)))
 					continue;
 
 				if (isFirstIt)
@@ -158,10 +159,13 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 				}
 
 				if ('"' == c)
+				{
+					isQuotedString = !isQuotedString;
 					continue;
+				}
 
-				isArrayEnd = ']' == c;
-				if ((',' == c) || isArrayEnd)
+				isArrayEnd = !isQuotedString && (']' == c);
+				if (!isQuotedString && ((',' == c) || isArrayEnd))
 				{
 					charBuf.push_back('\0');
 					values.push_back(std::string(charBuf.data()));

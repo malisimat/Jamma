@@ -222,6 +222,7 @@ namespace engine
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
 		std::vector<unsigned int> MidiInputChannels;
+		std::vector<std::string> MidiInputDevices;
 		std::string TextureRecording;
 		std::string TextureDitchDown;
 		std::string TextureOverdubbing;
@@ -279,6 +280,7 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		void AddMidiInputChannel(unsigned int chan);
+		void AddMidiInputDevice(std::string device);
 		TriggerState GetState() const;
 		bool IsDitchDown() const;
 		void Reset();
@@ -344,6 +346,7 @@ namespace engine
 		std::vector<DualBinding> _ditchBindings;
 		std::vector<unsigned int> _inputChannels;
 		std::vector<unsigned int> _midiInputChannels;
+		std::vector<std::string> _midiInputDevices;
 		TriggerState _state;
 		std::string _overdubSourceId;
 		unsigned long _recordSampCount;

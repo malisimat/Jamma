@@ -293,6 +293,22 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
 
+TEST(LoopTakeMidiVisualization, RecordMatchesConfiguredMidiDevices)
+{
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 3u }, { "Keys A", "Keys B" });
+
+	auto firstMidiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(1u));
+	auto secondMidiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(2u));
+	ASSERT_NE(nullptr, firstMidiModel);
+	ASSERT_NE(nullptr, secondMidiModel);
+
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100), "Keys A", 0u));
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 61, 100), "Keys B", 0u));
+	EXPECT_FALSE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 62, 100), "Keys C", 0u));
+	EXPECT_FALSE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 2, 63, 100), "Keys A", 0u));
+}
+
 TEST(LoopTakeMidiTiming, ResolveMidiRecordSampleCompensatesQueueDelay)
 {
 	EXPECT_EQ(200u, LoopTake::ResolveMidiRecordSample(1200u, 1600u, 600u));

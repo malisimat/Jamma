@@ -141,7 +141,10 @@ namespace engine
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
-		void Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels = {});
+		void Record(std::vector<unsigned int> channels,
+			std::string stationName,
+			std::vector<unsigned int> midiChannels = {},
+			std::vector<std::string> midiDevices = {});
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
@@ -153,6 +156,9 @@ namespace engine
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
+		bool RecordMidiEvent(const MidiEvent& ev,
+			const std::string& device,
+			std::uint32_t globalSampleNow) noexcept;
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
@@ -216,6 +222,7 @@ namespace engine
 		std::vector<std::shared_ptr<Loop>> _backLoops;
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
+		std::vector<std::string> _midiLoopDevices;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

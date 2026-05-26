@@ -83,6 +83,7 @@ namespace io
 			std::vector<TriggerPair> TriggerPairs;
 			std::vector<unsigned int> InputChannels;
 			std::vector<unsigned int> MidiInputChannels;
+			std::vector<std::string> MidiInputDevices;
 			std::optional<MidiTriggerBinding> MidiTrigger;
 
 			static std::optional<Trigger> FromJson(Json::JsonPart json);
