@@ -42,6 +42,9 @@ namespace io
 
 		static bool IsAllDigits(std::string str, bool includePeriod);
 		static bool IsTrue(std::string str);
+		static std::optional<std::string> GetString(const JsonPart& json, const std::string& key);
+		static std::optional<unsigned int> GetUnsigned(const JsonPart& json, const std::string& key);
+		static std::string NormaliseStringArrayValue(std::string value);
 
 	protected:
 		enum JsonScalarType

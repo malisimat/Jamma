@@ -3,496 +3,417 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PR 90 Adversarial Review</title>
+  <title>Jamma Multi-Device MIDI Review</title>
   <style>
     :root {
-      --bg: #efe7db;
-      --bg-2: #f7f2ea;
-      --panel: rgba(255, 251, 245, 0.82);
-      --panel-strong: rgba(255, 248, 239, 0.96);
-      --ink: #1f1713;
-      --muted: #65564d;
-      --line: rgba(31, 23, 19, 0.12);
-      --critical: #a63a2a;
-      --high: #d96a1f;
-      --medium: #b48a25;
-      --good: #20695d;
-      --shadow: 0 26px 80px rgba(60, 35, 14, 0.13);
+      --bg: #f6f7f3;
+      --ink: #18211f;
+      --muted: #5d6864;
+      --line: #d7ded8;
+      --panel: #ffffff;
+      --panel-soft: #eef5f1;
+      --teal: #0b756b;
+      --blue: #275f9f;
+      --gold: #9b6a16;
+      --red: #a64037;
+      --green: #24764d;
+      --shadow: 0 14px 34px rgba(24, 33, 31, 0.08);
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      font-family: "Aptos", "Segoe UI", Arial, sans-serif;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 12% 12%, rgba(166, 58, 42, 0.12), transparent 26%),
-        radial-gradient(circle at 86% 10%, rgba(32, 105, 93, 0.14), transparent 24%),
-        radial-gradient(circle at 75% 75%, rgba(217, 106, 31, 0.12), transparent 26%),
-        linear-gradient(135deg, var(--bg) 0%, #f6f0e7 52%, var(--bg-2) 100%);
-      min-height: 100vh;
+      background: linear-gradient(180deg, #fbfcf9 0%, var(--bg) 100%);
     }
 
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.22;
-      background-image:
-        linear-gradient(rgba(31, 23, 19, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(31, 23, 19, 0.03) 1px, transparent 1px);
-      background-size: 32px 32px;
-      mask-image: radial-gradient(circle at center, black 58%, transparent 100%);
+    main { min-height: 100vh; }
+
+    .band {
+      border-bottom: 1px solid var(--line);
     }
 
-    .wrap {
-      max-width: 1200px;
+    .inner {
+      width: min(1120px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 36px 24px 72px;
+      padding: 34px 0;
     }
 
     .hero {
-      position: relative;
-      overflow: hidden;
-      border-radius: 30px;
-      padding: 36px;
-      border: 1px solid var(--line);
-      background: linear-gradient(145deg, rgba(255,255,255,0.65), rgba(255,247,235,0.92));
-      box-shadow: var(--shadow);
-    }
-
-    .hero::after {
-      content: "";
-      position: absolute;
-      right: -60px;
-      top: -80px;
-      width: 260px;
-      height: 260px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(32, 105, 93, 0.24), transparent 62%);
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: 28px;
+      align-items: center;
     }
 
     .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 7px 13px;
-      border-radius: 999px;
-      border: 1px solid rgba(166, 58, 42, 0.18);
-      background: rgba(166, 58, 42, 0.08);
-      color: var(--critical);
-      font-family: "Bahnschrift", "Aptos", sans-serif;
-      font-size: 12px;
+      margin: 0 0 12px;
+      color: var(--teal);
+      font-size: 0.78rem;
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }
 
+    h1, h2, h3, p { margin-top: 0; }
+
     h1 {
-      margin: 18px 0 12px;
-      font-size: clamp(2.6rem, 6vw, 5.1rem);
-      line-height: 0.92;
-      letter-spacing: -0.04em;
+      margin-bottom: 14px;
+      font-size: 3rem;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-bottom: 18px;
+      font-size: 1.55rem;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 1.02rem;
+      letter-spacing: 0;
+    }
+
+    p, li {
+      color: var(--muted);
+      line-height: 1.62;
     }
 
     .lead {
-      max-width: 780px;
-      margin: 0;
-      font-size: 1.07rem;
-      line-height: 1.75;
-      color: var(--muted);
+      max-width: 760px;
+      margin-bottom: 20px;
+      font-size: 1.08rem;
     }
 
-    .hero-grid,
-    .grid {
+    .status-row,
+    .grid,
+    .checks {
       display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 18px;
+      gap: 14px;
     }
 
-    .hero-grid {
-      margin-top: 24px;
+    .status-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card,
     .stat,
-    .card {
+    .flow {
       border: 1px solid var(--line);
+      border-radius: 8px;
       background: var(--panel);
-      border-radius: 24px;
       box-shadow: var(--shadow);
-      backdrop-filter: blur(12px);
-      animation: floatUp 500ms ease both;
     }
+
+    .card { padding: 18px; }
 
     .stat {
-      grid-column: span 4;
-      padding: 18px;
+      padding: 16px;
+      min-height: 104px;
     }
 
     .stat strong {
       display: block;
       margin-bottom: 8px;
-      font-family: "Bahnschrift", "Aptos", sans-serif;
-      font-size: 2rem;
+      font-size: 1.7rem;
       line-height: 1;
     }
 
-    .stat p,
-    .card p,
-    .card li {
-      margin: 0;
-      font-size: 0.98rem;
-      line-height: 1.68;
+    .stat span {
       color: var(--muted);
+      line-height: 1.45;
     }
 
-    .grid {
-      margin-top: 22px;
+    .flow {
+      padding: 18px;
+      background: #fbfcfb;
     }
 
-    .card {
-      grid-column: span 12;
-      padding: 24px;
-    }
-
-    .card.half {
-      grid-column: span 6;
-    }
-
-    .card.third {
-      grid-column: span 4;
-    }
-
-    .card:nth-child(2) { animation-delay: 60ms; }
-    .card:nth-child(3) { animation-delay: 110ms; }
-    .card:nth-child(4) { animation-delay: 160ms; }
-    .card:nth-child(5) { animation-delay: 210ms; }
-    .card:nth-child(6) { animation-delay: 260ms; }
-
-    h2 {
-      margin: 0 0 14px;
-      font-family: "Bahnschrift", "Aptos", sans-serif;
-      font-size: 1.28rem;
-      letter-spacing: 0.01em;
-    }
-
-    .summary {
-      display: grid;
-      gap: 12px;
-    }
-
-    .finding {
-      position: relative;
-      padding: 18px 18px 18px 20px;
-      border-radius: 22px;
-      border: 1px solid var(--line);
-      background: var(--panel-strong);
-      overflow: hidden;
-    }
-
-    .finding::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 6px;
-    }
-
-    .finding.critical::before { background: var(--critical); }
-    .finding.high::before { background: var(--high); }
-    .finding.medium::before { background: var(--medium); }
-
-    .finding-head {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 86px;
-      padding: 7px 12px;
-      border-radius: 999px;
-      font-family: "Bahnschrift", "Aptos", sans-serif;
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-      color: white;
-    }
-
-    .badge.critical { background: var(--critical); }
-    .badge.high { background: var(--high); }
-    .badge.medium { background: var(--medium); }
-    .badge.good { background: var(--good); }
-
-    .finding h3 {
-      margin: 0;
-      font-size: 1.12rem;
-    }
-
-    .finding p + p {
-      margin-top: 10px;
-    }
-
-    .codebox {
-      margin-top: 12px;
-      border-radius: 18px;
-      border: 1px solid rgba(31, 23, 19, 0.08);
-      padding: 14px 16px;
-      background: #1f1a17;
-      color: #f7f0e6;
-      font-family: Consolas, "Courier New", monospace;
-      font-size: 0.88rem;
-      line-height: 1.6;
-      overflow: auto;
-      white-space: normal;
-      word-break: break-word;
-    }
-
-    ul {
-      margin: 0;
-      padding-left: 20px;
-    }
-
-    li + li {
-      margin-top: 8px;
+    .flow svg {
+      display: block;
+      width: 100%;
+      height: auto;
     }
 
     .pill-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 8px;
       margin-top: 14px;
     }
 
     .pill {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      border-radius: 999px;
+      min-height: 30px;
+      padding: 5px 10px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.62);
-      font-family: "Bahnschrift", "Aptos", sans-serif;
-      font-size: 0.88rem;
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--ink);
+      font-size: 0.86rem;
+      white-space: nowrap;
     }
 
-    .pill::before {
-      content: "";
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--good);
-      box-shadow: 0 0 0 5px rgba(32, 105, 93, 0.12);
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
     }
 
-    .footer {
-      margin-top: 24px;
-      padding: 0 6px;
+    .tag.green { background: var(--green); }
+    .tag.teal { background: var(--teal); }
+    .tag.blue { background: var(--blue); }
+    .tag.gold { background: var(--gold); }
+    .tag.red { background: var(--red); }
+
+    code,
+    pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: #e9eeeb;
+      color: #17211f;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 0;
+      padding: 16px;
+      border-radius: 8px;
+      background: #17211f;
+      color: #f4faf6;
+      line-height: 1.55;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .check {
+      display: grid;
+      grid-template-columns: 108px 1fr;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .check strong { color: var(--green); }
+
+    footer .inner {
+      padding: 22px 0;
       color: var(--muted);
-      font-size: 0.9rem;
-      line-height: 1.65;
+      font-size: 0.92rem;
     }
 
-    @keyframes floatUp {
-      from {
-        opacity: 0;
-        transform: translateY(18px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @media (max-width: 920px) {
-      .stat,
-      .card.half,
-      .card.third {
-        grid-column: span 12;
-      }
-
-      .wrap {
-        padding: 22px 14px 40px;
-      }
-
+    @media (max-width: 820px) {
       .hero,
-      .card {
-        padding: 20px;
+      .grid.two,
+      .grid.three,
+      .status-row {
+        grid-template-columns: 1fr;
       }
 
-      h1 {
-        font-size: clamp(2.2rem, 12vw, 3.3rem);
-      }
+      h1 { font-size: 2.2rem; }
+      .check { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <section class="hero">
-      <div class="eyebrow">Adversarial PR Review</div>
-      <h1>PR 90<br />Unified Trigger Interface</h1>
-      <p class="lead">
-        Two independent reviewers hit this branch from opposite angles: one on architecture and API shape, one on MIDI and serial trigger correctness.
-        They converged on the same two core defects. The branch now fixes the ingress concurrency bug, restores cross-trigger fanout for matching
-        key, serial, and MIDI events, and rejects malformed MIDI trigger bindings; the only remaining follow-up in this review is deferred multi-device MIDI support.
-      </p>
-
-      <div class="hero-grid">
-        <div class="stat">
-          <strong>4</strong>
-          <p>material findings raised in the review</p>
+  <main>
+    <section class="band">
+      <div class="inner hero">
+        <div>
+          <p class="eyebrow">Jamma MIDI implementation review</p>
+          <h1>Multi-device MIDI is now routed, recorded, and tested.</h1>
+          <p class="lead">The implementation moved from one global MIDI input to multiple callback-owned endpoints. Trigger activation is device-specific, and MIDI loop recording can subscribe to several devices on the same channel without collapsing them together.</p>
+          <div class="pill-row" aria-label="Implemented capabilities">
+            <span class="pill">Per-device MIDI queues</span>
+            <span class="pill">Exact trigger routing</span>
+            <span class="pill">Device-aware loop recording</span>
+            <span class="pill">String-array JSON fix</span>
+          </div>
         </div>
-        <div class="stat">
-          <strong>3</strong>
-          <p>findings fixed directly on this branch</p>
-        </div>
-        <div class="stat">
-          <strong>1</strong>
-          <p>deferred follow-up tracked separately in issue #91</p>
+        <div class="flow" aria-label="Multi-device MIDI signal flow diagram">
+          <svg viewBox="0 0 620 390" role="img" aria-labelledby="flow-title flow-desc">
+            <title id="flow-title">Multi-device MIDI flow</title>
+            <desc id="flow-desc">Three MIDI devices feed separate queues, which are pumped into trigger routing and loop recording.</desc>
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#5d6864" />
+              </marker>
+            </defs>
+            <rect x="24" y="34" width="146" height="58" rx="8" fill="#e8f3f1" stroke="#0b756b" />
+            <rect x="24" y="134" width="146" height="58" rx="8" fill="#edf2fa" stroke="#275f9f" />
+            <rect x="24" y="234" width="146" height="58" rx="8" fill="#f7f1e6" stroke="#9b6a16" />
+            <text x="48" y="68" font-size="18" fill="#18211f">TriggerPad</text>
+            <text x="60" y="168" font-size="18" fill="#18211f">Keys A</text>
+            <text x="60" y="268" font-size="18" fill="#18211f">Keys B</text>
+            <rect x="235" y="34" width="150" height="58" rx="8" fill="#fff" stroke="#d7ded8" />
+            <rect x="235" y="134" width="150" height="58" rx="8" fill="#fff" stroke="#d7ded8" />
+            <rect x="235" y="234" width="150" height="58" rx="8" fill="#fff" stroke="#d7ded8" />
+            <text x="268" y="68" font-size="16" fill="#18211f">SPSC queue</text>
+            <text x="268" y="168" font-size="16" fill="#18211f">SPSC queue</text>
+            <text x="268" y="268" font-size="16" fill="#18211f">SPSC queue</text>
+            <rect x="450" y="84" width="140" height="64" rx="8" fill="#e8f3f1" stroke="#0b756b" />
+            <rect x="450" y="196" width="140" height="64" rx="8" fill="#edf2fa" stroke="#275f9f" />
+            <text x="478" y="112" font-size="15" fill="#18211f">Trigger route</text>
+            <text x="486" y="133" font-size="13" fill="#5d6864">device slot</text>
+            <text x="472" y="224" font-size="15" fill="#18211f">Loop record</text>
+            <text x="476" y="245" font-size="13" fill="#5d6864">device + channel</text>
+            <path d="M170 63 H235" stroke="#5d6864" stroke-width="2" marker-end="url(#arrow)" />
+            <path d="M170 163 H235" stroke="#5d6864" stroke-width="2" marker-end="url(#arrow)" />
+            <path d="M170 263 H235" stroke="#5d6864" stroke-width="2" marker-end="url(#arrow)" />
+            <path d="M385 63 C430 63 430 104 450 116" stroke="#5d6864" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+            <path d="M385 163 C435 163 432 204 450 226" stroke="#5d6864" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+            <path d="M385 263 C435 263 432 244 450 238" stroke="#5d6864" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+          </svg>
         </div>
       </div>
     </section>
 
-    <section class="grid">
-      <article class="card">
-        <h2>Verdict</h2>
-        <div class="summary">
-          <div class="finding">
-            <div class="finding-head">
-              <span class="badge">Fixed</span>
-              <h3>Single-callback MIDI trigger fanout now owns ingress</h3>
-            </div>
-            <p>
-              <strong>What changed:</strong> the branch no longer lets multiple MIDI callbacks write into a Scene-owned SPSC queue. The main MIDI input
-              is now the single live MIDI source for both loop recording and MIDI trigger routing, and shared-main trigger fanout happens on the job thread
-              when <code>_midiIngress</code> is drained.
-            </p>
-            <p>
-              <strong>Why it is fixed:</strong> there is now only one callback-owned MIDI ingress path, trigger routes all share the same main-MIDI slot,
-              and the simplified single-global behavior is locked in by focused trigger regression coverage.
-            </p>
-            <div class="codebox">JammaLib/src/engine/Scene.cpp:988<br />JammaLib/src/engine/Scene.cpp:1020<br />JammaLib/src/engine/Scene.cpp:1251<br />JammaLib/src/engine/Scene.cpp:1281<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:800</div>
-          </div>
-
-          <div class="finding">
-            <div class="finding-head">
-              <span class="badge">Deferred</span>
-              <h3>Multiple simultaneous MIDI devices are deferred to issue #91</h3>
-            </div>
-            <p>
-              <strong>Current scope:</strong> the branch now intentionally assumes one global MIDI input for both loop MIDI recording and MIDI triggers.
-              That keeps device ownership, ingress topology, and routing semantics aligned while the rest of the feature settles.
-            </p>
-            <p>
-              <strong>Follow-up:</strong> proper multi-device support should return only when recording and trigger paths can both carry device identity cleanly.
-              That work is now tracked separately in GitHub issue #91.
-            </p>
-            <div class="codebox">JammaLib/src/engine/Scene.cpp:1251<br />JammaLib/src/engine/Scene.cpp:1281<br />doc/README.md:112<br />GitHub issue #91</div>
-          </div>
-
-          <div class="finding">
-            <div class="finding-head">
-              <span class="badge">Fixed</span>
-              <h3>Matching trigger events now fan out across all bound triggers</h3>
-            </div>
-            <p>
-              <strong>What changed:</strong> matching key, serial, and MIDI trigger events now continue through every bound trigger instead of stopping at the
-              first eaten station or route.
-            </p>
-            <p>
-              <strong>Why it is fixed:</strong> overlapping bindings on the same key, serial input, or MIDI event now all fire, and focused regression coverage
-              locks in fanout for key, serial, and MIDI plus the unmatched-event no-op behavior.
-            </p>
-            <div class="codebox">JammaLib/src/engine/Station.cpp:371<br />JammaLib/src/engine/Scene.cpp:826<br />JammaLib/src/engine/Scene.cpp:1036<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:793<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:910<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:938<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:963</div>
-          </div>
-
-          <div class="finding">
-            <div class="finding-head">
-              <span class="badge">Fixed</span>
-              <h3>Rig parsing now fails closed on invalid MIDI channel and ID data</h3>
-            </div>
-            <p>
-              <strong>What changed:</strong> MIDI trigger JSON now rejects explicit channels outside 1..16 and IDs above 127, and trigger construction
-              defensively revalidates binding specs before encoding them.
-            </p>
-            <p>
-              <strong>Why it is fixed:</strong> malformed rigs now fail closed instead of widening to match-any-channel or being silently truncated during
-              binding encoding, and dedicated parser regressions cover invalid channel and ID inputs.
-            </p>
-            <div class="codebox">JammaLib/src/io/RigFile.cpp:334<br />JammaLib/src/io/RigFile.cpp:338<br />JammaLib/src/io/RigFile.cpp:364<br />JammaLib/src/engine/Trigger.cpp:65<br />JammaLib/src/engine/Trigger.cpp:163<br />test/JammaLib_Tests/src/engine/Trigger_Tests.cpp:898<br />test/JammaLib_Tests/src/io/RigFile_Tests.cpp:142<br />test/JammaLib_Tests/src/io/RigFile_Tests.cpp:151<br />test/JammaLib_Tests/src/io/RigFile_Tests.cpp:160</div>
-          </div>
+    <section class="band">
+      <div class="inner">
+        <h2>Current Status</h2>
+        <div class="status-row">
+          <div class="stat"><strong>397 / 397</strong><span>Full native tests passed. One MIDI hardware availability test skipped.</span></div>
+          <div class="stat"><strong>29 / 29</strong><span>Focused MIDI, rig, config, trigger, and loop-visualization regression tests passed.</span></div>
+          <div class="stat"><strong>0</strong><span>Build warnings or errors in the targeted Debug x64 test build.</span></div>
         </div>
-      </article>
-
-      <article class="card half">
-        <h2>Why The Review Is High Confidence</h2>
-        <ul>
-          <li>The architecture/API reviewer and the trigger-correctness reviewer independently landed on the same gating regression and the same routing/fanout concern, and both now have focused regression coverage.</li>
-          <li>The concurrency defect was structural, not stylistic: the queue contract and callback topology disagreed in plain code, and the repair now enforces a single callback producer with job-thread fanout.</li>
-          <li>Trigger fanout is now consistent across the station key path, serial ingress path, and shared-main MIDI route loop, and malformed MIDI trigger config is rejected before binding encoding with a second defensive check at trigger construction.</li>
-        </ul>
-      </article>
-
-      <article class="card half">
-        <h2>What The PR Gets Right</h2>
-        <div class="pill-row">
-          <span class="pill">Note-on and note-off semantics are covered</span>
-          <span class="pill">Shared main-MIDI trigger path has dedicated tests</span>
-          <span class="pill">Matching key, serial, and MIDI events now fan out</span>
-          <span class="pill">Malformed MIDI trigger bindings now fail closed</span>
-        </div>
-      </article>
-
-      <article class="card third">
-        <h2>Reviewer A</h2>
-        <p>
-          Model used: <strong>GPT-5.4</strong>.<br />
-          Focus: architecture, API shape, ownership boundaries, and unification quality.
-        </p>
-      </article>
-
-      <article class="card third">
-        <h2>Reviewer B</h2>
-        <p>
-          Model used: <strong>GPT-5.3-Codex</strong>.<br />
-          Focus: MIDI and serial trigger correctness, event routing, and test gaps.
-        </p>
-      </article>
-
-      <article class="card third">
-        <h2>Method</h2>
-        <p>
-          Both reviews were run against the current local branch diff from <code>master...HEAD</code>. The requested High variants were not available in this environment, so the closest available models were used.
-        </p>
-      </article>
-
-      <article class="card">
-        <h2>Remaining Fix Order</h2>
-        <ul>
-          <li>Done on 2026-05-25: trigger ingress topology now uses a single main MIDI callback and a single global MIDI input for both loop recording and trigger routing.</li>
-          <li>Done on 2026-05-26: key, serial, and MIDI trigger dispatch now fan out across all matching bindings, and regression tests pin key, serial, and MIDI fanout plus the unmatched-event path.</li>
-          <li>Done on 2026-05-26: rig parsing now rejects invalid MIDI trigger channels and out-of-range IDs, with a defensive validation check before binding encoding.</li>
-          <li>Deferred: add real multi-device MIDI support later under GitHub issue #91 instead of partially supporting separate trigger-only devices now.</li>
-          <li>Optional follow-up: surface a clearer rig-load error in the UI or logs when a malformed MIDI trigger binding is rejected, so bad config is easier to diagnose live.</li>
-        </ul>
-      </article>
+      </div>
     </section>
 
-    <p class="footer">
-      Review date: 2026-05-25. Updated: 2026-05-26. Scope: GitHub PR 90 against <code>master</code> in the local branch currently checked out.<br />
-      Update: the single-producer MIDI ingress bug is fixed, matching key, serial, and MIDI trigger events now fan out across all bound triggers, and malformed MIDI trigger bindings now fail closed. Multi-device MIDI remains deferred to GitHub issue #91; the only remaining follow-up from this review is better user-facing error surfacing for rejected rig bindings.
-    </p>
-  </div>
+    <section class="band">
+      <div class="inner">
+        <h2>What Changed</h2>
+        <div class="grid three">
+          <article class="card">
+            <span class="tag teal">Config</span>
+            <h3>Required device list</h3>
+            <p><code>user.midi.devices</code> now declares enabled MIDI inputs. The legacy single-device shape is rejected by parser coverage.</p>
+          </article>
+          <article class="card">
+            <span class="tag blue">Routing</span>
+            <h3>Slot-based trigger dispatch</h3>
+            <p>Each opened MIDI input gets a stable slot. Trigger routes resolve device names to slots before dispatch.</p>
+          </article>
+          <article class="card">
+            <span class="tag gold">Recording</span>
+            <h3>Device-aware MIDI loops</h3>
+            <p><code>midiinputdevices</code> lets loop recording capture the same channel from multiple devices as separate streams.</p>
+          </article>
+          <article class="card">
+            <span class="tag green">Callback safety</span>
+            <h3>One producer per queue</h3>
+            <p>Each endpoint owns its own SPSC queue, preserving the queue model without locks in the MIDI callback path.</p>
+          </article>
+          <article class="card">
+            <span class="tag teal">JSON</span>
+            <h3>String arrays keep spaces</h3>
+            <p>The shared JSON array tokenizer now preserves names such as <code>MPK mini</code> and <code>Aux Keys</code>.</p>
+          </article>
+          <article class="card">
+            <span class="tag red">Cleanup</span>
+            <h3>Stale compatibility removed</h3>
+            <p>The old slot-zero wrapper and shared-main MIDI trigger state were removed from <code>Scene</code>.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="inner">
+        <h2>Rig Shape</h2>
+        <div class="grid two">
+          <pre>{
+  "user": {
+    "midi": {
+      "devices": [
+        { "name": "TriggerPad", "enabled": true },
+        { "name": "Keys A", "enabled": true },
+        { "name": "Keys B", "enabled": true }
+      ]
+    }
+  }
+}</pre>
+          <pre>{
+  "name": "TrigMidi",
+  "stationtype": 0,
+  "midiinput": [1],
+  "midiinputdevices": ["Keys A", "Keys B"],
+  "trigger": {
+    "type": "midi",
+    "device": "TriggerPad",
+    "activate": { "kind": "note", "channel": 1, "id": 60 },
+    "ditch": { "kind": "cc", "channel": 1, "id": 64 }
+  }
+}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="inner">
+        <h2>Validation</h2>
+        <div class="checks">
+          <div class="check"><strong>Build</strong><span>Targeted MSBuild of <code>test/JammaLib_Tests/JammaLib_Tests.vcxproj</code> in Debug x64 succeeded with explicit <code>SolutionDir</code>.</span></div>
+          <div class="check"><strong>Focused tests</strong><span><code>UserConfig.*:RigFile.ParsesMidi*:RigFile.ParsesFileWithMidiTriggerBinding:Trigger.*Midi*:LoopTakeMidiVisualization.*</code> passed 29 tests.</span></div>
+          <div class="check"><strong>Full suite</strong><span><code>JammaLib_Tests.exe</code> passed 397 tests with 1 skipped hardware-dependent MIDI test.</span></div>
+          <div class="check"><strong>New regression</strong><span><code>Trigger.InitMidiReportsUnmatchedLoopRecordMidiDevices</code> covers startup reporting for unresolved loop-record device names.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="inner">
+        <h2>Risk Review</h2>
+        <div class="grid two">
+          <article class="card">
+            <span class="tag gold">Still worth hardware testing</span>
+            <h3>Real device lifecycle</h3>
+            <p>Unit tests cover routing and queue behavior. Actual hardware should still be used to verify open, close, re-init, and active callback teardown across multiple MIDI drivers.</p>
+          </article>
+          <article class="card">
+            <span class="tag gold">Exact names</span>
+            <h3>Device matching is literal</h3>
+            <p>Configured names must exactly match active MIDI names. Startup logging now catches unresolved trigger and loop-record devices, but there is no fuzzy matching.</p>
+          </article>
+          <article class="card">
+            <span class="tag blue">Architecture</span>
+            <h3>Hot paths stay quiet</h3>
+            <p>The callback path pushes into a preallocated SPSC queue. Logging, route resolution, and validation happen outside the real-time callback path.</p>
+          </article>
+          <article class="card">
+            <span class="tag green">Cleanup</span>
+            <h3>Generic parsing moved down</h3>
+            <p>Generic JSON field helpers now live with <code>Json</code>, keeping <code>RigFile</code> focused on rig semantics.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <div class="inner">Generated for the Jamma multi-device MIDI implementation review. Last verified with Debug x64 native tests.</div>
+  </footer>
 </body>
 </html>

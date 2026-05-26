@@ -63,13 +63,14 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
 
-## MIDI Trigger Rig Config
+## Multi-Device MIDI Trigger Rig Config
 
-Rig files can now map a station trigger to a MIDI Note or CC without changing the existing MIDI loop-recording input path.
+Rig files can map station triggers to MIDI Note or CC input and can record MIDI loops from multiple configured MIDI devices at the same time.
 
-- `user.midi.name` still selects the performance MIDI input used for MIDI loop recording.
-- `triggers[].midiinput` still controls which MIDI channels are recorded into MIDI loops.
-- `triggers[].trigger` is the new trigger-control mapping.
+- `user.midi.devices` lists the MIDI inputs Jamma should open.
+- `triggers[].trigger.device` selects the single device that controls trigger activation and ditch.
+- `triggers[].midiinput` controls which one-based MIDI channels are recorded into MIDI loops.
+- `triggers[].midiinputdevices` controls which MIDI devices are recorded into MIDI loops.
 
 Example:
 
@@ -78,13 +79,20 @@ Example:
 	"name": "rig",
 	"user": {
 		"audio": { "name": "HDMI", "bufsize": 255, "inlatency": 414, "outlatency": 414, "numchannelsin": 0, "numchannelsout": 10 },
-		"midi": { "name": "Launchkey", "enabled": true }
+		"midi": {
+			"devices": [
+				{ "name": "TriggerPad", "enabled": true },
+				{ "name": "Keys A", "enabled": true },
+				{ "name": "Keys B", "enabled": true }
+			]
+		}
 	},
 	"triggers": [
 		{
 			"name": "Trig1",
 			"stationtype": 0,
 			"midiinput": [1],
+			"midiinputdevices": ["Keys A", "Keys B"],
 			"trigger": {
 				"type": "midi",
 				"device": "TriggerPad",
@@ -98,7 +106,8 @@ Example:
 
 Notes:
 
-- `device` may match `user.midi.name` if the same controller should both play/record MIDI loops and trigger recording.
+- `device` may match one of the names in `user.midi.devices` if the same controller should both play/record MIDI loops and trigger recording.
+- Device names are matched exactly. Startup logs report trigger devices or loop-record devices that do not match an active MIDI input.
 - `channel` is one-based in the rig file. If omitted, the mapping matches any MIDI channel.
 - `kind` supports `note` and `cc`.
 - `note` uses Note On as press and Note Off or Note On with velocity 0 as release.

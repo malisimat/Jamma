@@ -76,8 +76,6 @@ namespace io
 
 		struct MidiConfig
 		{
-			std::string Name = "default";
-			bool Enabled = false;
 			std::vector<MidiSettings> Devices;
 
 			static std::optional<MidiConfig> FromJson(Json::JsonPart json);

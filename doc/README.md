@@ -88,9 +88,25 @@ Playback path:
 2. Audio data is accumulated through buffer/mixer stages.
 3. Channel mixer sends final output to DAC.
 
-## MIDI Trigger Mapping
+## Multi-Device MIDI Trigger Mapping
 
-Rig files support a dedicated MIDI trigger mapping per station trigger.
+Rig files support multiple configured MIDI input devices. MIDI trigger activation uses one device per trigger, while MIDI loop recording can subscribe to one or more devices independently.
+
+Example rig fragments:
+
+```json
+{
+  "user": {
+    "midi": {
+      "devices": [
+        { "name": "TriggerPad", "enabled": true },
+        { "name": "Keys A", "enabled": true },
+        { "name": "Keys B", "enabled": true }
+      ]
+    }
+  }
+}
+```
 
 Example trigger block:
 
@@ -98,6 +114,8 @@ Example trigger block:
 {
   "name": "Trig1",
   "stationtype": 0,
+  "midiinput": [1],
+  "midiinputdevices": ["Keys A", "Keys B"],
   "trigger": {
     "type": "midi",
     "device": "TriggerPad",
@@ -109,9 +127,11 @@ Example trigger block:
 
 Behavior:
 
-- For now, MIDI triggers are sourced from the same global MIDI input as loop MIDI recording: `user.midi.name`.
-- The `trigger.device` field is still parsed and retained in rig data, but it is not currently used to open a separate MIDI device.
-- Trigger handling reuses the same trigger debounce and state-machine path as existing non-MIDI trigger inputs.
-- MIDI loop recording remains controlled by `user.midi.name` and `midiinput` channel arming.
-- Support for multiple simultaneous MIDI devices across both recording and triggers is deferred to GitHub issue #91.
-- `channel` values in the rig file are one-based. Omitting `channel` makes the binding match any channel.
+- `user.midi.devices` is the supported MIDI config shape. The old single-device `user.midi.name` / `enabled` shape is rejected.
+- Each enabled device gets its own MIDI callback endpoint and ingress queue.
+- `trigger.device` selects the input device that can activate or ditch that station trigger.
+- `midiinput` selects the one-based MIDI channels recorded into MIDI loops.
+- `midiinputdevices` selects the MIDI input devices recorded into MIDI loops. If omitted, MIDI loop recording keeps the legacy channel-only behavior.
+- The same MIDI channel from different devices is recorded into distinct MIDI loop streams when both devices are listed.
+- `channel` values in trigger bindings are one-based. Omitting `channel` makes the binding match any channel.
+- Device names are matched exactly against configured active MIDI input names. Startup logs report unresolved trigger devices and unresolved loop-record devices.

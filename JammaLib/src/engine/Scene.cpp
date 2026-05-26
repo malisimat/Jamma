@@ -1,6 +1,5 @@
 #include "Scene.h"
 #include <iostream>
-#include <limits>
 #include <set>
 #include "glm/ext.hpp"
 #include "../io/WavReadWriter.h"
@@ -22,6 +21,8 @@ using namespace std::placeholders;
 
 namespace
 {
+	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
+
 	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
 		const std::string& userName)
 	{
@@ -62,7 +63,6 @@ Scene::Scene(SceneParams params,
 	_serialDevices(),
 	_midiTriggerRoutes(),
 	_midiTriggerRoutesSnapshot(),
-	_sharedMainMidiTriggerSlot(std::nullopt),
 	_lastSerialDropCount(0u),
 	_masterLoop(nullptr),
 	_stations(),
@@ -1061,14 +1061,6 @@ void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
 	}
 }
 
-void Scene::_PushMainMidiEvent(std::uint8_t status,
-	std::uint8_t data1,
-	std::uint8_t data2,
-	unsigned int sampleRate) noexcept
-{
-	_PushMidiEvent(0u, status, data1, data2, sampleRate);
-}
-
 void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 	const MidiEvent& event)
 {
@@ -1105,7 +1097,7 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 	if (!trigger)
 		return;
 
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, std::numeric_limits<std::uint8_t>::max(), trigger });
+	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, kUnresolvedMidiDeviceSlot, trigger });
 	_PublishMidiTriggerRoutes();
 }
 
@@ -1269,10 +1261,6 @@ void Scene::InitMidi()
 {
 	CloseMidi();
 
-	_sharedMainMidiTriggerSlot = _midiTriggerRoutes.empty() ?
-		std::nullopt :
-		std::optional<std::uint8_t>(0u);
-
 	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
 
@@ -1288,55 +1276,68 @@ void Scene::InitMidi()
 	std::uint8_t nextSlot = 0u;
 
 	for (const auto& midiConfig : _userConfig.Midi.Devices)
+	{
+		if (!midiConfig.Enabled)
 		{
-			if (!midiConfig.Enabled)
-			{
-				std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
-				continue;
-			}
-
-			auto endpoint = std::make_shared<MidiInputEndpoint>();
-			endpoint->DeviceSlot = nextSlot++;
-			endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
-			endpoint->Device = std::make_unique<MidiDevice>();
-
-			auto opened = endpoint->Device->Open(
-				endpoint->ConfiguredName,
-				[endpoint, sampleRate, audioSampleCounter = &_audioSampleCounter, midiAnchorMicros = &_midiAnchorMicros](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
-				{
-					MidiIngressEvent ingress{};
-					const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-						std::chrono::steady_clock::now().time_since_epoch()).count();
-					const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
-					const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
-
-					std::uint64_t mappedSample = anchorSample;
-					if (sampleRate > 0u && nowMicros > anchorMicros)
-					{
-						const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-						mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-					}
-
-					ingress.DeviceSlot = endpoint->DeviceSlot;
-					ingress.Event.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-					ingress.Event.status = status;
-					ingress.Event.data1 = data1;
-					ingress.Event.data2 = data2;
-					ingress.Event._pad = 0u;
-					endpoint->Ingress.Push(ingress);
-				});
-
-			if (!opened)
-				continue;
-
-			midiInputs->push_back(endpoint);
+			std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
+			continue;
 		}
+
+		if (nextSlot == kUnresolvedMidiDeviceSlot)
+		{
+			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
+			break;
+		}
+
+		auto endpoint = std::make_shared<MidiInputEndpoint>();
+		endpoint->DeviceSlot = nextSlot++;
+		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
+		endpoint->Device = std::make_unique<MidiDevice>();
+
+		auto opened = endpoint->Device->Open(
+			endpoint->ConfiguredName,
+			[endpoint, sampleRate, audioSampleCounter = &_audioSampleCounter, midiAnchorMicros = &_midiAnchorMicros](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+			{
+				MidiIngressEvent ingress{};
+				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
+				const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
+
+				std::uint64_t mappedSample = anchorSample;
+				if (sampleRate > 0u && nowMicros > anchorMicros)
+				{
+					const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+					mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+				}
+
+				ingress.DeviceSlot = endpoint->DeviceSlot;
+				ingress.Event.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+				ingress.Event.status = status;
+				ingress.Event.data1 = data1;
+				ingress.Event.data2 = data2;
+				ingress.Event._pad = 0u;
+				endpoint->Ingress.Push(ingress);
+			});
+
+		if (!opened)
+			continue;
+
+		midiInputs->push_back(endpoint);
+	}
 
 	_midiInputs.store(midiInputs, std::memory_order_release);
 
+	std::set<std::string> activeMidiInputNames;
+	for (const auto& input : *midiInputs)
+	{
+		if (input)
+			activeMidiInputNames.insert(input->ConfiguredName);
+	}
+
 	for (auto& route : _midiTriggerRoutes)
 	{
-		route.DeviceSlot = std::numeric_limits<std::uint8_t>::max();
+		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
 		for (const auto& input : *midiInputs)
 		{
 			if (input && (input->ConfiguredName == route.DeviceName))
@@ -1346,8 +1347,20 @@ void Scene::InitMidi()
 			}
 		}
 
-		if (route.DeviceSlot == std::numeric_limits<std::uint8_t>::max())
+		if (route.DeviceSlot == kUnresolvedMidiDeviceSlot)
 			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
+
+		if (route.Trigger)
+		{
+			for (const auto& midiInputDevice : route.Trigger->MidiInputDevices())
+			{
+				if (!midiInputDevice.empty() && (activeMidiInputNames.find(midiInputDevice) == activeMidiInputNames.end()))
+				{
+					std::cout << "[MIDI] No active MIDI input matches loop-record device \""
+						<< midiInputDevice << "\" for trigger \"" << route.Trigger->Name() << "\"." << std::endl;
+				}
+			}
+		}
 	}
 
 	_PublishMidiTriggerRoutes();
@@ -1359,9 +1372,8 @@ void Scene::InitMidi()
 
 void Scene::CloseMidi()
 {
-	_sharedMainMidiTriggerSlot.reset();
 	for (auto& route : _midiTriggerRoutes)
-		route.DeviceSlot = std::numeric_limits<std::uint8_t>::max();
+		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
 	_PublishMidiTriggerRoutes();
 
 	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);

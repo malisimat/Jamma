@@ -196,11 +196,6 @@ public:
 		_midiInputs.store(updatedInputs, std::memory_order_release);
 	}
 
-	void SetSharedMainMidiTriggerSlotForTest(std::uint8_t slot)
-	{
-		_sharedMainMidiTriggerSlot = slot;
-	}
-
 	void PushMainMidiEventForTest(std::uint8_t status,
 		std::uint8_t data1,
 		std::uint8_t data2,
@@ -210,7 +205,7 @@ public:
 		if (!inputs || inputs->empty())
 			AddMidiInputDeviceForTest("default", 0u);
 
-		_PushMainMidiEvent(status, data1, data2, sampleRate);
+		_PushMidiEvent(0u, status, data1, data2, sampleRate);
 	}
 
 	void PushMidiEventForTest(std::uint8_t deviceSlot,
@@ -861,7 +856,6 @@ TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(station);
 	scene.RegisterMidiTriggerRouteForTest("default", trigger.value(), 0u);
-	scene.SetSharedMainMidiTriggerSlotForTest(0u);
 
 	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
 	scene.PumpMidiForTest();
@@ -895,7 +889,6 @@ TEST(Trigger, RoutedMidiTriggerIgnoresUnmatchedNoteAndCcEvents) {
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
 	scene.RegisterMidiTriggerRouteForTest("default", trigger.value(), 0u);
-	scene.SetSharedMainMidiTriggerSlotForTest(0u);
 
 	std::ostringstream captured;
 	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
@@ -911,7 +904,7 @@ TEST(Trigger, RoutedMidiTriggerIgnoresUnmatchedNoteAndCcEvents) {
 	EXPECT_TRUE(captured.str().empty());
 }
 
-TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
+TEST(Trigger, ConfiguredMidiTriggerDeviceUsesResolvedRouteSlot) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
 	auto testStream = std::stringstream(str);
@@ -931,13 +924,43 @@ TEST(Trigger, ConfiguredMidiTriggerDeviceUsesGlobalMainMidiInputForNow) {
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
 	scene.RegisterMidiTriggerRouteForTest("TriggerPad", trigger.value(), 0u);
-	scene.SetSharedMainMidiTriggerSlotForTest(0u);
 
 	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
 	scene.PumpMidiForTest();
 
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+}
+
+TEST(Trigger, InitMidiReportsUnmatchedLoopRecordMidiDevices) {
+	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"midiinput\":[1],\"midiinputdevices\":[\"Aux Keys\"],\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<io::Json::JsonPart>(io::Json::FromStream(std::move(testStream)).value());
+	auto trigStruct = io::RigFile::Trigger::FromJson(json);
+	ASSERT_TRUE(trigStruct.has_value());
+
+	TriggerParams trigParams;
+	trigParams.DebounceMs = 0u;
+	auto trigger = Trigger::FromFile(trigParams, trigStruct.value());
+	ASSERT_TRUE(trigger.has_value());
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	userConfig.Midi.Devices.push_back({ "TriggerPad", false });
+	TestScene scene(sceneParams, userConfig);
+	scene.RegisterMidiTriggerRouteForTest("TriggerPad", trigger.value(), 0u);
+
+	std::ostringstream captured;
+	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+	scene.InitMidi();
+
+	std::cout.flush();
+	std::cout.rdbuf(oldBuf);
+
+	EXPECT_NE(std::string::npos, captured.str().find("No active MIDI input matches loop-record device \"Aux Keys\""));
 }
 
 TEST(Trigger, SceneRoutesAndRecordsSameChannelAcrossMultipleMidiDevices) {

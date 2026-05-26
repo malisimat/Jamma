@@ -248,10 +248,6 @@ namespace engine
 			std::uint8_t data1,
 			std::uint8_t data2,
 			unsigned int sampleRate) noexcept;
-		void _PushMainMidiEvent(std::uint8_t status,
-			std::uint8_t data1,
-			std::uint8_t data2,
-			unsigned int sampleRate) noexcept;
 		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const MidiEvent& event);
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -316,7 +312,6 @@ namespace engine
 		std::mutex _serialIngressMutex;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
 		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
-		std::optional<std::uint8_t> _sharedMainMidiTriggerSlot;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;

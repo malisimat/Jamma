@@ -281,6 +281,7 @@ namespace engine
 		void ClearInputChannels();
 		void AddMidiInputChannel(unsigned int chan);
 		void AddMidiInputDevice(std::string device);
+		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		TriggerState GetState() const;
 		bool IsDitchDown() const;
 		void Reset();

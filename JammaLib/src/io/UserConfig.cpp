@@ -299,24 +299,6 @@ std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::Jso
 			midi.Devices.push_back(device.value());
 	}
 
-	if (!midi.Devices.empty())
-	{
-		auto active = std::find_if(midi.Devices.begin(), midi.Devices.end(), [](const MidiSettings& device) {
-			return device.Enabled;
-		});
-
-		if (active != midi.Devices.end())
-		{
-			midi.Name = active->Name;
-			midi.Enabled = true;
-		}
-		else
-		{
-			midi.Name = midi.Devices.front().Name;
-			midi.Enabled = false;
-		}
-	}
-
 	return midi;
 }
 
