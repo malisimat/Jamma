@@ -1334,7 +1334,6 @@ void Scene::InitMidi()
 		}
 
 		auto endpoint = std::make_shared<MidiInputEndpoint>();
-		endpoint->DeviceSlot = nextSlot++;
 		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
 		endpoint->Device = std::make_unique<MidiDevice>();
 
@@ -1367,6 +1366,7 @@ void Scene::InitMidi()
 		if (!opened)
 			continue;
 
+		endpoint->DeviceSlot = nextSlot++;
 		midiInputs->push_back(endpoint);
 	}
 
