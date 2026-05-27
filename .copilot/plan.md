@@ -22,4 +22,7 @@ Risk of messing up existing routing (e.g. live audio, or internal loop routing).
 Must be extremely careful with respect to the delayed actions - some state changes are delayed to compensate for MaxFadeLoopSamps lead-in.
 
 ## TODOs
-- [ ] (to be filled by implementing agent)
+- [x] Added regression test for punch-in overdub bounce routing (`AudioFlow.TriggerBounceRoutesSourceLoopsToMatchingTargetChannels`).
+- [x] Reproduced failure (red): bounced source audio landed on one destination channel.
+- [x] Implemented narrow routing fix in trigger bounce path to preserve per-loop channel mapping.
+- [x] Verified green with targeted tests and existing overdub alignment suite.

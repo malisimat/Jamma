@@ -4,6 +4,7 @@
 #include "engine/Station.h"
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
+#include "engine/Trigger.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
 #include "actions/TriggerAction.h"
@@ -15,6 +16,8 @@ using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Loop;
 using engine::LoopParams;
+using engine::Trigger;
+using engine::TriggerParams;
 using audio::ChannelMixer;
 using audio::ChannelMixerParams;
 using audio::AudioMixerParams;
@@ -219,6 +222,38 @@ private:
 	std::shared_ptr<CaptureSink> _sink;
 };
 
+class CaptureStereoSink :
+	public base::MultiAudioSink
+{
+public:
+	explicit CaptureStereoSink(unsigned int bufSize) :
+		_sinks{
+			std::make_shared<CaptureSink>(bufSize),
+			std::make_shared<CaptureSink>(bufSize)
+		}
+	{}
+
+	virtual unsigned int NumInputChannels(base::Audible::AudioSourceType) const override
+	{
+		return 2u;
+	}
+
+	std::shared_ptr<CaptureSink> GetSink(unsigned int index) const
+	{
+		return _sinks.at(index);
+	}
+
+protected:
+	virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType) override
+	{
+		return channel < _sinks.size() ? _sinks[channel] : nullptr;
+	}
+
+private:
+	std::vector<std::shared_ptr<CaptureSink>> _sinks;
+};
+
 } // anonymous namespace
 
 // ===========================================================================
@@ -306,6 +341,62 @@ TEST(AudioFlow, TriggerPunchActionsMuteSourceTakeAndToggleTargetState)
 	ASSERT_TRUE(punchOutResult.IsEaten);
 	EXPECT_EQ(LoopTake::STATE_OVERDUBBING, targetTake->TakeState());
 	EXPECT_FALSE(sourceTake->IsMuted());
+}
+
+TEST(AudioFlow, TriggerBounceRoutesSourceLoopsToMatchingTargetChannels)
+{
+	const unsigned int numChans = 2u;
+	const unsigned int blockSize = 16u;
+	const unsigned long loopLength = 64ul;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto sourceTake = MakeTake();
+	sourceTake->SetNumBusChannels(numChans);
+	sourceTake->Record({}, "test");
+	auto sourceLoop0 = sourceTake->AddLoop(0u, "test");
+	auto sourceLoop1 = sourceTake->AddLoop(1u, "test");
+	sourceLoop0->Record();
+	sourceLoop1->Record();
+	sourceTake->CommitChanges();
+
+	std::vector<float> sourceData0(totalRecord, 0.0f);
+	std::vector<float> sourceData1(totalRecord, 0.0f);
+	for (unsigned long i = constants::MaxLoopFadeSamps; i < totalRecord; ++i)
+	{
+		auto sampleIndex = static_cast<float>((i - constants::MaxLoopFadeSamps) + 1ul);
+		sourceData0[i] = sampleIndex * 0.01f;
+		sourceData1[i] = sampleIndex * 0.02f;
+	}
+
+	WriteLoopSamples(sourceLoop0, sourceData0);
+	WriteLoopSamples(sourceLoop1, sourceData1);
+	sourceTake->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+
+	auto targetTake = MakeTake();
+	targetTake->SetNumBusChannels(numChans);
+	targetTake->Overdub({ 0u, 1u }, "test");
+	targetTake->CommitChanges();
+
+	// Align writes to the playable loop region [MaxLoopFadeSamps, ...).
+	targetTake->EndMultiWrite(constants::MaxLoopFadeSamps, true, Audible::AUDIOSOURCE_BOUNCE);
+
+	TriggerParams trigParams;
+	trigParams.InputChannels = { 0u };
+	auto trigger = std::make_shared<Trigger>(trigParams);
+
+	sourceTake->WriteBlock(targetTake, trigger, 0, blockSize);
+	targetTake->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
+	targetTake->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+
+	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
+	targetTake->WriteBlock(sink, nullptr, 0, blockSize);
+	targetTake->EndMultiPlay(blockSize);
+
+	for (unsigned int s = 0u; s < blockSize; ++s)
+	{
+		ASSERT_FLOAT_EQ(sink->GetSink(0u)->Samples[s], static_cast<float>(s + 1u) * 0.01f);
+		ASSERT_FLOAT_EQ(sink->GetSink(1u)->Samples[s], static_cast<float>(s + 1u) * 0.02f);
+	}
 }
 
 // 3. Two channels: write to both channels, verify both loops record.
