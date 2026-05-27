@@ -109,8 +109,9 @@ Notes:
 - `device` may match one of the names in `user.midi.devices` if the same controller should both play/record MIDI loops and trigger recording.
 - Device names are matched exactly. Startup logs report trigger devices or loop-record devices that do not match an active MIDI input.
 - `channel` is one-based in the rig file. If omitted, the mapping matches any MIDI channel.
-- `kind` supports `note` and `cc`.
-- `note` uses Note On as press and Note Off or Note On with velocity 0 as release.
+- `kind` supports `note`, `noteoff`, and `cc`.
+- `note` (aliases: `noteon`, `note-on`, `note on`) uses Note On as press and Note Off or Note On with velocity 0 as release.
+- `noteoff` (aliases: `note-off`, `note off`) triggers on Note Off and releases on Note On—the inverse of `note`.
 - `cc` uses values greater than 0 as press and `0` as release.
 - Velocity is ignored for trigger purposes.
 

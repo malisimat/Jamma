@@ -105,7 +105,7 @@ namespace engine
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
-			return _changesMade ? _backLoopTakes : _loopTakes;
+			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
 		// Returns true if this station receives audio from a remote ninjam user.
 		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
