@@ -345,6 +345,8 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
+		std::mutex _remoteSnapshotMutex;
+		std::optional<io::NinjamRemoteSnapshot> _pendingRemoteSnapshot;
 		std::mutex _audioMutex;
 		std::mutex _tapTempoMutex;
 		io::UserConfig _userConfig;

@@ -1005,10 +1005,16 @@ void Scene::OnJobTick(Time curTime)
 		_QueueLocalTempoFromClock();
 		if (snapshot.has_value())
 		{
-			_UpdateRemoteStationsFromSnapshot(snapshot.value());
 			_SendQueuedTempoAtIntervalWrap(snapshot.value());
 			_ApplyRemoteTempoToClock(snapshot.value());
 		}
+	}
+
+	if (snapshot.has_value())
+	{
+		// Scene graph changes must be applied on the main/render thread.
+		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
+		_pendingRemoteSnapshot = snapshot.value();
 	}
 
 	actions::JobAction job;
@@ -1558,9 +1564,21 @@ void Scene::CloseAudio()
 void Scene::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
+	std::optional<io::NinjamRemoteSnapshot> pendingRemoteSnapshot;
+	{
+		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
+		if (_pendingRemoteSnapshot.has_value())
+		{
+			pendingRemoteSnapshot = std::move(_pendingRemoteSnapshot.value());
+			_pendingRemoteSnapshot.reset();
+		}
+	}
 
 	{
 		std::scoped_lock lock(_audioMutex);
+
+		if (pendingRemoteSnapshot.has_value())
+			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());
 
 		for (auto& station : _stations)
 		{
@@ -1914,11 +1932,17 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
 
-	_label->InitResources(resourceLib, forceInit);
+	if (_label)
+		_label->InitResources(resourceLib, forceInit);
 
-	for (auto& station : _stations)
-		station->InitResources(resourceLib, forceInit);
-};
+	// Stations can be added after scene resources are initialised.
+	auto stations = _stations;
+	for (auto& station : stations)
+	{
+		if (station)
+			station->InitResources(resourceLib, forceInit);
+	}
+}
 
 glm::mat4 Scene::_View()
 {
@@ -2076,8 +2100,8 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
 		}
 
-		// EnsureRemoteTake runs on the job thread so the audio callback can
-		// early-out safely if loops are not yet initialised.
+		// EnsureRemoteTake is run from Scene::CommitChanges on the main thread
+		// so scene/station graph mutation stays single-threaded.
 		remoteStation->EnsureRemoteTake();
 		remoteStation->UpdateRemoteVisuals();
 	}

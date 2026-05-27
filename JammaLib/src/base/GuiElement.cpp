@@ -48,9 +48,14 @@ void GuiElement::InitResources(resources::ResourceLib& resourceLib, bool forceIn
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
 
-	for (auto& child : _children)
-		child->InitResources(resourceLib, forceInit);
-};
+	// Iterate a snapshot in case child initialisation mutates _children.
+	auto children = _children;
+	for (auto& child : children)
+	{
+		if (child)
+			child->InitResources(resourceLib, forceInit);
+	}
+}
 
 void GuiElement::SetSize(Size2d size)
 {
@@ -447,9 +452,6 @@ void GuiElement::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_overTexture.InitResources(resourceLib, forceInit);
 	_downTexture.InitResources(resourceLib, forceInit);
 	_outTexture.InitResources(resourceLib, forceInit);
-
-	for (auto& child : _children)
-		child->InitResources(resourceLib, forceInit);
 }
 
 void GuiElement::_ReleaseResources()
