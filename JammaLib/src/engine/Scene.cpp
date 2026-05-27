@@ -557,7 +557,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	res.IsEaten = true;
 	res.SourceId = "";
 	res.TargetId = "";
-	res.ResultType = ACTIONRESULT_ID;
+	res.ResultType = ACTIONRESULT_DEFAULT;
 	res.Undo = std::shared_ptr<ActionUndo>();
 	res.ActiveElement = std::weak_ptr<GuiElement>();
 	return res;
@@ -905,11 +905,12 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 		case ACTIONRESULT_ACTIVATE:
 			_isSceneReset.store(false, std::memory_order_relaxed);
-			/*case ACTIONRESULT_ID:
-				_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
-				break;*/
+			checkReset = true;
+			break;
 		case ACTIONRESULT_DITCH:
 			checkReset = true;
+			break;
+		default:
 			break;
 		}
 
