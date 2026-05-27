@@ -2,6 +2,7 @@
 
 #include "MidiModel.h"
 #include "MidiNoteSpan.h"
+#include "MidiQuantisation.h"
 #include "../include/Constants.h"
 
 using namespace engine;
@@ -30,6 +31,7 @@ void MidiLoop::StartRecord() noexcept
 	_dropped = 0;
 	_state = MidiLoopState::Recording;
 	_held.reset();
+	_useQuantised.store(false, std::memory_order_release);
 	++_revision;
 }
 
@@ -55,6 +57,12 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps) noexcept
 	_state = MidiLoopState::Playing;
 	_held.reset();
 	++_revision;
+
+	// Recording just finalised the loop window. If quantisation was already armed
+	// for this take, rebuild the parallel buffer against the new length now so the
+	// first playback block can read it without further work.
+	if (_quantisation.Enabled)
+		RebuildQuantisedEvents();
 }
 
 void MidiLoop::Reset() noexcept
@@ -64,6 +72,7 @@ void MidiLoop::Reset() noexcept
 	_dropped = 0;
 	_state = MidiLoopState::Empty;
 	_held.reset();
+	_useQuantised.store(false, std::memory_order_release);
 	++_revision;
 }
 
@@ -112,7 +121,12 @@ bool MidiLoop::UpdateModelFromEvents(std::uint32_t displayLengthSamps, bool forc
 		}
 	}
 
-	auto spans = ExtractMidiNoteSpans(_events.data(), _eventCount, effectiveLength);
+	// Visualisation must reflect what playback emits, so use the same source the
+	// audio thread is reading from.
+	const auto useQuant = _useQuantised.load(std::memory_order_acquire);
+	const MidiEvent* eventSource = useQuant ? _quantisedEvents.data() : _events.data();
+
+	auto spans = ExtractMidiNoteSpans(eventSource, _eventCount, effectiveLength);
 	_model->UpdateModel(spans, effectiveLength);
 	_modelRevision = _revision;
 	_modelLengthSamps = effectiveLength;
@@ -159,10 +173,17 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
                                  std::uint32_t globalBase,
                                  IMidiSink& sink) noexcept
 {
+	// Snapshot which event source playback is using for this scan. Settings
+	// changes flip _useQuantised to false before rebuilding the quantised buffer
+	// and only back to true after the rebuild completes, so a single load here
+	// gives the audio thread a consistent view for the duration of the block.
+	const auto useQuant = _useQuantised.load(std::memory_order_acquire);
+	const MidiEvent* events = useQuant ? _quantisedEvents.data() : _events.data();
+
 	// Linear scan: small N expected, and storage is contiguous.
 	for (std::size_t i = 0; i < _eventCount; ++i)
 	{
-		const MidiEvent& src = _events[i];
+		const MidiEvent& src = events[i];
 		const std::uint32_t off = src.sampleOffset;
 		if (off >= _loopLengthSamps)
 			continue;
@@ -200,4 +221,32 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noe
 			_held.reset(slot);
 		}
 	}
+}
+
+void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings) noexcept
+{
+	const auto previous = _quantisation;
+	_quantisation = settings;
+
+	// Disable first so the audio thread reverts to the untransformed event buffer
+	// while we rebuild. If the new settings produce a non-zero snap step we then
+	// rebuild and re-publish. Brief gap is acceptable for a live UI tweak — and
+	// is bounded by the rebuild loop (O(eventCount), no allocation).
+	_useQuantised.store(false, std::memory_order_release);
+
+	const auto step = MidiQuantisationStepSamps(_quantisation);
+	if (step > 0u && _loopLengthSamps > 0u && _eventCount > 0u)
+	{
+		RebuildQuantisedEvents();
+		_useQuantised.store(true, std::memory_order_release);
+	}
+
+	if (previous != _quantisation)
+		++_revision;
+}
+
+void MidiLoop::RebuildQuantisedEvents() noexcept
+{
+	const auto step = MidiQuantisationStepSamps(_quantisation);
+	QuantiseEvents(_events.data(), _eventCount, _loopLengthSamps, step, _quantisedEvents.data());
 }

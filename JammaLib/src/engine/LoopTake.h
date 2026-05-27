@@ -162,6 +162,12 @@ namespace engine
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
+
+		// Per-LoopTake non-destructive MIDI start-time quantisation. Propagated to
+		// every owned MidiLoop. Underlying recorded events are never modified;
+		// disabling restores original timing exactly.
+		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
+		const MidiQuantisationSettings& MidiQuantisation() const noexcept { return _midiQuantisation; }
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -223,6 +229,7 @@ namespace engine
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
+		MidiQuantisationSettings _midiQuantisation;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

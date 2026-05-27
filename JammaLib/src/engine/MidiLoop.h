@@ -1,12 +1,14 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 
 #include "MidiEvent.h"
+#include "MidiQuantisation.h"
 
 namespace engine
 {
@@ -77,6 +79,14 @@ namespace engine
 		bool UpdateModelFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
+		// Non-destructive start-time quantisation. Updates a pre-allocated parallel
+		// event buffer and atomically publishes it for the audio thread. The original
+		// _events stream is never modified; disabling restores untransformed playback
+		// and rendering with bit-exact recorded timing.
+		void SetQuantisation(const MidiQuantisationSettings& settings) noexcept;
+		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
+		bool IsQuantisationActive() const noexcept { return _useQuantised.load(std::memory_order_acquire); }
+
 	private:
 		void EmitEventsInRange(std::uint32_t lo,
 		                       std::uint32_t hi,
@@ -88,7 +98,10 @@ namespace engine
 			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);
 		}
 
+		void RebuildQuantisedEvents() noexcept;
+
 		std::array<MidiEvent, DefaultCapacity> _events{};
+		std::array<MidiEvent, DefaultCapacity> _quantisedEvents{};
 		std::size_t _eventCount;
 		std::uint32_t _loopLengthSamps;
 		std::uint64_t _dropped;
@@ -98,5 +111,7 @@ namespace engine
 		MidiLoopState _state;
 		std::bitset<TotalNoteSlots> _held;
 		std::shared_ptr<MidiModel> _model;
+		MidiQuantisationSettings _quantisation;
+		std::atomic<bool> _useQuantised{ false };
 	};
 }

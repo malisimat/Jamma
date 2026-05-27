@@ -1,0 +1,92 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#include "MidiEvent.h"
+
+namespace engine
+{
+	// Fractional grid resolutions for MIDI start-time quantisation, expressed as
+	// fractions of the current grain size. The numeric value is the divisor of
+	// the grain (1, 2, 4, 8, 16, 32) so the snap step in samples is
+	//   step = grainSamps / divisor
+	enum class MidiQuantisationFraction : std::uint8_t
+	{
+		Whole = 0,        // 1   * grain
+		Half = 1,         // 1/2 * grain
+		Quarter = 2,      // 1/4 * grain
+		Eighth = 3,       // 1/8 * grain
+		Sixteenth = 4,    // 1/16 * grain
+		ThirtySecond = 5, // 1/32 * grain
+	};
+
+	static constexpr std::uint8_t MidiQuantisationFractionCount = 6u;
+
+	constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction f) noexcept
+	{
+		switch (f)
+		{
+		case MidiQuantisationFraction::Whole:        return 1u;
+		case MidiQuantisationFraction::Half:         return 2u;
+		case MidiQuantisationFraction::Quarter:      return 4u;
+		case MidiQuantisationFraction::Eighth:       return 8u;
+		case MidiQuantisationFraction::Sixteenth:    return 16u;
+		case MidiQuantisationFraction::ThirtySecond: return 32u;
+		}
+		return 1u;
+	}
+
+	// Per-LoopTake / per-MidiLoop quantisation settings. Non-destructive: applied
+	// when reading events; the underlying recorded events are never modified.
+	struct MidiQuantisationSettings
+	{
+		bool Enabled = false;
+		MidiQuantisationFraction Fraction = MidiQuantisationFraction::Whole;
+		std::uint32_t GrainSamps = 0u;
+
+		constexpr bool operator==(const MidiQuantisationSettings& o) const noexcept
+		{
+			return Enabled == o.Enabled && Fraction == o.Fraction && GrainSamps == o.GrainSamps;
+		}
+		constexpr bool operator!=(const MidiQuantisationSettings& o) const noexcept
+		{
+			return !(*this == o);
+		}
+	};
+
+	// Snap-step in samples for the given settings. Returns 0 when quantisation is
+	// inactive (disabled or grain not yet known) — callers must treat 0 as a
+	// no-op signal.
+	constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& s) noexcept
+	{
+		if (!s.Enabled || 0u == s.GrainSamps)
+			return 0u;
+		const auto divisor = MidiQuantisationDivisor(s.Fraction);
+		return s.GrainSamps / divisor;
+	}
+
+	// Snap `offset` to the nearest multiple of `step`, then wrap into [0, loopLength).
+	// `step == 0` or `loopLength == 0` returns `offset` unchanged.
+	std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
+	                                   std::uint32_t step,
+	                                   std::uint32_t loopLength) noexcept;
+
+	// Build a quantised view of a raw event stream into `dst`. The source array
+	// is treated as recorded order (NoteOn precedes its matching NoteOff for the
+	// same channel+note pair). For each NoteOn:
+	//   - NoteOn offset is snapped to the nearest `step` multiple, wrapped.
+	//   - The matching NoteOff is shifted by the same delta as its NoteOn,
+	//     preserving the recorded duration.
+	//   - If the shifted NoteOff would land at or past `loopLength`, it is
+	//     clamped to `loopLength - 1` so playback stays inside the loop.
+	// Non-note events (and unpaired note events) keep their original timestamps.
+	// `dst` must have capacity for `eventCount` entries; allocation is the caller's
+	// responsibility. This routine performs no heap allocation and is safe to call
+	// from non-realtime threads.
+	void QuantiseEvents(const MidiEvent* src,
+	                    std::size_t eventCount,
+	                    std::uint32_t loopLength,
+	                    std::uint32_t stepSamps,
+	                    MidiEvent* dst) noexcept;
+}

@@ -5,6 +5,7 @@
 #include "engine/LoopTake.h"
 #include "engine/MidiLoop.h"
 #include "engine/MidiModel.h"
+#include "engine/MidiQuantisation.h"
 #include "engine/Timer.h"
 
 using engine::IMidiSink;
@@ -15,6 +16,8 @@ using engine::MidiLoop;
 using engine::MidiLoopState;
 using engine::MidiModel;
 using engine::MidiModelParams;
+using engine::MidiQuantisationFraction;
+using engine::MidiQuantisationSettings;
 using engine::Timer;
 using audio::MergeMixBehaviourParams;
 using base::Audible;
@@ -376,4 +379,159 @@ TEST(MidiLoop, EndRecordWithPowerQuantisationSnapsToPowerOfTwo) {
     ASSERT_EQ(2u, sink.events.size());
     ASSERT_EQ(0u, sink.events[0].sampleOffset);
     ASSERT_EQ(1024u, sink.events[1].sampleOffset);
+}
+
+// ── Slice 6: Non-destructive per-LoopTake MIDI quantisation ───────────────────
+
+TEST(MidiLoopQuantisation, EnabledShiftsEmittedEventsToSnapGrid) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(160u, 0u, 60u, 100u));  // nearest 100-multiple = 200
+	loop.RecordEvent(MidiEvent::MakeNoteOff(560u, 0u, 60u));       // shifted +40 -> 600
+	loop.EndRecord(1000u);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+	loop.SetQuantisation(settings);
+	ASSERT_TRUE(loop.IsQuantisationActive());
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(200u, sink.events[0].sampleOffset);
+	EXPECT_EQ(600u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, DisabledRestoresOriginalTiming) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(140u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(540u, 0u, 60u));
+	loop.EndRecord(1000u);
+
+	MidiQuantisationSettings on;
+	on.Enabled = true;
+	on.Fraction = MidiQuantisationFraction::Whole;
+	on.GrainSamps = 100u;
+	loop.SetQuantisation(on);
+
+	MidiQuantisationSettings off;
+	loop.SetQuantisation(off);
+	EXPECT_FALSE(loop.IsQuantisationActive());
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(140u, sink.events[0].sampleOffset);
+	EXPECT_EQ(540u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, FractionAdjustmentRetargetsSnapGrid) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(70u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(170u, 0u, 60u));
+	loop.EndRecord(1000u);
+
+	MidiQuantisationSettings s;
+	s.Enabled = true;
+	s.GrainSamps = 200u;
+	s.Fraction = MidiQuantisationFraction::Whole; // step 200, 70 -> 0
+	loop.SetQuantisation(s);
+
+	CapturingSink wholeSink;
+	loop.ReadBlock(0u, 1000u, wholeSink);
+	ASSERT_EQ(2u, wholeSink.events.size());
+	EXPECT_EQ(0u, wholeSink.events[0].sampleOffset);
+	EXPECT_EQ(100u, wholeSink.events[1].sampleOffset);
+
+	s.Fraction = MidiQuantisationFraction::Half; // step 100, 70 -> 100
+	loop.SetQuantisation(s);
+
+	CapturingSink halfSink;
+	loop.ReadBlock(0u, 1000u, halfSink);
+	ASSERT_EQ(2u, halfSink.events.size());
+	EXPECT_EQ(100u, halfSink.events[0].sampleOffset);
+	EXPECT_EQ(200u, halfSink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, ClampsShiftedNoteOffAtLoopBoundary) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(550u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(990u, 0u, 60u));
+	loop.EndRecord(1000u);
+
+	MidiQuantisationSettings s;
+	s.Enabled = true;
+	s.Fraction = MidiQuantisationFraction::Whole;
+	s.GrainSamps = 100u;
+	loop.SetQuantisation(s);
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(600u, sink.events[0].sampleOffset);
+	EXPECT_EQ(999u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, ModelRebuildsWithQuantisedSpans) {
+	MidiModelParams modelParams;
+	modelParams.ModelScale = 1.0f;
+	auto model = std::make_shared<MidiModel>(modelParams);
+
+	MidiLoop loop;
+	loop.AttachModel(model);
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(140u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(540u, 0u, 60u));
+	loop.EndRecord(1000u);
+
+	ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+
+	MidiQuantisationSettings s;
+	s.Enabled = true;
+	s.Fraction = MidiQuantisationFraction::Whole;
+	s.GrainSamps = 100u;
+	loop.SetQuantisation(s);
+
+	// Settings change bumps the loop revision so the model rebuild reflects the
+	// new placement on the next refresh.
+	ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, false));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+}
+
+TEST(LoopTakeMidiQuantisation, SetMidiQuantisationPropagatesToMidiLoops) {
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 3u });
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	settings.GrainSamps = 800u;
+	take->SetMidiQuantisation(settings);
+
+	const auto& applied = take->MidiQuantisation();
+	EXPECT_TRUE(applied.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, applied.Fraction);
+	EXPECT_EQ(800u, applied.GrainSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 3u });
+
+	actions::GuiAction action;
+	action.Index = 0u;
+	action.ElementType = actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION;
+	action.Data = actions::GuiAction::GuiIntArray{ { 1, static_cast<int>(MidiQuantisationFraction::Eighth), 1600 } };
+	take->OnAction(action);
+
+	const auto& applied = take->MidiQuantisation();
+	EXPECT_TRUE(applied.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Eighth, applied.Fraction);
+	EXPECT_EQ(1600u, applied.GrainSamps);
 }

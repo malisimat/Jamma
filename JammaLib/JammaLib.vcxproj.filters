@@ -302,6 +302,9 @@
     <ClInclude Include="src\engine\MidiNoteSpan.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\MidiQuantisation.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\engine\MidiModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
@@ -617,6 +620,9 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\MidiNoteSpan.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\MidiQuantisation.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\MidiModel.cpp">

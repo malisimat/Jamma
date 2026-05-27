@@ -344,6 +344,7 @@
     <ClInclude Include="src\io\SerialTriggerQueue.h" />
     <ClInclude Include="src\engine\MidiLoop.h" />
     <ClInclude Include="src\engine\MidiNoteSpan.h" />
+    <ClInclude Include="src\engine\MidiQuantisation.h" />
     <ClInclude Include="src\engine\MidiModel.h" />
     <ClInclude Include="src\base\Tickable.h" />
   </ItemGroup>
@@ -441,6 +442,7 @@
     <ClCompile Include="src\engine\Timer.cpp" />
     <ClCompile Include="src\engine\MidiLoop.cpp" />
     <ClCompile Include="src\engine\MidiNoteSpan.cpp" />
+    <ClCompile Include="src\engine\MidiQuantisation.cpp" />
     <ClCompile Include="src\engine\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>

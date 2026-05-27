@@ -413,6 +413,30 @@ ActionResult LoopTake::OnAction(GuiAction action)
 		if (_receiver)
 			_receiver->OnAction(action);
 	}
+	else if (auto arr = std::get_if<GuiAction::GuiIntArray>(&action.Data))
+	{
+		if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
+		{
+			// Payload layout: [enabled, fractionIndex, optional grainSamps].
+			// grainSamps == 0 (or absent) preserves the current grain so the
+			// caller can toggle on/off without re-supplying timing each gesture.
+			MidiQuantisationSettings updated = _midiQuantisation;
+			if (arr->Values.size() >= 1)
+				updated.Enabled = (0 != arr->Values[0]);
+			if (arr->Values.size() >= 2)
+			{
+				const auto raw = arr->Values[1];
+				const auto clamped = raw < 0 ? 0 :
+					(raw >= static_cast<int>(MidiQuantisationFractionCount) ?
+						static_cast<int>(MidiQuantisationFractionCount) - 1 :
+						raw);
+				updated.Fraction = static_cast<MidiQuantisationFraction>(clamped);
+			}
+			if (arr->Values.size() >= 3 && arr->Values[2] > 0)
+				updated.GrainSamps = static_cast<std::uint32_t>(arr->Values[2]);
+			SetMidiQuantisation(updated);
+		}
+	}
 
 	return res;
 }
@@ -686,6 +710,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
+			midiLoop->SetQuantisation(_midiQuantisation);
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1340,6 +1365,24 @@ void LoopTake::_UpdateMidiModelRotation()
 		if (midiLoop && midiLoop->Model())
 			midiLoop->Model()->SetLoopIndexFrac(loopIndexFrac);
 	}
+}
+
+void LoopTake::SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept
+{
+	_midiQuantisation = settings;
+
+	// Propagate to live MidiLoops. Each MidiLoop owns its own preallocated
+	// parallel buffer and atomically publishes it, so this stays lock-free with
+	// respect to the audio thread.
+	for (auto& midiLoop : _midiLoops)
+	{
+		if (midiLoop)
+			midiLoop->SetQuantisation(_midiQuantisation);
+	}
+
+	// Refresh 3D visualisations immediately so the user sees the new placement
+	// without waiting for the next playback cycle.
+	_UpdateMidiModels(true);
 }
 
 void LoopTake::_RemoveMidiModelChildren()
