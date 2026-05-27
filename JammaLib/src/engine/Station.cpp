@@ -12,6 +12,9 @@ using gui::GuiToggleParams;
 
 namespace
 {
+	constexpr unsigned int HiddenSeedSamps = 1u;
+	constexpr unsigned int HiddenMasterSamps = 1u;
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -73,6 +76,7 @@ Station::Station(StationParams params,
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
+	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
 	_mixerToggle(nullptr),
@@ -84,7 +88,11 @@ Station::Station(StationParams params,
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
-	_backAudioBuffers()
+	_backAudioBuffers(),
+	_quantisationOverlayPinned(false),
+	_pendingQuantisationOverlaySeedSamps(HiddenSeedSamps),
+	_pendingQuantisationOverlayMasterLoopSamps(HiddenMasterSamps),
+	_pendingQuantisationOverlayConfirm(false)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -157,6 +165,57 @@ void Station::SetSize(utils::Size2d size)
 	GuiElement::SetSize(size);
 
 	_ArrangeChildren();
+}
+
+void Station::Draw3d(base::DrawContext& ctx,
+	unsigned int numInstances,
+	base::DrawPass pass)
+{
+	if (!_isVisible)
+		return;
+
+	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+	auto pos = ModelPosition();
+	auto scale = ModelScale();
+
+	_modelScreenPos = glCtx.ProjectScreen(pos);
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+
+	for (auto& child : _children)
+		child->Draw3d(ctx, 1, pass);
+
+	if (_quantisationModel && (base::PASS_SCENE == pass))
+	{
+		// Refresh quantisation overlay state on the render thread (safe for
+		// geometry allocation).  The audio thread only publishes _pendingLoopIndexFrac.
+		RefreshQuantisationOverlayFromClock();
+
+		// Draw the semi-transparent quantisation overlay without writing to the
+		// depth buffer (so it blends with already-rendered geometry and does not
+		// occlude subsequent draws).  Face culling eliminates back-facing gate
+		// panels that would otherwise accumulate a second alpha layer at the same
+		// screen pixel, which pushes effective opacity well above the intended 70%.
+		GLboolean prevDepthMask = GL_TRUE;
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+		const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+		GLint prevCullFaceMode = GL_BACK;
+		glGetIntegerv(GL_CULL_FACE_MODE, &prevCullFaceMode);
+
+		glDepthMask(GL_FALSE);
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_BACK);
+
+		_quantisationModel->Draw3d(ctx, numInstances, pass);
+
+		glDepthMask(prevDepthMask);
+		glCullFace(prevCullFaceMode);
+		if (!wasCulling)
+			glDisable(GL_CULL_FACE);
+	}
+
+	glCtx.PopMvp();
+	glCtx.PopMvp();
 }
 
 utils::Position2d Station::Position() const
@@ -718,6 +777,11 @@ void Station::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	// Publish the current loop-index fraction for the render thread to pick up
+	// (lock-free; Draw3d will apply it to the quantisation model).
+	if (_clock)
+		_pendingLoopIndexFrac.store(_clock->MasterLoopIndexFrac(), std::memory_order_release);
+
 	for (auto& trig : _triggers)
 	{
 		trig->OnTick(curTime, samps, cfg, params);
@@ -800,6 +864,65 @@ void Station::SetName(std::string name)
 void Station::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = clock;
+}
+
+void Station::SetQuantisationOverlay(unsigned int seedSamps,
+	unsigned int masterLoopSamps,
+	bool confirm)
+{
+	if (!_quantisationModel)
+		return;
+
+	_quantisationOverlayPinned = true;
+	_pendingQuantisationOverlaySeedSamps = seedSamps;
+	_pendingQuantisationOverlayMasterLoopSamps = masterLoopSamps;
+	_pendingQuantisationOverlayConfirm = _pendingQuantisationOverlayConfirm || confirm;
+}
+
+void Station::ClearQuantisationOverlay()
+{
+	_quantisationOverlayPinned = false;
+	_pendingQuantisationOverlayConfirm = false;
+}
+
+void Station::RefreshQuantisationOverlayFromClock()
+{
+	if (!_quantisationModel)
+		return;
+
+	_quantisationModel->SetLoopIndexFrac(
+		_clock ? _pendingLoopIndexFrac.load(std::memory_order_acquire) : 0.0);
+
+	if (!_clock || !_clock->IsQuantisable())
+	{
+		_quantisationOverlayPinned = false;
+		_pendingQuantisationOverlayConfirm = false;
+		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
+		_quantisationModel->SetOverlayVisible(false, false);
+		return;
+	}
+
+	if (_quantisationOverlayPinned)
+	{
+		const auto seedSamps = _pendingQuantisationOverlaySeedSamps > 0u ?
+			_pendingQuantisationOverlaySeedSamps :
+			HiddenSeedSamps;
+		const auto masterLoopSamps = _pendingQuantisationOverlayMasterLoopSamps > 0u ?
+			_pendingQuantisationOverlayMasterLoopSamps :
+			seedSamps;
+
+		_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
+		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationOverlayConfirm);
+		_pendingQuantisationOverlayConfirm = false;
+		return;
+	}
+
+	const auto seedSamps = _clock->QuantiseSamps();
+	const auto masterLoopSamps = _clock->SeedSourceLength();
+	_quantisationModel->SetTiming(seedSamps,
+		(masterLoopSamps > 0ul) ? static_cast<unsigned int>(masterLoopSamps) : seedSamps,
+		_sampleRate);
+	_quantisationModel->SetOverlayVisible(true, false);
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -975,6 +1098,22 @@ unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int n
 void Station::_InitReceivers()
 {
 	_guiRack->SetReceiver(ActionReceiver::shared_from_this());
+}
+
+void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	if (_quantisationModel)
+		_quantisationModel->InitResources(resourceLib, forceInit);
+
+	GuiElement::_InitResources(resourceLib, forceInit);
+}
+
+void Station::_ReleaseResources()
+{
+	if (_quantisationModel)
+		_quantisationModel->ReleaseResources();
+
+	GuiElement::_ReleaseResources();
 }
 
 std::vector<JobAction> Station::_CommitChanges()

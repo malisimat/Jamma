@@ -39,6 +39,33 @@ TEST(Timer, SetQuantisationResetsSeedSourceLength) {
 	ASSERT_EQ(0ul, t.SeedSourceLength());
 }
 
+TEST(Timer, TickAdvancesMasterLoopPhase) {
+	Timer t;
+	t.SetQuantisation(12000u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(48000ul);
+	t.SetMasterLoopIndexFrac(0.75);
+
+	EXPECT_NEAR(0.75, t.MasterLoopIndexFrac(), 1e-9);
+
+	t.Tick(12000u, 0u);
+	EXPECT_NEAR(0.5, t.MasterLoopIndexFrac(), 1e-9);
+
+	t.Tick(36000u, 0u);
+	EXPECT_NEAR(0.75, t.MasterLoopIndexFrac(), 1e-9);
+}
+
+TEST(Timer, SetMasterLoopIndexFracClampsOutOfRangeValues) {
+	Timer t;
+	t.SetQuantisation(12000u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(48000ul);
+
+	t.SetMasterLoopIndexFrac(2.0);
+	EXPECT_DOUBLE_EQ(1.0, t.MasterLoopIndexFrac());
+
+	t.SetMasterLoopIndexFrac(-1.0);
+	EXPECT_NEAR(1.0 / 48000.0, t.MasterLoopIndexFrac(), 1e-9);
+}
+
 // ── QUANTISE_OFF ─────────────────────────────────────────────────────────────
 
 TEST(Timer, QuantiseOff_ReturnsSampleCountAndZeroError) {

@@ -113,6 +113,12 @@
     <ClInclude Include="src\engine\Loop.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\Quantisation.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\QuantisationModel.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiModel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -675,6 +681,12 @@
     </ClCompile>
     <ClCompile Include="src\engine\LoopModel.cpp">
       <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\Quantisation.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\QuantisationModel.cpp">
+      <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\MathUtils.cpp">
       <Filter>src\utils</Filter>

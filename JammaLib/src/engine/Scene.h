@@ -25,6 +25,7 @@
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "NinjamSession.h"
+#include "Quantisation.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
 #include "Drawable.h"
@@ -259,6 +260,18 @@ namespace engine
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
+		QuantisationPolicy _QuantisationPolicy() const;
+		unsigned int _CurrentSampleRate() const;
+		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
+		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
+		void _ClearTimingState(bool clearTapTempo);
+		bool _HandleTapTempo(Time actionTime);
+		bool _TrySetMasterFromHover(bool confirm);
+		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
+		void _ClearQuantisationOverlays();
+		std::shared_ptr<Station> _StationForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
+		unsigned long _MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
+		std::shared_ptr<Loop> _RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
@@ -269,6 +282,7 @@ namespace engine
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
+
 
 	protected:
 		struct MidiInputEndpoint
@@ -321,6 +335,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::shared_ptr<Loop> _masterLoop;
+		std::atomic_ulong _masterLoopLengthSamps;
+		TapTempoTracker _tapTempo;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
@@ -330,20 +346,17 @@ namespace engine
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
 		std::mutex _audioMutex;
-		std::mutex _tempoMutex;
+		std::mutex _tapTempoMutex;
 		io::UserConfig _userConfig;
 		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
 
-		// NINJAM tempo / reclock state (job-thread owned).
-		float _remoteBpm = 0.0f;
-		int _remoteBpi = 0;
+		// NINJAM tempo / reclock state. Atomics are shared across UI, job, and audio reset paths.
+		unsigned int _remoteMasterLoopSamps = 0u;
 		unsigned int _remoteSampleRate = 0u;
-		unsigned int _effectiveQuantiseSamps = 0u;
+		std::atomic_uint _effectiveQuantiseSamps = 0u;
 		unsigned int _lastRemoteIntervalPos = 0u;
-		bool _armReclock = false;
-		bool _hasPendingTempo = false;
-		float _pendingTempoBpm = 0.0f;
-		int _pendingTempoBpi = 0;
+		std::atomic_bool _armReclock = false;
+		std::atomic_bool _hasPendingTempo = false;
 	};
 }

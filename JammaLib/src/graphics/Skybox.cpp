@@ -68,6 +68,12 @@ void Skybox::Draw(GlDrawContext& ctx)
 	if (!shader || !cubemap)
 		return;
 
+	const auto cullFaceEnabled = glIsEnabled(GL_CULL_FACE);
+	GLint depthFunc = GL_LESS;
+	GLboolean depthMask = GL_TRUE;
+	glGetIntegerv(GL_DEPTH_FUNC, &depthFunc);
+	glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+
 	glDepthMask(GL_FALSE);
 	glDepthFunc(GL_LEQUAL);
 	glDisable(GL_CULL_FACE);
@@ -85,9 +91,12 @@ void Skybox::Draw(GlDrawContext& ctx)
 	glBindVertexArray(0);
 	glUseProgram(0);
 
-	glEnable(GL_CULL_FACE);
-	glDepthFunc(GL_LESS);
-	glDepthMask(GL_TRUE);
+	if (cullFaceEnabled)
+		glEnable(GL_CULL_FACE);
+	else
+		glDisable(GL_CULL_FACE);
+	glDepthFunc(depthFunc);
+	glDepthMask(depthMask);
 }
 
 void Skybox::ReleaseResources()

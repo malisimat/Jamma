@@ -171,6 +171,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\engine\StationRemote_Tests.cpp" />
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
+    <ClCompile Include="src\engine\Quantisation_Tests.cpp" />
     <ClCompile Include="src\engine\Timer_Tests.cpp" />
     <ClCompile Include="src\engine\MidiQueue_Tests.cpp" />
     <ClCompile Include="src\engine\MidiLoop_Tests.cpp" />
