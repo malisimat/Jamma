@@ -424,10 +424,10 @@ ActionResult Station::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 
 	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-	return OnTriggerInput(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
+	return OnTriggerEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
 }
 
-ActionResult Station::OnTriggerInput(TriggerSource source,
+ActionResult Station::OnTriggerEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
 	const base::Action& action,
@@ -436,14 +436,18 @@ ActionResult Station::OnTriggerInput(TriggerSource source,
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	auto result = ActionResult::NoAction();
 	for (auto& trig : _triggers)
 	{
-		auto trigResult = trig->OnBindingEvent(source, value, state, action, device);
-		if (trigResult.IsEaten)
-			return trigResult;
+		auto trigResult = trig->OnEvent(source, value, state, action, device);
+		if (!trigResult.IsEaten)
+			continue;
+
+		if (!result.IsEaten || (trigResult.ResultType != actions::ACTIONRESULT_DEFAULT))
+			result = trigResult;
 	}
 
-	return ActionResult::NoAction();
+	return result;
 }
 
 ActionResult Station::OnAction(GuiAction action)
@@ -561,7 +565,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_START:
 	{
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels);
+		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices);
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();

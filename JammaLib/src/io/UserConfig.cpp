@@ -66,11 +66,15 @@ std::optional<UserConfig> UserConfig::FromJson(Json::JsonPart json)
 		if (json.KeyValues["midi"].index() == 6)
 		{
 			auto midiJson = std::get<Json::JsonPart>(json.KeyValues["midi"]);
-			auto midiOpt = MidiSettings::FromJson(midiJson);
+			auto midiOpt = MidiConfig::FromJson(midiJson);
 
 			if (midiOpt.has_value())
 				cfg.Midi = midiOpt.value();
+			else
+				return std::nullopt;
 		}
+		else
+			return std::nullopt;
 	}
 
 	iter = json.KeyValues.find("serial");
@@ -264,6 +268,37 @@ std::optional<UserConfig::MidiSettings> UserConfig::MidiSettings::FromJson(Json:
 	MidiSettings midi;
 	midi.Name = name;
 	midi.Enabled = enabled;
+	return midi;
+}
+
+std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::JsonPart json)
+{
+	auto iter = json.KeyValues.find("devices");
+	if ((iter == json.KeyValues.end()) || (iter->second.index() != 5))
+		return std::nullopt;
+
+	auto devicesArray = std::get<Json::JsonArray>(iter->second);
+	if (devicesArray.Array.index() != 5)
+		return std::nullopt;
+
+	MidiConfig midi;
+	auto devices = std::get<std::vector<Json::JsonPart>>(devicesArray.Array);
+	for (const auto& deviceJson : devices)
+	{
+		auto device = MidiSettings::FromJson(deviceJson);
+		if (!device.has_value())
+			continue;
+
+		if (device->Name.empty())
+			device->Name = "default";
+
+		const auto exists = std::find_if(midi.Devices.begin(), midi.Devices.end(), [&](const MidiSettings& current) {
+			return current.Name == device->Name;
+		});
+		if (exists == midi.Devices.end())
+			midi.Devices.push_back(device.value());
+	}
+
 	return midi;
 }
 

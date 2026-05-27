@@ -64,13 +64,13 @@ Loop::Loop(LoopParams params,
 	modelParams.ModelShaders = { "waveform", "picker", "white"};
 	_model = std::make_shared<LoopModel>(modelParams);
 
-	VuParams vuParams;
+	graphics::VuParams vuParams;
 	vuParams.Size = { 12, 18 };
 	vuParams.ModelScale = 1.0f;
 	vuParams.ModelTextures = { "blue" };
 	vuParams.ModelShaders = { "vu" };
 	vuParams.LedHeight = 1.0f;
-	_vu = std::make_shared<VU>(vuParams);
+	_vu = std::make_shared<graphics::VU>(vuParams);
 
 	_children.push_back(_model);
 	_children.push_back(_vu);
@@ -661,10 +661,39 @@ void Loop::Reset()
 
 void Loop::Update()
 {
-	_UpdateLoopModel();
+	RefreshVisualModel();
+	UpdateCapacity();
+}
 
+void Loop::UpdateCapacity()
+{
 	_bufferBank.UpdateCapacity();
 	_monitorBufferBank.UpdateCapacity();
+}
+
+void Loop::RefreshVisualModel()
+{
+	if (!CanRefreshVisualModel())
+		return;
+
+	_UpdateLoopModel();
+}
+
+bool Loop::CanRefreshVisualModel() const noexcept
+{
+	switch (_playState.load(std::memory_order_relaxed))
+	{
+	case STATE_INACTIVE:
+	case STATE_RECORDING:
+	case STATE_PLAYINGRECORDING:
+	case STATE_PLAYING:
+	case STATE_OVERDUBBING:
+	case STATE_PUNCHEDIN:
+	case STATE_OVERDUBBINGRECORDING:
+		return true;
+	default:
+		return false;
+	}
 }
 
 void Loop::EndRecording()

@@ -61,6 +61,29 @@ TEST(UserConfig, ParsesMidiSettings) {
 	ASSERT_TRUE(midi.value().Enabled);
 }
 
+TEST(UserConfig, ParsesMidiDeviceList) {
+	auto str = "{\"devices\":[{\"name\":\"MPK mini\",\"enabled\":true},{\"name\":\"Launchpad X\",\"enabled\":false}]}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto midi = UserConfig::MidiConfig::FromJson(json);
+
+	ASSERT_TRUE(midi.has_value());
+	ASSERT_EQ(2u, midi->Devices.size());
+	EXPECT_EQ(0, midi->Devices[0].Name.compare("MPK mini"));
+	EXPECT_TRUE(midi->Devices[0].Enabled);
+	EXPECT_EQ(0, midi->Devices[1].Name.compare("Launchpad X"));
+	EXPECT_FALSE(midi->Devices[1].Enabled);
+}
+
+TEST(UserConfig, RejectsLegacySingleMidiDeviceShape) {
+	auto str = "{\"name\":\"MPK mini\",\"enabled\":true}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto midi = UserConfig::MidiConfig::FromJson(json);
+
+	EXPECT_FALSE(midi.has_value());
+}
+
 TEST(UserConfig, ParsesSerialSettings) {
 	auto str = "{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true}";
 	auto testStream = std::stringstream(str);
@@ -96,7 +119,7 @@ TEST(UserConfig, ParsesFile) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string loop = "{\"fadeSamps\":54,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"}";
 	std::string trigger = "{\"preDelay\":21,\"debounceSamps\":18}";
-	std::string midi = "{\"name\":\"Launchkey\",\"enabled\":true}";
+	std::string midi = "{\"devices\":[{\"name\":\"Launchkey\",\"enabled\":true},{\"name\":\"DrumPad\",\"enabled\":false}]}";
 	std::string serial = "{\"devices\":[{\"name\":\"pedal-a\",\"port\":\"COM3\",\"baudrate\":115200,\"enabled\":true},{\"name\":\"pedal-b\",\"port\":\"COM4\",\"baudrate\":57600,\"enabled\":false}]}";
 	
 	auto str = "{\"name\":\"user\",\"audio\":" + audio + ",\"loop\":" + loop + ",\"trigger\":" + trigger + ",\"midi\":" + midi + ",\"serial\":" + serial + "}";
@@ -121,8 +144,11 @@ TEST(UserConfig, ParsesFile) {
 
 	ASSERT_EQ(21, cfg.value().Trigger.PreDelay);
 	ASSERT_EQ(18, cfg.value().Trigger.DebounceSamps);
-	ASSERT_EQ(0, cfg.value().Midi.Name.compare("Launchkey"));
-	ASSERT_TRUE(cfg.value().Midi.Enabled);
+	ASSERT_EQ(2u, cfg.value().Midi.Devices.size());
+	ASSERT_EQ(0, cfg.value().Midi.Devices[0].Name.compare("Launchkey"));
+	ASSERT_TRUE(cfg.value().Midi.Devices[0].Enabled);
+	ASSERT_EQ(0, cfg.value().Midi.Devices[1].Name.compare("DrumPad"));
+	ASSERT_FALSE(cfg.value().Midi.Devices[1].Enabled);
 	ASSERT_EQ(2u, cfg.value().Serial.Devices.size());
 	ASSERT_EQ(0, cfg.value().Serial.Devices[0].Name.compare("pedal-a"));
 	ASSERT_EQ(0, cfg.value().Serial.Devices[0].Port.compare("COM3"));

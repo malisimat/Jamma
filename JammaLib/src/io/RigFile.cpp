@@ -7,9 +7,11 @@
 
 #include "RigFile.h"
 
+#include <algorithm>
+
 using namespace io;
 
-const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"name\":\"default\",\"enabled\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
+const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}]},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
 
 std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 {
@@ -98,8 +100,12 @@ bool RigFile::ToStream(RigFile rig, std::stringstream& ss)
 	ss << "PreDelay: " << rig.User.Trigger.PreDelay << std::endl;
 
 	ss << "=== MIDI ===" << std::endl;
-	ss << "Name: " << rig.User.Midi.Name << std::endl;
-	ss << "Enabled: " << rig.User.Midi.Enabled << std::endl;
+	ss << "Devices: " << rig.User.Midi.Devices.size() << std::endl;
+	for (const auto& device : rig.User.Midi.Devices)
+	{
+		ss << "Device: " << device.Name
+			<< " Enabled: " << device.Enabled << std::endl;
+	}
 
 	return true;
 }
@@ -207,6 +213,8 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	std::vector<TriggerPair> pairs;
 	std::vector<unsigned int> inputChannels;
 	std::vector<unsigned int> midiInputChannels;
+	std::vector<std::string> midiInputDevices;
+	std::optional<MidiTriggerBinding> midiTrigger;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -284,7 +292,41 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		}
 	}
 
-	if (pairs.empty() || name.empty())
+	iter = json.KeyValues.find("midiinputdevices");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["midiinputdevices"].index() == 5)
+		{
+			auto jsonArray = std::get<Json::JsonArray>(json.KeyValues["midiinputdevices"]);
+
+			if (jsonArray.Array.index() == 4)
+			{
+				auto devices = std::get<std::vector<std::string>>(jsonArray.Array);
+				for (auto device : devices)
+				{
+					device = Json::NormaliseStringArrayValue(std::move(device));
+
+					if (device.empty())
+						continue;
+
+					if (midiInputDevices.end() == std::find(midiInputDevices.begin(), midiInputDevices.end(), device))
+						midiInputDevices.push_back(device);
+				}
+			}
+		}
+	}
+
+	iter = json.KeyValues.find("trigger");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["trigger"].index() == 6)
+		{
+			auto triggerJson = std::get<Json::JsonPart>(json.KeyValues["trigger"]);
+			midiTrigger = MidiTriggerBinding::FromJson(triggerJson);
+		}
+	}
+
+	if ((pairs.empty() && !midiTrigger.has_value()) || name.empty())
 		return std::nullopt;
 
 	Trigger trigger;
@@ -293,5 +335,77 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	trigger.TriggerPairs = pairs;
 	trigger.InputChannels = inputChannels;
 	trigger.MidiInputChannels = midiInputChannels;
+	trigger.MidiInputDevices = midiInputDevices;
+	trigger.MidiTrigger = midiTrigger;
 	return trigger;
+}
+
+std::optional<RigFile::Trigger::MidiTriggerBindingSpec> RigFile::Trigger::MidiTriggerBindingSpec::FromJson(Json::JsonPart json)
+{
+	auto kind = Json::GetString(json, "kind");
+	auto id = Json::GetUnsigned(json, "id");
+	if (!kind.has_value() || !id.has_value() || (id.value() > 127u))
+		return std::nullopt;
+
+	MidiTriggerBindingSpec binding{};
+	binding.Id = id.value();
+	binding.Channel = 0u;
+	binding.State = 1u;
+	binding.MatchAnyChannel = true;
+
+	if ((0 == kind.value().compare("note")) ||
+		(0 == kind.value().compare("noteon")) ||
+		(0 == kind.value().compare("note-on")) ||
+		(0 == kind.value().compare("note on")))
+		binding.Kind = NOTE;
+	else if ((0 == kind.value().compare("noteoff")) ||
+		(0 == kind.value().compare("note-off")) ||
+		(0 == kind.value().compare("note off")))
+	{
+		binding.Kind = NOTE;
+		binding.State = 0u;
+	}
+	else if (0 == kind.value().compare("cc"))
+		binding.Kind = CC;
+	else
+		return std::nullopt;
+
+	auto channelIter = json.KeyValues.find("channel");
+	if (channelIter != json.KeyValues.end())
+	{
+		auto channel = Json::GetUnsigned(json, "channel");
+		if (!channel.has_value() || (channel.value() < 1u) || (channel.value() > 16u))
+			return std::nullopt;
+
+		binding.Channel = channel.value() - 1u;
+		binding.MatchAnyChannel = false;
+	}
+
+	return binding;
+}
+
+std::optional<RigFile::Trigger::MidiTriggerBinding> RigFile::Trigger::MidiTriggerBinding::FromJson(Json::JsonPart json)
+{
+	auto type = Json::GetString(json, "type");
+	if (!type.has_value() || (0 != type.value().compare("midi")))
+		return std::nullopt;
+
+	auto activateIter = json.KeyValues.find("activate");
+	auto ditchIter = json.KeyValues.find("ditch");
+	if ((activateIter == json.KeyValues.end()) || (ditchIter == json.KeyValues.end()))
+		return std::nullopt;
+	if ((activateIter->second.index() != 6) || (ditchIter->second.index() != 6))
+		return std::nullopt;
+
+	auto activate = MidiTriggerBindingSpec::FromJson(std::get<Json::JsonPart>(activateIter->second));
+	auto ditch = MidiTriggerBindingSpec::FromJson(std::get<Json::JsonPart>(ditchIter->second));
+	if (!activate.has_value() || !ditch.has_value())
+		return std::nullopt;
+
+	MidiTriggerBinding binding{};
+	auto device = Json::GetString(json, "device");
+	binding.Device = device.has_value() ? device.value() : "default";
+	binding.Activate = activate.value();
+	binding.Ditch = ditch.value();
+	return binding;
 }

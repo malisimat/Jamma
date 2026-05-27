@@ -21,6 +21,53 @@ using namespace std::placeholders;
 
 namespace
 {
+	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
+
+	const char* MidiActionLabel(actions::ActionResultType rt)
+	{
+		switch (rt)
+		{
+		case actions::ACTIONRESULT_ACTIVATE: return "Activate";
+		case actions::ACTIONRESULT_DITCH:    return "Ditch";
+		case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
+		default:                             return "Action";
+		}
+	}
+
+	const char* MidiEventDirection(const engine::MidiEvent& event)
+	{
+		if (event.IsNoteOn())  return " Down";
+		if (event.IsNoteOff()) return " Up";
+		return "";
+	}
+
+	void LogMidiEventDetail(std::ostream& out, std::uint8_t deviceSlot, const engine::MidiEvent& event)
+	{
+		constexpr std::uint8_t CC            = 0xB0;
+		constexpr std::uint8_t ProgramChange = 0xC0;
+
+		out << "dev: " << (deviceSlot + 1) << ", chan " << (event.Channel() + 1) << ", ";
+
+		switch (event.MessageType())
+		{
+		case engine::MidiEvent::NoteOn:
+			out << (event.data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(event.data1);
+			break;
+		case engine::MidiEvent::NoteOff:
+			out << "noteoff: " << static_cast<int>(event.data1);
+			break;
+		case CC:
+			out << "cc " << static_cast<int>(event.data1) << ": " << static_cast<int>(event.data2);
+			break;
+		case ProgramChange:
+			out << "pc: " << static_cast<int>(event.data1);
+			break;
+		default:
+			out << "0x" << std::hex << std::uppercase << static_cast<int>(event.status) << std::dec;
+			break;
+		}
+	}
+
 	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
 		const std::string& userName)
 	{
@@ -57,9 +104,11 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
-	_midiDevice(nullptr),
+	_midiInputs(),
+	_loggingConfig{},
 	_serialDevices(),
-	_lastMidiDropCount(0u),
+	_midiTriggerRoutes(),
+	_midiTriggerRoutesSnapshot(),
 	_lastSerialDropCount(0u),
 	_masterLoop(nullptr),
 	_masterLoopLengthSamps(0ul),
@@ -140,8 +189,9 @@ Scene::Scene(SceneParams params,
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
 	_audioDevice = std::make_unique<AudioDevice>();
-	_midiDevice = std::make_unique<MidiDevice>();
 	_PublishAudioStations();
+	_midiInputs.store(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_release);
+	_PublishMidiTriggerRoutes();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -185,7 +235,13 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
 
 				if (trigger.has_value())
+				{
+					if (rigStruct.Triggers[stationParams.Index].MidiTrigger.has_value())
+						scene->_RegisterMidiTriggerRoute(
+							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
+							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+				}
 			}
 
 			scene->_AddStation(station.value());
@@ -501,7 +557,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	res.IsEaten = true;
 	res.SourceId = "";
 	res.TargetId = "";
-	res.ResultType = ACTIONRESULT_ID;
+	res.ResultType = ACTIONRESULT_DEFAULT;
 	res.Undo = std::shared_ptr<ActionUndo>();
 	res.ActiveElement = std::weak_ptr<GuiElement>();
 	return res;
@@ -835,41 +891,47 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 
 	bool checkReset = false;
+	auto result = ActionResult::NoAction();
 
 	for (auto& station : _stations)
 	{
 		auto res = station->OnAction(action);
 
-		if (res.IsEaten)
+		if (!res.IsEaten)
+			continue;
+
+		std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
+		switch (res.ResultType)
 		{
-			std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
-			switch (res.ResultType)
-			{
-			case ACTIONRESULT_ACTIVATE:
-				_isSceneReset.store(false, std::memory_order_relaxed);
-				/*case ACTIONRESULT_ID:
-					_masterLoop = std::dynamic_pointer_cast<engine::Loop>(res.IdMasterLoop);
-					break;*/
-			case ACTIONRESULT_DITCH:
-				checkReset = true;
-				break;
-			}
-
-			if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
-			{
-				unsigned int numTakes = 0;
-				for (auto& station : _stations)
-				{
-					numTakes += station->NumTakes();
-				}
-
-				if (0 == numTakes)
-					Reset();
-			}
-
-			return res;
+		case ACTIONRESULT_ACTIVATE:
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			checkReset = true;
+			break;
+		case ACTIONRESULT_DITCH:
+			checkReset = true;
+			break;
+		default:
+			break;
 		}
+
+		if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
+			result = res;
 	}
+
+	if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
+	{
+		unsigned int numTakes = 0;
+		for (auto& station : _stations)
+		{
+			numTakes += station->NumTakes();
+		}
+
+		if (0 == numTakes)
+			Reset();
+	}
+
+	if (result.IsEaten)
+		return result;
 
 	auto res = _selector->OnAction(action);
 
@@ -943,10 +1005,16 @@ void Scene::OnJobTick(Time curTime)
 		_QueueLocalTempoFromClock();
 		if (snapshot.has_value())
 		{
-			_UpdateRemoteStationsFromSnapshot(snapshot.value());
 			_SendQueuedTempoAtIntervalWrap(snapshot.value());
 			_ApplyRemoteTempoToClock(snapshot.value());
 		}
+	}
+
+	if (snapshot.has_value())
+	{
+		// Scene graph changes must be applied on the main/render thread.
+		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
+		_pendingRemoteSnapshot = snapshot.value();
 	}
 
 	actions::JobAction job;
@@ -991,36 +1059,150 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
-	MidiEvent ev{};
+	// Trigger-driven engine mutation (record start/end, overdub, ditch, MIDI
+	// loop writes) happens here via Trigger::OnEvent and LoopTake::RecordMidiEvent.
+	// Hold _audioMutex so mutation cannot interleave with Scene::CommitChanges()
+	// publishing back buffers on the main thread - this prevents partial
+	// multi-channel record-start visibility that produced block-quantised
+	// loop start offsets across channels.
+	std::scoped_lock lock(_audioMutex);
+
+	MidiEvent ingress{};
 	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
-	while (_midiIngress.Pop(ev))
+	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
+	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
+	static const std::vector<std::shared_ptr<Station>> emptyStations;
+	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
+
+	if (!midiInputs)
+		return;
+
+	for (const auto& input : *midiInputs)
 	{
-		const auto msgType = ev.MessageType();
-		if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
+		if (!input)
 			continue;
 
-		// Route NoteOn/NoteOff into any armed LoopTakes that record this MIDI channel.
-		for (auto& station : _stations)
+		while (input->Ingress.Pop(ingress))
 		{
-			for (auto& take : station->GetLoopTakes())
+			_DispatchMidiTriggerEvent(input->DeviceSlot, ingress);
+
+			const auto msgType = ingress.MessageType();
+			if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
+				continue;
+
+			// Trigger routing runs before loop recording, but both consume the same
+			// ingress event in this loop, so a trigger consuming the action does not
+			// suppress MIDI loop recording.
+			for (const auto& station : stations)
 			{
-				if (take->IsArmed())
-					take->RecordMidiEvent(ev, globalSampleNow);
+				for (const auto& take : station->GetLoopTakes())
+				{
+					if (take->IsArmed())
+						take->RecordMidiEvent(ingress, input->ConfiguredName, globalSampleNow);
+				}
 			}
 		}
-	}
 
-	auto dropped = _midiIngress.DroppedCount();
-	if (dropped != _lastMidiDropCount)
-	{
-		std::cout << "[MIDI] Ingress queue dropped " << (dropped - _lastMidiDropCount)
-			<< " event(s), total dropped=" << dropped << std::endl;
-		_lastMidiDropCount = dropped;
+		auto dropped = input->Ingress.DroppedCount();
+		if (dropped != input->LastDroppedCount)
+		{
+			std::cout << "[MIDI] Ingress queue dropped " << (dropped - input->LastDroppedCount)
+				<< " event(s) on device \"" << input->ConfiguredName
+				<< "\", total dropped=" << dropped << std::endl;
+			input->LastDroppedCount = dropped;
+		}
 	}
+}
+
+void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
+	std::uint8_t status,
+	std::uint8_t data1,
+	std::uint8_t data2,
+	unsigned int sampleRate) noexcept
+{
+	auto midiInputs = _midiInputs.load(std::memory_order_acquire);
+	if (!midiInputs)
+		return;
+
+	for (const auto& input : *midiInputs)
+	{
+		if (!input || (input->DeviceSlot != deviceSlot))
+			continue;
+
+		MidiEvent ingress{};
+		const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
+		const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+
+		std::uint64_t mappedSample = anchorSample;
+		if (sampleRate > 0u && nowMicros > anchorMicros)
+		{
+			const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+			mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+		}
+
+		ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+		ingress.status = status;
+		ingress.data1 = data1;
+		ingress.data2 = data2;
+		ingress._pad = 0u;
+		input->Ingress.Push(ingress);
+		break;
+	}
+}
+
+void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
+	const MidiEvent& event)
+{
+	Action triggerAction;
+	triggerAction.SetUserConfig(_userConfig);
+	if (_audioDevice)
+		triggerAction.SetAudioParams(_audioDevice->GetAudioStreamParams());
+	triggerAction.SetActionTime(Timer::GetTime());
+
+	auto routes = _midiTriggerRoutesSnapshot.load(std::memory_order_acquire);
+	if (!routes)
+		return;
+
+	for (const auto& route : *routes)
+	{
+		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
+			continue;
+
+		auto res = route.Trigger->OnEvent(event, triggerAction);
+		if (!res.IsEaten)
+			continue;
+
+		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
+			<< "\" " << MidiActionLabel(res.ResultType)
+			<< MidiEventDirection(event) << " (";
+		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
+		std::cout << ")\n";
+	}
+}
+
+void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+{
+	if (!trigger)
+		return;
+
+	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, kUnresolvedMidiDeviceSlot, trigger });
+	_PublishMidiTriggerRoutes();
+}
+
+void Scene::_PublishMidiTriggerRoutes()
+{
+	auto routes = std::make_shared<const std::vector<MidiTriggerRoute>>(_midiTriggerRoutes.begin(), _midiTriggerRoutes.end());
+	_midiTriggerRoutesSnapshot.store(routes, std::memory_order_release);
 }
 
 void Scene::_PumpSerial()
 {
+	// See _PumpMidi: trigger dispatch must be serialised with CommitChanges
+	// publication to keep multi-channel record-start coherent.
+	std::scoped_lock lock(_audioMutex);
+
 	static const std::string kEmptyDevice;
 	while (true)
 	{
@@ -1039,14 +1221,12 @@ void Scene::_PumpSerial()
 
 		for (auto& station : _stations)
 		{
-			auto res = station->OnTriggerInput(
+			station->OnTriggerEvent(
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
 				action,
 				device);
-			if (res.IsEaten)
-				break;
 		}
 	}
 
@@ -1178,54 +1358,132 @@ void Scene::InitAudio()
 
 void Scene::InitMidi()
 {
-	if (!_midiDevice)
-		_midiDevice = std::make_unique<MidiDevice>();
+	CloseMidi();
 
-	_midiIngress.Clear();
-	_lastMidiDropCount = 0u;
 	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
 
-	if (!_userConfig.Midi.Enabled)
+	if (_userConfig.Midi.Devices.empty())
 	{
-		std::cout << "[MIDI] MIDI input disabled by rig settings." << std::endl;
+		std::cout << "[MIDI] No MIDI devices configured." << std::endl;
+		_PublishMidiTriggerRoutes();
 		return;
 	}
 
 	const auto sampleRate = _userConfig.Audio.SampleRate;
-	auto opened = _midiDevice->Open(
-		_userConfig.Midi.Name,
-		[this, sampleRate](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
+	std::uint8_t nextSlot = 0u;
+
+	for (const auto& midiConfig : _userConfig.Midi.Devices)
+	{
+		if (!midiConfig.Enabled)
 		{
-			MidiEvent ev{};
-			const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
-			const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+			std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
+			continue;
+		}
 
-			std::uint64_t mappedSample = anchorSample;
-			if (sampleRate > 0u && nowMicros > anchorMicros)
+		if (nextSlot == kUnresolvedMidiDeviceSlot)
+		{
+			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
+			break;
+		}
+
+		auto endpoint = std::make_shared<MidiInputEndpoint>();
+		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
+		endpoint->Device = std::make_unique<MidiDevice>();
+
+		auto opened = endpoint->Device->Open(
+			endpoint->ConfiguredName,
+			[endpoint, sampleRate, audioSampleCounter = &_audioSampleCounter, midiAnchorMicros = &_midiAnchorMicros](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 			{
-				const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-				mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+				MidiEvent ingress{};
+				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
+				const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
+
+				std::uint64_t mappedSample = anchorSample;
+				if (sampleRate > 0u && nowMicros > anchorMicros)
+				{
+					const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
+					mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
+				}
+
+				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+				ingress.status = status;
+				ingress.data1 = data1;
+				ingress.data2 = data2;
+				ingress._pad = 0u;
+				endpoint->Ingress.Push(ingress);
+			},
+			_loggingConfig.Midi == "verbose");
+
+		if (!opened)
+			continue;
+
+		endpoint->DeviceSlot = nextSlot++;
+		midiInputs->push_back(endpoint);
+	}
+
+	_midiInputs.store(midiInputs, std::memory_order_release);
+
+	std::set<std::string> activeMidiInputNames;
+	for (const auto& input : *midiInputs)
+	{
+		if (input)
+			activeMidiInputNames.insert(input->ConfiguredName);
+	}
+
+	for (auto& route : _midiTriggerRoutes)
+	{
+		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+		for (const auto& input : *midiInputs)
+		{
+			if (input && (input->ConfiguredName == route.DeviceName))
+			{
+				route.DeviceSlot = input->DeviceSlot;
+				break;
 			}
+		}
 
-			ev.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-			ev.status = status;
-			ev.data1 = data1;
-			ev.data2 = data2;
-			ev._pad = 0u;
-			_midiIngress.Push(ev);
-		});
+		if (route.DeviceSlot == kUnresolvedMidiDeviceSlot)
+			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
 
-	if (!opened)
+		if (route.Trigger)
+		{
+			for (const auto& midiInputDevice : route.Trigger->MidiInputDevices())
+			{
+				if (!midiInputDevice.empty() && (activeMidiInputNames.find(midiInputDevice) == activeMidiInputNames.end()))
+				{
+					std::cout << "[MIDI] No active MIDI input matches loop-record device \""
+						<< midiInputDevice << "\" for trigger \"" << route.Trigger->Name() << "\"." << std::endl;
+				}
+			}
+		}
+	}
+
+	_PublishMidiTriggerRoutes();
+
+	if (midiInputs->empty())
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+
 }
 
 void Scene::CloseMidi()
 {
-	if (_midiDevice)
-		_midiDevice->Close();
+	for (auto& route : _midiTriggerRoutes)
+		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+	_PublishMidiTriggerRoutes();
+
+	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
+	if (!midiInputs)
+		return;
+
+	for (const auto& input : *midiInputs)
+	{
+		if (input && input->Device)
+			input->Device->Close();
+	}
 }
 
 void Scene::InitSerial()
@@ -1317,17 +1575,51 @@ void Scene::CloseAudio()
 
 void Scene::CommitChanges()
 {
+	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
+	std::optional<io::NinjamRemoteSnapshot> pendingRemoteSnapshot;
+	{
+		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
+		if (_pendingRemoteSnapshot.has_value())
+		{
+			pendingRemoteSnapshot = std::move(_pendingRemoteSnapshot.value());
+			_pendingRemoteSnapshot.reset();
+		}
+	}
 
 	{
 		std::scoped_lock lock(_audioMutex);
+
+		if (pendingRemoteSnapshot.has_value())
+			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());
 
 		for (auto& station : _stations)
 		{
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
-				jobList.insert(jobList.end(), jobs.begin(), jobs.end());
+			{
+				for (auto& job : jobs)
+				{
+					switch (job.JobActionType)
+					{
+					case JobAction::JOB_UPDATELOOPS:
+					case JobAction::JOB_ENDRECORDING:
+						syncJobs.push_back(std::move(job));
+						break;
+					default:
+						jobList.push_back(std::move(job));
+						break;
+					}
+				}
+			}
 		}
+	}
+
+	for (auto& job : syncJobs)
+	{
+		auto receiver = job.Receiver.lock();
+		if (receiver)
+			receiver->OnAction(job);
 	}
 
 	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
@@ -1674,11 +1966,14 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
 
-	_label->InitResources(resourceLib, forceInit);
-
-	for (auto& station : _stations)
-		station->InitResources(resourceLib, forceInit);
-};
+	// Stations can be added after scene resources are initialised.
+	auto stations = _stations;
+	for (auto& station : stations)
+	{
+		if (station)
+			station->InitResources(resourceLib, forceInit);
+	}
+}
 
 glm::mat4 Scene::_View()
 {
@@ -1688,9 +1983,6 @@ glm::mat4 Scene::_View()
 
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
-	_stations.push_back(station);
-	_PublishAudioStations();
-
 	station->SetClock(_clock);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
@@ -1702,6 +1994,9 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		selectDepth = (unsigned int)DEPTH_LOOP;
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
+
+	_stations.push_back(station);
+	_PublishAudioStations();
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
@@ -1836,8 +2131,8 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
 		}
 
-		// EnsureRemoteTake runs on the job thread so the audio callback can
-		// early-out safely if loops are not yet initialised.
+		// EnsureRemoteTake is run from Scene::CommitChanges on the main thread
+		// so scene/station graph mutation stays single-threaded.
 		remoteStation->EnsureRemoteTake();
 		remoteStation->UpdateRemoteVisuals();
 	}

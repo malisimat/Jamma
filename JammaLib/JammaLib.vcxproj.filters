@@ -18,6 +18,9 @@
     <Filter Include="src\engine">
       <UniqueIdentifier>{b2126494-7af7-409b-b8d4-cc037236024a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\engine\midi">
+      <UniqueIdentifier>{20c843c9-1175-4bb0-9b57-d0c48a970a77}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\graphics">
       <UniqueIdentifier>{65a7707a-07f7-444a-a4e9-efd7c2493003}</UniqueIdentifier>
     </Filter>
@@ -290,8 +293,8 @@
     <ClInclude Include="src\engine\MidiEvent.h">
       <Filter>src\engine</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiQueue.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\io\MidiQueue.h">
+      <Filter>src\io</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\MidiLoop.h">
       <Filter>src\engine</Filter>
@@ -404,7 +407,7 @@
     <ClInclude Include="include\Constants.h">
       <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\VU.h">
+    <ClInclude Include="src\graphics\VU.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\LoopModel.h">
@@ -673,7 +676,7 @@
     <ClCompile Include="src\io\TextReadWriter.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\VU.cpp">
+    <ClCompile Include="src\graphics\VU.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\LoopModel.cpp">

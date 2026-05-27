@@ -5,9 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "MidiEvent.h"
+#include "../engine/MidiEvent.h"
 
-namespace engine
+namespace io
 {
 	// Lock-free single-producer/single-consumer ring of MidiEvents for the MIDI ingress path.
 	//
@@ -28,7 +28,7 @@ namespace engine
 		static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
 
 	public:
-		using value_type = MidiEvent;
+		using value_type = engine::MidiEvent;
 		static constexpr std::size_t capacity = Capacity;
 
 		MidiQueue() noexcept
@@ -39,9 +39,9 @@ namespace engine
 		MidiQueue(const MidiQueue&) = delete;
 		MidiQueue& operator=(const MidiQueue&) = delete;
 
-		// Producer side. Returns true if the event was stored without displacing an older one,
-		// false if the ring was full and the oldest event was overwritten.
-		bool Push(const MidiEvent& ev) noexcept
+		// Producer side. Returns true if the event was stored.
+		// Returns false if the ring is full and the newest event is dropped.
+		bool Push(const value_type& ev) noexcept
 		{
 			const auto tail = _tail.load(std::memory_order_relaxed);
 			const auto head = _head.load(std::memory_order_acquire);
@@ -60,7 +60,7 @@ namespace engine
 		}
 
 		// Consumer side. Returns false if empty.
-		bool Pop(MidiEvent& out) noexcept
+		bool Pop(value_type& out) noexcept
 		{
 			const auto head = _head.load(std::memory_order_relaxed);
 			const auto tail = _tail.load(std::memory_order_acquire);
@@ -99,7 +99,7 @@ namespace engine
 	private:
 		static constexpr std::size_t Mask = Capacity - 1;
 
-		std::array<MidiEvent, Capacity> _buffer{};
+		std::array<value_type, Capacity> _buffer{};
 		std::atomic<std::size_t> _head;
 		std::atomic<std::size_t> _tail;
 		std::atomic<std::uint64_t> _dropped;

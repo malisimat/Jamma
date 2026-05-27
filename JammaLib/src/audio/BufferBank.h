@@ -1,6 +1,10 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <memory>
 #include <vector>
+#include "../include/Constants.h"
 
 namespace audio
 {
@@ -9,6 +13,15 @@ namespace audio
 	public:
 		BufferBank();
 		~BufferBank();
+		BufferBank(const BufferBank&) = delete;
+		BufferBank& operator=(const BufferBank&) = delete;
+		BufferBank(BufferBank&& other) noexcept;
+		BufferBank& operator=(BufferBank&& other) noexcept;
+		void swap(BufferBank& other) noexcept;
+		friend void swap(BufferBank& lhs, BufferBank& rhs) noexcept
+		{
+			lhs.swap(rhs);
+		}
 
 	public:
 		const float& operator[] (unsigned long index) const;
@@ -19,7 +32,7 @@ namespace audio
 		// Length() will never exceed Capacity(). UpdateCapacity() (via Loop::Update()) must be
 		// called off-thread to grow capacity and allow SetLength to advance further.
 		void SetLength(unsigned long length);
-		// Off-thread only: updates logical length and allocates/frees buffer banks as needed.
+		// Off-thread only: updates logical length and allocates buffer banks as needed.
 		// Do NOT call from the audio callback — performs heap allocation.
 		void Resize(unsigned long length);
 		void UpdateCapacity();
@@ -34,12 +47,17 @@ namespace audio
 		static unsigned int NumBanksToHold(unsigned long length, bool includeCapacityAhead);
 	
 	public:
-		static const unsigned int _BufferBankSize = 1000000u;
-		static const unsigned int _BufferCapacityAhead = 500000u;
+		static constexpr unsigned long _BufferBankSize = 1000000ul;
+		static constexpr unsigned long _BufferCapacityAhead = 500000ul;
+		static constexpr unsigned int _MaxBanks =
+			static_cast<unsigned int>(
+				(constants::MaxLoopBufferSize + _BufferCapacityAhead + _BufferBankSize - 1ul) /
+				_BufferBankSize);
 
 	protected:
 		float _dummy;
-		unsigned int _length;
-		std::vector<std::vector<float>> _bufferBank;
+		std::atomic<unsigned long> _length;
+		std::atomic<unsigned int> _numBanks;
+		std::array<std::unique_ptr<float[]>, _MaxBanks> _bufferBank;
 	};
 }

@@ -153,6 +153,36 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 		}
 	}
 
+	iter = iniParams.KeyValues.find("logging");
+	if (iter != iniParams.KeyValues.end())
+	{
+		if (iniParams.KeyValues["logging"].index() == 6)
+		{
+			auto loggingJson = std::get<Json::JsonPart>(iniParams.KeyValues["logging"]);
+
+			auto midiIter = loggingJson.KeyValues.find("midi");
+			if (midiIter != loggingJson.KeyValues.end())
+			{
+				if (loggingJson.KeyValues["midi"].index() == 4)
+					ini.Logging.Midi = std::get<std::string>(loggingJson.KeyValues["midi"]);
+			}
+
+			auto audioIter = loggingJson.KeyValues.find("audio");
+			if (audioIter != loggingJson.KeyValues.end())
+			{
+				if (loggingJson.KeyValues["audio"].index() == 4)
+					ini.Logging.Audio = std::get<std::string>(loggingJson.KeyValues["audio"]);
+			}
+
+			auto eventIter = loggingJson.KeyValues.find("event");
+			if (eventIter != loggingJson.KeyValues.end())
+			{
+				if (loggingJson.KeyValues["event"].index() == 4)
+					ini.Logging.Event = std::get<std::string>(loggingJson.KeyValues["event"]);
+			}
+		}
+	}
+
 	return ini;
 }
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 
 #include "rtmidi/RtMidi.h"
@@ -19,6 +20,47 @@ namespace
 		               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		return str;
 	}
+
+	void LogMidiMessageDetail(std::ostream& out, const std::vector<unsigned char>& message)
+	{
+		if (message.empty())
+			return;
+
+		constexpr std::uint8_t StatusMask    = 0xF0;
+		constexpr std::uint8_t ChannelMask   = 0x0F;
+		constexpr std::uint8_t NoteOff       = 0x80;
+		constexpr std::uint8_t NoteOn        = 0x90;
+		constexpr std::uint8_t CC            = 0xB0;
+		constexpr std::uint8_t ProgramChange = 0xC0;
+
+		const auto status = static_cast<std::uint8_t>(message[0]);
+		const auto data1  = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
+		const auto data2  = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
+		const int  chan   = (status & ChannelMask) + 1;
+
+		out << "  (chan " << chan << ", ";
+
+		switch (status & StatusMask)
+		{
+		case NoteOn:
+			out << (data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(data1);
+			break;
+		case NoteOff:
+			out << "noteoff: " << static_cast<int>(data1);
+			break;
+		case CC:
+			out << "cc " << static_cast<int>(data1) << ": " << static_cast<int>(data2);
+			break;
+		case ProgramChange:
+			out << "pc: " << static_cast<int>(data1);
+			break;
+		default:
+			out << "0x" << std::hex << std::uppercase << static_cast<int>(status) << std::dec;
+			break;
+		}
+
+		out << ")";
+	}
 }
 
 MidiDevice::MidiDevice()
@@ -26,6 +68,7 @@ MidiDevice::MidiDevice()
 	  _isOpen(false),
 	  _deviceName(""),
 	  _deviceId(0u),
+	  _loggingVerbose(false),
 	  _callback()
 {
 }
@@ -61,8 +104,11 @@ std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 }
 
 bool MidiDevice::Open(const std::string& preferredDeviceName,
-                      MidiMessageCallback callback)
+                      MidiMessageCallback callback,
+                      bool loggingVerbose)
 {
+	_callback = std::move(callback);
+	_loggingVerbose = loggingVerbose;
 	Close();
 
 	try
@@ -121,12 +167,11 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 		}
 	}
 
-	_callback = std::move(callback);
-
 	try
 	{
 		_midiIn->ignoreTypes(false, false, false);
-		_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
+		if (_callback)
+			_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
 		_midiIn->openPort(selected.DeviceId, "Jamma MIDI In");
 	}
 	catch (const rt::midi::RtMidiError& err)
@@ -193,6 +238,18 @@ void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message) noexcept
 		return;
 	if (message.empty())
 		return;
+
+	if (_loggingVerbose)
+	{
+		std::cout << "[MIDI] Device #" << _deviceId << " (" << _deviceName << ") packet: ";
+		for (size_t i = 0; i < message.size(); ++i) {
+			if (i > 0) std::cout << " ";
+			std::cout << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(message[i]);
+		}
+		std::cout << std::dec;
+		LogMidiMessageDetail(std::cout, message);
+		std::cout << "\n";
+	}
 
 	const auto status = static_cast<std::uint8_t>(message[0]);
 	const auto data1 = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);

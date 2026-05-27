@@ -1,9 +1,9 @@
 #include "gtest/gtest.h"
 #include "engine/MidiEvent.h"
-#include "engine/MidiQueue.h"
+#include "io/MidiQueue.h"
 
 using engine::MidiEvent;
-using engine::MidiQueue;
+using io::MidiQueue;
 
 namespace
 {

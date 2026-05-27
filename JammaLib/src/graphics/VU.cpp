@@ -1,6 +1,6 @@
 #include "VU.h"
 
-using namespace engine;
+using namespace graphics;
 using base::DrawContext;
 using base::Drawable;
 using base::DrawableParams;

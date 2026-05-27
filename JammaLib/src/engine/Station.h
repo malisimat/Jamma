@@ -92,7 +92,7 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		actions::ActionResult OnTriggerInput(TriggerSource source,
+		actions::ActionResult OnTriggerEvent(TriggerSource source,
 			unsigned int value,
 			unsigned int state,
 			const base::Action& action,
@@ -105,7 +105,10 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void Reset() override;
 		
-		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const { return _loopTakes; }
+		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
+		{
+			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
+		}
 		// Returns true if this station receives audio from a remote ninjam user.
 		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
 		virtual bool IsRemote() const noexcept { return false; }

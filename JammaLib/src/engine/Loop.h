@@ -9,7 +9,6 @@
 #include "Tweakable.h"
 #include "ResourceUser.h"
 #include "GlUtils.h"
-#include "VU.h"
 #include "LoopModel.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiModel.h"
@@ -18,6 +17,7 @@
 #include "../audio/BufferBank.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/Hanning.h"
+#include "../graphics/VU.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/WavResource.h"
 #include "../vst/VstChain.h"
@@ -212,6 +212,9 @@ namespace engine
 		virtual bool UnMute() override;
 		virtual void Reset() override;
 		virtual void Update();
+		void UpdateCapacity();
+		void RefreshVisualModel();
+		bool CanRefreshVisualModel() const noexcept;
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);
@@ -277,7 +280,7 @@ namespace engine
 		std::shared_ptr<audio::AudioMixer> _mixer;
 		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
-		std::shared_ptr<VU> _vu;
+		std::shared_ptr<graphics::VU> _vu;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
 		// Live VST chain published atomically for lock-free audio-thread reads.

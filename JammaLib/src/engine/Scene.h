@@ -22,6 +22,7 @@
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
+#include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "NinjamSession.h"
 #include "Quantisation.h"
@@ -36,7 +37,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "MidiQueue.h"
+#include "../io/MidiQueue.h"
 #include "../io/SerialTriggerQueue.h"
 
 namespace engine
@@ -200,6 +201,7 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		void SetLogging(io::LoggingConfig config) noexcept { _loggingConfig = config; }
 		void InitMidi();
 		void CloseMidi();
 		void InitSerial();
@@ -244,6 +246,15 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _JobLoop();
 		void _PumpMidi();
+		void _PushMidiEvent(std::uint8_t deviceSlot,
+			std::uint8_t status,
+			std::uint8_t data1,
+			std::uint8_t data2,
+			unsigned int sampleRate) noexcept;
+		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
+			const MidiEvent& event);
+		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void _PublishMidiTriggerRoutes();
 		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -274,6 +285,22 @@ namespace engine
 
 
 	protected:
+		struct MidiInputEndpoint
+		{
+			std::uint8_t DeviceSlot = 0u;
+			std::string ConfiguredName;
+			std::unique_ptr<audio::MidiDevice> Device;
+			io::MidiQueue<1024> Ingress;
+			std::uint64_t LastDroppedCount = 0u;
+		};
+
+		struct MidiTriggerRoute
+		{
+			std::string DeviceName;
+			std::uint8_t DeviceSlot;
+			std::shared_ptr<Trigger> Trigger;
+		};
+
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
@@ -289,12 +316,13 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
-		std::unique_ptr<audio::MidiDevice> _midiDevice;
+		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
+		io::LoggingConfig _loggingConfig;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
-		MidiQueue<1024> _midiIngress;
 		io::SerialTriggerQueue<256> _serialIngress;
 		std::mutex _serialIngressMutex;
-		std::uint64_t _lastMidiDropCount;
+		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
+		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
 		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
@@ -317,6 +345,8 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
+		std::mutex _remoteSnapshotMutex;
+		std::optional<io::NinjamRemoteSnapshot> _pendingRemoteSnapshot;
 		std::mutex _audioMutex;
 		std::mutex _tapTempoMutex;
 		io::UserConfig _userConfig;

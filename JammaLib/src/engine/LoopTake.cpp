@@ -517,6 +517,8 @@ ActionResult LoopTake::OnAction(JobAction action)
 	case JobAction::JOB_ENDRECORDING:
 	{
 		EndRecording();
+		_UpdateLoops();
+		_UpdateMidiModels(true);
 		std::cout << "Ended recording" << std::endl;
 
 		ActionResult res;
@@ -643,7 +645,10 @@ void LoopTake::SetNumBusChannels(unsigned int chans)
 	_guiRack->SetNumOutputChannels(chans);
 }
 
-void LoopTake::Record(std::vector<unsigned int> channels, std::string stationName, std::vector<unsigned int> midiChannels)
+void LoopTake::Record(std::vector<unsigned int> channels,
+	std::string stationName,
+	std::vector<unsigned int> midiChannels,
+	std::vector<std::string> midiDevices)
 {
 	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
@@ -667,17 +672,25 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 
 	_midiLoops.clear();
 	_midiLoopChannels.clear();
-	for (auto midiChan : midiChannels)
+	_midiLoopDevices.clear();
+	if (midiDevices.empty() && !midiChannels.empty())
+		midiDevices.push_back("");
+
+	for (const auto& midiDevice : midiDevices)
 	{
-		auto midiLoop = std::make_shared<MidiLoop>();
-		MidiModelParams modelParams;
-		modelParams.ModelScale = 1.0f;
-		auto midiModel = std::make_shared<MidiModel>(modelParams);
-		midiLoop->AttachModel(midiModel);
-		midiLoop->StartRecord();
-		_midiLoops.push_back(midiLoop);
-		_midiLoopChannels.push_back(midiChan);
-		_children.push_back(midiModel);
+		for (auto midiChan : midiChannels)
+		{
+			auto midiLoop = std::make_shared<MidiLoop>();
+			MidiModelParams modelParams;
+			modelParams.ModelScale = 1.0f;
+			auto midiModel = std::make_shared<MidiModel>(modelParams);
+			midiLoop->AttachModel(midiModel);
+			midiLoop->StartRecord();
+			_midiLoops.push_back(midiLoop);
+			_midiLoopChannels.push_back(midiChan);
+			_midiLoopDevices.push_back(midiDevice);
+			_children.push_back(midiModel);
+		}
 	}
 
 	if (!midiChannels.empty())
@@ -693,6 +706,13 @@ void LoopTake::Record(std::vector<unsigned int> channels, std::string stationNam
 
 bool LoopTake::RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept
 {
+	return RecordMidiEvent(ev, "", globalSampleNow);
+}
+
+bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
+	const std::string& device,
+	std::uint32_t globalSampleNow) noexcept
+{
 	if (_midiLoops.empty())
 		return false;
 
@@ -703,6 +723,9 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNo
 	for (auto i = 0u; i < _midiLoops.size(); ++i)
 	{
 		if (_midiLoopChannels[i] != midiChan)
+			continue;
+
+		if (!_midiLoopDevices[i].empty() && (_midiLoopDevices[i] != device))
 			continue;
 
 		if (_midiLoops[i]->State() != MidiLoopState::Recording)
@@ -924,6 +947,7 @@ void LoopTake::Ditch()
 	_RemoveMidiModelChildren();
 	_midiLoops.clear();
 	_midiLoopChannels.clear();
+	_midiLoopDevices.clear();
 }
 
 void LoopTake::Overdub(std::vector<unsigned int> channels, std::string stationName)
@@ -1263,7 +1287,8 @@ void LoopTake::_UpdateLoops()
 {
 	for (auto& loop : _loops)
 	{
-		loop->Update();
+		loop->UpdateCapacity();
+		loop->RefreshVisualModel();
 	}
 
 	_UpdateMidiModels(false);
@@ -1271,6 +1296,15 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
+	const auto state = _state.load(std::memory_order_relaxed);
+	const auto isRecording = (STATE_RECORDING == state) ||
+		(STATE_PLAYINGRECORDING == state) ||
+		(STATE_OVERDUBBING == state) ||
+		(STATE_PUNCHEDIN == state) ||
+		(STATE_OVERDUBBINGRECORDING == state);
+	if (isRecording && !force)
+		return;
+
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	for (auto& midiLoop : _midiLoops)
 	{

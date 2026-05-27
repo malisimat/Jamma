@@ -74,6 +74,13 @@ namespace io
 			static std::optional<MidiSettings> FromJson(Json::JsonPart json);
 		};
 
+		struct MidiConfig
+		{
+			std::vector<MidiSettings> Devices;
+
+			static std::optional<MidiConfig> FromJson(Json::JsonPart json);
+		};
+
 		struct SerialSettings
 		{
 			std::string Name = "default";
@@ -111,7 +118,7 @@ namespace io
 		AudioSettings Audio;
 		LoopSettings Loop;
 		TriggerSettings Trigger;
-		MidiSettings Midi;
+		MidiConfig Midi;
 		SerialConfig Serial;
 	};
 }

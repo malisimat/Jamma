@@ -2,6 +2,8 @@
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
+#include <cstdint>
+
 using namespace base;
 using namespace engine;
 using actions::ActionResult;
@@ -14,6 +16,64 @@ using graphics::ImageParams;
 using audio::AudioMixer;
 using resources::ResourceLib;
 
+namespace
+{
+	constexpr std::uint8_t MidiCcStatus = 0xB0u;
+	constexpr unsigned int MidiBindingKindShift = 12u;
+	constexpr unsigned int MidiBindingChannelShift = 8u;
+
+	unsigned int EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
+		unsigned int channel,
+		unsigned int id)
+	{
+		return (static_cast<unsigned int>(kind) << MidiBindingKindShift) |
+			((channel & 0x0Fu) << MidiBindingChannelShift) |
+				(id & 0x7Fu);
+	}
+
+	DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
+		unsigned int channel,
+		unsigned int id,
+		unsigned int state)
+	{
+		DualBinding binding;
+		binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
+			EncodeMidiBindingValue(kind, channel, id),
+			state), true);
+		return binding;
+	}
+
+	void AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
+		const std::function<void(const DualBinding&)>& onBinding)
+	{
+		if (bindingSpec.MatchAnyChannel)
+		{
+			for (auto channel = 0u; channel < 16u; ++channel)
+				onBinding(MakeMidiBinding(bindingSpec.Kind,
+					channel,
+					bindingSpec.Id,
+					bindingSpec.State));
+			return;
+		}
+
+		onBinding(MakeMidiBinding(bindingSpec.Kind,
+			bindingSpec.Channel,
+			bindingSpec.Id,
+			bindingSpec.State));
+	}
+
+	bool IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec)
+	{
+		if (bindingSpec.Id > 127u)
+			return false;
+
+		if (!bindingSpec.MatchAnyChannel && (bindingSpec.Channel > 15u))
+			return false;
+
+		return true;
+	}
+}
+
 Trigger::Trigger(TriggerParams trigParams) :
 	GuiElement(trigParams),
 	_name(trigParams.Name),
@@ -21,6 +81,7 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
 	_midiInputChannels(trigParams.MidiInputChannels),
+	_midiInputDevices(trigParams.MidiInputDevices),
 	_state(TRIGSTATE_DEFAULT),
 	_debounceTimeMs(trigParams.DebounceMs),
 	_lastActivateTime(),
@@ -98,6 +159,29 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 	for (auto midiChan : trigStruct.MidiInputChannels)
 		trigger->AddMidiInputChannel(midiChan);
 
+	for (const auto& midiDevice : trigStruct.MidiInputDevices)
+		trigger->AddMidiInputDevice(midiDevice);
+
+	if (trigStruct.MidiTrigger.has_value())
+	{
+		// Rig parsing already enforces these bounds. Keep the extra guard here so
+		// direct struct construction cannot encode impossible MIDI data bytes.
+		if (!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Activate) ||
+			!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Ditch))
+			return std::nullopt;
+
+		AddMidiBindingForChannels(trigStruct.MidiTrigger->Activate,
+			[&trigger](const DualBinding& binding)
+			{
+				trigger->AddBinding(binding, DualBinding());
+			});
+		AddMidiBindingForChannels(trigStruct.MidiTrigger->Ditch,
+			[&trigger](const DualBinding& binding)
+			{
+				trigger->AddBinding(DualBinding(), binding);
+			});
+	}
+
 	return trigger;
 }
 
@@ -129,10 +213,43 @@ ActionResult Trigger::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 
 	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1u : 0u;
-	return OnBindingEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
+	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
 
-ActionResult Trigger::OnBindingEvent(TriggerSource source,
+bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
+	unsigned int& outValue,
+	unsigned int& outState)
+{
+	if (event.IsNoteOn() || event.IsNoteOff())
+	{
+		outValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::NOTE,
+			event.Channel(),
+			event.data1);
+		outState = event.IsNoteOn() ? 1u : 0u;
+		return true;
+	}
+	if (event.MessageType() == MidiCcStatus)
+	{
+		outValue = EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent::CC,
+			event.Channel(),
+			event.data1);
+		outState = event.data2 > 0u ? 1u : 0u;
+		return true;
+	}
+	return false;
+}
+
+ActionResult Trigger::OnEvent(const MidiEvent& event,
+	const base::Action& action)
+{
+	unsigned int value = 0u, state = 0u;
+	if (!TryEncodeMidiEvent(event, value, state))
+		return ActionResult::NoAction();
+
+	return OnEvent(TriggerSource::TRIGGER_MIDI, value, state, action);
+}
+
+ActionResult Trigger::OnEvent(TriggerSource source,
 	unsigned int value,
 	unsigned int state,
 	const base::Action& action,
@@ -179,7 +296,7 @@ void Trigger::OnTick(Time curTime,
 		(TriggerState::TRIGSTATE_PUNCHEDIN == _state);
 
 	if (isRecording)
-		_recordSampCount += samps;
+		_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
 
 	for (auto& action : _delayedActions)
 	{
@@ -305,6 +422,15 @@ void Trigger::ClearInputChannels()
 void Trigger::AddMidiInputChannel(unsigned int chan)
 {
 	_midiInputChannels.push_back(chan);
+}
+
+void Trigger::AddMidiInputDevice(std::string device)
+{
+	if (device.empty())
+		return;
+
+	if (_midiInputDevices.end() == std::find(_midiInputDevices.begin(), _midiInputDevices.end(), device))
+		_midiInputDevices.push_back(std::move(device));
 }
 
 TriggerState Trigger::GetState() const
@@ -678,6 +804,7 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_START;
 		trigAction.InputChannels = _inputChannels;
 		trigAction.MidiInputChannels = _midiInputChannels;
+		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());
@@ -787,6 +914,7 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 		trigAction.InputChannels = _inputChannels;
 		trigAction.MidiInputChannels = _midiInputChannels;
+		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
 			trigAction.SetUserConfig(cfg.value());

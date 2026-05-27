@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <optional>
@@ -8,6 +9,7 @@
 #include "GuiElement.h"
 #include "Tickable.h"
 #include "Timer.h"
+#include "MidiEvent.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
@@ -221,6 +223,7 @@ namespace engine
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
 		std::vector<unsigned int> MidiInputChannels;
+		std::vector<std::string> MidiInputDevices;
 		std::string TextureRecording;
 		std::string TextureDitchDown;
 		std::string TextureOverdubbing;
@@ -258,7 +261,9 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		actions::ActionResult OnBindingEvent(TriggerSource source,
+		actions::ActionResult OnEvent(const MidiEvent& event,
+			const base::Action& action);
+		actions::ActionResult OnEvent(TriggerSource source,
 			unsigned int value,
 			unsigned int state,
 			const base::Action& action,
@@ -276,6 +281,8 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		void AddMidiInputChannel(unsigned int chan);
+		void AddMidiInputDevice(std::string device);
+		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		TriggerState GetState() const;
 		bool IsDitchDown() const;
 		void Reset();
@@ -293,6 +300,9 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
+		static bool TryEncodeMidiEvent(const MidiEvent& event,
+			unsigned int& outValue,
+			unsigned int& outState);
 		bool IgnoreRepeats(bool isActivate,
 			DualBinding::TestResult trigResult);
 		bool Debounce(bool isActivate,
@@ -338,9 +348,13 @@ namespace engine
 		std::vector<DualBinding> _ditchBindings;
 		std::vector<unsigned int> _inputChannels;
 		std::vector<unsigned int> _midiInputChannels;
+		std::vector<std::string> _midiInputDevices;
 		TriggerState _state;
 		std::string _overdubSourceId;
-		unsigned long _recordSampCount;
+		// Written by audio thread (OnTick) and read by event-handler threads
+		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
+		// (relaxed) gives a coherent snapshot without locks on the RT path.
+		std::atomic<unsigned long> _recordSampCount;
 		Time _lastActivateTime;
 		Time _lastDitchTime;
 		bool _isDitchDown;

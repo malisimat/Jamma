@@ -1,15 +1,15 @@
 
 #include "gtest/gtest.h"
 #include "engine/LoopModel.h"
-#include "engine/VU.h"
+#include "graphics/VU.h"
 
 #include <cmath>
 
 using audio::BufferBank;
 using engine::LoopModel;
 using engine::LoopModelParams;
-using engine::VU;
-using engine::VuParams;
+using graphics::VU;
+using graphics::VuParams;
 
 namespace
 {

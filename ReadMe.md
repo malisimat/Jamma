@@ -15,6 +15,7 @@ Current Version: v5.0.2
 * Designed to work with just footpedals, if needed
 * Overdubbing
 * MIDI loops with audio slicing
+* MIDI-triggered record and ditch control via rig-file mapping
 * Immersive and touch-centric user interface
 * VST effects and audio manipulation
 
@@ -61,6 +62,58 @@ Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
 ```
 
 After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
+
+## Multi-Device MIDI Trigger Rig Config
+
+Rig files can map station triggers to MIDI Note or CC input and can record MIDI loops from multiple configured MIDI devices at the same time.
+
+- `user.midi.devices` lists the MIDI inputs Jamma should open.
+- `triggers[].trigger.device` selects the single device that controls trigger activation and ditch.
+- `triggers[].midiinput` controls which one-based MIDI channels are recorded into MIDI loops.
+- `triggers[].midiinputdevices` controls which MIDI devices are recorded into MIDI loops.
+
+Example:
+
+```json
+{
+	"name": "rig",
+	"user": {
+		"audio": { "name": "HDMI", "bufsize": 255, "inlatency": 414, "outlatency": 414, "numchannelsin": 0, "numchannelsout": 10 },
+		"midi": {
+			"devices": [
+				{ "name": "TriggerPad", "enabled": true },
+				{ "name": "Keys A", "enabled": true },
+				{ "name": "Keys B", "enabled": true }
+			]
+		}
+	},
+	"triggers": [
+		{
+			"name": "Trig1",
+			"stationtype": 0,
+			"midiinput": [1],
+			"midiinputdevices": ["Keys A", "Keys B"],
+			"trigger": {
+				"type": "midi",
+				"device": "TriggerPad",
+				"activate": { "kind": "note", "channel": 1, "id": 60 },
+				"ditch": { "kind": "cc", "channel": 1, "id": 64 }
+			}
+		}
+	]
+}
+```
+
+Notes:
+
+- `device` may match one of the names in `user.midi.devices` if the same controller should both play/record MIDI loops and trigger recording.
+- Device names are matched exactly. Startup logs report trigger devices or loop-record devices that do not match an active MIDI input.
+- `channel` is one-based in the rig file. If omitted, the mapping matches any MIDI channel.
+- `kind` supports `note`, `noteoff`, and `cc`.
+- `note` (aliases: `noteon`, `note-on`, `note on`) uses Note On as press and Note Off or Note On with velocity 0 as release.
+- `noteoff` (aliases: `note-off`, `note off`) triggers on Note Off and releases on Note On—the inverse of `note`.
+- `cc` uses values greater than 0 as press and `0` as release.
+- Velocity is ignored for trigger purposes.
 
 ### Ninjam Integration
 

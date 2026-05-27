@@ -6,7 +6,7 @@
 #include "../audio/FallingValue.h"
 #include "../gui/GuiModel.h"
 
-namespace engine
+namespace graphics
 {
 	class VuParams :
 		public gui::GuiModelParams

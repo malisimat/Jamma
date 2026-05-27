@@ -61,6 +61,38 @@ bool Json::IsTrue(std::string str)
 	return "true" == strLower;
 }
 
+std::optional<std::string> Json::GetString(const JsonPart& json, const std::string& key)
+{
+	auto iter = json.KeyValues.find(key);
+	if (iter == json.KeyValues.end())
+		return std::nullopt;
+
+	if (const auto value = std::get_if<std::string>(&iter->second))
+		return *value;
+
+	return std::nullopt;
+}
+
+std::optional<unsigned int> Json::GetUnsigned(const JsonPart& json, const std::string& key)
+{
+	auto iter = json.KeyValues.find(key);
+	if (iter == json.KeyValues.end())
+		return std::nullopt;
+
+	if (const auto value = std::get_if<unsigned long>(&iter->second))
+		return static_cast<unsigned int>(*value);
+
+	return std::nullopt;
+}
+
+std::string Json::NormaliseStringArrayValue(std::string value)
+{
+	if ((value.size() >= 2u) && (value.front() == '"') && (value.back() == '"'))
+		value = value.substr(1u, value.size() - 2u);
+
+	return value;
+}
+
 Json::KeyResult Json::ParseKey(std::stringstream ss)
 {	
 	std::string key;
@@ -110,11 +142,12 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 			auto isNextPart = false;
 			auto isArrayEnd = false;
 			auto isFirstIt = true;
+			auto isQuotedString = false;
 			std::vector<std::string> values;
 
-			while (ss >> c)
+			while (ss.get(c))
 			{
-				if (' ' == c)
+				if (!isQuotedString && std::isspace(static_cast<unsigned char>(c)))
 					continue;
 
 				if (isFirstIt)
@@ -158,10 +191,13 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 				}
 
 				if ('"' == c)
+				{
+					isQuotedString = !isQuotedString;
 					continue;
+				}
 
-				isArrayEnd = ']' == c;
-				if ((',' == c) || isArrayEnd)
+				isArrayEnd = !isQuotedString && (']' == c);
+				if (!isQuotedString && ((',' == c) || isArrayEnd))
 				{
 					charBuf.push_back('\0');
 					values.push_back(std::string(charBuf.data()));
