@@ -296,7 +296,7 @@ void Trigger::OnTick(Time curTime,
 		(TriggerState::TRIGSTATE_PUNCHEDIN == _state);
 
 	if (isRecording)
-		_recordSampCount += samps;
+		_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
 
 	for (auto& action : _delayedActions)
 	{

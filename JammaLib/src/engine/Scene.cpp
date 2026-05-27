@@ -1059,6 +1059,14 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
+	// Trigger-driven engine mutation (record start/end, overdub, ditch, MIDI
+	// loop writes) happens here via Trigger::OnEvent and LoopTake::RecordMidiEvent.
+	// Hold _audioMutex so mutation cannot interleave with Scene::CommitChanges()
+	// publishing back buffers on the main thread - this prevents partial
+	// multi-channel record-start visibility that produced block-quantised
+	// loop start offsets across channels.
+	std::scoped_lock lock(_audioMutex);
+
 	MidiEvent ingress{};
 	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
@@ -1191,6 +1199,10 @@ void Scene::_PublishMidiTriggerRoutes()
 
 void Scene::_PumpSerial()
 {
+	// See _PumpMidi: trigger dispatch must be serialised with CommitChanges
+	// publication to keep multi-channel record-start coherent.
+	std::scoped_lock lock(_audioMutex);
+
 	static const std::string kEmptyDevice;
 	while (true)
 	{

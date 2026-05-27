@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <optional>
@@ -350,7 +351,10 @@ namespace engine
 		std::vector<std::string> _midiInputDevices;
 		TriggerState _state;
 		std::string _overdubSourceId;
-		unsigned long _recordSampCount;
+		// Written by audio thread (OnTick) and read by event-handler threads
+		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
+		// (relaxed) gives a coherent snapshot without locks on the RT path.
+		std::atomic<unsigned long> _recordSampCount;
 		Time _lastActivateTime;
 		Time _lastDitchTime;
 		bool _isDitchDown;

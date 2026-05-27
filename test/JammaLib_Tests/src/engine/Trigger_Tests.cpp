@@ -247,6 +247,11 @@ public:
 		_PumpSerial();
 	}
 
+	std::mutex& AudioMutexForTest()
+	{
+		return _audioMutex;
+	}
+
 private:
 	std::string _testSerialDeviceName;
 };
@@ -1121,4 +1126,85 @@ TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
 	auto trigger = Trigger::FromFile(trigParams, trigStruct);
 
 	EXPECT_FALSE(trigger.has_value());
+}
+
+// Regression: trigger-driven engine mutation from the job thread (MIDI/serial
+// pumps) must not run concurrently with Scene::CommitChanges publication.
+// Holding _audioMutex while a pump runs proves the synchronisation point.
+TEST(Trigger, PumpMidiBlocksWhileAudioMutexHeld) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string("{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"default\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}");
+
+	auto station = MakeTestStation("station-a");
+	auto trigger = MakeTriggerFromRigJson(triggerJson);
+	station->AddTrigger(trigger);
+	scene.AddStationForTest(station);
+	scene.RegisterMidiTriggerRouteForTest("default", trigger, 0u);
+
+	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+
+	std::atomic<bool> pumpFinished{ false };
+	{
+		std::unique_lock<std::mutex> holdLock(scene.AudioMutexForTest());
+
+		std::thread pumpThread([&] {
+			scene.PumpMidiForTest();
+			pumpFinished.store(true, std::memory_order_release);
+		});
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		EXPECT_FALSE(pumpFinished.load(std::memory_order_acquire))
+			<< "PumpMidi must block while _audioMutex is held by another thread";
+		EXPECT_EQ(0u, station->NumTakes())
+			<< "Trigger dispatch must not occur until _audioMutex is released";
+
+		holdLock.unlock();
+		pumpThread.join();
+	}
+
+	EXPECT_TRUE(pumpFinished.load(std::memory_order_acquire));
+	EXPECT_EQ(1u, station->NumTakes());
+}
+
+TEST(Trigger, PumpSerialBlocksWhileAudioMutexHeld) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string("{\"name\":\"TrigSerial\",\"stationtype\":0,\"pairs\":[{\"source\":\"serial\",\"device\":\"pedal-a\",\"activatedown\":0,\"activateup\":0,\"ditchdown\":1,\"ditchup\":1}]}");
+
+	auto station = MakeTestStation("station-a");
+	station->AddTrigger(MakeTriggerFromRigJson(triggerJson));
+	scene.AddStationForTest(station);
+
+	scene.PushSerialTriggerEventForTest("pedal-a", 0u, true);
+
+	std::atomic<bool> pumpFinished{ false };
+	{
+		std::unique_lock<std::mutex> holdLock(scene.AudioMutexForTest());
+
+		std::thread pumpThread([&] {
+			scene.PumpSerialForTest();
+			pumpFinished.store(true, std::memory_order_release);
+		});
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		EXPECT_FALSE(pumpFinished.load(std::memory_order_acquire))
+			<< "PumpSerial must block while _audioMutex is held by another thread";
+		EXPECT_EQ(0u, station->NumTakes())
+			<< "Trigger dispatch must not occur until _audioMutex is released";
+
+		holdLock.unlock();
+		pumpThread.join();
+	}
+
+	EXPECT_TRUE(pumpFinished.load(std::memory_order_acquire));
+	EXPECT_EQ(1u, station->NumTakes());
 }
