@@ -1563,6 +1563,7 @@ void Scene::CloseAudio()
 
 void Scene::CommitChanges()
 {
+	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
 	std::optional<io::NinjamRemoteSnapshot> pendingRemoteSnapshot;
 	{
@@ -1584,8 +1585,29 @@ void Scene::CommitChanges()
 		{
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
-				jobList.insert(jobList.end(), jobs.begin(), jobs.end());
+			{
+				for (auto& job : jobs)
+				{
+					switch (job.JobActionType)
+					{
+					case JobAction::JOB_UPDATELOOPS:
+					case JobAction::JOB_ENDRECORDING:
+						syncJobs.push_back(std::move(job));
+						break;
+					default:
+						jobList.push_back(std::move(job));
+						break;
+					}
+				}
+			}
 		}
+	}
+
+	for (auto& job : syncJobs)
+	{
+		auto receiver = job.Receiver.lock();
+		if (receiver)
+			receiver->OnAction(job);
 	}
 
 	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
@@ -1932,9 +1954,6 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
 
-	if (_label)
-		_label->InitResources(resourceLib, forceInit);
-
 	// Stations can be added after scene resources are initialised.
 	auto stations = _stations;
 	for (auto& station : stations)
@@ -1952,9 +1971,6 @@ glm::mat4 Scene::_View()
 
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
-	_stations.push_back(station);
-	_PublishAudioStations();
-
 	station->SetClock(_clock);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
@@ -1966,6 +1982,9 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		selectDepth = (unsigned int)DEPTH_LOOP;
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
+
+	_stations.push_back(station);
+	_PublishAudioStations();
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)

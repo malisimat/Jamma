@@ -212,6 +212,9 @@ namespace engine
 		virtual bool UnMute() override;
 		virtual void Reset() override;
 		virtual void Update();
+		void UpdateCapacity();
+		void RefreshVisualModel();
+		bool CanRefreshVisualModel() const noexcept;
 
 		unsigned int LoopChannel() const;
 		void SetLoopChannel(unsigned int channel);

@@ -1,9 +1,13 @@
 #include "BufferBank.h"
 
+#include <algorithm>
+
 using namespace audio;
 
 BufferBank::BufferBank() :
-	_length(0ul)
+	_dummy(0.0f),
+	_length(0ul),
+	_numBanks(0u)
 {
 	Init();
 }
@@ -12,11 +16,41 @@ BufferBank::~BufferBank()
 {
 }
 
+BufferBank::BufferBank(BufferBank&& other) noexcept :
+	_dummy(other._dummy),
+	_length(0ul),
+	_numBanks(0u)
+{
+	swap(other);
+}
+
+BufferBank& BufferBank::operator=(BufferBank&& other) noexcept
+{
+	if (this != &other)
+		swap(other);
+
+	return *this;
+}
+
+void BufferBank::swap(BufferBank& other) noexcept
+{
+	std::swap(_dummy, other._dummy);
+
+	auto length = _length.load(std::memory_order_relaxed);
+	_length.store(other._length.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	other._length.store(length, std::memory_order_relaxed);
+
+	auto numBanks = _numBanks.load(std::memory_order_relaxed);
+	_numBanks.store(other._numBanks.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	other._numBanks.store(numBanks, std::memory_order_relaxed);
+
+	for (auto i = 0u; i < _MaxBanks; ++i)
+		std::swap(_bufferBank[i], other._bufferBank[i]);
+}
+
 void BufferBank::Init()
 {
-	_length = 0;
-	_bufferBank.clear();
-
+	_length.store(0ul, std::memory_order_relaxed);
 	UpdateCapacity();
 }
 
@@ -49,39 +83,40 @@ float& audio::BufferBank::operator[](unsigned long index)
 void BufferBank::SetLength(unsigned long length)
 {
 	auto capacity = Capacity();
-	_length = length < capacity ? length : capacity;
+	_length.store(length < capacity ? length : capacity, std::memory_order_relaxed);
 }
 
 void BufferBank::Resize(unsigned long length)
 {
-	_length = length;
+	_length.store(length, std::memory_order_relaxed);
 	UpdateCapacity();
 }
 
 void BufferBank::UpdateCapacity()
 {
-	int numBanks = NumBanksToHold(_length, true);
+	auto numBanks = static_cast<unsigned int>(NumBanksToHold(Length(), true));
+	numBanks = std::min(numBanks, _MaxBanks);
 
-	if (numBanks > _bufferBank.size())
+	auto currentBanks = _numBanks.load(std::memory_order_acquire);
+	while (currentBanks < numBanks)
 	{
-		while (numBanks > _bufferBank.size())
-			_bufferBank.push_back(std::vector<float>(_BufferBankSize, 0.0f));
-	}
-	else if (numBanks < _bufferBank.size())
-	{
-		while (numBanks < _bufferBank.size())
-			_bufferBank.pop_back();
+		if (!_bufferBank[currentBanks])
+			_bufferBank[currentBanks] = std::make_unique<float[]>(_BufferBankSize);
+
+		std::fill_n(_bufferBank[currentBanks].get(), _BufferBankSize, 0.0f);
+		++currentBanks;
+		_numBanks.store(currentBanks, std::memory_order_release);
 	}
 }
 
 unsigned long BufferBank::Length() const
 {
-	return _length;
+	return _length.load(std::memory_order_relaxed);
 }
 
 unsigned long BufferBank::Capacity() const
 {
-	return _BufferBankSize * (unsigned long)_bufferBank.size();
+	return _BufferBankSize * static_cast<unsigned long>(_numBanks.load(std::memory_order_acquire));
 }
 
 float BufferBank::SubMin(unsigned long i1, unsigned long i2) const

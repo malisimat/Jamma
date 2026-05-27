@@ -517,6 +517,8 @@ ActionResult LoopTake::OnAction(JobAction action)
 	case JobAction::JOB_ENDRECORDING:
 	{
 		EndRecording();
+		_UpdateLoops();
+		_UpdateMidiModels(true);
 		std::cout << "Ended recording" << std::endl;
 
 		ActionResult res;
@@ -1285,7 +1287,8 @@ void LoopTake::_UpdateLoops()
 {
 	for (auto& loop : _loops)
 	{
-		loop->Update();
+		loop->UpdateCapacity();
+		loop->RefreshVisualModel();
 	}
 
 	_UpdateMidiModels(false);
@@ -1293,6 +1296,15 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
+	const auto state = _state.load(std::memory_order_relaxed);
+	const auto isRecording = (STATE_RECORDING == state) ||
+		(STATE_PLAYINGRECORDING == state) ||
+		(STATE_OVERDUBBING == state) ||
+		(STATE_PUNCHEDIN == state) ||
+		(STATE_OVERDUBBINGRECORDING == state);
+	if (isRecording && !force)
+		return;
+
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	for (auto& midiLoop : _midiLoops)
 	{

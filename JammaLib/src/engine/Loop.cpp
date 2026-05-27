@@ -661,10 +661,39 @@ void Loop::Reset()
 
 void Loop::Update()
 {
-	_UpdateLoopModel();
+	RefreshVisualModel();
+	UpdateCapacity();
+}
 
+void Loop::UpdateCapacity()
+{
 	_bufferBank.UpdateCapacity();
 	_monitorBufferBank.UpdateCapacity();
+}
+
+void Loop::RefreshVisualModel()
+{
+	if (!CanRefreshVisualModel())
+		return;
+
+	_UpdateLoopModel();
+}
+
+bool Loop::CanRefreshVisualModel() const noexcept
+{
+	switch (_playState.load(std::memory_order_relaxed))
+	{
+	case STATE_INACTIVE:
+	case STATE_RECORDING:
+	case STATE_PLAYINGRECORDING:
+	case STATE_PLAYING:
+	case STATE_OVERDUBBING:
+	case STATE_PUNCHEDIN:
+	case STATE_OVERDUBBINGRECORDING:
+		return true;
+	default:
+		return false;
+	}
 }
 
 void Loop::EndRecording()
