@@ -10,6 +10,7 @@
 #include <string>
 #include <cstdint>
 #include <windows.h>
+#include "../engine/MidiEvent.h"
 #include "../utils/CommonTypes.h"
 #include "VstAudioBuffers.h"
 
@@ -50,6 +51,15 @@ namespace vst
 
 		// Process numSamples of an exact-match multichannel bus in-place.  Real-time safe.
 		virtual void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept = 0;
+
+		// Start a new audio block for sample-accurate MIDI delivery. Real-time safe.
+		virtual void BeginMidiBlock(std::uint32_t blockStartSample,
+			std::uint32_t numSamples) noexcept = 0;
+
+		// Queue a MIDI event for the current block. event.sampleOffset is an
+		// absolute sample position. Real-time safe.
+		virtual void SendMidiEvent(const engine::MidiEvent& event,
+			bool isRealtime) noexcept = 0;
 
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.

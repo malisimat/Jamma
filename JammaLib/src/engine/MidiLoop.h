@@ -20,6 +20,13 @@ namespace engine
 		virtual void OnEvent(const MidiEvent& ev) noexcept = 0;
 	};
 
+	class IMidiOutputSink
+	{
+	public:
+		virtual ~IMidiOutputSink() = default;
+		virtual void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept = 0;
+	};
+
 	enum class MidiLoopState : std::uint8_t
 	{
 		Empty,

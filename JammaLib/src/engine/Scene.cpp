@@ -1087,6 +1087,15 @@ void Scene::_PumpMidi()
 			_DispatchMidiTriggerEvent(input->DeviceSlot, ingress);
 
 			const auto msgType = ingress.MessageType();
+			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
+			{
+				for (const auto& station : stations)
+				{
+					if (station && !station->IsRemote())
+						station->EnqueueLiveMidiEvent(ingress);
+				}
+			}
+
 			if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 				continue;
 
@@ -1787,7 +1796,8 @@ void Scene::_OnAudio(float* inBuf,
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
+				static_cast<std::uint32_t>(blockStartSample));
 			station->EndMultiPlay(numSamps);
 		}
 
@@ -1798,7 +1808,8 @@ void Scene::_OnAudio(float* inBuf,
 		for (auto& station : stations)
 		{
 			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
+				static_cast<std::uint32_t>(blockStartSample));
 			station->EndMultiPlay(numSamps);
 		}
 	}

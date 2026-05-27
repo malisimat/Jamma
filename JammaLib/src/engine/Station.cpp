@@ -295,12 +295,32 @@ void Station::Zero(unsigned int numSamps,
 void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	std::uint32_t blockStartSample)
 {
 	auto ptr = Sharable::shared_from_this();
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
+
+	class StationMidiSink final : public IMidiOutputSink
+	{
+	public:
+		StationMidiSink(Station& station, std::shared_ptr<vst::VstChain> chain) noexcept :
+			_station(station),
+			_chain(std::move(chain))
+		{
+		}
+
+		void OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept override
+		{
+			_station._SendMidiToVstChain(_chain, event, false, outputIndex);
+		}
+
+	private:
+		Station& _station;
+		std::shared_ptr<vst::VstChain> _chain;
+	};
 
 	for (const auto& take : state->LoopTakes)
 		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
@@ -337,7 +357,20 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
+	{
+		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+
+		MidiEvent liveMidi{};
+		while (_liveMidiIngress.Pop(liveMidi))
+			_SendMidiToVstChain(chain, liveMidi, true, LiveMidiOutputIndex);
+
+		StationMidiSink midiSink(*this, chain);
+		auto midiOutputIndex = 0u;
+		for (const auto& take : state->LoopTakes)
+			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+
 		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	}
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -1080,6 +1113,30 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 	}
 }
 
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
+{
+	_liveMidiIngress.Push(event);
+}
+
+void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
+{
+	auto routes = _midiVstRoutes.load(std::memory_order_acquire);
+	auto nextRoutes = routes ?
+		std::make_shared<std::vector<std::pair<unsigned int, size_t>>>(*routes) :
+		std::make_shared<std::vector<std::pair<unsigned int, size_t>>>();
+
+	nextRoutes->erase(std::remove(nextRoutes->begin(), nextRoutes->end(), std::make_pair(midiOutputIndex, vstIndex)),
+		nextRoutes->end());
+	nextRoutes->push_back({ midiOutputIndex, vstIndex });
+	_midiVstRoutes.store(nextRoutes, std::memory_order_release);
+}
+
+void Station::ClearMidiVstRoutes()
+{
+	_midiVstRoutes.store(std::make_shared<const std::vector<std::pair<unsigned int, size_t>>>(),
+		std::memory_order_release);
+}
+
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
 {
 	if (0 == numTakes)
@@ -1332,6 +1389,35 @@ void Station::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
+}
+
+void Station::_SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
+	const MidiEvent& event,
+	bool isRealtime,
+	unsigned int midiOutputIndex) noexcept
+{
+	if (!chain)
+		return;
+
+	auto routes = _midiVstRoutes.load(std::memory_order_acquire);
+	if (!routes || routes->empty())
+	{
+		chain->SendMidiEvent(event, isRealtime);
+		return;
+	}
+
+	bool routed = false;
+	for (const auto& route : *routes)
+	{
+		if (route.first != midiOutputIndex)
+			continue;
+
+		chain->SendMidiEventToPlugin(route.second, event, isRealtime);
+		routed = true;
+	}
+
+	if (!routed)
+		chain->SendMidiEvent(event, isRealtime);
 }
 
 void Station::LoadVstPlugin(std::wstring path)

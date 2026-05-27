@@ -80,6 +80,9 @@
     <ClCompile Include="src\engine\StationRack_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>

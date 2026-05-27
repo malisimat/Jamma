@@ -159,6 +159,10 @@ namespace engine
 		bool RecordMidiEvent(const MidiEvent& ev,
 			const std::string& device,
 			std::uint32_t globalSampleNow) noexcept;
+		unsigned int ReadMidiBlock(std::uint32_t globalSample,
+			std::uint32_t numSamples,
+			IMidiOutputSink& sink,
+			unsigned int firstOutputIndex = 0u) noexcept;
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;

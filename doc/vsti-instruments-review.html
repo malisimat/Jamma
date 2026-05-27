@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jamma VSTi Instrument Support Review</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #576575;
+      --line: #d8dee6;
+      --paper: #ffffff;
+      --band: #eef4f7;
+      --accent: #1f7a6d;
+      --accent-2: #9d5c22;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.55;
+    }
+
+    header {
+      padding: 40px 24px 28px;
+      background: var(--band);
+      border-bottom: 1px solid var(--line);
+    }
+
+    main {
+      width: min(1080px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 28px 0 56px;
+    }
+
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { width: min(1080px, calc(100% - 48px)); margin: 0 auto 8px; font-size: 2rem; }
+    header p { width: min(1080px, calc(100% - 48px)); margin: 0 auto; color: var(--muted); }
+    h2 { margin: 34px 0 12px; font-size: 1.25rem; }
+    h3 { margin: 20px 0 8px; font-size: 1rem; color: var(--accent); }
+    p { margin: 0 0 12px; }
+    ul { margin: 0 0 16px 22px; padding: 0; }
+    li { margin: 5px 0; }
+    code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.94em; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin: 20px 0 28px;
+    }
+
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: #fbfcfd;
+    }
+
+    .tile strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent-2);
+    }
+
+    .note {
+      border-left: 4px solid var(--accent);
+      padding: 10px 14px;
+      background: #f5faf8;
+      margin: 14px 0 18px;
+    }
+
+    .status-ok { color: #126141; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VSTi Instrument Support Review</h1>
+    <p>Implementation notes for station-owned VST instruments receiving live and recorded MIDI.</p>
+  </header>
+
+  <main>
+    <section class="summary" aria-label="Feature summary">
+      <div class="tile">
+        <strong>Scope</strong>
+        Station-owned VST2/VST3 instruments, live MIDI fanout, and recorded MIDI loop playback.
+      </div>
+      <div class="tile">
+        <strong>Persistence</strong>
+        No store or restore changes were made.
+      </div>
+      <div class="tile">
+        <strong>UI</strong>
+        No UI changes were made; routing is exposed at the engine/API level.
+      </div>
+      <div class="tile">
+        <strong>Tests</strong>
+        <span class="status-ok">Build and full native suite pass.</span>
+      </div>
+    </section>
+
+    <h2>What Changed</h2>
+    <p>
+      Stations now act as the instrument host point. A station can own a VST chain, receive live MIDI from the shared MIDI ingress, receive recorded MIDI events from its loop takes, and process those MIDI events before the station bus is rendered through the VST chain.
+    </p>
+    <ul>
+      <li><code>IVstPlugin</code> and <code>VstChain</code> gained block-scoped MIDI delivery methods.</li>
+      <li><code>Station</code> gained live MIDI ingress, MIDI-output-to-plugin routing, and recorded MIDI playback dispatch.</li>
+      <li><code>LoopTake</code> can read all MIDI loops in a block through indexed output sinks.</li>
+      <li><code>Scene::_PumpMidi</code> fans channel voice input to all non-remote stations so one MIDI input can play multiple station instruments.</li>
+      <li><code>Scene::_OnAudio</code> passes the absolute block start to stations for sample-accurate VST MIDI offsets.</li>
+      <li>VST2 instruments receive fixed-capacity <code>VstMidiEvent</code> blocks via <code>effProcessEvents</code>.</li>
+      <li>VST3 instruments receive fixed-capacity <code>IEventList</code> note events through <code>ProcessData.inputEvents</code>.</li>
+    </ul>
+
+    <h2>Routing Model</h2>
+    <p>
+      With no configured MIDI VST routes, station MIDI fans out to every plugin in that station's VST chain. When routes exist, a matching MIDI output index is delivered to the selected plugin index; unmatched outputs keep the default fanout behavior.
+    </p>
+    <p>
+      Live MIDI uses <code>Station::LiveMidiOutputIndex</code>. Recorded MIDI outputs are indexed by walking the station's loop takes and the MIDI loops within each take, preserving deterministic output indexes without changing file storage.
+    </p>
+
+    <h2>Real-Time Review</h2>
+    <div class="note">
+      Rubber-duck question: does the audio callback allocate, lock, block, or touch slow I/O in the new MIDI/VST path? Answer: no new callback-owned path does that.
+    </div>
+    <ul>
+      <li>Live MIDI ingress uses the existing lock-free SPSC queue.</li>
+      <li>Recorded MIDI dispatch uses stack-only sink adapters.</li>
+      <li>VST2 MIDI event storage is a fixed array capped at 256 events per block.</li>
+      <li>VST3 MIDI event storage is a fixed array capped at 256 events per block.</li>
+      <li>Route publication allocates outside the audio callback and is consumed via atomic shared snapshots.</li>
+      <li>No new mutexes, blocking calls, filesystem calls, logging, or dynamic allocation were added to <code>Scene::_OnAudio</code>, <code>Station::WriteBlock</code>, <code>LoopTake::ReadMidiBlock</code>, or the VST process path.</li>
+    </ul>
+
+    <h2>Verification</h2>
+    <ul>
+      <li>Targeted build: <code>test\JammaLib_Tests\JammaLib_Tests.vcxproj</code>, Debug x64, passed with 0 warnings and 0 errors.</li>
+      <li>Focused tests: <code>StationMidiInstrument.*</code>, 4 tests passed.</li>
+      <li>Full native test executable: 433 tests ran, 432 passed, 1 skipped (<code>MidiDevice.OpensPreferredDeviceWhenAvailable</code>).</li>
+    </ul>
+
+    <h2>Coverage Added</h2>
+    <ul>
+      <li>Live MIDI reaches a station VST plugin.</li>
+      <li>The same live MIDI input can play multiple stations.</li>
+      <li>Live MIDI can route to a specific plugin index.</li>
+      <li>Recorded MIDI loop playback can route to a specific station plugin.</li>
+    </ul>
+
+    <h2>Known Limits</h2>
+    <ul>
+      <li>Tests use fake plugins and do not load an actual VSTi, by design.</li>
+      <li>VST3 MIDI event support currently maps note on and note off events. Other controller-style input can be added once host/plugin expectations are pinned down.</li>
+      <li>Routing is present in engine APIs. No visible UI or persistence was added, matching the plan's explicit constraints.</li>
+    </ul>
+  </main>
+</body>
+</html>

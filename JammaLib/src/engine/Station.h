@@ -10,6 +10,7 @@
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
+#include "../io/MidiQueue.h"
 #include "../vst/VstChain.h"
 
 namespace engine
@@ -82,7 +83,8 @@ namespace engine
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
@@ -133,6 +135,10 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
+		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
+		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
+		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
+		void ClearMidiVstRoutes();
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -173,6 +179,10 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
+		void _SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
+			const MidiEvent& event,
+			bool isRealtime,
+			unsigned int midiOutputIndex) noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -214,6 +224,8 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		io::MidiQueue<1024> _liveMidiIngress;
+		std::atomic<std::shared_ptr<const std::vector<std::pair<unsigned int, size_t>>>> _midiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
