@@ -6,6 +6,51 @@
 
 namespace
 {
+	constexpr int MidiQuantisationDragPixelsPerStep = 32;
+
+	bool HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept
+	{
+		return (base::Action::MODIFIER_CTRL & modifiers)
+			&& (base::Action::MODIFIER_SHIFT & modifiers);
+	}
+
+	int MidiQuantisationFractionIndex(engine::MidiQuantisationFraction fraction) noexcept
+	{
+		return static_cast<int>(fraction);
+	}
+
+	engine::MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
+	{
+		if (index < 0)
+			index = 0;
+		else if (index >= static_cast<int>(engine::MidiQuantisationFractionCount))
+			index = static_cast<int>(engine::MidiQuantisationFractionCount) - 1;
+
+		return static_cast<engine::MidiQuantisationFraction>(index);
+	}
+
+	int MidiQuantisationDragSteps(int deltaY) noexcept
+	{
+		const auto absDelta = deltaY < 0 ? -deltaY : deltaY;
+		const auto steps = (absDelta + (MidiQuantisationDragPixelsPerStep / 2)) /
+			MidiQuantisationDragPixelsPerStep;
+		return deltaY < 0 ? steps : -steps;
+	}
+
+	const char* MidiQuantisationFractionLabel(engine::MidiQuantisationFraction fraction) noexcept
+	{
+		switch (fraction)
+		{
+		case engine::MidiQuantisationFraction::Whole: return "1";
+		case engine::MidiQuantisationFraction::Half: return "1/2";
+		case engine::MidiQuantisationFraction::Quarter: return "1/4";
+		case engine::MidiQuantisationFraction::Eighth: return "1/8";
+		case engine::MidiQuantisationFraction::Sixteenth: return "1/16";
+		case engine::MidiQuantisationFraction::ThirtySecond: return "1/32";
+		default: return "?";
+		}
+	}
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -21,6 +66,7 @@ namespace
 }
 
 using namespace engine;
+using base::Action;
 using base::AudioSink;
 using base::AudioSource;
 using base::DrawContext;
@@ -66,6 +112,11 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_masterMixer(nullptr),
 	_loops(),
 	_backLoops(),
+	_midiQuantisation(),
+	_midiQuantisationGestureActive(false),
+	_midiQuantisationGestureMoved(false),
+	_midiQuantisationGestureStartPosition({ 0, 0 }),
+	_midiQuantisationGestureStartFraction(MidiQuantisationFraction::Whole),
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
@@ -366,6 +417,90 @@ void LoopTake::SetSelectDepth(base::SelectDepth depth)
 		_guiRack->SetVisible(depth == base::SelectDepth::DEPTH_LOOPTAKE);
 }
 
+ActionResult LoopTake::OnAction(actions::TouchAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (_midiQuantisationGestureActive)
+	{
+		if (actions::TouchAction::TOUCH_UP == action.State)
+		{
+			if (!_midiQuantisationGestureMoved)
+			{
+				const auto enabled = !_midiQuantisation.Enabled;
+				std::cout << "MIDI quantisation gesture click: take=" << _id
+					<< " enabled " << _midiQuantisation.Enabled << " -> " << enabled
+					<< " fraction=" << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
+					<< " grain=" << _midiQuantisation.GrainSamps << std::endl;
+				_ApplyMidiQuantisationGesture(_midiQuantisation.Fraction, enabled, "click-toggle");
+			}
+			else
+			{
+				std::cout << "MIDI quantisation gesture end: take=" << _id
+					<< " moved=true enabled=" << _midiQuantisation.Enabled
+					<< " fraction=" << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
+					<< " grain=" << _midiQuantisation.GrainSamps << std::endl;
+			}
+
+			_midiQuantisationGestureActive = false;
+			_midiQuantisationGestureMoved = false;
+			return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+		}
+
+		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+	}
+
+	if ((actions::TouchAction::TOUCH_DOWN == action.State)
+		&& (0 == action.Index)
+		&& HasMidiQuantisationGestureModifiers(action.Modifiers)
+		&& HitTest(action.Position))
+	{
+		_midiQuantisationGestureActive = true;
+		_midiQuantisationGestureMoved = false;
+		_midiQuantisationGestureStartPosition = action.Position;
+		_midiQuantisationGestureStartFraction = _midiQuantisation.Fraction;
+
+		std::cout << "MIDI quantisation gesture start: take=" << _id
+			<< " enabled=" << _midiQuantisation.Enabled
+			<< " fraction=" << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
+			<< " grain=" << _midiQuantisation.GrainSamps
+			<< " modifiers=" << action.Modifiers << std::endl;
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_ACTIVEELEMENT;
+		res.ActiveElement = GuiElement::shared_from_this();
+		return res;
+	}
+
+	return Jammable::OnAction(action);
+}
+
+ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (!_midiQuantisationGestureActive)
+		return Jammable::OnAction(action);
+
+	_midiQuantisationGestureMoved = true;
+
+	const auto delta = action.Position - _midiQuantisationGestureStartPosition;
+	const auto startIndex = MidiQuantisationFractionIndex(_midiQuantisationGestureStartFraction);
+	const auto fraction = ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(delta.Y));
+
+	std::cout << "MIDI quantisation gesture drag: take=" << _id
+		<< " deltaY=" << delta.Y
+		<< " startFraction=" << MidiQuantisationFractionLabel(_midiQuantisationGestureStartFraction)
+		<< " targetFraction=" << MidiQuantisationFractionLabel(fraction)
+		<< " grain=" << _midiQuantisation.GrainSamps << std::endl;
+
+	_ApplyMidiQuantisationGesture(fraction, true, "drag-fraction");
+	return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+}
+
 ActionResult LoopTake::OnAction(GuiAction action)
 {
 	auto res = GuiElement::OnAction(action);
@@ -434,6 +569,10 @@ ActionResult LoopTake::OnAction(GuiAction action)
 			}
 			if (arr->Values.size() >= 3 && arr->Values[2] > 0)
 				updated.GrainSamps = static_cast<std::uint32_t>(arr->Values[2]);
+			std::cout << "MIDI quantisation GuiAction: take=" << _id
+				<< " enabled=" << updated.Enabled
+				<< " fraction=" << MidiQuantisationFractionLabel(updated.Fraction)
+				<< " grain=" << updated.GrainSamps << std::endl;
 			SetMidiQuantisation(updated);
 		}
 	}
@@ -1369,7 +1508,15 @@ void LoopTake::_UpdateMidiModelRotation()
 
 void LoopTake::SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept
 {
+	const auto previous = _midiQuantisation;
 	_midiQuantisation = settings;
+
+	std::cout << "LoopTake MIDI quantisation apply: take=" << _id
+		<< " enabled " << previous.Enabled << " -> " << _midiQuantisation.Enabled
+		<< " fraction " << MidiQuantisationFractionLabel(previous.Fraction)
+		<< " -> " << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
+		<< " grain " << previous.GrainSamps << " -> " << _midiQuantisation.GrainSamps
+		<< " midiLoops=" << _midiLoops.size() << std::endl;
 
 	// Propagate to live MidiLoops. Each MidiLoop owns its own preallocated
 	// parallel buffer and atomically publishes it, so this stays lock-free with
@@ -1383,6 +1530,24 @@ void LoopTake::SetMidiQuantisation(const MidiQuantisationSettings& settings) noe
 	// Refresh 3D visualisations immediately so the user sees the new placement
 	// without waiting for the next playback cycle.
 	_UpdateMidiModels(true);
+}
+
+void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept
+{
+	MidiQuantisationSettings updated = _midiQuantisation;
+	updated.Enabled = enabled;
+	updated.Fraction = fraction;
+
+	std::cout << "MIDI quantisation gesture apply: take=" << _id
+		<< " source=" << source
+		<< " enabled=" << updated.Enabled
+		<< " fraction=" << MidiQuantisationFractionLabel(updated.Fraction)
+		<< " grain=" << updated.GrainSamps;
+	if (updated.Enabled && updated.GrainSamps == 0u)
+		std::cout << " (inactive: grain unknown)";
+	std::cout << std::endl;
+
+	SetMidiQuantisation(updated);
 }
 
 void LoopTake::_RemoveMidiModelChildren()

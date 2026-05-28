@@ -1,5 +1,7 @@
 #include "MidiLoop.h"
 
+#include <iostream>
+
 #include "MidiModel.h"
 #include "MidiNoteSpan.h"
 #include "MidiQuantisation.h"
@@ -10,6 +12,20 @@ using namespace engine;
 namespace
 {
 	static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
+
+	const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
+	{
+		switch (fraction)
+		{
+		case MidiQuantisationFraction::Whole: return "1";
+		case MidiQuantisationFraction::Half: return "1/2";
+		case MidiQuantisationFraction::Quarter: return "1/4";
+		case MidiQuantisationFraction::Eighth: return "1/8";
+		case MidiQuantisationFraction::Sixteenth: return "1/16";
+		case MidiQuantisationFraction::ThirtySecond: return "1/32";
+		default: return "?";
+		}
+	}
 }
 
 MidiLoop::MidiLoop() noexcept
@@ -240,6 +256,14 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings) noexcep
 		RebuildQuantisedEvents();
 		_useQuantised.store(true, std::memory_order_release);
 	}
+
+	std::cout << "MidiLoop quantisation publish: enabled=" << _quantisation.Enabled
+		<< " fraction=" << MidiQuantisationFractionLabel(_quantisation.Fraction)
+		<< " grain=" << _quantisation.GrainSamps
+		<< " step=" << step
+		<< " loopLength=" << _loopLengthSamps
+		<< " events=" << _eventCount
+		<< " active=" << _useQuantised.load(std::memory_order_acquire) << std::endl;
 
 	if (previous != _quantisation)
 		++_revision;

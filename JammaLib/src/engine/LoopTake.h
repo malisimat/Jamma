@@ -110,6 +110,8 @@ namespace engine
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
@@ -201,6 +203,7 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		void _ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -230,6 +233,10 @@ namespace engine
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
 		MidiQuantisationSettings _midiQuantisation;
+		bool _midiQuantisationGestureActive;
+		bool _midiQuantisationGestureMoved;
+		utils::Position2d _midiQuantisationGestureStartPosition;
+		MidiQuantisationFraction _midiQuantisationGestureStartFraction;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

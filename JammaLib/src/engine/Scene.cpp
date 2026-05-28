@@ -466,6 +466,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers)
+		&& !(Action::MODIFIER_CTRL & action.Modifiers)
 		&& _TrySetMasterFromHover(true))
 	{
 		res.IsEaten = true;
@@ -2002,6 +2003,36 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
 	_clock->SetQuantisation(quantiseSamps, quantisation);
+	_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
+	_SetMidiQuantisationGrain(quantiseSamps, "scene quantisation set");
+}
+
+void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+{
+	unsigned int takeCount = 0u;
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			MidiQuantisationSettings settings = take->MidiQuantisation();
+			if (settings.GrainSamps != grainSamps)
+			{
+				settings.GrainSamps = grainSamps;
+				take->SetMidiQuantisation(settings);
+			}
+			++takeCount;
+		}
+	}
+
+	std::cout << "MIDI quantisation grain update: source=" << source
+		<< " grain=" << grainSamps
+		<< " takes=" << takeCount << std::endl;
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)
@@ -2011,6 +2042,7 @@ void Scene::_ClearTimingState(bool clearTapTempo)
 	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 	_hasPendingTempo.store(false, std::memory_order_release);
+	_SetMidiQuantisationGrain(0u, "timing clear");
 
 	if (clearTapTempo)
 	{
@@ -2217,6 +2249,7 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 	_clock->SetSeedSourceLength(timing.MasterLoopSamps);
 
 	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
+	_SetMidiQuantisationGrain(timing.SeedSamps, source);
 	_hasPendingTempo.store((timing.Bpm > 0.0f) && (timing.Bpi > 0u), std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 

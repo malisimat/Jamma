@@ -244,6 +244,7 @@ namespace engine
 		glm::mat4 _View();
 		void _AddStation(std::shared_ptr<Station> station);
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _JobLoop();
 		void _PumpMidi();
 		void _PushMidiEvent(std::uint8_t deviceSlot,

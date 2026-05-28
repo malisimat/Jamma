@@ -19,6 +19,8 @@ using engine::MidiModelParams;
 using engine::MidiQuantisationFraction;
 using engine::MidiQuantisationSettings;
 using engine::Timer;
+using actions::TouchAction;
+using actions::TouchMoveAction;
 using audio::MergeMixBehaviourParams;
 using base::Audible;
 
@@ -534,4 +536,91 @@ TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
 	EXPECT_TRUE(applied.Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Eighth, applied.Fraction);
 	EXPECT_EQ(1600u, applied.GrainSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, CtrlShiftDragEditsFraction) {
+	auto take = MakeLoopTake();
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	take->SetMidiQuantisation(settings);
+
+	TouchAction down;
+	down.State = TouchAction::TOUCH_DOWN;
+	down.Index = 0;
+	down.Position = { 20, 20 };
+	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	const auto downResult = take->OnAction(down);
+	EXPECT_TRUE(downResult.IsEaten);
+
+	TouchMoveAction move;
+	move.Index = 0;
+	move.Position = { 20, -44 };
+	move.Modifiers = down.Modifiers;
+	const auto moveResult = take->OnAction(move);
+	EXPECT_TRUE(moveResult.IsEaten);
+
+	const auto& moved = take->MidiQuantisation();
+	EXPECT_TRUE(moved.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, moved.Fraction);
+	EXPECT_EQ(1600u, moved.GrainSamps);
+
+	TouchAction up;
+	up.State = TouchAction::TOUCH_UP;
+	up.Index = 0;
+	up.Position = move.Position;
+	up.Modifiers = down.Modifiers;
+	const auto upResult = take->OnAction(up);
+	EXPECT_TRUE(upResult.IsEaten);
+
+	const auto& finished = take->MidiQuantisation();
+	EXPECT_TRUE(finished.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, finished.Fraction);
+}
+
+TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
+	auto take = MakeLoopTake();
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Eighth;
+	settings.GrainSamps = 1600u;
+	take->SetMidiQuantisation(settings);
+
+	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+
+	TouchAction down;
+	down.State = TouchAction::TOUCH_DOWN;
+	down.Index = 0;
+	down.Position = { 20, 20 };
+	down.Modifiers = ctrlShift;
+	EXPECT_TRUE(take->OnAction(down).IsEaten);
+
+	TouchAction up = down;
+	up.State = TouchAction::TOUCH_UP;
+	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	EXPECT_TRUE(take->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
+
+	EXPECT_TRUE(take->OnAction(down).IsEaten);
+	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	EXPECT_FALSE(take->MidiQuantisation().Enabled);
+
+	EXPECT_TRUE(take->OnAction(down).IsEaten);
+
+	TouchMoveAction moveAway;
+	moveAway.Index = 0;
+	moveAway.Position = { 20, -44 };
+	moveAway.Modifiers = ctrlShift;
+	EXPECT_TRUE(take->OnAction(moveAway).IsEaten);
+
+	TouchMoveAction moveBack = moveAway;
+	moveBack.Position = down.Position;
+	EXPECT_TRUE(take->OnAction(moveBack).IsEaten);
+
+	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	EXPECT_TRUE(take->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
 }
