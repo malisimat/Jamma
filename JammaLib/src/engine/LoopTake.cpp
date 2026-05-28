@@ -1296,15 +1296,6 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
-	const auto state = _state.load(std::memory_order_relaxed);
-	const auto isRecording = (STATE_RECORDING == state) ||
-		(STATE_PLAYINGRECORDING == state) ||
-		(STATE_OVERDUBBING == state) ||
-		(STATE_PUNCHEDIN == state) ||
-		(STATE_OVERDUBBINGRECORDING == state);
-	if (isRecording && !force)
-		return;
-
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	for (auto& midiLoop : _midiLoops)
 	{

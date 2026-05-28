@@ -14,6 +14,7 @@
 .vscode/launch.json
 .vscode/tasks.json
 packages/
+.copilot/*
 vcpkg_installed/
 test/JammaLib_Tests/x64/
 Directory.Build.local.props
