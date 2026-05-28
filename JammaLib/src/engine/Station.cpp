@@ -356,14 +356,20 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	}
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
-	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
-	{
+	const bool vstActive = chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
+	if (vstActive)
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 
-		MidiEvent liveMidi{};
-		while (_liveMidiIngress.Pop(liveMidi))
+	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
+	MidiEvent liveMidi{};
+	while (_liveMidiIngress.Pop(liveMidi))
+	{
+		if (vstActive)
 			_SendMidiToVstChain(chain, liveMidi, true, LiveMidiOutputIndex);
+	}
 
+	if (vstActive)
+	{
 		StationMidiSink midiSink(*this, chain);
 		auto midiOutputIndex = 0u;
 		for (const auto& take : state->LoopTakes)
