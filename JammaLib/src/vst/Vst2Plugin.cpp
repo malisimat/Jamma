@@ -381,14 +381,15 @@ void Vst2Plugin::SendMidiEvent(const engine::MidiEvent& event,
 		return;
 
 	const auto blockEnd = _midiBlockStartSample + _midiBlockNumSamples;
-	if (event.sampleOffset < _midiBlockStartSample || event.sampleOffset >= blockEnd)
+	const bool inWindow = (event.sampleOffset >= _midiBlockStartSample && event.sampleOffset < blockEnd);
+	if (!inWindow && !isRealtime)
 		return;
 
 	auto& midiEvent = _midiEvents[_midiEventCount];
 	midiEvent = {};
 	midiEvent.type = kVstMidiType;
 	midiEvent.byteSize = sizeof(VstMidiEvent);
-	midiEvent.deltaFrames = static_cast<VstInt32>(event.sampleOffset - _midiBlockStartSample);
+	midiEvent.deltaFrames = inWindow ? static_cast<VstInt32>(event.sampleOffset - _midiBlockStartSample) : 0;
 	midiEvent.flags = isRealtime ? kVstMidiEventIsRealtime : 0;
 	midiEvent.midiData[0] = static_cast<char>(event.status);
 	midiEvent.midiData[1] = static_cast<char>(event.data1);

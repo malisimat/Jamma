@@ -168,12 +168,13 @@ public:
 			return;
 
 		const auto blockEnd = _blockStartSample + _blockNumSamples;
-		if (midiEvent.sampleOffset < _blockStartSample || midiEvent.sampleOffset >= blockEnd)
+		const bool inWindow = (midiEvent.sampleOffset >= _blockStartSample && midiEvent.sampleOffset < blockEnd);
+		if (!inWindow && !isRealtime)
 			return;
 
 		Event event{};
 		event.busIndex = 0;
-		event.sampleOffset = static_cast<int32>(midiEvent.sampleOffset - _blockStartSample);
+		event.sampleOffset = inWindow ? static_cast<int32>(midiEvent.sampleOffset - _blockStartSample) : 0;
 		event.ppqPosition = 0.0;
 		event.flags = isRealtime ? Event::kIsLive : 0;
 
