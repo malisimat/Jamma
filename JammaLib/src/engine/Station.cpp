@@ -1412,6 +1412,9 @@ void Station::_SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
 		if (route.first != midiOutputIndex)
 			continue;
 
+		if (route.second >= chain->NumPlugins())
+			continue;
+
 		chain->SendMidiEventToPlugin(route.second, event, isRealtime);
 		routed = true;
 	}
