@@ -235,8 +235,8 @@ public:
 			event.type = Event::kLegacyMIDICCOutEvent;
 			event.midiCCOut.controlNumber = static_cast<uint8>(kPitchBend);
 			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
-			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);   // LSB
-			event.midiCCOut.value2 = static_cast<int8>(midiEvent.data2);  // MSB
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = static_cast<int8>(midiEvent.data2);
 		}
 		else
 		{
