@@ -257,6 +257,34 @@ TEST(MidiLoop, ResetReturnsToEmpty) {
 	ASSERT_EQ(0u, loop.LoopLengthSamps());
 }
 
+// HeldNotes() tracks notes that have been played (NoteOn emitted) but not yet released.
+// Station::_DitchLoopTake reads HeldNotes() before calling Ditch() to enqueue NoteOff
+// events, preventing stuck notes in the VST instrument.
+TEST(MidiLoop, HeldNotesTracksPlayedButUnreleasedNotes) {
+	MidiLoop loop;
+	loop.StartRecord();
+	// NoteOn with no matching NoteOff — note will remain held after playback.
+	loop.RecordEvent(MidiEvent::MakeNoteOn(10u, 0, 60, 100));
+	loop.EndRecord(1000u);
+
+	// Before any ReadBlock, no notes are held.
+	EXPECT_TRUE(loop.HeldNotes().none());
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 100u, sink); // block [0,100) — plays the NoteOn at loopOffset 10.
+
+	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_TRUE(sink.events[0].IsNoteOn());
+
+	// After playback, the note should be tracked as held.
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
+
+	// Other notes and channels are not held.
+	EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 61)));
+	EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(1, 60)));
+}
+
+
 TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	MidiLoop loop;
 	loop.StartRecord();

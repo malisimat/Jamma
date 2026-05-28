@@ -183,6 +183,9 @@ namespace engine
 			const MidiEvent& event,
 			bool isRealtime,
 			unsigned int midiOutputIndex) noexcept;
+		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
+		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
+		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;

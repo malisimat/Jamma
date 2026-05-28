@@ -619,7 +619,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
-				loopTake.value()->Ditch();
+				_DitchLoopTake(loopTake.value());
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -692,7 +692,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
-				loopTake.value()->Ditch();
+				_DitchLoopTake(loopTake.value());
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -778,7 +778,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
-			loopTake.value()->Ditch();
+			_DitchLoopTake(loopTake.value());
 
 			auto id = loopTake.value()->Id();
 			auto match = std::find_if(_backLoopTakes.begin(),
@@ -1428,6 +1428,30 @@ void Station::_SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
 
 	if (!routed)
 		chain->SendMidiEvent(event, isRealtime);
+}
+
+void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
+{
+	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
+	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
+	// drained by the audio thread on the next WriteBlock call.
+	for (const auto& midiLoop : take->GetMidiLoops())
+	{
+		if (!midiLoop)
+			continue;
+		const auto& held = midiLoop->HeldNotes();
+		if (held.none())
+			continue;
+		for (std::uint8_t ch = 0; ch < 16; ++ch)
+		{
+			for (std::uint8_t note = 0; note < 128; ++note)
+			{
+				if (held.test(MidiLoop::NoteSlot(ch, note)))
+					EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(0u, ch, note));
+			}
+		}
+	}
+	take->Ditch();
 }
 
 void Station::LoadVstPlugin(std::wstring path)
