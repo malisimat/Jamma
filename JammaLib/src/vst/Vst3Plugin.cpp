@@ -21,6 +21,7 @@
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
 #include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
 #include "vst3sdk/pluginterfaces/vst/ivstevents.h"
+#include "vst3sdk/pluginterfaces/vst/ivstmidicontrollers.h"
 #include "vst3sdk/pluginterfaces/gui/iplugview.h"
 #include "vst3sdk/public.sdk/source/vst/hosting/hostclasses.h"
 #endif
@@ -196,6 +197,46 @@ public:
 			event.noteOff.tuning = 0.0f;
 			event.noteOff.velocity = static_cast<float>(midiEvent.data2) / 127.0f;
 			event.noteOff.noteId = -1;
+		}
+		else if (midiEvent.MessageType() == 0xA0) // Polyphonic Key Pressure
+		{
+			event.type = Event::kPolyPressureEvent;
+			event.polyPressure.channel = midiEvent.Channel();
+			event.polyPressure.pitch = midiEvent.data1;
+			event.polyPressure.pressure = static_cast<float>(midiEvent.data2) / 127.0f;
+			event.polyPressure.noteId = -1;
+		}
+		else if (midiEvent.MessageType() == 0xB0) // Control Change
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = midiEvent.data1;
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data2);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xC0) // Program Change
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kCtrlProgramChange);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xD0) // Channel Pressure
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kAfterTouch);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xE0) // Pitch Bend
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kPitchBend);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);   // LSB
+			event.midiCCOut.value2 = static_cast<int8>(midiEvent.data2);  // MSB
 		}
 		else
 		{
