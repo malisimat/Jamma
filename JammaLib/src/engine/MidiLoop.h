@@ -117,6 +117,7 @@ namespace engine
 		                       std::uint32_t globalBase,
 		                       IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
+		void PublishQuantisedEvents();
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
 		std::atomic<std::shared_ptr<const QuantisedEventBuffer>> _quantisedEvents;

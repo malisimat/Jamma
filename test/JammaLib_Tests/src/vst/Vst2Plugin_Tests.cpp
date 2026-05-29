@@ -172,4 +172,11 @@ TEST(Vst2PluginFactory, DllExtensionCaseInsensitive)
 	EXPECT_FALSE(plugin->IsLoaded());
 }
 
+TEST(Vst2PluginHostCallback, ReportsInboundMidiCapability)
+{
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
+	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));
+}
+
 #endif // JAMMA_VST2_ENABLED

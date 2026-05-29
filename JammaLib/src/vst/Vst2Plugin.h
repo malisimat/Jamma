@@ -99,6 +99,15 @@ namespace vst
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
 
+		static bool SupportsHostCanDo(const char* canDo) noexcept
+		{
+			return canDo &&
+				((std::strcmp(canDo, "sendVstEvents") == 0) ||
+				 (std::strcmp(canDo, "sendVstMidiEvent") == 0) ||
+				 (std::strcmp(canDo, "receiveVstEvents") == 0) ||
+				 (std::strcmp(canDo, "receiveVstMidiEvent") == 0));
+		}
+
 	private:
 #ifdef JAMMA_VST2_ENABLED
 			static constexpr size_t MaxMidiEventsPerBlock = 256u;

@@ -493,8 +493,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		if (ptr)
 		{
 			const auto canDo = static_cast<const char*>(ptr);
-			if ((std::strcmp(canDo, "sendVstEvents") == 0) ||
-				(std::strcmp(canDo, "sendVstMidiEvent") == 0))
+			if (SupportsHostCanDo(canDo))
 				return 1;
 		}
 		return 0;
