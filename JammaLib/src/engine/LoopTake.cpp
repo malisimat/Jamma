@@ -533,12 +533,6 @@ ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
 	const auto startIndex = MidiQuantisationFractionIndex(_midiQuantisationGestureStartFraction);
 	const auto fraction = ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(delta.Y));
 
-	std::cout << "MIDI quantisation gesture drag: take=" << _id
-		<< " position=(" << action.Position.X << "," << action.Position.Y << ")"
-		<< " deltaY=" << delta.Y
-		<< " fraction " << MidiQuantisationFractionLabel(_midiQuantisationGestureStartFraction)
-		<< " -> " << MidiQuantisationFractionLabel(fraction) << std::endl;
-
 	_ApplyMidiQuantisationGesture(fraction, true, "drag-fraction");
 	return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 }
@@ -1663,7 +1657,7 @@ std::uint32_t LoopTake::_ResolveMidiQuantisationGestureGrain() const noexcept
 	return static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 }
 
-void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept
+void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, [[maybe_unused]] const char* source) noexcept
 {
 	const auto previous = MidiQuantisation();
 	MidiQuantisationSettings updated = previous;
@@ -1675,17 +1669,6 @@ void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, 
 		updated.GrainSamps;
 	if (enabled && resolvedGrain > 0u)
 		updated.GrainSamps = resolvedGrain;
-
-	std::cout << "MIDI quantisation gesture apply: take=" << _id
-		<< " source=" << source
-		<< " enabled " << previous.Enabled << " -> " << updated.Enabled
-		<< " fraction " << MidiQuantisationFractionLabel(previous.Fraction)
-		<< " -> " << MidiQuantisationFractionLabel(updated.Fraction)
-		<< " grain " << previous.GrainSamps << " -> " << updated.GrainSamps
-		<< " step=" << MidiQuantisationStepSamps(updated);
-	if (enabled && 0u == previous.GrainSamps)
-		std::cout << " fallbackGrain=" << resolvedGrain;
-	std::cout << std::endl;
 
 	SetMidiQuantisation(updated);
 }

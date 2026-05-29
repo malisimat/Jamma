@@ -9,6 +9,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <atomic>
 #include <memory>
@@ -101,11 +102,10 @@ namespace vst
 
 		static bool SupportsHostCanDo(const char* canDo) noexcept
 		{
-			return canDo &&
-				((std::strcmp(canDo, "sendVstEvents") == 0) ||
-				 (std::strcmp(canDo, "sendVstMidiEvent") == 0) ||
-				 (std::strcmp(canDo, "receiveVstEvents") == 0) ||
-				 (std::strcmp(canDo, "receiveVstMidiEvent") == 0));
+			if (!canDo) return false;
+			const std::string_view sv(canDo);
+			return (sv == "sendVstEvents") ||
+				   (sv == "sendVstMidiEvent");
 		}
 
 	private:
