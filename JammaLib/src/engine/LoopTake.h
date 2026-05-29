@@ -178,6 +178,7 @@ namespace engine
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
 		MidiQuantisationSettings MidiQuantisation() const noexcept;
+		void SetUiLoggingVerbose(bool verbose) noexcept { _uiLoggingVerbose = verbose; }
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -211,6 +212,9 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		void _LogMidiQuantisationFractionChange(MidiQuantisationFraction previous,
+			MidiQuantisationFraction updated,
+			const char* source) const;
 		void _ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept;
 		std::uint32_t _ResolveMidiQuantisationGestureGrain() const noexcept;
 
@@ -243,6 +247,7 @@ namespace engine
 		std::vector<std::string> _midiLoopDevices;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		bool _midiQuantisationUpdatePending;
+		bool _uiLoggingVerbose;
 		bool _midiQuantisationGestureActive;
 		bool _midiQuantisationGestureMoved;
 		utils::Position2d _midiQuantisationGestureStartPosition;

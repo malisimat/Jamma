@@ -1455,6 +1455,17 @@ void Scene::InitAudio()
 	CommitChanges();
 }
 
+void Scene::SetLogging(io::LoggingConfig config) noexcept
+{
+	_loggingConfig = config;
+	const auto uiLoggingVerbose = (_loggingConfig.Ui == "verbose");
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetUiLoggingVerbose(uiLoggingVerbose);
+	}
+}
+
 void Scene::InitMidi()
 {
 	CloseMidi();
@@ -2084,6 +2095,7 @@ glm::mat4 Scene::_View()
 
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
+	station->SetUiLoggingVerbose(_loggingConfig.Ui == "verbose");
 	station->SetClock(_clock);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
@@ -2809,5 +2821,3 @@ void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 		_hasPendingTempo.store(false, std::memory_order_release);
 	}
 }
-
-

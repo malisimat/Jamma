@@ -25,6 +25,7 @@ namespace io
 		std::string Midi;   // "verbose" to enable verbose MIDI packet logging
 		std::string Audio;  // "verbose" to enable verbose audio logging
 		std::string Event;  // "verbose" to enable verbose event logging
+		std::string Ui;     // "verbose" to enable verbose UI interaction logging
 	};
 
 	struct InitFile

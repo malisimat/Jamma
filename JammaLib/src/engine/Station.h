@@ -126,6 +126,7 @@ namespace engine
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
+		void SetUiLoggingVerbose(bool verbose) noexcept;
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
@@ -200,6 +201,7 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
+		bool _uiLoggingVerbose;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;

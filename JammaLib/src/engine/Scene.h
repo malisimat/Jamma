@@ -201,7 +201,7 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
-		void SetLogging(io::LoggingConfig config) noexcept { _loggingConfig = config; }
+		void SetLogging(io::LoggingConfig config) noexcept;
 		void InitMidi();
 		void CloseMidi();
 		void InitSerial();

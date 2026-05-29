@@ -75,6 +75,7 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
+	_uiLoggingVerbose(false),
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_guiRack(nullptr),
@@ -868,11 +869,29 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
+	take->SetUiLoggingVerbose(_uiLoggingVerbose);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
+}
+
+void Station::SetUiLoggingVerbose(bool verbose) noexcept
+{
+	_uiLoggingVerbose = verbose;
+
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetUiLoggingVerbose(verbose);
+	}
+
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetUiLoggingVerbose(verbose);
+	}
 }
 
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)

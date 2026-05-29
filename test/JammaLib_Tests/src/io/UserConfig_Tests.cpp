@@ -201,6 +201,14 @@ TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
 	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Users\\tester\\AppData\\Roaming\\Jamma")));
 	ASSERT_TRUE(parsed.has_value());
 }
+
+TEST(InitFile, ParsesUiLoggingSetting) {
+	auto parsed = InitFile::FromStream(std::stringstream("{\"logging\":{\"midi\":\"verbose\",\"ui\":\"verbose\"}}"));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ("verbose", parsed->Logging.Midi);
+	EXPECT_EQ("verbose", parsed->Logging.Ui);
+}
+
 TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {
 	UserConfig cfg;
 	cfg.Trigger.PreDelay = 128u;

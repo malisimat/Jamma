@@ -1,3 +1,5 @@
+#include <iostream>
+#include <sstream>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -785,6 +787,93 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	EXPECT_TRUE(take->OnAction(up).IsEaten);
 	EXPECT_TRUE(take->MidiQuantisation().Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
+}
+
+TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
+	auto take = MakeLoopTake();
+	take->SetUiLoggingVerbose(true);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	take->SetMidiQuantisation(settings);
+
+	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+
+	std::ostringstream captured;
+	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+	TouchAction down;
+	down.State = TouchAction::TOUCH_DOWN;
+	down.Index = 0;
+	down.Position = { 20, 20 };
+	down.Modifiers = ctrlShift;
+	EXPECT_TRUE(take->OnAction(down).IsEaten);
+
+	TouchMoveAction move = {};
+	move.Index = 0;
+	move.Modifiers = ctrlShift;
+
+	move.Position = { 20, 10 };
+	EXPECT_TRUE(take->OnAction(move).IsEaten);
+
+	move.Position = { 20, -44 };
+	EXPECT_TRUE(take->OnAction(move).IsEaten);
+
+	move.Position = { 20, -45 };
+	EXPECT_TRUE(take->OnAction(move).IsEaten);
+
+	move.Position = { 20, -76 };
+	EXPECT_TRUE(take->OnAction(move).IsEaten);
+
+	TouchAction up = down;
+	up.State = TouchAction::TOUCH_UP;
+	up.Position = move.Position;
+	EXPECT_TRUE(take->OnAction(up).IsEaten);
+
+	std::cout.flush();
+	std::cout.rdbuf(oldBuf);
+
+	const auto output = captured.str();
+	EXPECT_NE(std::string::npos, output.find("1 -> 1/4"));
+	EXPECT_NE(std::string::npos, output.find("1/4 -> 1/8"));
+	EXPECT_EQ(std::string::npos, output.find("1 -> 1/2"));
+	EXPECT_EQ(std::string::npos, output.find("1/4 -> 1/4"));
+}
+
+TEST(SceneInteractionRouting, UiVerboseLoggingPropagatesToExistingLoopTakes) {
+	auto take = MakeLoopTake();
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	take->SetMidiQuantisation(settings);
+
+	auto station = MakeStation();
+	station->AddTake(take);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
+
+	io::LoggingConfig logging;
+	logging.Ui = "verbose";
+	scene.SetLogging(logging);
+
+	std::ostringstream captured;
+	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+
+	std::cout.flush();
+	std::cout.rdbuf(oldBuf);
+
+	EXPECT_NE(std::string::npos, captured.str().find("MIDI quantisation fraction: take=take-0"));
 }
 
 TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
