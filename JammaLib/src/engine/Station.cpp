@@ -75,7 +75,6 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
-	_loggingConfig{},
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_guiRack(nullptr),
@@ -879,7 +878,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 
 void Station::SetLogging(const io::LoggingConfig& config) noexcept
 {
-	_loggingConfig = config;
+	base::Jammable::SetLogging(config);
 
 	for (auto& take : _loopTakes)
 	{

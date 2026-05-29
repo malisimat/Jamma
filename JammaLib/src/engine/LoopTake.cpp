@@ -124,7 +124,6 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_backLoops(),
 	_midiQuantisationPacked(PackMidiQuantisationSettings(MidiQuantisationSettings())),
 	_midiQuantisationUpdatePending(false),
-	_uiLoggingVerbose(false),
 	_midiQuantisationGestureActive(false),
 	_midiQuantisationGestureMoved(false),
 	_midiQuantisationGestureStartPosition({ 0, 0 }),
@@ -178,11 +177,6 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
 
 	return take;
-}
-
-void LoopTake::SetLogging(const io::LoggingConfig& config) noexcept
-{
-	_uiLoggingVerbose = (config.Ui == "verbose");
 }
 
 AudioMixerParams LoopTake::GetMixerParams(utils::Size2d loopSize,
@@ -580,7 +574,7 @@ ActionResult LoopTake::OnAction(GuiAction action)
 			}
 			if (arr->Values.size() >= 3 && arr->Values[2] > 0)
 				updated.GrainSamps = static_cast<std::uint32_t>(arr->Values[2]);
-			if (_uiLoggingVerbose && previous.Fraction != updated.Fraction)
+			if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 				_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, "gui-action");
 			SetMidiQuantisation(updated);
 		}
@@ -1634,7 +1628,7 @@ void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, 
 	if (enabled && resolvedGrain > 0u)
 		updated.GrainSamps = resolvedGrain;
 
-	if (_uiLoggingVerbose && previous.Fraction != updated.Fraction)
+	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);
 
 	SetMidiQuantisation(updated);

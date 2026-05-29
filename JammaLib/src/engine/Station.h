@@ -202,7 +202,6 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
-		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;

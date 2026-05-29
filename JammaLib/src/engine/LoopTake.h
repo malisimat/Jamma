@@ -183,7 +183,6 @@ namespace engine
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
 		MidiQuantisationSettings MidiQuantisation() const noexcept;
-		void SetLogging(const io::LoggingConfig& config) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -252,7 +251,6 @@ namespace engine
 		std::vector<std::string> _midiLoopDevices;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		bool _midiQuantisationUpdatePending;
-		bool _uiLoggingVerbose;
 		bool _midiQuantisationGestureActive;
 		bool _midiQuantisationGestureMoved;
 		utils::Position2d _midiQuantisationGestureStartPosition;

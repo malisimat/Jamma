@@ -104,7 +104,7 @@ namespace engine
 
 		// Move
 		Loop(Loop&& other) :
-			Jammable(other._loopParams),
+			Jammable(other._loopParams, other._loggingConfig),
 			_visualUpdatesEnabled(other._visualUpdatesEnabled),
 			_isPunchInActive(other._isPunchInActive.load(std::memory_order_relaxed)),
 			_lastPeak(other._lastPeak),
@@ -158,6 +158,7 @@ namespace engine
 				auto playState = _playState.load(std::memory_order_relaxed);
 				_playState.store(other._playState.exchange(playState, std::memory_order_relaxed), std::memory_order_relaxed);
 				std::swap(_loopParams, other._loopParams);
+				std::swap(_loggingConfig, other._loggingConfig);
 				_mixer.swap(other._mixer);
 				_hanning.swap(other._hanning);
 				_model.swap(other._model);

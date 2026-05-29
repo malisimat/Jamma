@@ -5,6 +5,7 @@
 #include "Tweakable.h"
 #include "MultiAudioSource.h"
 #include "MultiAudioSink.h"
+#include "../io/InitFile.h"
 
 namespace base
 {
@@ -31,12 +32,14 @@ namespace base
 		public MultiAudioSource
 	{
 	public:
-		Jammable(JammableParams params) :
+		Jammable(JammableParams params,
+			io::LoggingConfig loggingConfig = {}) :
 			GuiElement(params),
 			Tweakable({}),
 			MultiAudioSource(),
 			_selectDepth(DEPTH_STATION),
-			_jammableParams(params)
+			_jammableParams(params),
+			_loggingConfig(loggingConfig)
 		{
 		};
 
@@ -45,6 +48,7 @@ namespace base
 		virtual SelectDepth Depth() const { return SelectDepth::DEPTH_STATION; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void Reset() { _selectDepth = DEPTH_STATION; }
+		void SetLogging(const io::LoggingConfig& config) noexcept { _loggingConfig = config; }
 
 		virtual void SetSelectDepth(SelectDepth depth)
 		{
@@ -65,5 +69,6 @@ namespace base
 	protected:
 		SelectDepth _selectDepth;
 		JammableParams _jammableParams;
+		io::LoggingConfig _loggingConfig;
 	};
 }
