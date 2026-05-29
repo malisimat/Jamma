@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jamma Rig File Schema</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3350;
+    --text: #e2e8f0;
+    --muted: #8892b0;
+    --accent: #7c3aed;
+
+    --key-color:    #f59e0b;
+    --key-bg:       #291d05;
+    --key-border:   #92400e;
+
+    --serial-color: #22d3ee;
+    --serial-bg:    #042030;
+    --serial-border:#0e7490;
+
+    --midi-act-color:  #f472b6;
+    --midi-act-bg:     #290d1f;
+    --midi-act-border: #9d174d;
+
+    --audio-color:  #34d399;
+    --audio-bg:     #052015;
+    --audio-border: #065f46;
+
+    --midi-rec-color:  #818cf8;
+    --midi-rec-bg:     #0e0f2e;
+    --midi-rec-border: #3730a3;
+
+    --vst-color:    #fb923c;
+    --vst-bg:       #1f0f02;
+    --vst-border:   #9a3412;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 40px 24px 80px;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+  h1 span { color: var(--accent); }
+
+  .subtitle {
+    color: var(--muted);
+    margin-top: 6px;
+    font-size: 0.95rem;
+  }
+
+  header {
+    max-width: 960px;
+    margin: 0 auto 48px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+  }
+
+  .page { max-width: 960px; margin: 0 auto; }
+
+  /* Section headings */
+  .section-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  /* Top-level rig overview */
+  .rig-overview {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 24px;
+    margin-bottom: 56px;
+    align-items: start;
+  }
+
+  .overview-left {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .overview-left .label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .rig-key { color: var(--accent); font-family: monospace; font-size: 0.9rem; }
+  .rig-tree-row { padding: 3px 0; }
+  .rig-tree-row.child { padding-left: 18px; color: var(--muted); font-size: 0.85rem; }
+  .rig-tree-row.child::before { content: "└ "; color: var(--border); }
+  .rig-tree-highlight { color: #fff; font-weight: 600; }
+
+  .overview-right {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .mini-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .mini-card h4 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .mini-field { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; }
+  .field-name { font-family: monospace; font-size: 0.82rem; color: var(--accent); min-width: 120px; }
+  .field-type { font-family: monospace; font-size: 0.75rem; color: #64748b; }
+  .field-desc { font-size: 0.78rem; color: var(--muted); }
+
+  /* ─── THE BIG TRIGGER DIAGRAM ─── */
+
+  .trigger-section { margin-bottom: 56px; }
+
+  .trigger-grid {
+    display: grid;
+    grid-template-columns: 1fr 20px 1fr;
+    gap: 0;
+    align-items: start;
+  }
+
+  .col-header {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: inline-block;
+  }
+  .col-activation { background: rgba(244,114,182,0.1); color: var(--midi-act-color); }
+  .col-recording  { background: rgba(52,211,153,0.1);  color: var(--audio-color); }
+
+  .divider-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 36px;
+  }
+  .divider-line {
+    width: 1px;
+    height: 100%;
+    min-height: 400px;
+    background: linear-gradient(to bottom, transparent, var(--border) 10%, var(--border) 90%, transparent);
+  }
+
+  /* Source type cards */
+  .source-card {
+    border-radius: 12px;
+    border: 1px solid;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+    position: relative;
+  }
+
+  .source-card .card-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-tag .icon {
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px;
+  }
+
+  /* Keyboard */
+  .card-key    { background: var(--key-bg);      border-color: var(--key-border);      }
+  .card-key    .card-tag { color: var(--key-color); }
+  .card-key    .icon { background: var(--key-border); }
+
+  /* Serial */
+  .card-serial { background: var(--serial-bg);   border-color: var(--serial-border);   }
+  .card-serial .card-tag { color: var(--serial-color); }
+  .card-serial .icon { background: var(--serial-border); }
+
+  /* MIDI activation */
+  .card-midi-act { background: var(--midi-act-bg); border-color: var(--midi-act-border); }
+  .card-midi-act .card-tag { color: var(--midi-act-color); }
+  .card-midi-act .icon { background: var(--midi-act-border); }
+
+  /* Audio recording */
+  .card-audio  { background: var(--audio-bg);    border-color: var(--audio-border);    }
+  .card-audio  .card-tag { color: var(--audio-color); }
+  .card-audio  .icon { background: var(--audio-border); }
+
+  /* MIDI recording */
+  .card-midi-rec { background: var(--midi-rec-bg); border-color: var(--midi-rec-border); }
+  .card-midi-rec .card-tag { color: var(--midi-rec-color); }
+  .card-midi-rec .icon { background: var(--midi-rec-border); }
+
+  /* VST live */
+  .card-vst    { background: var(--vst-bg);      border-color: var(--vst-border);      }
+  .card-vst    .card-tag { color: var(--vst-color); }
+  .card-vst    .icon { background: var(--vst-border); }
+
+  .source-card .json-key  { font-family: monospace; font-size: 0.8rem; }
+  .source-card .json-key.k  { color: var(--key-color); }
+  .source-card .json-key.s  { color: var(--serial-color); }
+  .source-card .json-key.ma { color: var(--midi-act-color); }
+  .source-card .json-key.au { color: var(--audio-color); }
+  .source-card .json-key.mr { color: var(--midi-rec-color); }
+  .source-card .json-key.vt { color: var(--vst-color); }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 6px;
+    margin: 5px 0;
+    align-items: baseline;
+  }
+  .fkey { font-family: monospace; font-size: 0.8rem; }
+  .fdesc { font-size: 0.78rem; color: var(--muted); }
+  .ftype { font-family: monospace; font-size: 0.72rem; color: #475569; margin-left: 4px; }
+
+  .note-box {
+    border-radius: 7px;
+    padding: 8px 12px;
+    font-size: 0.77rem;
+    margin-top: 10px;
+  }
+  .note-box.note-key { background: rgba(245,158,11,0.08); border-left: 3px solid var(--key-border); color: var(--muted); }
+  .note-box.note-ser { background: rgba(34,211,238,0.08); border-left: 3px solid var(--serial-border); color: var(--muted); }
+  .note-box.note-mid { background: rgba(244,114,182,0.08); border-left: 3px solid var(--midi-act-border); color: var(--muted); }
+  .note-box.note-aud { background: rgba(52,211,153,0.08); border-left: 3px solid var(--audio-border); color: var(--muted); }
+  .note-box.note-mrec{ background: rgba(129,140,248,0.08); border-left: 3px solid var(--midi-rec-border); color: var(--muted); }
+  .note-box.note-vst { background: rgba(251,146,60,0.08); border-left: 3px solid var(--vst-border); color: var(--muted); }
+
+  /* ─── EXAMPLE SECTION ─── */
+  .example-section { margin-bottom: 56px; }
+
+  .example-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .trigger-example-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .tec-header {
+    background: var(--surface2);
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tec-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #fff;
+  }
+
+  .tec-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+
+  .badge-audio { background: rgba(52,211,153,0.15); color: var(--audio-color); border: 1px solid var(--audio-border); }
+  .badge-midi  { background: rgba(129,140,248,0.15); color: var(--midi-rec-color); border: 1px solid var(--midi-rec-border); }
+
+  .tec-body { padding: 16px 18px; }
+
+  .tec-section { margin-bottom: 14px; }
+  .tec-section:last-child { margin-bottom: 0; }
+
+  .tec-section-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .pill {
+    font-size: 0.75rem;
+    font-family: monospace;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .pill-key    { background: var(--key-bg);      border-color: var(--key-border);      color: var(--key-color); }
+  .pill-serial { background: var(--serial-bg);   border-color: var(--serial-border);   color: var(--serial-color); }
+  .pill-midact { background: var(--midi-act-bg); border-color: var(--midi-act-border); color: var(--midi-act-color); }
+  .pill-audio  { background: var(--audio-bg);    border-color: var(--audio-border);    color: var(--audio-color); }
+  .pill-midrec { background: var(--midi-rec-bg); border-color: var(--midi-rec-border); color: var(--midi-rec-color); }
+  .pill-vst    { background: var(--vst-bg);      border-color: var(--vst-border);      color: var(--vst-color); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-key    { background: var(--key-color); }
+  .dot-serial { background: var(--serial-color); }
+  .dot-midact { background: var(--midi-act-color); }
+  .dot-audio  { background: var(--audio-color); }
+  .dot-midrec { background: var(--midi-rec-color); }
+  .dot-vst    { background: var(--vst-color); }
+
+  /* ─── FLOW DIAGRAM ─── */
+  .flow-section { margin-bottom: 56px; }
+
+  .flow-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 32px 28px;
+    position: relative;
+  }
+
+  .flow-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+
+  .flow-row:last-child { margin-bottom: 0; }
+
+  .flow-node {
+    border-radius: 9px;
+    padding: 8px 16px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-align: center;
+    border: 1px solid;
+    min-width: 130px;
+  }
+
+  .flow-arrow {
+    font-size: 1.1rem;
+    color: var(--muted);
+    padding: 0 10px;
+    flex-shrink: 0;
+  }
+
+  .flow-label {
+    font-size: 0.65rem;
+    text-align: center;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    margin-top: 3px;
+  }
+
+  .flow-node-wrap { text-align: center; }
+
+  .fn-key    { background: var(--key-bg);      border-color: var(--key-border);      color: var(--key-color); }
+  .fn-serial { background: var(--serial-bg);   border-color: var(--serial-border);   color: var(--serial-color); }
+  .fn-midact { background: var(--midi-act-bg); border-color: var(--midi-act-border); color: var(--midi-act-color); }
+  .fn-audio  { background: var(--audio-bg);    border-color: var(--audio-border);    color: var(--audio-color); }
+  .fn-midrec { background: var(--midi-rec-bg); border-color: var(--midi-rec-border); color: var(--midi-rec-color); }
+  .fn-vst    { background: var(--vst-bg);      border-color: var(--vst-border);      color: var(--vst-color); }
+  .fn-engine { background: #1e1130;            border-color: var(--accent);           color: #c084fc; }
+  .fn-loop   { background: #0d1a30;            border-color: #1d4ed8;                 color: #93c5fd; }
+
+  .flow-group-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+    margin-top: 24px;
+    text-align: center;
+  }
+  .flow-group-label:first-child { margin-top: 0; }
+
+  .hline {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 24px 0;
+  }
+
+  /* Code block */
+  .schema-block {
+    background: #0a0c14;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.78rem;
+    line-height: 1.8;
+    overflow-x: auto;
+    margin-bottom: 20px;
+  }
+
+  .sc-brace  { color: #64748b; }
+  .sc-key    { color: #818cf8; }
+  .sc-colon  { color: #64748b; }
+  .sc-str    { color: #34d399; }
+  .sc-num    { color: #f59e0b; }
+  .sc-arr    { color: #64748b; }
+  .sc-comment{ color: #374151; font-style: italic; }
+  .sc-hl-act { background: rgba(244,114,182,0.08); border-radius: 3px; }
+  .sc-hl-rec { background: rgba(52,211,153,0.08);  border-radius: 3px; }
+  .sc-hl-vst { background: rgba(251,146,60,0.08);  border-radius: 3px; }
+
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.75rem;
+  }
+  .legend-swatch {
+    width: 12px; height: 12px;
+    border-radius: 3px;
+  }
+  .ls-act { background: rgba(244,114,182,0.4); }
+  .ls-rec { background: rgba(52,211,153,0.4); }
+  .ls-vst { background: rgba(251,146,60,0.4); }
+
+  /* Responsive */
+  @media (max-width: 680px) {
+    .rig-overview, .trigger-grid, .example-grid { grid-template-columns: 1fr; }
+    .divider-col { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Jamma <span>Rig File</span> Schema</h1>
+  <p class="subtitle">How devices, triggers, and recording sources are wired together — <code style="color:var(--accent);font-size:0.85em">default.rig</code></p>
+</header>
+
+<div class="page">
+
+  <!-- ═══ TOP-LEVEL STRUCTURE ═══ -->
+  <div class="section-label">Top-level structure</div>
+  <div class="rig-overview">
+
+    <div class="overview-left">
+      <div class="label">rig.json</div>
+      <div class="rig-tree-row"><span class="rig-key">name</span></div>
+      <div class="rig-tree-row"><span class="rig-key">user</span></div>
+      <div class="rig-tree-row child"><span class="rig-key">audio</span></div>
+      <div class="rig-tree-row child"><span class="rig-key">loop</span></div>
+      <div class="rig-tree-row child"><span class="rig-key">trigger</span></div>
+      <div class="rig-tree-row child"><span class="rig-key">midi.devices[]</span></div>
+      <div class="rig-tree-row child"><span class="rig-key">serial.devices[]</span></div>
+      <div class="rig-tree-row" style="margin-top:6px">
+        <span class="rig-key rig-tree-highlight">triggers[]</span>
+        &nbsp;<span style="color:var(--muted);font-size:0.75rem">← main focus</span>
+      </div>
+    </div>
+
+    <div class="overview-right">
+      <div class="mini-card">
+        <h4>user.audio</h4>
+        <div class="mini-field"><span class="field-name">bufsize</span><span class="field-type">uint</span></div>
+        <div class="mini-field"><span class="field-name">inlatency / outlatency</span><span class="field-type">uint (samples)</span></div>
+        <div class="mini-field"><span class="field-name">numchannelsin/out</span><span class="field-type">uint</span></div>
+      </div>
+      <div class="mini-card">
+        <h4>user.midi.devices[]</h4>
+        <div class="mini-field"><span class="field-name">name</span><span class="field-type">string</span></div>
+        <div class="mini-field"><span class="field-name">enabled</span><span class="field-type">bool</span></div>
+        <div class="fdesc" style="margin-top:6px;font-size:0.75rem">Enumerates which physical MIDI ports are opened. The <code style="color:var(--accent)">name</code> is used for device matching throughout triggers.</div>
+      </div>
+      <div class="mini-card">
+        <h4>user.serial.devices[]</h4>
+        <div class="mini-field"><span class="field-name">name</span><span class="field-type">string</span></div>
+        <div class="mini-field"><span class="field-name">port</span><span class="field-type">string — e.g. "COM3"</span></div>
+        <div class="mini-field"><span class="field-name">baudrate</span><span class="field-type">uint</span></div>
+        <div class="mini-field"><span class="field-name">enabled</span><span class="field-type">bool</span></div>
+      </div>
+      <div class="mini-card">
+        <h4>user.loop</h4>
+        <div class="mini-field"><span class="field-name">fadeSamps</span><span class="field-type">uint</span></div>
+        <div class="mini-field"><span class="field-name">seedGrainMinMs</span><span class="field-type">uint</span></div>
+        <div class="mini-field"><span class="field-name">seedBpmMin</span><span class="field-type">uint</span></div>
+        <div class="mini-field"><span class="field-name">seedQuantisation</span><span class="field-type">string</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TRIGGER SCHEMA SPLIT VIEW ═══ -->
+  <div class="section-label">Trigger schema — two responsibilities</div>
+  <div class="trigger-section">
+    <div class="trigger-grid">
+
+      <!-- LEFT: ACTIVATION SOURCES -->
+      <div>
+        <div><span class="col-header col-activation">🎛 Activation Sources</span></div>
+        <p style="font-size:0.8rem;color:var(--muted);margin-bottom:16px">
+          These fields define <em>what physical event starts or stops</em> the trigger — i.e., begins or ends a recording pass. Nothing here is recorded into the loop itself.
+        </p>
+
+        <!-- Keyboard pairs -->
+        <div class="source-card card-key">
+          <div class="card-tag">
+            <span class="icon">⌨</span>
+            Keyboard — <code>pairs[]</code> (no <code>source</code> field)
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key k">activatedown</span>
+            <span class="fdesc">Key code that starts recording on press</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key k">activateup</span>
+            <span class="fdesc">Key code that confirms start on release</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key k">ditchdown / ditchup</span>
+            <span class="fdesc">Key codes that abort/end recording</span>
+          </div>
+          <div class="note-box note-key">Default source when <code>source</code> is absent. Values are raw keyboard scan codes.</div>
+        </div>
+
+        <!-- Serial pairs -->
+        <div class="source-card card-serial">
+          <div class="card-tag">
+            <span class="icon">🔌</span>
+            Serial pedalboard — <code>pairs[]</code> with <code>"source": "serial"</code>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key s">source</span>
+            <span class="fdesc"><code>"serial"</code></span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key s">device</span>
+            <span class="fdesc">Must match a name in <code>user.serial.devices[]</code></span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key s">activatedown / activateup</span>
+            <span class="fdesc">Button index on the serial device</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key s">ditchdown / ditchup</span>
+            <span class="fdesc">Button index that ditches the take</span>
+          </div>
+          <div class="note-box note-ser">Serial devices send simple integer button indices over a COM port at the configured baud rate.</div>
+        </div>
+
+        <!-- MIDI pairs -->
+        <div class="source-card card-midi-act">
+          <div class="card-tag">
+            <span class="icon">🎹</span>
+            MIDI note — <code>pairs[]</code> with <code>"source": "midi"</code>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">source</span>
+            <span class="fdesc"><code>"midi"</code></span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">device</span>
+            <span class="fdesc">Must match a name in <code>user.midi.devices[]</code></span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">activatedown / activateup</span>
+            <span class="fdesc">MIDI note number for start (NoteOn / NoteOff)</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">ditchdown / ditchup</span>
+            <span class="fdesc">MIDI note number for ditch</span>
+          </div>
+        </div>
+
+        <!-- Primary MIDI trigger object -->
+        <div class="source-card card-midi-act" style="border-style:dashed">
+          <div class="card-tag">
+            <span class="icon">🎛</span>
+            Primary MIDI binding — <code>trigger</code> object
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">trigger.device</span>
+            <span class="fdesc">MIDI device name for this primary binding</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">trigger.activate.kind</span>
+            <span class="fdesc"><code>"note"</code> or <code>"cc"</code></span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">trigger.activate.channel</span>
+            <span class="fdesc">MIDI channel (1–16)</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">trigger.activate.id</span>
+            <span class="fdesc">Note number or CC number</span>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key ma">trigger.ditch</span>
+            <span class="fdesc">Same shape as <code>activate</code></span>
+          </div>
+          <div class="note-box note-mid">
+            The <code>trigger</code> object registers a dedicated MIDI device route in the engine so its activate/ditch messages are dispatched at sample-accurate timing. A trigger can have both <code>pairs</code> bindings <em>and</em> a <code>trigger</code> object — any of them can fire the trigger.
+          </div>
+        </div>
+      </div>
+
+      <!-- DIVIDER -->
+      <div class="divider-col"><div class="divider-line"></div></div>
+
+      <!-- RIGHT: RECORDING SOURCES -->
+      <div>
+        <div><span class="col-header col-recording">🔴 Recording Sources</span></div>
+        <p style="font-size:0.8rem;color:var(--muted);margin-bottom:16px">
+          These fields define <em>what content gets captured</em> once the trigger is active — audio channels, MIDI notes, and which devices can play live through the station's VSTi.
+        </p>
+
+        <!-- Audio channels -->
+        <div class="source-card card-audio">
+          <div class="card-tag">
+            <span class="icon">🎙</span>
+            Audio capture — <code>input[]</code>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key au">input</span>
+            <span class="fdesc">Array of ADC channel indices (0-based) to record</span>
+          </div>
+          <div class="note-box note-aud">
+            Each index corresponds to a physical input channel on the audio interface. Channels are latency-compensated and written into audio loop buffers on the station.
+            An empty array <code>[]</code> means no audio is captured (MIDI-only station).
+          </div>
+        </div>
+
+        <!-- MIDI channel recording -->
+        <div class="source-card card-midi-rec">
+          <div class="card-tag">
+            <span class="icon">🎵</span>
+            MIDI loop recording — <code>midiinput[]</code>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key mr">midiinput</span>
+            <span class="fdesc">MIDI channels to record (1-based, e.g. <code>[1]</code> = ch 1)</span>
+          </div>
+          <div class="note-box note-mrec">
+            Each listed MIDI channel gets its own <code>MidiLoop</code> inside the <code>LoopTake</code>. When the trigger is active, NoteOn/NoteOff events on these channels are timestamped and written into the loop. On playback, the loop replays them into the station's VST chain.
+          </div>
+        </div>
+
+        <!-- MIDI device filter (VST live + recording) -->
+        <div class="source-card card-vst">
+          <div class="card-tag">
+            <span class="icon">🎛</span>
+            VST live playback &amp; MIDI record filter — <code>midiinputdevices[]</code>
+          </div>
+          <div class="field-row">
+            <span class="fkey json-key vt">midiinputdevices</span>
+            <span class="fdesc">Device names allowed to drive this station's VSTi</span>
+          </div>
+          <div class="note-box note-vst">
+            <strong style="color:var(--vst-color)">Two effects in one field:</strong><br>
+            <strong>1. Live VSTi playback</strong> — only MIDI events from the listed devices are passed to <code>EnqueueLiveMidiEvent</code> and heard in real time through the instrument plugin.<br>
+            <strong>2. MIDI loop recording</strong> — <code>RecordMidiEvent</code> also filters by device name, so only notes from the listed devices are written into the MIDI loop.<br><br>
+            If <em>omitted or empty</em>, all connected MIDI devices are allowed (open/backward-compatible).
+            This is the key field for preventing a MIDI pedal on the trigger device from inadvertently playing through the VSTi.
+          </div>
+        </div>
+
+        <!-- Relationship note -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-top:4px">
+          <div style="font-size:0.7rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Interaction between activation &amp; recording</div>
+          <p style="font-size:0.78rem;color:var(--muted);line-height:1.7">
+            A MIDI device can appear in both roles simultaneously. For example, a MIDI pedal on <em>Focusrite USB MIDI</em> that sends note 3 to activate the trigger will <strong>also</strong> send that note through the live MIDI path unless you restrict <code>midiinputdevices</code> to a different controller.
+            The <code>midiinputdevices</code> filter was designed exactly for this separation.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ ANNOTATED JSON ═══ -->
+  <div class="section-label">Annotated JSON — triggers array</div>
+  <div class="example-section">
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch ls-act"></div> Activation field</div>
+      <div class="legend-item"><div class="legend-swatch ls-rec"></div> Recording / audio capture field</div>
+      <div class="legend-item"><div class="legend-swatch ls-vst"></div> VST / MIDI route field</div>
+    </div>
+    <div class="schema-block"><pre><span class="sc-brace">[</span>
+  <span class="sc-brace">{</span>
+    <span class="sc-key">"name"</span><span class="sc-colon">:</span> <span class="sc-str">"Trig1"</span><span class="sc-comment">                              // wired to Station 0</span>
+
+    <span class="sc-comment">// ── ACTIVATION ──────────────────────────────────────────────────</span>
+    <span class="sc-hl-act"><span class="sc-key">"pairs"</span><span class="sc-colon">:</span> <span class="sc-arr">[</span><span class="sc-brace">{ </span><span class="sc-key">"activatedown"</span><span class="sc-colon">:</span> <span class="sc-num">49</span><span class="sc-brace">,</span> <span class="sc-key">"activateup"</span><span class="sc-colon">:</span> <span class="sc-num">49</span><span class="sc-brace">,</span> <span class="sc-key">"ditchdown"</span><span class="sc-colon">:</span> <span class="sc-num">50</span><span class="sc-brace">,</span> <span class="sc-key">"ditchup"</span><span class="sc-colon">:</span> <span class="sc-num">50</span> <span class="sc-brace">}</span><span class="sc-arr">]</span></span><span class="sc-comment">  // keyboard keys 49/50</span>
+    <span class="sc-hl-act"><span class="sc-key">"trigger"</span><span class="sc-colon">:</span> <span class="sc-brace">{</span>
+      <span class="sc-key">"type"</span><span class="sc-colon">:</span> <span class="sc-str">"midi"</span><span class="sc-brace">,</span> <span class="sc-key">"device"</span><span class="sc-colon">:</span> <span class="sc-str">"Focusrite USB MIDI"</span>
+      <span class="sc-key">"activate"</span><span class="sc-colon">:</span> <span class="sc-brace">{</span> <span class="sc-key">"kind"</span><span class="sc-colon">:</span> <span class="sc-str">"note"</span><span class="sc-brace">,</span> <span class="sc-key">"channel"</span><span class="sc-colon">:</span> <span class="sc-num">2</span><span class="sc-brace">,</span> <span class="sc-key">"id"</span><span class="sc-colon">:</span> <span class="sc-num">1</span> <span class="sc-brace">}</span>
+      <span class="sc-key">"ditch"</span><span class="sc-colon">:</span>    <span class="sc-brace">{</span> <span class="sc-key">"kind"</span><span class="sc-colon">:</span> <span class="sc-str">"note"</span><span class="sc-brace">,</span> <span class="sc-key">"channel"</span><span class="sc-colon">:</span> <span class="sc-num">2</span><span class="sc-brace">,</span> <span class="sc-key">"id"</span><span class="sc-colon">:</span> <span class="sc-num">2</span> <span class="sc-brace">}</span>
+    <span class="sc-brace">}</span></span>
+
+    <span class="sc-comment">// ── RECORDING ───────────────────────────────────────────────────</span>
+    <span class="sc-hl-rec"><span class="sc-key">"input"</span><span class="sc-colon">:</span> <span class="sc-arr">[</span><span class="sc-num">0</span><span class="sc-brace">,</span> <span class="sc-num">2</span><span class="sc-arr">]</span></span><span class="sc-comment">                               // ADC channels 0 and 2 → audio loop</span>
+    <span class="sc-comment">// no midiinput / midiinputdevices → audio-only station</span>
+  <span class="sc-brace">}</span><span class="sc-brace">,</span>
+  <span class="sc-brace">{</span>
+    <span class="sc-key">"name"</span><span class="sc-colon">:</span> <span class="sc-str">"Trig2"</span><span class="sc-comment">                              // wired to Station 1</span>
+
+    <span class="sc-comment">// ── ACTIVATION ──────────────────────────────────────────────────</span>
+    <span class="sc-hl-act"><span class="sc-key">"pairs"</span><span class="sc-colon">:</span> <span class="sc-arr">[</span>
+      <span class="sc-brace">{</span> <span class="sc-key">"activatedown"</span><span class="sc-colon">:</span> <span class="sc-num">51</span> <span class="sc-brace">...</span> <span class="sc-brace">}</span><span class="sc-brace">,</span>                 <span class="sc-comment">// keyboard key 51</span>
+      <span class="sc-brace">{</span> <span class="sc-key">"source"</span><span class="sc-colon">:</span> <span class="sc-str">"serial"</span><span class="sc-brace">,</span> <span class="sc-key">"device"</span><span class="sc-colon">:</span> <span class="sc-str">"pedal-a"</span><span class="sc-brace">,</span> <span class="sc-key">"activatedown"</span><span class="sc-colon">:</span> <span class="sc-num">0</span> <span class="sc-brace">...</span> <span class="sc-brace">}</span><span class="sc-brace">,</span>  <span class="sc-comment">// serial button 0</span>
+      <span class="sc-brace">{</span> <span class="sc-key">"source"</span><span class="sc-colon">:</span> <span class="sc-str">"midi"</span><span class="sc-brace">,</span> <span class="sc-key">"device"</span><span class="sc-colon">:</span> <span class="sc-str">"CASIO USB-MIDI"</span><span class="sc-brace">,</span> <span class="sc-key">"activatedown"</span><span class="sc-colon">:</span> <span class="sc-num">60</span> <span class="sc-brace">...</span> <span class="sc-brace">}</span>  <span class="sc-comment">// MIDI note C4</span>
+    <span class="sc-arr">]</span></span>
+    <span class="sc-hl-act"><span class="sc-key">"trigger"</span><span class="sc-colon">:</span> <span class="sc-brace">{</span> <span class="sc-key">"device"</span><span class="sc-colon">:</span> <span class="sc-str">"Focusrite USB MIDI"</span><span class="sc-brace">,</span> <span class="sc-key">"activate"</span><span class="sc-colon">:</span> <span class="sc-brace">{</span> <span class="sc-key">"id"</span><span class="sc-colon">:</span> <span class="sc-num">3</span> <span class="sc-brace">}</span><span class="sc-brace">,</span> <span class="sc-key">"ditch"</span><span class="sc-colon">:</span> <span class="sc-brace">{</span> <span class="sc-key">"id"</span><span class="sc-colon">:</span> <span class="sc-num">4</span> <span class="sc-brace">}</span> <span class="sc-brace">}</span></span>
+
+    <span class="sc-comment">// ── RECORDING ───────────────────────────────────────────────────</span>
+    <span class="sc-hl-rec"><span class="sc-key">"input"</span><span class="sc-colon">:</span> <span class="sc-arr">[]</span></span><span class="sc-comment">                                  // no audio channels (MIDI-only)</span>
+    <span class="sc-hl-rec"><span class="sc-key">"midiinput"</span><span class="sc-colon">:</span> <span class="sc-arr">[</span><span class="sc-num">1</span><span class="sc-arr">]</span></span><span class="sc-comment">                             // record notes on MIDI channel 1</span>
+    <span class="sc-hl-vst"><span class="sc-key">"midiinputdevices"</span><span class="sc-colon">:</span> <span class="sc-arr">[</span><span class="sc-str">"CASIO USB-MIDI"</span><span class="sc-arr">]</span></span><span class="sc-comment">          // only Casio → VSTi live + loop record</span>
+  <span class="sc-brace">}</span>
+<span class="sc-brace">]</span></pre></div>
+  </div>
+
+  <!-- ═══ LIVE EXAMPLES ═══ -->
+  <div class="section-label">Trigger cards — default.rig</div>
+  <div class="example-section">
+    <div class="example-grid">
+
+      <!-- Trig1 -->
+      <div class="trigger-example-card">
+        <div class="tec-header">
+          <div class="tec-name">Trig1</div>
+          <div class="tec-badge badge-audio">audio station</div>
+          <div style="margin-left:auto;font-size:0.72rem;color:var(--muted)">Station 0</div>
+        </div>
+        <div class="tec-body">
+
+          <div class="tec-section">
+            <div class="tec-section-label">Activation sources</div>
+            <div class="pill-row">
+              <div class="pill pill-key"><div class="dot dot-key"></div>Key 49 (activate)</div>
+              <div class="pill pill-key"><div class="dot dot-key"></div>Key 50 (ditch)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Focusrite · ch2 · note 1 (activate)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Focusrite · ch2 · note 2 (ditch)</div>
+            </div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">Audio capture</div>
+            <div class="pill-row">
+              <div class="pill pill-audio"><div class="dot dot-audio"></div>ADC ch 0</div>
+              <div class="pill pill-audio"><div class="dot dot-audio"></div>ADC ch 2</div>
+            </div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">MIDI recording</div>
+            <div style="font-size:0.78rem;color:var(--muted);font-style:italic">none — audio-only station</div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">VSTi live device filter</div>
+            <div style="font-size:0.78rem;color:var(--muted);font-style:italic">unrestricted — all devices allowed</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Trig2 -->
+      <div class="trigger-example-card">
+        <div class="tec-header">
+          <div class="tec-name">Trig2</div>
+          <div class="tec-badge badge-midi">midi station</div>
+          <div style="margin-left:auto;font-size:0.72rem;color:var(--muted)">Station 1</div>
+        </div>
+        <div class="tec-body">
+
+          <div class="tec-section">
+            <div class="tec-section-label">Activation sources</div>
+            <div class="pill-row">
+              <div class="pill pill-key"><div class="dot dot-key"></div>Key 51 (activate)</div>
+              <div class="pill pill-key"><div class="dot dot-key"></div>Key 52 (ditch)</div>
+              <div class="pill pill-serial"><div class="dot dot-serial"></div>pedal-a · btn 0 (activate)</div>
+              <div class="pill pill-serial"><div class="dot dot-serial"></div>pedal-a · btn 1 (ditch)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Casio · note 60 (activate)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Casio · note 61 (ditch)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Focusrite · ch2 · note 3 (activate)</div>
+              <div class="pill pill-midact"><div class="dot dot-midact"></div>Focusrite · ch2 · note 4 (ditch)</div>
+            </div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">Audio capture</div>
+            <div style="font-size:0.78rem;color:var(--muted);font-style:italic">none — MIDI-only station</div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">MIDI loop recording</div>
+            <div class="pill-row">
+              <div class="pill pill-midrec"><div class="dot dot-midrec"></div>MIDI channel 1</div>
+            </div>
+          </div>
+
+          <div class="tec-section">
+            <div class="tec-section-label">VSTi live device filter</div>
+            <div class="pill-row">
+              <div class="pill pill-vst"><div class="dot dot-vst"></div>CASIO USB-MIDI only</div>
+            </div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:8px">
+              Focusrite pedal activates this trigger but its note events are <strong style="color:#f87171">blocked</strong> from reaching the VSTi. Casio notes on ch 1 play live <em>and</em> are recorded into the MIDI loop.
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ SIGNAL FLOW ═══ -->
+  <div class="section-label">Signal flow — MIDI event lifecycle</div>
+  <div class="flow-section">
+    <div class="flow-diagram">
+
+      <div class="flow-group-label">Input devices</div>
+      <div class="flow-row">
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-midact">Focusrite USB MIDI</div>
+          <div class="flow-label">trigger device</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-engine">Scene::_PumpMidi</div>
+          <div class="flow-label">action thread</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-midact">_DispatchMidiTriggerEvent</div>
+          <div class="flow-label">activates / ditches trigger</div>
+        </div>
+        <div class="flow-arrow" style="font-size:0.9rem;color:#f87171">✕</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-vst" style="opacity:0.4">VSTi live</div>
+          <div class="flow-label" style="color:#f87171">blocked by midiinputdevices</div>
+        </div>
+      </div>
+
+      <hr class="hline">
+
+      <div class="flow-row">
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-midrec">CASIO USB-MIDI</div>
+          <div class="flow-label">controller device</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-engine">Scene::_PumpMidi</div>
+          <div class="flow-label">action thread</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-vst">Station::EnqueueLiveMidiEvent</div>
+          <div class="flow-label">AcceptsLiveMidiFromDevice ✓</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-vst">VSTi live playback</div>
+          <div class="flow-label">audio callback thread</div>
+        </div>
+      </div>
+
+      <hr class="hline">
+
+      <div class="flow-group-label">Loop recording path (when trigger is armed)</div>
+      <div class="flow-row">
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-midrec">CASIO · ch 1 note</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-engine">LoopTake::RecordMidiEvent</div>
+          <div class="flow-label">checks channel + device filter</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-loop">MidiLoop (ch 1)</div>
+          <div class="flow-label">timestamped in loop buffer</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-vst">VSTi on playback</div>
+          <div class="flow-label">replayed every loop cycle</div>
+        </div>
+      </div>
+
+      <hr class="hline">
+
+      <div class="flow-group-label">Audio recording path (when trigger is armed)</div>
+      <div class="flow-row">
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-audio">ADC ch 0, 2</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-engine">ChannelMixer (latency comp.)</div>
+        </div>
+        <div class="flow-arrow" style="font-size:1.4rem">⟶</div>
+        <div class="flow-node-wrap">
+          <div class="flow-node fn-loop">Loop audio buffer</div>
+          <div class="flow-label">Station 0</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- .page -->
+</body>
+</html>
