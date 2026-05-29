@@ -61,6 +61,10 @@ namespace vst
 		// multichannel bus. channelBufs are modified in-place.
 		void ProcessBlockMulti(float* const* channelBufs, int numChannels, int numSamps) noexcept;
 
+		void BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numSamples) noexcept;
+		void SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) noexcept;
+		void SendMidiEventToPlugin(size_t index, const engine::MidiEvent& event, bool isRealtime) noexcept;
+
 	private:
 		std::vector<std::shared_ptr<IVstPlugin>> _plugins;
 	};
