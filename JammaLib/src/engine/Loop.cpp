@@ -419,7 +419,7 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		if (nullptr == trigger)
 			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 		else
-			trigger->WriteBlock(dest, tempBuf, sampsToWrite);
+			trigger->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
 	}
 }
 

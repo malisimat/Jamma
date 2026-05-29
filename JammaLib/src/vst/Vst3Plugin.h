@@ -79,6 +79,11 @@ namespace vst
 		// channelBufs must contain numChannels writable channel buffers.
 		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
+		void BeginMidiBlock(std::uint32_t blockStartSample,
+			std::uint32_t numSamples) noexcept override;
+		void SendMidiEvent(const engine::MidiEvent& event,
+			bool isRealtime) noexcept override;
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		// Returns true if the editor was opened successfully.

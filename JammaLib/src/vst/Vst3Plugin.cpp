@@ -8,6 +8,7 @@
 #include "Vst3Plugin.h"
 #include "Vst2Plugin.h"
 #include <algorithm>
+#include <array>
 #include <cwctype>
 #include <iostream>
 #include <mutex>
@@ -19,6 +20,8 @@
 #include "vst3sdk/pluginterfaces/vst/ivstmessage.h"
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
 #include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
+#include "vst3sdk/pluginterfaces/vst/ivstevents.h"
+#include "vst3sdk/pluginterfaces/vst/ivstmidicontrollers.h"
 #include "vst3sdk/pluginterfaces/gui/iplugview.h"
 #include "vst3sdk/public.sdk/source/vst/hosting/hostclasses.h"
 #endif
@@ -137,6 +140,143 @@ public:
 
 IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
 
+class FixedEventList final : public IEventList
+{
+public:
+	static constexpr int32 MaxEvents = 256;
+
+	FixedEventList() :
+		_count(0),
+		_blockStartSample(0u),
+		_blockNumSamples(0u),
+		_events{}
+	{
+		FUNKNOWN_CTOR
+	}
+
+	~FixedEventList() noexcept { FUNKNOWN_DTOR }
+
+	void BeginBlock(std::uint32_t blockStartSample, std::uint32_t numSamples) noexcept
+	{
+		_blockStartSample = blockStartSample;
+		_blockNumSamples = numSamples;
+		_count = 0;
+	}
+
+	void AddMidiEvent(const engine::MidiEvent& midiEvent, bool isRealtime) noexcept
+	{
+		if (_count >= MaxEvents || 0u == _blockNumSamples)
+			return;
+
+		const auto blockEnd = _blockStartSample + _blockNumSamples;
+		const bool inWindow = (midiEvent.sampleOffset >= _blockStartSample && midiEvent.sampleOffset < blockEnd);
+		if (!inWindow && !isRealtime)
+			return;
+
+		Event event{};
+		event.busIndex = 0;
+		event.sampleOffset = inWindow ? static_cast<int32>(midiEvent.sampleOffset - _blockStartSample) : 0;
+		event.ppqPosition = 0.0;
+		event.flags = isRealtime ? Event::kIsLive : 0;
+
+		if (midiEvent.IsNoteOn())
+		{
+			event.type = Event::kNoteOnEvent;
+			event.noteOn.channel = midiEvent.Channel();
+			event.noteOn.pitch = midiEvent.data1;
+			event.noteOn.tuning = 0.0f;
+			event.noteOn.velocity = static_cast<float>(midiEvent.data2) / 127.0f;
+			event.noteOn.length = 0;
+			event.noteOn.noteId = -1;
+		}
+		else if (midiEvent.IsNoteOff())
+		{
+			event.type = Event::kNoteOffEvent;
+			event.noteOff.channel = midiEvent.Channel();
+			event.noteOff.pitch = midiEvent.data1;
+			event.noteOff.tuning = 0.0f;
+			event.noteOff.velocity = static_cast<float>(midiEvent.data2) / 127.0f;
+			event.noteOff.noteId = -1;
+		}
+		else if (midiEvent.MessageType() == 0xA0) // Polyphonic Key Pressure
+		{
+			event.type = Event::kPolyPressureEvent;
+			event.polyPressure.channel = midiEvent.Channel();
+			event.polyPressure.pitch = midiEvent.data1;
+			event.polyPressure.pressure = static_cast<float>(midiEvent.data2) / 127.0f;
+			event.polyPressure.noteId = -1;
+		}
+		else if (midiEvent.MessageType() == 0xB0) // Control Change
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = midiEvent.data1;
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data2);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xC0) // Program Change
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kCtrlProgramChange);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xD0) // Channel Pressure
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kAfterTouch);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = 0;
+		}
+		else if (midiEvent.MessageType() == 0xE0) // Pitch Bend
+		{
+			event.type = Event::kLegacyMIDICCOutEvent;
+			event.midiCCOut.controlNumber = static_cast<uint8>(kPitchBend);
+			event.midiCCOut.channel = static_cast<int8>(midiEvent.Channel());
+			event.midiCCOut.value = static_cast<int8>(midiEvent.data1);
+			event.midiCCOut.value2 = static_cast<int8>(midiEvent.data2);
+		}
+		else
+		{
+			return;
+		}
+
+		_events[static_cast<size_t>(_count++)] = event;
+	}
+
+	int32 PLUGIN_API getEventCount() override { return _count; }
+
+	tresult PLUGIN_API getEvent(int32 index, Event& e) override
+	{
+		if (index < 0 || index >= _count)
+			return kInvalidArgument;
+
+		e = _events[static_cast<size_t>(index)];
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API addEvent(Event& e) override
+	{
+		if (_count >= MaxEvents)
+			return kOutOfMemory;
+
+		_events[static_cast<size_t>(_count++)] = e;
+		return kResultOk;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+
+private:
+	int32 _count;
+	std::uint32_t _blockStartSample;
+	std::uint32_t _blockNumSamples;
+	std::array<Event, MaxEvents> _events;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(FixedEventList, IEventList, IEventList::iid)
+
 class Vst3Plugin::Impl
 {
 public:
@@ -165,6 +305,7 @@ public:
 	std::vector<float*> outputChannelPtrs;
 	std::vector<float> inputScratchStorage;
 	std::vector<float> outputScratchStorage;
+	std::unique_ptr<FixedEventList> inputEvents;
 
 	Impl() :
 		factory(nullptr),
@@ -186,7 +327,8 @@ public:
 		inputChannelPtrs(),
 		outputChannelPtrs(),
 		inputScratchStorage(),
-		outputScratchStorage()
+		outputScratchStorage(),
+		inputEvents(std::make_unique<FixedEventList>())
 	{
 	}
 };
@@ -648,7 +790,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	_impl->processData.numOutputs = (outputBusCount > 0) ? 1 : 0;
 	_impl->processData.inputs = (inputBusCount > 0) ? &_impl->inputBus : nullptr;
 	_impl->processData.outputs = (outputBusCount > 0) ? &_impl->outputBus : nullptr;
-	_impl->processData.inputEvents = nullptr;
+	_impl->processData.inputEvents = _impl->inputEvents.get();
 	_impl->processData.outputEvents = nullptr;
 	_impl->processData.inputParameterChanges = nullptr;
 	_impl->processData.outputParameterChanges = nullptr;
@@ -904,6 +1046,28 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
 #else
 	(void)channelBufs; (void)numChannels; (void)numSamples;
+#endif
+}
+
+void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
+	std::uint32_t numSamples) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (_impl && _impl->inputEvents)
+		_impl->inputEvents->BeginBlock(blockStartSample, numSamples);
+#else
+	(void)blockStartSample; (void)numSamples;
+#endif
+}
+
+void Vst3Plugin::SendMidiEvent(const engine::MidiEvent& event,
+	bool isRealtime) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (_impl && _impl->inputEvents)
+		_impl->inputEvents->AddMidiEvent(event, isRealtime);
+#else
+	(void)event; (void)isRealtime;
 #endif
 }
 

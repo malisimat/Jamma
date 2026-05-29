@@ -22,6 +22,13 @@ namespace engine
 		virtual void OnEvent(const MidiEvent& ev) noexcept = 0;
 	};
 
+	class IMidiOutputSink
+	{
+	public:
+		virtual ~IMidiOutputSink() = default;
+		virtual void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept = 0;
+	};
+
 	enum class MidiLoopState : std::uint8_t
 	{
 		Empty,
@@ -80,6 +87,9 @@ namespace engine
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
+		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
+		// Used by the ditch path to flush stuck notes before the loop is discarded.
+		const std::bitset<TotalNoteSlots>& HeldNotes() const noexcept { return _held; }
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
 		std::shared_ptr<MidiModel> Model() const noexcept { return _model; }
@@ -95,6 +105,11 @@ namespace engine
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
+		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
+		{
+			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);
+		}
+
 	private:
 		bool BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force, bool queueUpdate);
 		void EmitEventsInRange(std::uint32_t lo,
@@ -102,12 +117,6 @@ namespace engine
 		                       std::uint32_t globalBase,
 		                       IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
-		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
-		{
-			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);
-		}
-
-		void PublishQuantisedEvents();
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
 		std::atomic<std::shared_ptr<const QuantisedEventBuffer>> _quantisedEvents;

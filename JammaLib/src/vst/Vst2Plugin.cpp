@@ -7,6 +7,7 @@
 
 #include "Vst2Plugin.h"
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 
 using namespace vst;
@@ -14,6 +15,11 @@ using namespace vst;
 Vst2Plugin::Vst2Plugin() :
 #ifdef JAMMA_VST2_ENABLED
 	_effect(nullptr),
+	_midiEvents(),
+	_midiEventBlock{},
+	_midiBlockStartSample(0u),
+	_midiBlockNumSamples(0u),
+	_midiEventCount(0u),
 #endif
 	_moduleHandle(nullptr),
 	_isLoaded(false),
@@ -29,6 +35,10 @@ Vst2Plugin::Vst2Plugin() :
 	_outputChannels(0),
 	_requestedChannels(1)
 {
+#ifdef JAMMA_VST2_ENABLED
+	for (auto i = 0u; i < MaxMidiEventsPerBlock; ++i)
+		_midiEventBlock.events[i] = reinterpret_cast<VstEvent*>(&_midiEvents[i]);
+#endif
 }
 
 Vst2Plugin::~Vst2Plugin()
@@ -254,6 +264,8 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	CopyMonoToInputBuffers(monoBuf, numSamples, _inputChannels,
 		_inputChannelPtrs.data());
 
+	DispatchPendingMidiEvents();
+
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
@@ -295,6 +307,8 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 	CopyMultiToInputBuffers(inputChans, 2, numSamples,
 		_inputChannelPtrs.data(), _inputChannels);
 
+	DispatchPendingMidiEvents();
+
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
@@ -331,6 +345,8 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	CopyMultiToInputBuffers(channelBufs, numChannels, numSamples,
 		_inputChannelPtrs.data(), _inputChannels);
 
+	DispatchPendingMidiEvents();
+
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
@@ -342,6 +358,62 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	(void)channelBufs; (void)numChannels; (void)numSamples;
 #endif
 }
+
+void Vst2Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
+	std::uint32_t numSamples) noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	_midiBlockStartSample = blockStartSample;
+	_midiBlockNumSamples = numSamples;
+	_midiEventCount = 0u;
+	_midiEventBlock.numEvents = 0;
+	_midiEventBlock.reserved = 0;
+#else
+	(void)blockStartSample; (void)numSamples;
+#endif
+}
+
+void Vst2Plugin::SendMidiEvent(const engine::MidiEvent& event,
+	bool isRealtime) noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_midiEventCount >= MaxMidiEventsPerBlock || 0u == _midiBlockNumSamples)
+		return;
+
+	const auto blockEnd = _midiBlockStartSample + _midiBlockNumSamples;
+	const bool inWindow = (event.sampleOffset >= _midiBlockStartSample && event.sampleOffset < blockEnd);
+	if (!inWindow && !isRealtime)
+		return;
+
+	auto& midiEvent = _midiEvents[_midiEventCount];
+	midiEvent = {};
+	midiEvent.type = kVstMidiType;
+	midiEvent.byteSize = sizeof(VstMidiEvent);
+	midiEvent.deltaFrames = inWindow ? static_cast<VstInt32>(event.sampleOffset - _midiBlockStartSample) : 0;
+	midiEvent.flags = isRealtime ? kVstMidiEventIsRealtime : 0;
+	midiEvent.midiData[0] = static_cast<char>(event.status);
+	midiEvent.midiData[1] = static_cast<char>(event.data1);
+	midiEvent.midiData[2] = static_cast<char>(event.data2);
+	midiEvent.midiData[3] = 0;
+
+	++_midiEventCount;
+	_midiEventBlock.numEvents = static_cast<VstInt32>(_midiEventCount);
+#else
+	(void)event; (void)isRealtime;
+#endif
+}
+
+#ifdef JAMMA_VST2_ENABLED
+void Vst2Plugin::DispatchPendingMidiEvents() noexcept
+{
+	if (_midiEventCount == 0u || !_effect)
+		return;
+
+	_effect->dispatcher(_effect, effProcessEvents, 0, 0, &_midiEventBlock, 0.0f);
+	_midiEventCount = 0u;
+	_midiEventBlock.numEvents = 0;
+}
+#endif
 
 bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 {
@@ -401,7 +473,7 @@ void Vst2Plugin::IdleEditor() noexcept
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float /*opt*/)
 {
-	(void)index; (void)value; (void)ptr;
+	(void)index; (void)value;
 
 	switch (opcode)
 	{
@@ -417,6 +489,15 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		return 1;
 	case audioMasterGetVendorVersion:
 		return 1000;
+	case audioMasterCanDo:
+		if (ptr)
+		{
+			const auto canDo = static_cast<const char*>(ptr);
+			if ((std::strcmp(canDo, "sendVstEvents") == 0) ||
+				(std::strcmp(canDo, "sendVstMidiEvent") == 0))
+				return 1;
+		}
+		return 0;
 	case audioMasterAutomate:
 		// Parameter automation notification — no action needed for a basic host.
 		return 0;

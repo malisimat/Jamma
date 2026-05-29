@@ -976,6 +976,42 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 	return recorded;
 }
 
+unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
+	std::uint32_t numSamples,
+	IMidiOutputSink& sink,
+	unsigned int firstOutputIndex) noexcept
+{
+	class IndexedMidiSink final : public IMidiSink
+	{
+	public:
+		IndexedMidiSink(IMidiOutputSink& outputSink, unsigned int outputIndex) noexcept :
+			_outputSink(outputSink),
+			_outputIndex(outputIndex)
+		{
+		}
+
+		void OnEvent(const MidiEvent& ev) noexcept override
+		{
+			_outputSink.OnEvent(_outputIndex, ev);
+		}
+
+	private:
+		IMidiOutputSink& _outputSink;
+		unsigned int _outputIndex;
+	};
+
+	for (auto i = 0u; i < _midiLoops.size(); ++i)
+	{
+		if (!_midiLoops[i])
+			continue;
+
+		IndexedMidiSink indexedSink(sink, firstOutputIndex + i);
+		_midiLoops[i]->ReadBlock(globalSample, numSamples, indexedSink);
+	}
+
+	return static_cast<unsigned int>(_midiLoops.size());
+}
+
 std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 	std::uint32_t globalSampleNow,
 	std::uint32_t recordedSampleCount) noexcept
@@ -1544,15 +1580,6 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
-	const auto state = _state.load(std::memory_order_relaxed);
-	const auto isRecording = (STATE_RECORDING == state) ||
-		(STATE_PLAYINGRECORDING == state) ||
-		(STATE_OVERDUBBING == state) ||
-		(STATE_PUNCHEDIN == state) ||
-		(STATE_OVERDUBBINGRECORDING == state);
-	if (isRecording && !force)
-		return;
-
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	for (auto& midiLoop : _midiLoops)
 	{

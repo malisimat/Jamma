@@ -166,6 +166,15 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 		const std::uint32_t roomInLoop = _loopLengthSamps - loopOffset;
 		const std::uint32_t segment = (remaining < roomInLoop) ? remaining : roomInLoop;
 
+		// If we are at the very start of a loop iteration, flush any notes that are
+		// still held from the previous iteration. This covers the case where the
+		// previous ReadBlock call ended exactly at the loop boundary, so the
+		// within-block wrap condition (remaining > roomInLoop) was never true and
+		// FlushHeldNotes was never called. Without this, note-ons replay at the top
+		// of each new iteration while the matching note-offs are never sent.
+		if (loopOffset == 0u)
+			FlushHeldNotes(cursor, sink);
+
 		// globalBase is the absolute sample corresponding to loopOffset.
 		const std::uint32_t globalBase = cursor - loopOffset;
 		EmitEventsInRange(loopOffset, loopOffset + segment, globalBase, sink);

@@ -291,6 +291,37 @@ TEST(MidiLoop, LoopWrapEmitsForcedNoteOffForHeldNote) {
 	ASSERT_EQ(1000u, sink.events[1].sampleOffset);
 }
 
+// Regression test: when a ReadBlock call ends *exactly* at the loop boundary
+// (remaining == roomInLoop), the within-block wraps condition is false so no
+// flush fires. The fix flushes at the start of the next iteration when
+// loopOffset == 0. Without the fix, held notes are replayed without a NoteOff.
+TEST(MidiLoop, HeldNoteIsFlushedWhenBlockEndsExactlyAtLoopBoundary) {
+	MidiLoop loop;
+	loop.StartRecord();
+	// NoteOn near the end of the loop — no matching NoteOff before loop boundary.
+	loop.RecordEvent(MidiEvent::MakeNoteOn(800u, 0, 60, 100));
+	loop.EndRecord(1000u);
+
+	CapturingSink sink;
+	// First block exactly fills one loop iteration. NoteOn is emitted; block ends
+	// at the loop boundary so no within-block wrap flush fires.
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_TRUE(sink.events[0].IsNoteOn());
+	ASSERT_EQ(800u, sink.events[0].sampleOffset);
+
+	// Second block starts exactly at the loop boundary. The held NoteOn from the
+	// first iteration must be flushed (NoteOff sent) before the new NoteOn fires.
+	sink.Clear();
+	loop.ReadBlock(1000u, 1000u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	ASSERT_TRUE(sink.events[0].IsNoteOff());        // forced flush at loop start
+	ASSERT_EQ(1000u, sink.events[0].sampleOffset);  // at the very start of this block
+	ASSERT_EQ(60u,   sink.events[0].data1);
+	ASSERT_TRUE(sink.events[1].IsNoteOn());          // new iteration's NoteOn
+	ASSERT_EQ(1800u, sink.events[1].sampleOffset);   // 1000 + 800
+}
+
 TEST(MidiLoop, ResetReturnsToEmpty) {
 	MidiLoop loop;
 	loop.StartRecord();
@@ -303,6 +334,34 @@ TEST(MidiLoop, ResetReturnsToEmpty) {
 	ASSERT_EQ(0u, loop.EventCount());
 	ASSERT_EQ(0u, loop.LoopLengthSamps());
 }
+
+// HeldNotes() tracks notes that have been played (NoteOn emitted) but not yet released.
+// Station::_DitchLoopTake reads HeldNotes() before calling Ditch() to enqueue NoteOff
+// events, preventing stuck notes in the VST instrument.
+TEST(MidiLoop, HeldNotesTracksPlayedButUnreleasedNotes) {
+	MidiLoop loop;
+	loop.StartRecord();
+	// NoteOn with no matching NoteOff — note will remain held after playback.
+	loop.RecordEvent(MidiEvent::MakeNoteOn(10u, 0, 60, 100));
+	loop.EndRecord(1000u);
+
+	// Before any ReadBlock, no notes are held.
+	EXPECT_TRUE(loop.HeldNotes().none());
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 100u, sink); // block [0,100) — plays the NoteOn at loopOffset 10.
+
+	ASSERT_EQ(1u, sink.events.size());
+	ASSERT_TRUE(sink.events[0].IsNoteOn());
+
+	// After playback, the note should be tracked as held.
+	EXPECT_TRUE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 60)));
+
+	// Other notes and channels are not held.
+	EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(0, 61)));
+	EXPECT_FALSE(loop.HeldNotes().test(MidiLoop::NoteSlot(1, 60)));
+}
+
 
 TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	MidiLoop loop;
