@@ -172,10 +172,12 @@ TEST(Vst2PluginFactory, DllExtensionCaseInsensitive)
 	EXPECT_FALSE(plugin->IsLoaded());
 }
 
-TEST(Vst2PluginHostCallback, ReportsInboundMidiCapability)
+TEST(Vst2PluginHostCallback, ReportsOutboundMidiCapability)
 {
-	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
-	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstEvents"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstMidiEvent"));
+	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
+	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));
 }
 
