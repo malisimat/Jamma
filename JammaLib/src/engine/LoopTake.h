@@ -17,11 +17,6 @@
 
 using base::Audible;
 
-namespace io
-{
-	struct LoggingConfig;
-}
-
 namespace engine
 {
 	class LoopTakeParams :
