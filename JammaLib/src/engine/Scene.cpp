@@ -907,6 +907,11 @@ ActionResult Scene::OnAction(KeyAction action)
 		case ACTIONRESULT_ACTIVATE:
 			_isSceneReset.store(false, std::memory_order_relaxed);
 			checkReset = true;
+			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
+			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
+			// do it here after every activation so all LoopTakes see the current grain.
+			if (_clock)
+				_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
 			break;
 		case ACTIONRESULT_DITCH:
 			checkReset = true;
