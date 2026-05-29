@@ -653,6 +653,36 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftDragEditsFraction) {
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, finished.Fraction);
 }
 
+TEST(LoopTakeMidiQuantisation, CtrlShiftDragSeedsGrainFromTakeLoopWhenSceneGrainUnknown) {
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 3u });
+	take->Play(0u, 1600u, 0u);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 0u;
+	take->SetMidiQuantisation(settings);
+
+	TouchAction down;
+	down.State = TouchAction::TOUCH_DOWN;
+	down.Index = 0;
+	down.Position = { 20, 20 };
+	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	EXPECT_TRUE(take->OnAction(down).IsEaten);
+
+	TouchMoveAction move;
+	move.Index = 0;
+	move.Position = { 20, -44 };
+	move.Modifiers = down.Modifiers;
+	EXPECT_TRUE(take->OnAction(move).IsEaten);
+
+	const auto& moved = take->MidiQuantisation();
+	EXPECT_TRUE(moved.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, moved.Fraction);
+	EXPECT_EQ(1600u, moved.GrainSamps);
+}
+
 TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	auto take = MakeLoopTake();
 

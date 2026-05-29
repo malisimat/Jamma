@@ -508,6 +508,7 @@ ActionResult LoopTake::BeginMidiQuantisationGesture(actions::TouchAction action)
 		<< " enabled=" << quantisation.Enabled
 		<< " fraction=" << MidiQuantisationFractionLabel(quantisation.Fraction)
 		<< " grain=" << quantisation.GrainSamps
+		<< " position=(" << action.Position.X << "," << action.Position.Y << ")"
 		<< " modifiers=" << action.Modifiers << std::endl;
 
 	ActionResult res;
@@ -530,6 +531,12 @@ ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
 	const auto delta = action.Position - _midiQuantisationGestureStartPosition;
 	const auto startIndex = MidiQuantisationFractionIndex(_midiQuantisationGestureStartFraction);
 	const auto fraction = ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(delta.Y));
+
+	std::cout << "MIDI quantisation gesture drag: take=" << _id
+		<< " position=(" << action.Position.X << "," << action.Position.Y << ")"
+		<< " deltaY=" << delta.Y
+		<< " fraction " << MidiQuantisationFractionLabel(_midiQuantisationGestureStartFraction)
+		<< " -> " << MidiQuantisationFractionLabel(fraction) << std::endl;
 
 	_ApplyMidiQuantisationGesture(fraction, true, "drag-fraction");
 	return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
@@ -721,11 +728,20 @@ ActionResult LoopTake::OnAction(JobAction action)
 		}
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		auto queuedModels = 0u;
 		for (auto& midiLoop : action.MidiLoops)
 		{
-			if (midiLoop)
-				midiLoop->QueueModelUpdateFromEvents(displayLength, true);
+			if (midiLoop && midiLoop->QueueModelUpdateFromEvents(displayLength, true))
+				++queuedModels;
 		}
+
+		std::cout << "MIDI quantisation update job: take=" << _id
+			<< " enabled=" << settings.Enabled
+			<< " fraction=" << MidiQuantisationFractionLabel(settings.Fraction)
+			<< " grain=" << settings.GrainSamps
+			<< " displayLength=" << displayLength
+			<< " midiLoops=" << action.MidiLoops.size()
+			<< " queuedModels=" << queuedModels << std::endl;
 
 		ActionResult res;
 		res.IsEaten = true;
@@ -1591,12 +1607,57 @@ MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 	return UnpackMidiQuantisationSettings(_midiQuantisationPacked.load(std::memory_order_acquire));
 }
 
+std::uint32_t LoopTake::_ResolveMidiQuantisationGestureGrain() const noexcept
+{
+	for (const auto& midiLoop : _midiLoops)
+	{
+		if (!midiLoop)
+			continue;
+
+		const auto loopLength = midiLoop->LoopLengthSamps();
+		if (loopLength > 0u)
+			return loopLength;
+	}
+
+	for (const auto& loop : _loops)
+	{
+		if (!loop)
+			continue;
+
+		const auto loopLength = static_cast<std::uint32_t>(loop->LoopLength());
+		if (loopLength > 0u)
+			return loopLength;
+	}
+
+	if (_midiVisualLoopLength > 0ul)
+		return static_cast<std::uint32_t>(_midiVisualLoopLength);
+
+	return static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+}
+
 void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept
 {
-	MidiQuantisationSettings updated = MidiQuantisation();
+	const auto previous = MidiQuantisation();
+	MidiQuantisationSettings updated = previous;
 	updated.Enabled = enabled;
 	updated.Fraction = fraction;
-	(void)source;
+
+	const auto resolvedGrain = (enabled && 0u == updated.GrainSamps) ?
+		_ResolveMidiQuantisationGestureGrain() :
+		updated.GrainSamps;
+	if (enabled && resolvedGrain > 0u)
+		updated.GrainSamps = resolvedGrain;
+
+	std::cout << "MIDI quantisation gesture apply: take=" << _id
+		<< " source=" << source
+		<< " enabled " << previous.Enabled << " -> " << updated.Enabled
+		<< " fraction " << MidiQuantisationFractionLabel(previous.Fraction)
+		<< " -> " << MidiQuantisationFractionLabel(updated.Fraction)
+		<< " grain " << previous.GrainSamps << " -> " << updated.GrainSamps
+		<< " step=" << MidiQuantisationStepSamps(updated);
+	if (enabled && 0u == previous.GrainSamps)
+		std::cout << " fallbackGrain=" << resolvedGrain;
+	std::cout << std::endl;
 
 	SetMidiQuantisation(updated);
 }

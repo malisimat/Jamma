@@ -206,6 +206,7 @@ namespace engine
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
 		void _ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept;
+		std::uint32_t _ResolveMidiQuantisationGestureGrain() const noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
