@@ -528,6 +528,7 @@ ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
 
 	_midiQuantisationGestureMoved = true;
 
+	action = GlobalToLocal(action);
 	const auto delta = action.Position - _midiQuantisationGestureStartPosition;
 	const auto startIndex = MidiQuantisationFractionIndex(_midiQuantisationGestureStartFraction);
 	const auto fraction = ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(delta.Y));
