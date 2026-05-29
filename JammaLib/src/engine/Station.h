@@ -3,7 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include "LoopTake.h"
-#include "QuantisationModel.h"
+#include "../graphics/QuantisationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
 #include "../audio/AudioMixer.h"
@@ -11,7 +11,7 @@
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
 #include "../io/InitFile.h"
-#include "../io/MidiQueue.h"
+#include "../midi/MidiQueue.h"
 #include "../vst/VstChain.h"
 
 namespace engine

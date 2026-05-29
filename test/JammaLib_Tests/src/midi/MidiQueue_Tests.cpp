@@ -1,6 +1,6 @@
 #include "gtest/gtest.h"
-#include "engine/MidiEvent.h"
-#include "io/MidiQueue.h"
+#include "midi/MidiEvent.h"
+#include "midi/MidiQueue.h"
 
 using engine::MidiEvent;
 using io::MidiQueue;

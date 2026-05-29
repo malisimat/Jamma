@@ -10,7 +10,7 @@
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
-#include "../audio/MidiDevice.h"
+#include "../midi/MidiDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -37,7 +37,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "../io/MidiQueue.h"
+#include "../midi/MidiQueue.h"
 #include "../io/SerialTriggerQueue.h"
 
 namespace engine

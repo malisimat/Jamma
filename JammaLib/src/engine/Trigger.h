@@ -9,7 +9,7 @@
 #include "GuiElement.h"
 #include "Tickable.h"
 #include "Timer.h"
-#include "MidiEvent.h"
+#include "../midi/MidiEvent.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"

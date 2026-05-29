@@ -3,11 +3,11 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "engine/MidiEvent.h"
+#include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
-#include "engine/MidiLoop.h"
-#include "engine/MidiModel.h"
-#include "engine/MidiQuantisation.h"
+#include "midi/MidiLoop.h"
+#include "midi/MidiModel.h"
+#include "midi/MidiQuantisation.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
 #include "engine/Timer.h"

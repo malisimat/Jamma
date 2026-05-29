@@ -2,7 +2,7 @@
 #include "gtest/gtest.h"
 #include <sstream>
 #include "resources/ResourceLib.h"
-#include "engine/MidiEvent.h"
+#include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"

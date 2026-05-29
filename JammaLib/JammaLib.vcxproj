@@ -222,9 +222,9 @@
     <ClInclude Include="src\gui\GuiToggle.h" />
     <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
-    <ClInclude Include="src\engine\LoopModel.h" />
+    <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\Quantisation.h" />
-    <ClInclude Include="src\engine\QuantisationModel.h" />
+    <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\base\Tweakable.h" />
     <ClInclude Include="src\graphics\VU.h" />
     <ClInclude Include="src\base\MultiAudible.h" />
@@ -269,7 +269,7 @@
     <ClInclude Include="lib\rtaudio\include\soundcard.h" />
     <ClInclude Include="src\base\ResourceUser.h" />
     <ClInclude Include="src\audio\AudioDevice.h" />
-    <ClInclude Include="src\audio\MidiDevice.h" />
+    <ClInclude Include="src\midi\MidiDevice.h" />
     <ClInclude Include="src\io\SerialDevice.h" />
     <ClInclude Include="src\io\SerialTriggerProtocol.h" />
     <ClInclude Include="lib\rtmidi\RtMidi.h" />
@@ -339,13 +339,13 @@
     <ClInclude Include="src\actions\WindowAction.h" />
     <ClInclude Include="src\resources\WavResource.h" />
     <ClInclude Include="src\engine\Timer.h" />
-    <ClInclude Include="src\engine\MidiEvent.h" />
-    <ClInclude Include="src\io\MidiQueue.h" />
-    <ClInclude Include="src\io\SerialTriggerQueue.h" />
-    <ClInclude Include="src\engine\MidiLoop.h" />
-    <ClInclude Include="src\engine\MidiNoteSpan.h" />
-    <ClInclude Include="src\engine\MidiQuantisation.h" />
-    <ClInclude Include="src\engine\MidiModel.h" />
+    <ClInclude Include="src\midi\MidiEvent.h" />
+    <ClInclude Include="src\midi\MidiQueue.h" />
+    <ClInclude Include="src\base\Tickable.h" />
+    <ClInclude Include="src\midi\MidiLoop.h" />
+    <ClInclude Include="src\midi\MidiNoteSpan.h" />
+    <ClInclude Include="src\midi\MidiQuantisation.h" />
+    <ClInclude Include="src\midi\MidiModel.h" />
     <ClInclude Include="src\base\Tickable.h" />
   </ItemGroup>
   <ItemGroup>
@@ -367,9 +367,9 @@
     <ClCompile Include="src\gui\GuiRouter.cpp" />
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\graphics\Skybox.cpp" />
-    <ClCompile Include="src\engine\LoopModel.cpp" />
+    <ClCompile Include="src\graphics\LoopModel.cpp" />
     <ClCompile Include="src\engine\Quantisation.cpp" />
-    <ClCompile Include="src\engine\QuantisationModel.cpp" />
+    <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />
@@ -390,7 +390,7 @@
     <ClCompile Include="lib\rtaudio\include\asiolist.cpp" />
     <ClCompile Include="lib\rtaudio\include\iasiothiscallresolver.cpp" />
     <ClCompile Include="src\audio\AudioDevice.cpp" />
-    <ClCompile Include="src\audio\MidiDevice.cpp" />
+    <ClCompile Include="src\midi\MidiDevice.cpp" />
     <ClCompile Include="src\io\SerialDevice.cpp" />
     <ClCompile Include="lib\rtmidi\RtMidi.cpp" />
     <ClCompile Include="src\gui\GuiSlider.cpp" />
@@ -440,10 +440,10 @@
     <ClCompile Include="src\actions\WindowAction.cpp" />
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\engine\Timer.cpp" />
-    <ClCompile Include="src\engine\MidiLoop.cpp" />
-    <ClCompile Include="src\engine\MidiNoteSpan.cpp" />
-    <ClCompile Include="src\engine\MidiQuantisation.cpp" />
-    <ClCompile Include="src\engine\MidiModel.cpp" />
+    <ClCompile Include="src\midi\MidiLoop.cpp" />
+    <ClCompile Include="src\midi\MidiNoteSpan.cpp" />
+    <ClCompile Include="src\midi\MidiQuantisation.cpp" />
+    <ClCompile Include="src\midi\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\graphics\Window.h" />

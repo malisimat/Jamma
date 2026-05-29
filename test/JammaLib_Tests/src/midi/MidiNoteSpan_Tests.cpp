@@ -1,9 +1,9 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "engine/MidiEvent.h"
-#include "engine/MidiLoop.h"
-#include "engine/MidiNoteSpan.h"
+#include "midi/MidiEvent.h"
+#include "midi/MidiLoop.h"
+#include "midi/MidiNoteSpan.h"
 
 using engine::ExtractMidiNoteSpans;
 using engine::MidiEvent;

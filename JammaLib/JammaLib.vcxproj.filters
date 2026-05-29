@@ -116,8 +116,8 @@
     <ClInclude Include="src\engine\Quantisation.h">
       <Filter>src\engine</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\QuantisationModel.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\graphics\QuantisationModel.h">
+      <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiModel.h">
       <Filter>src\gui</Filter>
@@ -233,8 +233,8 @@
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
     </ClInclude>
-    <ClInclude Include="src\audio\MidiDevice.h">
-      <Filter>src\audio</Filter>
+    <ClInclude Include="src\midi\MidiDevice.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
     <ClInclude Include="lib\rtmidi\RtMidi.h">
       <Filter>lib\rtmidi</Filter>
@@ -290,23 +290,23 @@
     <ClInclude Include="src\engine\Timer.h">
       <Filter>src\engine</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiEvent.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\midi\MidiEvent.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\io\MidiQueue.h">
-      <Filter>src\io</Filter>
+    <ClInclude Include="src\midi\MidiQueue.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiLoop.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\midi\MidiLoop.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiNoteSpan.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\midi\MidiNoteSpan.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiQuantisation.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\midi\MidiQuantisation.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\MidiModel.h">
-      <Filter>src\graphics</Filter>
+    <ClInclude Include="src\midi\MidiModel.h">
+      <Filter>src\midi</Filter>
     </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
@@ -413,7 +413,7 @@
     <ClInclude Include="src\graphics\VU.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\LoopModel.h">
+    <ClInclude Include="src\graphics\LoopModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\FallingValue.h">
@@ -592,8 +592,8 @@
     <ClCompile Include="src\audio\AudioDevice.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\MidiDevice.cpp">
-      <Filter>src\audio</Filter>
+    <ClCompile Include="src\midi\MidiDevice.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtmidi\RtMidi.cpp">
       <Filter>lib\rtmidi</Filter>
@@ -616,17 +616,17 @@
     <ClCompile Include="src\engine\Timer.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiLoop.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\midi\MidiLoop.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiNoteSpan.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\midi\MidiNoteSpan.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiQuantisation.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\midi\MidiQuantisation.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiModel.cpp">
-      <Filter>src\graphics</Filter>
+    <ClCompile Include="src\midi\MidiModel.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>
@@ -685,14 +685,14 @@
     <ClCompile Include="src\graphics\VU.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\LoopModel.cpp">
+    <ClCompile Include="src\graphics\LoopModel.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Quantisation.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\QuantisationModel.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\graphics\QuantisationModel.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\MathUtils.cpp">
       <Filter>src\utils</Filter>

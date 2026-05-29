@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "MidiModel.h"
+#include "../midi/MidiModel.h"
 
 namespace
 {

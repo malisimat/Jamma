@@ -6,7 +6,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "MidiLoop.h"
+#include "../midi/MidiLoop.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"

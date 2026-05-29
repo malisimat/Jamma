@@ -2,8 +2,8 @@
 
 #include "gtest/gtest.h"
 
-#include "engine/MidiEvent.h"
-#include "engine/MidiQuantisation.h"
+#include "midi/MidiEvent.h"
+#include "midi/MidiQuantisation.h"
 
 using engine::MidiEvent;
 using engine::MidiQuantisationDivisor;

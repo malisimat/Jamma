@@ -4,7 +4,7 @@
 #include <unordered_set>
 
 #include "gtest/gtest.h"
-#include "audio/MidiDevice.h"
+#include "midi/MidiDevice.h"
 
 using audio::MidiDevice;
 

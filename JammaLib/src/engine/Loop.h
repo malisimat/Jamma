@@ -9,7 +9,7 @@
 #include "Tweakable.h"
 #include "ResourceUser.h"
 #include "GlUtils.h"
-#include "LoopModel.h"
+#include "../graphics/LoopModel.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiModel.h"
 #include "../io/FileReadWriter.h"

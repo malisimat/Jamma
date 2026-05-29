@@ -2,8 +2,11 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="pch.cpp" />
-    <ClCompile Include="src\engine\LoopModel_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\audio\BlockApi_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\SerialTriggerProtocol_Tests.cpp">
+      <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp">
       <Filter>src\audio</Filter>
@@ -11,38 +14,38 @@
     <ClCompile Include="src\audio\Overdub_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\audio\MidiDevice_Tests.cpp">
-      <Filter>src\audio</Filter>
-    </ClCompile>
-    <ClCompile Include="src\audio\BufferBank_Tests.cpp">
+    <ClCompile Include="src\audio\AudioBuffer_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\ChannelMixer_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
-    <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
-      <Filter>src\utils</Filter>
-    </ClCompile>
-    <ClCompile Include="src\gui\GuiSlider_Tests.cpp">
-      <Filter>src\gui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\gui\GuiRack_Tests.cpp">
-      <Filter>src\gui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\gui\GuiControls_Tests.cpp">
-      <Filter>src\gui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\io\JamFile_Tests.cpp">
-      <Filter>src\io</Filter>
-    </ClCompile>
-    <ClCompile Include="src\io\Json_Tests.cpp">
-      <Filter>src\io</Filter>
-    </ClCompile>
     <ClCompile Include="src\audio\Loop_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\Hanning_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\MixBehaviour_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\BufferBank_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\JobAction_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\io\RigFile_Tests.cpp">
-      <Filter>src\io</Filter>
+    <ClCompile Include="src\engine\VstStaging_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\StationRemote_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\StationRack_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp">
+      <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Trigger_Tests.cpp">
       <Filter>src\engine</Filter>
@@ -53,41 +56,68 @@
     <ClCompile Include="src\engine\Timer_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiQueue_Tests.cpp">
+    <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiLoop_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\graphics\LoopModel_Tests.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\MidiNoteSpan_Tests.cpp">
-      <Filter>src\engine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\engine\MidiQuantisation_Tests.cpp">
-      <Filter>src\engine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\io\UserConfig_Tests.cpp">
-      <Filter>src\io</Filter>
+    <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Window_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\NinePatchImageTest.cpp">
-      <Filter>src\graphics</Filter>
+    <ClCompile Include="src\gui\GuiControls_Tests.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\UndoHistory_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\gui\GuiRack_Tests.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\FlipBuffer_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\gui\GuiSlider_Tests.cpp">
+      <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\StationRack_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\io\JamFile_Tests.cpp">
+      <Filter>src\io</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp">
-      <Filter>src\engine</Filter>
+    <ClCompile Include="src\io\Json_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\RigFile_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\UserConfig_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiDevice_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiQueue_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiLoop_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiNoteSpan_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiQuantisation_Tests.cpp">
+      <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp">
       <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
+      <Filter>src\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
