@@ -791,7 +791,9 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 
 TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	auto take = MakeLoopTake();
-	take->SetUiLoggingVerbose(true);
+	io::LoggingConfig logging;
+	logging.Ui = "verbose";
+	take->SetLogging(logging);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
