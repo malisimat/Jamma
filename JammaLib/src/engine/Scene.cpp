@@ -1089,9 +1089,10 @@ void Scene::_PumpMidi()
 			const auto msgType = ingress.MessageType();
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
+				const auto& deviceName = input->ConfiguredName;
 				for (const auto& station : stations)
 				{
-					if (station && !station->IsRemote())
+					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
 						station->EnqueueLiveMidiEvent(ingress);
 				}
 			}

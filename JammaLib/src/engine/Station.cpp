@@ -1119,6 +1119,25 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 	}
 }
 
+bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept
+{
+	for (const auto& trigger : _triggers)
+	{
+		if (!trigger)
+			continue;
+		const auto& devices = trigger->MidiInputDevices();
+		if (devices.empty())
+			return true;
+		for (const auto& d : devices)
+		{
+			if (d == deviceName)
+				return true;
+		}
+	}
+	// No trigger has a device restriction — allow all.
+	return _triggers.empty();
+}
+
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
 {
 	_liveMidiIngress.Push(event);

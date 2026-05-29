@@ -136,6 +136,10 @@ namespace engine
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
+		// Returns true if the named device is allowed to drive this station's live
+		// VST playback. If no trigger has a MidiInputDevices restriction, all
+		// devices are allowed (backward-compatible open behaviour).
+		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
 		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
