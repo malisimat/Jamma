@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "../include/Constants.h"
 #include "../graphics/GlDrawContext.h"
@@ -70,7 +71,8 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 MidiModel::MidiModel(MidiModelParams params)
 	: GuiModel(params),
 	  _midiParams(params),
-	  _loopIndexFrac(0.0)
+	  _loopIndexFrac(0.0),
+	  _pendingModelUpdate(nullptr)
 {
 	SetInstanceAttributes({}, 0u);
 }
@@ -81,6 +83,8 @@ MidiModel::~MidiModel()
 
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
+	ApplyPendingModelUpdate();
+
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac),
@@ -120,16 +124,30 @@ void MidiModel::SetLoopIndexFrac(double frac) noexcept
 
 void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
 {
+	auto data = BuildInstanceData(spans, loopLengthSamps);
+	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
+}
+
+void MidiModel::QueueModelUpdate(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
+{
+	_pendingModelUpdate.store(BuildInstanceData(spans, loopLengthSamps), std::memory_order_release);
+}
+
+std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const std::vector<MidiNoteSpan>& spans,
+	std::uint32_t loopLengthSamps) const
+{
+	auto data = std::make_shared<ModelInstanceData>();
 	std::vector<float> timePitchData;
 	std::vector<float> shapeData;
 
 	if (0u == loopLengthSamps || spans.empty())
 	{
-		SetInstanceAttributes({
-			{ TimePitchAttribute, 4u, timePitchData },
-			{ ShapeAttribute, 4u, shapeData }
-		}, 0u);
-		return;
+		data->Attributes = {
+			{ TimePitchAttribute, 4u, std::move(timePitchData) },
+			{ ShapeAttribute, 4u, std::move(shapeData) }
+		};
+		data->InstanceCount = 0u;
+		return data;
 	}
 
 	// Compute ring radius matching Loop::_CalcDrawRadius so MIDI rings
@@ -165,11 +183,21 @@ void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_
 		shapeData.push_back(0.0f);
 	}
 
-	const auto instanceCount = static_cast<unsigned int>(timePitchData.size() / 4u);
-	SetInstanceAttributes({
-		{ TimePitchAttribute, 4u, timePitchData },
-		{ ShapeAttribute, 4u, shapeData }
-	}, instanceCount);
+	data->InstanceCount = static_cast<unsigned int>(timePitchData.size() / 4u);
+	data->Attributes = {
+		{ TimePitchAttribute, 4u, std::move(timePitchData) },
+		{ ShapeAttribute, 4u, std::move(shapeData) }
+	};
+	return data;
+}
+
+void MidiModel::ApplyPendingModelUpdate()
+{
+	auto pending = _pendingModelUpdate.exchange(nullptr, std::memory_order_acq_rel);
+	if (!pending)
+		return;
+
+	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }
 
 std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()

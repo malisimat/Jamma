@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -170,7 +171,7 @@ namespace engine
 		// every owned MidiLoop. Underlying recorded events are never modified;
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
-		const MidiQuantisationSettings& MidiQuantisation() const noexcept { return _midiQuantisation; }
+		MidiQuantisationSettings MidiQuantisation() const noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -233,7 +234,8 @@ namespace engine
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
-		MidiQuantisationSettings _midiQuantisation;
+		std::atomic<std::uint64_t> _midiQuantisationPacked;
+		bool _midiQuantisationUpdatePending;
 		bool _midiQuantisationGestureActive;
 		bool _midiQuantisationGestureMoved;
 		utils::Position2d _midiQuantisationGestureStartPosition;

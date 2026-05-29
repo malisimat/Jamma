@@ -45,6 +45,13 @@ namespace engine
 		static constexpr std::size_t DefaultCapacity = 4096;
 		static constexpr std::size_t TotalNoteSlots = 16u * 128u; // channel * note
 
+	private:
+		struct QuantisedEventBuffer
+		{
+			std::array<MidiEvent, DefaultCapacity> Events{};
+		};
+
+	public:
 		MidiLoop() noexcept;
 
 		// State transitions
@@ -55,7 +62,7 @@ namespace engine
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).
-		void EndRecord(std::uint32_t loopLengthSamps) noexcept;
+		void EndRecord(std::uint32_t loopLengthSamps);
 		void Reset() noexcept;
 
 		// Play any events that fall within [globalSample, globalSample + numSamples).
@@ -77,17 +84,19 @@ namespace engine
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
 		std::shared_ptr<MidiModel> Model() const noexcept { return _model; }
 		bool UpdateModelFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
+		bool QueueModelUpdateFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
-		// Non-destructive start-time quantisation. Updates a pre-allocated parallel
-		// event buffer and atomically publishes it for the audio thread. The original
+		// Non-destructive start-time quantisation. Builds an immutable event-buffer
+		// snapshot and atomically publishes it for the audio thread. The original
 		// _events stream is never modified; disabling restores untransformed playback
 		// and rendering with bit-exact recorded timing.
-		void SetQuantisation(const MidiQuantisationSettings& settings) noexcept;
+		void SetQuantisation(const MidiQuantisationSettings& settings);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
-		bool IsQuantisationActive() const noexcept { return _useQuantised.load(std::memory_order_acquire); }
+		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
 	private:
+		bool BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force, bool queueUpdate);
 		void EmitEventsInRange(std::uint32_t lo,
 		                       std::uint32_t hi,
 		                       std::uint32_t globalBase,
@@ -98,10 +107,10 @@ namespace engine
 			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);
 		}
 
-		void RebuildQuantisedEvents() noexcept;
+		void PublishQuantisedEvents();
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
-		std::array<MidiEvent, DefaultCapacity> _quantisedEvents{};
+		std::atomic<std::shared_ptr<const QuantisedEventBuffer>> _quantisedEvents;
 		std::size_t _eventCount;
 		std::uint32_t _loopLengthSamps;
 		std::uint64_t _dropped;
@@ -112,6 +121,5 @@ namespace engine
 		std::bitset<TotalNoteSlots> _held;
 		std::shared_ptr<MidiModel> _model;
 		MidiQuantisationSettings _quantisation;
-		std::atomic<bool> _useQuantised{ false };
 	};
 }
