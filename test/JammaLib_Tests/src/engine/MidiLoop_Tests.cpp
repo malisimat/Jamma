@@ -6,7 +6,10 @@
 #include "engine/MidiLoop.h"
 #include "engine/MidiModel.h"
 #include "engine/MidiQuantisation.h"
+#include "engine/Scene.h"
+#include "engine/Station.h"
 #include "engine/Timer.h"
+#include "io/UserConfig.h"
 
 using engine::IMidiSink;
 using engine::LoopTake;
@@ -18,6 +21,10 @@ using engine::MidiModel;
 using engine::MidiModelParams;
 using engine::MidiQuantisationFraction;
 using engine::MidiQuantisationSettings;
+using engine::Scene;
+using engine::SceneParams;
+using engine::Station;
+using engine::StationParams;
 using engine::Timer;
 using actions::TouchAction;
 using actions::TouchMoveAction;
@@ -42,6 +49,72 @@ namespace
 		MergeMixBehaviourParams merge;
 		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
 		return std::make_shared<LoopTake>(params, mixerParams);
+	}
+
+	std::shared_ptr<Station> MakeStation(const std::string& name = "station")
+	{
+		StationParams params;
+		params.Name = name;
+		params.Size = { 100, 100 };
+		MergeMixBehaviourParams merge;
+		auto mixerParams = Station::GetMixerParams(params.Size, merge);
+		return std::make_shared<Station>(params, mixerParams);
+	}
+
+	class TestScene : public Scene
+	{
+	public:
+		TestScene(SceneParams params,
+			io::UserConfig user) :
+			Scene(params, user)
+		{
+		}
+
+		void AddStationForTest(const std::shared_ptr<Station>& station)
+		{
+			_AddStation(station);
+		}
+
+		void SetSelectDepthForTest(base::SelectDepth depth)
+		{
+			_UpdateSelectDepth(static_cast<unsigned int>(depth));
+		}
+	};
+
+	std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
+	{
+		std::vector<unsigned char> hoverPath;
+		for (auto idPart : element->GlobalId())
+			hoverPath.push_back(static_cast<unsigned char>(idPart + 1u));
+		hoverPath.push_back(0u);
+		return hoverPath;
+	}
+
+	void ApplyCtrlShiftDrag(TestScene& scene,
+		const utils::Position2d& start,
+		const utils::Position2d& finish)
+	{
+		auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+
+		TouchAction down;
+		down.State = TouchAction::TOUCH_DOWN;
+		down.Index = 0;
+		down.Position = start;
+		down.Modifiers = ctrlShift;
+		EXPECT_TRUE(scene.OnAction(down).IsEaten);
+
+		TouchMoveAction move;
+		move.Index = 0;
+		move.Position = finish;
+		move.Modifiers = ctrlShift;
+		EXPECT_TRUE(scene.OnAction(move).IsEaten);
+
+		TouchAction up;
+		up.State = TouchAction::TOUCH_UP;
+		up.Index = 0;
+		up.Position = finish;
+		up.Modifiers = ctrlShift;
+		EXPECT_FALSE(scene.OnAction(up).IsEaten);
 	}
 }
 
@@ -623,4 +696,226 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	EXPECT_TRUE(take->OnAction(up).IsEaten);
 	EXPECT_TRUE(take->MidiQuantisation().Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
+	auto take = MakeLoopTake();
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	take->SetMidiQuantisation(settings);
+
+	auto station = MakeStation();
+	station->AddTake(take);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+
+	const auto& moved = take->MidiQuantisation();
+	EXPECT_TRUE(moved.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, moved.Fraction);
+
+	EXPECT_TRUE(take->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, take->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations) {
+	auto hoveredTake = MakeLoopTake("take-a");
+	auto selectedTake = MakeLoopTake("take-b");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	hoveredTake->SetMidiQuantisation(settings);
+	selectedTake->SetMidiQuantisation(settings);
+
+	auto hoveredStation = MakeStation("station-a");
+	hoveredStation->AddTake(hoveredTake);
+	auto selectedStation = MakeStation("station-b");
+	selectedStation->AddTake(selectedTake);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(hoveredStation);
+	scene.AddStationForTest(selectedStation);
+	scene.CommitChanges();
+	selectedStation->Select();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
+
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+
+	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
+	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTakes) {
+	auto hoveredTake = MakeLoopTake("take-a");
+	auto selectedTake = MakeLoopTake("take-b");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	hoveredTake->SetMidiQuantisation(settings);
+	selectedTake->SetMidiQuantisation(settings);
+
+	auto hoveredStation = MakeStation("station-a");
+	hoveredStation->AddTake(hoveredTake);
+	auto selectedStation = MakeStation("station-b");
+	selectedStation->AddTake(selectedTake);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(hoveredStation);
+	scene.AddStationForTest(selectedStation);
+	scene.CommitChanges();
+	selectedTake->Select();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
+
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+
+	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
+	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
+	auto hoveredTake = MakeLoopTake("take-a");
+	auto selectedTake = MakeLoopTake("take-b");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	hoveredTake->SetMidiQuantisation(settings);
+	selectedTake->SetMidiQuantisation(settings);
+
+	auto hoveredLoop = hoveredTake->AddLoop(0u, "station-a");
+	auto selectedLoop = selectedTake->AddLoop(0u, "station-b");
+	auto hoveredStation = MakeStation("station-a");
+	hoveredStation->AddTake(hoveredTake);
+	auto selectedStation = MakeStation("station-b");
+	selectedStation->AddTake(selectedTake);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(hoveredStation);
+	scene.AddStationForTest(selectedStation);
+	scene.CommitChanges();
+	selectedLoop->Select();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOP);
+	scene.SetHover3d(HoverPathFor(hoveredLoop), base::Action::MODIFIER_NONE);
+
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+
+	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
+	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) {
+	auto hoveredTake = MakeLoopTake("take-a");
+	auto selectedTake = MakeLoopTake("take-b");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	hoveredTake->SetMidiQuantisation(settings);
+	selectedTake->SetMidiQuantisation(settings);
+
+	auto hoveredStation = MakeStation("station-a");
+	hoveredStation->AddTake(hoveredTake);
+	auto selectedStation = MakeStation("station-b");
+	selectedStation->AddTake(selectedTake);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(hoveredStation);
+	scene.AddStationForTest(selectedStation);
+	scene.CommitChanges();
+	selectedStation->Select();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
+
+	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+
+	TouchAction down;
+	down.State = TouchAction::TOUCH_DOWN;
+	down.Index = 0;
+	down.Position = { 220, 220 };
+	down.Modifiers = ctrlShift;
+	EXPECT_TRUE(scene.OnAction(down).IsEaten);
+
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+
+	TouchMoveAction move;
+	move.Index = 0;
+	move.Position = { 220, 156 };
+	move.Modifiers = ctrlShift;
+	EXPECT_TRUE(scene.OnAction(move).IsEaten);
+
+	TouchAction up;
+	up.State = TouchAction::TOUCH_UP;
+	up.Index = 0;
+	up.Position = move.Position;
+	up.Modifiers = ctrlShift;
+	EXPECT_FALSE(scene.OnAction(up).IsEaten);
+
+	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
+	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+}
+
+TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRouting) {
+	auto touchedTake = MakeLoopTake("take-a");
+	auto selectedTake = MakeLoopTake("take-b");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	touchedTake->SetMidiQuantisation(settings);
+	selectedTake->SetMidiQuantisation(settings);
+
+	auto touchedStation = MakeStation("station-a");
+	touchedStation->AddTake(touchedTake);
+	auto selectedStation = MakeStation("station-b");
+	selectedStation->AddTake(selectedTake);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(touchedStation);
+	scene.AddStationForTest(selectedStation);
+	scene.CommitChanges();
+	selectedStation->Select();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(touchedTake), base::Action::MODIFIER_NONE);
+
+	ApplyCtrlShiftDrag(scene, { 10, 10 }, { 10, -54 });
+
+	EXPECT_TRUE(touchedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, touchedTake->MidiQuantisation().Fraction);
+	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Whole, selectedTake->MidiQuantisation().Fraction);
 }

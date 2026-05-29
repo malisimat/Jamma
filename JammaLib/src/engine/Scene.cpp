@@ -23,6 +23,17 @@ namespace
 {
 	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
 
+	template<typename T>
+	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
+		const std::shared_ptr<T>& candidate)
+	{
+		if (!candidate)
+			return;
+
+		if (std::find(targets.begin(), targets.end(), candidate) == targets.end())
+			targets.push_back(candidate);
+	}
+
 	const char* MidiActionLabel(actions::ActionResultType rt)
 	{
 		switch (rt)
@@ -118,6 +129,9 @@ Scene::Scene(SceneParams params,
 	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
+	_hoverPath3d(),
+	_dragTargets(),
+	_dragSelectDepth(base::SelectDepth::DEPTH_STATION),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -474,6 +488,26 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
+	if ((TouchAction::TouchState::TOUCH_UP == action.State)
+		&& !_dragTargets.empty())
+	{
+		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->OnAction(take->GlobalToLocal(action));
+			if (takeRes.IsEaten && (nullptr != takeRes.Undo))
+				_undoHistory.Add(takeRes.Undo);
+		}
+
+		res = _selector->OnAction(_selector->ParentToLocal(action));
+		_UpdateSelection(res.ResultType);
+		_dragTargets.clear();
+		_touchDownElement.reset();
+		return ActionResult::NoAction();
+	}
+
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
 	{
 		auto activeElement = _touchDownElement.lock();
@@ -538,6 +572,34 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 	}
 
+	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
+		&& (0 == action.Index)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		_dragSelectDepth = _selector->CurrentSelectDepth();
+		_dragTargets = _CurrentInteractionTargets();
+		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->BeginMidiQuantisationGesture(action);
+
+			if (takeRes.IsEaten)
+			{
+				res = takeRes;
+				if (nullptr != takeRes.Undo)
+					_undoHistory.Add(takeRes.Undo);
+			}
+		}
+
+		if (res.IsEaten)
+			return res;
+
+		_dragTargets.clear();
+	}
+
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
 	_UpdateSelection(res.ResultType);
@@ -568,6 +630,22 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+
+	if (!_dragTargets.empty())
+	{
+		ActionResult res = ActionResult::NoAction();
+		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->OnAction(take->GlobalToLocal(action));
+			if (takeRes.IsEaten)
+				res = takeRes;
+		}
+
+		return res;
+	}
 
 	auto activeElement = _touchDownElement.lock();
 
@@ -1259,6 +1337,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
+	std::vector<unsigned char> fullElementPath;
 	std::vector<unsigned char> elementPath;
 
 	for (auto segment : path)
@@ -1266,8 +1345,12 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		if (0 == segment)
 			break;
 
-		elementPath.push_back(segment - 1);
+		fullElementPath.push_back(segment - 1);
 	}
+
+	_hoverPath3d = fullElementPath;
+	_hoverElement3d = _ChildFromPath(fullElementPath);
+	elementPath = fullElementPath;
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 
@@ -2474,6 +2557,102 @@ std::shared_ptr<Loop> Scene::_RepresentativeLoopForTarget(const std::shared_ptr<
 	}
 
 	return nullptr;
+}
+
+std::vector<std::shared_ptr<base::GuiElement>> Scene::_CurrentInteractionTargets()
+{
+	std::vector<std::shared_ptr<base::GuiElement>> targets;
+	const auto depth = _selector->CurrentSelectDepth();
+	AppendUniqueTarget(targets,
+		_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
+
+	switch (depth)
+	{
+	case base::SelectDepth::DEPTH_STATION:
+		for (const auto& station : _stations)
+		{
+			if (station && station->IsSelected())
+				AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(station));
+		}
+		break;
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+		for (const auto& station : _stations)
+		{
+			for (const auto& take : station->GetLoopTakes())
+			{
+				if (take && take->IsSelected())
+					AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(take));
+			}
+		}
+		break;
+	case base::SelectDepth::DEPTH_LOOP:
+		for (const auto& station : _stations)
+		{
+			for (const auto& take : station->GetLoopTakes())
+			{
+				for (const auto& loop : take->GetLoops())
+				{
+					if (loop && loop->IsSelected())
+						AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(loop));
+				}
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
+	return targets;
+}
+
+std::vector<std::shared_ptr<LoopTake>> Scene::_LoopTakesForInteractionTargets(
+	const std::vector<std::shared_ptr<base::GuiElement>>& interactionTargets,
+	base::SelectDepth depth) const
+{
+	std::vector<std::shared_ptr<LoopTake>> targets;
+	for (const auto& target : interactionTargets)
+	{
+		switch (depth)
+		{
+		case base::SelectDepth::DEPTH_STATION:
+		{
+			auto station = std::dynamic_pointer_cast<Station>(target);
+			if (!station)
+				break;
+
+			for (const auto& take : station->GetLoopTakes())
+				AppendUniqueTarget(targets, take);
+			break;
+		}
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+			AppendUniqueTarget(targets, std::dynamic_pointer_cast<LoopTake>(target));
+			break;
+		case base::SelectDepth::DEPTH_LOOP:
+		{
+			auto loop = std::dynamic_pointer_cast<Loop>(target);
+			if (!loop)
+				break;
+
+			for (const auto& station : _stations)
+			{
+				for (const auto& take : station->GetLoopTakes())
+				{
+					const auto& loops = take->GetLoops();
+					if (std::find(loops.begin(), loops.end(), loop) != loops.end())
+					{
+						AppendUniqueTarget(targets, take);
+						break;
+					}
+				}
+			}
+			break;
+		}
+		default:
+			break;
+		}
+	}
+
+	return targets;
 }
 
 void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)

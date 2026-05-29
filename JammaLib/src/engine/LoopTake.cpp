@@ -455,26 +455,39 @@ ActionResult LoopTake::OnAction(actions::TouchAction action)
 		&& (0 == action.Index)
 		&& HasMidiQuantisationGestureModifiers(action.Modifiers)
 		&& HitTest(action.Position))
-	{
-		_midiQuantisationGestureActive = true;
-		_midiQuantisationGestureMoved = false;
-		_midiQuantisationGestureStartPosition = action.Position;
-		_midiQuantisationGestureStartFraction = _midiQuantisation.Fraction;
-
-		std::cout << "MIDI quantisation gesture start: take=" << _id
-			<< " enabled=" << _midiQuantisation.Enabled
-			<< " fraction=" << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
-			<< " grain=" << _midiQuantisation.GrainSamps
-			<< " modifiers=" << action.Modifiers << std::endl;
-
-		ActionResult res;
-		res.IsEaten = true;
-		res.ResultType = actions::ACTIONRESULT_ACTIVEELEMENT;
-		res.ActiveElement = GuiElement::shared_from_this();
-		return res;
-	}
+		return BeginMidiQuantisationGesture(action);
 
 	return Jammable::OnAction(action);
+}
+
+ActionResult LoopTake::BeginMidiQuantisationGesture(actions::TouchAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if ((actions::TouchAction::TOUCH_DOWN != action.State)
+		|| (0 != action.Index)
+		|| !HasMidiQuantisationGestureModifiers(action.Modifiers))
+		return ActionResult::NoAction();
+
+	action = GlobalToLocal(action);
+
+	_midiQuantisationGestureActive = true;
+	_midiQuantisationGestureMoved = false;
+	_midiQuantisationGestureStartPosition = action.Position;
+	_midiQuantisationGestureStartFraction = _midiQuantisation.Fraction;
+
+	std::cout << "MIDI quantisation gesture start: take=" << _id
+		<< " enabled=" << _midiQuantisation.Enabled
+		<< " fraction=" << MidiQuantisationFractionLabel(_midiQuantisation.Fraction)
+		<< " grain=" << _midiQuantisation.GrainSamps
+		<< " modifiers=" << action.Modifiers << std::endl;
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = actions::ACTIONRESULT_ACTIVEELEMENT;
+	res.ActiveElement = GuiElement::shared_from_this();
+	return res;
 }
 
 ActionResult LoopTake::OnAction(actions::TouchMoveAction action)

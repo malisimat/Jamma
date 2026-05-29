@@ -110,6 +110,7 @@ namespace engine
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
+		actions::ActionResult BeginMidiQuantisationGesture(actions::TouchAction action);
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;

@@ -280,6 +280,10 @@ namespace engine
 		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
+		std::vector<std::shared_ptr<base::GuiElement>> _CurrentInteractionTargets();
+		std::vector<std::shared_ptr<LoopTake>> _LoopTakesForInteractionTargets(
+			const std::vector<std::shared_ptr<base::GuiElement>>& targets,
+			base::SelectDepth depth) const;
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
@@ -335,6 +339,9 @@ namespace engine
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
+		std::vector<unsigned char> _hoverPath3d;
+		std::vector<std::shared_ptr<base::GuiElement>> _dragTargets;
+		base::SelectDepth _dragSelectDepth;
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
