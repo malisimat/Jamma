@@ -37,6 +37,20 @@ namespace engine
 		return 1u;
 	}
 
+	constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction f) noexcept
+	{
+		switch (f)
+		{
+		case MidiQuantisationFraction::Whole:        return "1";
+		case MidiQuantisationFraction::Half:         return "1/2";
+		case MidiQuantisationFraction::Quarter:      return "1/4";
+		case MidiQuantisationFraction::Eighth:       return "1/8";
+		case MidiQuantisationFraction::Sixteenth:    return "1/16";
+		case MidiQuantisationFraction::ThirtySecond: return "1/32";
+		}
+		return "?";
+	}
+
 	// Per-LoopTake / per-MidiLoop quantisation settings. Non-destructive: applied
 	// when reading events; the underlying recorded events are never modified.
 	struct MidiQuantisationSettings

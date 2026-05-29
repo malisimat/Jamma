@@ -10,6 +10,7 @@
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
+#include "../io/InitFile.h"
 #include "../io/MidiQueue.h"
 #include "../vst/VstChain.h"
 
@@ -126,7 +127,7 @@ namespace engine
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
-		void SetUiLoggingVerbose(bool verbose) noexcept;
+		void SetLogging(const io::LoggingConfig& config) noexcept;
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
@@ -201,7 +202,7 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
-		bool _uiLoggingVerbose;
+		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;

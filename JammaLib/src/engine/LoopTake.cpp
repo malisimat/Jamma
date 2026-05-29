@@ -38,20 +38,6 @@ namespace
 		return deltaY < 0 ? steps : -steps;
 	}
 
-	const char* MidiQuantisationFractionLabel(engine::MidiQuantisationFraction fraction) noexcept
-	{
-		switch (fraction)
-		{
-		case engine::MidiQuantisationFraction::Whole: return "1";
-		case engine::MidiQuantisationFraction::Half: return "1/2";
-		case engine::MidiQuantisationFraction::Quarter: return "1/4";
-		case engine::MidiQuantisationFraction::Eighth: return "1/8";
-		case engine::MidiQuantisationFraction::Sixteenth: return "1/16";
-		case engine::MidiQuantisationFraction::ThirtySecond: return "1/32";
-		default: return "?";
-		}
-	}
-
 	std::uint64_t PackMidiQuantisationSettings(const engine::MidiQuantisationSettings& settings) noexcept
 	{
 		const auto fraction = static_cast<std::uint64_t>(settings.Fraction);
@@ -192,6 +178,11 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
 
 	return take;
+}
+
+void LoopTake::SetLogging(const io::LoggingConfig& config) noexcept
+{
+	_uiLoggingVerbose = (config.Ui == "verbose");
 }
 
 AudioMixerParams LoopTake::GetMixerParams(utils::Size2d loopSize,

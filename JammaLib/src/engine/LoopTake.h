@@ -17,6 +17,11 @@
 
 using base::Audible;
 
+namespace io
+{
+	struct LoggingConfig;
+}
+
 namespace engine
 {
 	class LoopTakeParams :
@@ -178,7 +183,7 @@ namespace engine
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
 		MidiQuantisationSettings MidiQuantisation() const noexcept;
-		void SetUiLoggingVerbose(bool verbose) noexcept { _uiLoggingVerbose = verbose; }
+		void SetLogging(const io::LoggingConfig& config) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();

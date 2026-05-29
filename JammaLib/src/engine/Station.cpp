@@ -75,7 +75,7 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
-	_uiLoggingVerbose(false),
+	_loggingConfig{},
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_guiRack(nullptr),
@@ -869,7 +869,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
-	take->SetUiLoggingVerbose(_uiLoggingVerbose);
+	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
 	_ArrangeChildren();
@@ -877,20 +877,20 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_changesMade = true;
 }
 
-void Station::SetUiLoggingVerbose(bool verbose) noexcept
+void Station::SetLogging(const io::LoggingConfig& config) noexcept
 {
-	_uiLoggingVerbose = verbose;
+	_loggingConfig = config;
 
 	for (auto& take : _loopTakes)
 	{
 		if (take)
-			take->SetUiLoggingVerbose(verbose);
+			take->SetLogging(config);
 	}
 
 	for (auto& take : _backLoopTakes)
 	{
 		if (take)
-			take->SetUiLoggingVerbose(verbose);
+			take->SetLogging(config);
 	}
 }
 

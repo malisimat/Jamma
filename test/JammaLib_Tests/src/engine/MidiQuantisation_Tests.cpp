@@ -8,6 +8,7 @@
 using engine::MidiEvent;
 using engine::MidiQuantisationDivisor;
 using engine::MidiQuantisationFraction;
+using engine::MidiQuantisationFractionLabel;
 using engine::MidiQuantisationSettings;
 using engine::MidiQuantisationStepSamps;
 using engine::QuantiseEvents;
@@ -32,6 +33,15 @@ TEST(MidiQuantisation, DivisorMatchesFractionName) {
 	EXPECT_EQ(8u, MidiQuantisationDivisor(MidiQuantisationFraction::Eighth));
 	EXPECT_EQ(16u, MidiQuantisationDivisor(MidiQuantisationFraction::Sixteenth));
 	EXPECT_EQ(32u, MidiQuantisationDivisor(MidiQuantisationFraction::ThirtySecond));
+}
+
+TEST(MidiQuantisation, FractionLabelsMatchFractions) {
+	EXPECT_STREQ("1", MidiQuantisationFractionLabel(MidiQuantisationFraction::Whole));
+	EXPECT_STREQ("1/2", MidiQuantisationFractionLabel(MidiQuantisationFraction::Half));
+	EXPECT_STREQ("1/4", MidiQuantisationFractionLabel(MidiQuantisationFraction::Quarter));
+	EXPECT_STREQ("1/8", MidiQuantisationFractionLabel(MidiQuantisationFraction::Eighth));
+	EXPECT_STREQ("1/16", MidiQuantisationFractionLabel(MidiQuantisationFraction::Sixteenth));
+	EXPECT_STREQ("1/32", MidiQuantisationFractionLabel(MidiQuantisationFraction::ThirtySecond));
 }
 
 TEST(MidiQuantisation, StepSampsReturnsZeroWhenDisabledOrNoGrain) {
