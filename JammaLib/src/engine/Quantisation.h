@@ -6,6 +6,12 @@
 
 namespace engine
 {
+	struct QuantisationParams
+	{
+		unsigned int SeedSamps = 0u;
+		unsigned int MasterSamps = 0u;
+	};
+
 	struct QuantisationPolicy
 	{
 		unsigned int SeedGrainMinMs = constants::DefaultSeedGrainMinMs;

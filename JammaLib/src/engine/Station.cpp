@@ -90,10 +90,8 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_quantisationOverlayPinned(false),
-	_pendingQuantisationOverlaySeedSamps(HiddenSeedSamps),
-	_pendingQuantisationOverlayMasterLoopSamps(HiddenMasterSamps),
-	_pendingQuantisationOverlayConfirm(false)
+	_pendingQuantisationParams(std::nullopt),
+	_pendingQuantisationConfirm(false)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -930,23 +928,29 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetQuantisationOverlay(unsigned int seedSamps,
-	unsigned int masterLoopSamps,
+void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
 	bool confirm)
 {
 	if (!_quantisationModel)
 		return;
 
-	_quantisationOverlayPinned = true;
-	_pendingQuantisationOverlaySeedSamps = seedSamps;
-	_pendingQuantisationOverlayMasterLoopSamps = masterLoopSamps;
-	_pendingQuantisationOverlayConfirm = _pendingQuantisationOverlayConfirm || confirm;
+	if (!params.has_value())
+	{
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		return;
+	}
+
+	_pendingQuantisationParams = QuantisationParams{
+		params->SeedSamps,
+		params->MasterSamps
+	};
+	_pendingQuantisationConfirm = _pendingQuantisationConfirm || confirm;
 }
 
-void Station::ClearQuantisationOverlay()
+void Station::ClearQuantisationParams()
 {
-	_quantisationOverlayPinned = false;
-	_pendingQuantisationOverlayConfirm = false;
+	SetQuantisationParams(std::nullopt);
 }
 
 void Station::RefreshQuantisationOverlayFromClock()
@@ -959,25 +963,25 @@ void Station::RefreshQuantisationOverlayFromClock()
 
 	if (!_clock || !_clock->IsQuantisable())
 	{
-		_quantisationOverlayPinned = false;
-		_pendingQuantisationOverlayConfirm = false;
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
 		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
 
-	if (_quantisationOverlayPinned)
+	if (_pendingQuantisationParams.has_value())
 	{
-		const auto seedSamps = _pendingQuantisationOverlaySeedSamps > 0u ?
-			_pendingQuantisationOverlaySeedSamps :
+		const auto seedSamps = _pendingQuantisationParams->SeedSamps > 0u ?
+			_pendingQuantisationParams->SeedSamps :
 			HiddenSeedSamps;
-		const auto masterLoopSamps = _pendingQuantisationOverlayMasterLoopSamps > 0u ?
-			_pendingQuantisationOverlayMasterLoopSamps :
+		const auto masterLoopSamps = _pendingQuantisationParams->MasterSamps > 0u ?
+			_pendingQuantisationParams->MasterSamps :
 			seedSamps;
 
 		_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
-		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationOverlayConfirm);
-		_pendingQuantisationOverlayConfirm = false;
+		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		_pendingQuantisationConfirm = false;
 		return;
 	}
 

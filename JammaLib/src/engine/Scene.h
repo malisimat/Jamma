@@ -268,8 +268,8 @@ namespace engine
 		void _ClearTimingState(bool clearTapTempo);
 		bool _HandleTapTempo(Time actionTime);
 		bool _TrySetMasterFromHover(bool confirm);
-		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
-		void _ClearQuantisationOverlays();
+		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
+		void _ClearStationQuantisation();
 		struct InteractionTarget
 		{
 			std::shared_ptr<Station> Station;

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include "LoopTake.h"
+#include "Quantisation.h"
 #include "../graphics/QuantisationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
@@ -122,8 +123,8 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
-		void SetQuantisationOverlay(unsigned int seedSamps, unsigned int masterLoopSamps, bool confirm);
-		void ClearQuantisationOverlay();
+		void SetQuantisationParams(std::optional<QuantisationParams> params, bool confirm = false);
+		void ClearQuantisationParams();
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
@@ -247,10 +248,8 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		bool _quantisationOverlayPinned;
-		unsigned int _pendingQuantisationOverlaySeedSamps;
-		unsigned int _pendingQuantisationOverlayMasterLoopSamps;
-		bool _pendingQuantisationOverlayConfirm;
+		std::optional<QuantisationParams> _pendingQuantisationParams;
+		bool _pendingQuantisationConfirm = false;
 
 		// Audio → render handoff for the quantisation overlay phase.
 		// Written lock-free on the audio thread (OnTick), consumed on the render thread (Draw3d).

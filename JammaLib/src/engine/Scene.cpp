@@ -1379,7 +1379,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 
 	auto candidate = (Action::MODIFIER_SHIFT & modifiers) ? _ChildFromPath(elementPath) : nullptr;
-	_RefreshQuantisationOverlays(candidate, _selector->CurrentSelectDepth(), false);
+	_UpdateStationQuantisation(candidate, _selector->CurrentSelectDepth(), false);
 }
 
 void Scene::Reset()
@@ -1387,7 +1387,7 @@ void Scene::Reset()
 	std::cout << "Reset" << std::endl;
 	_ClearTimingState(true);
 	_masterLoop.reset();
-	_ClearQuantisationOverlays();
+	_ClearStationQuantisation();
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -2399,7 +2399,7 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	}
 
 	_ApplyQuantisationTiming(timing.value(), "tap tempo");
-	_RefreshQuantisationOverlays(nullptr, _selector->CurrentSelectDepth(), false);
+	_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
 	return true;
 }
 
@@ -2428,18 +2428,18 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	_ApplyQuantisationTiming(timing.value(), "master loop");
 	if (_clock && _masterLoop)
 		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
-	_RefreshQuantisationOverlays(hovering, depth, confirm);
+	_UpdateStationQuantisation(hovering, depth, confirm);
 
 	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
 		<< " length=" << masterLength << std::endl;
 	return true;
 }
 
-void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate,
+void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate,
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_ClearQuantisationOverlays();
+	_ClearStationQuantisation();
 
 	if (!_clock || !_clock->IsQuantisable())
 		return;
@@ -2451,7 +2451,10 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 	{
 		auto masterTarget = _ResolveInteractionTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
 		if (masterTarget && masterTarget->Station)
-			masterTarget->Station->SetQuantisationOverlay(seed, master, false);
+			masterTarget->Station->SetQuantisationParams(QuantisationParams{
+				seed,
+				master
+			}, false);
 	}
 
 	if (!candidate)
@@ -2462,15 +2465,16 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 		return;
 
 	if (candidateTarget->Station)
-		candidateTarget->Station->SetQuantisationOverlay(seed,
-			static_cast<unsigned int>(candidateTarget->MasterLength),
-			confirmCandidate);
+		candidateTarget->Station->SetQuantisationParams(QuantisationParams{
+			seed,
+			static_cast<unsigned int>(candidateTarget->MasterLength)
+		}, confirmCandidate);
 }
 
-void Scene::_ClearQuantisationOverlays()
+void Scene::_ClearStationQuantisation()
 {
 	for (const auto& station : _stations)
-		station->ClearQuantisationOverlay();
+		station->ClearQuantisationParams();
 }
 
 std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
