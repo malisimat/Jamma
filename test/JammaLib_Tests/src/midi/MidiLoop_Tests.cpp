@@ -14,6 +14,7 @@
 #include "io/UserConfig.h"
 
 using engine::IMidiSink;
+using engine::IMidiOutputSink;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::MidiEvent;
@@ -41,6 +42,22 @@ namespace
 		std::vector<MidiEvent> events;
 		void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
 		void Clear() noexcept { events.clear(); }
+	};
+
+	class CapturingOutputSink : public IMidiOutputSink
+	{
+	public:
+		struct CapturedEvent
+		{
+			unsigned int outputIndex;
+			MidiEvent event;
+		};
+
+		std::vector<CapturedEvent> events;
+		void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept override
+		{
+			events.push_back({ outputIndex, ev });
+		}
 	};
 
 	std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
@@ -453,6 +470,30 @@ TEST(LoopTakeMidiTiming, ResolveMidiRecordSampleCompensatesQueueDelay)
 	EXPECT_EQ(200u, LoopTake::ResolveMidiRecordSample(1200u, 1600u, 600u));
 	EXPECT_EQ(0u, LoopTake::ResolveMidiRecordSample(700u, 1600u, 600u));
 	EXPECT_EQ(600u, LoopTake::ResolveMidiRecordSample(1650u, 1600u, 600u));
+}
+
+TEST(LoopTakeMidiTiming, FirstPlaybackStartsAtRecordedStartAfterAudioDelayCompensation)
+{
+	io::UserConfig cfg;
+	cfg.Trigger.PreDelay = 64u;
+
+	const auto loopLength = 96000ul;
+	const auto playPos = cfg.LoopPlayPos(0, loopLength, 128u);
+	const auto endRecordSamps = cfg.EndRecordingSamps(0);
+
+	auto take = MakeLoopTake();
+	take->Record({}, "station", { 0u });
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), 0u));
+	take->Play(playPos, loopLength, endRecordSamps);
+
+	CapturingOutputSink sink;
+	const auto firstBlockStart = 12345u;
+	EXPECT_EQ(1u, take->ReadMidiBlock(firstBlockStart, 64u, sink));
+
+	ASSERT_EQ(1u, sink.events.size());
+	EXPECT_EQ(0u, sink.events[0].outputIndex);
+	EXPECT_EQ(firstBlockStart, sink.events[0].event.sampleOffset);
+	EXPECT_TRUE(sink.events[0].event.IsNoteOn());
 }
 
 // ── Slice 5: Quantised record-end ─────────────────────────────────────────────

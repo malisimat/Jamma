@@ -77,13 +77,8 @@ namespace engine
 			io::UserConfig user);
 		~Scene()
 		{
+			Shutdown();
 			ReleaseResources();
-			CloseSerial();
-			CloseMidi();
-
-			_isSceneQuitting.store(true, std::memory_order_release);
-			if (_jobRunner.joinable())
-				_jobRunner.join();
 			// NinjamSession destructs after _jobRunner exits, so Pump() can no
 			// longer be called when the session tears down.
 			_ninjamSession.reset();
@@ -201,6 +196,7 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
 		void InitMidi();
 		void CloseMidi();

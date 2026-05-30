@@ -13,6 +13,30 @@ namespace
 			&& (base::Action::MODIFIER_SHIFT & modifiers);
 	}
 
+	unsigned long NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept
+	{
+		if (0ul == loopLength)
+			return 0ul;
+
+		const auto length = static_cast<long long>(loopLength);
+		auto normalized = index % length;
+		if (normalized < 0)
+			normalized += length;
+		return static_cast<unsigned long>(normalized);
+	}
+
+	unsigned long InitialMidiPlayIndex(unsigned long audioPlayIndex,
+		unsigned long loopLength,
+		unsigned int endRecordSamps) noexcept
+	{
+		if (audioPlayIndex < constants::MaxLoopFadeSamps)
+			return NormalizeLoopIndex(static_cast<long long>(audioPlayIndex), loopLength);
+
+		const auto quantisationError = static_cast<long long>(constants::MaxLoopFadeSamps) -
+			static_cast<long long>(endRecordSamps);
+		return NormalizeLoopIndex(quantisationError, loopLength);
+	}
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -864,29 +888,40 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	class IndexedMidiSink final : public IMidiSink
 	{
 	public:
-		IndexedMidiSink(IMidiOutputSink& outputSink, unsigned int outputIndex) noexcept :
+		IndexedMidiSink(IMidiOutputSink& outputSink,
+			unsigned int outputIndex,
+			std::uint32_t midiBlockStart,
+			std::uint32_t outputBlockStart) noexcept :
 			_outputSink(outputSink),
-			_outputIndex(outputIndex)
+			_outputIndex(outputIndex),
+			_midiBlockStart(midiBlockStart),
+			_outputBlockStart(outputBlockStart)
 		{
 		}
 
 		void OnEvent(const MidiEvent& ev) noexcept override
 		{
-			_outputSink.OnEvent(_outputIndex, ev);
+			MidiEvent mapped = ev;
+			mapped.sampleOffset = _outputBlockStart + (ev.sampleOffset - _midiBlockStart);
+			_outputSink.OnEvent(_outputIndex, mapped);
 		}
 
 	private:
 		IMidiOutputSink& _outputSink;
 		unsigned int _outputIndex;
+		std::uint32_t _midiBlockStart;
+		std::uint32_t _outputBlockStart;
 	};
+
+	const auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
 
 	for (auto i = 0u; i < _midiLoops.size(); ++i)
 	{
 		if (!_midiLoops[i])
 			continue;
 
-		IndexedMidiSink indexedSink(sink, firstOutputIndex + i);
-		_midiLoops[i]->ReadBlock(globalSample, numSamples, indexedSink);
+		IndexedMidiSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
+		_midiLoops[i]->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
 	return static_cast<unsigned int>(_midiLoops.size());
@@ -924,11 +959,7 @@ void LoopTake::Play(unsigned long index,
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength = loopLength;
-	_midiVisualPlayIndex = index >= constants::MaxLoopFadeSamps ?
-		index - constants::MaxLoopFadeSamps :
-		index;
-	while (_midiVisualLoopLength > 0ul && _midiVisualPlayIndex >= _midiVisualLoopLength)
-		_midiVisualPlayIndex -= _midiVisualLoopLength;
+	_midiVisualPlayIndex = InitialMidiPlayIndex(index, loopLength, endRecordSamps);
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)

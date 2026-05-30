@@ -15,7 +15,8 @@ int ResourceLib::NumResources() const
 
 void ResourceLib::ClearResources()
 {
-	return _resources.clear();
+	_fonts.clear();
+	_resources.clear();
 }
 
 bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::string> args)

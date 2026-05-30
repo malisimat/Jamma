@@ -13,8 +13,17 @@ GlDrawContext::GlDrawContext(Size2d size,
 
 GlDrawContext::~GlDrawContext()
 {
+	if (_texture)
+	{
+		glDeleteTextures(1, &_texture);
+		_texture = 0u;
+	}
+
 	if (SCREEN != _target)
+	{
 		glDeleteFramebuffers(1, &_frameBuffer);
+		_frameBuffer = 0u;
+	}
 }
 
 void GlDrawContext::Initialise()

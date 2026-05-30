@@ -377,16 +377,17 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		vst::DrainUiThreadDestroyQueue();
 	}
 
-	window.Release();
-
-	// Final drain for any plugins queued after the last render iteration.
-	vst::DrainUiThreadDestroyQueue();
-
 	// Close VST editor windows while the main thread's COM STA is still valid.
 	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
 	// undefined behaviour. scene is still alive here since it goes out of scope
 	// after the explicit CoUninitialize() call below.
+	scene.value()->Shutdown();
 	scene.value()->CloseAllVstEditorWindows();
+
+	window.Release();
+
+	// Final drain for any plugins queued after the last render iteration.
+	vst::DrainUiThreadDestroyQueue();
 
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.

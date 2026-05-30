@@ -1675,6 +1675,15 @@ void Scene::CloseAudio()
 	_audioDevice->Stop();
 }
 
+void Scene::Shutdown()
+{
+	_isSceneQuitting.store(true, std::memory_order_release);
+	if (_jobRunner.joinable())
+		_jobRunner.join();
+
+	CloseAudio();
+}
+
 void Scene::CommitChanges()
 {
 	std::vector<JobAction> syncJobs = {};
