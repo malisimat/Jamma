@@ -240,3 +240,57 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	EXPECT_EQ(48u, pluginB->Events[0].data1);
 	EXPECT_FALSE(pluginB->RealtimeFlags[0]);
 }
+
+TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
+{
+	auto station = MakeStation("station-route-replace");
+	auto pluginA = AddPlugin(station, L"fake-a.dll");
+	auto pluginB = AddPlugin(station, L"fake-b.dll");
+	auto pluginC = AddPlugin(station, L"fake-c.dll");
+
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 2u);
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
+
+	RenderStationBlock(station, 0u);
+
+	EXPECT_TRUE(pluginA->Events.empty());
+	EXPECT_TRUE(pluginB->Events.empty());
+	ASSERT_EQ(1u, pluginC->Events.size());
+	EXPECT_EQ(40u, pluginC->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
+{
+	auto station = MakeStation("station-route-clear");
+	auto pluginA = AddPlugin(station, L"fake-a.dll");
+	auto pluginB = AddPlugin(station, L"fake-b.dll");
+
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
+	station->ClearMidiVstRoutes();
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
+
+	RenderStationBlock(station, 0u);
+
+	ASSERT_EQ(1u, pluginA->Events.size());
+	ASSERT_EQ(1u, pluginB->Events.size());
+	EXPECT_EQ(41u, pluginA->Events[0].data1);
+	EXPECT_EQ(41u, pluginB->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
+{
+	auto station = MakeStation("station-route-invalid");
+	auto pluginA = AddPlugin(station, L"fake-a.dll");
+	auto pluginB = AddPlugin(station, L"fake-b.dll");
+
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 99u);
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
+
+	RenderStationBlock(station, 0u);
+
+	ASSERT_EQ(1u, pluginA->Events.size());
+	ASSERT_EQ(1u, pluginB->Events.size());
+	EXPECT_EQ(42u, pluginA->Events[0].data1);
+	EXPECT_EQ(42u, pluginB->Events[0].data1);
+}

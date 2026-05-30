@@ -4,8 +4,8 @@
 #include <array>
 #include <cmath>
 #include "glm/ext.hpp"
-#include "../graphics/GlDrawContext.h"
-#include "../include/Constants.h"
+#include "GlDrawContext.h"
+#include "../../include/Constants.h"
 
 using namespace engine;
 

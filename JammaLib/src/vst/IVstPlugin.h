@@ -10,7 +10,7 @@
 #include <string>
 #include <cstdint>
 #include <windows.h>
-#include "../engine/MidiEvent.h"
+#include "../midi/MidiEvent.h"
 #include "../utils/CommonTypes.h"
 #include "VstAudioBuffers.h"
 

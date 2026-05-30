@@ -1,11 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "MidiLoop.h"
+#include "../midi/MidiLoop.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
@@ -110,6 +111,9 @@ namespace engine
 			bool updateIndex,
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
+		actions::ActionResult BeginMidiQuantisationGesture(actions::TouchAction action);
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 		virtual bool Select() override;
@@ -168,6 +172,12 @@ namespace engine
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
+
+		// Per-LoopTake non-destructive MIDI start-time quantisation. Propagated to
+		// every owned MidiLoop. Underlying recorded events are never modified;
+		// disabling restores original timing exactly.
+		void SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept;
+		MidiQuantisationSettings MidiQuantisation() const noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -201,6 +211,13 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		void _LogMidiQuantisationFractionChange(MidiQuantisationFraction previous,
+			MidiQuantisationFraction updated,
+			const char* source) const;
+		void _ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
+			MidiQuantisationFraction fraction,
+			const char* source) noexcept;
+		MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -229,6 +246,8 @@ namespace engine
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
+		std::atomic<std::uint64_t> _midiQuantisationPacked;
+		bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

@@ -180,6 +180,13 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 				if (loggingJson.KeyValues["event"].index() == 4)
 					ini.Logging.Event = std::get<std::string>(loggingJson.KeyValues["event"]);
 			}
+
+			auto uiIter = loggingJson.KeyValues.find("ui");
+			if (uiIter != loggingJson.KeyValues.end())
+			{
+				if (loggingJson.KeyValues["ui"].index() == 4)
+					ini.Logging.Ui = std::get<std::string>(loggingJson.KeyValues["ui"]);
+			}
 		}
 	}
 

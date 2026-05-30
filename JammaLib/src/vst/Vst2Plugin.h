@@ -9,6 +9,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <atomic>
 #include <memory>
@@ -97,6 +98,14 @@ namespace vst
 		bool IsBypassed() const noexcept override
 		{
 			return _isBypassed.load(std::memory_order_relaxed);
+		}
+
+		static bool SupportsHostCanDo(const char* canDo) noexcept
+		{
+			if (!canDo) return false;
+			const std::string_view sv(canDo);
+			return (sv == "sendVstEvents") ||
+				   (sv == "sendVstMidiEvent");
 		}
 
 	private:

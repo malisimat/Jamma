@@ -1,10 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "../gui/GuiModel.h"
-#include "MidiNoteSpan.h"
+#include "../midi/MidiNoteSpan.h"
 
 namespace engine
 {
@@ -24,6 +26,13 @@ namespace engine
 
 	class MidiModel : public virtual gui::GuiModel
 	{
+	private:
+		struct ModelInstanceData
+		{
+			std::vector<gui::GuiModel::InstanceAttribute> Attributes;
+			unsigned int InstanceCount = 0u;
+		};
+
 	public:
 		MidiModel(MidiModelParams params);
 		~MidiModel();
@@ -38,6 +47,7 @@ namespace engine
 		void SetLoopIndexFrac(double frac) noexcept;
 		unsigned int NoteInstanceCount() const noexcept { return _backInstanceCount; }
 		void UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps);
+		void QueueModelUpdate(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps);
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);
 
@@ -45,10 +55,14 @@ namespace engine
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 	private:
+		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<MidiNoteSpan>& spans,
+			std::uint32_t loopLengthSamps) const;
+		void ApplyPendingModelUpdate();
 		float PitchOffset(std::uint8_t note) const noexcept;
 
 	private:
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
+		std::atomic<std::shared_ptr<ModelInstanceData>> _pendingModelUpdate;
 	};
 }

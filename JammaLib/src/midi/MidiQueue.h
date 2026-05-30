@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../engine/MidiEvent.h"
+#include "MidiEvent.h"
 
 namespace io
 {

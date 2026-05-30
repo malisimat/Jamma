@@ -3,8 +3,10 @@
 #include "Action.h"
 #include "CommonTypes.h"
 #include <memory>
+#include <vector>
 
 namespace base { class ActionReceiver; }
+namespace engine { class MidiLoop; }
 namespace vst { class IVstPlugin; }
 
 namespace actions
@@ -36,6 +38,7 @@ namespace actions
 		{
 			JOB_UPDATELOOPS,
 			JOB_ENDRECORDING,
+			JOB_UPDATEMIDIQUANTISATION,
 			JOB_LOADVST,
 			JOB_UNLOADVST
 		};
@@ -55,5 +58,9 @@ namespace actions
 
 		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
 		size_t VstIndex = 0;
+
+		// Payload for JOB_UPDATEMIDIQUANTISATION: stable loop snapshot captured on
+		// the UI thread before background processing begins.
+		std::vector<std::shared_ptr<engine::MidiLoop>> MidiLoops;
 	};
 }
