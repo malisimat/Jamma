@@ -277,3 +277,20 @@ TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
 	EXPECT_EQ(41u, pluginA->Events[0].data1);
 	EXPECT_EQ(41u, pluginB->Events[0].data1);
 }
+
+TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
+{
+	auto station = MakeStation("station-route-invalid");
+	auto pluginA = AddPlugin(station, L"fake-a.dll");
+	auto pluginB = AddPlugin(station, L"fake-b.dll");
+
+	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 99u);
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
+
+	RenderStationBlock(station, 0u);
+
+	ASSERT_EQ(1u, pluginA->Events.size());
+	ASSERT_EQ(1u, pluginB->Events.size());
+	EXPECT_EQ(42u, pluginA->Events[0].data1);
+	EXPECT_EQ(42u, pluginB->Events[0].data1);
+}

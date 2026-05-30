@@ -115,7 +115,6 @@ void VstChain::SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) no
 
 void VstChain::SendMidiEventToPlugin(size_t index, const engine::MidiEvent& event, bool isRealtime) noexcept
 {
-	auto plugin = GetPlugin(index);
-	if (plugin)
-		plugin->SendMidiEvent(event, isRealtime);
+	if (index < _plugins.size() && _plugins[index])
+		_plugins[index]->SendMidiEvent(event, isRealtime);
 }

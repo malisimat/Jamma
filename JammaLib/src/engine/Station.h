@@ -1,7 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
+#include <memory>
 #include <mutex>
+#include <vector>
 #include "LoopTake.h"
 #include "Quantisation.h"
 #include "../graphics/QuantisationModel.h"
@@ -187,11 +190,37 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
-		using MidiVstRoute = std::pair<unsigned int, size_t>;
-		using MidiVstRouteTable = std::vector<MidiVstRoute>;
+		struct MidiVstRoutingSnapshot
+		{
+			static constexpr size_t NoPlugin = (std::numeric_limits<size_t>::max)();
 
-		void _SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
-			const MidiVstRouteTable* routes,
+			std::vector<size_t> PluginByMidiOutput;
+			size_t LivePlugin = NoPlugin;
+
+			bool HasRoutes() const noexcept
+			{
+				if (LivePlugin != NoPlugin)
+					return true;
+				for (const auto pluginIndex : PluginByMidiOutput)
+				{
+					if (pluginIndex != NoPlugin)
+						return true;
+				}
+				return false;
+			}
+
+			size_t PluginForOutput(unsigned int midiOutputIndex) const noexcept
+			{
+				if (midiOutputIndex == LiveMidiOutputIndex)
+					return LivePlugin;
+				if (midiOutputIndex < PluginByMidiOutput.size())
+					return PluginByMidiOutput[midiOutputIndex];
+				return NoPlugin;
+			}
+		};
+
+		void _SendMidiToVstChain(vst::VstChain* chain,
+			const MidiVstRoutingSnapshot* routes,
 			const MidiEvent& event,
 			bool isRealtime,
 			unsigned int midiOutputIndex) noexcept;
@@ -240,7 +269,12 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		io::MidiQueue<1024> _liveMidiIngress;
-		std::atomic<std::shared_ptr<const MidiVstRouteTable>> _midiVstRoutes;
+		// Route snapshots are published on non-RT threads. The audio callback reads
+		// the raw immutable snapshot pointer and does O(1) route lookups per event.
+		// Old snapshots are retained for the Station lifetime so callback readers
+		// never observe freed route storage.
+		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
+		std::vector<std::unique_ptr<MidiVstRoutingSnapshot>> _retainedMidiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).

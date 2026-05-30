@@ -217,7 +217,7 @@ namespace engine
 		void _ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
 			MidiQuantisationFraction fraction,
 			const char* source) noexcept;
-		std::uint32_t _ResolveMidiQuantisationGestureGrain() const noexcept;
+		MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;

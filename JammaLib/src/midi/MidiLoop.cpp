@@ -135,7 +135,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 	// Visualisation must reflect what playback emits, so use the same published
 	// immutable quantised buffer that the audio thread reads from.
-	auto quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
+	const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
 	const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
 
 	auto spans = ExtractMidiNoteSpans(eventSource, _eventCount, effectiveLength);
@@ -198,9 +198,9 @@ void MidiLoop::EmitEventsInRange(std::uint32_t lo,
                                  IMidiSink& sink) noexcept
 {
 	// Snapshot which event source playback is using for this scan. Quantised
-	// buffers are published as immutable shared snapshots, so a single load gives
-	// the audio thread a stable view for the duration of the block.
-	auto quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
+	// buffers are immutable and retained by the owning MidiLoop, so this raw
+	// pointer stays valid without shared_ptr control-block work on the audio path.
+	const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
 	const MidiEvent* events = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
 
 	// Linear scan: small N expected, and storage is contiguous.
@@ -270,7 +270,9 @@ void MidiLoop::PublishQuantisedEvents()
 		return;
 	}
 
-	auto quantisedEvents = std::make_shared<QuantisedEventBuffer>();
+	auto quantisedEvents = std::make_unique<QuantisedEventBuffer>();
 	BuildQuantisedPlaybackEvents(_events.data(), _eventCount, _loopLengthSamps, step, quantisedEvents->Events.data());
-	_quantisedEvents.store(std::shared_ptr<const QuantisedEventBuffer>(std::move(quantisedEvents)), std::memory_order_release);
+	const auto* snapshot = quantisedEvents.get();
+	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
+	_quantisedEvents.store(snapshot, std::memory_order_release);
 }

@@ -20,7 +20,7 @@ namespace vst
 	//
 	// Threading contract:
 	//   AddPlugin / RemovePlugin – call from a non-RT thread only.
-	//   ProcessBlock – call from the audio callback (real-time safe).
+	//   ProcessBlock / BeginMidiBlock / SendMidiEvent* – call from the audio callback (real-time safe).
 	//   IsActive – safe to call from any thread.
 	class VstChain
 	{
@@ -63,6 +63,7 @@ namespace vst
 
 		void BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numSamples) noexcept;
 		void SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) noexcept;
+		// Direct indexed delivery for routing snapshots; avoids GetPlugin's shared_ptr copy on the RT path.
 		void SendMidiEventToPlugin(size_t index, const engine::MidiEvent& event, bool isRealtime) noexcept;
 
 	private:

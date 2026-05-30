@@ -112,6 +112,14 @@ namespace engine
 		}
 	};
 
+	struct MidiQuantisationGrainCandidates
+	{
+		std::uint32_t FirstPlayableMidiLoopSamps = 0u;
+		std::uint32_t FirstAudioLoopSamps = 0u;
+		std::uint32_t MidiVisualLoopSamps = 0u;
+		std::uint32_t RecordedSamps = 0u;
+	};
+
 	// Snap-step in samples for the given settings. Returns 0 when quantisation is
 	// inactive (disabled or grain not yet known) — callers must treat 0 as a
 	// no-op signal.
@@ -127,6 +135,10 @@ namespace engine
 	                                                      MidiQuantisationGesture gesture,
 	                                                      MidiQuantisationFraction fraction,
 	                                                      std::uint32_t resolvedGrainSamps) noexcept;
+	std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept;
+	MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+	                                                        const int* values,
+	                                                        std::size_t valueCount) noexcept;
 
 	// Snap `offset` to the nearest multiple of `step`, then wrap into [0, loopLength).
 	// `step == 0` or `loopLength == 0` returns `offset` unchanged.

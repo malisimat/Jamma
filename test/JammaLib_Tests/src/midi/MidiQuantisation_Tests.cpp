@@ -13,11 +13,14 @@ using engine::MidiQuantisationFractionLabel;
 using engine::MidiQuantisationSettings;
 using engine::MidiQuantisationStepSamps;
 using engine::MidiQuantisationGesture;
+using engine::MidiQuantisationGrainCandidates;
 using engine::ApplyMidiQuantisationGesture;
+using engine::ApplyMidiQuantisationGuiPayload;
 using engine::BuildQuantisedPlaybackEvents;
 using engine::QuantiseEvents;
 using engine::QuantiseSampleOffset;
 using engine::ResolveMidiQuantisationDragFraction;
+using engine::ResolveMidiQuantisationGestureGrain;
 
 namespace
 {
@@ -135,6 +138,49 @@ TEST(MidiQuantisation, ApplyGestureTogglesOrDragsWithResolvedGrain) {
 	EXPECT_FALSE(disabled.Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, disabled.Fraction);
 	EXPECT_EQ(1600u, disabled.GrainSamps);
+}
+
+TEST(MidiQuantisation, GestureGrainFallsBackByCurrentLoopPriority) {
+	MidiQuantisationGrainCandidates candidates;
+	candidates.FirstPlayableMidiLoopSamps = 960u;
+	candidates.FirstAudioLoopSamps = 1920u;
+	candidates.MidiVisualLoopSamps = 3840u;
+	candidates.RecordedSamps = 7680u;
+	EXPECT_EQ(960u, ResolveMidiQuantisationGestureGrain(candidates));
+
+	candidates.FirstPlayableMidiLoopSamps = 0u;
+	EXPECT_EQ(1920u, ResolveMidiQuantisationGestureGrain(candidates));
+
+	candidates.FirstAudioLoopSamps = 0u;
+	EXPECT_EQ(3840u, ResolveMidiQuantisationGestureGrain(candidates));
+
+	candidates.MidiVisualLoopSamps = 0u;
+	EXPECT_EQ(7680u, ResolveMidiQuantisationGestureGrain(candidates));
+}
+
+TEST(MidiQuantisation, GuiPayloadPreservesCurrentGrainWhenAbsentOrZero) {
+	MidiQuantisationSettings current;
+	current.Enabled = true;
+	current.Fraction = MidiQuantisationFraction::Quarter;
+	current.GrainSamps = 2400u;
+
+	const int absentGrain[] = { 0, static_cast<int>(MidiQuantisationFraction::Eighth) };
+	auto updated = ApplyMidiQuantisationGuiPayload(current, absentGrain, 2u);
+	EXPECT_FALSE(updated.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Eighth, updated.Fraction);
+	EXPECT_EQ(2400u, updated.GrainSamps);
+
+	const int zeroGrain[] = { 1, static_cast<int>(MidiQuantisationFraction::Half), 0 };
+	updated = ApplyMidiQuantisationGuiPayload(updated, zeroGrain, 3u);
+	EXPECT_TRUE(updated.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Half, updated.Fraction);
+	EXPECT_EQ(2400u, updated.GrainSamps);
+
+	const int explicitGrain[] = { 1, 99, 4800 };
+	updated = ApplyMidiQuantisationGuiPayload(updated, explicitGrain, 3u);
+	EXPECT_TRUE(updated.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::ThirtySecond, updated.Fraction);
+	EXPECT_EQ(4800u, updated.GrainSamps);
 }
 
 TEST(MidiQuantisation, QuantiseOffsetSnapsToNearestMultiple) {

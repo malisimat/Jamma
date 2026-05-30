@@ -45,6 +45,35 @@ MidiQuantisationSettings engine::ApplyMidiQuantisationGesture(const MidiQuantisa
 	return updated;
 }
 
+std::uint32_t engine::ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
+{
+	if (candidates.FirstPlayableMidiLoopSamps > 0u)
+		return candidates.FirstPlayableMidiLoopSamps;
+	if (candidates.FirstAudioLoopSamps > 0u)
+		return candidates.FirstAudioLoopSamps;
+	if (candidates.MidiVisualLoopSamps > 0u)
+		return candidates.MidiVisualLoopSamps;
+
+	return candidates.RecordedSamps;
+}
+
+MidiQuantisationSettings engine::ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+	const int* values,
+	std::size_t valueCount) noexcept
+{
+	MidiQuantisationSettings updated = current;
+	if (nullptr == values || 0u == valueCount)
+		return updated;
+
+	updated.Enabled = (0 != values[0]);
+	if (valueCount >= 2u)
+		updated.Fraction = ClampMidiQuantisationFractionIndex(values[1]);
+	if (valueCount >= 3u && values[2] > 0)
+		updated.GrainSamps = static_cast<std::uint32_t>(values[2]);
+
+	return updated;
+}
+
 std::uint32_t engine::QuantiseSampleOffset(std::uint32_t offset,
                                             std::uint32_t step,
                                             std::uint32_t loopLength) noexcept

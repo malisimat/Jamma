@@ -497,19 +497,10 @@ ActionResult LoopTake::OnAction(GuiAction action)
 	{
 		if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
 		{
-			// Payload layout: [enabled, fractionIndex, optional grainSamps].
-			// grainSamps == 0 (or absent) preserves the current grain so the
-			// caller can toggle on/off without re-supplying timing each gesture.
 			const auto previous = MidiQuantisation();
-			MidiQuantisationSettings updated = previous;
-			if (arr->Values.size() >= 1)
-				updated.Enabled = (0 != arr->Values[0]);
-			if (arr->Values.size() >= 2)
-			{
-				updated.Fraction = ClampMidiQuantisationFractionIndex(arr->Values[1]);
-			}
-			if (arr->Values.size() >= 3 && arr->Values[2] > 0)
-				updated.GrainSamps = static_cast<std::uint32_t>(arr->Values[2]);
+			const auto updated = ApplyMidiQuantisationGuiPayload(previous,
+				arr->Values.data(),
+				arr->Values.size());
 			if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 				_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, "gui-action");
 			SetMidiQuantisation(updated);
@@ -1523,8 +1514,10 @@ MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 	return MidiQuantisationSettings::Unpack(_midiQuantisationPacked.load(std::memory_order_acquire));
 }
 
-std::uint32_t LoopTake::_ResolveMidiQuantisationGestureGrain() const noexcept
+MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates() const noexcept
 {
+	MidiQuantisationGrainCandidates candidates;
+
 	for (const auto& midiLoop : _midiLoops)
 	{
 		if (!midiLoop)
@@ -1532,7 +1525,10 @@ std::uint32_t LoopTake::_ResolveMidiQuantisationGestureGrain() const noexcept
 
 		const auto loopLength = midiLoop->LoopLengthSamps();
 		if (loopLength > 0u)
-			return loopLength;
+		{
+			candidates.FirstPlayableMidiLoopSamps = loopLength;
+			break;
+		}
 	}
 
 	for (const auto& loop : _loops)
@@ -1542,13 +1538,17 @@ std::uint32_t LoopTake::_ResolveMidiQuantisationGestureGrain() const noexcept
 
 		const auto loopLength = static_cast<std::uint32_t>(loop->LoopLength());
 		if (loopLength > 0u)
-			return loopLength;
+		{
+			candidates.FirstAudioLoopSamps = loopLength;
+			break;
+		}
 	}
 
 	if (_midiVisualLoopLength > 0ul)
-		return static_cast<std::uint32_t>(_midiVisualLoopLength);
+		candidates.MidiVisualLoopSamps = static_cast<std::uint32_t>(_midiVisualLoopLength);
 
-	return static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+	candidates.RecordedSamps = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+	return candidates;
 }
 
 void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
@@ -1559,7 +1559,7 @@ void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
 	const auto updated = ApplyMidiQuantisationGesture(previous,
 		gesture,
 		fraction,
-		_ResolveMidiQuantisationGestureGrain());
+		ResolveMidiQuantisationGestureGrain(_MidiQuantisationGrainCandidates()));
 
 	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);

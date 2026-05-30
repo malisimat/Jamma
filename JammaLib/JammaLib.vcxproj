@@ -346,6 +346,7 @@
     <ClInclude Include="src\midi\MidiLoop.h" />
     <ClInclude Include="src\midi\MidiNoteSpan.h" />
     <ClInclude Include="src\midi\MidiQuantisation.h" />
+    <ClInclude Include="src\midi\MidiTimestampMapper.h" />
     <ClInclude Include="src\graphics\MidiModel.h" />
     <ClInclude Include="src\base\Tickable.h" />
   </ItemGroup>
@@ -444,6 +445,7 @@
     <ClCompile Include="src\midi\MidiLoop.cpp" />
     <ClCompile Include="src\midi\MidiNoteSpan.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation.cpp" />
+    <ClCompile Include="src\midi\MidiTimestampMapper.cpp" />
     <ClCompile Include="src\graphics\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>

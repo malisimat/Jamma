@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
@@ -97,10 +98,10 @@ namespace engine
 		bool QueueModelUpdateFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
-		// Non-destructive start-time quantisation. Builds an immutable event-buffer
-		// snapshot and atomically publishes it for the audio thread. The original
-		// _events stream is never modified; disabling restores untransformed playback
-		// and rendering with bit-exact recorded timing.
+		// Non-destructive start-time quantisation. Non-RT publication builds immutable
+		// event buffers and publishes a raw pointer for audio-thread readers. Retained
+		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
+		// ReadBlock never touches shared ownership or dangling storage.
 		void SetQuantisation(const MidiQuantisationSettings& settings);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
@@ -120,7 +121,8 @@ namespace engine
 		void PublishQuantisedEvents();
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
-		std::atomic<std::shared_ptr<const QuantisedEventBuffer>> _quantisedEvents;
+		std::atomic<const QuantisedEventBuffer*> _quantisedEvents;
+		std::vector<std::unique_ptr<QuantisedEventBuffer>> _retainedQuantisedEvents;
 		std::size_t _eventCount;
 		std::uint32_t _loopLengthSamps;
 		std::uint64_t _dropped;

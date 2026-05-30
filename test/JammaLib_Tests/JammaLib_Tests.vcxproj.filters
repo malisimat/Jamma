@@ -104,6 +104,9 @@
     <ClCompile Include="src\midi\MidiQuantisation_Tests.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
+    <ClCompile Include="src\midi\MidiTimestampMapper_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>

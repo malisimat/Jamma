@@ -6,6 +6,7 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
+#include "../midi/MidiTimestampMapper.h"
 #include "../vst/Vst3Plugin.h"
 
 using namespace base;
@@ -1226,13 +1227,10 @@ void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 		const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
 		const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
-
-		std::uint64_t mappedSample = anchorSample;
-		if (sampleRate > 0u && nowMicros > anchorMicros)
-		{
-			const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-			mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-		}
+		const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
+			anchorSample,
+			anchorMicros,
+			nowMicros);
 
 		ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 		ingress.status = status;
@@ -1508,13 +1506,10 @@ void Scene::InitMidi()
 					std::chrono::steady_clock::now().time_since_epoch()).count();
 				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
 				const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
-
-				std::uint64_t mappedSample = anchorSample;
-				if (sampleRate > 0u && nowMicros > anchorMicros)
-				{
-					const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-					mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-				}
+				const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
+					anchorSample,
+					anchorMicros,
+					nowMicros);
 
 				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 				ingress.status = status;
@@ -2337,18 +2332,15 @@ unsigned int Scene::_CurrentSampleRate() const
 std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 {
 	const auto sampleRate = _CurrentSampleRate();
-	auto sample = _audioSampleCounter.load(std::memory_order_acquire);
+	const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
 	const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
 	const auto actionMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		actionTime.time_since_epoch()).count();
 
-	if ((sampleRate > 0u) && (actionMicros > anchorMicros))
-	{
-		const auto deltaMicros = static_cast<std::uint64_t>(actionMicros - anchorMicros);
-		sample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-	}
-
-	return sample;
+	return MapMidiTimestampToAudioSample(sampleRate,
+		anchorSample,
+		anchorMicros,
+		actionMicros);
 }
 
 void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source)
