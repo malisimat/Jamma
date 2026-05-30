@@ -1,4 +1,5 @@
 #include "Station.h"
+#include <algorithm>
 #include <memory>
 
 using namespace engine;
@@ -306,20 +307,24 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	class StationMidiSink final : public IMidiOutputSink
 	{
 	public:
-		StationMidiSink(Station& station, std::shared_ptr<vst::VstChain> chain) noexcept :
+		StationMidiSink(Station& station,
+			std::shared_ptr<vst::VstChain> chain,
+			const MidiVstRouteTable* routes) noexcept :
 			_station(station),
-			_chain(std::move(chain))
+			_chain(std::move(chain)),
+			_routes(routes)
 		{
 		}
 
 		void OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept override
 		{
-			_station._SendMidiToVstChain(_chain, event, false, outputIndex);
+			_station._SendMidiToVstChain(_chain, _routes, event, false, outputIndex);
 		}
 
 	private:
 		Station& _station;
 		std::shared_ptr<vst::VstChain> _chain;
+		const MidiVstRouteTable* _routes;
 	};
 
 	for (const auto& take : state->LoopTakes)
@@ -356,6 +361,8 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	}
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto routeSnapshot = _midiVstRoutes.load(std::memory_order_acquire);
+	const auto* routes = routeSnapshot.get();
 	const bool vstActive = chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
 	if (vstActive)
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
@@ -365,12 +372,12 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	while (_liveMidiIngress.Pop(liveMidi))
 	{
 		if (vstActive)
-			_SendMidiToVstChain(chain, liveMidi, true, LiveMidiOutputIndex);
+			_SendMidiToVstChain(chain, routes, liveMidi, true, LiveMidiOutputIndex);
 	}
 
 	if (vstActive)
 	{
-		StationMidiSink midiSink(*this, chain);
+		StationMidiSink midiSink(*this, chain, routes);
 		auto midiOutputIndex = 0u;
 		for (const auto& take : state->LoopTakes)
 			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
@@ -1165,10 +1172,11 @@ void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
 {
 	auto routes = _midiVstRoutes.load(std::memory_order_acquire);
 	auto nextRoutes = routes ?
-		std::make_shared<std::vector<std::pair<unsigned int, size_t>>>(*routes) :
-		std::make_shared<std::vector<std::pair<unsigned int, size_t>>>();
+		std::make_shared<MidiVstRouteTable>(*routes) :
+		std::make_shared<MidiVstRouteTable>();
 
-	nextRoutes->erase(std::remove(nextRoutes->begin(), nextRoutes->end(), std::make_pair(midiOutputIndex, vstIndex)),
+	nextRoutes->erase(std::remove_if(nextRoutes->begin(), nextRoutes->end(),
+		[midiOutputIndex](const MidiVstRoute& route) { return route.first == midiOutputIndex; }),
 		nextRoutes->end());
 	nextRoutes->push_back({ midiOutputIndex, vstIndex });
 	_midiVstRoutes.store(nextRoutes, std::memory_order_release);
@@ -1176,7 +1184,7 @@ void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
 
 void Station::ClearMidiVstRoutes()
 {
-	_midiVstRoutes.store(std::make_shared<const std::vector<std::pair<unsigned int, size_t>>>(),
+	_midiVstRoutes.store(std::make_shared<const MidiVstRouteTable>(),
 		std::memory_order_release);
 }
 
@@ -1435,6 +1443,7 @@ void Station::_WireVuSliders()
 }
 
 void Station::_SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
+	const MidiVstRouteTable* routes,
 	const MidiEvent& event,
 	bool isRealtime,
 	unsigned int midiOutputIndex) noexcept
@@ -1442,7 +1451,6 @@ void Station::_SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
 	if (!chain)
 		return;
 
-	auto routes = _midiVstRoutes.load(std::memory_order_acquire);
 	if (!routes || routes->empty())
 	{
 		chain->SendMidiEvent(event, isRealtime);

@@ -22,6 +22,32 @@ namespace engine
 	};
 
 	static constexpr std::uint8_t MidiQuantisationFractionCount = 6u;
+	static constexpr int MidiQuantisationDragPixelsPerStep = 32;
+
+	enum class MidiQuantisationGesture : std::uint8_t
+	{
+		Toggle,
+		DragFraction
+	};
+
+	constexpr int MidiQuantisationFractionIndex(MidiQuantisationFraction fraction) noexcept
+	{
+		return static_cast<int>(fraction);
+	}
+
+	constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
+	{
+		if (index < 0)
+			index = 0;
+		else if (index >= static_cast<int>(MidiQuantisationFractionCount))
+			index = static_cast<int>(MidiQuantisationFractionCount) - 1;
+
+		return static_cast<MidiQuantisationFraction>(index);
+	}
+
+	int MidiQuantisationDragSteps(int deltaY) noexcept;
+	MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
+	                                                            int deltaY) noexcept;
 
 	constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction f) noexcept
 	{
@@ -59,6 +85,23 @@ namespace engine
 		MidiQuantisationFraction Fraction = MidiQuantisationFraction::Whole;
 		std::uint32_t GrainSamps = 0u;
 
+		constexpr std::uint64_t Pack() const noexcept
+		{
+			const auto fraction = static_cast<std::uint64_t>(Fraction);
+			return (Enabled ? 1ull : 0ull)
+				| (fraction << 8u)
+				| (static_cast<std::uint64_t>(GrainSamps) << 16u);
+		}
+
+		static constexpr MidiQuantisationSettings Unpack(std::uint64_t packed) noexcept
+		{
+			MidiQuantisationSettings settings;
+			settings.Enabled = (packed & 1ull) != 0ull;
+			settings.Fraction = ClampMidiQuantisationFractionIndex(static_cast<int>((packed >> 8u) & 0xffull));
+			settings.GrainSamps = static_cast<std::uint32_t>((packed >> 16u) & 0xffffffffull);
+			return settings;
+		}
+
 		constexpr bool operator==(const MidiQuantisationSettings& o) const noexcept
 		{
 			return Enabled == o.Enabled && Fraction == o.Fraction && GrainSamps == o.GrainSamps;
@@ -79,6 +122,11 @@ namespace engine
 		const auto divisor = MidiQuantisationDivisor(s.Fraction);
 		return s.GrainSamps / divisor;
 	}
+
+	MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
+	                                                      MidiQuantisationGesture gesture,
+	                                                      MidiQuantisationFraction fraction,
+	                                                      std::uint32_t resolvedGrainSamps) noexcept;
 
 	// Snap `offset` to the nearest multiple of `step`, then wrap into [0, loopLength).
 	// `step == 0` or `loopLength == 0` returns `offset` unchanged.
@@ -103,4 +151,20 @@ namespace engine
 	                    std::uint32_t loopLength,
 	                    std::uint32_t stepSamps,
 	                    MidiEvent* dst) noexcept;
+
+	// Sort an event buffer into the canonical order used by playback. Ordering is
+	// by sample offset, with same-sample NoteOffs before NoteOns so retriggered
+	// notes release before the next attack. Ties within the same priority keep
+	// their existing order.
+	void CanonicaliseMidiPlaybackOrder(MidiEvent* events,
+	                                   std::size_t eventCount) noexcept;
+
+	// Build the canonical quantised event view used by playback and rendering.
+	// This is intended for non-realtime publication paths; callers still own the
+	// destination storage.
+	void BuildQuantisedPlaybackEvents(const MidiEvent* src,
+	                                  std::size_t eventCount,
+	                                  std::uint32_t loopLength,
+	                                  std::uint32_t stepSamps,
+	                                  MidiEvent* dst) noexcept;
 }

@@ -15,6 +15,36 @@ namespace
 	}
 }
 
+int engine::MidiQuantisationDragSteps(int deltaY) noexcept
+{
+	const auto absDelta = deltaY < 0 ? -deltaY : deltaY;
+	const auto steps = (absDelta + (MidiQuantisationDragPixelsPerStep / 2)) /
+		MidiQuantisationDragPixelsPerStep;
+	return deltaY < 0 ? steps : -steps;
+}
+
+MidiQuantisationFraction engine::ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
+                                                                      int deltaY) noexcept
+{
+	const auto startIndex = MidiQuantisationFractionIndex(startFraction);
+	return ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(deltaY));
+}
+
+MidiQuantisationSettings engine::ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
+                                                               MidiQuantisationGesture gesture,
+                                                               MidiQuantisationFraction fraction,
+                                                               std::uint32_t resolvedGrainSamps) noexcept
+{
+	MidiQuantisationSettings updated = current;
+	updated.Enabled = (MidiQuantisationGesture::Toggle == gesture) ? !current.Enabled : true;
+	updated.Fraction = fraction;
+
+	if (updated.Enabled && 0u == updated.GrainSamps && resolvedGrainSamps > 0u)
+		updated.GrainSamps = resolvedGrainSamps;
+
+	return updated;
+}
+
 std::uint32_t engine::QuantiseSampleOffset(std::uint32_t offset,
                                             std::uint32_t step,
                                             std::uint32_t loopLength) noexcept
@@ -98,4 +128,50 @@ void engine::QuantiseEvents(const MidiEvent* src,
 
 		dst[i] = ev;
 	}
+}
+
+void engine::CanonicaliseMidiPlaybackOrder(MidiEvent* events,
+                                            std::size_t eventCount) noexcept
+{
+	if (nullptr == events || eventCount < 2u)
+		return;
+
+	const auto priority = [](const MidiEvent& ev) noexcept
+	{
+		if (ev.IsNoteOff())
+			return 0;
+		if (ev.IsNoteOn())
+			return 2;
+		return 1;
+	};
+
+	const auto shouldPrecede = [&](const MidiEvent& lhs, const MidiEvent& rhs) noexcept
+	{
+		if (lhs.sampleOffset != rhs.sampleOffset)
+			return lhs.sampleOffset < rhs.sampleOffset;
+
+		return priority(lhs) < priority(rhs);
+	};
+
+	for (std::size_t i = 1u; i < eventCount; ++i)
+	{
+		const auto current = events[i];
+		std::size_t j = i;
+		while (j > 0u && shouldPrecede(current, events[j - 1u]))
+		{
+			events[j] = events[j - 1u];
+			--j;
+		}
+		events[j] = current;
+	}
+}
+
+void engine::BuildQuantisedPlaybackEvents(const MidiEvent* src,
+                                           std::size_t eventCount,
+                                           std::uint32_t loopLength,
+                                           std::uint32_t stepSamps,
+                                           MidiEvent* dst) noexcept
+{
+	QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
+	CanonicaliseMidiPlaybackOrder(dst, eventCount);
 }

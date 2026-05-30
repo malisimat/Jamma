@@ -214,7 +214,9 @@ namespace engine
 		void _LogMidiQuantisationFractionChange(MidiQuantisationFraction previous,
 			MidiQuantisationFraction updated,
 			const char* source) const;
-		void _ApplyMidiQuantisationGesture(MidiQuantisationFraction fraction, bool enabled, const char* source) noexcept;
+		void _ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
+			MidiQuantisationFraction fraction,
+			const char* source) noexcept;
 		std::uint32_t _ResolveMidiQuantisationGestureGrain() const noexcept;
 
 	protected:
@@ -246,10 +248,6 @@ namespace engine
 		std::vector<std::string> _midiLoopDevices;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		bool _midiQuantisationUpdatePending;
-		bool _midiQuantisationGestureActive;
-		bool _midiQuantisationGestureMoved;
-		utils::Position2d _midiQuantisationGestureStartPosition;
-		MidiQuantisationFraction _midiQuantisationGestureStartFraction;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

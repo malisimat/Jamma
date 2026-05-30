@@ -1,6 +1,6 @@
 #include "MidiLoop.h"
 
-#include "MidiModel.h"
+#include "../graphics/MidiModel.h"
 #include "MidiNoteSpan.h"
 #include "MidiQuantisation.h"
 #include "../include/Constants.h"
@@ -271,6 +271,6 @@ void MidiLoop::PublishQuantisedEvents()
 	}
 
 	auto quantisedEvents = std::make_shared<QuantisedEventBuffer>();
-	QuantiseEvents(_events.data(), _eventCount, _loopLengthSamps, step, quantisedEvents->Events.data());
+	BuildQuantisedPlaybackEvents(_events.data(), _eventCount, _loopLengthSamps, step, quantisedEvents->Events.data());
 	_quantisedEvents.store(std::shared_ptr<const QuantisedEventBuffer>(std::move(quantisedEvents)), std::memory_order_release);
 }

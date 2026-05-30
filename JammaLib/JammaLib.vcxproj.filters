@@ -18,7 +18,7 @@
     <Filter Include="src\engine">
       <UniqueIdentifier>{b2126494-7af7-409b-b8d4-cc037236024a}</UniqueIdentifier>
     </Filter>
-    <Filter Include="src\engine\midi">
+    <Filter Include="src\midi">
       <UniqueIdentifier>{20c843c9-1175-4bb0-9b57-d0c48a970a77}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\graphics">
@@ -305,8 +305,8 @@
     <ClInclude Include="src\midi\MidiQuantisation.h">
       <Filter>src\midi</Filter>
     </ClInclude>
-    <ClInclude Include="src\midi\MidiModel.h">
-      <Filter>src\midi</Filter>
+    <ClInclude Include="src\graphics\MidiModel.h">
+      <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\base\ResourceUser.h">
       <Filter>src\base</Filter>
@@ -470,6 +470,9 @@
     <ClInclude Include="src\base\Jammable.h">
       <Filter>src\base</Filter>
     </ClInclude>
+    <ClInclude Include="src\base\LoggingConfig.h">
+      <Filter>src\base</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiRack.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -625,8 +628,8 @@
     <ClCompile Include="src\midi\MidiQuantisation.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
-    <ClCompile Include="src\midi\MidiModel.cpp">
-      <Filter>src\midi</Filter>
+    <ClCompile Include="src\graphics\MidiModel.cpp">
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="lib\rtaudio\include\asio.cpp">
       <Filter>lib\rtaudio\include</Filter>

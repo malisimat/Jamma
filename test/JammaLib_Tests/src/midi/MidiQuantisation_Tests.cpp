@@ -8,11 +8,16 @@
 using engine::MidiEvent;
 using engine::MidiQuantisationDivisor;
 using engine::MidiQuantisationFraction;
+using engine::ClampMidiQuantisationFractionIndex;
 using engine::MidiQuantisationFractionLabel;
 using engine::MidiQuantisationSettings;
 using engine::MidiQuantisationStepSamps;
+using engine::MidiQuantisationGesture;
+using engine::ApplyMidiQuantisationGesture;
+using engine::BuildQuantisedPlaybackEvents;
 using engine::QuantiseEvents;
 using engine::QuantiseSampleOffset;
+using engine::ResolveMidiQuantisationDragFraction;
 
 namespace
 {
@@ -22,6 +27,15 @@ namespace
 	{
 		std::vector<MidiEvent> dst(src.size());
 		QuantiseEvents(src.data(), src.size(), loopLength, step, dst.data());
+		return dst;
+	}
+
+	std::vector<MidiEvent> BuildPlaybackVec(const std::vector<MidiEvent>& src,
+		std::uint32_t loopLength,
+		std::uint32_t step)
+	{
+		std::vector<MidiEvent> dst(src.size());
+		BuildQuantisedPlaybackEvents(src.data(), src.size(), loopLength, step, dst.data());
 		return dst;
 	}
 }
@@ -56,6 +70,71 @@ TEST(MidiQuantisation, StepSampsReturnsZeroWhenDisabledOrNoGrain) {
 
 	s.Fraction = MidiQuantisationFraction::Quarter;
 	EXPECT_EQ(6000u, MidiQuantisationStepSamps(s));
+}
+
+TEST(MidiQuantisation, ClampFractionIndexBoundsPackedValues) {
+	EXPECT_EQ(MidiQuantisationFraction::Whole, ClampMidiQuantisationFractionIndex(-1));
+	EXPECT_EQ(MidiQuantisationFraction::Whole, ClampMidiQuantisationFractionIndex(0));
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, ClampMidiQuantisationFractionIndex(2));
+	EXPECT_EQ(MidiQuantisationFraction::ThirtySecond, ClampMidiQuantisationFractionIndex(99));
+}
+
+TEST(MidiQuantisation, SettingsPackRoundTripsAndUnpackClampsFraction) {
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Sixteenth;
+	settings.GrainSamps = 48000u;
+
+	const auto unpacked = MidiQuantisationSettings::Unpack(settings.Pack());
+	EXPECT_EQ(settings, unpacked);
+
+	const auto badFraction = 1ull | (99ull << 8u) | (3200ull << 16u);
+	const auto clamped = MidiQuantisationSettings::Unpack(badFraction);
+	EXPECT_TRUE(clamped.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::ThirtySecond, clamped.Fraction);
+	EXPECT_EQ(3200u, clamped.GrainSamps);
+}
+
+TEST(MidiQuantisation, DragFractionResolutionRoundsAndClamps) {
+	EXPECT_EQ(MidiQuantisationFraction::Whole,
+		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Whole, 10));
+	EXPECT_EQ(MidiQuantisationFraction::Quarter,
+		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Whole, -64));
+	EXPECT_EQ(MidiQuantisationFraction::Whole,
+		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::Quarter, 200));
+	EXPECT_EQ(MidiQuantisationFraction::ThirtySecond,
+		ResolveMidiQuantisationDragFraction(MidiQuantisationFraction::ThirtySecond, -200));
+}
+
+TEST(MidiQuantisation, ApplyGestureTogglesOrDragsWithResolvedGrain) {
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Eighth;
+	settings.GrainSamps = 0u;
+
+	auto toggled = ApplyMidiQuantisationGesture(settings,
+		MidiQuantisationGesture::Toggle,
+		settings.Fraction,
+		1600u);
+	EXPECT_TRUE(toggled.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Eighth, toggled.Fraction);
+	EXPECT_EQ(1600u, toggled.GrainSamps);
+
+	auto dragged = ApplyMidiQuantisationGesture(toggled,
+		MidiQuantisationGesture::DragFraction,
+		MidiQuantisationFraction::Quarter,
+		3200u);
+	EXPECT_TRUE(dragged.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, dragged.Fraction);
+	EXPECT_EQ(1600u, dragged.GrainSamps);
+
+	auto disabled = ApplyMidiQuantisationGesture(dragged,
+		MidiQuantisationGesture::Toggle,
+		dragged.Fraction,
+		3200u);
+	EXPECT_FALSE(disabled.Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, disabled.Fraction);
+	EXPECT_EQ(1600u, disabled.GrainSamps);
 }
 
 TEST(MidiQuantisation, QuantiseOffsetSnapsToNearestMultiple) {
@@ -143,4 +222,69 @@ TEST(MidiQuantisation, QuantiseEventsLeavesUnpairedNoteOffUntouched) {
 	};
 	auto result = QuantiseVec(events, 1000u, 100u);
 	EXPECT_EQ(340u, result[0].sampleOffset);
+}
+
+TEST(MidiQuantisation, PlaybackEventsAreSortedAfterCrossingQuantisedNotes) {
+	std::vector<MidiEvent> events = {
+		MidiEvent::MakeNoteOn(140u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(240u, 0u, 60u),
+		MidiEvent::MakeNoteOn(160u, 0u, 62u, 100u),
+		MidiEvent::MakeNoteOff(260u, 0u, 62u),
+	};
+
+	auto result = BuildPlaybackVec(events, 1000u, 100u);
+	ASSERT_EQ(4u, result.size());
+	EXPECT_EQ(100u, result[0].sampleOffset);
+	EXPECT_EQ(60u, result[0].data1);
+	EXPECT_TRUE(result[0].IsNoteOn());
+	EXPECT_EQ(200u, result[1].sampleOffset);
+	EXPECT_EQ(60u, result[1].data1);
+	EXPECT_TRUE(result[1].IsNoteOff());
+	EXPECT_EQ(200u, result[2].sampleOffset);
+	EXPECT_EQ(62u, result[2].data1);
+	EXPECT_TRUE(result[2].IsNoteOn());
+	EXPECT_EQ(300u, result[3].sampleOffset);
+}
+
+TEST(MidiQuantisation, PlaybackEventsWrapLateNotesToCanonicalStartOrder) {
+	std::vector<MidiEvent> events = {
+		MidiEvent::MakeNoteOn(970u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(990u, 0u, 60u),
+		MidiEvent::MakeNoteOn(40u, 0u, 62u, 100u),
+		MidiEvent::MakeNoteOff(140u, 0u, 62u),
+	};
+
+	auto result = BuildPlaybackVec(events, 1000u, 100u);
+	ASSERT_EQ(4u, result.size());
+	EXPECT_EQ(0u, result[0].sampleOffset);
+	EXPECT_EQ(60u, result[0].data1);
+	EXPECT_TRUE(result[0].IsNoteOn());
+	EXPECT_EQ(0u, result[1].sampleOffset);
+	EXPECT_EQ(62u, result[1].data1);
+	EXPECT_TRUE(result[1].IsNoteOn());
+	EXPECT_EQ(20u, result[2].sampleOffset);
+	EXPECT_EQ(60u, result[2].data1);
+	EXPECT_TRUE(result[2].IsNoteOff());
+	EXPECT_EQ(100u, result[3].sampleOffset);
+	EXPECT_EQ(62u, result[3].data1);
+	EXPECT_TRUE(result[3].IsNoteOff());
+}
+
+TEST(MidiQuantisation, PlaybackEventsOrderSameSampleNoteOffBeforeNoteOn) {
+	std::vector<MidiEvent> events = {
+		MidiEvent::MakeNoteOn(120u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(220u, 0u, 60u),
+		MidiEvent::MakeNoteOn(200u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(300u, 0u, 60u),
+	};
+
+	auto result = BuildPlaybackVec(events, 1000u, 100u);
+	ASSERT_EQ(4u, result.size());
+	EXPECT_EQ(100u, result[0].sampleOffset);
+	EXPECT_TRUE(result[0].IsNoteOn());
+	EXPECT_EQ(200u, result[1].sampleOffset);
+	EXPECT_TRUE(result[1].IsNoteOff());
+	EXPECT_EQ(200u, result[2].sampleOffset);
+	EXPECT_TRUE(result[2].IsNoteOn());
+	EXPECT_EQ(300u, result[3].sampleOffset);
 }

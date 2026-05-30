@@ -6,7 +6,7 @@
 #include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
 #include "midi/MidiLoop.h"
-#include "midi/MidiModel.h"
+#include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
@@ -611,6 +611,34 @@ TEST(MidiLoopQuantisation, ClampsShiftedNoteOffAtLoopBoundary) {
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(600u, sink.events[0].sampleOffset);
 	EXPECT_EQ(999u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopQuantisation, EmitsQuantisedSameBlockEventsInCanonicalOrder) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(120u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(220u, 0u, 60u));
+	loop.RecordEvent(MidiEvent::MakeNoteOn(200u, 0u, 60u, 100u));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(300u, 0u, 60u));
+	loop.EndRecord(1000u);
+
+	MidiQuantisationSettings s;
+	s.Enabled = true;
+	s.Fraction = MidiQuantisationFraction::Whole;
+	s.GrainSamps = 100u;
+	loop.SetQuantisation(s);
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(4u, sink.events.size());
+	EXPECT_EQ(100u, sink.events[0].sampleOffset);
+	EXPECT_TRUE(sink.events[0].IsNoteOn());
+	EXPECT_EQ(200u, sink.events[1].sampleOffset);
+	EXPECT_TRUE(sink.events[1].IsNoteOff());
+	EXPECT_EQ(200u, sink.events[2].sampleOffset);
+	EXPECT_TRUE(sink.events[2].IsNoteOn());
+	EXPECT_EQ(300u, sink.events[3].sampleOffset);
+	EXPECT_TRUE(sink.events[3].IsNoteOff());
 }
 
 TEST(MidiLoopQuantisation, ModelRebuildsWithQuantisedSpans) {

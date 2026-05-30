@@ -214,6 +214,7 @@
     <ClInclude Include="src\audio\BufferBank.h" />
     <ClInclude Include="src\actions\JobAction.h" />
     <ClInclude Include="src\base\Jammable.h" />
+    <ClInclude Include="src\base\LoggingConfig.h" />
     <ClInclude Include="src\audio\FallingValue.h" />
     <ClInclude Include="src\audio\Hanning.h" />
     <ClInclude Include="src\actions\DelayedAction.h" />
@@ -345,7 +346,7 @@
     <ClInclude Include="src\midi\MidiLoop.h" />
     <ClInclude Include="src\midi\MidiNoteSpan.h" />
     <ClInclude Include="src\midi\MidiQuantisation.h" />
-    <ClInclude Include="src\midi\MidiModel.h" />
+    <ClInclude Include="src\graphics\MidiModel.h" />
     <ClInclude Include="src\base\Tickable.h" />
   </ItemGroup>
   <ItemGroup>
@@ -443,7 +444,7 @@
     <ClCompile Include="src\midi\MidiLoop.cpp" />
     <ClCompile Include="src\midi\MidiNoteSpan.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation.cpp" />
-    <ClCompile Include="src\midi\MidiModel.cpp" />
+    <ClCompile Include="src\graphics\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\graphics\Window.h" />

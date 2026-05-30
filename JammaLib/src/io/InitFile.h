@@ -16,17 +16,12 @@
 #include <sstream>
 #include "Json.h"
 #include "../audio/AudioMixer.h"
+#include "../base/LoggingConfig.h"
 #include "../utils/CommonTypes.h"
 
 namespace io
 {
-	struct LoggingConfig
-	{
-		std::string Midi;   // "verbose" to enable verbose MIDI packet logging
-		std::string Audio;  // "verbose" to enable verbose audio logging
-		std::string Event;  // "verbose" to enable verbose event logging
-		std::string Ui;     // "verbose" to enable verbose UI interaction logging
-	};
+	using LoggingConfig = base::LoggingConfig;
 
 	struct InitFile
 	{

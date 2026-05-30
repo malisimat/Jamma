@@ -139,10 +139,11 @@ namespace engine
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
 		// Returns true if the named device is allowed to drive this station's live
-		// VST playback. If no trigger has a MidiInputDevices restriction, all
-		// devices are allowed (backward-compatible open behaviour).
+		// VST playback. Any unrestricted trigger keeps the station open to all
+		// devices; otherwise the device must match a trigger's MidiInputDevices list.
 		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
 		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
+		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
 
@@ -185,7 +186,11 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
+		using MidiVstRoute = std::pair<unsigned int, size_t>;
+		using MidiVstRouteTable = std::vector<MidiVstRoute>;
+
 		void _SendMidiToVstChain(const std::shared_ptr<vst::VstChain>& chain,
+			const MidiVstRouteTable* routes,
 			const MidiEvent& event,
 			bool isRealtime,
 			unsigned int midiOutputIndex) noexcept;
@@ -234,7 +239,7 @@ namespace engine
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		io::MidiQueue<1024> _liveMidiIngress;
-		std::atomic<std::shared_ptr<const std::vector<std::pair<unsigned int, size_t>>>> _midiVstRoutes;
+		std::atomic<std::shared_ptr<const MidiVstRouteTable>> _midiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).

@@ -130,8 +130,7 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
-	_dragTargets(),
-	_dragSelectDepth(base::SelectDepth::DEPTH_STATION),
+	_dragLoopTakeTargets(),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -489,9 +488,9 @@ ActionResult Scene::OnAction(TouchAction action)
 	}
 
 	if ((TouchAction::TouchState::TOUCH_UP == action.State)
-		&& !_dragTargets.empty())
+		&& !_dragLoopTakeTargets.empty())
 	{
-		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		for (const auto& take : _dragLoopTakeTargets)
 		{
 			if (!take)
 				continue;
@@ -503,7 +502,7 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		res = _selector->OnAction(_selector->ParentToLocal(action));
 		_UpdateSelection(res.ResultType);
-		_dragTargets.clear();
+		_dragLoopTakeTargets.clear();
 		_touchDownElement.reset();
 		return ActionResult::NoAction();
 	}
@@ -577,9 +576,8 @@ ActionResult Scene::OnAction(TouchAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		_dragSelectDepth = _selector->CurrentSelectDepth();
-		_dragTargets = _CurrentInteractionTargets();
-		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		_dragLoopTakeTargets = _CurrentLoopTakeInteractionTargets();
+		for (const auto& take : _dragLoopTakeTargets)
 		{
 			if (!take)
 				continue;
@@ -597,7 +595,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		if (res.IsEaten)
 			return res;
 
-		_dragTargets.clear();
+		_dragLoopTakeTargets.clear();
 	}
 
 	res = _selector->OnAction(_selector->ParentToLocal(action));
@@ -631,10 +629,10 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 
-	if (!_dragTargets.empty())
+	if (!_dragLoopTakeTargets.empty())
 	{
 		ActionResult res = ActionResult::NoAction();
-		for (const auto& take : _LoopTakesForInteractionTargets(_dragTargets, _dragSelectDepth))
+		for (const auto& take : _dragLoopTakeTargets)
 		{
 			if (!take)
 				continue;
@@ -2141,9 +2139,12 @@ void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* sourc
 		}
 	}
 
-	std::cout << "MIDI quantisation grain update: source=" << source
-		<< " grain=" << grainSamps
-		<< " takes=" << takeCount << std::endl;
+	if (_loggingConfig.Ui == "verbose")
+	{
+		std::cout << "MIDI quantisation grain update: source=" << source
+			<< " grain=" << grainSamps
+			<< " takes=" << takeCount << '\n';
+	}
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)
@@ -2409,7 +2410,8 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 		return false;
 
 	const auto depth = _selector->CurrentSelectDepth();
-	const auto masterLength = _MasterLengthForTarget(hovering, depth);
+	const auto target = _ResolveInteractionTarget(hovering, depth);
+	const auto masterLength = target ? target->MasterLength : 0ul;
 	if (masterLength == 0ul)
 		return false;
 
@@ -2417,7 +2419,7 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	if (!timing.has_value())
 		return false;
 
-	_masterLoop = _RepresentativeLoopForTarget(hovering, depth);
+	_masterLoop = target->RepresentativeLoop;
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_masterLoopLengthSamps.store(masterLength, std::memory_order_release);
@@ -2447,22 +2449,21 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 	const auto master = masterLengthSamps > 0ul ? static_cast<unsigned int>(masterLengthSamps) : seed;
 	if (_masterLoop)
 	{
-		auto masterStation = _StationForTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
-		if (masterStation)
-			masterStation->SetQuantisationOverlay(seed, master, false);
+		auto masterTarget = _ResolveInteractionTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
+		if (masterTarget && masterTarget->Station)
+			masterTarget->Station->SetQuantisationOverlay(seed, master, false);
 	}
 
 	if (!candidate)
 		return;
 
-	const auto candidateMaster = _MasterLengthForTarget(candidate, depth);
-	if (candidateMaster == 0ul)
+	const auto candidateTarget = _ResolveInteractionTarget(candidate, depth);
+	if (!candidateTarget || candidateTarget->MasterLength == 0ul)
 		return;
 
-	const auto candidateStation = _StationForTarget(candidate, depth);
-	if (candidateStation)
-		candidateStation->SetQuantisationOverlay(seed,
-			static_cast<unsigned int>(candidateMaster),
+	if (candidateTarget->Station)
+		candidateTarget->Station->SetQuantisationOverlay(seed,
+			static_cast<unsigned int>(candidateTarget->MasterLength),
 			confirmCandidate);
 }
 
@@ -2472,122 +2473,110 @@ void Scene::_ClearQuantisationOverlays()
 		station->ClearQuantisationOverlay();
 }
 
-std::shared_ptr<Station> Scene::_StationForTarget(const std::shared_ptr<base::GuiElement>& target,
+std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
+	const std::shared_ptr<base::GuiElement>& target,
 	base::SelectDepth depth) const
 {
 	if (!target)
-		return nullptr;
+		return std::nullopt;
+
+	InteractionTarget resolved;
+	resolved.Station = std::dynamic_pointer_cast<Station>(target);
+	resolved.Take = std::dynamic_pointer_cast<LoopTake>(target);
+	resolved.TargetLoop = std::dynamic_pointer_cast<Loop>(target);
 
 	switch (depth)
 	{
 	case base::SelectDepth::DEPTH_STATION:
-		return std::dynamic_pointer_cast<Station>(target);
+		if (!resolved.Station)
+			return std::nullopt;
+		return resolved;
 	case base::SelectDepth::DEPTH_LOOPTAKE:
 	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return nullptr;
+		if (!resolved.Take)
+			return std::nullopt;
 
 		for (const auto& station : _stations)
 		{
 			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), take) != takes.end())
-				return station;
+			if (std::find(takes.begin(), takes.end(), resolved.Take) != takes.end())
+			{
+				resolved.Station = station;
+				break;
+			}
 		}
 
-		return nullptr;
+		for (const auto& loop : resolved.Take->GetLoops())
+		{
+			if (!loop)
+				continue;
+
+			if (!resolved.RepresentativeLoop || (loop->LoopLength() > resolved.RepresentativeLoop->LoopLength()))
+				resolved.RepresentativeLoop = loop;
+			resolved.MasterLength = std::max(resolved.MasterLength, loop->LoopLength());
+		}
+
+		return resolved;
 	}
 	case base::SelectDepth::DEPTH_LOOP:
 	{
-		auto loop = std::dynamic_pointer_cast<Loop>(target);
-		if (!loop)
-			return nullptr;
+		if (!resolved.TargetLoop)
+			return std::nullopt;
 
 		for (const auto& station : _stations)
 		{
 			for (const auto& take : station->GetLoopTakes())
 			{
 				const auto& loops = take->GetLoops();
-				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
-					return station;
+				if (std::find(loops.begin(), loops.end(), resolved.TargetLoop) != loops.end())
+				{
+					resolved.Station = station;
+					resolved.Take = take;
+					resolved.RepresentativeLoop = resolved.TargetLoop;
+					resolved.MasterLength = resolved.TargetLoop->LoopLength();
+					return resolved;
+				}
 			}
 		}
 
-		return nullptr;
+		return std::nullopt;
 	}
 	default:
-		return nullptr;
+		return std::nullopt;
 	}
 }
 
-unsigned long Scene::_MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
+std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets()
 {
-	if (!target)
-		return 0ul;
-
-	if (depth == base::SelectDepth::DEPTH_LOOP)
-	{
-		auto loop = std::dynamic_pointer_cast<Loop>(target);
-		return loop ? loop->LoopLength() : 0ul;
-	}
-
-	if (depth == base::SelectDepth::DEPTH_LOOPTAKE)
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return 0ul;
-
-		auto length = 0ul;
-		for (const auto& loop : take->GetLoops())
-		{
-			if (loop)
-				length = std::max(length, loop->LoopLength());
-		}
-
-		return length;
-	}
-
-	return 0ul;
-}
-
-std::shared_ptr<Loop> Scene::_RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
-{
-	if (!target)
-		return nullptr;
-
-	if (depth == base::SelectDepth::DEPTH_LOOP)
-		return std::dynamic_pointer_cast<Loop>(target);
-
-	if (depth == base::SelectDepth::DEPTH_LOOPTAKE)
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return nullptr;
-
-		std::shared_ptr<Loop> bestLoop;
-		for (const auto& loop : take->GetLoops())
-		{
-			if (!loop)
-				continue;
-
-			if (!bestLoop || (loop->LoopLength() > bestLoop->LoopLength()))
-				bestLoop = loop;
-		}
-
-		return bestLoop;
-	}
-
-	return nullptr;
-}
-
-std::vector<std::shared_ptr<base::GuiElement>> Scene::_CurrentInteractionTargets()
-{
-	std::vector<std::shared_ptr<base::GuiElement>> targets;
+	std::vector<std::shared_ptr<LoopTake>> targets;
 	const auto depth = _selector->CurrentSelectDepth();
-	AppendUniqueTarget(targets,
-		_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
+
+	const auto appendFromElement = [&](const std::shared_ptr<base::GuiElement>& element)
+	{
+		const auto resolved = _ResolveInteractionTarget(element, depth);
+		if (!resolved)
+			return;
+
+		switch (depth)
+		{
+		case base::SelectDepth::DEPTH_STATION:
+			if (!resolved->Station)
+				return;
+			for (const auto& take : resolved->Station->GetLoopTakes())
+				AppendUniqueTarget(targets, take);
+			break;
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+			AppendUniqueTarget(targets, resolved->Take);
+			break;
+		case base::SelectDepth::DEPTH_LOOP:
+			AppendUniqueTarget(targets, resolved->Take);
+			break;
+		default:
+			break;
+		}
+	};
+
+	appendFromElement(_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
 
 	switch (depth)
 	{
@@ -2595,7 +2584,7 @@ std::vector<std::shared_ptr<base::GuiElement>> Scene::_CurrentInteractionTargets
 		for (const auto& station : _stations)
 		{
 			if (station && station->IsSelected())
-				AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(station));
+				appendFromElement(std::static_pointer_cast<base::GuiElement>(station));
 		}
 		break;
 	case base::SelectDepth::DEPTH_LOOPTAKE:
@@ -2604,7 +2593,7 @@ std::vector<std::shared_ptr<base::GuiElement>> Scene::_CurrentInteractionTargets
 			for (const auto& take : station->GetLoopTakes())
 			{
 				if (take && take->IsSelected())
-					AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(take));
+					appendFromElement(std::static_pointer_cast<base::GuiElement>(take));
 			}
 		}
 		break;
@@ -2616,63 +2605,13 @@ std::vector<std::shared_ptr<base::GuiElement>> Scene::_CurrentInteractionTargets
 				for (const auto& loop : take->GetLoops())
 				{
 					if (loop && loop->IsSelected())
-						AppendUniqueTarget(targets, std::static_pointer_cast<base::GuiElement>(loop));
+						appendFromElement(std::static_pointer_cast<base::GuiElement>(loop));
 				}
 			}
 		}
 		break;
 	default:
 		break;
-	}
-
-	return targets;
-}
-
-std::vector<std::shared_ptr<LoopTake>> Scene::_LoopTakesForInteractionTargets(
-	const std::vector<std::shared_ptr<base::GuiElement>>& interactionTargets,
-	base::SelectDepth depth) const
-{
-	std::vector<std::shared_ptr<LoopTake>> targets;
-	for (const auto& target : interactionTargets)
-	{
-		switch (depth)
-		{
-		case base::SelectDepth::DEPTH_STATION:
-		{
-			auto station = std::dynamic_pointer_cast<Station>(target);
-			if (!station)
-				break;
-
-			for (const auto& take : station->GetLoopTakes())
-				AppendUniqueTarget(targets, take);
-			break;
-		}
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-			AppendUniqueTarget(targets, std::dynamic_pointer_cast<LoopTake>(target));
-			break;
-		case base::SelectDepth::DEPTH_LOOP:
-		{
-			auto loop = std::dynamic_pointer_cast<Loop>(target);
-			if (!loop)
-				break;
-
-			for (const auto& station : _stations)
-			{
-				for (const auto& take : station->GetLoopTakes())
-				{
-					const auto& loops = take->GetLoops();
-					if (std::find(loops.begin(), loops.end(), loop) != loops.end())
-					{
-						AppendUniqueTarget(targets, take);
-						break;
-					}
-				}
-			}
-			break;
-		}
-		default:
-			break;
-		}
 	}
 
 	return targets;

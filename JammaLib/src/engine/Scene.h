@@ -270,9 +270,16 @@ namespace engine
 		bool _TrySetMasterFromHover(bool confirm);
 		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearQuantisationOverlays();
-		std::shared_ptr<Station> _StationForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
-		unsigned long _MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
-		std::shared_ptr<Loop> _RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
+		struct InteractionTarget
+		{
+			std::shared_ptr<Station> Station;
+			std::shared_ptr<LoopTake> Take;
+			std::shared_ptr<Loop> TargetLoop;
+			unsigned long MasterLength = 0ul;
+			std::shared_ptr<Loop> RepresentativeLoop;
+		};
+		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
+			base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
@@ -280,10 +287,7 @@ namespace engine
 		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
-		std::vector<std::shared_ptr<base::GuiElement>> _CurrentInteractionTargets();
-		std::vector<std::shared_ptr<LoopTake>> _LoopTakesForInteractionTargets(
-			const std::vector<std::shared_ptr<base::GuiElement>>& targets,
-			base::SelectDepth depth) const;
+		std::vector<std::shared_ptr<LoopTake>> _CurrentLoopTakeInteractionTargets();
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
@@ -340,8 +344,7 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
-		std::vector<std::shared_ptr<base::GuiElement>> _dragTargets;
-		base::SelectDepth _dragSelectDepth;
+		std::vector<std::shared_ptr<LoopTake>> _dragLoopTakeTargets;
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
