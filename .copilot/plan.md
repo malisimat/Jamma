@@ -21,4 +21,11 @@ Check https://github.com/malisimat/Jamma/issues/97 and ensure issue is reproduci
 risk of breaking existing functionality
 
 ## TODOs
-- [ ] (to be filled by implementing agent)
+- [x] Reproduce root causes via failing tests (TDD red phase)
+  - Root cause 1: `Scene::_DispatchMidiTriggerEvent` never called `Reset()` on ditch-to-zero
+  - Root cause 2: `Scene::_PumpSerial` discarded `OnTriggerEvent` return value, never called `Reset()` on ditch-to-zero
+- [x] Added `IsSceneResetForTest()` accessor to `TestScene` in `Trigger_Tests.cpp`
+- [x] Added 5 `SceneReset.*` tests covering key (direct, debounced, overdub), MIDI, and serial trigger paths
+- [x] Fixed `Scene::_DispatchMidiTriggerEvent` — on `ACTIONRESULT_DITCH`, counts total takes across all stations; if 0, calls `Reset()` immediately
+- [x] Fixed `Scene::_PumpSerial` — captures `OnTriggerEvent` return value; on `ACTIONRESULT_DITCH`, counts total takes; if 0, calls `Reset()` immediately
+- [x] All 5 `SceneReset.*` tests pass; full suite: 433/434 passed (1 pre-existing skip), 0 regressions
