@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -348,9 +349,10 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
-		bool _quantisationOverlayHeld;
-		Time _quantisationOverlayLastActive;
-		std::atomic_bool _pendingQuantisationOverlayPulse;
+		// Encodes overlay visibility: 0 = never shown, INT64_MAX = held at full
+		// alpha, any other value = nanosecond timestamp of last pulse (fade-out).
+		// Written from UI and job threads; read on render thread — must be atomic.
+		std::atomic<std::int64_t> _quantisationOverlayState;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;

@@ -24,6 +24,8 @@ namespace
 {
 	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
 	constexpr double QuantisationOverlayFadeSeconds = 2.0;
+	constexpr std::int64_t kOverlayInactive = 0LL;
+	constexpr std::int64_t kOverlayHeld = std::numeric_limits<std::int64_t>::max();
 
 	template<typename T>
 	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
@@ -126,9 +128,7 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_masterLoopLengthSamps(0ul),
 	_tapTempo(),
-	_quantisationOverlayHeld(false),
-	_quantisationOverlayLastActive(Timer::GetZero()),
-	_pendingQuantisationOverlayPulse(false),
+	_quantisationOverlayState(kOverlayInactive),
 	_stations(),
 	_ninjamConfig(std::nullopt),
 	_ninjamSession(std::make_unique<NinjamSession>()),
@@ -440,12 +440,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(_viewProj);
 
 	if (PASS_SCENE == pass)
-	{
-		if (_pendingQuantisationOverlayPulse.exchange(false, std::memory_order_acq_rel))
-			_PulseQuantisationOverlay();
-
 		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
-	}
 
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
@@ -1402,9 +1397,7 @@ void Scene::Reset()
 	_ClearTimingState(true);
 	_masterLoop.reset();
 	_ClearStationQuantisation();
-	_quantisationOverlayHeld = false;
-	_quantisationOverlayLastActive = Timer::GetZero();
-	_pendingQuantisationOverlayPulse.store(false, std::memory_order_release);
+	_quantisationOverlayState.store(kOverlayInactive, std::memory_order_release);
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -2425,27 +2418,36 @@ bool Scene::_HandleTapTempo(Time actionTime)
 
 void Scene::_PulseQuantisationOverlay()
 {
-	_quantisationOverlayLastActive = Timer::GetTime();
+	// CAS loop: write the current timestamp unless the overlay is held at
+	// full alpha, so a job-thread pulse cannot override an active Ctrl-hold.
+	auto expected = _quantisationOverlayState.load(std::memory_order_relaxed);
+	do {
+		if (expected == kOverlayHeld) return;
+	} while (!_quantisationOverlayState.compare_exchange_weak(
+		expected,
+		Timer::GetTime().time_since_epoch().count(),
+		std::memory_order_release,
+		std::memory_order_relaxed));
 }
 
 void Scene::_SetQuantisationOverlayHeld(bool held)
 {
-	_quantisationOverlayHeld = held;
-	_PulseQuantisationOverlay();
+	_quantisationOverlayState.store(
+		held ? kOverlayHeld : Timer::GetTime().time_since_epoch().count(),
+		std::memory_order_release);
 }
 
 float Scene::_QuantisationOverlayAlpha(Time now) const
 {
-	if (_quantisationOverlayHeld)
+	const auto state = _quantisationOverlayState.load(std::memory_order_acquire);
+	if (state == kOverlayHeld)
 		return 1.0f;
-
-	if (Timer::IsZero(_quantisationOverlayLastActive))
+	if (state == kOverlayInactive)
 		return 0.0f;
-
-	const auto elapsed = Timer::GetElapsedSeconds(_quantisationOverlayLastActive, now);
+	const auto lastActive = Time(Time::duration(state));
+	const auto elapsed = Timer::GetElapsedSeconds(lastActive, now);
 	if (elapsed >= QuantisationOverlayFadeSeconds)
 		return 0.0f;
-
 	return static_cast<float>(1.0 - (elapsed / QuantisationOverlayFadeSeconds));
 }
 
@@ -2756,7 +2758,7 @@ void Scene::_QueueLocalTempoFromClock()
 		_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
 		_armReclock.store(false, std::memory_order_release);
 		if (shouldPulseOverlay)
-			_pendingQuantisationOverlayPulse.store(true, std::memory_order_release);
+			_PulseQuantisationOverlay();
 		return;
 	}
 
@@ -2781,7 +2783,7 @@ void Scene::_QueueLocalTempoFromClock()
 	_hasPendingTempo.store(true, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 	if (shouldPulseOverlay)
-		_pendingQuantisationOverlayPulse.store(true, std::memory_order_release);
+		_PulseQuantisationOverlay();
 
 	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
 		<< " bpi=" << timing->Bpi

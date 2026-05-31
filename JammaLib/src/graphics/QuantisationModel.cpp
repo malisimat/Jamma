@@ -304,11 +304,6 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	}, instanceCount);
 }
 
-void QuantisationModel::SetLoopIndexFrac(double loopIndexFrac) noexcept
-{
-	(void)loopIndexFrac;
-}
-
 void QuantisationModel::SetOverlayVisible(bool visible, bool confirm)
 {
 	_overlayVisible = visible;

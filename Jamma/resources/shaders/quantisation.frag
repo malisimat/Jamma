@@ -10,6 +10,10 @@ in float InstanceMode;
 
 void main()
 {
+	// Gate and column geometry share the same VBO. Each instance is flagged
+	// as either GateInstance or ColumnInstance. Discard fragments where the
+	// geometry type (PartKind) does not match the instance type (InstanceMode)
+	// to prevent gate instances rendering column faces and vice versa.
 	bool columnPart = PartKind > 1.5;
 	bool columnInstance = InstanceMode > 0.5;
 	if (columnPart != columnInstance)
