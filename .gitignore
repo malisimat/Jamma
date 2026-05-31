@@ -10,8 +10,9 @@
 .vs/
 .vscode/
 .github/*
-.copilot/
 !.github/copilot-instructions.md
+.copilot/
+!.copilot/plan.md
 .vscode/launch.json
 .vscode/tasks.json
 packages/
