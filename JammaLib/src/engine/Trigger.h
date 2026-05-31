@@ -258,6 +258,7 @@ namespace engine
 			io::RigFile::Trigger trigStruct);
 		static audio::BounceMixBehaviourParams GetOverdubBehaviourParams(std::vector<unsigned int> channels);
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
+		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;

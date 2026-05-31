@@ -223,6 +223,8 @@ namespace engine
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
+		static std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
+			const std::string& userName);
 		static std::vector<unsigned char> TrimPath(std::vector<unsigned char> path,
 			unsigned int depth);
 		static int AudioCallback(void* outBuffer,
@@ -295,6 +297,11 @@ namespace engine
 
 
 	protected:
+		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
+		static constexpr double        QuantisationOverlayFadeSeconds  = 2.0;
+		static constexpr std::int64_t  OverlayInactive                 = 0LL;
+		static constexpr std::int64_t  OverlayHeld                     = std::numeric_limits<std::int64_t>::max();
+
 		struct MidiInputEndpoint
 		{
 			std::uint8_t DeviceSlot = 0u;

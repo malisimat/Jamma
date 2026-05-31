@@ -5,6 +5,7 @@
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
+#include "../utils/ArrayUtils.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../midi/MidiTimestampMapper.h"
 #include "../vst/Vst3Plugin.h"
@@ -19,83 +20,6 @@ using namespace graphics;
 using namespace resources;
 using namespace utils;
 using namespace std::placeholders;
-
-namespace
-{
-	constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
-	constexpr double QuantisationOverlayFadeSeconds = 2.0;
-	constexpr std::int64_t OverlayInactive = 0LL;
-	constexpr std::int64_t OverlayHeld = std::numeric_limits<std::int64_t>::max();
-
-	template<typename T>
-	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
-		const std::shared_ptr<T>& candidate)
-	{
-		if (!candidate)
-			return;
-
-		if (std::find(targets.begin(), targets.end(), candidate) == targets.end())
-			targets.push_back(candidate);
-	}
-
-	const char* MidiActionLabel(actions::ActionResultType rt)
-	{
-		switch (rt)
-		{
-		case actions::ACTIONRESULT_ACTIVATE: return "Activate";
-		case actions::ACTIONRESULT_DITCH:    return "Ditch";
-		case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
-		default:                             return "Action";
-		}
-	}
-
-	const char* MidiEventDirection(const engine::MidiEvent& event)
-	{
-		if (event.IsNoteOn())  return " Down";
-		if (event.IsNoteOff()) return " Up";
-		return "";
-	}
-
-	void LogMidiEventDetail(std::ostream& out, std::uint8_t deviceSlot, const engine::MidiEvent& event)
-	{
-		constexpr std::uint8_t CC            = 0xB0;
-		constexpr std::uint8_t ProgramChange = 0xC0;
-
-		out << "dev: " << (deviceSlot + 1) << ", chan " << (event.Channel() + 1) << ", ";
-
-		switch (event.MessageType())
-		{
-		case engine::MidiEvent::NoteOn:
-			out << (event.data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(event.data1);
-			break;
-		case engine::MidiEvent::NoteOff:
-			out << "noteoff: " << static_cast<int>(event.data1);
-			break;
-		case CC:
-			out << "cc " << static_cast<int>(event.data1) << ": " << static_cast<int>(event.data2);
-			break;
-		case ProgramChange:
-			out << "pc: " << static_cast<int>(event.data1);
-			break;
-		default:
-			out << "0x" << std::hex << std::uppercase << static_cast<int>(event.status) << std::dec;
-			break;
-		}
-	}
-
-	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
-		const std::string& userName)
-	{
-		for (const auto& station : stations)
-		{
-			auto remote = std::dynamic_pointer_cast<StationRemote>(station);
-			if (remote && remote->RemoteUserName() == userName)
-				return remote;
-		}
-
-		return nullptr;
-	}
-}
 
 Scene::Scene(SceneParams params,
 	UserConfig user) :
@@ -1276,9 +1200,9 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			continue;
 
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
-			<< "\" " << MidiActionLabel(res.ResultType)
-			<< MidiEventDirection(event) << " (";
-		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
+			<< "\" " << Trigger::ActionLabel(res.ResultType)
+			<< MidiEvent::Direction(event) << " (";
+		MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";
 	}
 }
@@ -1799,6 +1723,19 @@ void Scene::DisconnectNinjam()
 	_ninjamSession->Stop();
 }
 
+std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
+	const std::string& userName)
+{
+	for (const auto& station : stations)
+	{
+		auto remote = std::dynamic_pointer_cast<StationRemote>(station);
+		if (remote && remote->RemoteUserName() == userName)
+			return remote;
+	}
+
+	return nullptr;
+}
+
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
 {
 	unsigned int pathLength = depth <= path.size() ?
@@ -2246,7 +2183,7 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 	{
 		seenUsers.insert(remoteUser.UserName);
 
-		auto remoteStation = FindRemoteStation(_stations, remoteUser.UserName);
+		auto remoteStation = Scene::FindRemoteStation(_stations, remoteUser.UserName);
 
 		if (!remoteStation)
 		{

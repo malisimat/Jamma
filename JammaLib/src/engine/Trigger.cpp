@@ -109,6 +109,17 @@ Trigger::~Trigger()
 {
 }
 
+/*static*/ const char* Trigger::ActionLabel(actions::ActionResultType rt) noexcept
+{
+	switch (rt)
+	{
+	case actions::ACTIONRESULT_ACTIVATE: return "Activate";
+	case actions::ACTIONRESULT_DITCH:    return "Ditch";
+	case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
+	default:                             return "Action";
+	}
+}
+
 std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
 {
 	trigParams.Name = trigStruct.Name;
