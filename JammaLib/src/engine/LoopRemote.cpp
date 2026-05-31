@@ -31,24 +31,25 @@ void LoopRemote::SetVisualLength(unsigned int visualLengthSamps)
 
 void LoopRemote::Update()
 {
-	if (!_modelDirty.exchange(false))
+	if (!_modelDirty.load())
 		return;
 
 	// Throttle visual model updates to _MaxVisualUpdateHz to avoid excessive
 	// decimation/upload cost when multiple remote users are active.
 	// The vertex shader handles displacement from the waveform texture so
 	// no geometry rebuild is needed, but decimation is still O(loopLength).
-	auto now = std::chrono::steady_clock::now();
-	auto elapsed = std::chrono::duration<double>(now - _lastVisualUpdate).count();
+	std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+	double elapsed = std::chrono::duration<double>(now - _lastVisualUpdate).count();
 	if (elapsed < (1.0 / _MaxVisualUpdateHz))
 	{
-		// Re-set the dirty flag so the update is retried next tick.
-		_modelDirty.store(true);
+		// Leave _modelDirty set so the update is retried next tick.
 		_bufferBank.UpdateCapacity();
 		_monitorBufferBank.UpdateCapacity();
 		return;
 	}
 
+	// Consume the dirty flag now that we will perform the update.
+	_modelDirty.store(false);
 	_lastVisualUpdate = now;
 	Loop::Update();
 }
