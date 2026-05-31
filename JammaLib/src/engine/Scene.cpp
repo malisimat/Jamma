@@ -1165,6 +1165,7 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 	if (!routes)
 		return;
 
+	bool anythingDitched = false;
 	for (const auto& route : *routes)
 	{
 		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
@@ -1174,11 +1175,23 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 		if (!res.IsEaten)
 			continue;
 
+		if (res.ResultType == ACTIONRESULT_DITCH)
+			anythingDitched = true;
+
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
 			<< "\" " << MidiActionLabel(res.ResultType)
 			<< MidiEventDirection(event) << " (";
 		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";
+	}
+
+	if (anythingDitched)
+	{
+		unsigned int totalTakes = 0u;
+		for (const auto& station : _stations)
+			totalTakes += station->NumTakes();
+		if (0u == totalTakes)
+			Reset();
 	}
 }
 
@@ -1219,14 +1232,26 @@ void Scene::_PumpSerial()
 		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
 		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
 
+		bool anythingDitched = false;
 		for (auto& station : _stations)
 		{
-			station->OnTriggerEvent(
+			auto res = station->OnTriggerEvent(
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
 				action,
 				device);
+			if (res.IsEaten && res.ResultType == ACTIONRESULT_DITCH)
+				anythingDitched = true;
+		}
+
+		if (anythingDitched)
+		{
+			unsigned int totalTakes = 0u;
+			for (const auto& s : _stations)
+				totalTakes += s->NumTakes();
+			if (0u == totalTakes)
+				Reset();
 		}
 	}
 
