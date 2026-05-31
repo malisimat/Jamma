@@ -302,10 +302,11 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		modes.push_back(ColumnInstance);
 	}
 
+	const auto instanceCount = static_cast<unsigned int>(modes.size());
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
 		{ 4u, 1u, std::move(modes) }
-	}, static_cast<unsigned int>(modes.size()));
+	}, instanceCount);
 }
 
 void QuantisationModel::SetLoopIndexFrac(double loopIndexFrac) noexcept
