@@ -10,12 +10,23 @@ namespace engine
 		public gui::GuiModel
 	{
 	public:
+		struct LoopTakeVisual
+		{
+			unsigned long LoopLengthSamps;
+			double LoopIndexFrac;
+			float YCenter;
+			float HalfHeight;
+			float Radius;
+		};
+
 		QuantisationModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		void SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate = 0.0f);
+		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<LoopTakeVisual>& visuals);
 		void SetLoopIndexFrac(double loopIndexFrac) noexcept;
 		void SetOverlayVisible(bool visible, bool confirm);
+		void SetOverlayAlpha(float alpha) noexcept;
 		bool OverlayVisible() const noexcept;
 
 		static std::vector<float> BuildGateGeometry(unsigned int gateCount,
@@ -25,10 +36,8 @@ namespace engine
 
 	private:
 		unsigned int _seedSamps;
-		unsigned int _masterLoopSamps;
-		unsigned int _gateCount;
-		double _loopIndexFrac;
 		bool _overlayVisible;
+		float _overlayAlpha;
 		Time _confirmedAt;
 	};
 }

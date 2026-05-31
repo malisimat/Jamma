@@ -22,6 +22,7 @@ using namespace std::placeholders;
 namespace
 {
 	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
+	constexpr double QuantisationOverlayFadeSeconds = 2.0;
 
 	const char* MidiActionLabel(actions::ActionResultType rt)
 	{
@@ -113,6 +114,9 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_masterLoopLengthSamps(0ul),
 	_tapTempo(),
+	_quantisationOverlayHeld(false),
+	_quantisationOverlayLastActive(Timer::GetZero()),
+	_pendingQuantisationOverlayPulse(false),
 	_stations(),
 	_ninjamConfig(std::nullopt),
 	_ninjamSession(std::make_unique<NinjamSession>()),
@@ -421,6 +425,14 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
 
+	if (PASS_SCENE == pass)
+	{
+		if (_pendingQuantisationOverlayPulse.exchange(false, std::memory_order_acq_rel))
+			_PulseQuantisationOverlay();
+
+		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
+	}
+
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
 
@@ -607,8 +619,15 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
+	if (17 == action.KeyChar)
+	{
+		_SetQuantisationOverlayHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		return ActionResult::NoAction();
+	}
+
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
 	{
+		_PulseQuantisationOverlay();
 		_HandleTapTempo(action.GetActionTime());
 		return ActionResult::NoAction();
 	}
@@ -1291,6 +1310,9 @@ void Scene::Reset()
 	_ClearTimingState(true);
 	_masterLoop.reset();
 	_ClearQuantisationOverlays();
+	_quantisationOverlayHeld = false;
+	_quantisationOverlayLastActive = Timer::GetZero();
+	_pendingQuantisationOverlayPulse.store(false, std::memory_order_release);
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -2258,6 +2280,41 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	return true;
 }
 
+void Scene::_PulseQuantisationOverlay()
+{
+	_quantisationOverlayLastActive = Timer::GetTime();
+}
+
+void Scene::_SetQuantisationOverlayHeld(bool held)
+{
+	_quantisationOverlayHeld = held;
+	_PulseQuantisationOverlay();
+}
+
+float Scene::_QuantisationOverlayAlpha(Time now) const
+{
+	if (_quantisationOverlayHeld)
+		return 1.0f;
+
+	if (Timer::IsZero(_quantisationOverlayLastActive))
+		return 0.0f;
+
+	const auto elapsed = Timer::GetElapsedSeconds(_quantisationOverlayLastActive, now);
+	if (elapsed >= QuantisationOverlayFadeSeconds)
+		return 0.0f;
+
+	return static_cast<float>(1.0 - (elapsed / QuantisationOverlayFadeSeconds));
+}
+
+void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
+{
+	for (const auto& station : _stations)
+	{
+		if (station)
+			station->SetQuantisationOverlayAlpha(alpha);
+	}
+}
+
 bool Scene::_TrySetMasterFromHover(bool confirm)
 {
 	auto hovering = _ChildFromPath(_selector->CurrentHover());
@@ -2506,14 +2563,19 @@ void Scene::_QueueLocalTempoFromClock()
 		return;
 
 	const auto quantiseSamps = _clock->QuantiseSamps();
-	if ((0u == quantiseSamps) || (quantiseSamps == _effectiveQuantiseSamps.load(std::memory_order_acquire)))
+	const auto previousQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+	if ((0u == quantiseSamps) || (quantiseSamps == previousQuantiseSamps))
 		return;
+
+	const auto shouldPulseOverlay = (0u == previousQuantiseSamps);
 
 	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
 	if (seedLoopLengthSamps == 0u)
 	{
 		_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
 		_armReclock.store(false, std::memory_order_release);
+		if (shouldPulseOverlay)
+			_pendingQuantisationOverlayPulse.store(true, std::memory_order_release);
 		return;
 	}
 
@@ -2537,6 +2599,8 @@ void Scene::_QueueLocalTempoFromClock()
 	_masterLoopLengthSamps.store(seedLoopLengthSamps, std::memory_order_release);
 	_hasPendingTempo.store(true, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
+	if (shouldPulseOverlay)
+		_pendingQuantisationOverlayPulse.store(true, std::memory_order_release);
 
 	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
 		<< " bpi=" << timing->Bpi

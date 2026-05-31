@@ -90,6 +90,7 @@ Station::Station(StationParams params,
 	_audioBuffers(),
 	_backAudioBuffers(),
 	_quantisationOverlayPinned(false),
+	_quantisationOverlayAlpha(0.0f),
 	_pendingQuantisationOverlaySeedSamps(HiddenSeedSamps),
 	_pendingQuantisationOverlayMasterLoopSamps(HiddenMasterSamps),
 	_pendingQuantisationOverlayConfirm(false)
@@ -188,7 +189,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 	if (_quantisationModel && (base::PASS_SCENE == pass))
 	{
 		// Refresh quantisation overlay state on the render thread (safe for
-		// geometry allocation).  The audio thread only publishes _pendingLoopIndexFrac.
+		// geometry and instance-buffer allocation).
 		RefreshQuantisationOverlayFromClock();
 
 		// Draw the semi-transparent quantisation overlay without writing to the
@@ -777,11 +778,6 @@ void Station::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	// Publish the current loop-index fraction for the render thread to pick up
-	// (lock-free; Draw3d will apply it to the quantisation model).
-	if (_clock)
-		_pendingLoopIndexFrac.store(_clock->MasterLoopIndexFrac(), std::memory_order_release);
-
 	for (auto& trig : _triggers)
 	{
 		trig->OnTick(curTime, samps, cfg, params);
@@ -885,19 +881,51 @@ void Station::ClearQuantisationOverlay()
 	_pendingQuantisationOverlayConfirm = false;
 }
 
+void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
+{
+	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
+	if (_quantisationModel)
+		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
 void Station::RefreshQuantisationOverlayFromClock()
 {
 	if (!_quantisationModel)
 		return;
 
-	_quantisationModel->SetLoopIndexFrac(
-		_clock ? _pendingLoopIndexFrac.load(std::memory_order_acquire) : 0.0);
-
-	if (!_clock || !_clock->IsQuantisable())
+	if (!_clock || !_clock->IsQuantisable() || (_quantisationOverlayAlpha <= 0.001f))
 	{
 		_quantisationOverlayPinned = false;
 		_pendingQuantisationOverlayConfirm = false;
-		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
+		_quantisationModel->SetOverlayVisible(false, false);
+		return;
+	}
+
+	std::vector<QuantisationModel::LoopTakeVisual> visuals;
+	for (const auto& take : GetLoopTakes())
+	{
+		if (!take)
+			continue;
+
+		const auto loopLengthSamps = take->VisualLoopLengthSamps();
+		if (loopLengthSamps == 0ul)
+			continue;
+
+		const auto takeSize = take->GetSize();
+		const auto takePos = take->ModelPosition();
+		visuals.push_back({
+			loopLengthSamps,
+			take->LoopIndexFrac(),
+			takePos.Y,
+			std::max(8.0f, static_cast<float>(takeSize.Height) * 0.45f),
+			take->VisualRadius()
+		});
+	}
+
+	if (visuals.empty())
+	{
+		_quantisationOverlayPinned = false;
+		_pendingQuantisationOverlayConfirm = false;
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
@@ -907,21 +935,14 @@ void Station::RefreshQuantisationOverlayFromClock()
 		const auto seedSamps = _pendingQuantisationOverlaySeedSamps > 0u ?
 			_pendingQuantisationOverlaySeedSamps :
 			HiddenSeedSamps;
-		const auto masterLoopSamps = _pendingQuantisationOverlayMasterLoopSamps > 0u ?
-			_pendingQuantisationOverlayMasterLoopSamps :
-			seedSamps;
-
-		_quantisationModel->SetTiming(seedSamps, masterLoopSamps, _sampleRate);
+		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
 		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationOverlayConfirm);
 		_pendingQuantisationOverlayConfirm = false;
 		return;
 	}
 
 	const auto seedSamps = _clock->QuantiseSamps();
-	const auto masterLoopSamps = _clock->SeedSourceLength();
-	_quantisationModel->SetTiming(seedSamps,
-		(masterLoopSamps > 0ul) ? static_cast<unsigned int>(masterLoopSamps) : seedSamps,
-		_sampleRate);
+	_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
 	_quantisationModel->SetOverlayVisible(true, false);
 }
 

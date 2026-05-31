@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quantisation Visual Summary</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #101217;
+      color: #e7e9f2;
+    }
+    body {
+      margin: 0;
+      padding: 32px;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    h1, h2 {
+      margin: 0 0 12px;
+      line-height: 1.15;
+    }
+    h1 {
+      font-size: 30px;
+    }
+    h2 {
+      margin-top: 28px;
+      font-size: 20px;
+      color: #aeb9ff;
+    }
+    p {
+      margin: 0 0 14px;
+      color: #cfd3e7;
+    }
+    ul {
+      padding-left: 22px;
+      margin: 8px 0 0;
+    }
+    li {
+      margin: 8px 0;
+    }
+    code {
+      background: #202431;
+      border-radius: 4px;
+      padding: 2px 5px;
+      color: #dfe5ff;
+    }
+    .panel {
+      border: 1px solid #2b3142;
+      border-radius: 8px;
+      padding: 18px 20px;
+      background: #151925;
+      margin: 18px 0;
+    }
+    .ok {
+      color: #93e6b2;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Quantisation Visual Implementation</h1>
+    <p>Implemented for issue #94: per-LoopTake quantisation gates now align with each take instead of rotating as one master-loop overlay, and the overlay is hidden until explicitly needed.</p>
+
+    <section class="panel">
+      <h2>What Changed</h2>
+      <ul>
+        <li><code>LoopTake</code> exposes visual loop length, phase, and radius helpers so the quantisation overlay can match the representative take timing.</li>
+        <li><code>QuantisationModel</code> now flattens per-take gate instances with independent angle, vertical placement, height scale, and radius scale.</li>
+        <li>The quantisation shader now separates frame, backing rect, and central column appearance, with the backing rect rendered more opaque than the frame.</li>
+        <li><code>Station</code> builds per-LoopTake overlay input on the render thread and no longer uses master-loop phase for all gates.</li>
+        <li><code>Scene</code> controls overlay alpha globally: Ctrl holds it at full visibility; release fades over 2 seconds; tap tempo and first local quantisation pulse it immediately.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Issue Details Covered</h2>
+      <ul>
+        <li>Longer LoopTakes receive more gates, derived from <code>loopLength / seedSamps</code>.</li>
+        <li>Each LoopTake uses its own <code>LoopIndexFrac()</code>, so its gates rotate at that take's rate.</li>
+        <li>Gate height is aligned to the LoopTake row instead of spanning the whole station.</li>
+        <li>The central station column is rendered as its own shader-selected visual part.</li>
+        <li>The overlay is no longer permanently visible.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>Verification</h2>
+      <ul>
+        <li><span class="ok">Passed</span>: <code>JammaLib.vcxproj</code> Debug x64 build, 0 warnings, 0 errors.</li>
+        <li><span class="ok">Passed</span>: <code>JammaLib_Tests.vcxproj</code> Debug x64 build, 0 warnings, 0 errors.</li>
+        <li><span class="ok">Passed</span>: focused <code>Quantisation*</code> tests, 27/27.</li>
+        <li><span class="ok">Passed</span>: full native suite, 428 passed, 1 device-dependent MIDI test skipped.</li>
+        <li><span class="ok">Passed</span>: <code>Jamma.vcxproj</code> Debug x64 build, 0 warnings, 0 errors.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

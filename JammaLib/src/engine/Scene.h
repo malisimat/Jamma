@@ -266,6 +266,10 @@ namespace engine
 		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
 		bool _HandleTapTempo(Time actionTime);
+		void _PulseQuantisationOverlay();
+		void _SetQuantisationOverlayHeld(bool held);
+		float _QuantisationOverlayAlpha(Time now) const;
+		void _ApplyQuantisationOverlayAlpha(float alpha);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearQuantisationOverlays();
@@ -337,6 +341,9 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
+		bool _quantisationOverlayHeld;
+		Time _quantisationOverlayLastActive;
+		std::atomic_bool _pendingQuantisationOverlayPulse;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
