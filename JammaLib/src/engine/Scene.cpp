@@ -1001,17 +1001,8 @@ ActionResult Scene::OnAction(KeyAction action)
 			result = res;
 	}
 
-	if (checkReset && !_isSceneReset.load(std::memory_order_relaxed))
-	{
-		unsigned int numTakes = 0;
-		for (auto& station : _stations)
-		{
-			numTakes += station->NumTakes();
-		}
-
-		if (0 == numTakes)
-			Reset();
-	}
+	if (checkReset)
+		_ResetIfEmpty();
 
 	if (result.IsEaten)
 		return result;
@@ -1255,6 +1246,7 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 	if (!routes)
 		return;
 
+	bool anythingDitched = false;
 	for (const auto& route : *routes)
 	{
 		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
@@ -1264,12 +1256,24 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 		if (!res.IsEaten)
 			continue;
 
+		if (res.ResultType == ACTIONRESULT_ACTIVATE)
+		{
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			if (_clock)
+				_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
+		}
+		else if (res.ResultType == ACTIONRESULT_DITCH)
+			anythingDitched = true;
+
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
 			<< "\" " << MidiActionLabel(res.ResultType)
 			<< MidiEventDirection(event) << " (";
 		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";
 	}
+
+	if (anythingDitched)
+		_ResetIfEmpty();
 }
 
 void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
@@ -1309,15 +1313,29 @@ void Scene::_PumpSerial()
 		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
 		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
 
+		bool anythingDitched = false;
 		for (auto& station : _stations)
 		{
-			station->OnTriggerEvent(
+			auto res = station->OnTriggerEvent(
 				TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
 				action,
 				device);
+			if (!res.IsEaten)
+				continue;
+			if (res.ResultType == ACTIONRESULT_ACTIVATE)
+			{
+				_isSceneReset.store(false, std::memory_order_relaxed);
+				if (_clock)
+					_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
+			}
+			else if (res.ResultType == ACTIONRESULT_DITCH)
+				anythingDitched = true;
 		}
+
+		if (anythingDitched)
+			_ResetIfEmpty();
 	}
 
 	std::uint64_t dropped = 0u;
@@ -2165,6 +2183,17 @@ void Scene::_ClearTimingState(bool clearTapTempo)
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_tapTempo.Clear();
 	}
+}
+
+void Scene::_ResetIfEmpty()
+{
+	if (_isSceneReset.load(std::memory_order_relaxed))
+		return;
+	unsigned int total = 0u;
+	for (const auto& s : _stations)
+		total += s->NumTakes();
+	if (0u == total)
+		Reset();
 }
 
 void Scene::_JobLoop()

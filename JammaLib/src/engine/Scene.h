@@ -262,6 +262,7 @@ namespace engine
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
 		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
+		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
