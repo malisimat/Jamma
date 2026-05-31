@@ -42,6 +42,14 @@ bool MidiLoop::RecordEvent(const MidiEvent& ev) noexcept
 	if (_state != MidiLoopState::Recording)
 		return false;
 
+	return AppendEventForBuild(ev);
+}
+
+bool MidiLoop::AppendEventForBuild(const MidiEvent& ev) noexcept
+{
+	if (_state != MidiLoopState::Recording)
+		return false;
+
 	if (_eventCount >= _events.size())
 	{
 		++_dropped;
@@ -51,6 +59,46 @@ bool MidiLoop::RecordEvent(const MidiEvent& ev) noexcept
 	_events[_eventCount++] = ev;
 	++_revision;
 	return true;
+}
+
+void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
+	std::size_t count,
+	std::uint32_t loopLengthSamps)
+{
+	_eventCount = 0u;
+	_dropped = 0u;
+	_held.reset();
+
+	if (events && count > 0u)
+	{
+		const auto keepCount = (count < _events.size()) ? count : _events.size();
+		for (std::size_t i = 0u; i < keepCount; ++i)
+			_events[i] = events[i];
+
+		_eventCount = keepCount;
+		if (count > _events.size())
+			_dropped = static_cast<std::uint64_t>(count - _events.size());
+	}
+
+	_loopLengthSamps = loopLengthSamps;
+	_state = MidiLoopState::Playing;
+	++_revision;
+
+	if (_quantisation.Enabled)
+		PublishQuantisedEvents();
+	else
+		_quantisedEvents.store(nullptr, std::memory_order_release);
+}
+
+void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
+{
+	_loopLengthSamps = loopLengthSamps;
+	_state = MidiLoopState::Playing;
+	_held.reset();
+	++_revision;
+
+	if (_quantisation.Enabled)
+		PublishQuantisedEvents();
 }
 
 void MidiLoop::EndRecord(std::uint32_t loopLengthSamps)

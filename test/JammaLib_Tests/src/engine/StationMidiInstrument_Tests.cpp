@@ -1,10 +1,12 @@
 #include "gtest/gtest.h"
 
 #include "actions/JobAction.h"
+#include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
 
 using actions::JobAction;
+using actions::TriggerAction;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::MidiEvent;
@@ -293,4 +295,63 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 	ASSERT_EQ(1u, pluginB->Events.size());
 	EXPECT_EQ(42u, pluginA->Events[0].data1);
 	EXPECT_EQ(42u, pluginB->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
+{
+	auto station = MakeStation("station-overdub-source");
+	auto sourceTake = MakeMidiTake("source-midi-take");
+	station->AddTake(sourceTake);
+	station->CommitChanges();
+
+	sourceTake->Record({}, station->Name(), { 3u }, { "Keys" });
+	sourceTake->EndMultiWrite(100u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
+	sourceTake->Play(0u, 100u, 0u);
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+	start.InputChannels = {};
+	start.MidiInputChannels = { 3u };
+	start.MidiInputDevices = { "Keys" };
+	auto result = station->OnAction(start);
+
+	ASSERT_TRUE(result.IsEaten);
+	ASSERT_EQ(sourceTake->Id(), result.SourceId);
+	ASSERT_FALSE(result.TargetId.empty());
+
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> targetTake;
+	for (const auto& take : station->GetLoopTakes())
+	{
+		if (take && take->Id() == result.TargetId)
+		{
+			targetTake = take;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, targetTake);
+	ASSERT_EQ(1u, targetTake->GetMidiLoops().size());
+	ASSERT_EQ(3u, targetTake->MidiLoopChannels()[0]);
+	ASSERT_EQ("Keys", targetTake->MidiLoopDevices()[0]);
+
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->PunchIn();
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->PunchOut();
+	targetTake->Play(0u, 100u, 0u);
+
+	ASSERT_EQ(4u, targetTake->GetMidiLoops()[0]->EventCount());
+	MidiEvent event{};
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(0u, event));
+	EXPECT_EQ(10u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(1u, event));
+	EXPECT_EQ(20u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(2u, event));
+	EXPECT_EQ(40u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(3u, event));
+	EXPECT_EQ(90u, event.sampleOffset);
 }

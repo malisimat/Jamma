@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MIDI Overdub Implementation Summary</title>
+  <style>
+    body {
+      font-family: Segoe UI, Arial, sans-serif;
+      margin: 2rem auto;
+      max-width: 960px;
+      line-height: 1.5;
+      color: #161616;
+      padding: 0 1rem;
+    }
+    h1, h2 { margin: 0.8rem 0 0.4rem; }
+    code { background: #f3f3f3; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul { margin-top: 0.3rem; }
+    .meta { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>MIDI Overdub Implementation Summary</h1>
+  <p class="meta">Date: 2026-05-31</p>
+
+  <h2>Contract</h2>
+  <p>Implemented against <a href="../.copilot/plan.md">.copilot/plan.md</a> as the source contract.</p>
+
+  <h2>What Was Implemented</h2>
+  <ul>
+    <li>Pure MIDI overdub helper surface in <code>MidiOverdub</code> for source-note copy, punch-window erasure, note boundary splitting, and canonical ordering.</li>
+    <li>Bulk install/build APIs on <code>MidiLoop</code> for deterministic non-RT final event installation and quantisation/model compatibility.</li>
+    <li><code>LoopTake</code> MIDI overdub session wiring for source snapshot mapping, punch-window tracking, held-note capture, and final merge/render at <code>Play</code>.</li>
+    <li><code>Station</code> trigger integration to pass source take information through existing overdub trigger flow.</li>
+    <li>Helper/unit/integration tests for helper behavior, loop install path, loop-take overdub behavior, and station overdub handoff.</li>
+  </ul>
+
+  <h2>Rubber-Duck One-Note Lifecycle Review</h2>
+  <p>Reviewed one-note flow: source copy -> punch erase -> live capture -> finalize merge -> playback -> loop wrap/flush.</p>
+  <p>Issue found and fixed: zero-length punch windows could stage synthetic NoteOn/NoteOff at the same sample, and canonical ordering could leave a ghost held note. Fix: track the live-event start index at punch-in and roll back staged live events when punch-out closes a zero-length window.</p>
+
+  <h2>Validation</h2>
+  <ul>
+    <li>Built targeted test project: <code>test/JammaLib_Tests/JammaLib_Tests.vcxproj</code> (Debug x64, explicit SolutionDir).</li>
+    <li>Ran focused tests with filter: <code>MidiOverdub.*:MidiLoop.*:LoopTakeMidiOverdub.*:StationMidiInstrument.*</code>.</li>
+    <li>Ran full native test executable after focused pass.</li>
+  </ul>
+
+  <h2>Residual Risks</h2>
+  <ul>
+    <li>Very dense overdub event material still truncates at fixed loop capacity; this is deterministic but can drop tail content.</li>
+    <li>Device/channel mapping fallback behavior is intentionally permissive for legacy source takes with missing device names.</li>
+  </ul>
+</body>
+</html>

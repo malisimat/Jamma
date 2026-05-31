@@ -67,6 +67,18 @@ namespace engine
 		// Append an event during recording. `ev.sampleOffset` is the offset (in samples)
 		// since StartRecord(). Returns false if capacity was exceeded (event dropped).
 		bool RecordEvent(const MidiEvent& ev) noexcept;
+		// Append an event during non-RT build/finalization flows (for example,
+		// MIDI overdub render). Uses the same fixed-capacity drop-newest behavior
+		// as RecordEvent.
+		bool AppendEventForBuild(const MidiEvent& ev) noexcept;
+		// Replace all recorded events with a caller-built set and transition to
+		// Playing. If count exceeds capacity, excess tail events are dropped.
+		void ReplaceRecordedEvents(const MidiEvent* events,
+			std::size_t count,
+			std::uint32_t loopLengthSamps);
+		// Finalize a caller-built event set that was assembled through
+		// AppendEventForBuild.
+		void FinalizeOverdubBase(std::uint32_t loopLengthSamps);
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).

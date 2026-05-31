@@ -299,6 +299,9 @@
     <ClInclude Include="src\midi\MidiLoop.h">
       <Filter>src\midi</Filter>
     </ClInclude>
+    <ClInclude Include="src\midi\MidiOverdub.h">
+      <Filter>src\midi</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiNoteSpan.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -623,6 +626,9 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiLoop.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midi\MidiOverdub.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiNoteSpan.cpp">

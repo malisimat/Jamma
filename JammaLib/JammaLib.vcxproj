@@ -344,6 +344,7 @@
     <ClInclude Include="src\midi\MidiQueue.h" />
     <ClInclude Include="src\base\Tickable.h" />
     <ClInclude Include="src\midi\MidiLoop.h" />
+    <ClInclude Include="src\midi\MidiOverdub.h" />
     <ClInclude Include="src\midi\MidiNoteSpan.h" />
     <ClInclude Include="src\midi\MidiQuantisation.h" />
     <ClInclude Include="src\midi\MidiTimestampMapper.h" />
@@ -443,6 +444,7 @@
     <ClCompile Include="src\resources\WavResource.cpp" />
     <ClCompile Include="src\engine\Timer.cpp" />
     <ClCompile Include="src\midi\MidiLoop.cpp" />
+    <ClCompile Include="src\midi\MidiOverdub.cpp" />
     <ClCompile Include="src\midi\MidiNoteSpan.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation.cpp" />
     <ClCompile Include="src\midi\MidiTimestampMapper.cpp" />

@@ -1,13 +1,16 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <vector>
 #include <memory>
 #include "Loop.h"
 #include "Quantisation.h"
 #include "../midi/MidiLoop.h"
+#include "../midi/MidiOverdub.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
 #include "Trigger.h"
@@ -161,7 +164,11 @@ namespace engine
 			unsigned int endRecordSamps);
 		void EndRecording();
 		void Ditch();
-		void Overdub(std::vector<unsigned int> channels, std::string stationName);
+		void Overdub(std::vector<unsigned int> channels,
+			std::string stationName,
+			std::vector<unsigned int> midiChannels = {},
+			std::vector<std::string> midiDevices = {},
+			std::shared_ptr<LoopTake> sourceTake = nullptr);
 		void PunchIn();
 		void PunchOut();
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
@@ -176,6 +183,8 @@ namespace engine
 			unsigned int firstOutputIndex = 0u) noexcept;
 		// Read-only view of MIDI loops; used by Station to flush held notes on ditch.
 		const std::vector<std::shared_ptr<MidiLoop>>& GetMidiLoops() const noexcept { return _midiLoops; }
+		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
+		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
@@ -221,10 +230,39 @@ namespace engine
 		void _LogMidiQuantisationFractionChange(MidiQuantisationFraction previous,
 			MidiQuantisationFraction updated,
 			const char* source) const;
+		void _ResetMidiOverdubSession() noexcept;
+		void _InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noexcept;
+		void _OpenMidiPunchWindow(std::uint32_t punchSample) noexcept;
+		void _CloseMidiPunchWindow(std::uint32_t punchSample, bool synthNoteOffs) noexcept;
+		bool _AppendMidiOverdubLiveEvent(std::size_t loopIndex, const MidiEvent& ev) noexcept;
+		void _FinalizeMidiOverdubLoop(std::size_t loopIndex, std::uint32_t targetLoopLength);
 		void _ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
 			MidiQuantisationFraction fraction,
 			const char* source) noexcept;
 		MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
+
+		struct MidiOverdubLoopState
+		{
+			std::array<MidiEvent, MidiLoop::DefaultCapacity> SourceEvents{};
+			std::size_t SourceEventCount = 0u;
+			std::uint32_t SourceLoopLengthSamps = 0u;
+			std::array<MidiPunchWindow, 128u> PunchWindows{};
+			std::size_t PunchWindowCount = 0u;
+			std::uint32_t ActivePunchStart = (std::numeric_limits<std::uint32_t>::max)();
+			std::size_t ActivePunchLiveEventStart = 0u;
+			std::array<MidiEvent, MidiLoop::DefaultCapacity> LiveEvents{};
+			std::size_t LiveEventCount = 0u;
+			std::uint64_t LiveDropped = 0u;
+			std::array<std::uint8_t, MidiLoop::TotalNoteSlots> HeldLiveVelocity{};
+		};
+
+		struct MidiOverdubSession
+		{
+			bool Active = false;
+			std::vector<MidiOverdubLoopState> Loops;
+			std::array<MidiEvent, MidiLoop::DefaultCapacity> BuildScratch{};
+			std::array<MidiEvent, MidiLoop::DefaultCapacity> MergeScratch{};
+		};
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -253,6 +291,7 @@ namespace engine
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
+		MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;

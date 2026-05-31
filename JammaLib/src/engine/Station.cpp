@@ -679,10 +679,15 @@ ActionResult Station::OnAction(TriggerAction action)
 	}
 	case TriggerAction::TRIGGER_OVERDUB_START:
 	{
-		auto sourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+		auto sourceLoopTake = _loopTakes.empty() ? std::shared_ptr<LoopTake>() : _loopTakes.back();
+		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
 		auto newLoopTake = AddTake();
-		newLoopTake->Overdub(action.InputChannels, Name());
+		newLoopTake->Overdub(action.InputChannels,
+			Name(),
+			action.MidiInputChannels,
+			action.MidiInputDevices,
+			sourceLoopTake);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
