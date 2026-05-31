@@ -22,10 +22,10 @@ using namespace std::placeholders;
 
 namespace
 {
-	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
+	constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
 	constexpr double QuantisationOverlayFadeSeconds = 2.0;
-	constexpr std::int64_t kOverlayInactive = 0LL;
-	constexpr std::int64_t kOverlayHeld = std::numeric_limits<std::int64_t>::max();
+	constexpr std::int64_t OverlayInactive = 0LL;
+	constexpr std::int64_t OverlayHeld = std::numeric_limits<std::int64_t>::max();
 
 	template<typename T>
 	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
@@ -128,7 +128,7 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_masterLoopLengthSamps(0ul),
 	_tapTempo(),
-	_quantisationOverlayState(kOverlayInactive),
+	_quantisationOverlayState(OverlayInactive),
 	_stations(),
 	_ninjamConfig(std::nullopt),
 	_ninjamSession(std::make_unique<NinjamSession>()),
@@ -1288,7 +1288,7 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 	if (!trigger)
 		return;
 
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, kUnresolvedMidiDeviceSlot, trigger });
+	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, UnresolvedMidiDeviceSlot, trigger });
 	_PublishMidiTriggerRoutes();
 }
 
@@ -1304,7 +1304,7 @@ void Scene::_PumpSerial()
 	// publication to keep multi-channel record-start coherent.
 	std::scoped_lock lock(_audioMutex);
 
-	static const std::string kEmptyDevice;
+	static const std::string EmptyDevice;
 	while (true)
 	{
 		io::SerialTriggerEvent ev{};
@@ -1318,7 +1318,7 @@ void Scene::_PumpSerial()
 		action.SetActionTime(Timer::GetTime());
 		action.SetUserConfig(_userConfig);
 		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
-		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
+		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
 
 		for (auto& station : _stations)
 		{
@@ -1397,7 +1397,7 @@ void Scene::Reset()
 	_ClearTimingState(true);
 	_masterLoop.reset();
 	_ClearStationQuantisation();
-	_quantisationOverlayState.store(kOverlayInactive, std::memory_order_release);
+	_quantisationOverlayState.store(OverlayInactive, std::memory_order_release);
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -1499,7 +1499,7 @@ void Scene::InitMidi()
 			continue;
 		}
 
-		if (nextSlot == kUnresolvedMidiDeviceSlot)
+		if (nextSlot == UnresolvedMidiDeviceSlot)
 		{
 			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
 			break;
@@ -1550,7 +1550,7 @@ void Scene::InitMidi()
 
 	for (auto& route : _midiTriggerRoutes)
 	{
-		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+		route.DeviceSlot = UnresolvedMidiDeviceSlot;
 		for (const auto& input : *midiInputs)
 		{
 			if (input && (input->ConfiguredName == route.DeviceName))
@@ -1560,7 +1560,7 @@ void Scene::InitMidi()
 			}
 		}
 
-		if (route.DeviceSlot == kUnresolvedMidiDeviceSlot)
+		if (route.DeviceSlot == UnresolvedMidiDeviceSlot)
 			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
 
 		if (route.Trigger)
@@ -1586,7 +1586,7 @@ void Scene::InitMidi()
 void Scene::CloseMidi()
 {
 	for (auto& route : _midiTriggerRoutes)
-		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+		route.DeviceSlot = UnresolvedMidiDeviceSlot;
 	_PublishMidiTriggerRoutes();
 
 	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
@@ -2422,7 +2422,7 @@ void Scene::_PulseQuantisationOverlay()
 	// full alpha, so a job-thread pulse cannot override an active Ctrl-hold.
 	auto expected = _quantisationOverlayState.load(std::memory_order_relaxed);
 	do {
-		if (expected == kOverlayHeld) return;
+		if (expected == OverlayHeld) return;
 	} while (!_quantisationOverlayState.compare_exchange_weak(
 		expected,
 		Timer::GetTime().time_since_epoch().count(),
@@ -2433,16 +2433,16 @@ void Scene::_PulseQuantisationOverlay()
 void Scene::_SetQuantisationOverlayHeld(bool held)
 {
 	_quantisationOverlayState.store(
-		held ? kOverlayHeld : Timer::GetTime().time_since_epoch().count(),
+		held ? OverlayHeld : Timer::GetTime().time_since_epoch().count(),
 		std::memory_order_release);
 }
 
 float Scene::_QuantisationOverlayAlpha(Time now) const
 {
 	const auto state = _quantisationOverlayState.load(std::memory_order_acquire);
-	if (state == kOverlayHeld)
+	if (state == OverlayHeld)
 		return 1.0f;
-	if (state == kOverlayInactive)
+	if (state == OverlayInactive)
 		return 0.0f;
 	const auto lastActive = Time(Time::duration(state));
 	const auto elapsed = Timer::GetElapsedSeconds(lastActive, now);
