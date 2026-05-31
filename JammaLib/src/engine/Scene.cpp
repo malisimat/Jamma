@@ -698,10 +698,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
 	if (17 == action.KeyChar)
-	{
 		_SetQuantisationOverlayHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
-		return ActionResult::NoAction();
-	}
 
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
 	{
