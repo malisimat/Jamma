@@ -7,7 +7,9 @@
 
 #pragma once
 
+#include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <atomic>
 #include <memory>
@@ -67,6 +69,11 @@ namespace vst
 		// Process numSamples of an exact-match multichannel bus in-place.
 		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
+		void BeginMidiBlock(std::uint32_t blockStartSample,
+			std::uint32_t numSamples) noexcept override;
+		void SendMidiEvent(const engine::MidiEvent& event,
+			bool isRealtime) noexcept override;
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		bool OpenEditor(HWND parentHwnd) override;
@@ -93,13 +100,35 @@ namespace vst
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
 
+		static bool SupportsHostCanDo(const char* canDo) noexcept
+		{
+			if (!canDo) return false;
+			const std::string_view sv(canDo);
+			return (sv == "sendVstEvents") ||
+				   (sv == "sendVstMidiEvent");
+		}
+
 	private:
 #ifdef JAMMA_VST2_ENABLED
+			static constexpr size_t MaxMidiEventsPerBlock = 256u;
+			struct MidiEventBlock
+			{
+				VstInt32 numEvents;
+				VstIntPtr reserved;
+				VstEvent* events[MaxMidiEventsPerBlock];
+			};
+
 		// Host callback dispatched by the plugin back to us.
 		static VstIntPtr __cdecl HostCallback(AEffect* effect, VstInt32 opcode,
 			VstInt32 index, VstIntPtr value, void* ptr, float opt);
+			void DispatchPendingMidiEvents() noexcept;
 
 		AEffect* _effect;
+			std::array<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;
+			MidiEventBlock _midiEventBlock;
+			std::uint32_t _midiBlockStartSample;
+			std::uint32_t _midiBlockNumSamples;
+			std::uint32_t _midiEventCount;
 #endif
 
 		HMODULE _moduleHandle;

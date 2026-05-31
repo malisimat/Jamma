@@ -1,4 +1,5 @@
 #include "Station.h"
+#include <algorithm>
 #include <memory>
 
 using namespace engine;
@@ -89,11 +90,10 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-	_quantisationOverlayPinned(false),
-	_quantisationOverlayAlpha(0.0f),
-	_pendingQuantisationOverlaySeedSamps(HiddenSeedSamps),
-	_pendingQuantisationOverlayMasterLoopSamps(HiddenMasterSamps),
-	_pendingQuantisationOverlayConfirm(false)
+		_midiVstRoutes(nullptr),
+		_pendingQuantisationParams(std::nullopt),
+		_pendingQuantisationConfirm(false),
+		_quantisationOverlayAlpha(0.0f)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -296,12 +296,36 @@ void Station::Zero(unsigned int numSamps,
 void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const std::shared_ptr<Trigger> trigger,
 	int indexOffset,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	std::uint32_t blockStartSample)
 {
 	auto ptr = Sharable::shared_from_this();
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
+
+	class StationMidiSink final : public IMidiOutputSink
+	{
+	public:
+		StationMidiSink(Station& station,
+			vst::VstChain* chain,
+			const MidiVstRoutingSnapshot* routes) noexcept :
+			_station(station),
+			_chain(chain),
+			_routes(routes)
+		{
+		}
+
+		void OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept override
+		{
+			_station._SendMidiToVstChain(_chain, _routes, event, false, outputIndex);
+		}
+
+	private:
+		Station& _station;
+		vst::VstChain* _chain;
+		const MidiVstRoutingSnapshot* _routes;
+	};
 
 	for (const auto& take : state->LoopTakes)
 		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
@@ -337,8 +361,28 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	}
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
-	if (chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount))
+	const auto* routes = _midiVstRoutes.load(std::memory_order_acquire);
+	const bool vstActive = chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
+	if (vstActive)
+		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+
+	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
+	MidiEvent liveMidi{};
+	while (_liveMidiIngress.Pop(liveMidi))
+	{
+		if (vstActive)
+			_SendMidiToVstChain(chain.get(), routes, liveMidi, true, LiveMidiOutputIndex);
+	}
+
+	if (vstActive)
+	{
+		StationMidiSink midiSink(*this, chain.get(), routes);
+		auto midiOutputIndex = 0u;
+		for (const auto& take : state->LoopTakes)
+			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+
 		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+	}
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -581,7 +625,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
-				loopTake.value()->Ditch();
+				_DitchLoopTake(loopTake.value());
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -654,7 +698,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
-				loopTake.value()->Ditch();
+				_DitchLoopTake(loopTake.value());
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -740,7 +784,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
 		{
-			loopTake.value()->Ditch();
+			_DitchLoopTake(loopTake.value());
 
 			auto id = loopTake.value()->Id();
 			auto match = std::find_if(_backLoopTakes.begin(),
@@ -825,11 +869,29 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetupBuffers(_lastBufSize);
 	take->SetNumBusChannels(NumBusChannels());
 	take->SetSelectDepth(CurrentSelectDepth());
+	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
+}
+
+void Station::SetLogging(const io::LoggingConfig& config) noexcept
+{
+	base::Jammable::SetLogging(config);
+
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetLogging(config);
+	}
+
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetLogging(config);
+	}
 }
 
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
@@ -862,23 +924,29 @@ void Station::SetClock(std::shared_ptr<Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetQuantisationOverlay(unsigned int seedSamps,
-	unsigned int masterLoopSamps,
+void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
 	bool confirm)
 {
 	if (!_quantisationModel)
 		return;
 
-	_quantisationOverlayPinned = true;
-	_pendingQuantisationOverlaySeedSamps = seedSamps;
-	_pendingQuantisationOverlayMasterLoopSamps = masterLoopSamps;
-	_pendingQuantisationOverlayConfirm = _pendingQuantisationOverlayConfirm || confirm;
+	if (!params.has_value())
+	{
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		return;
+	}
+
+	_pendingQuantisationParams = QuantisationParams{
+		params->SeedSamps,
+		params->MasterSamps
+	};
+	_pendingQuantisationConfirm = _pendingQuantisationConfirm || confirm;
 }
 
-void Station::ClearQuantisationOverlay()
+void Station::ClearQuantisationParams()
 {
-	_quantisationOverlayPinned = false;
-	_pendingQuantisationOverlayConfirm = false;
+	SetQuantisationParams(std::nullopt);
 }
 
 void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
@@ -895,49 +963,33 @@ void Station::RefreshQuantisationOverlayFromClock()
 
 	if (!_clock || !_clock->IsQuantisable() || (_quantisationOverlayAlpha <= 0.001f))
 	{
-		_quantisationOverlayPinned = false;
-		_pendingQuantisationOverlayConfirm = false;
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
 
-	std::vector<QuantisationModel::LoopTakeVisual> visuals;
-	for (const auto& take : GetLoopTakes())
-	{
-		if (!take)
-			continue;
-
-		const auto loopLengthSamps = take->VisualLoopLengthSamps();
-		if (loopLengthSamps == 0ul)
-			continue;
-
-		const auto takeSize = take->GetSize();
-		const auto takePos = take->ModelPosition();
-		visuals.push_back({
-			loopLengthSamps,
-			take->LoopIndexFrac(),
-			takePos.Y,
-			std::max(8.0f, static_cast<float>(takeSize.Height) * 0.45f),
-			take->VisualRadius()
-		});
-	}
+	const auto visuals = LoopTake::QuantisationVisualsFor(GetLoopTakes());
 
 	if (visuals.empty())
 	{
-		_quantisationOverlayPinned = false;
-		_pendingQuantisationOverlayConfirm = false;
+		_pendingQuantisationParams = std::nullopt;
+		_pendingQuantisationConfirm = false;
+		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
 
-	if (_quantisationOverlayPinned)
+	if (_pendingQuantisationParams.has_value())
 	{
-		const auto seedSamps = _pendingQuantisationOverlaySeedSamps > 0u ?
-			_pendingQuantisationOverlaySeedSamps :
+		const auto seedSamps = _pendingQuantisationParams->SeedSamps > 0u ?
+			_pendingQuantisationParams->SeedSamps :
 			HiddenSeedSamps;
+
 		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationOverlayConfirm);
-		_pendingQuantisationOverlayConfirm = false;
+		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		_pendingQuantisationConfirm = false;
 		return;
 	}
 
@@ -1099,6 +1151,62 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 	{
 		take->SetRackVisibility(showLoopTakeRacks);
 	}
+}
+
+bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept
+{
+	for (const auto& trigger : _triggers)
+	{
+		if (!trigger)
+			continue;
+		const auto& devices = trigger->MidiInputDevices();
+		if (devices.empty())
+			return true;
+		for (const auto& d : devices)
+		{
+			if (d == deviceName)
+				return true;
+		}
+	}
+	// No trigger has a device restriction — allow all.
+	return _triggers.empty();
+}
+
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
+{
+	_liveMidiIngress.Push(event);
+}
+
+void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
+{
+	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
+	auto nextRoutes = current ?
+		std::make_unique<MidiVstRoutingSnapshot>(*current) :
+		std::make_unique<MidiVstRoutingSnapshot>();
+
+	if (midiOutputIndex == LiveMidiOutputIndex)
+	{
+		nextRoutes->LivePlugin = vstIndex;
+	}
+	else
+	{
+		if (midiOutputIndex >= nextRoutes->PluginByMidiOutput.size())
+			nextRoutes->PluginByMidiOutput.resize(static_cast<size_t>(midiOutputIndex) + 1u,
+				MidiVstRoutingSnapshot::NoPlugin);
+		nextRoutes->PluginByMidiOutput[midiOutputIndex] = vstIndex;
+	}
+
+	const auto* published = nextRoutes.get();
+	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
+	_midiVstRoutes.store(published, std::memory_order_release);
+}
+
+void Station::ClearMidiVstRoutes()
+{
+	auto nextRoutes = std::make_unique<MidiVstRoutingSnapshot>();
+	const auto* published = nextRoutes.get();
+	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
+	_midiVstRoutes.store(published, std::memory_order_release);
 }
 
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
@@ -1353,6 +1461,55 @@ void Station::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
+}
+
+void Station::_SendMidiToVstChain(vst::VstChain* chain,
+	const MidiVstRoutingSnapshot* routes,
+	const MidiEvent& event,
+	bool isRealtime,
+	unsigned int midiOutputIndex) noexcept
+{
+	if (!chain)
+		return;
+
+	if (!routes || !routes->HasRoutes())
+	{
+		chain->SendMidiEvent(event, isRealtime);
+		return;
+	}
+
+	const auto pluginIndex = routes->PluginForOutput(midiOutputIndex);
+	if (pluginIndex != MidiVstRoutingSnapshot::NoPlugin && pluginIndex < chain->NumPlugins())
+	{
+		chain->SendMidiEventToPlugin(pluginIndex, event, isRealtime);
+		return;
+	}
+
+	chain->SendMidiEvent(event, isRealtime);
+}
+
+void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
+{
+	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
+	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
+	// drained by the audio thread on the next WriteBlock call.
+	for (const auto& midiLoop : take->GetMidiLoops())
+	{
+		if (!midiLoop)
+			continue;
+		const auto& held = midiLoop->HeldNotes();
+		if (held.none())
+			continue;
+		for (std::uint8_t ch = 0; ch < 16; ++ch)
+		{
+			for (std::uint8_t note = 0; note < 128; ++note)
+			{
+				if (held.test(MidiLoop::NoteSlot(ch, note)))
+					EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(0u, ch, note));
+			}
+		}
+	}
+	take->Ditch();
 }
 
 void Station::LoadVstPlugin(std::wstring path)

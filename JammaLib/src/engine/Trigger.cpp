@@ -472,7 +472,8 @@ std::vector<TriggerTake> Trigger::GetTakes() const
 
 void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const float* srcBuf,
-	unsigned int numSamps)
+	unsigned int numSamps,
+	unsigned int destChannel)
 {
 	for (auto& action : _delayedActions)
 	{
@@ -489,7 +490,19 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 			[](DelayedAction& action) { return action.SampsLeft(0) == 0; }),
 		_delayedActions.end());
 
-	_overdubMixer->WriteBlock(dest, srcBuf, numSamps);
+	if ((nullptr == dest) || (nullptr == srcBuf) || !_overdubMixer)
+		return;
+
+	base::AudioWriteRequest request;
+	request.samples = srcBuf;
+	request.numSamps = numSamps;
+	request.stride = 1;
+	request.fadeCurrent = 1.0f - static_cast<float>(_overdubMixer->Level());
+	request.fadeNew = static_cast<float>(_overdubMixer->Level());
+	request.source = base::Audible::AUDIOSOURCE_BOUNCE;
+
+	dest->OnBlockWriteChannel(destChannel, request, 0);
+	_overdubMixer->Offset(numSamps);
 }
 
 void Trigger::QueueTriggerAction(const TriggerAction& action, unsigned int sampsDelay)

@@ -10,7 +10,7 @@
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
-#include "../audio/MidiDevice.h"
+#include "../midi/MidiDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -37,7 +37,7 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "../io/MidiQueue.h"
+#include "../midi/MidiQueue.h"
 #include "../io/SerialTriggerQueue.h"
 
 namespace engine
@@ -77,13 +77,8 @@ namespace engine
 			io::UserConfig user);
 		~Scene()
 		{
+			Shutdown();
 			ReleaseResources();
-			CloseSerial();
-			CloseMidi();
-
-			_isSceneQuitting.store(true, std::memory_order_release);
-			if (_jobRunner.joinable())
-				_jobRunner.join();
 			// NinjamSession destructs after _jobRunner exits, so Pump() can no
 			// longer be called when the session tears down.
 			_ninjamSession.reset();
@@ -201,7 +196,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
-		void SetLogging(io::LoggingConfig config) noexcept { _loggingConfig = config; }
+		void Shutdown();
+		void SetLogging(io::LoggingConfig config) noexcept;
 		void InitMidi();
 		void CloseMidi();
 		void InitSerial();
@@ -244,6 +240,7 @@ namespace engine
 		glm::mat4 _View();
 		void _AddStation(std::shared_ptr<Station> station);
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _JobLoop();
 		void _PumpMidi();
 		void _PushMidiEvent(std::uint8_t deviceSlot,
@@ -271,11 +268,18 @@ namespace engine
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		bool _TrySetMasterFromHover(bool confirm);
-		void _RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
-		void _ClearQuantisationOverlays();
-		std::shared_ptr<Station> _StationForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
-		unsigned long _MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
-		std::shared_ptr<Loop> _RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target, base::SelectDepth depth) const;
+		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
+		void _ClearStationQuantisation();
+		struct InteractionTarget
+		{
+			std::shared_ptr<Station> Station;
+			std::shared_ptr<LoopTake> Take;
+			std::shared_ptr<Loop> TargetLoop;
+			unsigned long MasterLength = 0ul;
+			std::shared_ptr<Loop> RepresentativeLoop;
+		};
+		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
+			base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
@@ -283,6 +287,7 @@ namespace engine
 		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
+		std::vector<std::shared_ptr<LoopTake>> _CurrentLoopTakeInteractionTargets();
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
@@ -338,6 +343,8 @@ namespace engine
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
+		std::vector<unsigned char> _hoverPath3d;
+		std::vector<std::shared_ptr<LoopTake>> _dragLoopTakeTargets;
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;

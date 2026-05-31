@@ -6,6 +6,21 @@
 
 namespace engine
 {
+	struct QuantisationParams
+	{
+		unsigned int SeedSamps = 0u;
+		unsigned int MasterSamps = 0u;
+	};
+
+	struct QuantisationLoopTakeVisual
+	{
+		unsigned long LoopLengthSamps = 0ul;
+		double LoopIndexFrac = 0.0;
+		float YCenter = 0.0f;
+		float HalfHeight = 0.0f;
+		float Radius = 0.0f;
+	};
+
 	struct QuantisationPolicy
 	{
 		unsigned int SeedGrainMinMs = constants::DefaultSeedGrainMinMs;

@@ -6,6 +6,7 @@
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
 #include "../graphics/VstEditorWindow.h"
+#include "../midi/MidiTimestampMapper.h"
 #include "../vst/Vst3Plugin.h"
 
 using namespace base;
@@ -23,6 +24,17 @@ namespace
 {
 	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
 	constexpr double QuantisationOverlayFadeSeconds = 2.0;
+
+	template<typename T>
+	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
+		const std::shared_ptr<T>& candidate)
+	{
+		if (!candidate)
+			return;
+
+		if (std::find(targets.begin(), targets.end(), candidate) == targets.end())
+			targets.push_back(candidate);
+	}
 
 	const char* MidiActionLabel(actions::ActionResultType rt)
 	{
@@ -122,6 +134,8 @@ Scene::Scene(SceneParams params,
 	_ninjamSession(std::make_unique<NinjamSession>()),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
+	_hoverPath3d(),
+	_dragLoopTakeTargets(),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -478,11 +492,32 @@ ActionResult Scene::OnAction(TouchAction action)
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers)
+		&& !(Action::MODIFIER_CTRL & action.Modifiers)
 		&& _TrySetMasterFromHover(true))
 	{
 		res.IsEaten = true;
 		res.ResultType = ACTIONRESULT_DEFAULT;
 		return res;
+	}
+
+	if ((TouchAction::TouchState::TOUCH_UP == action.State)
+		&& !_dragLoopTakeTargets.empty())
+	{
+		for (const auto& take : _dragLoopTakeTargets)
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->OnAction(take->GlobalToLocal(action));
+			if (takeRes.IsEaten && (nullptr != takeRes.Undo))
+				_undoHistory.Add(takeRes.Undo);
+		}
+
+		res = _selector->OnAction(_selector->ParentToLocal(action));
+		_UpdateSelection(res.ResultType);
+		_dragLoopTakeTargets.clear();
+		_touchDownElement.reset();
+		return ActionResult::NoAction();
 	}
 
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
@@ -549,6 +584,33 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 	}
 
+	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
+		&& (0 == action.Index)
+		&& (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers))
+	{
+		_dragLoopTakeTargets = _CurrentLoopTakeInteractionTargets();
+		for (const auto& take : _dragLoopTakeTargets)
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->BeginMidiQuantisationGesture(action);
+
+			if (takeRes.IsEaten)
+			{
+				res = takeRes;
+				if (nullptr != takeRes.Undo)
+					_undoHistory.Add(takeRes.Undo);
+			}
+		}
+
+		if (res.IsEaten)
+			return res;
+
+		_dragLoopTakeTargets.clear();
+	}
+
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
 	_UpdateSelection(res.ResultType);
@@ -579,6 +641,22 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+
+	if (!_dragLoopTakeTargets.empty())
+	{
+		ActionResult res = ActionResult::NoAction();
+		for (const auto& take : _dragLoopTakeTargets)
+		{
+			if (!take)
+				continue;
+
+			auto takeRes = take->OnAction(take->GlobalToLocal(action));
+			if (takeRes.IsEaten)
+				res = takeRes;
+		}
+
+		return res;
+	}
 
 	auto activeElement = _touchDownElement.lock();
 
@@ -925,6 +1003,11 @@ ActionResult Scene::OnAction(KeyAction action)
 		case ACTIONRESULT_ACTIVATE:
 			_isSceneReset.store(false, std::memory_order_relaxed);
 			checkReset = true;
+			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
+			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
+			// do it here after every activation so all LoopTakes see the current grain.
+			if (_clock)
+				_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
 			break;
 		case ACTIONRESULT_DITCH:
 			checkReset = true;
@@ -1106,6 +1189,16 @@ void Scene::_PumpMidi()
 			_DispatchMidiTriggerEvent(input->DeviceSlot, ingress);
 
 			const auto msgType = ingress.MessageType();
+			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
+			{
+				const auto& deviceName = input->ConfiguredName;
+				for (const auto& station : stations)
+				{
+					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
+						station->EnqueueLiveMidiEvent(ingress);
+				}
+			}
+
 			if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
 				continue;
 
@@ -1153,13 +1246,10 @@ void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 		const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
 		const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
-
-		std::uint64_t mappedSample = anchorSample;
-		if (sampleRate > 0u && nowMicros > anchorMicros)
-		{
-			const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-			mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-		}
+		const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
+			anchorSample,
+			anchorMicros,
+			nowMicros);
 
 		ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 		ingress.status = status;
@@ -1272,6 +1362,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 {
 	bool isSelected = false;
 	auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
+	std::vector<unsigned char> fullElementPath;
 	std::vector<unsigned char> elementPath;
 
 	for (auto segment : path)
@@ -1279,8 +1370,12 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		if (0 == segment)
 			break;
 
-		elementPath.push_back(segment - 1);
+		fullElementPath.push_back(segment - 1);
 	}
+
+	_hoverPath3d = fullElementPath;
+	_hoverElement3d = _ChildFromPath(fullElementPath);
+	elementPath = fullElementPath;
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 
@@ -1301,7 +1396,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 
 	auto candidate = (Action::MODIFIER_SHIFT & modifiers) ? _ChildFromPath(elementPath) : nullptr;
-	_RefreshQuantisationOverlays(candidate, _selector->CurrentSelectDepth(), false);
+	_UpdateStationQuantisation(candidate, _selector->CurrentSelectDepth(), false);
 }
 
 void Scene::Reset()
@@ -1309,7 +1404,7 @@ void Scene::Reset()
 	std::cout << "Reset" << std::endl;
 	_ClearTimingState(true);
 	_masterLoop.reset();
-	_ClearQuantisationOverlays();
+	_ClearStationQuantisation();
 	_quantisationOverlayHeld = false;
 	_quantisationOverlayLastActive = Timer::GetZero();
 	_pendingQuantisationOverlayPulse.store(false, std::memory_order_release);
@@ -1378,6 +1473,16 @@ void Scene::InitAudio()
 	CommitChanges();
 }
 
+void Scene::SetLogging(io::LoggingConfig config) noexcept
+{
+	_loggingConfig = config;
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetLogging(_loggingConfig);
+	}
+}
+
 void Scene::InitMidi()
 {
 	CloseMidi();
@@ -1423,13 +1528,10 @@ void Scene::InitMidi()
 					std::chrono::steady_clock::now().time_since_epoch()).count();
 				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
 				const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
-
-				std::uint64_t mappedSample = anchorSample;
-				if (sampleRate > 0u && nowMicros > anchorMicros)
-				{
-					const auto deltaMicros = static_cast<std::uint64_t>(nowMicros - anchorMicros);
-					mappedSample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-				}
+				const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
+					anchorSample,
+					anchorMicros,
+					nowMicros);
 
 				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 				ingress.status = status;
@@ -1593,6 +1695,15 @@ void Scene::CloseAudio()
 	_ninjamSession->Stop();
 
 	_audioDevice->Stop();
+}
+
+void Scene::Shutdown()
+{
+	_isSceneQuitting.store(true, std::memory_order_release);
+	if (_jobRunner.joinable())
+		_jobRunner.join();
+
+	CloseAudio();
 }
 
 void Scene::CommitChanges()
@@ -1809,7 +1920,8 @@ void Scene::_OnAudio(float* inBuf,
 		{
 			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
 			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
+				static_cast<std::uint32_t>(blockStartSample));
 			station->EndMultiPlay(numSamps);
 		}
 
@@ -1820,7 +1932,8 @@ void Scene::_OnAudio(float* inBuf,
 		for (auto& station : stations)
 		{
 			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps);
+			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
+				static_cast<std::uint32_t>(blockStartSample));
 			station->EndMultiPlay(numSamps);
 		}
 	}
@@ -2005,6 +2118,7 @@ glm::mat4 Scene::_View()
 
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
+	station->SetLogging(_loggingConfig);
 	station->SetClock(_clock);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
@@ -2024,6 +2138,39 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
 	_clock->SetQuantisation(quantiseSamps, quantisation);
+	_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
+	_SetMidiQuantisationGrain(quantiseSamps, "scene quantisation set");
+}
+
+void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+{
+	unsigned int takeCount = 0u;
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			MidiQuantisationSettings settings = take->MidiQuantisation();
+			if (settings.GrainSamps != grainSamps)
+			{
+				settings.GrainSamps = grainSamps;
+				take->SetMidiQuantisation(settings);
+			}
+			++takeCount;
+		}
+	}
+
+	if (_loggingConfig.Ui == "verbose")
+	{
+		std::cout << "MIDI quantisation grain update: source=" << source
+			<< " grain=" << grainSamps
+			<< " takes=" << takeCount << '\n';
+	}
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)
@@ -2033,6 +2180,7 @@ void Scene::_ClearTimingState(bool clearTapTempo)
 	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 	_hasPendingTempo.store(false, std::memory_order_release);
+	_SetMidiQuantisationGrain(0u, "timing clear");
 
 	if (clearTapTempo)
 	{
@@ -2215,18 +2363,15 @@ unsigned int Scene::_CurrentSampleRate() const
 std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 {
 	const auto sampleRate = _CurrentSampleRate();
-	auto sample = _audioSampleCounter.load(std::memory_order_acquire);
+	const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
 	const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
 	const auto actionMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		actionTime.time_since_epoch()).count();
 
-	if ((sampleRate > 0u) && (actionMicros > anchorMicros))
-	{
-		const auto deltaMicros = static_cast<std::uint64_t>(actionMicros - anchorMicros);
-		sample += (deltaMicros * static_cast<std::uint64_t>(sampleRate)) / 1000000ull;
-	}
-
-	return sample;
+	return MapMidiTimestampToAudioSample(sampleRate,
+		anchorSample,
+		anchorMicros,
+		actionMicros);
 }
 
 void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source)
@@ -2239,6 +2384,7 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 	_clock->SetSeedSourceLength(timing.MasterLoopSamps);
 
 	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
+	_SetMidiQuantisationGrain(timing.SeedSamps, source);
 	_hasPendingTempo.store((timing.Bpm > 0.0f) && (timing.Bpi > 0u), std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 
@@ -2276,7 +2422,7 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	}
 
 	_ApplyQuantisationTiming(timing.value(), "tap tempo");
-	_RefreshQuantisationOverlays(nullptr, _selector->CurrentSelectDepth(), false);
+	_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
 	return true;
 }
 
@@ -2322,7 +2468,8 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 		return false;
 
 	const auto depth = _selector->CurrentSelectDepth();
-	const auto masterLength = _MasterLengthForTarget(hovering, depth);
+	const auto target = _ResolveInteractionTarget(hovering, depth);
+	const auto masterLength = target ? target->MasterLength : 0ul;
 	if (masterLength == 0ul)
 		return false;
 
@@ -2330,7 +2477,7 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	if (!timing.has_value())
 		return false;
 
-	_masterLoop = _RepresentativeLoopForTarget(hovering, depth);
+	_masterLoop = target->RepresentativeLoop;
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_masterLoopLengthSamps.store(masterLength, std::memory_order_release);
@@ -2339,18 +2486,18 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 	_ApplyQuantisationTiming(timing.value(), "master loop");
 	if (_clock && _masterLoop)
 		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
-	_RefreshQuantisationOverlays(hovering, depth, confirm);
+	_UpdateStationQuantisation(hovering, depth, confirm);
 
 	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
 		<< " length=" << masterLength << std::endl;
 	return true;
 }
 
-void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candidate,
+void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate,
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_ClearQuantisationOverlays();
+	_ClearStationQuantisation();
 
 	if (!_clock || !_clock->IsQuantisable())
 		return;
@@ -2360,139 +2507,176 @@ void Scene::_RefreshQuantisationOverlays(std::shared_ptr<base::GuiElement> candi
 	const auto master = masterLengthSamps > 0ul ? static_cast<unsigned int>(masterLengthSamps) : seed;
 	if (_masterLoop)
 	{
-		auto masterStation = _StationForTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
-		if (masterStation)
-			masterStation->SetQuantisationOverlay(seed, master, false);
+		auto masterTarget = _ResolveInteractionTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
+		if (masterTarget && masterTarget->Station)
+			masterTarget->Station->SetQuantisationParams(QuantisationParams{
+				seed,
+				master
+			}, false);
 	}
 
 	if (!candidate)
 		return;
 
-	const auto candidateMaster = _MasterLengthForTarget(candidate, depth);
-	if (candidateMaster == 0ul)
+	const auto candidateTarget = _ResolveInteractionTarget(candidate, depth);
+	if (!candidateTarget || candidateTarget->MasterLength == 0ul)
 		return;
 
-	const auto candidateStation = _StationForTarget(candidate, depth);
-	if (candidateStation)
-		candidateStation->SetQuantisationOverlay(seed,
-			static_cast<unsigned int>(candidateMaster),
-			confirmCandidate);
+	if (candidateTarget->Station)
+		candidateTarget->Station->SetQuantisationParams(QuantisationParams{
+			seed,
+			static_cast<unsigned int>(candidateTarget->MasterLength)
+		}, confirmCandidate);
 }
 
-void Scene::_ClearQuantisationOverlays()
+void Scene::_ClearStationQuantisation()
 {
 	for (const auto& station : _stations)
-		station->ClearQuantisationOverlay();
+		station->ClearQuantisationParams();
 }
 
-std::shared_ptr<Station> Scene::_StationForTarget(const std::shared_ptr<base::GuiElement>& target,
+std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
+	const std::shared_ptr<base::GuiElement>& target,
 	base::SelectDepth depth) const
 {
 	if (!target)
-		return nullptr;
+		return std::nullopt;
+
+	InteractionTarget resolved;
+	resolved.Station = std::dynamic_pointer_cast<Station>(target);
+	resolved.Take = std::dynamic_pointer_cast<LoopTake>(target);
+	resolved.TargetLoop = std::dynamic_pointer_cast<Loop>(target);
 
 	switch (depth)
 	{
 	case base::SelectDepth::DEPTH_STATION:
-		return std::dynamic_pointer_cast<Station>(target);
+		if (!resolved.Station)
+			return std::nullopt;
+		return resolved;
 	case base::SelectDepth::DEPTH_LOOPTAKE:
 	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return nullptr;
+		if (!resolved.Take)
+			return std::nullopt;
 
 		for (const auto& station : _stations)
 		{
 			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), take) != takes.end())
-				return station;
+			if (std::find(takes.begin(), takes.end(), resolved.Take) != takes.end())
+			{
+				resolved.Station = station;
+				break;
+			}
 		}
 
-		return nullptr;
+		for (const auto& loop : resolved.Take->GetLoops())
+		{
+			if (!loop)
+				continue;
+
+			if (!resolved.RepresentativeLoop || (loop->LoopLength() > resolved.RepresentativeLoop->LoopLength()))
+				resolved.RepresentativeLoop = loop;
+			resolved.MasterLength = std::max(resolved.MasterLength, loop->LoopLength());
+		}
+
+		return resolved;
 	}
 	case base::SelectDepth::DEPTH_LOOP:
 	{
-		auto loop = std::dynamic_pointer_cast<Loop>(target);
-		if (!loop)
-			return nullptr;
+		if (!resolved.TargetLoop)
+			return std::nullopt;
 
 		for (const auto& station : _stations)
 		{
 			for (const auto& take : station->GetLoopTakes())
 			{
 				const auto& loops = take->GetLoops();
-				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
-					return station;
+				if (std::find(loops.begin(), loops.end(), resolved.TargetLoop) != loops.end())
+				{
+					resolved.Station = station;
+					resolved.Take = take;
+					resolved.RepresentativeLoop = resolved.TargetLoop;
+					resolved.MasterLength = resolved.TargetLoop->LoopLength();
+					return resolved;
+				}
 			}
 		}
 
-		return nullptr;
+		return std::nullopt;
 	}
 	default:
-		return nullptr;
+		return std::nullopt;
 	}
 }
 
-unsigned long Scene::_MasterLengthForTarget(const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
+std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets()
 {
-	if (!target)
-		return 0ul;
+	std::vector<std::shared_ptr<LoopTake>> targets;
+	const auto depth = _selector->CurrentSelectDepth();
 
-	if (depth == base::SelectDepth::DEPTH_LOOP)
+	const auto appendFromElement = [&](const std::shared_ptr<base::GuiElement>& element)
 	{
-		auto loop = std::dynamic_pointer_cast<Loop>(target);
-		return loop ? loop->LoopLength() : 0ul;
-	}
+		const auto resolved = _ResolveInteractionTarget(element, depth);
+		if (!resolved)
+			return;
 
-	if (depth == base::SelectDepth::DEPTH_LOOPTAKE)
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return 0ul;
-
-		auto length = 0ul;
-		for (const auto& loop : take->GetLoops())
+		switch (depth)
 		{
-			if (loop)
-				length = std::max(length, loop->LoopLength());
+		case base::SelectDepth::DEPTH_STATION:
+			if (!resolved->Station)
+				return;
+			for (const auto& take : resolved->Station->GetLoopTakes())
+				AppendUniqueTarget(targets, take);
+			break;
+		case base::SelectDepth::DEPTH_LOOPTAKE:
+			AppendUniqueTarget(targets, resolved->Take);
+			break;
+		case base::SelectDepth::DEPTH_LOOP:
+			AppendUniqueTarget(targets, resolved->Take);
+			break;
+		default:
+			break;
 		}
+	};
 
-		return length;
-	}
+	appendFromElement(_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
 
-	return 0ul;
-}
-
-std::shared_ptr<Loop> Scene::_RepresentativeLoopForTarget(const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
-{
-	if (!target)
-		return nullptr;
-
-	if (depth == base::SelectDepth::DEPTH_LOOP)
-		return std::dynamic_pointer_cast<Loop>(target);
-
-	if (depth == base::SelectDepth::DEPTH_LOOPTAKE)
+	switch (depth)
 	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(target);
-		if (!take)
-			return nullptr;
-
-		std::shared_ptr<Loop> bestLoop;
-		for (const auto& loop : take->GetLoops())
+	case base::SelectDepth::DEPTH_STATION:
+		for (const auto& station : _stations)
 		{
-			if (!loop)
-				continue;
-
-			if (!bestLoop || (loop->LoopLength() > bestLoop->LoopLength()))
-				bestLoop = loop;
+			if (station && station->IsSelected())
+				appendFromElement(std::static_pointer_cast<base::GuiElement>(station));
 		}
-
-		return bestLoop;
+		break;
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+		for (const auto& station : _stations)
+		{
+			for (const auto& take : station->GetLoopTakes())
+			{
+				if (take && take->IsSelected())
+					appendFromElement(std::static_pointer_cast<base::GuiElement>(take));
+			}
+		}
+		break;
+	case base::SelectDepth::DEPTH_LOOP:
+		for (const auto& station : _stations)
+		{
+			for (const auto& take : station->GetLoopTakes())
+			{
+				for (const auto& loop : take->GetLoops())
+				{
+					if (loop && loop->IsSelected())
+						appendFromElement(std::static_pointer_cast<base::GuiElement>(loop));
+				}
+			}
+		}
+		break;
+	default:
+		break;
 	}
 
-	return nullptr;
+	return targets;
 }
 
 void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
@@ -2644,5 +2828,3 @@ void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snaps
 		_hasPendingTempo.store(false, std::memory_order_release);
 	}
 }
-
-

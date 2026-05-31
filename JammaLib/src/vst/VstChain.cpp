@@ -94,3 +94,27 @@ void VstChain::ProcessBlockMulti(float* const* channelBufs, int numChannels, int
 			p->ProcessBlockMulti(channelBufs, numChannels, static_cast<int32_t>(numSamps));
 	}
 }
+
+void VstChain::BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numSamples) noexcept
+{
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			p->BeginMidiBlock(blockStartSample, numSamples);
+	}
+}
+
+void VstChain::SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) noexcept
+{
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			p->SendMidiEvent(event, isRealtime);
+	}
+}
+
+void VstChain::SendMidiEventToPlugin(size_t index, const engine::MidiEvent& event, bool isRealtime) noexcept
+{
+	if (index < _plugins.size() && _plugins[index])
+		_plugins[index]->SendMidiEvent(event, isRealtime);
+}

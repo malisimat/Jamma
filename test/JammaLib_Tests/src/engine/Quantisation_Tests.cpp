@@ -4,7 +4,7 @@
 #include <vector>
 #include "gtest/gtest.h"
 #include "engine/Quantisation.h"
-#include "engine/QuantisationModel.h"
+#include "graphics/QuantisationModel.h"
 
 using engine::QuantisationPolicy;
 using engine::TapTempoTracker;

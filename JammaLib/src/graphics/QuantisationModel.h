@@ -1,8 +1,9 @@
 #pragma once
 
 #include <vector>
+#include "../engine/Quantisation.h"
 #include "../gui/GuiModel.h"
-#include "Timer.h"
+#include "../engine/Timer.h"
 
 namespace engine
 {
@@ -10,20 +11,11 @@ namespace engine
 		public gui::GuiModel
 	{
 	public:
-		struct LoopTakeVisual
-		{
-			unsigned long LoopLengthSamps;
-			double LoopIndexFrac;
-			float YCenter;
-			float HalfHeight;
-			float Radius;
-		};
-
 		QuantisationModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		void SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate = 0.0f);
-		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<LoopTakeVisual>& visuals);
+		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<QuantisationLoopTakeVisual>& visuals);
 		void SetLoopIndexFrac(double loopIndexFrac) noexcept;
 		void SetOverlayVisible(bool visible, bool confirm);
 		void SetOverlayAlpha(float alpha) noexcept;

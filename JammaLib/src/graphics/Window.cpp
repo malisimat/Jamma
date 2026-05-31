@@ -21,11 +21,16 @@ using base::DrawPass;
 
 Window::Window(Scene& scene,
 	ResourceLib& resourceLib) :
+	_windowClass(nullptr),
+	_rc(nullptr),
+	_dc(nullptr),
+	_wnd(nullptr),
 	_scene(scene),
 	_resourceLib(resourceLib),
 	_style(WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN),
 	_resizing(false),
 	_trackingMouse(false),
+	_released(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
 	_modifiers(Action::MODIFIER_NONE),
@@ -41,7 +46,19 @@ Window::Window(Scene& scene,
 
 Window::~Window()
 {
+	Release();
+}
+
+void Window::ReleaseGlResources()
+{
+	_scene.ReleaseResources();
 	_highlightPass.ReleaseResources();
+
+	_drawContext.reset();
+	_pickContext.reset();
+	_textureContext.reset();
+
+	_resourceLib.ClearResources();
 }
 
 void Window::LoadResources()
@@ -393,16 +410,35 @@ void Window::Swap()
 
 void Window::Release()
 {
-	wglMakeCurrent(nullptr, nullptr);
+	if (_released)
+		return;
+
+	_released = true;
+
+	if (_dc && _rc)
+	{
+		wglMakeCurrent(_dc, _rc);
+		ReleaseGlResources();
+		wglMakeCurrent(nullptr, nullptr);
+	}
 
 	if (_rc)
+	{
 		wglDeleteContext(_rc);
+		_rc = nullptr;
+	}
 
-	if (_dc)
+	if (_dc && _wnd)
+	{
 		ReleaseDC(_wnd, _dc);
+		_dc = nullptr;
+	}
 
 	if (_wnd)
+	{
 		DestroyWindow(_wnd);
+		_wnd = nullptr;
+	}
 }
 
 ActionResult Window::OnAction(WindowAction winAction)
