@@ -176,7 +176,7 @@ QuantisationModel::QuantisationModel() :
 	_confirmedAt(Timer::GetZero())
 {
 	_modelParams.ModelShaders = { "quantisation" };
-	SetTiming(1u, 1u);
+	SetTiming(1u);
 	SetVisible(false);
 }
 
@@ -236,15 +236,10 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-void QuantisationModel::SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate)
+void QuantisationModel::SetTiming(unsigned int seedSamps)
 {
-	(void)masterLoopSamps;
-	(void)sampleRate;
-
 	if (seedSamps == 0u)
 		seedSamps = 1u;
-	if (masterLoopSamps == 0u)
-		masterLoopSamps = seedSamps;
 
 	if (seedSamps == _seedSamps)
 		return;
@@ -263,7 +258,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	if (seedSamps == 0u)
 		seedSamps = 1u;
 
-	SetTiming(seedSamps, seedSamps);
+	SetTiming(seedSamps);
 
 	std::vector<float> transforms;
 	std::vector<float> modes;

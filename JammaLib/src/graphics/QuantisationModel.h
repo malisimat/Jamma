@@ -14,7 +14,7 @@ namespace engine
 		QuantisationModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		void SetTiming(unsigned int seedSamps, unsigned int masterLoopSamps, float sampleRate = 0.0f);
+		void SetTiming(unsigned int seedSamps);
 		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<QuantisationLoopTakeVisual>& visuals);
 		void SetLoopIndexFrac(double loopIndexFrac) noexcept;
 		void SetOverlayVisible(bool visible, bool confirm);

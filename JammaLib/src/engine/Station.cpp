@@ -14,7 +14,6 @@ using gui::GuiToggleParams;
 namespace
 {
 	constexpr unsigned int HiddenSeedSamps = 1u;
-	constexpr unsigned int HiddenMasterSamps = 1u;
 
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
@@ -965,7 +964,7 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
-		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
+		_quantisationModel->SetTiming(HiddenSeedSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
@@ -976,7 +975,7 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
-		_quantisationModel->SetTiming(HiddenSeedSamps, HiddenMasterSamps);
+		_quantisationModel->SetTiming(HiddenSeedSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
