@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -222,6 +223,8 @@ namespace engine
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 
+		static std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
+			const std::string& userName);
 		static std::vector<unsigned char> TrimPath(std::vector<unsigned char> path,
 			unsigned int depth);
 		static int AudioCallback(void* outBuffer,
@@ -264,6 +267,10 @@ namespace engine
 		void _ClearTimingState(bool clearTapTempo);
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
+		void _PulseQuantisationOverlay();
+		void _SetQuantisationOverlayHeld(bool held);
+		float _QuantisationOverlayAlpha(Time now) const;
+		void _ApplyQuantisationOverlayAlpha(float alpha);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
@@ -291,6 +298,11 @@ namespace engine
 
 
 	protected:
+		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
+		static constexpr double        QuantisationOverlayFadeSeconds  = 2.0;
+		static constexpr std::int64_t  OverlayInactive                 = 0LL;
+		static constexpr std::int64_t  OverlayHeld                     = std::numeric_limits<std::int64_t>::max();
+
 		struct MidiInputEndpoint
 		{
 			std::uint8_t DeviceSlot = 0u;
@@ -345,6 +357,10 @@ namespace engine
 		std::shared_ptr<Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps;
 		TapTempoTracker _tapTempo;
+		// Encodes overlay visibility: 0 = never shown, INT64_MAX = held at full
+		// alpha, any other value = nanosecond timestamp of last pulse (fade-out).
+		// Written from UI and job threads; read on render thread — must be atomic.
+		std::atomic<std::int64_t> _quantisationOverlayState;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;

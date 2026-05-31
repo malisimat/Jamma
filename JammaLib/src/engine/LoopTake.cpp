@@ -697,6 +697,93 @@ unsigned long LoopTake::NumRecordedSamps() const
 	return _recordedSampCount.load(std::memory_order_relaxed);
 }
 
+unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
+{
+	auto length = 0ul;
+	for (const auto& loop : _loops)
+	{
+		if (loop)
+			length = std::max(length, loop->LoopLength());
+	}
+
+	if (length > 0ul)
+		return length;
+
+	return _midiVisualLoopLength;
+}
+
+double LoopTake::LoopIndexFrac() const noexcept
+{
+	const auto state = _state.load(std::memory_order_relaxed);
+	const auto isRecording = (STATE_RECORDING == state) ||
+		(STATE_OVERDUBBING == state) ||
+		(STATE_PUNCHEDIN == state);
+
+	if (isRecording)
+		return 0.0;
+
+	std::shared_ptr<Loop> representativeLoop;
+	for (const auto& loop : _loops)
+	{
+		if (!loop)
+			continue;
+
+		if (!representativeLoop || (loop->LoopLength() > representativeLoop->LoopLength()))
+			representativeLoop = loop;
+	}
+
+	if (representativeLoop)
+		return representativeLoop->LoopIndexFrac();
+
+	if (_midiVisualLoopLength > 0ul)
+	{
+		return 1.0 - std::max(0.0, std::min(1.0,
+			((double)(_midiVisualPlayIndex % _midiVisualLoopLength)) / ((double)_midiVisualLoopLength)));
+	}
+
+	return 0.0;
+}
+
+float LoopTake::VisualRadius() const noexcept
+{
+	return static_cast<float>(Loop::CalcDrawRadius(VisualLoopLengthSamps()));
+}
+
+std::optional<QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
+{
+	const auto loopLengthSamps = VisualLoopLengthSamps();
+	if (loopLengthSamps == 0ul)
+		return std::nullopt;
+
+	const auto takeSize = GetSize();
+	const auto takePos = ModelPosition();
+	return QuantisationLoopTakeVisual{
+		loopLengthSamps,
+		LoopIndexFrac(),
+		takePos.Y,
+		std::max(8.0f, static_cast<float>(takeSize.Height) * 0.45f),
+		VisualRadius()
+	};
+}
+
+std::vector<QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
+	const std::vector<std::shared_ptr<LoopTake>>& takes)
+{
+	std::vector<QuantisationLoopTakeVisual> visuals;
+	visuals.reserve(takes.size());
+
+	for (const auto& take : takes)
+	{
+		if (!take)
+			continue;
+
+		if (auto visual = take->QuantisationVisual(); visual.has_value())
+			visuals.push_back(visual.value());
+	}
+
+	return visuals;
+}
+
 std::shared_ptr<Loop> LoopTake::AddLoop(unsigned int chan, std::string stationName)
 {
 	auto newNumLoops = (unsigned int)_loops.size() + 1;
@@ -1501,25 +1588,7 @@ void LoopTake::_UpdateMidiModels(bool force)
 
 void LoopTake::_UpdateMidiModelRotation()
 {
-	double loopIndexFrac = 0.0;
-	const auto state = _state.load(std::memory_order_relaxed);
-	const auto isRecording = (STATE_RECORDING == state) ||
-		(STATE_OVERDUBBING == state) ||
-		(STATE_PUNCHEDIN == state);
-
-	if (isRecording)
-	{
-		loopIndexFrac = 0.0;
-	}
-	else if (!_loops.empty())
-	{
-		loopIndexFrac = _loops.front()->LoopIndexFrac();
-	}
-	else if (_midiVisualLoopLength > 0ul)
-	{
-		loopIndexFrac = 1.0 - std::max(0.0, std::min(1.0,
-			((double)(_midiVisualPlayIndex % _midiVisualLoopLength)) / ((double)_midiVisualLoopLength)));
-	}
+	const auto loopIndexFrac = LoopIndexFrac();
 
 	for (auto& midiLoop : _midiLoops)
 	{

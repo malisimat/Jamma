@@ -128,6 +128,7 @@ namespace engine
 		void SetClock(std::shared_ptr<Timer> clock);
 		void SetQuantisationParams(std::optional<QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
+		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
@@ -284,9 +285,6 @@ namespace engine
 		std::vector<float*> _vstBlockPtrs;
 		std::optional<QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
-
-		// Audio → render handoff for the quantisation overlay phase.
-		// Written lock-free on the audio thread (OnTick), consumed on the render thread (Draw3d).
-		std::atomic<double> _pendingLoopIndexFrac{ 0.0 };
+		float _quantisationOverlayAlpha = 0.0f;
 	};
 }

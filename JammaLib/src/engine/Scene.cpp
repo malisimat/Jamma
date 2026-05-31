@@ -5,6 +5,7 @@
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
+#include "../utils/ArrayUtils.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../midi/MidiTimestampMapper.h"
 #include "../vst/Vst3Plugin.h"
@@ -19,80 +20,6 @@ using namespace graphics;
 using namespace resources;
 using namespace utils;
 using namespace std::placeholders;
-
-namespace
-{
-	constexpr std::uint8_t kUnresolvedMidiDeviceSlot = 0xffu;
-
-	template<typename T>
-	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
-		const std::shared_ptr<T>& candidate)
-	{
-		if (!candidate)
-			return;
-
-		if (std::find(targets.begin(), targets.end(), candidate) == targets.end())
-			targets.push_back(candidate);
-	}
-
-	const char* MidiActionLabel(actions::ActionResultType rt)
-	{
-		switch (rt)
-		{
-		case actions::ACTIONRESULT_ACTIVATE: return "Activate";
-		case actions::ACTIONRESULT_DITCH:    return "Ditch";
-		case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
-		default:                             return "Action";
-		}
-	}
-
-	const char* MidiEventDirection(const engine::MidiEvent& event)
-	{
-		if (event.IsNoteOn())  return " Down";
-		if (event.IsNoteOff()) return " Up";
-		return "";
-	}
-
-	void LogMidiEventDetail(std::ostream& out, std::uint8_t deviceSlot, const engine::MidiEvent& event)
-	{
-		constexpr std::uint8_t CC            = 0xB0;
-		constexpr std::uint8_t ProgramChange = 0xC0;
-
-		out << "dev: " << (deviceSlot + 1) << ", chan " << (event.Channel() + 1) << ", ";
-
-		switch (event.MessageType())
-		{
-		case engine::MidiEvent::NoteOn:
-			out << (event.data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(event.data1);
-			break;
-		case engine::MidiEvent::NoteOff:
-			out << "noteoff: " << static_cast<int>(event.data1);
-			break;
-		case CC:
-			out << "cc " << static_cast<int>(event.data1) << ": " << static_cast<int>(event.data2);
-			break;
-		case ProgramChange:
-			out << "pc: " << static_cast<int>(event.data1);
-			break;
-		default:
-			out << "0x" << std::hex << std::uppercase << static_cast<int>(event.status) << std::dec;
-			break;
-		}
-	}
-
-	std::shared_ptr<StationRemote> FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
-		const std::string& userName)
-	{
-		for (const auto& station : stations)
-		{
-			auto remote = std::dynamic_pointer_cast<StationRemote>(station);
-			if (remote && remote->RemoteUserName() == userName)
-				return remote;
-		}
-
-		return nullptr;
-	}
-}
 
 Scene::Scene(SceneParams params,
 	UserConfig user) :
@@ -125,6 +52,7 @@ Scene::Scene(SceneParams params,
 	_masterLoop(nullptr),
 	_masterLoopLengthSamps(0ul),
 	_tapTempo(),
+	_quantisationOverlayState(OverlayInactive),
 	_stations(),
 	_ninjamConfig(std::nullopt),
 	_ninjamSession(std::make_unique<NinjamSession>()),
@@ -435,6 +363,9 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_viewProj);
 
+	if (PASS_SCENE == pass)
+		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
+
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
 
@@ -685,8 +616,12 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
+	if (17 == action.KeyChar)
+		_SetQuantisationOverlayHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
 	{
+		_PulseQuantisationOverlay();
 		_HandleTapTempo(action.GetActionTime());
 		return ActionResult::NoAction();
 	}
@@ -1266,9 +1201,9 @@ void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			anythingDitched = true;
 
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
-			<< "\" " << MidiActionLabel(res.ResultType)
-			<< MidiEventDirection(event) << " (";
-		LogMidiEventDetail(std::cout, route.DeviceSlot, event);
+			<< "\" " << Trigger::ActionLabel(res.ResultType)
+			<< MidiEvent::Direction(event) << " (";
+		MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";
 	}
 
@@ -1281,7 +1216,7 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 	if (!trigger)
 		return;
 
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, kUnresolvedMidiDeviceSlot, trigger });
+	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, UnresolvedMidiDeviceSlot, trigger });
 	_PublishMidiTriggerRoutes();
 }
 
@@ -1297,7 +1232,7 @@ void Scene::_PumpSerial()
 	// publication to keep multi-channel record-start coherent.
 	std::scoped_lock lock(_audioMutex);
 
-	static const std::string kEmptyDevice;
+	static const std::string EmptyDevice;
 	while (true)
 	{
 		io::SerialTriggerEvent ev{};
@@ -1311,7 +1246,7 @@ void Scene::_PumpSerial()
 		action.SetActionTime(Timer::GetTime());
 		action.SetUserConfig(_userConfig);
 		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
-		const auto& device = ev.Device ? *ev.Device : kEmptyDevice;
+		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
 
 		bool anythingDitched = false;
 		for (auto& station : _stations)
@@ -1404,6 +1339,7 @@ void Scene::Reset()
 	_ClearTimingState(true);
 	_masterLoop.reset();
 	_ClearStationQuantisation();
+	_quantisationOverlayState.store(OverlayInactive, std::memory_order_release);
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -1505,7 +1441,7 @@ void Scene::InitMidi()
 			continue;
 		}
 
-		if (nextSlot == kUnresolvedMidiDeviceSlot)
+		if (nextSlot == UnresolvedMidiDeviceSlot)
 		{
 			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
 			break;
@@ -1556,7 +1492,7 @@ void Scene::InitMidi()
 
 	for (auto& route : _midiTriggerRoutes)
 	{
-		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+		route.DeviceSlot = UnresolvedMidiDeviceSlot;
 		for (const auto& input : *midiInputs)
 		{
 			if (input && (input->ConfiguredName == route.DeviceName))
@@ -1566,7 +1502,7 @@ void Scene::InitMidi()
 			}
 		}
 
-		if (route.DeviceSlot == kUnresolvedMidiDeviceSlot)
+		if (route.DeviceSlot == UnresolvedMidiDeviceSlot)
 			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
 
 		if (route.Trigger)
@@ -1592,7 +1528,7 @@ void Scene::InitMidi()
 void Scene::CloseMidi()
 {
 	for (auto& route : _midiTriggerRoutes)
-		route.DeviceSlot = kUnresolvedMidiDeviceSlot;
+		route.DeviceSlot = UnresolvedMidiDeviceSlot;
 	_PublishMidiTriggerRoutes();
 
 	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
@@ -1803,6 +1739,19 @@ void Scene::DisconnectNinjam()
 
 	std::cout << "[NINJAM] Disconnecting" << std::endl;
 	_ninjamSession->Stop();
+}
+
+std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
+	const std::string& userName)
+{
+	for (const auto& station : stations)
+	{
+		auto remote = std::dynamic_pointer_cast<StationRemote>(station);
+		if (remote && remote->RemoteUserName() == userName)
+			return remote;
+	}
+
+	return nullptr;
 }
 
 std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsigned int depth)
@@ -2263,7 +2212,7 @@ void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& sn
 	{
 		seenUsers.insert(remoteUser.UserName);
 
-		auto remoteStation = FindRemoteStation(_stations, remoteUser.UserName);
+		auto remoteStation = Scene::FindRemoteStation(_stations, remoteUser.UserName);
 
 		if (!remoteStation)
 		{
@@ -2431,6 +2380,50 @@ bool Scene::_HandleTapTempo(Time actionTime)
 	_ApplyQuantisationTiming(timing.value(), "tap tempo");
 	_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
 	return true;
+}
+
+void Scene::_PulseQuantisationOverlay()
+{
+	// CAS loop: write the current timestamp unless the overlay is held at
+	// full alpha, so a job-thread pulse cannot override an active Ctrl-hold.
+	auto expected = _quantisationOverlayState.load(std::memory_order_relaxed);
+	do {
+		if (expected == OverlayHeld) return;
+	} while (!_quantisationOverlayState.compare_exchange_weak(
+		expected,
+		Timer::GetTime().time_since_epoch().count(),
+		std::memory_order_release,
+		std::memory_order_relaxed));
+}
+
+void Scene::_SetQuantisationOverlayHeld(bool held)
+{
+	_quantisationOverlayState.store(
+		held ? OverlayHeld : Timer::GetTime().time_since_epoch().count(),
+		std::memory_order_release);
+}
+
+float Scene::_QuantisationOverlayAlpha(Time now) const
+{
+	const auto state = _quantisationOverlayState.load(std::memory_order_acquire);
+	if (state == OverlayHeld)
+		return 1.0f;
+	if (state == OverlayInactive)
+		return 0.0f;
+	const auto lastActive = Time(Time::duration(state));
+	const auto elapsed = Timer::GetElapsedSeconds(lastActive, now);
+	if (elapsed >= QuantisationOverlayFadeSeconds)
+		return 0.0f;
+	return static_cast<float>(1.0 - (elapsed / QuantisationOverlayFadeSeconds));
+}
+
+void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
+{
+	for (const auto& station : _stations)
+	{
+		if (station)
+			station->SetQuantisationOverlayAlpha(alpha);
+	}
 }
 
 bool Scene::_TrySetMasterFromHover(bool confirm)
@@ -2719,14 +2712,19 @@ void Scene::_QueueLocalTempoFromClock()
 		return;
 
 	const auto quantiseSamps = _clock->QuantiseSamps();
-	if ((0u == quantiseSamps) || (quantiseSamps == _effectiveQuantiseSamps.load(std::memory_order_acquire)))
+	const auto previousQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+	if ((0u == quantiseSamps) || (quantiseSamps == previousQuantiseSamps))
 		return;
+
+	const auto shouldPulseOverlay = (0u == previousQuantiseSamps);
 
 	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
 	if (seedLoopLengthSamps == 0u)
 	{
 		_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
 		_armReclock.store(false, std::memory_order_release);
+		if (shouldPulseOverlay)
+			_PulseQuantisationOverlay();
 		return;
 	}
 
@@ -2750,6 +2748,8 @@ void Scene::_QueueLocalTempoFromClock()
 	_masterLoopLengthSamps.store(seedLoopLengthSamps, std::memory_order_release);
 	_hasPendingTempo.store(true, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
+	if (shouldPulseOverlay)
+		_PulseQuantisationOverlay();
 
 	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
 		<< " bpi=" << timing->Bpi

@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
+#include "Quantisation.h"
 #include "../midi/MidiLoop.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
@@ -129,6 +130,12 @@ namespace engine
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
+		unsigned long VisualLoopLengthSamps() const noexcept;
+		double LoopIndexFrac() const noexcept;
+		float VisualRadius() const noexcept;
+		std::optional<QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
+		static std::vector<QuantisationLoopTakeVisual> QuantisationVisualsFor(
+			const std::vector<std::shared_ptr<LoopTake>>& takes);
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
 		void SetMixerLevel(unsigned int chan, double level);

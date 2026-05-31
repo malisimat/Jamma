@@ -9,7 +9,8 @@
 
 #include <string>
 #include <vector>
-#include <algorithm> 
+#include <algorithm>
+#include <memory>
 
 namespace utils
 {
@@ -91,5 +92,16 @@ namespace utils
 		}
 
 		return curMax;
+	}
+
+	template<typename T>
+	void AppendUniqueTarget(std::vector<std::shared_ptr<T>>& targets,
+		const std::shared_ptr<T>& candidate)
+	{
+		if (!candidate)
+			return;
+
+		if (std::find(targets.begin(), targets.end(), candidate) == targets.end())
+			targets.push_back(candidate);
 	}
 }

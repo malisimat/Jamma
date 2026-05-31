@@ -222,6 +222,7 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
+		static double CalcDrawRadius(unsigned long loopLength);
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
@@ -254,7 +255,6 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
-		static double _CalcDrawRadius(unsigned long loopLength);
 		static LoopModel::LoopModelState _GetLoopModelState(base::DrawPass pass, LoopPlayState state, bool isMuted);
 		virtual unsigned long _ModelDisplayLength(bool isRecording, unsigned long actualLoopLength) const;
 		virtual double _DrawRadiusScale() const noexcept { return 1.0; }

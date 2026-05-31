@@ -792,7 +792,7 @@ double Loop::LoopIndexFrac() const noexcept
 	return 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 }
 
-double Loop::_CalcDrawRadius(unsigned long loopLength)
+double Loop::CalcDrawRadius(unsigned long loopLength)
 {
 	auto minRadius = 50.0;
 	auto maxRadius = 400.0;
@@ -857,7 +857,7 @@ void Loop::_ForceUpdateLoopModel()
 	auto displayLength = _ModelDisplayLength(isRecording, actualLength);
 	auto offset = isRecording ? 0ul : constants::MaxLoopFadeSamps;
 
-	auto radius = (float)(_CalcDrawRadius(displayLength) * _DrawRadiusScale());
+	auto radius = (float)(CalcDrawRadius(displayLength) * _DrawRadiusScale());
 	auto& bufBank = isRecording ? _monitorBufferBank : _bufferBank;
 	_ApplyLoopVisualModel(bufBank, actualLength, displayLength, offset, radius);
 }

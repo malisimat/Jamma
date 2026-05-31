@@ -150,7 +150,7 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 		return data;
 	}
 
-	// Compute ring radius matching Loop::_CalcDrawRadius so MIDI rings
+	// Compute ring radius matching Loop::CalcDrawRadius so MIDI rings
 	// appear at the same scale as the audio waveform rings.
 	const double rawRadius = 70.0 * std::log(static_cast<double>(loopLengthSamps)) - 600.0;
 	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ostream>
 
 namespace engine
 {
@@ -58,6 +59,40 @@ namespace engine
 			                  note,
 			                  velocity,
 			                  0 };
+		}
+
+		static const char* Direction(const MidiEvent& event) noexcept
+		{
+			if (event.IsNoteOn())  return " Down";
+			if (event.IsNoteOff()) return " Up";
+			return "";
+		}
+
+		static void LogDetail(std::ostream& out, std::uint8_t deviceSlot, const MidiEvent& event)
+		{
+			constexpr std::uint8_t CC            = 0xB0;
+			constexpr std::uint8_t ProgramChange = 0xC0;
+
+			out << "dev: " << (deviceSlot + 1) << ", chan " << (event.Channel() + 1) << ", ";
+
+			switch (event.MessageType())
+			{
+			case NoteOn:
+				out << (event.data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(event.data1);
+				break;
+			case NoteOff:
+				out << "noteoff: " << static_cast<int>(event.data1);
+				break;
+			case CC:
+				out << "cc " << static_cast<int>(event.data1) << ": " << static_cast<int>(event.data2);
+				break;
+			case ProgramChange:
+				out << "pc: " << static_cast<int>(event.data1);
+				break;
+			default:
+				out << "0x" << std::hex << std::uppercase << static_cast<int>(event.status) << std::dec;
+				break;
+			}
 		}
 	};
 
