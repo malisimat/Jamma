@@ -265,6 +265,7 @@ namespace engine
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
 		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
+		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
 		void _PulseQuantisationOverlay();
 		void _SetQuantisationOverlayHeld(bool held);

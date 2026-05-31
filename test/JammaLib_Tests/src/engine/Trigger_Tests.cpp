@@ -252,6 +252,11 @@ public:
 		return _audioMutex;
 	}
 
+	bool IsSceneResetForTest() const
+	{
+		return _isSceneReset.load(std::memory_order_relaxed);
+	}
+
 private:
 	std::string _testSerialDeviceName;
 };
@@ -1169,6 +1174,232 @@ TEST(Trigger, PumpMidiBlocksWhileAudioMutexHeld) {
 
 	EXPECT_TRUE(pumpFinished.load(std::memory_order_acquire));
 	EXPECT_EQ(1u, station->NumTakes());
+}
+
+// ---- Scene reset tests -------------------------------------------------
+// Tests 1-3: regression (key-trigger paths that already work).
+// Tests 4-5: MIDI and serial activate paths - FAIL before the fix because
+//            _DispatchMidiTriggerEvent and _PumpSerial never set
+//            _isSceneReset = false on ACTIONRESULT_ACTIVATE.
+
+TEST(SceneReset, KeyTriggerDitchWhileRecording_ResetsScene) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto station = MakeTestStation();
+	station->AddTrigger(MakeSharedDefaultTrigger());
+	scene.AddStationForTest(station);
+
+	// Activate: start recording
+	KeyAction action;
+	action.SetActionTime(GetTime());
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+	EXPECT_EQ(1u, station->NumTakes());
+
+	// Commit so _TryGetTake can find the take by ID in _loopTakes
+	station->CommitChanges();
+
+	// Ditch key down then up: fires Ditch(), removes take
+	action.SetActionTime(GetTime());
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	action.SetActionTime(GetTime());
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(action);
+
+	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+}
+
+TEST(SceneReset, KeyTriggerDebouncedDitch_ResetsSceneViaOnTick) {
+	constexpr unsigned int debounceMs = 100u;
+
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto station = MakeTestStation();
+	station->AddTrigger(MakeSharedDefaultTrigger(debounceMs));
+	scene.AddStationForTest(station);
+
+	auto curTime = GetTime();
+
+	// Activate
+	KeyAction action;
+	action.SetActionTime(curTime);
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+	EXPECT_EQ(1u, station->NumTakes());
+
+	// Commit so _TryGetTake can find the take by ID in _loopTakes
+	station->CommitChanges();
+
+	// Ditch DOWN: first ditch is debounce-bypassed, sets _isDitchDown
+	action.SetActionTime(curTime);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	// Ditch UP immediately (same timestamp): within debounce window, deferred
+	action.SetActionTime(curTime);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(action);
+
+	// Take still present: deferred ditch has not fired yet
+	EXPECT_EQ(1u, station->NumTakes());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+
+	// Simulate audio tick well past debounce window: deferred ditch fires,
+	// then scene sees zero takes and clears timing state
+	scene.OnTick(OffsetTime(curTime, debounceMs * 2), 256u, std::nullopt, std::nullopt);
+
+	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+}
+
+TEST(SceneReset, KeyTriggerDitchInOverdub_ResetsScene) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto station = MakeTestStation();
+	station->AddTrigger(MakeSharedDefaultTrigger());
+	scene.AddStationForTest(station);
+
+	auto curTime = GetTime();
+	KeyAction action;
+
+	// Hold ditch, then press activate: starts overdub from DEFAULT state (no
+	// prior recording), adding the very first take via TRIGGER_OVERDUB_START
+	action.SetActionTime(curTime);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	action.SetActionTime(curTime);
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	// The overdub start returns ACTIONRESULT_ACTIVATE, so _isSceneReset = false
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+	EXPECT_EQ(1u, station->NumTakes());
+
+	// Commit so _TryGetTake can find the take by ID in _loopTakes
+	station->CommitChanges();
+
+	// While in OVERDUBBING state, press ditch again then release: calls Ditch(),
+	// removing the only take and triggering scene reset
+	action.SetActionTime(curTime);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	scene.OnAction(action);
+
+	action.SetActionTime(curTime);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(action);
+
+	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+}
+
+// FAILS before fix: _DispatchMidiTriggerEvent never called Reset() when ditch
+// reduced total takes to zero.
+TEST(SceneReset, MidiTriggerDitchWhileRecording_ResetsScene) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string(
+		"{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{"
+		"\"type\":\"midi\",\"device\":\"default\","
+		"\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},"
+		"\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}");
+
+	auto station = MakeTestStation();
+	auto trigger = MakeTriggerFromRigJson(triggerJson);
+	station->AddTrigger(trigger);
+	scene.AddStationForTest(station);
+	scene.RegisterMidiTriggerRouteForTest("default", trigger, 0u);
+
+	// MIDI activate: start recording
+	engine::MidiEvent noteOn{};
+	noteOn.status = engine::MidiEvent::NoteOn;
+	noteOn.data1 = 60u;
+	noteOn.data2 = 100u;
+	scene.DispatchMidiTriggerEventForTest(0u, noteOn);
+
+	EXPECT_EQ(1u, station->NumTakes());
+
+	// Commit so _TryGetTake can find the take by ID in _loopTakes
+	station->CommitChanges();
+
+	// MIDI ditch: CC down then up
+	engine::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
+	engine::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
+	scene.DispatchMidiTriggerEventForTest(0u, ccDown);
+	scene.DispatchMidiTriggerEventForTest(0u, ccUp);
+
+	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+}
+
+// FAILS before fix: _PumpSerial never called Reset() on ditch-to-zero.
+TEST(SceneReset, SerialTriggerDitchWhileRecording_ResetsScene) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	const auto triggerJson = std::string(
+		"{\"name\":\"TrigSerial\",\"stationtype\":0,\"pairs\":[{"
+		"\"source\":\"serial\",\"device\":\"pedal-a\","
+		"\"activatedown\":0,\"activateup\":0,"
+		"\"ditchdown\":1,\"ditchup\":1}]}");
+
+	auto station = MakeTestStation();
+	station->AddTrigger(MakeTriggerFromRigJson(triggerJson));
+	scene.AddStationForTest(station);
+
+	// Serial activate: button 0 pressed
+	scene.PushSerialTriggerEventForTest("pedal-a", 0u, true);
+	scene.PumpSerialForTest();
+
+	EXPECT_EQ(1u, station->NumTakes());
+
+	// Commit so _TryGetTake can find the take by ID in _loopTakes
+	station->CommitChanges();
+
+	// Serial ditch: button 1 down then up
+	scene.PushSerialTriggerEventForTest("pedal-a", 1u, true);
+	scene.PumpSerialForTest();
+	scene.PushSerialTriggerEventForTest("pedal-a", 1u, false);
+	scene.PumpSerialForTest();
+
+	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
 }
 
 TEST(Trigger, PumpSerialBlocksWhileAudioMutexHeld) {
