@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "../include/Constants.h"
-#include "../graphics/GlDrawContext.h"
+#include "GlDrawContext.h"
 #include "../utils/VecUtils.h"
 
 using namespace engine;
@@ -70,7 +71,8 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 MidiModel::MidiModel(MidiModelParams params)
 	: GuiModel(params),
 	  _midiParams(params),
-	  _loopIndexFrac(0.0)
+	  _loopIndexFrac(0.0),
+	  _pendingModelUpdate(nullptr)
 {
 	SetInstanceAttributes({}, 0u);
 }
@@ -81,6 +83,8 @@ MidiModel::~MidiModel()
 
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
 {
+	ApplyPendingModelUpdate();
+
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.PushMvp(glm::rotate(glm::mat4(1.0),
 		(float)(constants::TWOPI * _loopIndexFrac),
@@ -120,25 +124,35 @@ void MidiModel::SetLoopIndexFrac(double frac) noexcept
 
 void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
 {
+	auto data = BuildInstanceData(spans, loopLengthSamps);
+	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
+}
+
+void MidiModel::QueueModelUpdate(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
+{
+	_pendingModelUpdate.store(BuildInstanceData(spans, loopLengthSamps), std::memory_order_release);
+}
+
+std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const std::vector<MidiNoteSpan>& spans,
+	std::uint32_t loopLengthSamps) const
+{
+	auto data = std::make_shared<ModelInstanceData>();
 	std::vector<float> timePitchData;
 	std::vector<float> shapeData;
 
 	if (0u == loopLengthSamps || spans.empty())
 	{
-		SetInstanceAttributes({
-			{ TimePitchAttribute, 4u, timePitchData },
-			{ ShapeAttribute, 4u, shapeData }
-		}, 0u);
-		return;
+		data->Attributes = {
+			{ TimePitchAttribute, 4u, std::move(timePitchData) },
+			{ ShapeAttribute, 4u, std::move(shapeData) }
+		};
+		data->InstanceCount = 0u;
+		return data;
 	}
 
-	// Compute ring radius matching Loop::_CalcDrawRadius so MIDI rings
-	// appear at the same scale as the audio waveform rings.
 	const double rawRadius = 70.0 * std::log(static_cast<double>(loopLengthSamps)) - 600.0;
 	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));
 
-	// RadialThickness and NoteHeight stored as unit-scale fractions; multiply
-	// by baseRadius to get world-space dimensions.
 	const float radialThickness = baseRadius * _midiParams.RadialThickness;
 	const float noteHeight = baseRadius * _midiParams.NoteHeight;
 
@@ -165,11 +179,21 @@ void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_
 		shapeData.push_back(0.0f);
 	}
 
-	const auto instanceCount = static_cast<unsigned int>(timePitchData.size() / 4u);
-	SetInstanceAttributes({
-		{ TimePitchAttribute, 4u, timePitchData },
-		{ ShapeAttribute, 4u, shapeData }
-	}, instanceCount);
+	data->InstanceCount = static_cast<unsigned int>(timePitchData.size() / 4u);
+	data->Attributes = {
+		{ TimePitchAttribute, 4u, std::move(timePitchData) },
+		{ ShapeAttribute, 4u, std::move(shapeData) }
+	};
+	return data;
+}
+
+void MidiModel::ApplyPendingModelUpdate()
+{
+	auto pending = _pendingModelUpdate.exchange(nullptr, std::memory_order_acq_rel);
+	if (!pending)
+		return;
+
+	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }
 
 std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
@@ -203,11 +227,8 @@ std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 		AddTri(verts, x1, -0.5f,  1.0f, x2, -0.5f, -1.0f, x2, -0.5f,  1.0f);
 	}
 
-	// Start cap (x=0, outward normal in -x direction)
 	AddTri(verts, 0.0f, -0.5f, -1.0f,  0.0f, -0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
 	AddTri(verts, 0.0f, -0.5f,  1.0f,  0.0f,  0.5f,  1.0f,  0.0f,  0.5f, -1.0f);
-
-	// End cap (x=1, outward normal in +x direction)
 	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f, -1.0f,  1.0f,  0.5f,  1.0f);
 	AddTri(verts, 1.0f, -0.5f, -1.0f,  1.0f,  0.5f,  1.0f,  1.0f, -0.5f,  1.0f);
 
@@ -233,11 +254,8 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 		}
 	}
 
-	// Start cap UVs (u=0.0, v mapped from y: -0.5->0.0, +0.5->1.0)
 	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 1.0f);
 	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 1.0f,  0.0f, 1.0f);
-
-	// End cap UVs (u=1.0, v mapped from y: -0.5->0.0, +0.5->1.0)
 	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 1.0f);
 	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 0.0f);
 

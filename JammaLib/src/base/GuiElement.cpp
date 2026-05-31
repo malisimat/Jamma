@@ -26,8 +26,37 @@ GuiElement::GuiElement(GuiElementParams params) :
 	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
 	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
 	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_gestureState(),
 	_children({})
 {
+}
+
+void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept
+{
+	_gestureState.Kind = kind;
+	_gestureState.Active = true;
+	_gestureState.Moved = false;
+	_gestureState.StartPosition = startPosition;
+	_gestureState.StartValue = startValue;
+}
+
+void GuiElement::_MarkGestureMoved() noexcept
+{
+	_gestureState.Moved = true;
+}
+
+void GuiElement::_EndGesture() noexcept
+{
+	_gestureState.Kind = GestureKind::None;
+	_gestureState.Active = false;
+	_gestureState.Moved = false;
+	_gestureState.StartPosition = { 0, 0 };
+	_gestureState.StartValue = 0;
+}
+
+bool GuiElement::_IsGestureActive(GestureKind kind) const noexcept
+{
+	return _gestureState.Active && _gestureState.Kind == kind;
 }
 
 void GuiElement::Init()

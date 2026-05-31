@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <tuple>
 #include <vector>
 #include "CommonTypes.h"
@@ -95,6 +96,21 @@ namespace base
 			EDIT_MUTE
 		};
 
+		enum class GestureKind : std::uint8_t
+		{
+			None,
+			MidiQuantisation
+		};
+
+		struct GestureState
+		{
+			GestureKind Kind = GestureKind::None;
+			bool Active = false;
+			bool Moved = false;
+			utils::Position2d StartPosition = { 0, 0 };
+			int StartValue = 0;
+		};
+
 	public:
 		virtual ActionDirection Direction() const override { return ACTIONDIR_DUPLEX; }
 		virtual void Init();
@@ -144,6 +160,11 @@ namespace base
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
 		virtual bool _HitTest(utils::Position2d localPos);
+		void _BeginGesture(GestureKind kind, utils::Position2d startPosition, int startValue = 0) noexcept;
+		void _MarkGestureMoved() noexcept;
+		void _EndGesture() noexcept;
+		bool _IsGestureActive(GestureKind kind) const noexcept;
+		const GestureState& _GestureState() const noexcept { return _gestureState; }
 
 	protected:
 		std::atomic<bool> _changesMade;
@@ -158,6 +179,7 @@ namespace base
 		graphics::Image _overTexture;
 		graphics::Image _downTexture;
 		graphics::Image _outTexture;
+		GestureState _gestureState;
 		std::shared_ptr<GuiElement> _parent;
 		std::vector<std::shared_ptr<GuiElement>> _children;
 	};

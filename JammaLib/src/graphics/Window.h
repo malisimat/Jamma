@@ -92,6 +92,7 @@ namespace graphics
 	private:
 		void LoadResources();
 		void InitScene();
+		void ReleaseGlResources();
 
 		static void InitStyle(WNDCLASSEX& wcex) noexcept;
 		static void APIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam);
@@ -105,6 +106,7 @@ namespace graphics
 		Config _config;
 		bool _resizing;
 		bool _trackingMouse;
+		bool _released;
 		unsigned int _buttonsDown;
 		unsigned int _lastHoverObjectId;
 

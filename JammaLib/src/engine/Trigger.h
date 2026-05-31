@@ -9,7 +9,7 @@
 #include "GuiElement.h"
 #include "Tickable.h"
 #include "Timer.h"
-#include "MidiEvent.h"
+#include "../midi/MidiEvent.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
@@ -291,7 +291,8 @@ namespace engine
 		std::vector<TriggerTake> GetTakes() const;
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			unsigned int destChannel);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

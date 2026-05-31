@@ -1,11 +1,42 @@
 #include "LoopTake.h"
 
 #include <algorithm>
+#include <cstdint>
 
-#include "MidiModel.h"
+#include "../graphics/MidiModel.h"
 
 namespace
 {
+	bool HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept
+	{
+		return (base::Action::MODIFIER_CTRL & modifiers)
+			&& (base::Action::MODIFIER_SHIFT & modifiers);
+	}
+
+	unsigned long NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept
+	{
+		if (0ul == loopLength)
+			return 0ul;
+
+		const auto length = static_cast<long long>(loopLength);
+		auto normalized = index % length;
+		if (normalized < 0)
+			normalized += length;
+		return static_cast<unsigned long>(normalized);
+	}
+
+	unsigned long InitialMidiPlayIndex(unsigned long audioPlayIndex,
+		unsigned long loopLength,
+		unsigned int endRecordSamps) noexcept
+	{
+		if (audioPlayIndex < constants::MaxLoopFadeSamps)
+			return NormalizeLoopIndex(static_cast<long long>(audioPlayIndex), loopLength);
+
+		const auto quantisationError = static_cast<long long>(constants::MaxLoopFadeSamps) -
+			static_cast<long long>(endRecordSamps);
+		return NormalizeLoopIndex(quantisationError, loopLength);
+	}
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -21,6 +52,7 @@ namespace
 }
 
 using namespace engine;
+using base::Action;
 using base::AudioSink;
 using base::AudioSource;
 using base::DrawContext;
@@ -66,6 +98,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_masterMixer(nullptr),
 	_loops(),
 	_backLoops(),
+	_midiQuantisationPacked(MidiQuantisationSettings().Pack()),
+	_midiQuantisationUpdatePending(false),
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
@@ -366,6 +400,76 @@ void LoopTake::SetSelectDepth(base::SelectDepth depth)
 		_guiRack->SetVisible(depth == base::SelectDepth::DEPTH_LOOPTAKE);
 }
 
+ActionResult LoopTake::OnAction(actions::TouchAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (_IsGestureActive(GestureKind::MidiQuantisation))
+	{
+		if (actions::TouchAction::TOUCH_UP == action.State)
+		{
+			const auto quantisation = MidiQuantisation();
+			if (!_GestureState().Moved)
+				_ApplyMidiQuantisationGesture(MidiQuantisationGesture::Toggle, quantisation.Fraction, "click-toggle");
+
+			_EndGesture();
+			return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+		}
+
+		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+	}
+
+	if ((actions::TouchAction::TOUCH_DOWN == action.State)
+		&& (0 == action.Index)
+		&& HasMidiQuantisationGestureModifiers(action.Modifiers)
+		&& HitTest(action.Position))
+		return BeginMidiQuantisationGesture(action);
+
+	return Jammable::OnAction(action);
+}
+
+ActionResult LoopTake::BeginMidiQuantisationGesture(actions::TouchAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if ((actions::TouchAction::TOUCH_DOWN != action.State)
+		|| (0 != action.Index)
+		|| !HasMidiQuantisationGestureModifiers(action.Modifiers))
+		return ActionResult::NoAction();
+
+	action = GlobalToLocal(action);
+
+	const auto quantisation = MidiQuantisation();
+	_BeginGesture(GestureKind::MidiQuantisation, action.Position, MidiQuantisationFractionIndex(quantisation.Fraction));
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = actions::ACTIONRESULT_ACTIVEELEMENT;
+	res.ActiveElement = GuiElement::shared_from_this();
+	return res;
+}
+
+ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (!_IsGestureActive(GestureKind::MidiQuantisation))
+		return Jammable::OnAction(action);
+
+	_MarkGestureMoved();
+
+	action = GlobalToLocal(action);
+	const auto delta = action.Position - _GestureState().StartPosition;
+	const auto startFraction = ClampMidiQuantisationFractionIndex(_GestureState().StartValue);
+	const auto fraction = ResolveMidiQuantisationDragFraction(startFraction, delta.Y);
+
+	_ApplyMidiQuantisationGesture(MidiQuantisationGesture::DragFraction, fraction, "drag-fraction");
+	return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
+}
+
 ActionResult LoopTake::OnAction(GuiAction action)
 {
 	auto res = GuiElement::OnAction(action);
@@ -412,6 +516,19 @@ ActionResult LoopTake::OnAction(GuiAction action)
 		// Rack state pre-notification from _guiRack — forward to parent receiver (Station).
 		if (_receiver)
 			_receiver->OnAction(action);
+	}
+	else if (auto arr = std::get_if<GuiAction::GuiIntArray>(&action.Data))
+	{
+		if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
+		{
+			const auto previous = MidiQuantisation();
+			const auto updated = ApplyMidiQuantisationGuiPayload(previous,
+				arr->Values.data(),
+				arr->Values.size());
+			if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
+				_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, "gui-action");
+			SetMidiQuantisation(updated);
+		}
 	}
 
 	return res;
@@ -511,6 +628,28 @@ ActionResult LoopTake::OnAction(JobAction action)
 		res.IsEaten = true;
 		res.ResultType = actions::ACTIONRESULT_DEFAULT;
 
+		return res;
+	}
+	break;
+	case JobAction::JOB_UPDATEMIDIQUANTISATION:
+	{
+		const auto settings = MidiQuantisation();
+		for (auto& midiLoop : action.MidiLoops)
+		{
+			if (midiLoop)
+				midiLoop->SetQuantisation(settings);
+		}
+
+		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		for (auto& midiLoop : action.MidiLoops)
+		{
+			if (midiLoop)
+				midiLoop->QueueModelUpdateFromEvents(displayLength, true);
+		}
+
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
 		return res;
 	}
 	break;
@@ -686,6 +825,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
+			midiLoop->SetQuantisation(MidiQuantisation());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -740,6 +880,53 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 	return recorded;
 }
 
+unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
+	std::uint32_t numSamples,
+	IMidiOutputSink& sink,
+	unsigned int firstOutputIndex) noexcept
+{
+	class IndexedMidiSink final : public IMidiSink
+	{
+	public:
+		IndexedMidiSink(IMidiOutputSink& outputSink,
+			unsigned int outputIndex,
+			std::uint32_t midiBlockStart,
+			std::uint32_t outputBlockStart) noexcept :
+			_outputSink(outputSink),
+			_outputIndex(outputIndex),
+			_midiBlockStart(midiBlockStart),
+			_outputBlockStart(outputBlockStart)
+		{
+		}
+
+		void OnEvent(const MidiEvent& ev) noexcept override
+		{
+			MidiEvent mapped = ev;
+			mapped.sampleOffset = _outputBlockStart + (ev.sampleOffset - _midiBlockStart);
+			_outputSink.OnEvent(_outputIndex, mapped);
+		}
+
+	private:
+		IMidiOutputSink& _outputSink;
+		unsigned int _outputIndex;
+		std::uint32_t _midiBlockStart;
+		std::uint32_t _outputBlockStart;
+	};
+
+	const auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
+
+	for (auto i = 0u; i < _midiLoops.size(); ++i)
+	{
+		if (!_midiLoops[i])
+			continue;
+
+		IndexedMidiSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
+		_midiLoops[i]->ReadBlock(midiBlockStart, numSamples, indexedSink);
+	}
+
+	return static_cast<unsigned int>(_midiLoops.size());
+}
+
 std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 	std::uint32_t globalSampleNow,
 	std::uint32_t recordedSampleCount) noexcept
@@ -772,11 +959,7 @@ void LoopTake::Play(unsigned long index,
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength = loopLength;
-	_midiVisualPlayIndex = index >= constants::MaxLoopFadeSamps ?
-		index - constants::MaxLoopFadeSamps :
-		index;
-	while (_midiVisualLoopLength > 0ul && _midiVisualPlayIndex >= _midiVisualLoopLength)
-		_midiVisualPlayIndex -= _midiVisualLoopLength;
+	_midiVisualPlayIndex = InitialMidiPlayIndex(index, loopLength, endRecordSamps);
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
@@ -1141,6 +1324,18 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		jobs.push_back(job);
 	}
 
+	if (_midiQuantisationUpdatePending)
+	{
+		_midiQuantisationUpdatePending = false;
+
+		JobAction job;
+		job.JobActionType = JobAction::JOB_UPDATEMIDIQUANTISATION;
+		job.SourceId = Id();
+		job.Receiver = ActionReceiver::shared_from_this();
+		job.MidiLoops = _midiLoops;
+		jobs.push_back(job);
+	}
+
 	// Drain pending unload indices — emit one JOB_UNLOADVST per entry so
 	// rapid back-to-back UnloadVstPlugin() calls are not silently dropped.
 	auto pendingUnloads = std::move(_pendingVstUnloads);
@@ -1296,15 +1491,6 @@ void LoopTake::_UpdateLoops()
 
 void LoopTake::_UpdateMidiModels(bool force)
 {
-	const auto state = _state.load(std::memory_order_relaxed);
-	const auto isRecording = (STATE_RECORDING == state) ||
-		(STATE_PLAYINGRECORDING == state) ||
-		(STATE_OVERDUBBING == state) ||
-		(STATE_PUNCHEDIN == state) ||
-		(STATE_OVERDUBBINGRECORDING == state);
-	if (isRecording && !force)
-		return;
-
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	for (auto& midiLoop : _midiLoops)
 	{
@@ -1340,6 +1526,86 @@ void LoopTake::_UpdateMidiModelRotation()
 		if (midiLoop && midiLoop->Model())
 			midiLoop->Model()->SetLoopIndexFrac(loopIndexFrac);
 	}
+}
+
+void LoopTake::SetMidiQuantisation(const MidiQuantisationSettings& settings) noexcept
+{
+	const auto previous = MidiQuantisation();
+	_midiQuantisationPacked.store(settings.Pack(), std::memory_order_release);
+
+	if (previous != settings)
+	{
+		_midiQuantisationUpdatePending = true;
+		_changesMade = true;
+	}
+}
+
+MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
+{
+	return MidiQuantisationSettings::Unpack(_midiQuantisationPacked.load(std::memory_order_acquire));
+}
+
+MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates() const noexcept
+{
+	MidiQuantisationGrainCandidates candidates;
+
+	for (const auto& midiLoop : _midiLoops)
+	{
+		if (!midiLoop)
+			continue;
+
+		const auto loopLength = midiLoop->LoopLengthSamps();
+		if (loopLength > 0u)
+		{
+			candidates.FirstPlayableMidiLoopSamps = loopLength;
+			break;
+		}
+	}
+
+	for (const auto& loop : _loops)
+	{
+		if (!loop)
+			continue;
+
+		const auto loopLength = static_cast<std::uint32_t>(loop->LoopLength());
+		if (loopLength > 0u)
+		{
+			candidates.FirstAudioLoopSamps = loopLength;
+			break;
+		}
+	}
+
+	if (_midiVisualLoopLength > 0ul)
+		candidates.MidiVisualLoopSamps = static_cast<std::uint32_t>(_midiVisualLoopLength);
+
+	candidates.RecordedSamps = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+	return candidates;
+}
+
+void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
+	MidiQuantisationFraction fraction,
+	const char* source) noexcept
+{
+	const auto previous = MidiQuantisation();
+	const auto updated = ApplyMidiQuantisationGesture(previous,
+		gesture,
+		fraction,
+		ResolveMidiQuantisationGestureGrain(_MidiQuantisationGrainCandidates()));
+
+	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
+		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);
+
+	SetMidiQuantisation(updated);
+}
+
+void LoopTake::_LogMidiQuantisationFractionChange(MidiQuantisationFraction previous,
+	MidiQuantisationFraction updated,
+	const char* source) const
+{
+	std::cout << "MIDI quantisation fraction: take=" << _id
+		<< " source=" << source
+		<< " " << MidiQuantisationFractionLabel(previous)
+		<< " -> " << MidiQuantisationFractionLabel(updated) << '\n';
 }
 
 void LoopTake::_RemoveMidiModelChildren()

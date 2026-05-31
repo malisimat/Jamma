@@ -1,15 +1,21 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
+#include <memory>
 #include <mutex>
+#include <vector>
 #include "LoopTake.h"
-#include "QuantisationModel.h"
+#include "Quantisation.h"
+#include "../graphics/QuantisationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../base/Jammable.h"
 #include "../gui/GuiRack.h"
+#include "../io/InitFile.h"
+#include "../midi/MidiQueue.h"
 #include "../vst/VstChain.h"
 
 namespace engine
@@ -82,7 +88,8 @@ namespace engine
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<Trigger> trigger,
 			int indexOffset,
-			unsigned int numSamps);
+			unsigned int numSamps,
+			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
@@ -119,11 +126,12 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<Timer> clock);
-		void SetQuantisationOverlay(unsigned int seedSamps, unsigned int masterLoopSamps, bool confirm);
-		void ClearQuantisationOverlay();
+		void SetQuantisationParams(std::optional<QuantisationParams> params, bool confirm = false);
+		void ClearQuantisationParams();
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
+		void SetLogging(const io::LoggingConfig& config) noexcept;
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
@@ -133,6 +141,15 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
+		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
+		// Returns true if the named device is allowed to drive this station's live
+		// VST playback. Any unrestricted trigger keeps the station open to all
+		// devices; otherwise the device must match a trigger's MidiInputDevices list.
+		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
+		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
+		// Replacement semantics: one MIDI output routes to at most one plugin.
+		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
+		void ClearMidiVstRoutes();
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -173,6 +190,43 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
+		struct MidiVstRoutingSnapshot
+		{
+			static constexpr size_t NoPlugin = (std::numeric_limits<size_t>::max)();
+
+			std::vector<size_t> PluginByMidiOutput;
+			size_t LivePlugin = NoPlugin;
+
+			bool HasRoutes() const noexcept
+			{
+				if (LivePlugin != NoPlugin)
+					return true;
+				for (const auto pluginIndex : PluginByMidiOutput)
+				{
+					if (pluginIndex != NoPlugin)
+						return true;
+				}
+				return false;
+			}
+
+			size_t PluginForOutput(unsigned int midiOutputIndex) const noexcept
+			{
+				if (midiOutputIndex == LiveMidiOutputIndex)
+					return LivePlugin;
+				if (midiOutputIndex < PluginByMidiOutput.size())
+					return PluginByMidiOutput[midiOutputIndex];
+				return NoPlugin;
+			}
+		};
+
+		void _SendMidiToVstChain(vst::VstChain* chain,
+			const MidiVstRoutingSnapshot* routes,
+			const MidiEvent& event,
+			bool isRealtime,
+			unsigned int midiOutputIndex) noexcept;
+		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
+		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
+		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
@@ -214,6 +268,13 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		io::MidiQueue<1024> _liveMidiIngress;
+		// Route snapshots are published on non-RT threads. The audio callback reads
+		// the raw immutable snapshot pointer and does O(1) route lookups per event.
+		// Old snapshots are retained for the Station lifetime so callback readers
+		// never observe freed route storage.
+		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
+		std::vector<std::unique_ptr<MidiVstRoutingSnapshot>> _retainedMidiVstRoutes;
 
 		// Sample rate and block size captured at SetupBuffers time; needed to
 		// initialise a newly loaded plugin (IVstPlugin: VST2 or VST3).
@@ -221,10 +282,8 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		bool _quantisationOverlayPinned;
-		unsigned int _pendingQuantisationOverlaySeedSamps;
-		unsigned int _pendingQuantisationOverlayMasterLoopSamps;
-		bool _pendingQuantisationOverlayConfirm;
+		std::optional<QuantisationParams> _pendingQuantisationParams;
+		bool _pendingQuantisationConfirm = false;
 
 		// Audio → render handoff for the quantisation overlay phase.
 		// Written lock-free on the audio thread (OnTick), consumed on the render thread (Draw3d).

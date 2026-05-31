@@ -155,7 +155,6 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\audio\BlockApi_Tests.cpp" />
-    <ClCompile Include="src\audio\MidiDevice_Tests.cpp" />
     <ClCompile Include="src\audio\SerialTriggerProtocol_Tests.cpp" />
     <ClCompile Include="src\audio\AudioFlow_Tests.cpp" />
     <ClCompile Include="src\audio\Overdub_Tests.cpp" />
@@ -167,18 +166,16 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\audio\BufferBank_Tests.cpp" />
     <ClCompile Include="src\engine\JobAction_Tests.cpp" />
     <ClCompile Include="src\engine\VstStaging_Tests.cpp" />
-    <ClCompile Include="src\engine\LoopModel_Tests.cpp" />
     <ClCompile Include="src\engine\StationRemote_Tests.cpp" />
     <ClCompile Include="src\engine\StationRack_Tests.cpp" />
+    <ClCompile Include="src\engine\StationMidiInstrument_Tests.cpp" />
     <ClCompile Include="src\engine\Trigger_Tests.cpp" />
     <ClCompile Include="src\engine\Quantisation_Tests.cpp" />
     <ClCompile Include="src\engine\Timer_Tests.cpp" />
-    <ClCompile Include="src\engine\MidiQueue_Tests.cpp" />
-    <ClCompile Include="src\engine\MidiLoop_Tests.cpp" />
-    <ClCompile Include="src\engine\MidiNoteSpan_Tests.cpp" />
     <ClCompile Include="src\engine\UndoHistory_Tests.cpp" />
-    <ClCompile Include="src\graphics\Window_Tests.cpp" />
+    <ClCompile Include="src\graphics\LoopModel_Tests.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />
+    <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />
     <ClCompile Include="src\gui\GuiSlider_Tests.cpp" />
@@ -186,6 +183,12 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\io\Json_Tests.cpp" />
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiDevice_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiQueue_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiLoop_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiNoteSpan_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiQuantisation_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiTimestampMapper_Tests.cpp" />
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
