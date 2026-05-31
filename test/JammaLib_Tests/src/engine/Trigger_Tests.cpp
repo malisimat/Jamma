@@ -1322,8 +1322,8 @@ TEST(SceneReset, KeyTriggerDitchInOverdub_ResetsScene) {
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 }
 
-// FAILS before fix: _DispatchMidiTriggerEvent never sets _isSceneReset = false
-// on ACTIONRESULT_ACTIVATE, so the OnTick reset guard never fires.
+// FAILS before fix: _DispatchMidiTriggerEvent never called Reset() when ditch
+// reduced total takes to zero.
 TEST(SceneReset, MidiTriggerDitchWhileRecording_ResetsScene) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
