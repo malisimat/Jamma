@@ -77,6 +77,7 @@ Station::Station(StationParams params,
 	_fadeSamps(params.FadeSamps),
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
+	_stationModel(std::make_shared<graphics::StationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
 	_mixerToggle(nullptr),
@@ -181,6 +182,13 @@ void Station::Draw3d(base::DrawContext& ctx,
 	_modelScreenPos = glCtx.ProjectScreen(pos);
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+
+	// Draw halo deck before children so the rack/loops render on top.
+	if (_stationModel)
+	{
+		_stationModel->SetOwnerState(GlobalId(), IsSelected(), _isPicking3d);
+		_stationModel->Draw3d(ctx, 1, pass);
+	}
 
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
@@ -458,8 +466,11 @@ void Station::EndMultiWrite(unsigned int numSamps,
 void Station::SetSelectDepth(base::SelectDepth depth)
 {
 	Jammable::SetSelectDepth(depth);
+	const bool atStation = (depth == base::SelectDepth::DEPTH_STATION);
 	if (_guiRack)
-		_guiRack->SetVisible(depth == base::SelectDepth::DEPTH_STATION);
+		_guiRack->SetVisible(atStation);
+	if (_stationModel)
+		_stationModel->SetVisible(atStation);
 }
 
 ActionResult Station::OnAction(KeyAction action)
@@ -1233,6 +1244,9 @@ void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit
 	if (_quantisationModel)
 		_quantisationModel->InitResources(resourceLib, forceInit);
 
+	if (_stationModel)
+		_stationModel->InitResources(resourceLib, forceInit);
+
 	GuiElement::_InitResources(resourceLib, forceInit);
 }
 
@@ -1240,6 +1254,9 @@ void Station::_ReleaseResources()
 {
 	if (_quantisationModel)
 		_quantisationModel->ReleaseResources();
+
+	if (_stationModel)
+		_stationModel->ReleaseResources();
 
 	GuiElement::_ReleaseResources();
 }
