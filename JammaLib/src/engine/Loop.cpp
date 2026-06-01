@@ -174,7 +174,8 @@ void Loop::Draw3d(DrawContext& ctx,
 		_vu->Draw3d(ctx, 1, pass);
 
 	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, visualHeightScale, 1.0f)));
+	_model->SetWaveformColorScale(visualHeightScale);
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
 	
 	_model->Draw3d(ctx, 1, pass);
 	

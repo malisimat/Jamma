@@ -190,6 +190,9 @@ void Station::Draw3d(base::DrawContext& ctx,
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
 	// Draw halo deck before children so the rack/loops render on top.
+	const auto stationVisualScale = _masterMixer ? static_cast<float>(_masterMixer->UnmutedLevel()) : 1.0f;
+	for (auto& take : GetLoopTakes())
+		take->SetParentVisualScale(stationVisualScale);
 	if (_stationModel)
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));

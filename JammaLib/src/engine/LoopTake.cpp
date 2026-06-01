@@ -185,13 +185,22 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	const auto takeVisualScale = static_cast<float>(_masterMixer ? _masterMixer->UnmutedLevel() : 1.0);
-	const auto combinedVisualScale = takeVisualScale * _parentVisualScale;
 
-	for (auto& loop : _loops)
-		loop->SetMasterVisualScale(combinedVisualScale);
+	for (size_t i = 0; i < _loops.size(); ++i)
+	{
+		const auto channelVisualScale = (i < _audioMixers.size() && _audioMixers[i]) ?
+			static_cast<float>(_audioMixers[i]->UnmutedLevel()) :
+			1.0f;
+		_loops[i]->SetMasterVisualScale(takeVisualScale * channelVisualScale * _parentVisualScale);
+	}
 
-	for (auto& loop : _backLoops)
-		loop->SetMasterVisualScale(combinedVisualScale);
+	for (size_t i = 0; i < _backLoops.size(); ++i)
+	{
+		const auto channelVisualScale = (i < _backAudioMixers.size() && _backAudioMixers[i]) ?
+			static_cast<float>(_backAudioMixers[i]->UnmutedLevel()) :
+			1.0f;
+		_backLoops[i]->SetMasterVisualScale(takeVisualScale * channelVisualScale * _parentVisualScale);
+	}
 
 	_UpdateMidiModelRotation();
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
