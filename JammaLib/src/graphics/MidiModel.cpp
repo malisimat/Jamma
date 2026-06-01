@@ -83,7 +83,19 @@ MidiModel::MidiModel(MidiModelParams params)
 	  _backNoteInstanceCount(0u),
 	  _pendingModelUpdate(nullptr)
 {
-	SetInstanceAttributes({}, 0u);
+	// Emit a disc at the minimum radius so the loop target is visible
+	// from the moment it is created (before the loop length is known).
+	constexpr float defaultRadius = 50.0f;
+	SetInstanceAttributes(
+		{
+			{ TimePitchAttribute, 4u, { 0.0f, 1.0f, 0.0f, 0.0f } },
+			{ ShapeAttribute, 4u,
+				{ defaultRadius * _midiParams.DiscRadiusFactor,
+				  defaultRadius * _midiParams.DiscRadialThicknessFactor,
+				  defaultRadius * _midiParams.DiscHeightFactor,
+				  1.0f } }
+		},
+		1u);
 }
 
 MidiModel::~MidiModel()
@@ -119,11 +131,28 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 	default:
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
 		glCtx.SetUniform("DiscAlpha", _midiParams.DiscAlpha);
-		glCtx.SetUniform("RenderMode", 0);
+		glCtx.SetUniform("RenderMode", 3);
 		break;
 	}
 
-	GuiModel::Draw3d(glCtx, numInstances, pass);
+	if (base::PASS_SCENE == pass)
+	{
+		GLboolean prevDepthMask = GL_TRUE;
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+
+		glDepthMask(GL_TRUE);
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+
+		glDepthMask(GL_FALSE);
+		glCtx.SetUniform("RenderMode", 4);
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+
+		glDepthMask(prevDepthMask);
+	}
+	else
+	{
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+	}
 	glCtx.PopMvp();
 }
 
@@ -283,10 +312,13 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 		}
 	}
 
-	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 1.0f);
-	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 1.0f,  0.0f, 1.0f);
-	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 1.0f);
-	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 0.0f);
+	// Mark arc end-cap triangles with UV.y = 2.0 so the fragment shader can
+	// discard them for full-circle disc instances (both caps land at the same
+	// world-space angle, leaving a visible seam fin if not discarded).
+	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
+	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
+	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
+	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
 
 	return uvs;
 }

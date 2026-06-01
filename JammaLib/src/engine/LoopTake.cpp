@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #include "../graphics/MidiModel.h"
 
@@ -960,7 +961,15 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 
 		MidiEvent stamped = ev;
 		stamped.sampleOffset = ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
-		_midiLoops[i]->RecordEvent(stamped);
+		if (!_midiLoops[i]->RecordEvent(stamped))
+			continue;
+
+		// Drive visual updates directly from MIDI ingress so note rendering does
+		// not depend on audio-loop update cadence.
+		const auto displayLength = (stamped.sampleOffset < std::numeric_limits<std::uint32_t>::max())
+			? std::max(recordedNow, stamped.sampleOffset + 1u)
+			: std::max(recordedNow, stamped.sampleOffset);
+		_midiLoops[i]->QueueModelUpdateFromEvents(displayLength, false);
 		recorded = true;
 	}
 
