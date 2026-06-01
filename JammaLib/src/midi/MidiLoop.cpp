@@ -147,6 +147,12 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 			if (MidiLoopState::Recording != _state || lengthDelta < MidiModelUpdateIntervalSamps)
 				return false;
 		}
+		else if (MidiLoopState::Recording == _state && lengthDelta < MidiModelUpdateIntervalSamps)
+		{
+			// During recording, throttle model rebuilds so we don't rescan
+			// all events on every incoming MIDI event (avoids O(N²) cost).
+			return false;
+		}
 	}
 
 	// Visualisation must reflect what playback emits, so use the same published
