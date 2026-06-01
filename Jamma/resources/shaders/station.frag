@@ -8,29 +8,50 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float StationHover;
+uniform float StationLevel;
 
-// uv.x = radial fraction 0..1  (0=center, 1=outer edge)
-// uv.y = part kind:  0=deck-top, 1=bevel, 2=side, 3=rib
+// uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
+// uv.y = part kind:  0=deck-top, 1=bevel, 2=side
 void main()
 {
 	float radialFrac = Uv.x;
 	float partKind   = Uv.y;
+	float stationLevel = clamp(StationLevel, 0.0, 1.0);
 
 	// -- base colour by part --
-	vec3 deckColour  = vec3(0.13, 0.15, 0.17);   // graphite
-	vec3 bevelColour = vec3(0.18, 0.22, 0.28);   // slate-blue bevel
-	vec3 sideColour  = vec3(0.10, 0.12, 0.14);   // dark fascia
-	vec3 ribColour   = vec3(0.28, 0.36, 0.50);   // muted steel rib
+	vec3 deckColour  = vec3(0.22, 0.24, 0.27);
+	vec3 bevelColour = vec3(0.28, 0.33, 0.40);
+	vec3 sideColour  = vec3(0.26, 0.30, 0.36);
 
 	vec3 base = deckColour;
-	if      (partKind > 2.5) base = ribColour;
-	else if (partKind > 1.5) base = sideColour;
+	if      (partKind > 1.5) base = sideColour;
 	else if (partKind > 0.5) base = bevelColour;
+
+	// -- side-wall level gradient bands --
+	if (partKind > 1.5)
+	{
+		float heightFrac = clamp(radialFrac, 0.0, 1.0);
+		vec3 lowA = vec3(0.98, 0.92, 0.18);  // yellow
+		vec3 lowB = vec3(0.20, 0.90, 0.22);  // green
+		vec3 midA = vec3(0.98, 0.55, 0.08);  // orange
+		vec3 midB = vec3(0.99, 0.88, 0.16);  // yellow
+		vec3 highA = vec3(0.95, 0.10, 0.08); // red
+		vec3 highB = vec3(0.98, 0.50, 0.06); // orange
+
+		float lowMask = 1.0 - step(0.33, stationLevel);
+		float midMask = step(0.33, stationLevel) * (1.0 - step(0.66, stationLevel));
+		float highMask = step(0.66, stationLevel);
+
+		vec3 lowGrad = mix(lowA, lowB, heightFrac);
+		vec3 midGrad = mix(midA, midB, heightFrac);
+		vec3 highGrad = mix(highA, highB, heightFrac);
+		base = (lowMask * lowGrad) + (midMask * midGrad) + (highMask * highGrad);
+	}
 
 	// -- cheap normal-based diffuse (single overhead light) --
 	vec3 lightDir  = normalize(vec3(0.3, 1.0, 0.4));
 	float diffuse  = clamp(dot(normalize(Normal), lightDir), 0.0, 1.0);
-	base *= (0.55 + 0.45 * diffuse);
+	base *= (0.90 + 0.35 * diffuse);
 
 	// -- luminous rim: thin bright ring near outer edge on bevel --
 	float rimGlow = 0.0;
@@ -44,12 +65,6 @@ void main()
 		vec3 rimColour = mix(vec3(0.2, 0.75, 0.9), vec3(0.9, 0.65, 0.2), radialFrac);
 		rimGlow = rimMask * 0.55 * (1.0 + StationHover * 0.7);
 		base = mix(base, rimColour, rimGlow);
-	}
-
-	// -- rib accent glow --
-	if (partKind > 2.5)
-	{
-		base += vec3(0.05, 0.12, 0.22) * (0.4 + StationHover * 0.6);
 	}
 
 	// -- highlight flash (selection) --

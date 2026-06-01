@@ -139,6 +139,7 @@ namespace engine
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
 		void SetMixerLevel(unsigned int chan, double level);
+		void SetParentVisualScale(float scale) noexcept;
 		void SetupBuffers(unsigned int bufSize);
 		void SetNumBusChannels(unsigned int chans);
 		unsigned int NumBusChannels() const;
@@ -248,6 +249,7 @@ namespace engine
 		std::atomic<bool> _isPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;

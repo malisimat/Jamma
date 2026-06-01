@@ -18,15 +18,11 @@ using base::DrawPass;
 namespace
 {
 	constexpr unsigned int  DefaultNumSides    = 32u;
-	constexpr unsigned int  DefaultNumRibs     = 8u;
-	constexpr float         DeckRadius         = 190.0f;
-	constexpr float         BevelWidth         = 18.0f;
-	constexpr float         BevelHeight        = 12.0f;
-	constexpr float         SideHeight         = 14.0f;
-	constexpr float         RibInnerFrac       = 0.18f;
-	constexpr float         RibOuterFrac       = 0.90f;
-	constexpr float         RibHeight          = 6.0f;
-	constexpr float         RibHalfWidthRad    = 0.045f; // ~2.6 degrees per rib face
+	constexpr unsigned int  DefaultNumRibs     = 0u;
+	constexpr float         DeckRadius         = 9.6f;
+	constexpr float         BevelWidth         = 2.0f;
+	constexpr float         BevelHeight        = 10.0f;
+	constexpr float         SideHeight         = 450.0f;
 
 	// Part-kind UVs (y channel)
 	constexpr float UV_TOP   = 0.0f;
@@ -170,13 +166,86 @@ StationModel::BuildSide(unsigned int numSides, float radius, float sideHeight)
 		const glm::vec3 t1(c1 * r, yTop, s1 * r);
 		const glm::vec3 b0(c0 * r, yBot, s0 * r);
 		const glm::vec3 b1(c1 * r, yBot, s1 * r);
+		const float uvTop = 1.0f;
+		const float uvBottom = 0.0f;
 
 		// Outward-facing: t0, b0, b1, t1
 		PushQuad(verts, uvs,
-			t0, 1.0f, UV_SIDE,
-			b0, 1.0f, UV_SIDE,
-			b1, 1.0f, UV_SIDE,
-			t1, 1.0f, UV_SIDE);
+			t0, uvTop, UV_SIDE,
+			b0, uvBottom, UV_SIDE,
+			b1, uvBottom, UV_SIDE,
+			t1, uvTop, UV_SIDE);
+	}
+
+	return { verts, uvs };
+}
+
+std::tuple<std::vector<float>, std::vector<float>>
+StationModel::BuildBottomBevel(unsigned int numSides, float radius,
+	float bevelWidth, float bevelHeight, float sideHeight)
+{
+	std::vector<float> verts;
+	std::vector<float> uvs;
+
+	verts.reserve(numSides * 6 * 3);
+	uvs.reserve(numSides * 6 * 2);
+
+	const float yTop = -(bevelHeight + sideHeight);
+	const float yBot = yTop - bevelHeight;
+	const float rOuter = radius + bevelWidth;
+	const float rInner = radius;
+	const float uInner = rInner / rOuter;
+
+	for (unsigned int i = 0; i < numSides; ++i)
+	{
+		const float a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(i) / static_cast<float>(numSides);
+		const float a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(i + 1u) / static_cast<float>(numSides);
+		const float c0 = std::cos(a0), s0 = std::sin(a0);
+		const float c1 = std::cos(a1), s1 = std::sin(a1);
+
+		const glm::vec3 ot0(c0 * rOuter, yTop, s0 * rOuter);
+		const glm::vec3 ot1(c1 * rOuter, yTop, s1 * rOuter);
+		const glm::vec3 ib0(c0 * rInner, yBot, s0 * rInner);
+		const glm::vec3 ib1(c1 * rInner, yBot, s1 * rInner);
+
+		// Outward-facing lower frustum: ot0, ot1, ib1, ib0.
+		PushQuad(verts, uvs,
+			ot0, 1.0f, UV_BEVEL,
+			ot1, 1.0f, UV_BEVEL,
+			ib1, uInner, UV_BEVEL,
+			ib0, uInner, UV_BEVEL);
+	}
+
+	return { verts, uvs };
+}
+
+std::tuple<std::vector<float>, std::vector<float>>
+StationModel::BuildDeckBottom(unsigned int numSides, float radius,
+	float bevelHeight, float sideHeight)
+{
+	std::vector<float> verts;
+	std::vector<float> uvs;
+
+	verts.reserve(numSides * 3 * 3);
+	uvs.reserve(numSides * 3 * 2);
+
+	const float deckY = -(2.0f * bevelHeight + sideHeight);
+	const glm::vec3 center(0.0f, deckY, 0.0f);
+	const float uCenter = 0.0f;
+
+	for (unsigned int i = 0; i < numSides; ++i)
+	{
+		const float a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(i) / static_cast<float>(numSides);
+		const float a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(i + 1u) / static_cast<float>(numSides);
+
+		const glm::vec3 p0(std::cos(a0) * radius, deckY, std::sin(a0) * radius);
+		const glm::vec3 p1(std::cos(a1) * radius, deckY, std::sin(a1) * radius);
+
+		// Winding: center, p0, p1 gives -Y normal.
+		PushTri(verts, uvs,
+			center, uCenter, UV_SIDE,
+			p0, 1.0f, UV_SIDE,
+			p1, 1.0f, UV_SIDE);
 	}
 
 	return { verts, uvs };
@@ -251,25 +320,24 @@ StationModel::BuildRibs(unsigned int numSides, float radius,
 std::tuple<std::vector<float>, std::vector<float>>
 StationModel::BuildAllGeometry(unsigned int numSides, float radius, unsigned int numRibs)
 {
+	(void)numRibs;
+
 	auto [tv, tu] = BuildDeckTop(numSides, radius);
 	auto [bv, bu] = BuildBevel(numSides, radius, BevelWidth, BevelHeight);
 	auto [sv, su] = BuildSide(numSides, radius, SideHeight);
-	auto [rv, ru] = BuildRibs(numSides, radius,
-		numRibs,
-		radius * RibInnerFrac,
-		radius * RibOuterFrac,
-		RibHeight, RibHalfWidthRad);
+	auto [lbv, lbu] = BuildBottomBevel(numSides, radius, BevelWidth, BevelHeight, SideHeight);
+	auto [cv, cu] = BuildDeckBottom(numSides, radius, BevelHeight, SideHeight);
 
 	// Concatenate
 	std::vector<float> verts;
 	std::vector<float> uvs;
-	verts.reserve(tv.size() + bv.size() + sv.size() + rv.size());
-	uvs.reserve(tu.size() + bu.size() + su.size() + ru.size());
+	verts.reserve(tv.size() + bv.size() + sv.size() + lbv.size() + cv.size());
+	uvs.reserve(tu.size() + bu.size() + su.size() + lbu.size() + cu.size());
 
-	for (auto& v : { &tv, &bv, &sv, &rv })
+	for (auto& v : { &tv, &bv, &sv, &lbv, &cv })
 		verts.insert(verts.end(), v->begin(), v->end());
 
-	for (auto& u : { &tu, &bu, &su, &ru })
+	for (auto& u : { &tu, &bu, &su, &lbu, &cu })
 		uvs.insert(uvs.end(), u->begin(), u->end());
 
 	return { verts, uvs };
@@ -284,7 +352,8 @@ StationModel::StationModel() :
 	_lastPass(base::PASS_SCENE),
 	_ownerGlobalId(),
 	_ownerSelected(false),
-	_ownerPicking(false)
+	_ownerPicking(false),
+	_ownerLevel(0.0f)
 {
 	_modelParams.ModelShaders = { "station", "picker" };
 	SetVisible(false);
@@ -293,11 +362,15 @@ StationModel::StationModel() :
 	SetGeometry(std::move(verts), std::move(uvs));
 }
 
-void StationModel::SetOwnerState(const std::vector<unsigned int>& ownerGlobalId, bool selected, bool picking)
+void StationModel::SetOwnerState(const std::vector<unsigned int>& ownerGlobalId,
+	bool selected,
+	bool picking,
+	float level)
 {
 	_ownerGlobalId = ownerGlobalId;
 	_ownerSelected = selected;
 	_ownerPicking = picking;
+	_ownerLevel = std::clamp(level, 0.0f, 1.0f);
 }
 
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
@@ -340,6 +413,8 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!shader || 0u == _vertexArray || 0u == _numTris)
 		return;
 
+	const auto stationLevel = std::clamp(_ownerLevel, 0.0f, 1.0f);
+
 	// Set pass-specific uniforms before binding the program.
 	switch (pass)
 	{
@@ -356,11 +431,13 @@ void StationModel::Draw3d(DrawContext& ctx,
 	case base::PASS_HIGHLIGHT:
 		glCtx.SetUniform("Highlight", _ownerSelected ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationHover", _ownerPicking ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationLevel", stationLevel);
 		break;
 	case base::PASS_SCENE:
 	default:
 		glCtx.SetUniform("Highlight", _ownerSelected ? 0.35f : 0.0f);
 		glCtx.SetUniform("StationHover", _ownerPicking ? 1.0f : 0.0f);
+		glCtx.SetUniform("StationLevel", stationLevel);
 		break;
 	}
 

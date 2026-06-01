@@ -35,6 +35,8 @@ namespace gui
 
 		// Called from the audio thread (protected by Scene's audio mutex).
 		void SetPeak(float peak, unsigned int numSamps);
+		float DisplayValue() const noexcept;
+		float HoldValue() const noexcept;
 
 		void SetVisible(bool visible);
 		bool IsVisible() const;

@@ -11,61 +11,53 @@ using utils::Size2d;
 using gui::GuiRackParams;
 using gui::GuiToggleParams;
 
-namespace
+void Station::_DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 {
-	constexpr unsigned int HiddenSeedSamps = 1u;
-
-	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
+	if (!chain)
+		return;
+	for (size_t i = 0; i < chain->NumPlugins(); ++i)
 	{
-		if (!chain)
-			return;
-		for (size_t i = 0; i < chain->NumPlugins(); ++i)
-		{
-			auto plugin = chain->GetPlugin(i);
-			if (plugin)
-				vst::QueueForUiThreadDestroy(std::move(plugin));
-		}
-		chain.reset();
+		auto plugin = chain->GetPlugin(i);
+		if (plugin)
+			vst::QueueForUiThreadDestroy(std::move(plugin));
 	}
-
-	unsigned int ResolveSampleRate(std::optional<io::UserConfig> cfg,
-		std::optional<audio::AudioStreamParams> params)
-	{
-		if (params.has_value() && (params.value().SampleRate > 0u))
-			return params.value().SampleRate;
-
-		if (cfg.has_value() && (cfg.value().Audio.SampleRate > 0u))
-			return cfg.value().Audio.SampleRate;
-
-		return constants::DefaultSampleRate;
-	}
-
-	void TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
-		unsigned long loopLengthSamps,
-		std::optional<io::UserConfig> cfg,
-		std::optional<audio::AudioStreamParams> params)
-	{
-		if (!clock)
-			return;
-
-		auto policyCfg = cfg.value_or(io::UserConfig());
-		const auto sampleRate = ResolveSampleRate(cfg, params);
-		if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
-		{
-			const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
-			clock->SetQuantisation(timing->GrainSamps, quantisation);
-			clock->SetSeedSourceLength(loopLengthSamps);
-			std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
-				<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
-				<< " loopGrains=" << timing->LoopGrains
-				<< " bpm=" << timing->Bpm
-				<< " bpi=" << timing->Bpi << std::endl;
-		}
-	}
+	chain.reset();
 }
 
-const utils::Size2d Station::_Gap = { 5, 5 };
-const unsigned int Station::_DefaultNumBusChannels = 8;
+unsigned int Station::_ResolveSampleRate(std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	if (params.has_value() && (params.value().SampleRate > 0u))
+		return params.value().SampleRate;
+
+	if (cfg.has_value() && (cfg.value().Audio.SampleRate > 0u))
+		return cfg.value().Audio.SampleRate;
+
+	return constants::DefaultSampleRate;
+}
+
+void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+	unsigned long loopLengthSamps,
+	std::optional<io::UserConfig> cfg,
+	std::optional<audio::AudioStreamParams> params)
+{
+	if (!clock)
+		return;
+
+	auto policyCfg = cfg.value_or(io::UserConfig());
+	const auto sampleRate = _ResolveSampleRate(cfg, params);
+	if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
+	{
+		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
+		clock->SetQuantisation(timing->GrainSamps, quantisation);
+		clock->SetSeedSourceLength(loopLengthSamps);
+		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
+			<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
+			<< " loopGrains=" << timing->LoopGrains
+			<< " bpm=" << timing->Bpm
+			<< " bpi=" << timing->Bpi << std::endl;
+	}
+}
 
 Station::Station(StationParams params,
 	AudioMixerParams mixerParams) :
@@ -73,8 +65,8 @@ Station::Station(StationParams params,
 	_flipTakeBuffer(false),
 	_flipAudioBuffer(false),
 	_name(params.Name),
-	_lastBufSize(constants::MaxBlockSize),
 	_fadeSamps(params.FadeSamps),
+	_lastBufSize(constants::MaxBlockSize),
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_stationModel(std::make_shared<graphics::StationModel>()),
@@ -90,10 +82,24 @@ Station::Station(StationParams params,
 	_backAudioMixers(),
 	_audioBuffers(),
 	_backAudioBuffers(),
-		_midiVstRoutes(nullptr),
-		_pendingQuantisationParams(std::nullopt),
-		_pendingQuantisationConfirm(false),
-		_quantisationOverlayAlpha(0.0f)
+	_audioState(nullptr),
+	_vstChain(nullptr),
+	_backVstChain(nullptr),
+	_flipVstChain(false),
+	_pendingVstLoads(),
+	_pendingVstUnloads(),
+	_vstPathsMutex(),
+	_vstPluginPaths(),
+	_liveMidiIngress(),
+	_midiVstRoutes(nullptr),
+	_retainedMidiVstRoutes(),
+	_sampleRate(44100.0f),
+	_blockSize(512u),
+	_vstBlockScratch(),
+	_vstBlockPtrs(),
+	_pendingQuantisationParams(std::nullopt),
+	_pendingQuantisationConfirm(false),
+	_quantisationOverlayAlpha(0.0f)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
@@ -109,8 +115,8 @@ Station::Station(StationParams params,
 
 Station::~Station()
 {
-	DrainVstChain(_vstChain.load(std::memory_order_acquire));
-	DrainVstChain(_backVstChain);
+	_DrainVstChain(_vstChain.load(std::memory_order_acquire));
+	_DrainVstChain(_backVstChain);
 }
 
 std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationParams,
@@ -186,8 +192,10 @@ void Station::Draw3d(base::DrawContext& ctx,
 	// Draw halo deck before children so the rack/loops render on top.
 	if (_stationModel)
 	{
+		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
 		_stationModel->SetOwnerState(GlobalId(), IsSelected(), _isPicking3d);
 		_stationModel->Draw3d(ctx, 1, pass);
+		glCtx.PopMvp();
 	}
 
 	for (auto& child : _children)
@@ -657,7 +665,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
+						_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -730,7 +738,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-					TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
+					_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -887,23 +895,6 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_changesMade = true;
 }
 
-void Station::SetLogging(const io::LoggingConfig& config) noexcept
-{
-	base::Jammable::SetLogging(config);
-
-	for (auto& take : _loopTakes)
-	{
-		if (take)
-			take->SetLogging(config);
-	}
-
-	for (auto& take : _backLoopTakes)
-	{
-		if (take)
-			take->SetLogging(config);
-	}
-}
-
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 {
 	trigger->SetReceiver(ActionReceiver::shared_from_this());
@@ -975,7 +966,7 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
-		_quantisationModel->SetTiming(HiddenSeedSamps);
+			_quantisationModel->SetTiming(_HiddenSeedSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
@@ -986,7 +977,7 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
-		_quantisationModel->SetTiming(HiddenSeedSamps);
+			_quantisationModel->SetTiming(_HiddenSeedSamps);
 		_quantisationModel->SetOverlayVisible(false, false);
 		return;
 	}
@@ -995,7 +986,7 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		const auto seedSamps = _pendingQuantisationParams->SeedSamps > 0u ?
 			_pendingQuantisationParams->SeedSamps :
-			HiddenSeedSamps;
+				_HiddenSeedSamps;
 
 		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
 		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
@@ -1035,6 +1026,23 @@ void Station::SetSampleRate(float sampleRate)
 		take->SetSampleRate(sampleRate);
 	for (auto& take : _backLoopTakes)
 		take->SetSampleRate(sampleRate);
+}
+
+void Station::SetLogging(const io::LoggingConfig& config) noexcept
+{
+	base::Jammable::SetLogging(config);
+
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetLogging(config);
+	}
+
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetLogging(config);
+	}
 }
 
 void Station::SetNumBusChannels(unsigned int chans)

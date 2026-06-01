@@ -160,6 +160,16 @@ void AudioMixer::UpdateVu(float peak, unsigned int numSamps)
 	_vu.SetPeak(peak, numSamps);
 }
 
+float AudioMixer::VuLevel() const noexcept
+{
+	return _vu.DisplayValue();
+}
+
+float AudioMixer::VuHoldLevel() const noexcept
+{
+	return _vu.HoldValue();
+}
+
 void AudioMixer::DrawVu(DrawContext& ctx, utils::Size2d sliderSize)
 {
 	// Position the VU at the right edge of the slider area, full height.

@@ -86,6 +86,24 @@ TEST(StationModel_Geometry, Side_HasExpectedTriCount)
 	EXPECT_EQ(numTris, NumSides * 2u);
 }
 
+TEST(StationModel_Geometry, BottomBevel_HasExpectedTriCount)
+{
+	constexpr unsigned int NumSides = 16u;
+	auto [verts, uvs] = StationModel::BuildBottomBevel(NumSides, 100.0f, 10.0f, 8.0f, 14.0f);
+
+	const auto numTris = verts.size() / 9u;
+	EXPECT_EQ(numTris, NumSides * 2u);
+}
+
+TEST(StationModel_Geometry, DeckBottom_HasExpectedTriCount)
+{
+	constexpr unsigned int NumSides = 16u;
+	auto [verts, uvs] = StationModel::BuildDeckBottom(NumSides, 100.0f, 8.0f, 14.0f);
+
+	const auto numTris = verts.size() / 9u;
+	EXPECT_EQ(numTris, NumSides);
+}
+
 // -------------------------------------------------------------------------
 // Rib geometry
 // -------------------------------------------------------------------------
@@ -131,8 +149,17 @@ TEST(StationModel_Geometry, BuildAllGeometry_TriCountAboveFloor)
 {
 	auto [verts, uvs] = StationModel::BuildAllGeometry(32u, 190.0f, 8u);
 	const auto numTris = verts.size() / 9u;
-	// 32 (top) + 32*2 (bevel) + 32*2 (side) + 8*6 (ribs) = 32+64+64+48 = 208
+	// Top + upper bevel + side + lower bevel + bottom cap.
 	EXPECT_GE(numTris, 200u);
+}
+
+TEST(StationModel_Geometry, BuildAllGeometry_IgnoresRibCount)
+{
+	auto [verts0, uvs0] = StationModel::BuildAllGeometry(32u, 190.0f, 0u);
+	auto [verts8, uvs8] = StationModel::BuildAllGeometry(32u, 190.0f, 8u);
+
+	EXPECT_EQ(verts0.size(), verts8.size());
+	EXPECT_EQ(uvs0.size(), uvs8.size());
 }
 
 TEST(StationModel_Geometry, BuildAllGeometry_VertCountDivisibleBy3)

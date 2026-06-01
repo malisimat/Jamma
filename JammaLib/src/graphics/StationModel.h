@@ -27,7 +27,10 @@ namespace graphics
 		StationModel& operator=(const StationModel&) = delete;
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		void SetOwnerState(const std::vector<unsigned int>& ownerGlobalId, bool selected, bool picking);
+		void SetOwnerState(const std::vector<unsigned int>& ownerGlobalId,
+			bool selected,
+			bool picking,
+			float level = 0.0f);
 
 		// --- Pure geometry builders (no OpenGL; testable without a GL context) ---
 
@@ -47,6 +50,16 @@ namespace graphics
 		// Build the vertical cylindrical side.
 		static std::tuple<std::vector<float>, std::vector<float>>
 			BuildSide(unsigned int numSides, float radius, float sideHeight);
+
+		// Build the lower bevel ring to close the capsule silhouette.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildBottomBevel(unsigned int numSides, float radius,
+				float bevelWidth, float bevelHeight, float sideHeight);
+
+		// Build the bottom cap (flat polygon fan, normal -Y).
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildDeckBottom(unsigned int numSides, float radius,
+				float bevelHeight, float sideHeight);
 
 		// Build raised radial ribs on the deck top surface.
 		// numRibs: number of ribs (evenly spaced).
@@ -77,5 +90,6 @@ namespace graphics
 		std::vector<unsigned int> _ownerGlobalId;
 		bool _ownerSelected;
 		bool _ownerPicking;
+		float _ownerLevel;
 	};
 }

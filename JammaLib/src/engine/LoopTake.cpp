@@ -184,6 +184,15 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	const auto takeVisualScale = static_cast<float>(_masterMixer ? _masterMixer->UnmutedLevel() : 1.0);
+	const auto combinedVisualScale = takeVisualScale * _parentVisualScale;
+
+	for (auto& loop : _loops)
+		loop->SetMasterVisualScale(combinedVisualScale);
+
+	for (auto& loop : _backLoops)
+		loop->SetMasterVisualScale(combinedVisualScale);
+
 	_UpdateMidiModelRotation();
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
@@ -1726,6 +1735,11 @@ void LoopTake::SetSampleRate(float sampleRate)
 		loop->SetSampleRate(sampleRate);
 	for (auto& loop : _backLoops)
 		loop->SetSampleRate(sampleRate);
+}
+
+void LoopTake::SetParentVisualScale(float scale) noexcept
+{
+	_parentVisualScale = std::max(0.0f, scale);
 }
 
 void LoopTake::LoadVstPlugin(std::wstring path)

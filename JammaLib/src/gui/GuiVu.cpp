@@ -102,6 +102,16 @@ void GuiVu::SetPeak(float peak, unsigned int numSamps)
 	_displayHold.store((float)_value.HoldValue(), std::memory_order_relaxed);
 }
 
+float GuiVu::DisplayValue() const noexcept
+{
+	return _displayValue.load(std::memory_order_relaxed);
+}
+
+float GuiVu::HoldValue() const noexcept
+{
+	return _displayHold.load(std::memory_order_relaxed);
+}
+
 void GuiVu::SetVisible(bool visible)
 {
 	_isVisible = visible;
