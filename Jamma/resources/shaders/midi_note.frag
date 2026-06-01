@@ -2,12 +2,14 @@
 
 in float Velocity;
 in float Diff;
+flat in float IsDisc;
 
 out vec4 ColorOUT;
 
 uniform int ObjectId;
 uniform float Highlight;
 uniform float LoopHover;
+uniform float DiscAlpha;
 uniform int RenderMode;
 
 void main()
@@ -24,6 +26,13 @@ void main()
     if (RenderMode == 2)
     {
         ColorOUT = vec4(Highlight);
+        return;
+    }
+
+    if (IsDisc > 0.5)
+    {
+        vec3 discColor = vec3(0.55, 0.6, 0.7) * Diff;
+        ColorOUT = vec4(discColor + (LoopHover * vec3(0.18, 0.18, 0.12)), DiscAlpha);
         return;
     }
 

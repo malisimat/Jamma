@@ -7,6 +7,7 @@ layout(location = 4) in vec4 InstanceShape;
 
 out float Velocity;
 out float Diff;
+flat out float IsDisc;
 
 uniform mat4 MVP;
 
@@ -18,6 +19,7 @@ void main()
     float durationFrac = InstanceTimePitch.y;
     float pitchOffset = InstanceTimePitch.z;
     Velocity = InstanceTimePitch.w;
+    IsDisc = InstanceShape.w;
 
     float angle = TwoPi * (startFrac + (PositionIN.x * durationFrac));
     float radius = InstanceShape.x + (PositionIN.z * InstanceShape.y);

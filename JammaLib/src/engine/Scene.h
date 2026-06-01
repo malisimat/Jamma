@@ -301,7 +301,7 @@ namespace engine
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
 		static constexpr double        QuantisationOverlayFadeSeconds  = 2.0;
 		static constexpr std::int64_t  OverlayInactive                 = 0LL;
-		static constexpr std::int64_t  OverlayHeld                     = std::numeric_limits<std::int64_t>::max();
+		static constexpr std::int64_t  OverlayHeld                     = (std::numeric_limits<std::int64_t>::max)();
 
 		struct MidiInputEndpoint
 		{
