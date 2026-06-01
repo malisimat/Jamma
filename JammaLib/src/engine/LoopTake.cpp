@@ -37,6 +37,49 @@ namespace
 		return NormalizeLoopIndex(quantisationError, loopLength);
 	}
 
+	std::uint32_t NormalizeMidiLoopOffset(std::uint32_t offset,
+		std::uint32_t loopLength) noexcept
+	{
+		if (0u == loopLength)
+			return 0u;
+
+		return offset % loopLength;
+	}
+
+	std::size_t AppendShiftedPunchWindow(std::array<engine::MidiPunchWindow, 128u>& windows,
+		std::size_t windowCount,
+		const engine::MidiPunchWindow& window,
+		std::uint32_t phaseOffset,
+		std::uint32_t loopLength) noexcept
+	{
+		if (0u == loopLength || window.EndSample <= window.StartSample)
+			return windowCount;
+
+		const auto duration = window.EndSample - window.StartSample;
+		if (duration >= loopLength)
+		{
+			if (windowCount < windows.size())
+				windows[windowCount++] = engine::MidiPunchWindow{ 0u, loopLength };
+			return windowCount;
+		}
+
+		const auto shiftedStart = NormalizeMidiLoopOffset(window.StartSample + phaseOffset, loopLength);
+		const auto shiftedEnd = static_cast<std::uint64_t>(shiftedStart) + duration;
+
+		if (windowCount < windows.size())
+		{
+			windows[windowCount++] = engine::MidiPunchWindow{
+				shiftedStart,
+				(shiftedEnd <= loopLength) ? static_cast<std::uint32_t>(shiftedEnd) : loopLength
+			};
+		}
+
+		if (shiftedEnd > loopLength && windowCount < windows.size())
+			windows[windowCount++] = engine::MidiPunchWindow{ 0u, static_cast<std::uint32_t>(shiftedEnd - loopLength) };
+
+		return windowCount;
+	}
+
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 	{
 		if (!chain)
@@ -1028,6 +1071,9 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		std::uint32_t _outputBlockStart;
 	};
 
+	if (IsMuted())
+		return static_cast<unsigned int>(_midiLoops.size());
+
 	const auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
 
 	for (auto i = 0u; i < _midiLoops.size(); ++i)
@@ -1674,6 +1720,9 @@ void LoopTake::_UpdateLoops()
 void LoopTake::_UpdateMidiModels(bool force)
 {
 	const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+	if (_midiOverdubSession.Active)
+		_RefreshMidiOverdubPreview(displayLength);
+
 	for (auto& midiLoop : _midiLoops)
 	{
 		if (midiLoop)
@@ -1825,6 +1874,9 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noe
 		state.SourceLoopLengthSamps = sourceLoop->LoopLengthSamps();
 		if (0u == state.SourceLoopLengthSamps)
 			state.SourceLoopLengthSamps = static_cast<std::uint32_t>(sourceTake->VisualLoopLengthSamps());
+		state.SourceStartSample = NormalizeMidiLoopOffset(
+			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex),
+			state.SourceLoopLengthSamps);
 
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)
 		{
@@ -1834,6 +1886,111 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noe
 
 			state.SourceEvents[state.SourceEventCount++] = event;
 		}
+	}
+}
+
+std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
+	std::uint32_t targetLoopLength,
+	bool includeOpenPunchWindow) noexcept
+{
+	if (!_midiOverdubSession.Active ||
+		loopIndex >= _midiOverdubSession.Loops.size() ||
+		0u == targetLoopLength)
+	{
+		return 0u;
+	}
+
+	auto& state = _midiOverdubSession.Loops[loopIndex];
+	std::array<MidiPunchWindow, 128u> localWindows{};
+	auto localWindowCount = state.PunchWindowCount;
+	for (std::size_t i = 0u; i < localWindowCount && i < localWindows.size(); ++i)
+		localWindows[i] = state.PunchWindows[i];
+
+	const auto invalidSample = (std::numeric_limits<std::uint32_t>::max)();
+	if (includeOpenPunchWindow && state.ActivePunchStart != invalidSample)
+	{
+		bool updatedActiveWindow = false;
+		if (localWindowCount > 0u)
+		{
+			auto& lastWindow = localWindows[localWindowCount - 1u];
+			if (lastWindow.StartSample == state.ActivePunchStart && lastWindow.EndSample <= lastWindow.StartSample)
+			{
+				lastWindow.EndSample = (targetLoopLength > lastWindow.StartSample) ?
+					targetLoopLength :
+					lastWindow.StartSample;
+				updatedActiveWindow = true;
+			}
+		}
+
+		if (!updatedActiveWindow && localWindowCount < localWindows.size())
+			localWindows[localWindowCount++] = MidiPunchWindow{ state.ActivePunchStart, targetLoopLength };
+	}
+
+	std::array<MidiPunchWindow, 128u> renderWindows{};
+	std::size_t renderWindowCount = 0u;
+	const auto phaseOffset = NormalizeMidiLoopOffset(state.SourceStartSample, targetLoopLength);
+	for (std::size_t i = 0u; i < localWindowCount; ++i)
+	{
+		renderWindowCount = AppendShiftedPunchWindow(renderWindows,
+			renderWindowCount,
+			localWindows[i],
+			phaseOffset,
+			targetLoopLength);
+	}
+
+	MidiOverdubRenderParams renderParams;
+	renderParams.SourceEvents = state.SourceEvents.data();
+	renderParams.SourceEventCount = state.SourceEventCount;
+	renderParams.SourceLoopLengthSamps = state.SourceLoopLengthSamps;
+	renderParams.TargetLoopLengthSamps = targetLoopLength;
+	renderParams.PunchWindows = (renderWindowCount > 0u) ? renderWindows.data() : nullptr;
+	renderParams.PunchWindowCount = renderWindowCount;
+
+	auto mergedCount = BuildMidiOverdubBaseEvents(renderParams,
+		_midiOverdubSession.BuildScratch.data(),
+		_midiOverdubSession.BuildScratch.size());
+
+	for (std::size_t i = 0u; i < mergedCount && i < _midiOverdubSession.MergeScratch.size(); ++i)
+		_midiOverdubSession.MergeScratch[i] = _midiOverdubSession.BuildScratch[i];
+
+	for (std::size_t liveIndex = 0u; liveIndex < state.LiveEventCount; ++liveIndex)
+	{
+		if (mergedCount >= _midiOverdubSession.MergeScratch.size())
+			break;
+
+		auto event = state.LiveEvents[liveIndex];
+		if (event.sampleOffset >= targetLoopLength)
+		{
+			if (event.IsNoteOff())
+				event.sampleOffset = targetLoopLength - 1u;
+			else
+				continue;
+		}
+
+		event.sampleOffset = NormalizeMidiLoopOffset(event.sampleOffset + phaseOffset, targetLoopLength);
+
+		_midiOverdubSession.MergeScratch[mergedCount++] = event;
+	}
+
+	CanonicaliseMidiPlaybackOrder(_midiOverdubSession.MergeScratch.data(), mergedCount);
+	return mergedCount;
+}
+
+void LoopTake::_RefreshMidiOverdubPreview(std::uint32_t displayLength) noexcept
+{
+	if (!_midiOverdubSession.Active)
+		return;
+
+	for (std::size_t loopIndex = 0u; loopIndex < _midiLoops.size(); ++loopIndex)
+	{
+		auto midiLoop = _midiLoops[loopIndex];
+		if (!midiLoop)
+			continue;
+
+		midiLoop->StartRecord();
+		const auto mergedCount = _BuildMidiOverdubMergedEvents(loopIndex, displayLength, true);
+		for (std::size_t eventIndex = 0u; eventIndex < mergedCount; ++eventIndex)
+			midiLoop->AppendEventForBuild(_midiOverdubSession.MergeScratch[eventIndex]);
 	}
 }
 
@@ -1938,43 +2095,7 @@ void LoopTake::_FinalizeMidiOverdubLoop(std::size_t loopIndex, std::uint32_t tar
 	if (!midiLoop)
 		return;
 
-	auto& state = _midiOverdubSession.Loops[loopIndex];
-	MidiOverdubRenderParams renderParams;
-	renderParams.SourceEvents = state.SourceEvents.data();
-	renderParams.SourceEventCount = state.SourceEventCount;
-	renderParams.SourceLoopLengthSamps = state.SourceLoopLengthSamps;
-	renderParams.TargetLoopLengthSamps = targetLoopLength;
-	renderParams.PunchWindows = state.PunchWindows.data();
-	renderParams.PunchWindowCount = state.PunchWindowCount;
-
-	auto mergedCount = BuildMidiOverdubBaseEvents(renderParams,
-		_midiOverdubSession.BuildScratch.data(),
-		_midiOverdubSession.BuildScratch.size());
-
-	for (std::size_t i = 0u; i < mergedCount && i < _midiOverdubSession.MergeScratch.size(); ++i)
-		_midiOverdubSession.MergeScratch[i] = _midiOverdubSession.BuildScratch[i];
-
-	for (std::size_t liveIndex = 0u; liveIndex < state.LiveEventCount; ++liveIndex)
-	{
-		if (mergedCount >= _midiOverdubSession.MergeScratch.size())
-			break;
-
-		auto event = state.LiveEvents[liveIndex];
-		if (targetLoopLength == 0u)
-			continue;
-
-		if (event.sampleOffset >= targetLoopLength)
-		{
-			if (event.IsNoteOff())
-				event.sampleOffset = targetLoopLength - 1u;
-			else
-				continue;
-		}
-
-		_midiOverdubSession.MergeScratch[mergedCount++] = event;
-	}
-
-	CanonicaliseMidiPlaybackOrder(_midiOverdubSession.MergeScratch.data(), mergedCount);
+	const auto mergedCount = _BuildMidiOverdubMergedEvents(loopIndex, targetLoopLength, false);
 	midiLoop->ReplaceRecordedEvents(_midiOverdubSession.MergeScratch.data(), mergedCount, targetLoopLength);
 	midiLoop->UpdateModelFromEvents(targetLoopLength, true);
 }

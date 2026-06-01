@@ -232,6 +232,10 @@ namespace engine
 			const char* source) const;
 		void _ResetMidiOverdubSession() noexcept;
 		void _InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noexcept;
+		std::size_t _BuildMidiOverdubMergedEvents(std::size_t loopIndex,
+			std::uint32_t targetLoopLength,
+			bool includeOpenPunchWindow) noexcept;
+		void _RefreshMidiOverdubPreview(std::uint32_t displayLength) noexcept;
 		void _OpenMidiPunchWindow(std::uint32_t punchSample) noexcept;
 		void _CloseMidiPunchWindow(std::uint32_t punchSample, bool synthNoteOffs) noexcept;
 		bool _AppendMidiOverdubLiveEvent(std::size_t loopIndex, const MidiEvent& ev) noexcept;
@@ -246,6 +250,7 @@ namespace engine
 			std::array<MidiEvent, MidiLoop::DefaultCapacity> SourceEvents{};
 			std::size_t SourceEventCount = 0u;
 			std::uint32_t SourceLoopLengthSamps = 0u;
+			std::uint32_t SourceStartSample = 0u;
 			std::array<MidiPunchWindow, 128u> PunchWindows{};
 			std::size_t PunchWindowCount = 0u;
 			std::uint32_t ActivePunchStart = (std::numeric_limits<std::uint32_t>::max)();
