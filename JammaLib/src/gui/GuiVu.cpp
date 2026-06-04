@@ -15,6 +15,7 @@ GuiVu::GuiVu() :
 	_position({ 0, 0 }),
 	_size({ VuWidth, 1 }),
 	_value(audio::FallingValue({ 0.00005, 0.00003, 12000u })),
+	_peakValue(0.0f),
 	_displayValue(0.0f),
 	_displayHold(0.0f),
 	_vertexArray(0),
@@ -92,6 +93,7 @@ void GuiVu::Draw(DrawContext& ctx)
 
 void GuiVu::SetPeak(float peak, unsigned int numSamps)
 {
+	_peakValue.store(peak, std::memory_order_relaxed);
 	_value.SetTarget((double)peak);
 	// Advance the falling value by one step per sample, matching the VU::SetValue convention.
 	for (auto i = 0u; i < numSamps; i++)
@@ -100,6 +102,11 @@ void GuiVu::SetPeak(float peak, unsigned int numSamps)
 	// Publish the latest display values to the render thread via atomics.
 	_displayValue.store((float)_value.Current(), std::memory_order_relaxed);
 	_displayHold.store((float)_value.HoldValue(), std::memory_order_relaxed);
+}
+
+float GuiVu::PeakValue() const noexcept
+{
+	return _peakValue.load(std::memory_order_relaxed);
 }
 
 float GuiVu::DisplayValue() const noexcept

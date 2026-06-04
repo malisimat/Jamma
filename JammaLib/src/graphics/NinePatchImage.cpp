@@ -152,11 +152,15 @@ void NinePatchImage::Draw(DrawContext& ctx)
 	if (!texture || !shader)
 		return;
 
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.SetUniform("TextureSampler", 0u);
+
 	glUseProgram(shader->GetId());
-	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
+	shader->SetUniforms(glCtx);
 
 	glBindVertexArray(_vertexArray);
 
+	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, texture->GetId());
 
 	glDrawArrays(GL_TRIANGLES, 0, VertexCount);

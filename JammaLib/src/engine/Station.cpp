@@ -196,7 +196,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 	if (_stationModel)
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
-		_stationModel->SetOwnerState(GlobalId(), IsSelected(), _isPicking3d);
+		const auto stationLevel = _masterMixer ? _masterMixer->VuHoldLevel() : 0.0f;
+		_stationModel->SetOwnerState(GlobalId(), IsSelected(), _isPicking3d, stationLevel);
 		_stationModel->Draw3d(ctx, 1, pass);
 		glCtx.PopMvp();
 	}

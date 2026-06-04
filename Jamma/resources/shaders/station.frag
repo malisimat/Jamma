@@ -3,12 +3,12 @@
 in vec3 Normal;
 in vec2 Uv;
 in vec3 WorldPos;
+flat in float StationLevelOut;
 
 out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float StationHover;
-uniform float StationLevel;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
@@ -16,7 +16,8 @@ void main()
 {
 	float radialFrac = Uv.x;
 	float partKind   = Uv.y;
-	float stationLevel = clamp(StationLevel, 0.0, 1.0);
+	// accentuate small values
+    float stationLevel = clamp(StationLevelOut, 0.0, 1.0);
 
 	// -- base colour by part --
 	vec3 deckColour  = vec3(0.22, 0.24, 0.27);
@@ -31,21 +32,15 @@ void main()
 	if (partKind > 1.5)
 	{
 		float heightFrac = clamp(radialFrac, 0.0, 1.0);
-		vec3 lowA = vec3(0.98, 0.92, 0.18);  // yellow
-		vec3 lowB = vec3(0.20, 0.90, 0.22);  // green
-		vec3 midA = vec3(0.98, 0.55, 0.08);  // orange
-		vec3 midB = vec3(0.99, 0.88, 0.16);  // yellow
-		vec3 highA = vec3(0.95, 0.10, 0.08); // red
-		vec3 highB = vec3(0.98, 0.50, 0.06); // orange
+		vec3 lowHue = mix(vec3(0.20, 0.90, 0.22), vec3(0.98, 0.92, 0.18), heightFrac);
+		vec3 midHue = mix(vec3(0.98, 0.92, 0.18), vec3(0.98, 0.55, 0.08), heightFrac);
+		vec3 highHue = mix(vec3(0.98, 0.55, 0.08), vec3(0.95, 0.10, 0.08), heightFrac);
 
-		float lowMask = 1.0 - step(0.33, stationLevel);
-		float midMask = step(0.33, stationLevel) * (1.0 - step(0.66, stationLevel));
-		float highMask = step(0.66, stationLevel);
+		float yellowToOrange = smoothstep(0.25, 0.66, stationLevel);
+		float orangeToRed = smoothstep(0.58, 1.00, stationLevel);
 
-		vec3 lowGrad = mix(lowA, lowB, heightFrac);
-		vec3 midGrad = mix(midA, midB, heightFrac);
-		vec3 highGrad = mix(highA, highB, heightFrac);
-		base = (lowMask * lowGrad) + (midMask * midGrad) + (highMask * highGrad);
+		vec3 lowMid = mix(lowHue, midHue, yellowToOrange);
+		base = mix(lowMid, highHue, orangeToRed);
 	}
 
 	// -- cheap normal-based diffuse (single overhead light) --

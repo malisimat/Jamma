@@ -165,6 +165,11 @@ float AudioMixer::VuLevel() const noexcept
 	return _vu.DisplayValue();
 }
 
+float AudioMixer::VuPeakLevel() const noexcept
+{
+	return _vu.PeakValue();
+}
+
 float AudioMixer::VuHoldLevel() const noexcept
 {
 	return _vu.HoldValue();
