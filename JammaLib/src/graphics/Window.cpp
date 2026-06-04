@@ -90,7 +90,11 @@ void Window::LoadResources()
 					args.push_back(arg);
 				}
 
-				_resourceLib.LoadResource((Type)resourceType, name, args);
+				if (!_resourceLib.LoadResource((Type)resourceType, name, args))
+				{
+					std::cout << "Window::LoadResources failed for type=" << resourceType
+						<< " name='" << name << "'" << std::endl;
+				}
 			}
 		}
 	}

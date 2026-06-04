@@ -15,7 +15,7 @@ const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
-const utils::Size2d GuiRack::_DragSize = { 32, 32 };
+const utils::Size2d GuiRack::_DragSize = { 140, 100 };
 
 GuiRack::GuiRack(GuiRackParams params) :
 	GuiElement(params),

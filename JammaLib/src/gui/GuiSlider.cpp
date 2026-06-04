@@ -8,6 +8,8 @@ using namespace utils;
 using namespace base;
 using namespace actions;
 using graphics::GlDrawContext;
+using graphics::NinePatchImage;
+using graphics::NinePatchImageParams;
 using resources::ResourceLib;
 
 GuiSlider::GuiSlider(GuiSliderParams params) :
@@ -26,6 +28,10 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 		params.DragDownTexture,
 		params.DragOutTexture,
 		{} )),
+	_dragImage(NinePatchImageParams(
+		DrawableParams{ params.DragTexture },
+		SizeableParams{ params.DragControlSize, params.DragControlSize },
+		"texture")),
 	_mixer()
 {
 	SetValue(params.InitValue);
@@ -61,6 +67,7 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	_sliderParams.DragControlSize = dragSize;
 	_sliderParams.DragGap = dragGap;
 	_dragElement.SetSize(dragSize);
+	_dragImage.SetSize(dragSize);
 
 	OnValueChange(true);
 }
@@ -79,7 +86,10 @@ void GuiSlider::Draw(DrawContext & ctx)
 	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-	_dragElement.Draw(ctx);
+	auto dragPos = _dragElement.Position();
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(dragPos.X, dragPos.Y, 0.f)));
+	_dragImage.Draw(ctx);
+	glCtx.PopMvp();
 
 	auto mixer = _mixer.lock();
 	if (mixer)
@@ -208,6 +218,7 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_dragElement.InitResources(resourceLib, forceInit);
+	_dragImage.InitResources(resourceLib, forceInit);
 	
 	// Initialize mixer's resources (VU meter shaders, vertex buffers, etc.)
 	auto mixer = _mixer.lock();
@@ -220,6 +231,7 @@ void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void GuiSlider::_ReleaseResources()
 {
 	_dragElement.ReleaseResources();
+	_dragImage.ReleaseResources();
 	
 	// Release mixer's resources
 	auto mixer = _mixer.lock();

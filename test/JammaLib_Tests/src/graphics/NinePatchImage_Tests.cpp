@@ -50,7 +50,7 @@ TEST(NinePatchImageTest, BorderDetection_FindsEncodingPixel)
 	pixels[px + 0] = 255;
 	pixels[px + 1] = 0;
 	pixels[px + 2] = 255;
-	pixels[px + 3] = 0;
+	pixels[px + 3] = 255;
 
 	auto border = NinePatchImage::DetectBorder(pixels, width, height);
 
@@ -69,7 +69,7 @@ TEST(NinePatchImageTest, BorderDetection_PatchesEncodingPixel)
 	pixels[px + 0] = 255;
 	pixels[px + 1] = 0;
 	pixels[px + 2] = 255;
-	pixels[px + 3] = 0;
+	pixels[px + 3] = 255;
 	pixels[px + 4] = 10;
 	pixels[px + 5] = 20;
 	pixels[px + 6] = 30;
@@ -106,6 +106,18 @@ TEST(NinePatchImageTest, BuildPositions_CentreStretches)
 	EXPECT_FLOAT_EQ(192.0f, xMax);
 	EXPECT_FLOAT_EQ(8.0f, yMin);
 	EXPECT_FLOAT_EQ(92.0f, yMax);
+}
+
+TEST(NinePatchImageTest, BuildPositions_ZeroBorderFillsWholeImage)
+{
+	auto positions = NinePatchImage::BuildPositions(0, 0, { 140, 100 });
+	auto [xMin, xMax] = CellXBounds(positions, 4);
+	auto [yMin, yMax] = CellYBounds(positions, 4);
+
+	EXPECT_FLOAT_EQ(0.0f, xMin);
+	EXPECT_FLOAT_EQ(140.0f, xMax);
+	EXPECT_FLOAT_EQ(0.0f, yMin);
+	EXPECT_FLOAT_EQ(100.0f, yMax);
 }
 
 TEST(NinePatchImageTest, BuildPositions_MinimumSize)
