@@ -83,7 +83,7 @@ TEST(StationModel_Geometry, Side_HasExpectedTriCount)
 	auto [verts, uvs] = StationModel::BuildSide(NumSides, 100.0f, 14.0f);
 
 	const auto numTris = verts.size() / 9u;
-	EXPECT_EQ(numTris, NumSides * 2u);
+	EXPECT_EQ(numTris, NumSides * 2u * 12u);
 }
 
 TEST(StationModel_Geometry, BottomBevel_HasExpectedTriCount)

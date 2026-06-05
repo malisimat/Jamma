@@ -16,8 +16,13 @@ void main()
 {
     float stationLevel = pow(clamp(StationLevel, 0.0, 1.0), 0.5);
 
-    // Radius expansion around the Y axis.
-    float radiusScale = 0.5 + 5.0 * stationLevel;
+    // Local model height runs from y=0 at the top to y=-470 at the bottom.
+    // A raised cosine gives a narrow profile at the caps and a wide profile in the middle.
+    float y01 = clamp((-PositionIN.y) / 470.0, 0.0, 1.0);
+    float radialProfile = 0.5 - 0.5 * cos(6.28318530718 * y01);
+
+    // Radius expansion around the Y axis, modulated by height.
+    float radiusScale = 0.5 + 4.0 * stationLevel * radialProfile;
 
     vec3 pos = PositionIN;
     pos.xz *= radiusScale;

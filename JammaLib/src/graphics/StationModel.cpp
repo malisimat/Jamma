@@ -19,6 +19,7 @@ namespace
 {
 	constexpr unsigned int  DefaultNumSides    = 32u;
 	constexpr unsigned int  DefaultNumRibs     = 0u;
+	constexpr unsigned int  SideVerticalSections = 12u;
 	constexpr float         DeckRadius         = 9.6f;
 	constexpr float         BevelWidth         = 2.0f;
 	constexpr float         BevelHeight        = 10.0f;
@@ -145,8 +146,8 @@ StationModel::BuildSide(unsigned int numSides, float radius, float sideHeight)
 	std::vector<float> verts;
 	std::vector<float> uvs;
 
-	verts.reserve(numSides * 6 * 3);
-	uvs.reserve(numSides * 6 * 2);
+	verts.reserve(numSides * SideVerticalSections * 6 * 3);
+	uvs.reserve(numSides * SideVerticalSections * 6 * 2);
 
 	const float bevelDrop = BevelHeight;   // top of side = bottom of bevel
 	const float yTop = -bevelDrop;
@@ -162,19 +163,28 @@ StationModel::BuildSide(unsigned int numSides, float radius, float sideHeight)
 		const float c0 = std::cos(a0), s0 = std::sin(a0);
 		const float c1 = std::cos(a1), s1 = std::sin(a1);
 
-		const glm::vec3 t0(c0 * r, yTop, s0 * r);
-		const glm::vec3 t1(c1 * r, yTop, s1 * r);
-		const glm::vec3 b0(c0 * r, yBot, s0 * r);
-		const glm::vec3 b1(c1 * r, yBot, s1 * r);
-		const float uvTop = 1.0f;
-		const float uvBottom = 0.0f;
+		for (unsigned int section = 0u; section < SideVerticalSections; ++section)
+		{
+			const float t0 = static_cast<float>(section) / static_cast<float>(SideVerticalSections);
+			const float t1 = static_cast<float>(section + 1u) / static_cast<float>(SideVerticalSections);
 
-		// Outward-facing: t0, b0, b1, t1
-		PushQuad(verts, uvs,
-			t0, uvTop, UV_SIDE,
-			b0, uvBottom, UV_SIDE,
-			b1, uvBottom, UV_SIDE,
-			t1, uvTop, UV_SIDE);
+			const float y0 = glm::mix(yTop, yBot, t0);
+			const float y1 = glm::mix(yTop, yBot, t1);
+
+			const glm::vec3 p0(c0 * r, y0, s0 * r);
+			const glm::vec3 p1(c1 * r, y0, s1 * r);
+			const glm::vec3 p2(c1 * r, y1, s1 * r);
+			const glm::vec3 p3(c0 * r, y1, s0 * r);
+			const float uvTop = 1.0f - t0;
+			const float uvBottom = 1.0f - t1;
+
+			// Outward-facing: p0, p1, p2, p3
+			PushQuad(verts, uvs,
+				p0, uvTop, UV_SIDE,
+				p1, uvTop, UV_SIDE,
+				p2, uvBottom, UV_SIDE,
+				p3, uvBottom, UV_SIDE);
+		}
 	}
 
 	return { verts, uvs };
