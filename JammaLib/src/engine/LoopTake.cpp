@@ -137,6 +137,7 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_midiVisualPlayIndex(0ul),
 	_midiVisualLoopLength(0ul),
 	_isPunchInActive(false),
+	_isMidiPunchInActive(false),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
 	_loops(),
@@ -930,6 +931,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
+	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_backLoops.clear();
 	_RemoveMidiModelChildren();
 	_ResetMidiOverdubSession();
@@ -992,7 +994,7 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 	bool recorded = false;
 	const auto recordedNow = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	const auto isOverdubCapture = _midiOverdubSession.Active;
-	const auto punchActive = _isPunchInActive.load(std::memory_order_relaxed);
+	const auto punchActive = _isMidiPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto i = 0u; i < _midiLoops.size(); ++i)
 	{
@@ -1131,10 +1133,10 @@ void LoopTake::Play(unsigned long index,
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)
 	{
-		if (_isPunchInActive.load(std::memory_order_relaxed))
+		if (_isMidiPunchInActive.load(std::memory_order_relaxed))
 		{
 			_CloseMidiPunchWindow(midiLoopLength, true);
-			_isPunchInActive.store(false, std::memory_order_relaxed);
+			_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 			if (STATE_PUNCHEDIN == state)
 				state = STATE_OVERDUBBING;
 		}
@@ -1293,6 +1295,7 @@ void LoopTake::Ditch()
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
+	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_ResetMidiOverdubSession();
 
 	for (auto& loop : _loops)
@@ -1329,6 +1332,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
+	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_backLoops.clear();
 	_RemoveMidiModelChildren();
 
@@ -1374,23 +1378,29 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_changesMade = true;
 }
 
-void LoopTake::PunchIn()
+void LoopTake::PunchIn(bool applyAudio, bool applyMidi)
 {
 	auto state = _state.load(std::memory_order_relaxed);
-	if ((STATE_OVERDUBBING != state) &&
-		(STATE_OVERDUBBINGRECORDING != state) &&
-		(STATE_PLAYING != state))
+	const auto canPunchAudio = (STATE_OVERDUBBING == state) ||
+		(STATE_OVERDUBBINGRECORDING == state) ||
+		(STATE_PLAYING == state);
+	const auto canPunchMidi = applyMidi && _midiOverdubSession.Active;
+	if (!canPunchAudio && !canPunchMidi)
+		return;
+
+	if (applyMidi && canPunchMidi && !_isMidiPunchInActive.load(std::memory_order_relaxed))
+	{
+		_isMidiPunchInActive.store(true, std::memory_order_release);
+		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		_OpenMidiPunchWindow(punchSample);
+	}
+
+	if (!applyAudio || !canPunchAudio)
 		return;
 
 	_isPunchInActive.store(true, std::memory_order_release);
 	if (STATE_OVERDUBBING == state)
 		_state.store(STATE_PUNCHEDIN, std::memory_order_release);
-
-	if (_midiOverdubSession.Active)
-	{
-		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
-		_OpenMidiPunchWindow(punchSample);
-	}
 
 	for (auto& loop : _loops)
 	{
@@ -1398,21 +1408,30 @@ void LoopTake::PunchIn()
 	}
 }
 
-void LoopTake::PunchOut()
+void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 {
 	auto state = _state.load(std::memory_order_relaxed);
-	if (!_isPunchInActive.load(std::memory_order_relaxed) && (STATE_PUNCHEDIN != state))
+	const auto hasAudioPunch = _isPunchInActive.load(std::memory_order_relaxed) || (STATE_PUNCHEDIN == state);
+	const auto hasMidiPunch = _isMidiPunchInActive.load(std::memory_order_relaxed);
+	if ((!applyAudio || !hasAudioPunch) && (!applyMidi || !hasMidiPunch))
+		return;
+
+	if (applyMidi && hasMidiPunch)
+	{
+		_isMidiPunchInActive.store(false, std::memory_order_release);
+		if (_midiOverdubSession.Active)
+		{
+		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
+		_CloseMidiPunchWindow(punchSample, true);
+		}
+	}
+
+	if (!applyAudio || !hasAudioPunch)
 		return;
 
 	_isPunchInActive.store(false, std::memory_order_release);
 	if (STATE_PUNCHEDIN == state)
 		_state.store(STATE_OVERDUBBING, std::memory_order_release);
-
-	if (_midiOverdubSession.Active)
-	{
-		const auto punchSample = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
-		_CloseMidiPunchWindow(punchSample, true);
-	}
 
 	for (auto& loop : _loops)
 	{

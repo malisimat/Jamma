@@ -254,6 +254,17 @@ std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
 	SetupConsole();
+	{
+		const DWORD cwdLength = GetCurrentDirectoryW(0, nullptr);
+		if (cwdLength > 0)
+		{
+			std::wstring cwd(cwdLength, L'\0');
+			GetCurrentDirectoryW(cwdLength, cwd.data());
+			if (!cwd.empty() && cwd.back() == L'\0')
+				cwd.pop_back();
+			std::wcout << L"[BOOT] cwd=" << cwd << std::endl;
+		}
+	}
 	// Initialize COM as STA matching the Steinberg editorhost pattern.
 	// CoInitializeEx (not OleInitialize) is used here so that VSTGUI's own
 	// OleInitialize call inside Win32Frame::Win32Frame() receives S_OK (first

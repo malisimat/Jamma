@@ -1296,6 +1296,32 @@ TEST(LoopTakeMidiOverdub, PunchOutClosesHeldLiveNoteAtPunchEnd)
 	EXPECT_EQ(64u, second.sampleOffset);
 }
 
+TEST(LoopTakeMidiOverdub, MidiPunchCanOpenWithoutChangingAudioPunchState)
+{
+	auto take = MakeLoopTake("overdub-midi-only-punch");
+	take->Overdub({ 0u }, "station", { 3u }, { "Keys" });
+
+	take->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	take->PunchIn(false, true);
+	EXPECT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(20u, 3u, 60u, 100u), "Keys", 20u));
+	take->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(30u, 3u, 60u), "Keys", 30u));
+	take->PunchOut(false, true);
+	take->Play(0u, 64u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(2u, take->GetMidiLoops()[0]->EventCount());
+	MidiEvent first{};
+	MidiEvent second{};
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, first));
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(1u, second));
+	EXPECT_EQ(20u, first.sampleOffset);
+	EXPECT_TRUE(first.IsNoteOn());
+	EXPECT_EQ(30u, second.sampleOffset);
+	EXPECT_TRUE(second.IsNoteOff());
+}
+
 TEST(LoopTakeMidiOverdub, PreviewIncludesSourceAndLiveEventsWhileRecording)
 {
 	auto source = MakeLoopTake("source-midi-preview");

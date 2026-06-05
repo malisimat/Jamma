@@ -169,8 +169,8 @@ namespace engine
 			std::vector<unsigned int> midiChannels = {},
 			std::vector<std::string> midiDevices = {},
 			std::shared_ptr<LoopTake> sourceTake = nullptr);
-		void PunchIn();
-		void PunchOut();
+		void PunchIn(bool applyAudio = true, bool applyMidi = true);
+		void PunchOut(bool applyAudio = true, bool applyMidi = true);
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
@@ -289,6 +289,7 @@ namespace engine
 		unsigned long _midiVisualPlayIndex;
 		unsigned long _midiVisualLoopLength;
 		std::atomic<bool> _isPunchInActive;
+		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::vector<std::shared_ptr<Loop>> _loops;
