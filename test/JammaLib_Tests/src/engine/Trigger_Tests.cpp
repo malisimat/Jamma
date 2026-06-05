@@ -747,6 +747,86 @@ TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
 }
 
+TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	trigger->AddInputChannel(0u);
+	trigger->AddMidiInputChannel(3u);
+	trigger->AddMidiInputDevice("Keys");
+
+	io::UserConfig cfg;
+	cfg.Audio = {
+		"",
+		48000,
+		256,
+		1000000,
+		0,
+		2,
+		2,
+		2
+	};
+	cfg.Loop = { 0 };
+	cfg.Trigger = { 64, 0 };
+
+	auto action = KeyAction();
+	action.SetUserConfig(cfg);
+
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+
+	action.KeyChar = ActivateChar;
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+
+	auto actionsBeforeTick = receiver->Actions();
+	ASSERT_EQ(5u, actionsBeforeTick.size());
+	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[1].ActionType);
+	EXPECT_FALSE(actionsBeforeTick[1].ApplyToTargetTake);
+	EXPECT_TRUE(actionsBeforeTick[1].ApplyToSourceTake);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[2].ActionType);
+	EXPECT_TRUE(actionsBeforeTick[2].ApplyToTargetTake);
+	EXPECT_FALSE(actionsBeforeTick[2].ApplyToSourceTake);
+	EXPECT_FALSE(actionsBeforeTick[2].ApplyToTargetAudio);
+	EXPECT_TRUE(actionsBeforeTick[2].ApplyToTargetMidi);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[3].ActionType);
+	EXPECT_FALSE(actionsBeforeTick[3].ApplyToTargetTake);
+	EXPECT_TRUE(actionsBeforeTick[3].ApplyToSourceTake);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[4].ActionType);
+	EXPECT_TRUE(actionsBeforeTick[4].ApplyToTargetTake);
+	EXPECT_FALSE(actionsBeforeTick[4].ApplyToSourceTake);
+	EXPECT_FALSE(actionsBeforeTick[4].ApplyToTargetAudio);
+	EXPECT_TRUE(actionsBeforeTick[4].ApplyToTargetMidi);
+
+	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+
+	auto actionsAfterTick = receiver->Actions();
+	ASSERT_EQ(7u, actionsAfterTick.size());
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsAfterTick[5].ActionType);
+	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetTake);
+	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
+	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetAudio);
+	EXPECT_FALSE(actionsAfterTick[5].ApplyToTargetMidi);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[6].ActionType);
+	EXPECT_TRUE(actionsAfterTick[6].ApplyToTargetTake);
+	EXPECT_FALSE(actionsAfterTick[6].ApplyToSourceTake);
+	EXPECT_TRUE(actionsAfterTick[6].ApplyToTargetAudio);
+	EXPECT_FALSE(actionsAfterTick[6].ApplyToTargetMidi);
+}
+
 TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";

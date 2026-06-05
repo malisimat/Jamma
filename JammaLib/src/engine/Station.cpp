@@ -761,7 +761,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	}
 	case TriggerAction::TRIGGER_PUNCHIN_START:
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchIn();
+			loopTake.value()->PunchIn(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 
 		if (action.ApplyToSourceTake)
 		{
@@ -774,7 +774,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchOut();
+			loopTake.value()->PunchOut(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 
 		if (action.ApplyToSourceTake)
 		{

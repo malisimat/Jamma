@@ -11,7 +11,9 @@ TriggerAction::TriggerAction() :
 	MidiInputChannels({}),
 	MidiInputDevices({}),
 	ApplyToTargetTake(true),
-	ApplyToSourceTake(true)
+	ApplyToSourceTake(true),
+	ApplyToTargetAudio(true),
+	ApplyToTargetMidi(true)
 {
 }
 
