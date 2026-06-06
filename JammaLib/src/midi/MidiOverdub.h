@@ -8,7 +8,7 @@
 
 #include "MidiEvent.h"
 #include "MidiLoop.h"
-#include "MidiNoteSpan.h"
+#include "MidiNote.h"
 
 namespace engine
 {

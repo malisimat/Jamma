@@ -1,4 +1,4 @@
-#include "MidiNoteSpan.h"
+#include "MidiNote.h"
 
 #include <array>
 

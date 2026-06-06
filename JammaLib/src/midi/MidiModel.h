@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "../gui/GuiModel.h"
-#include "MidiNoteSpan.h"
+#include "MidiNote.h"
 
 namespace engine
 {

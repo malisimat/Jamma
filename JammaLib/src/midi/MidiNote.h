@@ -25,9 +25,6 @@ namespace engine
 		}
 	};
 
-	// Back-compat alias retained while call sites migrate to MidiNote naming.
-	using MidiNoteSpan = MidiNote;
-
 	struct MidiNoteSnapshot
 	{
 		std::bitset<MidiNote::TotalNoteSlots> Held{};

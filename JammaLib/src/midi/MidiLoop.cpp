@@ -1,7 +1,7 @@
 #include "MidiLoop.h"
 
 #include "../graphics/MidiModel.h"
-#include "MidiNoteSpan.h"
+#include "MidiNote.h"
 #include "MidiQuantisation.h"
 #include "../include/Constants.h"
 
