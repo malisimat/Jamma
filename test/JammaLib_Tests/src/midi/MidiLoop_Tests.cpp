@@ -421,6 +421,39 @@ TEST(MidiLoop, AttachedModelClampsRecordingNoteToDisplayLength) {
 	EXPECT_EQ(1u, model->NoteInstanceCount());
 }
 
+TEST(MidiModelDisc, EmptyLoopWithLengthStillRendersDiscInstance) {
+	auto model = std::make_shared<MidiModel>(MidiModelParams());
+	model->UpdateModel({}, 1000u);
+
+	// No notes, but the middle-C plane disc is always present so the loop
+	// remains a reliable hover/select target.
+	EXPECT_EQ(0u, model->NoteInstanceCount());
+	EXPECT_GE(model->TotalInstanceCount(), 1u);
+}
+
+TEST(MidiModelDisc, ZeroLengthLoopRendersNoInstances) {
+	auto model = std::make_shared<MidiModel>(MidiModelParams());
+	model->UpdateModel({}, 0u);
+
+	EXPECT_EQ(0u, model->NoteInstanceCount());
+	EXPECT_EQ(0u, model->TotalInstanceCount());
+}
+
+TEST(MidiModelDisc, LoopWithNotesRendersDiscPlusEachNote) {
+	MidiLoop loop;
+	auto model = std::make_shared<MidiModel>(MidiModelParams());
+	loop.AttachModel(model);
+
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0, 60, 100));
+	loop.RecordEvent(MidiEvent::MakeNoteOff(500u, 0, 60));
+
+	ASSERT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+	// One disc instance is appended on top of the per-note instances.
+	EXPECT_EQ(model->NoteInstanceCount() + 1u, model->TotalInstanceCount());
+}
+
 TEST(LoopTakeMidiVisualization, RecordCreatesMidiModelChild)
 {
 	auto take = MakeLoopTake();
