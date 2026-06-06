@@ -37,7 +37,8 @@ LoopModel::LoopModel(LoopModelParams params) :
 	_lastWaveformSourceLength(0ul),
 	_lastWaveformDisplayLength(0ul),
 	_lastWaveformOffset(0ul),
-	_lastWaveformRadius(0.0f)
+	_lastWaveformRadius(0.0f),
+	_waveformColorScale(1.0f)
 {
 	auto [fixedVerts, fixedUvs] = BuildFixedGeometry(_WaveformSegments, _UnitMeshRadius);
 	SetGeometry(std::move(fixedVerts), std::move(fixedUvs));
@@ -107,6 +108,7 @@ void LoopModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("WaveformMinHeight", _MinHeight);
 	glCtx.SetUniform("WaveformColorMultiplier", waveformColorMultiplier);
 	glCtx.SetUniform("WaveformUnitMeshRadius", _UnitMeshRadius);
+	glCtx.SetUniform("WaveformColorScale", _waveformColorScale);
 
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(dynamic_cast<GlDrawContext&>(ctx));
@@ -146,6 +148,11 @@ void LoopModel::SetLoopIndexFrac(double frac)
 void LoopModel::SetLoopState(LoopModelState state)
 {
 	_modelState = state;
+}
+
+void LoopModel::SetWaveformColorScale(float scale) noexcept
+{
+	_waveformColorScale = std::max(0.0f, scale);
 }
 
 unsigned int LoopModel::TotalNumLeds(unsigned int vuHeight,

@@ -250,6 +250,9 @@ namespace audio
 		void DrawVu(base::DrawContext& ctx, utils::Size2d sliderSize);
 		// Called from hot audio path when WriteBlock is bypassed (e.g. master mixer).
 		void UpdateVu(float peak, unsigned int numSamps);
+		float VuPeakLevel() const noexcept;
+		float VuLevel() const noexcept;
+		float VuHoldLevel() const noexcept;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

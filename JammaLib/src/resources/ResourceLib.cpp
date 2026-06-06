@@ -1,4 +1,6 @@
 #include "ResourceLib.h"
+#include <array>
+#include <iostream>
 
 using namespace resources;
 using namespace graphics;
@@ -25,46 +27,74 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 	{
 		case TEXTURE:
 		{
-			auto texFile = "./resources/textures/" + name + ".tga";
-			auto texOpt = TextureResource::Load(texFile);
+			const std::array<std::string, 2> texFiles = {
+				"./resources/textures/" + name + ".tga",
+				"./Jamma/resources/textures/" + name + ".tga"
+			};
 
-			if (texOpt.has_value())
+			for (const auto& texFile : texFiles)
 			{
-				auto[tex, width, height] = texOpt.value();
-				_resources.emplace(name, std::make_shared<TextureResource>(name, tex, width, height));
+				auto texOpt = TextureResource::Load(texFile);
 
-				auto t2 = _resources[name]->GetType();
-
-				return true;
+				if (texOpt.has_value())
+				{
+					auto[tex, width, height] = texOpt.value();
+					_resources.emplace(name, std::make_shared<TextureResource>(name, tex, width, height));
+					return true;
+				}
 			}
+
+			std::cout << "ResourceLib: failed to load texture '" << name
+				<< "' from known texture paths" << std::endl;
 
 			break;
 		}
 		case SHADER:
 		{
-			auto vertFile = "./resources/shaders/" + name + ".vert";
-			auto fragFile = "./resources/shaders/" + name + ".frag";
-			auto shader = ShaderResource::Load(vertFile, fragFile);
+			const std::array<std::string, 2> shaderRoots = {
+				"./resources/shaders/",
+				"./Jamma/resources/shaders/"
+			};
 
-			if (shader.has_value())
+			for (const auto& shaderRoot : shaderRoots)
 			{
-				_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
-				return true;
+				auto vertFile = shaderRoot + name + ".vert";
+				auto fragFile = shaderRoot + name + ".frag";
+				auto shader = ShaderResource::Load(vertFile, fragFile);
+
+				if (shader.has_value())
+				{
+					_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
+					return true;
+				}
 			}
+
+			std::cout << "ResourceLib: failed to load shader '" << name
+				<< "' from known shader paths" << std::endl;
 
 			break;
 		}
 		case WAV:
 		{
-			auto wavFile = "./resources/wav/" + name + ".wav";
-			auto wavOpt = WavResource::Load(wavFile);
+			const std::array<std::string, 2> wavFiles = {
+				"./resources/wav/" + name + ".wav",
+				"./Jamma/resources/wav/" + name + ".wav"
+			};
 
-			if (wavOpt.has_value())
+			for (const auto& wavFile : wavFiles)
 			{
-				auto[wav, numSamps, sampleRate] = wavOpt.value();
-				_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
-				return true;
+				auto wavOpt = WavResource::Load(wavFile);
+
+				if (wavOpt.has_value())
+				{
+					auto[wav, numSamps, sampleRate] = wavOpt.value();
+					_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
+					return true;
+				}
 			}
+
+			std::cout << "ResourceLib: failed to load wav '" << name
+				<< "' from known wav paths" << std::endl;
 
 			break;
 		}

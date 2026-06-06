@@ -35,6 +35,9 @@ namespace gui
 
 		// Called from the audio thread (protected by Scene's audio mutex).
 		void SetPeak(float peak, unsigned int numSamps);
+		float PeakValue() const noexcept;
+		float DisplayValue() const noexcept;
+		float HoldValue() const noexcept;
 
 		void SetVisible(bool visible);
 		bool IsVisible() const;
@@ -58,6 +61,7 @@ namespace gui
 		audio::FallingValue _value;
 
 		// Atomic snapshots written by the audio thread and read by the render thread.
+		std::atomic<float> _peakValue;
 		std::atomic<float> _displayValue;
 		std::atomic<float> _displayHold;
 

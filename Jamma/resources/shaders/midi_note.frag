@@ -2,17 +2,37 @@
 
 in float Velocity;
 in float Diff;
+flat in float IsDisc;
+flat in float IsEndCap;
 
 out vec4 ColorOUT;
 
 uniform int ObjectId;
 uniform float Highlight;
 uniform float LoopHover;
+uniform float DiscAlpha;
 uniform int RenderMode;
+
+const int RenderModeScene = 0;
+const int RenderModePicker = 1;
+const int RenderModeHighlight = 2;
+const int RenderModeNotesOnly = 3;
+const int RenderModeDiscOnly = 4;
 
 void main()
 {
-    if (RenderMode == 1)
+    // Discard end-cap faces on full-circle disc instances: both caps map to
+    // the same angle (0/2pi) and produce an ugly overlapping seam fin.
+    if (IsDisc > 0.5 && IsEndCap > 0.5)
+        discard;
+
+    if (RenderMode == RenderModeNotesOnly && IsDisc > 0.5)
+        discard;
+
+    if (RenderMode == RenderModeDiscOnly && IsDisc < 0.5)
+        discard;
+
+    if (RenderMode == RenderModePicker)
     {
         float r = ((ObjectId >> 16) & 0xff) / 255.0;
         float g = ((ObjectId >> 8) & 0xff) / 255.0;
@@ -21,9 +41,16 @@ void main()
         return;
     }
 
-    if (RenderMode == 2)
+    if (RenderMode == RenderModeHighlight)
     {
         ColorOUT = vec4(Highlight);
+        return;
+    }
+
+    if (IsDisc > 0.5)
+    {
+        vec3 discColor = vec3(0.55, 0.6, 0.7) * Diff;
+        ColorOUT = vec4(discColor + (LoopHover * vec3(0.18, 0.18, 0.12)), DiscAlpha);
         return;
     }
 

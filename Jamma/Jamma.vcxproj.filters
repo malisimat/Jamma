@@ -96,6 +96,12 @@
     <Content Include="resources\shaders\texture.vert">
       <Filter>resources\shaders</Filter>
     </Content>
+    <Content Include="resources\shaders\station.frag">
+      <Filter>resources\shaders</Filter>
+    </Content>
+    <Content Include="resources\shaders\station.vert">
+      <Filter>resources\shaders</Filter>
+    </Content>
     <Content Include="resources\shaders\texture_shaded.frag">
       <Filter>resources\shaders</Filter>
     </Content>

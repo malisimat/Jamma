@@ -8,12 +8,13 @@
 #include "GuiElement.h"
 #include "ActionSender.h"
 #include "ActionUndo.h"
+#include "../graphics/NinePatchImage.h"
 #include "../resources/TextureResource.h"
 
 // Forward declaration to avoid circular include (AudioMixer.h -> GuiSlider.h).
 namespace audio { class AudioMixer; }
 
-namespace gui
+namespace gui 
 {
 
 	class GuiSliderParams : public base::GuiElementParams
@@ -129,6 +130,7 @@ namespace gui
 		utils::Position2d _initClickPos;
 		utils::Position2d _initDragPos;
 		base::GuiElement _dragElement;
+		graphics::NinePatchImage _dragImage;
 		double _valueOffset;
 		double _initValue;
 		std::weak_ptr<audio::AudioMixer> _mixer;

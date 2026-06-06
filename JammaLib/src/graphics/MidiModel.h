@@ -21,6 +21,10 @@ namespace engine
 		float RadialThickness;
 		float NoteHeight;
 		float PitchStep;
+		float DiscRadiusFactor;
+		float DiscRadialThicknessFactor;
+		float DiscHeightFactor;
+		float DiscAlpha;
 		std::uint8_t CenterPitch;
 	};
 
@@ -31,6 +35,7 @@ namespace engine
 		{
 			std::vector<gui::GuiModel::InstanceAttribute> Attributes;
 			unsigned int InstanceCount = 0u;
+			unsigned int NoteCount = 0u;
 		};
 
 	public:
@@ -45,7 +50,8 @@ namespace engine
 
 		double LoopIndexFrac() const noexcept { return _loopIndexFrac; }
 		void SetLoopIndexFrac(double frac) noexcept;
-		unsigned int NoteInstanceCount() const noexcept { return _backInstanceCount; }
+		unsigned int NoteInstanceCount() const noexcept { return _backNoteInstanceCount; }
+		unsigned int TotalInstanceCount() const noexcept { return _backInstanceCount; }
 		void UpdateModel(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps);
 		void QueueModelUpdate(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps);
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
@@ -63,6 +69,7 @@ namespace engine
 	private:
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
+		unsigned int _backNoteInstanceCount;
 		std::atomic<std::shared_ptr<ModelInstanceData>> _pendingModelUpdate;
 	};
 }

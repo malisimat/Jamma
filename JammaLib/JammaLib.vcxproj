@@ -226,6 +226,7 @@
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\Quantisation.h" />
     <ClInclude Include="src\graphics\QuantisationModel.h" />
+    <ClInclude Include="src\graphics\StationModel.h" />
     <ClInclude Include="src\base\Tweakable.h" />
     <ClInclude Include="src\graphics\VU.h" />
     <ClInclude Include="src\base\MultiAudible.h" />
@@ -373,6 +374,7 @@
     <ClCompile Include="src\graphics\LoopModel.cpp" />
     <ClCompile Include="src\engine\Quantisation.cpp" />
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
+    <ClCompile Include="src\graphics\StationModel.cpp" />
     <ClCompile Include="src\graphics\VU.cpp" />
     <ClCompile Include="src\graphics\Camera.cpp" />
     <ClCompile Include="src\gui\GuiSelector.cpp" />

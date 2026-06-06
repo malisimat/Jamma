@@ -119,6 +119,9 @@
     <ClInclude Include="src\graphics\QuantisationModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
+    <ClInclude Include="src\graphics\StationModel.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiModel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -707,6 +710,9 @@
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\QuantisationModel.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\StationModel.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\MathUtils.cpp">

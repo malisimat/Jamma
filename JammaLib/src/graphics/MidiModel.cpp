@@ -42,6 +42,10 @@ MidiModelParams::MidiModelParams()
 	  RadialThickness(0.035f),
 	  NoteHeight(0.035f),
 	  PitchStep(0.035f),
+	  DiscRadiusFactor(1.0f),
+	  DiscRadialThicknessFactor(0.12f),
+	  DiscHeightFactor(0.06f),
+	  DiscAlpha(0.2f),
 	  CenterPitch(60)
 {
 	ModelTextures = { "levels" };
@@ -56,6 +60,10 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 	  RadialThickness(0.035f),
 	  NoteHeight(0.035f),
 	  PitchStep(0.035f),
+	  DiscRadiusFactor(1.0f),
+	  DiscRadialThicknessFactor(0.12f),
+	  DiscHeightFactor(0.06f),
+	  DiscAlpha(0.2f),
 	  CenterPitch(60)
 {
 	if (ModelTextures.empty())
@@ -72,9 +80,22 @@ MidiModel::MidiModel(MidiModelParams params)
 	: GuiModel(params),
 	  _midiParams(params),
 	  _loopIndexFrac(0.0),
+	  _backNoteInstanceCount(0u),
 	  _pendingModelUpdate(nullptr)
 {
-	SetInstanceAttributes({}, 0u);
+	// Emit a disc at the minimum radius so the loop target is visible
+	// from the moment it is created (before the loop length is known).
+	constexpr float defaultRadius = 50.0f;
+	SetInstanceAttributes(
+		{
+			{ TimePitchAttribute, 4u, { 0.0f, 1.0f, 0.0f, 0.0f } },
+			{ ShapeAttribute, 4u,
+				{ defaultRadius * _midiParams.DiscRadiusFactor,
+				  defaultRadius * _midiParams.DiscRadialThicknessFactor,
+				  defaultRadius * _midiParams.DiscHeightFactor,
+				  1.0f } }
+		},
+		1u);
 }
 
 MidiModel::~MidiModel()
@@ -109,11 +130,29 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		break;
 	default:
 		glCtx.SetUniform("LoopHover", _isPicking3d ? 1.0f : 0.0f);
-		glCtx.SetUniform("RenderMode", 0);
+		glCtx.SetUniform("DiscAlpha", _midiParams.DiscAlpha);
+		glCtx.SetUniform("RenderMode", 3);
 		break;
 	}
 
-	GuiModel::Draw3d(glCtx, numInstances, pass);
+	if (base::PASS_SCENE == pass)
+	{
+		GLboolean prevDepthMask = GL_TRUE;
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+
+		glDepthMask(GL_TRUE);
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+
+		glDepthMask(GL_FALSE);
+		glCtx.SetUniform("RenderMode", 4);
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+
+		glDepthMask(prevDepthMask);
+	}
+	else
+	{
+		GuiModel::Draw3d(glCtx, numInstances, pass);
+	}
 	glCtx.PopMvp();
 }
 
@@ -125,6 +164,7 @@ void MidiModel::SetLoopIndexFrac(double frac) noexcept
 void MidiModel::UpdateModel(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
 	auto data = BuildInstanceData(spans, loopLengthSamps);
+	_backNoteInstanceCount = data->NoteCount;
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
 }
 
@@ -140,13 +180,14 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 	std::vector<float> timePitchData;
 	std::vector<float> shapeData;
 
-	if (0u == loopLengthSamps || spans.empty())
+	if (0u == loopLengthSamps)
 	{
 		data->Attributes = {
 			{ TimePitchAttribute, 4u, std::move(timePitchData) },
 			{ ShapeAttribute, 4u, std::move(shapeData) }
 		};
 		data->InstanceCount = 0u;
+		data->NoteCount = 0u;
 		return data;
 	}
 
@@ -156,9 +197,23 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 	const float radialThickness = baseRadius * _midiParams.RadialThickness;
 	const float noteHeight = baseRadius * _midiParams.NoteHeight;
 
-	timePitchData.reserve(spans.size() * 4u);
-	shapeData.reserve(spans.size() * 4u);
+	timePitchData.reserve((spans.size() + 1u) * 4u);
+	shapeData.reserve((spans.size() + 1u) * 4u);
 
+	// Always emit a semi-transparent disc at the middle-C plane so every MIDI
+	// loop presents a large, reliable hover/select target (the disc is opaque in
+	// the picker pass and shares the loop's ObjectId). Tagged via shape.w = 1.0.
+	timePitchData.push_back(0.0f);
+	timePitchData.push_back(1.0f);
+	timePitchData.push_back(PitchOffset(_midiParams.CenterPitch) * baseRadius);
+	timePitchData.push_back(0.0f);
+
+	shapeData.push_back(baseRadius * _midiParams.DiscRadiusFactor);
+	shapeData.push_back(baseRadius * _midiParams.DiscRadialThicknessFactor);
+	shapeData.push_back(baseRadius * _midiParams.DiscHeightFactor);
+	shapeData.push_back(1.0f);
+
+	unsigned int noteCount = 0u;
 	for (const auto& span : spans)
 	{
 		if (0u == span.DurationSamples || span.StartSample >= loopLengthSamps)
@@ -177,8 +232,10 @@ std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const
 		shapeData.push_back(radialThickness);
 		shapeData.push_back(noteHeight);
 		shapeData.push_back(0.0f);
+		++noteCount;
 	}
 
+	data->NoteCount = noteCount;
 	data->InstanceCount = static_cast<unsigned int>(timePitchData.size() / 4u);
 	data->Attributes = {
 		{ TimePitchAttribute, 4u, std::move(timePitchData) },
@@ -193,6 +250,7 @@ void MidiModel::ApplyPendingModelUpdate()
 	if (!pending)
 		return;
 
+	_backNoteInstanceCount = pending->NoteCount;
 	SetInstanceAttributes(std::move(pending->Attributes), pending->InstanceCount);
 }
 
@@ -254,10 +312,13 @@ std::vector<float> MidiModel::BuildBaseUvs(unsigned int segments)
 		}
 	}
 
-	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 1.0f);
-	AddUvTri(uvs, 0.0f, 0.0f,  0.0f, 1.0f,  0.0f, 1.0f);
-	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 1.0f);
-	AddUvTri(uvs, 1.0f, 0.0f,  1.0f, 1.0f,  1.0f, 0.0f);
+	// Mark arc end-cap triangles with UV.y = 2.0 so the fragment shader can
+	// discard them for full-circle disc instances (both caps land at the same
+	// world-space angle, leaving a visible seam fin if not discarded).
+	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
+	AddUvTri(uvs, 0.0f, 2.0f,  0.0f, 2.0f,  0.0f, 2.0f);
+	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
+	AddUvTri(uvs, 1.0f, 2.0f,  1.0f, 2.0f,  1.0f, 2.0f);
 
 	return uvs;
 }

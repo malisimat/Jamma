@@ -8,14 +8,14 @@ using namespace actions;
 using namespace resources;
 using namespace utils;
 
-const utils::Size2d GuiRack::_SliderGap = { 4, 4 };
-const unsigned int GuiRack::_ChannelTogglePaddingLeft = 35;
+const utils::Size2d GuiRack::_SliderGap = { 8, 4 };
+const unsigned int GuiRack::_ChannelTogglePaddingLeft = 18;
 const unsigned int GuiRack::_RouterSpacingY = 64;
 const utils::Size2d GuiRack::_ChannelToggleSize = { 32, 64 };
 const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
-const utils::Size2d GuiRack::_DragSize = { 32, 32 };
+const utils::Size2d GuiRack::_DragSize = { 112, 56 };
 
 GuiRack::GuiRack(GuiRackParams params) :
 	GuiElement(params),
@@ -324,7 +324,7 @@ gui::GuiSliderParams GuiRack::_GetSliderParams(unsigned int index, utils::Size2d
 		};
 	}
 
-	utils::Size2d dragSize = { std::min(_DragSize.Width, sliderSize.Width), std::min(_DragSize.Height, sliderSize.Height) };
+	utils::Size2d dragSize = { _DragSize.Width, std::min(_DragSize.Height, sliderSize.Height) };
 	sliderParams.DragControlOffset = { (int)(sliderParams.Size.Width / 2) - (int)(dragSize.Width / 2), (int)_DragGap.Height };
 	sliderParams.DragControlSize = dragSize;
 	sliderParams.DragGap = _DragGap;

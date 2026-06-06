@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #include "../graphics/MidiModel.h"
 
@@ -232,6 +233,24 @@ void LoopTake::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	const auto takeVisualScale = static_cast<float>(_masterMixer ? _masterMixer->UnmutedLevel() : 1.0);
+
+	for (size_t i = 0; i < _loops.size(); ++i)
+	{
+		const auto channelVisualScale = (i < _audioMixers.size() && _audioMixers[i]) ?
+			static_cast<float>(_audioMixers[i]->UnmutedLevel()) :
+			1.0f;
+		_loops[i]->SetMasterVisualScale(takeVisualScale * channelVisualScale * _parentVisualScale);
+	}
+
+	for (size_t i = 0; i < _backLoops.size(); ++i)
+	{
+		const auto channelVisualScale = (i < _backAudioMixers.size() && _backAudioMixers[i]) ?
+			static_cast<float>(_backAudioMixers[i]->UnmutedLevel()) :
+			1.0f;
+		_backLoops[i]->SetMasterVisualScale(takeVisualScale * channelVisualScale * _parentVisualScale);
+	}
+
 	_UpdateMidiModelRotation();
 	base::GuiElement::Draw3d(ctx, numInstances, pass);
 }
@@ -1070,7 +1089,15 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 			else if (ev.IsNoteOff())
 				held.Clear(midiChan, ev.data1);
 		}
-		_midiLoops[i]->RecordEvent(stamped);
+		if (!_midiLoops[i]->RecordEvent(stamped))
+			continue;
+
+		// Drive visual updates directly from MIDI ingress so note rendering does
+		// not depend on audio-loop update cadence.
+		const auto displayLength = (stamped.sampleOffset < std::numeric_limits<std::uint32_t>::max())
+			? std::max(recordedNow, stamped.sampleOffset + 1u)
+			: std::max(recordedNow, stamped.sampleOffset);
+		_midiLoops[i]->QueueModelUpdateFromEvents(displayLength, false);
 		recorded = true;
 	}
 
@@ -2453,6 +2480,11 @@ void LoopTake::SetSampleRate(float sampleRate)
 		loop->SetSampleRate(sampleRate);
 	for (auto& loop : _backLoops)
 		loop->SetSampleRate(sampleRate);
+}
+
+void LoopTake::SetParentVisualScale(float scale) noexcept
+{
+	_parentVisualScale = std::max(0.0f, scale);
 }
 
 void LoopTake::LoadVstPlugin(std::wstring path)

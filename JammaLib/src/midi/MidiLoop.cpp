@@ -1,5 +1,8 @@
 #include "MidiLoop.h"
 
+#include <algorithm>
+#include <limits>
+
 #include "../graphics/MidiModel.h"
 #include "MidiNote.h"
 #include "MidiQuantisation.h"
@@ -162,7 +165,20 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 	const auto modelLength = (MidiLoopState::Playing == _state && _loopLengthSamps > 0u) ?
 		_loopLengthSamps :
 		displayLengthSamps;
-	const auto effectiveLength = (modelLength > 0u) ? modelLength : _loopLengthSamps;
+	auto effectiveLength = (modelLength > 0u) ? modelLength : _loopLengthSamps;
+	if (0u == effectiveLength && _eventCount > 0u)
+	{
+		// If loop length is not yet resolved (for example during arming/transition
+		// windows), derive a temporary display span from recorded events so notes
+		// remain visible instead of disappearing.
+		const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
+		const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
+		std::uint32_t maxOffset = 0u;
+		for (std::size_t i = 0; i < _eventCount; ++i)
+			maxOffset = std::max(maxOffset, eventSource[i].sampleOffset);
+
+		effectiveLength = (maxOffset < std::numeric_limits<std::uint32_t>::max()) ? (maxOffset + 1u) : maxOffset;
+	}
 	const auto lengthDelta = (_modelLengthSamps > effectiveLength) ?
 		(_modelLengthSamps - effectiveLength) :
 		(effectiveLength - _modelLengthSamps);
@@ -180,6 +196,12 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 			if (MidiLoopState::Recording != _state || lengthDelta < MidiModelUpdateIntervalSamps)
 				return false;
+		}
+		else if (MidiLoopState::Recording == _state && lengthDelta < MidiModelUpdateIntervalSamps)
+		{
+			// During recording, throttle model rebuilds so we don't rescan
+			// all events on every incoming MIDI event (avoids O(N²) cost).
+			return false;
 		}
 	}
 

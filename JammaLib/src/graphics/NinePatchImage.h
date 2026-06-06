@@ -3,6 +3,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 #include <gl/glew.h>
 #include "Drawable.h"
@@ -118,6 +119,15 @@ namespace graphics
 
 	protected:
 		static constexpr int VertexCount = 54;
+		static constexpr int FloatsPerVertex = 3;
+		static constexpr int UvFloatsPerVertex = 2;
+		static constexpr int VertsPerCell = 6;
+		static constexpr int CellsPerAxis = 3;
+		static constexpr int NumChannels = 4;
+
+		static std::unordered_map<std::string, BorderInfo> _cachedBorders;
+		
+		static std::array<unsigned int, 4> _BuildBounds(unsigned int border, unsigned int extent);
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer[2];

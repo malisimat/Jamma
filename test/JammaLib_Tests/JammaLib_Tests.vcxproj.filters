@@ -62,6 +62,9 @@
     <ClCompile Include="src\graphics\LoopModel_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\graphics\StationModel_Tests.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
