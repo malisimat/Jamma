@@ -1,5 +1,7 @@
 #include "gtest/gtest.h"
 
+#include <array>
+
 #include "actions/JobAction.h"
 #include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
@@ -238,9 +240,102 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	RenderStationBlock(station, 0u);
 
 	EXPECT_TRUE(pluginA->Events.empty());
-	ASSERT_EQ(1u, pluginB->Events.size());
+	ASSERT_EQ(2u, pluginB->Events.size());
+	EXPECT_TRUE(pluginB->Events[0].IsNoteOn());
 	EXPECT_EQ(48u, pluginB->Events[0].data1);
+	EXPECT_TRUE(pluginB->Events[1].IsNoteOff());
+	EXPECT_EQ(48u, pluginB->Events[1].data1);
 	EXPECT_FALSE(pluginB->RealtimeFlags[0]);
+	EXPECT_FALSE(pluginB->RealtimeFlags[1]);
+}
+
+TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
+{
+	auto take = MakeMidiTake("regular-record-held-boundary");
+	take->Record({}, "station-held-boundary", { 0u }, { "Keys" });
+
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 0u, 48u, 100u), "Keys", 24u));
+	take->Play(0u, 128u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_EQ(2u, midiLoop->EventCount());
+
+	MidiEvent event{};
+	ASSERT_TRUE(midiLoop->TryGetEvent(0u, event));
+	EXPECT_TRUE(event.IsNoteOn());
+	EXPECT_EQ(0u, event.sampleOffset);
+	EXPECT_EQ(48u, event.data1);
+	EXPECT_EQ(100u, event.data2);
+
+	ASSERT_TRUE(midiLoop->TryGetEvent(1u, event));
+	EXPECT_TRUE(event.IsNoteOff());
+	EXPECT_EQ(127u, event.sampleOffset);
+	EXPECT_EQ(48u, event.data1);
+}
+
+TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
+{
+	auto station = MakeStation("station-recstart-held-seed");
+
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {};
+	start.MidiInputChannels = { 0u };
+	start.MidiInputDevices = { "Keys" };
+	auto startRes = station->OnAction(start);
+
+	ASSERT_TRUE(startRes.IsEaten);
+	ASSERT_FALSE(startRes.TargetId.empty());
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> take;
+	for (const auto& candidate : station->GetLoopTakes())
+	{
+		if (candidate && candidate->Id() == startRes.TargetId)
+		{
+			take = candidate;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, take);
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+
+	// Seeded notes must be present while still recording, so model updates can show them immediately.
+	EXPECT_EQ(2u, midiLoop->EventCount());
+
+	take->Play(0u, 128u, 0u);
+	ASSERT_EQ(4u, midiLoop->EventCount());
+
+	std::array<bool, 2u> foundOn{ false, false };
+	std::array<bool, 2u> foundOff{ false, false };
+	for (std::size_t i = 0u; i < midiLoop->EventCount(); ++i)
+	{
+		MidiEvent event{};
+		ASSERT_TRUE(midiLoop->TryGetEvent(i, event));
+		if (event.data1 == 60u)
+		{
+			if (event.IsNoteOn() && event.sampleOffset == 0u) foundOn[0] = true;
+			if (event.IsNoteOff() && event.sampleOffset == 127u) foundOff[0] = true;
+		}
+		else if (event.data1 == 64u)
+		{
+			if (event.IsNoteOn() && event.sampleOffset == 0u) foundOn[1] = true;
+			if (event.IsNoteOff() && event.sampleOffset == 127u) foundOff[1] = true;
+		}
+	}
+
+	EXPECT_TRUE(foundOn[0]);
+	EXPECT_TRUE(foundOn[1]);
+	EXPECT_TRUE(foundOff[0]);
+	EXPECT_TRUE(foundOff[1]);
 }
 
 TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)

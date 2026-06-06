@@ -103,6 +103,8 @@ void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 
 void MidiLoop::EndRecord(std::uint32_t loopLengthSamps)
 {
+	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
+
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	_held.reset();

@@ -1102,7 +1102,7 @@ void Scene::_PumpMidi()
 				for (const auto& station : stations)
 				{
 					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
-						station->EnqueueLiveMidiEvent(ingress);
+						station->EnqueueLiveMidiEvent(ingress, deviceName);
 				}
 			}
 

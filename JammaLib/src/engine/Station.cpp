@@ -608,8 +608,14 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 	case TriggerAction::TRIGGER_REC_START:
 	{
+		std::vector<std::pair<std::string, MidiNoteSnapshot>> heldSnapshot;
+		if (!action.MidiInputChannels.empty())
+		{
+			std::scoped_lock lock(_liveHeldMidiMutex);
+			heldSnapshot = _liveHeldMidi;
+		}
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices);
+		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices, std::move(heldSnapshot));
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -847,6 +853,10 @@ void Station::OnTick(Time curTime,
 void Station::Reset()
 {
 	Jammable::Reset();
+	{
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		_liveHeldMidi.clear();
+	}
 
 	for (auto& take : _loopTakes)
 	{
@@ -1190,6 +1200,35 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
 {
+	// Synthetic events, like punch-in transitions, do not have a device name.
+	EnqueueLiveMidiEvent(event, "");
+}
+
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName) noexcept
+{
+	if (event.IsNoteOn() || event.IsNoteOff())
+	{
+		const auto channel = event.Channel();
+		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		// Keep one snapshot for "any device" and one snapshot for the actual device.
+		// The empty-name snapshot is for device-agnostic recording; the named one is
+		// for real MIDI input from a specific device.
+		auto upsert = [&](const std::string& key) noexcept {
+			auto it = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+				[&key](const auto& p) { return p.first == key; });
+			if (it == _liveHeldMidi.end())
+			{
+				_liveHeldMidi.push_back({ key, MidiNoteSnapshot{} });
+				it = std::prev(_liveHeldMidi.end());
+			}
+			if (event.IsNoteOn()) it->second.Set(channel, note, event.data2);
+			else it->second.Clear(channel, note);
+		};
+		upsert("");
+		if (!deviceName.empty())
+			upsert(deviceName);
+	}
 	_liveMidiIngress.Push(event);
 }
 

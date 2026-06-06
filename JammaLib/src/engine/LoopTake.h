@@ -157,7 +157,10 @@ namespace engine
 		void Record(std::vector<unsigned int> channels,
 			std::string stationName,
 			std::vector<unsigned int> midiChannels = {},
-			std::vector<std::string> midiDevices = {});
+			std::vector<std::string> midiDevices = {},
+			// Snapshot of currently held live MIDI, keyed by device name.
+			// Empty device name means "device-agnostic / any source".
+			std::vector<std::pair<std::string, MidiNoteSnapshot>> heldAtStart = {});
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps);
@@ -288,6 +291,7 @@ namespace engine
 		std::vector<std::shared_ptr<MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
+		std::vector<MidiNoteSnapshot> _midiRecordHeld;
 		MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		bool _midiQuantisationUpdatePending;
