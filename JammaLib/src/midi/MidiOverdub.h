@@ -1,9 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <vector>
 
 #include "MidiEvent.h"
+#include "MidiLoop.h"
+#include "MidiNoteSpan.h"
 
 namespace engine
 {
@@ -21,6 +26,31 @@ namespace engine
 		std::uint32_t TargetLoopLengthSamps = 0u;
 		const MidiPunchWindow* PunchWindows = nullptr;
 		std::size_t PunchWindowCount = 0u;
+	};
+
+	struct MidiOverdubLoopState
+	{
+		std::array<MidiEvent, MidiLoop::DefaultCapacity> SourceEvents{};
+		std::size_t SourceEventCount = 0u;
+		std::uint32_t SourceLoopLengthSamps = 0u;
+		std::uint32_t SourceStartSample = 0u;
+		std::array<MidiPunchWindow, 128u> PunchWindows{};
+		std::array<MidiNoteSnapshot, 128u> SharedHeldAtPunchStart{};
+		std::size_t PunchWindowCount = 0u;
+		std::uint32_t ActivePunchStart = (std::numeric_limits<std::uint32_t>::max)();
+		std::size_t ActivePunchLiveEventStart = 0u;
+		std::array<MidiEvent, MidiLoop::DefaultCapacity> LiveEvents{};
+		std::size_t LiveEventCount = 0u;
+		std::uint64_t LiveDropped = 0u;
+		MidiNoteSnapshot LiveHeld{};
+	};
+
+	struct MidiOverdubSession
+	{
+		bool Active = false;
+		std::vector<MidiOverdubLoopState> Loops;
+		std::array<MidiEvent, MidiLoop::DefaultCapacity> BuildScratch{};
+		std::array<MidiEvent, MidiLoop::DefaultCapacity> MergeScratch{};
 	};
 
 	// Build source-derived base events for a MIDI overdub target.

@@ -355,3 +355,69 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(3u, event));
 	EXPECT_EQ(90u, event.sampleOffset);
 }
+
+TEST(StationMidiInstrument, PunchBoundariesEmitLiveMidiTransitionsForSourceAndLiveHeldNotes)
+{
+	auto station = MakeStation("station-punch-live-boundary");
+	auto plugin = AddPlugin(station, L"fake-punch-live.dll");
+	auto sourceTake = MakeMidiTake("source-punch-live");
+	station->AddTake(sourceTake);
+	station->CommitChanges();
+
+	sourceTake->Record({}, station->Name(), { 3u }, { "Keys" });
+	sourceTake->EndMultiWrite(100u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
+	sourceTake->Play(0u, 100u, 0u);
+
+	auto targetTake = MakeMidiTake("target-punch-live");
+	targetTake->Overdub({}, station->Name(), { 3u }, { "Keys" }, sourceTake);
+	station->AddTake(targetTake);
+	station->CommitChanges();
+
+	targetTake->EndMultiWrite(15u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_FALSE(targetTake->RecordMidiEvent(MidiEvent::MakeNoteOn(15u, 3u, 62u, 110u), "Keys", 15u));
+	targetTake->EndMultiWrite(5u, true, base::Audible::AUDIOSOURCE_ADC);
+
+	TriggerAction punchIn;
+	punchIn.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+	punchIn.TargetId = targetTake->Id();
+	punchIn.SourceId = sourceTake->Id();
+	punchIn.SampleCount = 20u;
+	punchIn.ApplyToTargetTake = true;
+	punchIn.ApplyToSourceTake = true;
+	punchIn.ApplyToTargetAudio = false;
+	punchIn.ApplyToTargetMidi = true;
+	station->OnAction(punchIn);
+
+	RenderStationBlock(station, 20u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(60u, plugin->Events[0].data1);
+	EXPECT_TRUE(plugin->RealtimeFlags[0]);
+
+	plugin->Events.clear();
+	plugin->RealtimeFlags.clear();
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+
+	TriggerAction punchOut;
+	punchOut.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+	punchOut.TargetId = targetTake->Id();
+	punchOut.SourceId = sourceTake->Id();
+	punchOut.SampleCount = 40u;
+	punchOut.ApplyToTargetTake = true;
+	punchOut.ApplyToSourceTake = true;
+	punchOut.ApplyToTargetAudio = false;
+	punchOut.ApplyToTargetMidi = true;
+	station->OnAction(punchOut);
+
+	RenderStationBlock(station, 40u);
+	ASSERT_GE(plugin->Events.size(), 2u);
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(62u, plugin->Events[0].data1);
+	EXPECT_TRUE(plugin->Events[1].IsNoteOn());
+	EXPECT_EQ(60u, plugin->Events[1].data1);
+	EXPECT_EQ(100u, plugin->Events[1].data2);
+	EXPECT_TRUE(plugin->RealtimeFlags[0]);
+	EXPECT_TRUE(plugin->RealtimeFlags[1]);
+}

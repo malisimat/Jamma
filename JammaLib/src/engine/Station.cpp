@@ -760,6 +760,12 @@ ActionResult Station::OnAction(TriggerAction action)
 		break;
 	}
 	case TriggerAction::TRIGGER_PUNCHIN_START:
+		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
+		{
+			for (const auto& event : loopTake.value()->BuildMidiPunchInLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
+				EnqueueLiveMidiEvent(event);
+		}
+
 		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchIn(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 
@@ -773,6 +779,12 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
+		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
+		{
+			for (const auto& event : loopTake.value()->BuildMidiPunchOutLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
+				EnqueueLiveMidiEvent(event);
+		}
+
 		if (action.ApplyToTargetTake && loopTake.has_value())
 			loopTake.value()->PunchOut(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 

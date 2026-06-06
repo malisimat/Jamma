@@ -1013,9 +1013,14 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 			{
 				auto& overdub = _midiOverdubSession.Loops[i];
 				if (ev.IsNoteOn())
-					overdub.HeldLiveVelocity[noteSlot] = ev.data2;
+					overdub.LiveHeld.Velocity[noteSlot] = ev.data2;
 				else if (ev.IsNoteOff())
-					overdub.HeldLiveVelocity[noteSlot] = 0u;
+					overdub.LiveHeld.Velocity[noteSlot] = 0u;
+
+				if (ev.IsNoteOn())
+					overdub.LiveHeld.Held.set(noteSlot);
+				else if (ev.IsNoteOff())
+					overdub.LiveHeld.Held.reset(noteSlot);
 
 				if (!punchActive)
 					continue;
@@ -1038,6 +1043,57 @@ bool LoopTake::RecordMidiEvent(const MidiEvent& ev,
 	}
 
 	return recorded;
+}
+
+std::vector<MidiEvent> LoopTake::BuildMidiPunchInLiveTransitionEvents(std::uint32_t punchSample) const
+{
+	return _BuildMidiLiveTransitionEvents(punchSample, true);
+}
+
+std::vector<MidiEvent> LoopTake::BuildMidiPunchOutLiveTransitionEvents(std::uint32_t punchSample) const
+{
+	return _BuildMidiLiveTransitionEvents(punchSample, false);
+}
+
+std::vector<MidiEvent> LoopTake::_BuildMidiLiveTransitionEvents(std::uint32_t punchSample,
+	bool isPunchInTransition) const
+{
+	MidiNoteSnapshot sourceSnapshot;
+	MidiNoteSnapshot liveSnapshot;
+	_SnapshotPunchBoundaryMidi(punchSample, sourceSnapshot, liveSnapshot);
+
+	std::vector<MidiEvent> events;
+	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+	{
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			const auto slot = MidiNote::NoteSlot(channel, note);
+			if (isPunchInTransition)
+			{
+				if (sourceSnapshot.Held.test(slot) && !liveSnapshot.Held.test(slot))
+					events.push_back(MidiEvent::MakeNoteOff(punchSample, channel, note));
+				continue;
+			}
+
+			if (liveSnapshot.Held.test(slot))
+				events.push_back(MidiEvent::MakeNoteOff(punchSample, channel, note));
+		}
+	}
+
+	if (isPunchInTransition)
+		return events;
+
+	for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+	{
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			const auto slot = MidiNote::NoteSlot(channel, note);
+			if (sourceSnapshot.Held.test(slot))
+				events.push_back(MidiEvent::MakeNoteOn(punchSample, channel, note, sourceSnapshot.Velocity[slot]));
+		}
+	}
+
+	return events;
 }
 
 unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
@@ -1814,6 +1870,116 @@ MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates() con
 	return candidates;
 }
 
+MidiNoteSnapshot LoopTake::_SnapshotSourceMidiAtSample(std::size_t loopIndex,
+	std::uint32_t targetSample) const noexcept
+{
+	MidiNoteSnapshot stateSnapshot;
+	if (!_midiOverdubSession.Active || loopIndex >= _midiOverdubSession.Loops.size())
+		return stateSnapshot;
+
+	const auto& loopState = _midiOverdubSession.Loops[loopIndex];
+	if (0u == loopState.SourceLoopLengthSamps)
+		return stateSnapshot;
+
+	const auto sourceSample = NormalizeMidiLoopOffset(
+		static_cast<std::uint32_t>(loopState.SourceStartSample + targetSample),
+		loopState.SourceLoopLengthSamps);
+
+	for (std::size_t eventIndex = 0u; eventIndex < loopState.SourceEventCount; ++eventIndex)
+	{
+		const auto& event = loopState.SourceEvents[eventIndex];
+		if (event.sampleOffset >= loopState.SourceLoopLengthSamps || event.sampleOffset >= sourceSample)
+			continue;
+
+		if (event.IsNoteOn())
+			stateSnapshot.Set(event.Channel(), event.data1, event.data2);
+		else if (event.IsNoteOff())
+			stateSnapshot.Clear(event.Channel(), event.data1);
+	}
+
+	return stateSnapshot;
+}
+
+MidiNoteSnapshot LoopTake::_SnapshotLiveMidiState(std::size_t loopIndex) const noexcept
+{
+	MidiNoteSnapshot stateSnapshot;
+	if (!_midiOverdubSession.Active || loopIndex >= _midiOverdubSession.Loops.size())
+		return stateSnapshot;
+
+	const auto& loopState = _midiOverdubSession.Loops[loopIndex];
+	return loopState.LiveHeld;
+}
+
+void LoopTake::_SnapshotPunchBoundaryMidi(std::uint32_t punchSample,
+	MidiNoteSnapshot& sourceSnapshot,
+	MidiNoteSnapshot& liveSnapshot) const noexcept
+{
+	for (std::size_t loopIndex = 0u; loopIndex < _midiOverdubSession.Loops.size(); ++loopIndex)
+	{
+		const auto sourceLoopSnapshot = _SnapshotSourceMidiAtSample(loopIndex, punchSample);
+		const auto liveLoopSnapshot = _SnapshotLiveMidiState(loopIndex);
+		for (std::size_t slot = 0u; slot < MidiNote::TotalNoteSlots; ++slot)
+		{
+			if (sourceLoopSnapshot.Held.test(slot))
+			{
+				sourceSnapshot.Held.set(slot);
+				if (0u == sourceSnapshot.Velocity[slot])
+					sourceSnapshot.Velocity[slot] = sourceLoopSnapshot.Velocity[slot];
+			}
+
+			if (liveLoopSnapshot.Held.test(slot))
+			{
+				liveSnapshot.Held.set(slot);
+				if (0u == liveSnapshot.Velocity[slot])
+					liveSnapshot.Velocity[slot] = liveLoopSnapshot.Velocity[slot];
+			}
+		}
+	}
+}
+
+std::size_t LoopTake::_PruneSharedPunchStartTransitions(std::size_t loopIndex,
+	const std::array<MidiPunchWindow, 128u>& windows,
+	std::size_t windowCount,
+	std::uint32_t phaseOffset,
+	std::uint32_t targetLoopLength,
+	MidiEvent* events,
+	std::size_t eventCount) const noexcept
+{
+	if (!_midiOverdubSession.Active || loopIndex >= _midiOverdubSession.Loops.size() || !events || 0u == targetLoopLength)
+		return eventCount;
+
+	const auto& loopState = _midiOverdubSession.Loops[loopIndex];
+	for (std::size_t windowIndex = 0u; windowIndex < windowCount && windowIndex < loopState.SharedHeldAtPunchStart.size(); ++windowIndex)
+	{
+		const auto& sharedHeld = loopState.SharedHeldAtPunchStart[windowIndex];
+		if (sharedHeld.Held.none())
+			continue;
+
+		const auto boundarySample = NormalizeMidiLoopOffset(windows[windowIndex].StartSample + phaseOffset, targetLoopLength);
+		std::bitset<MidiNote::TotalNoteSlots> removed;
+		std::size_t writeIndex = 0u;
+		for (std::size_t readIndex = 0u; readIndex < eventCount; ++readIndex)
+		{
+			const auto& event = events[readIndex];
+			if ((event.sampleOffset == boundarySample) && event.IsNoteOff())
+			{
+				const auto slot = MidiNote::NoteSlot(event.Channel(), event.data1);
+				if (sharedHeld.Held.test(slot) && !removed.test(slot))
+				{
+					removed.set(slot);
+					continue;
+				}
+			}
+
+			events[writeIndex++] = event;
+		}
+
+		eventCount = writeIndex;
+	}
+
+	return eventCount;
+}
+
 void LoopTake::_ResetMidiOverdubSession() noexcept
 {
 	_midiOverdubSession.Active = false;
@@ -1968,6 +2134,13 @@ std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 	auto mergedCount = BuildMidiOverdubBaseEvents(renderParams,
 		_midiOverdubSession.BuildScratch.data(),
 		_midiOverdubSession.BuildScratch.size());
+	mergedCount = _PruneSharedPunchStartTransitions(loopIndex,
+		localWindows,
+		localWindowCount,
+		phaseOffset,
+		targetLoopLength,
+		_midiOverdubSession.BuildScratch.data(),
+		mergedCount);
 
 	for (std::size_t i = 0u; i < mergedCount && i < _midiOverdubSession.MergeScratch.size(); ++i)
 		_midiOverdubSession.MergeScratch[i] = _midiOverdubSession.BuildScratch[i];
@@ -2025,19 +2198,23 @@ void LoopTake::_OpenMidiPunchWindow(std::uint32_t punchSample) noexcept
 		if (state.ActivePunchStart != invalidSample)
 			continue;
 
+		const auto sourceSnapshot = _SnapshotSourceMidiAtSample(loopIndex, punchSample);
+		const auto liveSnapshot = _SnapshotLiveMidiState(loopIndex);
+
 		if (state.PunchWindowCount < state.PunchWindows.size())
 		{
 			state.PunchWindows[state.PunchWindowCount] = MidiPunchWindow{ punchSample, punchSample };
+			state.SharedHeldAtPunchStart[state.PunchWindowCount].Held = sourceSnapshot.Held & liveSnapshot.Held;
 			state.PunchWindowCount++;
 		}
 
 		state.ActivePunchStart = punchSample;
 		state.ActivePunchLiveEventStart = state.LiveEventCount;
 
-		for (std::size_t slot = 0u; slot < state.HeldLiveVelocity.size(); ++slot)
+		for (std::size_t slot = 0u; slot < state.LiveHeld.Velocity.size(); ++slot)
 		{
-			const auto velocity = state.HeldLiveVelocity[slot];
-			if (velocity == 0u)
+			const auto velocity = state.LiveHeld.Velocity[slot];
+			if (velocity == 0u || sourceSnapshot.Held.test(slot))
 				continue;
 
 			const auto channel = static_cast<std::uint8_t>((slot >> 7) & MidiEvent::ChannelMask);
@@ -2077,9 +2254,9 @@ void LoopTake::_CloseMidiPunchWindow(std::uint32_t punchSample, bool synthNoteOf
 		if (!synthNoteOffs)
 			continue;
 
-		for (std::size_t slot = 0u; slot < state.HeldLiveVelocity.size(); ++slot)
+		for (std::size_t slot = 0u; slot < state.LiveHeld.Velocity.size(); ++slot)
 		{
-			if (state.HeldLiveVelocity[slot] == 0u)
+			if (state.LiveHeld.Velocity[slot] == 0u)
 				continue;
 
 			const auto channel = static_cast<std::uint8_t>((slot >> 7) & MidiEvent::ChannelMask);

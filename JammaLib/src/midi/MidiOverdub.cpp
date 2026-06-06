@@ -9,7 +9,6 @@ using namespace engine;
 
 namespace
 {
-	static constexpr std::size_t TotalNoteSlots = 16u * 128u;
 	static constexpr std::size_t MaxPunchWindows = 128u;
 	static constexpr std::size_t MaxSourceSpans = 4096u;
 
@@ -34,11 +33,6 @@ namespace
 		std::uint8_t Note = 0u;
 		std::uint8_t Velocity = 0u;
 	};
-
-	constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
-	{
-		return (static_cast<std::size_t>(channel & MidiEvent::ChannelMask) << 7) | (note & 0x7F);
-	}
 
 	bool IsInsideWindow(std::uint32_t sample,
 		const NormalizedWindow* windows,
@@ -134,7 +128,7 @@ namespace
 		if (!sourceEvents || !outSpans || outCapacity == 0u || sourceLoopLength == 0u)
 			return 0u;
 
-		std::array<ActiveNote, TotalNoteSlots> activeNotes{};
+		std::array<ActiveNote, MidiNote::TotalNoteSlots> activeNotes{};
 		std::size_t spanCount = 0u;
 
 		const auto emitSpan = [&](std::uint32_t start,
@@ -162,7 +156,7 @@ namespace
 
 			const auto channel = event.Channel();
 			const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
-			auto& active = activeNotes[NoteSlot(channel, note)];
+			auto& active = activeNotes[MidiNote::NoteSlot(channel, note)];
 
 			if (event.IsNoteOn())
 			{

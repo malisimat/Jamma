@@ -6,13 +6,6 @@ using namespace engine;
 
 namespace
 {
-	static constexpr std::size_t TotalNoteSlots = 16u * 128u;
-
-	constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
-	{
-		return (static_cast<std::size_t>(channel & MidiEvent::ChannelMask) << 7) | (note & 0x7F);
-	}
-
 	struct ActiveNote
 	{
 		bool IsActive = false;
@@ -20,7 +13,7 @@ namespace
 		std::uint8_t Velocity = 0;
 	};
 
-	void AddSpan(std::vector<MidiNoteSpan>& spans,
+	void AddSpan(std::vector<MidiNote>& spans,
 	             std::uint32_t startSample,
 	             std::uint32_t endSample,
 	             std::uint8_t channel,
@@ -30,7 +23,7 @@ namespace
 		if (endSample <= startSample)
 			return;
 
-		spans.push_back(MidiNoteSpan{
+		spans.push_back(MidiNote{
 			startSample,
 			endSample - startSample,
 			static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask),
@@ -40,17 +33,17 @@ namespace
 	}
 }
 
-std::vector<MidiNoteSpan> engine::ExtractMidiNoteSpans(const MidiEvent* events,
+std::vector<MidiNote> engine::ExtractMidiNoteSpans(const MidiEvent* events,
                                                        std::size_t eventCount,
                                                        std::uint32_t loopLengthSamps)
 {
-	std::vector<MidiNoteSpan> spans;
+	std::vector<MidiNote> spans;
 	if (nullptr == events || 0u == eventCount || 0u == loopLengthSamps)
 		return spans;
 
 	spans.reserve(eventCount / 2u);
 
-	std::array<ActiveNote, TotalNoteSlots> activeNotes{};
+	std::array<ActiveNote, MidiNote::TotalNoteSlots> activeNotes{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -60,7 +53,7 @@ std::vector<MidiNoteSpan> engine::ExtractMidiNoteSpans(const MidiEvent* events,
 
 		const auto channel = ev.Channel();
 		const auto note = static_cast<std::uint8_t>(ev.data1 & 0x7F);
-		const auto slot = NoteSlot(channel, note);
+		const auto slot = MidiNote::NoteSlot(channel, note);
 		auto& active = activeNotes[slot];
 
 		if (ev.IsNoteOn())

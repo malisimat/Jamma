@@ -3,7 +3,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <limits>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -177,6 +176,8 @@ namespace engine
 		bool RecordMidiEvent(const MidiEvent& ev,
 			const std::string& device,
 			std::uint32_t globalSampleNow) noexcept;
+		std::vector<MidiEvent> BuildMidiPunchInLiveTransitionEvents(std::uint32_t punchSample) const;
+		std::vector<MidiEvent> BuildMidiPunchOutLiveTransitionEvents(std::uint32_t punchSample) const;
 		unsigned int ReadMidiBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			IMidiOutputSink& sink,
@@ -244,30 +245,20 @@ namespace engine
 			MidiQuantisationFraction fraction,
 			const char* source) noexcept;
 		MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
-
-		struct MidiOverdubLoopState
-		{
-			std::array<MidiEvent, MidiLoop::DefaultCapacity> SourceEvents{};
-			std::size_t SourceEventCount = 0u;
-			std::uint32_t SourceLoopLengthSamps = 0u;
-			std::uint32_t SourceStartSample = 0u;
-			std::array<MidiPunchWindow, 128u> PunchWindows{};
-			std::size_t PunchWindowCount = 0u;
-			std::uint32_t ActivePunchStart = (std::numeric_limits<std::uint32_t>::max)();
-			std::size_t ActivePunchLiveEventStart = 0u;
-			std::array<MidiEvent, MidiLoop::DefaultCapacity> LiveEvents{};
-			std::size_t LiveEventCount = 0u;
-			std::uint64_t LiveDropped = 0u;
-			std::array<std::uint8_t, MidiLoop::TotalNoteSlots> HeldLiveVelocity{};
-		};
-
-		struct MidiOverdubSession
-		{
-			bool Active = false;
-			std::vector<MidiOverdubLoopState> Loops;
-			std::array<MidiEvent, MidiLoop::DefaultCapacity> BuildScratch{};
-			std::array<MidiEvent, MidiLoop::DefaultCapacity> MergeScratch{};
-		};
+		MidiNoteSnapshot _SnapshotSourceMidiAtSample(std::size_t loopIndex, std::uint32_t targetSample) const noexcept;
+		MidiNoteSnapshot _SnapshotLiveMidiState(std::size_t loopIndex) const noexcept;
+		void _SnapshotPunchBoundaryMidi(std::uint32_t punchSample,
+			MidiNoteSnapshot& sourceSnapshot,
+			MidiNoteSnapshot& liveSnapshot) const noexcept;
+		std::vector<MidiEvent> _BuildMidiLiveTransitionEvents(std::uint32_t punchSample,
+			bool isPunchInTransition) const;
+		std::size_t _PruneSharedPunchStartTransitions(std::size_t loopIndex,
+			const std::array<MidiPunchWindow, 128u>& windows,
+			std::size_t windowCount,
+			std::uint32_t phaseOffset,
+			std::uint32_t targetLoopLength,
+			MidiEvent* events,
+			std::size_t eventCount) const noexcept;
 
 	protected:
 		static const utils::Size2d _Gap;
