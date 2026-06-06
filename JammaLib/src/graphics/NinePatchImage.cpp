@@ -92,17 +92,41 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 		{
 			_texWidth = texture->Width();
 			_texHeight = texture->Height();
+			glBindTexture(GL_TEXTURE_2D, texture->GetId());
 
 			auto cachedBorder = _cachedBorders.find(_drawParams.Texture);
 			if (cachedBorder != _cachedBorders.end())
 			{
 				_borderX = cachedBorder->second.borderX;
 				_borderY = cachedBorder->second.borderY;
+
+				auto pixels = std::vector<unsigned char>(_texWidth * _texHeight * NumChannels, 0);
+				glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
+
+				const auto x = _borderX;
+				const auto y = _borderY;
+				const auto px = (y * _texWidth + x) * NumChannels;
+				auto replacementX = x;
+				auto replacementY = y;
+
+				if (x + 1u < _texWidth)
+					replacementX = x + 1u;
+				else if (x > 0u)
+					replacementX = x - 1u;
+				else if (y + 1u < _texHeight)
+					replacementY = y + 1u;
+				else if (y > 0u)
+					replacementY = y - 1u;
+
+				const auto replacementPx = (replacementY * _texWidth + replacementX) * NumChannels;
+				for (auto i = 0; i < NumChannels; ++i)
+					pixels[px + i] = pixels[replacementPx + i];
+
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _texWidth, _texHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
 			}
 			else
 			{
 				auto pixels = std::vector<unsigned char>(_texWidth * _texHeight * NumChannels, 0);
-				glBindTexture(GL_TEXTURE_2D, texture->GetId());
 				glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
 
 				auto border = NinePatchImage::DetectBorder(pixels, _texWidth, _texHeight);
@@ -119,9 +143,8 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 					_cachedBorders[_drawParams.Texture] = *border;
 					glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _texWidth, _texHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels.data());
 				}
-
-				glBindTexture(GL_TEXTURE_2D, 0);
 			}
+			glBindTexture(GL_TEXTURE_2D, 0);
 		}
 	}
 
