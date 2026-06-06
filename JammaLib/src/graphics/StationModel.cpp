@@ -399,10 +399,19 @@ void StationModel::SetParams(float fallRate) noexcept
 float StationModel::_ApplySoftDecay(float current, float target, float fallRate) noexcept
 {
 	if (target > current)
-		return target;
+	{
+		// Rise: move 30% of the way toward target
+		return current + 0.3f * (target - current);
+	}
+	else if (target < current)
+	{
+		// Fall: apply soft movement with fallRate limit
+		const auto softFall = 0.5f * fallRate;
+		const auto next = current - softFall;
+		return std::max(next, target);  // Don't fall below target
+	}
 
-	const auto next = current - fallRate;
-	return next < target ? target : next;
+	return current;
 }
 
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
