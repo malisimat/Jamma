@@ -1499,6 +1499,38 @@ TEST(LoopTakeMidiOverdub, PlayFinalizesPunchWindowRelativeToSourceLoopPhase)
 	EXPECT_TRUE(events[5].IsNoteOff());
 }
 
+TEST(LoopTakeMidiOverdub, FirstPlaybackBlockStartsAtCapturedSourcePhase)
+{
+	auto source = MakeLoopTake("source-midi-phase-start");
+	source->Record({}, "station", { 3u }, { "" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "", 100u));
+	source->Play(20u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi-phase-start");
+	target->Overdub({}, "station", { 3u }, { "" }, source);
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(5u, 3u, 62u, 100u), "", 5u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(10u, 3u, 62u), "", 10u));
+	target->PunchOut();
+	target->Play(0u, 100u, 0u);
+
+	CapturingOutputSink sink;
+	const auto firstBlockStart = 5000u;
+	EXPECT_EQ(1u, target->ReadMidiBlock(firstBlockStart, 10u, sink));
+
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(firstBlockStart, sink.events[0].event.sampleOffset);
+	EXPECT_TRUE(sink.events[0].event.IsNoteOff());
+	EXPECT_EQ(60u, sink.events[0].event.data1);
+	EXPECT_EQ(firstBlockStart + 5u, sink.events[1].event.sampleOffset);
+	EXPECT_TRUE(sink.events[1].event.IsNoteOn());
+	EXPECT_EQ(62u, sink.events[1].event.data1);
+}
+
 TEST(LoopTakeMidiOverdub, OverdubWithoutSourceMidiStillRecordsLivePunchOnly)
 {
 	auto target = MakeLoopTake("target-midi-live-only");

@@ -27,14 +27,17 @@ namespace
 
 	unsigned long InitialMidiPlayIndex(unsigned long audioPlayIndex,
 		unsigned long loopLength,
-		unsigned int endRecordSamps) noexcept
+		unsigned int endRecordSamps,
+		unsigned long phaseOffset) noexcept
 	{
+		const auto basePhase = static_cast<long long>(phaseOffset);
+
 		if (audioPlayIndex < constants::MaxLoopFadeSamps)
-			return NormalizeLoopIndex(static_cast<long long>(audioPlayIndex), loopLength);
+			return NormalizeLoopIndex(basePhase + static_cast<long long>(audioPlayIndex), loopLength);
 
 		const auto quantisationError = static_cast<long long>(constants::MaxLoopFadeSamps) -
 			static_cast<long long>(endRecordSamps);
-		return NormalizeLoopIndex(quantisationError, loopLength);
+		return NormalizeLoopIndex(basePhase + quantisationError, loopLength);
 	}
 
 	std::uint32_t NormalizeMidiLoopOffset(std::uint32_t offset,
@@ -1178,7 +1181,26 @@ void LoopTake::Play(unsigned long index,
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength = loopLength;
-	_midiVisualPlayIndex = InitialMidiPlayIndex(index, loopLength, endRecordSamps);
+	unsigned long midiPhaseOffset = 0ul;
+	if (_midiOverdubSession.Active)
+	{
+		for (const auto& overdubLoop : _midiOverdubSession.Loops)
+		{
+			if ((0u == overdubLoop.SourceLoopLengthSamps) &&
+				(0u == overdubLoop.SourceEventCount) &&
+				(0u == overdubLoop.SourceStartSample))
+			{
+				continue;
+			}
+
+			midiPhaseOffset = static_cast<unsigned long>(NormalizeMidiLoopOffset(
+				overdubLoop.SourceStartSample,
+				static_cast<std::uint32_t>(loopLength)));
+			break;
+		}
+	}
+
+	_midiVisualPlayIndex = InitialMidiPlayIndex(index, loopLength, endRecordSamps, midiPhaseOffset);
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
@@ -2062,7 +2084,7 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noe
 		state.SourceStartSample = NormalizeMidiLoopOffset(
 			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex),
 			state.SourceLoopLengthSamps);
-
+		
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)
 		{
 			MidiEvent event{};
