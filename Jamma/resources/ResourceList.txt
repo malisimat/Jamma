@@ -4,12 +4,13 @@
 4 sky
 2 texture MVP
 2 texture_shaded MVP LoopState LoopHover
-2 waveform MVP LoopState LoopHover TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier  WaveformUnitMeshRadius
+2 waveform MVP LoopState LoopHover TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius
 2 vu MVP DX DY NumInstances InstanceOffset
 2 midi_note MVP ObjectId Highlight LoopHover DiscAlpha RenderMode
 2 picker MVP ObjectId
 2 colour MVP Color
 2 quantisation MVP Highlight OverlayAlpha
+2 station MVP ObjectId Highlight StationHover StationLevel
 2 white MVP Highlight
 2 blur
 1 fader_back

@@ -173,7 +173,9 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (PASS_SCENE == pass)
 		_vu->Draw3d(ctx, 1, pass);
 
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(1.0f, _mixer->UnmutedLevel(), 1.0f)));
+	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
+	_model->SetWaveformColorScale(visualHeightScale);
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
 	
 	_model->Draw3d(ctx, 1, pass);
 	
@@ -560,6 +562,11 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 void Loop::SetMixerLevel(double level)
 {
 	_mixer->SetUnmutedLevel(level);
+}
+
+void Loop::SetMasterVisualScale(float scale) noexcept
+{
+	_masterVisualScale = std::max(0.0f, scale);
 }
 
 void Loop::SetVisualUpdatesEnabled(bool enabled)

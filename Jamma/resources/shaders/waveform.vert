@@ -14,6 +14,7 @@ uniform float WaveformHeightScale;
 uniform float WaveformMinHeight;
 uniform float WaveformColorMultiplier;
 uniform float WaveformUnitMeshRadius;
+uniform float WaveformColorScale;
 
 void main()
 {
@@ -26,13 +27,14 @@ void main()
     float yMin = (WaveformHeightScale * minMax.x) - WaveformMinHeight;
     float yMax = (WaveformHeightScale * minMax.y) + WaveformMinHeight;
     float y = PositionIN.y >= 0.0 ? yMax : yMin;
+    float colorScale = max(WaveformColorScale, 0.0);
 
     float safeUnitRadius = max(WaveformUnitMeshRadius, 0.0001);
     float radiusScale = WaveformRadius / safeUnitRadius; 
     vec2 scaledXZ = PositionIN.xz * radiusScale;
 
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
-    float colorV = clamp(0.5 - (y * WaveformColorMultiplier), 0.0, 1.0);
+    float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
 
     vec3 lightDir = normalize(vec3(0.0, 0.5, -0.3));

@@ -226,6 +226,7 @@ namespace engine
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
 		void SetMixerLevel(double level);
+		void SetMasterVisualScale(float scale) noexcept;
 		void SetVisualUpdatesEnabled(bool enabled);
 		bool Load(const io::WavReadWriter& readWriter);
 		void Record();
@@ -282,6 +283,7 @@ namespace engine
 		std::shared_ptr<audio::Hanning> _hanning;
 		std::shared_ptr<LoopModel> _model;
 		std::shared_ptr<graphics::VU> _vu;
+		float _masterVisualScale = 1.0f;
 		audio::BufferBank _bufferBank;
 		audio::BufferBank _monitorBufferBank;
 		// Live VST chain published atomically for lock-free audio-thread reads.

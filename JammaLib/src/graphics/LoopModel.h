@@ -60,6 +60,7 @@ namespace engine
 		double LoopIndexFrac() const;
 		void SetLoopIndexFrac(double frac);
 		void SetLoopState(LoopModelState state);
+		void SetWaveformColorScale(float scale) noexcept;
 		void UpdateModel(const audio::BufferBank& buffer,
 			unsigned long loopLength,
 			unsigned long offset,
@@ -137,6 +138,7 @@ namespace engine
 		unsigned long _lastWaveformDisplayLength;
 		unsigned long _lastWaveformOffset;
 		float _lastWaveformRadius;
+		float _waveformColorScale;
 		std::mutex _waveformMutex;
 	};
 }

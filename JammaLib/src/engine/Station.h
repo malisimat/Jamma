@@ -8,6 +8,7 @@
 #include "LoopTake.h"
 #include "Quantisation.h"
 #include "../graphics/QuantisationModel.h"
+#include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
 #include "../audio/AudioMixer.h"
@@ -36,7 +37,8 @@ namespace engine
 				),
 			Name(""),
 			FadeSamps(constants::DefaultFadeSamps),
-			NumBusChannels(0)
+			NumBusChannels(0),
+			StationLevelFallRate(0.01f)
 		{
 		}
 
@@ -44,6 +46,7 @@ namespace engine
 		std::string Name;
 		unsigned int FadeSamps;
 		unsigned int NumBusChannels;
+		float StationLevelFallRate;
 	};
 	
 	class Station :
@@ -58,6 +61,8 @@ namespace engine
 			STATIONPANEL_MIXER,
 			STATIONPANEL_ROUTER
 		};
+
+		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
 
 	public:
 		Station(StationParams params,
@@ -142,7 +147,6 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
-		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
 		// Returns true if the named device is allowed to drive this station's live
 		// VST playback. Any unrestricted trigger keeps the station open to all
 		// devices; otherwise the device must match a trigger's MidiInputDevices list.
@@ -165,7 +169,22 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
+		static constexpr utils::Size2d _Gap = { 5, 5 };
+		static constexpr unsigned int _DefaultNumBusChannels = 8;
+
+		static constexpr unsigned int _HiddenSeedSamps = 1u;
+		static constexpr float _StationModelHeight = 470.0f;
+		static constexpr float _StationModelYOffset = _StationModelHeight * 0.5f;
+
 		static unsigned int _CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes);
+		
+		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
+		static unsigned int _ResolveSampleRate(std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
+		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+			unsigned long loopLengthSamps,
+			std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params);
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -183,6 +202,7 @@ namespace engine
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
 		};
+
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
 		void _PublishAudioState();
@@ -229,10 +249,6 @@ namespace engine
 		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
-	protected:
-		static const utils::Size2d _Gap;
-		static const unsigned int _DefaultNumBusChannels;
-
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
@@ -240,6 +256,7 @@ namespace engine
 		unsigned int _lastBufSize;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
+		std::shared_ptr<graphics::StationModel> _stationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
