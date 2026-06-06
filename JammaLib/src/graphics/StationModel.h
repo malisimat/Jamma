@@ -27,10 +27,12 @@ namespace graphics
 		StationModel& operator=(const StationModel&) = delete;
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		void SetOwnerState(const std::vector<unsigned int>& ownerGlobalId,
+		void SetStationState(const std::vector<unsigned int>& stationGlobalId,
 			bool selected,
 			bool picking,
 			float level = 0.0f);
+		void SetParams(float fallRate) noexcept;
+		void ResetStationLevel() noexcept;
 
 		// --- Pure geometry builders (no OpenGL; testable without a GL context) ---
 
@@ -87,9 +89,11 @@ namespace graphics
 		// Index into _modelShaders for each draw pass.
 		// 0 = station (scene/highlight), 1 = picker.
 		base::DrawPass _lastPass;
-		std::vector<unsigned int> _ownerGlobalId;
-		bool _ownerSelected;
-		bool _ownerPicking;
-		float _ownerLevel;
+		std::vector<unsigned int> _stationGlobalId;
+		bool _stationSelected;
+		bool _stationPicking;
+		float _stationLevel;
+		float _stationFallRate;
+		static float _ApplySoftDecay(float current, float target, float fallRate) noexcept;
 	};
 }

@@ -360,10 +360,11 @@ StationModel::BuildAllGeometry(unsigned int numSides, float radius, unsigned int
 StationModel::StationModel() :
 	GuiModel(gui::GuiModelParams()),
 	_lastPass(base::PASS_SCENE),
-	_ownerGlobalId(),
-	_ownerSelected(false),
-	_ownerPicking(false),
-	_ownerLevel(0.0f)
+	_stationGlobalId(),
+	_stationSelected(false),
+	_stationPicking(false),
+	_stationLevel(0.0f),
+	_stationFallRate(0.0f)
 {
 	_modelParams.ModelShaders = { "station", "picker" };
 	SetVisible(false);
@@ -372,15 +373,36 @@ StationModel::StationModel() :
 	SetGeometry(std::move(verts), std::move(uvs));
 }
 
-void StationModel::SetOwnerState(const std::vector<unsigned int>& ownerGlobalId,
-	bool selected,
-	bool picking,
-	float level)
+void StationModel::SetStationState(const std::vector<unsigned int>& stationGlobalId,
+		bool selected,
+		bool picking,
+		float level)
+	{
+		_stationGlobalId = stationGlobalId;
+		_stationSelected = selected;
+		_stationPicking = picking;
+		const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
+		const auto decayRate = std::max(_stationFallRate, 0.0f);
+		_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
+}
+
+void StationModel::SetParams(float fallRate) noexcept
+	{
+		_stationFallRate = std::max(fallRate, 0.0f);
+	}
+
+	void StationModel::ResetStationLevel() noexcept
+	{
+		_stationLevel = 0.0f;
+}
+
+float StationModel::_ApplySoftDecay(float current, float target, float fallRate) noexcept
 {
-	_ownerGlobalId = ownerGlobalId;
-	_ownerSelected = selected;
-	_ownerPicking = picking;
-	_ownerLevel = std::clamp(level, 0.0f, 1.0f);
+	if (target > current)
+		return target;
+
+	const auto next = current - fallRate;
+	return next < target ? target : next;
 }
 
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
@@ -423,14 +445,14 @@ void StationModel::Draw3d(DrawContext& ctx,
 	if (!shader || 0u == _vertexArray || 0u == _numTris)
 		return;
 
-	const auto stationLevel = std::clamp(_ownerLevel, 0.0f, 1.0f);
+	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
 
 	// Set pass-specific uniforms before binding the program.
 	switch (pass)
 	{
 	case base::PASS_PICKER:
 	{
-		auto idVec = _ownerGlobalId.empty() ? GlobalId() : _ownerGlobalId;
+		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
 		idVec.resize(3);
 		for (auto& idPart : idVec)
 			idPart += 1;
@@ -439,14 +461,14 @@ void StationModel::Draw3d(DrawContext& ctx,
 		break;
 	}
 	case base::PASS_HIGHLIGHT:
-		glCtx.SetUniform("Highlight", _ownerSelected ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationHover", _ownerPicking ? 1.0f : 0.0f);
-		glCtx.SetUniform("StationLevel", stationLevel);
-		break;
-	case base::PASS_SCENE:
-	default:
-		glCtx.SetUniform("Highlight", _ownerSelected ? 0.35f : 0.0f);
-		glCtx.SetUniform("StationHover", _ownerPicking ? 1.0f : 0.0f);
+			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
+			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+			glCtx.SetUniform("StationLevel", stationLevel);
+			break;
+		case base::PASS_SCENE:
+		default:
+			glCtx.SetUniform("Highlight", _stationSelected ? 0.35f : 0.0f);
+			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
 		break;
 	}

@@ -102,6 +102,7 @@ Station::Station(StationParams params,
 	_quantisationOverlayAlpha(0.0f)
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
+	_stationModel->SetParams(params.StationLevelFallRate);
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	//_children.push_back(_masterMixer);
@@ -196,8 +197,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 	if (_stationModel)
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
-		const auto stationLevel = _masterMixer ? _masterMixer->VuHoldLevel() : 0.0f;
-		_stationModel->SetOwnerState(GlobalId(), IsSelected(), _isPicking3d, stationLevel);
+		const auto stationPeak = _masterMixer ? _masterMixer->VuPeakLevel() : 0.0f;
+		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak);
 		_stationModel->Draw3d(ctx, 1, pass);
 		glCtx.PopMvp();
 	}
@@ -853,6 +854,8 @@ void Station::OnTick(Time curTime,
 void Station::Reset()
 {
 	Jammable::Reset();
+	if (_stationModel)
+		_stationModel->ResetStationLevel();
 
 	for (auto& take : _loopTakes)
 	{

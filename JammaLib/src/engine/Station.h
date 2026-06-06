@@ -37,7 +37,8 @@ namespace engine
 				),
 			Name(""),
 			FadeSamps(constants::DefaultFadeSamps),
-			NumBusChannels(0)
+			NumBusChannels(0),
+			StationLevelFallRate(0.01f)
 		{
 		}
 
@@ -45,6 +46,7 @@ namespace engine
 		std::string Name;
 		unsigned int FadeSamps;
 		unsigned int NumBusChannels;
+		float StationLevelFallRate;
 	};
 	
 	class Station :
