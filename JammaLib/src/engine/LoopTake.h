@@ -236,7 +236,7 @@ namespace engine
 			MidiQuantisationFraction updated,
 			const char* source) const;
 		void _ResetMidiOverdubSession() noexcept;
-		void _InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noexcept;
+		void _InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake);
 		std::size_t _BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 			std::uint32_t targetLoopLength,
 			bool includeOpenPunchWindow) noexcept;

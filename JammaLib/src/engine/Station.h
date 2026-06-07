@@ -153,9 +153,9 @@ namespace engine
 		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
 		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
 		// without associated deviceName.
-		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
+		void EnqueueLiveMidiEvent(const MidiEvent& event);
 		// For real live MIDI input, with associated deviceName.
-		void EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName) noexcept;
+		void EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName);
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();

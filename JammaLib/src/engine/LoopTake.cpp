@@ -2095,7 +2095,7 @@ void LoopTake::_ResetMidiOverdubSession() noexcept
 	_midiOverdubSession.Loops.clear();
 }
 
-void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake) noexcept
+void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake)
 {
 	_midiOverdubSession.Active = !_midiLoops.empty();
 	_midiOverdubSession.Loops.clear();

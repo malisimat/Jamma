@@ -83,6 +83,7 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 			_dropped = static_cast<std::uint64_t>(count - _events.size());
 	}
 
+	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	++_revision;
@@ -95,6 +96,7 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 
 void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 {
+	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	_held.reset();

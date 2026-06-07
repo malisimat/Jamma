@@ -1224,13 +1224,13 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	return _triggers.empty();
 }
 
-void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 {
 	// Synthetic events, like punch-in transitions, do not have a device name.
 	EnqueueLiveMidiEvent(event, "");
 }
 
-void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName) noexcept
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName)
 {
 	if (event.IsNoteOn() || event.IsNoteOff())
 	{
@@ -1240,7 +1240,7 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 		// Keep one snapshot for "any device" and one snapshot for the actual device.
 		// The empty-name snapshot is for device-agnostic recording; the named one is
 		// for real MIDI input from a specific device.
-		auto upsert = [&](const std::string& key) noexcept {
+		auto upsert = [&](const std::string& key) {
 			auto it = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
 				[&key](const auto& p) { return p.first == key; });
 			if (it == _liveHeldMidi.end())
