@@ -14,11 +14,11 @@ namespace
 	};
 
 	void AddSpan(std::vector<MidiNote>& spans,
-	             std::uint32_t startSample,
-	             std::uint32_t endSample,
-	             std::uint8_t channel,
-	             std::uint8_t note,
-	             std::uint8_t velocity)
+		std::uint32_t startSample,
+		std::uint32_t endSample,
+		std::uint8_t channel,
+		std::uint8_t note,
+		std::uint8_t velocity)
 	{
 		if (endSample <= startSample)
 			return;
@@ -33,9 +33,9 @@ namespace
 	}
 }
 
-std::vector<MidiNote> engine::ExtractMidiNoteSpans(const MidiEvent* events,
-                                                       std::size_t eventCount,
-                                                       std::uint32_t loopLengthSamps)
+std::vector<MidiNote> engine::MidiNote::ExtractSpans(const MidiEvent* events,
+	std::size_t eventCount,
+	std::uint32_t loopLengthSamps)
 {
 	std::vector<MidiNote> spans;
 	if (nullptr == events || 0u == eventCount || 0u == loopLengthSamps)
@@ -89,4 +89,40 @@ std::vector<MidiNote> engine::ExtractMidiNoteSpans(const MidiEvent* events,
 	}
 
 	return spans;
+}
+
+void engine::MidiNote::SortMidiEvents(MidiEvent* events,
+	std::size_t eventCount) noexcept
+{
+	if (nullptr == events || eventCount < 2u)
+		return;
+
+	const auto priority = [](const MidiEvent& ev) noexcept
+	{
+		if (ev.IsNoteOff())
+			return 0;
+		if (ev.IsNoteOn())
+			return 2;
+		return 1;
+	};
+
+	const auto shouldPrecede = [&](const MidiEvent& lhs, const MidiEvent& rhs) noexcept
+	{
+		if (lhs.sampleOffset != rhs.sampleOffset)
+			return lhs.sampleOffset < rhs.sampleOffset;
+
+		return priority(lhs) < priority(rhs);
+	};
+
+	for (std::size_t i = 1u; i < eventCount; ++i)
+	{
+		const auto current = events[i];
+		std::size_t j = i;
+		while (j > 0u && shouldPrecede(current, events[j - 1u]))
+		{
+			events[j] = events[j - 1u];
+			--j;
+		}
+		events[j] = current;
+	}
 }

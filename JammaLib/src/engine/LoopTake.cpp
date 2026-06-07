@@ -5,6 +5,7 @@
 #include <limits>
 
 #include "../graphics/MidiModel.h"
+#include "../midi/MidiNote.h"
 
 namespace
 {
@@ -509,7 +510,9 @@ ActionResult LoopTake::BeginMidiQuantisationGesture(actions::TouchAction action)
 	action = GlobalToLocal(action);
 
 	const auto quantisation = MidiQuantisation();
-	_BeginGesture(GestureKind::MidiQuantisation, action.Position, MidiQuantisationFractionIndex(quantisation.Fraction));
+	_BeginGesture(GestureKind::MidiQuantisation,
+		action.Position,
+		engine::MidiQuantisation::FractionIndex(quantisation.Fraction));
 
 	ActionResult res;
 	res.IsEaten = true;
@@ -530,8 +533,8 @@ ActionResult LoopTake::OnAction(actions::TouchMoveAction action)
 
 	action = GlobalToLocal(action);
 	const auto delta = action.Position - _GestureState().StartPosition;
-	const auto startFraction = ClampMidiQuantisationFractionIndex(_GestureState().StartValue);
-	const auto fraction = ResolveMidiQuantisationDragFraction(startFraction, delta.Y);
+	const auto startFraction = engine::MidiQuantisation::ClampFractionIndex(_GestureState().StartValue);
+	const auto fraction = engine::MidiQuantisation::ResolveDragFraction(startFraction, delta.Y);
 
 	_ApplyMidiQuantisationGesture(MidiQuantisationGesture::DragFraction, fraction, "drag-fraction");
 	return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
@@ -589,7 +592,7 @@ ActionResult LoopTake::OnAction(GuiAction action)
 		if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
 		{
 			const auto previous = MidiQuantisation();
-			const auto updated = ApplyMidiQuantisationGuiPayload(previous,
+			const auto updated = engine::MidiQuantisation::ApplyGuiPayload(previous,
 				arr->Values.data(),
 				arr->Values.size());
 			if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
@@ -2273,7 +2276,7 @@ std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 		_midiOverdubSession.MergeScratch[mergedCount++] = event;
 	}
 
-	CanonicaliseMidiPlaybackOrder(_midiOverdubSession.MergeScratch.data(), mergedCount);
+	MidiNote::SortMidiEvents(_midiOverdubSession.MergeScratch.data(), mergedCount);
 	return mergedCount;
 }
 
@@ -2410,10 +2413,10 @@ void LoopTake::_ApplyMidiQuantisationGesture(MidiQuantisationGesture gesture,
 	const char* source) noexcept
 {
 	const auto previous = MidiQuantisation();
-	const auto updated = ApplyMidiQuantisationGesture(previous,
+	const auto updated = engine::MidiQuantisation::ApplyGesture(previous,
 		gesture,
 		fraction,
-		ResolveMidiQuantisationGestureGrain(_MidiQuantisationGrainCandidates()));
+		engine::MidiQuantisation::ResolveGestureGrain(_MidiQuantisationGrainCandidates()));
 
 	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);
@@ -2427,8 +2430,8 @@ void LoopTake::_LogMidiQuantisationFractionChange(MidiQuantisationFraction previ
 {
 	std::cout << "MIDI quantisation fraction: take=" << _id
 		<< " source=" << source
-		<< " " << MidiQuantisationFractionLabel(previous)
-		<< " -> " << MidiQuantisationFractionLabel(updated) << '\n';
+		<< " " << engine::MidiQuantisation::FractionLabel(previous)
+		<< " -> " << engine::MidiQuantisation::FractionLabel(updated) << '\n';
 }
 
 void LoopTake::_RemoveMidiModelChildren()

@@ -83,7 +83,7 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 			_dropped = static_cast<std::uint64_t>(count - _events.size());
 	}
 
-	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
+	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	++_revision;
@@ -96,7 +96,7 @@ void MidiLoop::ReplaceRecordedEvents(const MidiEvent* events,
 
 void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 {
-	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
+	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
 	_held.reset();
@@ -108,7 +108,7 @@ void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 
 void MidiLoop::EndRecord(std::uint32_t loopLengthSamps)
 {
-	CanonicaliseMidiPlaybackOrder(_events.data(), _eventCount);
+	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 
 	_loopLengthSamps = loopLengthSamps;
 	_state = MidiLoopState::Playing;
@@ -212,7 +212,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 	const auto* quantisedEvents = _quantisedEvents.load(std::memory_order_acquire);
 	const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
 
-	auto spans = ExtractMidiNoteSpans(eventSource, _eventCount, effectiveLength);
+	auto spans = MidiNote::ExtractSpans(eventSource, _eventCount, effectiveLength);
 	if (queueUpdate)
 		_model->QueueModelUpdate(spans, effectiveLength);
 	else
@@ -325,7 +325,7 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings)
 	const auto previous = _quantisation;
 	_quantisation = settings;
 
-	const auto step = MidiQuantisationStepSamps(_quantisation);
+	const auto step = MidiQuantisation::StepSamps(_quantisation);
 	if (step > 0u && _loopLengthSamps > 0u && _eventCount > 0u)
 		PublishQuantisedEvents();
 	else
@@ -337,7 +337,7 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings)
 
 void MidiLoop::PublishQuantisedEvents()
 {
-	const auto step = MidiQuantisationStepSamps(_quantisation);
+	const auto step = MidiQuantisation::StepSamps(_quantisation);
 	if (0u == step || 0u == _loopLengthSamps || 0u == _eventCount)
 	{
 		_quantisedEvents.store(nullptr, std::memory_order_release);
@@ -345,7 +345,11 @@ void MidiLoop::PublishQuantisedEvents()
 	}
 
 	auto quantisedEvents = std::make_unique<QuantisedEventBuffer>();
-	BuildQuantisedPlaybackEvents(_events.data(), _eventCount, _loopLengthSamps, step, quantisedEvents->Events.data());
+	MidiQuantisation::BuildQuantisedPlaybackEvents(_events.data(),
+		_eventCount,
+		_loopLengthSamps,
+		step,
+		quantisedEvents->Events.data());
 	const auto* snapshot = quantisedEvents.get();
 	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
 	_quantisedEvents.store(snapshot, std::memory_order_release);

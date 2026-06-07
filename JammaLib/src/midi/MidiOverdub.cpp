@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <array>
 
-#include "MidiQuantisation.h"
+#include "MidiNote.h"
 
 using namespace engine;
 
@@ -313,6 +313,6 @@ std::size_t engine::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& pa
 	}
 
 finalize:
-	CanonicaliseMidiPlaybackOrder(outEvents, outCount);
+	MidiNote::SortMidiEvents(outEvents, outCount);
 	return outCount;
 }

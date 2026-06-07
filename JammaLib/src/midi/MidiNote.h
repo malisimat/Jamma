@@ -23,6 +23,15 @@ namespace engine
 		{
 			return (static_cast<std::size_t>(channel & MidiEvent::ChannelMask) << 7) | (note & 0x7F);
 		}
+
+		static std::vector<MidiNote> ExtractSpans(const MidiEvent* events,
+			std::size_t eventCount,
+			std::uint32_t loopLengthSamps);
+
+		// Canonical playback order: sampleOffset ascending; same-sample NoteOffs
+		// before NoteOns; stable for equal-priority ties.
+		static void SortMidiEvents(MidiEvent* events,
+			std::size_t eventCount) noexcept;
 	};
 
 	struct MidiNoteSnapshot
@@ -45,7 +54,4 @@ namespace engine
 		}
 	};
 
-	std::vector<MidiNote> ExtractMidiNoteSpans(const MidiEvent* events,
-	                                                std::size_t eventCount,
-	                                                std::uint32_t loopLengthSamps);
 }

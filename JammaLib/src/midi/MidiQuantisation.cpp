@@ -1,7 +1,7 @@
-#include "MidiQuantisation.h"
-
 #include <array>
 #include <cstring>
+#include "MidiQuantisation.h"
+#include "MidiNote.h"
 
 using namespace engine;
 
@@ -15,7 +15,7 @@ namespace
 	}
 }
 
-int engine::MidiQuantisationDragSteps(int deltaY) noexcept
+int engine::MidiQuantisation::DragSteps(int deltaY) noexcept
 {
 	const auto absDelta = deltaY < 0 ? -deltaY : deltaY;
 	const auto steps = (absDelta + (MidiQuantisationDragPixelsPerStep / 2)) /
@@ -23,17 +23,17 @@ int engine::MidiQuantisationDragSteps(int deltaY) noexcept
 	return deltaY < 0 ? steps : -steps;
 }
 
-MidiQuantisationFraction engine::ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
-                                                                      int deltaY) noexcept
+MidiQuantisationFraction engine::MidiQuantisation::ResolveDragFraction(MidiQuantisationFraction startFraction,
+	int deltaY) noexcept
 {
-	const auto startIndex = MidiQuantisationFractionIndex(startFraction);
-	return ClampMidiQuantisationFractionIndex(startIndex + MidiQuantisationDragSteps(deltaY));
+	const auto startIndex = FractionIndex(startFraction);
+	return ClampFractionIndex(startIndex + DragSteps(deltaY));
 }
 
-MidiQuantisationSettings engine::ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
-                                                               MidiQuantisationGesture gesture,
-                                                               MidiQuantisationFraction fraction,
-                                                               std::uint32_t resolvedGrainSamps) noexcept
+MidiQuantisationSettings engine::MidiQuantisation::ApplyGesture(const MidiQuantisationSettings& current,
+	MidiQuantisationGesture gesture,
+	MidiQuantisationFraction fraction,
+	std::uint32_t resolvedGrainSamps) noexcept
 {
 	MidiQuantisationSettings updated = current;
 	updated.Enabled = (MidiQuantisationGesture::Toggle == gesture) ? !current.Enabled : true;
@@ -45,7 +45,7 @@ MidiQuantisationSettings engine::ApplyMidiQuantisationGesture(const MidiQuantisa
 	return updated;
 }
 
-std::uint32_t engine::ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
+std::uint32_t engine::MidiQuantisation::ResolveGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
 {
 	if (candidates.FirstPlayableMidiLoopSamps > 0u)
 		return candidates.FirstPlayableMidiLoopSamps;
@@ -57,7 +57,7 @@ std::uint32_t engine::ResolveMidiQuantisationGestureGrain(const MidiQuantisation
 	return candidates.RecordedSamps;
 }
 
-MidiQuantisationSettings engine::ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+MidiQuantisationSettings engine::MidiQuantisation::ApplyGuiPayload(const MidiQuantisationSettings& current,
 	const int* values,
 	std::size_t valueCount) noexcept
 {
@@ -67,16 +67,16 @@ MidiQuantisationSettings engine::ApplyMidiQuantisationGuiPayload(const MidiQuant
 
 	updated.Enabled = (0 != values[0]);
 	if (valueCount >= 2u)
-		updated.Fraction = ClampMidiQuantisationFractionIndex(values[1]);
+		updated.Fraction = ClampFractionIndex(values[1]);
 	if (valueCount >= 3u && values[2] > 0)
 		updated.GrainSamps = static_cast<std::uint32_t>(values[2]);
 
 	return updated;
 }
 
-std::uint32_t engine::QuantiseSampleOffset(std::uint32_t offset,
-                                            std::uint32_t step,
-                                            std::uint32_t loopLength) noexcept
+std::uint32_t engine::MidiQuantisation::QuantiseSampleOffset(std::uint32_t offset,
+	std::uint32_t step,
+	std::uint32_t loopLength) noexcept
 {
 	if (0u == step || 0u == loopLength)
 		return offset;
@@ -90,11 +90,11 @@ std::uint32_t engine::QuantiseSampleOffset(std::uint32_t offset,
 	return snapped % loopLength;
 }
 
-void engine::QuantiseEvents(const MidiEvent* src,
-                             std::size_t eventCount,
-                             std::uint32_t loopLength,
-                             std::uint32_t stepSamps,
-                             MidiEvent* dst) noexcept
+void engine::MidiQuantisation::QuantiseEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
 {
 	if (nullptr == src || nullptr == dst || 0u == eventCount)
 		return;
@@ -159,48 +159,12 @@ void engine::QuantiseEvents(const MidiEvent* src,
 	}
 }
 
-void engine::CanonicaliseMidiPlaybackOrder(MidiEvent* events,
-                                            std::size_t eventCount) noexcept
-{
-	if (nullptr == events || eventCount < 2u)
-		return;
-
-	const auto priority = [](const MidiEvent& ev) noexcept
-	{
-		if (ev.IsNoteOff())
-			return 0;
-		if (ev.IsNoteOn())
-			return 2;
-		return 1;
-	};
-
-	const auto shouldPrecede = [&](const MidiEvent& lhs, const MidiEvent& rhs) noexcept
-	{
-		if (lhs.sampleOffset != rhs.sampleOffset)
-			return lhs.sampleOffset < rhs.sampleOffset;
-
-		return priority(lhs) < priority(rhs);
-	};
-
-	for (std::size_t i = 1u; i < eventCount; ++i)
-	{
-		const auto current = events[i];
-		std::size_t j = i;
-		while (j > 0u && shouldPrecede(current, events[j - 1u]))
-		{
-			events[j] = events[j - 1u];
-			--j;
-		}
-		events[j] = current;
-	}
-}
-
-void engine::BuildQuantisedPlaybackEvents(const MidiEvent* src,
-                                           std::size_t eventCount,
-                                           std::uint32_t loopLength,
-                                           std::uint32_t stepSamps,
-                                           MidiEvent* dst) noexcept
+void engine::MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
 {
 	QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
-	CanonicaliseMidiPlaybackOrder(dst, eventCount);
+	MidiNote::SortMidiEvents(dst, eventCount);
 }
