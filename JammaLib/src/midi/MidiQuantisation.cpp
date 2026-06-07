@@ -1,5 +1,6 @@
 #include <array>
 #include <cstring>
+#include <vector>
 #include "MidiQuantisation.h"
 #include "MidiNote.h"
 
@@ -105,12 +106,11 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 		return;
 	}
 
-	// Per (channel, note) slot remember the signed delta applied to the most
-	// recent unmatched NoteOn so the matching NoteOff can ride the same shift.
-	// Use a sentinel `hasPending` array to distinguish "no pending shift" from
-	// "shift of 0 samples".
-	std::array<std::int64_t, TotalNoteSlots> pendingDelta{};
-	std::array<bool, TotalNoteSlots> hasPending{};
+	// Track pending NoteOn shifts per (channel, note) slot in FIFO order so
+	// overlapping same-pitch notes pair each NoteOff with the earliest unmatched
+	// NoteOn.
+	std::array<std::vector<std::int64_t>, TotalNoteSlots> pendingDeltas;
+	std::array<std::size_t, TotalNoteSlots> pendingReadIndex{};
 
 	for (std::size_t i = 0; i < eventCount; ++i)
 	{
@@ -122,17 +122,19 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 			if (ev.sampleOffset < loopLength)
 			{
 				const auto quantised = QuantiseSampleOffset(ev.sampleOffset, stepSamps, loopLength);
-				pendingDelta[slot] = static_cast<std::int64_t>(quantised) -
-					static_cast<std::int64_t>(ev.sampleOffset);
-				hasPending[slot] = true;
+				pendingDeltas[slot].push_back(static_cast<std::int64_t>(quantised) -
+					static_cast<std::int64_t>(ev.sampleOffset));
 				ev.sampleOffset = quantised;
 			}
 		}
 		else if (ev.IsNoteOff())
 		{
-			if (hasPending[slot])
+			auto& deltas = pendingDeltas[slot];
+			auto& readIndex = pendingReadIndex[slot];
+
+			if (readIndex < deltas.size())
 			{
-				const auto delta = pendingDelta[slot];
+				const auto delta = deltas[readIndex++];
 				const auto shifted = static_cast<std::int64_t>(ev.sampleOffset) + delta;
 				const auto loopEnd = static_cast<std::int64_t>(loopLength);
 
@@ -149,9 +151,6 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 				{
 					ev.sampleOffset = static_cast<std::uint32_t>(shifted);
 				}
-
-				hasPending[slot] = false;
-				pendingDelta[slot] = 0;
 			}
 		}
 

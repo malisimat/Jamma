@@ -33,7 +33,7 @@ namespace
 	}
 }
 
-std::vector<MidiNote> midi::MidiNote::ExtractSpans(const MidiEvent* events,
+std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,
 	std::size_t eventCount,
 	std::uint32_t loopLengthSamps)
 {
@@ -91,7 +91,7 @@ std::vector<MidiNote> midi::MidiNote::ExtractSpans(const MidiEvent* events,
 	return spans;
 }
 
-void midi::MidiNote::SortMidiEvents(MidiEvent* events,
+void MidiNote::SortMidiEvents(MidiEvent* events,
 	std::size_t eventCount) noexcept
 {
 	if (nullptr == events || eventCount < 2u)
