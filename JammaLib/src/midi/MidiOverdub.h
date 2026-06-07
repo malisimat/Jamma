@@ -10,7 +10,7 @@
 #include "MidiLoop.h"
 #include "MidiNote.h"
 
-namespace engine
+namespace midi
 {
 	struct MidiPunchWindow
 	{

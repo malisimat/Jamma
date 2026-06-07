@@ -5,7 +5,7 @@
 
 #include "MidiEvent.h"
 
-namespace engine
+namespace midi
 {
 	// Fractional grid resolutions for MIDI start-time quantisation, expressed as
 	// fractions of the current grain size. The numeric value is the divisor of

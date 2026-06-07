@@ -8,7 +8,7 @@
 
 #include "MidiEvent.h"
 
-namespace engine
+namespace midi
 {
 	struct MidiNote
 	{
@@ -53,5 +53,4 @@ namespace engine
 			Velocity[slot] = 0u;
 		}
 	};
-
 }

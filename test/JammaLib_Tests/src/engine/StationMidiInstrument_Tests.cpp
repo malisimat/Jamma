@@ -11,7 +11,7 @@ using actions::JobAction;
 using actions::TriggerAction;
 using engine::LoopTake;
 using engine::LoopTakeParams;
-using engine::MidiEvent;
+using midi::MidiEvent;
 using engine::Station;
 using engine::StationParams;
 

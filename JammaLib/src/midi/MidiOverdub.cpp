@@ -5,7 +5,7 @@
 
 #include "MidiNote.h"
 
-using namespace engine;
+using namespace midi;
 
 namespace
 {
@@ -206,7 +206,7 @@ namespace
 	}
 }
 
-std::size_t engine::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& params,
+std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& params,
 	MidiEvent* outEvents,
 	std::size_t outCapacity) noexcept
 {

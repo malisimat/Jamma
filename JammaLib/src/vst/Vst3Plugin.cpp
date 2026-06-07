@@ -163,7 +163,7 @@ public:
 		_count = 0;
 	}
 
-	void AddMidiEvent(const engine::MidiEvent& midiEvent, bool isRealtime) noexcept
+	void AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
 	{
 		if (_count >= MaxEvents || 0u == _blockNumSamples)
 			return;
@@ -1060,7 +1060,7 @@ void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 #endif
 }
 
-void Vst3Plugin::SendMidiEvent(const engine::MidiEvent& event,
+void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED

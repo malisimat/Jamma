@@ -5,13 +5,13 @@
 #include "midi/MidiLoop.h"
 #include "midi/MidiNote.h"
 
-using engine::MidiEvent;
-using engine::MidiLoop;
-using engine::MidiNote;
+using midi::MidiEvent;
+using midi::MidiLoop;
+using midi::MidiNote;
 
 namespace
 {
-	std::vector<engine::MidiNote> Extract(const std::vector<MidiEvent>& events,
+	std::vector<midi::MidiNote> Extract(const std::vector<MidiEvent>& events,
 		std::uint32_t loopLengthSamps)
 	{
 		return MidiNote::ExtractSpans(events.data(), events.size(), loopLengthSamps);

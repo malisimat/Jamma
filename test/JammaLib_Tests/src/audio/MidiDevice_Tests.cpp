@@ -6,7 +6,7 @@
 #include "gtest/gtest.h"
 #include "midi/MidiDevice.h"
 
-using audio::MidiDevice;
+using midi::MidiDevice;
 
 TEST(MidiDevice, IsClosedBeforeOpen) {
 	MidiDevice device;
@@ -30,7 +30,7 @@ TEST(MidiDevice, OpenWithUnknownNameIsConsistent) {
 }
 
 TEST(MidiDevice, EnumeratesInputDevices) {
-	std::vector<audio::MidiInputDeviceInfo> devices;
+	std::vector<midi::MidiInputDeviceInfo> devices;
 	ASSERT_NO_THROW(devices = MidiDevice::EnumerateInputDevices());
 
 	std::unordered_set<unsigned int> ids;

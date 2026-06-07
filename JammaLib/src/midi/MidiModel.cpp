@@ -8,7 +8,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../utils/VecUtils.h"
 
-using namespace engine;
+using namespace midi;
 using base::DrawContext;
 using graphics::GlDrawContext;
 

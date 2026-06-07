@@ -227,7 +227,7 @@ ActionResult Trigger::OnAction(KeyAction action)
 	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
 
-bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
+bool Trigger::TryEncodeMidiEvent(const midi::MidiEvent& event,
 	unsigned int& outValue,
 	unsigned int& outState)
 {
@@ -250,7 +250,7 @@ bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
 	return false;
 }
 
-ActionResult Trigger::OnEvent(const MidiEvent& event,
+ActionResult Trigger::OnEvent(const midi::MidiEvent& event,
 	const base::Action& action)
 {
 	unsigned int value = 0u, state = 0u;

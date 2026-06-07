@@ -373,7 +373,7 @@ void Vst2Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 #endif
 }
 
-void Vst2Plugin::SendMidiEvent(const engine::MidiEvent& event,
+void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
 #ifdef JAMMA_VST2_ENABLED

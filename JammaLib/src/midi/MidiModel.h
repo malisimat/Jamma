@@ -8,7 +8,7 @@
 #include "../gui/GuiModel.h"
 #include "MidiNote.h"
 
-namespace engine
+namespace midi
 {
 	class MidiModelParams : public gui::GuiModelParams
 	{

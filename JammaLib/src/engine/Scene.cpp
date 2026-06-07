@@ -16,6 +16,7 @@ using namespace audio;
 using namespace engine;
 using namespace gui;
 using namespace io;
+using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;

@@ -8,7 +8,7 @@
 #include "../gui/GuiModel.h"
 #include "../midi/MidiNote.h"
 
-namespace engine
+namespace graphics
 {
 	class MidiModelParams : public gui::GuiModelParams
 	{
@@ -52,8 +52,8 @@ namespace engine
 		void SetLoopIndexFrac(double frac) noexcept;
 		unsigned int NoteInstanceCount() const noexcept { return _backNoteInstanceCount; }
 		unsigned int TotalInstanceCount() const noexcept { return _backInstanceCount; }
-		void UpdateModel(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps);
-		void QueueModelUpdate(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps);
+		void UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps);
+		void QueueModelUpdate(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps);
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);
 
@@ -61,7 +61,7 @@ namespace engine
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 	private:
-		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<MidiNote>& spans,
+		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<midi::MidiNote>& spans,
 			std::uint32_t loopLengthSamps) const;
 		void ApplyPendingModelUpdate();
 		float PitchOffset(std::uint8_t note) const noexcept;

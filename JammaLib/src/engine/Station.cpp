@@ -6,6 +6,7 @@ using namespace engine;
 using namespace audio;
 using namespace actions;
 using namespace base;
+using namespace midi;
 using resources::ResourceLib;
 using utils::Size2d;
 using gui::GuiRackParams;

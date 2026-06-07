@@ -39,7 +39,7 @@ Time OffsetTime(const Time t, unsigned int ms)
 	return t + std::chrono::milliseconds(ms);
 }
 
-static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const engine::MidiEvent& event, Time t)
+static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const midi::MidiEvent& event, Time t)
 {
 	base::Action midiAction;
 	midiAction.SetActionTime(t);
@@ -223,7 +223,7 @@ public:
 	}
 
 	void DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
-		const engine::MidiEvent& event)
+		const midi::MidiEvent& event)
 	{
 		_DispatchMidiTriggerEvent(deviceSlot, event);
 	}
@@ -841,15 +841,15 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	engine::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
-	engine::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
+	midi::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
+	midi::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
 	SendMidiEvent(trigger.value(), ccDown, GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
@@ -873,17 +873,17 @@ TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	EXPECT_TRUE(receiver->Actions().empty());
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), GetTime());
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
 }
@@ -902,17 +902,17 @@ TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 	ASSERT_TRUE(trigger.has_value());
 	trigger.value()->SetReceiver(receiver);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOff(0u, 0u, 61u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOff(0u, 0u, 61u), GetTime());
 	ASSERT_EQ(1u, receiver->Actions().size());
 
-	SendMidiEvent(trigger.value(), engine::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
+	SendMidiEvent(trigger.value(), midi::MidiEvent::MakeNoteOn(0u, 0u, 61u, 100u), GetTime());
 	ASSERT_EQ(3u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
@@ -947,7 +947,7 @@ TEST(Trigger, SharedMainMidiIngressStillRecordsLoopMidiWhenTriggerEatsEvent) {
 	scene.AddStationForTest(station);
 	scene.RegisterMidiTriggerRouteForTest("default", trigger.value(), 0u);
 
-	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMainMidiEventForTest(midi::MidiEvent::NoteOn, 60u, 100u);
 	scene.PumpMidiForTest();
 
 	ASSERT_EQ(1u, take->MidiLoopEventCount());
@@ -983,7 +983,7 @@ TEST(Trigger, RoutedMidiTriggerIgnoresUnmatchedNoteAndCcEvents) {
 	std::ostringstream captured;
 	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
 
-	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 61u, 100u);
+	scene.PushMainMidiEventForTest(midi::MidiEvent::NoteOn, 61u, 100u);
 	scene.PushMainMidiEventForTest(0xB0u, 65u, 127u);
 	scene.PumpMidiForTest();
 
@@ -1015,7 +1015,7 @@ TEST(Trigger, ConfiguredMidiTriggerDeviceUsesResolvedRouteSlot) {
 	TestScene scene(sceneParams, userConfig);
 	scene.RegisterMidiTriggerRouteForTest("TriggerPad", trigger.value(), 0u);
 
-	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMainMidiEventForTest(midi::MidiEvent::NoteOn, 60u, 100u);
 	scene.PumpMidiForTest();
 
 	ASSERT_EQ(1u, receiver->Actions().size());
@@ -1088,8 +1088,8 @@ TEST(Trigger, SceneRoutesAndRecordsSameChannelAcrossMultipleMidiDevices) {
 	scene.RegisterMidiTriggerRouteForTest("Keys A", triggerA.value(), 0u);
 	scene.RegisterMidiTriggerRouteForTest("Keys B", triggerB.value(), 1u);
 
-	scene.PushMidiEventForTest(0u, engine::MidiEvent::NoteOn, 60u, 100u);
-	scene.PushMidiEventForTest(1u, engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMidiEventForTest(0u, midi::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMidiEventForTest(1u, midi::MidiEvent::NoteOn, 60u, 100u);
 	scene.PumpMidiForTest();
 
 	ASSERT_EQ(1u, receiverA->Actions().size());
@@ -1175,8 +1175,8 @@ TEST(Trigger, MidiTriggerRoutingHitsAllMatchingRoutes) {
 	scene.AddStationForTest(secondStation);
 	scene.RegisterMidiTriggerRouteForTest("default", thirdTrigger, 0u);
 
-	engine::MidiEvent event{};
-	event.status = engine::MidiEvent::NoteOn;
+	midi::MidiEvent event{};
+	event.status = midi::MidiEvent::NoteOn;
 	event.data1 = 60u;
 	event.data2 = 100u;
 	scene.DispatchMidiTriggerEventForTest(0u, event);
@@ -1231,7 +1231,7 @@ TEST(Trigger, PumpMidiBlocksWhileAudioMutexHeld) {
 	scene.AddStationForTest(station);
 	scene.RegisterMidiTriggerRouteForTest("default", trigger, 0u);
 
-	scene.PushMainMidiEventForTest(engine::MidiEvent::NoteOn, 60u, 100u);
+	scene.PushMainMidiEventForTest(midi::MidiEvent::NoteOn, 60u, 100u);
 
 	std::atomic<bool> pumpFinished{ false };
 	{
@@ -1424,8 +1424,8 @@ TEST(SceneReset, MidiTriggerDitchWhileRecording_ResetsScene) {
 	scene.RegisterMidiTriggerRouteForTest("default", trigger, 0u);
 
 	// MIDI activate: start recording
-	engine::MidiEvent noteOn{};
-	noteOn.status = engine::MidiEvent::NoteOn;
+	midi::MidiEvent noteOn{};
+	noteOn.status = midi::MidiEvent::NoteOn;
 	noteOn.data1 = 60u;
 	noteOn.data2 = 100u;
 	scene.DispatchMidiTriggerEventForTest(0u, noteOn);
@@ -1436,8 +1436,8 @@ TEST(SceneReset, MidiTriggerDitchWhileRecording_ResetsScene) {
 	station->CommitChanges();
 
 	// MIDI ditch: CC down then up
-	engine::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
-	engine::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
+	midi::MidiEvent ccDown{ 0u, 0xB0u, 64u, 127u, 0u };
+	midi::MidiEvent ccUp{ 0u, 0xB0u, 64u, 0u, 0u };
 	scene.DispatchMidiTriggerEventForTest(0u, ccDown);
 	scene.DispatchMidiTriggerEventForTest(0u, ccUp);
 

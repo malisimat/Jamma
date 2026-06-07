@@ -5,9 +5,9 @@
 #include "midi/MidiEvent.h"
 #include "midi/MidiOverdub.h"
 
-using engine::MidiEvent;
-using engine::MidiOverdubRenderParams;
-using engine::MidiPunchWindow;
+using midi::MidiEvent;
+using midi::MidiOverdubRenderParams;
+using midi::MidiPunchWindow;
 
 namespace
 {
@@ -34,7 +34,7 @@ namespace
 		params.PunchWindows = punchWindows.data();
 		params.PunchWindowCount = punchWindows.size();
 
-		const auto eventCount = engine::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
+		const auto eventCount = midi::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
 		std::vector<EventView> built;
 		built.reserve(eventCount);
 		for (std::size_t i = 0u; i < eventCount; ++i)

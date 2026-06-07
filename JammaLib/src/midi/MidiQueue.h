@@ -7,7 +7,7 @@
 
 #include "MidiEvent.h"
 
-namespace io
+namespace midi
 {
 	// Lock-free single-producer/single-consumer ring of MidiEvents for the MIDI ingress path.
 	//
@@ -28,7 +28,7 @@ namespace io
 		static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
 
 	public:
-		using value_type = engine::MidiEvent;
+		using value_type = midi::MidiEvent;
 		static constexpr std::size_t capacity = Capacity;
 
 		MidiQueue() noexcept

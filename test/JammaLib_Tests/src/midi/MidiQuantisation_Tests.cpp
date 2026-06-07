@@ -5,12 +5,12 @@
 #include "midi/MidiEvent.h"
 #include "midi/MidiQuantisation.h"
 
-using engine::MidiEvent;
-using engine::MidiQuantisationFraction;
-using engine::MidiQuantisation;
-using engine::MidiQuantisationSettings;
-using engine::MidiQuantisationGesture;
-using engine::MidiQuantisationGrainCandidates;
+using midi::MidiEvent;
+using midi::MidiQuantisationFraction;
+using midi::MidiQuantisation;
+using midi::MidiQuantisationSettings;
+using midi::MidiQuantisationGesture;
+using midi::MidiQuantisationGrainCandidates;
 
 namespace
 {

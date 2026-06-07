@@ -8,7 +8,7 @@
 #include "MidiQuantisation.h"
 #include "../include/Constants.h"
 
-using namespace engine;
+using namespace midi;
 
 namespace
 {
@@ -142,7 +142,7 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 	return true;
 }
 
-void MidiLoop::AttachModel(std::shared_ptr<MidiModel> model) noexcept
+void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
 {
 	_model = std::move(model);
 	_modelRevision = 0u;
@@ -177,9 +177,11 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 		const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
 		std::uint32_t maxOffset = 0u;
 		for (std::size_t i = 0; i < _eventCount; ++i)
-			maxOffset = std::max(maxOffset, eventSource[i].sampleOffset);
+			if (eventSource[i].sampleOffset > maxOffset)
+				maxOffset = eventSource[i].sampleOffset;
 
-		effectiveLength = (maxOffset < std::numeric_limits<std::uint32_t>::max()) ? (maxOffset + 1u) : maxOffset;
+		constexpr std::uint32_t MaxUint32 = 0xFFFFFFFFu;
+		effectiveLength = (maxOffset < MaxUint32) ? (maxOffset + 1u) : maxOffset;
 	}
 	const auto lengthDelta = (_modelLengthSamps > effectiveLength) ?
 		(_modelLengthSamps - effectiveLength) :

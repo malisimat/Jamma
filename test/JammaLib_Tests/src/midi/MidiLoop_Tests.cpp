@@ -14,17 +14,17 @@
 #include "engine/Timer.h"
 #include "io/UserConfig.h"
 
-using engine::IMidiSink;
-using engine::IMidiOutputSink;
+using midi::IMidiSink;
+using midi::IMidiOutputSink;
 using engine::LoopTake;
 using engine::LoopTakeParams;
-using engine::MidiEvent;
-using engine::MidiLoop;
-using engine::MidiLoopState;
-using engine::MidiModel;
-using engine::MidiModelParams;
-using engine::MidiQuantisationFraction;
-using engine::MidiQuantisationSettings;
+using midi::MidiEvent;
+using midi::MidiLoop;
+using midi::MidiLoopState;
+using graphics::MidiModel;
+using graphics::MidiModelParams;
+using midi::MidiQuantisationFraction;
+using midi::MidiQuantisationSettings;
 using engine::Scene;
 using engine::SceneParams;
 using engine::Station;
