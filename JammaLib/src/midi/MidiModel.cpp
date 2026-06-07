@@ -8,7 +8,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../utils/VecUtils.h"
 
-using namespace engine;
+using namespace midi;
 using base::DrawContext;
 using graphics::GlDrawContext;
 
@@ -122,18 +122,18 @@ void MidiModel::SetLoopIndexFrac(double frac) noexcept
 	_loopIndexFrac = frac;
 }
 
-void MidiModel::UpdateModel(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
+void MidiModel::UpdateModel(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
 	auto data = BuildInstanceData(spans, loopLengthSamps);
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
 }
 
-void MidiModel::QueueModelUpdate(const std::vector<MidiNoteSpan>& spans, std::uint32_t loopLengthSamps)
+void MidiModel::QueueModelUpdate(const std::vector<MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
 	_pendingModelUpdate.store(BuildInstanceData(spans, loopLengthSamps), std::memory_order_release);
 }
 
-std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const std::vector<MidiNoteSpan>& spans,
+std::shared_ptr<MidiModel::ModelInstanceData> MidiModel::BuildInstanceData(const std::vector<MidiNote>& spans,
 	std::uint32_t loopLengthSamps) const
 {
 	auto data = std::make_shared<ModelInstanceData>();

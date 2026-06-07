@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <ostream>
 
-namespace engine
+namespace midi
 {
 	// POD MIDI event, sample-relative timestamp.
 	//

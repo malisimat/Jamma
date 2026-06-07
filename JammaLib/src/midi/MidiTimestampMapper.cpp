@@ -2,7 +2,7 @@
 
 #include <limits>
 
-using namespace engine;
+using namespace midi;
 
 namespace
 {
@@ -49,7 +49,7 @@ namespace
 	}
 }
 
-std::uint64_t engine::MapMidiTimestampToAudioSample(unsigned int sampleRate,
+std::uint64_t midi::MapMidiTimestampToAudioSample(unsigned int sampleRate,
 	std::uint64_t anchorSample,
 	std::int64_t anchorMicros,
 	std::int64_t eventMicros) noexcept

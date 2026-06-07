@@ -4,7 +4,7 @@
 
 #include "midi/MidiTimestampMapper.h"
 
-using engine::MapMidiTimestampToAudioSample;
+using midi::MapMidiTimestampToAudioSample;
 
 TEST(MidiTimestampMapper, MapsMicrosAfterAnchorToSampleCounter)
 {

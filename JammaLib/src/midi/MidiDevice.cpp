@@ -8,7 +8,7 @@
 
 #include "rtmidi/RtMidi.h"
 
-using namespace audio;
+using namespace midi;
 
 namespace
 {

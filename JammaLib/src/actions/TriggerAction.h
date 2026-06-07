@@ -37,5 +37,7 @@ namespace actions
 		std::vector<std::string> MidiInputDevices;
 		bool ApplyToTargetTake;
 		bool ApplyToSourceTake;
+		bool ApplyToTargetAudio;
+		bool ApplyToTargetMidi;
 	};
 }

@@ -262,7 +262,7 @@ namespace engine
 
 		virtual	utils::Position2d Position() const override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		actions::ActionResult OnEvent(const MidiEvent& event,
+		actions::ActionResult OnEvent(const midi::MidiEvent& event,
 			const base::Action& action);
 		actions::ActionResult OnEvent(TriggerSource source,
 			unsigned int value,
@@ -302,7 +302,7 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
-		static bool TryEncodeMidiEvent(const MidiEvent& event,
+		static bool TryEncodeMidiEvent(const midi::MidiEvent& event,
 			unsigned int& outValue,
 			unsigned int& outState);
 		bool IgnoreRepeats(bool isActivate,

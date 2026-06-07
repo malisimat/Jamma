@@ -6,6 +6,7 @@ using namespace engine;
 using namespace audio;
 using namespace actions;
 using namespace base;
+using namespace midi;
 using resources::ResourceLib;
 using utils::Size2d;
 using gui::GuiRackParams;
@@ -632,8 +633,14 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 	case TriggerAction::TRIGGER_REC_START:
 	{
+		std::vector<std::pair<std::string, MidiNoteSnapshot>> heldSnapshot;
+		if (!action.MidiInputChannels.empty())
+		{
+			std::scoped_lock lock(_liveHeldMidiMutex);
+			heldSnapshot = _liveHeldMidi;
+		}
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices);
+		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices, std::move(heldSnapshot));
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -703,10 +710,15 @@ ActionResult Station::OnAction(TriggerAction action)
 	}
 	case TriggerAction::TRIGGER_OVERDUB_START:
 	{
-		auto sourceId = _backLoopTakes.empty() ? "" : _backLoopTakes.back()->Id();
+		auto sourceLoopTake = _loopTakes.empty() ? std::shared_ptr<LoopTake>() : _loopTakes.back();
+		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
 		auto newLoopTake = AddTake();
-		newLoopTake->Overdub(action.InputChannels, Name());
+		newLoopTake->Overdub(action.InputChannels,
+			Name(),
+			action.MidiInputChannels,
+			action.MidiInputDevices,
+			sourceLoopTake);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
@@ -779,8 +791,14 @@ ActionResult Station::OnAction(TriggerAction action)
 		break;
 	}
 	case TriggerAction::TRIGGER_PUNCHIN_START:
+		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
+		{
+			for (const auto& event : loopTake.value()->BuildMidiPunchInLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
+				EnqueueLiveMidiEvent(event);
+		}
+
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchIn();
+			loopTake.value()->PunchIn(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 
 		if (action.ApplyToSourceTake)
 		{
@@ -792,8 +810,14 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
+		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
+		{
+			for (const auto& event : loopTake.value()->BuildMidiPunchOutLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
+				EnqueueLiveMidiEvent(event);
+		}
+
 		if (action.ApplyToTargetTake && loopTake.has_value())
-			loopTake.value()->PunchOut();
+			loopTake.value()->PunchOut(action.ApplyToTargetAudio, action.ApplyToTargetMidi);
 
 		if (action.ApplyToSourceTake)
 		{
@@ -854,6 +878,10 @@ void Station::OnTick(Time curTime,
 void Station::Reset()
 {
 	Jammable::Reset();
+	{
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		_liveHeldMidi.clear();
+	}
 	if (_stationModel)
 		_stationModel->ResetStationLevel();
 
@@ -1197,8 +1225,37 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	return _triggers.empty();
 }
 
-void Station::EnqueueLiveMidiEvent(const MidiEvent& event) noexcept
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 {
+	// Synthetic events, like punch-in transitions, do not have a device name.
+	EnqueueLiveMidiEvent(event, "");
+}
+
+void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName)
+{
+	if (event.IsNoteOn() || event.IsNoteOff())
+	{
+		const auto channel = event.Channel();
+		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		// Keep one snapshot for "any device" and one snapshot for the actual device.
+		// The empty-name snapshot is for device-agnostic recording; the named one is
+		// for real MIDI input from a specific device.
+		auto upsert = [&](const std::string& key) {
+			auto it = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+				[&key](const auto& p) { return p.first == key; });
+			if (it == _liveHeldMidi.end())
+			{
+				_liveHeldMidi.push_back({ key, MidiNoteSnapshot{} });
+				it = std::prev(_liveHeldMidi.end());
+			}
+			if (event.IsNoteOn()) it->second.Set(channel, note, event.data2);
+			else it->second.Clear(channel, note);
+		};
+		upsert("");
+		if (!deviceName.empty())
+			upsert(deviceName);
+	}
 	_liveMidiIngress.Push(event);
 }
 

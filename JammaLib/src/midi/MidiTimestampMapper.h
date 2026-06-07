@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace engine
+namespace midi
 {
 	std::uint64_t MapMidiTimestampToAudioSample(unsigned int sampleRate,
 		std::uint64_t anchorSample,

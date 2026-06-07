@@ -252,7 +252,7 @@ namespace engine
 			std::uint8_t data2,
 			unsigned int sampleRate) noexcept;
 		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
-			const MidiEvent& event);
+			const midi::MidiEvent& event);
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
 		void _PublishMidiTriggerRoutes();
 		void _PumpSerial();
@@ -307,8 +307,8 @@ namespace engine
 		{
 			std::uint8_t DeviceSlot = 0u;
 			std::string ConfiguredName;
-			std::unique_ptr<audio::MidiDevice> Device;
-			io::MidiQueue<1024> Ingress;
+			std::unique_ptr<midi::MidiDevice> Device;
+			midi::MidiQueue<1024> Ingress;
 			std::uint64_t LastDroppedCount = 0u;
 		};
 

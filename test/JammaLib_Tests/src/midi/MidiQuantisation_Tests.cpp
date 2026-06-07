@@ -5,25 +5,86 @@
 #include "midi/MidiEvent.h"
 #include "midi/MidiQuantisation.h"
 
-using engine::MidiEvent;
-using engine::MidiQuantisationDivisor;
-using engine::MidiQuantisationFraction;
-using engine::ClampMidiQuantisationFractionIndex;
-using engine::MidiQuantisationFractionLabel;
-using engine::MidiQuantisationSettings;
-using engine::MidiQuantisationStepSamps;
-using engine::MidiQuantisationGesture;
-using engine::MidiQuantisationGrainCandidates;
-using engine::ApplyMidiQuantisationGesture;
-using engine::ApplyMidiQuantisationGuiPayload;
-using engine::BuildQuantisedPlaybackEvents;
-using engine::QuantiseEvents;
-using engine::QuantiseSampleOffset;
-using engine::ResolveMidiQuantisationDragFraction;
-using engine::ResolveMidiQuantisationGestureGrain;
+using midi::MidiEvent;
+using midi::MidiQuantisationFraction;
+using midi::MidiQuantisation;
+using midi::MidiQuantisationSettings;
+using midi::MidiQuantisationGesture;
+using midi::MidiQuantisationGrainCandidates;
 
 namespace
 {
+	constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
+	{
+		return MidiQuantisation::Divisor(fraction);
+	}
+
+	constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
+	{
+		return MidiQuantisation::ClampFractionIndex(index);
+	}
+
+	constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
+	{
+		return MidiQuantisation::FractionLabel(fraction);
+	}
+
+	constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& settings) noexcept
+	{
+		return MidiQuantisation::StepSamps(settings);
+	}
+
+	MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
+		int deltaY) noexcept
+	{
+		return MidiQuantisation::ResolveDragFraction(startFraction, deltaY);
+	}
+
+	MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
+		MidiQuantisationGesture gesture,
+		MidiQuantisationFraction fraction,
+		std::uint32_t resolvedGrainSamps) noexcept
+	{
+		return MidiQuantisation::ApplyGesture(current, gesture, fraction, resolvedGrainSamps);
+	}
+
+	std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
+	{
+		return MidiQuantisation::ResolveGestureGrain(candidates);
+	}
+
+	MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+		const int* values,
+		std::size_t valueCount) noexcept
+	{
+		return MidiQuantisation::ApplyGuiPayload(current, values, valueCount);
+	}
+
+	std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
+		std::uint32_t step,
+		std::uint32_t loopLength) noexcept
+	{
+		return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength);
+	}
+
+	void QuantiseEvents(const MidiEvent* src,
+		std::size_t eventCount,
+		std::uint32_t loopLength,
+		std::uint32_t stepSamps,
+		MidiEvent* dst) noexcept
+	{
+		MidiQuantisation::QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
+	}
+
+	void BuildQuantisedPlaybackEvents(const MidiEvent* src,
+		std::size_t eventCount,
+		std::uint32_t loopLength,
+		std::uint32_t stepSamps,
+		MidiEvent* dst) noexcept
+	{
+		MidiQuantisation::BuildQuantisedPlaybackEvents(src, eventCount, loopLength, stepSamps, dst);
+	}
+
 	std::vector<MidiEvent> QuantiseVec(const std::vector<MidiEvent>& src,
 		std::uint32_t loopLength,
 		std::uint32_t step)

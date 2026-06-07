@@ -58,7 +58,7 @@ namespace vst
 
 		// Queue a MIDI event for the current block. event.sampleOffset is an
 		// absolute sample position. Real-time safe.
-		virtual void SendMidiEvent(const engine::MidiEvent& event,
+		virtual void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept = 0;
 
 		// Open the plugin's GUI editor as a child of parentHwnd.

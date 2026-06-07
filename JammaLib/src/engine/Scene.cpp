@@ -16,6 +16,7 @@ using namespace audio;
 using namespace engine;
 using namespace gui;
 using namespace io;
+using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
@@ -1102,7 +1103,7 @@ void Scene::_PumpMidi()
 				for (const auto& station : stations)
 				{
 					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
-						station->EnqueueLiveMidiEvent(ingress);
+						station->EnqueueLiveMidiEvent(ingress, deviceName);
 				}
 			}
 

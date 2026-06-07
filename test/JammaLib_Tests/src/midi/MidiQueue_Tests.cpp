@@ -2,8 +2,8 @@
 #include "midi/MidiEvent.h"
 #include "midi/MidiQueue.h"
 
-using engine::MidiEvent;
-using io::MidiQueue;
+using midi::MidiEvent;
+using midi::MidiQueue;
 
 namespace
 {

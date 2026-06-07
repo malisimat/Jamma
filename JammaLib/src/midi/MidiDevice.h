@@ -8,7 +8,7 @@
 
 namespace rt { namespace midi { class RtMidiIn; } }
 
-namespace audio
+namespace midi
 {
 	struct MidiInputDeviceInfo
 	{
@@ -20,8 +20,8 @@ namespace audio
 	{
 	public:
 		using MidiMessageCallback = std::function<void(std::uint8_t status,
-		                                              std::uint8_t data1,
-		                                              std::uint8_t data2)>;
+			std::uint8_t data1,
+			std::uint8_t data2)>;
 
 		MidiDevice();
 		~MidiDevice();
@@ -35,8 +35,8 @@ namespace audio
 		// no exact/substring match is found, the first discovered input is used.
 		// loggingVerbose: if true, logs each received MIDI packet in hex format.
 		bool Open(const std::string& preferredDeviceName,
-		          MidiMessageCallback callback,
-		          bool loggingVerbose = false);
+			MidiMessageCallback callback,
+			bool loggingVerbose = false);
 		void Close();
 
 		bool IsOpen() const noexcept { return _isOpen; }
@@ -45,8 +45,8 @@ namespace audio
 
 	private:
 		static void _RtMidiCallback(double deltatime,
-		                           std::vector<unsigned char>* message,
-		                           void* userData);
+			std::vector<unsigned char>* message,
+			void* userData);
 		void _OnMidiData(const std::vector<unsigned char>& message) noexcept;
 
 		std::unique_ptr<rt::midi::RtMidiIn> _midiIn;

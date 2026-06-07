@@ -3,22 +3,22 @@
 #include "gtest/gtest.h"
 #include "midi/MidiEvent.h"
 #include "midi/MidiLoop.h"
-#include "midi/MidiNoteSpan.h"
+#include "midi/MidiNote.h"
 
-using engine::ExtractMidiNoteSpans;
-using engine::MidiEvent;
-using engine::MidiLoop;
+using midi::MidiEvent;
+using midi::MidiLoop;
+using midi::MidiNote;
 
 namespace
 {
-	std::vector<engine::MidiNoteSpan> Extract(const std::vector<MidiEvent>& events,
-	                                          std::uint32_t loopLengthSamps)
+	std::vector<midi::MidiNote> Extract(const std::vector<MidiEvent>& events,
+		std::uint32_t loopLengthSamps)
 	{
-		return ExtractMidiNoteSpans(events.data(), events.size(), loopLengthSamps);
+		return MidiNote::ExtractSpans(events.data(), events.size(), loopLengthSamps);
 	}
 }
 
-TEST(MidiNoteSpan, PairsNoteOnAndNoteOffIntoDurationSpan)
+TEST(MidiNote, PairsNoteOnAndNoteOffIntoDurationSpan)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(100u, 2, 60, 96),
@@ -35,7 +35,7 @@ TEST(MidiNoteSpan, PairsNoteOnAndNoteOffIntoDurationSpan)
 	EXPECT_EQ(96u, spans[0].Velocity);
 }
 
-TEST(MidiNoteSpan, TreatsVelocityZeroNoteOnAsNoteOff)
+TEST(MidiNote, TreatsVelocityZeroNoteOnAsNoteOff)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(25u, 0, 64, 80),
@@ -51,7 +51,7 @@ TEST(MidiNoteSpan, TreatsVelocityZeroNoteOnAsNoteOff)
 	EXPECT_EQ(80u, spans[0].Velocity);
 }
 
-TEST(MidiNoteSpan, ClampsUnmatchedNoteOnToLoopEnd)
+TEST(MidiNote, ClampsUnmatchedNoteOnToLoopEnd)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(700u, 1, 72, 110)
@@ -65,7 +65,7 @@ TEST(MidiNoteSpan, ClampsUnmatchedNoteOnToLoopEnd)
 	EXPECT_EQ(72u, spans[0].Note);
 }
 
-TEST(MidiNoteSpan, IgnoresEventsOutsidePlayableWindow)
+TEST(MidiNote, IgnoresEventsOutsidePlayableWindow)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(100u, 0, 60, 70),
@@ -82,7 +82,7 @@ TEST(MidiNoteSpan, IgnoresEventsOutsidePlayableWindow)
 	EXPECT_EQ(60u, spans[0].Note);
 }
 
-TEST(MidiNoteSpan, IgnoresNoteOffWithoutActiveNoteOn)
+TEST(MidiNote, IgnoresNoteOffWithoutActiveNoteOn)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOff(50u, 0, 60),
@@ -97,7 +97,7 @@ TEST(MidiNoteSpan, IgnoresNoteOffWithoutActiveNoteOn)
 	EXPECT_EQ(100u, spans[0].DurationSamples);
 }
 
-TEST(MidiNoteSpan, MatchesChannelAndPitchIndependently)
+TEST(MidiNote, MatchesChannelAndPitchIndependently)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(10u, 0, 60, 50),
@@ -122,7 +122,7 @@ TEST(MidiNoteSpan, MatchesChannelAndPitchIndependently)
 	EXPECT_EQ(300u, spans[2].DurationSamples);
 }
 
-TEST(MidiNoteSpan, OverlappingSameNoteStartsClosePreviousSpan)
+TEST(MidiNote, OverlappingSameNoteStartsClosePreviousSpan)
 {
 	const std::vector<MidiEvent> events{
 		MidiEvent::MakeNoteOn(100u, 0, 60, 40),
@@ -141,14 +141,14 @@ TEST(MidiNoteSpan, OverlappingSameNoteStartsClosePreviousSpan)
 	EXPECT_EQ(90u, spans[1].Velocity);
 }
 
-TEST(MidiNoteSpan, EmptyInputProducesNoSpans)
+TEST(MidiNote, EmptyInputProducesNoSpans)
 {
 	const std::vector<MidiEvent> events;
 	const auto spans = Extract(events, 1000u);
 	EXPECT_TRUE(spans.empty());
 }
 
-TEST(MidiNoteSpan, DenseContentRemainsStable)
+TEST(MidiNote, DenseContentRemainsStable)
 {
 	std::vector<MidiEvent> events;
 	events.reserve(MidiLoop::Capacity());

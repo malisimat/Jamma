@@ -81,7 +81,7 @@ namespace vst
 
 		void BeginMidiBlock(std::uint32_t blockStartSample,
 			std::uint32_t numSamples) noexcept override;
-		void SendMidiEvent(const engine::MidiEvent& event,
+		void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept override;
 
 		// Open the plugin's GUI editor as a child of parentHwnd.

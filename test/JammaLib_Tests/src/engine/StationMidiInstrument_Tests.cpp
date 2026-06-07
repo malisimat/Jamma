@@ -1,13 +1,17 @@
 #include "gtest/gtest.h"
 
+#include <array>
+
 #include "actions/JobAction.h"
+#include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
 
 using actions::JobAction;
+using actions::TriggerAction;
 using engine::LoopTake;
 using engine::LoopTakeParams;
-using engine::MidiEvent;
+using midi::MidiEvent;
 using engine::Station;
 using engine::StationParams;
 
@@ -236,9 +240,102 @@ TEST(StationMidiInstrument, RecordedMidiLoopPlaybackCanRouteToSpecificStationPlu
 	RenderStationBlock(station, 0u);
 
 	EXPECT_TRUE(pluginA->Events.empty());
-	ASSERT_EQ(1u, pluginB->Events.size());
+	ASSERT_EQ(2u, pluginB->Events.size());
+	EXPECT_TRUE(pluginB->Events[0].IsNoteOn());
 	EXPECT_EQ(48u, pluginB->Events[0].data1);
+	EXPECT_TRUE(pluginB->Events[1].IsNoteOff());
+	EXPECT_EQ(48u, pluginB->Events[1].data1);
 	EXPECT_FALSE(pluginB->RealtimeFlags[0]);
+	EXPECT_FALSE(pluginB->RealtimeFlags[1]);
+}
+
+TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
+{
+	auto take = MakeMidiTake("regular-record-held-boundary");
+	take->Record({}, "station-held-boundary", { 0u }, { "Keys" });
+
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(24u, 0u, 48u, 100u), "Keys", 24u));
+	take->Play(0u, 128u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_EQ(2u, midiLoop->EventCount());
+
+	MidiEvent event{};
+	ASSERT_TRUE(midiLoop->TryGetEvent(0u, event));
+	EXPECT_TRUE(event.IsNoteOn());
+	EXPECT_EQ(0u, event.sampleOffset);
+	EXPECT_EQ(48u, event.data1);
+	EXPECT_EQ(100u, event.data2);
+
+	ASSERT_TRUE(midiLoop->TryGetEvent(1u, event));
+	EXPECT_TRUE(event.IsNoteOff());
+	EXPECT_EQ(127u, event.sampleOffset);
+	EXPECT_EQ(48u, event.data1);
+}
+
+TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
+{
+	auto station = MakeStation("station-recstart-held-seed");
+
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {};
+	start.MidiInputChannels = { 0u };
+	start.MidiInputDevices = { "Keys" };
+	auto startRes = station->OnAction(start);
+
+	ASSERT_TRUE(startRes.IsEaten);
+	ASSERT_FALSE(startRes.TargetId.empty());
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> take;
+	for (const auto& candidate : station->GetLoopTakes())
+	{
+		if (candidate && candidate->Id() == startRes.TargetId)
+		{
+			take = candidate;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, take);
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+
+	// Seeded notes must be present while still recording, so model updates can show them immediately.
+	EXPECT_EQ(2u, midiLoop->EventCount());
+
+	take->Play(0u, 128u, 0u);
+	ASSERT_EQ(4u, midiLoop->EventCount());
+
+	std::array<bool, 2u> foundOn{ false, false };
+	std::array<bool, 2u> foundOff{ false, false };
+	for (std::size_t i = 0u; i < midiLoop->EventCount(); ++i)
+	{
+		MidiEvent event{};
+		ASSERT_TRUE(midiLoop->TryGetEvent(i, event));
+		if (event.data1 == 60u)
+		{
+			if (event.IsNoteOn() && event.sampleOffset == 0u) foundOn[0] = true;
+			if (event.IsNoteOff() && event.sampleOffset == 127u) foundOff[0] = true;
+		}
+		else if (event.data1 == 64u)
+		{
+			if (event.IsNoteOn() && event.sampleOffset == 0u) foundOn[1] = true;
+			if (event.IsNoteOff() && event.sampleOffset == 127u) foundOff[1] = true;
+		}
+	}
+
+	EXPECT_TRUE(foundOn[0]);
+	EXPECT_TRUE(foundOn[1]);
+	EXPECT_TRUE(foundOff[0]);
+	EXPECT_TRUE(foundOff[1]);
 }
 
 TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
@@ -293,4 +390,129 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 	ASSERT_EQ(1u, pluginB->Events.size());
 	EXPECT_EQ(42u, pluginA->Events[0].data1);
 	EXPECT_EQ(42u, pluginB->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
+{
+	auto station = MakeStation("station-overdub-source");
+	auto sourceTake = MakeMidiTake("source-midi-take");
+	station->AddTake(sourceTake);
+	station->CommitChanges();
+
+	sourceTake->Record({}, station->Name(), { 3u }, { "Keys" });
+	sourceTake->EndMultiWrite(100u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
+	sourceTake->Play(0u, 100u, 0u);
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+	start.InputChannels = {};
+	start.MidiInputChannels = { 3u };
+	start.MidiInputDevices = { "Keys" };
+	auto result = station->OnAction(start);
+
+	ASSERT_TRUE(result.IsEaten);
+	ASSERT_EQ(sourceTake->Id(), result.SourceId);
+	ASSERT_FALSE(result.TargetId.empty());
+
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> targetTake;
+	for (const auto& take : station->GetLoopTakes())
+	{
+		if (take && take->Id() == result.TargetId)
+		{
+			targetTake = take;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, targetTake);
+	ASSERT_EQ(1u, targetTake->GetMidiLoops().size());
+	ASSERT_EQ(3u, targetTake->MidiLoopChannels()[0]);
+	ASSERT_EQ("Keys", targetTake->MidiLoopDevices()[0]);
+
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->PunchIn();
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+	targetTake->PunchOut();
+	targetTake->Play(0u, 100u, 0u);
+
+	ASSERT_EQ(4u, targetTake->GetMidiLoops()[0]->EventCount());
+	MidiEvent event{};
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(0u, event));
+	EXPECT_EQ(10u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(1u, event));
+	EXPECT_EQ(20u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(2u, event));
+	EXPECT_EQ(40u, event.sampleOffset);
+	ASSERT_TRUE(targetTake->GetMidiLoops()[0]->TryGetEvent(3u, event));
+	EXPECT_EQ(90u, event.sampleOffset);
+}
+
+TEST(StationMidiInstrument, PunchBoundariesEmitLiveMidiTransitionsForSourceAndLiveHeldNotes)
+{
+	auto station = MakeStation("station-punch-live-boundary");
+	auto plugin = AddPlugin(station, L"fake-punch-live.dll");
+	auto sourceTake = MakeMidiTake("source-punch-live");
+	station->AddTake(sourceTake);
+	station->CommitChanges();
+
+	sourceTake->Record({}, station->Name(), { 3u }, { "Keys" });
+	sourceTake->EndMultiWrite(100u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
+	EXPECT_TRUE(sourceTake->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
+	sourceTake->Play(0u, 100u, 0u);
+
+	auto targetTake = MakeMidiTake("target-punch-live");
+	targetTake->Overdub({}, station->Name(), { 3u }, { "Keys" }, sourceTake);
+	station->AddTake(targetTake);
+	station->CommitChanges();
+
+	targetTake->EndMultiWrite(15u, true, base::Audible::AUDIOSOURCE_ADC);
+	EXPECT_FALSE(targetTake->RecordMidiEvent(MidiEvent::MakeNoteOn(15u, 3u, 62u, 110u), "Keys", 15u));
+	targetTake->EndMultiWrite(5u, true, base::Audible::AUDIOSOURCE_ADC);
+
+	TriggerAction punchIn;
+	punchIn.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
+	punchIn.TargetId = targetTake->Id();
+	punchIn.SourceId = sourceTake->Id();
+	punchIn.SampleCount = 20u;
+	punchIn.ApplyToTargetTake = true;
+	punchIn.ApplyToSourceTake = true;
+	punchIn.ApplyToTargetAudio = false;
+	punchIn.ApplyToTargetMidi = true;
+	station->OnAction(punchIn);
+
+	RenderStationBlock(station, 20u);
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(60u, plugin->Events[0].data1);
+	EXPECT_TRUE(plugin->RealtimeFlags[0]);
+
+	plugin->Events.clear();
+	plugin->RealtimeFlags.clear();
+	targetTake->EndMultiWrite(20u, true, base::Audible::AUDIOSOURCE_ADC);
+
+	TriggerAction punchOut;
+	punchOut.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
+	punchOut.TargetId = targetTake->Id();
+	punchOut.SourceId = sourceTake->Id();
+	punchOut.SampleCount = 40u;
+	punchOut.ApplyToTargetTake = true;
+	punchOut.ApplyToSourceTake = true;
+	punchOut.ApplyToTargetAudio = false;
+	punchOut.ApplyToTargetMidi = true;
+	station->OnAction(punchOut);
+
+	RenderStationBlock(station, 40u);
+	ASSERT_GE(plugin->Events.size(), 2u);
+	EXPECT_TRUE(plugin->Events[0].IsNoteOff());
+	EXPECT_EQ(62u, plugin->Events[0].data1);
+	EXPECT_TRUE(plugin->Events[1].IsNoteOn());
+	EXPECT_EQ(60u, plugin->Events[1].data1);
+	EXPECT_EQ(100u, plugin->Events[1].data2);
+	EXPECT_TRUE(plugin->RealtimeFlags[0]);
+	EXPECT_TRUE(plugin->RealtimeFlags[1]);
 }

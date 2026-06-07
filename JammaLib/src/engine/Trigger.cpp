@@ -227,7 +227,7 @@ ActionResult Trigger::OnAction(KeyAction action)
 	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
 
-bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
+bool Trigger::TryEncodeMidiEvent(const midi::MidiEvent& event,
 	unsigned int& outValue,
 	unsigned int& outState)
 {
@@ -250,7 +250,7 @@ bool Trigger::TryEncodeMidiEvent(const MidiEvent& event,
 	return false;
 }
 
-ActionResult Trigger::OnEvent(const MidiEvent& event,
+ActionResult Trigger::OnEvent(const midi::MidiEvent& event,
 	const base::Action& action)
 {
 	unsigned int value = 0u, state = 0u;
@@ -1026,6 +1026,8 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
+		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
+		const auto hasTargetMidi = !_midiInputChannels.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
@@ -1044,16 +1046,28 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 		auto targetAction = sourceAction;
 		targetAction.ApplyToTargetTake = true;
 		targetAction.ApplyToSourceTake = false;
+		targetAction.ApplyToTargetAudio = true;
+		targetAction.ApplyToTargetMidi = false;
+
+		auto targetMidiAction = targetAction;
+		targetMidiAction.ApplyToTargetAudio = false;
+		targetMidiAction.ApplyToTargetMidi = true;
+
+		DispatchTriggerAction(sourceAction);
+
+		if (hasTargetMidi)
+			DispatchTriggerAction(targetMidiAction);
+
+		if (!hasTargetAudio)
+			return;
 
 		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (0u == targetDelay)
 		{
-			targetAction.ApplyToSourceTake = true;
 			DispatchTriggerAction(targetAction);
 		}
 		else
 		{
-			DispatchTriggerAction(sourceAction);
 			QueueTriggerAction(targetAction, targetDelay);
 		}
 	}
@@ -1076,6 +1090,8 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
+		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
+		const auto hasTargetMidi = !_midiInputChannels.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
@@ -1094,16 +1110,28 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 		auto targetAction = sourceAction;
 		targetAction.ApplyToTargetTake = true;
 		targetAction.ApplyToSourceTake = false;
+		targetAction.ApplyToTargetAudio = true;
+		targetAction.ApplyToTargetMidi = false;
+
+		auto targetMidiAction = targetAction;
+		targetMidiAction.ApplyToTargetAudio = false;
+		targetMidiAction.ApplyToTargetMidi = true;
+
+		DispatchTriggerAction(sourceAction);
+
+		if (hasTargetMidi)
+			DispatchTriggerAction(targetMidiAction);
+
+		if (!hasTargetAudio)
+			return;
 
 		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (0u == targetDelay)
 		{
-			targetAction.ApplyToSourceTake = true;
 			DispatchTriggerAction(targetAction);
 		}
 		else
 		{
-			DispatchTriggerAction(sourceAction);
 			QueueTriggerAction(targetAction, targetDelay);
 		}
 	}

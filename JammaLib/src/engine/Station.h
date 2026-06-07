@@ -151,7 +151,11 @@ namespace engine
 		// VST playback. Any unrestricted trigger keeps the station open to all
 		// devices; otherwise the device must match a trigger's MidiInputDevices list.
 		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
-		void EnqueueLiveMidiEvent(const MidiEvent& event) noexcept;
+		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
+		// without associated deviceName.
+		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
+		// For real live MIDI input, with associated deviceName.
+		void EnqueueLiveMidiEvent(const midi::MidiEvent& event, const std::string& deviceName);
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
@@ -242,7 +246,7 @@ namespace engine
 
 		void _SendMidiToVstChain(vst::VstChain* chain,
 			const MidiVstRoutingSnapshot* routes,
-			const MidiEvent& event,
+			const midi::MidiEvent& event,
 			bool isRealtime,
 			unsigned int midiOutputIndex) noexcept;
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
@@ -286,11 +290,11 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
-		io::MidiQueue<1024> _liveMidiIngress;
-		// Route snapshots are published on non-RT threads. The audio callback reads
-		// the raw immutable snapshot pointer and does O(1) route lookups per event.
-		// Old snapshots are retained for the Station lifetime so callback readers
-		// never observe freed route storage.
+		midi::MidiQueue<1024> _liveMidiIngress;
+		mutable std::mutex _liveHeldMidiMutex;
+		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		// Route snapshots are published off the audio thread.
+		// The callback reads an immutable snapshot pointer for O(1) lookups.
 		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
 		std::vector<std::unique_ptr<MidiVstRoutingSnapshot>> _retainedMidiVstRoutes;
 

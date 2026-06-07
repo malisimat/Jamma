@@ -8,12 +8,13 @@
 #include <memory>
 #include <vector>
 
+#include "../graphics/MidiModel.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
 
-namespace engine
+namespace midi
 {
-	class MidiModel;
+	using namespace graphics;
 
 	// Sink for MIDI playback. Implementations should not allocate or block.
 	class IMidiSink
@@ -30,10 +31,12 @@ namespace engine
 		virtual void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept = 0;
 	};
 
+
 	enum class MidiLoopState : std::uint8_t
 	{
 		Empty,
 		Recording,
+
 		Playing
 	};
 
@@ -67,6 +70,18 @@ namespace engine
 		// Append an event during recording. `ev.sampleOffset` is the offset (in samples)
 		// since StartRecord(). Returns false if capacity was exceeded (event dropped).
 		bool RecordEvent(const MidiEvent& ev) noexcept;
+		// Append an event during non-RT build/finalization flows (for example,
+		// MIDI overdub render). Uses the same fixed-capacity drop-newest behavior
+		// as RecordEvent.
+		bool AppendEventForBuild(const MidiEvent& ev) noexcept;
+		// Replace all recorded events with a caller-built set and transition to
+		// Playing. If count exceeds capacity, excess tail events are dropped.
+		void ReplaceRecordedEvents(const MidiEvent* events,
+			std::size_t count,
+			std::uint32_t loopLengthSamps);
+		// Finalize a caller-built event set that was assembled through
+		// AppendEventForBuild.
+		void FinalizeOverdubBase(std::uint32_t loopLengthSamps);
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).
@@ -79,8 +94,8 @@ namespace engine
 		// which the sink should treat them as occurring. If the block crosses a loop
 		// boundary, held notes are flushed with synthetic NoteOffs at the wrap sample.
 		void ReadBlock(std::uint32_t globalSample,
-		               std::uint32_t numSamples,
-		               IMidiSink& sink) noexcept;
+			std::uint32_t numSamples,
+			IMidiSink& sink) noexcept;
 
 		// Accessors
 		MidiLoopState State() const noexcept { return _state; }
@@ -114,9 +129,9 @@ namespace engine
 	private:
 		bool BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force, bool queueUpdate);
 		void EmitEventsInRange(std::uint32_t lo,
-		                       std::uint32_t hi,
-		                       std::uint32_t globalBase,
-		                       IMidiSink& sink) noexcept;
+			std::uint32_t hi,
+			std::uint32_t globalBase,
+			IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		void PublishQuantisedEvents();
 

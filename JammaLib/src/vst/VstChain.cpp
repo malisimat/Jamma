@@ -104,7 +104,7 @@ void VstChain::BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numS
 	}
 }
 
-void VstChain::SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) noexcept
+void VstChain::SendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noexcept
 {
 	for (const auto& p : _plugins)
 	{
@@ -113,7 +113,7 @@ void VstChain::SendMidiEvent(const engine::MidiEvent& event, bool isRealtime) no
 	}
 }
 
-void VstChain::SendMidiEventToPlugin(size_t index, const engine::MidiEvent& event, bool isRealtime) noexcept
+void VstChain::SendMidiEventToPlugin(size_t index, const midi::MidiEvent& event, bool isRealtime) noexcept
 {
 	if (index < _plugins.size() && _plugins[index])
 		_plugins[index]->SendMidiEvent(event, isRealtime);

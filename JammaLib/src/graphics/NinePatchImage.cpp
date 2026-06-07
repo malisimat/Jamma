@@ -23,6 +23,9 @@ NinePatchImage::NinePatchImage(NinePatchImageParams params) :
 	_borderY(0),
 	_texWidth(0),
 	_texHeight(0),
+	_vertexBufferDirty(false),
+	_pendingWidth(params.Size.Width),
+	_pendingHeight(params.Size.Height),
 	_ninePatchParams(params),
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>())
@@ -32,14 +35,9 @@ NinePatchImage::NinePatchImage(NinePatchImageParams params) :
 void NinePatchImage::SetSize(Size2d size)
 {
 	Sizeable::SetSize(size);
-
-	if (_vertexArray != 0)
-	{
-		auto pos = _BuildPositions(size);
-		glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer[0]);
-		glBufferSubData(GL_ARRAY_BUFFER, 0, pos.size() * sizeof(GLfloat), pos.data());
-		glBindBuffer(GL_ARRAY_BUFFER, 0); 
-	}
+	_pendingWidth.store(size.Width, std::memory_order_release);
+	_pendingHeight.store(size.Height, std::memory_order_release);
+	_vertexBufferDirty.store(true, std::memory_order_release);
 }
 
 void NinePatchImage::Draw(DrawContext& ctx)
@@ -49,6 +47,8 @@ void NinePatchImage::Draw(DrawContext& ctx)
 
 	if (!texture || !shader)
 		return;
+
+	_SyncVertexBuffer();
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.SetUniform("TextureSampler", 0u);
@@ -240,7 +240,11 @@ bool NinePatchImage::_InitVertexArray()
 
 	glGenBuffers(2, _vertexBuffer);
 
-	const auto positions = _BuildPositions(_sizeParams.Size);
+	const Size2d size = {
+		_pendingWidth.load(std::memory_order_acquire),
+		_pendingHeight.load(std::memory_order_acquire)
+	};
+	const auto positions = _BuildPositions(size);
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer[0]);
 	glBufferData(GL_ARRAY_BUFFER, positions.size() * sizeof(GLfloat), positions.data(), GL_DYNAMIC_DRAW);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
@@ -283,10 +287,31 @@ bool NinePatchImage::_InitVertexArray()
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
+	_vertexBufferDirty.store(false, std::memory_order_release);
 
 	GlUtils::CheckError("NinePatchImage::InitVertexArray");
 
 	return true;
+}
+
+void NinePatchImage::_SyncVertexBuffer()
+{
+	if (!_vertexBufferDirty.exchange(false, std::memory_order_acq_rel))
+		return;
+
+	if (_vertexBuffer[0] == 0)
+		return;
+
+	const Size2d size = {
+		_pendingWidth.load(std::memory_order_acquire),
+		_pendingHeight.load(std::memory_order_acquire)
+	};
+	auto pos = _BuildPositions(size);
+
+	// Upload resized geometry only while the render thread owns the GL context.
+	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer[0]);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, pos.size() * sizeof(GLfloat), pos.data());
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 std::optional<NinePatchImage::BorderInfo> NinePatchImage::DetectBorder(

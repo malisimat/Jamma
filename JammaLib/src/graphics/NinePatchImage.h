@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -114,6 +115,7 @@ namespace graphics
 		bool _InitTexture(resources::ResourceLib& resourceLib);
 		bool _InitShader(resources::ResourceLib& resourceLib);
 		bool _InitVertexArray();
+		void _SyncVertexBuffer();
 
 		std::array<GLfloat, 162> _BuildPositions(utils::Size2d size) const;
 
@@ -135,6 +137,9 @@ namespace graphics
 		unsigned int _borderY;
 		unsigned int _texWidth;
 		unsigned int _texHeight;
+		std::atomic<bool> _vertexBufferDirty;
+		std::atomic<unsigned int> _pendingWidth;
+		std::atomic<unsigned int> _pendingHeight;
 		NinePatchImageParams _ninePatchParams;
 		std::weak_ptr<resources::TextureResource> _texture;
 		std::weak_ptr<resources::ShaderResource> _shader;

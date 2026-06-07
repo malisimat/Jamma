@@ -1,3 +1,4 @@
+#include <array>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -13,17 +14,17 @@
 #include "engine/Timer.h"
 #include "io/UserConfig.h"
 
-using engine::IMidiSink;
-using engine::IMidiOutputSink;
+using midi::IMidiSink;
+using midi::IMidiOutputSink;
 using engine::LoopTake;
 using engine::LoopTakeParams;
-using engine::MidiEvent;
-using engine::MidiLoop;
-using engine::MidiLoopState;
-using engine::MidiModel;
-using engine::MidiModelParams;
-using engine::MidiQuantisationFraction;
-using engine::MidiQuantisationSettings;
+using midi::MidiEvent;
+using midi::MidiLoop;
+using midi::MidiLoopState;
+using graphics::MidiModel;
+using graphics::MidiModelParams;
+using midi::MidiQuantisationFraction;
+using midi::MidiQuantisationSettings;
 using engine::Scene;
 using engine::SceneParams;
 using engine::Station;
@@ -1200,4 +1201,399 @@ TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRoutin
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, touchedTake->MidiQuantisation().Fraction);
 	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Whole, selectedTake->MidiQuantisation().Fraction);
+}
+
+TEST(MidiLoopBuildApi, ReplaceRecordedEventsPreservesPlaybackTiming)
+{
+	MidiLoop loop;
+	std::array<MidiEvent, 2u> events = {
+		MidiEvent::MakeNoteOn(100u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(200u, 0u, 60u)
+	};
+
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 512u);
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 512u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(100u, sink.events[0].sampleOffset);
+	EXPECT_EQ(200u, sink.events[1].sampleOffset);
+}
+
+TEST(MidiLoopBuildApi, ReplaceRecordedEventsUpdatesDroppedCountWhenCapacityExceeded)
+{
+	MidiLoop loop;
+	std::vector<MidiEvent> events;
+	events.reserve(MidiLoop::Capacity() + 2u);
+
+	for (std::size_t i = 0u; i < MidiLoop::Capacity() + 2u; ++i)
+		events.push_back(MidiEvent::MakeNoteOn(static_cast<std::uint32_t>(i), 0u, static_cast<std::uint8_t>(i & 0x7Fu), 100u));
+
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 1024u);
+
+	EXPECT_EQ(MidiLoop::Capacity(), loop.EventCount());
+	EXPECT_EQ(2u, loop.DroppedEventCount());
+}
+
+TEST(MidiLoopBuildApi, ReplaceRecordedEventsKeepsQuantisationAndModelFlow)
+{
+	MidiLoop loop;
+	auto model = std::make_shared<MidiModel>(MidiModelParams{});
+	loop.AttachModel(model);
+
+	MidiQuantisationSettings quant;
+	quant.Enabled = true;
+	quant.Fraction = MidiQuantisationFraction::Whole;
+	quant.GrainSamps = 100u;
+	loop.SetQuantisation(quant);
+
+	std::array<MidiEvent, 2u> events = {
+		MidiEvent::MakeNoteOn(140u, 0u, 60u, 100u),
+		MidiEvent::MakeNoteOff(540u, 0u, 60u)
+	};
+
+	loop.ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+
+	CapturingSink sink;
+	loop.ReadBlock(0u, 1000u, sink);
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(100u, sink.events[0].sampleOffset);
+	EXPECT_EQ(500u, sink.events[1].sampleOffset);
+	EXPECT_TRUE(loop.UpdateModelFromEvents(1000u, true));
+	EXPECT_EQ(1u, model->NoteInstanceCount());
+}
+
+TEST(LoopTakeMidiOverdub, OverdubCreatesMidiLoopsMatchingConfiguredChannelsAndDevices)
+{
+	auto take = MakeLoopTake("overdub-midi-setup");
+	take->Overdub({}, "station", { 1u, 2u }, { "KeysA", "KeysB" });
+
+	EXPECT_EQ(4u, take->GetMidiLoops().size());
+	EXPECT_EQ(4u, take->MidiLoopChannels().size());
+	EXPECT_EQ(4u, take->MidiLoopDevices().size());
+}
+
+TEST(LoopTakeMidiOverdub, RecordMidiEventIgnoredOutsidePunchWindowForOverdub)
+{
+	auto take = MakeLoopTake("overdub-ignore-outside-punch");
+	take->Overdub({}, "station", { 3u }, { "Keys" });
+
+	EXPECT_FALSE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3u, 60u, 100u), "Keys", 0u));
+	take->Play(0u, 128u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	EXPECT_EQ(0u, take->GetMidiLoops()[0]->EventCount());
+}
+
+TEST(LoopTakeMidiOverdub, PunchInCapturesAlreadyHeldLiveNoteAtPunchStart)
+{
+	auto take = MakeLoopTake("overdub-held-note-punchin");
+	take->Overdub({}, "station", { 3u }, { "Keys" });
+
+	take->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_FALSE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(100u, 3u, 60u, 100u), "Keys", 100u));
+	take->PunchIn();
+	take->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(120u, 3u, 60u), "Keys", 120u));
+	take->PunchOut();
+	take->Play(0u, 200u, 0u);
+
+	MidiEvent first{};
+	MidiEvent second{};
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, first));
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(1u, second));
+	EXPECT_TRUE(first.IsNoteOn());
+	EXPECT_EQ(100u, first.sampleOffset);
+	EXPECT_TRUE(second.IsNoteOff());
+	EXPECT_EQ(120u, second.sampleOffset);
+}
+
+TEST(LoopTakeMidiOverdub, PunchInDoesNotDuplicateMatchingSourceHeldNote)
+{
+	auto source = MakeLoopTake("source-midi-dedupe");
+	source->Record({}, "station", { 3u }, { "Keys" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", 100u));
+	source->Play(0u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi-dedupe");
+	target->Overdub({}, "station", { 3u }, { "Keys" }, source);
+
+	target->EndMultiWrite(15u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_FALSE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(15u, 3u, 60u, 100u), "Keys", 15u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	target->PunchIn();
+	target->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(40u, 3u, 60u), "Keys", 40u));
+	target->PunchOut();
+	target->Play(0u, 100u, 0u);
+
+	ASSERT_EQ(4u, target->GetMidiLoops()[0]->EventCount());
+	std::array<MidiEvent, 4u> events{};
+	for (std::size_t i = 0u; i < events.size(); ++i)
+		ASSERT_TRUE(target->GetMidiLoops()[0]->TryGetEvent(i, events[i]));
+
+	EXPECT_TRUE(events[0].IsNoteOn());
+	EXPECT_EQ(10u, events[0].sampleOffset);
+	EXPECT_EQ(60u, events[0].data1);
+	EXPECT_TRUE(events[1].IsNoteOff());
+	EXPECT_EQ(40u, events[1].sampleOffset);
+	EXPECT_EQ(60u, events[1].data1);
+	EXPECT_TRUE(events[2].IsNoteOn());
+	EXPECT_EQ(40u, events[2].sampleOffset);
+	EXPECT_EQ(60u, events[2].data1);
+	EXPECT_TRUE(events[3].IsNoteOff());
+	EXPECT_EQ(90u, events[3].sampleOffset);
+	EXPECT_EQ(60u, events[3].data1);
+}
+
+TEST(LoopTakeMidiOverdub, PunchOutClosesHeldLiveNoteAtPunchEnd)
+{
+	auto take = MakeLoopTake("overdub-held-note-punchout");
+	take->Overdub({}, "station", { 3u }, { "Keys" });
+
+	take->PunchIn();
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3u, 60u, 100u), "Keys", 0u));
+	take->EndMultiWrite(64u, true, Audible::AUDIOSOURCE_ADC);
+	take->PunchOut();
+	take->Play(0u, 128u, 0u);
+
+	MidiEvent first{};
+	MidiEvent second{};
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, first));
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(1u, second));
+	EXPECT_TRUE(first.IsNoteOn());
+	EXPECT_EQ(0u, first.sampleOffset);
+	EXPECT_TRUE(second.IsNoteOff());
+	EXPECT_EQ(64u, second.sampleOffset);
+}
+
+TEST(LoopTakeMidiOverdub, MidiPunchCanOpenWithoutChangingAudioPunchState)
+{
+	auto take = MakeLoopTake("overdub-midi-only-punch");
+	take->Overdub({ 0u }, "station", { 3u }, { "Keys" });
+
+	take->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	take->PunchIn(false, true);
+	EXPECT_EQ(LoopTake::STATE_OVERDUBBING, take->TakeState());
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(20u, 3u, 60u, 100u), "Keys", 20u));
+	take->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(30u, 3u, 60u), "Keys", 30u));
+	take->PunchOut(false, true);
+	take->Play(0u, 64u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(2u, take->GetMidiLoops()[0]->EventCount());
+	MidiEvent first{};
+	MidiEvent second{};
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(0u, first));
+	ASSERT_TRUE(take->GetMidiLoops()[0]->TryGetEvent(1u, second));
+	EXPECT_EQ(20u, first.sampleOffset);
+	EXPECT_TRUE(first.IsNoteOn());
+	EXPECT_EQ(30u, second.sampleOffset);
+	EXPECT_TRUE(second.IsNoteOff());
+}
+
+TEST(LoopTakeMidiOverdub, PreviewIncludesSourceAndLiveEventsWhileRecording)
+{
+	auto source = MakeLoopTake("source-midi-preview");
+	source->Record({}, "station", { 3u }, { "" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "", 100u));
+	source->Play(0u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi-preview");
+	target->Overdub({}, "station", { 3u }, { "" }, source);
+	target->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(25u, 3u, 62u, 100u), "", 25u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(30u, 3u, 62u), "", 30u));
+	target->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
+
+	actions::JobAction update;
+	update.JobActionType = actions::JobAction::JOB_UPDATELOOPS;
+	target->OnAction(update);
+
+	ASSERT_EQ(1u, target->GetMidiLoops().size());
+	ASSERT_EQ(MidiLoopState::Recording, target->GetMidiLoops()[0]->State());
+	ASSERT_EQ(4u, target->GetMidiLoops()[0]->EventCount());
+
+	std::array<MidiEvent, 4u> events{};
+	for (std::size_t i = 0u; i < events.size(); ++i)
+		ASSERT_TRUE(target->GetMidiLoops()[0]->TryGetEvent(i, events[i]));
+
+	EXPECT_TRUE(events[0].IsNoteOn());
+	EXPECT_EQ(10u, events[0].sampleOffset);
+	EXPECT_TRUE(events[1].IsNoteOff());
+	EXPECT_EQ(20u, events[1].sampleOffset);
+	EXPECT_TRUE(events[2].IsNoteOn());
+	EXPECT_EQ(25u, events[2].sampleOffset);
+	EXPECT_TRUE(events[3].IsNoteOff());
+	EXPECT_EQ(30u, events[3].sampleOffset);
+}
+
+TEST(LoopTakeMidiOverdub, ZeroLengthPunchDoesNotEmitHeldGhostNote)
+{
+	auto take = MakeLoopTake("overdub-zero-length-punch");
+	take->Overdub({}, "station", { 3u }, { "Keys" });
+
+	take->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_FALSE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(100u, 3u, 60u, 100u), "Keys", 100u));
+	take->PunchIn();
+	take->PunchOut();
+	take->Play(0u, 200u, 0u);
+
+	ASSERT_EQ(0u, take->GetMidiLoops()[0]->EventCount());
+}
+
+TEST(LoopTakeMidiOverdub, PlayFinalizesCopiedSourceAndLivePunchEvents)
+{
+	auto source = MakeLoopTake("source-midi");
+	source->Record({}, "station", { 3u }, { "" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "", 100u));
+	source->Play(0u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi");
+	target->Overdub({}, "station", { 3u }, { "" }, source);
+	target->EndMultiWrite(20u, true, Audible::AUDIOSOURCE_ADC);
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(25u, 3u, 62u, 100u), "", 25u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(30u, 3u, 62u), "", 30u));
+	target->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
+	target->PunchOut();
+	target->Play(0u, 100u, 0u);
+
+	std::vector<MidiEvent> events;
+	for (std::size_t i = 0u; i < target->GetMidiLoops()[0]->EventCount(); ++i)
+	{
+		MidiEvent ev{};
+		if (target->GetMidiLoops()[0]->TryGetEvent(i, ev))
+			events.push_back(ev);
+	}
+
+	ASSERT_EQ(6u, events.size());
+	EXPECT_EQ(10u, events[0].sampleOffset);
+	EXPECT_TRUE(events[0].IsNoteOn());
+	EXPECT_EQ(20u, events[1].sampleOffset);
+	EXPECT_TRUE(events[1].IsNoteOff());
+	EXPECT_EQ(25u, events[2].sampleOffset);
+	EXPECT_EQ(30u, events[3].sampleOffset);
+	EXPECT_EQ(40u, events[4].sampleOffset);
+	EXPECT_EQ(90u, events[5].sampleOffset);
+}
+
+TEST(LoopTakeMidiOverdub, PlayFinalizesPunchWindowRelativeToSourceLoopPhase)
+{
+	auto source = MakeLoopTake("source-midi-phase");
+	source->Record({}, "station", { 3u }, { "" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "", 100u));
+	source->Play(20u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi-phase");
+	target->Overdub({}, "station", { 3u }, { "" }, source);
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(5u, 3u, 62u, 100u), "", 5u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(10u, 3u, 62u), "", 10u));
+	target->PunchOut();
+	target->Play(0u, 100u, 0u);
+
+	std::vector<MidiEvent> events;
+	for (std::size_t i = 0u; i < target->GetMidiLoops()[0]->EventCount(); ++i)
+	{
+		MidiEvent ev{};
+		if (target->GetMidiLoops()[0]->TryGetEvent(i, ev))
+			events.push_back(ev);
+	}
+
+	ASSERT_EQ(6u, events.size());
+	EXPECT_EQ(10u, events[0].sampleOffset);
+	EXPECT_TRUE(events[0].IsNoteOn());
+	EXPECT_EQ(20u, events[1].sampleOffset);
+	EXPECT_TRUE(events[1].IsNoteOff());
+	EXPECT_EQ(25u, events[2].sampleOffset);
+	EXPECT_TRUE(events[2].IsNoteOn());
+	EXPECT_EQ(30u, events[3].sampleOffset);
+	EXPECT_TRUE(events[3].IsNoteOff());
+	EXPECT_EQ(30u, events[4].sampleOffset);
+	EXPECT_TRUE(events[4].IsNoteOn());
+	EXPECT_EQ(90u, events[5].sampleOffset);
+	EXPECT_TRUE(events[5].IsNoteOff());
+}
+
+TEST(LoopTakeMidiOverdub, FirstPlaybackBlockStartsAtCapturedSourcePhase)
+{
+	auto source = MakeLoopTake("source-midi-phase-start");
+	source->Record({}, "station", { 3u }, { "" });
+	source->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "", 100u));
+	EXPECT_TRUE(source->RecordMidiEvent(MidiEvent::MakeNoteOff(90u, 3u, 60u), "", 100u));
+	source->Play(20u, 100u, 0u);
+
+	auto target = MakeLoopTake("target-midi-phase-start");
+	target->Overdub({}, "station", { 3u }, { "" }, source);
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(5u, 3u, 62u, 100u), "", 5u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(10u, 3u, 62u), "", 10u));
+	target->PunchOut();
+	target->Play(0u, 100u, 0u);
+
+	CapturingOutputSink sink;
+	const auto firstBlockStart = 5000u;
+	EXPECT_EQ(1u, target->ReadMidiBlock(firstBlockStart, 10u, sink));
+
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_EQ(firstBlockStart, sink.events[0].event.sampleOffset);
+	EXPECT_TRUE(sink.events[0].event.IsNoteOff());
+	EXPECT_EQ(60u, sink.events[0].event.data1);
+	EXPECT_EQ(firstBlockStart + 5u, sink.events[1].event.sampleOffset);
+	EXPECT_TRUE(sink.events[1].event.IsNoteOn());
+	EXPECT_EQ(62u, sink.events[1].event.data1);
+}
+
+TEST(LoopTakeMidiOverdub, OverdubWithoutSourceMidiStillRecordsLivePunchOnly)
+{
+	auto target = MakeLoopTake("target-midi-live-only");
+	target->Overdub({}, "station", { 3u }, { "" });
+	target->PunchIn();
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOn(5u, 3u, 62u, 100u), "", 5u));
+	target->EndMultiWrite(5u, true, Audible::AUDIOSOURCE_ADC);
+	EXPECT_TRUE(target->RecordMidiEvent(MidiEvent::MakeNoteOff(10u, 3u, 62u), "", 10u));
+	target->PunchOut();
+	target->Play(0u, 64u, 0u);
+
+	ASSERT_EQ(2u, target->GetMidiLoops()[0]->EventCount());
+	MidiEvent first{};
+	MidiEvent second{};
+	ASSERT_TRUE(target->GetMidiLoops()[0]->TryGetEvent(0u, first));
+	ASSERT_TRUE(target->GetMidiLoops()[0]->TryGetEvent(1u, second));
+	EXPECT_EQ(5u, first.sampleOffset);
+	EXPECT_EQ(10u, second.sampleOffset);
+}
+
+TEST(LoopTakeMidiPlayback, MutedTakeDoesNotEmitMidiEvents)
+{
+	auto take = MakeLoopTake("muted-midi-take");
+	take->Record({}, "station", { 0u }, { "" });
+	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "", 0u));
+	take->Play(0u, 64u, 0u);
+	take->Mute();
+
+	CapturingOutputSink sink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(123u, 64u, sink));
+	EXPECT_TRUE(sink.events.empty());
 }
