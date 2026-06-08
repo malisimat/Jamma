@@ -348,6 +348,14 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		const MidiVstRoutingSnapshot* _routes;
 	};
 	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
+	for (const auto& weakTake : state->LoopTakes)
+	{
+		auto take = weakTake.lock();
+		if (!take)
+			continue;
+
+		take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
+	}
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
@@ -393,20 +401,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			auto take = weakTake.lock();
 			if (!take)
 				continue;
-
-			take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
 			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
-		}
-	}
-	else
-	{
-		for (const auto& weakTake : state->LoopTakes)
-		{
-			auto take = weakTake.lock();
-			if (!take)
-				continue;
-
-			take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
 		}
 	}
 
