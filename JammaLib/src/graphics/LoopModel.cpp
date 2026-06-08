@@ -1,4 +1,5 @@
 #include "LoopModel.h"
+#include "GlDeleteQueue.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -238,11 +239,11 @@ void LoopModel::_ReleaseResources()
 {
 	if (0u != _waveformTexture)
 	{
-		glDeleteTextures(1, &_waveformTexture);
+		graphics::GlDeleteQueue::DeleteTextures(1, &_waveformTexture);
 		_waveformTexture = 0u;
 	}
 
-	glDeleteBuffers(_WaveformPboCount, _waveformPbos.data());
+	graphics::GlDeleteQueue::DeleteBuffers(_WaveformPboCount, _waveformPbos.data());
 	_waveformPbos.fill(0u);
 
 	GuiModel::_ReleaseResources();

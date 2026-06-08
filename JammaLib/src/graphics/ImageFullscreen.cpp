@@ -1,4 +1,5 @@
 ﻿#include "ImageFullscreen.h"
+#include "GlDeleteQueue.h"
 #include <gl/glew.h>
 #include <gl/gl.h>
 #include "gl/glext.h"
@@ -68,7 +69,7 @@ void ImageFullscreen::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void ImageFullscreen::_ReleaseResources()
 {
-	glDeleteVertexArrays(1, &_vertexArray);
+	GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 }
 

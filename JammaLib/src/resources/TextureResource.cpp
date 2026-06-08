@@ -1,4 +1,5 @@
 #include "TextureResource.h"
+#include "../graphics/GlDeleteQueue.h"
 
 using namespace resources;
 
@@ -20,7 +21,7 @@ TextureResource::~TextureResource()
 
 void TextureResource::Release()
 {
-	glDeleteTextures(1, &_texture);
+	graphics::GlDeleteQueue::DeleteTextures(1, &_texture);
 	_texture = 0;
 }
 

@@ -1,4 +1,5 @@
 #include "Skybox.h"
+#include "GlDeleteQueue.h"
 #include <gl/glew.h>
 #include <gl/gl.h>
 
@@ -103,12 +104,12 @@ void Skybox::ReleaseResources()
 {
 	if (_vao)
 	{
-		glDeleteVertexArrays(1, &_vao);
+		GlDeleteQueue::DeleteVertexArrays(1, &_vao);
 		_vao = 0;
 	}
 	if (_vbo)
 	{
-		glDeleteBuffers(1, &_vbo);
+		GlDeleteQueue::DeleteBuffers(1, &_vbo);
 		_vbo = 0;
 	}
 	_initialised = false;

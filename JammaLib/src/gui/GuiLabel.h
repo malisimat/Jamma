@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include "GuiElement.h"
 #include "Drawable.h"
 #include "../graphics/Font.h"
@@ -40,10 +42,14 @@ namespace gui
 		virtual void _ReleaseResources() override;
 
 	private:
+		void SyncVertexArray();
 		bool InitVertexArray();
 
 	private:
 		std::string _str;
+		std::string _pendingStr;
+		std::mutex _stringMutex;
+		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;
 		std::weak_ptr<resources::TextureResource> _texture;
 		std::weak_ptr<resources::ShaderResource> _shader;

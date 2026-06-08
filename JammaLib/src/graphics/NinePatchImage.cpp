@@ -1,4 +1,5 @@
 ﻿#include "NinePatchImage.h"
+#include "GlDeleteQueue.h"
 #include <algorithm>
 #include <iostream>
 #include <gl/glew.h>
@@ -160,11 +161,11 @@ void NinePatchImage::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void NinePatchImage::_ReleaseResources()
 {
-	glDeleteBuffers(2, _vertexBuffer);
+	GlDeleteQueue::DeleteBuffers(2, _vertexBuffer);
 	_vertexBuffer[0] = 0;
 	_vertexBuffer[1] = 0;
 
-	glDeleteVertexArrays(1, &_vertexArray);
+	GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 
 	_isDrawInitialised = false;

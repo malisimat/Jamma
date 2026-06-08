@@ -1,4 +1,5 @@
 #include "GuiModel.h"
+#include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
@@ -140,18 +141,18 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiModel::_ReleaseResources()
 {
-	glDeleteBuffers(3, _vertexBuffer);
+	graphics::GlDeleteQueue::DeleteBuffers(3, _vertexBuffer);
 	_vertexBuffer[0] = 0;
 	_vertexBuffer[1] = 0;
 	_vertexBuffer[2] = 0;
 
 	if (!_instanceBuffers.empty())
 	{
-		glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+		graphics::GlDeleteQueue::DeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
 		_instanceBuffers.clear();
 	}
 
-	glDeleteVertexArrays(1, &_vertexArray);
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 }
 
@@ -347,7 +348,7 @@ bool GuiModel::SyncInstanceAttributes()
 	{
 		if (!_instanceBuffers.empty())
 		{
-			glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+			graphics::GlDeleteQueue::DeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
 			_instanceBuffers.clear();
 		}
 
@@ -360,7 +361,7 @@ bool GuiModel::SyncInstanceAttributes()
 	{
 		if (!_instanceBuffers.empty())
 		{
-			glDeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
+			graphics::GlDeleteQueue::DeleteBuffers((GLsizei)_instanceBuffers.size(), _instanceBuffers.data());
 			_instanceBuffers.clear();
 		}
 
