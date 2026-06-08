@@ -224,6 +224,8 @@
     <ClInclude Include="src\gui\GuiRouter.h" />
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\graphics\LoopModel.h" />
+    <ClInclude Include="src\engine\MidiRouter.h" />
+    <ClInclude Include="src\engine\NinjamController.h" />
     <ClInclude Include="src\engine\Quantisation.h" />
     <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\graphics\StationModel.h" />
@@ -372,6 +374,8 @@
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
+    <ClCompile Include="src\engine\MidiRouter.cpp" />
+    <ClCompile Include="src\engine\NinjamController.cpp" />
     <ClCompile Include="src\engine\Quantisation.cpp" />
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\StationModel.cpp" />

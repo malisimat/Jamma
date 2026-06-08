@@ -25,7 +25,8 @@
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
-#include "NinjamSession.h"
+#include "NinjamController.h"
+#include "MidiRouter.h"
 #include "Quantisation.h"
 #include "../graphics/VstEditorWindow.h"
 #include "Tickable.h"
@@ -38,8 +39,6 @@
 #include "Station.h"
 #include "StationRemote.h"
 #include "UndoHistory.h"
-#include "../midi/MidiQueue.h"
-#include "../io/SerialTriggerQueue.h"
 
 namespace engine
 {
@@ -80,9 +79,6 @@ namespace engine
 		{
 			Shutdown();
 			ReleaseResources();
-			// NinjamSession destructs after _jobRunner exits, so Pump() can no
-			// longer be called when the session tears down.
-			_ninjamSession.reset();
 		}
 
 		// Copy
@@ -242,19 +238,18 @@ namespace engine
 		void _UpdateSelection(actions::ActionResultType res);
 		glm::mat4 _View();
 		void _AddStation(std::shared_ptr<Station> station);
+		void _HandleReclockArm();
+		actions::ActionResult _HandleUndo();
+		actions::ActionResult _HandleVstInsert(const std::wstring& pluginPath,
+			base::SelectDepth depth,
+			const std::shared_ptr<base::GuiElement>& hovering);
+		actions::ActionResult _HandleVstEditorOpen();
+		actions::ActionResult _HandleExportSession();
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _JobLoop();
 		void _PumpMidi();
-		void _PushMidiEvent(std::uint8_t deviceSlot,
-			std::uint8_t status,
-			std::uint8_t data1,
-			std::uint8_t data2,
-			unsigned int sampleRate) noexcept;
-		void _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
-			const midi::MidiEvent& event);
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
-		void _PublishMidiTriggerRoutes();
 		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -276,11 +271,11 @@ namespace engine
 		void _ClearStationQuantisation();
 		struct InteractionTarget
 		{
-			std::shared_ptr<Station> Station;
-			std::shared_ptr<LoopTake> Take;
-			std::shared_ptr<Loop> TargetLoop;
-			unsigned long MasterLength = 0ul;
-			std::shared_ptr<Loop> RepresentativeLoop;
+			std::shared_ptr<Station> StationRef;
+			std::shared_ptr<LoopTake> TakeRef;
+			std::shared_ptr<Loop> LoopRef;
+			unsigned long MasterLengthSamps = 0ul;
+			std::shared_ptr<Loop> RepresentativeLoopRef;
 		};
 		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
 			base::SelectDepth depth) const;
@@ -299,25 +294,6 @@ namespace engine
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
-		static constexpr double        QuantisationOverlayFadeSeconds  = 2.0;
-		static constexpr std::int64_t  OverlayInactive                 = 0LL;
-		static constexpr std::int64_t  OverlayHeld                     = (std::numeric_limits<std::int64_t>::max)();
-
-		struct MidiInputEndpoint
-		{
-			std::uint8_t DeviceSlot = 0u;
-			std::string ConfiguredName;
-			std::unique_ptr<midi::MidiDevice> Device;
-			midi::MidiQueue<1024> Ingress;
-			std::uint64_t LastDroppedCount = 0u;
-		};
-
-		struct MidiTriggerRoute
-		{
-			std::string DeviceName;
-			std::uint8_t DeviceSlot;
-			std::shared_ptr<Trigger> Trigger;
-		};
 
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -334,33 +310,20 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
-		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
+		Quantisation _quantisation;
+		MidiRouter _midiRouter;
 		io::LoggingConfig _loggingConfig;
-		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
-		io::SerialTriggerQueue<256> _serialIngress;
-		std::mutex _serialIngressMutex;
-		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
-		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
-		std::uint64_t _lastSerialDropCount;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
-		std::optional<io::JamFile::NinjamConfig> _ninjamConfig;
-		std::unique_ptr<NinjamSession> _ninjamSession;
+		NinjamController _ninjamController;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::shared_ptr<LoopTake>> _dragLoopTakeTargets;
-		std::shared_ptr<Loop> _masterLoop;
-		std::atomic_ulong _masterLoopLengthSamps;
-		TapTempoTracker _tapTempo;
-		// Encodes overlay visibility: 0 = never shown, INT64_MAX = held at full
-		// alpha, any other value = nanosecond timestamp of last pulse (fade-out).
-		// Written from UI and job threads; read on render thread — must be atomic.
-		std::atomic<std::int64_t> _quantisationOverlayState;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
@@ -369,20 +332,8 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
-		std::mutex _remoteSnapshotMutex;
-		std::optional<io::NinjamRemoteSnapshot> _pendingRemoteSnapshot;
 		std::mutex _audioMutex;
-		std::mutex _tapTempoMutex;
 		io::UserConfig _userConfig;
-		std::shared_ptr<Timer> _clock;
 		ViewMode _viewMode;
-
-		// NINJAM tempo / reclock state. Atomics are shared across UI, job, and audio reset paths.
-		unsigned int _remoteMasterLoopSamps = 0u;
-		unsigned int _remoteSampleRate = 0u;
-		std::atomic_uint _effectiveQuantiseSamps = 0u;
-		unsigned int _lastRemoteIntervalPos = 0u;
-		std::atomic_bool _armReclock = false;
-		std::atomic_bool _hasPendingTempo = false;
 	};
 }
