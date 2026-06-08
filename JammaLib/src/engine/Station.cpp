@@ -385,16 +385,29 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	}
 
 	auto midiOutputIndex = 0u;
-	StationMidiSink midiSink(*this, chain.get(), routes);
-	for (const auto& weakTake : state->LoopTakes)
+	if (vstActive)
 	{
-		auto take = weakTake.lock();
-		if (!take)
-			continue;
+		StationMidiSink midiSink(*this, chain.get(), routes);
+		for (const auto& weakTake : state->LoopTakes)
+		{
+			auto take = weakTake.lock();
+			if (!take)
+				continue;
 
-		take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
-		if (vstActive)
+			take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
 			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+		}
+	}
+	else
+	{
+		for (const auto& weakTake : state->LoopTakes)
+		{
+			auto take = weakTake.lock();
+			if (!take)
+				continue;
+
+			take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
+		}
 	}
 
 	if (channelCount == 0u)

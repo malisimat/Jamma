@@ -167,7 +167,7 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 	glGenVertexArrays(1, &vao);
 	glBindVertexArray(vao);
 
-	GLuint vbo[2] = {};
+	GLuint vbo[2];
 	glGenBuffers(2, vbo);
 
 	auto numChars = str.size();
