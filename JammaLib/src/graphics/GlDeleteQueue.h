@@ -102,25 +102,32 @@ namespace graphics::GlDeleteQueue
 		}
 	}
 
-	inline void _DeleteOrQueue(DeleteKind kind, GLsizei n, const GLuint* ids)
+	inline void _DeleteOrQueue(DeleteKind kind, GLsizei n, const GLuint* ids) noexcept
 	{
-		auto filtered = _FilterIds(n, ids);
-		if (filtered.empty())
-			return;
-
-		bool runNow = false;
+		try
 		{
-			std::lock_guard<std::mutex> lock(_Mutex());
-			auto renderThread = _RenderThreadId();
-			runNow = (renderThread != std::thread::id()) && (renderThread == std::this_thread::get_id());
-			if (!runNow)
-			{
-				_Queue().push_back(PendingDelete{ kind, std::move(filtered) });
+			auto filtered = _FilterIds(n, ids);
+			if (filtered.empty())
 				return;
-			}
-		}
 
-		_DeleteNow(kind, filtered);
+			bool runNow = false;
+			{
+				std::lock_guard<std::mutex> lock(_Mutex());
+				auto renderThread = _RenderThreadId();
+				runNow = (renderThread != std::thread::id()) && (renderThread == std::this_thread::get_id());
+				if (!runNow)
+				{
+					_Queue().push_back(PendingDelete{ kind, std::move(filtered) });
+					return;
+				}
+			}
+
+			_DeleteNow(kind, filtered);
+		}
+		catch (...)
+		{
+			// Best-effort: never allow exceptions to escape (often called from destructors).
+		}
 	}
 
 	inline void DeleteBuffers(GLsizei n, const GLuint* ids)
