@@ -429,7 +429,7 @@ void NinjamSession::Stop()
 
 void NinjamSession::SendChat(const std::string& msg)
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (conn && conn->IsConnected())
 	{
 		conn->SendChat(msg);
@@ -443,13 +443,13 @@ void NinjamSession::SendChat(const std::string& msg)
 
 bool NinjamSession::IsConnected() const noexcept
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	return conn && conn->IsConnected();
 }
 
 std::optional<io::NinjamRemoteSnapshot> NinjamSession::Pump()
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (!conn)
 		return std::nullopt;
 
@@ -471,7 +471,7 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	_audioNumInputChannels = numInputChannels;
 	_audioNumOutputChannels = numOutputChannels;
 
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (conn)
 		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
 }
@@ -480,7 +480,7 @@ void NinjamSession::ProcessAudioBlock(const float* interleavedInput,
 	unsigned int numFrames,
 	unsigned int sampleRate)
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (conn)
 		conn->ProcessAudioBlock(interleavedInput, numFrames, sampleRate);
 }
@@ -490,7 +490,7 @@ bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
 	const float*& right,
 	unsigned int& numFrames) const
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (!conn)
 		return false;
 
@@ -499,7 +499,7 @@ bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
 
 bool NinjamSession::RequestServerTempo(float bpm, int bpi)
 {
-	ConnectionUse conn(*this);
+	NinjamConnectionUse conn(*this);
 	if (!conn || !conn->IsConnected())
 		return false;
 

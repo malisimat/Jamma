@@ -324,29 +324,6 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
-
-	class StationMidiSink final : public IMidiOutputSink
-	{
-	public:
-		StationMidiSink(Station& station,
-			vst::VstChain* chain,
-			const MidiVstRoutingSnapshot* routes) noexcept :
-			_station(station),
-			_chain(chain),
-			_routes(routes)
-		{
-		}
-
-		void OnEvent(unsigned int outputIndex, const MidiEvent& event) noexcept override
-		{
-			_station._SendMidiToVstChain(_chain, _routes, event, false, outputIndex);
-		}
-
-	private:
-		Station& _station;
-		vst::VstChain* _chain;
-		const MidiVstRoutingSnapshot* _routes;
-	};
 	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
 	for (const auto& weakTake : state->LoopTakes)
 	{
@@ -389,13 +366,13 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	while (_liveMidiIngress.Pop(liveMidi))
 	{
 		if (vstActive)
-			_SendMidiToVstChain(chain.get(), routes, liveMidi, true, LiveMidiOutputIndex);
+			midi::SendMidiToVstChain(chain.get(), routes, liveMidi, true, LiveMidiOutputIndex);
 	}
 
 	auto midiOutputIndex = 0u;
 	if (vstActive)
 	{
-		StationMidiSink midiSink(*this, chain.get(), routes);
+		midi::MidiVstOutputSink midiSink(chain.get(), routes);
 		for (const auto& weakTake : state->LoopTakes)
 		{
 			auto take = weakTake.lock();
@@ -1566,31 +1543,6 @@ void Station::_WireVuSliders()
 		if (slider)
 			slider->SetMixer(_audioMixers[i]);
 	}
-}
-
-void Station::_SendMidiToVstChain(vst::VstChain* chain,
-	const MidiVstRoutingSnapshot* routes,
-	const MidiEvent& event,
-	bool isRealtime,
-	unsigned int midiOutputIndex) noexcept
-{
-	if (!chain)
-		return;
-
-	if (!routes || !routes->HasRoutes())
-	{
-		chain->SendMidiEvent(event, isRealtime);
-		return;
-	}
-
-	const auto pluginIndex = routes->PluginForOutput(midiOutputIndex);
-	if (pluginIndex != MidiVstRoutingSnapshot::NoPlugin && pluginIndex < chain->NumPlugins())
-	{
-		chain->SendMidiEventToPlugin(pluginIndex, event, isRealtime);
-		return;
-	}
-
-	chain->SendMidiEvent(event, isRealtime);
 }
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept

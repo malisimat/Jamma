@@ -6,6 +6,7 @@
 
 #include "../graphics/MidiModel.h"
 #include "../midi/MidiNote.h"
+#include "../midi/MidiIndexedOutputSink.h"
 
 namespace
 {
@@ -1205,34 +1206,6 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	midi::IMidiOutputSink& sink,
 	unsigned int firstOutputIndex) noexcept
 {
-	class IndexedMidiSink final : public midi::IMidiSink
-	{
-	public:
-		IndexedMidiSink(midi::IMidiOutputSink& outputSink,
-			unsigned int outputIndex,
-			std::uint32_t midiBlockStart,
-			std::uint32_t outputBlockStart) noexcept :
-			_outputSink(outputSink),
-			_outputIndex(outputIndex),
-			_midiBlockStart(midiBlockStart),
-			_outputBlockStart(outputBlockStart)
-		{
-		}
-
-		void OnEvent(const midi::MidiEvent& ev) noexcept override
-		{
-			midi::MidiEvent mapped = ev;
-			mapped.sampleOffset = _outputBlockStart + (ev.sampleOffset - _midiBlockStart);
-			_outputSink.OnEvent(_outputIndex, mapped);
-		}
-
-	private:
-		midi::IMidiOutputSink& _outputSink;
-		unsigned int _outputIndex;
-		std::uint32_t _midiBlockStart;
-		std::uint32_t _outputBlockStart;
-	};
-
 	if (IsMuted())
 		return static_cast<unsigned int>(_midiLoops.size());
 
@@ -1243,7 +1216,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		if (!_midiLoops[i])
 			continue;
 
-		IndexedMidiSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
+		midi::MidiIndexedOutputSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
 		_midiLoops[i]->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
