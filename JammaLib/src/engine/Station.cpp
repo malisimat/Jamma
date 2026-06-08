@@ -347,21 +347,12 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		vst::VstChain* _chain;
 		const MidiVstRoutingSnapshot* _routes;
 	};
-
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock())
-			take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr), trigger, indexOffset, numSamps);
+	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
 	auto masterPeak = 0.0f;
 	const auto channelCount = (state->AudioBuffers.size() < state->AudioMixers.size()) ? state->AudioBuffers.size() : state->AudioMixers.size();
-	if (channelCount == 0u)
-	{
-		_masterMixer->UpdateVu(0.0f, sampsToRead);
-		_masterMixer->Offset(sampsToRead);
-		return;
-	}
 
 	for (auto i = 0u; i < channelCount; i++)
 	{
@@ -381,7 +372,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	const auto* routes = _midiVstRoutes.load(std::memory_order_acquire);
-	const bool vstActive = chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
+	const bool vstActive = (channelCount > 0u) && chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
 	if (vstActive)
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 
@@ -393,14 +384,28 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			_SendMidiToVstChain(chain.get(), routes, liveMidi, true, LiveMidiOutputIndex);
 	}
 
+	auto midiOutputIndex = 0u;
+	StationMidiSink midiSink(*this, chain.get(), routes);
+	for (const auto& weakTake : state->LoopTakes)
+	{
+		auto take = weakTake.lock();
+		if (!take)
+			continue;
+
+		take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
+		if (vstActive)
+			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+	}
+
+	if (channelCount == 0u)
+	{
+		_masterMixer->UpdateVu(0.0f, sampsToRead);
+		_masterMixer->Offset(sampsToRead);
+		return;
+	}
+
 	if (vstActive)
 	{
-		StationMidiSink midiSink(*this, chain.get(), routes);
-		auto midiOutputIndex = 0u;
-		for (const auto& weakTake : state->LoopTakes)
-			if (auto take = weakTake.lock())
-				midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
-
 		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 	}
 

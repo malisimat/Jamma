@@ -14,6 +14,7 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_pendingStr(guiParams.String),
 	_vertexArrayDirty(true),
 	_vertexArray(0),
+	_vertexBuffers{ 0, 0 },
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>()),
 	_font(std::weak_ptr<Font>())
@@ -51,6 +52,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	glCtx.PushMvp(glm::scale(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)), glm::vec3(scale, scale, 1.0f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
+	glCtx.PopMvp();
 }
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -70,6 +72,9 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiLabel::_ReleaseResources()
 {
+	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
+	_vertexBuffers[0] = 0;
+	_vertexBuffers[1] = 0;
 	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 }
@@ -100,7 +105,10 @@ void GuiLabel::SyncVertexArray()
 	if (!font)
 		return;
 
+	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
+	_vertexBuffers[0] = 0;
+	_vertexBuffers[1] = 0;
 	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
-	_vertexArray = font->InitVertexArray(next, GL_STATIC_DRAW);
+	_vertexArray = font->InitVertexArray(next, GL_STATIC_DRAW, &_vertexBuffers[0], &_vertexBuffers[1]);
 	_str = next;
 }

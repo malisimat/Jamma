@@ -51,6 +51,7 @@ namespace gui
 		std::mutex _stringMutex;
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;
+		GLuint _vertexBuffers[2];
 		std::weak_ptr<resources::TextureResource> _texture;
 		std::weak_ptr<resources::ShaderResource> _shader;
 		std::weak_ptr<graphics::Font> _font;
