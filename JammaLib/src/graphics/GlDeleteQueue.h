@@ -43,18 +43,32 @@ namespace graphics::GlDeleteQueue
 
 	inline void SetRenderThread(std::thread::id id) noexcept
 	{
-		std::lock_guard<std::mutex> lock(_Mutex());
-		_RenderThreadId() = id;
+		try
+		{
+			std::lock_guard<std::mutex> lock(_Mutex());
+			_RenderThreadId() = id;
+		}
+		catch (...)
+		{
+			// Best-effort: if locking fails, leave render thread unset.
+		}
 	}
 
 	inline bool IsRenderThread() noexcept
 	{
-		std::lock_guard<std::mutex> lock(_Mutex());
-		auto renderThread = _RenderThreadId();
-		if (renderThread == std::thread::id())
-			return false;
+		try
+		{
+			std::lock_guard<std::mutex> lock(_Mutex());
+			auto renderThread = _RenderThreadId();
+			if (renderThread == std::thread::id())
+				return false;
 
-		return std::this_thread::get_id() == renderThread;
+			return std::this_thread::get_id() == renderThread;
+		}
+		catch (...)
+		{
+			return false;
+		}
 	}
 
 	inline std::vector<GLuint> _FilterIds(GLsizei n, const GLuint* ids)
