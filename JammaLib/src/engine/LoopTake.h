@@ -164,7 +164,8 @@ namespace engine
 			std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart = {});
 		void Play(unsigned long index,
 			unsigned long loopLength,
-			unsigned int endRecordSamps);
+			unsigned int endRecordSamps,
+			int midiQuantisationErrorSamps = 0);
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -259,7 +260,6 @@ namespace engine
 		std::size_t _PruneSharedPunchStartTransitions(std::size_t loopIndex,
 			const std::array<midi::MidiPunchWindow, 128u>& windows,
 			std::size_t windowCount,
-			std::uint32_t phaseOffset,
 			std::uint32_t targetLoopLength,
 			midi::MidiEvent* events,
 			std::size_t eventCount) const noexcept;

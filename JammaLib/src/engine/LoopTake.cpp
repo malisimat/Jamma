@@ -27,21 +27,6 @@ namespace
 		return static_cast<unsigned long>(normalized);
 	}
 
-	unsigned long InitialMidiPlayIndex(unsigned long audioPlayIndex,
-		unsigned long loopLength,
-		unsigned int endRecordSamps,
-		unsigned long phaseOffset) noexcept
-	{
-		const auto basePhase = static_cast<long long>(phaseOffset);
-
-		if (audioPlayIndex < constants::MaxLoopFadeSamps)
-			return NormalizeLoopIndex(basePhase + static_cast<long long>(audioPlayIndex), loopLength);
-
-		const auto quantisationError = static_cast<long long>(constants::MaxLoopFadeSamps) -
-			static_cast<long long>(endRecordSamps);
-		return NormalizeLoopIndex(basePhase + quantisationError, loopLength);
-	}
-
 	std::uint32_t NormalizeMidiLoopOffset(std::uint32_t offset,
 		std::uint32_t loopLength) noexcept
 	{
@@ -51,38 +36,97 @@ namespace
 		return offset % loopLength;
 	}
 
-	std::size_t AppendShiftedPunchWindow(std::array<midi::MidiPunchWindow, 128u>& windows,
-		std::size_t windowCount,
-		const midi::MidiPunchWindow& window,
-		std::uint32_t phaseOffset,
-		std::uint32_t loopLength) noexcept
+	unsigned long InitialMidiPlayIndex(unsigned long loopLength,
+		int midiQuantisationErrorSamps) noexcept
 	{
-		if (0u == loopLength || window.EndSample <= window.StartSample)
-			return windowCount;
+		return NormalizeLoopIndex(static_cast<long long>(midiQuantisationErrorSamps), loopLength);
+	}
 
-		const auto duration = window.EndSample - window.StartSample;
-		if (duration >= loopLength)
+	bool AppendMidiEvent(const midi::MidiEvent& event,
+		midi::MidiEvent* outEvents,
+		std::size_t outCapacity,
+		std::size_t& outCount) noexcept
+	{
+		if (!outEvents || outCount >= outCapacity)
+			return false;
+
+		outEvents[outCount++] = event;
+		return true;
+	}
+
+	std::size_t BuildRebasedMidiOverdubSourceEvents(const midi::MidiOverdubLoopState& state,
+		midi::MidiEvent* outEvents,
+		std::size_t outCapacity) noexcept
+	{
+		if (!outEvents || 0u == outCapacity || 0u == state.SourceLoopLengthSamps)
+			return 0u;
+
+		const auto sourceLoopLength = state.SourceLoopLengthSamps;
+		const auto sourceStart = NormalizeMidiLoopOffset(state.SourceStartSample, sourceLoopLength);
+		const auto rebaseOffset = (sourceLoopLength - sourceStart) % sourceLoopLength;
+		std::size_t outCount = 0u;
+
+		for (std::size_t i = 0u; i < state.SourceEventCount; ++i)
 		{
-			if (windowCount < windows.size())
-				windows[windowCount++] = midi::MidiPunchWindow{ 0u, loopLength };
-			return windowCount;
+			const auto& sourceEvent = state.SourceEvents[i];
+			if (sourceEvent.sampleOffset >= sourceLoopLength)
+				continue;
+			if (sourceEvent.IsNoteOn() || sourceEvent.IsNoteOff())
+				continue;
+
+			auto mapped = sourceEvent;
+			mapped.sampleOffset = NormalizeMidiLoopOffset(sourceEvent.sampleOffset + rebaseOffset, sourceLoopLength);
+			if (!AppendMidiEvent(mapped, outEvents, outCapacity, outCount))
+				return outCount;
 		}
 
-		const auto shiftedStart = NormalizeMidiLoopOffset(window.StartSample + phaseOffset, loopLength);
-		const auto shiftedEnd = static_cast<std::uint64_t>(shiftedStart) + duration;
+		const auto noteSpans = midi::MidiNote::ExtractSpans(
+			state.SourceEvents.data(),
+			state.SourceEventCount,
+			sourceLoopLength);
 
-		if (windowCount < windows.size())
+		for (const auto& span : noteSpans)
 		{
-			windows[windowCount++] = midi::MidiPunchWindow{
-				shiftedStart,
-				(shiftedEnd <= loopLength) ? static_cast<std::uint32_t>(shiftedEnd) : loopLength
-			};
+			const auto spanStart = span.StartSample;
+			auto spanEnd = span.StartSample + span.DurationSamples;
+			if (spanEnd > sourceLoopLength)
+				spanEnd = sourceLoopLength;
+			if (spanEnd <= spanStart)
+				continue;
+
+			const auto mappedStart = NormalizeMidiLoopOffset(spanStart + rebaseOffset, sourceLoopLength);
+			const auto mappedEnd = NormalizeMidiLoopOffset(spanEnd + rebaseOffset, sourceLoopLength);
+
+			if (mappedStart < mappedEnd)
+			{
+				if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+					return outCount;
+				if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+					return outCount;
+				continue;
+			}
+
+			if (mappedStart > mappedEnd)
+			{
+				if (mappedEnd > 0u)
+				{
+					if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+						return outCount;
+					if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOff(mappedEnd, span.Channel, span.Note), outEvents, outCapacity, outCount))
+						return outCount;
+				}
+
+				if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOn(mappedStart, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+					return outCount;
+				continue;
+			}
+
+			if (!AppendMidiEvent(midi::MidiEvent::MakeNoteOn(0u, span.Channel, span.Note, span.Velocity), outEvents, outCapacity, outCount))
+				return outCount;
 		}
 
-		if (shiftedEnd > loopLength && windowCount < windows.size())
-			windows[windowCount++] = midi::MidiPunchWindow{ 0u, static_cast<std::uint32_t>(shiftedEnd - loopLength) };
-
-		return windowCount;
+		midi::MidiNote::SortMidiEvents(outEvents, outCount);
+		return outCount;
 	}
 
 	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
@@ -1229,7 +1273,8 @@ std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
-	unsigned int endRecordSamps)
+	unsigned int endRecordSamps,
+	int midiQuantisationErrorSamps)
 {
 	auto state = _state.load(std::memory_order_relaxed);
 	if ((STATE_RECORDING != state) &&
@@ -1240,26 +1285,21 @@ void LoopTake::Play(unsigned long index,
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength = loopLength;
-	unsigned long midiPhaseOffset = 0ul;
-	if (_midiOverdubSession.Active)
-	{
-		for (const auto& overdubLoop : _midiOverdubSession.Loops)
-		{
-			if ((0u == overdubLoop.SourceLoopLengthSamps) &&
-				(0u == overdubLoop.SourceEventCount) &&
-				(0u == overdubLoop.SourceStartSample))
-			{
-				continue;
-			}
 
-			midiPhaseOffset = static_cast<unsigned long>(NormalizeMidiLoopOffset(
-				overdubLoop.SourceStartSample,
-				static_cast<std::uint32_t>(loopLength)));
-			break;
-		}
+	_midiVisualPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
+	if (_loggingConfig.Ui == "verbose")
+	{
+		const char* triggerType = (STATE_RECORDING == state) ? "record-end" : "overdub-end";
+		std::cout << "MIDI first-play timing: take=" << _id
+			<< " trigger=" << triggerType
+			<< " loopLength=" << loopLength
+			<< " errorSamps=" << midiQuantisationErrorSamps
+			<< " audioPlayPos=" << index
+			<< " audioEndRecordSamps=" << endRecordSamps
+			<< " midiStart=" << _midiVisualPlayIndex
+			<< '\n';
 	}
 
-	_midiVisualPlayIndex = InitialMidiPlayIndex(index, loopLength, endRecordSamps, midiPhaseOffset);
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
@@ -2052,7 +2092,6 @@ void LoopTake::_SnapshotPunchBoundaryMidi(std::uint32_t punchSample,
 std::size_t LoopTake::_PruneSharedPunchStartTransitions(std::size_t loopIndex,
 	const std::array<midi::MidiPunchWindow, 128u>& windows,
 	std::size_t windowCount,
-	std::uint32_t phaseOffset,
 	std::uint32_t targetLoopLength,
 	midi::MidiEvent* events,
 	std::size_t eventCount) const noexcept
@@ -2067,7 +2106,7 @@ std::size_t LoopTake::_PruneSharedPunchStartTransitions(std::size_t loopIndex,
 		if (sharedHeld.Held.none())
 			continue;
 
-		const auto boundarySample = NormalizeMidiLoopOffset(windows[windowIndex].StartSample + phaseOffset, targetLoopLength);
+		const auto boundarySample = NormalizeMidiLoopOffset(windows[windowIndex].StartSample, targetLoopLength);
 		std::bitset<midi::MidiNote::TotalNoteSlots> removed;
 		std::size_t writeIndex = 0u;
 		for (std::size_t readIndex = 0u; readIndex < eventCount; ++readIndex)
@@ -2225,19 +2264,33 @@ std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 
 	std::array<midi::MidiPunchWindow, 128u> renderWindows{};
 	std::size_t renderWindowCount = 0u;
-	const auto phaseOffset = NormalizeMidiLoopOffset(state.SourceStartSample, targetLoopLength);
 	for (std::size_t i = 0u; i < localWindowCount; ++i)
 	{
-		renderWindowCount = AppendShiftedPunchWindow(renderWindows,
-			renderWindowCount,
-			localWindows[i],
-			phaseOffset,
-			targetLoopLength);
+		auto start = localWindows[i].StartSample;
+		auto end = localWindows[i].EndSample;
+		if (end <= start)
+			continue;
+
+		if (start >= targetLoopLength)
+			continue;
+
+		if (end > targetLoopLength)
+			end = targetLoopLength;
+
+		if (end <= start || renderWindowCount >= renderWindows.size())
+			continue;
+
+		renderWindows[renderWindowCount++] = midi::MidiPunchWindow{ start, end };
 	}
 
+	std::array<midi::MidiEvent, midi::MidiLoop::DefaultCapacity> rebasedSourceEvents{};
+	const auto rebasedSourceCount = BuildRebasedMidiOverdubSourceEvents(state,
+		rebasedSourceEvents.data(),
+		rebasedSourceEvents.size());
+
 	midi::MidiOverdubRenderParams renderParams;
-	renderParams.SourceEvents = state.SourceEvents.data();
-	renderParams.SourceEventCount = state.SourceEventCount;
+	renderParams.SourceEvents = rebasedSourceEvents.data();
+	renderParams.SourceEventCount = rebasedSourceCount;
 	renderParams.SourceLoopLengthSamps = state.SourceLoopLengthSamps;
 	renderParams.TargetLoopLengthSamps = targetLoopLength;
 	renderParams.PunchWindows = (renderWindowCount > 0u) ? renderWindows.data() : nullptr;
@@ -2249,7 +2302,6 @@ std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 	mergedCount = _PruneSharedPunchStartTransitions(loopIndex,
 		localWindows,
 		localWindowCount,
-		phaseOffset,
 		targetLoopLength,
 		_midiOverdubSession.BuildScratch.data(),
 		mergedCount);
@@ -2271,12 +2323,47 @@ std::size_t LoopTake::_BuildMidiOverdubMergedEvents(std::size_t loopIndex,
 				continue;
 		}
 
-		event.sampleOffset = NormalizeMidiLoopOffset(event.sampleOffset + phaseOffset, targetLoopLength);
-
 		_midiOverdubSession.MergeScratch[mergedCount++] = event;
 	}
 
 	midi::MidiNote::SortMidiEvents(_midiOverdubSession.MergeScratch.data(), mergedCount);
+
+	if (_loggingConfig.Ui == "verbose")
+	{
+		std::uint32_t sourceBefore = 0u;
+		std::uint32_t sourceAfter = 0u;
+		bool haveSourceExample = false;
+		for (std::size_t i = 0u; i < state.SourceEventCount; ++i)
+		{
+			const auto& event = state.SourceEvents[i];
+			if (event.sampleOffset >= state.SourceLoopLengthSamps)
+				continue;
+
+			sourceBefore = event.sampleOffset;
+			sourceAfter = NormalizeMidiLoopOffset(
+				event.sampleOffset + state.SourceLoopLengthSamps - NormalizeMidiLoopOffset(state.SourceStartSample, state.SourceLoopLengthSamps),
+				state.SourceLoopLengthSamps);
+			haveSourceExample = true;
+			break;
+		}
+
+		std::cout << "MIDI overdub merge: take=" << _id
+			<< " loopIndex=" << loopIndex
+			<< " sourceStart=" << NormalizeMidiLoopOffset(state.SourceStartSample, state.SourceLoopLengthSamps)
+			<< " sourceEvents=" << state.SourceEventCount
+			<< " rebasedSourceEvents=" << rebasedSourceCount
+			<< " liveEvents=" << state.LiveEventCount
+			<< " merged=" << mergedCount;
+
+		if (haveSourceExample)
+			std::cout << " sourceSample=" << sourceBefore << "->" << sourceAfter;
+
+		if (state.LiveEventCount > 0u)
+			std::cout << " liveSample=" << state.LiveEvents[0].sampleOffset;
+
+		std::cout << '\n';
+	}
+
 	return mergedCount;
 }
 
