@@ -7,6 +7,8 @@
 
 #include "Window.h"
 #include "StringUtils.h"
+#include "GlDeleteQueue.h"
+#include <thread>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 
@@ -51,6 +53,8 @@ Window::~Window()
 
 void Window::ReleaseGlResources()
 {
+	GlDeleteQueue::FlushPendingDeletes();
+
 	_scene.ReleaseResources();
 	_highlightPass.ReleaseResources();
 
@@ -59,6 +63,8 @@ void Window::ReleaseGlResources()
 	_textureContext.reset();
 
 	_resourceLib.ClearResources();
+
+	GlDeleteQueue::FlushPendingDeletes();
 }
 
 void Window::LoadResources()
@@ -272,6 +278,7 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	wglSwapIntervalEXT(1);
+	GlDeleteQueue::SetRenderThread(std::this_thread::get_id());
 
 	// Init opengl loader here (extra safe version)
 	GLenum err = glewInit();
@@ -376,6 +383,8 @@ Size2d Window::GetSize()
 
 void Window::Render()
 {
+	GlDeleteQueue::FlushPendingDeletes();
+
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
 

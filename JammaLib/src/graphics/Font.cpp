@@ -143,7 +143,7 @@ std::string Font::GetFontName(FontOptions::FontSize size)
 	return "";
 }
 
-GLuint Font::InitVertexArray(const std::string& str, GLenum usage)
+GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPosBuffer, GLuint* outUvBuffer)
 {
 	if (0 == _params.NumWidth)
 		return 0;
@@ -183,17 +183,22 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage)
 	}
 
 	glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
-	glBufferData(GL_ARRAY_BUFFER, pos.size() * sizeof(GLfloat), pos.data(), GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, pos.size() * sizeof(GLfloat), pos.data(), usage);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(0);
 
 	glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
-	glBufferData(GL_ARRAY_BUFFER, uv.size() * sizeof(GLfloat), uv.data(), GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, uv.size() * sizeof(GLfloat), uv.data(), usage);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, 0);
 	glEnableVertexAttribArray(1);
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
+
+	if (outPosBuffer)
+		*outPosBuffer = vbo[0];
+	if (outUvBuffer)
+		*outUvBuffer = vbo[1];
 
 	utils::GlUtils::CheckError("Font::InitVertexArray");
 

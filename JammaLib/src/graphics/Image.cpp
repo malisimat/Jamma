@@ -1,4 +1,5 @@
 ﻿#include "Image.h"
+#include "GlDeleteQueue.h"
 #include <gl/glew.h>
 #include <gl/gl.h>
 #include "gl/glext.h"
@@ -78,11 +79,11 @@ void Image::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void Image::_ReleaseResources()
 {
-	glDeleteBuffers(2, _vertexBuffer);
+	GlDeleteQueue::DeleteBuffers(2, _vertexBuffer);
 	_vertexBuffer[0] = 0;
 	_vertexBuffer[1] = 0;
 
-	glDeleteVertexArrays(1, &_vertexArray);
+	GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 
 	_isDrawInitialised = false;

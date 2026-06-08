@@ -1,4 +1,5 @@
 #include "CubemapResource.h"
+#include "../graphics/GlDeleteQueue.h"
 
 using namespace resources;
 
@@ -15,7 +16,7 @@ CubemapResource::~CubemapResource()
 
 void CubemapResource::Release()
 {
-	glDeleteTextures(1, &_texture);
+	graphics::GlDeleteQueue::DeleteTextures(1, &_texture);
 	_texture = 0;
 }
 
@@ -38,7 +39,7 @@ std::optional<GLuint> CubemapResource::Load(const std::string& baseName)
 		if (!imageLoaded.has_value())
 		{
 			glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-			glDeleteTextures(1, &texture);
+			graphics::GlDeleteQueue::DeleteTextures(1, &texture);
 			return std::nullopt;
 		}
 

@@ -1,4 +1,5 @@
 #include "GlDrawContext.h"
+#include "GlDeleteQueue.h"
 
 using namespace graphics;
 using namespace utils;
@@ -15,13 +16,13 @@ GlDrawContext::~GlDrawContext()
 {
 	if (_texture)
 	{
-		glDeleteTextures(1, &_texture);
+		GlDeleteQueue::DeleteTextures(1, &_texture);
 		_texture = 0u;
 	}
 
 	if (SCREEN != _target)
 	{
-		glDeleteFramebuffers(1, &_frameBuffer);
+		GlDeleteQueue::DeleteFramebuffers(1, &_frameBuffer);
 		_frameBuffer = 0u;
 	}
 }
@@ -30,13 +31,13 @@ void GlDrawContext::Initialise()
 {
 	if (_texture)
 	{
-		glDeleteTextures(1, &_texture);
+		GlDeleteQueue::DeleteTextures(1, &_texture);
 		_texture = 0u;
 	}
 
 	if (_frameBuffer)
 	{
-		glDeleteFramebuffers(1, &_frameBuffer);
+		GlDeleteQueue::DeleteFramebuffers(1, &_frameBuffer);
 		_frameBuffer = 0u;
 	}
 

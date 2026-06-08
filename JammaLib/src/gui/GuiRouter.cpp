@@ -1,4 +1,5 @@
 #include "GuiRouter.h"
+#include "../graphics/GlDeleteQueue.h"
 
 using namespace base;
 using namespace gui;
@@ -450,10 +451,10 @@ void GuiRouter::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiRouter::_ReleaseResources()
 {
-	glDeleteBuffers(1, &_vertexBuffer);
+	graphics::GlDeleteQueue::DeleteBuffers(1, &_vertexBuffer);
 	_vertexBuffer = 0;
 
-	glDeleteVertexArrays(1, &_vertexArray);
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 	_vertexArray = 0;
 }
 

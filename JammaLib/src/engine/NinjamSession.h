@@ -14,6 +14,32 @@
 
 namespace engine
 {
+	class NinjamSession;
+
+	class NinjamConnectionUse
+	{
+	public:
+		explicit NinjamConnectionUse(const NinjamSession& session) noexcept;
+		~NinjamConnectionUse();
+
+		NinjamConnectionUse(const NinjamConnectionUse&) = delete;
+		NinjamConnectionUse& operator=(const NinjamConnectionUse&) = delete;
+
+		io::NinjamConnection* operator->() const noexcept
+		{
+			return _connection;
+		}
+
+		explicit operator bool() const noexcept
+		{
+			return _connection != nullptr;
+		}
+
+	private:
+		const NinjamSession& _session;
+		io::NinjamConnection* _connection = nullptr;
+	};
+
 	// Owns a NinjamConnection and manages all ninjam-specific lifecycle so
 	// that Scene stays free of those concerns.
 	// Chat I/O is driven externally: the caller sends messages via SendChat()
@@ -93,37 +119,7 @@ namespace engine
 		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
-		class ConnectionUse
-		{
-		public:
-			explicit ConnectionUse(const NinjamSession& session) noexcept
-				: _session(session), _connection(session._AcquireConnectionUse())
-			{
-			}
-
-			~ConnectionUse()
-			{
-				if (_connection)
-					_session._ReleaseConnectionUse();
-			}
-
-			ConnectionUse(const ConnectionUse&) = delete;
-			ConnectionUse& operator=(const ConnectionUse&) = delete;
-
-			io::NinjamConnection* operator->() const noexcept
-			{
-				return _connection;
-			}
-
-			explicit operator bool() const noexcept
-			{
-				return _connection != nullptr;
-			}
-
-		private:
-			const NinjamSession& _session;
-			io::NinjamConnection* _connection = nullptr;
-		};
+		friend class NinjamConnectionUse;
 
 		static const std::array<const char*, 17> _StaticServerHosts;
 		static constexpr auto _ServerListFetchTtl = std::chrono::seconds(30);
@@ -155,4 +151,15 @@ namespace engine
 		std::atomic_uint _audioNumInputChannels{ 0u };
 		std::atomic_uint _audioNumOutputChannels{ 0u };
 	};
+
+	inline NinjamConnectionUse::NinjamConnectionUse(const NinjamSession& session) noexcept
+		: _session(session), _connection(session._AcquireConnectionUse())
+	{
+	}
+
+	inline NinjamConnectionUse::~NinjamConnectionUse()
+	{
+		if (_connection)
+			_session._ReleaseConnectionUse();
+	}
 }

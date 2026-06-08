@@ -106,7 +106,7 @@ namespace graphics
 			return *this;
 		}
 
-		GLuint InitVertexArray(const std::string& str, GLenum usage);
+		GLuint InitVertexArray(const std::string& str, GLenum usage, GLuint* outPosBuffer = nullptr, GLuint* outUvBuffer = nullptr);
 		void Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars);
 		float MeasureString(const std::string& str) const;
 		float GetHeight() const;

@@ -17,6 +17,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/InitFile.h"
 #include "../midi/MidiQueue.h"
+#include "../midi/MidiVstOutputSink.h"
 #include "../vst/VstChain.h"
 
 namespace engine
@@ -62,7 +63,7 @@ namespace engine
 			STATIONPANEL_ROUTER
 		};
 
-		static constexpr unsigned int LiveMidiOutputIndex = ~0u;
+		static constexpr unsigned int LiveMidiOutputIndex = midi::LiveMidiOutputIndex;
 
 	public:
 		Station(StationParams params,
@@ -200,7 +201,8 @@ namespace engine
 
 		struct AudioState
 		{
-			std::vector<std::shared_ptr<LoopTake>> LoopTakes;
+			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
+			std::vector<std::weak_ptr<LoopTake>> LoopTakes;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
@@ -215,40 +217,7 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
-		struct MidiVstRoutingSnapshot
-		{
-			static constexpr size_t NoPlugin = (std::numeric_limits<size_t>::max)();
-
-			std::vector<size_t> PluginByMidiOutput;
-			size_t LivePlugin = NoPlugin;
-
-			bool HasRoutes() const noexcept
-			{
-				if (LivePlugin != NoPlugin)
-					return true;
-				for (const auto pluginIndex : PluginByMidiOutput)
-				{
-					if (pluginIndex != NoPlugin)
-						return true;
-				}
-				return false;
-			}
-
-			size_t PluginForOutput(unsigned int midiOutputIndex) const noexcept
-			{
-				if (midiOutputIndex == LiveMidiOutputIndex)
-					return LivePlugin;
-				if (midiOutputIndex < PluginByMidiOutput.size())
-					return PluginByMidiOutput[midiOutputIndex];
-				return NoPlugin;
-			}
-		};
-
-		void _SendMidiToVstChain(vst::VstChain* chain,
-			const MidiVstRoutingSnapshot* routes,
-			const midi::MidiEvent& event,
-			bool isRealtime,
-			unsigned int midiOutputIndex) noexcept;
+		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
 		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;

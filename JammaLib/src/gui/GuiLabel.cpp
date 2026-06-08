@@ -1,4 +1,5 @@
 #include "GuiLabel.h"
+#include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
@@ -10,7 +11,10 @@ using namespace resources;
 GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
 	_str(guiParams.String),
+	_pendingStr(guiParams.String),
+	_vertexArrayDirty(true),
 	_vertexArray(0),
+	_vertexBuffers{ 0, 0 },
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>()),
 	_font(std::weak_ptr<Font>())
@@ -19,19 +23,12 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 
 void GuiLabel::SetString(const std::string& str)
 {
-	if (_str == str)
+	std::lock_guard<std::mutex> lock(_stringMutex);
+	if (_pendingStr == str)
 		return;
 
-	_str = str;
-
-	auto font = _font.lock();
-	if (!font)
-		return;
-
-	if (_vertexArray != 0)
-		glDeleteVertexArrays(1, &_vertexArray);
-
-	_vertexArray = font->InitVertexArray(_str, GL_STATIC_DRAW);
+	_pendingStr = str;
+	_vertexArrayDirty.store(true, std::memory_order_release);
 }
 
 void GuiLabel::Draw(DrawContext& ctx)
@@ -39,6 +36,10 @@ void GuiLabel::Draw(DrawContext& ctx)
 	auto font = _font.lock();
 
 	if (!font)
+		return;
+
+	SyncVertexArray();
+	if (_vertexArray == 0)
 		return;
 
 	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -51,6 +52,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 	glCtx.PushMvp(glm::scale(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)), glm::vec3(scale, scale, 1.0f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
+	glCtx.PopMvp();
 }
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -61,6 +63,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 		return;
 
 	_font = fontOpt.value();
+	_vertexArrayDirty.store(true, std::memory_order_release);
 
 	auto validated = InitVertexArray();
 
@@ -69,7 +72,11 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiLabel::_ReleaseResources()
 {
-	glDeleteVertexArrays(1, &_vertexArray);
+	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
+	_vertexBuffers[0] = 0;
+	_vertexBuffers[1] = 0;
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
+	_vertexArray = 0;
 }
 
 bool GuiLabel::InitVertexArray()
@@ -79,6 +86,29 @@ bool GuiLabel::InitVertexArray()
 	if (!font)
 		return false;
 		
-	_vertexArray = font->InitVertexArray(_str, GL_STATIC_DRAW);
+	SyncVertexArray();
 	return true;
+}
+
+void GuiLabel::SyncVertexArray()
+{
+	if (!_vertexArrayDirty.exchange(false, std::memory_order_acq_rel))
+		return;
+
+	std::string next;
+	{
+		std::lock_guard<std::mutex> lock(_stringMutex);
+		next = _pendingStr;
+	}
+
+	auto font = _font.lock();
+	if (!font)
+		return;
+
+	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
+	_vertexBuffers[0] = 0;
+	_vertexBuffers[1] = 0;
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
+	_vertexArray = font->InitVertexArray(next, GL_STATIC_DRAW, &_vertexBuffers[0], &_vertexBuffers[1]);
+	_str = next;
 }

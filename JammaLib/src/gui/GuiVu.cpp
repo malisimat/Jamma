@@ -1,4 +1,5 @@
 #include "GuiVu.h"
+#include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
@@ -197,14 +198,14 @@ void GuiVu::_ReleaseResources()
 {
 	if (_vertexBuffer[0] || _vertexBuffer[1])
 	{
-		glDeleteBuffers(2, _vertexBuffer);
+		graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffer);
 		_vertexBuffer[0] = 0;
 		_vertexBuffer[1] = 0;
 	}
 
 	if (_vertexArray)
 	{
-		glDeleteVertexArrays(1, &_vertexArray);
+		graphics::GlDeleteQueue::DeleteVertexArrays(1, &_vertexArray);
 		_vertexArray = 0;
 	}
 }

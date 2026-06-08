@@ -450,6 +450,8 @@
     <ClCompile Include="src\midi\MidiNote.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation.cpp" />
     <ClCompile Include="src\midi\MidiTimestampMapper.cpp" />
+    <ClCompile Include="src\midi\MidiIndexedOutputSink.cpp" />
+    <ClCompile Include="src\midi\MidiVstOutputSink.cpp" />
     <ClCompile Include="src\graphics\MidiModel.cpp" />
   </ItemGroup>
   <ItemGroup>

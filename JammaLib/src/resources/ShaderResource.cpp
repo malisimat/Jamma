@@ -1,4 +1,5 @@
 #include "ShaderResource.h"
+#include "../graphics/GlDeleteQueue.h"
 #include "glm/gtc/type_ptr.hpp"
 
 using namespace resources;
@@ -30,7 +31,7 @@ std::optional<GLuint> ShaderResource::Load(const std::string& vertFilePath, cons
 
 	if (!res)
 	{
-		glDeleteProgram(shaderProgram);
+		graphics::GlDeleteQueue::DeleteProgram(shaderProgram);
 		return std::nullopt;
 	}
 
@@ -41,7 +42,7 @@ std::optional<GLuint> ShaderResource::Load(const std::string& vertFilePath, cons
 
 	if (GL_FALSE == glResult)
 	{
-		glDeleteProgram(shaderProgram);
+		graphics::GlDeleteQueue::DeleteProgram(shaderProgram);
 		return std::nullopt;
 	}
 
@@ -50,7 +51,7 @@ std::optional<GLuint> ShaderResource::Load(const std::string& vertFilePath, cons
 
 void ShaderResource::Release()
 {
-	glDeleteProgram(_shaderProgram);
+	graphics::GlDeleteQueue::DeleteProgram(_shaderProgram);
 	_shaderProgram = 0;
 }
 
