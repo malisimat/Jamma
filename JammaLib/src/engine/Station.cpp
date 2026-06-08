@@ -309,8 +309,8 @@ void Station::Zero(unsigned int numSamps,
 		}
 	}
 
-	for (auto& take : state->LoopTakes)
-		take->Zero(numSamps, source);
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->Zero(numSamps, source);
 }
 
 // Only called when outputting to DAC
@@ -348,11 +348,9 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		const MidiVstRoutingSnapshot* _routes;
 	};
 
-	for (const auto& take : state->LoopTakes)
-		take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr),
-			trigger,
-			indexOffset,
-			numSamps);
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock())
+			take->WriteBlock(std::dynamic_pointer_cast<MultiAudioSink>(ptr), trigger, indexOffset, numSamps);
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 	auto masterLevel = static_cast<float>(_masterMixer->Level());
@@ -399,8 +397,9 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	{
 		StationMidiSink midiSink(*this, chain.get(), routes);
 		auto midiOutputIndex = 0u;
-		for (const auto& take : state->LoopTakes)
-			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+		for (const auto& weakTake : state->LoopTakes)
+			if (auto take = weakTake.lock())
+				midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
 
 		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 	}
@@ -428,8 +427,8 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	if (!state)
 		return;
 
-	for (auto& take : state->LoopTakes)
-		take->EndMultiPlay(numSamps);
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->EndMultiPlay(numSamps);
 
 	for (auto& buffer : state->AudioBuffers)
 	{
@@ -458,8 +457,8 @@ void Station::OnBlockWriteChannel(unsigned int channel,
 			if (!state)
 				break;
 
-			for (auto& take : state->LoopTakes)
-			take->OnBlockWriteChannel(channel, request, writeOffset);
+			for (const auto& weakTake : state->LoopTakes)
+				if (auto take = weakTake.lock()) take->OnBlockWriteChannel(channel, request, writeOffset);
 		}
 		break;
 	}
@@ -473,8 +472,8 @@ void Station::EndMultiWrite(unsigned int numSamps,
 	if (!state)
 		return;
 
-	for (auto& take : state->LoopTakes)
-		take->EndMultiWrite(numSamps, updateIndex, source);
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->EndMultiWrite(numSamps, updateIndex, source);
 }
 
 void Station::SetSelectDepth(base::SelectDepth depth)
@@ -1181,14 +1180,17 @@ void Station::OnBounce(unsigned int numSamps,
 			std::string targetId = take.TargetTakeId;
 			auto sourceMatch = std::find_if(state->LoopTakes.begin(),
 				state->LoopTakes.end(),
-				[&sourceId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == sourceId; });
+				[&sourceId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == sourceId; });
 			auto targetMatch = std::find_if(state->LoopTakes.begin(),
 				state->LoopTakes.end(),
-				[&targetId](const std::shared_ptr<LoopTake>& arg) { return arg->Id() == targetId; });
+				[&targetId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == targetId; });
 
 			if ((state->LoopTakes.end() != sourceMatch) && (state->LoopTakes.end() != targetMatch))
 			{
-				(*sourceMatch)->WriteBlock(*targetMatch, trigger, sourceOffset, numSamps);
+				auto sourceTake = sourceMatch->lock();
+				auto targetTake = targetMatch->lock();
+				if (sourceTake && targetTake)
+					sourceTake->WriteBlock(targetTake, trigger, sourceOffset, numSamps);
 			}
 		}
 	}
@@ -1460,7 +1462,9 @@ std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 void Station::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
-	state->LoopTakes = _loopTakes;
+	state->LoopTakes.reserve(_loopTakes.size());
+	for (const auto& take : _loopTakes)
+		state->LoopTakes.push_back(take);
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);

@@ -217,7 +217,8 @@ namespace engine
 
 		struct AudioState
 		{
-			std::vector<std::shared_ptr<Loop>> Loops;
+			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
+			std::vector<std::weak_ptr<Loop>> Loops;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;

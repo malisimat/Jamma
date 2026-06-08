@@ -352,8 +352,8 @@ void LoopTake::Zero(unsigned int numSamps,
 			channel->Zero(numSamps);
 	}
 
-	for (auto& loop : state->Loops)
-		loop->Zero(numSamps);
+	for (const auto& weakLoop : state->Loops)
+		if (auto loop = weakLoop.lock()) loop->Zero(numSamps);
 }
 
 // Only called when outputting to DAC
@@ -376,11 +376,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	if (!state)
 		return;
 
-	for (const auto& loop : state->Loops)
-		loop->WriteBlock(loopDest,
-			trigger,
-			indexOffset,
-			numSamps);
+	for (const auto& weakLoop : state->Loops)
+		if (auto loop = weakLoop.lock())
+			loop->WriteBlock(loopDest, trigger, indexOffset, numSamps);
 
 	if (nullptr != trigger)
 		return;
@@ -446,8 +444,8 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	if (!state)
 		return;
 
-	for (auto& loop : state->Loops)
-		loop->EndMultiPlay(numSamps);
+	for (const auto& weakLoop : state->Loops)
+		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
 	for (auto& buffer : state->AudioBuffers)
 	{
@@ -482,8 +480,8 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 	if (!audioState)
 		return;
 
-	for (auto& loop : audioState->Loops)
-		 loop->EndWrite(numSamps, updateIndex);
+	for (const auto& weakLoop : audioState->Loops)
+		if (auto loop = weakLoop.lock()) loop->EndWrite(numSamps, updateIndex);
 
 	auto isRecording = IsArmed();
 	auto takeState = _state.load(std::memory_order_acquire);
@@ -1836,7 +1834,7 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	case Audible::AUDIOSOURCE_MONITOR:
 	case Audible::AUDIOSOURCE_BOUNCE:
 		if (channel < loops.size())
-			return loops[channel];
+			return loops[channel].lock();
 
 		break;
 	case Audible::AUDIOSOURCE_LOOPS:
@@ -1862,7 +1860,9 @@ std::shared_ptr<const LoopTake::AudioState> LoopTake::_AudioStateSnapshot() cons
 void LoopTake::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
-	state->Loops = _loops;
+	state->Loops.reserve(_loops.size());
+	for (const auto& loop : _loops)
+		state->Loops.push_back(loop);
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
