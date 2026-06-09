@@ -717,7 +717,7 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	const auto gap = static_cast<double>(samplePosition - _lastTapSample.value());
 
 	// Reset if the inter-tap gap exceeds the timeout; treat this tap as a fresh first tap.
-	if (sampleRate > 0u && gap > 2.5 * static_cast<double>(sampleRate))
+	if (sampleRate > 0u && gap > TapTimeoutSecs * static_cast<double>(sampleRate))
 	{
 		Clear();
 		_lastTapSample = samplePosition;

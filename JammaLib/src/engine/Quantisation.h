@@ -85,6 +85,8 @@ namespace engine
 		bool HasEstimate() const noexcept;
 
 	private:
+		static constexpr double TapTimeoutSecs = 2.5;
+
 		std::optional<std::uint64_t> _lastTapSample;
 		std::optional<double> _estimatedGapSamps;
 	};
@@ -173,7 +175,6 @@ namespace engine
 		static constexpr double OverlayFadeSeconds = 2.0;
 		static constexpr std::int64_t StateInactive = 0LL;
 		static constexpr std::int64_t StateHeld = (std::numeric_limits<std::int64_t>::max)();
-		static constexpr double TapTimeoutSecs = 2.5;
 
 		static unsigned int _ClampToUInt(unsigned long value);
 		static unsigned int _RoundedToUInt(double value);
