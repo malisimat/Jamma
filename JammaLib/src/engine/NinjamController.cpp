@@ -8,9 +8,15 @@ void NinjamController::LoadConfig(const std::optional<io::JamFile::NinjamConfig>
 {
 	_config = config;
 	if (_config.has_value())
+	{
 		_session.Start(_config.value());
+	}
 	else
+	{
 		_session.Stop();
+		std::scoped_lock lock(_pendingSnapshotMutex);
+		_pendingSnapshot.reset();
+	}
 }
 
 void NinjamController::SetAudioFormat(unsigned int sampleRate,
