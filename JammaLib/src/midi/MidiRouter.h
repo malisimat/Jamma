@@ -23,7 +23,10 @@ namespace engine
 {
 	class Station;
 	class Trigger;
+}
 
+namespace midi
+{
 	class MidiRouter
 	{
 	public:
@@ -46,9 +49,9 @@ namespace engine
 		void CloseMidi();
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
-		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 		void RegisterTriggerForTest(const std::string& deviceName,
-			std::shared_ptr<Trigger> trigger,
+			std::shared_ptr<engine::Trigger> trigger,
 			std::uint8_t deviceSlot);
 		void AddMidiInputDeviceForTest(const std::string& deviceName, std::uint8_t deviceSlot);
 		void PushMidiEventForTest(std::uint8_t deviceSlot,
@@ -62,12 +65,12 @@ namespace engine
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& audioParams);
 
-		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<Station>>& stations,
+		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& audioParams) noexcept;
 
-		TriggerDispatchSummary PumpSerial(const std::vector<std::shared_ptr<Station>>& stations,
+		TriggerDispatchSummary PumpSerial(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& audioParams) noexcept;
 
@@ -87,7 +90,7 @@ namespace engine
 		{
 			std::string DeviceName;
 			std::uint8_t DeviceSlot = UnresolvedMidiDeviceSlot;
-			std::shared_ptr<Trigger> Trigger;
+			std::shared_ptr<engine::Trigger> Trigger;
 		};
 
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,

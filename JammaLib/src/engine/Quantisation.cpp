@@ -6,9 +6,9 @@
 #include <limits>
 #include "Loop.h"
 #include "LoopTake.h"
-#include "NinjamSession.h"
 #include "Station.h"
-#include "../io/NinjamConnection.h"
+#include "../ninjam/NinjamConnection.h"
+#include "../ninjam/NinjamSession.h"
 #include "../io/UserConfig.h"
 #include "../midi/MidiQuantisation.h"
 
@@ -437,7 +437,7 @@ std::optional<Quantisation::InteractionTarget> Quantisation::_ResolveInteraction
 	}
 }
 
-void Quantisation::ApplyRemoteTempo(const io::NinjamRemoteSnapshot& snapshot,
+void Quantisation::ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
 	const std::vector<std::shared_ptr<Station>>& stations,
 	const io::UserConfig& cfg)
 {
@@ -551,8 +551,8 @@ void Quantisation::QueueLocalTempo(unsigned int remoteSampleRate,
 		<< " (queued for next interval boundary)" << std::endl;
 }
 
-void Quantisation::SendQueuedTempo(const io::NinjamRemoteSnapshot& snapshot,
-	NinjamSession* ninjam,
+void Quantisation::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
+	ninjam::NinjamSession* ninjam,
 	unsigned int remoteSampleRate,
 	unsigned int audioDeviceSampleRate)
 {

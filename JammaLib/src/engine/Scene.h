@@ -11,7 +11,6 @@
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
-#include "../midi/MidiDevice.h"
 #include "../audio/ChannelMixer.h"
 #include "../graphics/Image.h"
 #include "../graphics/Camera.h"
@@ -25,10 +24,11 @@
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
-#include "NinjamController.h"
-#include "MidiRouter.h"
-#include "Quantisation.h"
+#include "../ninjam/NinjamController.h"
+#include "../midi/MidiDevice.h"
+#include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
+#include "Quantisation.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -254,7 +254,7 @@ namespace engine
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot);
+		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
@@ -280,8 +280,8 @@ namespace engine
 		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
 			base::SelectDepth depth) const;
 		void _QueueLocalTempoFromClock();
-		void _SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot);
-		void _ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot);
+		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _PruneClosedVstEditorWindows();
 		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
@@ -311,14 +311,14 @@ namespace engine
 		std::shared_ptr<audio::ChannelMixer> _channelMixer;
 		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		Quantisation _quantisation;
-		MidiRouter _midiRouter;
+		midi::MidiRouter _midiRouter;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
-		NinjamController _ninjamController;
+		ninjam::NinjamController _ninjamController;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

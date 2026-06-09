@@ -9,7 +9,7 @@
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
-#include "../engine/NinjamSession.h"
+#include "../ninjam/NinjamSession.h"
 #include "../io/TextReadWriter.h"
 #include "../io/InitFile.h"
 #include "../io/ConsoleTui.h"
@@ -40,8 +40,8 @@ namespace
 {
 	void PrintNinjamHelp()
 	{
-		auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-		auto servers = NinjamSession::GetReachablePublicServers();
+		auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+		auto servers = ninjam::NinjamSession::GetReachablePublicServers();
 		std::cout << "[NINJAM] Commands:\n"
 		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
 		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
@@ -54,7 +54,7 @@ namespace
 		{
 			std::cout << "[NINJAM]   " << (i + 1) << ". "
 			          << servers[i].Host
-			          << NinjamSession::FormatPublicServerSummary(servers[i])
+			          << ninjam::NinjamSession::FormatPublicServerSummary(servers[i])
 			          << "\n";
 		}
 		std::cout << std::flush;
@@ -79,8 +79,8 @@ namespace
 
 		if (verb.empty() || verb == "?" || verb == "help")
 		{
-			const auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-			const bool refreshStarted = NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
+			const auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+			const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
 			if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
 			{
 				std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
@@ -103,8 +103,8 @@ namespace
 			try { idx = std::stoi(args); }
 			catch (const std::exception&) { idx = 0; }
 
-			auto snapshot = NinjamSession::GetPublicServerDirectorySnapshot();
-			auto servers = NinjamSession::GetReachablePublicServers();
+			auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+			auto servers = ninjam::NinjamSession::GetReachablePublicServers();
 			const auto serverCount = static_cast<int>(servers.size());
 
 			if (serverCount == 0)

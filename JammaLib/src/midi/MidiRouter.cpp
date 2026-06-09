@@ -3,12 +3,12 @@
 #include <chrono>
 #include <iostream>
 #include <set>
-#include "Station.h"
-#include "Trigger.h"
+#include "../engine/Station.h"
+#include "../engine/Trigger.h"
 #include "../io/UserConfig.h"
-#include "../midi/MidiTimestampMapper.h"
+#include "MidiTimestampMapper.h"
 
-using namespace engine;
+using namespace midi;
 
 void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const base::LoggingConfig& loggingConfig,
@@ -208,7 +208,7 @@ void MidiRouter::CloseSerial()
 	}
 }
 
-void MidiRouter::RegisterTrigger(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+void MidiRouter::RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger)
 {
 	if (!trigger)
 		return;
@@ -218,7 +218,7 @@ void MidiRouter::RegisterTrigger(const std::string& deviceName, std::shared_ptr<
 }
 
 void MidiRouter::RegisterTriggerForTest(const std::string& deviceName,
-	std::shared_ptr<Trigger> trigger,
+	std::shared_ptr<engine::Trigger> trigger,
 	std::uint8_t deviceSlot)
 {
 	if (!trigger)
@@ -297,7 +297,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::DispatchMidiTriggerEventForTest(s
 	return _DispatchMidiTriggerEvent(deviceSlot, event, userConfig, audioParams);
 }
 
-MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::shared_ptr<Station>>& stations,
+MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 	std::uint64_t globalSampleNow,
 	const io::UserConfig& userConfig,
 	const audio::AudioStreamParams& audioParams) noexcept
@@ -356,7 +356,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	return summary;
 }
 
-MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std::shared_ptr<Station>>& stations,
+MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std::shared_ptr<engine::Station>>& stations,
 	const io::UserConfig& userConfig,
 	const audio::AudioStreamParams& audioParams) noexcept
 {
@@ -439,7 +439,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 			summary.Ditched = true;
 
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
-			<< "\" " << Trigger::ActionLabel(res.ResultType)
+			<< "\" " << engine::Trigger::ActionLabel(res.ResultType)
 			<< midi::MidiEvent::Direction(event) << " (";
 		midi::MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";

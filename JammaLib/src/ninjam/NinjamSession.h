@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 #include "../io/JamFile.h"
-#include "../io/NinjamConnection.h"
+#include "NinjamConnection.h"
 
-namespace engine
+namespace ninjam
 {
 	class NinjamSession;
 
@@ -25,7 +25,7 @@ namespace engine
 		NinjamConnectionUse(const NinjamConnectionUse&) = delete;
 		NinjamConnectionUse& operator=(const NinjamConnectionUse&) = delete;
 
-		io::NinjamConnection* operator->() const noexcept
+		NinjamConnection* operator->() const noexcept
 		{
 			return _connection;
 		}
@@ -37,7 +37,7 @@ namespace engine
 
 	private:
 		const NinjamSession& _session;
-		io::NinjamConnection* _connection = nullptr;
+		NinjamConnection* _connection = nullptr;
 	};
 
 	// Owns a NinjamConnection and manages all ninjam-specific lifecycle so
@@ -87,7 +87,7 @@ namespace engine
 
 		// Pump the connection on the job thread.
 		// Returns a snapshot when connected; nullopt otherwise.
-		std::optional<io::NinjamRemoteSnapshot> Pump();
+		std::optional<NinjamRemoteSnapshot> Pump();
 
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,
@@ -138,12 +138,12 @@ namespace engine
 
 		// Serializes Start/Stop while keeping audio and job paths lock-free.
 		mutable std::mutex _lifecycleMutex;
-		std::unique_ptr<io::NinjamConnection> _ownedConnection;
-		std::atomic<io::NinjamConnection*> _connection{ nullptr };
+		std::unique_ptr<NinjamConnection> _ownedConnection;
+		std::atomic<NinjamConnection*> _connection{ nullptr };
 		mutable std::atomic_uint _activeConnectionUsers{ 0u };
 
-		std::unique_ptr<io::NinjamConnection> _UnpublishConnectionLocked();
-		io::NinjamConnection* _AcquireConnectionUse() const noexcept;
+		std::unique_ptr<NinjamConnection> _UnpublishConnectionLocked();
+		NinjamConnection* _AcquireConnectionUse() const noexcept;
 		void _ReleaseConnectionUse() const noexcept;
 
 		std::atomic_uint _audioSampleRate{ 0u };

@@ -1,3 +1,4 @@
+
 #include "NinjamConnection.h"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <set>
 #include "njclient.h"
+#include "../../include/Constants.h"
 
 namespace
 {
@@ -53,9 +55,8 @@ namespace
 		}
 	}
 }
-#include "../../include/Constants.h"
 
-using namespace io;
+using namespace ninjam;
 
 NinjamConnection::NinjamConnection(std::string host,
 	std::string user,

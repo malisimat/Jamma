@@ -5,7 +5,7 @@
 #include <string>
 #include "NinjamSession.h"
 
-namespace engine
+namespace ninjam
 {
 	class NinjamController
 	{
@@ -24,8 +24,8 @@ namespace engine
 			unsigned int numInputChannels,
 			unsigned int numOutputChannels);
 
-		std::optional<io::NinjamRemoteSnapshot> Pump();
-		std::optional<io::NinjamRemoteSnapshot> TakePendingSnapshot();
+		std::optional<NinjamRemoteSnapshot> Pump();
+		std::optional<NinjamRemoteSnapshot> TakePendingSnapshot();
 
 		void SendChat(const std::string& msg);
 		void Connect(const std::string& host);
@@ -47,6 +47,6 @@ namespace engine
 		std::optional<io::JamFile::NinjamConfig> _config;
 		NinjamSession _session;
 		mutable std::mutex _pendingSnapshotMutex;
-		std::optional<io::NinjamRemoteSnapshot> _pendingSnapshot;
+		std::optional<NinjamRemoteSnapshot> _pendingSnapshot;
 	};
 }

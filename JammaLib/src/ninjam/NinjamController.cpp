@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-using namespace engine;
+using namespace ninjam;
 
 void NinjamController::LoadConfig(const std::optional<io::JamFile::NinjamConfig>& config)
 {
@@ -27,7 +27,7 @@ void NinjamController::SetAudioFormat(unsigned int sampleRate,
 	_session.SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
 }
 
-std::optional<io::NinjamRemoteSnapshot> NinjamController::Pump()
+std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::Pump()
 {
 	auto snapshot = _session.Pump();
 	if (snapshot.has_value())
@@ -38,7 +38,7 @@ std::optional<io::NinjamRemoteSnapshot> NinjamController::Pump()
 	return snapshot;
 }
 
-std::optional<io::NinjamRemoteSnapshot> NinjamController::TakePendingSnapshot()
+std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::TakePendingSnapshot()
 {
 	std::scoped_lock lock(_pendingSnapshotMutex);
 	if (!_pendingSnapshot.has_value())

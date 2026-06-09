@@ -1290,7 +1290,7 @@ void Scene::CommitChanges()
 {
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
-	std::optional<io::NinjamRemoteSnapshot> pendingRemoteSnapshot = _ninjamController.TakePendingSnapshot();
+	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _ninjamController.TakePendingSnapshot();
 
 	{
 		std::scoped_lock lock(_audioMutex);
@@ -1792,7 +1792,7 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
-void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
 	std::set<std::string> seenUsers;
 
@@ -2122,7 +2122,7 @@ std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets
 	return targets;
 }
 
-void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
 	_quantisation.ApplyRemoteTempo(snapshot, _stations, _userConfig);
 }
@@ -2132,7 +2132,7 @@ void Scene::_QueueLocalTempoFromClock()
 	_quantisation.QueueLocalTempo(_quantisation.RemoteSampleRate(), _CurrentSampleRate(), _userConfig);
 }
 
-void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
 	_quantisation.SendQueuedTempo(snapshot,
 		_ninjamController.Session(),

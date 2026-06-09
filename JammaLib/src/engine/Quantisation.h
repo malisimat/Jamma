@@ -17,15 +17,19 @@ namespace base
 
 namespace io
 {
-	struct NinjamRemoteSnapshot;
 	struct UserConfig;
+}
+
+namespace ninjam
+{
+	struct NinjamRemoteSnapshot;
+	class NinjamSession;
 }
 
 namespace engine
 {
 	class Loop;
 	class LoopTake;
-	class NinjamSession;
 	class Station;
 
 	struct QuantisationParams
@@ -133,7 +137,7 @@ namespace engine
 		void ApplyOverlayAlpha(float alpha,
 			const std::vector<std::shared_ptr<Station>>& stations);
 
-		void ApplyRemoteTempo(const io::NinjamRemoteSnapshot& snapshot,
+		void ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
 			const std::vector<std::shared_ptr<Station>>& stations,
 			const io::UserConfig& cfg);
 
@@ -141,8 +145,8 @@ namespace engine
 			unsigned int audioDeviceSampleRate,
 			const io::UserConfig& cfg);
 
-		void SendQueuedTempo(const io::NinjamRemoteSnapshot& snapshot,
-			NinjamSession* ninjam,
+		void SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
+			ninjam::NinjamSession* ninjam,
 			unsigned int remoteSampleRate,
 			unsigned int audioDeviceSampleRate);
 
