@@ -350,9 +350,6 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
 		if (sourcePtr != scratch)
 			std::copy(sourcePtr, sourcePtr + sampsToRead, scratch);
-
-		for (auto samp = 0u; samp < sampsToRead; samp++)
-			scratch[samp] *= masterLevel;
 	}
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
@@ -399,6 +396,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		auto* scratch = state->VstBlockPtrs[i];
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
+			scratch[samp] *= masterLevel;
 			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;

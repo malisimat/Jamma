@@ -409,9 +409,6 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		// (no wrap-around), we must copy into scratch before processing.
 		if (srcPtr != scratch)
 			std::copy(srcPtr, srcPtr + sampsToRead, scratch);
-
-		for (auto samp = 0u; samp < sampsToRead; samp++)
-			scratch[samp] *= masterLevel;
 	}
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
@@ -427,6 +424,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		// Track max peak across all channels for the master VU.
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
+			scratch[samp] *= masterLevel;
 			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
