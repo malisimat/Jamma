@@ -129,7 +129,11 @@ namespace vst
 			std::uint32_t _midiBlockStartSample;
 			std::uint32_t _midiBlockNumSamples;
 			std::uint32_t _midiEventCount;
+			VstTimeInfo _timeInfo;
 #endif
+		float _sampleRate;
+		unsigned int _blockSize;
+		std::atomic<std::int64_t> _sampleFramePosition;
 
 		HMODULE _moduleHandle;
 		bool _isLoaded;

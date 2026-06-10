@@ -22,6 +22,9 @@ Vst2Plugin::Vst2Plugin() :
 	_midiEventCount(0u),
 #endif
 	_moduleHandle(nullptr),
+	_sampleRate(44100.0f),
+	_blockSize(512u),
+	_sampleFramePosition(0),
 	_isLoaded(false),
 	_isActivated(false),
 	_name(),
@@ -102,6 +105,9 @@ bool Vst2Plugin::Load(const std::wstring& path,
 		<< std::endl;
 
 	_requestedChannels = static_cast<int32_t>((std::max)(1u, numChannels));
+	_sampleRate = sampleRate;
+	_blockSize = blockSize;
+	_sampleFramePosition.store(0, std::memory_order_relaxed);
 
 	// 1. Load the DLL if PreInit() hasn't done so already.
 	if (!_moduleHandle)
@@ -146,7 +152,14 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	// Store our 'this' pointer in the user field for the host callback.
 	_effect->user = this;
 
-	// 3. Query name.
+	// 3. Open and configure.
+	_effect->dispatcher(_effect, effOpen, 0, 0, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, sampleRate);
+	_effect->dispatcher(_effect, effSetBlockSize, 0,
+		static_cast<VstIntPtr>(blockSize), nullptr, 0.0f);
+	_effect->dispatcher(_effect, effSetProgram, 0, 0, nullptr, 0.0f);
+
+	// 4. Query name after effOpen.
 	{
 		char effectName[64] = {};
 		if (_effect->dispatcher(_effect, effGetEffectName, 0, 0, effectName, 0.0f) != 0)
@@ -160,12 +173,6 @@ bool Vst2Plugin::Load(const std::wstring& path,
 		if (_name.empty())
 			_name = "(unknown vst2)";
 	}
-
-	// 4. Open and configure.
-	_effect->dispatcher(_effect, effOpen, 0, 0, nullptr, 0.0f);
-	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, sampleRate);
-	_effect->dispatcher(_effect, effSetBlockSize, 0,
-		static_cast<VstIntPtr>(blockSize), nullptr, 0.0f);
 
 	_inputChannels = (std::max)(1, static_cast<int32_t>(_effect->numInputs));
 	_outputChannels = (std::max)(1, static_cast<int32_t>(_effect->numOutputs));
@@ -271,6 +278,8 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 		_outputChannelPtrs.data(),
 		numSamples);
 
+	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
+
 	FoldOutputToMono(_outputChannelPtrs.data(), _outputChannels,
 		numSamples, monoBuf);
 #else
@@ -314,6 +323,8 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 		_outputChannelPtrs.data(),
 		numSamples);
 
+	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
+
 	float* outputChans[] = { leftBuf, rightBuf };
 	CopyOutputToMulti(_outputChannelPtrs.data(), _outputChannels,
 		numSamples, outputChans, 2);
@@ -351,6 +362,8 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+
+	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
 
 	CopyOutputToMulti(_outputChannelPtrs.data(), _outputChannels,
 		numSamples, channelBufs, numChannels);
@@ -430,7 +443,6 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
 
-	// Query the editor rect to populate _editorSize.
 	ERect* eRect = nullptr;
 	_effect->dispatcher(_effect, effEditGetRect, 0, 0, &eRect, 0.0f);
 	if (eRect)
@@ -475,10 +487,38 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 {
 	(void)index; (void)value;
 
+	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
+
 	switch (opcode)
 	{
 	case audioMasterVersion:
 		return kVstVersion;
+	case audioMasterGetSampleRate:
+		return self ? static_cast<VstIntPtr>(self->_sampleRate) : 44100;
+	case audioMasterGetBlockSize:
+		return self ? static_cast<VstIntPtr>(self->_blockSize) : 512;
+	case audioMasterGetTime:
+		if (self)
+		{
+			auto& ti = self->_timeInfo;
+			ti = {};
+			ti.samplePos = static_cast<double>(
+				self->_sampleFramePosition.load(std::memory_order_relaxed));
+			ti.sampleRate = self->_sampleRate;
+			ti.tempo = 120.0;
+			ti.timeSigNumerator = 4;
+			ti.timeSigDenominator = 4;
+			ti.ppqPos = (ti.sampleRate > 0.0)
+				? (ti.samplePos / ti.sampleRate) * (ti.tempo / 60.0)
+				: 0.0;
+			ti.flags = kVstPpqPosValid | kVstTempoValid | kVstTimeSigValid;
+			if (self->_isActivated.load(std::memory_order_acquire))
+				ti.flags |= kVstTransportPlaying;
+			return reinterpret_cast<VstIntPtr>(&ti);
+		}
+		return 0;
+	case audioMasterGetCurrentProcessLevel:
+		return kVstProcessLevelUser;
 	case audioMasterGetVendorString:
 		if (ptr)
 			vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
