@@ -50,6 +50,8 @@ Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/c
 
 Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.props](Directory.Build.props), so running MSBuild against an individual project from the repo root no longer needs a manual `/p:SolutionDir=...` workaround.
 
+If VS Code shows false `std::max` / `std::numeric_limits::max` analyzer errors from Windows macro pollution, keep `.vscode/c_cpp_properties.json` using `cppStandard: c++20` and `NOMINMAX` in `defines`.
+
 ### Troubleshooting: tests crash silently on startup
 
 If `JammaLib_Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:

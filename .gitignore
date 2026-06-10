@@ -8,7 +8,6 @@
 *.user
 *.opendb
 .vs/
-.vscode/
 .github/*
 !.github/copilot-instructions.md
 .copilot/*
