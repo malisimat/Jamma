@@ -386,6 +386,11 @@ void Vst2Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 #endif
 }
 
+void Vst2Plugin::UpdateHostTime(const HostTimeState& state) noexcept
+{
+	_hostTime = state;
+}
+
 void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
@@ -502,17 +507,16 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		{
 			auto& ti = self->_timeInfo;
 			ti = {};
-			ti.samplePos = static_cast<double>(
-				self->_sampleFramePosition.load(std::memory_order_relaxed));
-			ti.sampleRate = self->_sampleRate;
-			ti.tempo = 120.0;
-			ti.timeSigNumerator = 4;
+			ti.samplePos  = self->_hostTime.samplePos;
+			ti.sampleRate = self->_hostTime.sampleRate;
+			ti.tempo      = self->_hostTime.tempo;
+			ti.timeSigNumerator   = self->_hostTime.bpi;
 			ti.timeSigDenominator = 4;
 			ti.ppqPos = (ti.sampleRate > 0.0)
 				? (ti.samplePos / ti.sampleRate) * (ti.tempo / 60.0)
 				: 0.0;
 			ti.flags = kVstPpqPosValid | kVstTempoValid | kVstTimeSigValid;
-			if (self->_isActivated.load(std::memory_order_acquire))
+			if (self->_hostTime.isPlaying)
 				ti.flags |= kVstTransportPlaying;
 			return reinterpret_cast<VstIntPtr>(&ti);
 		}

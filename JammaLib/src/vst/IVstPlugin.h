@@ -16,6 +16,17 @@
 
 namespace vst
 {
+	// Snapshot of host transport/tempo state passed to each plugin before processing
+	// each audio block.  Populated on the audio thread; must be trivially copyable.
+	struct HostTimeState
+	{
+		double samplePos  = 0.0;
+		double sampleRate = 44100.0;
+		double tempo      = 120.0;
+		int32_t bpi       = 4;
+		bool isPlaying    = false;
+	};
+
 	// IVstPlugin is the common interface for all hosted VST plugin types
 	// (VST2 via Vst2Plugin, VST3 via Vst3Plugin).
 	//
@@ -51,6 +62,11 @@ namespace vst
 
 		// Process numSamples of an exact-match multichannel bus in-place.  Real-time safe.
 		virtual void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept = 0;
+
+		// Called once per block before ProcessBlock to supply host transport/tempo
+		// context.  Real-time safe.  Default is a no-op (e.g. VST3 uses its own
+		// mechanism).
+		virtual void UpdateHostTime(const HostTimeState& /*state*/) noexcept {}
 
 		// Start a new audio block for sample-accurate MIDI delivery. Real-time safe.
 		virtual void BeginMidiBlock(std::uint32_t blockStartSample,

@@ -104,6 +104,15 @@ void VstChain::BeginMidiBlock(std::uint32_t blockStartSample, std::uint32_t numS
 	}
 }
 
+void VstChain::UpdateHostTime(const HostTimeState& state) noexcept
+{
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			p->UpdateHostTime(state);
+	}
+}
+
 void VstChain::SendMidiEvent(const midi::MidiEvent& event, bool isRealtime) noexcept
 {
 	for (const auto& p : _plugins)
