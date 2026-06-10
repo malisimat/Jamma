@@ -66,6 +66,10 @@ namespace vst
 		// Direct indexed delivery for routing snapshots; avoids GetPlugin's shared_ptr copy on the RT path.
 		void SendMidiEventToPlugin(size_t index, const midi::MidiEvent& event, bool isRealtime) noexcept;
 
+		// Propagate host transport/tempo context to all plugins before the block.
+		// Real-time safe.
+		void UpdateHostTime(const HostTimeState& state) noexcept;
+
 	private:
 		std::vector<std::shared_ptr<IVstPlugin>> _plugins;
 	};

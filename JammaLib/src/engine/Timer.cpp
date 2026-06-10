@@ -46,7 +46,13 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 		return;
 
 	const auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
-	const auto next = (sampleOffset + static_cast<unsigned long>(sampsIncrement)) % loopLength;
+	const auto totalSamps = sampleOffset + static_cast<unsigned long>(sampsIncrement);
+	const auto wraps = totalSamps / loopLength;
+	const auto next = totalSamps % loopLength;
+
+	if (wraps > 0ul)
+		_loopCount.fetch_add(wraps, std::memory_order_relaxed);
+
 	_sampOffset.store(static_cast<unsigned int>(next), std::memory_order_relaxed);
 }
 

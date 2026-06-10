@@ -74,6 +74,11 @@ namespace vst
 		void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept override;
 
+		// Update host transport/tempo context for the next ProcessBlock call.
+		// Called once per block on the audio thread before BeginMidiBlock.
+		// Real-time safe: plain struct copy, no allocation.
+		void UpdateHostTime(const HostTimeState& state) noexcept override;
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		bool OpenEditor(HWND parentHwnd) override;
@@ -129,7 +134,12 @@ namespace vst
 			std::uint32_t _midiBlockStartSample;
 			std::uint32_t _midiBlockNumSamples;
 			std::uint32_t _midiEventCount;
+			VstTimeInfo _timeInfo;
 #endif
+		float _sampleRate;
+		unsigned int _blockSize;
+		std::atomic<std::int64_t> _sampleFramePosition;
+		HostTimeState _hostTime;
 
 		HMODULE _moduleHandle;
 		bool _isLoaded;

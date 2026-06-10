@@ -218,6 +218,24 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
+
+		// --- WriteBlock helpers (audio thread) ---
+
+		// Copy each audio buffer into the corresponding VST scratch pointer.
+		void _PrepareVstScratch(const AudioState& state, unsigned int sampsToRead) noexcept;
+
+		// Run one VST block: update host time (derived from the clock and current
+		// tempo), open the MIDI block, drain live MIDI, read MIDI from loop takes,
+		// then process the audio block.
+		// When vstActive is false only live MIDI is drained (to prevent queue back-log).
+		void _RunVstBlock(vst::VstChain* chain,
+			const MidiVstRoutingSnapshot* routes,
+			const AudioState& state,
+			bool vstActive,
+			unsigned int channelCount,
+			unsigned int sampsToRead,
+			std::uint32_t blockStartSample) noexcept;
+
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
 		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;

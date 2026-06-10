@@ -40,6 +40,21 @@ namespace engine
 		double MasterLoopIndexFrac() const noexcept;
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
+		unsigned int SampOffset() const noexcept { return _sampOffset.load(std::memory_order_relaxed); }
+		unsigned long LoopCount() const noexcept { return _loopCount.load(std::memory_order_relaxed); }
+
+		// Returns (LoopCount * SeedSourceLength) + SampOffset, the absolute timeline
+		// position in samples since the clock was seeded.  Returns `fallback` when
+		// the clock has not yet been seeded (SeedSourceLength == 0).
+		unsigned long AbsoluteSamplePos(unsigned long fallback = 0ul) const noexcept
+		{
+			const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+			if (loopLength == 0ul)
+				return fallback;
+			return _loopCount.load(std::memory_order_relaxed) * loopLength
+				+ static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
+		}
+
 	private:
 		std::atomic_ulong _loopCount;
 		std::atomic_uint _sampOffset;

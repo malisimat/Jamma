@@ -339,48 +339,14 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	auto masterPeak = 0.0f;
 	const auto channelCount = (state->AudioBuffers.size() < state->AudioMixers.size()) ? state->AudioBuffers.size() : state->AudioMixers.size();
 
-	for (auto i = 0u; i < channelCount; i++)
-	{
-		auto* scratch = (i < state->VstBlockPtrs.size()) ? state->VstBlockPtrs[i] : nullptr;
-		if (!scratch)
-			continue;
-
-		const auto& source = state->AudioBuffers[i];
-		source->Delay(sampsToRead);
-		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
-		if (sourcePtr != scratch)
-			std::copy(sourcePtr, sourcePtr + sampsToRead, scratch);
-
-		for (auto samp = 0u; samp < sampsToRead; samp++)
-			scratch[samp] *= masterLevel;
-	}
+	_PrepareVstScratch(*state, sampsToRead);
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	const auto* routes = _midiVstRoutes.load(std::memory_order_acquire);
 	const bool vstActive = (channelCount > 0u) && chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
-	if (vstActive)
-		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 
-	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
-	MidiEvent liveMidi{};
-	while (_liveMidiIngress.Pop(liveMidi))
-	{
-		if (vstActive)
-			midi::SendMidiToVstChain(chain.get(), routes, liveMidi, true, LiveMidiOutputIndex);
-	}
-
-	auto midiOutputIndex = 0u;
-	if (vstActive)
-	{
-		midi::MidiVstOutputSink midiSink(chain.get(), routes);
-		for (const auto& weakTake : state->LoopTakes)
-		{
-			auto take = weakTake.lock();
-			if (!take)
-				continue;
-			midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
-		}
-	}
+	_RunVstBlock(chain.get(), routes, *state, vstActive,
+		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
 
 	if (channelCount == 0u)
 	{
@@ -389,16 +355,12 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 		return;
 	}
 
-	if (vstActive)
-	{
-		chain->ProcessBlockMulti(state->VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
-	}
-
 	for (auto i = 0u; i < channelCount; i++)
 	{
 		auto* scratch = state->VstBlockPtrs[i];
 		for (auto samp = 0u; samp < sampsToRead; samp++)
 		{
+			scratch[samp] *= masterLevel;
 			auto absSamp = std::abs(scratch[samp]);
 			if (absSamp > masterPeak)
 				masterPeak = absSamp;
@@ -409,6 +371,76 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
 	_masterMixer->Offset(sampsToRead);
+}
+
+void Station::_PrepareVstScratch(const AudioState& state, unsigned int sampsToRead) noexcept
+{
+	const auto channelCount = std::min(state.AudioBuffers.size(), state.AudioMixers.size());
+	for (auto i = 0u; i < channelCount; i++)
+	{
+		auto* scratch = (i < state.VstBlockPtrs.size()) ? state.VstBlockPtrs[i] : nullptr;
+		if (!scratch)
+			continue;
+
+		const auto& source = state.AudioBuffers[i];
+		source->Delay(sampsToRead);
+		auto sourcePtr = source->PlaybackRead(scratch, sampsToRead);
+		if (sourcePtr != scratch)
+			std::copy(sourcePtr, sourcePtr + sampsToRead, scratch);
+	}
+}
+
+void Station::_RunVstBlock(vst::VstChain* chain,
+	const MidiVstRoutingSnapshot* routes,
+	const AudioState& state,
+	bool vstActive,
+	unsigned int channelCount,
+	unsigned int sampsToRead,
+	std::uint32_t blockStartSample) noexcept
+{
+	if (vstActive)
+	{
+		vst::HostTimeState hostTime;
+		hostTime.sampleRate = static_cast<double>(_sampleRate);
+		hostTime.isPlaying  = true;
+		hostTime.samplePos  = _clock
+			? static_cast<double>(_clock->AbsoluteSamplePos(blockStartSample))
+			: static_cast<double>(blockStartSample);
+		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
+		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;
+		if (seedSamps > 0u && _sampleRate > 0.0f)
+			if (const auto timing = Quantisation::TimingFromSeedAndMaster(
+					seedSamps, masterSamps, static_cast<unsigned int>(_sampleRate)))
+			{
+				hostTime.tempo = static_cast<double>(timing->Bpm);
+				hostTime.bpi   = static_cast<int32_t>(timing->Bpi);
+			}
+		chain->UpdateHostTime(hostTime);
+		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+	}
+
+	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
+	MidiEvent liveMidi{};
+	while (_liveMidiIngress.Pop(liveMidi))
+	{
+		if (vstActive)
+			midi::SendMidiToVstChain(chain, routes, liveMidi, true, LiveMidiOutputIndex);
+	}
+
+	if (!vstActive)
+		return;
+
+	auto midiOutputIndex = 0u;
+	midi::MidiVstOutputSink midiSink(chain, routes);
+	for (const auto& weakTake : state.LoopTakes)
+	{
+		auto take = weakTake.lock();
+		if (!take)
+			continue;
+		midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+	}
+
+	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
