@@ -10,7 +10,7 @@
 
 class NJClient;
 
-namespace io
+namespace ninjam
 {
 	struct NinjamRemoteChannel
 	{

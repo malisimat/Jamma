@@ -44,19 +44,11 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_audioDevice(nullptr),
-	_midiInputs(),
+	_quantisation(),
+	_midiRouter(),
 	_loggingConfig{},
-	_serialDevices(),
-	_midiTriggerRoutes(),
-	_midiTriggerRoutesSnapshot(),
-	_lastSerialDropCount(0u),
-	_masterLoop(nullptr),
-	_masterLoopLengthSamps(0ul),
-	_tapTempo(),
-	_quantisationOverlayState(OverlayInactive),
 	_stations(),
-	_ninjamConfig(std::nullopt),
-	_ninjamSession(std::make_unique<NinjamSession>()),
+	_ninjamController(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
@@ -70,9 +62,11 @@ Scene::Scene(SceneParams params,
 			1.0),
 		0)),
 	_userConfig(user),
-	_clock(std::make_shared<Timer>()),
 	_viewMode(VIEW_STATION)
 {
+	_quantisation.SetClock(std::make_shared<Timer>());
+	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
+
 	GuiLabelParams labelParams;
 	labelParams.String = "Jamma";
 	labelParams.Position = { 10, 2 };
@@ -133,8 +127,6 @@ Scene::Scene(SceneParams params,
 
 	_audioDevice = std::make_unique<AudioDevice>();
 	_PublishAudioStations();
-	_midiInputs.store(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_release);
-	_PublishMidiTriggerRoutes();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
@@ -196,9 +188,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
-	scene->_ninjamConfig = jamStruct.Ninjam;
-	if (jamStruct.Ninjam.has_value())
-		scene->_ninjamSession->Start(jamStruct.Ninjam.value());
+	scene->_ninjamController.LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
 	return scene;
@@ -636,29 +626,13 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-		{
-			if (_clock)
-				_clock->Clear();
-			_masterLoopLengthSamps.store(0ul, std::memory_order_release);
-		}
-		{
-			std::scoped_lock tapTempoLock(_tapTempoMutex);
-			_tapTempo.Clear();
-		}
-		_armReclock.store(true, std::memory_order_release);
-		_effectiveQuantiseSamps.store(0u, std::memory_order_release);
-		_hasPendingTempo.store(false, std::memory_order_release);
+		_HandleReclockArm();
 		return ActionResult::NoAction();
 	}
 
 	if ((90 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType) && (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		std::cout << ">> Undo <<" << std::endl;
-
-		auto res = _undoHistory.Undo();
-
-		return { res };
+		return _HandleUndo();
 	}
 
 	// Ctrl+Shift+V - insert a VST on the hovered station/take/loop.
@@ -672,67 +646,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			return ActionResult::NoAction();
 
 		auto hovering = _ChildFromPath(_selector->CurrentHover());
-		if (!hovering)
-		{
-			std::cout << "VST insert: no hovered target" << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		std::cout << "VST insert request: depth=" << static_cast<int>(_selector->CurrentSelectDepth())
-			<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
-
-		switch (_selector->CurrentSelectDepth())
-		{
-		case base::SelectDepth::DEPTH_STATION:
-		{
-			auto station = std::dynamic_pointer_cast<Station>(hovering);
-			if (!station)
-				return ActionResult::NoAction();
-
-			std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
-
-			if (station->IsRemote())
-			{
-				std::cout << "VST insert: remote stations are read-only" << std::endl;
-				return ActionResult::NoAction();
-			}
-
-			station->LoadVstPlugin(pluginPath);
-			CommitChanges();
-			break;
-		}
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-		{
-			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-			if (!take)
-				return ActionResult::NoAction();
-
-			std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
-
-			take->LoadVstPlugin(pluginPath);
-			CommitChanges();
-			break;
-		}
-		case base::SelectDepth::DEPTH_LOOP:
-		{
-			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-			if (!loop)
-				return ActionResult::NoAction();
-
-			std::cout << "VST insert target: single loop" << std::endl;
-
-			loop->LoadVstPlugin(pluginPath);
-			CommitChanges();
-			break;
-		}
-		}
-
-		std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
-
-		ActionResult res;
-		res.IsEaten = true;
-		res.ResultType = actions::ACTIONRESULT_DEFAULT;
-		return res;
+		return _HandleVstInsert(pluginPath, _selector->CurrentSelectDepth(), hovering);
 	}
 
 	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
@@ -741,27 +655,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		auto hovering = _ChildFromPath(_selector->CurrentHover());
-		_PruneClosedVstEditorWindows();
-
-		auto eatAction = []() {
-			ActionResult res;
-			res.IsEaten = true;
-			res.ResultType = actions::ACTIONRESULT_DEFAULT;
-			return res;
-		};
-
-		if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
-			return eatAction();
-
-		for (const auto& station : _stations)
-		{
-			if (_TryOpenVstEditorForStation(station, 0))
-				return eatAction();
-		}
-
-		std::cout << "VST editor open: no loaded plugin found" << std::endl;
-		return ActionResult::NoAction();
+		return _HandleVstEditorOpen();
 	}
 
 	// Ctrl+S - export session to directory.
@@ -769,139 +663,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		struct LoopSnapshot
-		{
-			std::wstring Path;
-			std::vector<float> Samples;
-		};
-
-		struct LoopRef
-		{
-			std::shared_ptr<Loop> Loop;
-			std::string WavFilename;
-		};
-
-		struct TakeRef
-		{
-			std::vector<LoopRef> Loops;
-		};
-
-		struct StationRef
-		{
-			std::vector<TakeRef> Takes;
-		};
-
-		const auto exportDir = utils::PickDirectory(L"Choose export directory");
-		if (exportDir.empty())
-			return ActionResult::NoAction();
-
-		const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
-		const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
-
-		io::JamFile jam;
-		jam.Version = io::JamFile::VERSION_V;
-		jam.Name = "export";
-		jam.Ninjam = _ninjamConfig;
-		jam.TimerTicks = 0;
-		jam.QuantiseSamps = 0;
-		jam.Quantisation = engine::Timer::QUANTISE_OFF;
-
-		std::vector<StationRef> stationRefs;
-		std::vector<LoopSnapshot> loops;
-
-		{
-			std::scoped_lock lock(_audioMutex);
-
-			for (const auto& station : _stations)
-			{
-				if (station->IsRemote())
-					continue;
-
-				StationRef stationRef;
-
-				io::JamFile::Station jamStation;
-				jamStation.Name = station->Name();
-				jamStation.StationType = 0;
-				jamStation.VstChain = station->VstEntries();
-
-				for (const auto& take : station->GetLoopTakes())
-				{
-					TakeRef takeRef;
-
-					io::JamFile::LoopTake jamTake;
-					jamTake.Name = take->Id();
-					jamTake.VstChain = take->VstEntries();
-
-					for (const auto& loop : take->GetLoops())
-					{
-						const auto wavFilename = loop->Id() + ".wav";
-						takeRef.Loops.push_back({ loop, wavFilename });
-						jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
-					}
-
-					if (!takeRef.Loops.empty())
-						stationRef.Takes.push_back(std::move(takeRef));
-
-					if (!jamTake.Loops.empty())
-						jamStation.LoopTakes.push_back(std::move(jamTake));
-				}
-
-				if (!stationRef.Takes.empty())
-					stationRefs.push_back(std::move(stationRef));
-
-				if (!jamStation.LoopTakes.empty())
-					jam.Stations.push_back(std::move(jamStation));
-			}
-		}
-
-		if (jam.Stations.empty())
-		{
-			std::cout << "Export: nothing to export" << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		// Copy loop samples outside the audio lock to avoid callback stalls.
-		for (const auto& stationRef : stationRefs)
-		{
-			for (const auto& takeRef : stationRef.Takes)
-			{
-				for (const auto& loopRef : takeRef.Loops)
-				{
-					auto samples = loopRef.Loop->ExportSamples();
-					if (samples.empty())
-						continue;
-
-					LoopSnapshot snap;
-					snap.Path = exportDir + L"\\" + utils::DecodeUtf8(loopRef.WavFilename);
-					snap.Samples = std::move(samples);
-					loops.push_back(std::move(snap));
-				}
-			}
-		}
-
-		io::WavReadWriter wavWriter;
-		unsigned int wavCount = 0;
-		for (const auto& loop : loops)
-		{
-			if (wavWriter.Write(loop.Path, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
-				++wavCount;
-		}
-
-		std::stringstream jamStream;
-		io::JamFile::ToStream(jam, jamStream);
-		const auto jamPath = exportDir + L"\\session.jam";
-		const auto wroteJamFile = io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
-		if (!wroteJamFile)
-		{
-			std::cout << "Export: failed to write session.jam to "
-				<< utils::EncodeUtf8(jamPath) << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
-			<< utils::EncodeUtf8(exportDir) << std::endl;
-
-		return ActionResult::NoAction();
+		return _HandleExportSession();
 	}
 
 	bool checkReset = false;
@@ -923,8 +685,8 @@ ActionResult Scene::OnAction(KeyAction action)
 			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
 			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
 			// do it here after every activation so all LoopTakes see the current grain.
-			if (_clock)
-				_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
+			if (auto clock = _quantisation.Clock())
+				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
 			break;
 		case ACTIONRESULT_DITCH:
 			checkReset = true;
@@ -955,6 +717,250 @@ ActionResult Scene::OnAction(KeyAction action)
 	return ActionResult::NoAction();
 }
 
+void Scene::_HandleReclockArm()
+{
+	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
+	_quantisation.ArmReclock();
+	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
+}
+
+ActionResult Scene::_HandleUndo()
+{
+	std::cout << ">> Undo <<" << std::endl;
+	auto res = _undoHistory.Undo();
+	return { res };
+}
+
+ActionResult Scene::_HandleVstInsert(const std::wstring& pluginPath,
+	base::SelectDepth depth,
+	const std::shared_ptr<base::GuiElement>& hovering)
+{
+	if (!hovering)
+	{
+		std::cout << "VST insert: no hovered target" << std::endl;
+		return ActionResult::NoAction();
+	}
+
+	std::cout << "VST insert request: depth=" << static_cast<int>(depth)
+		<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
+
+	switch (depth)
+	{
+	case base::SelectDepth::DEPTH_STATION:
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		if (!station)
+			return ActionResult::NoAction();
+
+		std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
+
+		if (station->IsRemote())
+		{
+			std::cout << "VST insert: remote stations are read-only" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		station->LoadVstPlugin(pluginPath);
+		CommitChanges();
+		break;
+	}
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	{
+		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+		if (!take)
+			return ActionResult::NoAction();
+
+		std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
+
+		take->LoadVstPlugin(pluginPath);
+		CommitChanges();
+		break;
+	}
+	case base::SelectDepth::DEPTH_LOOP:
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		if (!loop)
+			return ActionResult::NoAction();
+
+		std::cout << "VST insert target: single loop" << std::endl;
+
+		loop->LoadVstPlugin(pluginPath);
+		CommitChanges();
+		break;
+	}
+	default:
+		return ActionResult::NoAction();
+	}
+
+	std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = actions::ACTIONRESULT_DEFAULT;
+	return res;
+}
+
+ActionResult Scene::_HandleVstEditorOpen()
+{
+	auto hovering = _ChildFromPath(_selector->CurrentHover());
+	_PruneClosedVstEditorWindows();
+
+	auto eatAction = []() {
+		ActionResult res;
+		res.IsEaten = true;
+		res.ResultType = actions::ACTIONRESULT_DEFAULT;
+		return res;
+	};
+
+	if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
+		return eatAction();
+
+	for (const auto& station : _stations)
+	{
+		if (_TryOpenVstEditorForStation(station, 0))
+			return eatAction();
+	}
+
+	std::cout << "VST editor open: no loaded plugin found" << std::endl;
+	return ActionResult::NoAction();
+}
+
+ActionResult Scene::_HandleExportSession()
+{
+	struct LoopSnapshot
+	{
+		std::wstring Path;
+		std::vector<float> Samples;
+	};
+
+	struct LoopRef
+	{
+		std::shared_ptr<Loop> Loop;
+		std::string WavFilename;
+	};
+
+	struct TakeRef
+	{
+		std::vector<LoopRef> Loops;
+	};
+
+	struct StationRef
+	{
+		std::vector<TakeRef> Takes;
+	};
+
+	const auto exportDir = utils::PickDirectory(L"Choose export directory");
+	if (exportDir.empty())
+		return ActionResult::NoAction();
+
+	const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
+	const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
+
+	io::JamFile jam;
+	jam.Version = io::JamFile::VERSION_V;
+	jam.Name = "export";
+	jam.Ninjam = _ninjamController.Config();
+	jam.TimerTicks = 0;
+	jam.QuantiseSamps = 0;
+	jam.Quantisation = engine::Timer::QUANTISE_OFF;
+
+	std::vector<StationRef> stationRefs;
+	std::vector<LoopSnapshot> loops;
+
+	{
+		std::scoped_lock lock(_audioMutex);
+
+		for (const auto& station : _stations)
+		{
+			if (station->IsRemote())
+				continue;
+
+			StationRef stationRef;
+
+			io::JamFile::Station jamStation;
+			jamStation.Name = station->Name();
+			jamStation.StationType = 0;
+			jamStation.VstChain = station->VstEntries();
+
+			for (const auto& take : station->GetLoopTakes())
+			{
+				TakeRef takeRef;
+
+				io::JamFile::LoopTake jamTake;
+				jamTake.Name = take->Id();
+				jamTake.VstChain = take->VstEntries();
+
+				for (const auto& loop : take->GetLoops())
+				{
+					const auto wavFilename = loop->Id() + ".wav";
+					takeRef.Loops.push_back({ loop, wavFilename });
+					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
+				}
+
+				if (!takeRef.Loops.empty())
+					stationRef.Takes.push_back(std::move(takeRef));
+
+				if (!jamTake.Loops.empty())
+					jamStation.LoopTakes.push_back(std::move(jamTake));
+			}
+
+			if (!stationRef.Takes.empty())
+				stationRefs.push_back(std::move(stationRef));
+
+			if (!jamStation.LoopTakes.empty())
+				jam.Stations.push_back(std::move(jamStation));
+		}
+	}
+
+	if (jam.Stations.empty())
+	{
+		std::cout << "Export: nothing to export" << std::endl;
+		return ActionResult::NoAction();
+	}
+
+	for (const auto& stationRef : stationRefs)
+	{
+		for (const auto& takeRef : stationRef.Takes)
+		{
+			for (const auto& loopRef : takeRef.Loops)
+			{
+				auto samples = loopRef.Loop->ExportSamples();
+				if (samples.empty())
+					continue;
+
+				LoopSnapshot snap;
+				snap.Path = exportDir + L"\\" + utils::DecodeUtf8(loopRef.WavFilename);
+				snap.Samples = std::move(samples);
+				loops.push_back(std::move(snap));
+			}
+		}
+	}
+
+	io::WavReadWriter wavWriter;
+	unsigned int wavCount = 0;
+	for (const auto& loop : loops)
+	{
+		if (wavWriter.Write(loop.Path, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
+			++wavCount;
+	}
+
+	std::stringstream jamStream;
+	io::JamFile::ToStream(jam, jamStream);
+	const auto jamPath = exportDir + L"\\session.jam";
+	const auto wroteJamFile = io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
+	if (!wroteJamFile)
+	{
+		std::cout << "Export: failed to write session.jam to "
+			<< utils::EncodeUtf8(jamPath) << std::endl;
+		return ActionResult::NoAction();
+	}
+
+	std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
+		<< utils::EncodeUtf8(exportDir) << std::endl;
+
+	return ActionResult::NoAction();
+}
+
 ActionResult Scene::OnAction(GuiAction action)
 {
 	switch (action.ElementType)
@@ -976,8 +982,8 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
-	if (_clock)
-		_clock->Tick(samps, 0u);
+	if (auto clock = _quantisation.Clock())
+		clock->Tick(samps, 0u);
 
 	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
@@ -1006,7 +1012,7 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 
-	auto snapshot = _ninjamSession->Pump();
+	auto snapshot = _ninjamController.Pump();
 	{
 		// Always sync the station clock state to the scene-level quantisation.
 		// This ensures that when the first loop seeds the station clock locally
@@ -1018,13 +1024,6 @@ void Scene::OnJobTick(Time curTime)
 			_SendQueuedTempoAtIntervalWrap(snapshot.value());
 			_ApplyRemoteTempoToClock(snapshot.value());
 		}
-	}
-
-	if (snapshot.has_value())
-	{
-		// Scene graph changes must be applied on the main/render thread.
-		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
-		_pendingRemoteSnapshot = snapshot.value();
 	}
 
 	actions::JobAction job;
@@ -1076,155 +1075,24 @@ void Scene::_PumpMidi()
 	// multi-channel record-start visibility that produced block-quantised
 	// loop start offsets across channels.
 	std::scoped_lock lock(_audioMutex);
-
-	MidiEvent ingress{};
 	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
-	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
-	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
-	static const std::vector<std::shared_ptr<Station>> emptyStations;
-	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
-
-	if (!midiInputs)
-		return;
-
-	for (const auto& input : *midiInputs)
+	auto summary = _midiRouter.PumpMidi(_stations,
+		globalSampleNow,
+		_userConfig,
+		_audioDevice->GetAudioStreamParams());
+	if (summary.Activated)
 	{
-		if (!input)
-			continue;
-
-		while (input->Ingress.Pop(ingress))
-		{
-			_DispatchMidiTriggerEvent(input->DeviceSlot, ingress);
-
-			const auto msgType = ingress.MessageType();
-			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
-			{
-				const auto& deviceName = input->ConfiguredName;
-				for (const auto& station : stations)
-				{
-					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
-						station->EnqueueLiveMidiEvent(ingress, deviceName);
-				}
-			}
-
-			if ((msgType != MidiEvent::NoteOn) && (msgType != MidiEvent::NoteOff))
-				continue;
-
-			// Trigger routing runs before loop recording, but both consume the same
-			// ingress event in this loop, so a trigger consuming the action does not
-			// suppress MIDI loop recording.
-			for (const auto& station : stations)
-			{
-				for (const auto& take : station->GetLoopTakes())
-				{
-					if (take->IsArmed())
-						take->RecordMidiEvent(ingress, input->ConfiguredName, globalSampleNow);
-				}
-			}
-		}
-
-		auto dropped = input->Ingress.DroppedCount();
-		if (dropped != input->LastDroppedCount)
-		{
-			std::cout << "[MIDI] Ingress queue dropped " << (dropped - input->LastDroppedCount)
-				<< " event(s) on device \"" << input->ConfiguredName
-				<< "\", total dropped=" << dropped << std::endl;
-			input->LastDroppedCount = dropped;
-		}
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		if (auto clock = _quantisation.Clock())
+			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
 	}
-}
-
-void Scene::_PushMidiEvent(std::uint8_t deviceSlot,
-	std::uint8_t status,
-	std::uint8_t data1,
-	std::uint8_t data2,
-	unsigned int sampleRate) noexcept
-{
-	auto midiInputs = _midiInputs.load(std::memory_order_acquire);
-	if (!midiInputs)
-		return;
-
-	for (const auto& input : *midiInputs)
-	{
-		if (!input || (input->DeviceSlot != deviceSlot))
-			continue;
-
-		MidiEvent ingress{};
-		const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
-		const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
-		const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
-		const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
-			anchorSample,
-			anchorMicros,
-			nowMicros);
-
-		ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-		ingress.status = status;
-		ingress.data1 = data1;
-		ingress.data2 = data2;
-		ingress._pad = 0u;
-		input->Ingress.Push(ingress);
-		break;
-	}
-}
-
-void Scene::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
-	const MidiEvent& event)
-{
-	Action triggerAction;
-	triggerAction.SetUserConfig(_userConfig);
-	if (_audioDevice)
-		triggerAction.SetAudioParams(_audioDevice->GetAudioStreamParams());
-	triggerAction.SetActionTime(Timer::GetTime());
-
-	auto routes = _midiTriggerRoutesSnapshot.load(std::memory_order_acquire);
-	if (!routes)
-		return;
-
-	bool anythingDitched = false;
-	for (const auto& route : *routes)
-	{
-		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
-			continue;
-
-		auto res = route.Trigger->OnEvent(event, triggerAction);
-		if (!res.IsEaten)
-			continue;
-
-		if (res.ResultType == ACTIONRESULT_ACTIVATE)
-		{
-			_isSceneReset.store(false, std::memory_order_relaxed);
-			if (_clock)
-				_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
-		}
-		else if (res.ResultType == ACTIONRESULT_DITCH)
-			anythingDitched = true;
-
-		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
-			<< "\" " << Trigger::ActionLabel(res.ResultType)
-			<< MidiEvent::Direction(event) << " (";
-		MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
-		std::cout << ")\n";
-	}
-
-	if (anythingDitched)
+	if (summary.Ditched)
 		_ResetIfEmpty();
 }
 
 void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 {
-	if (!trigger)
-		return;
-
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, UnresolvedMidiDeviceSlot, trigger });
-	_PublishMidiTriggerRoutes();
-}
-
-void Scene::_PublishMidiTriggerRoutes()
-{
-	auto routes = std::make_shared<const std::vector<MidiTriggerRoute>>(_midiTriggerRoutes.begin(), _midiTriggerRoutes.end());
-	_midiTriggerRoutesSnapshot.store(routes, std::memory_order_release);
+	_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
 }
 
 void Scene::_PumpSerial()
@@ -1232,59 +1100,15 @@ void Scene::_PumpSerial()
 	// See _PumpMidi: trigger dispatch must be serialised with CommitChanges
 	// publication to keep multi-channel record-start coherent.
 	std::scoped_lock lock(_audioMutex);
-
-	static const std::string EmptyDevice;
-	while (true)
+	auto summary = _midiRouter.PumpSerial(_stations, _userConfig, _audioDevice->GetAudioStreamParams());
+	if (summary.Activated)
 	{
-		io::SerialTriggerEvent ev{};
-		{
-			std::scoped_lock lock(_serialIngressMutex);
-			if (!_serialIngress.Pop(ev))
-				break;
-		}
-
-		base::Action action;
-		action.SetActionTime(Timer::GetTime());
-		action.SetUserConfig(_userConfig);
-		action.SetAudioParams(_audioDevice->GetAudioStreamParams());
-		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
-
-		bool anythingDitched = false;
-		for (auto& station : _stations)
-		{
-			auto res = station->OnTriggerEvent(
-				TriggerSource::TRIGGER_SERIAL,
-				ev.ButtonIndex,
-				ev.IsPressed ? 1u : 0u,
-				action,
-				device);
-			if (!res.IsEaten)
-				continue;
-			if (res.ResultType == ACTIONRESULT_ACTIVATE)
-			{
-				_isSceneReset.store(false, std::memory_order_relaxed);
-				if (_clock)
-					_SetMidiQuantisationGrain(_clock->QuantiseSamps(), "loop activated");
-			}
-			else if (res.ResultType == ACTIONRESULT_DITCH)
-				anythingDitched = true;
-		}
-
-		if (anythingDitched)
-			_ResetIfEmpty();
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		if (auto clock = _quantisation.Clock())
+			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
 	}
-
-	std::uint64_t dropped = 0u;
-	{
-		std::scoped_lock lock(_serialIngressMutex);
-		dropped = _serialIngress.DroppedCount();
-	}
-	if (dropped != _lastSerialDropCount)
-	{
-		std::cout << "[Serial] Ingress queue dropped " << (dropped - _lastSerialDropCount)
-			<< " event(s), total dropped=" << dropped << std::endl;
-		_lastSerialDropCount = dropped;
-	}
+	if (summary.Ditched)
+		_ResetIfEmpty();
 }
 
 void Scene::InitReceivers()
@@ -1338,9 +1162,8 @@ void Scene::Reset()
 {
 	std::cout << "Reset" << std::endl;
 	_ClearTimingState(true);
-	_masterLoop.reset();
 	_ClearStationQuantisation();
-	_quantisationOverlayState.store(OverlayInactive, std::memory_order_release);
+	_quantisation.ClearOverlay();
 	_isSceneReset.store(true, std::memory_order_relaxed);
 }
 
@@ -1388,7 +1211,7 @@ void Scene::InitAudio()
 					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
 				}
 			}
-			_ninjamSession->SetAudioFormat(
+			_ninjamController.SetAudioFormat(
 				audioStreamParams.SampleRate,
 				audioStreamParams.BufSize,
 				audioStreamParams.NumInputChannels,
@@ -1418,198 +1241,22 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 
 void Scene::InitMidi()
 {
-	CloseMidi();
-
-	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
-
-	if (_userConfig.Midi.Devices.empty())
-	{
-		std::cout << "[MIDI] No MIDI devices configured." << std::endl;
-		_PublishMidiTriggerRoutes();
-		return;
-	}
-
-	const auto sampleRate = _userConfig.Audio.SampleRate;
-	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
-	std::uint8_t nextSlot = 0u;
-
-	for (const auto& midiConfig : _userConfig.Midi.Devices)
-	{
-		if (!midiConfig.Enabled)
-		{
-			std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
-			continue;
-		}
-
-		if (nextSlot == UnresolvedMidiDeviceSlot)
-		{
-			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
-			break;
-		}
-
-		auto endpoint = std::make_shared<MidiInputEndpoint>();
-		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
-		endpoint->Device = std::make_unique<MidiDevice>();
-
-		auto opened = endpoint->Device->Open(
-			endpoint->ConfiguredName,
-			[endpoint, sampleRate, audioSampleCounter = &_audioSampleCounter, midiAnchorMicros = &_midiAnchorMicros](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
-			{
-				MidiEvent ingress{};
-				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now().time_since_epoch()).count();
-				const auto anchorSample = audioSampleCounter->load(std::memory_order_acquire);
-				const auto anchorMicros = midiAnchorMicros->load(std::memory_order_acquire);
-				const auto mappedSample = MapMidiTimestampToAudioSample(sampleRate,
-					anchorSample,
-					anchorMicros,
-					nowMicros);
-
-				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
-				ingress.status = status;
-				ingress.data1 = data1;
-				ingress.data2 = data2;
-				ingress._pad = 0u;
-				endpoint->Ingress.Push(ingress);
-			},
-			_loggingConfig.Midi == "verbose");
-
-		if (!opened)
-			continue;
-
-		endpoint->DeviceSlot = nextSlot++;
-		midiInputs->push_back(endpoint);
-	}
-
-	_midiInputs.store(midiInputs, std::memory_order_release);
-
-	std::set<std::string> activeMidiInputNames;
-	for (const auto& input : *midiInputs)
-	{
-		if (input)
-			activeMidiInputNames.insert(input->ConfiguredName);
-	}
-
-	for (auto& route : _midiTriggerRoutes)
-	{
-		route.DeviceSlot = UnresolvedMidiDeviceSlot;
-		for (const auto& input : *midiInputs)
-		{
-			if (input && (input->ConfiguredName == route.DeviceName))
-			{
-				route.DeviceSlot = input->DeviceSlot;
-				break;
-			}
-		}
-
-		if (route.DeviceSlot == UnresolvedMidiDeviceSlot)
-			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
-
-		if (route.Trigger)
-		{
-			for (const auto& midiInputDevice : route.Trigger->MidiInputDevices())
-			{
-				if (!midiInputDevice.empty() && (activeMidiInputNames.find(midiInputDevice) == activeMidiInputNames.end()))
-				{
-					std::cout << "[MIDI] No active MIDI input matches loop-record device \""
-						<< midiInputDevice << "\" for trigger \"" << route.Trigger->Name() << "\"." << std::endl;
-				}
-			}
-		}
-	}
-
-	_PublishMidiTriggerRoutes();
-
-	if (midiInputs->empty())
-		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
-
+	_midiRouter.InitMidi(_userConfig, _loggingConfig, _audioSampleCounter, _midiAnchorMicros);
 }
 
 void Scene::CloseMidi()
 {
-	for (auto& route : _midiTriggerRoutes)
-		route.DeviceSlot = UnresolvedMidiDeviceSlot;
-	_PublishMidiTriggerRoutes();
-
-	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
-	if (!midiInputs)
-		return;
-
-	for (const auto& input : *midiInputs)
-	{
-		if (input && input->Device)
-			input->Device->Close();
-	}
+	_midiRouter.CloseMidi();
 }
 
 void Scene::InitSerial()
 {
-	CloseSerial();
-	{
-		std::scoped_lock lock(_serialIngressMutex);
-		_serialIngress.Clear();
-	}
-	_lastSerialDropCount = 0u;
-
-	if (_userConfig.Serial.Devices.empty())
-		return;
-
-	auto availablePorts = io::SerialDevice::EnumeratePorts();
-	std::cout << "[Serial] Ports found: " << availablePorts.size() << std::endl;
-	for (const auto& port : availablePorts)
-		std::cout << "[Serial]   " << port << std::endl;
-
-	unsigned int activeConnections = 0u;
-	for (const auto& serialConfig : _userConfig.Serial.Devices)
-	{
-		if (!serialConfig.Enabled)
-		{
-			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" disabled by rig settings." << std::endl;
-			continue;
-		}
-
-		if (serialConfig.Port.empty())
-		{
-			std::cout << "[Serial] Device \"" << serialConfig.Name << "\" has no port configured." << std::endl;
-			continue;
-		}
-
-		auto serialDevice = std::make_unique<io::SerialDevice>();
-		auto opened = serialDevice->Open(
-			serialConfig.Name,
-			serialConfig.Port,
-			serialConfig.BaudRate,
-			[this](const io::SerialTriggerEvent& event)
-			{
-				std::scoped_lock lock(_serialIngressMutex);
-				_serialIngress.Push(event);
-			});
-
-		if (!opened)
-			continue;
-
-		_serialDevices.push_back(std::move(serialDevice));
-		activeConnections++;
-	}
-
-	if (0u == activeConnections)
-		std::cout << "[Serial] No active serial trigger connections." << std::endl;
+	_midiRouter.InitSerial(_userConfig);
 }
 
 void Scene::CloseSerial()
 {
-	for (auto& serialDevice : _serialDevices)
-	{
-		if (serialDevice)
-			serialDevice->Close();
-	}
-
-	_serialDevices.clear();
-	{
-		std::scoped_lock lock(_serialIngressMutex);
-		_serialIngress.Clear();
-	}
+	_midiRouter.CloseSerial();
 }
 
 void Scene::CloseAudio()
@@ -1625,7 +1272,7 @@ void Scene::CloseAudio()
 
 	std::scoped_lock lock(_audioMutex);
 
-	_ninjamSession->Stop();
+	_ninjamController.Stop();
 
 	_audioDevice->Stop();
 }
@@ -1643,15 +1290,7 @@ void Scene::CommitChanges()
 {
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
-	std::optional<io::NinjamRemoteSnapshot> pendingRemoteSnapshot;
-	{
-		std::scoped_lock snapshotLock(_remoteSnapshotMutex);
-		if (_pendingRemoteSnapshot.has_value())
-		{
-			pendingRemoteSnapshot = std::move(_pendingRemoteSnapshot.value());
-			_pendingRemoteSnapshot.reset();
-		}
-	}
+	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _ninjamController.TakePendingSnapshot();
 
 	{
 		std::scoped_lock lock(_audioMutex);
@@ -1713,33 +1352,17 @@ void Scene::CommitChanges()
 
 void Scene::SendNinjamChat(const std::string& msg)
 {
-	if (_ninjamSession)
-		_ninjamSession->SendChat(msg);
+	_ninjamController.SendChat(msg);
 }
 
 void Scene::ConnectNinjam(const std::string& host)
 {
-	if (!_ninjamSession)
-		return;
-
-	io::JamFile::NinjamConfig config;
-	if (_ninjamConfig.has_value())
-		config = _ninjamConfig.value();
-
-	config.Host = host;
-	_ninjamConfig = config;
-
-	std::cout << "[NINJAM] Connecting to " << host << std::endl;
-	_ninjamSession->Start(config);
+	_ninjamController.Connect(host);
 }
 
 void Scene::DisconnectNinjam()
 {
-	if (!_ninjamSession)
-		return;
-
-	std::cout << "[NINJAM] Disconnecting" << std::endl;
-	_ninjamSession->Stop();
+	_ninjamController.Disconnect();
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -1841,7 +1464,7 @@ void Scene::_OnAudio(float* inBuf,
 	_channelMixer->Source()->EndMultiPlay(numSamps);
 
 	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-	_ninjamSession->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
+	_ninjamController.ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
 		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
@@ -1851,7 +1474,7 @@ void Scene::_OnAudio(float* inBuf,
 		const float* left = nullptr;
 		const float* right = nullptr;
 		unsigned int frameCount = 0u;
-		if (_ninjamSession->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+		if (_ninjamController.ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
 		{
 			auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
 			station->IngestStereoBlock(left, right, ingestFrames);
@@ -2065,7 +1688,7 @@ glm::mat4 Scene::_View()
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
 	station->SetLogging(_loggingConfig);
-	station->SetClock(_clock);
+	station->SetClock(_quantisation.Clock());
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_channelMixer->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
@@ -2083,56 +1706,20 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
 {
-	_clock->SetQuantisation(quantiseSamps, quantisation);
-	_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
-	_SetMidiQuantisationGrain(quantiseSamps, "scene quantisation set");
+	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
+	_quantisation.Set(quantiseSamps, quantisation);
+	_quantisation.SetMidiGrain(quantiseSamps, "scene quantisation set", _stations);
 }
 
 void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
 {
-	unsigned int takeCount = 0u;
-	for (const auto& station : _stations)
-	{
-		if (!station)
-			continue;
-
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (!take)
-				continue;
-
-			MidiQuantisationSettings settings = take->MidiQuantisation();
-			if (settings.GrainSamps != grainSamps)
-			{
-				settings.GrainSamps = grainSamps;
-				take->SetMidiQuantisation(settings);
-			}
-			++takeCount;
-		}
-	}
-
-	if (_loggingConfig.Ui == "verbose")
-	{
-		std::cout << "MIDI quantisation grain update: source=" << source
-			<< " grain=" << grainSamps
-			<< " takes=" << takeCount << '\n';
-	}
+	_quantisation.SetMidiGrain(grainSamps, source, _stations);
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	if (_clock)
-		_clock->Clear();
-	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
-	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
-	_hasPendingTempo.store(false, std::memory_order_release);
-	_SetMidiQuantisationGrain(0u, "timing clear");
-
-	if (clearTapTempo)
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		_tapTempo.Clear();
-	}
+	_quantisation.Clear(clearTapTempo);
+	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
 }
 
 void Scene::_ResetIfEmpty()
@@ -2205,7 +1792,7 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
-void Scene::_UpdateRemoteStationsFromSnapshot(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
 	std::set<std::string> seenUsers;
 
@@ -2333,172 +1920,62 @@ std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 
 void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source)
 {
-	if (!_clock || (timing.SeedSamps == 0u))
-		return;
-
-	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
-	_clock->SetQuantisation(timing.SeedSamps, quantisation);
-	_clock->SetSeedSourceLength(timing.MasterLoopSamps);
-
-	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
-	_SetMidiQuantisationGrain(timing.SeedSamps, source);
-	_hasPendingTempo.store((timing.Bpm > 0.0f) && (timing.Bpi > 0u), std::memory_order_release);
-	_armReclock.store(false, std::memory_order_release);
-
-	std::cout << "Quantisation " << source
-		<< ": seed=" << timing.SeedSamps
-		<< " master=" << timing.MasterLoopSamps
-		<< " seeds=" << timing.SeedCount
-		<< " bpm=" << timing.Bpm
-		<< " bpi=" << timing.Bpi << std::endl;
+	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
+	_quantisation.ApplyTiming(timing, source);
+	_quantisation.SetMidiGrain(timing.SeedSamps, source, _stations);
 }
 
 bool Scene::_HandleTapTempo(Time actionTime)
 {
-	const auto sampleRate = _CurrentSampleRate();
-
-	std::optional<QuantisationTiming> timing;
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		const auto masterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
-		if (masterLoopLengthSamps == 0ul)
-		{
-			std::cout << "Tap tempo: no master loop, tap ignored" << std::endl;
-			return true;
-		}
-		timing = _tapTempo.TapAtSample(_EstimatedAudioSampleAt(actionTime),
-			sampleRate,
-			masterLoopLengthSamps,
-			_QuantisationPolicy());
-	}
-
-	if (!timing.has_value())
-	{
-		std::cout << "Tap tempo: first tap" << std::endl;
-		return true;
-	}
-
-	_ApplyQuantisationTiming(timing.value(), "tap tempo");
-	_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
-	return true;
+	const auto handled = _quantisation.HandleTapTempo(_EstimatedAudioSampleAt(actionTime),
+		_CurrentSampleRate(),
+		_stations,
+		_userConfig);
+	if (handled)
+		_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
+	return handled;
 }
 
 void Scene::_PulseQuantisationOverlay()
 {
-	// CAS loop: write the current timestamp unless the overlay is held at
-	// full alpha, so a job-thread pulse cannot override an active Ctrl-hold.
-	auto expected = _quantisationOverlayState.load(std::memory_order_relaxed);
-	do {
-		if (expected == OverlayHeld) return;
-	} while (!_quantisationOverlayState.compare_exchange_weak(
-		expected,
-		Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release,
-		std::memory_order_relaxed));
+	_quantisation.PulseOverlay();
 }
 
 void Scene::_SetQuantisationOverlayHeld(bool held)
 {
-	_quantisationOverlayState.store(
-		held ? OverlayHeld : Timer::GetTime().time_since_epoch().count(),
-		std::memory_order_release);
+	_quantisation.SetOverlayHeld(held);
 }
 
 float Scene::_QuantisationOverlayAlpha(Time now) const
 {
-	const auto state = _quantisationOverlayState.load(std::memory_order_acquire);
-	if (state == OverlayHeld)
-		return 1.0f;
-	if (state == OverlayInactive)
-		return 0.0f;
-	const auto lastActive = Time(Time::duration(state));
-	const auto elapsed = Timer::GetElapsedSeconds(lastActive, now);
-	if (elapsed >= QuantisationOverlayFadeSeconds)
-		return 0.0f;
-	return static_cast<float>(1.0 - (elapsed / QuantisationOverlayFadeSeconds));
+	return _quantisation.OverlayAlpha(now);
 }
 
 void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 {
-	for (const auto& station : _stations)
-	{
-		if (station)
-			station->SetQuantisationOverlayAlpha(alpha);
-	}
+	_quantisation.ApplyOverlayAlpha(alpha, _stations);
 }
 
 bool Scene::_TrySetMasterFromHover(bool confirm)
 {
-	auto hovering = _ChildFromPath(_selector->CurrentHover());
-	if (!hovering)
-		return false;
-
-	const auto depth = _selector->CurrentSelectDepth();
-	const auto target = _ResolveInteractionTarget(hovering, depth);
-	const auto masterLength = target ? target->MasterLength : 0ul;
-	if (masterLength == 0ul)
-		return false;
-
-	auto timing = DeduceSeedTiming(masterLength, _CurrentSampleRate(), _QuantisationPolicy());
-	if (!timing.has_value())
-		return false;
-
-	_masterLoop = target->RepresentativeLoop;
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		_masterLoopLengthSamps.store(masterLength, std::memory_order_release);
-		_tapTempo.Clear();
-	}
-	_ApplyQuantisationTiming(timing.value(), "master loop");
-	if (_clock && _masterLoop)
-		_clock->SetMasterLoopIndexFrac(_masterLoop->LoopIndexFrac());
-	_UpdateStationQuantisation(hovering, depth, confirm);
-
-	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
-		<< " length=" << masterLength << std::endl;
-	return true;
+	return _quantisation.TrySetMasterFromHover(_ChildFromPath(_selector->CurrentHover()),
+		_selector->CurrentSelectDepth(),
+		_stations,
+		_CurrentSampleRate(),
+		_userConfig,
+		confirm);
 }
 
 void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate,
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_ClearStationQuantisation();
-
-	if (!_clock || !_clock->IsQuantisable())
-		return;
-
-	const auto seed = _clock->QuantiseSamps();
-	const auto masterLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
-	const auto master = masterLengthSamps > 0ul ? static_cast<unsigned int>(masterLengthSamps) : seed;
-	if (_masterLoop)
-	{
-		auto masterTarget = _ResolveInteractionTarget(_masterLoop, base::SelectDepth::DEPTH_LOOP);
-		if (masterTarget && masterTarget->Station)
-			masterTarget->Station->SetQuantisationParams(QuantisationParams{
-				seed,
-				master
-			}, false);
-	}
-
-	if (!candidate)
-		return;
-
-	const auto candidateTarget = _ResolveInteractionTarget(candidate, depth);
-	if (!candidateTarget || candidateTarget->MasterLength == 0ul)
-		return;
-
-	if (candidateTarget->Station)
-		candidateTarget->Station->SetQuantisationParams(QuantisationParams{
-			seed,
-			static_cast<unsigned int>(candidateTarget->MasterLength)
-		}, confirmCandidate);
+	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, _stations);
 }
 
 void Scene::_ClearStationQuantisation()
 {
-	for (const auto& station : _stations)
-		station->ClearQuantisationParams();
+	_quantisation.ClearStationHints(_stations);
 }
 
 std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
@@ -2509,46 +1986,46 @@ std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
 		return std::nullopt;
 
 	InteractionTarget resolved;
-	resolved.Station = std::dynamic_pointer_cast<Station>(target);
-	resolved.Take = std::dynamic_pointer_cast<LoopTake>(target);
-	resolved.TargetLoop = std::dynamic_pointer_cast<Loop>(target);
+	resolved.StationRef = std::dynamic_pointer_cast<Station>(target);
+	resolved.TakeRef = std::dynamic_pointer_cast<LoopTake>(target);
+	resolved.LoopRef = std::dynamic_pointer_cast<Loop>(target);
 
 	switch (depth)
 	{
 	case base::SelectDepth::DEPTH_STATION:
-		if (!resolved.Station)
+		if (!resolved.StationRef)
 			return std::nullopt;
 		return resolved;
 	case base::SelectDepth::DEPTH_LOOPTAKE:
 	{
-		if (!resolved.Take)
+		if (!resolved.TakeRef)
 			return std::nullopt;
 
 		for (const auto& station : _stations)
 		{
 			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), resolved.Take) != takes.end())
+			if (std::find(takes.begin(), takes.end(), resolved.TakeRef) != takes.end())
 			{
-				resolved.Station = station;
+				resolved.StationRef = station;
 				break;
 			}
 		}
 
-		for (const auto& loop : resolved.Take->GetLoops())
+		for (const auto& loop : resolved.TakeRef->GetLoops())
 		{
 			if (!loop)
 				continue;
 
-			if (!resolved.RepresentativeLoop || (loop->LoopLength() > resolved.RepresentativeLoop->LoopLength()))
-				resolved.RepresentativeLoop = loop;
-			resolved.MasterLength = std::max(resolved.MasterLength, loop->LoopLength());
+			if (!resolved.RepresentativeLoopRef || (loop->LoopLength() > resolved.RepresentativeLoopRef->LoopLength()))
+				resolved.RepresentativeLoopRef = loop;
+			resolved.MasterLengthSamps = std::max(resolved.MasterLengthSamps, loop->LoopLength());
 		}
 
 		return resolved;
 	}
 	case base::SelectDepth::DEPTH_LOOP:
 	{
-		if (!resolved.TargetLoop)
+		if (!resolved.LoopRef)
 			return std::nullopt;
 
 		for (const auto& station : _stations)
@@ -2556,12 +2033,12 @@ std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
 			for (const auto& take : station->GetLoopTakes())
 			{
 				const auto& loops = take->GetLoops();
-				if (std::find(loops.begin(), loops.end(), resolved.TargetLoop) != loops.end())
+				if (std::find(loops.begin(), loops.end(), resolved.LoopRef) != loops.end())
 				{
-					resolved.Station = station;
-					resolved.Take = take;
-					resolved.RepresentativeLoop = resolved.TargetLoop;
-					resolved.MasterLength = resolved.TargetLoop->LoopLength();
+					resolved.StationRef = station;
+					resolved.TakeRef = take;
+					resolved.RepresentativeLoopRef = resolved.LoopRef;
+					resolved.MasterLengthSamps = resolved.LoopRef->LoopLength();
 					return resolved;
 				}
 			}
@@ -2588,16 +2065,16 @@ std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets
 		switch (depth)
 		{
 		case base::SelectDepth::DEPTH_STATION:
-			if (!resolved->Station)
+			if (!resolved->StationRef)
 				return;
-			for (const auto& take : resolved->Station->GetLoopTakes())
+			for (const auto& take : resolved->StationRef->GetLoopTakes())
 				AppendUniqueTarget(targets, take);
 			break;
 		case base::SelectDepth::DEPTH_LOOPTAKE:
-			AppendUniqueTarget(targets, resolved->Take);
+			AppendUniqueTarget(targets, resolved->TakeRef);
 			break;
 		case base::SelectDepth::DEPTH_LOOP:
-			AppendUniqueTarget(targets, resolved->Take);
+			AppendUniqueTarget(targets, resolved->TakeRef);
 			break;
 		default:
 			break;
@@ -2645,152 +2122,20 @@ std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets
 	return targets;
 }
 
-void Scene::_ApplyRemoteTempoToClock(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
-	if (!_clock || !snapshot.HasTiming)
-		return;
-
-	// Don't override quantisation while a one-shot reclock is armed -
-	// the next recording will establish the new quantisation.
-	if (_armReclock.load(std::memory_order_acquire))
-		return;
-
-	if (_hasPendingTempo.load(std::memory_order_acquire))
-		return;
-
-	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
-	if (intervalLengthSamps == 0u)
-	{
-		intervalLengthSamps = IntervalSampsFromTempo(snapshot.Bpm,
-			static_cast<unsigned int>(snapshot.Bpi),
-			snapshot.SampleRate);
-	}
-
-	const auto tempoChanged = (intervalLengthSamps != _remoteMasterLoopSamps)
-		|| (snapshot.SampleRate != _remoteSampleRate);
-
-	if (!tempoChanged && (_effectiveQuantiseSamps.load(std::memory_order_acquire) != 0u) && _clock->IsQuantisable())
-		return;
-
-	const auto timing = _userConfig.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
-	if (!timing.has_value() || (timing->GrainSamps == 0u))
-		return;
-
-	_remoteMasterLoopSamps = intervalLengthSamps;
-	_remoteSampleRate = snapshot.SampleRate;
-	_effectiveQuantiseSamps.store(timing->GrainSamps, std::memory_order_release);
-	_masterLoopLengthSamps.store(static_cast<unsigned long>(intervalLengthSamps), std::memory_order_release);
-	{
-		std::scoped_lock tapTempoLock(_tapTempoMutex);
-		_tapTempo.Clear();
-	}
-
-	const auto quantisation = _userConfig.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE;
-	_clock->SetQuantisation(timing->GrainSamps, quantisation);
-	_clock->SetSeedSourceLength(intervalLengthSamps);
-	if (intervalLengthSamps > 0u)
-	{
-		auto loopIndexFrac = 1.0;
-		if (snapshot.IntervalPositionSamps > 0u)
-		{
-			const auto intervalPos = snapshot.IntervalPositionSamps % intervalLengthSamps;
-			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(intervalLengthSamps));
-		}
-		_clock->SetMasterLoopIndexFrac(loopIndexFrac);
-	}
-
-	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
-		<< " bpi=" << snapshot.Bpi
-		<< " sr=" << snapshot.SampleRate
-		<< " intervalSamps=" << intervalLengthSamps
-		<< " mode=" << (_userConfig.Loop.SeedUsesPowers ? "power" : "multiple")
-		<< " grain=" << timing->GrainSamps << std::endl;
+	_quantisation.ApplyRemoteTempo(snapshot, _stations, _userConfig);
 }
 
 void Scene::_QueueLocalTempoFromClock()
 {
-	if (!_clock || !_clock->IsQuantisable())
-		return;
-
-	const auto quantiseSamps = _clock->QuantiseSamps();
-	const auto previousQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
-	if ((0u == quantiseSamps) || (quantiseSamps == previousQuantiseSamps))
-		return;
-
-	const auto shouldPulseOverlay = (0u == previousQuantiseSamps);
-
-	const auto seedLoopLengthSamps = _clock->SeedSourceLength();
-	if (seedLoopLengthSamps == 0u)
-	{
-		_effectiveQuantiseSamps.store(quantiseSamps, std::memory_order_release);
-		_armReclock.store(false, std::memory_order_release);
-		if (shouldPulseOverlay)
-			_PulseQuantisationOverlay();
-		return;
-	}
-
-	auto sampleRate = _remoteSampleRate;
-	if (sampleRate == 0u)
-		sampleRate = _audioDevice ? _audioDevice->GetAudioStreamParams().SampleRate : 0u;
-	if (sampleRate == 0u)
-		sampleRate = _userConfig.Audio.SampleRate;
-	if (sampleRate == 0u)
-	{
-		return;
-	}
-
-	const auto timing = _userConfig.DeduceLoopTiming(seedLoopLengthSamps, sampleRate);
-	if (!timing.has_value())
-	{
-		return;
-	}
-
-	_effectiveQuantiseSamps.store(timing->GrainSamps, std::memory_order_release);
-	_masterLoopLengthSamps.store(seedLoopLengthSamps, std::memory_order_release);
-	_hasPendingTempo.store(true, std::memory_order_release);
-	_armReclock.store(false, std::memory_order_release);
-	if (shouldPulseOverlay)
-		_PulseQuantisationOverlay();
-
-	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
-		<< " bpi=" << timing->Bpi
-		<< " grain=" << timing->GrainSamps
-		<< " seedLoopLength=" << seedLoopLengthSamps
-		<< " (queued for next interval boundary)" << std::endl;
+	_quantisation.QueueLocalTempo(_quantisation.RemoteSampleRate(), _CurrentSampleRate(), _userConfig);
 }
 
-void Scene::_SendQueuedTempoAtIntervalWrap(const io::NinjamRemoteSnapshot& snapshot)
+void Scene::_SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
-	// Detect interval wrap from the latest remote snapshot.
-	const auto pos = snapshot.IntervalPositionSamps;
-	const bool wrapped = (pos < _lastRemoteIntervalPos);
-	_lastRemoteIntervalPos = pos;
-
-	if (!_hasPendingTempo.load(std::memory_order_acquire))
-		return;
-
-	if (!_ninjamSession || !_ninjamSession->IsConnected())
-		return;
-
-	if (!wrapped)
-		return;
-
-	// Derive BPM/BPI on demand from current seed and master lengths.
-	auto sampleRate = _remoteSampleRate;
-	if (sampleRate == 0u)
-		sampleRate = _audioDevice ? _audioDevice->GetAudioStreamParams().SampleRate : 0u;
-	if (sampleRate == 0u)
-		sampleRate = _userConfig.Audio.SampleRate;
-
-	const auto qtOpt = engine::TimingFromSeedAndMaster(
-		_effectiveQuantiseSamps.load(std::memory_order_acquire),
-		_masterLoopLengthSamps.load(std::memory_order_acquire),
-		sampleRate);
-	if (!qtOpt.has_value() || (qtOpt->Bpm <= 0.0f) || (qtOpt->Bpi == 0u))
-		return;
-
-	if (_ninjamSession->RequestServerTempo(qtOpt->Bpm, static_cast<int>(qtOpt->Bpi)))
-	{
-		_hasPendingTempo.store(false, std::memory_order_release);
-	}
+	_quantisation.SendQueuedTempo(snapshot,
+		_ninjamController.Session(),
+		_quantisation.RemoteSampleRate(),
+		_CurrentSampleRate());
 }

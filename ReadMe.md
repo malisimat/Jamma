@@ -4,7 +4,7 @@
 
 Multichannel loopsampling software for recording and live performance.
 
-![JammaV_Screenshot](https://user-images.githubusercontent.com/24556021/69101042-76834100-0a56-11ea-9340-a9e192fb5430.gif)
+![JammaV_Screenshot](https://github-production-user-asset-6210df.s3.amazonaws.com/172774419/606049963-08fd0f48-8f11-495a-83e8-f19a0cad3f1b.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260610%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260610T205856Z&X-Amz-Expires=300&X-Amz-Signature=f4e94adf8d931e0c9b1eb3a66073533e202d646cfd62b83fe36cfd1ae235cdf4&X-Amz-SignedHeaders=host&response-content-type=image%2Fpng)
 
 Current Version: v5.0.2
 
@@ -24,135 +24,13 @@ Current Version: v5.0.2
 * Windows (support for other operating systems planned after beta)
 * A soundcard, ideally with more than 2 channels in/out
 
-## Building
+## Documentation and Guides
 
-### Prerequisites
+Detailed guides on setup, building, testing, and advanced configurations live in the [doc](doc) folder:
 
-- Visual Studio 2022 with C++ desktop development tools
-- Windows SDK 10.0
+- **[Build and Test Guide](doc/build.md)**: Prerequisites, vcpkg dependencies, target builds, and troubleshooting steps.
+- **[Real-Time Audio Guidance](doc/realtime-audio.md)**: Guidelines for working within real-time constraints and the hot-path review checklist.
+- **[Multi-Device MIDI Trigger Rig Config](doc/midi-trigger-mapping.md)**: Rig file mapping for multiple MIDI devices, channels, and activation mappings.
+- **[Ninjam Integration Guide](doc/ninjam.md)**: Vendored files structure, reference dependencies, and update steps.
+- **[VS Code Tasks Setup](doc/vscode-tasks.example.json)**: Local configurations for automating MSBuild.
 
-### Setup (First Time or Fresh Worktree)
-
-Before building, install dependencies with vcpkg from the repository root:
-
-```powershell
-vcpkg integrate install
-vcpkg install
-```
-
-This project uses `vcpkg.json` manifest mode to install dependencies (including Google Test).
-
-Windows builds also compile VST3 hosting support by default via the `vst3sdk` vcpkg dependency declared in `vcpkg.json`.
-
-### Build
-
-Use the Visual Studio build tasks in VS Code or MSBuild directly. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed build commands and project targets.
-
-Direct `*.vcxproj` builds now inherit `$(SolutionDir)` from [Directory.Build.props](Directory.Build.props), so running MSBuild against an individual project from the repo root no longer needs a manual `/p:SolutionDir=...` workaround.
-
-### Troubleshooting: tests crash silently on startup
-
-If `JammaLib_Tests.exe` exits immediately with code 1 and no output, the Debug output dir likely has stale Release `gtest.dll`/`gtest_main.dll` (a known MSBuild up-to-date skip issue). Fix by copying the correct debug DLLs:
-
-```powershell
-$src = ".\vcpkg_installed\x64-windows\debug\bin"
-$dst = ".\test\JammaLib_Tests\bin\x64\Debug"
-Copy-Item "$src\gtest.dll"      "$dst\gtest.dll"      -Force
-Copy-Item "$src\gtest_main.dll" "$dst\gtest_main.dll" -Force
-```
-
-After copying, `gtest.dll` should be ~1.8 MB (the Release version is ~448 KB).
-
-## Multi-Device MIDI Trigger Rig Config
-
-Rig files can map station triggers to MIDI Note or CC input and can record MIDI loops from multiple configured MIDI devices at the same time.
-
-- `user.midi.devices` lists the MIDI inputs Jamma should open.
-- `triggers[].trigger.device` selects the single device that controls trigger activation and ditch.
-- `triggers[].midiinput` controls which one-based MIDI channels are recorded into MIDI loops.
-- `triggers[].midiinputdevices` controls which MIDI devices are recorded into MIDI loops.
-
-Example:
-
-```json
-{
-	"name": "rig",
-	"user": {
-		"audio": { "name": "HDMI", "bufsize": 255, "inlatency": 414, "outlatency": 414, "numchannelsin": 0, "numchannelsout": 10 },
-		"midi": {
-			"devices": [
-				{ "name": "TriggerPad", "enabled": true },
-				{ "name": "Keys A", "enabled": true },
-				{ "name": "Keys B", "enabled": true }
-			]
-		}
-	},
-	"triggers": [
-		{
-			"name": "Trig1",
-			"stationtype": 0,
-			"midiinput": [1],
-			"midiinputdevices": ["Keys A", "Keys B"],
-			"trigger": {
-				"type": "midi",
-				"device": "TriggerPad",
-				"activate": { "kind": "note", "channel": 1, "id": 60 },
-				"ditch": { "kind": "cc", "channel": 1, "id": 64 }
-			}
-		}
-	]
-}
-```
-
-Notes:
-
-- `device` may match one of the names in `user.midi.devices` if the same controller should both play/record MIDI loops and trigger recording.
-- Device names are matched exactly. Startup logs report trigger devices or loop-record devices that do not match an active MIDI input.
-- `channel` is one-based in the rig file. If omitted, the mapping matches any MIDI channel.
-- `kind` supports `note`, `noteoff`, and `cc`.
-- `note` (aliases: `noteon`, `note-on`, `note on`) uses Note On as press and Note Off or Note On with velocity 0 as release.
-- `noteoff` (aliases: `note-off`, `note off`) triggers on Note Off and releases on Note On—the inverse of `note`.
-- `cc` uses values greater than 0 as press and `0` as release.
-- Velocity is ignored for trigger purposes.
-
-### Ninjam Integration
-
-Jamma now uses vendored Ninjam client files under `lib/`:
-
-- Header include root: `lib\njclient\njclient.h`
-- x64 Debug lib: `lib\njclient\x64\Debug\MD\njclient.lib`
-- x64 Release lib: `lib\njclient\x64\Release\MD\njclient.lib`
-
-You do **not** need `Directory.Build.local.props` for Ninjam paths anymore.
-
-### Refreshing Vendored Ninjam Files (Only When Updating Them)
-
-You only need this step when you intentionally update the vendored Ninjam artifacts.
-
-1. Build Ninjam in the other repo for `x64` `Debug` and `Release` (`MD` runtime).
-2. Copy updated headers/libs into this repo:
-
-```powershell
-$ninjam = "C:\Users\<you>\Source\Repos\NinjamLib\ninjam"
-
-Copy-Item "$ninjam\ninjam\njclient.h" ".\lib\njclient\njclient.h" -Force
-
-Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.lib" ".\lib\njclient\x64\Debug\MD\njclient.lib" -Force
-Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.pdb" ".\lib\njclient\x64\Debug\MD\njclient.pdb" -Force
-Copy-Item "$ninjam\bin\x64\Debug\MD\njclient.idb" ".\lib\njclient\x64\Debug\MD\njclient.idb" -Force
-Copy-Item "$ninjam\bin\x64\Release\MD\njclient.lib" ".\lib\njclient\x64\Release\MD\njclient.lib" -Force
-```
-
-### Troubleshooting: Ninjam include/link errors
-
-If you see errors like:
-
-- `Cannot open include file: 'njclient.h'`
-- linker errors for `njclient.lib`
-
-verify the vendored files above exist in `lib\njclient`.
-
-Required Ninjam-related link dependencies:
-- `njclient.lib` from `lib\njclient\x64\...`
-- `ogg.lib`, `vorbis.lib`, `vorbisenc.lib`, `vorbisfile.lib` (provided via vcpkg)
-- `ws2_32.lib` (Windows SDK)

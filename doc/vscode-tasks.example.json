@@ -1,0 +1,118 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build JammaLib (Debug x64)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\JammaLib\\JammaLib.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build Jamma (Debug x64)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\Jamma\\Jamma.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build JammaLib_Tests (Debug x64)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\test\\JammaLib_Tests\\JammaLib_Tests.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Run JammaLib_Tests",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& \"${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe\""
+      ],
+      "dependsOn": "Build JammaLib_Tests (Debug x64)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Run JammaLib_Tests (filtered)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& \"${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe\" --gtest_filter=\"${input:gtestFilter}\""
+      ],
+      "dependsOn": "Build JammaLib_Tests (Debug x64)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Build Solution (Debug x64)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\Jamma.sln\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$msCompile"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "gtestFilter",
+      "type": "promptString",
+      "description": "GoogleTest filter, for example StationTests.*",
+      "default": "SuiteName.TestName"
+    }
+  ]
+}

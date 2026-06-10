@@ -200,8 +200,8 @@
     <ClInclude Include="src\engine\Scene.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
-    <ClInclude Include="src\engine\NinjamSession.h">
-      <Filter>src\engine</Filter>
+    <ClInclude Include="src\ninjam\NinjamSession.h">
+      <Filter>src\ninjam</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\InterpolatedValue.h">
       <Filter>src\audio</Filter>
@@ -398,8 +398,8 @@
     <ClInclude Include="src\io\ConsoleTui.h">
       <Filter>src\io</Filter>
     </ClInclude>
-    <ClInclude Include="src\io\NinjamConnection.h">
-      <Filter>src\io</Filter>
+    <ClInclude Include="src\ninjam\NinjamConnection.h">
+      <Filter>src\ninjam</Filter>
     </ClInclude>
     <ClInclude Include="src\io\TextReadWriter.h">
       <Filter>src\io</Filter>
@@ -563,13 +563,13 @@
       <Filter>src\utils</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Shader.cpp">
-      <Filter>src\resources</Filter>
-    </ClCompile>
-    <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
-    <ClCompile Include="src\engine\NinjamSession.cpp">
+    <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamSession.cpp">
+      <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\InterpolatedValue.cpp">
       <Filter>src\audio</Filter>
@@ -700,11 +700,11 @@
     <ClCompile Include="src\io\ConsoleTui.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
-    <ClCompile Include="src\io\NinjamConnection.cpp">
-      <Filter>src\io</Filter>
+    <ClCompile Include="src\ninjam\NinjamConnection.cpp">
+      <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Camera.cpp">
-      <Filter>src\engine</Filter>
+      <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\io\UserConfig.cpp">
       <Filter>src\io</Filter>

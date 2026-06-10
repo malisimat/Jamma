@@ -175,25 +175,13 @@ public:
 		const std::shared_ptr<Trigger>& trigger,
 		std::uint8_t deviceSlot)
 	{
-		_RegisterMidiTriggerRoute(deviceName, trigger);
-		_midiTriggerRoutes.back().DeviceSlot = deviceSlot;
-		_PublishMidiTriggerRoutes();
+		_midiRouter.RegisterTriggerForTest(deviceName, trigger, deviceSlot);
 	}
 
 	void AddMidiInputDeviceForTest(const std::string& deviceName,
 		std::uint8_t deviceSlot)
 	{
-		auto currentInputs = _midiInputs.load(std::memory_order_acquire);
-		auto updatedInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
-		if (currentInputs)
-			updatedInputs->insert(updatedInputs->end(), currentInputs->begin(), currentInputs->end());
-
-		auto endpoint = std::make_shared<MidiInputEndpoint>();
-		endpoint->DeviceSlot = deviceSlot;
-		endpoint->ConfiguredName = deviceName;
-		updatedInputs->push_back(endpoint);
-
-		_midiInputs.store(updatedInputs, std::memory_order_release);
+		_midiRouter.AddMidiInputDeviceForTest(deviceName, deviceSlot);
 	}
 
 	void PushMainMidiEventForTest(std::uint8_t status,
@@ -201,11 +189,11 @@ public:
 		std::uint8_t data2,
 		unsigned int sampleRate = 0u)
 	{
-		auto inputs = _midiInputs.load(std::memory_order_acquire);
-		if (!inputs || inputs->empty())
+		(void)sampleRate;
+		if (!_midiRouter.HasMidiInputDeviceForTest(0u))
 			AddMidiInputDeviceForTest("default", 0u);
 
-		_PushMidiEvent(0u, status, data1, data2, sampleRate);
+		_midiRouter.PushMidiEventForTest(0u, status, data1, data2);
 	}
 
 	void PushMidiEventForTest(std::uint8_t deviceSlot,
@@ -214,7 +202,8 @@ public:
 		std::uint8_t data2,
 		unsigned int sampleRate = 0u)
 	{
-		_PushMidiEvent(deviceSlot, status, data1, data2, sampleRate);
+		(void)sampleRate;
+		_midiRouter.PushMidiEventForTest(deviceSlot, status, data1, data2);
 	}
 
 	void PumpMidiForTest()
@@ -225,7 +214,21 @@ public:
 	void DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
 		const midi::MidiEvent& event)
 	{
-		_DispatchMidiTriggerEvent(deviceSlot, event);
+		auto audioParams = _audioDevice ? _audioDevice->GetAudioStreamParams() : audio::AudioStreamParams{};
+		auto summary = _midiRouter.DispatchMidiTriggerEventForTest(deviceSlot, event, _userConfig, audioParams);
+		if (summary.Activated)
+			_isSceneReset.store(false, std::memory_order_relaxed);
+		if (summary.Ditched)
+		{
+			unsigned int totalNumTakes = 0u;
+			for (auto& station : _stations)
+			{
+				station->CommitChanges();
+				totalNumTakes += station->NumTakes();
+			}
+			if (0u == totalNumTakes)
+				Reset();
+		}
 	}
 
 	void PushSerialTriggerEventForTest(const std::string& deviceName,
@@ -237,9 +240,7 @@ public:
 		event.Device = &_testSerialDeviceName;
 		event.ButtonIndex = buttonIndex;
 		event.IsPressed = isPressed;
-
-		std::scoped_lock lock(_serialIngressMutex);
-		_serialIngress.Push(event);
+		_midiRouter.PushSerialTriggerEventForTest(event);
 	}
 
 	void PumpSerialForTest()

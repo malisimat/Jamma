@@ -17,7 +17,7 @@
 #include <unordered_set>
 #include "../utils/StringUtils.h"
 
-using namespace engine;
+using namespace ninjam;
 
 const std::array<const char*, 17> NinjamSession::_StaticServerHosts = {{
 	"ninjamer.com:2049",
@@ -347,7 +347,7 @@ NinjamSession::~NinjamSession()
 	Stop();
 }
 
-std::unique_ptr<io::NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
+std::unique_ptr<NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
 {
 	auto* published = _connection.exchange(nullptr, std::memory_order_acq_rel);
 	if (!published)
@@ -359,7 +359,7 @@ std::unique_ptr<io::NinjamConnection> NinjamSession::_UnpublishConnectionLocked(
 	return std::move(_ownedConnection);
 }
 
-io::NinjamConnection* NinjamSession::_AcquireConnectionUse() const noexcept
+NinjamConnection* NinjamSession::_AcquireConnectionUse() const noexcept
 {
 	while (true)
 	{
@@ -382,7 +382,7 @@ void NinjamSession::_ReleaseConnectionUse() const noexcept
 
 void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 {
-	std::unique_ptr<io::NinjamConnection> old;
+	std::unique_ptr<NinjamConnection> old;
 	{
 		std::scoped_lock lifecycleLock(_lifecycleMutex);
 		old = _UnpublishConnectionLocked();
@@ -393,7 +393,7 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	if (config.Host.empty() || config.User.empty())
 		return;
 
-	auto conn = std::make_unique<io::NinjamConnection>(
+	auto conn = std::make_unique<NinjamConnection>(
 		config.Host, config.User, config.Pass, config.WorkDir);
 
 	conn->SetAudioFormat(
@@ -417,7 +417,7 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 
 void NinjamSession::Stop()
 {
-	std::unique_ptr<io::NinjamConnection> old;
+	std::unique_ptr<NinjamConnection> old;
 	{
 		std::scoped_lock lifecycleLock(_lifecycleMutex);
 		old = _UnpublishConnectionLocked();
@@ -447,7 +447,7 @@ bool NinjamSession::IsConnected() const noexcept
 	return conn && conn->IsConnected();
 }
 
-std::optional<io::NinjamRemoteSnapshot> NinjamSession::Pump()
+std::optional<NinjamRemoteSnapshot> NinjamSession::Pump()
 {
 	NinjamConnectionUse conn(*this);
 	if (!conn)
