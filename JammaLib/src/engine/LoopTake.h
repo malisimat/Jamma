@@ -147,7 +147,8 @@ namespace engine
 		unsigned int NumBusChannels() const;
 		// Staging only — actual load/unload happens on the job thread after
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
-		void LoadVstPlugin(std::wstring path);
+		void LoadVstPlugin(std::wstring path,
+			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
 		void SetSampleRate(float sampleRate);
 		float GetSampleRate() const noexcept { return _sampleRate; }
@@ -307,7 +308,7 @@ namespace engine
 		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		std::vector<std::wstring> _pendingVstLoads;
+		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).

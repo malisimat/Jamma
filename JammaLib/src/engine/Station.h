@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -164,7 +165,11 @@ namespace engine
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
 		// is inserted at the end of the station's effect chain.
-		void LoadVstPlugin(std::wstring path);
+		// initialState — optional VST2 state blob (from IVstPlugin::GetState) to
+		// restore immediately after the plugin finishes loading.  Pass {} for
+		// normal interactive loads where no state needs to be restored.
+		void LoadVstPlugin(std::wstring path,
+			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
@@ -271,7 +276,8 @@ namespace engine
 
 		// Pending load/unload requests staged by LoadVstPlugin / UnloadVstPlugin.
 		// Read only on the job thread (from OnAction(JobAction)).
-		std::vector<std::wstring> _pendingVstLoads;
+		// Each entry carries the plugin path and an optional VST2 initial-state blob.
+		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.

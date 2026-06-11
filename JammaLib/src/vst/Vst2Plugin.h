@@ -105,6 +105,14 @@ namespace vst
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
 
+		// Capture or restore the plugin's full state as an opaque byte blob.
+		// The blob is self-describing: a 1-byte version, a 1-byte type flag
+		// (0 = param array, 1 = VST2 chunk), a 4-byte LE payload size, then
+		// the payload.  Returns {} when not loaded or state is unavailable.
+		// Not RT-safe; call from a non-RT thread only.
+		std::vector<std::uint8_t> GetState() const override;
+		void SetState(const std::vector<std::uint8_t>& blob) override;
+
 		static bool SupportsHostCanDo(const char* canDo) noexcept
 		{
 			if (!canDo) return false;

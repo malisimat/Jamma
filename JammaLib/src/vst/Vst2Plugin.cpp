@@ -559,3 +559,142 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	return 0;
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// State save / restore  (non-RT, job/UI thread only)
+// ---------------------------------------------------------------------------
+//
+// Blob layout:
+//   Byte 0   : format version (0x01)
+//   Byte 1   : type flag — 0 = param array, 1 = opaque VST2 chunk
+//   Bytes 2-5: payload size  (uint32, little-endian)
+//   Bytes 6+ : payload
+//
+// For the param path every parameter is stored as a little-endian float32.
+// For the chunk path the raw bytes returned by effGetChunk are stored as-is.
+// ---------------------------------------------------------------------------
+
+std::vector<std::uint8_t> Vst2Plugin::GetState() const
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (!_isLoaded || !_effect)
+		return {};
+
+	// --- Determine which path to use ----------------------------------
+	const bool supportsChunks = (_effect->flags & effFlagsProgramChunks) != 0;
+
+	std::vector<std::uint8_t> payload;
+	std::uint8_t typeFlag = 0;
+
+	if (supportsChunks)
+	{
+		// Path 1: opaque chunk (bank-level, index = 0)
+		void* chunkPtr = nullptr;
+		const auto chunkSize = _effect->dispatcher(
+			_effect, effGetChunk, /*bank=*/0, 0, &chunkPtr, 0.0f);
+
+		if (chunkSize > 0 && chunkPtr)
+		{
+			typeFlag = 1;
+			const auto* bytes = static_cast<const std::uint8_t*>(chunkPtr);
+			payload.assign(bytes, bytes + static_cast<size_t>(chunkSize));
+		}
+		else
+		{
+			// Plugin reported chunk support but returned nothing — bail out.
+			return {};
+		}
+	}
+	else
+	{
+		// Path 2: parameter array
+		const int numParams = _effect->numParams;
+		if (numParams <= 0)
+			return {};
+
+		typeFlag = 0;
+		payload.resize(static_cast<size_t>(numParams) * 4u);
+
+		for (int i = 0; i < numParams; ++i)
+		{
+			const float v = _effect->getParameter(_effect, i);
+			std::uint8_t bytes[4];
+			std::memcpy(bytes, &v, 4);
+			payload[static_cast<size_t>(i) * 4u + 0] = bytes[0];
+			payload[static_cast<size_t>(i) * 4u + 1] = bytes[1];
+			payload[static_cast<size_t>(i) * 4u + 2] = bytes[2];
+			payload[static_cast<size_t>(i) * 4u + 3] = bytes[3];
+		}
+	}
+
+	// --- Pack blob --------------------------------------------------------
+	const auto payloadSize = static_cast<std::uint32_t>(payload.size());
+	std::vector<std::uint8_t> blob;
+	blob.reserve(6 + payload.size());
+	blob.push_back(0x01);                                     // version
+	blob.push_back(typeFlag);                                 // type
+	blob.push_back(static_cast<std::uint8_t>(payloadSize & 0xFF));
+	blob.push_back(static_cast<std::uint8_t>((payloadSize >> 8)  & 0xFF));
+	blob.push_back(static_cast<std::uint8_t>((payloadSize >> 16) & 0xFF));
+	blob.push_back(static_cast<std::uint8_t>((payloadSize >> 24) & 0xFF));
+	blob.insert(blob.end(), payload.begin(), payload.end());
+
+	return blob;
+#else
+	return {};
+#endif
+}
+
+void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (!_isLoaded || !_effect || blob.size() < 6)
+		return;
+
+	// Unpack header
+	const std::uint8_t version  = blob[0];
+	const std::uint8_t typeFlag = blob[1];
+	const std::uint32_t payloadSize =
+		(static_cast<std::uint32_t>(blob[2]))       |
+		(static_cast<std::uint32_t>(blob[3]) << 8)  |
+		(static_cast<std::uint32_t>(blob[4]) << 16) |
+		(static_cast<std::uint32_t>(blob[5]) << 24);
+
+	if (version != 0x01)
+	{
+		std::cerr << "[Vst2Plugin] SetState: unknown blob version " << (int)version << std::endl;
+		return;
+	}
+
+	if (blob.size() < 6 + static_cast<size_t>(payloadSize))
+	{
+		std::cerr << "[Vst2Plugin] SetState: blob truncated" << std::endl;
+		return;
+	}
+
+	const std::uint8_t* payload = blob.data() + 6;
+
+	if (typeFlag == 1)
+	{
+		// Chunk path
+		_effect->dispatcher(_effect, effSetChunk, /*bank=*/0,
+			static_cast<VstIntPtr>(payloadSize),
+			const_cast<void*>(static_cast<const void*>(payload)),
+			0.0f);
+	}
+	else
+	{
+		// Param path
+		const int numParams = _effect->numParams;
+		const auto paramCount = static_cast<int>(payloadSize / 4);
+		for (int i = 0; i < (std::min)(numParams, paramCount); ++i)
+		{
+			float v = 0.0f;
+			std::memcpy(&v, payload + static_cast<size_t>(i) * 4u, 4);
+			_effect->setParameter(_effect, i, v);
+		}
+	}
+#else
+	(void)blob;
+#endif
+}

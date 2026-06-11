@@ -7,6 +7,7 @@
 
 #include "JamFile.h"
 #include <iomanip>
+#include "../utils/StringUtils.h"
 
 using namespace io;
 using audio::BehaviourParams;
@@ -212,9 +213,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	};
 
 	auto vstEntryToJson = [&](const JamFile::VstEntry& entry) -> std::string {
-		return "{" + kvStr("path", entry.Path)
+		std::string out = "{" + kvStr("path", entry.Path)
 			+ "," + kvBool("bypass", entry.Bypass)
-			+ "}";
+			+ "," + kvStr("state", entry.State);
+		out += "}";
+		return out;
 	};
 
 	auto vstChainToJson = [&](const std::vector<JamFile::VstEntry>& chain) -> std::string {
@@ -352,7 +355,24 @@ std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json
 			entry.Bypass = std::get<bool>(json.KeyValues["bypass"]);
 	}
 
+	iter = json.KeyValues.find("state");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["state"].index() == 4)
+			entry.State = std::get<std::string>(json.KeyValues["state"]);
+	}
+
 	return entry;
+}
+
+std::string JamFile::VstEntry::EncodeState(const std::vector<std::uint8_t>& blob)
+{
+	return utils::Base64Encode(blob);
+}
+
+std::vector<std::uint8_t> JamFile::VstEntry::DecodeState() const
+{
+	return utils::Base64Decode(State);
 }
 
 std::optional<JamFile::LoopMix> JamFile::LoopMix::FromJson(Json::JsonPart json)

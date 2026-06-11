@@ -234,14 +234,14 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		if (loop.has_value())
 		{
 			for (const auto& vstEntry : loopStruct.VstChain)
-				loop.value()->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
+				loop.value()->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
 
 			take->AddLoop(loop.value());
 		}
 	}
 
 	for (const auto& vstEntry : takeStruct.VstChain)
-		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
+		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
 
 	return take;
 }
@@ -675,6 +675,10 @@ ActionResult LoopTake::OnAction(JobAction action)
 			hostChannels = 1u;
 		if (plugin->Load(action.VstPath, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact))
 		{
+			// Restore saved state before adding to the chain.
+			if (!action.VstInitialState.empty())
+				plugin->SetState(action.VstInitialState);
+
 			newChain->AddPlugin(plugin);
 			{
 				std::lock_guard<std::mutex> lock(_vstPathsMutex);
@@ -1774,12 +1778,13 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 	}
 
 	auto pendingLoads = std::move(_pendingVstLoads);
-	for (auto& path : pendingLoads)
+	for (auto& [path, initialState] : pendingLoads)
 	{
 		JobAction job;
 		job.JobActionType = JobAction::JOB_LOADVST;
 		job.SourceId = Id();
 		job.VstPath = std::move(path);
+		job.VstInitialState = std::move(initialState);
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
@@ -2548,9 +2553,10 @@ void LoopTake::SetParentVisualScale(float scale) noexcept
 	_parentVisualScale = std::max(0.0f, scale);
 }
 
-void LoopTake::LoadVstPlugin(std::wstring path)
+void LoopTake::LoadVstPlugin(std::wstring path,
+	std::vector<std::uint8_t> initialState)
 {
-	_pendingVstLoads.push_back(std::move(path));
+	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
 }
 
@@ -2572,14 +2578,28 @@ std::shared_ptr<vst::IVstPlugin> LoopTake::GetVstPlugin(size_t index) const
 std::vector<io::JamFile::VstEntry> LoopTake::VstEntries() const
 {
 	std::vector<io::JamFile::VstEntry> entries;
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
 	entries.reserve(_vstPluginPaths.size());
 
-	for (const auto& path : _vstPluginPaths)
+	for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
 	{
 		io::JamFile::VstEntry entry;
-		entry.Path = utils::EncodeUtf8(path);
+		entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
 		entry.Bypass = false;
+
+		if (chain && i < chain->NumPlugins())
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+			{
+				auto blob = plugin->GetState();
+				if (!blob.empty())
+					entry.State = io::JamFile::VstEntry::EncodeState(blob);
+			}
+		}
+
 		entries.push_back(std::move(entry));
 	}
 

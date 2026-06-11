@@ -4,6 +4,7 @@
 #include "CommonTypes.h"
 #include <memory>
 #include <vector>
+#include <cstdint>
 
 namespace base { class ActionReceiver; }
 namespace midi { class MidiLoop; }
@@ -47,7 +48,7 @@ namespace actions
 		std::string SourceId;
 		std::weak_ptr<base::ActionReceiver> Receiver;
 
-		// Payload for JOB_LOADVST: path to the .vst3 plugin.
+		// Payload for JOB_LOADVST: path to the plugin.
 		std::wstring VstPath;
 
 		// Optional: plugin pre-initialised on the main thread before the job is
@@ -55,6 +56,11 @@ namespace actions
 		// this instance directly instead of creating a fresh one.
 		// Can be Vst3Plugin (VST3) or Vst2Plugin (VST2) — determined by extension.
 		std::shared_ptr<vst::IVstPlugin> PreInitPlugin;
+
+		// Optional: VST2 state blob to restore immediately after a successful load.
+		// Populated from JamFile::VstEntry::DecodeState() on file load.
+		// Empty means no state to restore (normal interactive loads).
+		std::vector<std::uint8_t> VstInitialState;
 
 		// Payload for JOB_UNLOADVST / JOB_LOADVST: 0-based index in the chain.
 		size_t VstIndex = 0;

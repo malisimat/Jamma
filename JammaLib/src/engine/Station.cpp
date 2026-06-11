@@ -153,7 +153,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 	// Queue load jobs for any VST plugins serialised in the station's chain.
 	for (const auto& vstEntry : stationStruct.VstChain)
-		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path));
+		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
 
 	return station;
 }
@@ -1442,12 +1442,13 @@ std::vector<JobAction> Station::_CommitChanges()
 	// first so the for-loop iterates a local copy (avoids moving from a
 	// reference to a live vector element).
 	auto pendingLoads = std::move(_pendingVstLoads);
-	for (auto& path : pendingLoads)
+	for (auto& [path, initialState] : pendingLoads)
 	{
 		JobAction job;
 		job.JobActionType = JobAction::JOB_LOADVST;
 		job.SourceId = _name;
 		job.VstPath = std::move(path);
+		job.VstInitialState = std::move(initialState);
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
@@ -1601,9 +1602,10 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	take->Ditch();
 }
 
-void Station::LoadVstPlugin(std::wstring path)
+void Station::LoadVstPlugin(std::wstring path,
+	std::vector<std::uint8_t> initialState)
 {
-	_pendingVstLoads.push_back(std::move(path));
+	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
 }
 
@@ -1625,14 +1627,28 @@ std::shared_ptr<vst::IVstPlugin> Station::GetVstPlugin(size_t index) const
 std::vector<io::JamFile::VstEntry> Station::VstEntries() const
 {
 	std::vector<io::JamFile::VstEntry> entries;
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
 	std::lock_guard<std::mutex> lock(_vstPathsMutex);
 	entries.reserve(_vstPluginPaths.size());
 
-	for (const auto& path : _vstPluginPaths)
+	for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
 	{
 		io::JamFile::VstEntry entry;
-		entry.Path = utils::EncodeUtf8(path);
+		entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
 		entry.Bypass = false;
+
+		if (chain && i < chain->NumPlugins())
+		{
+			auto plugin = chain->GetPlugin(i);
+			if (plugin)
+			{
+				auto blob = plugin->GetState();
+				if (!blob.empty())
+					entry.State = io::JamFile::VstEntry::EncodeState(blob);
+			}
+		}
+
 		entries.push_back(std::move(entry));
 	}
 
@@ -1674,6 +1690,11 @@ ActionResult Station::OnAction(JobAction action)
 			hostChannels = 1u;
 		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
 		{
+			// Restore saved state before adding to the chain so the plugin's
+			// parameters are correct when audio processing resumes.
+			if (!action.VstInitialState.empty())
+				plugin->SetState(action.VstInitialState);
+
 			newChain->AddPlugin(plugin);
 			{
 				std::lock_guard<std::mutex> lock(_vstPathsMutex);

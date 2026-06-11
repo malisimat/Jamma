@@ -547,11 +547,24 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
-		for (const auto& vstPath : _vstPluginPaths)
+		for (size_t i = 0; i < _vstPluginPaths.size(); ++i)
 		{
 			io::JamFile::VstEntry entry;
-			entry.Path = utils::EncodeUtf8(vstPath);
+			entry.Path = utils::EncodeUtf8(_vstPluginPaths[i]);
 			entry.Bypass = false;
+
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			if (chain && i < chain->NumPlugins())
+			{
+				auto plugin = chain->GetPlugin(i);
+				if (plugin)
+				{
+					auto blob = plugin->GetState();
+					if (!blob.empty())
+						entry.State = io::JamFile::VstEntry::EncodeState(blob);
+				}
+			}
+
 			loop.VstChain.push_back(std::move(entry));
 		}
 	}
@@ -880,9 +893,10 @@ void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
 	_vu->UpdateModel(radius);
 }
 
-void Loop::LoadVstPlugin(std::wstring path)
+void Loop::LoadVstPlugin(std::wstring path,
+	std::vector<std::uint8_t> initialState)
 {
-	_pendingVstLoads.push_back(std::move(path));
+	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
 }
 
@@ -925,12 +939,13 @@ std::vector<JobAction> Loop::_CommitChanges()
 	}
 
 	auto pendingLoads = std::move(_pendingVstLoads);
-	for (auto& path : pendingLoads)
+	for (auto& [path, initialState] : pendingLoads)
 	{
 		JobAction job;
 		job.JobActionType = JobAction::JOB_LOADVST;
 		job.SourceId = Id();
 		job.VstPath = std::move(path);
+		job.VstInitialState = std::move(initialState);
 		job.Receiver = ActionReceiver::shared_from_this();
 		jobs.push_back(std::move(job));
 	}
@@ -967,6 +982,10 @@ ActionResult Loop::OnAction(JobAction action)
 			: vst::MakePluginForPath(action.VstPath);
 		if (plugin->Load(action.VstPath, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
 		{
+			// Restore saved state before adding to the chain.
+			if (!action.VstInitialState.empty())
+				plugin->SetState(action.VstInitialState);
+
 			newChain->AddPlugin(plugin);
 			{
 				std::lock_guard<std::mutex> lock(_vstPathsMutex);
