@@ -891,24 +891,24 @@ ActionResult Scene::_HandleExportSession()
 				for (const auto& loop : take->GetLoops())
 				{
 					const auto wavFilename = loop->Id() + ".wav";
-					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
 
 					auto samples = loop->ExportSamples();
-					if (!samples.empty())
-					{
-						LoopSnapshot snap;
-						snap.Path = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-						snap.Samples = std::move(samples);
-						loops.push_back(std::move(snap));
-					}
+					if (samples.empty())
+						continue;
+
+					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
+
+					LoopSnapshot snap;
+					snap.Path = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
+					snap.Samples = std::move(samples);
+					loops.push_back(std::move(snap));
 				}
 
 				if (!jamTake.Loops.empty())
 					jamStation.LoopTakes.push_back(std::move(jamTake));
 			}
 
-			if (!jamStation.LoopTakes.empty())
-				jam.Stations.push_back(std::move(jamStation));
+			jam.Stations.push_back(std::move(jamStation));
 		}
 	}
 

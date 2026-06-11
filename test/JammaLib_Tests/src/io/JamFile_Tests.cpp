@@ -297,6 +297,64 @@ TEST(JamFile, RoundTripsVstStateBlob) {
 	ASSERT_EQ(stateBlob, parsedLoop.VstChain[0].DecodeState());
 }
 
+TEST(JamFile, SerializesEmptyVstStateField) {
+	JamFile::VstEntry entry;
+	entry.Path = "C:/Plugins/Example.dll";
+	entry.Bypass = false;
+	entry.State = "";
+
+	JamFile::Station station;
+	station.Name = "station";
+	station.StationType = 0;
+	station.VstChain.push_back(entry);
+
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "jam";
+	jam.Stations.push_back(station);
+
+	std::stringstream out;
+	ASSERT_TRUE(JamFile::ToStream(jam, out));
+
+	const auto json = out.str();
+	ASSERT_NE(std::string::npos, json.find("\"state\":\"\""));
+
+	auto parsed = JamFile::FromStream(std::move(out));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].VstChain.size());
+	ASSERT_EQ("", parsed->Stations[0].VstChain[0].State);
+}
+
+TEST(JamFile, RoundTripsStationWithNoTakesAndVstChain) {
+	JamFile::VstEntry entry;
+	entry.Path = "C:/Plugins/Example.dll";
+	entry.Bypass = false;
+	entry.State = "dGVzdA==";
+
+	JamFile::Station station;
+	station.Name = "HiHat";
+	station.StationType = 0;
+	station.VstChain.push_back(entry);
+
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "export";
+	jam.Stations.push_back(station);
+
+	std::stringstream out;
+	ASSERT_TRUE(JamFile::ToStream(jam, out));
+
+	auto parsed = JamFile::FromStream(std::move(out));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ("HiHat", parsed->Stations[0].Name);
+	ASSERT_TRUE(parsed->Stations[0].LoopTakes.empty());
+	ASSERT_EQ(1, parsed->Stations[0].VstChain.size());
+	ASSERT_EQ(entry.Path, parsed->Stations[0].VstChain[0].Path);
+	ASSERT_EQ(entry.State, parsed->Stations[0].VstChain[0].State);
+}
+
 TEST(JamFile, DefaultJsonIncludesNinjamConnectionIdentity) {
 	auto parsed = JamFile::FromStream(std::stringstream(JamFile::DefaultJson));
 	ASSERT_TRUE(parsed.has_value());

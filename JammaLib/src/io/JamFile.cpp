@@ -214,9 +214,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 
 	auto vstEntryToJson = [&](const JamFile::VstEntry& entry) -> std::string {
 		std::string out = "{" + kvStr("path", entry.Path)
-			+ "," + kvBool("bypass", entry.Bypass);
-		if (!entry.State.empty())
-			out += "," + kvStr("state", entry.State);
+			+ "," + kvBool("bypass", entry.Bypass)
+			+ "," + kvStr("state", entry.State);
 		out += "}";
 		return out;
 	};
