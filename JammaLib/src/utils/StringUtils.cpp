@@ -203,6 +203,112 @@ std::vector<std::string> utils::SplitLines(const std::string& text)
 	return lines;
 }
 
+std::string utils::Base64Encode(const std::vector<std::uint8_t>& data)
+{
+	static const char kBase64Chars[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+	if (data.empty())
+		return {};
+
+	std::string out;
+	out.reserve(((data.size() + 2) / 3) * 4);
+
+	const std::uint8_t* p = data.data();
+	size_t remaining = data.size();
+
+	while (remaining >= 3)
+	{
+		const std::uint32_t v = (static_cast<std::uint32_t>(p[0]) << 16) |
+									(static_cast<std::uint32_t>(p[1]) <<  8) |
+									 static_cast<std::uint32_t>(p[2]);
+		out += kBase64Chars[(v >> 18) & 0x3F];
+		out += kBase64Chars[(v >> 12) & 0x3F];
+		out += kBase64Chars[(v >>  6) & 0x3F];
+		out += kBase64Chars[ v        & 0x3F];
+		p         += 3;
+		remaining -= 3;
+	}
+
+	if (remaining == 2)
+	{
+		const std::uint32_t v = (static_cast<std::uint32_t>(p[0]) << 16) |
+									(static_cast<std::uint32_t>(p[1]) <<  8);
+		out += kBase64Chars[(v >> 18) & 0x3F];
+		out += kBase64Chars[(v >> 12) & 0x3F];
+		out += kBase64Chars[(v >>  6) & 0x3F];
+		out += '=';
+	}
+	else if (remaining == 1)
+	{
+		const std::uint32_t v = static_cast<std::uint32_t>(p[0]) << 16;
+		out += kBase64Chars[(v >> 18) & 0x3F];
+		out += kBase64Chars[(v >> 12) & 0x3F];
+		out += '=';
+		out += '=';
+	}
+
+	return out;
+}
+
+std::vector<std::uint8_t> utils::Base64Decode(const std::string& str)
+{
+	static const char kBase64Chars[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+	if (str.empty())
+		return {};
+	if (str.size() % 4 != 0)
+		return {};
+
+	static const int kInvalid = -1;
+	int revTable[256];
+	std::fill(std::begin(revTable), std::end(revTable), kInvalid);
+	for (int i = 0; i < 64; ++i)
+		revTable[static_cast<unsigned char>(kBase64Chars[i])] = i;
+
+	std::vector<std::uint8_t> out;
+	out.reserve((str.size() / 4) * 3);
+
+	size_t i = 0;
+	while (i + 3 < str.size())
+	{
+		const int b0 = revTable[static_cast<unsigned char>(str[i])];
+		const int b1 = revTable[static_cast<unsigned char>(str[i + 1])];
+		const int b2 = revTable[static_cast<unsigned char>(str[i + 2])];
+		const int b3 = revTable[static_cast<unsigned char>(str[i + 3])];
+		const bool pad2 = str[i + 2] == '=';
+		const bool pad3 = str[i + 3] == '=';
+
+		if (b0 < 0 || b1 < 0)
+			return {};
+		if (pad2 && !pad3)
+			return {};
+		if ((pad2 || pad3) && i + 4 != str.size())
+			return {};
+
+		out.push_back(static_cast<std::uint8_t>((b0 << 2) | (b1 >> 4)));
+
+		if (!pad2)
+		{
+			if (b2 < 0)
+				return {};
+			out.push_back(static_cast<std::uint8_t>(((b1 & 0x0F) << 4) | (b2 >> 2)));
+		}
+
+		if (!pad3)
+		{
+			if (b3 < 0)
+				return {};
+			out.push_back(static_cast<std::uint8_t>(((b2 & 0x03) << 6) | b3));
+		}
+
+		i += 4;
+	}
+
+	return out;
+}
+
 bool utils::StringReplace(std::string& str, const std::string& from, const std::string& to)
 {
 	size_t start_pos = str.find(from);

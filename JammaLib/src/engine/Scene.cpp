@@ -827,26 +827,28 @@ ActionResult Scene::_HandleVstEditorOpen()
 
 ActionResult Scene::_HandleExportSession()
 {
+	struct AudioPauseGuard
+	{
+		explicit AudioPauseGuard(audio::AudioDevice* device) : Device(device), WasPlaying(device && device->Pause()) {}
+		~AudioPauseGuard() { Resume(); }
+
+		void Resume()
+		{
+			if (WasPlaying && Device)
+			{
+				Device->Resume();
+				WasPlaying = false;
+			}
+		}
+
+		audio::AudioDevice* Device;
+		bool WasPlaying;
+	};
+
 	struct LoopSnapshot
 	{
 		std::wstring Path;
 		std::vector<float> Samples;
-	};
-
-	struct LoopRef
-	{
-		std::shared_ptr<Loop> Loop;
-		std::string WavFilename;
-	};
-
-	struct TakeRef
-	{
-		std::vector<LoopRef> Loops;
-	};
-
-	struct StationRef
-	{
-		std::vector<TakeRef> Takes;
 	};
 
 	const auto exportDir = utils::PickDirectory(L"Choose export directory");
@@ -864,18 +866,16 @@ ActionResult Scene::_HandleExportSession()
 	jam.QuantiseSamps = 0;
 	jam.Quantisation = engine::Timer::QUANTISE_OFF;
 
-	std::vector<StationRef> stationRefs;
 	std::vector<LoopSnapshot> loops;
 
 	{
+		AudioPauseGuard pause(_audioDevice.get());
 		std::scoped_lock lock(_audioMutex);
 
 		for (const auto& station : _stations)
 		{
 			if (station->IsRemote())
 				continue;
-
-			StationRef stationRef;
 
 			io::JamFile::Station jamStation;
 			jamStation.Name = station->Name();
@@ -884,8 +884,6 @@ ActionResult Scene::_HandleExportSession()
 
 			for (const auto& take : station->GetLoopTakes())
 			{
-				TakeRef takeRef;
-
 				io::JamFile::LoopTake jamTake;
 				jamTake.Name = take->Id();
 				jamTake.VstChain = take->VstEntries();
@@ -893,19 +891,21 @@ ActionResult Scene::_HandleExportSession()
 				for (const auto& loop : take->GetLoops())
 				{
 					const auto wavFilename = loop->Id() + ".wav";
-					takeRef.Loops.push_back({ loop, wavFilename });
 					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
-				}
 
-				if (!takeRef.Loops.empty())
-					stationRef.Takes.push_back(std::move(takeRef));
+					auto samples = loop->ExportSamples();
+					if (!samples.empty())
+					{
+						LoopSnapshot snap;
+						snap.Path = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
+						snap.Samples = std::move(samples);
+						loops.push_back(std::move(snap));
+					}
+				}
 
 				if (!jamTake.Loops.empty())
 					jamStation.LoopTakes.push_back(std::move(jamTake));
 			}
-
-			if (!stationRef.Takes.empty())
-				stationRefs.push_back(std::move(stationRef));
 
 			if (!jamStation.LoopTakes.empty())
 				jam.Stations.push_back(std::move(jamStation));
@@ -916,24 +916,6 @@ ActionResult Scene::_HandleExportSession()
 	{
 		std::cout << "Export: nothing to export" << std::endl;
 		return ActionResult::NoAction();
-	}
-
-	for (const auto& stationRef : stationRefs)
-	{
-		for (const auto& takeRef : stationRef.Takes)
-		{
-			for (const auto& loopRef : takeRef.Loops)
-			{
-				auto samples = loopRef.Loop->ExportSamples();
-				if (samples.empty())
-					continue;
-
-				LoopSnapshot snap;
-				snap.Path = exportDir + L"\\" + utils::DecodeUtf8(loopRef.WavFilename);
-				snap.Samples = std::move(samples);
-				loops.push_back(std::move(snap));
-			}
-		}
 	}
 
 	io::WavReadWriter wavWriter;

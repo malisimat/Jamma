@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -31,6 +32,10 @@ namespace utils
 	std::string ToLower(std::string str);
 	std::string HtmlToText(const std::string& html, bool preserveLineBreaks = false);
 	std::vector<std::string> SplitLines(const std::string& text);
+	// Base64 encode a raw byte blob to a standard ASCII string.
+	std::string Base64Encode(const std::vector<std::uint8_t>& data);
+	// Decode a base64 string back to raw bytes. Returns empty on empty or malformed input.
+	std::vector<std::uint8_t> Base64Decode(const std::string& str);
 
 	bool StringReplace(std::string& str, const std::string& from, const std::string& to);
 	bool StringReplace(std::wstring& str, const std::wstring& from, const std::wstring& to);

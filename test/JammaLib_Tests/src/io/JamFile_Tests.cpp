@@ -245,6 +245,58 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ(0.0, panParams[1]);
 }
 
+TEST(JamFile, RoundTripsVstStateBlob) {
+	const std::vector<std::uint8_t> stateBlob{ 0x00, 0xff, 0x10, 0x41, 0x42, 0x43, 0x64 };
+
+	JamFile::VstEntry entry;
+	entry.Path = "C:\\Plugins\\Example.dll";
+	entry.Bypass = false;
+	entry.State = JamFile::VstEntry::EncodeState(stateBlob);
+
+	JamFile::Loop loop;
+	loop.Name = "loop.wav";
+	loop.Length = 220;
+	loop.Index = 0;
+	loop.MasterLoopCount = 0;
+	loop.Level = 1.0;
+	loop.Speed = 1.0;
+	loop.MuteGroups = 0;
+	loop.SelectGroups = 0;
+	loop.Muted = false;
+	loop.Mix.Mix = JamFile::LoopMix::MIX_PAN;
+	loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
+	loop.VstChain.push_back(entry);
+
+	JamFile::LoopTake take;
+	take.Name = "take";
+	take.Loops.push_back(loop);
+
+	JamFile::Station station;
+	station.Name = "station";
+	station.StationType = 0;
+	station.LoopTakes.push_back(take);
+
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "jam";
+	jam.Stations.push_back(station);
+
+	std::stringstream out;
+	ASSERT_TRUE(JamFile::ToStream(jam, out));
+
+	auto parsed = JamFile::FromStream(std::move(out));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());
+
+	const auto& parsedLoop = parsed->Stations[0].LoopTakes[0].Loops[0];
+	ASSERT_EQ(1, parsedLoop.VstChain.size());
+	ASSERT_EQ(entry.Path, parsedLoop.VstChain[0].Path);
+	ASSERT_FALSE(parsedLoop.VstChain[0].State.empty());
+	ASSERT_EQ(stateBlob, parsedLoop.VstChain[0].DecodeState());
+}
+
 TEST(JamFile, DefaultJsonIncludesNinjamConnectionIdentity) {
 	auto parsed = JamFile::FromStream(std::stringstream(JamFile::DefaultJson));
 	ASSERT_TRUE(parsed.has_value());

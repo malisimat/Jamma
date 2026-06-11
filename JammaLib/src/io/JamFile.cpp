@@ -7,102 +7,10 @@
 
 #include "JamFile.h"
 #include <iomanip>
+#include "../utils/StringUtils.h"
 
 using namespace io;
 using audio::BehaviourParams;
-
-// ---------------------------------------------------------------------------
-// Base64 encode / decode helpers (used for VST state blobs)
-// ---------------------------------------------------------------------------
-namespace
-{
-	static const char kBase64Chars[] =
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-	std::string Base64Encode(const std::vector<std::uint8_t>& data)
-	{
-		if (data.empty())
-			return {};
-
-		std::string out;
-		out.reserve(((data.size() + 2) / 3) * 4);
-
-		const std::uint8_t* p = data.data();
-		size_t remaining = data.size();
-
-		while (remaining >= 3)
-		{
-			const std::uint32_t v = (static_cast<std::uint32_t>(p[0]) << 16) |
-			                        (static_cast<std::uint32_t>(p[1]) <<  8) |
-			                         static_cast<std::uint32_t>(p[2]);
-			out += kBase64Chars[(v >> 18) & 0x3F];
-			out += kBase64Chars[(v >> 12) & 0x3F];
-			out += kBase64Chars[(v >>  6) & 0x3F];
-			out += kBase64Chars[ v        & 0x3F];
-			p         += 3;
-			remaining -= 3;
-		}
-
-		if (remaining == 2)
-		{
-			const std::uint32_t v = (static_cast<std::uint32_t>(p[0]) << 16) |
-			                        (static_cast<std::uint32_t>(p[1]) <<  8);
-			out += kBase64Chars[(v >> 18) & 0x3F];
-			out += kBase64Chars[(v >> 12) & 0x3F];
-			out += kBase64Chars[(v >>  6) & 0x3F];
-			out += '=';
-		}
-		else if (remaining == 1)
-		{
-			const std::uint32_t v = static_cast<std::uint32_t>(p[0]) << 16;
-			out += kBase64Chars[(v >> 18) & 0x3F];
-			out += kBase64Chars[(v >> 12) & 0x3F];
-			out += '=';
-			out += '=';
-		}
-
-		return out;
-	}
-
-	std::vector<std::uint8_t> Base64Decode(const std::string& s)
-	{
-		if (s.empty())
-			return {};
-
-		// Build a reverse-lookup table
-		static const int kInvalid = -1;
-		int revTable[256];
-		std::fill(std::begin(revTable), std::end(revTable), kInvalid);
-		for (int i = 0; i < 64; ++i)
-			revTable[static_cast<unsigned char>(kBase64Chars[i])] = i;
-
-		std::vector<std::uint8_t> out;
-		out.reserve((s.size() / 4) * 3);
-
-		size_t i = 0;
-		while (i + 3 < s.size())
-		{
-			const int b0 = revTable[static_cast<unsigned char>(s[i])];
-			const int b1 = revTable[static_cast<unsigned char>(s[i + 1])];
-			const int b2 = revTable[static_cast<unsigned char>(s[i + 2])];
-			const int b3 = revTable[static_cast<unsigned char>(s[i + 3])];
-
-			if (b0 < 0 || b1 < 0) break; // corrupt input
-
-			out.push_back(static_cast<std::uint8_t>((b0 << 2) | (b1 >> 4)));
-
-			if (s[i + 2] != '=' && b2 >= 0)
-				out.push_back(static_cast<std::uint8_t>(((b1 & 0x0F) << 4) | (b2 >> 2)));
-
-			if (s[i + 3] != '=' && b3 >= 0)
-				out.push_back(static_cast<std::uint8_t>(((b2 & 0x03) << 6) | b3));
-
-			i += 4;
-		}
-
-		return out;
-	}
-} // anonymous namespace
 
 const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
 
@@ -460,12 +368,12 @@ std::optional<JamFile::VstEntry> JamFile::VstEntry::FromJson(Json::JsonPart json
 
 std::string JamFile::VstEntry::EncodeState(const std::vector<std::uint8_t>& blob)
 {
-	return Base64Encode(blob);
+	return utils::Base64Encode(blob);
 }
 
 std::vector<std::uint8_t> JamFile::VstEntry::DecodeState() const
 {
-	return Base64Decode(State);
+	return utils::Base64Decode(State);
 }
 
 std::optional<JamFile::LoopMix> JamFile::LoopMix::FromJson(Json::JsonPart json)
