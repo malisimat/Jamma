@@ -136,6 +136,10 @@ namespace engine
 		void SetQuantisationParams(std::optional<QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
+		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
+		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
+		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
+		std::int32_t StationPhaseOffsetSamps() const noexcept { return _stationPhaseOffsetSamps; }
 		void RefreshQuantisationOverlayFromClock();
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
@@ -216,6 +220,7 @@ namespace engine
 
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
+		void _ApplyMidiQuantisationPhaseOffset() noexcept;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 
@@ -300,5 +305,7 @@ namespace engine
 		std::optional<QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
+		std::int32_t _globalPhaseOffsetSamps = 0;
+		std::int32_t _stationPhaseOffsetSamps = 0;
 	};
 }

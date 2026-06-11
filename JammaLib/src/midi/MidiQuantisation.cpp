@@ -77,25 +77,34 @@ MidiQuantisationSettings MidiQuantisation::ApplyGuiPayload(const MidiQuantisatio
 
 std::uint32_t MidiQuantisation::QuantiseSampleOffset(std::uint32_t offset,
 	std::uint32_t step,
-	std::uint32_t loopLength) noexcept
+	std::uint32_t loopLength,
+	std::int32_t phaseOffsetSamps) noexcept
 {
 	if (0u == step || 0u == loopLength)
 		return offset;
 
-	// Round-to-nearest: snapped = ((offset + step/2) / step) * step
-	const auto halfStep = step / 2u;
-	const auto snapped = ((offset + halfStep) / step) * step;
+	const auto loopLength64 = static_cast<std::int64_t>(loopLength);
+	const auto phase64 = static_cast<std::int64_t>(phaseOffsetSamps);
+	const auto phaseWrapped = static_cast<std::uint32_t>(((phase64 % loopLength64) + loopLength64) % loopLength64);
 
-	// Wrap into [0, loopLength) so notes near the loop end snap back to 0
-	// rather than escaping the loop window.
-	return snapped % loopLength;
+	// Shift into the grid's frame so snap points land at k*step.
+	const auto shifted = (offset + loopLength - phaseWrapped) % loopLength;
+
+	// Round-to-nearest in the shifted frame.
+	const auto halfStep = step / 2u;
+	const auto snapped = ((shifted + halfStep) / step) * step;
+
+	// Map back into the loop-local frame; modulo wraps a tie at the cycle edge
+	// back to the grid origin.
+	return (snapped + phaseWrapped) % loopLength;
 }
 
 void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 	std::size_t eventCount,
 	std::uint32_t loopLength,
 	std::uint32_t stepSamps,
-	MidiEvent* dst) noexcept
+	MidiEvent* dst,
+	std::int32_t phaseOffsetSamps) noexcept
 {
 	if (nullptr == src || nullptr == dst || 0u == eventCount)
 		return;
@@ -121,7 +130,10 @@ void MidiQuantisation::QuantiseEvents(const MidiEvent* src,
 		{
 			if (ev.sampleOffset < loopLength)
 			{
-				const auto quantised = QuantiseSampleOffset(ev.sampleOffset, stepSamps, loopLength);
+				const auto quantised = QuantiseSampleOffset(ev.sampleOffset,
+					stepSamps,
+					loopLength,
+					phaseOffsetSamps);
 				pendingDeltas[slot].push_back(static_cast<std::int64_t>(quantised) -
 					static_cast<std::int64_t>(ev.sampleOffset));
 				ev.sampleOffset = quantised;
@@ -162,8 +174,9 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	std::size_t eventCount,
 	std::uint32_t loopLength,
 	std::uint32_t stepSamps,
-	MidiEvent* dst) noexcept
+	MidiEvent* dst,
+	std::int32_t phaseOffsetSamps) noexcept
 {
-	QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
+	QuantiseEvents(src, eventCount, loopLength, stepSamps, dst, phaseOffsetSamps);
 	MidiNote::SortMidiEvents(dst, eventCount);
 }

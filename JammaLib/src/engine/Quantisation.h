@@ -45,6 +45,7 @@ namespace engine
 		float YCenter = 0.0f;
 		float HalfHeight = 0.0f;
 		float Radius = 0.0f;
+		std::int32_t PhaseOffsetSamps = 0;
 	};
 
 	struct QuantisationPolicy
@@ -110,6 +111,8 @@ namespace engine
 		void SetMidiGrain(unsigned int grainSamps,
 			const char* source,
 			const std::vector<std::shared_ptr<Station>>& stations);
+		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
+			const std::vector<std::shared_ptr<Station>>& stations);
 
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
@@ -151,6 +154,7 @@ namespace engine
 			unsigned int audioDeviceSampleRate);
 
 		unsigned int EffectiveSamps() const noexcept;
+		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<Timer> Clock() const noexcept;
 		unsigned int RemoteSampleRate() const noexcept;
@@ -215,6 +219,7 @@ namespace engine
 		unsigned int _remoteSampleRate = 0u;
 		unsigned int _lastRemoteIntervalPos = 0u;
 		bool _seedUsesPowers = true;
+		std::int32_t _globalPhaseOffsetSamps = 0;
 	};
 
 	inline unsigned int MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)

@@ -195,6 +195,20 @@ void Quantisation::SetMidiGrain(unsigned int grainSamps,
 	(void)takeCount;
 }
 
+void Quantisation::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
+	const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (_globalPhaseOffsetSamps == offsetSamps)
+		return;
+
+	_globalPhaseOffsetSamps = offsetSamps;
+	for (const auto& station : stations)
+	{
+		if (station)
+			station->SetGlobalPhaseOffsetSamps(offsetSamps);
+	}
+}
+
 bool Quantisation::HandleTapTempo(std::uint64_t estimatedSampleAt,
 	unsigned int sampleRate,
 	const std::vector<std::shared_ptr<Station>>& stations,
@@ -589,6 +603,11 @@ void Quantisation::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
 unsigned int Quantisation::EffectiveSamps() const noexcept
 {
 	return _effectiveQuantiseSamps.load(std::memory_order_acquire);
+}
+
+std::int32_t Quantisation::GlobalPhaseOffsetSamps() const noexcept
+{
+	return _globalPhaseOffsetSamps;
 }
 
 bool Quantisation::IsArmedForReclock() const noexcept

@@ -351,7 +351,8 @@ void MidiLoop::PublishQuantisedEvents()
 		_eventCount,
 		_loopLengthSamps,
 		step,
-		quantisedEvents->Events.data());
+		quantisedEvents->Events.data(),
+		_quantisation.PhaseOffsetSamps);
 	const auto* snapshot = quantisedEvents.get();
 	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
 	_quantisedEvents.store(snapshot, std::memory_order_release);

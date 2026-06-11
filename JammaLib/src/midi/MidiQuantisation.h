@@ -96,17 +96,20 @@ namespace midi
 			const int* values,
 			std::size_t valueCount) noexcept;
 
-		// Snap `offset` to the nearest multiple of `step`, then wrap into
-		// [0, loopLength).
+		// Snap `offset` to the nearest grid point at
+		//   phaseOffsetSamps + (k * step)
+		// then wrap into [0, loopLength).
 		// `step == 0` or `loopLength == 0` returns `offset` unchanged.
 		static std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
 			std::uint32_t step,
-			std::uint32_t loopLength) noexcept;
+			std::uint32_t loopLength,
+			std::int32_t phaseOffsetSamps = 0) noexcept;
 
 		// Build a quantised view of a raw event stream into `dst`. The source
 		// array is treated as recorded order (NoteOn precedes its matching NoteOff
 		// for the same channel+note pair). For each NoteOn:
-		//   - NoteOn offset is snapped to the nearest `step` multiple, wrapped.
+		//   - NoteOn offset is snapped to the nearest phase-shifted `step`
+		//     multiple, wrapped.
 		//   - The matching NoteOff is shifted by the same delta as its NoteOn,
 		//     preserving the recorded duration.
 		//   - If the shifted NoteOff would land at or past `loopLength`, it is
@@ -120,7 +123,8 @@ namespace midi
 			std::size_t eventCount,
 			std::uint32_t loopLength,
 			std::uint32_t stepSamps,
-			MidiEvent* dst) noexcept;
+			MidiEvent* dst,
+			std::int32_t phaseOffsetSamps = 0) noexcept;
 
 		// Build the canonical quantised event view used by playback and rendering.
 		// This is intended for non-realtime publication paths; callers still own
@@ -129,7 +133,8 @@ namespace midi
 			std::size_t eventCount,
 			std::uint32_t loopLength,
 			std::uint32_t stepSamps,
-			MidiEvent* dst) noexcept;
+			MidiEvent* dst,
+			std::int32_t phaseOffsetSamps = 0) noexcept;
 	};
 
 	// Per-LoopTake / per-MidiLoop quantisation settings. Non-destructive: applied
@@ -139,6 +144,9 @@ namespace midi
 		bool Enabled = false;
 		MidiQuantisationFraction Fraction = MidiQuantisationFraction::Whole;
 		std::uint32_t GrainSamps = 0u;
+		// Take-local phase offset in samples. LoopTake composes this with inherited
+		// station/global offsets before publishing settings to MidiLoop.
+		std::int32_t PhaseOffsetSamps = 0;
 
 		constexpr std::uint64_t Pack() const noexcept
 		{
@@ -159,7 +167,10 @@ namespace midi
 
 		constexpr bool operator==(const MidiQuantisationSettings& o) const noexcept
 		{
-			return Enabled == o.Enabled && Fraction == o.Fraction && GrainSamps == o.GrainSamps;
+			return Enabled == o.Enabled
+				&& Fraction == o.Fraction
+				&& GrainSamps == o.GrainSamps
+				&& PhaseOffsetSamps == o.PhaseOffsetSamps;
 		}
 		constexpr bool operator!=(const MidiQuantisationSettings& o) const noexcept
 		{

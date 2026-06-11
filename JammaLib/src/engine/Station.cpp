@@ -1,5 +1,6 @@
 #include "Station.h"
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 using namespace engine;
@@ -945,6 +946,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetSelectDepth(CurrentSelectDepth());
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
+	take->SetMidiQuantisationInheritedPhaseOffset(_globalPhaseOffsetSamps + _stationPhaseOffsetSamps);
 	_backLoopTakes.push_back(take);
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
@@ -1011,6 +1013,48 @@ void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
 	if (_quantisationModel)
 		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
+void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
+{
+	if (_globalPhaseOffsetSamps == offsetSamps)
+		return;
+
+	_globalPhaseOffsetSamps = offsetSamps;
+	_ApplyMidiQuantisationPhaseOffset();
+}
+
+void Station::SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
+{
+	if (_stationPhaseOffsetSamps == offsetSamps)
+		return;
+
+	_stationPhaseOffsetSamps = offsetSamps;
+	_ApplyMidiQuantisationPhaseOffset();
+}
+
+void Station::_ApplyMidiQuantisationPhaseOffset() noexcept
+{
+	auto combined = static_cast<std::int64_t>(_globalPhaseOffsetSamps)
+		+ static_cast<std::int64_t>(_stationPhaseOffsetSamps);
+	if (combined > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
+		combined = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+	else if (combined < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))
+		combined = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
+
+	const auto inherited = static_cast<std::int32_t>(combined);
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetMidiQuantisationInheritedPhaseOffset(inherited);
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetMidiQuantisationInheritedPhaseOffset(inherited);
+	}
+
+	RefreshQuantisationOverlayFromClock();
 }
 
 void Station::RefreshQuantisationOverlayFromClock()

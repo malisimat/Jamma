@@ -201,6 +201,8 @@ namespace engine
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
+		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
+		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -298,6 +300,8 @@ namespace engine
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
 		midi::MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
+		std::atomic<std::int32_t> _midiTakePhaseOffsetSamps{ 0 };
+		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;

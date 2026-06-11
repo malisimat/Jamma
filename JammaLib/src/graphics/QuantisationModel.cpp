@@ -275,9 +275,13 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
-		const auto phaseOffset = std::fmod(
+		const auto loopIndexAngle = std::fmod(
 			static_cast<float>(constants::TWOPI * visual.LoopIndexFrac),
 			static_cast<float>(constants::TWOPI));
+		const auto phaseOffsetAngle = static_cast<float>(constants::TWOPI)
+			* (static_cast<float>(visual.PhaseOffsetSamps)
+				/ static_cast<float>(visual.LoopLengthSamps));
+		const auto phaseOffset = loopIndexAngle + phaseOffsetAngle;
 		const auto heightScale = std::max(visual.HalfHeight, MinVisualHalfHeight) / GateHalfHeight;
 		const auto radiusScale = std::max(visual.Radius, MinVisualRadius) / GateOuterRadius;
 
