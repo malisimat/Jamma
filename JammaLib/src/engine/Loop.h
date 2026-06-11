@@ -243,7 +243,8 @@ namespace engine
 
 		// VST chain management — staging only; actual load/unload happens on the
 		// job thread after CommitChanges() queues the appropriate job.
-		void LoadVstPlugin(std::wstring path);
+		void LoadVstPlugin(std::wstring path,
+			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
 		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
@@ -290,7 +291,7 @@ namespace engine
 		std::atomic<std::shared_ptr<vst::VstChain>> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
-		std::vector<std::wstring> _pendingVstLoads;
+		std::vector<std::pair<std::wstring, std::vector<std::uint8_t>>> _pendingVstLoads;
 		std::vector<size_t> _pendingVstUnloads;
 		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
 		unsigned int _blockSize{ constants::DefaultBufferSizeSamps };

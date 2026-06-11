@@ -9,6 +9,7 @@
 
 #include <string>
 #include <cstdint>
+#include <vector>
 #include <windows.h>
 #include "../midi/MidiEvent.h"
 #include "../utils/CommonTypes.h"
@@ -98,6 +99,18 @@ namespace vst
 
 		virtual void SetBypassed(bool bypass) noexcept = 0;
 		virtual bool IsBypassed() const noexcept = 0;
+
+		// Capture the full plugin state as an opaque byte blob.
+		// VST2: uses effGetChunk (bank-level, index=0) when the plugin supports
+		//        program chunks; otherwise serialises all parameters as float32.
+		// Returns an empty vector when the plugin is not loaded or has no state.
+		// Not RT-safe — call from a non-RT (job/UI) thread only.
+		virtual std::vector<std::uint8_t> GetState() const { return {}; }
+
+		// Restore plugin state from a blob previously returned by GetState().
+		// No-op when the blob is empty or the plugin is not loaded.
+		// Not RT-safe — call from a non-RT (job/UI) thread only.
+		virtual void SetState(const std::vector<std::uint8_t>& /*blob*/) {}
 	};
 
 	// Factory: creates the correct plugin type based on file extension.

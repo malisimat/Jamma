@@ -14,6 +14,7 @@
 #include <variant>
 #include <iostream>
 #include <sstream>
+#include <cstdint>
 #include "Json.h"
 #include "../engine/Timer.h"
 #include "../audio/AudioMixer.h"
@@ -58,14 +59,23 @@ namespace io
 			static std::optional<LoopMix> FromJson(Json::JsonPart json);
 		};
 
-		// Describes a single VST3 entry in a VstChain.
+		// Describes a single VST entry in a VstChain.
 		struct VstEntry
 		{
 			// UTF-8 path to the .vst3 bundle or DLL.
 			std::string Path;
 			bool Bypass = false;
+			// Base64-encoded VST2 state blob (from IVstPlugin::GetState).
+			// Empty string means no saved state for this entry.
+			std::string State;
 
 			static std::optional<VstEntry> FromJson(Json::JsonPart json);
+
+			// Encode a raw state blob to base64 for storage in State.
+			static std::string EncodeState(const std::vector<std::uint8_t>& blob);
+			// Decode State back to a raw blob for IVstPlugin::SetState.
+			// Returns an empty vector when State is empty or malformed.
+			std::vector<std::uint8_t> DecodeState() const;
 		};
 
 		struct Loop
