@@ -892,6 +892,69 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
 }
 
+TEST(LoopTakeMidiQuantisation, TransportStartContributesNaturalPhaseOffset) {
+	auto take = MakeLoopTake("take-phase-anchor");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+	take->SetMidiQuantisation(settings);
+
+	take->Record({}, "station", { 0u }, {}, {}, 250u);
+	EXPECT_EQ(250u, take->MidiQuantisationTransportStartSamps());
+	EXPECT_EQ(-50, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+
+	settings.PhaseOffsetSamps = 20;
+	take->SetMidiQuantisation(settings);
+	take->SetMidiQuantisationInheritedPhaseOffset(10);
+	EXPECT_EQ(-20, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid) {
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+
+	auto firstTake = MakeLoopTake("take-start-zero");
+	firstTake->SetMidiQuantisation(settings);
+	firstTake->Record({}, "station", { 0u }, {}, {}, 0u);
+	firstTake->EndMultiWrite(260u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(firstTake->RecordMidiEvent(MidiEvent::MakeNoteOn(260u, 0u, 60u, 100u), 260u));
+	firstTake->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(firstTake->RecordMidiEvent(MidiEvent::MakeNoteOff(360u, 0u, 60u), 360u));
+	firstTake->Play(0u, 1000u, 0u);
+
+	auto shiftedTake = MakeLoopTake("take-start-250");
+	shiftedTake->SetMidiQuantisation(settings);
+	shiftedTake->Record({}, "station", { 0u }, {}, {}, 250u);
+	shiftedTake->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(shiftedTake->RecordMidiEvent(MidiEvent::MakeNoteOn(260u, 0u, 60u, 100u), 260u));
+	shiftedTake->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(shiftedTake->RecordMidiEvent(MidiEvent::MakeNoteOff(360u, 0u, 60u), 360u));
+	shiftedTake->Play(0u, 1000u, 0u);
+
+	CapturingOutputSink firstSink;
+	EXPECT_EQ(1u, firstTake->ReadMidiBlock(0u, 500u, firstSink));
+	ASSERT_EQ(2u, firstSink.events.size());
+	EXPECT_EQ(300u, firstSink.events[0].event.sampleOffset);
+	EXPECT_TRUE(firstSink.events[0].event.IsNoteOn());
+
+	CapturingOutputSink shiftedSink;
+	EXPECT_EQ(1u, shiftedTake->ReadMidiBlock(0u, 500u, shiftedSink));
+	ASSERT_EQ(2u, shiftedSink.events.size());
+	EXPECT_EQ(50u, shiftedSink.events[0].event.sampleOffset);
+	EXPECT_TRUE(shiftedSink.events[0].event.IsNoteOn());
+
+	EXPECT_EQ(300u,
+		firstSink.events[0].event.sampleOffset
+		+ static_cast<std::uint32_t>(firstTake->MidiQuantisationTransportStartSamps()));
+	EXPECT_EQ(300u,
+		shiftedSink.events[0].event.sampleOffset
+		+ static_cast<std::uint32_t>(shiftedTake->MidiQuantisationTransportStartSamps()));
+}
+
 TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	auto take = MakeLoopTake();
 	io::LoggingConfig logging;

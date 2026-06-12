@@ -662,7 +662,13 @@ ActionResult Station::OnAction(TriggerAction action)
 			heldSnapshot = _liveHeldMidi;
 		}
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices, std::move(heldSnapshot));
+		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
+		newLoopTake->Record(action.InputChannels,
+			Name(),
+			action.MidiInputChannels,
+			action.MidiInputDevices,
+			std::move(heldSnapshot),
+			static_cast<std::uint64_t>(transportStartSamps));
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -736,11 +742,13 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
 		auto newLoopTake = AddTake();
+		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),
 			action.MidiInputChannels,
 			action.MidiInputDevices,
-			sourceLoopTake);
+			sourceLoopTake,
+			static_cast<std::uint64_t>(transportStartSamps));
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
