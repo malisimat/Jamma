@@ -96,7 +96,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest.dll" "$(OutDir)"
@@ -147,7 +147,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;gtest_main.lib;gtest.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

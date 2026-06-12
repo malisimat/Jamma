@@ -170,6 +170,23 @@ namespace
 
 		return DefaultIniPath();
 	}
+
+	bool IsWindowPlacementVisible(const utils::Position2d& position, const utils::Size2d& size)
+	{
+		RECT workArea{};
+		if (!SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0))
+			return true;
+
+		const LONG left = static_cast<LONG>(position.X);
+		const LONG top = static_cast<LONG>(position.Y);
+		const LONG right = left + static_cast<LONG>(size.Width);
+		const LONG bottom = top + static_cast<LONG>(size.Height);
+
+		return right > workArea.left
+			&& bottom > workArea.top
+			&& left < workArea.right
+			&& top < workArea.bottom;
+	}
 }
 
 void SetupConsole()
@@ -317,6 +334,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		sceneParams.Position = defaults.value().WinPos;
 		sceneParams.Size = defaults.value().WinSize;
+
+		if (!IsWindowPlacementVisible(sceneParams.Position, sceneParams.Size))
+			sceneParams.Position = Window::Center(sceneParams.Size);
 
 		std::stringstream ss;
 		InitFile::ToStream(defaults.value(), ss);
