@@ -100,6 +100,7 @@ namespace io
 			std::string Name;
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
+			std::int32_t TakePhaseOffsetSamps = 0;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};
@@ -110,6 +111,7 @@ namespace io
 			unsigned int StationType;
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
+			std::int32_t StationPhaseOffsetSamps = 0;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};
@@ -120,6 +122,7 @@ namespace io
 		std::vector<Station> Stations;
 		unsigned long TimerTicks;
 		unsigned int QuantiseSamps;
+		std::int32_t GlobalPhaseOffsetSamps = 0;
 		engine::Timer::QuantisationType Quantisation;
 	};
 }

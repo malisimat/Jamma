@@ -273,6 +273,24 @@ namespace engine
 		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
 		actions::ActionResult _EndMidiPhaseDrag(actions::TouchAction action);
+		enum class MidiPhaseDragTargetKind : std::uint8_t
+		{
+			Global,
+			Station,
+			LoopTake
+		};
+		struct MidiPhaseDragTarget
+		{
+			MidiPhaseDragTargetKind Kind = MidiPhaseDragTargetKind::Global;
+			std::shared_ptr<Station> StationRef;
+			std::shared_ptr<LoopTake> TakeRef;
+			std::vector<std::shared_ptr<Station>> StationTargets;
+			std::vector<std::shared_ptr<LoopTake>> TakeTargets;
+		};
+		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget();
+		std::int32_t _MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept;
+		void _SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
+			std::int32_t offsetSamps) noexcept;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
@@ -319,6 +337,7 @@ namespace engine
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;
 		std::int32_t _midiPhaseDragStartOffsetSamps = 0;
+		MidiPhaseDragTarget _midiPhaseDragTarget;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;

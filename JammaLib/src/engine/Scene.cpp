@@ -189,6 +189,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_ninjamController.LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -820,6 +821,7 @@ ActionResult Scene::_HandleExportSession()
 	jam.Ninjam = _ninjamController.Config();
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
+	jam.GlobalPhaseOffsetSamps = _quantisation.GlobalPhaseOffsetSamps();
 	jam.Quantisation = engine::Timer::QUANTISE_OFF;
 
 	std::vector<LoopSnapshot> loops;
@@ -837,12 +839,14 @@ ActionResult Scene::_HandleExportSession()
 			jamStation.Name = station->Name();
 			jamStation.StationType = 0;
 			jamStation.VstChain = station->VstEntries();
+			jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
 
 			for (const auto& take : station->GetLoopTakes())
 			{
 				io::JamFile::LoopTake jamTake;
 				jamTake.Name = take->Id();
 				jamTake.VstChain = take->VstEntries();
+				jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
 
 				for (const auto& loop : take->GetLoops())
 				{
@@ -1664,7 +1668,8 @@ ActionResult Scene::_BeginMidiPhaseDrag(TouchAction action)
 {
 	_isMidiPhaseDragging = true;
 	_midiPhaseDragStartPosition = action.Position;
-	_midiPhaseDragStartOffsetSamps = _quantisation.GlobalPhaseOffsetSamps();
+	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget();
+	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
 	_SetQuantisationOverlayHeld(true);
 	_ApplyQuantisationOverlayAlpha(1.0f);
 
@@ -1680,7 +1685,7 @@ ActionResult Scene::_UpdateMidiPhaseDrag(TouchMoveAction action)
 	const auto offsetSamps = Quantisation::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		_CurrentSampleRate());
-	_quantisation.SetGlobalPhaseOffsetSamps(offsetSamps, _stations);
+	_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	_ApplyQuantisationOverlayAlpha(1.0f);
 
 	ActionResult res;
@@ -1697,15 +1702,181 @@ ActionResult Scene::_EndMidiPhaseDrag(TouchAction action)
 		const auto offsetSamps = Quantisation::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 			delta.X,
 			_CurrentSampleRate());
-		_quantisation.SetGlobalPhaseOffsetSamps(offsetSamps, _stations);
+		_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	}
 
 	_isMidiPhaseDragging = false;
+	_midiPhaseDragTarget = MidiPhaseDragTarget{};
 	_SetQuantisationOverlayHeld(false);
 	_PulseQuantisationOverlay();
 	_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
 
 	return ActionResult::NoAction();
+}
+
+Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
+{
+	MidiPhaseDragTarget target;
+	auto hovering = _ChildFromPath(_selector->CurrentHover());
+	if (!hovering && !_hoverPath3d.empty())
+		hovering = _ChildFromPath(_hoverPath3d);
+	if (!hovering)
+		return target;
+
+	auto addStationTarget = [](std::vector<std::shared_ptr<Station>>& targets,
+		const std::shared_ptr<Station>& station) {
+		if (!station || station->IsRemote())
+			return;
+		if (std::find(targets.begin(), targets.end(), station) == targets.end())
+			targets.push_back(station);
+	};
+	auto addTakeTarget = [](std::vector<std::shared_ptr<LoopTake>>& targets,
+		const std::shared_ptr<LoopTake>& take) {
+		if (!take)
+			return;
+		if (std::find(targets.begin(), targets.end(), take) == targets.end())
+			targets.push_back(take);
+	};
+	auto stationForTake = [this](const std::shared_ptr<LoopTake>& take) -> std::shared_ptr<Station> {
+		if (!take)
+			return nullptr;
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+				return station;
+		}
+		return nullptr;
+	};
+	auto takeForLoop = [this](const std::shared_ptr<Loop>& loop) -> std::shared_ptr<LoopTake> {
+		if (!loop)
+			return nullptr;
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+			for (const auto& candidateTake : station->GetLoopTakes())
+			{
+				if (!candidateTake)
+					continue;
+				const auto& loops = candidateTake->GetLoops();
+				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
+					return candidateTake;
+			}
+		}
+		return nullptr;
+	};
+
+	const auto depth = _selector->CurrentSelectDepth();
+	if (depth == base::SelectDepth::DEPTH_STATION)
+	{
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		if (!station)
+			station = stationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
+		if (!station)
+			station = stationForTake(takeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
+		if (station && !station->IsRemote())
+		{
+			target.Kind = MidiPhaseDragTargetKind::Station;
+			target.StationRef = std::move(station);
+			addStationTarget(target.StationTargets, target.StationRef);
+		}
+		for (const auto& candidateStation : _stations)
+		{
+			if (candidateStation && candidateStation->IsSelected())
+				addStationTarget(target.StationTargets, candidateStation);
+		}
+		return target;
+	}
+
+	auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
+	if (!take)
+	{
+		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
+		take = takeForLoop(loop);
+	}
+
+	if (take)
+	{
+		target.Kind = MidiPhaseDragTargetKind::LoopTake;
+		target.TakeRef = std::move(take);
+		addTakeTarget(target.TakeTargets, target.TakeRef);
+	}
+
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		for (const auto& candidateTake : station->GetLoopTakes())
+		{
+			if (!candidateTake)
+				continue;
+
+			if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) && candidateTake->IsSelected())
+				addTakeTarget(target.TakeTargets, candidateTake);
+
+			if (depth == base::SelectDepth::DEPTH_LOOP)
+			{
+				for (const auto& loop : candidateTake->GetLoops())
+				{
+					if (loop && loop->IsSelected())
+					{
+						addTakeTarget(target.TakeTargets, candidateTake);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return target;
+}
+
+std::int32_t Scene::_MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept
+{
+	switch (target.Kind)
+	{
+	case MidiPhaseDragTargetKind::Station:
+		return target.StationRef ? target.StationRef->StationPhaseOffsetSamps() : 0;
+	case MidiPhaseDragTargetKind::LoopTake:
+		return target.TakeRef ? target.TakeRef->MidiQuantisation().PhaseOffsetSamps : 0;
+	case MidiPhaseDragTargetKind::Global:
+	default:
+		return _quantisation.GlobalPhaseOffsetSamps();
+	}
+}
+
+void Scene::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
+	std::int32_t offsetSamps) noexcept
+{
+	switch (target.Kind)
+	{
+	case MidiPhaseDragTargetKind::Station:
+		for (const auto& station : target.StationTargets)
+		{
+			if (station)
+				station->SetStationPhaseOffsetSamps(offsetSamps);
+		}
+		break;
+	case MidiPhaseDragTargetKind::LoopTake:
+		for (const auto& take : target.TakeTargets)
+		{
+			if (!take)
+				continue;
+
+			auto settings = take->MidiQuantisation();
+			settings.PhaseOffsetSamps = offsetSamps;
+			take->SetMidiQuantisation(settings);
+		}
+		break;
+	case MidiPhaseDragTargetKind::Global:
+	default:
+		_quantisation.SetGlobalPhaseOffsetSamps(offsetSamps, _stations);
+		break;
+	}
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)

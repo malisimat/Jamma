@@ -153,6 +153,15 @@ namespace
 		up.Modifiers = ctrlShift;
 		EXPECT_FALSE(scene.OnAction(up).IsEaten);
 	}
+
+	void AddRecordedLoopForVisual(std::shared_ptr<LoopTake> take,
+		const std::string& stationName,
+		std::uint64_t transportStartSamps)
+	{
+		take->Record({ 0u }, stationName, {}, {}, {}, transportStartSamps);
+		take->EndMultiWrite(1000u, true, Audible::AUDIOSOURCE_ADC);
+		take->Play(0u, 1000u, 0u);
+	}
 }
 
 TEST(MidiLoop, DefaultStateIsEmpty) {
@@ -1002,6 +1011,94 @@ TEST(LoopTakeMidiQuantisation, QuantisationGlobalPhasePropagatesAcrossStations) 
 
 	EXPECT_EQ(240, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
 	EXPECT_EQ(270, secondTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, ResolvedPhasePublicationComposesGlobalStationTakeAndTransport) {
+	auto take = MakeLoopTake("published-phase-take");
+	auto station = MakeStation("published-phase-station");
+	station->SetGlobalPhaseOffsetSamps(100);
+	station->SetStationPhaseOffsetSamps(25);
+	station->AddTake(take);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+	settings.PhaseOffsetSamps = 10;
+	take->SetMidiQuantisation(settings);
+
+	take->Record({}, station->Name(), { 0u }, {}, {}, 250u);
+	EXPECT_EQ(85, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
+	auto take = MakeLoopTake("visual-phase-take");
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+	settings.PhaseOffsetSamps = 12;
+	take->SetMidiQuantisation(settings);
+	take->SetMidiQuantisationInheritedPhaseOffset(30);
+	AddRecordedLoopForVisual(take, "visual-station", 250u);
+
+	auto visual = take->QuantisationVisual();
+	ASSERT_TRUE(visual.has_value());
+	EXPECT_EQ(-8, visual->PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragBackgroundUpdatesGlobalPhase) {
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	auto station = MakeStation("scene-global-station");
+	auto take = MakeLoopTake("scene-global-take");
+	station->AddTake(take);
+	scene.AddStationForTest(station);
+
+	const utils::Position2d start{ 20, 20 };
+	const utils::Position2d finish{ 70, 20 };
+	ApplyCtrlShiftDrag(scene, start, finish);
+
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->GlobalPhaseOffsetSamps());
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragStationDepthUpdatesStationPhase) {
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	auto station = MakeStation("scene-station-phase");
+	auto take = MakeLoopTake("scene-station-phase-take");
+	station->AddTake(take);
+	scene.AddStationForTest(station);
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(station), base::Action::MODIFIER_NONE);
+
+	const utils::Position2d start{ 20, 20 };
+	const utils::Position2d finish{ 70, 20 };
+	ApplyCtrlShiftDrag(scene, start, finish);
+
+	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->StationPhaseOffsetSamps());
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragLoopTakeDepthUpdatesTakeLocalPhase) {
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	auto station = MakeStation("scene-take-phase-station");
+	auto take = MakeLoopTake("scene-take-phase");
+	station->AddTake(take);
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
+
+	const utils::Position2d start{ 20, 20 };
+	const utils::Position2d finish{ 70, 20 };
+	ApplyCtrlShiftDrag(scene, start, finish);
+
+	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
+	EXPECT_EQ(0, station->StationPhaseOffsetSamps());
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->MidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
 TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {

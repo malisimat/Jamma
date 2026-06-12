@@ -129,6 +129,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 {
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
+	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };

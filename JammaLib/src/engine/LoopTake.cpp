@@ -226,6 +226,9 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 {
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
+	midi::MidiQuantisationSettings quantisation = take->MidiQuantisation();
+	quantisation.PhaseOffsetSamps = takeStruct.TakePhaseOffsetSamps;
+	take->SetMidiQuantisation(quantisation);
 
 	LoopParams loopParams;
 	loopParams.Wav = "hh";

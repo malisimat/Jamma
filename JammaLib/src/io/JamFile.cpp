@@ -6,7 +6,9 @@
 ///////////////////////////////////////////////////////////
 
 #include "JamFile.h"
+#include <algorithm>
 #include <iomanip>
+#include <limits>
 #include "../utils/StringUtils.h"
 
 using namespace io;
@@ -36,8 +38,35 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.Version = VERSION_V;
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
+	jam.GlobalPhaseOffsetSamps = 0;
 	jam.Quantisation = engine::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
+
+	auto parseInt32 = [](const Json::JsonValue& value, std::int32_t fallback) {
+		long long parsed = fallback;
+		switch (value.index())
+		{
+		case 1:
+			parsed = std::get<long>(value);
+			break;
+		case 2:
+		{
+			const auto unsignedValue = std::get<unsigned long>(value);
+			parsed = unsignedValue > static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max()) ?
+				static_cast<long long>(std::numeric_limits<std::int32_t>::max()) :
+				static_cast<long long>(unsignedValue);
+			break;
+		}
+		default:
+			break;
+		}
+
+		if (parsed > static_cast<long long>(std::numeric_limits<std::int32_t>::max()))
+			return std::numeric_limits<std::int32_t>::max();
+		if (parsed < static_cast<long long>(std::numeric_limits<std::int32_t>::min()))
+			return std::numeric_limits<std::int32_t>::min();
+		return static_cast<std::int32_t>(parsed);
+	};
 
 	auto iter = jamParams.KeyValues.find("ninjam");
 	if (iter != jamParams.KeyValues.end())
@@ -83,6 +112,10 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		if (jamParams.KeyValues["quantisesamps"].index() == 2)
 			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
 	}
+
+	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
+	if (iter != jamParams.KeyValues.end())
+		jam.GlobalPhaseOffsetSamps = parseInt32(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
 
 	std::string quantiseStr = "";
 	iter = jamParams.KeyValues.find("quantisation");
@@ -150,6 +183,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	auto kvStr = [&](const std::string& key, const std::string& value)
 		{ return quoted(key) + ":" + quoted(value); };
 	auto kvUlong = [&](const std::string& key, unsigned long value)
+		{ return quoted(key) + ":" + std::to_string(value); };
+	auto kvInt = [&](const std::string& key, std::int32_t value)
 		{ return quoted(key) + ":" + std::to_string(value); };
 	auto kvDouble = [&](const std::string& key, double value)
 		{ return quoted(key) + ":" + formatDouble(value); };
@@ -235,6 +270,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvStr("name", jam.Name) << ",";
 	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
+	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
 		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";
@@ -246,6 +282,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		if (stationIndex > 0) ss << ",";
 		ss << "{" << kvStr("name", station.Name) << ","
 			<< kvUlong("stationtype", station.StationType) << ","
+			<< kvInt("stationphaseoffsetsamps", station.StationPhaseOffsetSamps) << ","
 			<< quoted("takes") << ":[";
 
 		for (size_t takeIndex = 0; takeIndex < station.LoopTakes.size(); ++takeIndex)
@@ -253,6 +290,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			const auto& take = station.LoopTakes[takeIndex];
 			if (takeIndex > 0) ss << ",";
 			ss << "{" << kvStr("name", take.Name) << ","
+				<< kvInt("takephaseoffsetsamps", take.TakePhaseOffsetSamps) << ","
 				<< quoted("loops") << ":[";
 
 			for (size_t loopIndex = 0; loopIndex < take.Loops.size(); ++loopIndex)
@@ -556,6 +594,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	std::string name;
 	std::vector<Loop> loops;
 	std::vector<VstEntry> vstChain;
+	std::int32_t takePhaseOffsetSamps = 0;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -587,6 +626,18 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	if (loops.empty() || name.empty())
 		return std::nullopt;
 
+	iter = json.KeyValues.find("takephaseoffsetsamps");
+	if (iter != json.KeyValues.end())
+	{
+		const auto& value = json.KeyValues["takephaseoffsetsamps"];
+		if (value.index() == 1)
+			takePhaseOffsetSamps = static_cast<std::int32_t>(std::get<long>(value));
+		else if (value.index() == 2)
+			takePhaseOffsetSamps = static_cast<std::int32_t>(std::min<unsigned long>(
+				std::get<unsigned long>(value),
+				static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max())));
+	}
+
 	iter = json.KeyValues.find("vst");
 	if (iter != json.KeyValues.end())
 	{
@@ -609,6 +660,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.Name = name;
 	take.Loops = loops;
 	take.VstChain = vstChain;
+	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;
 	return take;
 }
 
@@ -617,6 +669,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::string name;
 	unsigned int stationType = 0;
 	std::vector<LoopTake> takes;
+	std::int32_t stationPhaseOffsetSamps = 0;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -652,6 +705,18 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
+	iter = json.KeyValues.find("stationphaseoffsetsamps");
+	if (iter != json.KeyValues.end())
+	{
+		const auto& value = json.KeyValues["stationphaseoffsetsamps"];
+		if (value.index() == 1)
+			stationPhaseOffsetSamps = static_cast<std::int32_t>(std::get<long>(value));
+		else if (value.index() == 2)
+			stationPhaseOffsetSamps = static_cast<std::int32_t>(std::min<unsigned long>(
+				std::get<unsigned long>(value),
+				static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max())));
+	}
+
 	std::vector<VstEntry> vstChain;
 	iter = json.KeyValues.find("vst");
 	if (iter != json.KeyValues.end())
@@ -679,5 +744,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	station.StationType = stationType;
 	station.LoopTakes = takes;
 	station.VstChain = vstChain;
+	station.StationPhaseOffsetSamps = stationPhaseOffsetSamps;
 	return station;
 }

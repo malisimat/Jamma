@@ -191,6 +191,7 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	jam.Name = "jam\"name\\path";
 	jam.TimerTicks = 12;
 	jam.QuantiseSamps = 960;
+	jam.GlobalPhaseOffsetSamps = -120;
 	jam.Quantisation = engine::Timer::QUANTISE_MULTIPLE;
 
 	JamFile::Loop loop;
@@ -208,11 +209,13 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 
 	JamFile::LoopTake take;
 	take.Name = "take";
+	take.TakePhaseOffsetSamps = 45;
 	take.Loops.push_back(loop);
 
 	JamFile::Station station;
 	station.Name = "station";
 	station.StationType = 0;
+	station.StationPhaseOffsetSamps = 30;
 	station.LoopTakes.push_back(take);
 
 	jam.Stations.push_back(station);
@@ -225,9 +228,12 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ("jam\"name\\path", parsed->Name);
 	ASSERT_EQ(12, parsed->TimerTicks);
 	ASSERT_EQ(960, parsed->QuantiseSamps);
+	ASSERT_EQ(-120, parsed->GlobalPhaseOffsetSamps);
 	ASSERT_EQ(engine::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
 	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(30, parsed->Stations[0].StationPhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	ASSERT_EQ(45, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());
 
 	const auto& parsedLoop = parsed->Stations[0].LoopTakes[0].Loops[0];
@@ -243,6 +249,38 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ(2, panParams.size());
 	ASSERT_EQ(1.0, panParams[0]);
 	ASSERT_EQ(0.0, panParams[1]);
+}
+
+TEST(JamFile, MissingPhaseOffsetsDefaultToZero) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(0, parsed->GlobalPhaseOffsetSamps);
+	ASSERT_EQ(1, parsed->Stations.size());
+	EXPECT_EQ(0, parsed->Stations[0].StationPhaseOffsetSamps);
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
+}
+
+TEST(JamFile, ParsesSignedPhaseOffsets) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"takephaseoffsetsamps\":-7,\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"stationphaseoffsetsamps\":-11,\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"globalphaseoffsetsamps\":-13,\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(-13, parsed->GlobalPhaseOffsetSamps);
+	ASSERT_EQ(1, parsed->Stations.size());
+	EXPECT_EQ(-11, parsed->Stations[0].StationPhaseOffsetSamps);
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_EQ(-7, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
 TEST(JamFile, RoundTripsVstStateBlob) {
