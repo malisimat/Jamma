@@ -127,30 +127,30 @@ namespace
 		return hoverPath;
 	}
 
-	void ApplyCtrlShiftDrag(TestScene& scene,
+	void ApplyCtrlDrag(TestScene& scene,
 		const utils::Position2d& start,
 		const utils::Position2d& finish)
 	{
-		auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+		auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
 		TouchAction down;
 		down.State = TouchAction::TOUCH_DOWN;
 		down.Index = 0;
 		down.Position = start;
-		down.Modifiers = ctrlShift;
+		down.Modifiers = ctrl;
 		EXPECT_TRUE(scene.OnAction(down).IsEaten);
 
 		TouchMoveAction move;
 		move.Index = 0;
 		move.Position = finish;
-		move.Modifiers = ctrlShift;
+		move.Modifiers = ctrl;
 		EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
 		TouchAction up;
 		up.State = TouchAction::TOUCH_UP;
 		up.Index = 0;
 		up.Position = finish;
-		up.Modifiers = ctrlShift;
+		up.Modifiers = ctrl;
 		EXPECT_FALSE(scene.OnAction(up).IsEaten);
 	}
 
@@ -801,7 +801,7 @@ TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
 	EXPECT_EQ(1600u, applied.GrainSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, CtrlShiftDragEditsFraction) {
+TEST(LoopTakeMidiQuantisation, CtrlDragEditsFraction) {
 	auto take = MakeLoopTake();
 
 	MidiQuantisationSettings settings;
@@ -814,7 +814,7 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftDragEditsFraction) {
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
 	down.Position = { 20, 20 };
-	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 	const auto downResult = take->OnAction(down);
 	EXPECT_TRUE(downResult.IsEaten);
 
@@ -843,7 +843,7 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftDragEditsFraction) {
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, finished.Fraction);
 }
 
-TEST(LoopTakeMidiQuantisation, CtrlShiftDragSeedsGrainFromTakeLoopWhenSceneGrainUnknown) {
+TEST(LoopTakeMidiQuantisation, CtrlDragSeedsGrainFromTakeLoopWhenSceneGrainUnknown) {
 	auto take = MakeLoopTake();
 	take->Record({}, "station", { 3u });
 	take->Play(0u, 1600u, 0u);
@@ -858,7 +858,7 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftDragSeedsGrainFromTakeLoopWhenSceneGrain
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
 	down.Position = { 20, 20 };
-	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 	EXPECT_TRUE(take->OnAction(down).IsEaten);
 
 	TouchMoveAction move;
@@ -873,7 +873,7 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftDragSeedsGrainFromTakeLoopWhenSceneGrain
 	EXPECT_EQ(1600u, moved.GrainSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
+TEST(LoopTakeMidiQuantisation, CtrlClickTogglesEnableDisable) {
 	auto take = MakeLoopTake();
 
 	MidiQuantisationSettings settings;
@@ -882,13 +882,13 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	settings.GrainSamps = 1600u;
 	take->SetMidiQuantisation(settings);
 
-	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
 	TouchAction down;
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
 	down.Position = { 20, 20 };
-	down.Modifiers = ctrlShift;
+	down.Modifiers = ctrl;
 	EXPECT_TRUE(take->OnAction(down).IsEaten);
 
 	TouchAction up = down;
@@ -906,7 +906,7 @@ TEST(LoopTakeMidiQuantisation, CtrlShiftClickTogglesEnableDisable) {
 	TouchMoveAction moveAway;
 	moveAway.Index = 0;
 	moveAway.Position = { 20, -44 };
-	moveAway.Modifiers = ctrlShift;
+	moveAway.Modifiers = ctrl;
 	EXPECT_TRUE(take->OnAction(moveAway).IsEaten);
 
 	TouchMoveAction moveBack = moveAway;
@@ -1048,7 +1048,7 @@ TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
 	EXPECT_EQ(-8, visual->PhaseOffsetSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragBackgroundUpdatesGlobalPhase) {
+TEST(LoopTakeMidiQuantisation, SceneCtrlDragBackgroundUpdatesGlobalPhase) {
 	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
 	auto station = MakeStation("scene-global-station");
 	auto take = MakeLoopTake("scene-global-take");
@@ -1057,13 +1057,13 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragBackgroundUpdatesGlobalPhase) {
 
 	const utils::Position2d start{ 20, 20 };
 	const utils::Position2d finish{ 70, 20 };
-	ApplyCtrlShiftDrag(scene, start, finish);
+	ApplyCtrlDrag(scene, start, finish);
 
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->GlobalPhaseOffsetSamps());
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragStationDepthUpdatesStationPhase) {
+TEST(LoopTakeMidiQuantisation, SceneCtrlDragStationDepthUpdatesStationPhase) {
 	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
 	auto station = MakeStation("scene-station-phase");
 	auto take = MakeLoopTake("scene-station-phase-take");
@@ -1074,14 +1074,14 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragStationDepthUpdatesStationPhase
 
 	const utils::Position2d start{ 20, 20 };
 	const utils::Position2d finish{ 70, 20 };
-	ApplyCtrlShiftDrag(scene, start, finish);
+	ApplyCtrlDrag(scene, start, finish);
 
 	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->StationPhaseOffsetSamps());
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragLoopTakeDepthUpdatesTakeLocalPhase) {
+TEST(LoopTakeMidiQuantisation, SceneCtrlDragLoopTakeDepthUpdatesTakeLocalPhase) {
 	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
 	auto station = MakeStation("scene-take-phase-station");
 	auto take = MakeLoopTake("scene-take-phase");
@@ -1093,7 +1093,7 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlShiftDragLoopTakeDepthUpdatesTakeLocalPh
 
 	const utils::Position2d start{ 20, 20 };
 	const utils::Position2d finish{ 70, 20 };
-	ApplyCtrlShiftDrag(scene, start, finish);
+	ApplyCtrlDrag(scene, start, finish);
 
 	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
 	EXPECT_EQ(0, station->StationPhaseOffsetSamps());
@@ -1113,7 +1113,7 @@ TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	settings.GrainSamps = 1600u;
 	take->SetMidiQuantisation(settings);
 
-	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
 	std::ostringstream captured;
 	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
@@ -1122,12 +1122,12 @@ TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
 	down.Position = { 20, 20 };
-	down.Modifiers = ctrlShift;
+	down.Modifiers = ctrl;
 	EXPECT_TRUE(take->OnAction(down).IsEaten);
 
 	TouchMoveAction move = {};
 	move.Index = 0;
-	move.Modifiers = ctrlShift;
+	move.Modifiers = ctrl;
 
 	move.Position = { 20, 10 };
 	EXPECT_TRUE(take->OnAction(move).IsEaten);
@@ -1175,7 +1175,7 @@ TEST(SceneInteractionRouting, ScenePhaseDragPropagatesToExistingLoopTakes) {
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
 
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 }),
 		take->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1201,7 +1201,7 @@ TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
 	scene.CommitChanges();
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
 
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 }),
 		take->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1235,7 +1235,7 @@ TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations)
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1270,7 +1270,7 @@ TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTake
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1307,7 +1307,7 @@ TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOP);
 	scene.SetHover3d(HoverPathFor(hoveredLoop), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1342,13 +1342,13 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	auto ctrlShift = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT);
+	auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
 	TouchAction down;
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
 	down.Position = { 220, 220 };
-	down.Modifiers = ctrlShift;
+	down.Modifiers = ctrl;
 	EXPECT_TRUE(scene.OnAction(down).IsEaten);
 
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
@@ -1356,14 +1356,14 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 	TouchMoveAction move;
 	move.Index = 0;
 	move.Position = { 284, 220 };
-	move.Modifiers = ctrlShift;
+	move.Modifiers = ctrl;
 	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
 	TouchAction up;
 	up.State = TouchAction::TOUCH_UP;
 	up.Index = 0;
 	up.Position = move.Position;
-	up.Modifiers = ctrlShift;
+	up.Modifiers = ctrl;
 	EXPECT_FALSE(scene.OnAction(up).IsEaten);
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
@@ -1399,7 +1399,7 @@ TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRoutin
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(touchedTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 10, 10 }, { 74, 10 });
+	ApplyCtrlDrag(scene, { 10, 10 }, { 74, 10 });
 
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 10, 10 }, { 74, 10 }),
 		touchedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);

@@ -1660,8 +1660,7 @@ void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* sourc
 
 bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
 {
-	return (Action::MODIFIER_CTRL & modifiers)
-		&& (Action::MODIFIER_SHIFT & modifiers);
+	return (Action::MODIFIER_CTRL & modifiers);
 }
 
 ActionResult Scene::_BeginMidiPhaseDrag(TouchAction action)

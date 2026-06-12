@@ -9,7 +9,7 @@
 2 midi_note MVP ObjectId Highlight LoopHover DiscAlpha RenderMode
 2 picker MVP ObjectId
 2 colour MVP Color
-2 quantisation MVP Highlight OverlayAlpha
+2 quantisation MVP Highlight OverlayAlpha Hue
 2 station MVP ObjectId Highlight StationHover StationLevel
 2 white MVP Highlight
 2 blur

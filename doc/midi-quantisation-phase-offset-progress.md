@@ -9,7 +9,8 @@ This branch has landed the first structural slice for shared MIDI quantisation p
 - `LoopTake` now keeps local phase offset, inherited phase offset, and a transport-derived natural phase separate, then resolves them into one effective value before publishing to owned `MidiLoop` instances.
 - `Quantisation` now has a global phase offset entry point, and `Station` now has global and station phase offset storage plus propagation into its takes.
 - `QuantisationLoopTakeVisual` and `QuantisationModel` now carry and render the resolved phase offset, so the quantisation overlay rotates with the same phase concept used by MIDI snapping.
-- `Scene` now supports Ctrl-Shift drag for adjusting quantisation phase at the active edit depth: background/global, station, LoopTake, and Loop-owned take targets. Hovered targets and selected peers are updated together.
+- `Scene` now supports Ctrl drag for adjusting quantisation phase at the active edit depth: background/global, station, LoopTake, and Loop-owned take targets. Hovered targets and selected peers are updated together.
+- The quantisation overlay is Ctrl-momentary, fades smoothly on release, renders specular-shaded subdivision bands, and shows hue-controlled phase-origin handles aligned to each take's resolved phase.
 - `Station` now applies MIDI quantisation phase offsets when adding takes.
 - Save/load now persists global, station, and take-local phase offsets, with old sessions defaulting missing fields to zero.
 - Focused native tests cover positive and negative phase offsets, the local-only pack/unpack contract, transport-anchor alignment across different take start positions, station-to-take propagation, resolved phase publication into `MidiLoop`, resolved visual publication, depth-aware scene drag routing, and persistence defaults/round-trips.
@@ -18,7 +19,7 @@ This branch has landed the first structural slice for shared MIDI quantisation p
 
 The engine now carries a full phase chain of global, station, and take-local offsets. The rendered quantisation overlay uses the resolved value, and sessions reopen with saved grid alignment.
 
-The main remaining gap is polish: the current interaction is depth-aware Ctrl-Shift drag rather than a visible popup handle picker with screen-edge-aware placement. Visual banded subdivision rows, explicit origin markers, and undo/redo participation still need a design pass.
+The main remaining gap is optional UX expansion: the current interaction is depth-aware Ctrl drag with a momentary/fading overlay rather than a separate popup picker. Banded subdivision rows and phase-origin handles are rendered in the overlay; undo participation is out of scope for this pass.
 
 ## Next Stages
 
@@ -28,10 +29,8 @@ Goal: provide intuitive, responsive control of global and LoopTake prop-edits th
 
 Work:
 
-- Define the overlay state model for hovered, selected, and depth-mode-specific handles.
-- Wire the handle routing so each edit target resolves to the correct global, station, LoopTake, or Loop phase field.
-- Implement screen-edge-aware placement and a stable column layout for the handle picker.
-- Keep the interaction contract explicit for future per-object edit modes.
+- Keep the Ctrl-momentary overlay contract explicit for future per-object edit modes.
+- Optionally design a separate screen-edge-aware picker if the inline phase-origin handles are not discoverable enough in play.
 
 Deliverable:
 
@@ -47,7 +46,7 @@ Work:
 - Add persistence for station phase offset.
 - Add persistence for take-local phase offset.
 - Decide backward compatibility behavior for sessions created before this feature.
-- Decide whether phase edits should participate in undo/redo.
+- Undo/redo participation is intentionally out of scope for this visual pass.
 
 Deliverable:
 
@@ -59,9 +58,9 @@ Goal: make the visuals clearly communicate the new model.
 
 Work:
 
-- Adjust the QuantisationModel rotation for each LoopTake that represents its offset, so they all line up visually on the shared grid.
-- Add a new visual like banded rows that displays the current fraction/subdivisions of each LoopTake, with widths indicating subdivision size.
-- Decide whether overlay origin markers should show loop origin, quantisation origin, or both.
+- Keep QuantisationModel rotation aligned to each LoopTake's resolved offset so the shared grid lines up visually.
+- Keep specular-shaded banded rows visible enough to show the current fraction/subdivisions of each LoopTake.
+- Keep phase-origin handles readable as quantisation-origin markers; loop-origin markers can be added separately if needed.
 - Decide whether the MIDI model should visually expose quantisation-origin shifts separately from playhead rotation.
 - Verify that overlay rotation remains intuitive when phase shifts are large or negative.
 - Audit render-side use of phase values for precision and normalization edge cases.

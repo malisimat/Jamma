@@ -12,8 +12,7 @@ namespace
 {
 	bool HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept
 	{
-		return (base::Action::MODIFIER_CTRL & modifiers)
-			&& (base::Action::MODIFIER_SHIFT & modifiers);
+		return (base::Action::MODIFIER_CTRL & modifiers);
 	}
 
 	unsigned long NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept
