@@ -5,7 +5,6 @@
 #include "../io/WavReadWriter.h"
 #include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
-#include "../utils/ArrayUtils.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../midi/MidiTimestampMapper.h"
 #include "../vst/Vst3Plugin.h"
@@ -52,7 +51,9 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
-	_dragLoopTakeTargets(),
+	_isMidiPhaseDragging(false),
+	_midiPhaseDragStartPosition{},
+	_midiPhaseDragStartOffsetSamps(0),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
 	_camera(CameraParams(
@@ -410,24 +411,19 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
-	if ((TouchAction::TouchState::TOUCH_UP == action.State)
-		&& !_dragLoopTakeTargets.empty())
+	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
+		&& (0 == action.Index)
+		&& _IsMidiPhaseDragModifier(action.Modifiers))
+		return _BeginMidiPhaseDrag(action);
+
+	if (_isMidiPhaseDragging)
 	{
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
+		if (TouchAction::TouchState::TOUCH_UP == action.State)
+			return _EndMidiPhaseDrag(action);
 
-			auto takeRes = take->OnAction(take->GlobalToLocal(action));
-			if (takeRes.IsEaten && (nullptr != takeRes.Undo))
-				_undoHistory.Add(takeRes.Undo);
-		}
-
-		res = _selector->OnAction(_selector->ParentToLocal(action));
-		_UpdateSelection(res.ResultType);
-		_dragLoopTakeTargets.clear();
-		_touchDownElement.reset();
-		return ActionResult::NoAction();
+		res.IsEaten = true;
+		res.ResultType = ACTIONRESULT_DEFAULT;
+		return res;
 	}
 
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
@@ -494,33 +490,6 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 	}
 
-	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
-		&& (0 == action.Index)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		_dragLoopTakeTargets = _CurrentLoopTakeInteractionTargets();
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
-
-			auto takeRes = take->BeginMidiQuantisationGesture(action);
-
-			if (takeRes.IsEaten)
-			{
-				res = takeRes;
-				if (nullptr != takeRes.Undo)
-					_undoHistory.Add(takeRes.Undo);
-			}
-		}
-
-		if (res.IsEaten)
-			return res;
-
-		_dragLoopTakeTargets.clear();
-	}
-
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
 	_UpdateSelection(res.ResultType);
@@ -552,21 +521,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 
-	if (!_dragLoopTakeTargets.empty())
-	{
-		ActionResult res = ActionResult::NoAction();
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
-
-			auto takeRes = take->OnAction(take->GlobalToLocal(action));
-			if (takeRes.IsEaten)
-				res = takeRes;
-		}
-
-		return res;
-	}
+	if (_isMidiPhaseDragging)
+		return _UpdateMidiPhaseDrag(action);
 
 	auto activeElement = _touchDownElement.lock();
 
@@ -1698,6 +1654,60 @@ void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* sourc
 	_quantisation.SetMidiGrain(grainSamps, source, _stations);
 }
 
+bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
+{
+	return (Action::MODIFIER_CTRL & modifiers)
+		&& (Action::MODIFIER_SHIFT & modifiers);
+}
+
+ActionResult Scene::_BeginMidiPhaseDrag(TouchAction action)
+{
+	_isMidiPhaseDragging = true;
+	_midiPhaseDragStartPosition = action.Position;
+	_midiPhaseDragStartOffsetSamps = _quantisation.GlobalPhaseOffsetSamps();
+	_SetQuantisationOverlayHeld(true);
+	_ApplyQuantisationOverlayAlpha(1.0f);
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = ACTIONRESULT_DEFAULT;
+	return res;
+}
+
+ActionResult Scene::_UpdateMidiPhaseDrag(TouchMoveAction action)
+{
+	const auto delta = action.Position - _midiPhaseDragStartPosition;
+	const auto offsetSamps = Quantisation::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
+		delta.X,
+		_CurrentSampleRate());
+	_quantisation.SetGlobalPhaseOffsetSamps(offsetSamps, _stations);
+	_ApplyQuantisationOverlayAlpha(1.0f);
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = ACTIONRESULT_DEFAULT;
+	return res;
+}
+
+ActionResult Scene::_EndMidiPhaseDrag(TouchAction action)
+{
+	if (_isMidiPhaseDragging)
+	{
+		const auto delta = action.Position - _midiPhaseDragStartPosition;
+		const auto offsetSamps = Quantisation::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
+			delta.X,
+			_CurrentSampleRate());
+		_quantisation.SetGlobalPhaseOffsetSamps(offsetSamps, _stations);
+	}
+
+	_isMidiPhaseDragging = false;
+	_SetQuantisationOverlayHeld(false);
+	_PulseQuantisationOverlay();
+	_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
+
+	return ActionResult::NoAction();
+}
+
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
 	_quantisation.Clear(clearTapTempo);
@@ -1958,150 +1968,6 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
-}
-
-std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
-	const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
-{
-	if (!target)
-		return std::nullopt;
-
-	InteractionTarget resolved;
-	resolved.StationRef = std::dynamic_pointer_cast<Station>(target);
-	resolved.TakeRef = std::dynamic_pointer_cast<LoopTake>(target);
-	resolved.LoopRef = std::dynamic_pointer_cast<Loop>(target);
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-		if (!resolved.StationRef)
-			return std::nullopt;
-		return resolved;
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		if (!resolved.TakeRef)
-			return std::nullopt;
-
-		for (const auto& station : _stations)
-		{
-			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), resolved.TakeRef) != takes.end())
-			{
-				resolved.StationRef = station;
-				break;
-			}
-		}
-
-		for (const auto& loop : resolved.TakeRef->GetLoops())
-		{
-			if (!loop)
-				continue;
-
-			if (!resolved.RepresentativeLoopRef || (loop->LoopLength() > resolved.RepresentativeLoopRef->LoopLength()))
-				resolved.RepresentativeLoopRef = loop;
-			resolved.MasterLengthSamps = std::max(resolved.MasterLengthSamps, loop->LoopLength());
-		}
-
-		return resolved;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		if (!resolved.LoopRef)
-			return std::nullopt;
-
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				const auto& loops = take->GetLoops();
-				if (std::find(loops.begin(), loops.end(), resolved.LoopRef) != loops.end())
-				{
-					resolved.StationRef = station;
-					resolved.TakeRef = take;
-					resolved.RepresentativeLoopRef = resolved.LoopRef;
-					resolved.MasterLengthSamps = resolved.LoopRef->LoopLength();
-					return resolved;
-				}
-			}
-		}
-
-		return std::nullopt;
-	}
-	default:
-		return std::nullopt;
-	}
-}
-
-std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets()
-{
-	std::vector<std::shared_ptr<LoopTake>> targets;
-	const auto depth = _selector->CurrentSelectDepth();
-
-	const auto appendFromElement = [&](const std::shared_ptr<base::GuiElement>& element)
-	{
-		const auto resolved = _ResolveInteractionTarget(element, depth);
-		if (!resolved)
-			return;
-
-		switch (depth)
-		{
-		case base::SelectDepth::DEPTH_STATION:
-			if (!resolved->StationRef)
-				return;
-			for (const auto& take : resolved->StationRef->GetLoopTakes())
-				AppendUniqueTarget(targets, take);
-			break;
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-			AppendUniqueTarget(targets, resolved->TakeRef);
-			break;
-		case base::SelectDepth::DEPTH_LOOP:
-			AppendUniqueTarget(targets, resolved->TakeRef);
-			break;
-		default:
-			break;
-		}
-	};
-
-	appendFromElement(_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-		for (const auto& station : _stations)
-		{
-			if (station && station->IsSelected())
-				appendFromElement(std::static_pointer_cast<base::GuiElement>(station));
-		}
-		break;
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				if (take && take->IsSelected())
-					appendFromElement(std::static_pointer_cast<base::GuiElement>(take));
-			}
-		}
-		break;
-	case base::SelectDepth::DEPTH_LOOP:
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				for (const auto& loop : take->GetLoops())
-				{
-					if (loop && loop->IsSelected())
-						appendFromElement(std::static_pointer_cast<base::GuiElement>(loop));
-				}
-			}
-		}
-		break;
-	default:
-		break;
-	}
-
-	return targets;
 }
 
 void Scene::_ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)

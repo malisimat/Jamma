@@ -101,6 +101,23 @@ namespace
 		}
 	};
 
+	constexpr unsigned int ScenePhaseDragSampleRate = 48000u;
+
+	io::UserConfig MakeSceneUserConfig()
+	{
+		io::UserConfig userConfig = {};
+		userConfig.Audio.SampleRate = ScenePhaseDragSampleRate;
+		return userConfig;
+	}
+
+	std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
+		const utils::Position2d& finish)
+	{
+		return engine::ResolvePhaseOffsetDrag(0,
+			finish.X - start.X,
+			ScenePhaseDragSampleRate);
+	}
+
 	std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
 	{
 		std::vector<unsigned char> hoverPath;
@@ -955,6 +972,38 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 		+ static_cast<std::uint32_t>(shiftedTake->MidiQuantisationTransportStartSamps()));
 }
 
+TEST(LoopTakeMidiQuantisation, StationPhaseOffsetsComposeForExistingAndNewTakes) {
+	auto firstTake = MakeLoopTake("phase-take-a");
+	auto secondTake = MakeLoopTake("phase-take-b");
+	auto station = MakeStation("phase-station");
+
+	station->SetGlobalPhaseOffsetSamps(100);
+	station->SetStationPhaseOffsetSamps(25);
+	station->AddTake(firstTake);
+	EXPECT_EQ(125, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+
+	station->SetStationPhaseOffsetSamps(40);
+	station->AddTake(secondTake);
+	EXPECT_EQ(140, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(140, secondTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, QuantisationGlobalPhasePropagatesAcrossStations) {
+	auto firstTake = MakeLoopTake("global-phase-take-a");
+	auto secondTake = MakeLoopTake("global-phase-take-b");
+	auto firstStation = MakeStation("global-phase-station-a");
+	auto secondStation = MakeStation("global-phase-station-b");
+	firstStation->AddTake(firstTake);
+	secondStation->AddTake(secondTake);
+	secondStation->SetStationPhaseOffsetSamps(30);
+
+	engine::Quantisation quantisation;
+	quantisation.SetGlobalPhaseOffsetSamps(240, { firstStation, secondStation });
+
+	EXPECT_EQ(240, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(270, secondTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+}
+
 TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	auto take = MakeLoopTake();
 	io::LoggingConfig logging;
@@ -1010,7 +1059,7 @@ TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	EXPECT_EQ(std::string::npos, output.find("1/4 -> 1/4"));
 }
 
-TEST(SceneInteractionRouting, UiVerboseLoggingPropagatesToExistingLoopTakes) {
+TEST(SceneInteractionRouting, ScenePhaseDragPropagatesToExistingLoopTakes) {
 	auto take = MakeLoopTake();
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
@@ -1022,26 +1071,19 @@ TEST(SceneInteractionRouting, UiVerboseLoggingPropagatesToExistingLoopTakes) {
 	station->AddTake(take);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(station);
 	scene.CommitChanges();
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
 
-	io::LoggingConfig logging;
-	logging.Ui = "verbose";
-	scene.SetLogging(logging);
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
 
-	std::ostringstream captured;
-	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
-
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
-
-	std::cout.flush();
-	std::cout.rdbuf(oldBuf);
-
-	EXPECT_NE(std::string::npos, captured.str().find("MIDI quantisation fraction: take=take-0"));
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 }),
+		take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(take->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Whole, take->MidiQuantisation().Fraction);
 }
 
 TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
@@ -1056,20 +1098,18 @@ TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
 	station->AddTake(take);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(station);
 	scene.CommitChanges();
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
 
-	const auto& moved = take->MidiQuantisation();
-	EXPECT_TRUE(moved.Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, moved.Fraction);
-
-	EXPECT_TRUE(take->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, take->MidiQuantisation().Fraction);
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 }),
+		take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(take->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Whole, take->MidiQuantisation().Fraction);
 }
 
 TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations) {
@@ -1089,7 +1129,7 @@ TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations)
 	selectedStation->AddTake(selectedTake);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(hoveredStation);
 	scene.AddStationForTest(selectedStation);
@@ -1098,12 +1138,13 @@ TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations)
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
 
-	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
-	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
+	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(expectedPhase, selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 }
 
 TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTakes) {
@@ -1123,7 +1164,7 @@ TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTake
 	selectedStation->AddTake(selectedTake);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(hoveredStation);
 	scene.AddStationForTest(selectedStation);
@@ -1132,12 +1173,13 @@ TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTake
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
 
-	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
-	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
+	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(expectedPhase, selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 }
 
 TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
@@ -1159,7 +1201,7 @@ TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
 	selectedStation->AddTake(selectedTake);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(hoveredStation);
 	scene.AddStationForTest(selectedStation);
@@ -1168,12 +1210,13 @@ TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOP);
 	scene.SetHover3d(HoverPathFor(hoveredLoop), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 220, 156 });
+	ApplyCtrlShiftDrag(scene, { 220, 220 }, { 284, 220 });
 
-	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
-	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
+	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(expectedPhase, selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 }
 
 TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) {
@@ -1193,7 +1236,7 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 	selectedStation->AddTake(selectedTake);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(hoveredStation);
 	scene.AddStationForTest(selectedStation);
@@ -1215,7 +1258,7 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 
 	TouchMoveAction move;
 	move.Index = 0;
-	move.Position = { 220, 156 };
+	move.Position = { 284, 220 };
 	move.Modifiers = ctrlShift;
 	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
@@ -1226,10 +1269,11 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 	up.Modifiers = ctrlShift;
 	EXPECT_FALSE(scene.OnAction(up).IsEaten);
 
-	EXPECT_TRUE(hoveredTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, hoveredTake->MidiQuantisation().Fraction);
-	EXPECT_TRUE(selectedTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, selectedTake->MidiQuantisation().Fraction);
+	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
+	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(expectedPhase, selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(hoveredTake->MidiQuantisation().Enabled);
+	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 }
 
 TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRouting) {
@@ -1249,7 +1293,7 @@ TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRoutin
 	selectedStation->AddTake(selectedTake);
 
 	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
-	io::UserConfig userConfig = {};
+	io::UserConfig userConfig = MakeSceneUserConfig();
 	TestScene scene(sceneParams, userConfig);
 	scene.AddStationForTest(touchedStation);
 	scene.AddStationForTest(selectedStation);
@@ -1258,10 +1302,14 @@ TEST(SceneInteractionRouting, TwoDimensionalLoopTakeTouchDoesNotStartSceneRoutin
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
 	scene.SetHover3d(HoverPathFor(touchedTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlShiftDrag(scene, { 10, 10 }, { 10, -54 });
+	ApplyCtrlShiftDrag(scene, { 10, 10 }, { 74, 10 });
 
-	EXPECT_TRUE(touchedTake->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, touchedTake->MidiQuantisation().Fraction);
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 10, 10 }, { 74, 10 }),
+		touchedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag({ 10, 10 }, { 74, 10 }),
+		selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_FALSE(touchedTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Whole, touchedTake->MidiQuantisation().Fraction);
 	EXPECT_FALSE(selectedTake->MidiQuantisation().Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Whole, selectedTake->MidiQuantisation().Fraction);
 }

@@ -954,8 +954,8 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetSelectDepth(CurrentSelectDepth());
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
-	take->SetMidiQuantisationInheritedPhaseOffset(_globalPhaseOffsetSamps + _stationPhaseOffsetSamps);
 	_backLoopTakes.push_back(take);
+	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;

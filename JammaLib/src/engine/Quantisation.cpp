@@ -32,6 +32,15 @@ unsigned int Quantisation::_RoundedToUInt(double value)
 	return static_cast<unsigned int>(value + 0.5);
 }
 
+std::int32_t Quantisation::_ClampPhaseOffset(std::int64_t offsetSamps) noexcept
+{
+	if (offsetSamps > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
+		return std::numeric_limits<std::int32_t>::max();
+	if (offsetSamps < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))
+		return std::numeric_limits<std::int32_t>::min();
+	return static_cast<std::int32_t>(offsetSamps);
+}
+
 unsigned long Quantisation::_SnapSeedToMasterDivisor(unsigned long requestedSeedSamps,
 	unsigned long masterLoopSamps)
 {
@@ -207,6 +216,18 @@ void Quantisation::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 		if (station)
 			station->SetGlobalPhaseOffsetSamps(offsetSamps);
 	}
+}
+
+std::int32_t Quantisation::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
+	int deltaX,
+	unsigned int sampleRate) noexcept
+{
+	if (0u == sampleRate)
+		return startOffsetSamps;
+
+	const auto dragMs = static_cast<std::int64_t>(deltaX) / PhaseOffsetDragPixelsPerMillisecond;
+	const auto dragSamps = dragMs * static_cast<std::int64_t>(sampleRate) / 1000LL;
+	return _ClampPhaseOffset(static_cast<std::int64_t>(startOffsetSamps) + dragSamps);
 }
 
 bool Quantisation::HandleTapTempo(std::uint64_t estimatedSampleAt,

@@ -161,6 +161,9 @@ namespace engine
 
 		static unsigned int MinSeedSamps(unsigned int sampleRate,
 			const QuantisationPolicy& policy);
+		static std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
+			int deltaX,
+			unsigned int sampleRate) noexcept;
 		static unsigned int IntervalSampsFromTempo(float bpm,
 			unsigned int bpi,
 			unsigned int sampleRate);
@@ -181,8 +184,10 @@ namespace engine
 
 	private:
 		static constexpr double OverlayFadeSeconds = 2.0;
+		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
 		static constexpr std::int64_t StateHeld = (std::numeric_limits<std::int64_t>::max)();
+		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 
 		static unsigned int _ClampToUInt(unsigned long value);
 		static unsigned int _RoundedToUInt(double value);
@@ -225,6 +230,13 @@ namespace engine
 	inline unsigned int MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)
 	{
 		return Quantisation::MinSeedSamps(sampleRate, policy);
+	}
+
+	inline std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
+		int deltaX,
+		unsigned int sampleRate) noexcept
+	{
+		return Quantisation::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
 	}
 
 	inline unsigned int IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate)

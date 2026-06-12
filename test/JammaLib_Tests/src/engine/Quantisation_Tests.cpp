@@ -44,6 +44,14 @@ TEST(Quantisation, ConvertsNinjamTempoToIntervalSamples)
 	EXPECT_EQ(0u, engine::IntervalSampsFromTempo(120.0f, 16u, 0u));
 }
 
+TEST(Quantisation, ResolvePhaseOffsetDragConvertsHorizontalPixelsToMilliseconds)
+{
+	EXPECT_EQ(2400, engine::ResolvePhaseOffsetDrag(0, 50, 48000u));
+	EXPECT_EQ(-2400, engine::ResolvePhaseOffsetDrag(0, -50, 48000u));
+	EXPECT_EQ(3400, engine::ResolvePhaseOffsetDrag(1000, 50, 48000u));
+	EXPECT_EQ(1000, engine::ResolvePhaseOffsetDrag(1000, 50, 0u));
+}
+
 TEST(Quantisation, TapTempoTrackerSmoothsGaps)
 {
 	QuantisationPolicy policy;

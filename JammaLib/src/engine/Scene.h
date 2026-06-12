@@ -269,16 +269,10 @@ namespace engine
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
-		struct InteractionTarget
-		{
-			std::shared_ptr<Station> StationRef;
-			std::shared_ptr<LoopTake> TakeRef;
-			std::shared_ptr<Loop> LoopRef;
-			unsigned long MasterLengthSamps = 0ul;
-			std::shared_ptr<Loop> RepresentativeLoopRef;
-		};
-		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
-			base::SelectDepth depth) const;
+		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
+		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action);
+		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
+		actions::ActionResult _EndMidiPhaseDrag(actions::TouchAction action);
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
@@ -286,7 +280,6 @@ namespace engine
 		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
 		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
 		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
-		std::vector<std::shared_ptr<LoopTake>> _CurrentLoopTakeInteractionTargets();
 		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);
@@ -323,7 +316,9 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
-		std::vector<std::shared_ptr<LoopTake>> _dragLoopTakeTargets;
+		bool _isMidiPhaseDragging = false;
+		utils::Position2d _midiPhaseDragStartPosition;
+		std::int32_t _midiPhaseDragStartOffsetSamps = 0;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
