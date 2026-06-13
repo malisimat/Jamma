@@ -30,6 +30,7 @@
 #include "../graphics/VstEditorWindow.h"
 #include "../graphics/CtrlHandleOverlay.h"
 #include "Quantisation.h"
+#include "QuantisationInteractionController.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -269,59 +270,16 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
-		void _RefreshCtrlHandleOverlay();
-		float _CtrlHandleAlpha(Time now) const;
-		void _ApplyCtrlHandleAlpha(float alpha);
+		QuantisationInteractionContext _InteractionContext() const;
+		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
+		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
+		void _EndBackgroundDrag();
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
 		bool _HasQuantisationSelection() const;
 		bool _HasQuantisationHover() const;
-		int _CtrlHandleButtonCount() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		enum class MidiPhaseDragRoute : std::uint8_t
-		{
-			Global,
-			Local
-		};
-		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action,
-			MidiPhaseDragRoute route);
-		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
-		actions::ActionResult _EndMidiPhaseDrag(actions::TouchAction action);
-		actions::ActionResult _BeginFractionDrag(actions::TouchAction action);
-		actions::ActionResult _UpdateFractionDrag(actions::TouchMoveAction action);
-		actions::ActionResult _EndFractionDrag(actions::TouchAction action);
-		std::shared_ptr<LoopTake> _ResolveFractionDragTake();
-		std::vector<std::shared_ptr<LoopTake>> _ResolveFractionDragTargets();
-		std::shared_ptr<base::GuiElement> _CtrlOverlayHoverElement();
-		base::SelectDepth _CtrlOverlaySelectDepth() const noexcept;
-		void _CaptureCtrlOverlayContext();
-		bool _HasCtrlOverlayContext() const noexcept;
-		enum class MidiPhaseDragTargetKind : std::uint8_t
-		{
-			Global,
-			Station,
-			LoopTake
-		};
-		struct MidiPhaseDragTarget
-		{
-			MidiPhaseDragTargetKind Kind = MidiPhaseDragTargetKind::Global;
-			std::shared_ptr<Station> StationRef;
-			std::shared_ptr<LoopTake> TakeRef;
-			std::vector<std::shared_ptr<Station>> StationTargets;
-			std::vector<std::shared_ptr<LoopTake>> TakeTargets;
-		};
-		struct CtrlOverlayContext
-		{
-			utils::Position2d Anchor{};
-			int VisibleButtonCount = 1;
-			std::vector<unsigned char> HoverPath;
-			base::SelectDepth SelectDepth = base::SelectDepth::DEPTH_STATION;
-		};
-		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget(MidiPhaseDragRoute route);
-		std::int32_t _MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept;
-		void _SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
-			std::int32_t offsetSamps) noexcept;
 		void _QueueLocalTempoFromClock();
 		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
@@ -365,16 +323,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
-		bool _isMidiPhaseDragging = false;
-		utils::Position2d _midiPhaseDragStartPosition;
-		std::int32_t _midiPhaseDragStartOffsetSamps = 0;
-		MidiPhaseDragTarget _midiPhaseDragTarget;
-		bool _isFractionDragging = false;
-		int _fractionDragStartY = 0;
-		std::shared_ptr<LoopTake> _fractionDragTake;
-		std::vector<std::shared_ptr<LoopTake>> _fractionDragTargets;
-		midi::MidiQuantisationFraction _fractionDragStartFraction = midi::MidiQuantisationFraction::Whole;
-		bool _fractionDragMoved = false;
+		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
+		QuantisationInteractionController _quantisationInteraction;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
@@ -387,9 +337,5 @@ namespace engine
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
-		bool _ctrlHandleHeld = false;
-		Time _ctrlHandleReleasedAt;
-		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
-		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 	};
 }

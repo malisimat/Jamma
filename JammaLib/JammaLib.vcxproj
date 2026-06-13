@@ -226,6 +226,7 @@
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
     <ClInclude Include="src\engine\Quantisation.h" />
+    <ClInclude Include="src\engine\QuantisationInteractionController.h" />
     <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\graphics\QuantisationDivisionModel.h" />
     <ClInclude Include="src\graphics\StationModel.h" />
@@ -377,6 +378,7 @@
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
     <ClCompile Include="src\engine\Quantisation.cpp" />
+    <ClCompile Include="src\engine\QuantisationInteractionController.cpp" />
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
     <ClCompile Include="src\graphics\StationModel.cpp" />

@@ -116,6 +116,9 @@
     <ClInclude Include="src\engine\Quantisation.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\QuantisationInteractionController.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\QuantisationModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
@@ -722,6 +725,9 @@
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Quantisation.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\QuantisationInteractionController.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\QuantisationModel.cpp">
