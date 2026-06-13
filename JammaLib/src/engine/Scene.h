@@ -185,6 +185,8 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		int CtrlOverlayVisibleButtonCountForTest() const noexcept;
+		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
 
 		void InitReceivers();
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
@@ -267,11 +269,15 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
+		void _RefreshCtrlHandleOverlay();
 		float _CtrlHandleAlpha(Time now) const;
 		void _ApplyCtrlHandleAlpha(float alpha);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
+		bool _HasQuantisationSelection() const;
+		bool _HasQuantisationHover() const;
+		int _CtrlHandleButtonCount() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
 		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
@@ -280,6 +286,10 @@ namespace engine
 		actions::ActionResult _UpdateFractionDrag(actions::TouchMoveAction action);
 		actions::ActionResult _EndFractionDrag(actions::TouchAction action);
 		std::shared_ptr<LoopTake> _ResolveFractionDragTake();
+		std::shared_ptr<base::GuiElement> _CtrlOverlayHoverElement();
+		base::SelectDepth _CtrlOverlaySelectDepth() const noexcept;
+		void _CaptureCtrlOverlayContext();
+		bool _HasCtrlOverlayContext() const noexcept;
 		enum class MidiPhaseDragTargetKind : std::uint8_t
 		{
 			Global,
@@ -293,6 +303,13 @@ namespace engine
 			std::shared_ptr<LoopTake> TakeRef;
 			std::vector<std::shared_ptr<Station>> StationTargets;
 			std::vector<std::shared_ptr<LoopTake>> TakeTargets;
+		};
+		struct CtrlOverlayContext
+		{
+			utils::Position2d Anchor{};
+			int VisibleButtonCount = 1;
+			std::vector<unsigned char> HoverPath;
+			base::SelectDepth SelectDepth = base::SelectDepth::DEPTH_STATION;
 		};
 		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget();
 		std::int32_t _MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept;
@@ -362,6 +379,7 @@ namespace engine
 		utils::Position2d _cursorPos{};
 		bool _ctrlHandleHeld = false;
 		Time _ctrlHandleReleasedAt;
+		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 	};
 }

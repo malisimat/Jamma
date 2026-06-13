@@ -114,6 +114,12 @@
     <Content Include="resources\shaders\vu.vert">
       <Filter>resources\shaders</Filter>
     </Content>
+    <Content Include="resources\shaders\quantisation_division.frag">
+      <Filter>resources\shaders</Filter>
+    </Content>
+    <Content Include="resources\shaders\quantisation_division.vert">
+      <Filter>resources\shaders</Filter>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <Content Include="resources\fonts\font_large.txt">

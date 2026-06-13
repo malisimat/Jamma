@@ -22,14 +22,21 @@ void CtrlHandleOverlay::SetAnchor(utils::Position2d screenPos, utils::Size2d sce
 	_anchorPos = screenPos;
 	_sceneSize = sceneSize;
 
-	constexpr float TotalW = NumButtons * ButtonW + (NumButtons - 1) * ButtonGap;
-	float panelX = static_cast<float>(_anchorPos.X) - TotalW * 0.5f;
+	const auto visibleButtons = (std::max)(_visibleButtonCount, 1);
+	const auto totalW = visibleButtons * ButtonW + (visibleButtons - 1) * ButtonGap;
+	float panelX = static_cast<float>(_anchorPos.X) - totalW * 0.5f;
 	float panelY = static_cast<float>(_anchorPos.Y) - AnchorOffsetY - ButtonH;
 
-	const auto maxX = static_cast<float>(_sceneSize.Width) - TotalW;
+	const auto maxX = static_cast<float>(_sceneSize.Width) - totalW;
 	const auto maxY = static_cast<float>(_sceneSize.Height) - ButtonH;
 	_panelX = std::clamp(panelX, 0.0f, std::max(maxX, 0.0f));
 	_panelY = std::clamp(panelY, 0.0f, std::max(maxY, 0.0f));
+}
+
+void CtrlHandleOverlay::SetVisibleButtonCount(int count) noexcept
+{
+	_visibleButtonCount = std::clamp(count, 1, NumButtons);
+	SetAnchor(_anchorPos, _sceneSize);
 }
 
 int CtrlHandleOverlay::HitTestButton(utils::Position2d pos) const noexcept
@@ -40,7 +47,7 @@ int CtrlHandleOverlay::HitTestButton(utils::Position2d pos) const noexcept
 	if ((py < _panelY) || (py > (_panelY + ButtonH)))
 		return -1;
 
-	for (int i = 0; i < NumButtons; ++i)
+	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
 		const float x = _panelX + static_cast<float>(i) * (ButtonW + ButtonGap);
 		if ((px >= x) && (px <= (x + ButtonW)))
@@ -48,6 +55,20 @@ int CtrlHandleOverlay::HitTestButton(utils::Position2d pos) const noexcept
 	}
 
 	return -1;
+}
+
+std::optional<utils::Position2d> CtrlHandleOverlay::ButtonCenter(int index) const noexcept
+{
+	if (index < 0 || index >= _visibleButtonCount)
+		return std::nullopt;
+
+	const auto x = _panelX + static_cast<float>(index) * (ButtonW + ButtonGap) + (ButtonW * 0.5f);
+	const auto y = _panelY + (ButtonH * 0.5f);
+
+	return utils::Position2d{
+		static_cast<int>(std::lround(x)),
+		static_cast<int>(std::lround(y))
+	};
 }
 
 void CtrlHandleOverlay::SetAlpha(float alpha) noexcept
@@ -126,9 +147,9 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 
 	// Build all button quads into a local array and upload in one shot.
 	constexpr int FloatsPerButton = 6 * 2;
-	float verts[NumButtons * FloatsPerButton];
+	float verts[NumButtons * FloatsPerButton]{};
 
-	for (int i = 0; i < NumButtons; ++i)
+	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
 		const float x  = panelX + static_cast<float>(i) * (ButtonW + ButtonGap);
 		const float y  = panelY;
@@ -159,7 +180,7 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 
 	const auto colorLoc = glGetUniformLocation(shaderPtr->GetId(), "Color");
 
-	for (int i = 0; i < NumButtons; ++i)
+	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
 		const auto col = HsvToRgb(ButtonSpecs[i].hue, 0.60f, 0.90f);
 		glUniform4f(colorLoc, col.x, col.y, col.z, _alpha * 0.88f);

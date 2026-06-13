@@ -71,6 +71,7 @@ Station::Station(StationParams params,
 	_lastBufSize(constants::MaxBlockSize),
 	_clock(std::shared_ptr<Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
+	_quantisationDivisionModel(std::make_shared<QuantisationDivisionModel>()),
 	_stationModel(std::make_shared<graphics::StationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
@@ -209,7 +210,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
 
-	if (_quantisationModel && (base::PASS_SCENE == pass))
+	if ((_quantisationModel || _quantisationDivisionModel) && (base::PASS_SCENE == pass))
 	{
 		// Refresh quantisation overlay state on the render thread (safe for
 		// geometry and instance-buffer allocation).
@@ -230,7 +231,10 @@ void Station::Draw3d(base::DrawContext& ctx,
 		glEnable(GL_CULL_FACE);
 		glCullFace(GL_BACK);
 
-		_quantisationModel->Draw3d(ctx, numInstances, pass);
+		if (_quantisationModel)
+			_quantisationModel->Draw3d(ctx, numInstances, pass);
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->Draw3d(ctx, numInstances, pass);
 
 		glDepthMask(prevDepthMask);
 		glCullFace(prevCullFaceMode);
@@ -1022,6 +1026,8 @@ void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
 	if (_quantisationModel)
 		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
 }
 
 void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
@@ -1068,15 +1074,20 @@ void Station::_ApplyMidiQuantisationPhaseOffset() noexcept
 
 void Station::RefreshQuantisationOverlayFromClock()
 {
-	if (!_quantisationModel)
+	if (!_quantisationModel && !_quantisationDivisionModel)
 		return;
 
 	if (!_clock || !_clock->IsQuantisable() || (_quantisationOverlayAlpha <= 0.001f))
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
 			_quantisationModel->SetTiming(_HiddenSeedSamps);
-		_quantisationModel->SetOverlayVisible(false, false);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
 		return;
 	}
 
@@ -1086,8 +1097,13 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
 			_quantisationModel->SetTiming(_HiddenSeedSamps);
-		_quantisationModel->SetOverlayVisible(false, false);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
 		return;
 	}
 
@@ -1097,15 +1113,31 @@ void Station::RefreshQuantisationOverlayFromClock()
 			_pendingQuantisationParams->SeedSamps :
 				_HiddenSeedSamps;
 
-		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		if (_quantisationModel)
+		{
+			_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+			_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
+		if (_quantisationDivisionModel)
+		{
+			_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+			_quantisationDivisionModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
 		_pendingQuantisationConfirm = false;
 		return;
 	}
 
 	const auto seedSamps = _clock->QuantiseSamps();
-	_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-	_quantisationModel->SetOverlayVisible(true, false);
+	if (_quantisationModel)
+	{
+		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+		_quantisationModel->SetOverlayVisible(true, false);
+	}
+	if (_quantisationDivisionModel)
+	{
+		_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+		_quantisationDivisionModel->SetOverlayVisible(true, false);
+	}
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -1392,6 +1424,8 @@ void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit
 {
 	if (_quantisationModel)
 		_quantisationModel->InitResources(resourceLib, forceInit);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->InitResources(resourceLib, forceInit);
 
 	if (_stationModel)
 		_stationModel->InitResources(resourceLib, forceInit);
@@ -1403,6 +1437,8 @@ void Station::_ReleaseResources()
 {
 	if (_quantisationModel)
 		_quantisationModel->ReleaseResources();
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->ReleaseResources();
 
 	if (_stationModel)
 		_stationModel->ReleaseResources();

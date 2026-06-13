@@ -180,9 +180,9 @@ namespace midi
 
 	struct MidiQuantisationGrainCandidates
 	{
-		std::uint32_t FirstPlayableMidiLoopSamps = 0u;
-		std::uint32_t FirstAudioLoopSamps = 0u;
-		std::uint32_t MidiVisualLoopSamps = 0u;
+		std::uint32_t ResolvedTakeGrainSamps = 0u;
+		std::uint32_t PublishedSceneGrainSamps = 0u;
+		std::uint32_t SingleGrainLoopSamps = 0u;
 		std::uint32_t RecordedSamps = 0u;
 	};
 

@@ -204,19 +204,19 @@ TEST(MidiQuantisation, ApplyGestureTogglesOrDragsWithResolvedGrain) {
 
 TEST(MidiQuantisation, GestureGrainFallsBackByCurrentLoopPriority) {
 	MidiQuantisationGrainCandidates candidates;
-	candidates.FirstPlayableMidiLoopSamps = 960u;
-	candidates.FirstAudioLoopSamps = 1920u;
-	candidates.MidiVisualLoopSamps = 3840u;
+	candidates.ResolvedTakeGrainSamps = 960u;
+	candidates.PublishedSceneGrainSamps = 1920u;
+	candidates.SingleGrainLoopSamps = 3840u;
 	candidates.RecordedSamps = 7680u;
 	EXPECT_EQ(960u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.FirstPlayableMidiLoopSamps = 0u;
+	candidates.ResolvedTakeGrainSamps = 0u;
 	EXPECT_EQ(1920u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.FirstAudioLoopSamps = 0u;
+	candidates.PublishedSceneGrainSamps = 0u;
 	EXPECT_EQ(3840u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.MidiVisualLoopSamps = 0u;
+	candidates.SingleGrainLoopSamps = 0u;
 	EXPECT_EQ(7680u, ResolveMidiQuantisationGestureGrain(candidates));
 }
 

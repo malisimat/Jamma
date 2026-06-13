@@ -48,12 +48,12 @@ MidiQuantisationSettings MidiQuantisation::ApplyGesture(const MidiQuantisationSe
 
 std::uint32_t MidiQuantisation::ResolveGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
 {
-	if (candidates.FirstPlayableMidiLoopSamps > 0u)
-		return candidates.FirstPlayableMidiLoopSamps;
-	if (candidates.FirstAudioLoopSamps > 0u)
-		return candidates.FirstAudioLoopSamps;
-	if (candidates.MidiVisualLoopSamps > 0u)
-		return candidates.MidiVisualLoopSamps;
+	if (candidates.ResolvedTakeGrainSamps > 0u)
+		return candidates.ResolvedTakeGrainSamps;
+	if (candidates.PublishedSceneGrainSamps > 0u)
+		return candidates.PublishedSceneGrainSamps;
+	if (candidates.SingleGrainLoopSamps > 0u)
+		return candidates.SingleGrainLoopSamps;
 
 	return candidates.RecordedSamps;
 }

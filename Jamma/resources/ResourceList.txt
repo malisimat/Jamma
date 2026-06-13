@@ -10,6 +10,7 @@
 2 picker MVP ObjectId
 2 colour MVP Color
 2 quantisation MVP Highlight OverlayAlpha
+2 quantisation_division MVP Highlight OverlayAlpha
 2 ctrl_handle MVP Color
 2 station MVP ObjectId Highlight StationHover StationLevel
 2 white MVP Highlight

@@ -9,6 +9,7 @@
 #include "LoopTake.h"
 #include "Quantisation.h"
 #include "../graphics/QuantisationModel.h"
+#include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
 #include "Trigger.h"
 #include "AudioSink.h"
@@ -257,6 +258,7 @@ namespace engine
 		unsigned int _lastBufSize;
 		std::shared_ptr<Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
+		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;

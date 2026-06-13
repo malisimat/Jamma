@@ -534,12 +534,6 @@ ActionResult LoopTake::OnAction(actions::TouchAction action)
 		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	}
 
-	if ((actions::TouchAction::TOUCH_DOWN == action.State)
-		&& (0 == action.Index)
-		&& HasMidiQuantisationGestureModifiers(action.Modifiers)
-		&& HitTest(action.Position))
-		return BeginMidiQuantisationGesture(action);
-
 	return Jammable::OnAction(action);
 }
 
@@ -875,15 +869,24 @@ std::optional<QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const n
 	if (loopLengthSamps == 0ul)
 		return std::nullopt;
 
+	const auto resolvedQuantisation = ResolvedMidiQuantisation();
+	const auto grainSamps = resolvedQuantisation.GrainSamps;
+	const auto loopGrains = (grainSamps > 0u && (loopLengthSamps % grainSamps) == 0ul) ?
+		static_cast<std::uint32_t>(loopLengthSamps / grainSamps) :
+		0u;
+
 	const auto takeSize = GetSize();
 	const auto takePos = ModelPosition();
 	return QuantisationLoopTakeVisual{
 		loopLengthSamps,
+		grainSamps,
+		loopGrains,
 		LoopIndexFrac(),
 		takePos.Y,
 		std::max(8.0f, static_cast<float>(takeSize.Height) * 0.45f),
 		VisualRadius(),
-		ResolvedMidiQuantisation().PhaseOffsetSamps
+		MidiQuantisation().Fraction,
+		resolvedQuantisation.PhaseOffsetSamps
 	};
 }
 
@@ -2043,6 +2046,10 @@ std::int32_t LoopTake::_NaturalMidiQuantisationPhaseOffset(const midi::MidiQuant
 midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates() const noexcept
 {
 	midi::MidiQuantisationGrainCandidates candidates;
+	candidates.ResolvedTakeGrainSamps = ResolvedMidiQuantisation().GrainSamps;
+	candidates.PublishedSceneGrainSamps = MidiQuantisation().GrainSamps;
+
+	std::uint32_t representativeLoopLength = 0u;
 
 	for (const auto& midiLoop : _midiLoops)
 	{
@@ -2052,7 +2059,7 @@ midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates
 		const auto loopLength = midiLoop->LoopLengthSamps();
 		if (loopLength > 0u)
 		{
-			candidates.FirstPlayableMidiLoopSamps = loopLength;
+			representativeLoopLength = loopLength;
 			break;
 		}
 	}
@@ -2065,13 +2072,18 @@ midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates
 		const auto loopLength = static_cast<std::uint32_t>(loop->LoopLength());
 		if (loopLength > 0u)
 		{
-			candidates.FirstAudioLoopSamps = loopLength;
+			if (0u == representativeLoopLength)
+				representativeLoopLength = loopLength;
 			break;
 		}
 	}
 
-	if (_midiVisualLoopLength > 0ul)
-		candidates.MidiVisualLoopSamps = static_cast<std::uint32_t>(_midiVisualLoopLength);
+	if ((representativeLoopLength > 0u)
+		&& (candidates.ResolvedTakeGrainSamps > 0u)
+		&& (representativeLoopLength == candidates.ResolvedTakeGrainSamps))
+	{
+		candidates.SingleGrainLoopSamps = representativeLoopLength;
+	}
 
 	candidates.RecordedSamps = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	return candidates;
@@ -2555,10 +2567,14 @@ void LoopTake::_ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gestu
 	const char* source) noexcept
 {
 	const auto previous = MidiQuantisation();
+	auto resolvedGrain = ResolvedMidiQuantisation().GrainSamps;
+	if (0u == resolvedGrain)
+		resolvedGrain = midi::MidiQuantisation::ResolveGestureGrain(_MidiQuantisationGrainCandidates());
+
 	const auto updated = midi::MidiQuantisation::ApplyGesture(previous,
 		gesture,
 		fraction,
-		midi::MidiQuantisation::ResolveGestureGrain(_MidiQuantisationGrainCandidates()));
+		resolvedGrain);
 
 	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);

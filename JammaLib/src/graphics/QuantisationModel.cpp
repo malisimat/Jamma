@@ -5,6 +5,7 @@
 #include <cmath>
 #include "glm/ext.hpp"
 #include "GlDrawContext.h"
+#include "../midi/MidiQuantisation.h"
 #include "../../include/Constants.h"
 
 using namespace engine;
@@ -300,8 +301,11 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		if (visual.LoopLengthSamps == 0ul)
 			continue;
 
-		auto gateCount = static_cast<unsigned int>(std::llround(
-			static_cast<double>(visual.LoopLengthSamps) / static_cast<double>(seedSamps)));
+		const auto counts = ResolveVisualCounts(visual);
+		auto gateCount = counts.GrainFrameCount;
+		if (0u == gateCount)
+			continue;
+
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
@@ -326,7 +330,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);
 			modes.push_back(GateInstance);
-			bands.push_back(static_cast<float>(gate % 2u));
+			bands.push_back(0.0f);
 			fillHalfWidths.push_back(fillHalfWidth);
 		}
 
@@ -346,6 +350,24 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		{ 5u, 1u, std::move(bands) },
 		{ 6u, 1u, std::move(fillHalfWidths) }
 	}, instanceCount);
+}
+
+QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const QuantisationLoopTakeVisual& visual) noexcept
+{
+	VisualCounts counts;
+	if (visual.LoopLengthSamps == 0ul || visual.GrainSamps == 0u)
+		return counts;
+
+	counts.GrainFrameCount = visual.LoopGrains;
+	if (0u == counts.GrainFrameCount && (visual.LoopLengthSamps % visual.GrainSamps) == 0ul)
+		counts.GrainFrameCount = static_cast<unsigned int>(visual.LoopLengthSamps / visual.GrainSamps);
+
+	const auto divisor = midi::MidiQuantisation::Divisor(visual.Fraction);
+	counts.StepSamps = (divisor > 0u) ? (visual.GrainSamps / divisor) : 0u;
+	if ((counts.StepSamps > 0u) && ((visual.LoopLengthSamps % counts.StepSamps) == 0ul))
+		counts.FractionDivisionCount = static_cast<unsigned int>(visual.LoopLengthSamps / counts.StepSamps);
+
+	return counts;
 }
 
 void QuantisationModel::SetOverlayVisible(bool visible, bool confirm)

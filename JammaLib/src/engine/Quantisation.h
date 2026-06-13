@@ -26,6 +26,11 @@ namespace ninjam
 	class NinjamSession;
 }
 
+namespace midi
+{
+	enum class MidiQuantisationFraction : std::uint8_t;
+}
+
 namespace engine
 {
 	class Loop;
@@ -41,10 +46,13 @@ namespace engine
 	struct QuantisationLoopTakeVisual
 	{
 		unsigned long LoopLengthSamps = 0ul;
+		std::uint32_t GrainSamps = 0u;
+		std::uint32_t LoopGrains = 0u;
 		double LoopIndexFrac = 0.0;
 		float YCenter = 0.0f;
 		float HalfHeight = 0.0f;
 		float Radius = 0.0f;
+		midi::MidiQuantisationFraction Fraction;
 		std::int32_t PhaseOffsetSamps = 0;
 	};
 

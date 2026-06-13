@@ -59,6 +59,7 @@ Scene::Scene(SceneParams params,
 	_cursorPos{},
 	_ctrlHandleHeld(false),
 	_ctrlHandleReleasedAt(Timer::GetZero()),
+	_ctrlOverlayContext(std::nullopt),
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -427,6 +428,9 @@ ActionResult Scene::OnAction(TouchAction action)
 		&& _IsMidiPhaseDragModifier(action.Modifiers))
 	{
 		const int hitBtn = _ctrlHandleOverlay.HitTestButton(action.Position);
+		std::cout << "Ctrl overlay handle down: button=" << hitBtn
+			<< " mode=" << ((0 == hitBtn) ? "phase" : ((1 == hitBtn) ? "fraction" : "none"))
+			<< std::endl;
 		if (0 == hitBtn)
 			return _BeginMidiPhaseDrag(action);
 		if (1 == hitBtn)
@@ -601,12 +605,13 @@ ActionResult Scene::OnAction(KeyAction action)
 	if (17 == action.KeyChar)
 	{
 		const bool held = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		if (held && !_ctrlHandleHeld)
+			_CaptureCtrlOverlayContext();
 		_SetQuantisationOverlayHeld(held);
 		_ctrlHandleHeld = held;
 		if (!held)
 			_ctrlHandleReleasedAt = Timer::GetTime();
-		if (held)
-			_ctrlHandleOverlay.SetAnchor(_cursorPos, _sizeParams.Size);
+		_RefreshCtrlHandleOverlay();
 	}
 
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
@@ -1135,6 +1140,7 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		modifiers,
 		isSelected,
 		tweakState);
+	_RefreshCtrlHandleOverlay();
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 
@@ -1648,6 +1654,8 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	}
+
+	_RefreshCtrlHandleOverlay();
 }
 
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
@@ -1661,6 +1669,16 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 		if (station)
 			station->InitResources(resourceLib, forceInit);
 	}
+}
+
+int Scene::CtrlOverlayVisibleButtonCountForTest() const noexcept
+{
+	return _ctrlHandleOverlay.VisibleButtonCount();
+}
+
+std::optional<utils::Position2d> Scene::CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept
+{
+	return _ctrlHandleOverlay.ButtonCenter(buttonIndex);
 }
 
 glm::mat4 Scene::_View()
@@ -1726,6 +1744,10 @@ ActionResult Scene::_UpdateMidiPhaseDrag(TouchMoveAction action)
 	const auto offsetSamps = Quantisation::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		_CurrentSampleRate());
+	std::cout << "Ctrl overlay drag: mode=phase deltaX=" << delta.X
+		<< " deltaY=" << delta.Y
+		<< " phaseOffsetSamps=" << offsetSamps
+		<< std::endl;
 	_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	_ApplyQuantisationOverlayAlpha(1.0f);
 
@@ -1759,7 +1781,10 @@ ActionResult Scene::_BeginFractionDrag(TouchAction action)
 {
 	auto take = _ResolveFractionDragTake();
 	if (!take)
+	{
+		std::cout << "Ctrl overlay handle down: mode=fraction target=none" << std::endl;
 		return ActionResult::NoAction();
+	}
 
 	auto res = take->BeginMidiQuantisationGesture(action);
 	if (!res.IsEaten)
@@ -1768,6 +1793,10 @@ ActionResult Scene::_BeginFractionDrag(TouchAction action)
 	_isFractionDragging = true;
 	_fractionDragStartY = action.Position.Y;
 	_fractionDragTake = take;
+	const auto quantisation = take->MidiQuantisation();
+	std::cout << "Ctrl overlay handle down: mode=fraction take=" << take->Id()
+		<< " startFraction=" << midi::MidiQuantisation::FractionLabel(quantisation.Fraction)
+		<< std::endl;
 	return res;
 }
 
@@ -1776,7 +1805,16 @@ ActionResult Scene::_UpdateFractionDrag(TouchMoveAction action)
 	if (!_isFractionDragging || !_fractionDragTake)
 		return ActionResult::NoAction();
 
-	return _fractionDragTake->OnAction(action);
+	const auto startFraction = _fractionDragTake->MidiQuantisation().Fraction;
+	const auto startLabel = midi::MidiQuantisation::FractionLabel(startFraction);
+	const auto deltaY = action.Position.Y - _fractionDragStartY;
+	auto res = _fractionDragTake->OnAction(action);
+	const auto updatedFraction = _fractionDragTake->MidiQuantisation().Fraction;
+	std::cout << "Ctrl overlay drag: mode=fraction deltaY=" << deltaY
+		<< " fraction=" << startLabel
+		<< "->" << midi::MidiQuantisation::FractionLabel(updatedFraction)
+		<< std::endl;
+	return res;
 }
 
 ActionResult Scene::_EndFractionDrag(TouchAction action)
@@ -1794,6 +1832,22 @@ ActionResult Scene::_EndFractionDrag(TouchAction action)
 
 std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
 {
+	auto stationForTake = [this](const std::shared_ptr<LoopTake>& take) -> std::shared_ptr<Station> {
+		if (!take)
+			return nullptr;
+
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+				return station;
+		}
+
+		return nullptr;
+	};
 	auto takeForLoop = [this](const std::shared_ptr<Loop>& loop) -> std::shared_ptr<LoopTake> {
 		if (!loop)
 			return nullptr;
@@ -1827,14 +1881,46 @@ std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
 		return takeForLoop(std::dynamic_pointer_cast<Loop>(element));
 	};
 
-	auto take = takeFromElement(_ChildFromPath(_hoverPath3d));
-	if (take)
-		return take;
-	take = takeFromElement(_ChildFromPath(_selector->CurrentHover()));
+	auto take = takeFromElement(_CtrlOverlayHoverElement());
 	if (take)
 		return take;
 
-	const auto depth = _selector->CurrentSelectDepth();
+	const auto depth = _CtrlOverlaySelectDepth();
+	if (depth == base::SelectDepth::DEPTH_STATION)
+	{
+		auto firstTake = [](const std::shared_ptr<Station>& stationRef) -> std::shared_ptr<LoopTake> {
+			if (!stationRef)
+				return nullptr;
+
+			for (const auto& candidateTake : stationRef->GetLoopTakes())
+			{
+				if (candidateTake)
+					return candidateTake;
+			}
+
+			return nullptr;
+		};
+
+		auto hovering = _CtrlOverlayHoverElement();
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		if (!station)
+			station = stationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
+		if (!station)
+			station = stationForTake(takeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
+
+		if (auto takeFromStation = firstTake(station))
+			return takeFromStation;
+
+		for (const auto& candidateStation : _stations)
+		{
+			if (candidateStation && candidateStation->IsSelected())
+			{
+				if (auto selectedTake = firstTake(candidateStation))
+					return selectedTake;
+			}
+		}
+	}
+
 	for (const auto& station : _stations)
 	{
 		if (!station)
@@ -1865,9 +1951,7 @@ std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
 Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
 {
 	MidiPhaseDragTarget target;
-	auto hovering = _ChildFromPath(_selector->CurrentHover());
-	if (!hovering && !_hoverPath3d.empty())
-		hovering = _ChildFromPath(_hoverPath3d);
+	auto hovering = _CtrlOverlayHoverElement();
 	if (!hovering)
 		return target;
 
@@ -1917,7 +2001,7 @@ Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
 		return nullptr;
 	};
 
-	const auto depth = _selector->CurrentSelectDepth();
+	const auto depth = _CtrlOverlaySelectDepth();
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
 		auto station = std::dynamic_pointer_cast<Station>(hovering);
@@ -2267,6 +2351,20 @@ void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 	_quantisation.ApplyOverlayAlpha(alpha, _stations);
 }
 
+void Scene::_RefreshCtrlHandleOverlay()
+{
+	if (_HasCtrlOverlayContext())
+	{
+		_ctrlHandleOverlay.SetVisibleButtonCount(_ctrlOverlayContext->VisibleButtonCount);
+		_ctrlHandleOverlay.SetAnchor(_ctrlOverlayContext->Anchor, _sizeParams.Size);
+		return;
+	}
+
+	_ctrlHandleOverlay.SetVisibleButtonCount(_CtrlHandleButtonCount());
+	if (_ctrlHandleHeld)
+		_ctrlHandleOverlay.SetAnchor(_cursorPos, _sizeParams.Size);
+}
+
 float Scene::_CtrlHandleAlpha(Time now) const
 {
 	if (_ctrlHandleHeld)
@@ -2283,6 +2381,95 @@ float Scene::_CtrlHandleAlpha(Time now) const
 void Scene::_ApplyCtrlHandleAlpha(float alpha)
 {
 	_ctrlHandleOverlay.SetAlpha(alpha);
+	if ((alpha <= 0.001f) && !_ctrlHandleHeld)
+		_ctrlOverlayContext = std::nullopt;
+}
+
+bool Scene::_HasQuantisationSelection() const
+{
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		if (station->IsSelected())
+			return true;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			if (take->IsSelected())
+				return true;
+
+			for (const auto& loop : take->GetLoops())
+			{
+				if (loop && loop->IsSelected())
+					return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+bool Scene::_HasQuantisationHover() const
+{
+	return !_selector->CurrentHover().empty() || !_hoverPath3d.empty();
+}
+
+int Scene::_CtrlHandleButtonCount() const
+{
+	if (_HasCtrlOverlayContext())
+		return _ctrlOverlayContext->VisibleButtonCount;
+
+	return (_HasQuantisationSelection() || _HasQuantisationHover()) ? 2 : 1;
+}
+
+std::shared_ptr<base::GuiElement> Scene::_CtrlOverlayHoverElement()
+{
+	if (_HasCtrlOverlayContext())
+		return _ChildFromPath(_ctrlOverlayContext->HoverPath);
+
+	auto hovering = _ChildFromPath(_selector->CurrentHover());
+	if (!hovering && !_hoverPath3d.empty())
+		hovering = _ChildFromPath(_hoverPath3d);
+	return hovering;
+}
+
+base::SelectDepth Scene::_CtrlOverlaySelectDepth() const noexcept
+{
+	if (_HasCtrlOverlayContext())
+		return _ctrlOverlayContext->SelectDepth;
+
+	return _selector->CurrentSelectDepth();
+}
+
+void Scene::_CaptureCtrlOverlayContext()
+{
+	CtrlOverlayContext context;
+	context.Anchor = _cursorPos;
+	context.VisibleButtonCount = _CtrlHandleButtonCount();
+	context.SelectDepth = _selector->CurrentSelectDepth();
+
+	std::vector<unsigned char> hoverPath = _selector->CurrentHover();
+	auto hovering = _ChildFromPath(hoverPath);
+	if (!hovering && !_hoverPath3d.empty())
+	{
+		hoverPath = _hoverPath3d;
+		hovering = _ChildFromPath(hoverPath);
+	}
+	if (!hovering)
+		hoverPath.clear();
+
+	context.HoverPath = std::move(hoverPath);
+	_ctrlOverlayContext = std::move(context);
+}
+
+bool Scene::_HasCtrlOverlayContext() const noexcept
+{
+	return _ctrlOverlayContext.has_value();
 }
 
 bool Scene::_TrySetMasterFromHover(bool confirm)

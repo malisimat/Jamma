@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <gl/glew.h>
 #include "glm/glm.hpp"
 #include "../utils/CommonTypes.h"
@@ -27,7 +28,10 @@ namespace graphics
 		// Update the anchor pixel position and the scene viewport size.
 		// Call this when Ctrl is pressed to pin the panel location.
 		void SetAnchor(utils::Position2d screenPos, utils::Size2d sceneSize) noexcept;
+		void SetVisibleButtonCount(int count) noexcept;
+		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
 		int HitTestButton(utils::Position2d pos) const noexcept;
+		std::optional<utils::Position2d> ButtonCenter(int index) const noexcept;
 
 		// Set the blended alpha (0–1).  The overlay is invisible at 0.
 		void SetAlpha(float alpha) noexcept;
@@ -63,6 +67,7 @@ namespace graphics
 		float _alpha = 0.0f;
 		utils::Position2d _anchorPos{};
 		utils::Size2d _sceneSize{};
+		int _visibleButtonCount = NumButtons;
 		float _panelX = 0.0f;
 		float _panelY = 0.0f;
 		std::weak_ptr<resources::ShaderResource> _shader;

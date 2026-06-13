@@ -11,6 +11,13 @@ namespace engine
 		public gui::GuiModel
 	{
 	public:
+		struct VisualCounts
+		{
+			unsigned int GrainFrameCount = 0u;
+			unsigned int FractionDivisionCount = 0u;
+			unsigned int StepSamps = 0u;
+		};
+
 		QuantisationModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
@@ -24,6 +31,7 @@ namespace engine
 			float innerRadius,
 			float outerRadius,
 			float halfHeight);
+		static VisualCounts ResolveVisualCounts(const QuantisationLoopTakeVisual& visual) noexcept;
 
 	private:
 		unsigned int _seedSamps;

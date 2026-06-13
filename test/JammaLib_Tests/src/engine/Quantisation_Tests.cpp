@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "engine/Quantisation.h"
 #include "graphics/QuantisationModel.h"
+#include "midi/MidiQuantisation.h"
 
 using engine::QuantisationPolicy;
 using engine::TapTempoTracker;
@@ -50,6 +51,48 @@ TEST(Quantisation, ResolvePhaseOffsetDragConvertsHorizontalPixelsToMilliseconds)
 	EXPECT_EQ(-2400, engine::ResolvePhaseOffsetDrag(0, -50, 48000u));
 	EXPECT_EQ(3400, engine::ResolvePhaseOffsetDrag(1000, 50, 48000u));
 	EXPECT_EQ(1000, engine::ResolvePhaseOffsetDrag(1000, 50, 0u));
+}
+
+TEST(Quantisation, VisualCounts_FourGrainsQuarterProducesSixteenDivisions)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 1600u;
+	visual.GrainSamps = 400u;
+	visual.LoopGrains = 4u;
+	visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(4u, counts.GrainFrameCount);
+	EXPECT_EQ(100u, counts.StepSamps);
+	EXPECT_EQ(16u, counts.FractionDivisionCount);
+}
+
+TEST(Quantisation, VisualCounts_FourGrainsEighthProducesThirtyTwoDivisions)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 1600u;
+	visual.GrainSamps = 400u;
+	visual.LoopGrains = 4u;
+	visual.Fraction = midi::MidiQuantisationFraction::Eighth;
+
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(4u, counts.GrainFrameCount);
+	EXPECT_EQ(50u, counts.StepSamps);
+	EXPECT_EQ(32u, counts.FractionDivisionCount);
+}
+
+TEST(Quantisation, VisualCounts_SingleGrainQuarterProducesFourDivisions)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 400u;
+	visual.GrainSamps = 400u;
+	visual.LoopGrains = 1u;
+	visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(1u, counts.GrainFrameCount);
+	EXPECT_EQ(100u, counts.StepSamps);
+	EXPECT_EQ(4u, counts.FractionDivisionCount);
 }
 
 TEST(Quantisation, TapTempoTrackerSmoothsGaps)
