@@ -1,0 +1,88 @@
+#pragma once
+
+#include <array>
+#include <memory>
+#include <optional>
+#include <gl/glew.h>
+#include "glm/glm.hpp"
+#include "../utils/CommonTypes.h"
+#include "../resources/ResourceLib.h"
+#include "../base/DrawContext.h"
+
+namespace graphics
+{
+	class GlDrawContext;
+
+	// Lightweight 2D screen-space overlay that shows a small row of coloured
+	// handle buttons near the cursor while Ctrl is held.  Each button has a
+	// distinct hue so the user can tell them apart at a glance.
+	class CtrlHandleOverlay
+	{
+	public:
+		enum class ButtonScope : unsigned char
+		{
+			Global,
+			Local
+		};
+
+		CtrlHandleOverlay();
+		~CtrlHandleOverlay();
+
+		CtrlHandleOverlay(const CtrlHandleOverlay&) = delete;
+		CtrlHandleOverlay& operator=(const CtrlHandleOverlay&) = delete;
+
+		// Update the anchor pixel position and the scene viewport size.
+		// Call this when Ctrl is pressed to pin the panel location.
+		void SetAnchor(utils::Position2d screenPos, utils::Size2d sceneSize) noexcept;
+		void SetVisibleButtonCount(int count) noexcept;
+		void SetButtonScope(int index, ButtonScope scope) noexcept;
+		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
+		int HitTestButton(utils::Position2d pos) const noexcept;
+		std::optional<utils::Position2d> ButtonCenter(int index) const noexcept;
+
+		// Set the blended alpha (0–1).  The overlay is invisible at 0.
+		void SetAlpha(float alpha) noexcept;
+		float Alpha() const noexcept { return _alpha; }
+
+		void InitResources(resources::ResourceLib& resourceLib, bool forceInit);
+		void ReleaseResources();
+
+		void Draw(base::DrawContext& ctx);
+
+	private:
+		struct ButtonSpec
+		{
+			float globalHue;
+			float localHue;
+		};
+
+		static constexpr int NumButtons = 2;
+		static constexpr float ButtonW = 72.0f;
+		static constexpr float ButtonH = 28.0f;
+		static constexpr float ButtonGap = 6.0f;
+		static constexpr float AnchorOffsetY = 14.0f;
+
+		// Button 0: Phase (blue global / green local).
+		// Button 1: Division (orange global / red local).
+		static constexpr std::array<ButtonSpec, NumButtons> ButtonSpecs = {{
+			{ 0.58f, 0.33f },
+			{ 0.11f, 0.00f }
+		}};
+
+		static glm::vec3 HsvToRgb(float h, float s, float v) noexcept;
+
+		GLuint _vertexArray = 0;
+		GLuint _vertexBuffer = 0;
+		float _alpha = 0.0f;
+		utils::Position2d _anchorPos{};
+		utils::Size2d _sceneSize{};
+		int _visibleButtonCount = NumButtons;
+		std::array<ButtonScope, NumButtons> _buttonScopes = {
+			ButtonScope::Global,
+			ButtonScope::Global
+		};
+		float _panelX = 0.0f;
+		float _panelY = 0.0f;
+		std::weak_ptr<resources::ShaderResource> _shader;
+	};
+}

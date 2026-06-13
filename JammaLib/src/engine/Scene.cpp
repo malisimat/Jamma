@@ -1,13 +1,9 @@
 #include "Scene.h"
 #include <iostream>
-#include <set>
 #include "glm/ext.hpp"
-#include "../io/WavReadWriter.h"
-#include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
-#include "../utils/ArrayUtils.h"
-#include "../graphics/VstEditorWindow.h"
 #include "../midi/MidiTimestampMapper.h"
+#include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
 using namespace base;
@@ -20,6 +16,9 @@ using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
+using namespace timing;
+using namespace vst;
+using namespace ninjam;
 using namespace std::placeholders;
 
 Scene::Scene(SceneParams params,
@@ -39,22 +38,18 @@ Scene::Scene(SceneParams params,
 	_skyboxViewProj(glm::mat4()),
 	_skyboxStarted(false),
 	_skyboxStartTime(Timer::GetZero()),
-	_channelMixer(std::make_shared<ChannelMixer>(ChannelMixerParams{})),
 	_label(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
-	_audioDevice(nullptr),
 	_quantisation(),
-	_midiRouter(),
 	_loggingConfig{},
 	_stations(),
-	_ninjamController(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
-	_dragLoopTakeTargets(),
-	_audioSampleCounter(0u),
-	_midiAnchorMicros(0),
+	_ctrlHandleOverlay(),
+	_quantisationInteraction(_ctrlHandleOverlay, _quantisation, _stations),
+	_cursorPos{},
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -62,7 +57,11 @@ Scene::Scene(SceneParams params,
 			1.0),
 		0)),
 	_userConfig(user),
-	_viewMode(VIEW_STATION)
+	_viewMode(VIEW_STATION),
+		_audioEngine(std::make_unique<audio::AudioHost>(user)),
+		_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
+		_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
+		_networkService(std::make_unique<ninjam::NinjamNetworkService>())
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
@@ -125,7 +124,6 @@ Scene::Scene(SceneParams params,
 	modeRadioParams.ToggleParams = radioToggleParams;
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
-	_audioDevice = std::make_unique<AudioDevice>();
 	_PublishAudioStations();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
@@ -188,112 +186,11 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
-	scene->_ninjamController.LoadConfig(jamStruct.Ninjam);
+	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
+	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
 	return scene;
-}
-
-void Scene::CloseAllVstEditorWindows()
-{
-	for (auto& window : _vstEditorWindows)
-	{
-		if (window)
-			window->Destroy();
-	}
-	_vstEditorWindows.clear();
-}
-
-void Scene::_PruneClosedVstEditorWindows()
-{
-	_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
-		return !window || !window->IsOpen();
-	}), _vstEditorWindows.end());
-}
-
-bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
-{
-	if (!plugin || !plugin->IsLoaded())
-		return false;
-
-	auto window = std::make_unique<graphics::VstEditorWindow>();
-	const auto hInstance = GetModuleHandle(nullptr);
-	if (!window->Create(hInstance, plugin))
-		return false;
-
-	_vstEditorWindows.push_back(std::move(window));
-	return true;
-}
-
-bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
-{
-	if (!loop)
-		return false;
-
-	auto plugin = loop->GetVstPlugin(pluginIndex);
-	if (!plugin || !plugin->IsLoaded())
-		return false;
-
-	return _OpenVstEditorForPlugin(plugin);
-}
-
-bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
-{
-	if (!station || station->IsRemote())
-		return false;
-
-	auto stationPlugin = station->GetVstPlugin(pluginIndex);
-	if (stationPlugin && stationPlugin->IsLoaded())
-		return _OpenVstEditorForPlugin(stationPlugin);
-
-	for (const auto& take : station->GetLoopTakes())
-	{
-		for (const auto& loop : take->GetLoops())
-		{
-			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
-				return true;
-		}
-	}
-
-	return false;
-}
-
-bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
-	base::SelectDepth depth,
-	size_t pluginIndex)
-{
-	if (!hovering)
-		return false;
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-	{
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		return _TryOpenVstEditorForStation(station, pluginIndex);
-	}
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-		if (!take)
-			return false;
-
-		for (const auto& loop : take->GetLoops())
-		{
-			if (_TryOpenVstEditorForLoop(loop, pluginIndex))
-				return true;
-		}
-
-		return false;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-		return _TryOpenVstEditorForLoop(loop, pluginIndex);
-	}
-	default:
-		return false;
-	}
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -312,6 +209,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
+	_ctrlHandleOverlay.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -355,7 +253,11 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(_viewProj);
 
 	if (PASS_SCENE == pass)
-		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
+	{
+		const auto now = Timer::GetTime();
+		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(now));
+		_quantisationInteraction.Tick(now);
+	}
 
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
@@ -369,6 +271,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
+	_ctrlHandleOverlay.InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
@@ -384,6 +287,7 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
+	_ctrlHandleOverlay.ReleaseResources();
 
 	for (auto& station : _stations)
 		station->ReleaseResources();
@@ -396,6 +300,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	ActionResult res;
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+	_cursorPos = action.Position;
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
@@ -410,24 +315,14 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
-	if ((TouchAction::TouchState::TOUCH_UP == action.State)
-		&& !_dragLoopTakeTargets.empty())
+	if (auto overlayRes = _quantisationInteraction.TryHandleTouchAction(action,
+		_CurrentSampleRate(),
+		_IsMidiPhaseDragModifier(action.Modifiers),
+		_InteractionContext(),
+		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+		overlayRes.has_value())
 	{
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
-
-			auto takeRes = take->OnAction(take->GlobalToLocal(action));
-			if (takeRes.IsEaten && (nullptr != takeRes.Undo))
-				_undoHistory.Add(takeRes.Undo);
-		}
-
-		res = _selector->OnAction(_selector->ParentToLocal(action));
-		_UpdateSelection(res.ResultType);
-		_dragLoopTakeTargets.clear();
-		_touchDownElement.reset();
-		return ActionResult::NoAction();
+		return overlayRes.value();
 	}
 
 	if (TouchAction::TouchState::TOUCH_UP == action.State)
@@ -446,7 +341,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 		else if (_isSceneTouching)
 		{
-			_isSceneTouching = false;
+			_EndBackgroundDrag();
 
 			// Clear selection only if not dragged
 			// isSceneTouching should only be true if selector mode is SELECT_NONE
@@ -494,33 +389,6 @@ ActionResult Scene::OnAction(TouchAction action)
 		}
 	}
 
-	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
-		&& (0 == action.Index)
-		&& (Action::MODIFIER_CTRL & action.Modifiers)
-		&& (Action::MODIFIER_SHIFT & action.Modifiers))
-	{
-		_dragLoopTakeTargets = _CurrentLoopTakeInteractionTargets();
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
-
-			auto takeRes = take->BeginMidiQuantisationGesture(action);
-
-			if (takeRes.IsEaten)
-			{
-				res = takeRes;
-				if (nullptr != takeRes.Undo)
-					_undoHistory.Add(takeRes.Undo);
-			}
-		}
-
-		if (res.IsEaten)
-			return res;
-
-		_dragLoopTakeTargets.clear();
-	}
-
 	res = _selector->OnAction(_selector->ParentToLocal(action));
 
 	_UpdateSelection(res.ResultType);
@@ -533,39 +401,20 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
-	_isSceneTouching = true;
-	_isSceneDragged = false;
-	_initTouchDownPosition = action.Position;
-	_initTouchCamPosition = _camera.ModelPosition();
-
-	res.IsEaten = true;
-	res.SourceId = "";
-	res.TargetId = "";
-	res.ResultType = ACTIONRESULT_DEFAULT;
-	res.Undo = std::shared_ptr<ActionUndo>();
-	res.ActiveElement = std::weak_ptr<GuiElement>();
-	return res;
+	return _BeginBackgroundDrag(action);
 }
 
 ActionResult Scene::OnAction(TouchMoveAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+	_cursorPos = action.Position;
 
-	if (!_dragLoopTakeTargets.empty())
+	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
+		_CurrentSampleRate());
+		overlayRes.has_value())
 	{
-		ActionResult res = ActionResult::NoAction();
-		for (const auto& take : _dragLoopTakeTargets)
-		{
-			if (!take)
-				continue;
-
-			auto takeRes = take->OnAction(take->GlobalToLocal(action));
-			if (takeRes.IsEaten)
-				res = takeRes;
-		}
-
-		return res;
+		return overlayRes.value();
 	}
 
 	auto activeElement = _touchDownElement.lock();
@@ -573,13 +422,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	if (activeElement)
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
 	else if (_isSceneTouching)
-	{
-		auto dPos = action.Position - _initTouchDownPosition;
-		_camera.SetModelPosition(_initTouchCamPosition - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0 });
-		SetSize(_sizeParams.Size);
-
-		_isSceneDragged = true;
-	}
+		return _UpdateBackgroundDrag(action);
 	else
 	{
 		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
@@ -603,12 +446,18 @@ ActionResult Scene::OnAction(KeyAction action)
 {
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
-	action.SetAudioParams(_audioDevice->GetAudioStreamParams());
+	action.SetAudioParams(_audioEngine->GetStreamParams());
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
 	if (17 == action.KeyChar)
-		_SetQuantisationOverlayHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+	{
+		const bool held = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		_quantisationInteraction.OnCtrlModifierChanged(held,
+			Timer::GetTime(),
+			_InteractionContext(),
+			[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
+	}
 
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
 	{
@@ -646,7 +495,10 @@ ActionResult Scene::OnAction(KeyAction action)
 			return ActionResult::NoAction();
 
 		auto hovering = _ChildFromPath(_selector->CurrentHover());
-		return _HandleVstInsert(pluginPath, _selector->CurrentSelectDepth(), hovering);
+		return _windowSubsystem->HandleVstInsert(pluginPath,
+			_selector->CurrentSelectDepth(),
+			hovering,
+			[this]() { CommitChanges(); });
 	}
 
 	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
@@ -655,7 +507,10 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		return _HandleVstEditorOpen();
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		return _windowSubsystem->HandleVstEditorOpen(hovering,
+			_selector->CurrentSelectDepth(),
+			_stations);
 	}
 
 	// Ctrl+S - export session to directory.
@@ -663,7 +518,13 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		return _HandleExportSession();
+		return io::IoSessionExporter::ExportSession(_stations,
+			_quantisation,
+			_userConfig,
+			_audioEngine->GetStreamParams(),
+			_audioEngine->GetDevice(),
+			_sceneMutex,
+			_networkService->GetController());
 	}
 
 	bool checkReset = false;
@@ -731,218 +592,6 @@ ActionResult Scene::_HandleUndo()
 	return { res };
 }
 
-ActionResult Scene::_HandleVstInsert(const std::wstring& pluginPath,
-	base::SelectDepth depth,
-	const std::shared_ptr<base::GuiElement>& hovering)
-{
-	if (!hovering)
-	{
-		std::cout << "VST insert: no hovered target" << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "VST insert request: depth=" << static_cast<int>(depth)
-		<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-	{
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		if (!station)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
-
-		if (station->IsRemote())
-		{
-			std::cout << "VST insert: remote stations are read-only" << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		station->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-		if (!take)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
-
-		take->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-		if (!loop)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: single loop" << std::endl;
-
-		loop->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	default:
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
-
-	ActionResult res;
-	res.IsEaten = true;
-	res.ResultType = actions::ACTIONRESULT_DEFAULT;
-	return res;
-}
-
-ActionResult Scene::_HandleVstEditorOpen()
-{
-	auto hovering = _ChildFromPath(_selector->CurrentHover());
-	_PruneClosedVstEditorWindows();
-
-	auto eatAction = []() {
-		ActionResult res;
-		res.IsEaten = true;
-		res.ResultType = actions::ACTIONRESULT_DEFAULT;
-		return res;
-	};
-
-	if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
-		return eatAction();
-
-	for (const auto& station : _stations)
-	{
-		if (_TryOpenVstEditorForStation(station, 0))
-			return eatAction();
-	}
-
-	std::cout << "VST editor open: no loaded plugin found" << std::endl;
-	return ActionResult::NoAction();
-}
-
-ActionResult Scene::_HandleExportSession()
-{
-	struct AudioPauseGuard
-	{
-		explicit AudioPauseGuard(audio::AudioDevice* device) : Device(device), WasPlaying(device && device->Pause()) {}
-		~AudioPauseGuard() { Resume(); }
-
-		void Resume()
-		{
-			if (WasPlaying && Device)
-			{
-				Device->Resume();
-				WasPlaying = false;
-			}
-		}
-
-		audio::AudioDevice* Device;
-		bool WasPlaying;
-	};
-
-	struct LoopSnapshot
-	{
-		std::wstring Path;
-		std::vector<float> Samples;
-	};
-
-	const auto exportDir = utils::PickDirectory(L"Choose export directory");
-	if (exportDir.empty())
-		return ActionResult::NoAction();
-
-	const auto streamSampleRate = _audioDevice->GetAudioStreamParams().SampleRate;
-	const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
-
-	io::JamFile jam;
-	jam.Version = io::JamFile::VERSION_V;
-	jam.Name = "export";
-	jam.Ninjam = _ninjamController.Config();
-	jam.TimerTicks = 0;
-	jam.QuantiseSamps = 0;
-	jam.Quantisation = engine::Timer::QUANTISE_OFF;
-
-	std::vector<LoopSnapshot> loops;
-
-	{
-		AudioPauseGuard pause(_audioDevice.get());
-		std::scoped_lock lock(_audioMutex);
-
-		for (const auto& station : _stations)
-		{
-			if (station->IsRemote())
-				continue;
-
-			io::JamFile::Station jamStation;
-			jamStation.Name = station->Name();
-			jamStation.StationType = 0;
-			jamStation.VstChain = station->VstEntries();
-
-			for (const auto& take : station->GetLoopTakes())
-			{
-				io::JamFile::LoopTake jamTake;
-				jamTake.Name = take->Id();
-				jamTake.VstChain = take->VstEntries();
-
-				for (const auto& loop : take->GetLoops())
-				{
-					const auto wavFilename = loop->Id() + ".wav";
-
-					auto samples = loop->ExportSamples();
-					if (samples.empty())
-						continue;
-
-					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
-
-					LoopSnapshot snap;
-					snap.Path = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-					snap.Samples = std::move(samples);
-					loops.push_back(std::move(snap));
-				}
-
-				if (!jamTake.Loops.empty())
-					jamStation.LoopTakes.push_back(std::move(jamTake));
-			}
-
-			jam.Stations.push_back(std::move(jamStation));
-		}
-	}
-
-	if (jam.Stations.empty())
-	{
-		std::cout << "Export: nothing to export" << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	io::WavReadWriter wavWriter;
-	unsigned int wavCount = 0;
-	for (const auto& loop : loops)
-	{
-		if (wavWriter.Write(loop.Path, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
-			++wavCount;
-	}
-
-	std::stringstream jamStream;
-	io::JamFile::ToStream(jam, jamStream);
-	const auto jamPath = exportDir + L"\\session.jam";
-	const auto wroteJamFile = io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
-	if (!wroteJamFile)
-	{
-		std::cout << "Export: failed to write session.jam to "
-			<< utils::EncodeUtf8(jamPath) << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
-		<< utils::EncodeUtf8(exportDir) << std::endl;
-
-	return ActionResult::NoAction();
-}
-
 ActionResult Scene::OnAction(GuiAction action)
 {
 	switch (action.ElementType)
@@ -968,7 +617,7 @@ void Scene::OnTick(Time curTime,
 		clock->Tick(samps, 0u);
 
 	unsigned int totalNumLoops = 0u;
-	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
+	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
@@ -977,7 +626,7 @@ void Scene::OnTick(Time curTime,
 		station->OnTick(curTime,
 			samps,
 			_userConfig,
-			_audioDevice->GetAudioStreamParams());
+			_audioEngine->GetStreamParams());
 
 		totalNumLoops += station->NumTakes();
 	}
@@ -994,12 +643,12 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 
-	auto snapshot = _ninjamController.Pump();
+	auto snapshot = _networkService->GetController()->Pump();
 	{
 		// Always sync the station clock state to the scene-level quantisation.
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
-		std::scoped_lock lock(_audioMutex);
+		std::scoped_lock lock(_sceneMutex);
 		_QueueLocalTempoFromClock();
 		if (snapshot.has_value())
 		{
@@ -1011,7 +660,7 @@ void Scene::OnJobTick(Time curTime)
 	actions::JobAction job;
 	job.SetActionTime(Timer::GetTime());
 	job.SetUserConfig(_userConfig);
-	job.SetAudioParams(_audioDevice->GetAudioStreamParams());
+	job.SetAudioParams(_audioEngine->GetStreamParams());
 
 	{
 		std::scoped_lock lock(_jobMutex);
@@ -1050,18 +699,7 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
-	// Trigger-driven engine mutation (record start/end, overdub, ditch, MIDI
-	// loop writes) happens here via Trigger::OnEvent and LoopTake::RecordMidiEvent.
-	// Hold _audioMutex so mutation cannot interleave with Scene::CommitChanges()
-	// publishing back buffers on the main thread - this prevents partial
-	// multi-channel record-start visibility that produced block-quantised
-	// loop start offsets across channels.
-	std::scoped_lock lock(_audioMutex);
-	const auto globalSampleNow = static_cast<std::uint32_t>(_audioSampleCounter.load(std::memory_order_acquire));
-	auto summary = _midiRouter.PumpMidi(_stations,
-		globalSampleNow,
-		_userConfig,
-		_audioDevice->GetAudioStreamParams());
+    auto summary = _inputSubsystem->PumpMidi(_stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
@@ -1074,15 +712,12 @@ void Scene::_PumpMidi()
 
 void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 {
-	_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
+	_inputSubsystem->RegisterMidiTriggerRoute(deviceName, std::move(trigger));
 }
 
 void Scene::_PumpSerial()
 {
-	// See _PumpMidi: trigger dispatch must be serialised with CommitChanges
-	// publication to keep multi-channel record-start coherent.
-	std::scoped_lock lock(_audioMutex);
-	auto summary = _midiRouter.PumpSerial(_stations, _userConfig, _audioDevice->GetAudioStreamParams());
+    auto summary = _inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
@@ -1133,6 +768,8 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 		modifiers,
 		isSelected,
 		tweakState);
+	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
+		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 
@@ -1157,57 +794,16 @@ void Scene::InitGui()
 
 void Scene::InitAudio()
 {
-	{
-		std::scoped_lock lock(_audioMutex);
+	// Setup audio engine which starts device
+	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps, const io::UserConfig& cfg, const audio::AudioStreamParams& params) {
+		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
+	});
 
-		auto dev = AudioDevice::Open(Scene::AudioCallback,
-			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-			_userConfig.Audio,
-			this);
-
-		if (dev.has_value())
-		{
-			_audioDevice = std::move(dev.value());
-			_audioSampleCounter.store(0u, std::memory_order_release);
-
-			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-
-			auto inLatency = (0u == audioStreamParams.InputLatency) ?
-				_userConfig.Audio.LatencyIn :
-				audioStreamParams.InputLatency;
-
-			_channelMixer->SetParams(ChannelMixerParams({
-					_userConfig.AdcBufferDelay(inLatency) + audioStreamParams.BufSize,
-					ChannelMixer::DefaultBufferSize,
-					audioStreamParams.NumInputChannels,
-					audioStreamParams.NumOutputChannels }));
-
-			for (auto& station : _stations)
-			{
-				if (station)
-				{
-					station->SetupBuffers(audioStreamParams.BufSize);
-					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
-					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
-					station->SetNumDacChannels(audioStreamParams.NumOutputChannels);
-					//station->SetNumBusChannels(audioStreamParams.NumOutputChannels);
-				}
-			}
-			_ninjamController.SetAudioFormat(
-				audioStreamParams.SampleRate,
-				audioStreamParams.BufSize,
-				audioStreamParams.NumInputChannels,
-				audioStreamParams.NumOutputChannels);
-
-			InitMidi();
-			InitSerial();
-			_audioDevice->Start();
-			_audioDevice->GetAudioStreamParams().PrintParams();
-		}
+	if (started) {
+		InitMidi();
+		InitSerial();
 	}
 
-	// Dispatch any VST loads that were staged during scene FromFile so they run
-	// with the real audio device sample rate and buffer size.
 	CommitChanges();
 }
 
@@ -1221,42 +817,11 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 	}
 }
 
-void Scene::InitMidi()
-{
-	_midiRouter.InitMidi(_userConfig, _loggingConfig, _audioSampleCounter, _midiAnchorMicros);
-}
-
-void Scene::CloseMidi()
-{
-	_midiRouter.CloseMidi();
-}
-
-void Scene::InitSerial()
-{
-	_midiRouter.InitSerial(_userConfig);
-}
-
-void Scene::CloseSerial()
-{
-	_midiRouter.CloseSerial();
-}
-
 void Scene::CloseAudio()
 {
 	CloseSerial();
 	CloseMidi();
-
-	// Do not hold the audio callback mutex while stopping the stream.
-	// RtAudio shutdown may wait for the callback thread to return, and the
-	// callback takes this same mutex.
-	if (_audioDevice)
-		_audioDevice->Stop();
-
-	std::scoped_lock lock(_audioMutex);
-
-	_ninjamController.Stop();
-
-	_audioDevice->Stop();
+	_audioEngine->Close();
 }
 
 void Scene::Shutdown()
@@ -1272,10 +837,10 @@ void Scene::CommitChanges()
 {
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
-	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _ninjamController.TakePendingSnapshot();
+	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _networkService->GetController()->TakePendingSnapshot();
 
 	{
-		std::scoped_lock lock(_audioMutex);
+		std::scoped_lock lock(_sceneMutex);
 
 		if (pendingRemoteSnapshot.has_value())
 			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());
@@ -1310,7 +875,7 @@ void Scene::CommitChanges()
 	}
 
 	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
-	// thread. Do this after releasing _audioMutex so LoadLibraryW stays out of
+	// thread. Do this after releasing _sceneMutex so LoadLibraryW stays out of
 	// the audio lock and later attached() calls remain UI-thread bound.
 	// MakePluginForPath selects VST3 (Vst3Plugin) or VST2 (Vst2Plugin) by
 	// file extension (.dll → VST2, anything else → VST3).
@@ -1330,21 +895,6 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
-}
-
-void Scene::SendNinjamChat(const std::string& msg)
-{
-	_ninjamController.SendChat(msg);
-}
-
-void Scene::ConnectNinjam(const std::string& host)
-{
-	_ninjamController.Connect(host);
-}
-
-void Scene::DisconnectNinjam()
-{
-	_ninjamController.Disconnect();
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -1371,135 +921,9 @@ std::vector<unsigned char> Scene::TrimPath(std::vector<unsigned char> path, unsi
 	return curPath;
 }
 
-int Scene::AudioCallback(void* outBuffer,
-	void* inBuffer,
-	unsigned int numSamps,
-	double streamTime,
-	RtAudioStreamStatus status,
-	void* userData)
-{
-	Scene* scene = (Scene*)userData;
-	scene->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps);
 
-	return 0;
-}
 
-void Scene::_OnAudio(float* inBuf,
-	float* outBuf,
-	unsigned int numSamps)
-{
-	const auto audioStreamParams = nullptr == _audioDevice ?
-		AudioStreamParams() : _audioDevice->GetAudioStreamParams();
-	const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
-	const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
-	static const std::vector<std::shared_ptr<Station>> emptyStations;
-	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
-	if (nullptr != inBuf)
-	{
-		auto inLatency = (0u == audioStreamParams.InputLatency) ?
-			_userConfig.Audio.LatencyIn :
-			audioStreamParams.InputLatency;
-
-		_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
-
-		_channelMixer->InitPlay(0u, numSamps);
-		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
-
-		for (auto& station : stations)
-		{
-			if (station->IsRemote())
-				continue;
-
-			_channelMixer->WriteToSink(station, numSamps);
-		}
-
-		_channelMixer->InitPlay(_userConfig.AdcBufferDelay(inLatency), numSamps);
-		_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_ADC);
-
-		for (auto& station : stations)
-		{
-			if (station->IsRemote())
-				continue;
-
-			_channelMixer->WriteToSink(station, numSamps);
-		
-			// Overdubbing / bouncing
-			// Each trigger knows which looptakes are wired up to which
-			// other looptakes (and inputs)
-			// Imagine overdubbing a drum take - records from inputs 5-8
-			// Then on audio, we transfer audio directly from previous loops
-			// to new looptake, no wiring/mixing, so loop 1 goes to new loop 1 etc.
-			// The only wiring/mixing done is from input audio.
-			// We call a method on station to wind all these internal looptake bounces
-			// forward, according to the triggers that are in overdub mode.
-			station->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
-			station->OnBounce(numSamps, _userConfig, audioStreamParams);
-
-			station->SetSourceType(Audible::AUDIOSOURCE_BOUNCE);
-			station->OnBounce(numSamps, _userConfig, audioStreamParams);
-
-			station->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_BOUNCE);
-		}
-	}
-
-	_channelMixer->Source()->EndMultiPlay(numSamps);
-
-	_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-	_ninjamController.ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
-
-	auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
-		auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
-		if (!station || !station->IsConnectedRemote())
-			return;
-
-		const float* left = nullptr;
-		const float* right = nullptr;
-		unsigned int frameCount = 0u;
-		if (_ninjamController.ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
-		{
-			auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
-			station->IngestStereoBlock(left, right, ingestFrames);
-		}
-	};
-
-	if (nullptr != outBuf)
-	{
-		std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
-
-		for (auto& station : stations)
-		{
-			station->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
-				static_cast<std::uint32_t>(blockStartSample));
-			station->EndMultiPlay(numSamps);
-		}
-
-		_channelMixer->ToDac(outBuf, audioStreamParams.NumOutputChannels, numSamps);
-	}
-	else
-	{
-		for (auto& station : stations)
-		{
-			ingestRemoteStation(station);
-			station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
-				static_cast<std::uint32_t>(blockStartSample));
-			station->EndMultiPlay(numSamps);
-		}
-	}
-	
-	_channelMixer->Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
-
-	OnTick(Timer::GetTime(),
-		numSamps,
-		_userConfig,
-		_audioDevice->GetAudioStreamParams());
-
-	_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
-	_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
-}
 
 bool Scene::_OnUndo(std::shared_ptr<base::ActionUndo> undo)
 {
@@ -1646,6 +1070,9 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	}
+
+	_quantisationInteraction.RefreshOverlay(_InteractionContext(),
+		[this](const std::vector<unsigned char>& path) { return _ChildFromPath(path); });
 }
 
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
@@ -1661,6 +1088,16 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
+int Scene::CtrlOverlayVisibleButtonCountForTest() const noexcept
+{
+	return _quantisationInteraction.VisibleButtonCountForTest();
+}
+
+std::optional<utils::Position2d> Scene::CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept
+{
+	return _quantisationInteraction.ButtonCenterForTest(buttonIndex);
+}
+
 glm::mat4 Scene::_View()
 {
 	auto camPos = _camera.ModelPosition();
@@ -1672,8 +1109,8 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
-	station->SetNumAdcChannels(_channelMixer->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
-	station->SetNumDacChannels(_channelMixer->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
+	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
+	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
 	station->Init();
 
 	auto selectDepth = (unsigned int)_viewMode;
@@ -1693,9 +1130,52 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 	_quantisation.SetMidiGrain(quantiseSamps, "scene quantisation set", _stations);
 }
 
-void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
 {
-	_quantisation.SetMidiGrain(grainSamps, source, _stations);
+	return (Action::MODIFIER_CTRL & modifiers);
+}
+
+QuantisationInteractionContext Scene::_InteractionContext() const
+{
+	QuantisationInteractionContext context;
+	context.CursorPos = _cursorPos;
+	context.ViewportSize = _sizeParams.Size;
+	context.SelectDepth = _selector->CurrentSelectDepth();
+	context.HoverPath = _selector->CurrentHover();
+	context.HoverPath3d = _hoverPath3d;
+	return context;
+}
+
+ActionResult Scene::_BeginBackgroundDrag(TouchAction action)
+{
+	_isSceneTouching = true;
+	_isSceneDragged = false;
+	_initTouchDownPosition = action.Position;
+	_initTouchCamPosition = _camera.ModelPosition();
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.SourceId = "";
+	res.TargetId = "";
+	res.ResultType = ACTIONRESULT_DEFAULT;
+	res.Undo = std::shared_ptr<ActionUndo>();
+	res.ActiveElement = std::weak_ptr<GuiElement>();
+	return res;
+}
+
+ActionResult Scene::_UpdateBackgroundDrag(TouchMoveAction action)
+{
+	auto dPos = action.Position - _initTouchDownPosition;
+	_camera.SetModelPosition(_initTouchCamPosition - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0 });
+	SetSize(_sizeParams.Size);
+
+	_isSceneDragged = true;
+	return ActionResult::NoAction();
+}
+
+void Scene::_EndBackgroundDrag()
+{
+	_isSceneTouching = false;
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)
@@ -1727,7 +1207,7 @@ void Scene::_JobLoop()
 void Scene::_PublishAudioStations()
 {
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(_stations.begin(), _stations.end());
-	_audioStations.store(stations, std::memory_order_release);
+	_audioEngine->SetStations(stations);
 }
 
 std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> path)
@@ -1774,93 +1254,6 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
 }
 
-void Scene::_UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	std::set<std::string> seenUsers;
-
-	for (const auto& remoteUser : snapshot.Users)
-	{
-		seenUsers.insert(remoteUser.UserName);
-
-		auto remoteStation = Scene::FindRemoteStation(_stations, remoteUser.UserName);
-
-		if (!remoteStation)
-		{
-			StationParams stationParams;
-			stationParams.Name = remoteUser.UserName;
-			stationParams.Size = { 200, 280 };
-			stationParams.Index = static_cast<unsigned int>(_stations.size());
-			stationParams.Position = {
-				static_cast<int>(stationParams.Index) * 600,
-				0 };
-			stationParams.ModelPosition = {
-				static_cast<float>(stationParams.Index) * 600.0f,
-				0.0f,
-				0.0f };
-
-			audio::MergeMixBehaviourParams merge;
-			auto mixerParams = Station::GetMixerParams(stationParams.Size, merge);
-			remoteStation = std::make_shared<StationRemote>(stationParams, mixerParams);
-			remoteStation->SetRemoteUserName(remoteUser.UserName);
-			remoteStation->SetNumBusChannels(2);
-			remoteStation->SetNumDacChannels(2);
-			_AddStation(remoteStation);
-			std::cout << "[NINJAM] User joined: " << remoteUser.UserName << std::endl;
-		}
-
-		remoteStation->SetAssignedOutputChannel(remoteUser.AssignedOutputChannel);
-		remoteStation->SetRemoteChannelCount(remoteUser.ChannelCount);
-		remoteStation->SetConnectedRemote(true);
-
-		if (snapshot.IntervalLengthSamps > 0)
-		{
-			auto visualIntervalSamps = snapshot.IntervalLengthSamps;
-			if (snapshot.HasTiming)
-			{
-				const auto derivedInterval = IntervalSampsFromTempo(snapshot.Bpm,
-					static_cast<unsigned int>(snapshot.Bpi),
-					snapshot.SampleRate);
-				if (derivedInterval > 0u)
-					visualIntervalSamps = std::max(visualIntervalSamps, derivedInterval);
-			}
-
-			remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
-		}
-
-		// EnsureRemoteTake is run from Scene::CommitChanges on the main thread
-		// so scene/station graph mutation stays single-threaded.
-		remoteStation->EnsureRemoteTake();
-		remoteStation->UpdateRemoteVisuals();
-	}
-
-	// Remove stations for users who have left.
-	bool stationsChanged = false;
-	for (auto it = _stations.begin(); it != _stations.end();)
-	{
-		auto remoteStation = std::dynamic_pointer_cast<StationRemote>(*it);
-		if (!remoteStation)
-		{
-			++it;
-			continue;
-		}
-
-		if (seenUsers.find(remoteStation->RemoteUserName()) == seenUsers.end())
-		{
-			remoteStation->SetConnectedRemote(false);
-			std::cout << "[NINJAM] User left: " << remoteStation->RemoteUserName() << std::endl;
-			it = _stations.erase(it);
-			stationsChanged = true;
-		}
-		else
-		{
-			++it;
-		}
-	}
-
-	if (stationsChanged)
-		_PublishAudioStations();
-}
-
 QuantisationPolicy Scene::_QuantisationPolicy() const
 {
 	QuantisationPolicy policy;
@@ -1873,9 +1266,9 @@ QuantisationPolicy Scene::_QuantisationPolicy() const
 
 unsigned int Scene::_CurrentSampleRate() const
 {
-	if (_audioDevice)
+	if (_audioEngine->GetDevice())
 	{
-		const auto streamRate = _audioDevice->GetAudioStreamParams().SampleRate;
+		const auto streamRate = _audioEngine->GetStreamParams().SampleRate;
 		if (streamRate > 0u)
 			return streamRate;
 	}
@@ -1889,8 +1282,8 @@ unsigned int Scene::_CurrentSampleRate() const
 std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 {
 	const auto sampleRate = _CurrentSampleRate();
-	const auto anchorSample = _audioSampleCounter.load(std::memory_order_acquire);
-	const auto anchorMicros = _midiAnchorMicros.load(std::memory_order_acquire);
+	const auto anchorSample = _audioEngine->GetAudioSampleCounter();
+	const auto anchorMicros = _audioEngine->GetMidiAnchorMicros();
 	const auto actionMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		actionTime.time_since_epoch()).count();
 
@@ -1938,6 +1331,40 @@ void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 	_quantisation.ApplyOverlayAlpha(alpha, _stations);
 }
 
+bool Scene::_HasQuantisationSelection() const
+{
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		if (station->IsSelected())
+			return true;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			if (take->IsSelected())
+				return true;
+
+			for (const auto& loop : take->GetLoops())
+			{
+				if (loop && loop->IsSelected())
+					return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+bool Scene::_HasQuantisationHover() const
+{
+	return !_selector->CurrentHover().empty() || !_hoverPath3d.empty();
+}
+
 bool Scene::_TrySetMasterFromHover(bool confirm)
 {
 	return _quantisation.TrySetMasterFromHover(_ChildFromPath(_selector->CurrentHover()),
@@ -1958,166 +1385,4 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
-}
-
-std::optional<Scene::InteractionTarget> Scene::_ResolveInteractionTarget(
-	const std::shared_ptr<base::GuiElement>& target,
-	base::SelectDepth depth) const
-{
-	if (!target)
-		return std::nullopt;
-
-	InteractionTarget resolved;
-	resolved.StationRef = std::dynamic_pointer_cast<Station>(target);
-	resolved.TakeRef = std::dynamic_pointer_cast<LoopTake>(target);
-	resolved.LoopRef = std::dynamic_pointer_cast<Loop>(target);
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-		if (!resolved.StationRef)
-			return std::nullopt;
-		return resolved;
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		if (!resolved.TakeRef)
-			return std::nullopt;
-
-		for (const auto& station : _stations)
-		{
-			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), resolved.TakeRef) != takes.end())
-			{
-				resolved.StationRef = station;
-				break;
-			}
-		}
-
-		for (const auto& loop : resolved.TakeRef->GetLoops())
-		{
-			if (!loop)
-				continue;
-
-			if (!resolved.RepresentativeLoopRef || (loop->LoopLength() > resolved.RepresentativeLoopRef->LoopLength()))
-				resolved.RepresentativeLoopRef = loop;
-			resolved.MasterLengthSamps = std::max(resolved.MasterLengthSamps, loop->LoopLength());
-		}
-
-		return resolved;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		if (!resolved.LoopRef)
-			return std::nullopt;
-
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				const auto& loops = take->GetLoops();
-				if (std::find(loops.begin(), loops.end(), resolved.LoopRef) != loops.end())
-				{
-					resolved.StationRef = station;
-					resolved.TakeRef = take;
-					resolved.RepresentativeLoopRef = resolved.LoopRef;
-					resolved.MasterLengthSamps = resolved.LoopRef->LoopLength();
-					return resolved;
-				}
-			}
-		}
-
-		return std::nullopt;
-	}
-	default:
-		return std::nullopt;
-	}
-}
-
-std::vector<std::shared_ptr<LoopTake>> Scene::_CurrentLoopTakeInteractionTargets()
-{
-	std::vector<std::shared_ptr<LoopTake>> targets;
-	const auto depth = _selector->CurrentSelectDepth();
-
-	const auto appendFromElement = [&](const std::shared_ptr<base::GuiElement>& element)
-	{
-		const auto resolved = _ResolveInteractionTarget(element, depth);
-		if (!resolved)
-			return;
-
-		switch (depth)
-		{
-		case base::SelectDepth::DEPTH_STATION:
-			if (!resolved->StationRef)
-				return;
-			for (const auto& take : resolved->StationRef->GetLoopTakes())
-				AppendUniqueTarget(targets, take);
-			break;
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-			AppendUniqueTarget(targets, resolved->TakeRef);
-			break;
-		case base::SelectDepth::DEPTH_LOOP:
-			AppendUniqueTarget(targets, resolved->TakeRef);
-			break;
-		default:
-			break;
-		}
-	};
-
-	appendFromElement(_ChildFromPath(TrimPath(_hoverPath3d, static_cast<unsigned int>(depth) + 1u)));
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-		for (const auto& station : _stations)
-		{
-			if (station && station->IsSelected())
-				appendFromElement(std::static_pointer_cast<base::GuiElement>(station));
-		}
-		break;
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				if (take && take->IsSelected())
-					appendFromElement(std::static_pointer_cast<base::GuiElement>(take));
-			}
-		}
-		break;
-	case base::SelectDepth::DEPTH_LOOP:
-		for (const auto& station : _stations)
-		{
-			for (const auto& take : station->GetLoopTakes())
-			{
-				for (const auto& loop : take->GetLoops())
-				{
-					if (loop && loop->IsSelected())
-						appendFromElement(std::static_pointer_cast<base::GuiElement>(loop));
-				}
-			}
-		}
-		break;
-	default:
-		break;
-	}
-
-	return targets;
-}
-
-void Scene::_ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	_quantisation.ApplyRemoteTempo(snapshot, _stations, _userConfig);
-}
-
-void Scene::_QueueLocalTempoFromClock()
-{
-	_quantisation.QueueLocalTempo(_quantisation.RemoteSampleRate(), _CurrentSampleRate(), _userConfig);
-}
-
-void Scene::_SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	_quantisation.SendQueuedTempo(snapshot,
-		_ninjamController.Session(),
-		_quantisation.RemoteSampleRate(),
-		_CurrentSampleRate());
 }

@@ -1,4 +1,4 @@
-#include "LoopTake.h"
+﻿#include "LoopTake.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -12,8 +12,7 @@ namespace
 {
 	bool HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept
 	{
-		return (base::Action::MODIFIER_CTRL & modifiers)
-			&& (base::Action::MODIFIER_SHIFT & modifiers);
+		return (base::Action::MODIFIER_CTRL & modifiers);
 	}
 
 	unsigned long NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept
@@ -145,6 +144,7 @@ namespace
 }
 
 using namespace engine;
+using namespace timing;
 using base::Action;
 using base::AudioSink;
 using base::AudioSource;
@@ -194,6 +194,9 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_backLoops(),
 	_midiRecordHeld(),
 	_midiQuantisationPacked(midi::MidiQuantisationSettings().Pack()),
+	_midiTakePhaseOffsetSamps(0),
+	_midiInheritedPhaseOffsetSamps(0),
+	_midiTransportStartSamps(0u),
 	_midiQuantisationUpdatePending(false),
 	_audioMixers(),
 	_backAudioMixers(),
@@ -223,6 +226,9 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 {
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
+	midi::MidiQuantisationSettings quantisation = take->MidiQuantisation();
+	quantisation.PhaseOffsetSamps = takeStruct.TakePhaseOffsetSamps;
+	take->SetMidiQuantisation(quantisation);
 
 	LoopParams loopParams;
 	loopParams.Wav = "hh";
@@ -529,12 +535,6 @@ ActionResult LoopTake::OnAction(actions::TouchAction action)
 		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	}
 
-	if ((actions::TouchAction::TOUCH_DOWN == action.State)
-		&& (0 == action.Index)
-		&& HasMidiQuantisationGestureModifiers(action.Modifiers)
-		&& HitTest(action.Position))
-		return BeginMidiQuantisationGesture(action);
-
 	return Jammable::OnAction(action);
 }
 
@@ -748,7 +748,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 	break;
 	case JobAction::JOB_UPDATEMIDIQUANTISATION:
 	{
-		const auto settings = MidiQuantisation();
+		const auto settings = ResolvedMidiQuantisation();
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
@@ -864,27 +864,37 @@ float LoopTake::VisualRadius() const noexcept
 	return static_cast<float>(Loop::CalcDrawRadius(VisualLoopLengthSamps()));
 }
 
-std::optional<QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
+std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
 {
 	const auto loopLengthSamps = VisualLoopLengthSamps();
 	if (loopLengthSamps == 0ul)
 		return std::nullopt;
 
+	const auto resolvedQuantisation = ResolvedMidiQuantisation();
+	const auto grainSamps = resolvedQuantisation.GrainSamps;
+	const auto loopGrains = (grainSamps > 0u && (loopLengthSamps % grainSamps) == 0ul) ?
+		static_cast<std::uint32_t>(loopLengthSamps / grainSamps) :
+		0u;
+
 	const auto takeSize = GetSize();
 	const auto takePos = ModelPosition();
 	return QuantisationLoopTakeVisual{
 		loopLengthSamps,
+		grainSamps,
+		loopGrains,
 		LoopIndexFrac(),
 		takePos.Y,
 		std::max(8.0f, static_cast<float>(takeSize.Height) * 0.45f),
-		VisualRadius()
+		VisualRadius(),
+		MidiQuantisation().Fraction,
+		resolvedQuantisation.PhaseOffsetSamps
 	};
 }
 
-std::vector<QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
+std::vector<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
 	const std::vector<std::shared_ptr<LoopTake>>& takes)
 {
-	std::vector<QuantisationLoopTakeVisual> visuals;
+	std::vector<timing::QuantisationLoopTakeVisual> visuals;
 	visuals.reserve(takes.size());
 
 	for (const auto& take : takes)
@@ -990,7 +1000,8 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	std::string stationName,
 	std::vector<unsigned int> midiChannels,
 	std::vector<std::string> midiDevices,
-	std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart)
+	std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart,
+	std::uint64_t transportStartSamps)
 {
 	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
@@ -1005,6 +1016,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_backLoops.clear();
 	_RemoveMidiModelChildren();
 	_ResetMidiOverdubSession();
@@ -1031,7 +1043,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(MidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1475,6 +1487,7 @@ void LoopTake::Ditch()
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiTransportStartSamps.store(0u, std::memory_order_release);
 	_ResetMidiOverdubSession();
 
 	for (auto& loop : _loops)
@@ -1499,7 +1512,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	std::string stationName,
 	std::vector<unsigned int> midiChannels,
 	std::vector<std::string> midiDevices,
-	std::shared_ptr<LoopTake> sourceTake)
+	std::shared_ptr<LoopTake> sourceTake,
+	std::uint64_t transportStartSamps)
 {
 	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
@@ -1514,6 +1528,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
+	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
 	_backLoops.clear();
 	_RemoveMidiModelChildren();
 
@@ -1539,7 +1554,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(MidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1663,6 +1678,15 @@ unsigned int LoopTake::_CalcLoopHeight(unsigned int takeHeight, unsigned int num
 		return minHeight;
 
 	return height;
+}
+
+std::int32_t LoopTake::_ClampPhaseOffset(std::int64_t offsetSamps) noexcept
+{
+	if (offsetSamps > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
+		return std::numeric_limits<std::int32_t>::max();
+	if (offsetSamps < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))
+		return std::numeric_limits<std::int32_t>::min();
+	return static_cast<std::int32_t>(offsetSamps);
 }
 
 void LoopTake::_InitReceivers()
@@ -1948,6 +1972,7 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 {
 	const auto previous = MidiQuantisation();
 	_midiQuantisationPacked.store(settings.Pack(), std::memory_order_release);
+	_midiTakePhaseOffsetSamps.store(settings.PhaseOffsetSamps, std::memory_order_release);
 
 	if (previous != settings)
 	{
@@ -1958,12 +1983,74 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 
 midi::MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 {
-	return midi::MidiQuantisationSettings::Unpack(_midiQuantisationPacked.load(std::memory_order_acquire));
+	auto settings = midi::MidiQuantisationSettings::Unpack(
+		_midiQuantisationPacked.load(std::memory_order_acquire));
+	settings.PhaseOffsetSamps = _midiTakePhaseOffsetSamps.load(std::memory_order_acquire);
+	return settings;
+}
+
+midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexcept
+{
+	auto settings = MidiQuantisation();
+	auto combined = static_cast<std::int64_t>(_NaturalMidiQuantisationPhaseOffset(settings))
+		+ static_cast<std::int64_t>(settings.PhaseOffsetSamps)
+		+ static_cast<std::int64_t>(_midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire));
+	settings.PhaseOffsetSamps = _ClampPhaseOffset(combined);
+	return settings;
+}
+
+void LoopTake::SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept
+{
+	const auto previous = ResolvedMidiQuantisation();
+	_midiInheritedPhaseOffsetSamps.store(offsetSamps, std::memory_order_release);
+	const auto updated = ResolvedMidiQuantisation();
+
+	if (previous != updated)
+	{
+		_midiQuantisationUpdatePending = true;
+		_changesMade = true;
+	}
+}
+
+void LoopTake::SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept
+{
+	const auto previous = ResolvedMidiQuantisation();
+	_midiTransportStartSamps.store(startSamps, std::memory_order_release);
+	const auto updated = ResolvedMidiQuantisation();
+
+	if (previous != updated)
+	{
+		_midiQuantisationUpdatePending = true;
+		_changesMade = true;
+	}
+}
+
+std::uint64_t LoopTake::MidiQuantisationTransportStartSamps() const noexcept
+{
+	return _midiTransportStartSamps.load(std::memory_order_acquire);
+}
+
+std::int32_t LoopTake::_NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept
+{
+	const auto stepSamps = midi::MidiQuantisation::StepSamps(settings);
+	if (0u == stepSamps)
+		return 0;
+
+	const auto transportStartSamps = _midiTransportStartSamps.load(std::memory_order_acquire);
+	const auto startWithinStep = transportStartSamps % static_cast<std::uint64_t>(stepSamps);
+	if (0u == startWithinStep)
+		return 0;
+
+	return _ClampPhaseOffset(-static_cast<std::int64_t>(startWithinStep));
 }
 
 midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates() const noexcept
 {
 	midi::MidiQuantisationGrainCandidates candidates;
+	candidates.ResolvedTakeGrainSamps = ResolvedMidiQuantisation().GrainSamps;
+	candidates.PublishedSceneGrainSamps = MidiQuantisation().GrainSamps;
+
+	std::uint32_t representativeLoopLength = 0u;
 
 	for (const auto& midiLoop : _midiLoops)
 	{
@@ -1973,7 +2060,7 @@ midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates
 		const auto loopLength = midiLoop->LoopLengthSamps();
 		if (loopLength > 0u)
 		{
-			candidates.FirstPlayableMidiLoopSamps = loopLength;
+			representativeLoopLength = loopLength;
 			break;
 		}
 	}
@@ -1986,13 +2073,18 @@ midi::MidiQuantisationGrainCandidates LoopTake::_MidiQuantisationGrainCandidates
 		const auto loopLength = static_cast<std::uint32_t>(loop->LoopLength());
 		if (loopLength > 0u)
 		{
-			candidates.FirstAudioLoopSamps = loopLength;
+			if (0u == representativeLoopLength)
+				representativeLoopLength = loopLength;
 			break;
 		}
 	}
 
-	if (_midiVisualLoopLength > 0ul)
-		candidates.MidiVisualLoopSamps = static_cast<std::uint32_t>(_midiVisualLoopLength);
+	if ((representativeLoopLength > 0u)
+		&& (candidates.ResolvedTakeGrainSamps > 0u)
+		&& (representativeLoopLength == candidates.ResolvedTakeGrainSamps))
+	{
+		candidates.SingleGrainLoopSamps = representativeLoopLength;
+	}
 
 	candidates.RecordedSamps = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 	return candidates;
@@ -2476,10 +2568,14 @@ void LoopTake::_ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gestu
 	const char* source) noexcept
 {
 	const auto previous = MidiQuantisation();
+	auto resolvedGrain = ResolvedMidiQuantisation().GrainSamps;
+	if (0u == resolvedGrain)
+		resolvedGrain = midi::MidiQuantisation::ResolveGestureGrain(_MidiQuantisationGrainCandidates());
+
 	const auto updated = midi::MidiQuantisation::ApplyGesture(previous,
 		gesture,
 		fraction,
-		midi::MidiQuantisation::ResolveGestureGrain(_MidiQuantisationGrainCandidates()));
+		resolvedGrain);
 
 	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);

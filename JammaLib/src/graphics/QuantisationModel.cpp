@@ -5,9 +5,12 @@
 #include <cmath>
 #include "glm/ext.hpp"
 #include "GlDrawContext.h"
+#include "../midi/MidiQuantisation.h"
 #include "../../include/Constants.h"
 
 using namespace engine;
+using namespace utils;
+using namespace timing;
 
 namespace
 {
@@ -22,6 +25,7 @@ namespace
 	constexpr float FramePart = 0.0f;
 	constexpr float BackingPart = 1.0f;
 	constexpr float ColumnPart = 2.0f;
+	constexpr float HandlePart = 3.0f;
 	constexpr float GateInstance = 0.0f;
 	constexpr float ColumnInstance = 1.0f;
 
@@ -80,10 +84,14 @@ namespace
 		const auto zMax = outerRadius;
 		const auto xFront = frameDepthHalf;
 		const auto xBack = -frameDepthHalf;
+		const auto handleZMin = zMax - (frameWidth * 0.18f);
+		const auto handleZMax = zMax + std::max(frameWidth * 0.75f, 8.0f);
+		constexpr auto handleXMin = -1.0f;
+		constexpr auto handleXMax = 1.0f;
 
-		verts.reserve(24u * 6u * 3u);
+		verts.reserve(28u * 6u * 3u);
 		if (uvs)
-			uvs->reserve(24u * 6u * 2u);
+			uvs->reserve(28u * 6u * 2u);
 
 		AppendQuad(verts, uvs, BackingPart,
 			GatePoint(xFront * 0.35f, yInnerMin, zMin),
@@ -165,6 +173,27 @@ namespace
 				GatePoint(p1.x, yMax, p1.y),
 				GatePoint(p0.x, yMax, p0.y));
 		}
+
+		AppendQuad(verts, uvs, HandlePart,
+			GatePoint(handleXMin, yMin, handleZMax),
+			GatePoint(handleXMax, yMin, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMax),
+			GatePoint(handleXMin, yMax, handleZMax));
+		AppendQuad(verts, uvs, HandlePart,
+			GatePoint(handleXMax, yMin, handleZMin),
+			GatePoint(handleXMin, yMin, handleZMin),
+			GatePoint(handleXMin, yMax, handleZMin),
+			GatePoint(handleXMax, yMax, handleZMin));
+		AppendQuad(verts, uvs, HandlePart,
+			GatePoint(handleXMin, yMax, handleZMin),
+			GatePoint(handleXMin, yMax, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMin));
+		AppendQuad(verts, uvs, HandlePart,
+			GatePoint(handleXMax, yMin, handleZMin),
+			GatePoint(handleXMax, yMin, handleZMax),
+			GatePoint(handleXMin, yMin, handleZMax),
+			GatePoint(handleXMin, yMin, handleZMin));
 	}
 }
 
@@ -253,7 +282,7 @@ void QuantisationModel::SetTiming(unsigned int seedSamps)
 }
 
 void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
-	const std::vector<QuantisationLoopTakeVisual>& visuals)
+	const std::vector<timing::QuantisationLoopTakeVisual>& visuals)
 {
 	if (seedSamps == 0u)
 		seedSamps = 1u;
@@ -262,22 +291,37 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 
 	std::vector<float> transforms;
 	std::vector<float> modes;
+	std::vector<float> bands;
+	std::vector<float> fillHalfWidths;
 	transforms.reserve(visuals.size() * 16u);
 	modes.reserve(visuals.size() * 4u);
+	bands.reserve(visuals.size() * 4u);
+	fillHalfWidths.reserve(visuals.size() * 4u);
 
 	for (const auto& visual : visuals)
 	{
 		if (visual.LoopLengthSamps == 0ul)
 			continue;
 
-		auto gateCount = static_cast<unsigned int>(std::llround(
-			static_cast<double>(visual.LoopLengthSamps) / static_cast<double>(seedSamps)));
+		const auto counts = ResolveVisualCounts(visual);
+		auto gateCount = counts.GrainFrameCount;
+		if (0u == gateCount)
+			continue;
+
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
-		const auto phaseOffset = std::fmod(
+		const auto fillHalfWidth = std::clamp(
+			GateOuterRadius * std::tan(angleStep * 0.25f),
+			6.0f,
+			GateOuterRadius * 0.45f);
+		const auto loopIndexAngle = std::fmod(
 			static_cast<float>(constants::TWOPI * visual.LoopIndexFrac),
 			static_cast<float>(constants::TWOPI));
+		const auto phaseOffsetAngle = static_cast<float>(constants::TWOPI)
+			* (static_cast<float>(visual.PhaseOffsetSamps)
+				/ static_cast<float>(visual.LoopLengthSamps));
+		const auto phaseOffset = loopIndexAngle + phaseOffsetAngle;
 		const auto heightScale = std::max(visual.HalfHeight, MinVisualHalfHeight) / GateHalfHeight;
 		const auto radiusScale = std::max(visual.Radius, MinVisualRadius) / GateOuterRadius;
 
@@ -288,20 +332,44 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);
 			modes.push_back(GateInstance);
+			bands.push_back(0.0f);
+			fillHalfWidths.push_back(fillHalfWidth);
 		}
 
-		transforms.push_back(0.0f);
+		transforms.push_back(phaseOffset);
 		transforms.push_back(visual.YCenter);
 		transforms.push_back(heightScale);
 		transforms.push_back(radiusScale);
 		modes.push_back(ColumnInstance);
+		bands.push_back(1.0f);
+		fillHalfWidths.push_back(1.0f);
 	}
 
 	const auto instanceCount = static_cast<unsigned int>(modes.size());
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
-		{ 4u, 1u, std::move(modes) }
+		{ 4u, 1u, std::move(modes) },
+		{ 5u, 1u, std::move(bands) },
+		{ 6u, 1u, std::move(fillHalfWidths) }
 	}, instanceCount);
+}
+
+QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const timing::QuantisationLoopTakeVisual& visual) noexcept
+{
+	VisualCounts counts;
+	if (visual.LoopLengthSamps == 0ul || visual.GrainSamps == 0u)
+		return counts;
+
+	counts.GrainFrameCount = visual.LoopGrains;
+	if (0u == counts.GrainFrameCount && (visual.LoopLengthSamps % visual.GrainSamps) == 0ul)
+		counts.GrainFrameCount = static_cast<unsigned int>(visual.LoopLengthSamps / visual.GrainSamps);
+
+	const auto divisor = midi::MidiQuantisation::Divisor(visual.Fraction);
+	counts.StepSamps = (divisor > 0u) ? (visual.GrainSamps / divisor) : 0u;
+	if ((counts.StepSamps > 0u) && ((visual.LoopLengthSamps % counts.StepSamps) == 0ul))
+		counts.FractionDivisionCount = static_cast<unsigned int>(visual.LoopLengthSamps / counts.StepSamps);
+
+	return counts;
 }
 
 void QuantisationModel::SetOverlayVisible(bool visible, bool confirm)

@@ -25,10 +25,15 @@
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "../ninjam/NinjamController.h"
+#include "../audio/AudioHost.h"
+#include "../io/IoInputSubsystem.h"
+#include "../ninjam/NinjamNetworkService.h"
+#include "../vst/VstEditorWindowManager.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
-#include "Quantisation.h"
+#include "../graphics/CtrlHandleOverlay.h"
+#include "../timing/TimingQuantiser.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -38,7 +43,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "StationRemote.h"
-#include "UndoHistory.h"
+#include "../actions/ActionUndoHistory.h"
 
 namespace engine
 {
@@ -184,6 +189,8 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		int CtrlOverlayVisibleButtonCountForTest() const noexcept;
+		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
 
 		void InitReceivers();
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
@@ -195,25 +202,43 @@ namespace engine
 		void CloseAudio();
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
-		void InitMidi();
-		void CloseMidi();
-		void InitSerial();
-		void CloseSerial();
+		void InitMidi()
+		{
+			_inputSubsystem->Init(_audioEngine->GetAudioSampleCounter_Ref(), _audioEngine->GetMidiAnchorMicros_Ref());
+		}
+		void CloseMidi()
+		{
+			_inputSubsystem->Close();
+		}
+		void InitSerial() {}
+		void CloseSerial() {}
 		void CommitChanges();
 
 		// Send a chat message on the active ninjam session (no-op if none).
-		void SendNinjamChat(const std::string& msg);
+		void SendNinjamChat(const std::string& msg)
+		{
+			_networkService->SendChat(msg);
+		}
 
 		// Close all open VST editor windows immediately.
 		// Call this on the main thread before OleUninitialize() during shutdown.
-		void CloseAllVstEditorWindows();
+		void CloseAllVstEditorWindows()
+		{
+			_windowSubsystem->CloseAllVstEditorWindows();
+		}
 
 		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
 		// from the loaded jam config when available; falls back to anonymous.
-		void ConnectNinjam(const std::string& host);
+		void ConnectNinjam(const std::string& host)
+		{
+			_networkService->Connect(host);
+		}
 
 		// Disconnect the active NINJAM session. No-op if not connected.
-		void DisconnectNinjam();
+		void DisconnectNinjam()
+		{
+			_networkService->Disconnect();
+		}
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -240,13 +265,11 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
-		actions::ActionResult _HandleVstInsert(const std::wstring& pluginPath,
-			base::SelectDepth depth,
-			const std::shared_ptr<base::GuiElement>& hovering);
-		actions::ActionResult _HandleVstEditorOpen();
-		actions::ActionResult _HandleExportSession();
-		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
-		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
+		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+		{
+			_quantisation.SetMidiGrain(grainSamps, source, _stations);
+		}
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -254,11 +277,15 @@ namespace engine
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
-		QuantisationPolicy _QuantisationPolicy() const;
+		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
+				_PublishAudioStations();
+		}
+		timing::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
-		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
+		void _ApplyQuantisationTiming(const timing::QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
@@ -266,30 +293,28 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
+		timing::QuantisationInteractionContext _InteractionContext() const;
+		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
+		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
+		void _EndBackgroundDrag();
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
-		struct InteractionTarget
+		bool _HasQuantisationSelection() const;
+		bool _HasQuantisationHover() const;
+		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
+		void _QueueLocalTempoFromClock()
 		{
-			std::shared_ptr<Station> StationRef;
-			std::shared_ptr<LoopTake> TakeRef;
-			std::shared_ptr<Loop> LoopRef;
-			unsigned long MasterLengthSamps = 0ul;
-			std::shared_ptr<Loop> RepresentativeLoopRef;
-		};
-		std::optional<InteractionTarget> _ResolveInteractionTarget(const std::shared_ptr<base::GuiElement>& target,
-			base::SelectDepth depth) const;
-		void _QueueLocalTempoFromClock();
-		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
-		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
-		void _PruneClosedVstEditorWindows();
-		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
-		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
-		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
-		std::vector<std::shared_ptr<LoopTake>> _CurrentLoopTakeInteractionTargets();
-		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
-			base::SelectDepth depth,
-			size_t pluginIndex);
+			_networkService->QueueLocalTempoFromClock(_quantisation, _userConfig, _CurrentSampleRate());
+		}
+		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			_networkService->SendQueuedTempoAtIntervalWrap(snapshot, _quantisation, _CurrentSampleRate());
+		}
+		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			_networkService->ApplyRemoteTempoToClock(snapshot, _quantisation, _stations, _userConfig);
+		}
 
 
 	protected:
@@ -308,32 +333,29 @@ namespace engine
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
 		graphics::Skybox _skybox;
-		std::shared_ptr<audio::ChannelMixer> _channelMixer;
-		std::unique_ptr<audio::AudioDevice> _audioDevice;
-		Quantisation _quantisation;
-		midi::MidiRouter _midiRouter;
+		std::unique_ptr<audio::AudioHost> _audioEngine;
+		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
+		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
+		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
+		timing::TimingQuantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
-		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
-		ninjam::NinjamController _ninjamController;
-		UndoHistory _undoHistory;
+		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
-		std::vector<std::shared_ptr<LoopTake>> _dragLoopTakeTargets;
-		// Open plugin editor windows created from the UI (main thread only).
-		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
-		std::atomic<std::uint64_t> _audioSampleCounter;
-			std::atomic<std::int64_t> _midiAnchorMicros;
+		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
+		timing::TimingQuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
-		std::mutex _audioMutex;
+		std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
+		utils::Position2d _cursorPos{};
 	};
 }

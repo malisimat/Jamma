@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "Quantisation.h"
+#include "../timing/TimingQuantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
@@ -135,8 +135,8 @@ namespace engine
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
-		std::optional<QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
-		static std::vector<QuantisationLoopTakeVisual> QuantisationVisualsFor(
+		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
+		static std::vector<timing::QuantisationLoopTakeVisual> QuantisationVisualsFor(
 			const std::vector<std::shared_ptr<LoopTake>>& takes);
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
@@ -162,7 +162,8 @@ namespace engine
 			std::vector<std::string> midiDevices = {},
 			// Snapshot of currently held live MIDI, keyed by device name.
 			// Empty device name means "device-agnostic / any source".
-			std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart = {});
+			std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart = {},
+			std::uint64_t transportStartSamps = 0u);
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
@@ -173,7 +174,8 @@ namespace engine
 			std::string stationName,
 			std::vector<unsigned int> midiChannels = {},
 			std::vector<std::string> midiDevices = {},
-			std::shared_ptr<LoopTake> sourceTake = nullptr);
+			std::shared_ptr<LoopTake> sourceTake = nullptr,
+			std::uint64_t transportStartSamps = 0u);
 		void PunchIn(bool applyAudio = true, bool applyMidi = true);
 		void PunchOut(bool applyAudio = true, bool applyMidi = true);
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
@@ -201,6 +203,10 @@ namespace engine
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
+		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
+		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
+		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
+		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -208,6 +214,7 @@ namespace engine
 
 	protected:
 		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
+		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 
 		virtual void _InitReceivers() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -251,6 +258,7 @@ namespace engine
 		void _ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gesture,
 			midi::MidiQuantisationFraction fraction,
 			const char* source) noexcept;
+		std::int32_t _NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept;
 		midi::MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
 		midi::MidiNoteSnapshot _SnapshotSourceMidiAtSample(std::size_t loopIndex, std::uint32_t targetSample) const noexcept;
 		midi::MidiNoteSnapshot _SnapshotLiveMidiState(std::size_t loopIndex) const noexcept;
@@ -298,6 +306,9 @@ namespace engine
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
 		midi::MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
+		std::atomic<std::int32_t> _midiTakePhaseOffsetSamps{ 0 };
+		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
+		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
 		bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;

@@ -62,9 +62,10 @@ namespace
 
 	std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
 		std::uint32_t step,
-		std::uint32_t loopLength) noexcept
+		std::uint32_t loopLength,
+		std::int32_t phaseOffsetSamps = 0) noexcept
 	{
-		return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength);
+		return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength, phaseOffsetSamps);
 	}
 
 	void QuantiseEvents(const MidiEvent* src,
@@ -203,19 +204,19 @@ TEST(MidiQuantisation, ApplyGestureTogglesOrDragsWithResolvedGrain) {
 
 TEST(MidiQuantisation, GestureGrainFallsBackByCurrentLoopPriority) {
 	MidiQuantisationGrainCandidates candidates;
-	candidates.FirstPlayableMidiLoopSamps = 960u;
-	candidates.FirstAudioLoopSamps = 1920u;
-	candidates.MidiVisualLoopSamps = 3840u;
+	candidates.ResolvedTakeGrainSamps = 960u;
+	candidates.PublishedSceneGrainSamps = 1920u;
+	candidates.SingleGrainLoopSamps = 3840u;
 	candidates.RecordedSamps = 7680u;
 	EXPECT_EQ(960u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.FirstPlayableMidiLoopSamps = 0u;
+	candidates.ResolvedTakeGrainSamps = 0u;
 	EXPECT_EQ(1920u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.FirstAudioLoopSamps = 0u;
+	candidates.PublishedSceneGrainSamps = 0u;
 	EXPECT_EQ(3840u, ResolveMidiQuantisationGestureGrain(candidates));
 
-	candidates.MidiVisualLoopSamps = 0u;
+	candidates.SingleGrainLoopSamps = 0u;
 	EXPECT_EQ(7680u, ResolveMidiQuantisationGestureGrain(candidates));
 }
 
@@ -256,6 +257,48 @@ TEST(MidiQuantisation, QuantiseOffsetWrapsAtLoopEnd) {
 	// Loop length 1000, step 100 — sample 970 should wrap to 0 (nearest snap = 1000).
 	EXPECT_EQ(0u, QuantiseSampleOffset(970u, 100u, 1000u));
 	EXPECT_EQ(900u, QuantiseSampleOffset(949u, 100u, 1000u));
+}
+
+TEST(MidiQuantisation, QuantiseOffsetRespectsPositivePhaseOffset) {
+	EXPECT_EQ(10u, QuantiseSampleOffset(10u, 100u, 1000u, 10));
+	EXPECT_EQ(10u, QuantiseSampleOffset(59u, 100u, 1000u, 10));
+	EXPECT_EQ(110u, QuantiseSampleOffset(60u, 100u, 1000u, 10));
+	EXPECT_EQ(10u, QuantiseSampleOffset(960u, 100u, 1000u, 10));
+	EXPECT_EQ(10u, QuantiseSampleOffset(965u, 100u, 1000u, 10));
+}
+
+TEST(MidiQuantisation, QuantiseOffsetRespectsNegativePhaseOffset) {
+	EXPECT_EQ(990u, QuantiseSampleOffset(990u, 100u, 1000u, -10));
+	EXPECT_EQ(990u, QuantiseSampleOffset(39u, 100u, 1000u, -10));
+	EXPECT_EQ(90u, QuantiseSampleOffset(90u, 100u, 1000u, -10));
+}
+
+TEST(MidiQuantisation, SettingsEqualityIncludesPhaseOffset) {
+	MidiQuantisationSettings a;
+	MidiQuantisationSettings b;
+	a.Enabled = true;
+	a.GrainSamps = 1000u;
+	a.PhaseOffsetSamps = 100;
+	b.Enabled = true;
+	b.GrainSamps = 1000u;
+	b.PhaseOffsetSamps = 100;
+	EXPECT_EQ(a, b);
+	b.PhaseOffsetSamps = 200;
+	EXPECT_NE(a, b);
+}
+
+TEST(MidiQuantisation, PackUnpackLeavesPhaseOffsetLocalOnly) {
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	settings.GrainSamps = 4800u;
+	settings.PhaseOffsetSamps = 512;
+
+	const auto unpacked = MidiQuantisationSettings::Unpack(settings.Pack());
+	EXPECT_EQ(settings.Enabled, unpacked.Enabled);
+	EXPECT_EQ(settings.Fraction, unpacked.Fraction);
+	EXPECT_EQ(settings.GrainSamps, unpacked.GrainSamps);
+	EXPECT_EQ(0, unpacked.PhaseOffsetSamps);
 }
 
 TEST(MidiQuantisation, ZeroStepIsPassthrough) {

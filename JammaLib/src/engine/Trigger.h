@@ -8,7 +8,7 @@
 #include "ActionReceiver.h"
 #include "GuiElement.h"
 #include "Tickable.h"
-#include "Timer.h"
+#include "../utils/Timer.h"
 #include "../midi/MidiEvent.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"

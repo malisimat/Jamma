@@ -1,17 +1,17 @@
-#include "UndoHistory.h"
+#include "ActionUndoHistory.h"
 
-using namespace engine;
+using namespace actions;
 using base::ActionUndo;
 
-UndoHistory::UndoHistory()
+ActionUndoHistory::ActionUndoHistory()
 {
 }
 
-UndoHistory::~UndoHistory()
+ActionUndoHistory::~ActionUndoHistory()
 {
 }
 
-void engine::UndoHistory::Add(std::shared_ptr<ActionUndo> actionUndo)
+void actions::ActionUndoHistory::Add(std::shared_ptr<ActionUndo> actionUndo)
 {
 	while (!_poppedHistory.empty())
 		_poppedHistory.pop();
@@ -19,7 +19,7 @@ void engine::UndoHistory::Add(std::shared_ptr<ActionUndo> actionUndo)
 	_history.push(actionUndo);
 }
 
-void engine::UndoHistory::Clear()
+void actions::ActionUndoHistory::Clear()
 {
 	while (!_poppedHistory.empty())
 		_poppedHistory.pop();
@@ -28,7 +28,7 @@ void engine::UndoHistory::Clear()
 		_history.pop();
 }
 
-bool engine::UndoHistory::Undo()
+bool actions::ActionUndoHistory::Undo()
 {
 	auto lastOpt = Pop();
 
@@ -43,7 +43,7 @@ bool engine::UndoHistory::Undo()
 	return false;
 }
 
-bool engine::UndoHistory::Redo()
+bool actions::ActionUndoHistory::Redo()
 {
 	auto nextOpt = UnPop();
 
@@ -58,7 +58,7 @@ bool engine::UndoHistory::Redo()
 	return false;
 }
 
-std::optional<std::shared_ptr<ActionUndo>> engine::UndoHistory::Pop()
+std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::Pop()
 {
 	if (_history.empty())
 		return std::nullopt;
@@ -69,7 +69,7 @@ std::optional<std::shared_ptr<ActionUndo>> engine::UndoHistory::Pop()
 	return _poppedHistory.front();
 }
 
-std::optional<std::shared_ptr<ActionUndo>> engine::UndoHistory::UnPop()
+std::optional<std::shared_ptr<ActionUndo>> actions::ActionUndoHistory::UnPop()
 {
 	if (_poppedHistory.empty())
 		return std::nullopt;

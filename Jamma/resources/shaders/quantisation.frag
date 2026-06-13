@@ -7,32 +7,34 @@ uniform float OverlayAlpha;
 
 in float PartKind;
 in float InstanceMode;
+in float BandValue;
+in vec3 Normal;
+in vec3 LocalPosition;
 
 void main()
 {
-	// Gate and column geometry share the same VBO. Each instance is flagged
-	// as either GateInstance or ColumnInstance. Discard fragments where the
-	// geometry type (PartKind) does not match the instance type (InstanceMode)
-	// to prevent gate instances rendering column faces and vice versa.
-	bool columnPart = PartKind > 1.5;
+	// Gate instances (InstanceMode == 0) render frame/backing geometry.
+	// Column instances (InstanceMode == 1) render the origin marker.
+	bool columnOnlyPart = PartKind > 1.5 && PartKind < 2.5;
 	bool columnInstance = InstanceMode > 0.5;
-	if (columnPart != columnInstance)
+	if (columnOnlyPart != columnInstance)
 		discard;
 
 	float partAlpha = 0.34;
 	if (PartKind > 1.5)
-		partAlpha = 0.46;
-	else if (PartKind > 0.5)
 		partAlpha = 0.58;
+	else if (PartKind > 0.5)
+		partAlpha = 0.48;
 
-	vec3 frameColour = vec3(0.40, 0.48, 1.0);
-	vec3 rectColour = vec3(0.22, 0.28, 0.72);
-	vec3 columnColour = vec3(0.52, 0.58, 1.0);
+	vec3 frameColour  = vec3(0.62, 0.70, 0.90);
+	vec3 backingColour = vec3(0.18, 0.22, 0.40);
+	vec3 columnColour = vec3(0.80, 0.88, 1.00);
+
 	vec3 colour = frameColour;
 	if (PartKind > 1.5)
 		colour = columnColour;
 	else if (PartKind > 0.5)
-		colour = rectColour;
+		colour = backingColour;
 
 	colour *= mix(0.82, 1.18, clamp(Highlight, 0.0, 1.0));
 	ColorOUT = vec4(colour, OverlayAlpha * partAlpha);

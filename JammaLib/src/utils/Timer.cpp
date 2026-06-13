@@ -1,6 +1,6 @@
 #include "Timer.h"
 
-using namespace engine;
+using namespace utils;
 
 Timer::Timer() :
 	_loopCount(0ul),
@@ -151,7 +151,7 @@ double Timer::MasterLoopIndexFrac() const noexcept
 	return frac;
 }
 
-std::tuple<unsigned long, int> engine::Timer::QuantiseLength(unsigned long length)
+std::tuple<unsigned long, int> utils::Timer::QuantiseLength(unsigned long length)
 {
 	const auto quantiseSamps = _quantiseSamps.load(std::memory_order_acquire);
 	const auto quantisation = _quantisation.load(std::memory_order_acquire);

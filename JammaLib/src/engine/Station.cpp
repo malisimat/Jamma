@@ -1,8 +1,10 @@
-#include "Station.h"
+﻿#include "Station.h"
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 using namespace engine;
+using namespace timing;
 using namespace audio;
 using namespace actions;
 using namespace base;
@@ -37,7 +39,7 @@ unsigned int Station::_ResolveSampleRate(std::optional<io::UserConfig> cfg,
 	return constants::DefaultSampleRate;
 }
 
-void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 	unsigned long loopLengthSamps,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
@@ -49,7 +51,7 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& c
 	const auto sampleRate = _ResolveSampleRate(cfg, params);
 	if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
 	{
-		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
+		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(loopLengthSamps);
 		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
@@ -68,8 +70,9 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_lastBufSize(constants::MaxBlockSize),
-	_clock(std::shared_ptr<Timer>()),
+	_clock(std::shared_ptr<utils::Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
+	_quantisationDivisionModel(std::make_shared<QuantisationDivisionModel>()),
 	_stationModel(std::make_shared<graphics::StationModel>()),
 	_guiRack(nullptr),
 	_masterMixer(nullptr),
@@ -128,6 +131,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 {
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
+	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -207,7 +211,7 @@ void Station::Draw3d(base::DrawContext& ctx,
 	for (auto& child : _children)
 		child->Draw3d(ctx, 1, pass);
 
-	if (_quantisationModel && (base::PASS_SCENE == pass))
+	if ((_quantisationModel || _quantisationDivisionModel) && (base::PASS_SCENE == pass))
 	{
 		// Refresh quantisation overlay state on the render thread (safe for
 		// geometry and instance-buffer allocation).
@@ -228,7 +232,10 @@ void Station::Draw3d(base::DrawContext& ctx,
 		glEnable(GL_CULL_FACE);
 		glCullFace(GL_BACK);
 
-		_quantisationModel->Draw3d(ctx, numInstances, pass);
+		if (_quantisationModel)
+			_quantisationModel->Draw3d(ctx, numInstances, pass);
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->Draw3d(ctx, numInstances, pass);
 
 		glDepthMask(prevDepthMask);
 		glCullFace(prevCullFaceMode);
@@ -409,7 +416,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
 		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;
 		if (seedSamps > 0u && _sampleRate > 0.0f)
-			if (const auto timing = Quantisation::TimingFromSeedAndMaster(
+			if (const auto timing = TimingQuantiser::TimingFromSeedAndMaster(
 					seedSamps, masterSamps, static_cast<unsigned int>(_sampleRate)))
 			{
 				hostTime.tempo = static_cast<double>(timing->Bpm);
@@ -661,7 +668,13 @@ ActionResult Station::OnAction(TriggerAction action)
 			heldSnapshot = _liveHeldMidi;
 		}
 		auto newLoopTake = AddTake();
-		newLoopTake->Record(action.InputChannels, Name(), action.MidiInputChannels, action.MidiInputDevices, std::move(heldSnapshot));
+		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
+		newLoopTake->Record(action.InputChannels,
+			Name(),
+			action.MidiInputChannels,
+			action.MidiInputDevices,
+			std::move(heldSnapshot),
+			static_cast<std::uint64_t>(transportStartSamps));
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -735,11 +748,13 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
 		auto newLoopTake = AddTake();
+		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),
 			action.MidiInputChannels,
 			action.MidiInputDevices,
-			sourceLoopTake);
+			sourceLoopTake,
+			static_cast<std::uint64_t>(transportStartSamps));
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
@@ -946,6 +961,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	_backLoopTakes.push_back(take);
+	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
@@ -976,12 +992,12 @@ void Station::SetName(std::string name)
 	_name = name;
 }
 
-void Station::SetClock(std::shared_ptr<Timer> clock)
+void Station::SetClock(std::shared_ptr<utils::Timer> clock)
 {
 	_clock = clock;
 }
 
-void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
+void Station::SetQuantisationParams(std::optional<timing::QuantisationParams> params,
 	bool confirm)
 {
 	if (!_quantisationModel)
@@ -994,7 +1010,7 @@ void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
 		return;
 	}
 
-	_pendingQuantisationParams = QuantisationParams{
+	_pendingQuantisationParams = timing::QuantisationParams{
 		params->SeedSamps,
 		params->MasterSamps
 	};
@@ -1011,19 +1027,68 @@ void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 	_quantisationOverlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
 	if (_quantisationModel)
 		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
+void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
+{
+	if (_globalPhaseOffsetSamps == offsetSamps)
+		return;
+
+	_globalPhaseOffsetSamps = offsetSamps;
+	_ApplyMidiQuantisationPhaseOffset();
+}
+
+void Station::SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
+{
+	if (_stationPhaseOffsetSamps == offsetSamps)
+		return;
+
+	_stationPhaseOffsetSamps = offsetSamps;
+	_ApplyMidiQuantisationPhaseOffset();
+}
+
+void Station::_ApplyMidiQuantisationPhaseOffset() noexcept
+{
+	auto combined = static_cast<std::int64_t>(_globalPhaseOffsetSamps)
+		+ static_cast<std::int64_t>(_stationPhaseOffsetSamps);
+	if (combined > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
+		combined = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+	else if (combined < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))
+		combined = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
+
+	const auto inherited = static_cast<std::int32_t>(combined);
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetMidiQuantisationInheritedPhaseOffset(inherited);
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetMidiQuantisationInheritedPhaseOffset(inherited);
+	}
+
+	RefreshQuantisationOverlayFromClock();
 }
 
 void Station::RefreshQuantisationOverlayFromClock()
 {
-	if (!_quantisationModel)
+	if (!_quantisationModel && !_quantisationDivisionModel)
 		return;
 
 	if (!_clock || !_clock->IsQuantisable() || (_quantisationOverlayAlpha <= 0.001f))
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
 			_quantisationModel->SetTiming(_HiddenSeedSamps);
-		_quantisationModel->SetOverlayVisible(false, false);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
 		return;
 	}
 
@@ -1033,8 +1098,13 @@ void Station::RefreshQuantisationOverlayFromClock()
 	{
 		_pendingQuantisationParams = std::nullopt;
 		_pendingQuantisationConfirm = false;
+		if (_quantisationModel)
+		{
 			_quantisationModel->SetTiming(_HiddenSeedSamps);
-		_quantisationModel->SetOverlayVisible(false, false);
+			_quantisationModel->SetOverlayVisible(false, false);
+		}
+		if (_quantisationDivisionModel)
+			_quantisationDivisionModel->SetOverlayVisible(false, false);
 		return;
 	}
 
@@ -1044,15 +1114,31 @@ void Station::RefreshQuantisationOverlayFromClock()
 			_pendingQuantisationParams->SeedSamps :
 				_HiddenSeedSamps;
 
-		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-		_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		if (_quantisationModel)
+		{
+			_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+			_quantisationModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
+		if (_quantisationDivisionModel)
+		{
+			_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+			_quantisationDivisionModel->SetOverlayVisible(true, _pendingQuantisationConfirm);
+		}
 		_pendingQuantisationConfirm = false;
 		return;
 	}
 
 	const auto seedSamps = _clock->QuantiseSamps();
-	_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
-	_quantisationModel->SetOverlayVisible(true, false);
+	if (_quantisationModel)
+	{
+		_quantisationModel->SetLoopTakeVisuals(seedSamps, visuals);
+		_quantisationModel->SetOverlayVisible(true, false);
+	}
+	if (_quantisationDivisionModel)
+	{
+		_quantisationDivisionModel->SetLoopTakeVisuals(visuals);
+		_quantisationDivisionModel->SetOverlayVisible(true, false);
+	}
 }
 
 void Station::SetupBuffers(unsigned int bufSize)
@@ -1339,6 +1425,8 @@ void Station::_InitResources(resources::ResourceLib& resourceLib, bool forceInit
 {
 	if (_quantisationModel)
 		_quantisationModel->InitResources(resourceLib, forceInit);
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->InitResources(resourceLib, forceInit);
 
 	if (_stationModel)
 		_stationModel->InitResources(resourceLib, forceInit);
@@ -1350,6 +1438,8 @@ void Station::_ReleaseResources()
 {
 	if (_quantisationModel)
 		_quantisationModel->ReleaseResources();
+	if (_quantisationDivisionModel)
+		_quantisationDivisionModel->ReleaseResources();
 
 	if (_stationModel)
 		_stationModel->ReleaseResources();

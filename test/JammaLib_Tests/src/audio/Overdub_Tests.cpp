@@ -10,7 +10,7 @@
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
-#include "engine/Timer.h"
+#include "Timer.h"
 #include "engine/Trigger.h"
 #include "io/UserConfig.h"
 
@@ -24,7 +24,7 @@ using base::Audible;
 using engine::LoopTake;
 using engine::Station;
 using engine::StationParams;
-using engine::Timer;
+using utils::Timer;
 using engine::Trigger;
 using engine::TriggerBinding;
 using engine::TriggerParams;
@@ -239,7 +239,7 @@ void SendKey(const std::shared_ptr<Station>& station,
 	action.KeyActionType = (keyType == KeyAction::KEY_DOWN) ?
 		KeyAction::KEY_DOWN :
 		KeyAction::KEY_UP;
-	action.SetActionTime(engine::Timer::GetTime());
+	action.SetActionTime(utils::Timer::GetTime());
 	action.SetUserConfig(cfg);
 	action.SetAudioParams(streamParams);
 	station->OnAction(action);
@@ -358,7 +358,7 @@ void SimulateAudioCallback(ChannelMixer& chanMixer,
 	chanMixer.ToDac(outBuf, numChans, numSamps);
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 
-	station->OnTick(engine::Timer::GetTime(), numSamps, cfg, streamParams);
+	station->OnTick(utils::Timer::GetTime(), numSamps, cfg, streamParams);
 	DrainCommitJobs(station);
 }
 

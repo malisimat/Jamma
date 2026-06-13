@@ -116,7 +116,13 @@
     <ClInclude Include="src\engine\Quantisation.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+    <ClInclude Include="src\engine\QuantisationInteractionController.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
     <ClInclude Include="src\graphics\QuantisationModel.h">
+      <Filter>src\graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="src\graphics\QuantisationDivisionModel.h">
       <Filter>src\graphics</Filter>
     </ClInclude>
     <ClInclude Include="src\graphics\StationModel.h">
@@ -198,7 +204,22 @@
       <Filter>src\resources</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\Scene.h">
-      <Filter>src\graphics</Filter>
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\AudioEngine.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\InputSubsystem.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\WindowSubsystem.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\NetworkService.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\SessionExportService.h">
+      <Filter>src\engine</Filter>
     </ClInclude>
     <ClInclude Include="src\ninjam\NinjamSession.h">
       <Filter>src\ninjam</Filter>
@@ -568,6 +589,21 @@
     <ClCompile Include="src\engine\Scene.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\AudioEngine.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\InputSubsystem.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\WindowSubsystem.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\NetworkService.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\SessionExportService.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\ninjam\NinjamSession.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
@@ -721,7 +757,13 @@
     <ClCompile Include="src\engine\Quantisation.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\QuantisationInteractionController.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\QuantisationModel.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\StationModel.cpp">
