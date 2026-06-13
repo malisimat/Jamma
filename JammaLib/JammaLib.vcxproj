@@ -307,7 +307,11 @@
     <ClInclude Include="lib\opengl\gl\glxew.h" />
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
-    <ClInclude Include="src\engine\Scene.h" />
+        <ClInclude Include="src\engine\Scene.h" />
+    <ClInclude Include="src\engine\AudioEngine.h" />
+    <ClInclude Include="src\engine\InputSubsystem.h" />
+    <ClInclude Include="src\engine\WindowSubsystem.h" />
+    <ClInclude Include="src\engine\NetworkService.h" />
     <ClInclude Include="src\ninjam\NinjamController.h" />
     <ClInclude Include="src\ninjam\NinjamConnection.h" />
     <ClInclude Include="src\ninjam\NinjamSession.h" />
@@ -430,7 +434,11 @@
     <ClCompile Include="src\graphics\Font.cpp" />
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
-    <ClCompile Include="src\engine\Scene.cpp" />
+        <ClCompile Include="src\engine\Scene.cpp" />
+    <ClCompile Include="src\engine\AudioEngine.cpp" />
+    <ClCompile Include="src\engine\InputSubsystem.cpp" />
+    <ClCompile Include="src\engine\WindowSubsystem.cpp" />
+    <ClCompile Include="src\engine\NetworkService.cpp" />
     <ClCompile Include="src\engine\Station.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />
     <ClCompile Include="src\graphics\Shader.cpp" />

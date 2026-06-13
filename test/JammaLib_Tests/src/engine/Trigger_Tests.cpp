@@ -175,13 +175,13 @@ public:
 		const std::shared_ptr<Trigger>& trigger,
 		std::uint8_t deviceSlot)
 	{
-		_midiRouter.RegisterTriggerForTest(deviceName, trigger, deviceSlot);
+		_inputSubsystem->GetMidiRouterForTest().RegisterTriggerForTest(deviceName, trigger, deviceSlot);
 	}
 
 	void AddMidiInputDeviceForTest(const std::string& deviceName,
 		std::uint8_t deviceSlot)
 	{
-		_midiRouter.AddMidiInputDeviceForTest(deviceName, deviceSlot);
+		_inputSubsystem->GetMidiRouterForTest().AddMidiInputDeviceForTest(deviceName, deviceSlot);
 	}
 
 	void PushMainMidiEventForTest(std::uint8_t status,
@@ -190,10 +190,10 @@ public:
 		unsigned int sampleRate = 0u)
 	{
 		(void)sampleRate;
-		if (!_midiRouter.HasMidiInputDeviceForTest(0u))
+		if (!_inputSubsystem->GetMidiRouterForTest().HasMidiInputDeviceForTest(0u))
 			AddMidiInputDeviceForTest("default", 0u);
 
-		_midiRouter.PushMidiEventForTest(0u, status, data1, data2);
+		_inputSubsystem->GetMidiRouterForTest().PushMidiEventForTest(0u, status, data1, data2);
 	}
 
 	void PushMidiEventForTest(std::uint8_t deviceSlot,
@@ -203,7 +203,7 @@ public:
 		unsigned int sampleRate = 0u)
 	{
 		(void)sampleRate;
-		_midiRouter.PushMidiEventForTest(deviceSlot, status, data1, data2);
+		_inputSubsystem->GetMidiRouterForTest().PushMidiEventForTest(deviceSlot, status, data1, data2);
 	}
 
 	void PumpMidiForTest()
@@ -214,8 +214,8 @@ public:
 	void DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
 		const midi::MidiEvent& event)
 	{
-		auto audioParams = _audioDevice ? _audioDevice->GetAudioStreamParams() : audio::AudioStreamParams{};
-		auto summary = _midiRouter.DispatchMidiTriggerEventForTest(deviceSlot, event, _userConfig, audioParams);
+		auto audioParams = _audioEngine->GetStreamParams();
+		auto summary = _inputSubsystem->GetMidiRouterForTest().DispatchMidiTriggerEventForTest(deviceSlot, event, _userConfig, audioParams);
 		if (summary.Activated)
 			_isSceneReset.store(false, std::memory_order_relaxed);
 		if (summary.Ditched)
@@ -240,7 +240,7 @@ public:
 		event.Device = &_testSerialDeviceName;
 		event.ButtonIndex = buttonIndex;
 		event.IsPressed = isPressed;
-		_midiRouter.PushSerialTriggerEventForTest(event);
+		_inputSubsystem->GetMidiRouterForTest().PushSerialTriggerEventForTest(event);
 	}
 
 	void PumpSerialForTest()
@@ -250,7 +250,7 @@ public:
 
 	std::mutex& AudioMutexForTest()
 	{
-		return _audioMutex;
+		return _sceneMutex;
 	}
 
 	bool IsSceneResetForTest() const
@@ -1216,7 +1216,7 @@ TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
 
 // Regression: trigger-driven engine mutation from the job thread (MIDI/serial
 // pumps) must not run concurrently with Scene::CommitChanges publication.
-// Holding _audioMutex while a pump runs proves the synchronisation point.
+// Holding _sceneMutex while a pump runs proves the synchronisation point.
 TEST(Trigger, PumpMidiBlocksWhileAudioMutexHeld) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
@@ -1245,9 +1245,9 @@ TEST(Trigger, PumpMidiBlocksWhileAudioMutexHeld) {
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		EXPECT_FALSE(pumpFinished.load(std::memory_order_acquire))
-			<< "PumpMidi must block while _audioMutex is held by another thread";
+			<< "PumpMidi must block while _sceneMutex is held by another thread";
 		EXPECT_EQ(0u, station->NumTakes())
-			<< "Trigger dispatch must not occur until _audioMutex is released";
+			<< "Trigger dispatch must not occur until _sceneMutex is released";
 
 		holdLock.unlock();
 		pumpThread.join();
@@ -1509,9 +1509,9 @@ TEST(Trigger, PumpSerialBlocksWhileAudioMutexHeld) {
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		EXPECT_FALSE(pumpFinished.load(std::memory_order_acquire))
-			<< "PumpSerial must block while _audioMutex is held by another thread";
+			<< "PumpSerial must block while _sceneMutex is held by another thread";
 		EXPECT_EQ(0u, station->NumTakes())
-			<< "Trigger dispatch must not occur until _audioMutex is released";
+			<< "Trigger dispatch must not occur until _sceneMutex is released";
 
 		holdLock.unlock();
 		pumpThread.join();

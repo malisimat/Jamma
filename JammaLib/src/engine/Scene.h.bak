@@ -25,10 +25,6 @@
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "../ninjam/NinjamController.h"
-#include "AudioEngine.h"
-#include "InputSubsystem.h"
-#include "NetworkService.h"
-#include "WindowSubsystem.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
@@ -312,27 +308,32 @@ namespace engine
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
 		graphics::Skybox _skybox;
-		std::unique_ptr<AudioEngine> _audioEngine;
-		std::unique_ptr<InputSubsystem> _inputSubsystem;
-		std::unique_ptr<WindowSubsystem> _windowSubsystem;
-		std::unique_ptr<NetworkService> _networkService;
+		std::shared_ptr<audio::ChannelMixer> _channelMixer;
+		std::unique_ptr<audio::AudioDevice> _audioDevice;
 		Quantisation _quantisation;
+		midi::MidiRouter _midiRouter;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<Station>>>> _audioStations;
+		ninjam::NinjamController _ninjamController;
 		UndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		QuantisationInteractionController _quantisationInteraction;
+		// Open plugin editor windows created from the UI (main thread only).
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
+		std::atomic<std::uint64_t> _audioSampleCounter;
+			std::atomic<std::int64_t> _midiAnchorMicros;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
-		std::mutex _sceneMutex;
+		std::mutex _audioMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
