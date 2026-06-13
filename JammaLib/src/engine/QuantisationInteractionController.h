@@ -62,12 +62,6 @@ namespace engine
 		std::optional<utils::Position2d> ButtonCenterForTest(int buttonIndex) const noexcept;
 
 	private:
-		enum class MidiPhaseDragRoute : std::uint8_t
-		{
-			Global,
-			Local
-		};
-
 		enum class MidiPhaseDragTargetKind : std::uint8_t
 		{
 			Global,
@@ -100,9 +94,19 @@ namespace engine
 		base::SelectDepth _SelectDepth(const QuantisationInteractionContext& context) const noexcept;
 		std::shared_ptr<base::GuiElement> _HoverElement(const QuantisationInteractionContext& context,
 			const ChildResolver& childResolver) const;
+		void _ApplyOverlayScopes(const QuantisationInteractionContext& context,
+			const ChildResolver& childResolver);
+		std::shared_ptr<Station> _StationFromElement(const std::shared_ptr<base::GuiElement>& element) const;
+		std::vector<std::shared_ptr<Station>> _SelectedStations() const;
+		std::vector<std::shared_ptr<LoopTake>> _SelectedLoopTakes(base::SelectDepth depth) const;
+		std::vector<std::shared_ptr<LoopTake>> _AllLocalLoopTakes() const;
+		std::vector<std::shared_ptr<LoopTake>> _LoopTakesForStations(const std::vector<std::shared_ptr<Station>>& stations) const;
+		bool _IsPhaseGlobalTarget(const QuantisationInteractionContext& context,
+			const ChildResolver& childResolver) const;
+		bool _IsDivisionGlobalTarget(const QuantisationInteractionContext& context,
+			const ChildResolver& childResolver) const;
 
 		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action,
-			MidiPhaseDragRoute route,
 			const QuantisationInteractionContext& context,
 			const ChildResolver& childResolver);
 		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action,
@@ -124,9 +128,7 @@ namespace engine
 		std::shared_ptr<LoopTake> _FirstTakeForStation(const std::shared_ptr<Station>& station) const;
 		std::vector<std::shared_ptr<LoopTake>> _ResolveFractionDragTargets(const QuantisationInteractionContext& context,
 			const ChildResolver& childResolver) const;
-		std::shared_ptr<LoopTake> _ResolveFractionDragTake(const QuantisationInteractionContext& context,
-			const ChildResolver& childResolver) const;
-		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget(MidiPhaseDragRoute route,
+		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget(
 			const QuantisationInteractionContext& context,
 			const ChildResolver& childResolver) const;
 		std::int32_t _MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept;

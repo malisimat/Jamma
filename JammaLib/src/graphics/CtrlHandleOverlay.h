@@ -19,6 +19,12 @@ namespace graphics
 	class CtrlHandleOverlay
 	{
 	public:
+		enum class ButtonScope : unsigned char
+		{
+			Global,
+			Local
+		};
+
 		CtrlHandleOverlay();
 		~CtrlHandleOverlay();
 
@@ -29,6 +35,7 @@ namespace graphics
 		// Call this when Ctrl is pressed to pin the panel location.
 		void SetAnchor(utils::Position2d screenPos, utils::Size2d sceneSize) noexcept;
 		void SetVisibleButtonCount(int count) noexcept;
+		void SetButtonScope(int index, ButtonScope scope) noexcept;
 		int VisibleButtonCount() const noexcept { return _visibleButtonCount; }
 		int HitTestButton(utils::Position2d pos) const noexcept;
 		std::optional<utils::Position2d> ButtonCenter(int index) const noexcept;
@@ -45,22 +52,21 @@ namespace graphics
 	private:
 		struct ButtonSpec
 		{
-			float hue;
+			float globalHue;
+			float localHue;
 		};
 
-		static constexpr int NumButtons = 3;
+		static constexpr int NumButtons = 2;
 		static constexpr float ButtonW = 72.0f;
 		static constexpr float ButtonH = 28.0f;
 		static constexpr float ButtonGap = 6.0f;
 		static constexpr float AnchorOffsetY = 14.0f;
 
-		// Button 0: Global phase drag (blue).
-		// Button 1: Local take phase drag (teal).
-		// Button 2: Fraction drag (orange).
+		// Button 0: Phase (blue global / green local).
+		// Button 1: Division (orange global / red local).
 		static constexpr std::array<ButtonSpec, NumButtons> ButtonSpecs = {{
-			{ 0.58f },
-			{ 0.50f },
-			{ 0.11f }
+			{ 0.58f, 0.33f },
+			{ 0.11f, 0.00f }
 		}};
 
 		static glm::vec3 HsvToRgb(float h, float s, float v) noexcept;
@@ -71,6 +77,10 @@ namespace graphics
 		utils::Position2d _anchorPos{};
 		utils::Size2d _sceneSize{};
 		int _visibleButtonCount = NumButtons;
+		std::array<ButtonScope, NumButtons> _buttonScopes = {
+			ButtonScope::Global,
+			ButtonScope::Global
+		};
 		float _panelX = 0.0f;
 		float _panelY = 0.0f;
 		std::weak_ptr<resources::ShaderResource> _shader;

@@ -44,11 +44,13 @@ void QuantisationInteractionController::RefreshOverlay(const QuantisationInterac
 	if (_ctrlOverlayContext.has_value())
 	{
 		_overlay.SetVisibleButtonCount(_ctrlOverlayContext->VisibleButtonCount);
+		_ApplyOverlayScopes(context, childResolver);
 		_overlay.SetAnchor(_ctrlOverlayContext->Anchor, context.ViewportSize);
 		return;
 	}
 
 	_overlay.SetVisibleButtonCount(_VisibleButtonCount(context));
+	_ApplyOverlayScopes(context, childResolver);
 	if (_ctrlHandleHeld)
 		_overlay.SetAnchor(context.CursorPos, context.ViewportSize);
 }
@@ -92,25 +94,17 @@ std::optional<ActionResult> QuantisationInteractionController::TryHandleTouchAct
 		return std::nullopt;
 
 	const int hitBtn = _overlay.HitTestButton(action.Position);
-	const int visibleButtons = _ctrlOverlayContext.has_value()
-		? _ctrlOverlayContext->VisibleButtonCount
-		: _VisibleButtonCount(context);
-	const int fractionBtn = (visibleButtons >= 3) ? 2 : 1;
 	std::cout << "Ctrl overlay handle down: button=" << hitBtn
 		<< " mode="
 		<< ((0 == hitBtn)
 			? "phase-global"
-			: ((1 == hitBtn) && (visibleButtons >= 3))
-				? "phase-local"
-				: (fractionBtn == hitBtn)
-					? "fraction"
-					: "none")
+			: (1 == hitBtn)
+				? "fraction"
+				: "none")
 		<< std::endl;
 	if (0 == hitBtn)
-		return _BeginMidiPhaseDrag(action, MidiPhaseDragRoute::Global, context, childResolver);
-	if ((1 == hitBtn) && (visibleButtons >= 3))
-		return _BeginMidiPhaseDrag(action, MidiPhaseDragRoute::Local, context, childResolver);
-	if (fractionBtn == hitBtn)
+		return _BeginMidiPhaseDrag(action, context, childResolver);
+	if (1 == hitBtn)
 		return _BeginFractionDrag(action, context, childResolver);
 
 	ActionResult res;
@@ -192,7 +186,6 @@ int QuantisationInteractionController::_VisibleButtonCount(const QuantisationInt
 	{
 	case base::SelectDepth::DEPTH_LOOPTAKE:
 	case base::SelectDepth::DEPTH_LOOP:
-		return 3;
 	case base::SelectDepth::DEPTH_STATION:
 		return 2;
 	default:
@@ -220,14 +213,166 @@ std::shared_ptr<GuiElement> QuantisationInteractionController::_HoverElement(con
 	return hovering;
 }
 
+void QuantisationInteractionController::_ApplyOverlayScopes(const QuantisationInteractionContext& context,
+	const ChildResolver& childResolver)
+{
+	_overlay.SetButtonScope(0,
+		_IsPhaseGlobalTarget(context, childResolver)
+			? graphics::CtrlHandleOverlay::ButtonScope::Global
+			: graphics::CtrlHandleOverlay::ButtonScope::Local);
+	_overlay.SetButtonScope(1,
+		_IsDivisionGlobalTarget(context, childResolver)
+			? graphics::CtrlHandleOverlay::ButtonScope::Global
+			: graphics::CtrlHandleOverlay::ButtonScope::Local);
+}
+
+std::shared_ptr<Station> QuantisationInteractionController::_StationFromElement(const std::shared_ptr<GuiElement>& element) const
+{
+	if (!element)
+		return nullptr;
+
+	auto station = std::dynamic_pointer_cast<Station>(element);
+	if (station)
+		return station;
+
+	auto take = std::dynamic_pointer_cast<LoopTake>(element);
+	if (take)
+		return _StationForTake(take);
+
+	return _StationForTake(_TakeForLoop(std::dynamic_pointer_cast<Loop>(element)));
+}
+
+std::vector<std::shared_ptr<Station>> QuantisationInteractionController::_SelectedStations() const
+{
+	std::vector<std::shared_ptr<Station>> selected;
+	for (const auto& station : _stations)
+	{
+		if (!station || station->IsRemote() || !station->IsSelected())
+			continue;
+		selected.push_back(station);
+	}
+	return selected;
+}
+
+std::vector<std::shared_ptr<LoopTake>> QuantisationInteractionController::_SelectedLoopTakes(base::SelectDepth depth) const
+{
+	std::vector<std::shared_ptr<LoopTake>> selected;
+	auto addTake = [&selected](const std::shared_ptr<LoopTake>& take) {
+		if (!take)
+			return;
+		if (std::find(selected.begin(), selected.end(), take) == selected.end())
+			selected.push_back(take);
+	};
+
+	_ForEachTake([depth, &addTake](const std::shared_ptr<Station>& station,
+		const std::shared_ptr<LoopTake>& take) {
+		if (!station || station->IsRemote())
+			return;
+
+		if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) && take->IsSelected())
+		{
+			addTake(take);
+			return;
+		}
+
+		if (depth == base::SelectDepth::DEPTH_LOOP)
+		{
+			for (const auto& loop : take->GetLoops())
+			{
+				if (loop && loop->IsSelected())
+				{
+					addTake(take);
+					break;
+				}
+			}
+		}
+	});
+
+	return selected;
+}
+
+std::vector<std::shared_ptr<LoopTake>> QuantisationInteractionController::_AllLocalLoopTakes() const
+{
+	std::vector<std::shared_ptr<LoopTake>> targets;
+	_ForEachTake([&targets](const std::shared_ptr<Station>& station,
+		const std::shared_ptr<LoopTake>& take) {
+		if (!station || station->IsRemote())
+			return;
+		targets.push_back(take);
+	});
+	return targets;
+}
+
+std::vector<std::shared_ptr<LoopTake>> QuantisationInteractionController::_LoopTakesForStations(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	std::vector<std::shared_ptr<LoopTake>> targets;
+	for (const auto& station : stations)
+	{
+		if (!station)
+			continue;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+			if (std::find(targets.begin(), targets.end(), take) == targets.end())
+				targets.push_back(take);
+		}
+	}
+	return targets;
+}
+
+bool QuantisationInteractionController::_IsPhaseGlobalTarget(const QuantisationInteractionContext& context,
+	const ChildResolver& childResolver) const
+{
+	const auto depth = _SelectDepth(context);
+	if (depth == base::SelectDepth::DEPTH_STATION)
+	{
+		if (!_SelectedStations().empty())
+			return false;
+		auto hoveredStation = _StationFromElement(_HoverElement(context, childResolver));
+		return !hoveredStation || hoveredStation->IsRemote();
+	}
+
+	if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) || (depth == base::SelectDepth::DEPTH_LOOP))
+	{
+		if (!_SelectedLoopTakes(depth).empty())
+			return false;
+		return _TakeFromElement(_HoverElement(context, childResolver)) == nullptr;
+	}
+
+	return true;
+}
+
+bool QuantisationInteractionController::_IsDivisionGlobalTarget(const QuantisationInteractionContext& context,
+	const ChildResolver& childResolver) const
+{
+	const auto depth = _SelectDepth(context);
+	if (depth == base::SelectDepth::DEPTH_STATION)
+	{
+		if (!_SelectedStations().empty())
+			return false;
+		auto hoveredStation = _StationFromElement(_HoverElement(context, childResolver));
+		return !hoveredStation || hoveredStation->IsRemote();
+	}
+
+	if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) || (depth == base::SelectDepth::DEPTH_LOOP))
+	{
+		if (!_SelectedLoopTakes(depth).empty())
+			return false;
+		return _TakeFromElement(_HoverElement(context, childResolver)) == nullptr;
+	}
+
+	return true;
+}
+
 ActionResult QuantisationInteractionController::_BeginMidiPhaseDrag(TouchAction action,
-	MidiPhaseDragRoute route,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
 	_isMidiPhaseDragging = true;
 	_midiPhaseDragStartPosition = action.Position;
-	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget(route, context, childResolver);
+	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget(context, childResolver);
 	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
 	_quantisation.SetOverlayHeld(true);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
@@ -492,141 +637,80 @@ std::vector<std::shared_ptr<LoopTake>> QuantisationInteractionController::_Resol
 	const auto depth = _SelectDepth(context);
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
-		auto hovering = _HoverElement(context, childResolver);
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		if (!station)
-			station = _StationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
-		if (!station)
-			station = _StationForTake(_TakeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
+		auto selectedStations = _SelectedStations();
+		if (!selectedStations.empty())
+			return _LoopTakesForStations(selectedStations);
 
-		if (!station || station->IsRemote())
-			return {};
+		auto hoveredStation = _StationFromElement(_HoverElement(context, childResolver));
+		if (hoveredStation && !hoveredStation->IsRemote())
+			return _LoopTakesForStations({ hoveredStation });
 
-		std::vector<std::shared_ptr<LoopTake>> targets;
-		for (const auto& take : station->GetLoopTakes())
-		{
-			if (take)
-				targets.push_back(take);
-		}
-		return targets;
+		return _AllLocalLoopTakes();
 	}
 
-	auto take = _ResolveFractionDragTake(context, childResolver);
-	if (!take)
-		return {};
-
-	return { take };
-}
-
-std::shared_ptr<LoopTake> QuantisationInteractionController::_ResolveFractionDragTake(const QuantisationInteractionContext& context,
-	const ChildResolver& childResolver) const
-{
-	auto take = _TakeFromElement(_HoverElement(context, childResolver));
-	if (take)
-		return take;
-
-	const auto depth = _SelectDepth(context);
-	if (depth == base::SelectDepth::DEPTH_STATION)
+	if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) || (depth == base::SelectDepth::DEPTH_LOOP))
 	{
-		auto hovering = _HoverElement(context, childResolver);
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		if (!station)
-			station = _StationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
-		if (!station)
-			station = _StationForTake(_TakeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
+		auto selected = _SelectedLoopTakes(depth);
+		if (!selected.empty())
+			return selected;
 
-		if (auto takeFromStation = _FirstTakeForStation(station))
-			return takeFromStation;
+		auto hoveredTake = _TakeFromElement(_HoverElement(context, childResolver));
+		if (hoveredTake)
+			return { hoveredTake };
 
-		for (const auto& candidateStation : _stations)
-		{
-			if (candidateStation && candidateStation->IsSelected())
-			{
-				if (auto selectedTake = _FirstTakeForStation(candidateStation))
-					return selectedTake;
-			}
-		}
+		return _AllLocalLoopTakes();
 	}
 
-	std::shared_ptr<LoopTake> selectedTake;
-	_ForEachTake([&selectedTake, depth](const std::shared_ptr<Station>&,
-		const std::shared_ptr<LoopTake>& candidateTake) {
-		if (selectedTake)
-			return;
-
-		if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) && candidateTake->IsSelected())
-		{
-			selectedTake = candidateTake;
-			return;
-		}
-
-		if (depth == base::SelectDepth::DEPTH_LOOP)
-		{
-			for (const auto& loop : candidateTake->GetLoops())
-			{
-				if (loop && loop->IsSelected())
-				{
-					selectedTake = candidateTake;
-					return;
-				}
-			}
-		}
-	});
-	return selectedTake;
+	return {};
 }
 
-QuantisationInteractionController::MidiPhaseDragTarget QuantisationInteractionController::_ResolveMidiPhaseDragTarget(MidiPhaseDragRoute route,
+QuantisationInteractionController::MidiPhaseDragTarget QuantisationInteractionController::_ResolveMidiPhaseDragTarget(
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
 	MidiPhaseDragTarget target;
-	if (route == MidiPhaseDragRoute::Global)
-		return target;
-
-	auto hovering = _HoverElement(context, childResolver);
-	if (!hovering)
-		return target;
-
-	auto addTakeTarget = [](std::vector<std::shared_ptr<LoopTake>>& targets,
-		const std::shared_ptr<LoopTake>& take) {
-		if (!take)
-			return;
-		if (std::find(targets.begin(), targets.end(), take) == targets.end())
-			targets.push_back(take);
-	};
 
 	const auto depth = _SelectDepth(context);
 	if (depth == base::SelectDepth::DEPTH_STATION)
-		return target;
-
-	auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-	if (!take)
-		take = _TakeForLoop(std::dynamic_pointer_cast<Loop>(hovering));
-
-	if (take)
 	{
-		target.Kind = MidiPhaseDragTargetKind::LoopTake;
-		target.TakeRef = std::move(take);
-		addTakeTarget(target.TakeTargets, target.TakeRef);
+		auto selectedStations = _SelectedStations();
+		if (!selectedStations.empty())
+		{
+			target.Kind = MidiPhaseDragTargetKind::Station;
+			target.StationTargets = std::move(selectedStations);
+			target.StationRef = target.StationTargets.front();
+			return target;
+		}
+
+		auto hoveredStation = _StationFromElement(_HoverElement(context, childResolver));
+		if (hoveredStation && !hoveredStation->IsRemote())
+		{
+			target.Kind = MidiPhaseDragTargetKind::Station;
+			target.StationRef = hoveredStation;
+			target.StationTargets.push_back(hoveredStation);
+		}
+		return target;
 	}
 
-	_ForEachTake([&target, &addTakeTarget, depth](const std::shared_ptr<Station>&,
-		const std::shared_ptr<LoopTake>& candidateTake) {
-		if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) && candidateTake->IsSelected())
-			addTakeTarget(target.TakeTargets, candidateTake);
+	if ((depth != base::SelectDepth::DEPTH_LOOPTAKE) && (depth != base::SelectDepth::DEPTH_LOOP))
+		return target;
 
-		if (depth == base::SelectDepth::DEPTH_LOOP)
-		{
-			for (const auto& loop : candidateTake->GetLoops())
-			{
-				if (loop && loop->IsSelected())
-				{
-					addTakeTarget(target.TakeTargets, candidateTake);
-					break;
-				}
-			}
-		}
-	});
+	auto selectedTakes = _SelectedLoopTakes(depth);
+	if (!selectedTakes.empty())
+	{
+		target.Kind = MidiPhaseDragTargetKind::LoopTake;
+		target.TakeTargets = std::move(selectedTakes);
+		target.TakeRef = target.TakeTargets.front();
+		return target;
+	}
+
+	auto hoveredTake = _TakeFromElement(_HoverElement(context, childResolver));
+	if (hoveredTake)
+	{
+		target.Kind = MidiPhaseDragTargetKind::LoopTake;
+		target.TakeRef = hoveredTake;
+		target.TakeTargets.push_back(hoveredTake);
+	}
 
 	return target;
 }

@@ -39,6 +39,14 @@ void CtrlHandleOverlay::SetVisibleButtonCount(int count) noexcept
 	SetAnchor(_anchorPos, _sceneSize);
 }
 
+void CtrlHandleOverlay::SetButtonScope(int index, ButtonScope scope) noexcept
+{
+	if ((index < 0) || (index >= NumButtons))
+		return;
+
+	_buttonScopes[static_cast<size_t>(index)] = scope;
+}
+
 int CtrlHandleOverlay::HitTestButton(utils::Position2d pos) const noexcept
 {
 	const float px = static_cast<float>(pos.X);
@@ -182,7 +190,12 @@ void CtrlHandleOverlay::Draw(base::DrawContext& ctx)
 
 	for (int i = 0; i < _visibleButtonCount; ++i)
 	{
-		const auto col = HsvToRgb(ButtonSpecs[i].hue, 0.60f, 0.90f);
+		const auto& spec = ButtonSpecs[static_cast<size_t>(i)];
+		const auto scope = _buttonScopes[static_cast<size_t>(i)];
+		const auto hue = (scope == ButtonScope::Global)
+			? spec.globalHue
+			: spec.localHue;
+		const auto col = HsvToRgb(hue, 0.60f, 0.90f);
 		glUniform4f(colorLoc, col.x, col.y, col.z, _alpha * 0.88f);
 		glDrawArrays(GL_TRIANGLES, i * 6, 6);
 	}
