@@ -1,31 +1,34 @@
 #include "stdafx.h"
-#include "NetworkService.h"
+#include "NinjamNetworkService.h"
 #include <set>
 #include <iostream>
 
-namespace engine
+using namespace engine;
+using namespace timing;
+
+namespace ninjam
 {
-	NetworkService::NetworkService() :
+	NinjamNetworkService::NinjamNetworkService() :
 		_ninjamController(std::make_shared<ninjam::NinjamController>())
 	{
 	}
 
-	void NetworkService::SendChat(const std::string& msg)
+	void NinjamNetworkService::SendChat(const std::string& msg)
 	{
 		_ninjamController->SendChat(msg);
 	}
 
-	void NetworkService::Connect(const std::string& host)
+	void NinjamNetworkService::Connect(const std::string& host)
 	{
 		_ninjamController->Connect(host);
 	}
 
-	void NetworkService::Disconnect()
+	void NinjamNetworkService::Disconnect()
 	{
 		_ninjamController->Disconnect();
 	}
 
-	bool NetworkService::UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
+	bool NinjamNetworkService::UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 		std::vector<std::shared_ptr<Station>>& stations)
 	{
 		bool stationsChanged = false;
@@ -84,7 +87,7 @@ namespace engine
 				auto visualIntervalSamps = snapshot.IntervalLengthSamps;
 				if (snapshot.HasTiming)
 				{
-					const auto derivedInterval = Quantisation::IntervalSampsFromTempo(snapshot.Bpm,
+					const auto derivedInterval = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
 						static_cast<unsigned int>(snapshot.Bpi),
 						snapshot.SampleRate);
 					if (derivedInterval > 0u)
@@ -123,23 +126,23 @@ namespace engine
 		return stationsChanged;
 	}
 
-	void NetworkService::ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot,
-		Quantisation& quantisation,
+	void NinjamNetworkService::ApplyRemoteTempoToClock(const NinjamRemoteSnapshot& snapshot,
+		timing::TimingQuantiser& quantisation,
 		const std::vector<std::shared_ptr<Station>>& stations,
 		const io::UserConfig& userConfig)
 	{
 		quantisation.ApplyRemoteTempo(snapshot, stations, userConfig);
 	}
 
-	void NetworkService::QueueLocalTempoFromClock(Quantisation& quantisation,
+	void NinjamNetworkService::QueueLocalTempoFromClock(timing::TimingQuantiser& quantisation,
 		const io::UserConfig& userConfig,
 		unsigned int currentSampleRate)
 	{
 		quantisation.QueueLocalTempo(quantisation.RemoteSampleRate(), currentSampleRate, userConfig);
 	}
 
-	void NetworkService::SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot,
-		Quantisation& quantisation,
+	void NinjamNetworkService::SendQueuedTempoAtIntervalWrap(const NinjamRemoteSnapshot& snapshot,
+		timing::TimingQuantiser& quantisation,
 		unsigned int currentSampleRate)
 	{
 		quantisation.SendQueuedTempo(snapshot,

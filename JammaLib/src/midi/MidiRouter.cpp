@@ -372,7 +372,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		}
 
 		base::Action action;
-		action.SetActionTime(engine::Timer::GetTime());
+		action.SetActionTime(utils::Timer::GetTime());
 		action.SetUserConfig(userConfig);
 		action.SetAudioParams(audioParams);
 		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
@@ -418,7 +418,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	base::Action triggerAction;
 	triggerAction.SetUserConfig(userConfig);
 	triggerAction.SetAudioParams(audioParams);
-	triggerAction.SetActionTime(engine::Timer::GetTime());
+	triggerAction.SetActionTime(utils::Timer::GetTime());
 
 	auto routes = _midiTriggerRoutesSnapshot.load(std::memory_order_acquire);
 	if (!routes)

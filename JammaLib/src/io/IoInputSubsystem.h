@@ -7,11 +7,11 @@
 #include "../io/UserConfig.h"
 #include "../io/SerialDevice.h"
 #include "../midi/MidiRouter.h"
-#include "Station.h"
+#include "../engine/Station.h"
 
-namespace engine
+namespace io
 {
-	class InputSubsystem
+	class IoInputSubsystem
 	{
 	public:
 	    struct PumpResult
@@ -20,23 +20,23 @@ namespace engine
 			bool Ditched = false;
 		};
 
-		InputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig);
-		~InputSubsystem();
+		IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig);
+		~IoInputSubsystem();
 
 		void Init(std::atomic<std::uint64_t>& audioSampleCounter,
 			std::atomic<std::int64_t>& midiAnchorMicros);
 		void Close();
 
-		PumpResult PumpMidi(std::vector<std::shared_ptr<Station>>& stations,
+		PumpResult PumpMidi(std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t audioSampleCounter,
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 
-		PumpResult PumpSerial(std::vector<std::shared_ptr<Station>>& stations,
+		PumpResult PumpSerial(std::vector<std::shared_ptr<engine::Station>>& stations,
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 
-		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
 		midi::MidiRouter& GetMidiRouterForTest() { return _midiRouter; }
 

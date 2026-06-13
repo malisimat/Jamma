@@ -1,8 +1,8 @@
 
 #include "gtest/gtest.h"
-#include "engine/Timer.h"
+#include "utils/Timer.h"
 
-using engine::Timer;
+using utils::Timer;
 
 // ── Initialisation / lifecycle ───────────────────────────────────────────────
 

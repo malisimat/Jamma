@@ -3,18 +3,18 @@
 #include <utility>
 #include <vector>
 #include "gtest/gtest.h"
-#include "engine/Quantisation.h"
+#include "timing/TimingQuantiser.h"
 #include "graphics/QuantisationModel.h"
 #include "midi/MidiQuantisation.h"
 
-using engine::QuantisationPolicy;
-using engine::TapTempoTracker;
+using timing::QuantisationPolicy;
+using timing::TapTempoTracker;
 
 TEST(Quantisation, DerivesSeedTimingFromMasterLoop)
 {
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceSeedTiming(48000ul * 8ul, 48000u, policy);
+	auto timing = timing::DeduceSeedTiming(48000ul * 8ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
@@ -29,7 +29,7 @@ TEST(Quantisation, EnforcesMinimumTapSeed)
 	QuantisationPolicy policy;
 	policy.SeedGrainMinMs = 400u;
 
-	auto timing = engine::DeduceTapSeedTiming(1000ul, 48000u, policy);
+	auto timing = timing::DeduceTapSeedTiming(1000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(19200u, timing->SeedSamps);
@@ -39,23 +39,23 @@ TEST(Quantisation, EnforcesMinimumTapSeed)
 
 TEST(Quantisation, ConvertsNinjamTempoToIntervalSamples)
 {
-	EXPECT_EQ(384000u, engine::IntervalSampsFromTempo(120.0f, 16u, 48000u));
-	EXPECT_EQ(0u, engine::IntervalSampsFromTempo(0.0f, 16u, 48000u));
-	EXPECT_EQ(0u, engine::IntervalSampsFromTempo(120.0f, 0u, 48000u));
-	EXPECT_EQ(0u, engine::IntervalSampsFromTempo(120.0f, 16u, 0u));
+	EXPECT_EQ(384000u, timing::IntervalSampsFromTempo(120.0f, 16u, 48000u));
+	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(0.0f, 16u, 48000u));
+	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(120.0f, 0u, 48000u));
+	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(120.0f, 16u, 0u));
 }
 
 TEST(Quantisation, ResolvePhaseOffsetDragConvertsHorizontalPixelsToMilliseconds)
 {
-	EXPECT_EQ(2400, engine::ResolvePhaseOffsetDrag(0, 50, 48000u));
-	EXPECT_EQ(-2400, engine::ResolvePhaseOffsetDrag(0, -50, 48000u));
-	EXPECT_EQ(3400, engine::ResolvePhaseOffsetDrag(1000, 50, 48000u));
-	EXPECT_EQ(1000, engine::ResolvePhaseOffsetDrag(1000, 50, 0u));
+	EXPECT_EQ(2400, timing::ResolvePhaseOffsetDrag(0, 50, 48000u));
+	EXPECT_EQ(-2400, timing::ResolvePhaseOffsetDrag(0, -50, 48000u));
+	EXPECT_EQ(3400, timing::ResolvePhaseOffsetDrag(1000, 50, 48000u));
+	EXPECT_EQ(1000, timing::ResolvePhaseOffsetDrag(1000, 50, 0u));
 }
 
 TEST(Quantisation, VisualCounts_FourGrainsQuarterProducesSixteenDivisions)
 {
-	engine::QuantisationLoopTakeVisual visual{};
+	timing::QuantisationLoopTakeVisual visual{};
 	visual.LoopLengthSamps = 1600u;
 	visual.GrainSamps = 400u;
 	visual.LoopGrains = 4u;
@@ -69,7 +69,7 @@ TEST(Quantisation, VisualCounts_FourGrainsQuarterProducesSixteenDivisions)
 
 TEST(Quantisation, VisualCounts_FourGrainsEighthProducesThirtyTwoDivisions)
 {
-	engine::QuantisationLoopTakeVisual visual{};
+	timing::QuantisationLoopTakeVisual visual{};
 	visual.LoopLengthSamps = 1600u;
 	visual.GrainSamps = 400u;
 	visual.LoopGrains = 4u;
@@ -83,7 +83,7 @@ TEST(Quantisation, VisualCounts_FourGrainsEighthProducesThirtyTwoDivisions)
 
 TEST(Quantisation, VisualCounts_SingleGrainQuarterProducesFourDivisions)
 {
-	engine::QuantisationLoopTakeVisual visual{};
+	timing::QuantisationLoopTakeVisual visual{};
 	visual.LoopLengthSamps = 400u;
 	visual.GrainSamps = 400u;
 	visual.LoopGrains = 1u;
@@ -115,7 +115,7 @@ TEST(Quantisation, TimingFromSeedAndMasterDerivesBpmAndBpi)
 	// Master = 8 seconds at 48kHz; seed = 2 seconds (quarter of master).
 	// Direct seed timing preserves the supplied seed: BPI is the number of
 	// actual seed divisions in the master loop.
-	const auto timing = engine::TimingFromSeedAndMaster(96000u, 384000ul, 48000u);
+	const auto timing = timing::TimingFromSeedAndMaster(96000u, 384000ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(96000u, timing->SeedSamps);
@@ -127,9 +127,9 @@ TEST(Quantisation, TimingFromSeedAndMasterDerivesBpmAndBpi)
 
 TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
 {
-	EXPECT_FALSE(engine::TimingFromSeedAndMaster(0u, 384000ul, 48000u).has_value());
-	EXPECT_FALSE(engine::TimingFromSeedAndMaster(96000u, 0ul, 48000u).has_value());
-	EXPECT_FALSE(engine::TimingFromSeedAndMaster(96000u, 384000ul, 0u).has_value());
+	EXPECT_FALSE(timing::TimingFromSeedAndMaster(0u, 384000ul, 48000u).has_value());
+	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 0ul, 48000u).has_value());
+	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 384000ul, 0u).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ TEST(Quantisation, SeedFromMasterNoHalvingNeeded)
 	// so BPI equals the number of seed gates in the master.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceSeedTiming(96000ul, 48000u, policy);
+	auto timing = timing::DeduceSeedTiming(96000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
@@ -159,7 +159,7 @@ TEST(Quantisation, SeedFromMasterRequiresMultipleHalvings)
 	// 1536000 -> 768000 -> 384000 -> 192000 -> 96000 -> 48000 -> 24000.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceSeedTiming(1536000ul, 48000u, policy);
+	auto timing = timing::DeduceSeedTiming(1536000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
@@ -175,7 +175,7 @@ TEST(Quantisation, SeedFromMasterAt44100SampleRate)
 	// the seed halves twice more so it represents 120 BPM directly.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceSeedTiming(352800ul, 44100u, policy);
+	auto timing = timing::DeduceSeedTiming(352800ul, 44100u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(22050u, timing->SeedSamps);
@@ -189,7 +189,7 @@ TEST(Quantisation, SeedFromFirstFourBeatLoopDrawsFourGates)
 {
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceSeedTiming(124928ul, 44100u, policy);
+	auto timing = timing::DeduceSeedTiming(124928ul, 44100u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(31232u, timing->SeedSamps);
@@ -202,8 +202,8 @@ TEST(Quantisation, SeedFromFirstFourBeatLoopDrawsFourGates)
 TEST(Quantisation, SeedFromMasterRejectsZeroInputs)
 {
 	QuantisationPolicy policy;
-	EXPECT_FALSE(engine::DeduceSeedTiming(0ul, 48000u, policy).has_value());
-	EXPECT_FALSE(engine::DeduceSeedTiming(384000ul, 0u, policy).has_value());
+	EXPECT_FALSE(timing::DeduceSeedTiming(0ul, 48000u, policy).has_value());
+	EXPECT_FALSE(timing::DeduceSeedTiming(384000ul, 0u, policy).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ TEST(Quantisation, TapSeedAt120BpmNoMaster)
 	// 120 BPM quarter note = 0.5 s = 24000 samps at 48 kHz.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceTapSeedTiming(24000ul, 48000u, policy);
+	auto timing = timing::DeduceTapSeedTiming(24000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
@@ -227,7 +227,7 @@ TEST(Quantisation, TapSeedAt90BpmNoMaster)
 	// 90 BPM quarter note = 32000 samps at 48 kHz.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceTapSeedTiming(32000ul, 48000u, policy);
+	auto timing = timing::DeduceTapSeedTiming(32000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(32000u, timing->SeedSamps);
@@ -240,7 +240,7 @@ TEST(Quantisation, TapSeedAt60BpmNoMaster)
 	// Explicit tap timing preserves the physical seed interval.
 	QuantisationPolicy policy;
 
-	auto timing = engine::DeduceTapSeedTiming(48000ul, 48000u, policy);
+	auto timing = timing::DeduceTapSeedTiming(48000ul, 48000u, policy);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(48000u, timing->SeedSamps);
@@ -322,20 +322,20 @@ TEST(Quantisation, NinjamRoundTrip_100bpm_4bpi)
 	// Seed = one beat = 60*sr/BPM = 28800 samps; no halving policy applies.
 	const unsigned int sr = 48000u;
 
-	const auto interval = engine::IntervalSampsFromTempo(100.0f, 4u, sr);
+	const auto interval = timing::IntervalSampsFromTempo(100.0f, 4u, sr);
 	ASSERT_EQ(115200u, interval);
 
 	// Derive seed directly as one beat: IntervalSampsFromTempo(bpm, 1, sr).
-	const auto seed = engine::IntervalSampsFromTempo(100.0f, 1u, sr);
+	const auto seed = timing::IntervalSampsFromTempo(100.0f, 1u, sr);
 	ASSERT_EQ(28800u, seed);
 
-	auto timingOpt = engine::TimingFromSeedAndMaster(seed, interval, sr);
+	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(28800u, timingOpt->SeedSamps);
 	EXPECT_EQ(4u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(100.0f, timingOpt->Bpm);
 	EXPECT_EQ(4u, timingOpt->Bpi);
-	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
@@ -344,19 +344,19 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
 	// Seed = one beat = 60*sr/BPM = 24000 samps.
 	const unsigned int sr = 48000u;
 
-	const auto interval = engine::IntervalSampsFromTempo(120.0f, 8u, sr);
+	const auto interval = timing::IntervalSampsFromTempo(120.0f, 8u, sr);
 	ASSERT_EQ(192000u, interval);
 
-	const auto seed = engine::IntervalSampsFromTempo(120.0f, 1u, sr);
+	const auto seed = timing::IntervalSampsFromTempo(120.0f, 1u, sr);
 	ASSERT_EQ(24000u, seed);
 
-	auto timingOpt = engine::TimingFromSeedAndMaster(seed, interval, sr);
+	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(24000u, timingOpt->SeedSamps);
 	EXPECT_EQ(8u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(8u, timingOpt->Bpi);
-	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
@@ -366,19 +366,19 @@ TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
 	// are recovered exactly.
 	const unsigned int sr = 48000u;
 
-	const auto interval = engine::IntervalSampsFromTempo(180.0f, 16u, sr);
+	const auto interval = timing::IntervalSampsFromTempo(180.0f, 16u, sr);
 	ASSERT_EQ(256000u, interval);
 
-	const auto seed = engine::IntervalSampsFromTempo(180.0f, 1u, sr);
+	const auto seed = timing::IntervalSampsFromTempo(180.0f, 1u, sr);
 	ASSERT_EQ(16000u, seed);
 
-	auto timingOpt = engine::TimingFromSeedAndMaster(seed, interval, sr);
+	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(16000u, timingOpt->SeedSamps);
 	EXPECT_EQ(16u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(180.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
-	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
@@ -387,19 +387,19 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
 	// Seed = one beat = 60*sr/BPM = 22050 samps.
 	const unsigned int sr = 44100u;
 
-	const auto interval = engine::IntervalSampsFromTempo(120.0f, 16u, sr);
+	const auto interval = timing::IntervalSampsFromTempo(120.0f, 16u, sr);
 	ASSERT_EQ(352800u, interval);
 
-	const auto seed = engine::IntervalSampsFromTempo(120.0f, 1u, sr);
+	const auto seed = timing::IntervalSampsFromTempo(120.0f, 1u, sr);
 	ASSERT_EQ(22050u, seed);
 
-	auto timingOpt = engine::TimingFromSeedAndMaster(seed, interval, sr);
+	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
 	ASSERT_TRUE(timingOpt.has_value());
 	EXPECT_EQ(22050u, timingOpt->SeedSamps);
 	EXPECT_EQ(16u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
-	EXPECT_EQ(interval, engine::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ TEST(Quantisation, TapSeedFromMasterExactDivisor)
 	// tap = 24000 (120 BPM quarter note); master = 384000 (8 s).
 	// 384000 / 16 = 24000: exact divisor.
 
-	auto timing = engine::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 48000u);
+	auto timing = timing::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(24000u, timing->SeedSamps);
@@ -434,7 +434,7 @@ TEST(Quantisation, TapSeedFromMasterSnapsToNearestDivisor)
 	// Nearest whole-divisor seeds: 384000/15=25600 (dist 400) and
 	// 384000/16=24000 (dist 2000).  25600 wins.
 
-	auto timing = engine::DeduceTapSeedTimingFromMaster(26000ul, 384000ul, 48000u);
+	auto timing = timing::DeduceTapSeedTimingFromMaster(26000ul, 384000ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(25600u, timing->SeedSamps);
@@ -450,7 +450,7 @@ TEST(Quantisation, TapSeedFromMasterBelowMinSizeLimit)
 	// DeduceTapSeedTiming would clamp to the 14400-sample no-master floor;
 	// DeduceTapSeedTimingFromMaster must return 2000 (no size limit).
 
-	auto timing = engine::DeduceTapSeedTimingFromMaster(2000ul, 48000ul, 48000u);
+	auto timing = timing::DeduceTapSeedTimingFromMaster(2000ul, 48000ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(2000u, timing->SeedSamps);
@@ -466,7 +466,7 @@ TEST(Quantisation, TapSeedFromMasterAbovePolicySizeMax)
 	// master = 480000; 480000 / 2 = 240000: exact divisor.
 	// DeduceSeedTiming would halve to 120000; this function must return 240000.
 
-	auto timing = engine::DeduceTapSeedTimingFromMaster(240000ul, 480000ul, 48000u);
+	auto timing = timing::DeduceTapSeedTimingFromMaster(240000ul, 480000ul, 48000u);
 
 	ASSERT_TRUE(timing.has_value());
 	EXPECT_EQ(240000u, timing->SeedSamps);
@@ -478,9 +478,9 @@ TEST(Quantisation, TapSeedFromMasterAbovePolicySizeMax)
 
 TEST(Quantisation, TapSeedFromMasterRejectsZeroInputs)
 {
-	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(0ul, 384000ul, 48000u).has_value());
-	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(24000ul, 0ul, 48000u).has_value());
-	EXPECT_FALSE(engine::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 0u).has_value());
+	EXPECT_FALSE(timing::DeduceTapSeedTimingFromMaster(0ul, 384000ul, 48000u).has_value());
+	EXPECT_FALSE(timing::DeduceTapSeedTimingFromMaster(24000ul, 0ul, 48000u).has_value());
+	EXPECT_FALSE(timing::DeduceTapSeedTimingFromMaster(24000ul, 384000ul, 0u).has_value());
 }
 
 TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)

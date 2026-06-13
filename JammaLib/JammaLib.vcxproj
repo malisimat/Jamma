@@ -225,8 +225,8 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
-    <ClInclude Include="src\engine\Quantisation.h" />
-    <ClInclude Include="src\engine\QuantisationInteractionController.h" />
+    <ClInclude Include="src\timing\TimingQuantiser.h" />
+    
     <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\graphics\QuantisationDivisionModel.h" />
     <ClInclude Include="src\graphics\StationModel.h" />
@@ -308,11 +308,11 @@
     <ClInclude Include="lib\opengl\gl\wglew.h" />
     <ClInclude Include="lib\opengl\gl\wglext.h" />
         <ClInclude Include="src\engine\Scene.h" />
-    <ClInclude Include="src\engine\AudioEngine.h" />
-    <ClInclude Include="src\engine\InputSubsystem.h" />
-    <ClInclude Include="src\engine\WindowSubsystem.h" />
-    <ClInclude Include="src\engine\NetworkService.h" />
-    <ClInclude Include="src\engine\SessionExportService.h" />
+    <ClInclude Include="src\audio\AudioHost.h" />
+    <ClInclude Include="src\io\IoInputSubsystem.h" />
+    <ClInclude Include="src\vst\VstEditorWindowManager.h" />
+    <ClInclude Include="src\ninjam\NinjamNetworkService.h" />
+    <ClInclude Include="src\io\IoSessionExporter.h" />
     <ClInclude Include="src\ninjam\NinjamController.h" />
     <ClInclude Include="src\ninjam\NinjamConnection.h" />
     <ClInclude Include="src\ninjam\NinjamSession.h" />
@@ -345,12 +345,12 @@
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
     <ClInclude Include="src\engine\Trigger.h" />
-    <ClInclude Include="src\engine\UndoHistory.h" />
+    <ClInclude Include="src\actions\ActionUndoHistory.h" />
     <ClInclude Include="src\io\WavReadWriter.h" />
     <ClInclude Include="src\resources\TextureResource.h" />
     <ClInclude Include="src\actions\WindowAction.h" />
     <ClInclude Include="src\resources\WavResource.h" />
-    <ClInclude Include="src\engine\Timer.h" />
+    <ClInclude Include="src\utils\Timer.h" />
     <ClInclude Include="src\midi\MidiEvent.h" />
     <ClInclude Include="src\midi\MidiQueue.h" />
     <ClInclude Include="src\base\Tickable.h" />
@@ -382,8 +382,8 @@
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
-    <ClCompile Include="src\engine\Quantisation.cpp" />
-    <ClCompile Include="src\engine\QuantisationInteractionController.cpp" />
+    <ClCompile Include="src\timing\TimingQuantiser.cpp" />
+    
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
     <ClCompile Include="src\graphics\StationModel.cpp" />
@@ -436,11 +436,11 @@
     <ClCompile Include="src\utils\GlUtils.cpp" />
     <ClCompile Include="src\graphics\GlDrawContext.cpp" />
         <ClCompile Include="src\engine\Scene.cpp" />
-    <ClCompile Include="src\engine\AudioEngine.cpp" />
-    <ClCompile Include="src\engine\InputSubsystem.cpp" />
-    <ClCompile Include="src\engine\WindowSubsystem.cpp" />
-    <ClCompile Include="src\engine\NetworkService.cpp" />
-    <ClCompile Include="src\engine\SessionExportService.cpp" />
+    <ClCompile Include="src\audio\AudioHost.cpp" />
+    <ClCompile Include="src\io\IoInputSubsystem.cpp" />
+    <ClCompile Include="src\vst\VstEditorWindowManager.cpp" />
+    <ClCompile Include="src\ninjam\NinjamNetworkService.cpp" />
+    <ClCompile Include="src\io\IoSessionExporter.cpp" />
     <ClCompile Include="src\engine\Station.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />
     <ClCompile Include="src\graphics\Shader.cpp" />
@@ -458,8 +458,8 @@
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
-    <ClCompile Include="src\engine\Timer.cpp" />
-    <ClCompile Include="src\engine\UndoHistory.cpp" />
+    <ClCompile Include="src\utils\Timer.cpp" />
+    <ClCompile Include="src\actions\ActionUndoHistory.cpp" />
     <ClCompile Include="src\io\WavReadWriter.cpp" />
     <ClCompile Include="src\resources\TextureResource.cpp" />
     <ClCompile Include="src\resources\CubemapResource.cpp" />

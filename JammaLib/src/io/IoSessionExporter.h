@@ -7,16 +7,16 @@
 #include "../audio/AudioDevice.h"
 #include "../io/UserConfig.h"
 #include "../ninjam/NinjamController.h"
-#include "Quantisation.h"
-#include "Station.h"
+#include "../timing/TimingQuantiser.h"
+#include "../engine/Station.h"
 
-namespace engine
+namespace io
 {
-	class SessionExportService
+	class IoSessionExporter
 	{
 	public:
-		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
-			const Quantisation& quantisation,
+		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const timing::TimingQuantiser& quantisation,
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& streamParams,
 			audio::AudioDevice* device,

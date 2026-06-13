@@ -1,9 +1,10 @@
-#include "Station.h"
+﻿#include "Station.h"
 #include <algorithm>
 #include <limits>
 #include <memory>
 
 using namespace engine;
+using namespace timing;
 using namespace audio;
 using namespace actions;
 using namespace base;
@@ -38,7 +39,7 @@ unsigned int Station::_ResolveSampleRate(std::optional<io::UserConfig> cfg,
 	return constants::DefaultSampleRate;
 }
 
-void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 	unsigned long loopLengthSamps,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
@@ -50,7 +51,7 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& c
 	const auto sampleRate = _ResolveSampleRate(cfg, params);
 	if (auto timing = policyCfg.DeduceLoopTiming(loopLengthSamps, sampleRate); timing.has_value())
 	{
-		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? engine::Timer::QUANTISE_POWER : engine::Timer::QUANTISE_MULTIPLE;
+		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(loopLengthSamps);
 		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
@@ -69,7 +70,7 @@ Station::Station(StationParams params,
 	_name(params.Name),
 	_fadeSamps(params.FadeSamps),
 	_lastBufSize(constants::MaxBlockSize),
-	_clock(std::shared_ptr<Timer>()),
+	_clock(std::shared_ptr<utils::Timer>()),
 	_quantisationModel(std::make_shared<QuantisationModel>()),
 	_quantisationDivisionModel(std::make_shared<QuantisationDivisionModel>()),
 	_stationModel(std::make_shared<graphics::StationModel>()),
@@ -415,7 +416,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
 		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;
 		if (seedSamps > 0u && _sampleRate > 0.0f)
-			if (const auto timing = Quantisation::TimingFromSeedAndMaster(
+			if (const auto timing = TimingQuantiser::TimingFromSeedAndMaster(
 					seedSamps, masterSamps, static_cast<unsigned int>(_sampleRate)))
 			{
 				hostTime.tempo = static_cast<double>(timing->Bpm);
@@ -991,12 +992,12 @@ void Station::SetName(std::string name)
 	_name = name;
 }
 
-void Station::SetClock(std::shared_ptr<Timer> clock)
+void Station::SetClock(std::shared_ptr<utils::Timer> clock)
 {
 	_clock = clock;
 }
 
-void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
+void Station::SetQuantisationParams(std::optional<timing::QuantisationParams> params,
 	bool confirm)
 {
 	if (!_quantisationModel)
@@ -1009,7 +1010,7 @@ void Station::SetQuantisationParams(std::optional<QuantisationParams> params,
 		return;
 	}
 
-	_pendingQuantisationParams = QuantisationParams{
+	_pendingQuantisationParams = timing::QuantisationParams{
 		params->SeedSamps,
 		params->MasterSamps
 	};

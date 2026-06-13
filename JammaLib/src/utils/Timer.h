@@ -6,7 +6,7 @@
 
 typedef std::chrono::time_point<std::chrono::steady_clock> Time;
 
-namespace engine
+namespace utils
 {
 	class Timer
 	{

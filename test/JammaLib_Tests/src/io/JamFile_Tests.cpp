@@ -182,7 +182,7 @@ TEST(JamFile, ParsesFile) {
 	ASSERT_EQ(1.2, jam.value().Stations[1].LoopTakes[2].Loops[0].Speed);
 
 	ASSERT_EQ(4321, jam.value().QuantiseSamps);
-	ASSERT_EQ(engine::Timer::QUANTISE_POWER, jam.value().Quantisation);
+	ASSERT_EQ(utils::Timer::QUANTISE_POWER, jam.value().Quantisation);
 }
 
 TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
@@ -192,7 +192,7 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	jam.TimerTicks = 12;
 	jam.QuantiseSamps = 960;
 	jam.GlobalPhaseOffsetSamps = -120;
-	jam.Quantisation = engine::Timer::QUANTISE_MULTIPLE;
+	jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
 
 	JamFile::Loop loop;
 	loop.Name = "loop\"1.wav";
@@ -229,7 +229,7 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ(12, parsed->TimerTicks);
 	ASSERT_EQ(960, parsed->QuantiseSamps);
 	ASSERT_EQ(-120, parsed->GlobalPhaseOffsetSamps);
-	ASSERT_EQ(engine::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
+	ASSERT_EQ(utils::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
 	ASSERT_EQ(1, parsed->Stations.size());
 	ASSERT_EQ(30, parsed->Stations[0].StationPhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());

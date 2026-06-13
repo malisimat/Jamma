@@ -8,6 +8,8 @@
 #include "../../include/Constants.h"
 
 using namespace engine;
+using namespace utils;
+using namespace timing;
 
 namespace
 {
@@ -160,7 +162,7 @@ void QuantisationDivisionModel::Draw3d(base::DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
-void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<QuantisationLoopTakeVisual>& visuals)
+void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<timing::QuantisationLoopTakeVisual>& visuals)
 {
 	std::vector<float> transforms;
 	std::vector<float> bands;

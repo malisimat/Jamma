@@ -1,29 +1,32 @@
 #include "stdafx.h"
-#include "AudioEngine.h"
-#include "../engine/Timer.h"
+#include "AudioHost.h"
+#include "../utils/Timer.h"
 #include <iostream>
 
-namespace engine
+using namespace engine;
+using namespace utils;
+
+namespace audio
 {
-	AudioEngine::AudioEngine(io::UserConfig userConfig) :
+	AudioHost::AudioHost(io::UserConfig userConfig) :
 		_userConfig(userConfig),
 		_channelMixer(std::make_shared<audio::ChannelMixer>(audio::ChannelMixerParams{}))
 	{
 	}
 
-	AudioEngine::~AudioEngine()
+	AudioHost::~AudioHost()
 	{
 		Close();
 	}
 
-	bool AudioEngine::Init(std::shared_ptr<ninjam::NinjamController> ninjamController, TickCallback tickCallback)
+	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController, TickCallback tickCallback)
 	{
 		std::scoped_lock lock(_audioMutex);
 
 		_ninjamController = ninjamController;
 		_tickCallback = tickCallback;
 
-		auto dev = audio::AudioDevice::Open(AudioEngine::AudioCallback,
+		auto dev = audio::AudioDevice::Open(AudioHost::AudioCallback,
 			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
 			_userConfig.Audio,
 			this);
@@ -76,7 +79,7 @@ namespace engine
 		return false;
 	}
 
-	void AudioEngine::Close()
+	void AudioHost::Close()
 	{
 		if (_audioDevice)
 			_audioDevice->Stop();
@@ -90,24 +93,24 @@ namespace engine
 			_audioDevice->Stop();
 	}
 
-	void AudioEngine::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
+	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
 	{
 		_audioStations.store(stations, std::memory_order_release);
 	}
 
-	int AudioEngine::AudioCallback(void* outBuffer,
+	int AudioHost::AudioCallback(void* outBuffer,
 		void* inBuffer,
 		unsigned int numSamps,
 		double streamTime,
 		RtAudioStreamStatus status,
 		void* userData)
 	{
-		AudioEngine* engine = (AudioEngine*)userData;
+		AudioHost* engine = (AudioHost*)userData;
 		engine->_OnAudio((float*)inBuffer, (float*)outBuffer, numSamps, streamTime);
 		return 0;
 	}
 
-	void AudioEngine::_OnAudio(float* inBuf,
+	void AudioHost::_OnAudio(float* inBuf,
 		float* outBuf,
 		unsigned int numSamps,
 		double streamTime)

@@ -25,16 +25,15 @@
 #include "../io/InitFile.h"
 #include "../io/SerialDevice.h"
 #include "../ninjam/NinjamController.h"
-#include "AudioEngine.h"
-#include "InputSubsystem.h"
-#include "NetworkService.h"
-#include "WindowSubsystem.h"
+#include "../audio/AudioHost.h"
+#include "../io/IoInputSubsystem.h"
+#include "../ninjam/NinjamNetworkService.h"
+#include "../vst/VstEditorWindowManager.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../graphics/CtrlHandleOverlay.h"
-#include "Quantisation.h"
-#include "QuantisationInteractionController.h"
+#include "../timing/TimingQuantiser.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -44,7 +43,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "StationRemote.h"
-#include "UndoHistory.h"
+#include "../actions/ActionUndoHistory.h"
 
 namespace engine
 {
@@ -266,7 +265,7 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
-		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
+		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
 		{
 			_quantisation.SetMidiGrain(grainSamps, source, _stations);
@@ -283,10 +282,10 @@ namespace engine
 			if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
 				_PublishAudioStations();
 		}
-		QuantisationPolicy _QuantisationPolicy() const;
+		timing::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
-		void _ApplyQuantisationTiming(const QuantisationTiming& timing, const char* source);
+		void _ApplyQuantisationTiming(const timing::QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
@@ -294,7 +293,7 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
-		QuantisationInteractionContext _InteractionContext() const;
+		timing::QuantisationInteractionContext _InteractionContext() const;
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
 		void _EndBackgroundDrag();
@@ -334,22 +333,22 @@ namespace engine
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
 		graphics::Skybox _skybox;
-		std::unique_ptr<AudioEngine> _audioEngine;
-		std::unique_ptr<InputSubsystem> _inputSubsystem;
-		std::unique_ptr<WindowSubsystem> _windowSubsystem;
-		std::unique_ptr<NetworkService> _networkService;
-		Quantisation _quantisation;
+		std::unique_ptr<audio::AudioHost> _audioEngine;
+		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
+		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
+		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
+		timing::TimingQuantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
 		std::vector<std::shared_ptr<Station>> _stations;
-		UndoHistory _undoHistory;
+		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
-		QuantisationInteractionController _quantisationInteraction;
+		timing::TimingQuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

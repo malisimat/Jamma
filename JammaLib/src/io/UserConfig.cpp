@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "UserConfig.h"
+#include "../timing/TimingQuantiser.h"
 #include <limits>
 
 using namespace io;
@@ -474,13 +475,13 @@ std::optional<UserConfig::SeedLoopTiming> UserConfig::DeduceLoopTiming(unsigned 
 	if ((0ul == loopLengthSamps) || (0u == sampleRate))
 		return std::nullopt;
 
-	engine::QuantisationPolicy policy;
+	timing::QuantisationPolicy policy;
 	policy.SeedGrainMinMs = Loop.SeedGrainMinMs;
 	policy.SeedGrainTargetMaxMs = Loop.SeedGrainTargetMaxMs;
 	policy.SeedBpmMin = Loop.SeedBpmMin;
 	policy.SeedUsesPowers = Loop.SeedUsesPowers;
 
-	auto timingOpt = engine::DeduceSeedTiming(loopLengthSamps, sampleRate, policy);
+	auto timingOpt = timing::DeduceSeedTiming(loopLengthSamps, sampleRate, policy);
 	if (!timingOpt.has_value())
 		return std::nullopt;
 

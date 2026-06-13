@@ -1,33 +1,35 @@
 #include "stdafx.h"
-#include "InputSubsystem.h"
+#include "IoInputSubsystem.h"
 
-namespace engine
+using namespace engine;
+
+namespace io
 {
-	InputSubsystem::InputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig) :
+	IoInputSubsystem::IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig) :
 		_userConfig(userConfig),
 		_loggingConfig(loggingConfig)
 	{
 	}
 
-	InputSubsystem::~InputSubsystem()
+	IoInputSubsystem::~IoInputSubsystem()
 	{
 		Close();
 	}
 
-	void InputSubsystem::Init(std::atomic<std::uint64_t>& audioSampleCounter,
+	void IoInputSubsystem::Init(std::atomic<std::uint64_t>& audioSampleCounter,
 		std::atomic<std::int64_t>& midiAnchorMicros)
 	{
 		_midiRouter.InitMidi(_userConfig, _loggingConfig, audioSampleCounter, midiAnchorMicros);
 		_midiRouter.InitSerial(_userConfig);
 	}
 
-	void InputSubsystem::Close()
+	void IoInputSubsystem::Close()
 	{
 		_midiRouter.CloseSerial();
 		_midiRouter.CloseMidi();
 	}
 
-	InputSubsystem::PumpResult InputSubsystem::PumpMidi(std::vector<std::shared_ptr<Station>>& stations,
+	IoInputSubsystem::PumpResult IoInputSubsystem::PumpMidi(std::vector<std::shared_ptr<Station>>& stations,
 		std::uint64_t audioSampleCounter,
 		const audio::AudioStreamParams& streamParams,
 		std::mutex& audioMutex)
@@ -43,7 +45,7 @@ namespace engine
 		return result;
 	}
 
-	InputSubsystem::PumpResult InputSubsystem::PumpSerial(std::vector<std::shared_ptr<Station>>& stations,
+	IoInputSubsystem::PumpResult IoInputSubsystem::PumpSerial(std::vector<std::shared_ptr<Station>>& stations,
 		const audio::AudioStreamParams& streamParams,
 		std::mutex& audioMutex)
 	{
@@ -55,7 +57,7 @@ namespace engine
 		return result;
 	}
 
-	void InputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 	{
 		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
 	}

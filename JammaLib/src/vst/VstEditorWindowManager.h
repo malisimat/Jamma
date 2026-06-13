@@ -6,15 +6,15 @@
 #include "../actions/ActionResult.h"
 #include "../base/GuiElement.h"
 #include "../graphics/VstEditorWindow.h"
-#include "Station.h"
+#include "../engine/Station.h"
 
-namespace engine
+namespace vst
 {
-	class WindowSubsystem
+	class VstEditorWindowManager
 	{
 	public:
-		WindowSubsystem() = default;
-		~WindowSubsystem();
+		VstEditorWindowManager() = default;
+		~VstEditorWindowManager();
 
 		void CloseAllVstEditorWindows();
 		void PruneClosedVstEditorWindows();
@@ -26,11 +26,11 @@ namespace engine
 
 		actions::ActionResult HandleVstEditorOpen(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
-			const std::vector<std::shared_ptr<Station>>& stations);
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
-		bool OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
-		bool TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
-		bool TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
+		bool OpenVstEditorForPlugin(const std::shared_ptr<IVstPlugin>& plugin);
+		bool TryOpenVstEditorForLoop(const std::shared_ptr<engine::Loop>& loop, size_t pluginIndex);
+		bool TryOpenVstEditorForStation(const std::shared_ptr<engine::Station>& station, size_t pluginIndex);
 		bool TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			size_t pluginIndex);

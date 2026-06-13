@@ -9,6 +9,8 @@
 #include "../../include/Constants.h"
 
 using namespace engine;
+using namespace utils;
+using namespace timing;
 
 namespace
 {
@@ -280,7 +282,7 @@ void QuantisationModel::SetTiming(unsigned int seedSamps)
 }
 
 void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
-	const std::vector<QuantisationLoopTakeVisual>& visuals)
+	const std::vector<timing::QuantisationLoopTakeVisual>& visuals)
 {
 	if (seedSamps == 0u)
 		seedSamps = 1u;
@@ -352,7 +354,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	}, instanceCount);
 }
 
-QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const QuantisationLoopTakeVisual& visual) noexcept
+QuantisationModel::VisualCounts QuantisationModel::ResolveVisualCounts(const timing::QuantisationLoopTakeVisual& visual) noexcept
 {
 	VisualCounts counts;
 	if (visual.LoopLengthSamps == 0ul || visual.GrainSamps == 0u)

@@ -21,7 +21,7 @@ using engine::Station;
 using engine::StationParams;
 using engine::Trigger;
 using engine::TriggerParams;
-using engine::Timer;
+using utils::Timer;
 using actions::TriggerAction;
 using actions::KeyAction;
 using audio::MergeMixBehaviourParams;

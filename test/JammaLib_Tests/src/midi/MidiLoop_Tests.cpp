@@ -11,7 +11,7 @@
 #include "midi/MidiQuantisation.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
-#include "engine/Timer.h"
+#include "Timer.h"
 #include "io/UserConfig.h"
 
 using midi::IMidiSink;
@@ -29,7 +29,7 @@ using engine::Scene;
 using engine::SceneParams;
 using engine::Station;
 using engine::StationParams;
-using engine::Timer;
+using utils::Timer;
 using actions::TouchAction;
 using actions::TouchMoveAction;
 using audio::MergeMixBehaviourParams;
@@ -113,7 +113,7 @@ namespace
 	std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
 		const utils::Position2d& finish)
 	{
-		return engine::ResolvePhaseOffsetDrag(0,
+		return timing::ResolvePhaseOffsetDrag(0,
 			finish.X - start.X,
 			ScenePhaseDragSampleRate);
 	}
@@ -1088,7 +1088,7 @@ TEST(LoopTakeMidiQuantisation, QuantisationGlobalPhasePropagatesAcrossStations) 
 	secondStation->AddTake(secondTake);
 	secondStation->SetStationPhaseOffsetSamps(30);
 
-	engine::Quantisation quantisation;
+	timing::TimingQuantiser quantisation;
 	quantisation.SetGlobalPhaseOffsetSamps(240, { firstStation, secondStation });
 
 	EXPECT_EQ(240, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);

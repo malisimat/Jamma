@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include "SessionExportService.h"
+#include "IoSessionExporter.h"
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -8,10 +8,12 @@
 #include "../io/WavReadWriter.h"
 #include "../utils/PathUtils.h"
 
-namespace engine
+using namespace engine;
+
+namespace io
 {
-	actions::ActionResult SessionExportService::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
-		const Quantisation& quantisation,
+	actions::ActionResult IoSessionExporter::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
+		const timing::TimingQuantiser& quantisation,
 		const io::UserConfig& userConfig,
 		const audio::AudioStreamParams& streamParams,
 		audio::AudioDevice* device,
@@ -55,7 +57,7 @@ namespace engine
 		jam.TimerTicks = 0;
 		jam.QuantiseSamps = 0;
 		jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
-		jam.Quantisation = engine::Timer::QUANTISE_OFF;
+		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
 		std::vector<LoopSnapshot> loops;
 

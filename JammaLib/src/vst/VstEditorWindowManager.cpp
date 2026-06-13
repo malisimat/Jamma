@@ -1,17 +1,19 @@
 #include "stdafx.h"
-#include "WindowSubsystem.h"
+#include "VstEditorWindowManager.h"
 #include <algorithm>
 #include <iostream>
 #include "../utils/PathUtils.h"
 
-namespace engine
+using namespace engine;
+
+namespace vst
 {
-	WindowSubsystem::~WindowSubsystem()
+	VstEditorWindowManager::~VstEditorWindowManager()
 	{
 		CloseAllVstEditorWindows();
 	}
 
-	void WindowSubsystem::CloseAllVstEditorWindows()
+	void VstEditorWindowManager::CloseAllVstEditorWindows()
 	{
 		for (auto& window : _vstEditorWindows)
 		{
@@ -21,14 +23,14 @@ namespace engine
 		_vstEditorWindows.clear();
 	}
 
-	void WindowSubsystem::PruneClosedVstEditorWindows()
+	void VstEditorWindowManager::PruneClosedVstEditorWindows()
 	{
 		_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
 			return !window || !window->IsOpen();
 		}), _vstEditorWindows.end());
 	}
 
-	actions::ActionResult WindowSubsystem::EatAction()
+	actions::ActionResult VstEditorWindowManager::EatAction()
 	{
 		actions::ActionResult res;
 		res.IsEaten = true;
@@ -36,7 +38,7 @@ namespace engine
 		return res;
 	}
 
-	actions::ActionResult WindowSubsystem::HandleVstInsert(const std::wstring& pluginPath,
+	actions::ActionResult VstEditorWindowManager::HandleVstInsert(const std::wstring& pluginPath,
 		base::SelectDepth depth,
 		const std::shared_ptr<base::GuiElement>& hovering,
 		const std::function<void()>& onCommit)
@@ -105,7 +107,7 @@ namespace engine
 		return EatAction();
 	}
 
-	actions::ActionResult WindowSubsystem::HandleVstEditorOpen(const std::shared_ptr<base::GuiElement>& hovering,
+	actions::ActionResult VstEditorWindowManager::HandleVstEditorOpen(const std::shared_ptr<base::GuiElement>& hovering,
 		base::SelectDepth depth,
 		const std::vector<std::shared_ptr<Station>>& stations)
 	{
@@ -124,7 +126,7 @@ namespace engine
 		return actions::ActionResult::NoAction();
 	}
 
-	bool WindowSubsystem::OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
+	bool VstEditorWindowManager::OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
 	{
 		if (!plugin || !plugin->IsLoaded())
 			return false;
@@ -138,7 +140,7 @@ namespace engine
 		return true;
 	}
 
-	bool WindowSubsystem::TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
+	bool VstEditorWindowManager::TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
 	{
 		if (!loop)
 			return false;
@@ -150,7 +152,7 @@ namespace engine
 		return OpenVstEditorForPlugin(plugin);
 	}
 
-	bool WindowSubsystem::TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
+	bool VstEditorWindowManager::TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
 	{
 		if (!station || station->IsRemote())
 			return false;
@@ -171,7 +173,7 @@ namespace engine
 		return false;
 	}
 
-	bool WindowSubsystem::TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
+	bool VstEditorWindowManager::TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
 		base::SelectDepth depth,
 		size_t pluginIndex)
 	{

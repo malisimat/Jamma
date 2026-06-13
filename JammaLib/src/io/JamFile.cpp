@@ -39,7 +39,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
 	jam.GlobalPhaseOffsetSamps = 0;
-	jam.Quantisation = engine::Timer::QUANTISE_OFF;
+	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
 
 	auto parseInt32 = [](const Json::JsonValue& value, std::int32_t fallback) {
@@ -126,11 +126,11 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	}
 
 	if (quantiseStr.compare("multiple") == 0)
-		jam.Quantisation = engine::Timer::QUANTISE_MULTIPLE;
+		jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
 	else if (quantiseStr.compare("power") == 0)
-		jam.Quantisation = engine::Timer::QUANTISE_POWER;
+		jam.Quantisation = utils::Timer::QUANTISE_POWER;
 	else
-		jam.Quantisation = engine::Timer::QUANTISE_OFF;
+		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
 	return jam;
 }
@@ -191,14 +191,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	auto kvBool = [&](const std::string& key, bool value)
 		{ return quoted(key) + ":" + (value ? "true" : "false"); };
 
-	auto quantStr = [](engine::Timer::QuantisationType quant) -> std::string {
+	auto quantStr = [](utils::Timer::QuantisationType quant) -> std::string {
 		switch (quant)
 		{
-		case engine::Timer::QUANTISE_MULTIPLE:
+		case utils::Timer::QUANTISE_MULTIPLE:
 			return "multiple";
-		case engine::Timer::QUANTISE_POWER:
+		case utils::Timer::QUANTISE_POWER:
 			return "power";
-		case engine::Timer::QUANTISE_OFF:
+		case utils::Timer::QUANTISE_OFF:
 		default:
 			return "off";
 		}

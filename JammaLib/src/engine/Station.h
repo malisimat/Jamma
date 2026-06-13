@@ -7,7 +7,7 @@
 #include <mutex>
 #include <vector>
 #include "LoopTake.h"
-#include "Quantisation.h"
+#include "../timing/TimingQuantiser.h"
 #include "../graphics/QuantisationModel.h"
 #include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
@@ -133,8 +133,8 @@ namespace engine
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
-		void SetClock(std::shared_ptr<Timer> clock);
-		void SetQuantisationParams(std::optional<QuantisationParams> params, bool confirm = false);
+		void SetClock(std::shared_ptr<utils::Timer> clock);
+		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
@@ -196,7 +196,7 @@ namespace engine
 		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 		static unsigned int _ResolveSampleRate(std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
-		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<engine::Timer>& clock,
+		static void _TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& clock,
 			unsigned long loopLengthSamps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
@@ -256,7 +256,7 @@ namespace engine
 		std::string _name;
 		unsigned int _fadeSamps;
 		unsigned int _lastBufSize;
-		std::shared_ptr<Timer> _clock;
+		std::shared_ptr<utils::Timer> _clock;
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
@@ -304,7 +304,7 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<QuantisationParams> _pendingQuantisationParams;
+		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
 		std::int32_t _globalPhaseOffsetSamps = 0;

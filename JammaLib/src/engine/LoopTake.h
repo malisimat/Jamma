@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "Quantisation.h"
+#include "../timing/TimingQuantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
@@ -135,8 +135,8 @@ namespace engine
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
-		std::optional<QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
-		static std::vector<QuantisationLoopTakeVisual> QuantisationVisualsFor(
+		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
+		static std::vector<timing::QuantisationLoopTakeVisual> QuantisationVisualsFor(
 			const std::vector<std::shared_ptr<LoopTake>>& takes);
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);

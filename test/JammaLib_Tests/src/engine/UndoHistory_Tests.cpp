@@ -1,12 +1,12 @@
 
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
-#include "engine/UndoHistory.h"
+#include "actions/ActionUndoHistory.h"
 
 using base::ActionUndo;
 using base::ActionSender;
 using base::ActionReceiver;
-using engine::UndoHistory;
+using actions::ActionUndoHistory;
 using actions::TouchAction;
 using actions::TouchMoveAction;
 
@@ -23,29 +23,29 @@ public:
 	virtual bool Redo(std::shared_ptr<ActionUndo> undo) override { return true; }
 };
 
-TEST(UndoHistory, CannotUndoWhenEmpty) {
+TEST(ActionUndoHistory, CannotUndoWhenEmpty) {
 	auto sender = std::make_shared<MockedActionSender>(nullptr);
 	auto actionUndo = std::make_shared<ActionUndo>(sender);
 
-	auto undoHistory = UndoHistory();
+	auto undoHistory = ActionUndoHistory();
 	undoHistory.Add(actionUndo);
 
 	ASSERT_TRUE(undoHistory.Undo());
 	ASSERT_FALSE(undoHistory.Undo());
 }
 
-TEST(UndoHistory, SkipsAddingNull) {
-	auto undoHistory = UndoHistory();
+TEST(ActionUndoHistory, SkipsAddingNull) {
+	auto undoHistory = ActionUndoHistory();
 	undoHistory.Add(nullptr);
 
 	ASSERT_FALSE(undoHistory.Undo());
 }
 
-TEST(UndoHistory, CanRedoTwice) {
+TEST(ActionUndoHistory, CanRedoTwice) {
 	auto sender = std::make_shared<MockedActionSender>(nullptr);
 	auto actionUndo = std::make_shared<ActionUndo>(sender);
 
-	auto undoHistory = UndoHistory();
+	auto undoHistory = ActionUndoHistory();
 	undoHistory.Add(actionUndo);
 	undoHistory.Add(actionUndo);
 
@@ -58,11 +58,11 @@ TEST(UndoHistory, CanRedoTwice) {
 	ASSERT_FALSE(undoHistory.Redo());
 }
 
-TEST(UndoHistory, CanRedoAfterEmpty) {
+TEST(ActionUndoHistory, CanRedoAfterEmpty) {
 	auto sender = std::make_shared<MockedActionSender>(nullptr);
 	auto actionUndo = std::make_shared<ActionUndo>(sender);
 
-	auto undoHistory = UndoHistory();
+	auto undoHistory = ActionUndoHistory();
 	undoHistory.Add(actionUndo);
 
 	ASSERT_TRUE(undoHistory.Undo());
@@ -72,11 +72,11 @@ TEST(UndoHistory, CanRedoAfterEmpty) {
 	ASSERT_FALSE(undoHistory.Redo());
 }
 
-TEST(UndoHistory, CannotRedoAfterAdding) {
+TEST(ActionUndoHistory, CannotRedoAfterAdding) {
 	auto sender = std::make_shared<MockedActionSender>(nullptr);
 	auto actionUndo = std::make_shared<ActionUndo>(sender);
 
-	auto undoHistory = UndoHistory();
+	auto undoHistory = ActionUndoHistory();
 	undoHistory.Add(actionUndo);
 
 	ASSERT_TRUE(undoHistory.Undo());

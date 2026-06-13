@@ -3,7 +3,7 @@
 #include "glm/ext.hpp"
 #include "../utils/PathUtils.h"
 #include "../midi/MidiTimestampMapper.h"
-#include "SessionExportService.h"
+#include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
 using namespace base;
@@ -16,6 +16,9 @@ using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
+using namespace timing;
+using namespace vst;
+using namespace ninjam;
 using namespace std::placeholders;
 
 Scene::Scene(SceneParams params,
@@ -55,10 +58,10 @@ Scene::Scene(SceneParams params,
 		0)),
 	_userConfig(user),
 	_viewMode(VIEW_STATION),
-		_audioEngine(std::make_unique<AudioEngine>(user)),
-		_inputSubsystem(std::make_unique<InputSubsystem>(user, io::LoggingConfig{})),
-		_windowSubsystem(std::make_unique<WindowSubsystem>()),
-		_networkService(std::make_unique<NetworkService>())
+		_audioEngine(std::make_unique<audio::AudioHost>(user)),
+		_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
+		_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
+		_networkService(std::make_unique<ninjam::NinjamNetworkService>())
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
@@ -515,7 +518,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		return SessionExportService::ExportSession(_stations,
+		return io::IoSessionExporter::ExportSession(_stations,
 			_quantisation,
 			_userConfig,
 			_audioEngine->GetStreamParams(),

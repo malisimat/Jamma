@@ -8,13 +8,13 @@
 #include "../base/ActionSender.h"
 #include "../base/ActionReceiver.h"
 
-namespace engine
+namespace actions
 {
-	class UndoHistory
+	class ActionUndoHistory
 	{
 	public:
-		UndoHistory();
-		~UndoHistory();
+		ActionUndoHistory();
+		~ActionUndoHistory();
 
 	public:
 		void Add(std::shared_ptr<base::ActionUndo> action);

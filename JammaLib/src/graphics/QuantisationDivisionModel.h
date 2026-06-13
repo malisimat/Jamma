@@ -1,9 +1,9 @@
 #pragma once
 
 #include <vector>
-#include "../engine/Quantisation.h"
+#include "../timing/TimingQuantiser.h"
 #include "../gui/GuiModel.h"
-#include "../engine/Timer.h"
+#include "Timer.h"
 
 namespace engine
 {
@@ -14,7 +14,7 @@ namespace engine
 		QuantisationDivisionModel();
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		void SetLoopTakeVisuals(const std::vector<QuantisationLoopTakeVisual>& visuals);
+		void SetLoopTakeVisuals(const std::vector<timing::QuantisationLoopTakeVisual>& visuals);
 		void SetOverlayVisible(bool visible, bool confirm);
 		void SetOverlayAlpha(float alpha) noexcept;
 		bool OverlayVisible() const noexcept;

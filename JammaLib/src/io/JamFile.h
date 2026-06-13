@@ -16,7 +16,7 @@
 #include <sstream>
 #include <cstdint>
 #include "Json.h"
-#include "../engine/Timer.h"
+#include "Timer.h"
 #include "../audio/AudioMixer.h"
 
 namespace io
@@ -123,6 +123,6 @@ namespace io
 		unsigned long TimerTicks;
 		unsigned int QuantiseSamps;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
-		engine::Timer::QuantisationType Quantisation;
+		utils::Timer::QuantisationType Quantisation;
 	};
 }
