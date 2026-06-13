@@ -28,6 +28,7 @@
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
+#include "../graphics/CtrlHandleOverlay.h"
 #include "Quantisation.h"
 #include "Tickable.h"
 #include "Drawable.h"
@@ -266,6 +267,8 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
+		float _CtrlHandleAlpha(Time now) const;
+		void _ApplyCtrlHandleAlpha(float alpha);
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
@@ -273,6 +276,10 @@ namespace engine
 		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
 		actions::ActionResult _EndMidiPhaseDrag(actions::TouchAction action);
+		actions::ActionResult _BeginFractionDrag(actions::TouchAction action);
+		actions::ActionResult _UpdateFractionDrag(actions::TouchMoveAction action);
+		actions::ActionResult _EndFractionDrag(actions::TouchAction action);
+		std::shared_ptr<LoopTake> _ResolveFractionDragTake();
 		enum class MidiPhaseDragTargetKind : std::uint8_t
 		{
 			Global,
@@ -338,6 +345,9 @@ namespace engine
 		utils::Position2d _midiPhaseDragStartPosition;
 		std::int32_t _midiPhaseDragStartOffsetSamps = 0;
 		MidiPhaseDragTarget _midiPhaseDragTarget;
+		bool _isFractionDragging = false;
+		int _fractionDragStartY = 0;
+		std::shared_ptr<LoopTake> _fractionDragTake;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;
@@ -349,5 +359,9 @@ namespace engine
 		std::mutex _audioMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
+		utils::Position2d _cursorPos{};
+		bool _ctrlHandleHeld = false;
+		Time _ctrlHandleReleasedAt;
+		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 	};
 }

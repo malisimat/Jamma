@@ -312,6 +312,7 @@
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />
+    <ClInclude Include="src\graphics\CtrlHandleOverlay.h" />
     <ClInclude Include="src\base\ActionSender.h" />
     <ClInclude Include="src\audio\InterpolatedValue.h" />
     <ClInclude Include="src\gui\GuiPanel.h" />
@@ -431,6 +432,7 @@
     <ClCompile Include="src\graphics\Shader.cpp" />
     <ClCompile Include="src\graphics\Image.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage.cpp" />
+    <ClCompile Include="src\graphics\CtrlHandleOverlay.cpp" />
     <ClCompile Include="src\audio\InterpolatedValue.cpp" />
     <ClCompile Include="lib\glew\glew.c" />
     <ClCompile Include="lib\rtaudio\RtAudio.cpp" />

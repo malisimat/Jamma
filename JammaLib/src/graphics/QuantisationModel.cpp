@@ -81,11 +81,10 @@ namespace
 		const auto zMax = outerRadius;
 		const auto xFront = frameDepthHalf;
 		const auto xBack = -frameDepthHalf;
-		const auto handleWidth = std::max(frameWidth * 1.4f, 12.0f);
-		const auto handleZMin = zMax - (frameWidth * 0.2f);
-		const auto handleZMax = zMax + (handleWidth * 0.45f);
-		const auto handleXFront = xFront * 1.8f;
-		const auto handleXBack = xBack * 1.8f;
+		const auto handleZMin = zMax - (frameWidth * 0.18f);
+		const auto handleZMax = zMax + std::max(frameWidth * 0.75f, 8.0f);
+		constexpr auto handleXMin = -1.0f;
+		constexpr auto handleXMax = 1.0f;
 
 		verts.reserve(28u * 6u * 3u);
 		if (uvs)
@@ -173,25 +172,25 @@ namespace
 		}
 
 		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXFront, yMin, handleZMin),
-			GatePoint(handleXFront, yMax, handleZMin),
-			GatePoint(handleXFront, yMax, handleZMax),
-			GatePoint(handleXFront, yMin, handleZMax));
+			GatePoint(handleXMin, yMin, handleZMax),
+			GatePoint(handleXMax, yMin, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMax),
+			GatePoint(handleXMin, yMax, handleZMax));
 		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXBack, yMax, handleZMin),
-			GatePoint(handleXBack, yMin, handleZMin),
-			GatePoint(handleXBack, yMin, handleZMax),
-			GatePoint(handleXBack, yMax, handleZMax));
+			GatePoint(handleXMax, yMin, handleZMin),
+			GatePoint(handleXMin, yMin, handleZMin),
+			GatePoint(handleXMin, yMax, handleZMin),
+			GatePoint(handleXMax, yMax, handleZMin));
 		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXFront, yMax, handleZMin),
-			GatePoint(handleXBack, yMax, handleZMin),
-			GatePoint(handleXBack, yMax, handleZMax),
-			GatePoint(handleXFront, yMax, handleZMax));
+			GatePoint(handleXMin, yMax, handleZMin),
+			GatePoint(handleXMin, yMax, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMax),
+			GatePoint(handleXMax, yMax, handleZMin));
 		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXBack, yMin, handleZMin),
-			GatePoint(handleXFront, yMin, handleZMin),
-			GatePoint(handleXFront, yMin, handleZMax),
-			GatePoint(handleXBack, yMin, handleZMax));
+			GatePoint(handleXMax, yMin, handleZMin),
+			GatePoint(handleXMax, yMin, handleZMax),
+			GatePoint(handleXMin, yMin, handleZMax),
+			GatePoint(handleXMin, yMin, handleZMin));
 	}
 }
 
@@ -200,7 +199,6 @@ QuantisationModel::QuantisationModel() :
 	_seedSamps(0u),
 	_overlayVisible(false),
 	_overlayAlpha(0.0f),
-	_hue(0.48f),
 	_confirmedAt(Timer::GetZero())
 {
 	_modelParams.ModelShaders = { "quantisation" };
@@ -251,7 +249,6 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 
 	glCtx.SetUniform("Highlight", highlight);
 	glCtx.SetUniform("OverlayAlpha", _overlayAlpha);
-	glCtx.SetUniform("Hue", _hue);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(glCtx);
 
@@ -292,9 +289,11 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	std::vector<float> transforms;
 	std::vector<float> modes;
 	std::vector<float> bands;
+	std::vector<float> fillHalfWidths;
 	transforms.reserve(visuals.size() * 16u);
 	modes.reserve(visuals.size() * 4u);
 	bands.reserve(visuals.size() * 4u);
+	fillHalfWidths.reserve(visuals.size() * 4u);
 
 	for (const auto& visual : visuals)
 	{
@@ -306,6 +305,10 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		gateCount = std::clamp(gateCount, 1u, MaxVisibleGates);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(gateCount);
+		const auto fillHalfWidth = std::clamp(
+			GateOuterRadius * std::tan(angleStep * 0.25f),
+			6.0f,
+			GateOuterRadius * 0.45f);
 		const auto loopIndexAngle = std::fmod(
 			static_cast<float>(constants::TWOPI * visual.LoopIndexFrac),
 			static_cast<float>(constants::TWOPI));
@@ -324,6 +327,7 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 			transforms.push_back(radiusScale);
 			modes.push_back(GateInstance);
 			bands.push_back(static_cast<float>(gate % 2u));
+			fillHalfWidths.push_back(fillHalfWidth);
 		}
 
 		transforms.push_back(phaseOffset);
@@ -332,13 +336,15 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 		transforms.push_back(radiusScale);
 		modes.push_back(ColumnInstance);
 		bands.push_back(1.0f);
+		fillHalfWidths.push_back(1.0f);
 	}
 
 	const auto instanceCount = static_cast<unsigned int>(modes.size());
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
 		{ 4u, 1u, std::move(modes) },
-		{ 5u, 1u, std::move(bands) }
+		{ 5u, 1u, std::move(bands) },
+		{ 6u, 1u, std::move(fillHalfWidths) }
 	}, instanceCount);
 }
 
@@ -354,11 +360,6 @@ void QuantisationModel::SetOverlayAlpha(float alpha) noexcept
 {
 	_overlayAlpha = std::clamp(alpha, 0.0f, 1.0f);
 	SetVisible(_overlayVisible && (_overlayAlpha > 0.001f));
-}
-
-void QuantisationModel::SetHue(float hue) noexcept
-{
-	_hue = hue - std::floor(hue);
 }
 
 bool QuantisationModel::OverlayVisible() const noexcept

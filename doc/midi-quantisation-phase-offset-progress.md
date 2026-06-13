@@ -1,90 +1,49 @@
-# MIDI Quantisation Phase Offset Progress
+# Handoff: Ctrl Phase-Edit Overlay Handles
 
-## What Has Been Done
+## Recent Work (session 2026-06-12)
 
-This branch has landed the first structural slice for shared MIDI quantisation phase offsets and the supporting visuals/tests around it.
+- **Ctrl-only trigger**: removed the Shift requirement from both `LoopTake::HasMidiQuantisationGestureModifiers` and `Scene::_IsMidiPhaseDragModifier`. Holding Ctrl alone now activates the quantisation fraction-drag gesture and the phase-offset drag in Scene.
+- **QuantisationModel visual polish**: added a fourth mesh part (`HandlePart = 3.0`) as four quads that protrude beyond the outermost gate ring; added an alternating `BandValue` per-instance stream (attribute index 5) so odd/even subdivision bands shade differently; added a `Hue` uniform and HSV colour palette in `quantisation.frag`; added diffuse + specular lighting using the computed surface normal; added `ResourceList.txt` entry for `Hue`.
+- **Column origin fixed**: the ColumnInstance transform angle was previously hardcoded to `0.0` — it is now set to `phaseOffset` so the origin marker follows the take's resolved phase.
+- **Tests updated**: all `CtrlShift` test helpers and test names renamed to `Ctrl`; geometry regression test updated for the new 28-quad mesh size.
+- **Validation**: build clean (0 warnings), 560 tests run, 559 passed, 1 skipped (MidiDevice availability).
 
-- The MIDI snap math now supports an explicit phase origin instead of always snapping against loop-local zero.
-- `MidiQuantisationSettings` now carries a take-local `PhaseOffsetSamps` field.
-- `LoopTake` now keeps local phase offset, inherited phase offset, and a transport-derived natural phase separate, then resolves them into one effective value before publishing to owned `MidiLoop` instances.
-- `Quantisation` now has a global phase offset entry point, and `Station` now has global and station phase offset storage plus propagation into its takes.
-- `QuantisationLoopTakeVisual` and `QuantisationModel` now carry and render the resolved phase offset, so the quantisation overlay rotates with the same phase concept used by MIDI snapping.
-- `Scene` now supports Ctrl drag for adjusting quantisation phase at the active edit depth: background/global, station, LoopTake, and Loop-owned take targets. Hovered targets and selected peers are updated together.
-- The quantisation overlay is Ctrl-momentary, fades smoothly on release, renders specular-shaded subdivision bands, and shows hue-controlled phase-origin handles aligned to each take's resolved phase.
-- `Station` now applies MIDI quantisation phase offsets when adding takes.
-- Save/load now persists global, station, and take-local phase offsets, with old sessions defaulting missing fields to zero.
-- Focused native tests cover positive and negative phase offsets, the local-only pack/unpack contract, transport-anchor alignment across different take start positions, station-to-take propagation, resolved phase publication into `MidiLoop`, resolved visual publication, depth-aware scene drag routing, and persistence defaults/round-trips.
+---
 
-## Current State
+## Bug: Ctrl Handles Are Not Near the Mouse Cursor
 
-The engine now carries a full phase chain of global, station, and take-local offsets. The rendered quantisation overlay uses the resolved value, and sessions reopen with saved grid alignment.
+### Diagnosis
 
-The main remaining gap is optional UX expansion: the current interaction is depth-aware Ctrl drag with a momentary/fading overlay rather than a separate popup picker. Banded subdivision rows and phase-origin handles are rendered in the overlay; undo participation is out of scope for this pass.
+The handles added in the last session are **3D geometry** appended to the existing `QuantisationModel` gate mesh. They appear as small protrusions at the outer radius of the radial gate ring — i.e. somewhere in the 3D scene centered on the hovered station, **not** near the mouse pointer.
 
-## Next Stages
+What was described in the requirements — "a few rounded-rect buttons coloured differently (global drag, LoopTake fraction, future ops)" — is a **2D screen-space popup panel** that follows the cursor. That feature does not exist yet.
 
-### Stage 1: Better UX with overlay drag handles for quant/edit adjustment
+---
 
-Goal: provide intuitive, responsive control of global and LoopTake prop-edits through mouse drag on popup overlay handles.
+## Proposed Solution
 
-Work:
+Add a `CtrlHandleOverlay` class — a lightweight 2D overlay drawn on the `Scene::Draw` pass alongside `_label`, `_selector`, and `_modeRadio`. It should:
 
-- Keep the Ctrl-momentary overlay contract explicit for future per-object edit modes.
-- Optionally design a separate screen-edge-aware picker if the inline phase-origin handles are not discoverable enough in play.
+1. **Track hover position**: Scene already stores `_hoverPath3d` and calls `SetHover3d` on every cursor move. Each `Station` already computes `_modelScreenPos` via `GlDrawContext::ProjectScreen` during `Draw3d`. Use the hovered station/take screen position as an anchor; fall back to raw mouse pixel position if nothing is hovered.
 
-Deliverable:
+2. **Show/hide with Ctrl**: Scene already calls `_SetQuantisationOverlayHeld(true/false)` on key-char 17 (VK_CONTROL). Feed that same held state as `SetVisible` on the overlay. Use `Quantisation::OverlayAlpha` for smooth fade, exactly like the existing `QuantisationModel`.
 
-- Mouse-driven overlay editing for quantisation and LoopTake timing that is discoverable, depth-aware, and does not conflict with selection.
+3. **Render 2–3 rounded-rect buttons**: Use `NinePatchImage` (already in the codebase) for each button. Suggested set:
+   - **Phase** — horizontal drag → calls `_BeginMidiPhaseDrag` / `_UpdateMidiPhaseDrag`
+   - **Fraction** — vertical drag → calls `LoopTake::BeginMidiQuantisationGesture`
+   - *(reserved slot for future ops)*
 
-### Stage 2: Persistence and session semantics
+4. **Dispatch on touch-down inside a button rect**: The overlay lives in `Scene::Draw` 2D space. On `Scene::OnAction(TouchAction)`, check whether the incoming position hits a visible button rect before the existing drag-start logic runs.
 
-Goal: the new phase state survives save/load and behaves like other editable timing data.
+5. **Screen-edge clamping**: clamp the panel position so it stays within scene bounds when the cursor is near an edge.
 
-Work:
+---
 
-- Add persistence for global phase offset.
-- Add persistence for station phase offset.
-- Add persistence for take-local phase offset.
-- Decide backward compatibility behavior for sessions created before this feature.
-- Undo/redo participation is intentionally out of scope for this visual pass.
+## Files to Change
 
-Deliverable:
-
-- Saved sessions reopen with the same quantisation grid alignment.
-
-### Stage 3: Visual polish and correctness passes
-
-Goal: make the visuals clearly communicate the new model.
-
-Work:
-
-- Keep QuantisationModel rotation aligned to each LoopTake's resolved offset so the shared grid lines up visually.
-- Keep specular-shaded banded rows visible enough to show the current fraction/subdivisions of each LoopTake.
-- Keep phase-origin handles readable as quantisation-origin markers; loop-origin markers can be added separately if needed.
-- Decide whether the MIDI model should visually expose quantisation-origin shifts separately from playhead rotation.
-- Verify that overlay rotation remains intuitive when phase shifts are large or negative.
-- Audit render-side use of phase values for precision and normalization edge cases.
-
-Deliverable:
-
-- Clear visual communication of quantisation origin versus loop playback state, plus a clear visual display of subdivisions.
-
-### Stage 4: Integration tests and regression coverage
-
-Goal: prove the user-facing behavior rather than only the math.
-
-Work:
-
-- Add tests for inherited phase composition: global + station + take.
-- Add tests for station propagation into all owned takes.
-- Add tests for `LoopTake` resolved quantisation publication into `MidiLoop`.
-- Add tests for overlay visual generation using resolved phase.
-- Add at least one higher-level test for two takes with different local zeroes aligning to the same shared grid.
-
-Deliverable:
-
-- Regression coverage for the actual feature contract.
-
-## Validation Already Run
-
-- `Build Tests (Debug x64)` succeeded
+| File | Change |
+|---|---|
+| `JammaLib/src/graphics/CtrlHandleOverlay.h/.cpp` | New class. Owns 2–3 `NinePatchImage` buttons, tracks anchor pos and alpha. |
+| `JammaLib/src/engine/Scene.h` | Add `_ctrlHandleOverlay` member, add `_UpdateCtrlHandleOverlayPosition` helper. |
+| `JammaLib/src/engine/Scene.cpp` | Construct overlay in ctor; call `_ctrlHandleOverlay.Draw(ctx)` in `Scene::Draw`; update position in `SetHover3d`; wire Ctrl key and touch dispatch. |
+| `Jamma/resources/ResourceList.txt` | Any new textures used by the button NinePatches. |

@@ -56,6 +56,9 @@ Scene::Scene(SceneParams params,
 	_midiPhaseDragStartOffsetSamps(0),
 	_audioSampleCounter(0u),
 	_midiAnchorMicros(0),
+	_cursorPos{},
+	_ctrlHandleHeld(false),
+	_ctrlHandleReleasedAt(Timer::GetZero()),
 	_camera(CameraParams(
 		MoveableParams(
 			Position2d{ 0,0 },
@@ -314,6 +317,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
+	_ctrlHandleOverlay.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -357,7 +361,11 @@ void Scene::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(_viewProj);
 
 	if (PASS_SCENE == pass)
-		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(Timer::GetTime()));
+	{
+		const auto now = Timer::GetTime();
+		_ApplyQuantisationOverlayAlpha(_QuantisationOverlayAlpha(now));
+		_ApplyCtrlHandleAlpha(_CtrlHandleAlpha(now));
+	}
 
 	for (auto& station : _stations)
 		station->Draw3d(ctx, 1, pass);
@@ -371,6 +379,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
+	_ctrlHandleOverlay.InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
 		station->InitResources(resourceLib, forceInit);
@@ -386,6 +395,7 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
+	_ctrlHandleOverlay.ReleaseResources();
 
 	for (auto& station : _stations)
 		station->ReleaseResources();
@@ -415,7 +425,26 @@ ActionResult Scene::OnAction(TouchAction action)
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
 		&& _IsMidiPhaseDragModifier(action.Modifiers))
-		return _BeginMidiPhaseDrag(action);
+	{
+		const int hitBtn = _ctrlHandleOverlay.HitTestButton(action.Position);
+		if (0 == hitBtn)
+			return _BeginMidiPhaseDrag(action);
+		if (1 == hitBtn)
+			return _BeginFractionDrag(action);
+
+		res.IsEaten = false;
+		res.ResultType = ACTIONRESULT_DEFAULT;
+	}
+
+	if (_isFractionDragging)
+	{
+		if (TouchAction::TouchState::TOUCH_UP == action.State)
+			return _EndFractionDrag(action);
+
+		res.IsEaten = true;
+		res.ResultType = ACTIONRESULT_DEFAULT;
+		return res;
+	}
 
 	if (_isMidiPhaseDragging)
 	{
@@ -522,8 +551,13 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 
+	_cursorPos = action.Position;
+
 	if (_isMidiPhaseDragging)
 		return _UpdateMidiPhaseDrag(action);
+
+	if (_isFractionDragging)
+		return _UpdateFractionDrag(action);
 
 	auto activeElement = _touchDownElement.lock();
 
@@ -565,7 +599,15 @@ ActionResult Scene::OnAction(KeyAction action)
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
 	if (17 == action.KeyChar)
-		_SetQuantisationOverlayHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+	{
+		const bool held = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		_SetQuantisationOverlayHeld(held);
+		_ctrlHandleHeld = held;
+		if (!held)
+			_ctrlHandleReleasedAt = Timer::GetTime();
+		if (held)
+			_ctrlHandleOverlay.SetAnchor(_cursorPos, _sizeParams.Size);
+	}
 
 	if ((32 == action.KeyChar) && (actions::KeyAction::KEY_UP == action.KeyActionType))
 	{
@@ -1713,6 +1755,113 @@ ActionResult Scene::_EndMidiPhaseDrag(TouchAction action)
 	return ActionResult::NoAction();
 }
 
+ActionResult Scene::_BeginFractionDrag(TouchAction action)
+{
+	auto take = _ResolveFractionDragTake();
+	if (!take)
+		return ActionResult::NoAction();
+
+	auto res = take->BeginMidiQuantisationGesture(action);
+	if (!res.IsEaten)
+		return res;
+
+	_isFractionDragging = true;
+	_fractionDragStartY = action.Position.Y;
+	_fractionDragTake = take;
+	return res;
+}
+
+ActionResult Scene::_UpdateFractionDrag(TouchMoveAction action)
+{
+	if (!_isFractionDragging || !_fractionDragTake)
+		return ActionResult::NoAction();
+
+	return _fractionDragTake->OnAction(action);
+}
+
+ActionResult Scene::_EndFractionDrag(TouchAction action)
+{
+	auto take = _fractionDragTake;
+	_isFractionDragging = false;
+	_fractionDragStartY = 0;
+	_fractionDragTake.reset();
+
+	if (!take)
+		return ActionResult::NoAction();
+
+	return take->OnAction(action);
+}
+
+std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
+{
+	auto takeForLoop = [this](const std::shared_ptr<Loop>& loop) -> std::shared_ptr<LoopTake> {
+		if (!loop)
+			return nullptr;
+
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+
+			for (const auto& candidateTake : station->GetLoopTakes())
+			{
+				if (!candidateTake)
+					continue;
+
+				const auto& loops = candidateTake->GetLoops();
+				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
+					return candidateTake;
+			}
+		}
+
+		return nullptr;
+	};
+	auto takeFromElement = [&takeForLoop](const std::shared_ptr<base::GuiElement>& element) -> std::shared_ptr<LoopTake> {
+		if (!element)
+			return nullptr;
+
+		auto take = std::dynamic_pointer_cast<LoopTake>(element);
+		if (take)
+			return take;
+
+		return takeForLoop(std::dynamic_pointer_cast<Loop>(element));
+	};
+
+	auto take = takeFromElement(_ChildFromPath(_hoverPath3d));
+	if (take)
+		return take;
+	take = takeFromElement(_ChildFromPath(_selector->CurrentHover()));
+	if (take)
+		return take;
+
+	const auto depth = _selector->CurrentSelectDepth();
+	for (const auto& station : _stations)
+	{
+		if (!station)
+			continue;
+
+		for (const auto& candidateTake : station->GetLoopTakes())
+		{
+			if (!candidateTake)
+				continue;
+
+			if ((depth == base::SelectDepth::DEPTH_LOOPTAKE) && candidateTake->IsSelected())
+				return candidateTake;
+
+			if (depth == base::SelectDepth::DEPTH_LOOP)
+			{
+				for (const auto& loop : candidateTake->GetLoops())
+				{
+					if (loop && loop->IsSelected())
+						return candidateTake;
+				}
+			}
+		}
+	}
+
+	return nullptr;
+}
+
 Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
 {
 	MidiPhaseDragTarget target;
@@ -2116,6 +2265,24 @@ float Scene::_QuantisationOverlayAlpha(Time now) const
 void Scene::_ApplyQuantisationOverlayAlpha(float alpha)
 {
 	_quantisation.ApplyOverlayAlpha(alpha, _stations);
+}
+
+float Scene::_CtrlHandleAlpha(Time now) const
+{
+	if (_ctrlHandleHeld)
+		return 1.0f;
+	if (Timer::IsZero(_ctrlHandleReleasedAt))
+		return 0.0f;
+	static constexpr double FadeSeconds = 0.5;
+	const auto elapsed = Timer::GetElapsedSeconds(_ctrlHandleReleasedAt, now);
+	if (elapsed >= FadeSeconds)
+		return 0.0f;
+	return static_cast<float>(1.0 - elapsed / FadeSeconds);
+}
+
+void Scene::_ApplyCtrlHandleAlpha(float alpha)
+{
+	_ctrlHandleOverlay.SetAlpha(alpha);
 }
 
 bool Scene::_TrySetMasterFromHover(bool confirm)

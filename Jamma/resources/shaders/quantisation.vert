@@ -6,6 +6,7 @@ layout(location = 2) in vec3 NormalIN;
 layout(location = 3) in vec4 InstanceTransformIN;
 layout(location = 4) in float InstanceModeIN;
 layout(location = 5) in float InstanceBandIN;
+layout(location = 6) in float InstanceFillHalfWidthIN;
 
 uniform mat4 MVP;
 
@@ -21,6 +22,8 @@ void main()
 	float c = cos(angle);
 	float s = sin(angle);
 	vec3 local = PositionIN;
+	if (UvIN.x > 2.5)
+		local.x *= InstanceFillHalfWidthIN;
 	local.y = (local.y * InstanceTransformIN.z) + InstanceTransformIN.y;
 	vec2 rotatedXZ = mat2(c, -s, s, c) * (local.xz * InstanceTransformIN.w);
 	vec2 rotatedNormalXZ = mat2(c, -s, s, c) * NormalIN.xz;

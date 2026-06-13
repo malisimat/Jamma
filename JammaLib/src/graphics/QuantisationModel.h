@@ -18,7 +18,6 @@ namespace engine
 		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<QuantisationLoopTakeVisual>& visuals);
 		void SetOverlayVisible(bool visible, bool confirm);
 		void SetOverlayAlpha(float alpha) noexcept;
-		void SetHue(float hue) noexcept;
 		bool OverlayVisible() const noexcept;
 
 		static std::vector<float> BuildGateGeometry(unsigned int gateCount,
@@ -30,7 +29,6 @@ namespace engine
 		unsigned int _seedSamps;
 		bool _overlayVisible;
 		float _overlayAlpha;
-		float _hue;
 		Time _confirmedAt;
 	};
 }
