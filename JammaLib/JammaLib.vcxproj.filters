@@ -204,7 +204,22 @@
       <Filter>src\resources</Filter>
     </ClInclude>
     <ClInclude Include="src\engine\Scene.h">
-      <Filter>src\graphics</Filter>
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\AudioEngine.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\InputSubsystem.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\WindowSubsystem.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\NetworkService.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="src\engine\SessionExportService.h">
+      <Filter>src\engine</Filter>
     </ClInclude>
     <ClInclude Include="src\ninjam\NinjamSession.h">
       <Filter>src\ninjam</Filter>
@@ -572,6 +587,21 @@
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\engine\Scene.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\AudioEngine.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\InputSubsystem.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\WindowSubsystem.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\NetworkService.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\engine\SessionExportService.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamSession.cpp">

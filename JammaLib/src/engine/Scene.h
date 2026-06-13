@@ -203,25 +203,43 @@ namespace engine
 		void CloseAudio();
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
-		void InitMidi();
-		void CloseMidi();
-		void InitSerial();
-		void CloseSerial();
+		void InitMidi()
+		{
+			_inputSubsystem->Init(_audioEngine->GetAudioSampleCounter_Ref(), _audioEngine->GetMidiAnchorMicros_Ref());
+		}
+		void CloseMidi()
+		{
+			_inputSubsystem->Close();
+		}
+		void InitSerial() {}
+		void CloseSerial() {}
 		void CommitChanges();
 
 		// Send a chat message on the active ninjam session (no-op if none).
-		void SendNinjamChat(const std::string& msg);
+		void SendNinjamChat(const std::string& msg)
+		{
+			_networkService->SendChat(msg);
+		}
 
 		// Close all open VST editor windows immediately.
 		// Call this on the main thread before OleUninitialize() during shutdown.
-		void CloseAllVstEditorWindows();
+		void CloseAllVstEditorWindows()
+		{
+			_windowSubsystem->CloseAllVstEditorWindows();
+		}
 
 		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
 		// from the loaded jam config when available; falls back to anonymous.
-		void ConnectNinjam(const std::string& host);
+		void ConnectNinjam(const std::string& host)
+		{
+			_networkService->Connect(host);
+		}
 
 		// Disconnect the active NINJAM session. No-op if not connected.
-		void DisconnectNinjam();
+		void DisconnectNinjam()
+		{
+			_networkService->Disconnect();
+		}
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -248,13 +266,11 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
-		actions::ActionResult _HandleVstInsert(const std::wstring& pluginPath,
-			base::SelectDepth depth,
-			const std::shared_ptr<base::GuiElement>& hovering);
-		actions::ActionResult _HandleVstEditorOpen();
-		actions::ActionResult _HandleExportSession();
 		void _SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation);
-		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+		{
+			_quantisation.SetMidiGrain(grainSamps, source, _stations);
+		}
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -262,7 +278,11 @@ namespace engine
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
+				_PublishAudioStations();
+		}
 		QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
@@ -284,16 +304,18 @@ namespace engine
 		bool _HasQuantisationSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		void _QueueLocalTempoFromClock();
-		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot);
-		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot);
-		void _PruneClosedVstEditorWindows();
-		bool _OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin);
-		bool _TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex);
-		bool _TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex);
-		bool _TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
-			base::SelectDepth depth,
-			size_t pluginIndex);
+		void _QueueLocalTempoFromClock()
+		{
+			_networkService->QueueLocalTempoFromClock(_quantisation, _userConfig, _CurrentSampleRate());
+		}
+		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			_networkService->SendQueuedTempoAtIntervalWrap(snapshot, _quantisation, _CurrentSampleRate());
+		}
+		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
+		{
+			_networkService->ApplyRemoteTempoToClock(snapshot, _quantisation, _stations, _userConfig);
+		}
 
 
 	protected:

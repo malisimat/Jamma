@@ -1,12 +1,9 @@
 #include "Scene.h"
 #include <iostream>
-#include <set>
 #include "glm/ext.hpp"
-#include "../io/WavReadWriter.h"
-#include "../io/TextReadWriter.h"
 #include "../utils/PathUtils.h"
-#include "../graphics/VstEditorWindow.h"
 #include "../midi/MidiTimestampMapper.h"
+#include "SessionExportService.h"
 #include "../vst/Vst3Plugin.h"
 
 using namespace base;
@@ -191,38 +188,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->InitReceivers();
 
 	return scene;
-}
-
-void Scene::CloseAllVstEditorWindows()
-{
-	_windowSubsystem->CloseAllVstEditorWindows();
-}
-
-void Scene::_PruneClosedVstEditorWindows()
-{
-	_windowSubsystem->PruneClosedVstEditorWindows();
-}
-
-bool Scene::_OpenVstEditorForPlugin(const std::shared_ptr<vst::IVstPlugin>& plugin)
-{
-	return _windowSubsystem->OpenVstEditorForPlugin(plugin);
-}
-
-bool Scene::_TryOpenVstEditorForLoop(const std::shared_ptr<Loop>& loop, size_t pluginIndex)
-{
-	return _windowSubsystem->TryOpenVstEditorForLoop(loop, pluginIndex);
-}
-
-bool Scene::_TryOpenVstEditorForStation(const std::shared_ptr<Station>& station, size_t pluginIndex)
-{
-	return _windowSubsystem->TryOpenVstEditorForStation(station, pluginIndex);
-}
-
-bool Scene::_TryOpenVstEditorForHover(const std::shared_ptr<base::GuiElement>& hovering,
-	base::SelectDepth depth,
-	size_t pluginIndex)
-{
-	return _windowSubsystem->TryOpenVstEditorForHover(hovering, depth, pluginIndex);
 }
 
 void Scene::Draw(DrawContext& ctx)
@@ -527,7 +492,10 @@ ActionResult Scene::OnAction(KeyAction action)
 			return ActionResult::NoAction();
 
 		auto hovering = _ChildFromPath(_selector->CurrentHover());
-		return _HandleVstInsert(pluginPath, _selector->CurrentSelectDepth(), hovering);
+		return _windowSubsystem->HandleVstInsert(pluginPath,
+			_selector->CurrentSelectDepth(),
+			hovering,
+			[this]() { CommitChanges(); });
 	}
 
 	// Ctrl+Shift+E - open the first plugin editor for the hovered station/take/loop.
@@ -536,7 +504,10 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers))
 	{
-		return _HandleVstEditorOpen();
+		auto hovering = _ChildFromPath(_selector->CurrentHover());
+		return _windowSubsystem->HandleVstEditorOpen(hovering,
+			_selector->CurrentSelectDepth(),
+			_stations);
 	}
 
 	// Ctrl+S - export session to directory.
@@ -544,7 +515,13 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
-		return _HandleExportSession();
+		return SessionExportService::ExportSession(_stations,
+			_quantisation,
+			_userConfig,
+			_audioEngine->GetStreamParams(),
+			_audioEngine->GetDevice(),
+			_sceneMutex,
+			_networkService->GetController());
 	}
 
 	bool checkReset = false;
@@ -610,221 +587,6 @@ ActionResult Scene::_HandleUndo()
 	std::cout << ">> Undo <<" << std::endl;
 	auto res = _undoHistory.Undo();
 	return { res };
-}
-
-ActionResult Scene::_HandleVstInsert(const std::wstring& pluginPath,
-	base::SelectDepth depth,
-	const std::shared_ptr<base::GuiElement>& hovering)
-{
-	if (!hovering)
-	{
-		std::cout << "VST insert: no hovered target" << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "VST insert request: depth=" << static_cast<int>(depth)
-		<< ", path=" << utils::EncodeUtf8(pluginPath) << std::endl;
-
-	switch (depth)
-	{
-	case base::SelectDepth::DEPTH_STATION:
-	{
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		if (!station)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: station '" << station->Name() << "' (busChannels=" << station->NumBusChannels() << ")" << std::endl;
-
-		if (station->IsRemote())
-		{
-			std::cout << "VST insert: remote stations are read-only" << std::endl;
-			return ActionResult::NoAction();
-		}
-
-		station->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOPTAKE:
-	{
-		auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-		if (!take)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: looptake (numLoops=" << take->GetLoops().size() << ")" << std::endl;
-
-		take->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	case base::SelectDepth::DEPTH_LOOP:
-	{
-		auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-		if (!loop)
-			return ActionResult::NoAction();
-
-		std::cout << "VST insert target: single loop" << std::endl;
-
-		loop->LoadVstPlugin(pluginPath);
-		CommitChanges();
-		break;
-	}
-	default:
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "VST inserted: " << utils::EncodeUtf8(pluginPath) << std::endl;
-
-	ActionResult res;
-	res.IsEaten = true;
-	res.ResultType = actions::ACTIONRESULT_DEFAULT;
-	return res;
-}
-
-ActionResult Scene::_HandleVstEditorOpen()
-{
-	auto hovering = _ChildFromPath(_selector->CurrentHover());
-	_PruneClosedVstEditorWindows();
-
-	auto eatAction = []() {
-		ActionResult res;
-		res.IsEaten = true;
-		res.ResultType = actions::ACTIONRESULT_DEFAULT;
-		return res;
-	};
-
-	if (_TryOpenVstEditorForHover(hovering, _selector->CurrentSelectDepth(), 0))
-		return eatAction();
-
-	for (const auto& station : _stations)
-	{
-		if (_TryOpenVstEditorForStation(station, 0))
-			return eatAction();
-	}
-
-	std::cout << "VST editor open: no loaded plugin found" << std::endl;
-	return ActionResult::NoAction();
-}
-
-ActionResult Scene::_HandleExportSession()
-{
-	struct AudioPauseGuard
-	{
-		explicit AudioPauseGuard(audio::AudioDevice* device) : Device(device), WasPlaying(device && device->Pause()) {}
-		~AudioPauseGuard() { Resume(); }
-
-		void Resume()
-		{
-			if (WasPlaying && Device)
-			{
-				Device->Resume();
-				WasPlaying = false;
-			}
-		}
-
-		audio::AudioDevice* Device;
-		bool WasPlaying;
-	};
-
-	struct LoopSnapshot
-	{
-		std::wstring Path;
-		std::vector<float> Samples;
-	};
-
-	const auto exportDir = utils::PickDirectory(L"Choose export directory");
-	if (exportDir.empty())
-		return ActionResult::NoAction();
-
-	const auto streamSampleRate = _audioEngine->GetStreamParams().SampleRate;
-	const auto sampleRate = (streamSampleRate == 0u) ? _userConfig.Audio.SampleRate : streamSampleRate;
-
-	io::JamFile jam;
-	jam.Version = io::JamFile::VERSION_V;
-	jam.Name = "export";
-	jam.Ninjam = _networkService->GetController()->Config();
-	jam.TimerTicks = 0;
-	jam.QuantiseSamps = 0;
-	jam.GlobalPhaseOffsetSamps = _quantisation.GlobalPhaseOffsetSamps();
-	jam.Quantisation = engine::Timer::QUANTISE_OFF;
-
-	std::vector<LoopSnapshot> loops;
-
-	{
-		AudioPauseGuard pause(_audioEngine->GetDevice());
-		std::scoped_lock lock(_sceneMutex);
-
-		for (const auto& station : _stations)
-		{
-			if (station->IsRemote())
-				continue;
-
-			io::JamFile::Station jamStation;
-			jamStation.Name = station->Name();
-			jamStation.StationType = 0;
-			jamStation.VstChain = station->VstEntries();
-			jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
-
-			for (const auto& take : station->GetLoopTakes())
-			{
-				io::JamFile::LoopTake jamTake;
-				jamTake.Name = take->Id();
-				jamTake.VstChain = take->VstEntries();
-				jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
-
-				for (const auto& loop : take->GetLoops())
-				{
-					const auto wavFilename = loop->Id() + ".wav";
-
-					auto samples = loop->ExportSamples();
-					if (samples.empty())
-						continue;
-
-					jamTake.Loops.push_back(loop->ToJamFile(wavFilename));
-
-					LoopSnapshot snap;
-					snap.Path = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-					snap.Samples = std::move(samples);
-					loops.push_back(std::move(snap));
-				}
-
-				if (!jamTake.Loops.empty())
-					jamStation.LoopTakes.push_back(std::move(jamTake));
-			}
-
-			jam.Stations.push_back(std::move(jamStation));
-		}
-	}
-
-	if (jam.Stations.empty())
-	{
-		std::cout << "Export: nothing to export" << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	io::WavReadWriter wavWriter;
-	unsigned int wavCount = 0;
-	for (const auto& loop : loops)
-	{
-		if (wavWriter.Write(loop.Path, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
-			++wavCount;
-	}
-
-	std::stringstream jamStream;
-	io::JamFile::ToStream(jam, jamStream);
-	const auto jamPath = exportDir + L"\\session.jam";
-	const auto wroteJamFile = io::TextReadWriter().Write(jamPath, jamStream.str(), 0, 0);
-	if (!wroteJamFile)
-	{
-		std::cout << "Export: failed to write session.jam to "
-			<< utils::EncodeUtf8(jamPath) << std::endl;
-		return ActionResult::NoAction();
-	}
-
-	std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
-		<< utils::EncodeUtf8(exportDir) << std::endl;
-
-	return ActionResult::NoAction();
 }
 
 ActionResult Scene::OnAction(GuiAction action)
@@ -1052,28 +814,6 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 	}
 }
 
-void Scene::InitMidi()
-{
-	// _inputSubsystem->Init(...) will be called, but we unified its Init.
-	_inputSubsystem->Init(_audioEngine->GetAudioSampleCounter_Ref(), _audioEngine->GetMidiAnchorMicros_Ref());
-}
-
-void Scene::CloseMidi()
-{
-	// InputSubsystem Close encompasses both
-	_inputSubsystem->Close();
-}
-
-void Scene::InitSerial()
-{
-	// handled in InputSubsystem::Init
-}
-
-void Scene::CloseSerial()
-{
-	// handled in InputSubsystem::Close
-}
-
 void Scene::CloseAudio()
 {
 	CloseSerial();
@@ -1152,21 +892,6 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
-}
-
-void Scene::SendNinjamChat(const std::string& msg)
-{
-	_networkService->SendChat(msg);
-}
-
-void Scene::ConnectNinjam(const std::string& host)
-{
-	_networkService->Connect(host);
-}
-
-void Scene::DisconnectNinjam()
-{
-	_networkService->Disconnect();
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -1402,11 +1127,6 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 	_quantisation.SetMidiGrain(quantiseSamps, "scene quantisation set", _stations);
 }
 
-void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
-{
-	_quantisation.SetMidiGrain(grainSamps, source, _stations);
-}
-
 bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
 {
 	return (Action::MODIFIER_CTRL & modifiers);
@@ -1529,12 +1249,6 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 		station->SetSelectDepth(selectDepth);
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
-}
-
-void Scene::_UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
-		_PublishAudioStations();
 }
 
 QuantisationPolicy Scene::_QuantisationPolicy() const
@@ -1668,19 +1382,4 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 void Scene::_ClearStationQuantisation()
 {
 	_quantisation.ClearStationHints(_stations);
-}
-
-void Scene::_ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	_networkService->ApplyRemoteTempoToClock(snapshot, _quantisation, _stations, _userConfig);
-}
-
-void Scene::_QueueLocalTempoFromClock()
-{
-	_networkService->QueueLocalTempoFromClock(_quantisation, _userConfig, _CurrentSampleRate());
-}
-
-void Scene::_SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
-{
-	_networkService->SendQueuedTempoAtIntervalWrap(snapshot, _quantisation, _CurrentSampleRate());
 }
