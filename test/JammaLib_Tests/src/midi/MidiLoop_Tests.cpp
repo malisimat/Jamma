@@ -129,7 +129,8 @@ namespace
 
 	void ApplyCtrlDrag(TestScene& scene,
 		const utils::Position2d& start,
-		const utils::Position2d& finish)
+		const utils::Position2d& finish,
+		int buttonIndex = 0)
 	{
 		auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
@@ -146,7 +147,7 @@ namespace
 		scene.OnAction(ctrlDown);
 
 		auto dragStart = start;
-		if (auto buttonCenter = scene.CtrlOverlayButtonCenterForTest(0); buttonCenter.has_value())
+		if (auto buttonCenter = scene.CtrlOverlayButtonCenterForTest(buttonIndex); buttonCenter.has_value())
 			dragStart = buttonCenter.value();
 		const auto dragDelta = finish - start;
 		const utils::Position2d dragFinish = {
@@ -173,6 +174,99 @@ namespace
 		up.Position = dragFinish;
 		up.Modifiers = ctrl;
 		EXPECT_FALSE(scene.OnAction(up).IsEaten);
+
+		actions::KeyAction ctrlUp;
+		ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
+		ctrlUp.KeyChar = 17;
+		ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
+		scene.OnAction(ctrlUp);
+	}
+
+	void ApplyCtrlFractionDrag(TestScene& scene,
+		const utils::Position2d& anchor,
+		const utils::Position2d& finish,
+		int buttonIndex)
+	{
+		auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
+
+		TouchMoveAction cursorMove;
+		cursorMove.Index = 0;
+		cursorMove.Position = anchor;
+		cursorMove.Modifiers = base::Action::MODIFIER_NONE;
+		scene.OnAction(cursorMove);
+
+		actions::KeyAction ctrlDown;
+		ctrlDown.KeyActionType = actions::KeyAction::KEY_DOWN;
+		ctrlDown.KeyChar = 17;
+		ctrlDown.Modifiers = ctrl;
+		scene.OnAction(ctrlDown);
+
+		auto fractionCenter = scene.CtrlOverlayButtonCenterForTest(buttonIndex);
+		ASSERT_TRUE(fractionCenter.has_value());
+		const auto dragDelta = finish - anchor;
+		const utils::Position2d dragFinish = {
+			fractionCenter->X + dragDelta.X,
+			fractionCenter->Y + dragDelta.Y
+		};
+
+		TouchAction down;
+		down.State = TouchAction::TOUCH_DOWN;
+		down.Index = 0;
+		down.Position = fractionCenter.value();
+		down.Modifiers = ctrl;
+		EXPECT_TRUE(scene.OnAction(down).IsEaten);
+
+		TouchMoveAction move;
+		move.Index = 0;
+		move.Position = dragFinish;
+		move.Modifiers = ctrl;
+		EXPECT_TRUE(scene.OnAction(move).IsEaten);
+
+		TouchAction up;
+		up.State = TouchAction::TOUCH_UP;
+		up.Index = 0;
+		up.Position = dragFinish;
+		up.Modifiers = ctrl;
+		EXPECT_TRUE(scene.OnAction(up).IsEaten);
+
+		actions::KeyAction ctrlUp;
+		ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
+		ctrlUp.KeyChar = 17;
+		ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
+		scene.OnAction(ctrlUp);
+	}
+
+	void ApplyCtrlFractionClick(TestScene& scene,
+		const utils::Position2d& anchor,
+		int buttonIndex)
+	{
+		auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
+
+		TouchMoveAction cursorMove;
+		cursorMove.Index = 0;
+		cursorMove.Position = anchor;
+		cursorMove.Modifiers = base::Action::MODIFIER_NONE;
+		scene.OnAction(cursorMove);
+
+		actions::KeyAction ctrlDown;
+		ctrlDown.KeyActionType = actions::KeyAction::KEY_DOWN;
+		ctrlDown.KeyChar = 17;
+		ctrlDown.Modifiers = ctrl;
+		scene.OnAction(ctrlDown);
+
+		auto fractionCenter = scene.CtrlOverlayButtonCenterForTest(buttonIndex);
+		ASSERT_TRUE(fractionCenter.has_value());
+
+		TouchAction down;
+		down.State = TouchAction::TOUCH_DOWN;
+		down.Index = 0;
+		down.Position = fractionCenter.value();
+		down.Modifiers = ctrl;
+		EXPECT_TRUE(scene.OnAction(down).IsEaten);
+
+		TouchAction up = down;
+		up.State = TouchAction::TOUCH_UP;
+		EXPECT_TRUE(scene.OnAction(up).IsEaten);
 
 		actions::KeyAction ctrlUp;
 		ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
@@ -829,8 +923,15 @@ TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
 }
 
 TEST(LoopTakeMidiQuantisation, CtrlDragEditsFraction) {
-	GTEST_SKIP() << "Superseded by Scene ctrl-overlay latch routing tests.";
-	auto take = MakeLoopTake();
+	auto take = MakeLoopTake("fraction-drag-take");
+	auto station = MakeStation("fraction-drag-station");
+	station->AddTake(take);
+
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
@@ -838,42 +939,25 @@ TEST(LoopTakeMidiQuantisation, CtrlDragEditsFraction) {
 	settings.GrainSamps = 1600u;
 	take->SetMidiQuantisation(settings);
 
-	TouchAction down;
-	down.State = TouchAction::TOUCH_DOWN;
-	down.Index = 0;
-	down.Position = { 20, 20 };
-	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
-	const auto downResult = take->OnAction(down);
-	EXPECT_TRUE(downResult.IsEaten);
-
-	TouchMoveAction move;
-	move.Index = 0;
-	move.Position = { 20, -44 };
-	move.Modifiers = down.Modifiers;
-	const auto moveResult = take->OnAction(move);
-	EXPECT_TRUE(moveResult.IsEaten);
+	ApplyCtrlFractionDrag(scene, { 220, 220 }, { 220, 156 }, 2);
 
 	const auto& moved = take->MidiQuantisation();
 	EXPECT_TRUE(moved.Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, moved.Fraction);
 	EXPECT_EQ(1600u, moved.GrainSamps);
-
-	TouchAction up;
-	up.State = TouchAction::TOUCH_UP;
-	up.Index = 0;
-	up.Position = move.Position;
-	up.Modifiers = down.Modifiers;
-	const auto upResult = take->OnAction(up);
-	EXPECT_TRUE(upResult.IsEaten);
-
-	const auto& finished = take->MidiQuantisation();
-	EXPECT_TRUE(finished.Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Quarter, finished.Fraction);
 }
 
 TEST(LoopTakeMidiQuantisation, CtrlDragDoesNotInferLoopLengthAsGrainWhenSceneGrainUnknown) {
-	GTEST_SKIP() << "Superseded by Scene ctrl-overlay latch routing tests.";
-	auto take = MakeLoopTake();
+	auto take = MakeLoopTake("fraction-unknown-grain-take");
+	auto station = MakeStation("fraction-unknown-grain-station");
+	station->AddTake(take);
+
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
+
 	take->Record({}, "station", { 3u });
 	take->Play(0u, 1600u, 0u);
 
@@ -883,18 +967,7 @@ TEST(LoopTakeMidiQuantisation, CtrlDragDoesNotInferLoopLengthAsGrainWhenSceneGra
 	settings.GrainSamps = 0u;
 	take->SetMidiQuantisation(settings);
 
-	TouchAction down;
-	down.State = TouchAction::TOUCH_DOWN;
-	down.Index = 0;
-	down.Position = { 20, 20 };
-	down.Modifiers = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
-	EXPECT_TRUE(take->OnAction(down).IsEaten);
-
-	TouchMoveAction move;
-	move.Index = 0;
-	move.Position = { 20, -44 };
-	move.Modifiers = down.Modifiers;
-	EXPECT_TRUE(take->OnAction(move).IsEaten);
+	ApplyCtrlFractionDrag(scene, { 220, 220 }, { 220, 156 }, 2);
 
 	const auto& moved = take->MidiQuantisation();
 	EXPECT_TRUE(moved.Enabled);
@@ -903,8 +976,15 @@ TEST(LoopTakeMidiQuantisation, CtrlDragDoesNotInferLoopLengthAsGrainWhenSceneGra
 }
 
 TEST(LoopTakeMidiQuantisation, CtrlClickTogglesEnableDisable) {
-	GTEST_SKIP() << "Superseded by Scene ctrl-overlay latch routing tests.";
-	auto take = MakeLoopTake();
+	auto take = MakeLoopTake("fraction-click-take");
+	auto station = MakeStation("fraction-click-station");
+	station->AddTake(take);
+
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
@@ -912,40 +992,12 @@ TEST(LoopTakeMidiQuantisation, CtrlClickTogglesEnableDisable) {
 	settings.GrainSamps = 1600u;
 	take->SetMidiQuantisation(settings);
 
-	auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
-
-	TouchAction down;
-	down.State = TouchAction::TOUCH_DOWN;
-	down.Index = 0;
-	down.Position = { 20, 20 };
-	down.Modifiers = ctrl;
-	EXPECT_TRUE(take->OnAction(down).IsEaten);
-
-	TouchAction up = down;
-	up.State = TouchAction::TOUCH_UP;
-	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	ApplyCtrlFractionClick(scene, { 220, 220 }, 2);
 	EXPECT_TRUE(take->MidiQuantisation().Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
 
-	EXPECT_TRUE(take->OnAction(down).IsEaten);
-	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	ApplyCtrlFractionClick(scene, { 220, 220 }, 2);
 	EXPECT_FALSE(take->MidiQuantisation().Enabled);
-
-	EXPECT_TRUE(take->OnAction(down).IsEaten);
-
-	TouchMoveAction moveAway;
-	moveAway.Index = 0;
-	moveAway.Position = { 20, -44 };
-	moveAway.Modifiers = ctrl;
-	EXPECT_TRUE(take->OnAction(moveAway).IsEaten);
-
-	TouchMoveAction moveBack = moveAway;
-	moveBack.Position = down.Position;
-	EXPECT_TRUE(take->OnAction(moveBack).IsEaten);
-
-	EXPECT_TRUE(take->OnAction(up).IsEaten);
-	EXPECT_TRUE(take->MidiQuantisation().Enabled);
-	EXPECT_EQ(MidiQuantisationFraction::Eighth, take->MidiQuantisation().Fraction);
 }
 
 TEST(LoopTakeMidiQuantisation, TransportStartContributesNaturalPhaseOffset) {
@@ -1095,7 +1147,7 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlDragBackgroundUpdatesGlobalPhase) {
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, SceneCtrlDragStationDepthUpdatesStationPhase) {
+TEST(LoopTakeMidiQuantisation, SceneCtrlDragStationDepthUpdatesGlobalPhase) {
 	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
 	auto station = MakeStation("scene-station-phase");
 	auto take = MakeLoopTake("scene-station-phase-take");
@@ -1108,8 +1160,8 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlDragStationDepthUpdatesStationPhase) {
 	const utils::Position2d finish{ 70, 20 };
 	ApplyCtrlDrag(scene, start, finish);
 
-	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
-	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->StationPhaseOffsetSamps());
+	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), station->GlobalPhaseOffsetSamps());
+	EXPECT_EQ(0, station->StationPhaseOffsetSamps());
 	EXPECT_EQ(ExpectedPhaseOffsetForDrag(start, finish), take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
@@ -1125,7 +1177,7 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlDragLoopTakeDepthUpdatesTakeLocalPhase) 
 
 	const utils::Position2d start{ 20, 20 };
 	const utils::Position2d finish{ 70, 20 };
-	ApplyCtrlDrag(scene, start, finish);
+	ApplyCtrlDrag(scene, start, finish, 1);
 
 	EXPECT_EQ(0, station->GlobalPhaseOffsetSamps());
 	EXPECT_EQ(0, station->StationPhaseOffsetSamps());
@@ -1134,8 +1186,16 @@ TEST(LoopTakeMidiQuantisation, SceneCtrlDragLoopTakeDepthUpdatesTakeLocalPhase) 
 }
 
 TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
-	GTEST_SKIP() << "Superseded by Scene ctrl-overlay latch routing tests.";
-	auto take = MakeLoopTake();
+	auto take = MakeLoopTake("verbose-fraction-take");
+	auto station = MakeStation("verbose-fraction-station");
+	station->AddTake(take);
+
+	TestScene scene(SceneParams({ "" }, {}, { 640, 480 }), MakeSceneUserConfig());
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
+	scene.SetHover3d(HoverPathFor(take), base::Action::MODIFIER_NONE);
+
 	io::LoggingConfig logging;
 	logging.Ui = "verbose";
 	take->SetLogging(logging);
@@ -1151,33 +1211,54 @@ TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 	std::ostringstream captured;
 	auto* oldBuf = std::cout.rdbuf(captured.rdbuf());
 
+	TouchMoveAction anchorMove;
+	anchorMove.Index = 0;
+	anchorMove.Position = { 220, 220 };
+	anchorMove.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(anchorMove);
+
+	actions::KeyAction ctrlDown;
+	ctrlDown.KeyActionType = actions::KeyAction::KEY_DOWN;
+	ctrlDown.KeyChar = 17;
+	ctrlDown.Modifiers = ctrl;
+	scene.OnAction(ctrlDown);
+
+	auto fractionCenter = scene.CtrlOverlayButtonCenterForTest(2);
+	ASSERT_TRUE(fractionCenter.has_value());
+
 	TouchAction down;
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
-	down.Position = { 20, 20 };
+	down.Position = fractionCenter.value();
 	down.Modifiers = ctrl;
-	EXPECT_TRUE(take->OnAction(down).IsEaten);
+	EXPECT_TRUE(scene.OnAction(down).IsEaten);
 
 	TouchMoveAction move = {};
 	move.Index = 0;
 	move.Modifiers = ctrl;
 
-	move.Position = { 20, 10 };
-	EXPECT_TRUE(take->OnAction(move).IsEaten);
+	move.Position = { fractionCenter->X, fractionCenter->Y - 10 };
+	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
-	move.Position = { 20, -44 };
-	EXPECT_TRUE(take->OnAction(move).IsEaten);
+	move.Position = { fractionCenter->X, fractionCenter->Y - 64 };
+	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
-	move.Position = { 20, -45 };
-	EXPECT_TRUE(take->OnAction(move).IsEaten);
+	move.Position = { fractionCenter->X, fractionCenter->Y - 65 };
+	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
-	move.Position = { 20, -76 };
-	EXPECT_TRUE(take->OnAction(move).IsEaten);
+	move.Position = { fractionCenter->X, fractionCenter->Y - 96 };
+	EXPECT_TRUE(scene.OnAction(move).IsEaten);
 
 	TouchAction up = down;
 	up.State = TouchAction::TOUCH_UP;
 	up.Position = move.Position;
-	EXPECT_TRUE(take->OnAction(up).IsEaten);
+	EXPECT_TRUE(scene.OnAction(up).IsEaten);
+
+	actions::KeyAction ctrlUp;
+	ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
+	ctrlUp.KeyChar = 17;
+	ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(ctrlUp);
 
 	std::cout.flush();
 	std::cout.rdbuf(oldBuf);
@@ -1190,7 +1271,6 @@ TEST(LoopTakeMidiQuantisation, VerboseUiLoggingOnlyPrintsOnFractionChanges) {
 }
 
 TEST(SceneInteractionRouting, ScenePhaseDragPropagatesToExistingLoopTakes) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto take = MakeLoopTake();
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
@@ -1218,7 +1298,6 @@ TEST(SceneInteractionRouting, ScenePhaseDragPropagatesToExistingLoopTakes) {
 }
 
 TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto take = MakeLoopTake();
 	MidiQuantisationSettings settings;
 	settings.Enabled = false;
@@ -1245,7 +1324,6 @@ TEST(SceneInteractionRouting, StationDepthMapsHoveredStationToLoopTakes) {
 }
 
 TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto hoveredTake = MakeLoopTake("take-a");
 	auto selectedTake = MakeLoopTake("take-b");
 
@@ -1281,7 +1359,6 @@ TEST(SceneInteractionRouting, StationDepthDragAffectsHoveredAndSelectedStations)
 }
 
 TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTakes) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto hoveredTake = MakeLoopTake("take-a");
 	auto selectedTake = MakeLoopTake("take-b");
 
@@ -1307,7 +1384,7 @@ TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTake
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOPTAKE);
 	scene.SetHover3d(HoverPathFor(hoveredTake), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 }, 1);
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1317,7 +1394,6 @@ TEST(SceneInteractionRouting, LoopTakeDepthDragAffectsHoveredAndSelectedLoopTake
 }
 
 TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto hoveredTake = MakeLoopTake("take-a");
 	auto selectedTake = MakeLoopTake("take-b");
 
@@ -1345,7 +1421,7 @@ TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
 	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_LOOP);
 	scene.SetHover3d(HoverPathFor(hoveredLoop), base::Action::MODIFIER_NONE);
 
-	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 });
+	ApplyCtrlDrag(scene, { 220, 220 }, { 284, 220 }, 1);
 
 	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
@@ -1355,7 +1431,6 @@ TEST(SceneInteractionRouting, LoopDepthDragAffectsHoveredAndSelectedLoops) {
 }
 
 TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) {
-	GTEST_SKIP() << "Legacy cursor-relative ctrl drag contract replaced by latched overlay routing.";
 	auto hoveredTake = MakeLoopTake("take-a");
 	auto selectedTake = MakeLoopTake("take-b");
 
@@ -1383,10 +1458,25 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 
 	auto ctrl = static_cast<base::Action::Modifiers>(base::Action::MODIFIER_CTRL);
 
+	TouchMoveAction moveToAnchor;
+	moveToAnchor.Index = 0;
+	moveToAnchor.Position = { 220, 220 };
+	moveToAnchor.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(moveToAnchor);
+
+	actions::KeyAction ctrlDown;
+	ctrlDown.KeyActionType = actions::KeyAction::KEY_DOWN;
+	ctrlDown.KeyChar = 17;
+	ctrlDown.Modifiers = ctrl;
+	scene.OnAction(ctrlDown);
+
+	auto globalPhaseCenter = scene.CtrlOverlayButtonCenterForTest(0);
+	ASSERT_TRUE(globalPhaseCenter.has_value());
+
 	TouchAction down;
 	down.State = TouchAction::TOUCH_DOWN;
 	down.Index = 0;
-	down.Position = { 220, 220 };
+	down.Position = globalPhaseCenter.value();
 	down.Modifiers = ctrl;
 	EXPECT_TRUE(scene.OnAction(down).IsEaten);
 
@@ -1405,7 +1495,13 @@ TEST(SceneInteractionRouting, DragKeepsTargetsWhenSelectDepthChangesMidGesture) 
 	up.Modifiers = ctrl;
 	EXPECT_FALSE(scene.OnAction(up).IsEaten);
 
-	const auto expectedPhase = ExpectedPhaseOffsetForDrag({ 220, 220 }, { 284, 220 });
+	actions::KeyAction ctrlUp;
+	ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
+	ctrlUp.KeyChar = 17;
+	ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(ctrlUp);
+
+	const auto expectedPhase = ExpectedPhaseOffsetForDrag(down.Position, move.Position);
 	EXPECT_EQ(expectedPhase, hoveredTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
 	EXPECT_EQ(expectedPhase, selectedTake->ResolvedMidiQuantisation().PhaseOffsetSamps);
 	EXPECT_FALSE(hoveredTake->MidiQuantisation().Enabled);
@@ -1437,7 +1533,7 @@ TEST(SceneInteractionRouting, CtrlOverlayLatchKeepsButtonContractAndAnchorWhileH
 	ctrlDown.Modifiers = base::Action::MODIFIER_CTRL;
 	scene.OnAction(ctrlDown);
 
-	EXPECT_EQ(2, scene.CtrlOverlayVisibleButtonCountForTest());
+	EXPECT_EQ(3, scene.CtrlOverlayVisibleButtonCountForTest());
 	auto before = scene.CtrlOverlayButtonCenterForTest(0);
 	ASSERT_TRUE(before.has_value());
 
@@ -1449,7 +1545,7 @@ TEST(SceneInteractionRouting, CtrlOverlayLatchKeepsButtonContractAndAnchorWhileH
 	moveAway.Modifiers = base::Action::MODIFIER_NONE;
 	scene.OnAction(moveAway);
 
-	EXPECT_EQ(2, scene.CtrlOverlayVisibleButtonCountForTest());
+	EXPECT_EQ(3, scene.CtrlOverlayVisibleButtonCountForTest());
 	auto after = scene.CtrlOverlayButtonCenterForTest(0);
 	ASSERT_TRUE(after.has_value());
 	EXPECT_EQ(before->X, after->X);
@@ -1460,6 +1556,73 @@ TEST(SceneInteractionRouting, CtrlOverlayLatchKeepsButtonContractAndAnchorWhileH
 	ctrlUp.KeyChar = 17;
 	ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
 	scene.OnAction(ctrlUp);
+}
+
+TEST(SceneInteractionRouting, CtrlOverlayStationDepthShowsGlobalAndFractionHandles) {
+	auto take = MakeLoopTake("overlay-station-depth-take");
+	auto station = MakeStation("overlay-station-depth-station");
+	station->AddTake(take);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = MakeSceneUserConfig();
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(station), base::Action::MODIFIER_NONE);
+
+	TouchMoveAction moveToAnchor;
+	moveToAnchor.Index = 0;
+	moveToAnchor.Position = { 220, 220 };
+	moveToAnchor.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(moveToAnchor);
+
+	actions::KeyAction ctrlDown;
+	ctrlDown.KeyActionType = actions::KeyAction::KEY_DOWN;
+	ctrlDown.KeyChar = 17;
+	ctrlDown.Modifiers = base::Action::MODIFIER_CTRL;
+	scene.OnAction(ctrlDown);
+
+	EXPECT_EQ(2, scene.CtrlOverlayVisibleButtonCountForTest());
+	EXPECT_TRUE(scene.CtrlOverlayButtonCenterForTest(0).has_value());
+	EXPECT_TRUE(scene.CtrlOverlayButtonCenterForTest(1).has_value());
+	EXPECT_FALSE(scene.CtrlOverlayButtonCenterForTest(2).has_value());
+
+	actions::KeyAction ctrlUp;
+	ctrlUp.KeyActionType = actions::KeyAction::KEY_UP;
+	ctrlUp.KeyChar = 17;
+	ctrlUp.Modifiers = base::Action::MODIFIER_NONE;
+	scene.OnAction(ctrlUp);
+}
+
+TEST(SceneInteractionRouting, StationDepthFractionDragAffectsAllLoopTakesInHoveredStation) {
+	auto firstTake = MakeLoopTake("station-fraction-first");
+	auto secondTake = MakeLoopTake("station-fraction-second");
+	auto station = MakeStation("station-fraction-station");
+	station->AddTake(firstTake);
+	station->AddTake(secondTake);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 1600u;
+	firstTake->SetMidiQuantisation(settings);
+	secondTake->SetMidiQuantisation(settings);
+
+	SceneParams sceneParams{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams{ 400, 300 } };
+	io::UserConfig userConfig = MakeSceneUserConfig();
+	TestScene scene(sceneParams, userConfig);
+	scene.AddStationForTest(station);
+	scene.CommitChanges();
+	scene.SetSelectDepthForTest(base::SelectDepth::DEPTH_STATION);
+	scene.SetHover3d(HoverPathFor(station), base::Action::MODIFIER_NONE);
+
+	ApplyCtrlFractionDrag(scene, { 220, 220 }, { 220, 156 }, 1);
+
+	EXPECT_TRUE(firstTake->MidiQuantisation().Enabled);
+	EXPECT_TRUE(secondTake->MidiQuantisation().Enabled);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, firstTake->MidiQuantisation().Fraction);
+	EXPECT_EQ(MidiQuantisationFraction::Quarter, secondTake->MidiQuantisation().Fraction);
 }
 
 TEST(SceneInteractionRouting, CtrlOverlayFractionClickUsesLatchedHoverTarget) {
@@ -1499,7 +1662,7 @@ TEST(SceneInteractionRouting, CtrlOverlayFractionClickUsesLatchedHoverTarget) {
 	ctrlDown.Modifiers = base::Action::MODIFIER_CTRL;
 	scene.OnAction(ctrlDown);
 
-	auto fractionCenter = scene.CtrlOverlayButtonCenterForTest(1);
+	auto fractionCenter = scene.CtrlOverlayButtonCenterForTest(2);
 	ASSERT_TRUE(fractionCenter.has_value());
 
 	scene.SetHover3d(HoverPathFor(driftTake), base::Action::MODIFIER_NONE);

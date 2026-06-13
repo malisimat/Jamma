@@ -48,15 +48,18 @@ namespace graphics
 			float hue;
 		};
 
-		static constexpr int NumButtons = 2;
+		static constexpr int NumButtons = 3;
 		static constexpr float ButtonW = 72.0f;
 		static constexpr float ButtonH = 28.0f;
 		static constexpr float ButtonGap = 6.0f;
 		static constexpr float AnchorOffsetY = 14.0f;
 
-		// Button 0: Phase drag (cyan-blue). Button 1: Fraction drag (orange).
+		// Button 0: Global phase drag (blue).
+		// Button 1: Local take phase drag (teal).
+		// Button 2: Fraction drag (orange).
 		static constexpr std::array<ButtonSpec, NumButtons> ButtonSpecs = {{
 			{ 0.58f },
+			{ 0.50f },
 			{ 0.11f }
 		}};
 

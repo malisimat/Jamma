@@ -279,13 +279,20 @@ namespace engine
 		bool _HasQuantisationHover() const;
 		int _CtrlHandleButtonCount() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action);
+		enum class MidiPhaseDragRoute : std::uint8_t
+		{
+			Global,
+			Local
+		};
+		actions::ActionResult _BeginMidiPhaseDrag(actions::TouchAction action,
+			MidiPhaseDragRoute route);
 		actions::ActionResult _UpdateMidiPhaseDrag(actions::TouchMoveAction action);
 		actions::ActionResult _EndMidiPhaseDrag(actions::TouchAction action);
 		actions::ActionResult _BeginFractionDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateFractionDrag(actions::TouchMoveAction action);
 		actions::ActionResult _EndFractionDrag(actions::TouchAction action);
 		std::shared_ptr<LoopTake> _ResolveFractionDragTake();
+		std::vector<std::shared_ptr<LoopTake>> _ResolveFractionDragTargets();
 		std::shared_ptr<base::GuiElement> _CtrlOverlayHoverElement();
 		base::SelectDepth _CtrlOverlaySelectDepth() const noexcept;
 		void _CaptureCtrlOverlayContext();
@@ -311,7 +318,7 @@ namespace engine
 			std::vector<unsigned char> HoverPath;
 			base::SelectDepth SelectDepth = base::SelectDepth::DEPTH_STATION;
 		};
-		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget();
+		MidiPhaseDragTarget _ResolveMidiPhaseDragTarget(MidiPhaseDragRoute route);
 		std::int32_t _MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept;
 		void _SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
 			std::int32_t offsetSamps) noexcept;
@@ -365,6 +372,9 @@ namespace engine
 		bool _isFractionDragging = false;
 		int _fractionDragStartY = 0;
 		std::shared_ptr<LoopTake> _fractionDragTake;
+		std::vector<std::shared_ptr<LoopTake>> _fractionDragTargets;
+		midi::MidiQuantisationFraction _fractionDragStartFraction = midi::MidiQuantisationFraction::Whole;
+		bool _fractionDragMoved = false;
 		// Open plugin editor windows created from the UI (main thread only).
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 		std::atomic<std::uint64_t> _audioSampleCounter;

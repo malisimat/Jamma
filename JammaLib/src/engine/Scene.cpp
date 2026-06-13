@@ -428,12 +428,25 @@ ActionResult Scene::OnAction(TouchAction action)
 		&& _IsMidiPhaseDragModifier(action.Modifiers))
 	{
 		const int hitBtn = _ctrlHandleOverlay.HitTestButton(action.Position);
+		const int visibleButtons = _HasCtrlOverlayContext()
+			? _ctrlOverlayContext->VisibleButtonCount
+			: _CtrlHandleButtonCount();
+		const int fractionBtn = (visibleButtons >= 3) ? 2 : 1;
 		std::cout << "Ctrl overlay handle down: button=" << hitBtn
-			<< " mode=" << ((0 == hitBtn) ? "phase" : ((1 == hitBtn) ? "fraction" : "none"))
+			<< " mode="
+			<< ((0 == hitBtn)
+				? "phase-global"
+				: ((1 == hitBtn) && (visibleButtons >= 3))
+					? "phase-local"
+					: (fractionBtn == hitBtn)
+						? "fraction"
+						: "none")
 			<< std::endl;
 		if (0 == hitBtn)
-			return _BeginMidiPhaseDrag(action);
-		if (1 == hitBtn)
+			return _BeginMidiPhaseDrag(action, MidiPhaseDragRoute::Global);
+		if ((1 == hitBtn) && (visibleButtons >= 3))
+			return _BeginMidiPhaseDrag(action, MidiPhaseDragRoute::Local);
+		if (fractionBtn == hitBtn)
 			return _BeginFractionDrag(action);
 
 		res.IsEaten = false;
@@ -1723,11 +1736,12 @@ bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const no
 	return (Action::MODIFIER_CTRL & modifiers);
 }
 
-ActionResult Scene::_BeginMidiPhaseDrag(TouchAction action)
+ActionResult Scene::_BeginMidiPhaseDrag(TouchAction action,
+	MidiPhaseDragRoute route)
 {
 	_isMidiPhaseDragging = true;
 	_midiPhaseDragStartPosition = action.Position;
-	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget();
+	_midiPhaseDragTarget = _ResolveMidiPhaseDragTarget(route);
 	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
 	_SetQuantisationOverlayHeld(true);
 	_ApplyQuantisationOverlayAlpha(1.0f);
@@ -1779,55 +1793,202 @@ ActionResult Scene::_EndMidiPhaseDrag(TouchAction action)
 
 ActionResult Scene::_BeginFractionDrag(TouchAction action)
 {
-	auto take = _ResolveFractionDragTake();
-	if (!take)
+	_fractionDragTargets = _ResolveFractionDragTargets();
+	if (_fractionDragTargets.empty())
 	{
 		std::cout << "Ctrl overlay handle down: mode=fraction target=none" << std::endl;
 		return ActionResult::NoAction();
 	}
 
-	auto res = take->BeginMidiQuantisationGesture(action);
-	if (!res.IsEaten)
+	_fractionDragStartY = action.Position.Y;
+	_fractionDragMoved = false;
+	_fractionDragTake.reset();
+	_fractionDragStartFraction = _fractionDragTargets.front()->MidiQuantisation().Fraction;
+
+	if (_fractionDragTargets.size() == 1u)
+	{
+		auto take = _fractionDragTargets.front();
+		auto res = take->BeginMidiQuantisationGesture(action);
+		if (!res.IsEaten)
+		{
+			_fractionDragTargets.clear();
+			return res;
+		}
+
+		_isFractionDragging = true;
+		_fractionDragTake = take;
+		const auto quantisation = take->MidiQuantisation();
+		std::cout << "Ctrl overlay handle down: mode=fraction take=" << take->Id()
+			<< " startFraction=" << midi::MidiQuantisation::FractionLabel(quantisation.Fraction)
+			<< std::endl;
 		return res;
+	}
 
 	_isFractionDragging = true;
-	_fractionDragStartY = action.Position.Y;
-	_fractionDragTake = take;
-	const auto quantisation = take->MidiQuantisation();
-	std::cout << "Ctrl overlay handle down: mode=fraction take=" << take->Id()
-		<< " startFraction=" << midi::MidiQuantisation::FractionLabel(quantisation.Fraction)
+	std::cout << "Ctrl overlay handle down: mode=fraction takes=" << _fractionDragTargets.size()
+		<< " startFraction=" << midi::MidiQuantisation::FractionLabel(_fractionDragStartFraction)
 		<< std::endl;
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = ACTIONRESULT_DEFAULT;
 	return res;
 }
 
 ActionResult Scene::_UpdateFractionDrag(TouchMoveAction action)
 {
-	if (!_isFractionDragging || !_fractionDragTake)
+	if (!_isFractionDragging)
 		return ActionResult::NoAction();
 
-	const auto startFraction = _fractionDragTake->MidiQuantisation().Fraction;
-	const auto startLabel = midi::MidiQuantisation::FractionLabel(startFraction);
+	_fractionDragMoved = true;
+
+	if (_fractionDragTake)
+	{
+		const auto startFraction = _fractionDragTake->MidiQuantisation().Fraction;
+		const auto startLabel = midi::MidiQuantisation::FractionLabel(startFraction);
+		const auto deltaY = action.Position.Y - _fractionDragStartY;
+		auto res = _fractionDragTake->OnAction(action);
+		const auto updatedFraction = _fractionDragTake->MidiQuantisation().Fraction;
+		std::cout << "Ctrl overlay drag: mode=fraction deltaY=" << deltaY
+			<< " fraction=" << startLabel
+			<< "->" << midi::MidiQuantisation::FractionLabel(updatedFraction)
+			<< std::endl;
+		return res;
+	}
+
+	if (_fractionDragTargets.empty())
+		return ActionResult::NoAction();
+
 	const auto deltaY = action.Position.Y - _fractionDragStartY;
-	auto res = _fractionDragTake->OnAction(action);
-	const auto updatedFraction = _fractionDragTake->MidiQuantisation().Fraction;
+	const auto fraction = midi::MidiQuantisation::ResolveDragFraction(_fractionDragStartFraction,
+		deltaY);
+	for (const auto& take : _fractionDragTargets)
+	{
+		if (!take)
+			continue;
+
+		auto settings = take->MidiQuantisation();
+		settings.Enabled = true;
+		settings.Fraction = fraction;
+		take->SetMidiQuantisation(settings);
+	}
+
 	std::cout << "Ctrl overlay drag: mode=fraction deltaY=" << deltaY
-		<< " fraction=" << startLabel
-		<< "->" << midi::MidiQuantisation::FractionLabel(updatedFraction)
+		<< " fraction=" << midi::MidiQuantisation::FractionLabel(_fractionDragStartFraction)
+		<< "->" << midi::MidiQuantisation::FractionLabel(fraction)
+		<< " targets=" << _fractionDragTargets.size()
 		<< std::endl;
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = ACTIONRESULT_DEFAULT;
 	return res;
 }
 
 ActionResult Scene::_EndFractionDrag(TouchAction action)
 {
 	auto take = _fractionDragTake;
+	auto targets = _fractionDragTargets;
+	const auto moved = _fractionDragMoved;
 	_isFractionDragging = false;
 	_fractionDragStartY = 0;
 	_fractionDragTake.reset();
+	_fractionDragTargets.clear();
+	_fractionDragMoved = false;
 
-	if (!take)
+	if (take)
+		return take->OnAction(action);
+
+	if (targets.empty())
 		return ActionResult::NoAction();
 
-	return take->OnAction(action);
+	if (!moved)
+	{
+		for (const auto& target : targets)
+		{
+			if (!target)
+				continue;
+
+			auto settings = target->MidiQuantisation();
+			settings.Enabled = !settings.Enabled;
+			target->SetMidiQuantisation(settings);
+		}
+	}
+
+	ActionResult res;
+	res.IsEaten = true;
+	res.ResultType = ACTIONRESULT_DEFAULT;
+	return res;
+}
+
+std::vector<std::shared_ptr<LoopTake>> Scene::_ResolveFractionDragTargets()
+{
+	auto takeForLoop = [this](const std::shared_ptr<Loop>& loop) -> std::shared_ptr<LoopTake> {
+		if (!loop)
+			return nullptr;
+
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+
+			for (const auto& candidateTake : station->GetLoopTakes())
+			{
+				if (!candidateTake)
+					continue;
+
+				const auto& loops = candidateTake->GetLoops();
+				if (std::find(loops.begin(), loops.end(), loop) != loops.end())
+					return candidateTake;
+			}
+		}
+
+		return nullptr;
+	};
+	auto stationForTake = [this](const std::shared_ptr<LoopTake>& take) -> std::shared_ptr<Station> {
+		if (!take)
+			return nullptr;
+
+		for (const auto& station : _stations)
+		{
+			if (!station)
+				continue;
+
+			const auto& takes = station->GetLoopTakes();
+			if (std::find(takes.begin(), takes.end(), take) != takes.end())
+				return station;
+		}
+
+		return nullptr;
+	};
+
+	const auto depth = _CtrlOverlaySelectDepth();
+	if (depth == base::SelectDepth::DEPTH_STATION)
+	{
+		auto hovering = _CtrlOverlayHoverElement();
+		auto station = std::dynamic_pointer_cast<Station>(hovering);
+		if (!station)
+			station = stationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
+		if (!station)
+			station = stationForTake(takeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
+
+		if (!station || station->IsRemote())
+			return {};
+
+		std::vector<std::shared_ptr<LoopTake>> targets;
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (take)
+				targets.push_back(take);
+		}
+		return targets;
+	}
+
+	auto take = _ResolveFractionDragTake();
+	if (!take)
+		return {};
+
+	return { take };
 }
 
 std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
@@ -1948,39 +2109,22 @@ std::shared_ptr<LoopTake> Scene::_ResolveFractionDragTake()
 	return nullptr;
 }
 
-Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
+Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget(MidiPhaseDragRoute route)
 {
 	MidiPhaseDragTarget target;
+	if (route == MidiPhaseDragRoute::Global)
+		return target;
+
 	auto hovering = _CtrlOverlayHoverElement();
 	if (!hovering)
 		return target;
 
-	auto addStationTarget = [](std::vector<std::shared_ptr<Station>>& targets,
-		const std::shared_ptr<Station>& station) {
-		if (!station || station->IsRemote())
-			return;
-		if (std::find(targets.begin(), targets.end(), station) == targets.end())
-			targets.push_back(station);
-	};
 	auto addTakeTarget = [](std::vector<std::shared_ptr<LoopTake>>& targets,
 		const std::shared_ptr<LoopTake>& take) {
 		if (!take)
 			return;
 		if (std::find(targets.begin(), targets.end(), take) == targets.end())
 			targets.push_back(take);
-	};
-	auto stationForTake = [this](const std::shared_ptr<LoopTake>& take) -> std::shared_ptr<Station> {
-		if (!take)
-			return nullptr;
-		for (const auto& station : _stations)
-		{
-			if (!station)
-				continue;
-			const auto& takes = station->GetLoopTakes();
-			if (std::find(takes.begin(), takes.end(), take) != takes.end())
-				return station;
-		}
-		return nullptr;
 	};
 	auto takeForLoop = [this](const std::shared_ptr<Loop>& loop) -> std::shared_ptr<LoopTake> {
 		if (!loop)
@@ -2003,25 +2147,7 @@ Scene::MidiPhaseDragTarget Scene::_ResolveMidiPhaseDragTarget()
 
 	const auto depth = _CtrlOverlaySelectDepth();
 	if (depth == base::SelectDepth::DEPTH_STATION)
-	{
-		auto station = std::dynamic_pointer_cast<Station>(hovering);
-		if (!station)
-			station = stationForTake(std::dynamic_pointer_cast<LoopTake>(hovering));
-		if (!station)
-			station = stationForTake(takeForLoop(std::dynamic_pointer_cast<Loop>(hovering)));
-		if (station && !station->IsRemote())
-		{
-			target.Kind = MidiPhaseDragTargetKind::Station;
-			target.StationRef = std::move(station);
-			addStationTarget(target.StationTargets, target.StationRef);
-		}
-		for (const auto& candidateStation : _stations)
-		{
-			if (candidateStation && candidateStation->IsSelected())
-				addStationTarget(target.StationTargets, candidateStation);
-		}
 		return target;
-	}
 
 	auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
 	if (!take)
@@ -2424,7 +2550,16 @@ int Scene::_CtrlHandleButtonCount() const
 	if (_HasCtrlOverlayContext())
 		return _ctrlOverlayContext->VisibleButtonCount;
 
-	return (_HasQuantisationSelection() || _HasQuantisationHover()) ? 2 : 1;
+	switch (_CtrlOverlaySelectDepth())
+	{
+	case base::SelectDepth::DEPTH_LOOPTAKE:
+	case base::SelectDepth::DEPTH_LOOP:
+		return 3;
+	case base::SelectDepth::DEPTH_STATION:
+		return 2;
+	default:
+		return 1;
+	}
 }
 
 std::shared_ptr<base::GuiElement> Scene::_CtrlOverlayHoverElement()
