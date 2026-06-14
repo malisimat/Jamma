@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include "MidiEvent.h"
 
@@ -151,9 +153,15 @@ namespace midi
 		constexpr std::uint64_t Pack() const noexcept
 		{
 			const auto fraction = static_cast<std::uint64_t>(Fraction);
+			const auto phaseMin = static_cast<std::int64_t>((std::numeric_limits<std::int16_t>::lowest)());
+			const auto phaseMax = static_cast<std::int64_t>((std::numeric_limits<std::int16_t>::max)());
+			const auto clampedPhase = (PhaseOffsetSamps < phaseMin) ? phaseMin :
+				(PhaseOffsetSamps > phaseMax ? phaseMax : static_cast<std::int64_t>(PhaseOffsetSamps));
+			const auto zigzagPhase = static_cast<std::uint64_t>((clampedPhase << 1) ^ (clampedPhase >> 15));
 			return (Enabled ? 1ull : 0ull)
 				| (fraction << 8u)
-				| (static_cast<std::uint64_t>(GrainSamps) << 16u);
+				| (static_cast<std::uint64_t>(GrainSamps) << 16u)
+				| (zigzagPhase << 48u);
 		}
 
 		static constexpr MidiQuantisationSettings Unpack(std::uint64_t packed) noexcept
@@ -162,6 +170,8 @@ namespace midi
 			settings.Enabled = (packed & 1ull) != 0ull;
 			settings.Fraction = MidiQuantisation::ClampFractionIndex(static_cast<int>((packed >> 8u) & 0xffull));
 			settings.GrainSamps = static_cast<std::uint32_t>((packed >> 16u) & 0xffffffffull);
+			const auto zigzagPhase = static_cast<std::int64_t>((packed >> 48u) & 0xffffull);
+			settings.PhaseOffsetSamps = static_cast<std::int32_t>((zigzagPhase >> 1) ^ (-(zigzagPhase & 1ll)));
 			return settings;
 		}
 

@@ -7,6 +7,7 @@
 
 #include "JamFile.h"
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include "../utils/StringUtils.h"
@@ -15,6 +16,49 @@ using namespace io;
 using audio::BehaviourParams;
 
 const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
+
+std::int32_t JamFile::ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept
+{
+	long long parsed = fallback;
+	switch (value.index())
+	{
+	case 1:
+		parsed = std::get<long>(value);
+		break;
+	case 2:
+	{
+		const auto unsignedValue = std::get<unsigned long>(value);
+		parsed = unsignedValue > static_cast<unsigned long>((std::numeric_limits<std::int32_t>::max)()) ?
+			static_cast<long long>((std::numeric_limits<std::int32_t>::max)()) :
+			static_cast<long long>(unsignedValue);
+		break;
+	}
+	case 3:
+		{
+			const auto doubleValue = std::get<double>(value);
+			if (!std::isfinite(doubleValue))
+				return fallback;
+
+			const auto maxInt32Double = static_cast<double>((std::numeric_limits<std::int32_t>::max)());
+			const auto minInt32Double = static_cast<double>((std::numeric_limits<std::int32_t>::min)());
+			if (doubleValue >= maxInt32Double)
+				return (std::numeric_limits<std::int32_t>::max)();
+			if (doubleValue <= minInt32Double)
+				return (std::numeric_limits<std::int32_t>::min)();
+
+			parsed = static_cast<long long>(doubleValue);
+			break;
+		}
+	default:
+		break;
+	}
+
+	if (parsed > static_cast<long long>((std::numeric_limits<std::int32_t>::max)()))
+		return (std::numeric_limits<std::int32_t>::max)();
+	if (parsed < static_cast<long long>((std::numeric_limits<std::int32_t>::min)()))
+		return (std::numeric_limits<std::int32_t>::min)();
+	return static_cast<std::int32_t>(parsed);
+}
 
 std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 {
@@ -41,32 +85,6 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.GlobalPhaseOffsetSamps = 0;
 	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
-
-	auto parseInt32 = [](const Json::JsonValue& value, std::int32_t fallback) {
-		long long parsed = fallback;
-		switch (value.index())
-		{
-		case 1:
-			parsed = std::get<long>(value);
-			break;
-		case 2:
-		{
-			const auto unsignedValue = std::get<unsigned long>(value);
-			parsed = unsignedValue > static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max()) ?
-				static_cast<long long>(std::numeric_limits<std::int32_t>::max()) :
-				static_cast<long long>(unsignedValue);
-			break;
-		}
-		default:
-			break;
-		}
-
-		if (parsed > static_cast<long long>(std::numeric_limits<std::int32_t>::max()))
-			return std::numeric_limits<std::int32_t>::max();
-		if (parsed < static_cast<long long>(std::numeric_limits<std::int32_t>::min()))
-			return std::numeric_limits<std::int32_t>::min();
-		return static_cast<std::int32_t>(parsed);
-	};
 
 	auto iter = jamParams.KeyValues.find("ninjam");
 	if (iter != jamParams.KeyValues.end())
@@ -115,7 +133,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 
 	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
 	if (iter != jamParams.KeyValues.end())
-		jam.GlobalPhaseOffsetSamps = parseInt32(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
+		jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
 
 	std::string quantiseStr = "";
 	iter = jamParams.KeyValues.find("quantisation");
@@ -628,15 +646,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 
 	iter = json.KeyValues.find("takephaseoffsetsamps");
 	if (iter != json.KeyValues.end())
-	{
-		const auto& value = json.KeyValues["takephaseoffsetsamps"];
-		if (value.index() == 1)
-			takePhaseOffsetSamps = static_cast<std::int32_t>(std::get<long>(value));
-		else if (value.index() == 2)
-			takePhaseOffsetSamps = static_cast<std::int32_t>(std::min<unsigned long>(
-				std::get<unsigned long>(value),
-				static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max())));
-	}
+		takePhaseOffsetSamps = ParseInt32Clamped(json.KeyValues["takephaseoffsetsamps"], 0);
 
 	iter = json.KeyValues.find("vst");
 	if (iter != json.KeyValues.end())
@@ -707,15 +717,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 
 	iter = json.KeyValues.find("stationphaseoffsetsamps");
 	if (iter != json.KeyValues.end())
-	{
-		const auto& value = json.KeyValues["stationphaseoffsetsamps"];
-		if (value.index() == 1)
-			stationPhaseOffsetSamps = static_cast<std::int32_t>(std::get<long>(value));
-		else if (value.index() == 2)
-			stationPhaseOffsetSamps = static_cast<std::int32_t>(std::min<unsigned long>(
-				std::get<unsigned long>(value),
-				static_cast<unsigned long>(std::numeric_limits<std::int32_t>::max())));
-	}
+		stationPhaseOffsetSamps = ParseInt32Clamped(json.KeyValues["stationphaseoffsetsamps"], 0);
 
 	std::vector<VstEntry> vstChain;
 	iter = json.KeyValues.find("vst");

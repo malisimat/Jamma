@@ -194,7 +194,6 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_backLoops(),
 	_midiRecordHeld(),
 	_midiQuantisationPacked(midi::MidiQuantisationSettings().Pack()),
-	_midiTakePhaseOffsetSamps(0),
 	_midiInheritedPhaseOffsetSamps(0),
 	_midiTransportStartSamps(0u),
 	_midiQuantisationUpdatePending(false),
@@ -1972,7 +1971,6 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 {
 	const auto previous = MidiQuantisation();
 	_midiQuantisationPacked.store(settings.Pack(), std::memory_order_release);
-	_midiTakePhaseOffsetSamps.store(settings.PhaseOffsetSamps, std::memory_order_release);
 
 	if (previous != settings)
 	{
@@ -1983,10 +1981,8 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 
 midi::MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 {
-	auto settings = midi::MidiQuantisationSettings::Unpack(
+	return midi::MidiQuantisationSettings::Unpack(
 		_midiQuantisationPacked.load(std::memory_order_acquire));
-	settings.PhaseOffsetSamps = _midiTakePhaseOffsetSamps.load(std::memory_order_acquire);
-	return settings;
 }
 
 midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexcept

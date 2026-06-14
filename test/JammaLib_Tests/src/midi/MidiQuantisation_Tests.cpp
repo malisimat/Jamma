@@ -287,7 +287,7 @@ TEST(MidiQuantisation, SettingsEqualityIncludesPhaseOffset) {
 	EXPECT_NE(a, b);
 }
 
-TEST(MidiQuantisation, PackUnpackLeavesPhaseOffsetLocalOnly) {
+TEST(MidiQuantisation, PackUnpackRoundTripsPhaseOffset) {
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
 	settings.Fraction = MidiQuantisationFraction::Quarter;
@@ -295,10 +295,11 @@ TEST(MidiQuantisation, PackUnpackLeavesPhaseOffsetLocalOnly) {
 	settings.PhaseOffsetSamps = 512;
 
 	const auto unpacked = MidiQuantisationSettings::Unpack(settings.Pack());
-	EXPECT_EQ(settings.Enabled, unpacked.Enabled);
-	EXPECT_EQ(settings.Fraction, unpacked.Fraction);
-	EXPECT_EQ(settings.GrainSamps, unpacked.GrainSamps);
-	EXPECT_EQ(0, unpacked.PhaseOffsetSamps);
+	EXPECT_EQ(settings, unpacked);
+
+	settings.PhaseOffsetSamps = -513;
+	const auto negativeUnpacked = MidiQuantisationSettings::Unpack(settings.Pack());
+	EXPECT_EQ(settings, negativeUnpacked);
 }
 
 TEST(MidiQuantisation, ZeroStepIsPassthrough) {

@@ -306,7 +306,6 @@ namespace engine
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
 		midi::MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
-		std::atomic<std::int32_t> _midiTakePhaseOffsetSamps{ 0 };
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
 		bool _midiQuantisationUpdatePending;
