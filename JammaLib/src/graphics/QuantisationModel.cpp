@@ -174,11 +174,8 @@ void QuantisationModel::Draw3d(base::DrawContext& ctx,
 	if (!_overlayVisible || (_overlayAlpha <= 0.001f) || (base::PASS_SCENE != pass))
 		return;
 
-	if (_instanceAttributesNeedUpdating)
-	{
-		if (!SyncInstanceAttributes())
-			_resourcesNeedInitialising = true;
-	}
+	if (!SyncInstanceAttributes())
+		_resourcesNeedInitialising = true;
 
 	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
 	auto pos = ModelPosition();

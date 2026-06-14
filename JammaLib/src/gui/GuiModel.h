@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
+
 #include "GuiElement.h"
 #include "GlUtils.h"
 
@@ -60,6 +63,7 @@ namespace gui
 		unsigned int InstanceCount() const noexcept { return _instanceCount; }
 
 	protected:
+		static bool HasCurrentGlContext() noexcept;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		bool SyncInstanceAttributes();
@@ -73,22 +77,22 @@ namespace gui
 		virtual std::weak_ptr<resources::TextureResource> GetTexture()
 		{
 			if (!_modelTextures.empty())
-				return *_modelTextures.begin();
+				return _modelTextures.front();
 
 			return std::weak_ptr<resources::TextureResource>();
 		}
 		virtual std::weak_ptr<resources::ShaderResource> GetShader()
 		{
 			if (!_modelShaders.empty())
-				return *_modelShaders.begin();
+				return _modelShaders.front();
 
 			return std::weak_ptr<resources::ShaderResource>();
 		}
 
 	protected:
 		bool _resourcesInitialised;
-		bool _geometryNeedsUpdating;
-		bool _instanceAttributesNeedUpdating;
+		std::atomic<bool> _geometryNeedsUpdating;
+		std::atomic<bool> _instanceAttributesNeedUpdating;
 		bool _usesInstanceAttributes;
 		GuiModelParams _modelParams;
 		std::vector<float> _backVerts;
@@ -101,6 +105,7 @@ namespace gui
 		unsigned int _numTris;
 		unsigned int _backInstanceCount;
 		unsigned int _instanceCount;
+		mutable std::mutex _modelStateMutex;
 		std::vector<std::weak_ptr<resources::TextureResource>> _modelTextures;
 		std::vector<std::weak_ptr<resources::ShaderResource>> _modelShaders;
 	};

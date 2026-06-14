@@ -1339,7 +1339,7 @@ void LoopTake::Play(unsigned long index,
 		if (midiLoop->State() == midi::MidiLoopState::Recording)
 		{
 			midiLoop->EndRecord(midiLoopLength);
-			midiLoop->UpdateModelFromEvents(midiLoopLength, true);
+			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}
 
@@ -1952,7 +1952,7 @@ void LoopTake::_UpdateMidiModels(bool force)
 	for (auto& midiLoop : _midiLoops)
 	{
 		if (midiLoop)
-			midiLoop->UpdateModelFromEvents(displayLength, force);
+			midiLoop->QueueModelUpdateFromEvents(displayLength, force);
 	}
 }
 
@@ -2556,7 +2556,7 @@ void LoopTake::_FinalizeMidiOverdubLoop(std::size_t loopIndex, std::uint32_t tar
 
 	const auto mergedCount = _BuildMidiOverdubMergedEvents(loopIndex, targetLoopLength, false);
 	midiLoop->ReplaceRecordedEvents(_midiOverdubSession.MergeScratch.data(), mergedCount, targetLoopLength);
-	midiLoop->UpdateModelFromEvents(targetLoopLength, true);
+	midiLoop->QueueModelUpdateFromEvents(targetLoopLength, true);
 }
 
 void LoopTake::_ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gesture,

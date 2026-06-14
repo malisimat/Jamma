@@ -442,11 +442,8 @@ void StationModel::Draw3d(DrawContext& ctx,
 	_lastPass = pass;
 
 	// Ensure resources are present (lazy init like quantisation model).
-	if (_instanceAttributesNeedUpdating)
-	{
-		if (!SyncInstanceAttributes())
-			_resourcesNeedInitialising = true;
-	}
+	if (!SyncInstanceAttributes())
+		_resourcesNeedInitialising = true;
 
 	auto modelShader = GetShader();
 	auto shader = modelShader.lock();
