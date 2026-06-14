@@ -33,6 +33,12 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
 - Run the relevant native test target after engine changes.
 - Detailed test commands, filtered test runs, and troubleshooting live in [../doc/build.md](../doc/build.md).
 
+## Investigation Guidance
+
+- For architecture/flow questions, start with semantic / codegraph tools rather than blunt text search.
+- Always use subagents with small models for codebase exploration.  Instruct them to cite specific files and line numbers in their summarised response.
+- For text search, always use `rg` (ripgrep), never `grep` or `Select-String` in PowerShell.
+
 ## Coding Guidance
 
 Prefer modern C++ and functional style where practical.
@@ -41,7 +47,6 @@ Prefer modern C++ and functional style where practical.
 - Prefer value semantics, explicit inputs/outputs, isolated side effects, and RAII-friendly standard library types when performance allows.
 - Avoid hidden global mutable state, raw owning pointers, and exception-driven control flow in real-time paths.
 - Detailed real-time rules, hot-path review checklist, and banned blocking primitives live in [../doc/realtime-audio.md](../doc/realtime-audio.md).
-- grep is not available (powershell-only) but ripgrep `rg` is.
 
 ## Change Expectations
 
