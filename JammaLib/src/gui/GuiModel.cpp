@@ -3,6 +3,14 @@
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
+namespace
+{
+	inline bool HasCurrentGlContext() noexcept
+	{
+		return nullptr != wglGetCurrentContext();
+	}
+}
+
 using namespace base;
 using namespace gui;
 using namespace resources;
@@ -32,6 +40,9 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	if (!HasCurrentGlContext())
+		return;
+
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = ModelPosition();
 	auto scale = ModelScale();
@@ -40,7 +51,9 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-	if (_instanceAttributesNeedUpdating)
+	const auto instanceAttributesNeedUpdating = _instanceAttributesNeedUpdating.load(std::memory_order_acquire);
+
+	if (instanceAttributesNeedUpdating)
 	{
 		if (!SyncInstanceAttributes())
 			_resourcesNeedInitialising = true;
@@ -91,27 +104,30 @@ void GuiModel::Draw3d(DrawContext& ctx,
 
 void GuiModel::SetGeometry(std::vector<float> verts, std::vector<float> uvs)
 {
-	_backVerts = verts;
-	_backUvs = uvs;
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	_backVerts = std::move(verts);
+	_backUvs = std::move(uvs);
 
-	_geometryNeedsUpdating = true;
+	_geometryNeedsUpdating.store(true, std::memory_order_release);
 	_resourcesNeedInitialising = true;
 }
 
 void GuiModel::SetInstanceAttributes(std::vector<InstanceAttribute> attributes, unsigned int instanceCount)
 {
-	_backInstanceAttributes = attributes;
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	_backInstanceAttributes = std::move(attributes);
 	_backInstanceCount = instanceCount;
-	_instanceAttributesNeedUpdating = true;
+
+	_instanceAttributesNeedUpdating.store(true, std::memory_order_release);
 	_usesInstanceAttributes = true;
 }
 
 void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
-	auto validated = true;
+	if (!HasCurrentGlContext())
+		return;
 
-	_modelTextures.clear();
-	_modelShaders.clear();
+	auto validated = true;
 
 	if (validated)
 		validated = InitTextures(resourceLib);
@@ -119,16 +135,18 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 		validated = InitShaders(resourceLib);
 	if (validated)
 	{
-		if (_geometryNeedsUpdating)
+		std::lock_guard<std::mutex> lock(_modelStateMutex);
+
+		if (_geometryNeedsUpdating.load(std::memory_order_acquire))
 		{
-			_geometryNeedsUpdating = false;
+			_geometryNeedsUpdating.store(false, std::memory_order_release);
 			_modelParams.Verts = _backVerts;
 			_modelParams.Uvs = _backUvs;
 		}
 
-		if (_instanceAttributesNeedUpdating)
+		if (_instanceAttributesNeedUpdating.load(std::memory_order_acquire))
 		{
-			_instanceAttributesNeedUpdating = false;
+			_instanceAttributesNeedUpdating.store(false, std::memory_order_release);
 			_instanceAttributes = _backInstanceAttributes;
 			_instanceCount = _backInstanceCount;
 		}
@@ -141,6 +159,9 @@ void GuiModel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiModel::_ReleaseResources()
 {
+	if (!HasCurrentGlContext())
+		return;
+
 	graphics::GlDeleteQueue::DeleteBuffers(3, _vertexBuffer);
 	_vertexBuffer[0] = 0;
 	_vertexBuffer[1] = 0;
@@ -159,6 +180,7 @@ void GuiModel::_ReleaseResources()
 bool GuiModel::InitTextures(ResourceLib& resourceLib)
 {
 	bool result = true;
+	std::vector<std::weak_ptr<TextureResource>> modelTextures;
 
 	for (std::string texture : _modelParams.ModelTextures)
 	{
@@ -184,7 +206,12 @@ bool GuiModel::InitTextures(ResourceLib& resourceLib)
 			continue;
 		}
 
-		_modelTextures.push_back(std::dynamic_pointer_cast<TextureResource>(resource));
+		modelTextures.push_back(std::dynamic_pointer_cast<TextureResource>(resource));
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(_modelStateMutex);
+		_modelTextures = std::move(modelTextures);
 	}
 
 	return result;
@@ -193,6 +220,7 @@ bool GuiModel::InitTextures(ResourceLib& resourceLib)
 bool GuiModel::InitShaders(ResourceLib & resourceLib)
 {
 	bool result = true;
+	std::vector<std::weak_ptr<ShaderResource>> modelShaders;
 
 	for (std::string shader : _modelParams.ModelShaders)
 	{
@@ -218,7 +246,12 @@ bool GuiModel::InitShaders(ResourceLib & resourceLib)
 			continue;
 		}
 
-		_modelShaders.push_back(std::dynamic_pointer_cast<ShaderResource>(resource));
+		modelShaders.push_back(std::dynamic_pointer_cast<ShaderResource>(resource));
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(_modelStateMutex);
+		_modelShaders = std::move(modelShaders);
 	}
 
 	return result;
@@ -226,6 +259,9 @@ bool GuiModel::InitShaders(ResourceLib & resourceLib)
 
 bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)
 {
+	if (!HasCurrentGlContext())
+		return false;
+
 	_ReleaseResources();
 
 	_numTris = (unsigned int)verts.size() / 9;
@@ -282,6 +318,9 @@ bool GuiModel::InitVertexArray(std::vector<float> verts, std::vector<float> uvs)
 
 bool GuiModel::InitInstanceAttributes()
 {
+	if (!HasCurrentGlContext())
+		return false;
+
 	if (!_usesInstanceAttributes || _instanceAttributes.empty())
 		return true;
 
@@ -330,16 +369,24 @@ bool GuiModel::HasSameInstanceAttributeLayout(const std::vector<InstanceAttribut
 
 bool GuiModel::SyncInstanceAttributes()
 {
-	if (!_instanceAttributesNeedUpdating)
+	if (!HasCurrentGlContext())
+		return false;
+
+	if (!_instanceAttributesNeedUpdating.exchange(false, std::memory_order_acq_rel))
 		return true;
 
-	const auto nextAttributes = _backInstanceAttributes;
-	const auto nextInstanceCount = _backInstanceCount;
-	const auto layoutChanged = !HasSameInstanceAttributeLayout(_instanceAttributes, nextAttributes);
+	auto layoutChanged = false;
+	std::vector<InstanceAttribute> nextAttributes;
+	unsigned int nextInstanceCount = 0u;
+	{
+		std::lock_guard<std::mutex> lock(_modelStateMutex);
+		nextAttributes = _backInstanceAttributes;
+		nextInstanceCount = _backInstanceCount;
+		layoutChanged = !HasSameInstanceAttributeLayout(_instanceAttributes, nextAttributes);
+	}
 
 	_instanceAttributes = nextAttributes;
 	_instanceCount = nextInstanceCount;
-	_instanceAttributesNeedUpdating = false;
 
 	if (0u == _vertexArray)
 		return false;
