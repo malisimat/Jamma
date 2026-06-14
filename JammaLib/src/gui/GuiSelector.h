@@ -41,6 +41,7 @@ namespace gui
 		base::SelectDepth CurrentSelectDepth() const;
 		void SetSelectDepth(base::SelectDepth level);
 		std::vector<unsigned char> CurrentHover() const;
+		std::vector<unsigned char> PaintedPathForTest() const;
 		bool UpdateCurrentHover(std::vector<unsigned char> path,
 			base::Action::Modifiers modifiers,
 			bool isSelected,
@@ -64,6 +65,7 @@ namespace gui
 		utils::Position2d _initPos;
 		utils::Position2d _currentPos;
 		std::vector<unsigned char> _currentHover;
+		std::vector<unsigned char> _paintedPath;
 		bool _currentHoverSelected;
 		base::Tweakable::TweakState _currentHoverTweakState;
 	};

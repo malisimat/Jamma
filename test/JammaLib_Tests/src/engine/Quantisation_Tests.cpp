@@ -489,7 +489,7 @@ TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)
 	auto repeatedGateVerts = engine::QuantisationModel::BuildGateGeometry(8u, 132.0f, 312.0f, 92.0f);
 	ASSERT_FALSE(repeatedGateVerts.empty());
 	EXPECT_EQ(singleGateVerts, repeatedGateVerts);
-	EXPECT_EQ(28u * 6u * 3u, repeatedGateVerts.size());
+	EXPECT_EQ(16u * 6u * 3u, repeatedGateVerts.size());
 
 	auto minX = repeatedGateVerts[0];
 	auto maxX = repeatedGateVerts[0];
@@ -511,6 +511,6 @@ TEST(QuantisationModel, GateGeometryBuildsHalfFrameInstanceMesh)
 	EXPECT_GT(maxX, 0.0f);
 	EXPECT_FLOAT_EQ(-92.0f, minY);
 	EXPECT_FLOAT_EQ(92.0f, maxY);
-	EXPECT_LT(minZ, 0.0f);
-	EXPECT_GT(maxZ, 312.0f);
+	EXPECT_FLOAT_EQ(132.0f, minZ);
+	EXPECT_FLOAT_EQ(312.0f, maxZ);
 }

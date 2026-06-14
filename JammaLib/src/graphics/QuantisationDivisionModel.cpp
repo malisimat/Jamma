@@ -56,8 +56,8 @@ namespace
 		constexpr float xMax = 1.0f;
 		constexpr float yMin = -StripHalfHeight;
 		constexpr float yMax = StripHalfHeight;
-		constexpr float zMin = StripOuterRadius - 4.0f;
-		constexpr float zMax = StripOuterRadius + 8.0f;
+		constexpr float zMin = StripOuterRadius - 1.0f;
+		constexpr float zMax = StripOuterRadius + 2.0f;
 
 		AppendQuad(verts, &uvs, 0.0f,
 			glm::vec3(xMin, yMin, zMax),

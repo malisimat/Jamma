@@ -47,6 +47,7 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
+	_lastLoggedHoverPath(),
 	_ctrlHandleOverlay(),
 	_quantisationInteraction(_ctrlHandleOverlay, _quantisation, _stations),
 	_cursorPos{},
@@ -754,6 +755,24 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 	elementPath = fullElementPath;
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
+
+	if ((elementPath != _lastLoggedHoverPath) && (_loggingConfig.Ui == "verbose"))
+	{
+		std::string pathString = "[";
+		for (size_t i = 0; i < elementPath.size(); ++i)
+		{
+			pathString += std::to_string(static_cast<unsigned int>(elementPath[i]));
+			if ((i + 1) < elementPath.size())
+				pathString += ",";
+		}
+		pathString += "]";
+		std::cout << "Hover3d resolved: " << pathString << std::endl;
+		_lastLoggedHoverPath = elementPath;
+	}
+	else if (elementPath != _lastLoggedHoverPath)
+	{
+		_lastLoggedHoverPath = elementPath;
+	}
 
 	auto hovering = _ChildFromPath(elementPath);
 	if (nullptr != hovering)
