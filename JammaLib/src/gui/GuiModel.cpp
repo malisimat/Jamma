@@ -3,14 +3,6 @@
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
 
-namespace
-{
-	inline bool HasCurrentGlContext() noexcept
-	{
-		return nullptr != wglGetCurrentContext();
-	}
-}
-
 using namespace base;
 using namespace gui;
 using namespace resources;
@@ -34,6 +26,11 @@ GuiModel::GuiModel(GuiModelParams params) :
 	_backInstanceAttributes({}),
 	_instanceAttributes({})
 {
+}
+
+bool GuiModel::HasCurrentGlContext() noexcept
+{
+	return nullptr != wglGetCurrentContext();
 }
 
 void GuiModel::Draw3d(DrawContext& ctx,

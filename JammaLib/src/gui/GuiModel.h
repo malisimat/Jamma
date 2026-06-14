@@ -63,6 +63,7 @@ namespace gui
 		unsigned int InstanceCount() const noexcept { return _instanceCount; }
 
 	protected:
+		static bool HasCurrentGlContext() noexcept;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		bool SyncInstanceAttributes();
