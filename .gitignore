@@ -9,7 +9,8 @@
 *.opendb
 .vs/
 .github/*
-!.github/copilot-instructions.md
+!.github/skills/
+!.github/skills/**
 .copilot/*
 !.copilot/plan.md
 .vscode/launch.json
@@ -17,4 +18,5 @@
 packages/
 vcpkg_installed/
 test/JammaLib_Tests/x64/
+.codegraph/
 Directory.Build.local.props
