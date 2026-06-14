@@ -30,6 +30,7 @@ Detailed guides on setup, building, testing, and advanced configurations live in
 
 - **[Build and Test Guide](doc/build.md)**: Prerequisites, vcpkg dependencies, target builds, and troubleshooting steps.
 - **[Real-Time Audio Guidance](doc/realtime-audio.md)**: Guidelines for working within real-time constraints and the hot-path review checklist.
+- **[Overlay Control UI](doc/overlay-controls.md)**: Instructions for the Ctrl-held overlay controls, target selection rules, and quantisation handle behavior.
 - **[Multi-Device MIDI Trigger Rig Config](doc/midi-trigger-mapping.md)**: Rig file mapping for multiple MIDI devices, channels, and activation mappings.
 - **[Ninjam Integration Guide](doc/ninjam.md)**: Vendored files structure, reference dependencies, and update steps.
 - **[VS Code Tasks Setup](doc/vscode-tasks.example.json)**: Local configurations for automating MSBuild.

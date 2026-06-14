@@ -1,5 +1,6 @@
 
 #include "gtest/gtest.h"
+#include <limits>
 #include <regex>
 #include "resources/ResourceLib.h"
 #include "io/Json.h"
@@ -283,6 +284,19 @@ TEST(JamFile, ParsesSignedPhaseOffsets) {
 	EXPECT_EQ(-7, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
+TEST(JamFile, ParsesOverlargePhaseOffsetsWithinInt32Bounds) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"takephaseoffsetsamps\":4294967296,\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"stationphaseoffsetsamps\":-4294967296,\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"globalphaseoffsetsamps\":4294967296,\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ((std::numeric_limits<std::int32_t>::max)(), parsed->GlobalPhaseOffsetSamps);
+	EXPECT_EQ((std::numeric_limits<std::int32_t>::min)(), parsed->Stations[0].StationPhaseOffsetSamps);
+	EXPECT_EQ((std::numeric_limits<std::int32_t>::max)(), parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
+}
 TEST(JamFile, RoundTripsVstStateBlob) {
 	const std::vector<std::uint8_t> stateBlob{ 0x00, 0xff, 0x10, 0x41, 0x42, 0x43, 0x64 };
 

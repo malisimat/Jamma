@@ -24,10 +24,6 @@ namespace
 	constexpr float MinVisualRadius = 24.0f;
 	constexpr float FramePart = 0.0f;
 	constexpr float BackingPart = 1.0f;
-	constexpr float ColumnPart = 2.0f;
-	constexpr float HandlePart = 3.0f;
-	constexpr float GateInstance = 0.0f;
-	constexpr float ColumnInstance = 1.0f;
 
 	void AppendPartUvs(std::vector<float>* uvs, float partKind)
 	{
@@ -84,14 +80,10 @@ namespace
 		const auto zMax = outerRadius;
 		const auto xFront = frameDepthHalf;
 		const auto xBack = -frameDepthHalf;
-		const auto handleZMin = zMax - (frameWidth * 0.18f);
-		const auto handleZMax = zMax + std::max(frameWidth * 0.75f, 8.0f);
-		constexpr auto handleXMin = -1.0f;
-		constexpr auto handleXMax = 1.0f;
 
-		verts.reserve(28u * 6u * 3u);
+		verts.reserve(16u * 6u * 3u);
 		if (uvs)
-			uvs->reserve(28u * 6u * 2u);
+			uvs->reserve(16u * 6u * 2u);
 
 		AppendQuad(verts, uvs, BackingPart,
 			GatePoint(xFront * 0.35f, yInnerMin, zMin),
@@ -158,42 +150,6 @@ namespace
 				GatePoint(xBack, from.x, from.y));
 		}
 
-		const auto columnRadius = std::max(frameWidth * 0.75f, 6.0f);
-		constexpr auto ColumnSides = 8u;
-		for (auto side = 0u; side < ColumnSides; ++side)
-		{
-			const auto a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(side) / static_cast<float>(ColumnSides);
-			const auto a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(side + 1u) / static_cast<float>(ColumnSides);
-			const auto p0 = glm::vec2(std::cos(a0) * columnRadius, std::sin(a0) * columnRadius);
-			const auto p1 = glm::vec2(std::cos(a1) * columnRadius, std::sin(a1) * columnRadius);
-
-			AppendQuad(verts, uvs, ColumnPart,
-				GatePoint(p0.x, yMin, p0.y),
-				GatePoint(p1.x, yMin, p1.y),
-				GatePoint(p1.x, yMax, p1.y),
-				GatePoint(p0.x, yMax, p0.y));
-		}
-
-		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXMin, yMin, handleZMax),
-			GatePoint(handleXMax, yMin, handleZMax),
-			GatePoint(handleXMax, yMax, handleZMax),
-			GatePoint(handleXMin, yMax, handleZMax));
-		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXMax, yMin, handleZMin),
-			GatePoint(handleXMin, yMin, handleZMin),
-			GatePoint(handleXMin, yMax, handleZMin),
-			GatePoint(handleXMax, yMax, handleZMin));
-		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXMin, yMax, handleZMin),
-			GatePoint(handleXMin, yMax, handleZMax),
-			GatePoint(handleXMax, yMax, handleZMax),
-			GatePoint(handleXMax, yMax, handleZMin));
-		AppendQuad(verts, uvs, HandlePart,
-			GatePoint(handleXMax, yMin, handleZMin),
-			GatePoint(handleXMax, yMin, handleZMax),
-			GatePoint(handleXMin, yMin, handleZMax),
-			GatePoint(handleXMin, yMin, handleZMin));
 	}
 }
 
@@ -290,12 +246,8 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 	SetTiming(seedSamps);
 
 	std::vector<float> transforms;
-	std::vector<float> modes;
-	std::vector<float> bands;
 	std::vector<float> fillHalfWidths;
 	transforms.reserve(visuals.size() * 16u);
-	modes.reserve(visuals.size() * 4u);
-	bands.reserve(visuals.size() * 4u);
 	fillHalfWidths.reserve(visuals.size() * 4u);
 
 	for (const auto& visual : visuals)
@@ -331,26 +283,15 @@ void QuantisationModel::SetLoopTakeVisuals(unsigned int seedSamps,
 			transforms.push_back(visual.YCenter);
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);
-			modes.push_back(GateInstance);
-			bands.push_back(0.0f);
 			fillHalfWidths.push_back(fillHalfWidth);
 		}
 
-		transforms.push_back(phaseOffset);
-		transforms.push_back(visual.YCenter);
-		transforms.push_back(heightScale);
-		transforms.push_back(radiusScale);
-		modes.push_back(ColumnInstance);
-		bands.push_back(1.0f);
-		fillHalfWidths.push_back(1.0f);
 	}
 
-	const auto instanceCount = static_cast<unsigned int>(modes.size());
+	const auto instanceCount = static_cast<unsigned int>(fillHalfWidths.size());
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
-		{ 4u, 1u, std::move(modes) },
-		{ 5u, 1u, std::move(bands) },
-		{ 6u, 1u, std::move(fillHalfWidths) }
+		{ 4u, 1u, std::move(fillHalfWidths) }
 	}, instanceCount);
 }
 

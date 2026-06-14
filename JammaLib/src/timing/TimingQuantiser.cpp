@@ -907,14 +907,6 @@ std::optional<ActionResult> TimingQuantiserController::TryHandleTouchAction(Touc
 		return std::nullopt;
 
 	const int hitBtn = _overlay.HitTestButton(action.Position);
-	std::cout << "Ctrl overlay handle down: button=" << hitBtn
-		<< " mode="
-		<< ((0 == hitBtn)
-			? "phase-global"
-			: (1 == hitBtn)
-				? "fraction"
-				: "none")
-		<< std::endl;
 	if (0 == hitBtn)
 		return _BeginMidiPhaseDrag(action, context, childResolver);
 	if (1 == hitBtn)
@@ -1203,10 +1195,6 @@ ActionResult TimingQuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction act
 	const auto offsetSamps = TimingQuantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		sampleRate);
-	std::cout << "Ctrl overlay drag: mode=phase deltaX=" << delta.X
-		<< " deltaY=" << delta.Y
-		<< " phaseOffsetSamps=" << offsetSamps
-		<< std::endl;
 	_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
 
@@ -1243,10 +1231,7 @@ ActionResult TimingQuantiserController::_BeginFractionDrag(TouchAction action,
 {
 	_fractionDragTargets = _ResolveFractionDragTargets(context, childResolver);
 	if (_fractionDragTargets.empty())
-	{
-		std::cout << "Ctrl overlay handle down: mode=fraction target=none" << std::endl;
 		return ActionResult::NoAction();
-	}
 
 	_fractionDragStartY = action.Position.Y;
 	_fractionDragMoved = false;
@@ -1265,17 +1250,10 @@ ActionResult TimingQuantiserController::_BeginFractionDrag(TouchAction action,
 
 		_isFractionDragging = true;
 		_fractionDragTake = take;
-		const auto quantisation = take->MidiQuantisation();
-		std::cout << "Ctrl overlay handle down: mode=fraction take=" << take->Id()
-			<< " startFraction=" << midi::MidiQuantisation::FractionLabel(quantisation.Fraction)
-			<< std::endl;
 		return res;
 	}
 
 	_isFractionDragging = true;
-	std::cout << "Ctrl overlay handle down: mode=fraction takes=" << _fractionDragTargets.size()
-		<< " startFraction=" << midi::MidiQuantisation::FractionLabel(_fractionDragStartFraction)
-		<< std::endl;
 
 	ActionResult res;
 	res.IsEaten = true;
@@ -1292,15 +1270,7 @@ ActionResult TimingQuantiserController::_UpdateFractionDrag(TouchMoveAction acti
 
 	if (_fractionDragTake)
 	{
-		const auto startFraction = _fractionDragTake->MidiQuantisation().Fraction;
-		const auto startLabel = midi::MidiQuantisation::FractionLabel(startFraction);
-		const auto deltaY = action.Position.Y - _fractionDragStartY;
 		auto res = _fractionDragTake->OnAction(action);
-		const auto updatedFraction = _fractionDragTake->MidiQuantisation().Fraction;
-		std::cout << "Ctrl overlay drag: mode=fraction deltaY=" << deltaY
-			<< " fraction=" << startLabel
-			<< "->" << midi::MidiQuantisation::FractionLabel(updatedFraction)
-			<< std::endl;
 		return res;
 	}
 
@@ -1320,12 +1290,6 @@ ActionResult TimingQuantiserController::_UpdateFractionDrag(TouchMoveAction acti
 		settings.Fraction = fraction;
 		take->SetMidiQuantisation(settings);
 	}
-
-	std::cout << "Ctrl overlay drag: mode=fraction deltaY=" << deltaY
-		<< " fraction=" << midi::MidiQuantisation::FractionLabel(_fractionDragStartFraction)
-		<< "->" << midi::MidiQuantisation::FractionLabel(fraction)
-		<< " targets=" << _fractionDragTargets.size()
-		<< std::endl;
 
 	ActionResult res;
 	res.IsEaten = true;

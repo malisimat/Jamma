@@ -1070,6 +1070,8 @@ void Station::_ApplyMidiQuantisationPhaseOffset() noexcept
 			take->SetMidiQuantisationInheritedPhaseOffset(inherited);
 	}
 
+	// Quantisation overlay state is refreshed on the render thread, so keep this
+	// path off the audio callback and only mutate the GUI model from the main/render path.
 	RefreshQuantisationOverlayFromClock();
 }
 

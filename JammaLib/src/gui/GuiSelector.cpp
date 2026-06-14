@@ -14,6 +14,7 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 	_initPos({0,0}),
 	_currentPos({0,0}),
 	_currentHover({}),
+	_paintedPath({}),
 	_currentHoverSelected(false),
 	_currentHoverTweakState(Tweakable::TweakState::TWEAKSTATE_NONE),
 	GuiElement(guiParams)
@@ -38,6 +39,11 @@ void GuiSelector::SetSelectDepth(SelectDepth level)
 std::vector<unsigned char> GuiSelector::CurrentHover() const
 {
 	return _currentHover;
+}
+
+std::vector<unsigned char> GuiSelector::PaintedPathForTest() const
+{
+	return _paintedPath;
 }
 
 bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
@@ -81,7 +87,7 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 			if (0 == action.Index)
 			{
 				res.IsEaten = true;
-				auto mode = Action::MODIFIER_CTRL & action.Modifiers ?
+				auto mode = Action::MODIFIER_SHIFT & action.Modifiers ?
 					(_currentHoverSelected ? SELECT_SELECTREMOVE : SELECT_SELECTADD ) :
 					SELECT_SELECT;
 
@@ -142,7 +148,7 @@ actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
 
 	res.IsEaten = false;
 
-	if (17 == action.KeyChar)
+	if (16 == action.KeyChar)
 	{
 		if ((SELECT_NONE == _selectMode) && (actions::KeyAction::KeyActionType::KEY_DOWN == action.KeyActionType))
 		{
@@ -174,6 +180,7 @@ void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char
 	_isSelecting = true;
 	_selectionTool = SELECTION_PAINT;
 	_selectMode = mode;
+	_paintedPath = selection;
 }
 
 void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)

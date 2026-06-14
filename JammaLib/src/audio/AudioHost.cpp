@@ -169,7 +169,10 @@ namespace audio
 			_ninjamController->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 		auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
-			auto station = std::dynamic_pointer_cast<StationRemote>(stationBase);
+			if (!stationBase || !stationBase->IsRemote())
+				return;
+
+			auto station = std::static_pointer_cast<StationRemote>(stationBase);
 			if (!station || !station->IsConnectedRemote())
 				return;
 

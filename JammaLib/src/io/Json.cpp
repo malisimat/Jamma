@@ -7,6 +7,10 @@
 
 #include "Json.h"
 
+#include <exception>
+#include <limits>
+#include <string>
+
 using namespace io;
 
 std::optional<Json::JsonValue> Json::FromStream(std::stringstream ss)
@@ -327,15 +331,30 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 					{
 						if ('-' == str[0])
 						{
-							long v;
-							if (ss2 >> v)
-								return { std::move(ss), v };
+							try
+							{
+								const long long v = std::stoll(str);
+								if (v >= static_cast<long long>((std::numeric_limits<long>::min)()) &&
+									v <= static_cast<long long>((std::numeric_limits<long>::max)()))
+									return { std::move(ss), static_cast<long>(v) };
+								return { std::move(ss), static_cast<double>(v) };
+							}
+							catch (const std::exception&)
+							{
+							}
 						}
 						else
 						{
-							unsigned long v;
-							if (ss2 >> v)
-								return { std::move(ss), unsigned long(v) };
+							try
+							{
+								const unsigned long long v = std::stoull(str);
+								if (v <= static_cast<unsigned long long>((std::numeric_limits<unsigned long>::max)()))
+									return { std::move(ss), static_cast<unsigned long>(v) };
+								return { std::move(ss), static_cast<double>(v) };
+							}
+							catch (const std::exception&)
+							{
+							}
 						}
 					}
 					else if (IsAllDigits(str, true))

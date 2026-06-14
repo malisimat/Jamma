@@ -2,6 +2,8 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiRadio.h"
+#include "gui/GuiSelector.h"
+#include "actions/KeyAction.h"
 #include <stdexcept>
 
 using base::ActionReceiver;
@@ -11,8 +13,11 @@ using gui::GuiToggle;
 using gui::GuiToggleParams;
 using gui::GuiRadio;
 using gui::GuiRadioParams;
+using gui::GuiSelector;
+using gui::GuiSelectorParams;
 using actions::GuiAction;
 using actions::TouchAction;
+using actions::KeyAction;
 
 namespace
 {
@@ -325,4 +330,80 @@ TEST(GuiRadio, ChildToggleUpdatesSelectionAndNotifiesReceiver) {
 	ASSERT_EQ(GuiAction::ACTIONELEMENT_RADIO, receiver->LastAction().ElementType);
 	ASSERT_EQ(11u, receiver->LastAction().Index);
 	ASSERT_EQ(2, std::get<GuiAction::GuiInt>(receiver->LastAction().Data).Value);
+}
+
+TEST(GuiSelector, ShiftKeyTogglesNoneAddMode) {
+	GuiSelectorParams params;
+	auto selector = std::make_shared<GuiSelector>(params);
+
+	KeyAction shiftDown;
+	shiftDown.KeyChar = 16;
+	shiftDown.KeyActionType = KeyAction::KEY_DOWN;
+	selector->OnAction(shiftDown);
+	ASSERT_EQ(GuiSelector::SELECT_NONEADD, selector->CurrentMode());
+
+	KeyAction shiftUp;
+	shiftUp.KeyChar = 16;
+	shiftUp.KeyActionType = KeyAction::KEY_UP;
+	selector->OnAction(shiftUp);
+	ASSERT_EQ(GuiSelector::SELECT_NONE, selector->CurrentMode());
+
+	KeyAction ctrlDown;
+	ctrlDown.KeyChar = 17;
+	ctrlDown.KeyActionType = KeyAction::KEY_DOWN;
+	selector->OnAction(ctrlDown);
+	ASSERT_EQ(GuiSelector::SELECT_NONE, selector->CurrentMode());
+}
+
+TEST(GuiSelector, PaintSelectionPersistsWhenHoverClears) {
+	GuiSelectorParams params;
+	auto selector = std::make_shared<GuiSelector>(params);
+	selector->SetSelectDepth(base::DEPTH_STATION);
+
+	const std::vector<unsigned char> hoveredPath = { 2, 4 };
+	ASSERT_TRUE(selector->UpdateCurrentHover(hoveredPath,
+		base::Action::MODIFIER_SHIFT,
+		false,
+		base::Tweakable::TWEAKSTATE_NONE));
+
+	TouchAction down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 5, 5 });
+	down.Modifiers = base::Action::MODIFIER_SHIFT;
+	down.Index = 0;
+	selector->OnAction(down);
+
+	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
+	ASSERT_EQ(GuiSelector::SELECT_SELECTADD, selector->CurrentMode());
+
+	selector->UpdateCurrentHover({},
+		base::Action::MODIFIER_NONE,
+		false,
+		base::Tweakable::TWEAKSTATE_NONE);
+	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
+}
+
+TEST(GuiSelector, HoverLossDoesNotClearCommittedPaintPath) {
+	GuiSelectorParams params;
+	auto selector = std::make_shared<GuiSelector>(params);
+	selector->SetSelectDepth(base::DEPTH_STATION);
+
+	const std::vector<unsigned char> hoveredPath = { 3 };
+	ASSERT_TRUE(selector->UpdateCurrentHover(hoveredPath,
+		base::Action::MODIFIER_SHIFT,
+		false,
+		base::Tweakable::TWEAKSTATE_NONE));
+
+	TouchAction down = MakeTouchAction(TouchAction::TOUCH_DOWN, { 8, 8 });
+	down.Modifiers = base::Action::MODIFIER_SHIFT;
+	down.Index = 0;
+	selector->OnAction(down);
+
+	TouchAction up = MakeTouchAction(TouchAction::TOUCH_UP, { 8, 8 });
+	up.Index = 0;
+	selector->OnAction(up);
+
+	selector->UpdateCurrentHover({},
+		base::Action::MODIFIER_NONE,
+		false,
+		base::Tweakable::TWEAKSTATE_NONE);
+	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
 }

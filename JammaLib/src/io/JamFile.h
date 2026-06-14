@@ -32,6 +32,7 @@ namespace io
 		static std::optional<JamFile> FromStream(std::stringstream ss);
 		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
+		static std::int32_t ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept;
 
 		struct NinjamConfig
 		{
