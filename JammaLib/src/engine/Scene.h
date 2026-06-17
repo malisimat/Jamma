@@ -195,6 +195,7 @@ namespace engine
 		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
 
 		void InitReceivers();
+		void AddChild(std::shared_ptr<base::GuiElement> child);
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
@@ -344,7 +345,8 @@ namespace engine
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
-		std::unique_ptr<gui::GuiStackPanel> _layoutDemoPanel;
+		std::shared_ptr<gui::GuiStackPanel> _layoutDemoPanel;
+		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

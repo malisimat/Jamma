@@ -86,45 +86,97 @@ Scene::Scene(SceneParams params,
 		rootParams.Spacing   = 4u;
 		rootParams.PaddingH  = 8u;
 		rootParams.PaddingV  = 8u;
+		rootParams.Texture   = "router";
+		rootParams.OverTexture = "router_over";
+		rootParams.DownTexture = "router_down";
+		rootParams.OutTexture  = "router_active";
 		rootParams.Position  = { 10, 40 };
 		rootParams.Size      = { 310u, 200u };
 		rootParams.MinSize   = { 100u, 80u };
-		_layoutDemoPanel = std::make_unique<GuiStackPanel>(rootParams);
+		_layoutDemoPanel = std::make_shared<GuiStackPanel>(rootParams);
+		AddChild(_layoutDemoPanel);
 
 		// Header label (Auto width, fixed height).
 		{
 			GuiLabelParams lp;
 			lp.String      = "-- Layout v2 Demo --";
+			lp.Texture     = "router";
+			lp.OverTexture = "router_over";
+			lp.DownTexture = "router_down";
+			lp.OutTexture  = "router_active";
 			lp.Size        = { 280u, 22u };
 			lp.MinSize     = { 40u, 22u };
 			_layoutDemoPanel->AddChild(std::make_shared<GuiLabel>(lp));
 		}
 
-		// Horizontal sub-stack: three labels that share available width equally.
+		// Horizontal sub-stack: a toggle, button, and slider grouped together.
 		{
 			GuiStackPanelParams hParams;
 			hParams.Direction   = StackDirection::Horizontal;
 			hParams.Spacing     = 6u;
-			hParams.Size        = { 290u, 24u };
-			hParams.MinSize     = { 80u, 24u };
+			hParams.Texture     = "router";
+			hParams.OverTexture = "router_over";
+			hParams.DownTexture = "router_down";
+			hParams.OutTexture  = "router_active";
+			hParams.Size        = { 290u, 26u };
+			hParams.MinSize     = { 80u, 26u };
 			auto hStack = std::make_shared<GuiStackPanel>(hParams);
 
-			for (const char* text : { "Red", "Green", "Blue" })
 			{
-				GuiLabelParams lp;
-				lp.String       = text;
-				lp.Size         = { 80u, 22u };
-				lp.MinSize      = { 20u, 22u };
-				lp.HorizSizing  = LayoutSizing::Fill;
-				hStack->AddChild(std::make_shared<GuiLabel>(lp));
+				GuiToggleParams tp;
+				tp.Texture = "router";
+				tp.OverTexture = "router_over";
+				tp.DownTexture = "router_down";
+				tp.OutTexture = "router_active";
+				tp.ToggledTexture = "router_active";
+				tp.ToggledOverTexture = "router_over";
+				tp.ToggledDownTexture = "router_down";
+				tp.Size = { 72u, 22u };
+				tp.MinSize = { 36u, 22u };
+				hStack->AddChild(std::make_shared<GuiToggle>(tp));
 			}
+
+			{
+				GuiButtonParams bp;
+				bp.Texture = "router";
+				bp.OverTexture = "router_over";
+				bp.DownTexture = "router_down";
+				bp.OutTexture = "router_active";
+				bp.Size = { 72u, 22u };
+				bp.MinSize = { 36u, 22u };
+				hStack->AddChild(std::make_shared<GuiButton>(bp));
+			}
+
+			{
+				GuiSliderParams sp;
+				sp.Texture = "router";
+				sp.OverTexture = "router_over";
+				sp.DownTexture = "router_down";
+				sp.OutTexture = "router_active";
+				sp.Size = { 120u, 22u };
+				sp.MinSize = { 60u, 22u };
+				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+				sp.DragTexture = "router";
+				sp.DragOverTexture = "router_over";
+				sp.DragDownTexture = "router_down";
+				sp.DragOutTexture = "router_active";
+				sp.DragControlSize = { 12u, 12u };
+				sp.DragControlOffset = { 0, 0 };
+				sp.DragGap = { 0u, 0u };
+				hStack->AddChild(std::make_shared<GuiSlider>(sp));
+			}
+
 			_layoutDemoPanel->AddChild(hStack);
 		}
 
-		// 2×2 grid: fixed 26px rows, fill columns with 4px spacing.
+		// 2×2 grid: four control cells showing toggle, button, slider, and selector.
 		{
 			GuiGridParams gp;
-			gp.Size     = { 290u, 60u };
+			gp.Texture     = "router";
+			gp.OverTexture = "router_over";
+			gp.DownTexture = "router_down";
+			gp.OutTexture  = "router_active";
+			gp.Size     = { 290u, 74u };
 			gp.MinSize  = { 80u, 40u };
 			gp.PaddingH = 2u;
 			gp.PaddingV = 2u;
@@ -136,47 +188,132 @@ Scene::Scene(SceneParams params,
 
 			GridCellDef row;
 			row.sizing    = GridCellDef::Sizing::Fixed;
-			row.fixedSize = 26u;
+			row.fixedSize = 32u;
 			row.spacing   = 4u;
 			gp.Rows = { row, row };
 
 			auto grid = std::make_shared<GuiGrid>(gp);
 
-			const char* cellText[4] = { "Cell A", "Cell B", "Cell C", "Cell D" };
+			const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
+				[]() {
+					GuiToggleParams tp;
+					tp.Texture = "router";
+					tp.OverTexture = "router_over";
+					tp.DownTexture = "router_down";
+					tp.OutTexture = "router_active";
+					tp.ToggledTexture = "router_active";
+					tp.ToggledOverTexture = "router_over";
+					tp.ToggledDownTexture = "router_down";
+					tp.Size = { 80u, 22u };
+					tp.MinSize = { 20u, 22u };
+					return std::make_shared<GuiToggle>(tp);
+				},
+				[]() {
+					GuiButtonParams bp;
+					bp.Texture = "router";
+					bp.OverTexture = "router_over";
+					bp.DownTexture = "router_down";
+					bp.OutTexture = "router_active";
+					bp.Size = { 80u, 22u };
+					bp.MinSize = { 20u, 22u };
+					return std::make_shared<GuiButton>(bp);
+				},
+				[]() {
+					GuiSliderParams sp;
+					sp.Texture = "router";
+					sp.OverTexture = "router_over";
+					sp.DownTexture = "router_down";
+					sp.OutTexture = "router_active";
+					sp.Size = { 80u, 22u };
+					sp.MinSize = { 20u, 22u };
+					sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+					sp.DragTexture = "router";
+					sp.DragOverTexture = "router_over";
+					sp.DragDownTexture = "router_down";
+					sp.DragOutTexture = "router_active";
+					sp.DragControlSize = { 10u, 10u };
+					return std::make_shared<GuiSlider>(sp);
+				},
+				[]() {
+					GuiSelectorParams sp;
+					sp.Texture = "router";
+					sp.OverTexture = "router_over";
+					sp.DownTexture = "router_down";
+					sp.OutTexture = "router_active";
+					sp.Size = { 80u, 22u };
+					sp.MinSize = { 20u, 22u };
+					return std::make_shared<GuiSelector>(sp);
+				}
+			};
+
 			for (int ci = 0; ci < 4; ++ci)
 			{
-				GuiLabelParams lp;
-				lp.String  = cellText[ci];
-				lp.Size    = { 80u, 22u };
-				lp.MinSize = { 20u, 22u };
 				GridChildPlacement placement;
 				placement.row    = static_cast<unsigned int>(ci / 2);
 				placement.col    = static_cast<unsigned int>(ci % 2);
 				placement.hAlign = LayoutHAlign::Fill;
 				placement.vAlign = LayoutVAlign::Fill;
-				grid->AddGridChild(std::make_shared<GuiLabel>(lp), placement);
+				grid->AddGridChild(cellCreators[ci](), placement);
 			}
 			_layoutDemoPanel->AddChild(grid);
 		}
 
-		// Wrapping horizontal stack — demonstrates responsive narrow-width behaviour.
+		// Wrapping horizontal stack — demonstrates responsive narrow-width behaviour with another control mix.
 		{
 			GuiStackPanelParams wParams;
 			wParams.Direction    = StackDirection::Horizontal;
 			wParams.Spacing      = 4u;
 			wParams.WrapContent  = true;
-			wParams.Size         = { 290u, 60u };
+			wParams.Texture      = "router";
+			wParams.OverTexture  = "router_over";
+			wParams.DownTexture  = "router_down";
+			wParams.OutTexture   = "router_active";
+			wParams.Size         = { 290u, 42u };
 			wParams.MinSize      = { 60u, 24u };
 			auto wStack = std::make_shared<GuiStackPanel>(wParams);
 
-			for (const char* text : { "Alpha", "Beta", "Gamma", "Delta", "Epsilon" })
 			{
-				GuiLabelParams lp;
-				lp.String  = text;
-				lp.Size    = { 90u, 22u };
-				lp.MinSize = { 30u, 22u };
-				wStack->AddChild(std::make_shared<GuiLabel>(lp));
+				GuiToggleParams tp;
+				tp.Texture = "router";
+				tp.OverTexture = "router_over";
+				tp.DownTexture = "router_down";
+				tp.OutTexture = "router_active";
+				tp.ToggledTexture = "router_active";
+				tp.ToggledOverTexture = "router_over";
+				tp.ToggledDownTexture = "router_down";
+				tp.Size = { 80u, 22u };
+				tp.MinSize = { 30u, 22u };
+				wStack->AddChild(std::make_shared<GuiToggle>(tp));
 			}
+
+			{
+				GuiButtonParams bp;
+				bp.Texture = "router";
+				bp.OverTexture = "router_over";
+				bp.DownTexture = "router_down";
+				bp.OutTexture = "router_active";
+				bp.Size = { 80u, 22u };
+				bp.MinSize = { 30u, 22u };
+				wStack->AddChild(std::make_shared<GuiButton>(bp));
+			}
+
+			{
+				GuiSliderParams sp;
+				sp.Texture = "router";
+				sp.OverTexture = "router_over";
+				sp.DownTexture = "router_down";
+				sp.OutTexture = "router_active";
+				sp.Size = { 92u, 22u };
+				sp.MinSize = { 30u, 22u };
+				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+				sp.DragTexture = "router";
+				sp.DragOverTexture = "router_over";
+				sp.DragDownTexture = "router_down";
+				sp.DragOutTexture = "router_active";
+				sp.DragControlSize = { 10u, 10u };
+				wStack->AddChild(std::make_shared<GuiSlider>(sp));
+			}
+
 			_layoutDemoPanel->AddChild(wStack);
 		}
 	}
@@ -312,8 +449,9 @@ void Scene::Draw(DrawContext& ctx)
 
 	_label->Draw(ctx);
 
-	if (_layoutDemoPanel)
-		_layoutDemoPanel->Draw(ctx);
+	for (auto& child : _guiChildren)
+		if (child)
+			child->Draw(ctx);
 
 	for (auto& station : _stations)
 		station->Draw(ctx);
@@ -382,8 +520,9 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
-	if (_layoutDemoPanel)
-		_layoutDemoPanel->InitResources(resourceLib, forceInit);
+	for (auto& child : _guiChildren)
+		if (child)
+			child->InitResources(resourceLib, forceInit);
 	_ctrlHandleOverlay.InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
@@ -400,8 +539,9 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
-	if (_layoutDemoPanel)
-		_layoutDemoPanel->ReleaseResources();
+	for (auto& child : _guiChildren)
+		if (child)
+			child->ReleaseResources();
 	_ctrlHandleOverlay.ReleaseResources();
 
 	for (auto& station : _stations)
@@ -475,6 +615,24 @@ ActionResult Scene::OnAction(TouchAction action)
 		return ActionResult::NoAction();
 	}
 
+	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+	{
+		if (!*it)
+			continue;
+
+		res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+		if (res.IsEaten)
+		{
+			if (nullptr != res.Undo)
+				_undoHistory.Add(res.Undo);
+
+			if (!_touchDownElement.lock())
+				_touchDownElement = res.ActiveElement;
+
+			return res;
+		}
+	}
+
 	res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
 
 	if (res.IsEaten)
@@ -540,6 +698,16 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return _UpdateBackgroundDrag(action);
 	else
 	{
+		for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+		{
+			if (!*it)
+				continue;
+
+			auto res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+			if (res.IsEaten)
+				return res;
+		}
+
 		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
 
 		if (res.IsEaten)
@@ -847,6 +1015,19 @@ void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+}
+
+void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
+{
+	if (!child)
+		return;
+
+	auto it = std::find(_guiChildren.begin(), _guiChildren.end(), child);
+	if (it == _guiChildren.end())
+	{
+		_guiChildren.push_back(child);
+		child->Init();
+	}
 }
 
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)

@@ -6,6 +6,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiLabel.h"
 #include "gui/GuiPanel.h"
+#include "engine/Scene.h"
 
 using base::LayoutSizing;
 using base::LayoutHAlign;
@@ -19,6 +20,9 @@ using gui::GuiStackPanelParams;
 using gui::StackDirection;
 using gui::GuiButton;
 using gui::GuiButtonParams;
+using engine::Scene;
+using engine::SceneParams;
+using actions::TouchAction;
 
 // ---------------------------------------------------------------------------
 // Helper factories
@@ -472,4 +476,30 @@ TEST(GuiStackPanel, ThreeFillChildrenSplitWidthEvenly)
 	// 300px / 3 = 100px each.
 	for (const auto& btn : buttons)
 		EXPECT_EQ(100u, btn->GetSize().Width);
+}
+
+TEST(Scene, TouchActionReachesChildGuiPanel)
+{
+	SceneParams sceneParams({ "" }, {}, { 320u, 240u });
+	io::UserConfig userConfig{};
+	Scene scene(sceneParams, userConfig);
+
+	GuiStackPanelParams panelParams;
+	panelParams.Size = { 100u, 40u };
+	panelParams.Position = { 10, 10 };
+	panelParams.MinSize = { 0u, 0u };
+	panelParams.GuiPassThrough = false;
+	auto panel = std::make_shared<GuiStackPanel>(panelParams);
+	panel->AddChild(std::make_shared<GuiButton>(MakeButtonParams(80u, 20u)));
+	scene.AddChild(panel);
+
+	TouchAction action;
+	action.State = TouchAction::TOUCH_DOWN;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Index = 0;
+	action.Position = { 20, 20 };
+
+	auto res = scene.OnAction(action);
+
+	EXPECT_TRUE(res.IsEaten);
 }
