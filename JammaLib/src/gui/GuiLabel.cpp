@@ -60,12 +60,17 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto fontOpt = resourceLib.GetFont(graphics::FontOptions::FONT_LARGE);
 
 	if (!fontOpt.has_value())
+	{
+		std::cout << "GuiLabel::_InitResources missing FONT_LARGE resource" << std::endl;
 		return;
+	}
 
 	_font = fontOpt.value();
 	_vertexArrayDirty.store(true, std::memory_order_release);
 
 	auto validated = InitVertexArray();
+	if (!validated)
+		std::cout << "GuiLabel::_InitResources failed to build initial vertex array for label text: '" << _str << "'" << std::endl;
 
 	utils::GlUtils::CheckError("GuiLabel::_InitResources()");
 }

@@ -139,6 +139,9 @@ namespace base
 		bool IsVisible() const;
 		bool IsEnabled() const;
 		bool IsSelected() const;
+		bool HasFocus() const;
+		bool RequestFocus();
+		void ClearFocus();
 		bool HitTest(utils::Position2d localPos);
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
@@ -172,6 +175,7 @@ namespace base
 		bool _isEnabled;
 		bool _isSelected;
 		bool _isPicking3d;
+		bool _hasFocus;
 		unsigned int _index;
 		GuiElementParams _guiParams;
 		GuiElementState _state;

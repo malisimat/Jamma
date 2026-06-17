@@ -120,19 +120,13 @@ std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::strin
 
 bool ResourceLib::LoadFonts()
 {
-	// Load font specific textures, if not already loaded
-	for (auto size : FontOptions::FontSizes)
-	{
-		LoadResource(TEXTURE, Font::GetFontName(size), {});
-	}
-
-	if (_fonts.size() >= (sizeof(FontOptions::FontSizes) / sizeof(int)))
-		return true;
-
 	_fonts.clear();
+	std::cout << "ResourceLib::LoadFonts starting font initialisation" << std::endl;
 
 	std::shared_ptr<ShaderResource> shader;
-	auto shaderOpt = GetResource("texture");
+	auto shaderOpt = GetResource("font");
+	if (!shaderOpt.has_value())
+		shaderOpt = GetResource("texture");
 
 	if (shaderOpt.has_value())
 	{
@@ -144,30 +138,25 @@ bool ResourceLib::LoadFonts()
 		}
 	}
 
-	bool res = false;
+	if (!shader)
+		std::cout << "ResourceLib::LoadFonts missing shader resource 'font'/'texture'; font draw will be unavailable" << std::endl;
+
+	bool res = true;
 	for (auto size : FontOptions::FontSizes)
 	{
 		auto fontName = Font::GetFontName(size);
-		
-		std::shared_ptr<TextureResource> texture;
-		auto textureOpt = GetResource(fontName);
-
-		if (textureOpt.has_value())
-		{
-			auto textureResource = textureOpt.value().lock();
-			if (textureResource)
-			{
-				if (TEXTURE == textureResource->GetType())
-					texture = std::dynamic_pointer_cast<TextureResource>(textureResource);
-			}
-		}
-
-		auto font = Font::Load(size, texture, shader);
+		auto font = Font::Load(size, shader);
 
 		if (font.has_value())
+		{
 			_fonts[size] = std::move(font.value());
+			std::cout << "ResourceLib::LoadFonts loaded " << fontName << std::endl;
+		}
 		else
+		{
+			std::cout << "ResourceLib: failed to load font '" << fontName << "'" << std::endl;
 			res = false;
+		}
 	}
 
 	return res;

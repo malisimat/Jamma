@@ -19,6 +19,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 	_isEnabled(true),
 	_isSelected(false),
 	_isPicking3d(false),
+	_hasFocus(false),
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
@@ -99,6 +100,22 @@ void GuiElement::SetSize(Size2d size)
 bool GuiElement::IsSelected() const
 {
 	return _isSelected;
+}
+
+bool GuiElement::HasFocus() const
+{
+	return _hasFocus;
+}
+
+bool GuiElement::RequestFocus()
+{
+	_hasFocus = true;
+	return true;
+}
+
+void GuiElement::ClearFocus()
+{
+	_hasFocus = false;
 }
 
 bool GuiElement::IsVisible() const
@@ -225,6 +242,11 @@ ActionResult GuiElement::OnAction(KeyAction action)
 {
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
+
+	if (_hasFocus && (action.KeyActionType == KeyAction::KEY_UP) && ((action.KeyChar == 13) || (action.KeyChar == 32)))
+	{
+		return { true, std::to_string(_index), "", ACTIONRESULT_ACTIVATE, nullptr, shared_from_this() };
+	}
 
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)

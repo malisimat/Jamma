@@ -68,10 +68,11 @@ Scene::Scene(SceneParams params,
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
 	GuiLabelParams labelParams;
-	labelParams.String = "Jamma";
-	labelParams.Position = { 10, 2 };
-	labelParams.ModelPosition = { 10, 2, 0 };
-	labelParams.Size = { 20, 40 };
+	const std::string versionText = "Jamma v" LIB_VERSION;
+	labelParams.String = versionText;
+	labelParams.Position = { (int)params.Size.Width - 220, (int)params.Size.Height - 28 };
+	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
+	labelParams.Size = { 220, 24 };
 	_label = std::make_unique<GuiLabel>(labelParams);
 
 	GuiSelectorParams selectorParams;

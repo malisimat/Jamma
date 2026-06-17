@@ -4,6 +4,7 @@
 #include "gui/GuiRadio.h"
 #include "gui/GuiSelector.h"
 #include "actions/KeyAction.h"
+#include "graphics/Font.h"
 #include <stdexcept>
 
 using base::ActionReceiver;
@@ -97,6 +98,43 @@ TEST(GuiButton, TouchInsideEatsDownAndUp) {
 
 	ASSERT_TRUE(downRes.IsEaten);
 	ASSERT_TRUE(upRes.IsEaten);
+}
+
+TEST(Font, PrefersBundledInterFontAsset) {
+	auto filename = graphics::Font::GetFontFilename();
+
+	EXPECT_NE(std::string::npos, filename.find("Inter-Regular.ttf"));
+}
+
+TEST(Font, LoadsAndMeasuresPrintableText) {
+	auto font = graphics::Font::Load(graphics::FontOptions::FONT_LARGE, std::weak_ptr<resources::ShaderResource>());
+
+	ASSERT_TRUE(font.has_value());
+	ASSERT_NE(nullptr, font->get());
+	EXPECT_GT(font->get()->GetHeight(), 0.0f);
+	EXPECT_GT(font->get()->MeasureString("Hello"), 0.0f);
+	EXPECT_GT(font->get()->MeasureString("A°"), font->get()->MeasureString("A"));
+}
+
+TEST(GuiButton, KeyboardFocusCanActivateWhenFocused) {
+	auto button = std::make_shared<GuiButton>(MakeButtonParams());
+	ASSERT_TRUE(button->RequestFocus());
+	ASSERT_TRUE(button->HasFocus());
+
+	KeyAction down;
+	down.KeyChar = 13;
+	down.KeyActionType = KeyAction::KEY_DOWN;
+	auto downRes = button->OnAction(down);
+
+	KeyAction up;
+	up.KeyChar = 13;
+	up.KeyActionType = KeyAction::KEY_UP;
+	auto upRes = button->OnAction(up);
+
+	ASSERT_FALSE(downRes.IsEaten);
+	ASSERT_TRUE(upRes.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, upRes.ResultType);
+	ASSERT_EQ(button->Index(), upRes.ActiveElement.lock()->Index());
 }
 
 TEST(GuiButton, DisabledButtonIgnoresTouch) {
