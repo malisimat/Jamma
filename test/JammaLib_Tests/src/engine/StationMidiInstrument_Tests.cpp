@@ -603,15 +603,13 @@ TEST(StationAutomation, RecordingTargetLoopSuppressesPlaybackForThatLoop)
 		std::memory_order_relaxed);
 	station->RebuildAutomationDispatch();
 
-	// While the loop is the active record target, its lanes must not play back.
-	midi::AutomationRecordHeld.store(true, std::memory_order_relaxed);
-	midi::RecordTargetLoop.store(midiLoop.get(), std::memory_order_relaxed);
+	// While automation recording is active, playback writes must be suppressed.
+	midi::MidiRouter::SetAutomationRecordHeldForTest(true);
 	station->RunAutomationDispatchForTest(0u);
 	EXPECT_EQ(0u, plugin->ParamSetCalls);
 
 	// Releasing record resumes playback.
-	midi::AutomationRecordHeld.store(false, std::memory_order_relaxed);
-	midi::RecordTargetLoop.store(nullptr, std::memory_order_relaxed);
+	midi::MidiRouter::SetAutomationRecordHeldForTest(false);
 	station->RunAutomationDispatchForTest(0u);
 	EXPECT_GE(plugin->ParamSetCalls, 1u);
 	EXPECT_EQ(1u, plugin->LastParamIndex);

@@ -3,23 +3,188 @@
 #include <chrono>
 #include <iostream>
 #include <set>
+#include "../base/Action.h"
+#include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../engine/Trigger.h"
 #include "../io/UserConfig.h"
+#include "../vst/IVstPlugin.h"
 #include "MidiTimestampMapper.h"
 #include "MidiLoop.h"
 using namespace midi;
 
 namespace midi
 {
-	// Definitions of the interactive automation arming/learn state declared in
-	// MidiRouter.h.
-	std::atomic<bool>         LearnMidiCCMode{ false };
-	std::atomic<std::uint8_t> LearnedCC{ LearnNothingCaptured };
-	std::atomic<std::uint8_t> LearnedChannel{ LearnNothingCaptured };
-	std::atomic<bool>         AutomationRecordHeld{ false };
-	std::atomic<std::uint8_t> SelectedLaneIndex{ 0u };
-	std::atomic<MidiLoop*>    RecordTargetLoop{ nullptr };
+	std::atomic<bool> MidiRouter::_automationRecordHeld{ false };
+}
+
+std::pair<std::shared_ptr<engine::Station>, std::shared_ptr<midi::MidiLoop>> MidiRouter::_ResolveAutomationTarget(
+	const std::vector<std::shared_ptr<engine::Station>>& stations,
+	const std::vector<unsigned char>& hoverPath,
+	const std::shared_ptr<engine::LoopTake>& hoveredTake) const
+{
+	if (hoverPath.empty())
+		return { nullptr, nullptr };
+
+	const auto stationIndex = hoverPath[0];
+	if (stationIndex >= stations.size())
+		return { nullptr, nullptr };
+
+	auto station = stations[stationIndex];
+	if (!station || station->IsRemote())
+		return { nullptr, nullptr };
+
+	std::shared_ptr<engine::LoopTake> take = hoveredTake;
+	if (!take)
+	{
+		const auto& takes = station->GetLoopTakes();
+		if (!takes.empty())
+			take = takes.front();
+	}
+	if (!take)
+		return { nullptr, nullptr };
+
+	const auto& midiLoops = take->GetMidiLoops();
+	if (midiLoops.empty() || !midiLoops.front())
+		return { nullptr, nullptr };
+
+	return { station, midiLoops.front() };
+}
+
+actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& action,
+	const std::vector<std::shared_ptr<engine::Station>>& stations,
+	const std::vector<unsigned char>& hoverPath,
+	const std::shared_ptr<engine::LoopTake>& hoveredTake)
+{
+	const bool ctrlShift = (base::Action::MODIFIER_CTRL & action.Modifiers)
+		&& (base::Action::MODIFIER_SHIFT & action.Modifiers);
+	const bool isDown = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
+	const bool isUp = (actions::KeyAction::KEY_UP == action.KeyActionType);
+
+	auto eaten = actions::ActionResult::NoAction();
+	eaten.IsEaten = true;
+
+	if (65 == action.KeyChar)
+	{
+		if (isDown && ctrlShift && !_automationRecordKeyHeld)
+		{
+			_automationRecordKeyHeld = true;
+			_automationRecordHeld.store(true, std::memory_order_release);
+			std::cout << ">> Automation record armed (Ctrl+Shift+A) <<" << std::endl;
+			return eaten;
+		}
+		if (isUp && _automationRecordKeyHeld)
+		{
+			_automationRecordKeyHeld = false;
+			_automationRecordHeld.store(false, std::memory_order_release);
+			for (const auto& station : stations)
+			{
+				if (station && !station->IsRemote())
+					station->RebuildAutomationDispatch();
+			}
+			std::cout << ">> Automation record released <<" << std::endl;
+			return eaten;
+		}
+		return actions::ActionResult::NoAction();
+	}
+
+	if (!isDown || !ctrlShift)
+		return actions::ActionResult::NoAction();
+
+	switch (action.KeyChar)
+	{
+	case 76: // 'L'
+	{
+		const bool nowOn = !_learnMidiCCMode.load(std::memory_order_relaxed);
+		_learnMidiCCMode.store(nowOn, std::memory_order_relaxed);
+		if (!nowOn)
+		{
+			_learnedCC.store(LearnNothingCaptured, std::memory_order_relaxed);
+			_learnedChannel.store(LearnNothingCaptured, std::memory_order_relaxed);
+		}
+		std::cout << ">> MIDI learn mode " << (nowOn ? "ON" : "OFF") << " <<" << std::endl;
+		return eaten;
+	}
+	case 87: // 'W'
+	{
+		const auto learnedCC = _learnedCC.load(std::memory_order_relaxed);
+		auto* plugin = vst::_lastTouchedParam.Plugin.load(std::memory_order_relaxed);
+		if (learnedCC == LearnNothingCaptured || !plugin)
+		{
+			std::cout << "Automation wire ignored: no captured CC or touched parameter" << std::endl;
+			return actions::ActionResult::NoAction();
+		}
+
+		auto [station, loop] = _ResolveAutomationTarget(stations, hoverPath, hoveredTake);
+		if (!loop || !station)
+			return actions::ActionResult::NoAction();
+
+		const auto channel = _learnedChannel.load(std::memory_order_relaxed);
+		const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_relaxed);
+		const auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
+
+		auto& lane = loop->GetLane(laneIdx);
+		lane.Mapping.TargetPlugin = plugin;
+		lane.Mapping.TargetParameterIndex = paramIdx;
+		lane.Mapping.MatchKey.store(
+			midi::AutomationMapping::MakeMatchKey(channel & 0x0Fu, learnedCC),
+			std::memory_order_relaxed);
+
+		_learnMidiCCMode.store(false, std::memory_order_relaxed);
+		_learnedCC.store(LearnNothingCaptured, std::memory_order_relaxed);
+		_learnedChannel.store(LearnNothingCaptured, std::memory_order_relaxed);
+
+		station->RebuildAutomationDispatch();
+		std::cout << ">> Automation wired: lane " << static_cast<int>(laneIdx)
+			<< " <- CC " << static_cast<int>(learnedCC) << " ch " << static_cast<int>(channel)
+			<< " -> param " << paramIdx << " <<" << std::endl;
+		return eaten;
+	}
+	case 88: // 'X'
+	{
+		auto [station, loop] = _ResolveAutomationTarget(stations, hoverPath, hoveredTake);
+		if (!loop || !station)
+			return actions::ActionResult::NoAction();
+
+		const auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
+		loop->ClearAutomationLane(laneIdx);
+		station->RebuildAutomationDispatch();
+		std::cout << ">> Automation lane " << static_cast<int>(laneIdx) << " cleared <<" << std::endl;
+		return eaten;
+	}
+	case 91: // '['
+	{
+		auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
+		laneIdx = (laneIdx == 0u)
+			? static_cast<std::uint8_t>(midi::MidiLoop::MaxAutomationLanes - 1u)
+			: static_cast<std::uint8_t>(laneIdx - 1u);
+		_selectedLaneIndex.store(laneIdx, std::memory_order_relaxed);
+		std::cout << ">> Selected automation lane " << static_cast<int>(laneIdx) << " <<" << std::endl;
+		return eaten;
+	}
+	case 93: // ']'
+	{
+		auto laneIdx = _selectedLaneIndex.load(std::memory_order_relaxed);
+		laneIdx = static_cast<std::uint8_t>((laneIdx + 1u) % midi::MidiLoop::MaxAutomationLanes);
+		_selectedLaneIndex.store(laneIdx, std::memory_order_relaxed);
+		std::cout << ">> Selected automation lane " << static_cast<int>(laneIdx) << " <<" << std::endl;
+		return eaten;
+	}
+	default:
+		break;
+	}
+
+	return actions::ActionResult::NoAction();
+}
+
+bool MidiRouter::IsAutomationRecordHeld() noexcept
+{
+	return _automationRecordHeld.load(std::memory_order_acquire);
+}
+
+void MidiRouter::SetAutomationRecordHeldForTest(bool held) noexcept
+{
+	_automationRecordHeld.store(held, std::memory_order_release);
 }
 
 void MidiRouter::InitMidi(const io::UserConfig& cfg,
@@ -350,30 +515,44 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				const auto cc = ingress.data1;
 
 				// Learn capture: the user moved a physical knob while in learn mode.
-				if (LearnMidiCCMode.load(std::memory_order_relaxed))
+				if (_learnMidiCCMode.load(std::memory_order_relaxed))
 				{
-					LearnedChannel.store(channel, std::memory_order_relaxed);
-					LearnedCC.store(cc, std::memory_order_relaxed);
+					_learnedChannel.store(channel, std::memory_order_relaxed);
+					_learnedCC.store(cc, std::memory_order_relaxed);
 				}
 
-				// Recording: route the CC value into any matching armed lane on the
-				// loop currently being recorded.
-				if (AutomationRecordHeld.load(std::memory_order_relaxed))
+				// Recording: route the CC value into every mapped lane across stations.
+				if (_automationRecordHeld.load(std::memory_order_acquire))
 				{
-					if (auto* loop = RecordTargetLoop.load(std::memory_order_relaxed))
+					const auto matchKey = AutomationMapping::MakeMatchKey(channel, cc);
+					const float value = static_cast<float>(ingress.data2) / 127.0f;
+					for (const auto& station : stations)
 					{
-						const auto loopLen = loop->LoopLengthSamps();
-						if (loopLen > 0u)
+						if (!station || station->IsRemote())
+							continue;
+
+						for (const auto& take : station->GetLoopTakes())
 						{
-							const auto matchKey = AutomationMapping::MakeMatchKey(channel, cc);
-							const double frac =
-								static_cast<double>(globalSampleNow % loopLen) / static_cast<double>(loopLen);
-							const float value = static_cast<float>(ingress.data2) / 127.0f;
-							for (std::size_t laneIdx = 0u; laneIdx < MidiLoop::MaxAutomationLanes; ++laneIdx)
+							if (!take)
+								continue;
+
+							for (const auto& loop : take->GetMidiLoops())
 							{
-								auto& lane = loop->GetLane(laneIdx);
-								if (lane.Mapping.MatchKey.load(std::memory_order_relaxed) == matchKey)
-									loop->SetAutomationValueAtFrac(laneIdx, frac, value);
+								if (!loop)
+									continue;
+
+								const auto loopLen = loop->LoopLengthSamps();
+								if (loopLen == 0u)
+									continue;
+
+								const double frac =
+									static_cast<double>(globalSampleNow % loopLen) / static_cast<double>(loopLen);
+								for (std::size_t laneIdx = 0u; laneIdx < MidiLoop::MaxAutomationLanes; ++laneIdx)
+								{
+									auto& lane = loop->GetLane(laneIdx);
+									if (lane.Mapping.MatchKey.load(std::memory_order_relaxed) == matchKey)
+										loop->SetAutomationValueAtFrac(laneIdx, frac, value);
+								}
 							}
 						}
 					}

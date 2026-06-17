@@ -57,6 +57,14 @@ namespace io
 		return result;
 	}
 
+	actions::ActionResult IoInputSubsystem::HandleAutomationKey(const actions::KeyAction& action,
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		const std::vector<unsigned char>& hoverPath,
+		const std::shared_ptr<engine::LoopTake>& hoveredTake)
+	{
+		return _midiRouter.HandleAutomationKey(action, stations, hoverPath, hoveredTake);
+	}
+
 	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 	{
 		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));

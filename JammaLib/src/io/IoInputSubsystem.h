@@ -36,6 +36,11 @@ namespace io
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 
+		actions::ActionResult HandleAutomationKey(const actions::KeyAction& action,
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const std::vector<unsigned char>& hoverPath,
+			const std::shared_ptr<engine::LoopTake>& hoveredTake);
+
 		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
 		midi::MidiRouter& GetMidiRouterForTest() { return _midiRouter; }

@@ -511,9 +511,7 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 	if (!dispatches)
 		return;
 
-	// acquire above pairs with the release store in RebuildAutomationDispatch.
-	const bool recordHeld = midi::AutomationRecordHeld.load(std::memory_order_acquire);
-	const auto* recordTarget = midi::RecordTargetLoop.load(std::memory_order_relaxed);
+	const bool recordHeld = midi::MidiRouter::IsAutomationRecordHeld();
 	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
 	const auto count = _automationDispatchCount[frontIdx];
 
@@ -523,9 +521,9 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 		if (!entry.plugin || !entry.loop)
 			continue;
 
-		// Suppress playback only for lanes on the loop actively being recorded;
-		// other loops' lanes keep playing back unaffected.
-		if (recordHeld && entry.loop == recordTarget)
+		// While recording automation, bypass playback writes so incoming CC can own
+		// parameter movement across all active mappings without tug-of-war.
+		if (recordHeld)
 			continue;
 
 		const double frac = (entry.loopLengthSamps > 0u)
