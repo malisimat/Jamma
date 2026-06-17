@@ -97,6 +97,21 @@ void GuiElement::SetSize(Size2d size)
 	_outTexture.SetSize(_sizeParams.Size);
 }
 
+utils::Size2d GuiElement::ContentSize() const
+{
+	return GetSize();
+}
+
+LayoutSizing GuiElement::GetHorizSizing() const
+{
+	return _guiParams.HorizSizing;
+}
+
+LayoutSizing GuiElement::GetVertSizing() const
+{
+	return _guiParams.VertSizing;
+}
+
 bool GuiElement::IsSelected() const
 {
 	return _isSelected;

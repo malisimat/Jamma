@@ -290,6 +290,7 @@
     <ClInclude Include="src\actions\TouchAction.h" />
     <ClInclude Include="src\actions\TouchMoveAction.h" />
     <ClInclude Include="src\gui\GuiGrid.h" />
+    <ClInclude Include="src\gui\GuiStackPanel.h" />
     <ClInclude Include="src\base\GuiElement.h" />
     <ClInclude Include="src\utils\ImageUtils.h" />
     <ClInclude Include="src\gui\GuiLabel.h" />
@@ -415,6 +416,7 @@
     <ClCompile Include="src\gui\GuiSlider.cpp" />
     <ClCompile Include="src\gui\GuiVu.cpp" />
     <ClCompile Include="src\gui\GuiGrid.cpp" />
+    <ClCompile Include="src\gui\GuiStackPanel.cpp" />
     <ClCompile Include="src\gui\GuiLabel.cpp" />
     <ClCompile Include="src\gui\GuiPanel.cpp" />
     <ClCompile Include="src\gui\GuiModel.cpp" />

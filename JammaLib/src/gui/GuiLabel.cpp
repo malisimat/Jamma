@@ -2,6 +2,7 @@
 #include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
+#include <cmath>
 
 using namespace base;
 using namespace gui;
@@ -29,6 +30,35 @@ void GuiLabel::SetString(const std::string& str)
 
 	_pendingStr = str;
 	_vertexArrayDirty.store(true, std::memory_order_release);
+}
+
+utils::Size2d GuiLabel::ContentSize() const
+{
+	auto font = _font.lock();
+	if (!font)
+		return GetSize();
+
+	float fontH = font->GetHeight();
+	if (fontH <= 0.0f)
+		return GetSize();
+
+	// Use _pendingStr so that ContentSize() reflects the most recent SetString()
+	// call even before Draw() has synced the vertex array.
+	std::string currentStr;
+	{
+		std::lock_guard<std::mutex> lock(_stringMutex);
+		currentStr = _pendingStr;
+	}
+
+	// Draw() scales the glyph quads by (currentHeight / fontHeight).
+	auto sz = GetSize();
+	float scale = static_cast<float>(sz.Height) / fontH;
+	float measuredW = font->MeasureString(currentStr) * scale;
+
+	return {
+		static_cast<unsigned int>(std::ceil(measuredW)),
+		sz.Height
+	};
 }
 
 void GuiLabel::Draw(DrawContext& ctx)

@@ -284,6 +284,9 @@
     <ClInclude Include="src\gui\GuiGrid.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiStackPanel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiSlider.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -629,6 +632,9 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiGrid.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiStackPanel.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiLabel.cpp">

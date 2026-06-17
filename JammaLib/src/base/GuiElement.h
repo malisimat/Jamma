@@ -15,6 +15,32 @@
 
 namespace base
 {
+	// How a layout container should size this element in one axis.
+	enum class LayoutSizing : std::uint8_t
+	{
+		Fixed,  // Use the element's explicit Size; the container does not resize this axis.
+		Auto,   // Let the container size this axis to ContentSize().
+		Fill    // Stretch to fill remaining space in the container.
+	};
+
+	// Horizontal alignment of an element within a layout cell.
+	enum class LayoutHAlign : std::uint8_t
+	{
+		Left,
+		Center,
+		Right,
+		Fill    // Stretch to fill cell width.
+	};
+
+	// Vertical alignment of an element within a layout cell.
+	enum class LayoutVAlign : std::uint8_t
+	{
+		Top,
+		Center,
+		Bottom,
+		Fill    // Stretch to fill cell height.
+	};
+
 	class GuiElement;
 
 	class GuiElementParams :
@@ -69,6 +95,8 @@ namespace base
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
+		LayoutSizing HorizSizing = LayoutSizing::Fixed;
+		LayoutSizing VertSizing  = LayoutSizing::Fixed;
 	};
 
 	class GuiElement :
@@ -135,6 +163,10 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+
+		virtual utils::Size2d ContentSize() const;
+		LayoutSizing GetHorizSizing() const;
+		LayoutSizing GetVertSizing() const;
 
 		bool IsVisible() const;
 		bool IsEnabled() const;

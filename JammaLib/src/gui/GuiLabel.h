@@ -36,6 +36,7 @@ namespace gui
 
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
+		virtual utils::Size2d ContentSize() const override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -48,7 +49,7 @@ namespace gui
 	private:
 		std::string _str;
 		std::string _pendingStr;
-		std::mutex _stringMutex;
+		mutable std::mutex _stringMutex;
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;
 		GLuint _vertexBuffers[2];

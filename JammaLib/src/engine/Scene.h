@@ -17,6 +17,8 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
+#include "../gui/GuiGrid.h"
+#include "../gui/GuiStackPanel.h"
 #include "../gui/GuiSlider.h"
 #include "../gui/GuiSelector.h"
 #include "../gui/GuiRadio.h"
@@ -342,6 +344,7 @@ namespace engine
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::GuiSelector> _selector;
+		std::unique_ptr<gui::GuiStackPanel> _layoutDemoPanel;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

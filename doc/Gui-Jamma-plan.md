@@ -329,8 +329,18 @@ Turn the existing `GuiGrid`/panel/container story into a real layout system that
 
 Mark progress, lessons learned, outstanding work, here:
 
-[] -
-[] -
+[x] - Added `LayoutSizing` (Fixed/Auto/Fill), `LayoutHAlign`, and `LayoutVAlign` enums to `base::GuiElement.h`; added `ContentSize()`, `GetHorizSizing()`, and `GetVertSizing()` to `GuiElement` with implementations in `GuiElement.cpp`.
+[x] - Added `HorizSizing`/`VertSizing` fields to `GuiElementParams` so sizing contracts can be set at construction time alongside existing size fields.
+[x] - Replaced the `GuiGrid` stub with a full retained grid-layout container: fixed, auto, and fill track sizing; per-track `minSize` and `spacing`; per-child `GridChildPlacement` with row/col/span and `LayoutHAlign`/`LayoutVAlign` alignment; auto-place sequential children via `AddChild`. Lazy layout recompute via `_layoutDirty` flag.
+[x] - Implemented `GuiStackPanel`: vertical and horizontal stacking with spacing, padding, Fill/Auto/Fixed child sizing, and a responsive horizontal-wrap mode that breaks children to a new row when the panel is too narrow. Layout also lazy via `_layoutDirty`.
+[x] - Added `ContentSize()` override to `GuiLabel` using `_pendingStr` (not the committed `_str`) so layout reflects the most recent `SetString()` call immediately, before the next `Draw()` syncs the vertex array. Fixed `_stringMutex` to `mutable` for use in `const ContentSize()`.
+[x] - Added `GuiStackPanel` to `JammaLib.vcxproj` and `JammaLib.vcxproj.filters`.
+[x] - Created a live layout demo panel in `Scene.cpp` (`_layoutDemoPanel`): a vertical `GuiStackPanel` hosting a header label, a horizontal stack with three fill-sized labels (Red/Green/Blue), a 2×2 `GuiGrid` with fixed rows and fill columns, and a wrapping horizontal `GuiStackPanel` with five labels that reflow on resize. The panel is drawn, resource-initialised, and released alongside the existing `_label`.
+[x] - Added `test/JammaLib_Tests/src/gui/GuiLayout_Tests.cpp` with 15 tests covering: fixed/fill/auto column/row sizing, padding, min-size floor, spacing, cell origin maths, Fill/Center child alignment, auto-placement, layout invalidation on resize, vertical and horizontal stacking, Fill child stretch, padding inset, horizontal wrap row-break, and equal three-way fill split.
+[x] - Both `JammaLib (Debug x64)` and `JammaLib_Tests (Debug x64)` build clean (exit 0). All 31 layout + pre-existing GUI tests pass.
+[x] - Ran adversarial review (AgentCouncil / GPT). Critical issues found and fixed: (1) `_placedChildren` deduplication guard added to `AddGridChild` and `AddChild`; (2) `RemoveGridChild` added to `GuiGrid` so both `_children` and `_placedChildren` stay in sync on removal; (3) `_InitResources` in `GuiGrid` and `GuiStackPanel` now calls `GuiPanel::_InitResources` instead of `GuiElement::_InitResources` directly to preserve future vtable dispatch; (4) `Fill` children in `GuiStackPanel` wrap layout now correctly receive the full row height instead of their construction height; (5) `GuiLabel::ContentSize()` now reads `_pendingStr` under the mutex to avoid layout/render string desync after `SetString()`.
+
+**Phase 2 is complete.** All exit criteria met. Proceeding to Phase 3.
 
 ---
 
@@ -463,18 +473,13 @@ Before ending any agent session working on this plan:
 
 ## Next-agent starting point
 
-If starting fresh, begin Phase 1 by reviewing only these files first:
+Phase 1 and Phase 2 are complete. Begin Phase 3 by reviewing:
 
-- `JammaLib/src/graphics/Font.h`
-- `JammaLib/src/graphics/Font.cpp`
-- `JammaLib/src/resources/ResourceLib.cpp`
-- `JammaLib/src/gui/GuiLabel.cpp`
-- `JammaLib/src/base/GuiElement.cpp`
-- `test/JammaLib_Tests/src/gui/GuiControls_Tests.cpp`
+- `JammaLib/src/gui/GuiGrid.h` / `.cpp` — real layout container (Phase 2)
+- `JammaLib/src/gui/GuiStackPanel.h` / `.cpp` — real stack/wrap container (Phase 2)
+- `JammaLib/src/base/GuiElement.h` — has `LayoutSizing`, `ContentSize()`, `GetHorizSizing()`, `GetVertSizing()`, `HasFocus()`, `RequestFocus()`, `ClearFocus()`
+- `JammaLib/src/gui/GuiButton.h` / `.cpp` — focus-aware, activates on Enter/Space
+- `JammaLib/src/gui/GuiPanel.h` / `.cpp` — thin child-host base (note: `AddChild` signature mismatch with base `GuiElement::AddChild` — see Phase 2 notes)
+- `JammaLib/src/engine/Scene.cpp` — `_layoutDemoPanel` construction shows live API usage
 
-Then decide the smallest viable Phase 1 slice:
-
-1. Add stb_truetype to the build.
-2. Replace `graphics::Font` internals while preserving its consumer-facing role.
-3. Add tests for font loading and measurement.
-4. Add focus manager plus one focused button keyboard path.
+Phase 3 starts with popup-layer infrastructure before any new controls.
