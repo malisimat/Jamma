@@ -1,8 +1,11 @@
+#include <type_traits>
+
 #include "gtest/gtest.h"
 #include "gui/GuiGrid.h"
 #include "gui/GuiStackPanel.h"
 #include "gui/GuiButton.h"
 #include "gui/GuiLabel.h"
+#include "gui/GuiPanel.h"
 
 using base::LayoutSizing;
 using base::LayoutHAlign;
@@ -63,6 +66,24 @@ namespace
 		p.vAlign = va;
 		return p;
 	}
+}
+
+TEST(GuiPanel, AddChildUsesBaseGuiElementSignature)
+{
+	using ExpectedSignature = void (gui::GuiPanel::*)(std::shared_ptr<base::GuiElement>);
+	EXPECT_TRUE((std::is_same_v<decltype(&gui::GuiPanel::AddChild), ExpectedSignature>));
+}
+
+TEST(GuiElement, AddChildToNonSharedParentDoesNotThrow)
+{
+	GuiButtonParams parentParams;
+	parentParams.Size = { 64u, 32u };
+	parentParams.MinSize = { 0u, 0u };
+
+	GuiButton parent(parentParams);
+	auto child = std::make_shared<GuiButton>(parentParams);
+
+	EXPECT_NO_THROW(parent.AddChild(child));
 }
 
 // ---------------------------------------------------------------------------

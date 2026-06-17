@@ -186,8 +186,8 @@ namespace base
 
 		std::shared_ptr<GuiElement> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<GuiElement>(
-				Actionable::shared_from_this());
+			auto self = Actionable::shared_from_this();
+			return self ? std::dynamic_pointer_cast<GuiElement>(self) : nullptr;
 		}
 
 	protected:
