@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -180,6 +181,19 @@ namespace engine
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 
+		// Rebuild the flat parameter-automation dispatch list from the current
+		// loop set and lane wirings, then publish it atomically for the audio
+		// thread. Call on the non-audio (UI/action) thread whenever automation
+		// wiring changes or a recording is released.
+		void RebuildAutomationDispatch();
+
+		// Test hook: run one automation dispatch block in isolation (drives
+		// SetParameter on wired plugins). Non-RT; mirrors the audio-thread path.
+		void RunAutomationDispatchForTest(std::uint32_t blockStartSample) noexcept
+		{
+			_RunAutomationDispatch(blockStartSample);
+		}
+
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
@@ -251,6 +265,28 @@ namespace engine
 		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
+		// --- Parameter automation dispatch ---
+
+		// One pre-resolved automation mapping ready for the audio thread. All
+		// pointer chasing and lane metadata are baked in by RebuildAutomationDispatch
+		// so the audio path is a flat loop over a hot cache line.
+		struct AutomationDispatch
+		{
+			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
+			unsigned int     paramIdx = 0u;
+			midi::MidiLoop*  loop = nullptr;            // raw observer — lifetime owned by LoopTake
+			std::uint8_t     laneIdx = 0u;              // which lane within loop to read
+			std::uint32_t    loopLengthSamps = 0u;      // pre-resolved; avoids per-block takes lock
+			std::uint16_t    cursorIdx = 0u;            // playback cursor for amortised O(1) interpolation
+			float            lastValue = -2.0f;         // sentinel: force first write
+		};
+		static constexpr std::size_t MaxAutomationDispatches = 64u;
+		static constexpr float AutomationEpsilon = 1.0f / 65536.0f; // below 16-bit param resolution
+
+		// Run one automation dispatch block on the audio thread: advance each
+		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
+		void _RunAutomationDispatch(std::uint32_t blockStartSample) noexcept;
+
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
@@ -273,6 +309,14 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+
+		// Flat automation dispatch list, double-buffered and published with an
+		// atomic-swap release store (audio thread reads with acquire). Built only on
+		// the non-audio thread in RebuildAutomationDispatch.
+		std::atomic<AutomationDispatch*> _automationDispatch{ nullptr };
+		AutomationDispatch _automationDispatchBuf[2][MaxAutomationDispatches]{};
+		std::uint8_t       _automationDispatchCount[2]{};
+		std::uint8_t       _automationDispatchBack = 0u;
 
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.

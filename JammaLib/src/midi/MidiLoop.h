@@ -6,11 +6,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "../graphics/MidiModel.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
+
+namespace vst
+{
+	class IVstPlugin;
+}
 
 namespace midi
 {
@@ -38,6 +44,53 @@ namespace midi
 		Recording,
 
 		Playing
+	};
+
+	// Metadata describing how a CC controller is wired to a hosted plugin
+	// parameter for one automation lane.
+	struct AutomationMapping
+	{
+		// Active, Channel, and CC must be read atomically together on the MIDI
+		// thread (CC matching) while written together on the UI thread (wire key).
+		// Pack all three into one uint32_t so a reader always sees a consistent
+		// triple. Encoding: bit 16 = Active, bits [15:8] = Channel, bits [7:0] = CC.
+		std::atomic<std::uint32_t> MatchKey{ 0u };
+
+		// Written and read on the non-audio thread only (_RebuildAutomationDispatch
+		// and the wire/delete key handlers). No atomic needed.
+		vst::IVstPlugin* TargetPlugin{ nullptr };
+		unsigned int     TargetParameterIndex{ 0u };
+
+		static constexpr std::uint32_t kInactive = 0u;
+
+		static constexpr std::uint32_t MakeMatchKey(std::uint8_t ch, std::uint8_t cc) noexcept
+		{
+			return (1u << 16) | (static_cast<std::uint32_t>(ch) << 8) | static_cast<std::uint32_t>(cc);
+		}
+
+		bool IsActive() const noexcept
+		{
+			return ((MatchKey.load(std::memory_order_relaxed) >> 16) & 1u) != 0u;
+		}
+		std::uint8_t GetChannel() const noexcept
+		{
+			return static_cast<std::uint8_t>(MatchKey.load(std::memory_order_relaxed) >> 8);
+		}
+		std::uint8_t GetCC() const noexcept
+		{
+			return static_cast<std::uint8_t>(MatchKey.load(std::memory_order_relaxed));
+		}
+	};
+
+	// One self-contained automation lane: its CC->parameter mapping plus its own
+	// sparse control-point buffer recorded along the loop timeline.
+	struct AutomationLane
+	{
+		static constexpr std::size_t MaxPoints = 256u;
+
+		AutomationMapping Mapping;
+		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
+		std::size_t PointCount = 0u;
 	};
 
 	// In-memory MIDI loop. Records sample-offset-stamped events relative to the
@@ -113,6 +166,28 @@ namespace midi
 		bool QueueModelUpdateFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
+		// --- Parameter automation lanes ---
+		static constexpr std::size_t MaxAutomationLanes = 8u;
+
+		AutomationLane& GetLane(std::size_t idx) noexcept { return _lanes[idx]; }
+		const AutomationLane& GetLane(std::size_t idx) const noexcept { return _lanes[idx]; }
+
+		// Write a control point for lane laneIdx at fractional loop position frac
+		// (0..1). If a point already exists at (approximately) frac the value is
+		// updated in place; otherwise the point is inserted in frac order. Real-time
+		// safe: fixed-capacity storage, no allocation. Points beyond capacity are
+		// dropped (drop-newest). Called on the MIDI thread during recording.
+		void SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept;
+
+		// Cursor-advancing read on lane laneIdx: advances cursorIdx forward to the
+		// correct bracket for frac, returns the piecewise-linearly interpolated
+		// value. Resets the cursor on loop wrap (detected when frac steps backward).
+		// Amortised O(1) per block. Returns 0 when the lane has no points.
+		float GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept;
+
+		// Clear a lane's mapping and control points (non-audio thread; delete key).
+		void ClearAutomationLane(std::size_t laneIdx) noexcept;
+
 		// Non-destructive start-time quantisation. Non-RT publication builds immutable
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
@@ -148,5 +223,6 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		std::shared_ptr<MidiModel> _model;
 		MidiQuantisationSettings _quantisation;
+		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};
 }

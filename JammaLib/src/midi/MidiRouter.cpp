@@ -7,8 +7,20 @@
 #include "../engine/Trigger.h"
 #include "../io/UserConfig.h"
 #include "MidiTimestampMapper.h"
-
+#include "MidiLoop.h"
 using namespace midi;
+
+namespace midi
+{
+	// Definitions of the interactive automation arming/learn state declared in
+	// MidiRouter.h.
+	std::atomic<bool>         LearnMidiCCMode{ false };
+	std::atomic<std::uint8_t> LearnedCC{ LearnNothingCaptured };
+	std::atomic<std::uint8_t> LearnedChannel{ LearnNothingCaptured };
+	std::atomic<bool>         AutomationRecordHeld{ false };
+	std::atomic<std::uint8_t> SelectedLaneIndex{ 0u };
+	std::atomic<MidiLoop*>    RecordTargetLoop{ nullptr };
+}
 
 void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const base::LoggingConfig& loggingConfig,
@@ -327,6 +339,44 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				{
 					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
 						station->EnqueueLiveMidiEvent(ingress, deviceName);
+				}
+			}
+
+			// Control Change handling: MIDI-learn capture and automation recording.
+			constexpr std::uint8_t ControlChange = 0xB0u;
+			if (msgType == ControlChange)
+			{
+				const auto channel = ingress.Channel();
+				const auto cc = ingress.data1;
+
+				// Learn capture: the user moved a physical knob while in learn mode.
+				if (LearnMidiCCMode.load(std::memory_order_relaxed))
+				{
+					LearnedChannel.store(channel, std::memory_order_relaxed);
+					LearnedCC.store(cc, std::memory_order_relaxed);
+				}
+
+				// Recording: route the CC value into any matching armed lane on the
+				// loop currently being recorded.
+				if (AutomationRecordHeld.load(std::memory_order_relaxed))
+				{
+					if (auto* loop = RecordTargetLoop.load(std::memory_order_relaxed))
+					{
+						const auto loopLen = loop->LoopLengthSamps();
+						if (loopLen > 0u)
+						{
+							const auto matchKey = AutomationMapping::MakeMatchKey(channel, cc);
+							const double frac =
+								static_cast<double>(globalSampleNow % loopLen) / static_cast<double>(loopLen);
+							const float value = static_cast<float>(ingress.data2) / 127.0f;
+							for (std::size_t laneIdx = 0u; laneIdx < MidiLoop::MaxAutomationLanes; ++laneIdx)
+							{
+								auto& lane = loop->GetLane(laneIdx);
+								if (lane.Mapping.MatchKey.load(std::memory_order_relaxed) == matchKey)
+									loop->SetAutomationValueAtFrac(laneIdx, frac, value);
+							}
+						}
+					}
 				}
 			}
 

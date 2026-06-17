@@ -528,6 +528,13 @@ ActionResult Scene::OnAction(KeyAction action)
 			_networkService->GetController());
 	}
 
+	// Ctrl+Shift+L/W/X/[/]/A - MIDI automation learn, wire, delete, lane cycle, record.
+	{
+		auto automationRes = _HandleAutomationKey(action);
+		if (automationRes.IsEaten)
+			return automationRes;
+	}
+
 	bool checkReset = false;
 	auto result = ActionResult::NoAction();
 
@@ -591,6 +598,179 @@ ActionResult Scene::_HandleUndo()
 	std::cout << ">> Undo <<" << std::endl;
 	auto res = _undoHistory.Undo();
 	return { res };
+}
+
+std::pair<std::shared_ptr<Station>, std::shared_ptr<midi::MidiLoop>> Scene::_ResolveHoveredAutomationTarget()
+{
+	auto hoverPath = _selector->CurrentHover();
+	if (hoverPath.empty())
+		return { nullptr, nullptr };
+
+	const auto stationIndex = hoverPath[0];
+	if (stationIndex >= _stations.size())
+		return { nullptr, nullptr };
+
+	auto station = _stations[stationIndex];
+	if (!station || station->IsRemote())
+		return { nullptr, nullptr };
+
+	// Prefer the hovered LoopTake; otherwise fall back to the station's first take.
+	std::shared_ptr<LoopTake> take;
+	if (auto hovered = _ChildFromPath(hoverPath))
+		take = std::dynamic_pointer_cast<LoopTake>(hovered);
+	if (!take)
+	{
+		const auto& takes = station->GetLoopTakes();
+		if (!takes.empty())
+			take = takes.front();
+	}
+	if (!take)
+		return { nullptr, nullptr };
+
+	const auto& midiLoops = take->GetMidiLoops();
+	if (midiLoops.empty() || !midiLoops.front())
+		return { nullptr, nullptr };
+
+	return { station, midiLoops.front() };
+}
+
+ActionResult Scene::_HandleAutomationKey(actions::KeyAction action)
+{
+	// All automation commands require Ctrl+Shift to avoid clashing with the bare
+	// letter keys already bound to loop triggers.
+	const bool ctrlShift = (Action::MODIFIER_CTRL & action.Modifiers)
+		&& (Action::MODIFIER_SHIFT & action.Modifiers);
+	const bool isDown = (actions::KeyAction::KEY_DOWN == action.KeyActionType);
+	const bool isUp = (actions::KeyAction::KEY_UP == action.KeyActionType);
+
+	auto eaten = ActionResult::NoAction();
+	eaten.IsEaten = true;
+
+	// 'A' record: begin on Ctrl+Shift+A down, end on A up (regardless of modifier
+	// so releasing the key always resumes playback). Guarded so unrelated A-ups are
+	// only consumed when we actually started an automation recording.
+	if (65 == action.KeyChar)
+	{
+		if (isDown && ctrlShift && !_automationRecordKeyHeld)
+		{
+			auto [station, loop] = _ResolveHoveredAutomationTarget();
+			if (!loop || !station)
+				return ActionResult::NoAction();
+
+			_automationRecordKeyHeld = true;
+			_automationRecordStation = station;
+			midi::RecordTargetLoop.store(loop.get(), std::memory_order_relaxed);
+			midi::AutomationRecordHeld.store(true, std::memory_order_relaxed);
+			std::cout << ">> Automation record armed (Ctrl+Shift+A) <<" << std::endl;
+			return eaten;
+		}
+		if (isUp && _automationRecordKeyHeld)
+		{
+			_automationRecordKeyHeld = false;
+			// Release order: clear the held flag, then publish the dispatch with a
+			// release fence so the audio thread sees all recorded points.
+			midi::AutomationRecordHeld.store(false, std::memory_order_relaxed);
+			midi::RecordTargetLoop.store(nullptr, std::memory_order_relaxed);
+			if (auto station = _automationRecordStation.lock())
+				station->RebuildAutomationDispatch();
+			_automationRecordStation.reset();
+			std::cout << ">> Automation record released <<" << std::endl;
+			return eaten;
+		}
+		return ActionResult::NoAction();
+	}
+
+	// The remaining commands are edge-triggered on Ctrl+Shift + key-down.
+	if (!isDown || !ctrlShift)
+		return ActionResult::NoAction();
+
+	switch (action.KeyChar)
+	{
+	case 76: // 'L' - toggle learn mode
+	{
+		const bool wasOn = midi::LearnMidiCCMode.load(std::memory_order_relaxed);
+		const bool nowOn = !wasOn;
+		midi::LearnMidiCCMode.store(nowOn, std::memory_order_relaxed);
+		if (!nowOn)
+		{
+			// Toggling off clears any stale capture so it can't be wired later.
+			midi::LearnedCC.store(midi::LearnNothingCaptured, std::memory_order_relaxed);
+			midi::LearnedChannel.store(midi::LearnNothingCaptured, std::memory_order_relaxed);
+		}
+		std::cout << ">> MIDI learn mode " << (nowOn ? "ON" : "OFF") << " <<" << std::endl;
+		return eaten;
+	}
+	case 87: // 'W' - wire the captured CC + last-touched parameter to the selected lane
+	{
+		const auto learnedCC = midi::LearnedCC.load(std::memory_order_relaxed);
+		auto* plugin = vst::_lastTouchedParam.Plugin.load(std::memory_order_relaxed);
+		if (learnedCC == midi::LearnNothingCaptured || !plugin)
+		{
+			std::cout << "Automation wire ignored: no captured CC or touched parameter" << std::endl;
+			return ActionResult::NoAction();
+		}
+
+		auto [station, loop] = _ResolveHoveredAutomationTarget();
+		if (!loop || !station)
+			return ActionResult::NoAction();
+
+		const auto channel = midi::LearnedChannel.load(std::memory_order_relaxed);
+		const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_relaxed);
+		const auto laneIdx = midi::SelectedLaneIndex.load(std::memory_order_relaxed);
+
+		auto& lane = loop->GetLane(laneIdx);
+		lane.Mapping.TargetPlugin = plugin;
+		lane.Mapping.TargetParameterIndex = paramIdx;
+		lane.Mapping.MatchKey.store(
+			midi::AutomationMapping::MakeMatchKey(channel & 0x0Fu, learnedCC),
+			std::memory_order_relaxed);
+
+		// Exit learn mode and clear the capture so the next wire is deliberate.
+		midi::LearnMidiCCMode.store(false, std::memory_order_relaxed);
+		midi::LearnedCC.store(midi::LearnNothingCaptured, std::memory_order_relaxed);
+		midi::LearnedChannel.store(midi::LearnNothingCaptured, std::memory_order_relaxed);
+
+		station->RebuildAutomationDispatch();
+		std::cout << ">> Automation wired: lane " << static_cast<int>(laneIdx)
+			<< " <- CC " << static_cast<int>(learnedCC) << " ch " << static_cast<int>(channel)
+			<< " -> param " << paramIdx << " <<" << std::endl;
+		return eaten;
+	}
+	case 88: // 'X' - delete the selected lane on the hovered loop
+	{
+		auto [station, loop] = _ResolveHoveredAutomationTarget();
+		if (!loop || !station)
+			return ActionResult::NoAction();
+
+		const auto laneIdx = midi::SelectedLaneIndex.load(std::memory_order_relaxed);
+		loop->ClearAutomationLane(laneIdx);
+		station->RebuildAutomationDispatch();
+		std::cout << ">> Automation lane " << static_cast<int>(laneIdx) << " cleared <<" << std::endl;
+		return eaten;
+	}
+	case 91: // '[' - select previous lane
+	{
+		auto laneIdx = midi::SelectedLaneIndex.load(std::memory_order_relaxed);
+		laneIdx = (laneIdx == 0u)
+			? static_cast<std::uint8_t>(midi::MidiLoop::MaxAutomationLanes - 1u)
+			: static_cast<std::uint8_t>(laneIdx - 1u);
+		midi::SelectedLaneIndex.store(laneIdx, std::memory_order_relaxed);
+		std::cout << ">> Selected automation lane " << static_cast<int>(laneIdx) << " <<" << std::endl;
+		return eaten;
+	}
+	case 93: // ']' - select next lane
+	{
+		auto laneIdx = midi::SelectedLaneIndex.load(std::memory_order_relaxed);
+		laneIdx = static_cast<std::uint8_t>((laneIdx + 1u) % midi::MidiLoop::MaxAutomationLanes);
+		midi::SelectedLaneIndex.store(laneIdx, std::memory_order_relaxed);
+		std::cout << ">> Selected automation lane " << static_cast<int>(laneIdx) << " <<" << std::endl;
+		return eaten;
+	}
+	default:
+		break;
+	}
+
+	return ActionResult::NoAction();
 }
 
 ActionResult Scene::OnAction(GuiAction action)

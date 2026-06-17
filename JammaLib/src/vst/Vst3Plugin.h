@@ -79,6 +79,12 @@ namespace vst
 		// channelBufs must contain numChannels writable channel buffers.
 		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
+		// Set / get a hosted parameter by index. VST3 parameter automation is not
+		// wired through this host yet, so these are no-op stubs that satisfy the
+		// IVstPlugin interface (GetParameter returns 0).
+		void SetParameter(unsigned int index, float value) noexcept override;
+		float GetParameter(unsigned int index) const noexcept override;
+
 		void BeginMidiBlock(std::uint32_t blockStartSample,
 			std::uint32_t numSamples) noexcept override;
 		void SendMidiEvent(const midi::MidiEvent& event,

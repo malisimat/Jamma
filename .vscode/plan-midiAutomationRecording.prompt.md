@@ -92,14 +92,14 @@ graph TD
 
 ## Phase 1: Track Last Touched Parameter
 
-### 1-A: Interface Extension `IVstPlugin`
+### [DONE] 1-A: Interface Extension `IVstPlugin`
 - Modify `IVstPlugin` in [JammaLib/src/vst/IVstPlugin.h](JammaLib/src/vst/IVstPlugin.h) to expose parameter setters:
   ```cpp
   virtual void SetParameter(unsigned int index, float value) noexcept = 0;
   virtual float GetParameter(unsigned int index) const noexcept = 0;
   ```
 
-### 1-B: VST2 Plugin Implementation
+### [DONE] 1-B: VST2 Plugin Implementation
 - Implement the methods in [JammaLib/src/vst/Vst2Plugin.h](JammaLib/src/vst/Vst2Plugin.h) and [JammaLib/src/vst/Vst2Plugin.cpp](JammaLib/src/vst/Vst2Plugin.cpp):
   ```cpp
   void Vst2Plugin::SetParameter(unsigned int index, float value) noexcept {
@@ -113,7 +113,7 @@ graph TD
   ```
 - Implement empty stubs in [JammaLib/src/vst/Vst3Plugin.cpp](JammaLib/src/vst/Vst3Plugin.cpp) to satisfy the compiler interface checks.
 
-### 1-C: Last Touched Registry
+### [DONE] 1-C: Last Touched Registry
 - Add a thread-safe registry in `vst` namespace inside [JammaLib/src/vst/IVstPlugin.h](JammaLib/src/vst/IVstPlugin.h):
   ```cpp
   struct LastTouchedParameter {
@@ -121,15 +121,15 @@ graph TD
       std::atomic<unsigned int> ParameterIndex{0u};
       std::atomic<float> Value{0.0f};
   };
-  extern LastTouchedParameter g_lastTouchedParam;
+  extern LastTouchedParameter _lastTouchedParam;
   ```
 - Update `HostCallback` in [JammaLib/src/vst/Vst2Plugin.cpp](JammaLib/src/vst/Vst2Plugin.cpp)'s `audioMasterAutomate` case:
   ```cpp
   case audioMasterAutomate:
       if (self) {
-          g_lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
-          g_lastTouchedParam.ParameterIndex.store(index, std::memory_order_relaxed);
-          g_lastTouchedParam.Value.store(opt, std::memory_order_relaxed);
+          _lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
+          _lastTouchedParam.ParameterIndex.store(index, std::memory_order_relaxed);
+          _lastTouchedParam.Value.store(opt, std::memory_order_relaxed);
       }
       return 0;
   ```
@@ -138,7 +138,7 @@ graph TD
 
 ## Phase 2: In-Memory Automation Timeline inside `MidiLoop`
 
-### 2-A: Automation Timeline Representation
+### [DONE] 2-A: Automation Timeline Representation
 - Represent the automation as sparse control points in the loop timeline and upload them to the GPU as an $N \times 2$ lookup texture, where each texel stores:
   - `R`/`x`: the automation value
   - `G`/`y`: the fractional position through the loop where that value applies
@@ -192,7 +192,7 @@ graph TD
   ```
 - The CPU keeps each lane's sparse points in their native form; the GPU receives a lane's points as a compact 2-channel texture for display. Each lane uploads independently.
 
-### 2-B: Read/Write Interpolation Implementation
+### [DONE] 2-B: Read/Write Interpolation Implementation
 - Inside [JammaLib/src/midi/MidiLoop.cpp](JammaLib/src/midi/MidiLoop.cpp):
   - Preserve sparse points exactly as they are recorded.
   - When a new point arrives, insert or update the point in the loop-local control-point storage.
@@ -203,7 +203,7 @@ graph TD
 
 ## Phase 3: Keyboard Arming and MIDI Learn Hooks
 
-### 3-A: Interactive State Flags
+### [DONE] 3-A: Interactive State Flags
 - Add flags inside [JammaLib/src/midi/MidiRouter.h](JammaLib/src/midi/MidiRouter.h):
   ```cpp
   namespace midi {
@@ -218,7 +218,7 @@ graph TD
 - `LearnedCC` and `LearnedChannel` are **written inside `MidiRouter::PumpMidi`** whenever a CC message arrives and `LearnMidiCCMode` is `true`. This is the CC capture step: the user moves a physical knob/slider and the system automatically captures the controller number and channel without any further key press.
 - `RecordTargetLoop` is a **raw observer pointer** — its lifetime is externally guaranteed by the `LoopTake` that owns it. It must be cleared to `nullptr` before any `MidiLoop` is destroyed (handled in `LoopTake` teardown).
 
-### 3-B: Interactive Key Bindings
+### [DONE] 3-B: Interactive Key Bindings
 - Modify `Scene::OnAction(KeyAction)` in [JammaLib/src/engine/Scene.cpp](JammaLib/src/engine/Scene.cpp#L446):
   - Key `L` — **Learn Mode** (on key-down): Toggle `LearnMidiCCMode`. When toggling **off**, also reset `LearnedCC` and `LearnedChannel` to `0xffu` so a stale capture cannot be accidentally wired on a future press.
   - Key `W` — **Wire Command** (on key-down):
@@ -235,7 +235,7 @@ graph TD
 
 ## Phase 4: Audio Thread Playback Routing
 
-### 4-A: Pre-baked Flat Dispatch List (eliminates nested weak_ptr::lock chains)
+### [DONE] 4-A: Pre-baked Flat Dispatch List (eliminates nested weak_ptr::lock chains)
 
 The naïve approach of walking `state.LoopTakes → weak_ptr::lock → GetMidiLoops → GetAutomation` inside `_RunVstBlock` pays O(takes × midiLoops) in atomic refcount increments, shared_ptr pointer chasing, and per-entry atomic loads — every audio block, at audio-thread priority. This is unacceptable.
 
@@ -262,7 +262,7 @@ std::uint8_t       _automationDispatchBack = 0u;
 
 Add `_RebuildAutomationDispatch()` — called on the non-audio thread whenever automation is wired or the loop set changes. It walks all takes and MIDI loops, resolves all raw pointers, and atomically publishes the new front buffer. This is the only place that traverses weak_ptrs and shared_ptrs for automation purposes.
 
-### 4-B: Per-loop `frac` from `blockStartSample` (not from the clock)
+### [DONE] 4-B: Per-loop `frac` from `blockStartSample` (not from the clock)
 
 `_clock->FractionalPosition()` would use `SeedSourceLength()` as the denominator — correct only for the seed loop. Overdub loops may be harmonically related but still have independent lengths. Each dispatch entry stores `loopLengthSamps` pre-resolved at build time. Per-block fractional position:
 
@@ -275,7 +275,7 @@ const double frac = (entry.loopLengthSamps > 0u)
 
 This is correct for all loop configurations and costs one `fmod` instead of an indirect clock method call.
 
-### 4-C: Playback cursor — O(1) amortised interpolation (replaces O(N) scan)
+### [DONE] 4-C: Playback cursor — O(1) amortised interpolation (replaces O(N) scan)
 
 `GetAutomationValueAtFrac` with up to 256 sparse control points costs up to 256 comparisons per active mapping per block if searching from index 0. Since playback is monotonically forward (wrapping only at loop boundaries), the bracket for the current `frac` advances by at most 1–2 control points per block in normal use.
 
@@ -286,7 +286,7 @@ Store `cursorIdx` in each `AutomationDispatch`. Per block:
 
 Amortised cost across a full loop playback: O(total control points) — equivalent to a single pass, not one pass per block.
 
-### 4-D: Delta-threshold gate — suppress redundant `SetParameter` calls
+### [DONE] 4-D: Delta-threshold gate — suppress redundant `SetParameter` calls
 
 VST2 `setParameter` is an opcode dispatch that can trigger coefficient recalculation inside the plugin on every call. On a flat or slow-moving automation curve (the common case), the value barely changes between consecutive blocks. Gate the call:
 
@@ -300,7 +300,9 @@ if (std::abs(val - entry.lastValue) > automationEpsilon) {
 
 On a steady-state loop after the first pass, this reduces `SetParameter` calls to zero — the dominant cost on a playing-but-not-moving automation lane.
 
-### 4-E: Final audio-thread dispatch loop in `_RunVstBlock`
+### [DONE] 4-E: Final audio-thread dispatch loop in `_RunVstBlock`
+
+> **Agent note:** Implemented as `Station::_RunAutomationDispatch(blockStartSample)`, called from `Station::WriteBlock` immediately after `_RunVstBlock`. It is deliberately *not* gated behind `vstActive`, so recorded parameter motion still drives a bypassed/idle chain. Buffer-index derivation, acquire/release fencing, per-loop `fmod`, cursor advance, and the delta gate (`AutomationEpsilon = 1/65536`) match the plan. Verified by `StationAutomation.*` GTests in `test/JammaLib_Tests/src/engine/StationMidiInstrument_Tests.cpp`. Test hook: `Station::RunAutomationDispatchForTest`.
 
 With the above in place, the audio-thread path collapses to:
 

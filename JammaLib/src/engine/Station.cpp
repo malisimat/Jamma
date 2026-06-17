@@ -1,7 +1,9 @@
 ﻿#include "Station.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
+#include "../midi/MidiRouter.h"
 
 using namespace engine;
 using namespace timing;
@@ -355,6 +357,11 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	_RunVstBlock(chain.get(), routes, *state, vstActive,
 		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
 
+	// Drive any wired parameter automation. Runs independently of vstActive so a
+	// bypassed/idle chain still receives recorded parameter motion. Flat loop over
+	// the pre-baked dispatch list — no weak_ptr locks, no shared_ptr chasing.
+	_RunAutomationDispatch(blockStartSample);
+
 	if (channelCount == 0u)
 	{
 		_masterMixer->UpdateVu(0.0f, sampsToRead);
@@ -448,6 +455,92 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+}
+
+void Station::RebuildAutomationDispatch()
+{
+	// Non-audio thread only. Walk every take and MIDI loop, resolve all raw
+	// pointers and lane metadata into a compact flat list, then publish it.
+	const std::uint8_t back = _automationDispatchBack;
+	auto* buf = _automationDispatchBuf[back];
+	std::uint8_t count = 0u;
+
+	const auto& takes = GetLoopTakes();
+	for (const auto& take : takes)
+	{
+		if (!take)
+			continue;
+
+		for (const auto& midiLoop : take->GetMidiLoops())
+		{
+			if (!midiLoop)
+				continue;
+
+			for (std::size_t laneIdx = 0u; laneIdx < midi::MidiLoop::MaxAutomationLanes; ++laneIdx)
+			{
+				if (count >= MaxAutomationDispatches)
+					break;
+
+				const auto& lane = midiLoop->GetLane(laneIdx);
+				if (!lane.Mapping.IsActive() || !lane.Mapping.TargetPlugin)
+					continue;
+
+				auto& entry = buf[count];
+				entry.plugin = lane.Mapping.TargetPlugin;
+				entry.paramIdx = lane.Mapping.TargetParameterIndex;
+				entry.loop = midiLoop.get();
+				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
+				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
+				entry.cursorIdx = 0u;
+				entry.lastValue = -2.0f; // force first write after a rebuild
+				++count;
+			}
+		}
+	}
+
+	_automationDispatchCount[back] = count;
+	// Release pairs with the audio thread's acquire load: makes all MIDI-thread
+	// writes to lane Points visible before the new list is consumed.
+	_automationDispatch.store(buf, std::memory_order_release);
+	_automationDispatchBack ^= 1u;
+}
+
+void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
+{
+	auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
+	if (!dispatches)
+		return;
+
+	// acquire above pairs with the release store in RebuildAutomationDispatch.
+	const bool recordHeld = midi::AutomationRecordHeld.load(std::memory_order_acquire);
+	const auto* recordTarget = midi::RecordTargetLoop.load(std::memory_order_relaxed);
+	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
+	const auto count = _automationDispatchCount[frontIdx];
+
+	for (std::uint8_t i = 0u; i < count; ++i)
+	{
+		auto& entry = dispatches[i];
+		if (!entry.plugin || !entry.loop)
+			continue;
+
+		// Suppress playback only for lanes on the loop actively being recorded;
+		// other loops' lanes keep playing back unaffected.
+		if (recordHeld && entry.loop == recordTarget)
+			continue;
+
+		const double frac = (entry.loopLengthSamps > 0u)
+			? std::fmod(static_cast<double>(blockStartSample), static_cast<double>(entry.loopLengthSamps))
+				/ static_cast<double>(entry.loopLengthSamps)
+			: 0.0;
+
+		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, entry.cursorIdx);
+
+		if (std::abs(val - entry.lastValue) > AutomationEpsilon)
+		{
+			entry.plugin->SetParameter(entry.paramIdx, val);
+			entry.lastValue = val;
+		}
+	}
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)

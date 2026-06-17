@@ -1049,6 +1049,18 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 #endif
 }
 
+void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
+{
+	// VST3 parameter automation is not yet routed through this host.
+	(void)index; (void)value;
+}
+
+float Vst3Plugin::GetParameter(unsigned int index) const noexcept
+{
+	(void)index;
+	return 0.0f;
+}
+
 void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {

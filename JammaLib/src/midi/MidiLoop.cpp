@@ -357,3 +357,100 @@ void MidiLoop::PublishQuantisedEvents()
 	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
 	_quantisedEvents.store(snapshot, std::memory_order_release);
 }
+
+void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return;
+
+	auto& lane = _lanes[laneIdx];
+	auto fracF = static_cast<float>(frac);
+	if (fracF < 0.0f)
+		fracF = 0.0f;
+	else if (fracF > 1.0f)
+		fracF = 1.0f;
+
+	// Merge points that land on (approximately) the same fractional position so a
+	// stream of CC values recorded close together doesn't exhaust the buffer.
+	constexpr float fracEpsilon = 1.0f / 2048.0f;
+
+	auto& points = lane.Points;
+	auto& count = lane.PointCount;
+
+	// Find the insertion index (points are kept sorted by frac ascending).
+	std::size_t insertAt = 0u;
+	while (insertAt < count && points[insertAt].first < fracF)
+		++insertAt;
+
+	// Update in place if a neighbouring point shares this fractional position.
+	if (insertAt < count && (points[insertAt].first - fracF) <= fracEpsilon)
+	{
+		points[insertAt].second = value;
+		return;
+	}
+	if (insertAt > 0u && (fracF - points[insertAt - 1u].first) <= fracEpsilon)
+	{
+		points[insertAt - 1u].second = value;
+		return;
+	}
+
+	if (count >= AutomationLane::MaxPoints)
+		return; // Buffer full: drop newest.
+
+	// Shift tail right to make room, then insert. Fixed-capacity, no allocation.
+	for (std::size_t i = count; i > insertAt; --i)
+		points[i] = points[i - 1u];
+	points[insertAt] = std::make_pair(fracF, value);
+	++count;
+}
+
+float MidiLoop::GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return 0.0f;
+
+	const auto& lane = _lanes[laneIdx];
+	const auto count = lane.PointCount;
+	if (0u == count)
+		return 0.0f;
+
+	const auto& points = lane.Points;
+	const auto fracF = static_cast<float>(frac);
+
+	// Clamp cursor into range and reset on loop wrap (frac stepped backward).
+	if (cursorIdx >= count)
+		cursorIdx = 0u;
+	if (fracF < points[cursorIdx].first)
+		cursorIdx = 0u;
+
+	// Advance forward while the next point still starts at or before frac.
+	while ((cursorIdx + 1u) < count && points[cursorIdx + 1u].first <= fracF)
+		++cursorIdx;
+
+	// Before the first point: hold the first value. At/after the last: hold last.
+	if (fracF <= points[0].first)
+		return points[0].second;
+	if ((cursorIdx + 1u) >= count)
+		return points[count - 1u].second;
+
+	const auto& lo = points[cursorIdx];
+	const auto& hi = points[cursorIdx + 1u];
+	const auto span = hi.first - lo.first;
+	if (span <= 0.0f)
+		return hi.second;
+
+	const auto t = (fracF - lo.first) / span;
+	return lo.second + t * (hi.second - lo.second);
+}
+
+void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return;
+
+	auto& lane = _lanes[laneIdx];
+	lane.Mapping.MatchKey.store(AutomationMapping::kInactive, std::memory_order_relaxed);
+	lane.Mapping.TargetPlugin = nullptr;
+	lane.Mapping.TargetParameterIndex = 0u;
+	lane.PointCount = 0u;
+}

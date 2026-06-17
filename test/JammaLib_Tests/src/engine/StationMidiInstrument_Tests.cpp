@@ -6,6 +6,8 @@
 #include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
+#include "midi/MidiLoop.h"
+#include "midi/MidiRouter.h"
 
 using actions::JobAction;
 using actions::TriggerAction;
@@ -52,6 +54,19 @@ namespace
 			RealtimeFlags.push_back(isRealtime);
 		}
 
+		void SetParameter(unsigned int index, float value) noexcept override
+		{
+			ParamSetCalls++;
+			LastParamIndex = index;
+			LastParamValue = value;
+		}
+
+		float GetParameter(unsigned int index) const noexcept override
+		{
+			(void)index;
+			return LastParamValue;
+		}
+
 		bool OpenEditor(HWND) override { return false; }
 		void CloseEditor() override {}
 		utils::Size2d GetEditorSize() const noexcept override { return { 0, 0 }; }
@@ -64,6 +79,9 @@ namespace
 		std::uint32_t BlockSamples = 0u;
 		unsigned int BeginCalls = 0u;
 		unsigned int ProcessCalls = 0u;
+		unsigned int ParamSetCalls = 0u;
+		unsigned int LastParamIndex = 0u;
+		float LastParamValue = 0.0f;
 		std::vector<MidiEvent> Events;
 		std::vector<bool> RealtimeFlags;
 
@@ -515,4 +533,87 @@ TEST(StationMidiInstrument, PunchBoundariesEmitLiveMidiTransitionsForSourceAndLi
 	EXPECT_EQ(100u, plugin->Events[1].data2);
 	EXPECT_TRUE(plugin->RealtimeFlags[0]);
 	EXPECT_TRUE(plugin->RealtimeFlags[1]);
+}
+
+TEST(StationAutomation, WiredLaneDrivesPluginSetParameterDuringPlayback)
+{
+	auto station = MakeStation("station-automation");
+	auto plugin = AddPlugin(station, L"fake-automation.dll");
+	auto take = MakeMidiTake("automation-take");
+	station->AddTake(take);
+	station->CommitChanges();
+
+	// Establish a recorded MIDI loop with a known length so frac mapping is defined.
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 48u, 100u), "Keys", 0u);
+	take->Play(0u, 128u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_GT(midiLoop->LoopLengthSamps(), 0u);
+
+	// Record two control points: 0.25 at frac 0, 0.75 at frac ~0.5.
+	const std::size_t laneIdx = 0u;
+	midiLoop->SetAutomationValueAtFrac(laneIdx, 0.0, 0.25f);
+	midiLoop->SetAutomationValueAtFrac(laneIdx, 0.5, 0.75f);
+
+	auto& lane = midiLoop->GetLane(laneIdx);
+	lane.Mapping.TargetPlugin = plugin.get();
+	lane.Mapping.TargetParameterIndex = 3u;
+	lane.Mapping.MatchKey.store(
+		midi::AutomationMapping::MakeMatchKey(0u, 7u),
+		std::memory_order_relaxed);
+
+	station->RebuildAutomationDispatch();
+
+	// At block-start sample 0 the value should be the first control point.
+	station->RunAutomationDispatchForTest(0u);
+	ASSERT_GE(plugin->ParamSetCalls, 1u);
+	EXPECT_EQ(3u, plugin->LastParamIndex);
+	EXPECT_NEAR(0.25f, plugin->LastParamValue, 1.0e-4f);
+
+	// Half-way through the loop the interpolated value should approach 0.75.
+	const auto halfLen = midiLoop->LoopLengthSamps() / 2u;
+	station->RunAutomationDispatchForTest(halfLen);
+	EXPECT_NEAR(0.75f, plugin->LastParamValue, 1.0e-2f);
+}
+
+TEST(StationAutomation, RecordingTargetLoopSuppressesPlaybackForThatLoop)
+{
+	auto station = MakeStation("station-automation-record");
+	auto plugin = AddPlugin(station, L"fake-automation-record.dll");
+	auto take = MakeMidiTake("automation-record-take");
+	station->AddTake(take);
+	station->CommitChanges();
+
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 48u, 100u), "Keys", 0u);
+	take->Play(0u, 128u, 0u);
+
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	midiLoop->SetAutomationValueAtFrac(0u, 0.0, 0.4f);
+
+	auto& lane = midiLoop->GetLane(0u);
+	lane.Mapping.TargetPlugin = plugin.get();
+	lane.Mapping.TargetParameterIndex = 1u;
+	lane.Mapping.MatchKey.store(
+		midi::AutomationMapping::MakeMatchKey(0u, 11u),
+		std::memory_order_relaxed);
+	station->RebuildAutomationDispatch();
+
+	// While the loop is the active record target, its lanes must not play back.
+	midi::AutomationRecordHeld.store(true, std::memory_order_relaxed);
+	midi::RecordTargetLoop.store(midiLoop.get(), std::memory_order_relaxed);
+	station->RunAutomationDispatchForTest(0u);
+	EXPECT_EQ(0u, plugin->ParamSetCalls);
+
+	// Releasing record resumes playback.
+	midi::AutomationRecordHeld.store(false, std::memory_order_relaxed);
+	midi::RecordTargetLoop.store(nullptr, std::memory_order_relaxed);
+	station->RunAutomationDispatchForTest(0u);
+	EXPECT_GE(plugin->ParamSetCalls, 1u);
+	EXPECT_EQ(1u, plugin->LastParamIndex);
+	EXPECT_NEAR(0.4f, plugin->LastParamValue, 1.0e-4f);
 }

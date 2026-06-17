@@ -69,6 +69,10 @@ namespace vst
 		// Process numSamples of an exact-match multichannel bus in-place.
 		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
+		// Set / get a hosted parameter by index. Real-time safe (single opcode dispatch).
+		void SetParameter(unsigned int index, float value) noexcept override;
+		float GetParameter(unsigned int index) const noexcept override;
+
 		void BeginMidiBlock(std::uint32_t blockStartSample,
 			std::uint32_t numSamples) noexcept override;
 		void SendMidiEvent(const midi::MidiEvent& event,

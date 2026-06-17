@@ -372,6 +372,27 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 #endif
 }
 
+void Vst2Plugin::SetParameter(unsigned int index, float value) noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect && _effect->setParameter)
+		_effect->setParameter(_effect, static_cast<VstInt32>(index), value);
+#else
+	(void)index; (void)value;
+#endif
+}
+
+float Vst2Plugin::GetParameter(unsigned int index) const noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect && _effect->getParameter)
+		return _effect->getParameter(_effect, static_cast<VstInt32>(index));
+#else
+	(void)index;
+#endif
+	return 0.0f;
+}
+
 void Vst2Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {
@@ -488,9 +509,9 @@ void Vst2Plugin::IdleEditor() noexcept
 
 #ifdef JAMMA_VST2_ENABLED
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
-	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float /*opt*/)
+	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
 {
-	(void)index; (void)value;
+	(void)value;
 
 	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
 
@@ -542,7 +563,14 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		}
 		return 0;
 	case audioMasterAutomate:
-		// Parameter automation notification — no action needed for a basic host.
+		// Parameter automation notification: record the most recently touched
+		// parameter so the UI thread can wire it to a MIDI automation lane.
+		if (self)
+		{
+			_lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
+			_lastTouchedParam.ParameterIndex.store(static_cast<unsigned int>(index), std::memory_order_relaxed);
+			_lastTouchedParam.Value.store(opt, std::memory_order_relaxed);
+		}
 		return 0;
 	case audioMasterIdle:
 		// Called by some older plugins requesting idle processing.

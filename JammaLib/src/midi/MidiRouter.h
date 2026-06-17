@@ -27,9 +27,22 @@ namespace engine
 
 namespace midi
 {
+	class MidiLoop;
+
+	// Interactive automation arming/learn state, shared between the UI/action
+	// thread (Scene key handlers) and the MIDI thread (MidiRouter::PumpMidi).
+	// All fields are independently atomic; consumers tolerate brief torn reads.
+	extern std::atomic<bool>          LearnMidiCCMode;
+	extern std::atomic<std::uint8_t>  LearnedCC;            // 0xffu = nothing captured yet
+	extern std::atomic<std::uint8_t>  LearnedChannel;       // 0xffu = nothing captured yet
+	extern std::atomic<bool>          AutomationRecordHeld; // true while the record key is held
+	extern std::atomic<std::uint8_t>  SelectedLaneIndex;    // lane slot W/A/X target (0..MaxAutomationLanes-1)
+	extern std::atomic<MidiLoop*>     RecordTargetLoop;     // loop being recorded; nullptr = all lanes play back
+
+	static constexpr std::uint8_t LearnNothingCaptured = 0xffu;
+
 	class MidiRouter
-	{
-	public:
+	{	public:
 		struct TriggerDispatchSummary
 		{
 			bool Activated = false;

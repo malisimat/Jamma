@@ -8,6 +8,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
+#include <utility>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -265,8 +266,13 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
-		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
-		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+		// MIDI automation interaction (Ctrl+Shift+L/W/X/[/]/A). Returns an eaten
+		// result when the key was handled as an automation command, NoAction otherwise.
+		actions::ActionResult _HandleAutomationKey(actions::KeyAction action);
+		// Resolve the hovered LoopTake's primary MIDI loop and its owning station.
+		// Returns {nullptr, nullptr} when the hover does not target a MIDI loop.
+		std::pair<std::shared_ptr<Station>, std::shared_ptr<midi::MidiLoop>> _ResolveHoveredAutomationTarget();
+		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
 		{
 			_quantisation.SetMidiGrain(grainSamps, source, _stations);
 		}
@@ -324,6 +330,10 @@ namespace engine
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
 		bool _isSceneDragged;
+		// True while a Ctrl+Shift+A automation recording is in progress (key held).
+		bool _automationRecordKeyHeld = false;
+		// Station owning the loop currently being automation-recorded; rebuilt on release.
+		std::weak_ptr<Station> _automationRecordStation;
 		utils::Position2d _initTouchDownPosition;
 		utils::Position3d _initTouchCamPosition;
 		glm::mat4 _viewProj;
