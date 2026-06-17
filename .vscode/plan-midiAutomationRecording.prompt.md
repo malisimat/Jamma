@@ -17,7 +17,7 @@ This plan is designed to be executed in **two agent sessions** with a clean engi
 **Implement strictly in order:**
 1. **Phase 1** — VST interface + registry. Build clean before moving on.
 2. **Phase 2** — `MidiLoop` automation data model. Data structures and interpolation only; no rendering.
-3. **Phase 3** — Keyboard arming, MIDI learn hooks, `Scene::OnAction` bindings.
+3. **Phase 3** — Keyboard arming and MIDI learn hooks routed via `IoInputSubsystem`/`MidiRouter` (Scene delegates only).
 4. **Phase 4** — Flat dispatch list, `_RebuildAutomationDispatch`, `_RunVstBlock` loop.
 
 **Stop when:**
@@ -34,7 +34,7 @@ This plan is designed to be executed in **two agent sessions** with a clean engi
 **Prerequisite:** Session 1 complete. Flat dispatch list is live; `SetParameter` is being called correctly.
 
 **Implement in order:**
-1. **Phase 5** — Confirm `MaxAutomationLanes` wiring through the dispatch rebuild; add any missing `SelectedLaneIndex` / multi-lane recording paths.
+1. **Phase 5** — Confirm and harden `MaxAutomationLanes` behavior for multi-lane UX/policy (same-parameter conflicts, lane highlighting, deterministic precedence).
 2. **Phase 6** — `automation.vert` / `automation.frag` shaders, `MidiModel` VAO/VBO setup, live control-point texture uploads.
 
 **Stop when:**
@@ -55,7 +55,9 @@ graph TD
     classDef nonrt fill:#1a5c1a,stroke:#aaffaa,color:#fff;
 
     subgraph User Input
-        K[Keyboard Key Events] -->|L, W, A, X, brackets| SC[Scene::OnAction]
+      K[Keyboard Key Events] -->|L, W, A, X, brackets| SC[Scene::OnAction]
+      SC -->|delegate| IO[IoInputSubsystem::HandleAutomationKey]
+      IO -->|automation command handling| MR
         E[Mouse / VST UI GUI] -->|SetParameterAutomated| V2[audioMasterAutomate Callback]
         M[MIDI Keyboard/Controller] -->|Physical CC Ingress| MR[MidiRouter::PumpMidi]
     end
@@ -67,7 +69,7 @@ graph TD
     end
 
     subgraph Non-Audio Thread Maintenance
-        SC -->|Wire / Arm / Delete / Release A| RB[Station::_RebuildAutomationDispatch]
+      MR -->|Wire / Delete / Release A| RB[Station::_RebuildAutomationDispatch]
         ML -->|Resolve raw ptrs & lane metadata| RB
         RB -->|atomic swap release| AD[_automationDispatch flat list]
     end
@@ -204,32 +206,29 @@ graph TD
 ## Phase 3: Keyboard Arming and MIDI Learn Hooks
 
 ### [DONE] 3-A: Interactive State Flags
-- Add flags inside [JammaLib/src/midi/MidiRouter.h](JammaLib/src/midi/MidiRouter.h):
+- Add automation interaction state inside [JammaLib/src/midi/MidiRouter.h](JammaLib/src/midi/MidiRouter.h) as `MidiRouter` members (not namespace globals):
   ```cpp
-  namespace midi {
-      extern std::atomic<bool>          LearnMidiCCMode;
-      extern std::atomic<std::uint8_t>  LearnedCC;            // 0xffu = nothing captured yet
-      extern std::atomic<std::uint8_t>  LearnedChannel;       // 0xffu = nothing captured yet
-      extern std::atomic<bool>          AutomationRecordHeld;
-      extern std::atomic<std::uint8_t>  SelectedLaneIndex;    // which lane slot W/A targets (0..MaxAutomationLanes-1)
-      extern std::atomic<MidiLoop*>     RecordTargetLoop;     // loop being recorded; nullptr = all lanes play back
-  }
+  std::atomic<bool>         _learnMidiCCMode{ false };
+  std::atomic<std::uint8_t> _learnedCC{ LearnNothingCaptured };
+  std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
+  std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
+  bool _automationRecordKeyHeld = false;
+  static std::atomic<bool> _automationRecordHeld;
   ```
-- `LearnedCC` and `LearnedChannel` are **written inside `MidiRouter::PumpMidi`** whenever a CC message arrives and `LearnMidiCCMode` is `true`. This is the CC capture step: the user moves a physical knob/slider and the system automatically captures the controller number and channel without any further key press.
-- `RecordTargetLoop` is a **raw observer pointer** — its lifetime is externally guaranteed by the `LoopTake` that owns it. It must be cleared to `nullptr` before any `MidiLoop` is destroyed (handled in `LoopTake` teardown).
+- `_learnedCC` and `_learnedChannel` are written inside `MidiRouter::PumpMidi` whenever a CC message arrives and `_learnMidiCCMode` is true.
+- `_automationRecordHeld` is exposed through `MidiRouter::IsAutomationRecordHeld()` and test-only setter `MidiRouter::SetAutomationRecordHeldForTest(bool)`.
 
 ### [DONE] 3-B: Interactive Key Bindings
-- Modify `Scene::OnAction(KeyAction)` in [JammaLib/src/engine/Scene.cpp](JammaLib/src/engine/Scene.cpp#L446):
-  - Key `L` — **Learn Mode** (on key-down): Toggle `LearnMidiCCMode`. When toggling **off**, also reset `LearnedCC` and `LearnedChannel` to `0xffu` so a stale capture cannot be accidentally wired on a future press.
+- Scene now delegates automation key handling through `IoInputSubsystem::HandleAutomationKey(...)`, which forwards to `MidiRouter::HandleAutomationKey(...)`.
+  - Key `L` — **Learn Mode** (on key-down): Toggle `_learnMidiCCMode`. When toggling off, reset `_learnedCC` and `_learnedChannel` to `0xffu`.
   - Key `W` — **Wire Command** (on key-down):
-    - Requires `LearnedCC != 0xffu` (a CC was captured) **and** `LastTouchedParam.Plugin != nullptr` (a VST parameter was touched).
-    - Query the hovered `MidiLoop` via the current selector. If none, do nothing.
-    - Write to `loop.GetLane(SelectedLaneIndex)`: set `Active = true`, `Channel`, `ControllerNumber`, `TargetPlugin`, `TargetParameterIndex` from the captured state.
-    - **This writes to the selected lane slot** — it does not append a new one blindly. If slot `SelectedLaneIndex` already had a wiring, it is replaced. To add a second wiring, the user first cycles to the next empty slot with `]` (see below).
-    - After wiring: exit learn mode (`LearnMidiCCMode = false`, clear `LearnedCC`/`LearnedChannel`), and call `Station::_RebuildAutomationDispatch()` on the non-audio thread.
-  - Key `X` — **Delete Lane** (on key-down): Clear `loop.GetLane(SelectedLaneIndex)` on the hovered loop — set `Active = false`, reset all fields, erase control points. Trigger `_RebuildAutomationDispatch`.
-  - Key `[` / `]` — **Cycle Selected Lane** (on key-down): Decrement / increment `SelectedLaneIndex` (wrapping within `0..MaxAutomationLanes-1`). The renderer should highlight the active lane so the user knows which slot they're operating on.
-  Key `A` — **Automation Record Mode**: Set `AutomationRecordHeld = true` and `RecordTargetLoop = hoveredLoop` **on key-down**; clear both back to `false` / `nullptr` **on key-up**, then immediately call `Station::_RebuildAutomationDispatch()`. The rebuild's `release` store on `_automationDispatch` establishes a happens-before between all MIDI thread writes to `Points` during recording and the audio thread's subsequent `acquire` load of the dispatch pointer. Without this fence, the audio thread could read stale control-point data on the first playback block. The held-key model means recording is always intentional and transient — releasing `A` triggers the fence and immediately resumes playback on that loop's lanes.
+    - Requires `_learnedCC != 0xffu` and `vst::_lastTouchedParam.Plugin != nullptr`.
+    - Resolves hovered automation target from station hover path + hovered LoopTake fallback.
+    - Writes to `loop.GetLane(_selectedLaneIndex)` and rebuilds the owning station dispatch.
+    - Exits learn mode and clears capture.
+  - Key `X` — **Delete Lane** (on key-down): Clears `loop.GetLane(_selectedLaneIndex)` on hovered loop and rebuilds that station dispatch.
+  - Key `[` / `]` — **Cycle Selected Lane** (on key-down): updates `_selectedLaneIndex` with wraparound.
+  - Key `A` — **Automation Record Mode**: sets `_automationRecordHeld = true` on key-down and false on key-up; key-up rebuilds dispatch for all local stations. Recording is keyed by lane mapping match (`AutomationMapping::MatchKey`), not by a single record-target loop pointer.
 
 ---
 
@@ -300,17 +299,14 @@ if (std::abs(val - entry.lastValue) > automationEpsilon) {
 
 On a steady-state loop after the first pass, this reduces `SetParameter` calls to zero — the dominant cost on a playing-but-not-moving automation lane.
 
-### [DONE] 4-E: Final audio-thread dispatch loop in `_RunVstBlock`
+### [DONE] 4-E: Final audio-thread dispatch loop
 
 > **Agent note:** Implemented as `Station::_RunAutomationDispatch(blockStartSample)`, called from `Station::WriteBlock` immediately after `_RunVstBlock`. It is deliberately *not* gated behind `vstActive`, so recorded parameter motion still drives a bypassed/idle chain. Buffer-index derivation, acquire/release fencing, per-loop `fmod`, cursor advance, and the delta gate (`AutomationEpsilon = 1/65536`) match the plan. Verified by `StationAutomation.*` GTests in `test/JammaLib_Tests/src/engine/StationMidiInstrument_Tests.cpp`. Test hook: `Station::RunAutomationDispatchForTest`.
 
 With the above in place, the audio-thread path collapses to:
 
 ```cpp
-// acquire pairs with the release store in _RebuildAutomationDispatch,
-// ensuring all MIDI-thread writes to Points are visible once recordHeld goes false.
-const bool        recordHeld   = midi::AutomationRecordHeld.load(std::memory_order_acquire);
-const MidiLoop*   recordTarget = midi::RecordTargetLoop.load(std::memory_order_relaxed);
+const bool        recordHeld   = midi::MidiRouter::IsAutomationRecordHeld();
 const auto*       dispatches   = _automationDispatch.load(std::memory_order_acquire);
 // Derive front buffer index from which half of _automationDispatchBuf the pointer falls in.
 const std::uint8_t frontIdx   = dispatches ? (dispatches == _automationDispatchBuf[0] ? 0u : 1u) : 0u;
@@ -319,9 +315,9 @@ const auto         count      = dispatches ? _automationDispatchCount[frontIdx] 
 for (auto i = 0u; i < count; ++i)
 {
     auto& entry = dispatches[i];
-    // Suppress playback only for lanes on the loop that is actively being recorded.
-    // Other loops' lanes (different MidiLoop*) continue playing back unaffected.
-    if (recordHeld && entry.loop == recordTarget) continue;
+  // Suppress playback while automation recording is held, so incoming CC writes
+  // own parameter movement without playback tug-of-war.
+  if (recordHeld) continue;
 
     // Per-loop fractional position from block-start sample.
     const double frac = (entry.loopLengthSamps > 0u)
@@ -351,15 +347,18 @@ No `weak_ptr::lock`. No shared_ptr deref chain. No per-entry atomic loads. One f
 
 ### 5-A: Per-Parameter Automation State
 - `MidiLoop` already holds a fixed array of `AutomationLane` (capacity `MaxAutomationLanes = 8`, defined in Phase 2-A). Each lane is fully self-contained: its own `AutomationMapping` metadata, its own sparse control-point buffer, and its own point count. No structural changes to `MidiLoop` are required for multi-lane support.
-- `SelectedLaneIndex` (Phase 3-A) identifies which slot the user is currently operating on. `RecordTargetLoop` (Phase 3-A) identifies which loop is actively recording. Together they make multi-lane, multi-loop operation deterministic with no ambiguity.
+- `_selectedLaneIndex` identifies which slot the user is currently operating on.
+- Recording is now mapping-driven across all local stations while `_automationRecordHeld` is true; there is no single `RecordTargetLoop` pointer.
 - This allows:
-  - simultaneous recording of several parameters from the same loop (press `]` to move to next lane slot, wire each with W, then hold A to record all active lanes at once since `recordHeld` suppresses all of the target loop's lanes),
+  - simultaneous recording of several parameters from the same loop,
+  - simultaneous recording of mapped parameters across multiple stations,
   - independent wiring of different CCs/controllers to different parameters (each lane stores its own `ControllerNumber`/`Channel`),
   - and independent playback of each mapped parameter via the flat dispatch list.
 
 ### 5-B: Simultaneous / Independent Recording
-- When recording is active, incoming MIDI CC values should be routed to whichever automation mapping is currently selected or currently armed for that controller/channel.
-- A single loop may record multiple automation lanes at once if multiple mappings are armed.
+- When recording is active, incoming MIDI CC values are routed to every active mapping with matching `(channel, cc)` across all local stations and their MIDI loops.
+- A single loop may record multiple automation lanes at once if multiple mappings match.
+- Multiple stations may record at the same time if they contain matching active mappings.
 - Each mapping should keep its own timeline of sparse control points, so one parameter’s curve can evolve independently of another’s.
 - The UI/interaction layer should make it clear which automation lane is currently being learned or recorded.
 
