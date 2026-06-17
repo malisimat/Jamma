@@ -3,13 +3,21 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "../gui/GuiModel.h"
 #include "../midi/MidiNote.h"
 
+namespace midi
+{
+	class MidiLoop;
+}
+
 namespace graphics
 {
+	class GlDrawContext;
+
 	class MidiModelParams : public gui::GuiModelParams
 	{
 	public:
@@ -57,8 +65,14 @@ namespace graphics
 		static std::vector<float> BuildBaseVerts(unsigned int segments);
 		static std::vector<float> BuildBaseUvs(unsigned int segments);
 
+		// Back-pointer to the owning loop so the renderer can read automation lanes.
+		// The loop owns this model (shared_ptr), so the raw pointer outlives the model.
+		void SetAutomationSource(const midi::MidiLoop* loop) noexcept { _automationSource = loop; }
+
 	protected:
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
+		void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		void _ReleaseResources() override;
 
 	private:
 		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<midi::MidiNote>& spans,
@@ -66,10 +80,31 @@ namespace graphics
 		void ApplyPendingModelUpdate();
 		float PitchOffset(std::uint8_t note) const noexcept;
 
+		// --- Automation curtain rendering ---
+		void _InitAutomationGl(resources::ResourceLib& resourceLib);
+		void _ReleaseAutomationGl();
+		void _DrawAutomation(GlDrawContext& glCtx);
+
 	private:
 		MidiModelParams _midiParams;
 		double _loopIndexFrac;
 		unsigned int _backNoteInstanceCount;
 		std::atomic<std::shared_ptr<ModelInstanceData>> _pendingModelUpdate;
+
+		// Automation display state. GL objects live on the render thread only.
+		const midi::MidiLoop* _automationSource;
+		std::atomic<std::uint32_t> _displayLengthSamps;
+		bool _automationGlReady;
+		std::weak_ptr<resources::ShaderResource> _automationShader;
+		GLuint _curtainVao;
+		GLuint _curtainVbo;
+		unsigned int _curtainVertCount;
+		GLuint _crownVao;
+		GLuint _crownVbo;
+		unsigned int _crownVertCount;
+		GLuint _playVao;
+		GLuint _playVbo;
+		GLuint _dotVao;
+		GLuint _dotVbo;
 	};
 }

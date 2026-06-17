@@ -145,6 +145,8 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
 {
 	_model = std::move(model);
+	if (_model)
+		_model->SetAutomationSource(this);
 	_modelRevision = 0u;
 	_modelLengthSamps = 0u;
 }
@@ -377,6 +379,11 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 	auto& points = lane.Points;
 	auto& count = lane.PointCount;
 
+	// Open the seqlock (odd) so a concurrent render-thread snapshot retries rather
+	// than observing a half-shifted buffer, then close it (even) on every exit.
+	const auto gen = lane.Revision.load(std::memory_order_relaxed);
+	lane.Revision.store(gen + 1u, std::memory_order_release);
+
 	// Find the insertion index (points are kept sorted by frac ascending).
 	std::size_t insertAt = 0u;
 	while (insertAt < count && points[insertAt].first < fracF)
@@ -386,22 +393,25 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 	if (insertAt < count && (points[insertAt].first - fracF) <= fracEpsilon)
 	{
 		points[insertAt].second = value;
-		return;
 	}
-	if (insertAt > 0u && (fracF - points[insertAt - 1u].first) <= fracEpsilon)
+	else if (insertAt > 0u && (fracF - points[insertAt - 1u].first) <= fracEpsilon)
 	{
 		points[insertAt - 1u].second = value;
-		return;
+	}
+	else if (count >= AutomationLane::MaxPoints)
+	{
+		// Buffer full: drop newest.
+	}
+	else
+	{
+		// Shift tail right to make room, then insert. Fixed-capacity, no allocation.
+		for (std::size_t i = count; i > insertAt; --i)
+			points[i] = points[i - 1u];
+		points[insertAt] = std::make_pair(fracF, value);
+		++count;
 	}
 
-	if (count >= AutomationLane::MaxPoints)
-		return; // Buffer full: drop newest.
-
-	// Shift tail right to make room, then insert. Fixed-capacity, no allocation.
-	for (std::size_t i = count; i > insertAt; --i)
-		points[i] = points[i - 1u];
-	points[insertAt] = std::make_pair(fracF, value);
-	++count;
+	lane.Revision.store(gen + 2u, std::memory_order_release);
 }
 
 float MidiLoop::GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept
@@ -449,8 +459,50 @@ void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
 		return;
 
 	auto& lane = _lanes[laneIdx];
+	const auto gen = lane.Revision.load(std::memory_order_relaxed);
+	lane.Revision.store(gen + 1u, std::memory_order_release);
 	lane.Mapping.MatchKey.store(AutomationMapping::kInactive, std::memory_order_relaxed);
 	lane.Mapping.TargetPlugin = nullptr;
 	lane.Mapping.TargetParameterIndex = 0u;
 	lane.PointCount = 0u;
+	lane.Revision.store(gen + 2u, std::memory_order_release);
+}
+
+std::uint16_t MidiLoop::SnapshotAutomationLanePoints(std::size_t laneIdx,
+	std::pair<float, float>* out, std::size_t maxPoints) const noexcept
+{
+	if (laneIdx >= MaxAutomationLanes || !out || 0u == maxPoints)
+		return 0u;
+
+	const auto& lane = _lanes[laneIdx];
+
+	// Seqlock read: retry while the writer holds the lock (odd generation) or the
+	// generation changed mid-copy. Bounded retries — this is a display path, so a
+	// rare give-up returning the latest partial copy is acceptable.
+	for (int attempt = 0; attempt < 8; ++attempt)
+	{
+		const auto gen0 = lane.Revision.load(std::memory_order_acquire);
+		if (gen0 & 1u)
+			continue; // Writer in progress.
+
+		auto count = lane.PointCount;
+		if (count > maxPoints)
+			count = maxPoints;
+		for (std::size_t i = 0u; i < count; ++i)
+			out[i] = lane.Points[i];
+
+		const auto gen1 = lane.Revision.load(std::memory_order_acquire);
+		if (gen0 == gen1)
+			return static_cast<std::uint16_t>(count);
+	}
+
+	return 0u;
+}
+
+bool MidiLoop::IsAutomationLaneActive(std::size_t laneIdx) const noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return false;
+
+	return _lanes[laneIdx].Mapping.IsActive();
 }

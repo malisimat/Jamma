@@ -7,6 +7,7 @@
 2 waveform MVP LoopState LoopHover TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius
 2 vu MVP DX DY NumInstances InstanceOffset
 2 midi_note MVP ObjectId Highlight LoopHover DiscAlpha RenderMode
+2 automation MVP
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius
 2 colour MVP Color
 2 quantisation MVP Highlight OverlayAlpha

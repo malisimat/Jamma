@@ -1,11 +1,17 @@
 #include "MidiModel.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
 #include "../include/Constants.h"
 #include "GlDrawContext.h"
+#include "GlDeleteQueue.h"
+#include "../midi/MidiLoop.h"
+#include "../midi/MidiRouter.h"
+#include "../resources/ResourceLib.h"
+#include "../resources/ShaderResource.h"
 #include "../utils/VecUtils.h"
 
 using namespace graphics;
@@ -17,6 +23,10 @@ namespace
 	static constexpr unsigned int BaseArcSegments = 16u;
 	static constexpr unsigned int TimePitchAttribute = 3u;
 	static constexpr unsigned int ShapeAttribute = 4u;
+
+	// Automation curtain tessellation around the loop circumference. Higher counts
+	// give a smoother undulating ribbon at the cost of more vertices (built once).
+	static constexpr unsigned int AutomationArcSegments = 160u;
 
 	void AddTri(std::vector<float>& verts,
 	            float x1, float y1, float z1,
@@ -81,7 +91,21 @@ MidiModel::MidiModel(MidiModelParams params)
 	  _midiParams(params),
 	  _loopIndexFrac(0.0),
 	  _backNoteInstanceCount(0u),
-	  _pendingModelUpdate(nullptr)
+	  _pendingModelUpdate(nullptr),
+	  _automationSource(nullptr),
+	  _displayLengthSamps(0u),
+	  _automationGlReady(false),
+	  _automationShader(),
+	  _curtainVao(0u),
+	  _curtainVbo(0u),
+	  _curtainVertCount(0u),
+	  _crownVao(0u),
+	  _crownVbo(0u),
+	  _crownVertCount(0u),
+	  _playVao(0u),
+	  _playVbo(0u),
+	  _dotVao(0u),
+	  _dotVbo(0u)
 {
 	// Emit a disc at the minimum radius so the loop target is visible
 	// from the moment it is created (before the loop length is known).
@@ -100,6 +124,7 @@ MidiModel::MidiModel(MidiModelParams params)
 
 MidiModel::~MidiModel()
 {
+	_ReleaseAutomationGl();
 }
 
 void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPass pass)
@@ -147,6 +172,8 @@ void MidiModel::Draw3d(DrawContext& ctx, unsigned int numInstances, base::DrawPa
 		glCtx.SetUniform("RenderMode", 4);
 		GuiModel::Draw3d(glCtx, numInstances, pass);
 
+		_DrawAutomation(glCtx);
+
 		glDepthMask(prevDepthMask);
 	}
 	else
@@ -163,6 +190,7 @@ void MidiModel::SetLoopIndexFrac(double frac) noexcept
 
 void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
+	_displayLengthSamps.store(loopLengthSamps, std::memory_order_relaxed);
 	auto data = BuildInstanceData(spans, loopLengthSamps);
 	_backNoteInstanceCount = data->NoteCount;
 	SetInstanceAttributes(std::move(data->Attributes), data->InstanceCount);
@@ -170,6 +198,7 @@ void MidiModel::UpdateModel(const std::vector<midi::MidiNote>& spans, std::uint3
 
 void MidiModel::QueueModelUpdate(const std::vector<midi::MidiNote>& spans, std::uint32_t loopLengthSamps)
 {
+	_displayLengthSamps.store(loopLengthSamps, std::memory_order_relaxed);
 	_pendingModelUpdate.store(BuildInstanceData(spans, loopLengthSamps), std::memory_order_release);
 }
 
@@ -262,12 +291,215 @@ std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
 	return std::weak_ptr<resources::ShaderResource>();
 }
 
+void MidiModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	GuiModel::_InitResources(resourceLib, forceInit);
+	_InitAutomationGl(resourceLib);
+}
+
+void MidiModel::_ReleaseResources()
+{
+	GuiModel::_ReleaseResources();
+	_ReleaseAutomationGl();
+}
+
+void MidiModel::_InitAutomationGl(resources::ResourceLib& resourceLib)
+{
+	if (_automationGlReady || !HasCurrentGlContext())
+		return;
+
+	if (auto resOpt = resourceLib.GetResource("automation"); resOpt.has_value())
+	{
+		if (auto res = resOpt.value().lock(); res && resources::SHADER == res->GetType())
+			_automationShader = std::dynamic_pointer_cast<resources::ShaderResource>(res);
+	}
+
+	// Curtain: a closed triangle strip of bottom/top vertex pairs around the loop.
+	std::vector<float> curtain;
+	curtain.reserve((AutomationArcSegments + 1u) * 4u);
+	for (unsigned int i = 0u; i <= AutomationArcSegments; ++i)
+	{
+		const float t = static_cast<float>(i) / static_cast<float>(AutomationArcSegments);
+		curtain.push_back(t); curtain.push_back(0.0f); // base
+		curtain.push_back(t); curtain.push_back(1.0f); // top
+	}
+	_curtainVertCount = (AutomationArcSegments + 1u) * 2u;
+
+	// Crown: the top edge as a closed line loop.
+	std::vector<float> crown;
+	crown.reserve(AutomationArcSegments * 2u);
+	for (unsigned int i = 0u; i < AutomationArcSegments; ++i)
+	{
+		const float t = static_cast<float>(i) / static_cast<float>(AutomationArcSegments);
+		crown.push_back(t); crown.push_back(1.0f);
+	}
+	_crownVertCount = AutomationArcSegments;
+
+	const float play[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	const float dot[2] = { 0.0f, 1.0f };
+
+	const auto makeVao = [](GLuint& vao, GLuint& vbo, const float* data, std::size_t floatCount)
+	{
+		glGenVertexArrays(1, &vao);
+		glBindVertexArray(vao);
+		glGenBuffers(1, &vbo);
+		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+		glBufferData(GL_ARRAY_BUFFER, floatCount * sizeof(GLfloat), data, GL_STATIC_DRAW);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+		glBindVertexArray(0);
+	};
+
+	makeVao(_curtainVao, _curtainVbo, curtain.data(), curtain.size());
+	makeVao(_crownVao, _crownVbo, crown.data(), crown.size());
+	makeVao(_playVao, _playVbo, play, 4u);
+	makeVao(_dotVao, _dotVbo, dot, 2u);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	_automationGlReady = true;
+}
+
+void MidiModel::_ReleaseAutomationGl()
+{
+	const auto dropBuffer = [](GLuint& id)
+	{
+		if (id != 0u)
+		{
+			graphics::GlDeleteQueue::DeleteBuffers(1, &id);
+			id = 0u;
+		}
+	};
+	const auto dropVao = [](GLuint& id)
+	{
+		if (id != 0u)
+		{
+			graphics::GlDeleteQueue::DeleteVertexArrays(1, &id);
+			id = 0u;
+		}
+	};
+
+	dropBuffer(_curtainVbo); dropVao(_curtainVao);
+	dropBuffer(_crownVbo);   dropVao(_crownVao);
+	dropBuffer(_playVbo);    dropVao(_playVao);
+	dropBuffer(_dotVbo);     dropVao(_dotVao);
+
+	_curtainVertCount = 0u;
+	_crownVertCount = 0u;
+	_automationGlReady = false;
+}
+
+void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
+{
+	if (!_automationSource)
+		return;
+
+	auto shader = _automationShader.lock();
+	if (!shader || 0u == _curtainVao)
+		return;
+
+	const auto lengthSamps = _displayLengthSamps.load(std::memory_order_relaxed);
+	if (0u == lengthSamps)
+		return;
+
+	// Reproduce the placement GuiModel applies to the note instances so the curtain
+	// sits concentric with the note ring.
+	const auto pos = ModelPosition();
+	const auto scale = ModelScale();
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
+
+	const double rawRadius = 70.0 * std::log(static_cast<double>(lengthSamps)) - 600.0;
+	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));
+	const float laneHeight = baseRadius * 0.16f;
+	const bool recording = midi::MidiRouter::IsAutomationRecordHeld();
+	const float playFrac = static_cast<float>(_loopIndexFrac);
+
+	const GLuint prog = shader->GetId();
+	glUseProgram(prog);
+	shader->SetUniforms(glCtx); // MVP
+
+	const GLint locPoints = glGetUniformLocation(prog, "AutoPoints");
+	const GLint locCount = glGetUniformLocation(prog, "AutoPointCount");
+	const GLint locRadius = glGetUniformLocation(prog, "LaneRadius");
+	const GLint locHeight = glGetUniformLocation(prog, "LaneHeight");
+	const GLint locColor = glGetUniformLocation(prog, "LaneColor");
+	const GLint locGlow = glGetUniformLocation(prog, "RecordGlow");
+	const GLint locPlay = glGetUniformLocation(prog, "PlayFrac");
+	const GLint locMode = glGetUniformLocation(prog, "RenderMode");
+
+	glUniform1f(locPlay, playFrac);
+
+	GLboolean prevDepthMask = GL_TRUE;
+	glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+	const GLboolean prevBlend = glIsEnabled(GL_BLEND);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_PROGRAM_POINT_SIZE);
+
+	static const std::array<glm::vec3, 8> palette = { {
+		{ 0.20f, 0.85f, 1.00f }, { 1.00f, 0.55f, 0.20f }, { 0.55f, 1.00f, 0.45f }, { 1.00f, 0.35f, 0.65f },
+		{ 0.70f, 0.55f, 1.00f }, { 1.00f, 0.90f, 0.30f }, { 0.30f, 0.95f, 0.80f }, { 0.95f, 0.45f, 0.40f }
+	} };
+
+	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> pts;
+	std::array<float, midi::AutomationLane::MaxPoints * 2u> flat;
+
+	for (std::size_t lane = 0u; lane < midi::MidiLoop::MaxAutomationLanes; ++lane)
+	{
+		const bool active = _automationSource->IsAutomationLaneActive(lane);
+		const auto count = _automationSource->SnapshotAutomationLanePoints(lane, pts.data(), pts.size());
+		if (!active && 0u == count)
+			continue;
+
+		for (std::uint16_t i = 0u; i < count; ++i)
+		{
+			flat[i * 2u] = pts[i].first;
+			flat[i * 2u + 1u] = pts[i].second;
+		}
+
+		const float laneRadius = baseRadius * (1.05f + static_cast<float>(lane) * 0.045f);
+		const auto& col = palette[lane % palette.size()];
+
+		glUniform2fv(locPoints, count, flat.data());
+		glUniform1i(locCount, static_cast<GLint>(count));
+		glUniform1f(locRadius, laneRadius);
+		glUniform1f(locHeight, laneHeight);
+		glUniform3f(locColor, col.x, col.y, col.z);
+		glUniform1f(locGlow, (active && recording) ? 1.0f : 0.0f);
+
+		glUniform1i(locMode, 0); // Curtain
+		glBindVertexArray(_curtainVao);
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, static_cast<GLsizei>(_curtainVertCount));
+
+		glUniform1i(locMode, 1); // Crown ring
+		glBindVertexArray(_crownVao);
+		glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(_crownVertCount));
+
+		glUniform1i(locMode, 2); // Playhead line
+		glBindVertexArray(_playVao);
+		glDrawArrays(GL_LINES, 0, 2);
+
+		glUniform1i(locMode, 3); // Play dot
+		glBindVertexArray(_dotVao);
+		glDrawArrays(GL_POINTS, 0, 1);
+	}
+
+	glBindVertexArray(0);
+	glUseProgram(0);
+
+	glDisable(GL_PROGRAM_POINT_SIZE);
+	if (!prevBlend)
+		glDisable(GL_BLEND);
+	glDepthMask(prevDepthMask);
+
+	glCtx.PopMvp();
+	glCtx.PopMvp();
+}
+
 std::vector<float> MidiModel::BuildBaseVerts(unsigned int segments)
 {
 	std::vector<float> verts;
-	if (0u == segments)
-		return verts;
-
 	verts.reserve((segments * 8u + 4u) * 9u);
 
 	for (auto segment = 0u; segment < segments; ++segment)

@@ -255,6 +255,14 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="resources\shaders\automation.frag">
+      <DeploymentContent>true</DeploymentContent>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="resources\shaders\automation.vert">
+      <DeploymentContent>true</DeploymentContent>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="resources\shaders\quantisation.frag">
       <DeploymentContent>true</DeploymentContent>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

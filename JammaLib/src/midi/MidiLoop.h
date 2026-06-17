@@ -91,6 +91,14 @@ namespace midi
 		AutomationMapping Mapping;
 		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
 		std::size_t PointCount = 0u;
+
+		// Seqlock generation counter. The MIDI thread (the only writer of Points /
+		// PointCount) bumps this to an odd value before mutating the buffer and back
+		// to an even value afterwards. The render thread reads the points with a
+		// retry loop so it never observes a half-shifted buffer. Audio-thread cursor
+		// reads ignore this; a momentarily torn read there is harmless and pre-dates
+		// the display path.
+		std::atomic<std::uint32_t> Revision{ 0u };
 	};
 
 	// In-memory MIDI loop. Records sample-offset-stamped events relative to the
@@ -187,6 +195,17 @@ namespace midi
 
 		// Clear a lane's mapping and control points (non-audio thread; delete key).
 		void ClearAutomationLane(std::size_t laneIdx) noexcept;
+
+		// Render-thread consistent read of a lane's control points via the lane
+		// seqlock. Copies up to maxPoints (frac, value) pairs into out and returns
+		// the count actually copied. Returns 0 for an invalid lane. Safe to call
+		// concurrently with MIDI-thread writes (retries on a torn read).
+		std::uint16_t SnapshotAutomationLanePoints(std::size_t laneIdx,
+			std::pair<float, float>* out, std::size_t maxPoints) const noexcept;
+
+		// Whether a lane currently has a mapping wired. Used by the renderer to gate
+		// and highlight active automation bands.
+		bool IsAutomationLaneActive(std::size_t laneIdx) const noexcept;
 
 		// Non-destructive start-time quantisation. Non-RT publication builds immutable
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained

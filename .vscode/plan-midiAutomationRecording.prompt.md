@@ -345,7 +345,7 @@ No `weak_ptr::lock`. No shared_ptr deref chain. No per-entry atomic loads. One f
 
 ## Phase 5: Multiple Automation Parameters and Multi-Playback
 
-### 5-A: Per-Parameter Automation State
+### [DONE] 5-A: Per-Parameter Automation State
 - `MidiLoop` already holds a fixed array of `AutomationLane` (capacity `MaxAutomationLanes = 8`, defined in Phase 2-A). Each lane is fully self-contained: its own `AutomationMapping` metadata, its own sparse control-point buffer, and its own point count. No structural changes to `MidiLoop` are required for multi-lane support.
 - `_selectedLaneIndex` identifies which slot the user is currently operating on.
 - Recording is now mapping-driven across all local stations while `_automationRecordHeld` is true; there is no single `RecordTargetLoop` pointer.
@@ -355,14 +355,14 @@ No `weak_ptr::lock`. No shared_ptr deref chain. No per-entry atomic loads. One f
   - independent wiring of different CCs/controllers to different parameters (each lane stores its own `ControllerNumber`/`Channel`),
   - and independent playback of each mapped parameter via the flat dispatch list.
 
-### 5-B: Simultaneous / Independent Recording
+### [DONE] 5-B: Simultaneous / Independent Recording
 - When recording is active, incoming MIDI CC values are routed to every active mapping with matching `(channel, cc)` across all local stations and their MIDI loops.
 - A single loop may record multiple automation lanes at once if multiple mappings match.
 - Multiple stations may record at the same time if they contain matching active mappings.
 - Each mapping should keep its own timeline of sparse control points, so one parameter’s curve can evolve independently of another’s.
 - The UI/interaction layer should make it clear which automation lane is currently being learned or recorded.
 
-### 5-C: Multi-Playback Routing
+### [DONE] 5-C: Multi-Playback Routing
 - During playback, evaluate all active automation mappings for a loop and apply each mapped value to its target plugin parameter.
 - Playback should be additive/independent per mapping, not a single shared curve.
 - If multiple automation mappings target the same plugin parameter, the system should either:
@@ -370,7 +370,7 @@ No `weak_ptr::lock`. No shared_ptr deref chain. No per-entry atomic loads. One f
   - define a clear precedence rule such as “last wired mapping wins” or “multi-lane blend.”
 - The initial implementation should favor deterministic, easy-to-reason-about behavior: evaluate mappings in insertion order and apply each to its target parameter.
 
-### 5-D: Rendering Multiple Automation Curves
+### [DONE] 5-D: Rendering Multiple Automation Curves
 - The display should support rendering multiple automation lanes for the same loop, each with its own texture-backed curve.
 - One vertex shader uniform (Radius) and one fragment shader uniform (Color) are used to distinguish different parameters/lanes in the 3D visualization.
 - The shader path should remain generic: one automation curve texture can drive one visual band/ribbon, and multiple bands can be drawn for multiple mapped parameters.
@@ -379,13 +379,19 @@ No `weak_ptr::lock`. No shared_ptr deref chain. No per-entry atomic loads. One f
 
 ## Phase 6: Holographic 3D Undulating Display
 
-### 6-A: Pipeline Shader Modifications
+### [DONE] 6-A: Pipeline Shader Modifications
+
+> **Agent note:** Implemented with a `uniform vec2 AutoPoints[256]` array instead of an N×2 lookup *texture*. Functionally equivalent (piecewise-linear interp in the vertex shader), but avoids a new `TextureResource` subclass and per-frame `glTexImage2D` uploads. Control points are snapshotted from the live `MidiLoop` lane each draw via a seqlock reader (`SnapshotAutomationLanePoints`) and pushed as uniforms. Single shader pair handles all four primitives via an `int RenderMode` uniform (0 curtain / 1 crown / 2 playhead / 3 dot).
+
 - Store shader pipeline configs [Jamma/resources/shaders/automation.vert](Jamma/resources/shaders/automation.vert) and [Jamma/resources/shaders/automation.frag](Jamma/resources/shaders/automation.frag):
   - **Vertex Shader**: Use the automation lookup texture to sample the curve by the vertex’s loop position, then offset the geometry along the circular trajectory using the sampled height value.
   - **Fragment Shader**: Apply a color gradient (circumferentially, based on uv coordinates, so color and alpha fade with loop time, brightest at current play position). Also feature bright highlighted thick top edge and vertical play position.  Should brighten when recording is active (frag uniform).
 - The vertex shader should perform piecewise-linear interpolation across the sparse control points stored in the $N \times 2$ texture (first coord is time [0:1], second coord is automation height value), so the display updates live while recording without CPU resampling.
 
-### 6-B: VAO Setup inside `MidiModel`
+### [DONE] 6-B: VAO Setup inside `MidiModel`
+
+> **Agent note:** Four static VAO/VBO pairs built once in `_InitAutomationGl` (curtain triangle-strip, crown line-loop, playhead line, dot point). `MidiModel` caches a `const midi::MidiLoop*` back-pointer set in `MidiLoop::AttachModel`. Per-lane draw loop in `_DrawAutomation` snapshots points, sets per-lane radius/height/colour uniforms, and issues the four draws. No mesh regeneration per frame; only uniforms change. "Texture re-upload on change" requirement is satisfied by the per-draw uniform snapshot.
+
 - Update [JammaLib/src/graphics/MidiModel.h](JammaLib/src/graphics/MidiModel.h) and [JammaLib/src/graphics/MidiModel.cpp](JammaLib/src/graphics/MidiModel.cpp):
   - Cache a reference pointer to `midi::MidiLoop` in `MidiModel`.
   - Build a fixed mesh once for the automation display, with the geometry defined in a reusable VAO/VBO pair.  UV's normalised to the loop length / full arc.  The main mesh should be a circular curtain with a small vertical height (scaled per LoopTake height), and the vertices should be arranged in a triangle strip around the circumference.
