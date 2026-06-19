@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -66,6 +67,15 @@ namespace midi
 		static constexpr std::uint32_t MakeMatchKey(std::uint8_t ch, std::uint8_t cc) noexcept
 		{
 			return (1u << 16) | (static_cast<std::uint32_t>(ch) << 8) | static_cast<std::uint32_t>(cc);
+		}
+
+		// Match key for a lane wired directly from a plugin editor drag (no CC
+		// source). Active so it renders and plays back, but uses out-of-range
+		// channel/CC sentinels (0xFF) that no real incoming CC can ever match, so
+		// live CC recording never writes into an editor-driven lane.
+		static constexpr std::uint32_t MakeEditorMatchKey() noexcept
+		{
+			return MakeMatchKey(0xFFu, 0xFFu);
 		}
 
 		bool IsActive() const noexcept
@@ -195,6 +205,28 @@ namespace midi
 
 		// Clear a lane's mapping and control points (non-audio thread; delete key).
 		void ClearAutomationLane(std::size_t laneIdx) noexcept;
+
+		// Clear only a lane's recorded points while preserving mapping metadata.
+		// Used by editor-driven overwrite mode to replace an existing curve from the
+		// first drag event in a new automation-record gesture.
+		void ClearAutomationLanePoints(std::size_t laneIdx) noexcept;
+
+		// Resolve which lane should host editor-driven automation for the given
+		// (plugin, parameter) pair. Resolution rule: first an active lane already
+		// mapped to that pair (reuse), otherwise the first inactive lane (claim),
+		// otherwise std::nullopt (full). Pure query: never mutates a lane. Called on
+		// the non-audio (MIDI pump) thread.
+		std::optional<std::size_t> ResolveAutomationLaneFor(const vst::IVstPlugin* plugin,
+			unsigned int paramIdx) const noexcept;
+
+		// Wire a lane for editor-driven automation (no CC source). Sets the target
+		// plugin/parameter and an editor match key. Returns true when the mapping
+		// topology actually changed (so the caller can rebuild the audio dispatch),
+		// false when the lane was already mapped to the same (plugin, parameter).
+		// Non-audio thread only.
+		bool WireEditorAutomationLane(std::size_t laneIdx,
+			vst::IVstPlugin* plugin,
+			unsigned int paramIdx) noexcept;
 
 		// Render-thread consistent read of a lane's control points via the lane
 		// seqlock. Copies up to maxPoints (frac, value) pairs into out and returns

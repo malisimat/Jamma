@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -20,6 +22,11 @@
 namespace io
 {
 	struct UserConfig;
+}
+
+namespace vst
+{
+	class IVstPlugin;
 }
 
 namespace engine
@@ -90,7 +97,36 @@ namespace midi
 		static bool IsAutomationRecordHeld() noexcept;
 		static void SetAutomationRecordHeldForTest(bool held) noexcept;
 
+		// --- Editor-driven automation feedback suppression ---
+		// Per (plugin, parameter) cool-down published by the non-RT MIDI pump and
+		// read by the audio-thread automation player. While suppressed, recorded
+		// automation playback skips that one parameter so a live editor drag is not
+		// fought by its own freshly recorded curve. Deadlines live in the audio
+		// sample domain so the audio thread never reads a wall clock.
+
+		// Cool-down window after the last editor-origin change, in milliseconds.
+		static constexpr double AutomationSuppressionCooldownMs = 800.0;
+
+		// Audio thread: true while (plugin, paramIdx) is within its cool-down at
+		// blockStartSample. Real-time safe: bounded flat scan, no locks/allocation,
+		// no wall-clock read.
+		static bool IsParameterSuppressed(const vst::IVstPlugin* plugin,
+			unsigned int paramIdx,
+			std::uint32_t blockStartSample) noexcept;
+
+		// Non-RT: refresh (or claim) the suppression entry for (plugin, paramIdx)
+		// with an absolute sample-domain expiry. nowSample lets stale entries be
+		// reclaimed.
+		static void RefreshAutomationSuppression(const vst::IVstPlugin* plugin,
+			unsigned int paramIdx,
+			std::uint32_t nowSample,
+			std::uint32_t expirySample) noexcept;
+
+		// Test hook: drop all suppression entries.
+		static void ResetAutomationSuppressionForTest() noexcept;
+
 	private:
+		static constexpr std::size_t MaxEditorOverwritePoints = 256u;
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
 
 		struct MidiInputEndpoint
@@ -119,6 +155,21 @@ namespace midi
 			const std::shared_ptr<engine::LoopTake>& hoveredTake) const;
 		void _PublishMidiTriggerRoutes();
 
+		// Non-RT: poll vst::_lastTouchedParam for a fresh editor-origin parameter
+		// change and, while automation record is held, record it into the owning
+		// station's last recorded MIDI loop (auto-creating/reusing a lane) and
+		// refresh that parameter's playback suppression. Called once per pump.
+		void _ConsumeEditorAutomation(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			std::uint64_t globalSampleNow,
+			const audio::AudioStreamParams& audioParams) noexcept;
+		void _ResetEditorOverwriteSessions() noexcept;
+		void _RecordOverwritePoint(
+			std::array<std::pair<float, float>, MaxEditorOverwritePoints>& points,
+			std::size_t& count,
+			float frac,
+			float value) noexcept;
+		void _ApplyEditorOverwriteSessions(std::uint32_t nowSample) noexcept;
+
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
 		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
@@ -132,5 +183,36 @@ namespace midi
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
 		bool _automationRecordKeyHeld = false;
 		static std::atomic<bool> _automationRecordHeld;
+
+		// Highest editor-origin sequence already consumed by _ConsumeEditorAutomation.
+		// Touched only on the (single) MIDI pump thread.
+		std::uint64_t _lastEditorAutomationSeq = 0u;
+
+		struct EditorOverwriteSession
+		{
+			bool Active = false;
+			const vst::IVstPlugin* Plugin = nullptr;
+			unsigned int ParamIndex = 0u;
+			std::weak_ptr<midi::MidiLoop> Loop;
+			std::size_t LaneIdx = 0u;
+			std::array<std::pair<float, float>, MaxEditorOverwritePoints> Points{};
+			std::size_t PointCount = 0u;
+			std::uint32_t ExpirySample = 0u;
+		};
+		static constexpr std::size_t MaxEditorOverwriteSessions = 16u;
+		std::array<EditorOverwriteSession, MaxEditorOverwriteSessions> _editorOverwriteSessions{};
+
+		// Fixed-capacity per-parameter suppression table. Written on the non-RT MIDI
+		// pump thread, read on the audio thread; each field is independently atomic
+		// and a momentarily stale read is harmless (best-effort cool-down).
+		struct AutomationSuppressionSlot
+		{
+			std::atomic<const vst::IVstPlugin*> Plugin{ nullptr };
+			std::atomic<unsigned int>           ParamIndex{ 0u };
+			std::atomic<std::uint32_t>          ExpirySample{ 0u };
+		};
+		static constexpr std::size_t MaxAutomationSuppressions = 16u;
+		static std::array<AutomationSuppressionSlot, MaxAutomationSuppressions> _automationSuppressions;
+		static std::atomic<std::uint8_t> _automationSuppressionCount;
 	};
 }

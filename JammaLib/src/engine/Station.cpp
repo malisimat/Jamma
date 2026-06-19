@@ -505,13 +505,60 @@ void Station::RebuildAutomationDispatch()
 	_automationDispatchBack ^= 1u;
 }
 
+std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take)
+{
+	std::shared_ptr<midi::MidiLoop> last;
+	if (!take)
+		return last;
+
+	for (const auto& loop : take->GetMidiLoops())
+	{
+		if (loop && loop->LoopLengthSamps() > 0u)
+			last = loop;
+	}
+	return last;
+}
+
+std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const
+{
+	if (!plugin)
+		return nullptr;
+
+	const auto& takes = GetLoopTakes();
+
+	// Take-level ownership: record into the owning take's last recorded loop.
+	for (const auto& take : takes)
+	{
+		if (take && take->OwnsPlugin(plugin))
+		{
+			if (auto loop = _LastRecordedMidiLoop(take))
+				return loop;
+		}
+	}
+
+	// Station-level ownership: record into the station's last recorded loop
+	// (the most recently created MIDI loop across all takes).
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain && chain->ContainsPlugin(plugin))
+	{
+		std::shared_ptr<midi::MidiLoop> last;
+		for (const auto& take : takes)
+		{
+			if (auto loop = _LastRecordedMidiLoop(take))
+				last = loop;
+		}
+		return last;
+	}
+
+	return nullptr;
+}
+
 void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 {
 	auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
 	if (!dispatches)
 		return;
 
-	const bool recordHeld = midi::MidiRouter::IsAutomationRecordHeld();
 	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
 	const auto count = _automationDispatchCount[frontIdx];
 
@@ -521,9 +568,12 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 		if (!entry.plugin || !entry.loop)
 			continue;
 
-		// While recording automation, bypass playback writes so incoming CC can own
-		// parameter movement across all active mappings without tug-of-war.
-		if (recordHeld)
+		// Editor-driven recording leaves a short per-parameter cool-down so a just
+		// dragged parameter is not snapped back to its recorded curve the instant
+		// automation record is released. Only the matching (plugin, parameter) pair
+		// is held off; all other automation plays normally. Sample-domain deadline,
+		// so the audio thread never reads a wall clock.
+		if (midi::MidiRouter::IsParameterSuppressed(entry.plugin, entry.paramIdx, blockStartSample))
 			continue;
 
 		const double frac = (entry.loopLengthSamps > 0u)

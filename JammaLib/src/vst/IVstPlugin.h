@@ -122,19 +122,25 @@ namespace vst
 	};
 
 	// Records the most recently host-automated plugin parameter so the UI thread
-	// can wire it to a MIDI automation lane ("MIDI learn" target half).
+	// can wire it to a MIDI automation lane ("MIDI learn" target half), and so the
+	// non-RT MIDI pump can record live editor-driven automation while automation
+	// record mode is held.
 	//
 	// Threading: written on the audio/UI thread inside Vst2Plugin's
 	// audioMasterAutomate host callback when the user touches a parameter in a
-	// plugin editor; read on the non-audio (UI/action) thread when the user
-	// presses the wire key. Each field is independently atomic; readers must
-	// tolerate a brief torn triple, which is acceptable because wiring only
-	// happens after the user deliberately stops touching the control.
+	// plugin editor; read on the non-audio (UI/action/job) thread when the user
+	// presses the wire key or when the MIDI pump consumes editor-origin events.
+	// Each field is independently atomic; readers must tolerate a brief torn
+	// triple, which is acceptable because wiring only happens after the user
+	// deliberately stops touching the control. Sequence is bumped (release) after
+	// the triple is stored so a consumer that acquire-loads Sequence observes a
+	// coherent Plugin/ParameterIndex/Value and can detect fresh events by change.
 	struct LastTouchedParameter
 	{
 		std::atomic<IVstPlugin*>   Plugin{ nullptr };
 		std::atomic<unsigned int>  ParameterIndex{ 0u };
 		std::atomic<float>         Value{ 0.0f };
+		std::atomic<std::uint64_t> Sequence{ 0u };
 	};
 	extern LastTouchedParameter _lastTouchedParam;
 

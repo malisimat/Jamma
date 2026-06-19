@@ -468,6 +468,64 @@ void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
 	lane.Revision.store(gen + 2u, std::memory_order_release);
 }
 
+void MidiLoop::ClearAutomationLanePoints(std::size_t laneIdx) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return;
+
+	auto& lane = _lanes[laneIdx];
+	const auto gen = lane.Revision.load(std::memory_order_relaxed);
+	lane.Revision.store(gen + 1u, std::memory_order_release);
+	lane.PointCount = 0u;
+	lane.Revision.store(gen + 2u, std::memory_order_release);
+}
+
+std::optional<std::size_t> MidiLoop::ResolveAutomationLaneFor(const vst::IVstPlugin* plugin,
+	unsigned int paramIdx) const noexcept
+{
+	// 1) Reuse an active lane already mapped to this exact (plugin, parameter).
+	for (std::size_t i = 0u; i < MaxAutomationLanes; ++i)
+	{
+		const auto& mapping = _lanes[i].Mapping;
+		if (mapping.IsActive()
+			&& mapping.TargetPlugin == plugin
+			&& mapping.TargetParameterIndex == paramIdx)
+			return i;
+	}
+
+	// 2) Otherwise claim the first inactive lane.
+	for (std::size_t i = 0u; i < MaxAutomationLanes; ++i)
+	{
+		if (!_lanes[i].Mapping.IsActive())
+			return i;
+	}
+
+	// 3) All lanes occupied by other mappings.
+	return std::nullopt;
+}
+
+bool MidiLoop::WireEditorAutomationLane(std::size_t laneIdx,
+	vst::IVstPlugin* plugin,
+	unsigned int paramIdx) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes)
+		return false;
+
+	auto& mapping = _lanes[laneIdx].Mapping;
+	const bool alreadyMapped = mapping.IsActive()
+		&& mapping.TargetPlugin == plugin
+		&& mapping.TargetParameterIndex == paramIdx;
+	if (alreadyMapped)
+		return false;
+
+	// Publish the target before activating the match key so a reader that observes
+	// the active key also observes the resolved plugin/parameter.
+	mapping.TargetPlugin = plugin;
+	mapping.TargetParameterIndex = paramIdx;
+	mapping.MatchKey.store(AutomationMapping::MakeEditorMatchKey(), std::memory_order_release);
+	return true;
+}
+
 std::uint16_t MidiLoop::SnapshotAutomationLanePoints(std::size_t laneIdx,
 	std::pair<float, float>* out, std::size_t maxPoints) const noexcept
 {

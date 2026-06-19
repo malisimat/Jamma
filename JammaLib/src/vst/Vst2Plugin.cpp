@@ -564,12 +564,15 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		return 0;
 	case audioMasterAutomate:
 		// Parameter automation notification: record the most recently touched
-		// parameter so the UI thread can wire it to a MIDI automation lane.
+		// parameter so the UI thread can wire it to a MIDI automation lane and the
+		// MIDI pump can record live editor-driven automation. Publish the triple
+		// first, then bump Sequence (release) so consumers see a coherent event.
 		if (self)
 		{
 			_lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
 			_lastTouchedParam.ParameterIndex.store(static_cast<unsigned int>(index), std::memory_order_relaxed);
 			_lastTouchedParam.Value.store(opt, std::memory_order_relaxed);
+			_lastTouchedParam.Sequence.fetch_add(1u, std::memory_order_release);
 		}
 		return 0;
 	case audioMasterIdle:

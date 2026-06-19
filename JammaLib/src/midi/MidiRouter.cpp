@@ -16,6 +16,8 @@ using namespace midi;
 namespace midi
 {
 	std::atomic<bool> MidiRouter::_automationRecordHeld{ false };
+	std::array<MidiRouter::AutomationSuppressionSlot, MidiRouter::MaxAutomationSuppressions> MidiRouter::_automationSuppressions{};
+	std::atomic<std::uint8_t> MidiRouter::_automationSuppressionCount{ 0u };
 }
 
 std::pair<std::shared_ptr<engine::Station>, std::shared_ptr<midi::MidiLoop>> MidiRouter::_ResolveAutomationTarget(
@@ -69,6 +71,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 		if (isDown && ctrlShift && !_automationRecordKeyHeld)
 		{
 			_automationRecordKeyHeld = true;
+			_ResetEditorOverwriteSessions();
 			_automationRecordHeld.store(true, std::memory_order_release);
 			std::cout << ">> Automation record armed (Ctrl+Shift+A) <<" << std::endl;
 			return eaten;
@@ -185,6 +188,178 @@ bool MidiRouter::IsAutomationRecordHeld() noexcept
 void MidiRouter::SetAutomationRecordHeldForTest(bool held) noexcept
 {
 	_automationRecordHeld.store(held, std::memory_order_release);
+}
+
+void MidiRouter::_ResetEditorOverwriteSessions() noexcept
+{
+	for (auto& session : _editorOverwriteSessions)
+		session.Active = false;
+}
+
+void MidiRouter::_RecordOverwritePoint(
+	std::array<std::pair<float, float>, MaxEditorOverwritePoints>& points,
+	std::size_t& count,
+	float frac,
+	float value) noexcept
+{
+	constexpr float fracEpsilon = 1.0f / 2048.0f;
+
+	std::size_t insertAt = 0u;
+	while (insertAt < count && points[insertAt].first < frac)
+		++insertAt;
+
+	if (insertAt < count && (points[insertAt].first - frac) <= fracEpsilon)
+	{
+		points[insertAt].second = value;
+		return;
+	}
+
+	if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= fracEpsilon)
+	{
+		points[insertAt - 1u].second = value;
+		return;
+	}
+
+	if (count >= MaxEditorOverwritePoints)
+		return;
+
+	for (std::size_t i = count; i > insertAt; --i)
+		points[i] = points[i - 1u];
+	points[insertAt] = std::make_pair(frac, value);
+	++count;
+}
+
+void MidiRouter::_ApplyEditorOverwriteSessions(std::uint32_t nowSample) noexcept
+{
+	for (auto& session : _editorOverwriteSessions)
+	{
+		if (!session.Active)
+			continue;
+
+		if (static_cast<std::int32_t>(session.ExpirySample - nowSample) <= 0)
+		{
+			session.Active = false;
+			continue;
+		}
+
+		auto loop = session.Loop.lock();
+		if (!loop)
+		{
+			session.Active = false;
+			continue;
+		}
+
+		if (session.LaneIdx >= MidiLoop::MaxAutomationLanes)
+		{
+			session.Active = false;
+			continue;
+		}
+
+		const auto& mapping = loop->GetLane(session.LaneIdx).Mapping;
+		if (!mapping.IsActive()
+			|| mapping.TargetPlugin != session.Plugin
+			|| mapping.TargetParameterIndex != session.ParamIndex)
+		{
+			session.Active = false;
+			continue;
+		}
+
+		loop->ClearAutomationLanePoints(session.LaneIdx);
+		for (std::size_t i = 0u; i < session.PointCount; ++i)
+		{
+			const auto& pt = session.Points[i];
+			loop->SetAutomationValueAtFrac(session.LaneIdx, pt.first, pt.second);
+		}
+	}
+}
+
+bool MidiRouter::IsParameterSuppressed(const vst::IVstPlugin* plugin,
+	unsigned int paramIdx,
+	std::uint32_t blockStartSample) noexcept
+{
+	if (!plugin)
+		return false;
+
+	const auto count = _automationSuppressionCount.load(std::memory_order_acquire);
+	for (std::uint8_t i = 0u; i < count; ++i)
+	{
+		const auto& slot = _automationSuppressions[i];
+		if (slot.Plugin.load(std::memory_order_relaxed) != plugin)
+			continue;
+		if (slot.ParamIndex.load(std::memory_order_relaxed) != paramIdx)
+			continue;
+
+		const auto expiry = slot.ExpirySample.load(std::memory_order_relaxed);
+		// Signed sample-domain comparison tolerates uint32 wraparound.
+		if (static_cast<std::int32_t>(expiry - blockStartSample) > 0)
+			return true;
+	}
+	return false;
+}
+
+void MidiRouter::RefreshAutomationSuppression(const vst::IVstPlugin* plugin,
+	unsigned int paramIdx,
+	std::uint32_t nowSample,
+	std::uint32_t expirySample) noexcept
+{
+	if (!plugin)
+		return;
+
+	const auto count = _automationSuppressionCount.load(std::memory_order_relaxed);
+
+	// 1) Refresh an existing entry for this exact (plugin, parameter).
+	for (std::uint8_t i = 0u; i < count; ++i)
+	{
+		auto& slot = _automationSuppressions[i];
+		if (slot.Plugin.load(std::memory_order_relaxed) == plugin
+			&& slot.ParamIndex.load(std::memory_order_relaxed) == paramIdx)
+		{
+			slot.ExpirySample.store(expirySample, std::memory_order_release);
+			return;
+		}
+	}
+
+	// 2) Reclaim an already-expired slot.
+	for (std::uint8_t i = 0u; i < count; ++i)
+	{
+		auto& slot = _automationSuppressions[i];
+		const auto expiry = slot.ExpirySample.load(std::memory_order_relaxed);
+		if (static_cast<std::int32_t>(expiry - nowSample) <= 0)
+		{
+			slot.Plugin.store(plugin, std::memory_order_relaxed);
+			slot.ParamIndex.store(paramIdx, std::memory_order_relaxed);
+			slot.ExpirySample.store(expirySample, std::memory_order_release);
+			return;
+		}
+	}
+
+	// 3) Claim a fresh slot, publishing the fields before bumping the count.
+	if (count < MaxAutomationSuppressions)
+	{
+		auto& slot = _automationSuppressions[count];
+		slot.Plugin.store(plugin, std::memory_order_relaxed);
+		slot.ParamIndex.store(paramIdx, std::memory_order_relaxed);
+		slot.ExpirySample.store(expirySample, std::memory_order_release);
+		_automationSuppressionCount.store(static_cast<std::uint8_t>(count + 1u), std::memory_order_release);
+		return;
+	}
+
+	// 4) Table full (16 distinct live parameters): overwrite the first slot.
+	auto& slot = _automationSuppressions[0];
+	slot.Plugin.store(plugin, std::memory_order_relaxed);
+	slot.ParamIndex.store(paramIdx, std::memory_order_relaxed);
+	slot.ExpirySample.store(expirySample, std::memory_order_release);
+}
+
+void MidiRouter::ResetAutomationSuppressionForTest() noexcept
+{
+	for (auto& slot : _automationSuppressions)
+	{
+		slot.Plugin.store(nullptr, std::memory_order_relaxed);
+		slot.ParamIndex.store(0u, std::memory_order_relaxed);
+		slot.ExpirySample.store(0u, std::memory_order_relaxed);
+	}
+	_automationSuppressionCount.store(0u, std::memory_order_release);
 }
 
 void MidiRouter::InitMidi(const io::UserConfig& cfg,
@@ -474,6 +649,131 @@ MidiRouter::TriggerDispatchSummary MidiRouter::DispatchMidiTriggerEventForTest(s
 	return _DispatchMidiTriggerEvent(deviceSlot, event, userConfig, audioParams);
 }
 
+void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engine::Station>>& stations,
+	std::uint64_t globalSampleNow,
+	const audio::AudioStreamParams& audioParams) noexcept
+{
+	const auto seq = vst::_lastTouchedParam.Sequence.load(std::memory_order_acquire);
+	if (seq == _lastEditorAutomationSeq)
+		return;
+	_lastEditorAutomationSeq = seq;
+
+	// Only fold editor drags into automation while the record gesture is held.
+	if (!_automationRecordHeld.load(std::memory_order_acquire))
+		return;
+
+	auto* plugin = vst::_lastTouchedParam.Plugin.load(std::memory_order_acquire);
+	if (!plugin)
+		return;
+	const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_acquire);
+	const auto value = vst::_lastTouchedParam.Value.load(std::memory_order_acquire);
+
+	// Find the first non-remote station whose recording loop owns this plugin.
+	std::shared_ptr<midi::MidiLoop> targetLoop;
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote())
+			continue;
+		if (auto loop = station->ResolveEditorAutomationLoop(plugin))
+		{
+			targetLoop = loop;
+			break;
+		}
+	}
+
+	if (!targetLoop)
+	{
+		std::cout << "[Automation] editor drag ignored: no recording loop owns plugin "
+			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+		return;
+	}
+
+	const auto loopLen = targetLoop->LoopLengthSamps();
+	if (loopLen == 0u)
+		return;
+
+	const auto laneOpt = targetLoop->ResolveAutomationLaneFor(plugin, paramIdx);
+	if (!laneOpt)
+	{
+		std::cout << "[Automation] editor drag ignored: no free automation lane for plugin "
+			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+		return;
+	}
+
+	const auto laneIdx = *laneOpt;
+
+	const unsigned int sampleRate = (audioParams.SampleRate > 0u) ? audioParams.SampleRate : 48000u;
+	const auto cooldownSamples = static_cast<std::uint32_t>(
+		(AutomationSuppressionCooldownMs * static_cast<double>(sampleRate)) / 1000.0);
+	const auto nowSample = static_cast<std::uint32_t>(globalSampleNow);
+	const auto expirySample = nowSample + cooldownSamples;
+
+	EditorOverwriteSession* targetSession = nullptr;
+	for (auto& session : _editorOverwriteSessions)
+	{
+		if (session.Active && session.Plugin == plugin && session.ParamIndex == paramIdx)
+		{
+			targetSession = &session;
+			break;
+		}
+	}
+
+	if (!targetSession)
+	{
+		for (auto& session : _editorOverwriteSessions)
+		{
+			if (!session.Active
+				|| static_cast<std::int32_t>(session.ExpirySample - nowSample) <= 0)
+			{
+				targetSession = &session;
+				break;
+			}
+		}
+	}
+
+	if (!targetSession)
+	{
+		std::cout << "[Automation] editor drag ignored: no free overwrite session for plugin "
+			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+		return;
+	}
+
+	if (!targetSession->Active)
+	{
+		targetSession->Active = true;
+		targetSession->Plugin = plugin;
+		targetSession->ParamIndex = paramIdx;
+		targetSession->PointCount = 0u;
+	}
+	else
+	{
+		auto existingLoop = targetSession->Loop.lock();
+		if (!existingLoop || existingLoop.get() != targetLoop.get() || targetSession->LaneIdx != laneIdx)
+			targetSession->PointCount = 0u;
+	}
+
+	targetSession->Loop = targetLoop;
+	targetSession->LaneIdx = laneIdx;
+	targetSession->ExpirySample = expirySample;
+
+	if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))
+	{
+		std::cout << "[Automation] editor drag wired lane " << laneIdx
+			<< " -> plugin " << static_cast<const void*>(plugin)
+			<< " param " << paramIdx << "\n";
+	}
+
+	const float frac = (loopLen > 0u)
+		? static_cast<float>(static_cast<double>(globalSampleNow % loopLen)
+			/ static_cast<double>(loopLen))
+		: 0.0f;
+	_RecordOverwritePoint(targetSession->Points, targetSession->PointCount, frac, value);
+
+	// Refresh playback suppression so the recorded curve doesn't snap the just
+	// dragged parameter back during the post-release cool-down window.
+	RefreshAutomationSuppression(plugin, paramIdx, nowSample, expirySample);
+}
+
 MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 	std::uint64_t globalSampleNow,
 	const io::UserConfig& userConfig,
@@ -483,8 +783,11 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	midi::MidiEvent ingress{};
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
 	if (!midiInputs)
+	{
+		_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
+		_ApplyEditorOverwriteSessions(static_cast<std::uint32_t>(globalSampleNow));
 		return summary;
-
+	}
 	for (const auto& input : *midiInputs)
 	{
 		if (!input)
@@ -581,6 +884,9 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			input->LastDroppedCount = dropped;
 		}
 	}
+
+	_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
+	_ApplyEditorOverwriteSessions(static_cast<std::uint32_t>(globalSampleNow));
 
 	return summary;
 }

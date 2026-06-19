@@ -579,7 +579,7 @@ TEST(StationAutomation, WiredLaneDrivesPluginSetParameterDuringPlayback)
 	EXPECT_NEAR(0.75f, plugin->LastParamValue, 1.0e-2f);
 }
 
-TEST(StationAutomation, RecordingTargetLoopSuppressesPlaybackForThatLoop)
+TEST(StationAutomation, RecordHeldDoesNotSuppressPlaybackWithoutParameterCooldown)
 {
 	auto station = MakeStation("station-automation-record");
 	auto plugin = AddPlugin(station, L"fake-automation-record.dll");
@@ -603,15 +603,60 @@ TEST(StationAutomation, RecordingTargetLoopSuppressesPlaybackForThatLoop)
 		std::memory_order_relaxed);
 	station->RebuildAutomationDispatch();
 
-	// While automation recording is active, playback writes must be suppressed.
+	// Holding automation record alone must not mute playback globally.
 	midi::MidiRouter::SetAutomationRecordHeldForTest(true);
 	station->RunAutomationDispatchForTest(0u);
-	EXPECT_EQ(0u, plugin->ParamSetCalls);
+	EXPECT_GE(plugin->ParamSetCalls, 1u);
+	EXPECT_EQ(1u, plugin->LastParamIndex);
+	EXPECT_NEAR(0.4f, plugin->LastParamValue, 1.0e-4f);
 
-	// Releasing record resumes playback.
+	// Releasing record keeps normal playback behavior.
 	midi::MidiRouter::SetAutomationRecordHeldForTest(false);
 	station->RunAutomationDispatchForTest(0u);
 	EXPECT_GE(plugin->ParamSetCalls, 1u);
 	EXPECT_EQ(1u, plugin->LastParamIndex);
 	EXPECT_NEAR(0.4f, plugin->LastParamValue, 1.0e-4f);
+}
+
+TEST(StationAutomation, EditorSuppressionGatesPlaybackUntilCooldownExpires)
+{
+	midi::MidiRouter::ResetAutomationSuppressionForTest();
+	midi::MidiRouter::SetAutomationRecordHeldForTest(false);
+
+	auto station = MakeStation("station-automation-suppress");
+	auto plugin = AddPlugin(station, L"fake-automation-suppress.dll");
+	auto take = MakeMidiTake("automation-suppress-take");
+	station->AddTake(take);
+	station->CommitChanges();
+
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 48u, 100u), "Keys", 0u);
+	take->Play(0u, 128u, 0u);
+
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	midiLoop->SetAutomationValueAtFrac(0u, 0.0, 0.6f);
+
+	auto& lane = midiLoop->GetLane(0u);
+	lane.Mapping.TargetPlugin = plugin.get();
+	lane.Mapping.TargetParameterIndex = 2u;
+	lane.Mapping.MatchKey.store(
+		midi::AutomationMapping::MakeEditorMatchKey(),
+		std::memory_order_relaxed);
+	station->RebuildAutomationDispatch();
+
+	// A live editor drag has just published a cool-down for (plugin, param 2)
+	// expiring at sample 5000. Record is NOT held, but playback for that one
+	// parameter must still be held off so the recorded curve doesn't fight the drag.
+	midi::MidiRouter::RefreshAutomationSuppression(plugin.get(), 2u, /*now*/ 0u, /*expiry*/ 5000u);
+
+	station->RunAutomationDispatchForTest(0u);
+	EXPECT_EQ(0u, plugin->ParamSetCalls);
+
+	// Past the cool-down deadline, playback resumes normally.
+	station->RunAutomationDispatchForTest(6000u);
+	EXPECT_GE(plugin->ParamSetCalls, 1u);
+	EXPECT_EQ(2u, plugin->LastParamIndex);
+
+	midi::MidiRouter::ResetAutomationSuppressionForTest();
 }

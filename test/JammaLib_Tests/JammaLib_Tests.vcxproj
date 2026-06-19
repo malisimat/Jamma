@@ -187,6 +187,8 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\midi\MidiDevice_Tests.cpp" />
     <ClCompile Include="src\midi\MidiQueue_Tests.cpp" />
     <ClCompile Include="src\midi\MidiLoop_Tests.cpp" />
+    <ClCompile Include="src\midi\MidiAutomationLaneResolution_Tests.cpp" />
+    <ClCompile Include="src\midi\VstEditorAutomationSuppression_Tests.cpp" />
     <ClCompile Include="src\midi\MidiOverdub_Tests.cpp" />
     <ClCompile Include="src\midi\MidiNote_Tests.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation_Tests.cpp" />

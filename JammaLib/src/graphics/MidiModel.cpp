@@ -410,7 +410,7 @@ void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
 
 	const double rawRadius = 70.0 * std::log(static_cast<double>(lengthSamps)) - 600.0;
 	const float baseRadius = static_cast<float>(std::clamp(rawRadius, 50.0, 400.0));
-	const float laneHeight = baseRadius * 0.16f;
+	const float laneHeight = baseRadius * 0.64f;
 	const bool recording = midi::MidiRouter::IsAutomationRecordHeld();
 	const float playFrac = static_cast<float>(_loopIndexFrac);
 
@@ -458,7 +458,7 @@ void MidiModel::_DrawAutomation(GlDrawContext& glCtx)
 			flat[i * 2u + 1u] = pts[i].second;
 		}
 
-		const float laneRadius = baseRadius * (1.05f + static_cast<float>(lane) * 0.045f);
+		const float laneRadius = baseRadius * 1.5f * (1.05f + static_cast<float>(lane) * 0.045f);
 		const auto& col = palette[lane % palette.size()];
 
 		glUniform2fv(locPoints, count, flat.data());

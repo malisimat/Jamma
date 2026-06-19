@@ -131,6 +131,23 @@ namespace vst
 		if (!plugin || !plugin->IsLoaded())
 			return false;
 
+		for (const auto& window : _vstEditorWindows)
+		{
+			if (!window || !window->IsOpen())
+				continue;
+
+			if (window->Plugin().get() == plugin.get())
+			{
+				if (const auto hwnd = window->EditorHwnd())
+				{
+					if (IsIconic(hwnd))
+						ShowWindow(hwnd, SW_RESTORE);
+					SetForegroundWindow(hwnd);
+				}
+				return true;
+			}
+		}
+
 		auto window = std::make_unique<graphics::VstEditorWindow>();
 		const auto hInstance = GetModuleHandle(nullptr);
 		if (!window->Create(hInstance, plugin))

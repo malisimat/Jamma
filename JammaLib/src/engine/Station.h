@@ -187,6 +187,13 @@ namespace engine
 		// wiring changes or a recording is released.
 		void RebuildAutomationDispatch();
 
+		// Resolve the MIDI loop that should host editor-driven automation for a
+		// plugin hosted by this station (station-level or take-level chain).
+		// Returns the owner's last recorded MIDI loop, or nullptr when this
+		// station does not host the plugin or has no recorded MIDI loop yet.
+		// Non-audio (MIDI pump) thread only.
+		std::shared_ptr<midi::MidiLoop> ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const;
+
 		// Test hook: run one automation dispatch block in isolation (drives
 		// SetParameter on wired plugins). Non-RT; mirrors the audio-thread path.
 		void RunAutomationDispatchForTest(std::uint32_t blockStartSample) noexcept
@@ -286,6 +293,10 @@ namespace engine
 		// Run one automation dispatch block on the audio thread: advance each
 		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
 		void _RunAutomationDispatch(std::uint32_t blockStartSample) noexcept;
+
+		// Last recorded MIDI loop in a take (most recently created loop with a
+		// non-zero length), or nullptr. Non-audio thread helper.
+		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
