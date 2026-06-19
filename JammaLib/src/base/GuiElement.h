@@ -173,8 +173,16 @@ namespace base
 		bool IsSelected() const;
 		GuiElementState GetState() const;
 		bool HasFocus() const;
-		bool RequestFocus();
-		void ClearFocus();
+		virtual bool RequestFocus();
+		virtual void ClearFocus();
+		// True if this element should take keyboard focus when pressed.  Only
+		// editing-style controls (text boxes, dropdowns) opt in.
+		virtual bool WantsFocusOnPress() const;
+		// True while this element owns the keyboard for text entry; lets the scene
+		// suppress global shortcuts (Space/Ctrl+Z/Ctrl+S) during editing.
+		virtual bool IsTextEditing() const;
+		// Top-left position of this element in global (scene overlay) coordinates.
+		utils::Position2d GlobalPosition() const;
 		bool HitTest(utils::Position2d localPos);
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);

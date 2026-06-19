@@ -287,6 +287,99 @@ Scene::Scene(SceneParams params,
 		}
 	}
 
+	// ---------------------------------------------------------------------------
+	// Phase 3 demo panel — interactive controls: text box, numeric input,
+	// drop-down (uses the popup host) and a scrollable panel.
+	// ---------------------------------------------------------------------------
+	{
+		GuiStackPanelParams rootParams;
+		rootParams.Direction = StackDirection::Vertical;
+		rootParams.Spacing   = 4u;
+		rootParams.PaddingH  = 8u;
+		rootParams.PaddingV  = 8u;
+		rootParams.Texture   = "rounded_but";
+		rootParams.Position  = { 10, 250 };
+		rootParams.Size      = { 310u, 250u };
+		rootParams.MinSize   = { 100u, 80u };
+		auto panel = std::make_shared<GuiStackPanel>(rootParams);
+		AddChild(panel);
+
+		{
+			GuiLabelParams lp;
+			lp.String  = "-- Phase 3 Controls --";
+			lp.Size    = { 280u, 22u };
+			lp.MinSize = { 40u, 22u };
+			panel->AddChild(std::make_shared<GuiLabel>(lp));
+		}
+
+		// Single-line text box.
+		{
+			GuiTextBoxParams tp;
+			tp.Texture = "rounded_but";
+			tp.Text    = "edit me";
+			tp.Size    = { 290u, 24u };
+			tp.MinSize = { 60u, 24u };
+			panel->AddChild(std::make_shared<GuiTextBox>(tp));
+		}
+
+		// Numeric input (drag vertically or type).
+		{
+			GuiNumericInputParams np;
+			np.Texture   = "rounded_but";
+			np.Min       = 0.0;
+			np.Max       = 100.0;
+			np.Step      = 0.5;
+			np.InitValue = 42.0;
+			np.Decimals  = 1;
+			np.Size      = { 290u, 24u };
+			np.MinSize   = { 60u, 24u };
+			panel->AddChild(std::make_shared<GuiNumericInput>(np));
+		}
+
+		// Drop-down / combo box (opens through the scene popup host).
+		{
+			GuiDropDownParams dp;
+			dp.Texture   = "rounded_but";
+			dp.Items     = { "Sine", "Square", "Saw", "Triangle", "Noise" };
+			dp.InitIndex = 0u;
+			dp.RowHeight = 22u;
+			dp.Size      = { 290u, 24u };
+			dp.MinSize   = { 60u, 24u };
+			auto dd = std::make_shared<GuiDropDown>(dp);
+			dd->SetPopupHost(&_popupHost);
+			panel->AddChild(dd);
+		}
+
+		// Scrollable panel hosting a tall content stack.
+		{
+			GuiStackPanelParams cParams;
+			cParams.Direction = StackDirection::Vertical;
+			cParams.Spacing   = 2u;
+			cParams.PaddingH  = 2u;
+			cParams.PaddingV  = 2u;
+			cParams.Size      = { 280u, 320u };
+			cParams.MinSize   = { 60u, 40u };
+			auto content = std::make_shared<GuiStackPanel>(cParams);
+			for (int i = 0; i < 12; ++i)
+			{
+				GuiLabelParams lp;
+				lp.String  = "Scroll row " + std::to_string(i + 1);
+				lp.Size    = { 260u, 24u };
+				lp.MinSize = { 40u, 24u };
+				content->AddChild(std::make_shared<GuiLabel>(lp));
+			}
+
+			GuiScrollPanelParams spParams;
+			spParams.Texture        = "rounded_but";
+			spParams.Size           = { 290u, 90u };
+			spParams.MinSize        = { 60u, 40u };
+			spParams.ScrollBarWidth = 12u;
+			auto scroll = std::make_shared<GuiScrollPanel>(spParams);
+			scroll->SetContent(content);
+			panel->AddChild(scroll);
+		}
+	}
+
 	GuiSelectorParams selectorParams;
 	selectorParams.Position = { 10, 2 };
 	selectorParams.Size = params.Size;
@@ -429,6 +522,8 @@ void Scene::Draw(DrawContext& ctx)
 	_modeRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
 
+	_popupHost.Draw(ctx);
+
 	glCtx.PopMvp();
 }
 
@@ -528,6 +623,10 @@ ActionResult Scene::OnAction(TouchAction action)
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
+	// Popups capture all pointer input while open (routing, outside-dismiss).
+	if (_popupHost.IsOpen())
+		return _popupHost.OnAction(action);
+
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
 		&& (Action::MODIFIER_SHIFT & action.Modifiers)
@@ -598,6 +697,16 @@ ActionResult Scene::OnAction(TouchAction action)
 			if (!_touchDownElement.lock())
 				_touchDownElement = res.ActiveElement;
 
+			// Focus follows the pressed control when it wants the keyboard.
+			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+			{
+				auto active = res.ActiveElement.lock();
+				if (active && active->WantsFocusOnPress())
+					_focusManager.RequestFocus(active);
+				else
+					_focusManager.ClearFocus();
+			}
+
 			return res;
 		}
 	}
@@ -643,6 +752,10 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
+	// Pressing empty background clears keyboard focus.
+	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+		_focusManager.ClearFocus();
+
 	return _BeginBackgroundDrag(action);
 }
 
@@ -651,6 +764,9 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+
+	if (_popupHost.IsOpen())
+		return _popupHost.OnAction(action);
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -701,6 +817,25 @@ ActionResult Scene::OnAction(KeyAction action)
 	action.SetAudioParams(_audioEngine->GetStreamParams());
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
+
+	// 1. Open popups capture the keyboard first.
+	if (_popupHost.IsOpen())
+	{
+		auto popupRes = _popupHost.OnAction(action);
+		if (popupRes.IsEaten)
+			return popupRes;
+	}
+
+	// 2. The focused control gets first refusal. While it is editing text we
+	//    swallow the key entirely so global shortcuts don't fire mid-edit.
+	if (auto focus = _focusManager.CurrentFocus())
+	{
+		auto focusRes = focus->OnAction(action);
+		if (focusRes.IsEaten)
+			return focusRes;
+		if (_focusManager.IsEditingText())
+			return ActionResult::NoAction();
+	}
 
 	if (17 == action.KeyChar)
 	{

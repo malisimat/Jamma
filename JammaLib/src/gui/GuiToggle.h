@@ -59,6 +59,7 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 
 		GuiToggleParams::ToggleState Toggle();
 		GuiToggleParams::ToggleState GetToggleState() const;

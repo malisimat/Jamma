@@ -291,6 +291,13 @@
     <ClInclude Include="src\actions\TouchMoveAction.h" />
     <ClInclude Include="src\gui\GuiGrid.h" />
     <ClInclude Include="src\gui\GuiStackPanel.h" />
+    <ClInclude Include="src\gui\GuiFocusManager.h" />
+    <ClInclude Include="src\gui\GuiPopupHost.h" />
+    <ClInclude Include="src\gui\GuiTextBox.h" />
+    <ClInclude Include="src\gui\GuiNumericInput.h" />
+    <ClInclude Include="src\gui\GuiDropDown.h" />
+    <ClInclude Include="src\gui\GuiScrollBar.h" />
+    <ClInclude Include="src\gui\GuiScrollPanel.h" />
     <ClInclude Include="src\base\GuiElement.h" />
     <ClInclude Include="src\utils\ImageUtils.h" />
     <ClInclude Include="src\gui\GuiLabel.h" />
@@ -417,6 +424,13 @@
     <ClCompile Include="src\gui\GuiVu.cpp" />
     <ClCompile Include="src\gui\GuiGrid.cpp" />
     <ClCompile Include="src\gui\GuiStackPanel.cpp" />
+    <ClCompile Include="src\gui\GuiFocusManager.cpp" />
+    <ClCompile Include="src\gui\GuiPopupHost.cpp" />
+    <ClCompile Include="src\gui\GuiTextBox.cpp" />
+    <ClCompile Include="src\gui\GuiNumericInput.cpp" />
+    <ClCompile Include="src\gui\GuiDropDown.cpp" />
+    <ClCompile Include="src\gui\GuiScrollBar.cpp" />
+    <ClCompile Include="src\gui\GuiScrollPanel.cpp" />
     <ClCompile Include="src\gui\GuiLabel.cpp" />
     <ClCompile Include="src\gui\GuiPanel.cpp" />
     <ClCompile Include="src\gui\GuiModel.cpp" />

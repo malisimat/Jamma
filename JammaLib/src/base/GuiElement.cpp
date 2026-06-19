@@ -138,6 +138,24 @@ void GuiElement::ClearFocus()
 	_hasFocus = false;
 }
 
+bool GuiElement::IsTextEditing() const
+{
+	return false;
+}
+
+bool GuiElement::WantsFocusOnPress() const
+{
+	return false;
+}
+
+utils::Position2d GuiElement::GlobalPosition() const
+{
+	auto pos = Position();
+	if (nullptr != _parent)
+		pos += _parent->GlobalPosition();
+	return pos;
+}
+
 bool GuiElement::IsVisible() const
 {
 	return _isVisible;

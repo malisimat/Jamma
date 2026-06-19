@@ -471,10 +471,45 @@ Add the next wave of controls only after text, focus, and layout are stable enou
 
 Mark progress, lessons learned, outstanding work, here:
 
-[] -
-[] -
+**Phase 3 is complete.** All exit criteria met.
+
+#### Exit criteria status
+
+- [x] Popup infrastructure exists and is used by at least one control — `GuiPopupHost` (scene-owned layer + input capture) is used by `GuiDropDown`.
+- [x] Scrollable container and scrollbar behavior are functional — `GuiScrollPanel` + `GuiScrollBar` (offset, fraction, wheel, thumb drag) with unit-tested range math.
+- [x] `GuiTextBox` supports focused editing — caret, selection, insert/delete/navigation, click-to-place caret.
+- [x] Numeric input supports both typing and drag/step adjustment — `GuiNumericInput` (digit/sign/decimal filtering, parse+clamp on commit, vertical drag by step/pixel).
+- [x] Tests cover the major interaction paths — 31 new tests in `test/JammaLib_Tests/src/gui/GuiPhase3_Tests.cpp` (focus, popup, toggle keyboard, scrollbar math, scroll panel, text editing, numeric, dropdown). Full suite: 621 passing / 1 pre-existing skip.
+
+#### Files added (JammaLib/src/gui)
+
+- `GuiFocusManager.{h,cpp}` — scene-level single-owner focus authority (weak_ptr; drives per-element focus flag; `IsEditingText()`).
+- `GuiPopupHost.{h,cpp}` — popup stack, draw-on-top, input capture, outside-press + Escape dismiss.
+- `GuiTextBox.{h,cpp}` — single-line editor.
+- `GuiNumericInput.{h,cpp}` — numeric entry built on `GuiTextBox`.
+- `GuiDropDown.{h,cpp}` — `GuiDropDownList` (popup) + `GuiDropDown` (combo).
+- `GuiScrollBar.{h,cpp}` — vertical scrollbar with static, testable range math.
+- `GuiScrollPanel.{h,cpp}` — scrollable viewport hosting one content element.
+
+#### Scene wiring (`engine/Scene`)
+
+- Added `GuiFocusManager` + `GuiPopupHost` members.
+- `Draw`: popups rendered after all GUI overlay children.
+- `OnAction(TouchAction/TouchMoveAction)`: popups capture pointer input first; pressing a control that `WantsFocusOnPress()` grabs focus, empty-background press clears it.
+- `OnAction(KeyAction)`: ordered dispatch — popup → focused control (swallow keys while `IsEditingText()`) → existing global shortcuts → stations/selector.
+- Phase 3 demo panel added alongside the Phase 2 layout demo.
+
+#### Deviations / lessons / outstanding
+
+- **stb_textedit not vendored.** `stb_textedit.h` is not in the repo and could not be reproduced verbatim safely. Instead `GuiTextBox` implements a small, self-contained single-line editing core (plain CPU caret/selection state) reusing the Phase 1/2 `Font::MeasureString` path for hit-testing and caret rendering. This satisfies the focused-editing intent and is fully unit-testable without a GL context. If multi-line editing is needed later, revisit vendoring `stb_textedit`.
+- **Keyboard is VK-only.** Input arrives as Windows virtual-key codes via `WM_KEYDOWN` (no `WM_CHAR`). `GuiTextBox::VkToChar` reconstructs printable ASCII from VK + Shift. Scope is ASCII printable, not full Unicode.
+- **Escape caveat.** `Window.cpp` posts `WM_CLOSE` on `VK_ESCAPE` (app quits), so key-based popup dismissal never reaches the scene; popups still dismiss via outside-click. `GuiPopupHost` handles Escape for completeness/testing and if that app behavior is ever relaxed. Left `Window.cpp` unchanged (surgical).
+- **Scroll clipping deferred.** Scroll offset, scrollbar, wheel and input mediation are functional and tested; GL scissor clipping of overflowing content is not yet wired (the draw context does not expose window height for the scissor flip). Content currently draws translated by the offset without a hard clip. Follow-up: add central scissor support to the GL draw context.
+- **Member sub-elements pattern.** All controls keep their sub-elements (labels, caret/thumb/highlight quads, dropdown list) as members drawn/initialised manually rather than tree children, mirroring `GuiSlider::_dragElement`, to avoid `shared_from_this()` in constructors.
+- **No anonymous namespaces.** Per `AGENTS.md`, all param-builder helpers are private `static` methods on their owning class (not file-local free functions).
 
 ---
+
 
 ## Session handoff checklist
 

@@ -20,6 +20,13 @@
 #include "../gui/GuiGrid.h"
 #include "../gui/GuiStackPanel.h"
 #include "../gui/GuiSlider.h"
+#include "../gui/GuiFocusManager.h"
+#include "../gui/GuiPopupHost.h"
+#include "../gui/GuiTextBox.h"
+#include "../gui/GuiNumericInput.h"
+#include "../gui/GuiDropDown.h"
+#include "../gui/GuiScrollBar.h"
+#include "../gui/GuiScrollPanel.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
@@ -347,6 +354,8 @@ namespace engine
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiStackPanel> _layoutDemoPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
+		gui::GuiFocusManager _focusManager;
+		gui::GuiPopupHost _popupHost;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

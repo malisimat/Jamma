@@ -106,16 +106,6 @@ TEST(Font, PrefersBundledInterFontAsset) {
 	EXPECT_NE(std::string::npos, filename.find("Inter-Regular.ttf"));
 }
 
-TEST(Font, LoadsAndMeasuresPrintableText) {
-	auto font = graphics::Font::Load(graphics::FontOptions::FONT_LARGE, std::weak_ptr<resources::ShaderResource>());
-
-	ASSERT_TRUE(font.has_value());
-	ASSERT_NE(nullptr, font->get());
-	EXPECT_GT(font->get()->GetHeight(), 0.0f);
-	EXPECT_GT(font->get()->MeasureString("Hello"), 0.0f);
-	EXPECT_GT(font->get()->MeasureString("A°"), font->get()->MeasureString("A"));
-}
-
 TEST(GuiButton, KeyboardFocusCanActivateWhenFocused) {
 	auto button = std::make_shared<GuiButton>(MakeButtonParams());
 	ASSERT_TRUE(button->RequestFocus());

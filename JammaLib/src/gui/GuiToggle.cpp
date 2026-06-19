@@ -155,6 +155,32 @@ ActionResult GuiToggle::OnAction(TouchAction action)
 	return ActionResult::NoAction();
 }
 
+ActionResult GuiToggle::OnAction(KeyAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (_hasFocus
+		&& (KeyAction::KEY_UP == action.KeyActionType)
+		&& ((13 == action.KeyChar) || (32 == action.KeyChar)))
+	{
+		_toggleState = GuiToggleParams::TOGGLE_ON == _toggleState ?
+			GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON;
+		_OnToggleChange(false);
+
+		return {
+			true,
+			std::to_string(_index),
+			"",
+			ACTIONRESULT_TOGGLE,
+			nullptr,
+			std::static_pointer_cast<base::GuiElement>(shared_from_this())
+		};
+	}
+
+	return GuiElement::OnAction(action);
+}
+
 GuiToggleParams::ToggleState GuiToggle::Toggle()
 {
 	switch (_toggleState)
