@@ -1,5 +1,6 @@
 #include "GlDrawContext.h"
 #include "GlDeleteQueue.h"
+#include <algorithm>
 
 using namespace graphics;
 using namespace utils;
@@ -100,6 +101,8 @@ void GlDrawContext::Initialise()
 void GlDrawContext::Bind()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+	_scissorStack.clear();
+	glDisable(GL_SCISSOR_TEST);
 }
 
 unsigned int GlDrawContext::GetTexture() const
@@ -178,6 +181,60 @@ void GlDrawContext::PopMvp() noexcept
 void GlDrawContext::ClearMvp() noexcept
 {
 	_mvp.clear();
+}
+
+void GlDrawContext::PushScissorRect(utils::Position2d pos, utils::Size2d size)
+{
+	ScissorRect rect{
+		pos.X,
+		pos.Y,
+		(int)size.Width,
+		(int)size.Height
+	};
+
+	if (!_scissorStack.empty())
+		rect = _IntersectScissorRect(_scissorStack.back(), rect);
+
+	_scissorStack.push_back(rect);
+	_ApplyScissorState();
+}
+
+void GlDrawContext::PopScissorRect()
+{
+	if (!_scissorStack.empty())
+		_scissorStack.pop_back();
+
+	_ApplyScissorState();
+}
+
+void GlDrawContext::_ApplyScissorState() noexcept
+{
+	if (_scissorStack.empty())
+	{
+		glDisable(GL_SCISSOR_TEST);
+		return;
+	}
+
+	auto rect = _scissorStack.back();
+	rect = _IntersectScissorRect(rect, { 0, 0, (int)_size.Width, (int)_size.Height });
+
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(rect.X, rect.Y, std::max(0, rect.Width), std::max(0, rect.Height));
+}
+
+GlDrawContext::ScissorRect GlDrawContext::_IntersectScissorRect(const ScissorRect& a, const ScissorRect& b) noexcept
+{
+	const int x1 = std::max(a.X, b.X);
+	const int y1 = std::max(a.Y, b.Y);
+	const int x2 = std::min(a.X + a.Width, b.X + b.Width);
+	const int y2 = std::min(a.Y + a.Height, b.Y + b.Height);
+
+	return {
+		x1,
+		y1,
+		std::max(0, x2 - x1),
+		std::max(0, y2 - y1)
+	};
 }
 
 Position2d GlDrawContext::ProjectScreen(utils::Position3d pos)

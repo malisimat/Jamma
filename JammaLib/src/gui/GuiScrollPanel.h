@@ -60,6 +60,7 @@ namespace gui
 
 		std::shared_ptr<base::GuiElement> _content;
 		std::shared_ptr<GuiScrollBar>     _scrollBar;
+		static constexpr unsigned int _ContentClipPadding = 2u;
 		unsigned int _scrollBarWidth;
 		unsigned int _wheelStep;
 		int          _scrollOffset;

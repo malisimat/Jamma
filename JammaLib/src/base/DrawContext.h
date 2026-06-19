@@ -35,6 +35,14 @@ namespace base
 			return 0;
 		}
 
+		virtual void PushScissorRect(utils::Position2d pos, utils::Size2d size)
+		{
+		}
+
+		virtual void PopScissorRect()
+		{
+		}
+
 	protected:
 		utils::Size2d _size;
 		ContextTarget _target;

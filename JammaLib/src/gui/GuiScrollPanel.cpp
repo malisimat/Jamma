@@ -125,9 +125,22 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 	// Content, shifted up by the current scroll offset.
 	if (_content)
 	{
+		auto clipPos = GlobalPosition();
+		clipPos.X += (int)_ContentClipPadding;
+		clipPos.Y += (int)_ContentClipPadding;
+
+		const int clipWidth = std::max(0, (int)ViewportWidth() - 2 * (int)_ContentClipPadding);
+		const int clipHeight = std::max(0, (int)ViewportHeight() - 2 * (int)_ContentClipPadding);
+		glCtx.PushScissorRect(clipPos, {
+			(unsigned int)clipWidth,
+			(unsigned int)clipHeight
+		});
+
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.f, -(float)_scrollOffset, 0.f)));
 		_content->Draw(ctx);
 		glCtx.PopMvp();
+
+		glCtx.PopScissorRect();
 	}
 
 	_scrollBar->Draw(ctx);
