@@ -168,8 +168,8 @@ void GuiStackPanel::_ComputeVertical()
         fillExtra = remaining % fillCount;
     }
 
-    // Second pass: assign positions and sizes.
-    int y = static_cast<int>(padV);
+    // Second pass: assign positions and sizes from the top edge downward.
+    int y = static_cast<int>(panelH) - static_cast<int>(padV);
     unsigned int fillSeen = 0u;
 
     for (const auto& child : _children)
@@ -206,9 +206,10 @@ void GuiStackPanel::_ComputeVertical()
             childH = child->GetSize().Height;
         }
 
-        child->SetPosition({ static_cast<int>(padH), y });
         child->SetSize({ childW, childH });
-        y += static_cast<int>(childH) + static_cast<int>(_spacing);
+        y -= static_cast<int>(childH);
+        child->SetPosition({ static_cast<int>(padH), y });
+        y -= static_cast<int>(_spacing);
     }
 }
 
@@ -338,8 +339,8 @@ void GuiStackPanel::_ComputeHorizontalWrapped()
     if (!currentRow.empty())
         rows.push_back(currentRow);
 
-    // Lay out each row.
-    int y = static_cast<int>(padV);
+    // Lay out each row from the top edge downward.
+    int y = static_cast<int>(panelH) - static_cast<int>(padV);
     for (const auto& row : rows)
     {
         // Compute row height = max child height in this row.
@@ -351,6 +352,8 @@ void GuiStackPanel::_ComputeHorizontalWrapped()
                 : _children[idx]->GetSize().Height;
             rowH = std::max(rowH, childH);
         }
+
+        y -= static_cast<int>(rowH);
 
         int x = static_cast<int>(padH);
         for (unsigned int idx : row)
@@ -378,7 +381,7 @@ void GuiStackPanel::_ComputeHorizontalWrapped()
             x += static_cast<int>(childW) + static_cast<int>(_spacing);
         }
 
-        y += static_cast<int>(rowH) + static_cast<int>(_spacing);
+        y -= static_cast<int>(_spacing);
         (void)panelH;  // available for future clip/scroll use
     }
 }

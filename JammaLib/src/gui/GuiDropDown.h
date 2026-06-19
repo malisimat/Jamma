@@ -21,6 +21,7 @@ namespace gui
 		GuiDropDownList(base::GuiElementParams params,
 			std::vector<std::string> items,
 			unsigned int rowHeight,
+			unsigned int padding,
 			const std::string& highlightTexture);
 
 		void SetOnSelect(std::function<void(int)> onSelect);
@@ -40,7 +41,7 @@ namespace gui
 		int _RowFromLocalY(int localY) const;
 
 		static base::GuiElementParams _MakeQuadParams(const std::string& texture);
-		static std::shared_ptr<GuiLabel> _MakeRowLabel(const std::string& text, int y, unsigned int width, unsigned int rowHeight);
+		static std::shared_ptr<GuiLabel> _MakeRowLabel(const std::string& text, int y, unsigned int width, unsigned int rowHeight, unsigned int padding);
 
 		std::vector<std::string>          _items;
 		std::vector<std::shared_ptr<GuiLabel>> _rowLabels;
@@ -60,6 +61,7 @@ namespace gui
 		std::vector<std::string> Items;
 		unsigned int             InitIndex        = 0u;
 		unsigned int             RowHeight        = 24u;
+		unsigned int             Padding          = 4u;
 		std::string              ListTexture      = "rounded_but";
 		std::string              HighlightTexture = "blue";
 		std::weak_ptr<base::ActionReceiver> Receiver;
@@ -107,6 +109,7 @@ namespace gui
 		std::shared_ptr<GuiDropDownList>   _list;
 		GuiPopupHost*                      _popupHost;
 		bool                               _open;
+		unsigned int                       _padding;
 		std::weak_ptr<base::ActionReceiver> _receiver;
 	};
 }

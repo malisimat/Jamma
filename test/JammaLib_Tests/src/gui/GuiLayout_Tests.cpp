@@ -249,11 +249,11 @@ TEST(GuiGrid, CenterAlignedChildIsPositionedInsideCell)
 	grid->AddGridChild(btn, p);
 	grid->ComputeLayout();
 
-	// Cell (1,0): origin=(0,50), size=(100,50).
-	// Child 30×20 centered → posX=0+(100-30)/2=35, posY=50+(50-20)/2=65.
+	// Cell (1,0): origin=(0,0), size=(100,50).
+	// Child 30×20 centered → posX=0+(100-30)/2=35, posY=0+(50-20)/2=15.
 	auto pos = btn->Position();
 	EXPECT_EQ(35,  pos.X);
-	EXPECT_EQ(65,  pos.Y);
+	EXPECT_EQ(15,  pos.Y);
 	EXPECT_EQ(30u, btn->GetSize().Width);
 	EXPECT_EQ(20u, btn->GetSize().Height);
 }
@@ -346,9 +346,9 @@ TEST(GuiStackPanel, VerticalStackPositionsChildrenTopToBottom)
 	stack->AddChild(btn2);
 	stack->ComputeLayout();
 
-	// btn1 at top (y=0), btn2 below btn1 + spacing.
-	EXPECT_EQ(0,  btn1->Position().Y);
-	EXPECT_EQ(35, btn2->Position().Y);  // 30 + 5
+	// btn1 is anchored to the top edge, btn2 stacks below it.
+	EXPECT_EQ(170, btn1->Position().Y);  // 200 - 30
+	EXPECT_EQ(125, btn2->Position().Y);  // 170 - 30 - 5 - 40
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ TEST(GuiStackPanel, PaddingInsetFirstChild)
 	stack->ComputeLayout();
 
 	EXPECT_EQ(12, btn->Position().X);
-	EXPECT_EQ(8,  btn->Position().Y);
+	EXPECT_EQ(72, btn->Position().Y);  // 100 - 8 - 20
 }
 
 // ---------------------------------------------------------------------------
@@ -444,9 +444,9 @@ TEST(GuiStackPanel, HorizontalWrapBreaksToNextRow)
 	stack->AddChild(btn2);
 	stack->ComputeLayout();
 
-	// btn1 on row 0 (y=0), btn2 wrapped to row 1 (y=20).
-	EXPECT_EQ(0, btn1->Position().Y);
-	EXPECT_LT(btn1->Position().Y, btn2->Position().Y);
+	// Row 0 is anchored to the top edge, row 1 appears below it.
+	EXPECT_EQ(60, btn1->Position().Y);
+	EXPECT_EQ(40, btn2->Position().Y);
 }
 
 // ---------------------------------------------------------------------------

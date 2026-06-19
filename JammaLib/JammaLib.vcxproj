@@ -296,6 +296,7 @@
     <ClInclude Include="src\gui\GuiTextBox.h" />
     <ClInclude Include="src\gui\GuiNumericInput.h" />
     <ClInclude Include="src\gui\GuiDropDown.h" />
+    <ClInclude Include="src\gui\GuiMainPanel.h" />
     <ClInclude Include="src\gui\GuiScrollBar.h" />
     <ClInclude Include="src\gui\GuiScrollPanel.h" />
     <ClInclude Include="src\base\GuiElement.h" />
@@ -429,6 +430,7 @@
     <ClCompile Include="src\gui\GuiTextBox.cpp" />
     <ClCompile Include="src\gui\GuiNumericInput.cpp" />
     <ClCompile Include="src\gui\GuiDropDown.cpp" />
+    <ClCompile Include="src\gui\GuiMainPanel.cpp" />
     <ClCompile Include="src\gui\GuiScrollBar.cpp" />
     <ClCompile Include="src\gui\GuiScrollPanel.cpp" />
     <ClCompile Include="src\gui\GuiLabel.cpp" />

@@ -23,13 +23,14 @@ GuiElementParams GuiDropDownList::_MakeQuadParams(const std::string& texture)
 	return p;
 }
 
-std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text, int y, unsigned int width, unsigned int rowHeight)
+std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text, int y, unsigned int width, unsigned int rowHeight, unsigned int padding)
 {
 	GuiLabelParams lp;
 	lp.String = text;
-	lp.Position = { 4, y };
-	lp.Size = { std::max(1u, width > 8u ? width - 8u : 1u), rowHeight };
-	lp.MinSize = { 1u, rowHeight };
+	const unsigned int pad = std::min(padding, rowHeight / 2u);
+	lp.Position = { (int)pad, y + (int)pad };
+	lp.Size = { std::max(1u, width > 2u * pad ? width - 2u * pad : 1u), std::max(1u, rowHeight > 2u * pad ? rowHeight - 2u * pad : 1u) };
+	lp.MinSize = { 1u, std::max(1u, rowHeight > 2u * pad ? rowHeight - 2u * pad : 1u) };
 	return std::make_shared<GuiLabel>(lp);
 }
 
@@ -40,6 +41,7 @@ std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text
 GuiDropDownList::GuiDropDownList(GuiElementParams params,
 	std::vector<std::string> items,
 	unsigned int rowHeight,
+	unsigned int padding,
 	const std::string& highlightTexture) :
 	GuiElement(params),
 	_items(std::move(items)),
@@ -51,7 +53,7 @@ GuiDropDownList::GuiDropDownList(GuiElementParams params,
 	int y = 0;
 	for (const auto& item : _items)
 	{
-		_rowLabels.push_back(_MakeRowLabel(item, y, params.Size.Width, _rowHeight));
+		_rowLabels.push_back(_MakeRowLabel(item, y, params.Size.Width, _rowHeight, padding));
 		y += (int)_rowHeight;
 	}
 }
@@ -178,9 +180,10 @@ std::shared_ptr<GuiLabel> GuiDropDown::_MakeClosedLabel(const GuiDropDownParams&
 {
 	GuiLabelParams lp;
 	lp.String = (params.InitIndex < params.Items.size()) ? params.Items[params.InitIndex] : std::string();
-	lp.Position = { 4, 2 };
-	const int w = std::max(1, (int)params.Size.Width - 8);
-	const int h = std::max(1, (int)params.Size.Height - 4);
+	const unsigned int pad = std::min(params.Padding, params.Size.Height / 2u);
+	lp.Position = { (int)pad, (int)pad };
+	const int w = std::max(1, (int)params.Size.Width - (int)(2u * pad));
+	const int h = std::max(1, (int)params.Size.Height - (int)(2u * pad));
 	lp.Size = { (unsigned int)w, (unsigned int)h };
 	lp.MinSize = { 1u, (unsigned int)h };
 	return std::make_shared<GuiLabel>(lp);
@@ -195,7 +198,7 @@ std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams&
 		"", "", "", {});
 	lp.Texture = params.ListTexture;
 	lp.GuiPassThrough = false;
-	return std::make_shared<GuiDropDownList>(lp, params.Items, params.RowHeight, params.HighlightTexture);
+	return std::make_shared<GuiDropDownList>(lp, params.Items, params.RowHeight, params.Padding, params.HighlightTexture);
 }
 
 GuiDropDown::GuiDropDown(GuiDropDownParams params) :
@@ -203,6 +206,7 @@ GuiDropDown::GuiDropDown(GuiDropDownParams params) :
 	_items(params.Items),
 	_selectedIndex(params.Items.empty() ? -1 : (int)std::min((size_t)params.InitIndex, params.Items.size() - 1)),
 	_rowHeight(params.RowHeight),
+	_padding(params.Padding),
 	_label(_MakeClosedLabel(params)),
 	_list(_MakeList(params)),
 	_popupHost(nullptr),
@@ -281,8 +285,9 @@ void GuiDropDown::Close()
 void GuiDropDown::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
-	const int w = std::max(1, (int)size.Width - 8);
-	const int h = std::max(1, (int)size.Height - 4);
+	const unsigned int pad = std::min(_padding, size.Height / 2u);
+	const int w = std::max(1, (int)size.Width - (int)(2u * pad));
+	const int h = std::max(1, (int)size.Height - (int)(2u * pad));
 	_label->SetSize({ (unsigned int)w, (unsigned int)h });
 }
 

@@ -274,11 +274,13 @@ void GuiGrid::ComputeLayout()
 
     std::vector<unsigned int> rowOrigins(numRows, 0u);
     {
-        unsigned int y = padV;
+        unsigned int y = totalH > padV ? totalH - padV : 0u;
         for (unsigned int r = 0u; r < numRows; ++r)
         {
+            y -= _computedRowSizes[r];
             rowOrigins[r] = y;
-            y += _computedRowSizes[r] + _rows[r].spacing;
+            if (r + 1u < numRows)
+                y -= _rows[r].spacing;
         }
     }
 
@@ -380,9 +382,11 @@ utils::Position2d GuiGrid::CellOrigin(unsigned int row, unsigned int col) const
     for (unsigned int c = 0u; c < col; ++c)
         x += static_cast<int>(_computedColSizes[c] + _cols[c].spacing);
 
-    int y = static_cast<int>(_padding.Height);
+    int y = static_cast<int>(GetSize().Height) - static_cast<int>(_padding.Height);
     for (unsigned int r = 0u; r < row; ++r)
-        y += static_cast<int>(_computedRowSizes[r] + _rows[r].spacing);
+        y -= static_cast<int>(_computedRowSizes[r] + _rows[r].spacing);
+
+    y -= static_cast<int>(_computedRowSizes[row]);
 
     return { x, y };
 }
