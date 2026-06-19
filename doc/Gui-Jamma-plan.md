@@ -14,7 +14,8 @@ This document is the working handoff for improving Jamma's GUI system. It has be
 - The font path is now stb_truetype-backed: `Inter-Regular.ttf` is loaded from `Jamma/resources/fonts/`, rasterized into a `GL_R8` atlas texture, and drawn with per-glyph quads through `font.vert`/`font.frag`. The old `.txt` metadata files are no longer used.
 - `gui::GuiLabel` builds a VAO from `graphics::Font::InitVertexArray()` and draws through `graphics::Font::Draw()`. Font rendering is confirmed working in-app.
 - `base::GuiElement` has focus state. `GuiButton` can receive focus and activate on Enter/Space key-up.
-- There is already a `gui::GuiGrid`, but it is only a stub and is not yet a usable layout system.
+- There is a working retained layout system from Phase 2: `gui::GuiGrid` and `gui::GuiStackPanel` support fixed/auto/fill sizing, spacing, padding, and lazy invalidation/recompute.
+- Focus is currently per-element (`GuiElement::_hasFocus`) and not yet centralized in a scene-level focus manager.
 - There is no existing `GuiScrollBar`, `GuiTextBox`, dropdown, or popup-layer manager in the repo today.
 
 ## Implementation guardrails
@@ -53,12 +54,12 @@ These are the main files future agents should inspect before changing each phase
   - `JammaLib/src/graphics/Font.cpp`
   - `JammaLib/src/resources/ResourceLib.h`
   - `JammaLib/src/resources/ResourceLib.cpp`
-  - `Jamma/resources/fonts/font_large.txt`
-  - `Jamma/resources/fonts/font_medium.txt`
-  - `Jamma/resources/fonts/font_small.txt`
-  - `Jamma/resources/fonts/font_tiny.txt`
+  - `Jamma/resources/fonts/Inter-Regular.ttf`
+  - `Jamma/resources/shaders/font.vert`
+  - `Jamma/resources/shaders/font.frag`
 - Existing GUI tests:
   - `test/JammaLib_Tests/src/gui/GuiControls_Tests.cpp`
+  - `test/JammaLib_Tests/src/gui/GuiLayout_Tests.cpp`
   - `test/JammaLib_Tests/src/gui/GuiSlider_Tests.cpp`
   - `test/JammaLib_Tests/src/gui/GuiRack_Tests.cpp`
 
@@ -373,6 +374,18 @@ Add the next wave of controls only after text, focus, and layout are stable enou
 - Add a way to render some GUI elements after the normal tree.
 - Add explicit input capture while a popup is open.
 - Define dismissal rules, especially outside click and Escape.
+- Define the owning seam and API explicitly before coding (recommended: scene-level popup stack/host that owns open popups and capture target, not ad hoc per-control static state).
+
+#### 1.5 Keyboard routing prerequisite
+
+- Before implementing dropdown/textbox behavior, add explicit key routing for GUI controls.
+- Today, `Scene::OnAction(KeyAction)` handles scene shortcuts and station/selector routing but does not route key events through `_guiChildren` / focused GUI controls.
+- Add and test an ordered key dispatch policy, for example:
+  1. Active popup capture target
+  2. Focused GUI control (textbox/dropdown/etc.)
+  3. Global scene shortcuts (tap tempo, undo, VST commands) when not text-editing
+  4. Existing station/selector fallthrough
+- Define shortcut suppression rules while text editing is active so keys like Space/Ctrl+Z/Ctrl+S do not trigger scene-wide behavior unintentionally.
 
 #### 2. Checkbox / toggle
 
@@ -419,8 +432,9 @@ Add the next wave of controls only after text, focus, and layout are stable enou
 ### Implementation notes
 
 - `stb_textedit` requires a real row layout and width query implementation. Reuse the Phase 1/2 text measurement path rather than inventing separate metrics.
-- Keep popups and text inputs integrated with the same focus manager introduced in Phase 1.
+- Keep popups and text inputs integrated with one focus authority. Because Phase 1 only added per-element focus state, Phase 3 should either (a) introduce a centralized focus manager now, or (b) introduce an equivalent scene-owned focus coordinator with clear single-owner semantics.
 - Avoid introducing control-specific ad hoc key handling when the focus manager can centralize routing.
+- Keep drag/capture ownership explicit and single-owner: popup capture, control drag capture, and scene background drag should not compete for the same pointer stream.
 
 ### Demo expectation
 
@@ -436,6 +450,7 @@ Add the next wave of controls only after text, focus, and layout are stable enou
 
 - Add unit and behavior tests for:
   - popup open/close and input capture
+  - key-routing precedence and shortcut suppression while editing text
   - dropdown selection
   - scrollbar range math
   - text editing operations and selection behavior
@@ -479,7 +494,8 @@ Phase 1 and Phase 2 are complete. Begin Phase 3 by reviewing:
 - `JammaLib/src/gui/GuiStackPanel.h` / `.cpp` — real stack/wrap container (Phase 2)
 - `JammaLib/src/base/GuiElement.h` — has `LayoutSizing`, `ContentSize()`, `GetHorizSizing()`, `GetVertSizing()`, `HasFocus()`, `RequestFocus()`, `ClearFocus()`
 - `JammaLib/src/gui/GuiButton.h` / `.cpp` — focus-aware, activates on Enter/Space
-- `JammaLib/src/gui/GuiPanel.h` / `.cpp` — thin child-host base (note: `AddChild` signature mismatch with base `GuiElement::AddChild` — see Phase 2 notes)
-- `JammaLib/src/engine/Scene.cpp` — `_layoutDemoPanel` construction shows live API usage
+- `JammaLib/src/gui/GuiPanel.h` / `.cpp` — thin child-host base
+- `JammaLib/src/engine/Scene.cpp` — `_layoutDemoPanel` construction plus current UI draw/input ordering (`Draw`, `OnAction(TouchAction)`, `OnAction(TouchMoveAction)`, `OnAction(KeyAction)`)
+- `JammaLib/src/graphics/Window.cpp` — current OS-level mouse capture behavior that Phase 3 popup/control capture should align with
 
-Phase 3 starts with popup-layer infrastructure before any new controls.
+Phase 3 starts with popup-layer infrastructure and GUI key-routing infrastructure before any new controls.
