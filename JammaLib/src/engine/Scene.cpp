@@ -143,9 +143,8 @@ Scene::Scene(SceneParams params,
 				sp.MinSize = { 60u, 22u };
 				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
 				sp.DragTexture = "blue";
+				sp.DragOverTexture = "yellow";
 				sp.DragControlSize = { 12u, 22u };
-				sp.DragControlOffset = { 0, 0 };
-				sp.DragGap = { 0u, 0u };
 				hStack->AddChild(std::make_shared<GuiSlider>(sp));
 			}
 
@@ -201,27 +200,25 @@ Scene::Scene(SceneParams params,
 				[]() {
 					GuiSliderParams sp;
 					sp.Texture = "rounded_but";
-					sp.OverTexture = "rounded_but_over";
-					sp.DownTexture = "rounded_but_down";
-					sp.OutTexture = "rounded_but_on";
 					sp.Size = { 80u, 22u };
 					sp.MinSize = { 20u, 22u };
 					sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
 					sp.DragTexture = "green";
-					sp.DragOverTexture = "";
+					sp.DragOverTexture = "yellow";
 					sp.DragControlSize = { 10u, 22u };
 					return std::make_shared<GuiSlider>(sp);
 				},
 				[]() {
-					GuiSelectorParams sp;
-					sp.Texture = "router";
-					sp.OverTexture = "router_over";
-					sp.DownTexture = "router_down";
-					sp.OutTexture = "router_active";
+					GuiSliderParams sp;
+					sp.Texture = "rounded_but";
 					sp.Size = { 80u, 22u };
 					sp.MinSize = { 20u, 22u };
-					return std::make_shared<GuiSelector>(sp);
-				}
+					sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+					sp.DragTexture = "purple";
+					sp.DragOverTexture = "yellow";
+					sp.DragControlSize = { 10u, 22u };
+					return std::make_shared<GuiSlider>(sp);
+				},
 			};
 
 			for (int ci = 0; ci < 4; ++ci)
@@ -281,7 +278,7 @@ Scene::Scene(SceneParams params,
 				sp.MinSize = { 30u, 22u };
 				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
 				sp.DragTexture = "red";
-				sp.DragOverTexture = "";
+				sp.DragOverTexture = "yellow";
 				sp.DragControlSize = { 10u, 22u };
 				wStack->AddChild(std::make_shared<GuiSlider>(sp));
 			}
@@ -293,7 +290,7 @@ Scene::Scene(SceneParams params,
 	GuiSelectorParams selectorParams;
 	selectorParams.Position = { 10, 2 };
 	selectorParams.Size = params.Size;
-	_selector = std::make_unique<GuiSelector>(selectorParams);
+	_selector = std::make_unique<SceneSelector>(selectorParams);
 	_selector->SetSelectDepth(base::DEPTH_STATION);
 
 	GuiRadioParams modeRadioParams;
@@ -1257,7 +1254,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		// Only called when hover changed or touch down
 		switch (currentMode)
 		{
-		case GuiSelector::SELECT_NONE:
+		case SceneSelector::SELECT_NONE:
 			for (auto& station : _stations)
 				station->SetPicking3d(false);
 
@@ -1266,7 +1263,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_NONEADD:
+		case SceneSelector::SELECT_NONEADD:
 			for (auto& station : _stations)
 				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
 
@@ -1275,31 +1272,31 @@ void Scene::_UpdateSelection(ActionResultType res)
 				hovering->SetPicking3d(!hovering->IsSelected());
 
 			break;
-		case GuiSelector::SELECT_SELECT:
+		case SceneSelector::SELECT_SELECT:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_SELECTADD:
+		case SceneSelector::SELECT_SELECTADD:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_SELECTREMOVE:
+		case SceneSelector::SELECT_SELECTREMOVE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(false);
 
 			break;
-		case GuiSelector::SELECT_MUTE:
+		case SceneSelector::SELECT_MUTE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_UNMUTE:
+		case SceneSelector::SELECT_UNMUTE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);

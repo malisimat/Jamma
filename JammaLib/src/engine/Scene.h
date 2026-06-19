@@ -20,7 +20,7 @@
 #include "../gui/GuiGrid.h"
 #include "../gui/GuiStackPanel.h"
 #include "../gui/GuiSlider.h"
-#include "../gui/GuiSelector.h"
+#include "../gui/SceneSelector.h"
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
@@ -126,7 +126,7 @@ namespace engine
 						"",
 						{}),
 					""));
-			other._selector = std::make_unique<gui::GuiSelector>(
+			other._selector = std::make_unique<gui::SceneSelector>(
 				gui::GuiSelectorParams(
 					base::GuiElementParams(
 						base::DrawableParams{ "" },
@@ -344,7 +344,7 @@ namespace engine
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
-		std::unique_ptr<gui::GuiSelector> _selector;
+		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiStackPanel> _layoutDemoPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		std::vector<std::shared_ptr<Station>> _stations;

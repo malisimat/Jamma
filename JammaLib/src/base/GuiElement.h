@@ -171,6 +171,7 @@ namespace base
 		bool IsVisible() const;
 		bool IsEnabled() const;
 		bool IsSelected() const;
+		GuiElementState GetState() const;
 		bool HasFocus() const;
 		bool RequestFocus();
 		void ClearFocus();

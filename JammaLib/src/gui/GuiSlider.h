@@ -8,8 +8,6 @@
 #include "GuiElement.h"
 #include "ActionSender.h"
 #include "ActionUndo.h"
-#include "../graphics/Image.h"
-
 // Forward declaration to avoid circular include (AudioMixer.h -> GuiSlider.h).
 namespace audio { class AudioMixer; }
 
@@ -105,6 +103,8 @@ namespace gui
 		virtual bool Undo(std::shared_ptr<base::ActionUndo> undo) override;
 		virtual bool Redo(std::shared_ptr<base::ActionUndo> undo) override;
 
+		bool DragHandleIsOverForTest() const noexcept;
+
 		// VU meter — connects this slider to its owning AudioMixer for display.
 		void SetMixer(std::shared_ptr<audio::AudioMixer> mixer);
 		void SetVuVisible(bool visible);
@@ -129,7 +129,6 @@ namespace gui
 		utils::Position2d _initClickPos;
 		utils::Position2d _initDragPos;
 		base::GuiElement _dragElement;
-		graphics::Image _dragImage;
 		double _valueOffset;
 		double _initValue;
 		std::weak_ptr<audio::AudioMixer> _mixer;

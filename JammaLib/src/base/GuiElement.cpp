@@ -117,6 +117,11 @@ bool GuiElement::IsSelected() const
 	return _isSelected;
 }
 
+GuiElement::GuiElementState GuiElement::GetState() const
+{
+	return _state;
+}
+
 bool GuiElement::HasFocus() const
 {
 	return _hasFocus;

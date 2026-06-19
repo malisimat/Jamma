@@ -185,3 +185,39 @@ TEST(GuiSlider, DragBeyondRangeClampsValue) {
 
 	ASSERT_EQ(1.0, slider->Value());
 }
+
+TEST(GuiSlider, HitTestCoversFullSliderTrack) {
+	auto sliderParams = GuiSliderParams();
+	sliderParams.Position = { 0, 0 };
+	sliderParams.Size = { 140u, 20u };
+	sliderParams.DragControlSize = { 20u, 20u };
+	sliderParams.InitValue = 0.0;
+	sliderParams.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+
+	auto slider = std::make_shared<GuiSlider>(sliderParams);
+
+	ASSERT_TRUE(slider->HitTest({ 50, 10 }));
+	ASSERT_TRUE(slider->HitTest({ 119, 10 }));
+	ASSERT_FALSE(slider->HitTest({ 150, 10 }));
+}
+
+TEST(GuiSlider, DragHandleRespondsToHover) {
+	auto sliderParams = GuiSliderParams();
+	sliderParams.Position = { 0, 0 };
+	sliderParams.Size = { 140u, 20u };
+	sliderParams.DragControlSize = { 20u, 20u };
+	sliderParams.InitValue = 0.0;
+	sliderParams.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+	sliderParams.DragTexture = "drag";
+	sliderParams.DragOverTexture = "drag_over";
+
+	auto slider = std::make_shared<GuiSlider>(sliderParams);
+
+	actions::TouchMoveAction moveAction;
+	moveAction.Touch = actions::TouchAction::TOUCH_MOUSE;
+	moveAction.Position = { 10, 10 };
+	moveAction.Index = 0;
+	slider->OnAction(moveAction);
+
+	ASSERT_TRUE(slider->DragHandleIsOverForTest());
+}

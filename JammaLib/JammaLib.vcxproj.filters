@@ -473,7 +473,7 @@
     <ClInclude Include="src\actions\DelayedAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiSelector.h">
+    <ClInclude Include="src\gui\SceneSelector.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\base\Tweakable.h">
@@ -793,7 +793,7 @@
     <ClCompile Include="src\utils\VecUtils.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiSelector.cpp">
+    <ClCompile Include="src\gui\SceneSelector.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRouter.cpp">

@@ -8,8 +8,6 @@ using namespace utils;
 using namespace base;
 using namespace actions;
 using graphics::GlDrawContext;
-using graphics::Image;
-using graphics::ImageParams;
 using resources::ResourceLib;
 
 GuiSlider::GuiSlider(GuiSliderParams params) :
@@ -20,21 +18,27 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 	_initDragPos({ 0,0 }),
 	_initValue(params.InitValue),
 	_valueOffset(0.0),
-	_dragElement(GuiElementParams(0,
-		DrawableParams{ params.DragTexture },
-		MoveableParams(params.Position, params.ModelPosition, params.ModelScale),
-		SizeableParams{ params.DragControlSize, params.DragControlSize },
-		params.DragOverTexture,
-		params.DragDownTexture,
-		params.DragOutTexture,
-		{} )),
-	_dragImage(ImageParams(
-		DrawableParams{ params.DragTexture },
-		SizeableParams{ params.DragControlSize, params.DragControlSize },
-		"texture",
-		false,
-		false,
-		false)),
+		_dragElement([params]() {
+			GuiElementParams dragParams(0,
+				DrawableParams{ "" },
+				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
+				SizeableParams{ 1, 1 },
+				"",
+				"",
+				"",
+				{});
+			dragParams.Texture = params.DragTexture;
+			dragParams.OverTexture = params.DragOverTexture;
+			dragParams.DownTexture = params.DragDownTexture;
+			dragParams.OutTexture = params.DragOutTexture;
+			dragParams.Position = { 0, 0 };
+			dragParams.ModelPosition = params.ModelPosition;
+			dragParams.ModelScale = params.ModelScale;
+			dragParams.Size = params.DragControlSize;
+			dragParams.MinSize = params.DragControlSize;
+			dragParams.GuiPassThrough = false;
+			return dragParams;
+		}()),
 	_mixer()
 {
 	SetValue(params.InitValue);
@@ -70,7 +74,6 @@ void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	_sliderParams.DragControlSize = dragSize;
 	_sliderParams.DragGap = dragGap;
 	_dragElement.SetSize(dragSize);
-	_dragImage.SetSize(dragSize);
 
 	OnValueChange(true);
 }
@@ -89,10 +92,7 @@ void GuiSlider::Draw(DrawContext & ctx)
 	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-	auto dragPos = _dragElement.Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(dragPos.X, dragPos.Y, 0.f)));
-	_dragImage.Draw(ctx);
-	glCtx.PopMvp();
+	_dragElement.Draw(ctx);
 
 	auto mixer = _mixer.lock();
 	if (mixer)
@@ -110,6 +110,8 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 
 	if (!_isEnabled || !_isVisible)
 		return res;
+
+	_dragElement.OnAction(_dragElement.ParentToLocal(action));
 
 	if (_isDragging)
 	{
@@ -159,16 +161,19 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 
 ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
-	auto res = GuiElement::OnAction(action);
+	ActionResult res = ActionResult::NoAction();
 
 	if (!_isEnabled || !_isVisible)
 		return res;
 
-	if (res.IsEaten)
-		return res;
+	if (!_isDragging)
+	{
+		res = GuiElement::OnAction(action);
+		if (res.IsEaten)
+			return res;
 
-	res.IsEaten = false;
-	res.ResultType = ACTIONRESULT_DEFAULT;
+		_dragElement.OnAction(_dragElement.ParentToLocal(action));
+	}
 
 	if (!_isDragging)
 		return res;
@@ -218,10 +223,14 @@ bool GuiSlider::Redo(std::shared_ptr<ActionUndo> undo)
 	return false;
 }
 
+bool GuiSlider::DragHandleIsOverForTest() const noexcept
+{
+	return _dragElement.GetState() == GuiElement::STATE_OVER;
+}
+
 void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	_dragElement.InitResources(resourceLib, forceInit);
-	_dragImage.InitResources(resourceLib, forceInit);
 	
 	// Initialize mixer's resources (VU meter shaders, vertex buffers, etc.)
 	auto mixer = _mixer.lock();
@@ -234,7 +243,6 @@ void GuiSlider::_InitResources(ResourceLib& resourceLib, bool forceInit)
 void GuiSlider::_ReleaseResources()
 {
 	_dragElement.ReleaseResources();
-	_dragImage.ReleaseResources();
 	
 	// Release mixer's resources
 	auto mixer = _mixer.lock();
@@ -246,19 +254,7 @@ void GuiSlider::_ReleaseResources()
 
 bool GuiSlider::_HitTest(Position2d localPos)
 {
-	auto left = _dragElement.Position().X;
-	auto right = _dragElement.Position().X + (int)_dragElement.GetSize().Width;
-
-	if (localPos.X > left && localPos.X < right)
-	{
-		auto bottom = _dragElement.Position().Y;
-		auto top = _dragElement.Position().X + (int)_dragElement.GetSize().Height;
-
-		if (localPos.Y > bottom && localPos.Y < top)
-			return true;
-	}
-
-	return false;
+	return Size2d::RectTest(_sizeParams.Size, localPos);
 }
 
 void GuiSlider::OnValueChange(bool bypassUpdates)
