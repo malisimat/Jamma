@@ -86,10 +86,7 @@ Scene::Scene(SceneParams params,
 		rootParams.Spacing   = 4u;
 		rootParams.PaddingH  = 8u;
 		rootParams.PaddingV  = 8u;
-		rootParams.Texture   = "router";
-		rootParams.OverTexture = "router_over";
-		rootParams.DownTexture = "router_down";
-		rootParams.OutTexture  = "router_active";
+		rootParams.Texture   = "rounded_but";
 		rootParams.Position  = { 10, 40 };
 		rootParams.Size      = { 310u, 200u };
 		rootParams.MinSize   = { 100u, 80u };
@@ -100,10 +97,6 @@ Scene::Scene(SceneParams params,
 		{
 			GuiLabelParams lp;
 			lp.String      = "-- Layout v2 Demo --";
-			lp.Texture     = "router";
-			lp.OverTexture = "router_over";
-			lp.DownTexture = "router_down";
-			lp.OutTexture  = "router_active";
 			lp.Size        = { 280u, 22u };
 			lp.MinSize     = { 40u, 22u };
 			_layoutDemoPanel->AddChild(std::make_shared<GuiLabel>(lp));
@@ -114,10 +107,6 @@ Scene::Scene(SceneParams params,
 			GuiStackPanelParams hParams;
 			hParams.Direction   = StackDirection::Horizontal;
 			hParams.Spacing     = 6u;
-			hParams.Texture     = "router";
-			hParams.OverTexture = "router_over";
-			hParams.DownTexture = "router_down";
-			hParams.OutTexture  = "router_active";
 			hParams.Size        = { 290u, 26u };
 			hParams.MinSize     = { 80u, 26u };
 			auto hStack = std::make_shared<GuiStackPanel>(hParams);
@@ -149,18 +138,12 @@ Scene::Scene(SceneParams params,
 
 			{
 				GuiSliderParams sp;
-				sp.Texture = "router";
-				sp.OverTexture = "router_over";
-				sp.DownTexture = "router_down";
-				sp.OutTexture = "router_active";
+				sp.Texture = "rounded_but";
 				sp.Size = { 120u, 22u };
 				sp.MinSize = { 60u, 22u };
 				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-				sp.DragTexture = "router";
-				sp.DragOverTexture = "router_over";
-				sp.DragDownTexture = "router_down";
-				sp.DragOutTexture = "router_active";
-				sp.DragControlSize = { 12u, 12u };
+				sp.DragTexture = "blue";
+				sp.DragControlSize = { 12u, 22u };
 				sp.DragControlOffset = { 0, 0 };
 				sp.DragGap = { 0u, 0u };
 				hStack->AddChild(std::make_shared<GuiSlider>(sp));
@@ -172,10 +155,7 @@ Scene::Scene(SceneParams params,
 		// 2×2 grid: four control cells showing toggle, button, slider, and selector.
 		{
 			GuiGridParams gp;
-			gp.Texture     = "router";
-			gp.OverTexture = "router_over";
-			gp.DownTexture = "router_down";
-			gp.OutTexture  = "router_active";
+			gp.Texture     = "";
 			gp.Size     = { 290u, 74u };
 			gp.MinSize  = { 80u, 40u };
 			gp.PaddingH = 2u;
@@ -197,41 +177,39 @@ Scene::Scene(SceneParams params,
 			const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
 				[]() {
 					GuiToggleParams tp;
-					tp.Texture = "router";
-					tp.OverTexture = "router_over";
-					tp.DownTexture = "router_down";
-					tp.OutTexture = "router_active";
-					tp.ToggledTexture = "router_active";
-					tp.ToggledOverTexture = "router_over";
-					tp.ToggledDownTexture = "router_down";
+					tp.Texture = "rounded_but";
+					tp.OverTexture = "rounded_but_over";
+					tp.DownTexture = "rounded_but_down";
+					tp.OutTexture = "";
+					tp.ToggledTexture = "rounded_but_on";
+					tp.ToggledOverTexture = "rounded_but_on_over";
+					tp.ToggledDownTexture = "rounded_but_on_down";
 					tp.Size = { 80u, 22u };
 					tp.MinSize = { 20u, 22u };
 					return std::make_shared<GuiToggle>(tp);
 				},
 				[]() {
 					GuiButtonParams bp;
-					bp.Texture = "router";
-					bp.OverTexture = "router_over";
-					bp.DownTexture = "router_down";
-					bp.OutTexture = "router_active";
+					bp.Texture = "rounded_but";
+					bp.OverTexture = "rounded_but_over";
+					bp.DownTexture = "rounded_but_down";
+					bp.OutTexture = "rounded_but_on";
 					bp.Size = { 80u, 22u };
 					bp.MinSize = { 20u, 22u };
 					return std::make_shared<GuiButton>(bp);
 				},
 				[]() {
 					GuiSliderParams sp;
-					sp.Texture = "router";
-					sp.OverTexture = "router_over";
-					sp.DownTexture = "router_down";
-					sp.OutTexture = "router_active";
+					sp.Texture = "rounded_but";
+					sp.OverTexture = "rounded_but_over";
+					sp.DownTexture = "rounded_but_down";
+					sp.OutTexture = "rounded_but_on";
 					sp.Size = { 80u, 22u };
 					sp.MinSize = { 20u, 22u };
 					sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-					sp.DragTexture = "router";
-					sp.DragOverTexture = "router_over";
-					sp.DragDownTexture = "router_down";
-					sp.DragOutTexture = "router_active";
-					sp.DragControlSize = { 10u, 10u };
+					sp.DragTexture = "green";
+					sp.DragOverTexture = "";
+					sp.DragControlSize = { 10u, 22u };
 					return std::make_shared<GuiSlider>(sp);
 				},
 				[]() {
@@ -264,23 +242,19 @@ Scene::Scene(SceneParams params,
 			wParams.Direction    = StackDirection::Horizontal;
 			wParams.Spacing      = 4u;
 			wParams.WrapContent  = true;
-			wParams.Texture      = "router";
-			wParams.OverTexture  = "router_over";
-			wParams.DownTexture  = "router_down";
-			wParams.OutTexture   = "router_active";
 			wParams.Size         = { 290u, 42u };
 			wParams.MinSize      = { 60u, 24u };
 			auto wStack = std::make_shared<GuiStackPanel>(wParams);
 
 			{
 				GuiToggleParams tp;
-				tp.Texture = "router";
-				tp.OverTexture = "router_over";
-				tp.DownTexture = "router_down";
-				tp.OutTexture = "router_active";
-				tp.ToggledTexture = "router_active";
-				tp.ToggledOverTexture = "router_over";
-				tp.ToggledDownTexture = "router_down";
+				tp.Texture = "rounded_but";
+				tp.OverTexture = "rounded_but_over";
+				tp.DownTexture = "rounded_but_down";
+				tp.OutTexture = "rounded_but_on";
+				tp.ToggledTexture = "rounded_but_on";
+				tp.ToggledOverTexture = "rounded_but_on_over";
+				tp.ToggledDownTexture = "rounded_but_on_down";
 				tp.Size = { 80u, 22u };
 				tp.MinSize = { 30u, 22u };
 				wStack->AddChild(std::make_shared<GuiToggle>(tp));
@@ -288,10 +262,10 @@ Scene::Scene(SceneParams params,
 
 			{
 				GuiButtonParams bp;
-				bp.Texture = "router";
-				bp.OverTexture = "router_over";
-				bp.DownTexture = "router_down";
-				bp.OutTexture = "router_active";
+				bp.Texture = "rounded_but";
+				bp.OverTexture = "rounded_but_over";
+				bp.DownTexture = "rounded_but_down";
+				bp.OutTexture = "rounded_but_on";
 				bp.Size = { 80u, 22u };
 				bp.MinSize = { 30u, 22u };
 				wStack->AddChild(std::make_shared<GuiButton>(bp));
@@ -299,18 +273,16 @@ Scene::Scene(SceneParams params,
 
 			{
 				GuiSliderParams sp;
-				sp.Texture = "router";
-				sp.OverTexture = "router_over";
-				sp.DownTexture = "router_down";
-				sp.OutTexture = "router_active";
+				sp.Texture = "rounded_but";
+				sp.OverTexture = "rounded_but_over";
+				sp.DownTexture = "rounded_but_down";
+				sp.OutTexture = "rounded_but_on";
 				sp.Size = { 92u, 22u };
 				sp.MinSize = { 30u, 22u };
 				sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-				sp.DragTexture = "router";
-				sp.DragOverTexture = "router_over";
-				sp.DragDownTexture = "router_down";
-				sp.DragOutTexture = "router_active";
-				sp.DragControlSize = { 10u, 10u };
+				sp.DragTexture = "red";
+				sp.DragOverTexture = "";
+				sp.DragControlSize = { 10u, 22u };
 				wStack->AddChild(std::make_shared<GuiSlider>(sp));
 			}
 

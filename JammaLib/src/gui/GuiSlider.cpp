@@ -8,8 +8,8 @@ using namespace utils;
 using namespace base;
 using namespace actions;
 using graphics::GlDrawContext;
-using graphics::NinePatchImage;
-using graphics::NinePatchImageParams;
+using graphics::Image;
+using graphics::ImageParams;
 using resources::ResourceLib;
 
 GuiSlider::GuiSlider(GuiSliderParams params) :
@@ -28,10 +28,13 @@ GuiSlider::GuiSlider(GuiSliderParams params) :
 		params.DragDownTexture,
 		params.DragOutTexture,
 		{} )),
-	_dragImage(NinePatchImageParams(
+	_dragImage(ImageParams(
 		DrawableParams{ params.DragTexture },
 		SizeableParams{ params.DragControlSize, params.DragControlSize },
-		"texture")),
+		"texture",
+		false,
+		false,
+		false)),
 	_mixer()
 {
 	SetValue(params.InitValue);

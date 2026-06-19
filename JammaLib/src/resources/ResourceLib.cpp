@@ -1,9 +1,43 @@
 #include "ResourceLib.h"
 #include <array>
+#include <cctype>
 #include <iostream>
+#include <limits>
 
 using namespace resources;
 using namespace graphics;
+
+namespace
+{
+	bool _ParseUnsigned(const std::string& token, unsigned int& value)
+	{
+		if (token.empty())
+			return false;
+
+		for (auto c : token)
+		{
+			if (!std::isdigit(static_cast<unsigned char>(c)))
+				return false;
+		}
+
+		try
+		{
+			size_t consumed = 0;
+			const auto parsed = std::stoull(token, &consumed, 10);
+			if (consumed != token.size())
+				return false;
+			if (parsed > std::numeric_limits<unsigned int>::max())
+				return false;
+
+			value = static_cast<unsigned int>(parsed);
+			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}
+}
 
 ResourceLib::ResourceLib() :
 	_resources({})
@@ -27,6 +61,15 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 	{
 		case TEXTURE:
 		{
+			bool isNinePatch = false;
+			unsigned int borderX = 0;
+			unsigned int borderY = 0;
+			if (!ParseTextureArgs(args, isNinePatch, borderX, borderY))
+			{
+				std::cout << "ResourceLib: invalid texture args for '" << name << "'" << std::endl;
+				return false;
+			}
+
 			const std::array<std::string, 2> texFiles = {
 				"./resources/textures/" + name + ".tga",
 				"./Jamma/resources/textures/" + name + ".tga"
@@ -39,7 +82,14 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				if (texOpt.has_value())
 				{
 					auto[tex, width, height] = texOpt.value();
-					_resources.emplace(name, std::make_shared<TextureResource>(name, tex, width, height));
+					_resources.emplace(name, std::make_shared<TextureResource>(
+						name,
+						tex,
+						width,
+						height,
+						isNinePatch,
+						borderX,
+						borderY));
 					return true;
 				}
 			}
@@ -108,6 +158,31 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 	}
 
 	return false;
+}
+
+bool ResourceLib::ParseTextureArgs(const std::vector<std::string>& args,
+	bool& isNinePatch,
+	unsigned int& borderX,
+	unsigned int& borderY)
+{
+	isNinePatch = false;
+	borderX = 0;
+	borderY = 0;
+
+	if (args.empty())
+		return true;
+
+	if (args.size() != 3)
+		return false;
+
+	if (args[0] != "ninepatch")
+		return false;
+
+	if (!_ParseUnsigned(args[1], borderX) || !_ParseUnsigned(args[2], borderY))
+		return false;
+
+	isNinePatch = true;
+	return true;
 }
 
 std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::string& name)

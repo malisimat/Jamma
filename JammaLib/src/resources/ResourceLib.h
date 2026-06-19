@@ -24,6 +24,10 @@ namespace resources
 		int NumResources() const;
 		void ClearResources();
 		bool LoadResource(Type type, std::string name, std::vector<std::string> args);
+		static bool ParseTextureArgs(const std::vector<std::string>& args,
+			bool& isNinePatch,
+			unsigned int& borderX,
+			unsigned int& borderY);
 		std::optional<std::weak_ptr<Resource>> GetResource(const std::string& name);
 		bool LoadFonts();
 		std::optional<std::weak_ptr<graphics::Font>> GetFont(graphics::FontOptions::FontSize size);
