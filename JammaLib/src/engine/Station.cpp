@@ -360,7 +360,7 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	// Drive any wired parameter automation. Runs independently of vstActive so a
 	// bypassed/idle chain still receives recorded parameter motion. Flat loop over
 	// the pre-baked dispatch list — no weak_ptr locks, no shared_ptr chasing.
-	_RunAutomationDispatch(blockStartSample);
+	_RunAutomationDispatch(blockStartSample, sampsToRead);
 
 	if (channelCount == 0u)
 	{
@@ -490,6 +490,7 @@ void Station::RebuildAutomationDispatch()
 				entry.paramIdx = lane.Mapping.TargetParameterIndex;
 				entry.loop = midiLoop.get();
 				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
+				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
 				entry.cursorIdx = 0u;
 				entry.lastValue = -2.0f; // force first write after a rebuild
@@ -553,7 +554,8 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 	return nullptr;
 }
 
-void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
+void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
+	std::uint32_t numSamps) noexcept
 {
 	auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
 	if (!dispatches)
@@ -561,6 +563,7 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 
 	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
 	const auto count = _automationDispatchCount[frontIdx];
+	const auto dispatchSample = blockStartSample + ((numSamps > 0u) ? (numSamps - 1u) : 0u);
 
 	for (std::uint8_t i = 0u; i < count; ++i)
 	{
@@ -573,12 +576,14 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample) noexcept
 		// automation record is released. Only the matching (plugin, parameter) pair
 		// is held off; all other automation plays normally. Sample-domain deadline,
 		// so the audio thread never reads a wall clock.
-		if (midi::MidiRouter::IsParameterSuppressed(entry.plugin, entry.paramIdx, blockStartSample))
+		if (midi::MidiRouter::IsParameterSuppressed(entry.plugin, entry.paramIdx, dispatchSample))
 			continue;
 
 		const double frac = (entry.loopLengthSamps > 0u)
-			? std::fmod(static_cast<double>(blockStartSample), static_cast<double>(entry.loopLengthSamps))
-				/ static_cast<double>(entry.loopLengthSamps)
+			? std::fmod(
+				static_cast<double>(dispatchSample - entry.loopPhaseAnchor),
+				static_cast<double>(entry.loopLengthSamps))
+					/ static_cast<double>(entry.loopLengthSamps)
 			: 0.0;
 
 		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, entry.cursorIdx);

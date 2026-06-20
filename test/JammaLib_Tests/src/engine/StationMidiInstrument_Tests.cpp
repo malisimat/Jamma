@@ -567,15 +567,17 @@ TEST(StationAutomation, WiredLaneDrivesPluginSetParameterDuringPlayback)
 
 	station->RebuildAutomationDispatch();
 
-	// At block-start sample 0 the value should be the first control point.
-	station->RunAutomationDispatchForTest(0u);
+	// Dispatch should sample the latest value inside the block, not the block start.
+	const auto quarterLen = (std::max)(1u, midiLoop->LoopLengthSamps() / 4u);
+	station->RunAutomationDispatchForTest(0u, quarterLen);
 	ASSERT_GE(plugin->ParamSetCalls, 1u);
 	EXPECT_EQ(3u, plugin->LastParamIndex);
-	EXPECT_NEAR(0.25f, plugin->LastParamValue, 1.0e-4f);
+	EXPECT_GT(plugin->LastParamValue, 0.25f);
+	EXPECT_LT(plugin->LastParamValue, 0.75f);
 
 	// Half-way through the loop the interpolated value should approach 0.75.
 	const auto halfLen = midiLoop->LoopLengthSamps() / 2u;
-	station->RunAutomationDispatchForTest(halfLen);
+	station->RunAutomationDispatchForTest(halfLen, quarterLen);
 	EXPECT_NEAR(0.75f, plugin->LastParamValue, 1.0e-2f);
 }
 
@@ -657,6 +659,61 @@ TEST(StationAutomation, EditorSuppressionGatesPlaybackUntilCooldownExpires)
 	station->RunAutomationDispatchForTest(6000u);
 	EXPECT_GE(plugin->ParamSetCalls, 1u);
 	EXPECT_EQ(2u, plugin->LastParamIndex);
+	midi::MidiRouter::ResetAutomationSuppressionForTest();
+}
 
+
+TEST(StationAutomation, EditorTouchWritesHoldWindowOnlyOnFreshTouch)
+{
+	midi::MidiRouter::ResetAutomationSuppressionForTest();
+	midi::MidiRouter::SetAutomationRecordHeldForTest(true);
+
+	auto station = MakeStation("station-editor-touch");
+	auto plugin = AddPlugin(station, L"fake-editor-touch.dll");
+	auto take = MakeMidiTake("editor-touch-take");
+	station->AddTake(take);
+	station->CommitChanges();
+
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 48u, 100u), "Keys", 0u);
+	take->Play(0u, 1000u, 0u);
+
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_GE(midiLoop->LoopLengthSamps(), 180u);
+
+	io::UserConfig cfg{};
+	audio::AudioStreamParams audioParams{};
+	audioParams.SampleRate = 100u;
+	midi::MidiRouter router;
+
+	vst::_lastTouchedParam.Plugin.store(plugin.get(), std::memory_order_relaxed);
+	vst::_lastTouchedParam.ParameterIndex.store(5u, std::memory_order_relaxed);
+	vst::_lastTouchedParam.Value.store(0.3f, std::memory_order_relaxed);
+	vst::_lastTouchedParam.Sequence.fetch_add(1u, std::memory_order_release);
+
+	router.PumpMidi({ station }, 100u, cfg, audioParams);
+
+	const auto lane = midiLoop->ResolveAutomationLaneFor(plugin.get(), 5u);
+	ASSERT_TRUE(lane.has_value());
+	EXPECT_EQ(midi::AutomationMapping::MakeEditorMatchKey(),
+		midiLoop->GetLane(*lane).Mapping.MatchKey.load(std::memory_order_relaxed));
+
+	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
+	const auto firstCount = midiLoop->SnapshotAutomationLanePoints(*lane, points.data(), points.size());
+	ASSERT_EQ(2u, firstCount);
+	EXPECT_NEAR(0.1f, points[0].first, 1.0e-6f);
+	EXPECT_NEAR(0.3f, points[0].second, 1.0e-6f);
+	EXPECT_NEAR(0.18f, points[1].first, 1.0e-6f);
+	EXPECT_NEAR(0.3f, points[1].second, 1.0e-6f);
+	EXPECT_TRUE(midi::MidiRouter::IsParameterSuppressed(plugin.get(), 5u, 179u));
+
+	// No new touch sequence: PumpMidi should neither add more points nor extend suppression.
+	router.PumpMidi({ station }, 150u, cfg, audioParams);
+	const auto secondCount = midiLoop->SnapshotAutomationLanePoints(*lane, points.data(), points.size());
+	EXPECT_EQ(firstCount, secondCount);
+	EXPECT_FALSE(midi::MidiRouter::IsParameterSuppressed(plugin.get(), 5u, 181u));
+
+	midi::MidiRouter::SetAutomationRecordHeldForTest(false);
 	midi::MidiRouter::ResetAutomationSuppressionForTest();
 }

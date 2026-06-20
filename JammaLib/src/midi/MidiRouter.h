@@ -126,7 +126,6 @@ namespace midi
 		static void ResetAutomationSuppressionForTest() noexcept;
 
 	private:
-		static constexpr std::size_t MaxEditorOverwritePoints = 256u;
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
 
 		struct MidiInputEndpoint
@@ -163,12 +162,6 @@ namespace midi
 			std::uint64_t globalSampleNow,
 			const audio::AudioStreamParams& audioParams) noexcept;
 		void _ResetEditorOverwriteSessions() noexcept;
-		void _RecordOverwritePoint(
-			std::array<std::pair<float, float>, MaxEditorOverwritePoints>& points,
-			std::size_t& count,
-			float frac,
-			float value) noexcept;
-		void _ApplyEditorOverwriteSessions(std::uint32_t nowSample) noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
@@ -188,19 +181,28 @@ namespace midi
 		// Touched only on the (single) MIDI pump thread.
 		std::uint64_t _lastEditorAutomationSeq = 0u;
 
-		struct EditorOverwriteSession
+		// Per-(plugin, param) state for active editor-touch cooldown windows. Each
+		// real VST editor change writes one bounded overwrite window and refreshes
+		// suppression once; idle pump ticks only age out stale sessions.
+		//
+		// Lifecycle:
+		//  • _ResetEditorOverwriteSessions() clears all states (called on Ctrl+Shift+A press).
+		//  • First VST touch after reset: freshDrag → state activated and a hold window written.
+		//  • Subsequent touches in the same record session: state stays active and writes a fresh window.
+		//  • No new touch for > cooldown samples: state expires.
+		//  • Next VST touch after expiry: freshDrag again → new cooldown session.
+		struct EditorTouchState
 		{
 			bool Active = false;
 			const vst::IVstPlugin* Plugin = nullptr;
 			unsigned int ParamIndex = 0u;
+			std::uint32_t LastTouchSample = 0u;
+			float LastKnownValue = 0.0f;
 			std::weak_ptr<midi::MidiLoop> Loop;
 			std::size_t LaneIdx = 0u;
-			std::array<std::pair<float, float>, MaxEditorOverwritePoints> Points{};
-			std::size_t PointCount = 0u;
-			std::uint32_t ExpirySample = 0u;
 		};
-		static constexpr std::size_t MaxEditorOverwriteSessions = 16u;
-		std::array<EditorOverwriteSession, MaxEditorOverwriteSessions> _editorOverwriteSessions{};
+		static constexpr std::size_t MaxEditorTouchStates = 16u;
+		std::array<EditorTouchState, MaxEditorTouchStates> _editorTouchStates{};
 
 		// Fixed-capacity per-parameter suppression table. Written on the non-RT MIDI
 		// pump thread, read on the audio thread; each field is independently atomic

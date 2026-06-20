@@ -96,7 +96,7 @@ namespace midi
 	// sparse control-point buffer recorded along the loop timeline.
 	struct AutomationLane
 	{
-		static constexpr std::size_t MaxPoints = 256u;
+		static constexpr std::size_t MaxPoints = 2048u;
 
 		AutomationMapping Mapping;
 		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
@@ -156,7 +156,9 @@ namespace midi
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).
-		void EndRecord(std::uint32_t loopLengthSamps);
+		// startGlobalSample is the global audio sample at which loop position 0 maps:
+		// used by automation dispatch to compute loop-relative fracs correctly.
+		void EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGlobalSample = 0u);
 		void Reset() noexcept;
 
 		// Play any events that fall within [globalSample, globalSample + numSamples).
@@ -172,6 +174,10 @@ namespace midi
 		MidiLoopState State() const noexcept { return _state; }
 		std::size_t EventCount() const noexcept { return _eventCount; }
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
+		// Global sample that maps to loop-relative position 0.  Use to convert a
+		// global sample counter into a loop-relative frac:
+		//   frac = (globalSample - LoopPhaseAnchor()) % loopLen / loopLen
+		std::uint32_t LoopPhaseAnchor() const noexcept { return _loopPhaseAnchor; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
@@ -196,6 +202,15 @@ namespace midi
 		// safe: fixed-capacity storage, no allocation. Points beyond capacity are
 		// dropped (drop-newest). Called on the MIDI thread during recording.
 		void SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept;
+
+		// Replace automation in the sample-domain half-open window
+		// [startSample, startSample + durationSamples) with a held value, then
+		// write that same value again at the window end so playback holds steady
+		// until the next control point. Non-RT helper for editor-driven automation.
+		void OverwriteAutomationWindow(std::size_t laneIdx,
+			std::uint32_t startSample,
+			std::uint32_t durationSamples,
+			float value) noexcept;
 
 		// Cursor-advancing read on lane laneIdx: advances cursorIdx forward to the
 		// correct bracket for frac, returns the piecewise-linearly interpolated
@@ -266,6 +281,7 @@ namespace midi
 		std::vector<std::unique_ptr<QuantisedEventBuffer>> _retainedQuantisedEvents;
 		std::size_t _eventCount;
 		std::uint32_t _loopLengthSamps;
+		std::uint32_t _loopPhaseAnchor;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;
 		std::uint64_t _modelRevision;

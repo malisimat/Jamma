@@ -1,6 +1,7 @@
 #include "MidiRouter.h"
 
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <set>
 #include "../base/Action.h"
@@ -192,85 +193,8 @@ void MidiRouter::SetAutomationRecordHeldForTest(bool held) noexcept
 
 void MidiRouter::_ResetEditorOverwriteSessions() noexcept
 {
-	for (auto& session : _editorOverwriteSessions)
-		session.Active = false;
-}
-
-void MidiRouter::_RecordOverwritePoint(
-	std::array<std::pair<float, float>, MaxEditorOverwritePoints>& points,
-	std::size_t& count,
-	float frac,
-	float value) noexcept
-{
-	constexpr float fracEpsilon = 1.0f / 2048.0f;
-
-	std::size_t insertAt = 0u;
-	while (insertAt < count && points[insertAt].first < frac)
-		++insertAt;
-
-	if (insertAt < count && (points[insertAt].first - frac) <= fracEpsilon)
-	{
-		points[insertAt].second = value;
-		return;
-	}
-
-	if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= fracEpsilon)
-	{
-		points[insertAt - 1u].second = value;
-		return;
-	}
-
-	if (count >= MaxEditorOverwritePoints)
-		return;
-
-	for (std::size_t i = count; i > insertAt; --i)
-		points[i] = points[i - 1u];
-	points[insertAt] = std::make_pair(frac, value);
-	++count;
-}
-
-void MidiRouter::_ApplyEditorOverwriteSessions(std::uint32_t nowSample) noexcept
-{
-	for (auto& session : _editorOverwriteSessions)
-	{
-		if (!session.Active)
-			continue;
-
-		if (static_cast<std::int32_t>(session.ExpirySample - nowSample) <= 0)
-		{
-			session.Active = false;
-			continue;
-		}
-
-		auto loop = session.Loop.lock();
-		if (!loop)
-		{
-			session.Active = false;
-			continue;
-		}
-
-		if (session.LaneIdx >= MidiLoop::MaxAutomationLanes)
-		{
-			session.Active = false;
-			continue;
-		}
-
-		const auto& mapping = loop->GetLane(session.LaneIdx).Mapping;
-		if (!mapping.IsActive()
-			|| mapping.TargetPlugin != session.Plugin
-			|| mapping.TargetParameterIndex != session.ParamIndex)
-		{
-			session.Active = false;
-			continue;
-		}
-
-		loop->ClearAutomationLanePoints(session.LaneIdx);
-		for (std::size_t i = 0u; i < session.PointCount; ++i)
-		{
-			const auto& pt = session.Points[i];
-			loop->SetAutomationValueAtFrac(session.LaneIdx, pt.first, pt.second);
-		}
-	}
+	for (auto& state : _editorTouchStates)
+		state.Active = false;
 }
 
 bool MidiRouter::IsParameterSuppressed(const vst::IVstPlugin* plugin,
@@ -653,54 +577,15 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 	std::uint64_t globalSampleNow,
 	const audio::AudioStreamParams& audioParams) noexcept
 {
+	// Always advance the sequence cursor so that touches made before Ctrl+Shift+A
+	// was pressed are not replayed as soon as record mode is armed.
 	const auto seq = vst::_lastTouchedParam.Sequence.load(std::memory_order_acquire);
-	if (seq == _lastEditorAutomationSeq)
-		return;
-	_lastEditorAutomationSeq = seq;
+	const bool newTouch = (seq != _lastEditorAutomationSeq);
+	if (newTouch)
+		_lastEditorAutomationSeq = seq;
 
-	// Only fold editor drags into automation while the record gesture is held.
 	if (!_automationRecordHeld.load(std::memory_order_acquire))
 		return;
-
-	auto* plugin = vst::_lastTouchedParam.Plugin.load(std::memory_order_acquire);
-	if (!plugin)
-		return;
-	const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_acquire);
-	const auto value = vst::_lastTouchedParam.Value.load(std::memory_order_acquire);
-
-	// Find the first non-remote station whose recording loop owns this plugin.
-	std::shared_ptr<midi::MidiLoop> targetLoop;
-	for (const auto& station : stations)
-	{
-		if (!station || station->IsRemote())
-			continue;
-		if (auto loop = station->ResolveEditorAutomationLoop(plugin))
-		{
-			targetLoop = loop;
-			break;
-		}
-	}
-
-	if (!targetLoop)
-	{
-		std::cout << "[Automation] editor drag ignored: no recording loop owns plugin "
-			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
-		return;
-	}
-
-	const auto loopLen = targetLoop->LoopLengthSamps();
-	if (loopLen == 0u)
-		return;
-
-	const auto laneOpt = targetLoop->ResolveAutomationLaneFor(plugin, paramIdx);
-	if (!laneOpt)
-	{
-		std::cout << "[Automation] editor drag ignored: no free automation lane for plugin "
-			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
-		return;
-	}
-
-	const auto laneIdx = *laneOpt;
 
 	const unsigned int sampleRate = (audioParams.SampleRate > 0u) ? audioParams.SampleRate : 48000u;
 	const auto cooldownSamples = static_cast<std::uint32_t>(
@@ -708,70 +593,138 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 	const auto nowSample = static_cast<std::uint32_t>(globalSampleNow);
 	const auto expirySample = nowSample + cooldownSamples;
 
-	EditorOverwriteSession* targetSession = nullptr;
-	for (auto& session : _editorOverwriteSessions)
+	// -----------------------------------------------------------------------
+	// Part A — new VST touch: resolve (plugin, param, loop, lane) and replace
+	// that parameter's next cool-down-sized future window with a held value.
+	// -----------------------------------------------------------------------
+	if (newTouch)
 	{
-		if (session.Active && session.Plugin == plugin && session.ParamIndex == paramIdx)
+		auto* plugin = vst::_lastTouchedParam.Plugin.load(std::memory_order_acquire);
+		if (plugin)
 		{
-			targetSession = &session;
-			break;
-		}
-	}
+			const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_acquire);
+			const auto value    = vst::_lastTouchedParam.Value.load(std::memory_order_acquire);
 
-	if (!targetSession)
-	{
-		for (auto& session : _editorOverwriteSessions)
-		{
-			if (!session.Active
-				|| static_cast<std::int32_t>(session.ExpirySample - nowSample) <= 0)
+			std::shared_ptr<midi::MidiLoop> targetLoop;
+			for (const auto& station : stations)
 			{
-				targetSession = &session;
-				break;
+				if (!station || station->IsRemote())
+					continue;
+				if (auto loop = station->ResolveEditorAutomationLoop(plugin))
+				{
+					targetLoop = loop;
+					break;
+				}
+			}
+
+			if (!targetLoop)
+			{
+				std::cout << "[Automation] editor drag ignored: no recording loop owns plugin "
+					<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+			}
+			else
+			{
+				const auto loopLen = targetLoop->LoopLengthSamps();
+				if (loopLen > 0u)
+				{
+					const auto loopSample = static_cast<std::uint32_t>(
+						(nowSample - targetLoop->LoopPhaseAnchor()) % loopLen);
+					const auto laneOpt = targetLoop->ResolveAutomationLaneFor(plugin, paramIdx);
+					if (!laneOpt)
+					{
+						std::cout << "[Automation] editor drag ignored: no free automation lane for plugin "
+							<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+					}
+					else
+					{
+						const auto laneIdx = *laneOpt;
+
+						EditorTouchState* touchState = nullptr;
+						for (auto& state : _editorTouchStates)
+						{
+							if (state.Active && state.Plugin == plugin && state.ParamIndex == paramIdx)
+							{
+								touchState = &state;
+								break;
+							}
+						}
+						if (!touchState)
+						{
+							for (auto& state : _editorTouchStates)
+							{
+								if (!state.Active)
+								{
+									touchState = &state;
+									break;
+								}
+							}
+						}
+
+						if (!touchState)
+						{
+							std::cout << "[Automation] editor drag ignored: no free touch-state slot for plugin "
+								<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
+						}
+						else
+						{
+							// First touch in this record session: the slot was inactive because
+							// Ctrl+Shift+A was just pressed (or because the previous cool-down
+							// expired). Each real touch rewrites one bounded future hold window.
+							const bool freshDrag = !touchState->Active;
+							if (freshDrag)
+							{
+								touchState->Active     = true;
+								touchState->Plugin     = plugin;
+								touchState->ParamIndex = paramIdx;
+								std::cout << "[Automation] fresh drag: lane " << laneIdx
+									<< " overwrite started for param " << paramIdx << "\n";
+							}
+
+							touchState->Loop           = targetLoop;
+							touchState->LaneIdx        = laneIdx;
+							touchState->LastKnownValue = value;
+							touchState->LastTouchSample = nowSample;
+
+							if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))
+							{
+								std::cout << "[Automation] editor drag wired lane " << laneIdx
+									<< " -> plugin " << static_cast<const void*>(plugin)
+									<< " param " << paramIdx << "\n";
+							}
+
+							targetLoop->OverwriteAutomationWindow(laneIdx, loopSample, cooldownSamples, value);
+
+							RefreshAutomationSuppression(plugin, paramIdx, nowSample, expirySample);
+						}
+					}
+				}
 			}
 		}
 	}
 
-	if (!targetSession)
+	// -----------------------------------------------------------------------
+	// Part B — expire stale touch sessions. Between actual VST touch events we
+	// only age out state; we do not write more points or extend suppression.
+	// -----------------------------------------------------------------------
+	for (auto& state : _editorTouchStates)
 	{
-		std::cout << "[Automation] editor drag ignored: no free overwrite session for plugin "
-			<< static_cast<const void*>(plugin) << " (param " << paramIdx << ")\n";
-		return;
+		if (!state.Active)
+			continue;
+
+		if (static_cast<std::int32_t>(nowSample - state.LastTouchSample)
+			> static_cast<std::int32_t>(cooldownSamples))
+		{
+			state.Active = false;
+			continue;
+		}
+
+		auto loop = state.Loop.lock();
+		if (!loop)
+		{
+			state.Active = false;
+			continue;
+		}
 	}
-
-	if (!targetSession->Active)
-	{
-		targetSession->Active = true;
-		targetSession->Plugin = plugin;
-		targetSession->ParamIndex = paramIdx;
-		targetSession->PointCount = 0u;
-	}
-	else
-	{
-		auto existingLoop = targetSession->Loop.lock();
-		if (!existingLoop || existingLoop.get() != targetLoop.get() || targetSession->LaneIdx != laneIdx)
-			targetSession->PointCount = 0u;
-	}
-
-	targetSession->Loop = targetLoop;
-	targetSession->LaneIdx = laneIdx;
-	targetSession->ExpirySample = expirySample;
-
-	if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))
-	{
-		std::cout << "[Automation] editor drag wired lane " << laneIdx
-			<< " -> plugin " << static_cast<const void*>(plugin)
-			<< " param " << paramIdx << "\n";
-	}
-
-	const float frac = (loopLen > 0u)
-		? static_cast<float>(static_cast<double>(globalSampleNow % loopLen)
-			/ static_cast<double>(loopLen))
-		: 0.0f;
-	_RecordOverwritePoint(targetSession->Points, targetSession->PointCount, frac, value);
-
-	// Refresh playback suppression so the recorded curve doesn't snap the just
-	// dragged parameter back during the post-release cool-down window.
-	RefreshAutomationSuppression(plugin, paramIdx, nowSample, expirySample);
 }
 
 MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -785,7 +738,6 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	if (!midiInputs)
 	{
 		_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
-		_ApplyEditorOverwriteSessions(static_cast<std::uint32_t>(globalSampleNow));
 		return summary;
 	}
 	for (const auto& input : *midiInputs)
@@ -848,8 +800,9 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 								if (loopLen == 0u)
 									continue;
 
-								const double frac =
-									static_cast<double>(globalSampleNow % loopLen) / static_cast<double>(loopLen);
+							const double frac = std::fmod(
+								static_cast<double>(static_cast<std::uint32_t>(globalSampleNow) - loop->LoopPhaseAnchor()),
+								static_cast<double>(loopLen)) / static_cast<double>(loopLen);
 								for (std::size_t laneIdx = 0u; laneIdx < MidiLoop::MaxAutomationLanes; ++laneIdx)
 								{
 									auto& lane = loop->GetLane(laneIdx);
@@ -886,7 +839,6 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	}
 
 	_ConsumeEditorAutomation(stations, globalSampleNow, audioParams);
-	_ApplyEditorOverwriteSessions(static_cast<std::uint32_t>(globalSampleNow));
 
 	return summary;
 }

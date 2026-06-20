@@ -13,13 +13,69 @@ using namespace midi;
 namespace
 {
 	static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
+	static constexpr float AutomationFracEpsilon = 1.0f / 2048.0f;
+
+	float ClampAutomationFrac(double frac) noexcept
+	{
+		auto fracF = static_cast<float>(frac);
+		if (fracF < 0.0f)
+			return 0.0f;
+		if (fracF > 1.0f)
+			return 1.0f;
+		return fracF;
+	}
+
+	void InsertOrUpdateAutomationPoint(std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints>& points,
+		std::size_t& count,
+		float frac,
+		float value) noexcept
+	{
+		std::size_t insertAt = 0u;
+		while (insertAt < count && points[insertAt].first < frac)
+			++insertAt;
+
+		if (insertAt < count && (points[insertAt].first - frac) <= AutomationFracEpsilon)
+		{
+			points[insertAt].second = value;
+		}
+		else if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= AutomationFracEpsilon)
+		{
+			points[insertAt - 1u].second = value;
+		}
+		else if (count < midi::AutomationLane::MaxPoints)
+		{
+			for (std::size_t i = count; i > insertAt; --i)
+				points[i] = points[i - 1u];
+			points[insertAt] = std::make_pair(frac, value);
+			++count;
+		}
+	}
+
+	float SampleToAutomationFrac(std::uint32_t sample,
+		std::uint32_t loopLengthSamps) noexcept
+	{
+		if (0u == loopLengthSamps)
+			return 0.0f;
+		return static_cast<float>(sample % loopLengthSamps)
+			/ static_cast<float>(loopLengthSamps);
+	}
+
+	bool FracWithinOverwriteWindow(float frac,
+		float startFrac,
+		float endFrac,
+		bool wraps) noexcept
+	{
+		if (!wraps)
+			return frac >= startFrac && frac < endFrac;
+
+		return frac >= startFrac || frac < endFrac;
+	}
 
 }
 
 MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
-	  _loopLengthSamps(0),
-	  _dropped(0),
+	  _loopLengthSamps(0),	  _loopPhaseAnchor(0),	  _dropped(0),
 	  _revision(0),
 	  _modelRevision(0),
 	  _modelLengthSamps(0),
@@ -106,11 +162,12 @@ void MidiLoop::FinalizeOverdubBase(std::uint32_t loopLengthSamps)
 		PublishQuantisedEvents();
 }
 
-void MidiLoop::EndRecord(std::uint32_t loopLengthSamps)
+void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGlobalSample)
 {
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 
 	_loopLengthSamps = loopLengthSamps;
+	_loopPhaseAnchor = startGlobalSample;
 	_state = MidiLoopState::Playing;
 	_held.reset();
 	++_revision;
@@ -366,15 +423,7 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 		return;
 
 	auto& lane = _lanes[laneIdx];
-	auto fracF = static_cast<float>(frac);
-	if (fracF < 0.0f)
-		fracF = 0.0f;
-	else if (fracF > 1.0f)
-		fracF = 1.0f;
-
-	// Merge points that land on (approximately) the same fractional position so a
-	// stream of CC values recorded close together doesn't exhaust the buffer.
-	constexpr float fracEpsilon = 1.0f / 2048.0f;
+	auto fracF = ClampAutomationFrac(frac);
 
 	auto& points = lane.Points;
 	auto& count = lane.PointCount;
@@ -384,32 +433,59 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 	const auto gen = lane.Revision.load(std::memory_order_relaxed);
 	lane.Revision.store(gen + 1u, std::memory_order_release);
 
-	// Find the insertion index (points are kept sorted by frac ascending).
-	std::size_t insertAt = 0u;
-	while (insertAt < count && points[insertAt].first < fracF)
-		++insertAt;
+	InsertOrUpdateAutomationPoint(points, count, fracF, value);
 
-	// Update in place if a neighbouring point shares this fractional position.
-	if (insertAt < count && (points[insertAt].first - fracF) <= fracEpsilon)
+	lane.Revision.store(gen + 2u, std::memory_order_release);
+}
+
+void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
+	std::uint32_t startSample,
+	std::uint32_t durationSamples,
+	float value) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes || 0u == _loopLengthSamps)
+		return;
+
+	auto& lane = _lanes[laneIdx];
+	auto& points = lane.Points;
+	auto& count = lane.PointCount;
+
+	const auto startWrapped = startSample % _loopLengthSamps;
+	const auto durationWrapped = durationSamples % _loopLengthSamps;
+	const bool overwritesFullLoop = durationSamples >= _loopLengthSamps && durationWrapped == 0u;
+	const auto endWrapped = (startWrapped + durationWrapped) % _loopLengthSamps;
+	const auto startFrac = SampleToAutomationFrac(startWrapped, _loopLengthSamps);
+	const auto endFrac = SampleToAutomationFrac(endWrapped, _loopLengthSamps);
+	const bool wraps = !overwritesFullLoop && durationWrapped > 0u && endWrapped <= startWrapped;
+
+	const auto gen = lane.Revision.load(std::memory_order_relaxed);
+	lane.Revision.store(gen + 1u, std::memory_order_release);
+
+	if (overwritesFullLoop)
 	{
-		points[insertAt].second = value;
-	}
-	else if (insertAt > 0u && (fracF - points[insertAt - 1u].first) <= fracEpsilon)
-	{
-		points[insertAt - 1u].second = value;
-	}
-	else if (count >= AutomationLane::MaxPoints)
-	{
-		// Buffer full: drop newest.
+		count = 0u;
 	}
 	else
 	{
-		// Shift tail right to make room, then insert. Fixed-capacity, no allocation.
-		for (std::size_t i = count; i > insertAt; --i)
-			points[i] = points[i - 1u];
-		points[insertAt] = std::make_pair(fracF, value);
-		++count;
+		std::array<std::pair<float, float>, AutomationLane::MaxPoints> kept{};
+		std::size_t keptCount = 0u;
+		for (std::size_t i = 0u; i < count; ++i)
+		{
+			const auto frac = points[i].first;
+			if (FracWithinOverwriteWindow(frac, startFrac, endFrac, wraps))
+				continue;
+
+			if (keptCount < kept.size())
+				kept[keptCount++] = points[i];
+		}
+
+		for (std::size_t i = 0u; i < keptCount; ++i)
+			points[i] = kept[i];
+		count = keptCount;
 	}
+
+	InsertOrUpdateAutomationPoint(points, count, startFrac, value);
+	InsertOrUpdateAutomationPoint(points, count, endFrac, value);
 
 	lane.Revision.store(gen + 2u, std::memory_order_release);
 }

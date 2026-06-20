@@ -196,9 +196,10 @@ namespace engine
 
 		// Test hook: run one automation dispatch block in isolation (drives
 		// SetParameter on wired plugins). Non-RT; mirrors the audio-thread path.
-		void RunAutomationDispatchForTest(std::uint32_t blockStartSample) noexcept
+		void RunAutomationDispatchForTest(std::uint32_t blockStartSample,
+			std::uint32_t numSamps = 128u) noexcept
 		{
-			_RunAutomationDispatch(blockStartSample);
+			_RunAutomationDispatch(blockStartSample, numSamps);
 		}
 
 		// Called on the job thread to actually perform the load / unload.
@@ -284,6 +285,7 @@ namespace engine
 			midi::MidiLoop*  loop = nullptr;            // raw observer — lifetime owned by LoopTake
 			std::uint8_t     laneIdx = 0u;              // which lane within loop to read
 			std::uint32_t    loopLengthSamps = 0u;      // pre-resolved; avoids per-block takes lock
+			std::uint32_t    loopPhaseAnchor = 0u;      // global sample mapping to loop position 0
 			std::uint16_t    cursorIdx = 0u;            // playback cursor for amortised O(1) interpolation
 			float            lastValue = -2.0f;         // sentinel: force first write
 		};
@@ -292,7 +294,8 @@ namespace engine
 
 		// Run one automation dispatch block on the audio thread: advance each
 		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
-		void _RunAutomationDispatch(std::uint32_t blockStartSample) noexcept;
+		void _RunAutomationDispatch(std::uint32_t blockStartSample,
+			std::uint32_t numSamps) noexcept;
 
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.

@@ -1338,7 +1338,14 @@ void LoopTake::Play(unsigned long index,
 	{
 		if (midiLoop->State() == midi::MidiLoopState::Recording)
 		{
-			midiLoop->EndRecord(midiLoopLength);
+			// Compute the global sample that corresponds to loop-relative position 0 so
+			// automation frac calculations stay in phase with _midiVisualPlayIndex.
+			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
+			// At global sample `index`, the play cursor is at P0, so position 0 maps to
+			// global sample (index - P0). uint32_t wraps correctly.
+			const auto phaseAnchor = static_cast<std::uint32_t>(index)
+				- static_cast<std::uint32_t>(_midiVisualPlayIndex);
+			midiLoop->EndRecord(midiLoopLength, phaseAnchor);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}

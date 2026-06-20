@@ -373,7 +373,7 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 }
 
 void Vst2Plugin::SetParameter(unsigned int index, float value) noexcept
-{
+{ 
 #ifdef JAMMA_VST2_ENABLED
 	if (_effect && _effect->setParameter)
 		_effect->setParameter(_effect, static_cast<VstInt32>(index), value);
@@ -567,6 +567,8 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		// parameter so the UI thread can wire it to a MIDI automation lane and the
 		// MIDI pump can record live editor-driven automation. Publish the triple
 		// first, then bump Sequence (release) so consumers see a coherent event.
+		// Do not feed the value back through setParameter here: the plugin already
+		// changed its own parameter state before calling audioMasterAutomate.
 		if (self)
 		{
 			_lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
