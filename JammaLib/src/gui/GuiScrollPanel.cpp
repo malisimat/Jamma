@@ -81,6 +81,8 @@ void GuiScrollPanel::SetScrollFraction(double fraction)
 {
 	const int maxOff = MaxScrollOffset();
 	_scrollOffset = (int)std::round(std::clamp(fraction, 0.0, 1.0) * (double)maxOff);
+	_ClampOffset();
+	_scrollBar->SetValue(maxOff > 0 ? (double)_scrollOffset / (double)maxOff : 0.0);
 }
 
 void GuiScrollPanel::_UpdateMetrics()
