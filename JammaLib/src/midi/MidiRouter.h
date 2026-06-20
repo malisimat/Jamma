@@ -161,7 +161,7 @@ namespace midi
 		void _ConsumeEditorAutomation(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
 			const audio::AudioStreamParams& audioParams) noexcept;
-		void _ResetEditorOverwriteSessions() noexcept;
+		void _ResetEditorTouchStates() noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
@@ -186,7 +186,7 @@ namespace midi
 		// suppression once; idle pump ticks only age out stale sessions.
 		//
 		// Lifecycle:
-		//  • _ResetEditorOverwriteSessions() clears all states (called on Ctrl+Shift+A press).
+		//  • _ResetEditorTouchStates() clears all states (called on Ctrl+Shift+A press).
 		//  • First VST touch after reset: freshDrag → state activated and a hold window written.
 		//  • Subsequent touches in the same record session: state stays active and writes a fresh window.
 		//  • No new touch for > cooldown samples: state expires.
@@ -197,7 +197,6 @@ namespace midi
 			const vst::IVstPlugin* Plugin = nullptr;
 			unsigned int ParamIndex = 0u;
 			std::uint32_t LastTouchSample = 0u;
-			float LastKnownValue = 0.0f;
 			std::weak_ptr<midi::MidiLoop> Loop;
 			std::size_t LaneIdx = 0u;
 		};

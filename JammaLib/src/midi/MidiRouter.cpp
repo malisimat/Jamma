@@ -72,7 +72,7 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 		if (isDown && ctrlShift && !_automationRecordKeyHeld)
 		{
 			_automationRecordKeyHeld = true;
-			_ResetEditorOverwriteSessions();
+			_ResetEditorTouchStates();
 			_automationRecordHeld.store(true, std::memory_order_release);
 			std::cout << ">> Automation record armed (Ctrl+Shift+A) <<" << std::endl;
 			return eaten;
@@ -191,7 +191,7 @@ void MidiRouter::SetAutomationRecordHeldForTest(bool held) noexcept
 	_automationRecordHeld.store(held, std::memory_order_release);
 }
 
-void MidiRouter::_ResetEditorOverwriteSessions() noexcept
+void MidiRouter::_ResetEditorTouchStates() noexcept
 {
 	for (auto& state : _editorTouchStates)
 		state.Active = false;
@@ -682,7 +682,6 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 
 							touchState->Loop           = targetLoop;
 							touchState->LaneIdx        = laneIdx;
-							touchState->LastKnownValue = value;
 							touchState->LastTouchSample = nowSample;
 
 							if (targetLoop->WireEditorAutomationLane(laneIdx, plugin, paramIdx))

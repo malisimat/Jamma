@@ -373,7 +373,7 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 }
 
 void Vst2Plugin::SetParameter(unsigned int index, float value) noexcept
-{ 
+{
 #ifdef JAMMA_VST2_ENABLED
 	if (_effect && _effect->setParameter)
 		_effect->setParameter(_effect, static_cast<VstInt32>(index), value);

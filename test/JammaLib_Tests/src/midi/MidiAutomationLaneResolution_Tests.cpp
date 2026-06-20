@@ -167,13 +167,13 @@ TEST(MidiAutomationLaneResolution, ClearThenReplayFullyReplacesPriorCurve)
 }
 
 // ============================================================================
-// Write-head model: phase anchor and frac arithmetic
+// Phase anchor and frac arithmetic
 // ============================================================================
 
 // After EndRecord the loop stores the phase anchor so the pump can compute
 // a loop-relative frac from a global sample position with:
 //   frac = (globalSample - LoopPhaseAnchor()) % LoopLengthSamps() / LoopLengthSamps()
-TEST(MidiAutomationWriteHead, PhaseAnchorIsStoredByEndRecord)
+TEST(MidiAutomationPhaseAnchor, PhaseAnchorIsStoredByEndRecord)
 {
 	MidiLoop loop;
 	const std::uint32_t loopLen     = 48000u;  // 1 s at 48 kHz
@@ -185,15 +185,17 @@ TEST(MidiAutomationWriteHead, PhaseAnchorIsStoredByEndRecord)
 	EXPECT_EQ(phaseAnchor, loop.LoopPhaseAnchor());
 }
 
-// The frac written by the write-head for a given global sample position must
-// land at the correct fractional position within the loop regardless of where
-// in the global timeline the loop started.
-TEST(MidiAutomationWriteHead, FracReflectsPhaseAnchor)
+// The loop-relative frac for a given global sample must land at the correct
+// fractional position regardless of where in the global timeline the loop
+// started. This mirrors the frac math used by the playback dispatch and the
+// CC-record path.
+TEST(MidiAutomationPhaseAnchor, FracReflectsPhaseAnchor)
 {
 	const std::uint32_t loopLen     = 48000u;  // 1 s
 	const std::uint32_t phaseAnchor = 96000u;
 
-	// Reference calculation matching MidiRouter::_ConsumeEditorAutomation Part B.
+	// Reference calculation matching the phase-anchored frac used across the
+	// dispatch and CC-record paths.
 	auto calcFrac = [&](std::uint32_t globalSample) -> float {
 		return static_cast<float>(
 			std::fmod(static_cast<double>(globalSample - phaseAnchor),
@@ -208,10 +210,9 @@ TEST(MidiAutomationWriteHead, FracReflectsPhaseAnchor)
 	EXPECT_NEAR(0.25f, calcFrac(108000u), 1.0e-6f);
 }
 
-// The write-head sweeps the loop, writing LastKnownValue at every visited frac.
-// When it passes over a frac it previously wrote during the same drag, the new
-// write must replace the old value, not accumulate a duplicate point.
-TEST(MidiAutomationWriteHead, RepeatWriteAtSameFracReplacesValue)
+// Writing the same frac twice must replace the existing point's value rather
+// than accumulate a duplicate point.
+TEST(MidiAutomationPhaseAnchor, RepeatWriteAtSameFracReplacesValue)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x800u);
@@ -220,9 +221,9 @@ TEST(MidiAutomationWriteHead, RepeatWriteAtSameFracReplacesValue)
 	ASSERT_TRUE(lane.has_value());
 	ASSERT_TRUE(loop.WireEditorAutomationLane(*lane, plugin, 0u));
 
-	// Simulate two full sweeps of the write-head over frac 0.5.
-	loop.SetAutomationValueAtFrac(*lane, 0.5, 0.3f);  // first pass
-	loop.SetAutomationValueAtFrac(*lane, 0.5, 0.7f);  // second pass (same frac)
+	// Two writes at the same frac with different values.
+	loop.SetAutomationValueAtFrac(*lane, 0.5, 0.3f);  // first write
+	loop.SetAutomationValueAtFrac(*lane, 0.5, 0.7f);  // second write (same frac)
 
 	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
 	const auto count = loop.SnapshotAutomationLanePoints(*lane, points.data(), points.size());
@@ -233,10 +234,9 @@ TEST(MidiAutomationWriteHead, RepeatWriteAtSameFracReplacesValue)
 	EXPECT_NEAR(0.7f, points[0].second, 1.0e-5f);
 }
 
-// A write-head drag progressively fills the lane as the playhead sweeps forward.
-// Each new frac position gets one point; the count grows until the loop wraps
-// and existing fracs are overwritten rather than duplicated.
-TEST(MidiAutomationWriteHead, SweepFillsLaneProgressively)
+// Distinct frac positions each get their own point; rewriting those same
+// positions replaces values in place rather than appending duplicates.
+TEST(MidiAutomationPhaseAnchor, DistinctFracsFillLaneThenReplaceInPlace)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x810u);
@@ -245,7 +245,7 @@ TEST(MidiAutomationWriteHead, SweepFillsLaneProgressively)
 	ASSERT_TRUE(lane.has_value());
 	ASSERT_TRUE(loop.WireEditorAutomationLane(*lane, plugin, 1u));
 
-	// Write four distinct frac positions (simulating pump ticks at 25 % intervals).
+	// Write four distinct frac positions.
 	loop.SetAutomationValueAtFrac(*lane, 0.00, 0.1f);
 	loop.SetAutomationValueAtFrac(*lane, 0.25, 0.2f);
 	loop.SetAutomationValueAtFrac(*lane, 0.50, 0.3f);
@@ -259,7 +259,7 @@ TEST(MidiAutomationWriteHead, SweepFillsLaneProgressively)
 	for (std::size_t i = 1u; i < count; ++i)
 		EXPECT_LT(points[i - 1u].first, points[i].first);
 
-	// Second sweep: overwrite each position with a new value.
+	// Rewrite each position with a new value.
 	loop.SetAutomationValueAtFrac(*lane, 0.00, 0.9f);
 	loop.SetAutomationValueAtFrac(*lane, 0.25, 0.8f);
 	loop.SetAutomationValueAtFrac(*lane, 0.50, 0.7f);
@@ -275,7 +275,7 @@ TEST(MidiAutomationWriteHead, SweepFillsLaneProgressively)
 	EXPECT_NEAR(0.6f, points[3].second, 1.0e-5f);
 }
 
-TEST(MidiAutomationWriteHead, OverwriteWindowReplacesTouchedFutureRange)
+TEST(MidiAutomationPhaseAnchor, OverwriteWindowReplacesTouchedFutureRange)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x820u);
@@ -307,7 +307,7 @@ TEST(MidiAutomationWriteHead, OverwriteWindowReplacesTouchedFutureRange)
 	EXPECT_NEAR(0.8f, points[3].second, 1.0e-6f);
 }
 
-TEST(MidiAutomationWriteHead, OverwriteWindowWrapsAcrossLoopBoundary)
+TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x821u);

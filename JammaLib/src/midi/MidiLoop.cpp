@@ -467,20 +467,16 @@ void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
 	}
 	else
 	{
-		std::array<std::pair<float, float>, AutomationLane::MaxPoints> kept{};
+		// Compact in place: keep points outside the window, preserving sort order.
+		// Two-pointer pass over the sorted buffer — no temporary copy, no allocation.
 		std::size_t keptCount = 0u;
 		for (std::size_t i = 0u; i < count; ++i)
 		{
-			const auto frac = points[i].first;
-			if (FracWithinOverwriteWindow(frac, startFrac, endFrac, wraps))
+			if (FracWithinOverwriteWindow(points[i].first, startFrac, endFrac, wraps))
 				continue;
 
-			if (keptCount < kept.size())
-				kept[keptCount++] = points[i];
+			points[keptCount++] = points[i];
 		}
-
-		for (std::size_t i = 0u; i < keptCount; ++i)
-			points[i] = kept[i];
 		count = keptCount;
 	}
 
