@@ -581,6 +581,54 @@ TEST(StationAutomation, WiredLaneDrivesPluginSetParameterDuringPlayback)
 	EXPECT_NEAR(0.75f, plugin->LastParamValue, 1.0e-2f);
 }
 
+TEST(StationAutomation, DitchTakeRemovesAutomationPlayback)
+{
+	auto station = MakeStation("station-automation-ditch");
+	auto plugin = AddPlugin(station, L"fake-automation-ditch.dll");
+	auto take = MakeMidiTake("automation-ditch-take");
+	station->AddTake(take);
+	station->CommitChanges();
+
+	take->Record({}, station->Name(), { 0u }, { "Keys" });
+	take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 48u, 100u), "Keys", 0u);
+	take->Play(0u, 128u, 0u);
+
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+
+	const auto laneIdx = 0u;
+	midiLoop->SetAutomationValueAtFrac(laneIdx, 0.0, 0.25f);
+	midiLoop->SetAutomationValueAtFrac(laneIdx, 0.5, 0.75f);
+
+	auto& lane = midiLoop->GetLane(laneIdx);
+	lane.Mapping.TargetPlugin = plugin.get();
+	lane.Mapping.TargetParameterIndex = 3u;
+	lane.Mapping.MatchKey.store(
+		midi::AutomationMapping::MakeEditorMatchKey(),
+		std::memory_order_relaxed);
+
+	station->RebuildAutomationDispatch();
+
+	const auto loopLen = midiLoop->LoopLengthSamps();
+	ASSERT_GT(loopLen, 0u);
+	const auto quarterLen = (std::max)(1u, loopLen / 4u);
+	const auto halfLen = loopLen / 2u;
+
+	station->RunAutomationDispatchForTest(0u, quarterLen);
+	ASSERT_GE(plugin->ParamSetCalls, 1u);
+	const auto callsBeforeDitch = plugin->ParamSetCalls;
+
+	actions::TriggerAction ditch;
+	ditch.ActionType = actions::TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = take->Id();
+	station->OnAction(ditch);
+
+	station->RunAutomationDispatchForTest(halfLen, quarterLen);
+	EXPECT_EQ(callsBeforeDitch, plugin->ParamSetCalls);
+	EXPECT_TRUE(take->GetMidiLoops().empty());
+}
+
 TEST(StationAutomation, RecordHeldDoesNotSuppressPlaybackWithoutParameterCooldown)
 {
 	auto station = MakeStation("station-automation-record");

@@ -1838,6 +1838,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 		}
 	}
 	take->Ditch();
+	RebuildAutomationDispatch();
 }
 
 void Station::LoadVstPlugin(std::wstring path,
