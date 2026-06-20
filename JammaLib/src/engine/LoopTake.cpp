@@ -2645,6 +2645,8 @@ void LoopTake::SetSampleRate(float sampleRate)
 		loop->SetSampleRate(sampleRate);
 	for (auto& loop : _backLoops)
 		loop->SetSampleRate(sampleRate);
+	for (auto& midiLoop : _midiLoops)
+		if (midiLoop) midiLoop->SetSampleRate(sampleRate);
 }
 
 void LoopTake::SetParentVisualScale(float scale) noexcept

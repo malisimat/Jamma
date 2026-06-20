@@ -13,7 +13,7 @@ using namespace midi;
 namespace
 {
 	static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
-	static constexpr float AutomationFracEpsilon = 1.0f / 2048.0f;
+	static constexpr float AutomationMergeWindowMs = 10.0f;
 
 	float ClampAutomationFrac(double frac) noexcept
 	{
@@ -25,20 +25,33 @@ namespace
 		return fracF;
 	}
 
+	float AutomationMergeWindowFrac(float sampleRate, std::uint32_t loopLengthSamps) noexcept
+	{
+		if (0u == loopLengthSamps || sampleRate <= 0.0f)
+			return 0.0f;
+
+		const auto mergeWindowSamps = sampleRate * AutomationMergeWindowMs / 1000.0f;
+		return mergeWindowSamps / static_cast<float>(loopLengthSamps);
+	}
+
 	void InsertOrUpdateAutomationPoint(std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints>& points,
 		std::size_t& count,
+		float sampleRate,
+		std::uint32_t loopLengthSamps,
 		float frac,
 		float value) noexcept
 	{
+		const auto automationFracEpsilon = AutomationMergeWindowFrac(sampleRate, loopLengthSamps);
+
 		std::size_t insertAt = 0u;
 		while (insertAt < count && points[insertAt].first < frac)
 			++insertAt;
 
-		if (insertAt < count && (points[insertAt].first - frac) <= AutomationFracEpsilon)
+		if (insertAt < count && (points[insertAt].first - frac) <= automationFracEpsilon)
 		{
 			points[insertAt].second = value;
 		}
-		else if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= AutomationFracEpsilon)
+		else if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= automationFracEpsilon)
 		{
 			points[insertAt - 1u].second = value;
 		}
@@ -75,7 +88,10 @@ namespace
 
 MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
-	  _loopLengthSamps(0),	  _loopPhaseAnchor(0),	  _dropped(0),
+	  _sampleRate(static_cast<float>(constants::DefaultSampleRate)),
+	  _loopLengthSamps(0),
+	  _loopPhaseAnchor(0),
+	  _dropped(0),
 	  _revision(0),
 	  _modelRevision(0),
 	  _modelLengthSamps(0),
@@ -433,7 +449,7 @@ void MidiLoop::SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float 
 	const auto gen = lane.Revision.load(std::memory_order_relaxed);
 	lane.Revision.store(gen + 1u, std::memory_order_release);
 
-	InsertOrUpdateAutomationPoint(points, count, fracF, value);
+	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, fracF, value);
 
 	lane.Revision.store(gen + 2u, std::memory_order_release);
 }
@@ -480,8 +496,8 @@ void MidiLoop::OverwriteAutomationWindow(std::size_t laneIdx,
 		count = keptCount;
 	}
 
-	InsertOrUpdateAutomationPoint(points, count, startFrac, value);
-	InsertOrUpdateAutomationPoint(points, count, endFrac, value);
+	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, startFrac, value);
+	InsertOrUpdateAutomationPoint(points, count, _sampleRate, _loopLengthSamps, endFrac, value);
 
 	lane.Revision.store(gen + 2u, std::memory_order_release);
 }

@@ -51,10 +51,10 @@ across the loop boundary.
     place (two-pointer, no temporary buffer / no allocation), then writes the
     held value at both window ends.
 - `MidiLoop::SetAutomationValueAtFrac(...)`
-  - Keeps points sorted by frac; merges points within `1 / 2048` of a neighbour.
-  - Capacity is `AutomationLane::MaxPoints = 2048`. Because every adjacent pair
-    must be more than `1 / 2048` apart, that cap is the structural maximum number
-    of distinct points a lane can hold given the merge epsilon.
+  - Keeps points sorted by frac; merges points within a fixed 10 ms window.
+  - Capacity is `AutomationLane::MaxPoints = 8192`, which is intentionally above
+    the practical merge ceiling. The merge window is the real density limit for
+    distinct points.
 - `MidiLoop::EndRecord(loopLengthSamps, startGlobalSample)`
   - Stores `LoopPhaseAnchor()` so dispatch and CC-record fracs stay in phase with
     the visual play index.

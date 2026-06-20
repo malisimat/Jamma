@@ -96,7 +96,9 @@ namespace midi
 	// sparse control-point buffer recorded along the loop timeline.
 	struct AutomationLane
 	{
-		static constexpr std::size_t MaxPoints = 2048u;
+		// Keep the storage comfortably above the merge threshold so the point cap is
+		// not the limiting factor for dense automation curves.
+		static constexpr std::size_t MaxPoints = 8192u;
 
 		AutomationMapping Mapping;
 		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
@@ -262,6 +264,11 @@ namespace midi
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
+		// Update the sample rate used to project the ms-based automation merge
+		// window into normalised frac space. Should be called whenever the audio
+		// device sample rate changes, mirroring the pattern used for audio Loop.
+		void SetSampleRate(float sampleRate) noexcept { _sampleRate = sampleRate; }
+
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
 		{
 			return (static_cast<std::size_t>(channel & 0x0F) << 7) | (note & 0x7F);
@@ -280,6 +287,7 @@ namespace midi
 		std::atomic<const QuantisedEventBuffer*> _quantisedEvents;
 		std::vector<std::unique_ptr<QuantisedEventBuffer>> _retainedQuantisedEvents;
 		std::size_t _eventCount;
+		float _sampleRate;
 		std::uint32_t _loopLengthSamps;
 		std::uint32_t _loopPhaseAnchor;
 		std::uint64_t _dropped;

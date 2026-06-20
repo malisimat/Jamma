@@ -296,15 +296,11 @@ TEST(MidiAutomationPhaseAnchor, OverwriteWindowReplacesTouchedFutureRange)
 
 	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
 	const auto count = loop.SnapshotAutomationLanePoints(*lane, points.data(), points.size());
-	ASSERT_EQ(4u, count);
+	ASSERT_EQ(2u, count);
 	EXPECT_NEAR(0.10f, points[0].first, 1.0e-6f);
-	EXPECT_NEAR(0.1f, points[0].second, 1.0e-6f);
-	EXPECT_NEAR(0.20f, points[1].first, 1.0e-6f);
+	EXPECT_NEAR(0.7f, points[0].second, 1.0e-6f);
+	EXPECT_NEAR(0.80f, points[1].first, 1.0e-6f);
 	EXPECT_NEAR(0.7f, points[1].second, 1.0e-6f);
-	EXPECT_NEAR(0.60f, points[2].first, 1.0e-6f);
-	EXPECT_NEAR(0.7f, points[2].second, 1.0e-6f);
-	EXPECT_NEAR(0.80f, points[3].first, 1.0e-6f);
-	EXPECT_NEAR(0.8f, points[3].second, 1.0e-6f);
 }
 
 TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
@@ -328,13 +324,9 @@ TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
 
 	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
 	const auto count = loop.SnapshotAutomationLanePoints(*lane, points.data(), points.size());
-	ASSERT_EQ(4u, count);
+	ASSERT_EQ(2u, count);
 	EXPECT_NEAR(0.20f, points[0].first, 1.0e-6f);
 	EXPECT_NEAR(0.6f, points[0].second, 1.0e-6f);
-	EXPECT_NEAR(0.25f, points[1].first, 1.0e-6f);
-	EXPECT_NEAR(0.25f, points[1].second, 1.0e-6f);
-	EXPECT_NEAR(0.70f, points[2].first, 1.0e-6f);
-	EXPECT_NEAR(0.70f, points[2].second, 1.0e-6f);
-	EXPECT_NEAR(0.90f, points[3].first, 1.0e-6f);
-	EXPECT_NEAR(0.6f, points[3].second, 1.0e-6f);
+	EXPECT_NEAR(0.70f, points[1].first, 1.0e-6f);
+	EXPECT_NEAR(0.6f, points[1].second, 1.0e-6f);
 }
