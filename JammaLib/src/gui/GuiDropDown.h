@@ -53,15 +53,32 @@ namespace gui
 
 	struct GuiDropDownParams : public base::GuiElementParams
 	{
+		static constexpr unsigned int DefaultHeight = 44u;
+		static constexpr unsigned int DefaultMinWidth = 60u;
+		static constexpr unsigned int DefaultMinHeight = 44u;
+		static constexpr unsigned int DefaultRowHeight = 22u;
+		static constexpr unsigned int DefaultPadding = 2u;
+
 		GuiDropDownParams()
 		{
 			GuiPassThrough = false;
 		}
 
+		static GuiDropDownParams PanelInput(unsigned int width)
+		{
+			GuiDropDownParams params;
+			params.Texture = "rounded_but";
+			params.Size = { width, DefaultHeight };
+			params.MinSize = { DefaultMinWidth, DefaultMinHeight };
+			params.RowHeight = DefaultRowHeight;
+			params.Padding = DefaultPadding;
+			return params;
+		}
+
 		std::vector<std::string> Items;
 		unsigned int             InitIndex        = 0u;
-		unsigned int             RowHeight        = 24u;
-		unsigned int             Padding          = 4u;
+		unsigned int             RowHeight        = DefaultRowHeight;
+		unsigned int             Padding          = DefaultPadding;
 		std::string              ListTexture      = "rounded_but";
 		std::string              HighlightTexture = "blue";
 		std::weak_ptr<base::ActionReceiver> Receiver;

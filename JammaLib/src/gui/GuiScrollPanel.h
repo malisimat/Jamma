@@ -9,6 +9,10 @@ namespace gui
 {
 	struct GuiScrollPanelParams : public base::GuiElementParams
 	{
+		static constexpr unsigned int DefaultPanelPaddingWidth = 10u;
+		static constexpr unsigned int DefaultPanelMinWidth = 60u;
+		static constexpr unsigned int DefaultPanelMinHeight = 40u;
+
 		GuiScrollPanelParams()
 		{
 			GuiPassThrough = false;
@@ -18,6 +22,15 @@ namespace gui
 		unsigned int WheelStep      = 24u;   // pixels scrolled per wheel notch.
 		std::string  ScrollBarTexture = "rounded_but";
 		std::string  ThumbTexture      = "blue";
+
+		static GuiScrollPanelParams PanelScroll(unsigned int width, unsigned int height)
+		{
+			GuiScrollPanelParams params;
+			params.Texture = "rounded_but";
+			params.Size = { width + DefaultPanelPaddingWidth, height };
+			params.MinSize = { DefaultPanelMinWidth, DefaultPanelMinHeight };
+			return params;
+		}
 	};
 
 	// A vertically scrollable viewport hosting a single content element plus a

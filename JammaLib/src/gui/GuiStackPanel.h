@@ -14,12 +14,39 @@ namespace gui
 
 	struct GuiStackPanelParams : public base::GuiElementParams
 	{
+		static constexpr unsigned int PanelRowSpacing = 6u;
+		static constexpr unsigned int PanelSectionSpacing = 8u;
+		static constexpr unsigned int PanelContentSpacing = 2u;
+		static constexpr unsigned int PanelContentPadding = 2u;
+
 		StackDirection Direction    = StackDirection::Vertical;
 		unsigned int   Spacing      = 0u;  // gap in pixels between children.
 		unsigned int   PaddingH     = 0u;  // horizontal padding (left+right each).
 		unsigned int   PaddingV     = 0u;  // vertical padding (top+bottom each).
 		bool           WrapContent  = false; // Horizontal only: wrap to a new row
 		                                     // when the row is too wide.
+
+		static GuiStackPanelParams PanelHorizontalRow(unsigned int width, unsigned int height)
+		{
+			GuiStackPanelParams params;
+			params.Direction = StackDirection::Horizontal;
+			params.Spacing = PanelRowSpacing;
+			params.Size = { width, height };
+			params.MinSize = { 80u, height };
+			return params;
+		}
+
+		static GuiStackPanelParams PanelContentStack(unsigned int width, unsigned int height)
+		{
+			GuiStackPanelParams params;
+			params.Direction = StackDirection::Vertical;
+			params.Spacing = PanelContentSpacing;
+			params.PaddingH = PanelContentPadding;
+			params.PaddingV = PanelContentPadding;
+			params.Size = { width, height };
+			params.MinSize = { 60u, 40u };
+			return params;
+		}
 	};
 
 	// A retained stack-layout container.

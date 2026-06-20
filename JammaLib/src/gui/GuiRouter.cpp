@@ -7,8 +7,6 @@ using namespace utils;
 using namespace actions;
 using namespace resources;
 
-const unsigned int GuiRouterParams::BusWidth = 30;
-const unsigned int GuiRouterParams::BusGap = 8;
 const unsigned int GuiRouter::_MaxRoutes = 128;
 const int GuiRouter::_WireYOffset = 6;
 

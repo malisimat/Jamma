@@ -13,6 +13,12 @@ namespace gui
 	class GuiLabelParams : public base::GuiElementParams
 	{
 	public:
+		static constexpr unsigned int HeaderHeight = 22u;
+		static constexpr unsigned int HeaderMinWidth = 40u;
+		static constexpr unsigned int RowWidth = 260u;
+		static constexpr unsigned int RowHeight = 24u;
+		static constexpr unsigned int RowMinWidth = 40u;
+
 		GuiLabelParams() :
 			base::GuiElementParams()
 		{}
@@ -22,6 +28,24 @@ namespace gui
 			base::GuiElementParams(params),
 			String(string)
 		{}
+
+		static GuiLabelParams PanelHeader(const std::string& text, unsigned int width)
+		{
+			GuiLabelParams params;
+			params.String = text;
+			params.Size = { width, HeaderHeight };
+			params.MinSize = { HeaderMinWidth, HeaderHeight };
+			return params;
+		}
+
+		static GuiLabelParams PanelScrollRow(const std::string& text)
+		{
+			GuiLabelParams params;
+			params.String = text;
+			params.Size = { RowWidth, RowHeight };
+			params.MinSize = { RowMinWidth, RowHeight };
+			return params;
+		}
 
 	public:
 		std::string String;

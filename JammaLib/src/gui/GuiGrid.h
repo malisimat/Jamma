@@ -36,10 +36,36 @@ namespace gui
 
 	struct GuiGridParams : public base::GuiElementParams
 	{
+		static constexpr unsigned int PanelPadding = 2u;
+		static constexpr unsigned int PanelTrackSpacing = 4u;
+		static constexpr unsigned int PanelRowHeight = 44u;
+
 		std::vector<GridCellDef> Rows;
 		std::vector<GridCellDef> Cols;
 		unsigned int PaddingH = 0u;
 		unsigned int PaddingV = 0u;
+
+		static GuiGridParams PanelToggleGrid(unsigned int width, unsigned int height)
+		{
+			GuiGridParams params;
+			params.Size = { width + PanelTrackSpacing, height };
+			params.MinSize = { 80u, 40u };
+			params.PaddingH = PanelPadding;
+			params.PaddingV = PanelPadding;
+
+			GridCellDef col;
+			col.sizing = GridCellDef::Sizing::Fill;
+			col.spacing = PanelTrackSpacing;
+			params.Cols = { col, col };
+
+			GridCellDef row;
+			row.sizing = GridCellDef::Sizing::Fixed;
+			row.fixedSize = PanelRowHeight;
+			row.spacing = PanelTrackSpacing;
+			params.Rows = { row, row };
+
+			return params;
+		}
 	};
 
 	// A retained grid-layout container.

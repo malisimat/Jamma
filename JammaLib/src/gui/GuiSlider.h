@@ -17,6 +17,12 @@ namespace gui
 	class GuiSliderParams : public base::GuiElementParams
 	{
 	public:
+		static constexpr unsigned int DefaultHeight = 34u;
+		static constexpr unsigned int DefaultWidth = 104u;
+		static constexpr unsigned int WideWidth = 320u;
+		static constexpr unsigned int DefaultMinWidth = 36u;
+		static constexpr unsigned int DefaultDragWidth = 10u;
+
 		GuiSliderParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
@@ -57,6 +63,29 @@ namespace gui
 			DragGap({ 0,0 })
 		{
 			GuiPassThrough = false;
+		}
+
+		static void ApplyPanelTextures(GuiSliderParams& params)
+		{
+			params.Texture = "rounded_but";
+			params.OverTexture = "rounded_but_over";
+			params.DownTexture = "rounded_but_down";
+			params.OutTexture = "rounded_but_on";
+			params.DragOverTexture = "yellow";
+		}
+
+		static GuiSliderParams PanelHorizontal(const std::string& dragTexture,
+			unsigned int width = DefaultWidth)
+		{
+			GuiSliderParams params;
+			ApplyPanelTextures(params);
+			params.Orientation = SLIDER_HORIZONTAL;
+			params.Size = { width, DefaultHeight };
+			params.MinSize = { DefaultMinWidth, DefaultHeight };
+			params.DragTexture = dragTexture;
+			params.DragControlSize = { DefaultDragWidth, DefaultHeight };
+			params.DragControlOffset = { 0, 0 };
+			return params;
 		}
 
 		enum SliderOrientation

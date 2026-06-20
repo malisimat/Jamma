@@ -13,9 +13,24 @@ namespace gui
 {
 	struct GuiTextBoxParams : public base::GuiElementParams
 	{
+		static constexpr unsigned int DefaultHeight = 44u;
+		static constexpr unsigned int DefaultMinWidth = 60u;
+		static constexpr unsigned int DefaultMinHeight = 34u;
+		static constexpr unsigned int DefaultPadding = 8u;
+
 		GuiTextBoxParams()
 		{
 			GuiPassThrough = false;
+		}
+
+		static GuiTextBoxParams PanelInput(unsigned int width)
+		{
+			GuiTextBoxParams params;
+			params.Texture = "rounded_but";
+			params.Size = { width, DefaultHeight };
+			params.MinSize = { DefaultMinWidth, DefaultMinHeight };
+			params.Padding = DefaultPadding;
+			return params;
 		}
 
 		std::string  Text;

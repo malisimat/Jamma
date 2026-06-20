@@ -12,6 +12,16 @@ namespace gui
 		double Step      = 0.01;   // value change per pixel of drag.
 		double InitValue = 0.0;
 		int    Decimals  = 2;
+
+		static GuiNumericInputParams PanelInput(unsigned int width)
+		{
+			GuiNumericInputParams params;
+			params.Texture = "rounded_but";
+			params.Size = { width, DefaultHeight };
+			params.MinSize = { DefaultMinWidth, DefaultMinHeight };
+			params.Padding = DefaultPadding;
+			return params;
+		}
 	};
 
 	// Numeric entry composed from GuiTextBox plus drag/step adjustment.

@@ -40,45 +40,13 @@ void GuiMainPanel::_BuildUpperSection()
 	section->AddChild(_MakeHeaderLabel("-- Upper --", sectionWidth));
 
 	{
-		GuiStackPanelParams hParams;
-		hParams.Direction = StackDirection::Horizontal;
-		hParams.Spacing = 6u;
-		hParams.Size = { _SectionContentWidth, _StackRowHeight };
-		hParams.MinSize = { 80u, _StackRowHeight };
+		GuiStackPanelParams hParams = GuiStackPanelParams::PanelHorizontalRow(
+			_SectionContentWidth,
+			_StackRowHeight);
 		auto hStack = std::make_shared<GuiStackPanel>(hParams);
 
-		{
-			GuiButtonParams bp;
-			bp.Texture = "rounded_but";
-			bp.OverTexture = "rounded_but_over";
-			bp.DownTexture = "rounded_but_down";
-			bp.OutTexture = "rounded_but_on";
-			bp.Size = { 102u, _ControlHeight };
-			bp.MinSize = { 36u, _ControlHeight };
-			hStack->AddChild(std::make_shared<GuiButton>(bp));
-		}
-
-		{
-			GuiButtonParams bp;
-			bp.Texture = "rounded_but";
-			bp.OverTexture = "rounded_but_over";
-			bp.DownTexture = "rounded_but_down";
-			bp.OutTexture = "rounded_but_on";
-			bp.Size = { 102u, _ControlHeight };
-			bp.MinSize = { 36u, _ControlHeight };
-			hStack->AddChild(std::make_shared<GuiButton>(bp));
-		}
-
-		{
-			GuiButtonParams bp;
-			bp.Texture = "rounded_but";
-			bp.OverTexture = "rounded_but_over";
-			bp.DownTexture = "rounded_but_down";
-			bp.OutTexture = "rounded_but_on";
-			bp.Size = { 102u, _ControlHeight };
-			bp.MinSize = { 36u, _ControlHeight };
-			hStack->AddChild(std::make_shared<GuiButton>(bp));
-		}
+		for (int i = 0; i < 3; ++i)
+			hStack->AddChild(std::make_shared<GuiButton>(GuiButtonParams::PanelButton()));
 
 		section->AddChild(hStack);
 	}
@@ -102,38 +70,25 @@ void GuiMainPanel::_BuildLowerSection()
 	section->AddChild(_MakeHeaderLabel("-- Lower --", sectionWidth));
 
 	{
-		GuiTextBoxParams tp;
-		tp.Texture = "rounded_but";
+		GuiTextBoxParams tp = GuiTextBoxParams::PanelInput(_SectionContentWidth);
 		tp.Text = "edit me";
-		tp.Size = { _SectionContentWidth, _ControlHeight+10 };
-		tp.MinSize = { 60u, _ControlHeight };
-		tp.Padding = _TextBoxPadding;
 		section->AddChild(std::make_shared<GuiTextBox>(tp));
 	}
 
 	{
-		GuiNumericInputParams np;
-		np.Texture = "rounded_but";
-		np.Padding = _NumericInputPadding;
+		GuiNumericInputParams np = GuiNumericInputParams::PanelInput(_SectionContentWidth);
 		np.Min = 0.0;
 		np.Max = 100.0;
 		np.Step = 0.5;
 		np.InitValue = 42.0;
 		np.Decimals = 1;
-		np.Size = { _SectionContentWidth, _ControlHeight+10 };
-		np.MinSize = { 60u, _ControlHeight };
 		section->AddChild(std::make_shared<GuiNumericInput>(np));
 	}
 
 	{
-		GuiDropDownParams dp;
-		dp.Texture = "rounded_but";
-		dp.Padding = _DropDownPadding;
+		GuiDropDownParams dp = GuiDropDownParams::PanelInput(_SectionContentWidth);
 		dp.Items = { "Sine", "Square", "Saw", "Triangle", "Noise" };
 		dp.InitIndex = 0u;
-		dp.RowHeight = 22u;
-		dp.Size = { _SectionContentWidth, _ControlHeight+10 };
-		dp.MinSize = { 60u, _ControlHeight+10 };
 		auto dd = std::make_shared<GuiDropDown>(dp);
 		if (_popupHost != nullptr)
 			dd->SetPopupHost(_popupHost);
@@ -141,28 +96,19 @@ void GuiMainPanel::_BuildLowerSection()
 	}
 
 	{
-		GuiStackPanelParams cParams;
-		cParams.Direction = StackDirection::Vertical;
-		cParams.Spacing = 2u;
-		cParams.PaddingH = 2u;
-		cParams.PaddingV = 2u;
-		cParams.Size = { _SectionContentWidth, _ScrollPanelHeight*3 };
-		cParams.MinSize = { 60u, 40u };
+		GuiStackPanelParams cParams = GuiStackPanelParams::PanelContentStack(
+			_SectionContentWidth,
+			_ScrollPanelHeight * 3);
 		auto content = std::make_shared<GuiStackPanel>(cParams);
 		for (int i = 0; i < 12; ++i)
 		{
-			GuiLabelParams lp;
-			lp.String = "Scroll row " + std::to_string(i + 1);
-			lp.Size = { 260u, 24u };
-			lp.MinSize = { 40u, 24u };
-			content->AddChild(std::make_shared<GuiLabel>(lp));
+			content->AddChild(std::make_shared<GuiLabel>(
+				GuiLabelParams::PanelScrollRow("Scroll row " + std::to_string(i + 1))));
 		}
 
-		GuiScrollPanelParams spParams;
-		spParams.Texture = "rounded_but";
-		spParams.Size = { _SectionContentWidth+10, _ScrollPanelHeight };
-		spParams.MinSize = { 60u, 40u };
-		spParams.ScrollBarWidth = 12u;
+		GuiScrollPanelParams spParams = GuiScrollPanelParams::PanelScroll(
+			_SectionContentWidth,
+			_ScrollPanelHeight);
 		auto scroll = std::make_shared<GuiScrollPanel>(spParams);
 		scroll->SetContent(content);
 		section->AddChild(scroll);
@@ -171,86 +117,27 @@ void GuiMainPanel::_BuildLowerSection()
 
 std::shared_ptr<GuiLabel> GuiMainPanel::_MakeHeaderLabel(const std::string& text, unsigned int width)
 {
-	GuiLabelParams lp;
-	lp.String = text;
-	lp.Size = { width, _HeaderHeight };
-	lp.MinSize = { 40u, _HeaderHeight };
-	return std::make_shared<GuiLabel>(lp);
+	return std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(text, width));
 }
 
 std::shared_ptr<GuiGrid> GuiMainPanel::_CreateToggleGrid()
 {
-	GuiGridParams gp;
+	GuiGridParams gp = GuiGridParams::PanelToggleGrid(_SectionContentWidth, _GridHeight);
 	gp.Texture = "";
-	gp.Size = { _SectionContentWidth + 4, _GridHeight };
-	gp.MinSize = { 80u, 40u };
-	gp.PaddingH = 2u;
-	gp.PaddingV = 2u;
-
-	GridCellDef col;
-	col.sizing = GridCellDef::Sizing::Fill;
-	col.spacing = 4u;
-	gp.Cols = { col, col };
-
-	GridCellDef row;
-	row.sizing = GridCellDef::Sizing::Fixed;
-	row.fixedSize = 44u;
-	row.spacing = 4u;
-	gp.Rows = { row, row };
 
 	auto grid = std::make_shared<GuiGrid>(gp);
 	const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
 		[]() {
-			GuiToggleParams tp;
-			tp.Texture = "rounded_but";
-			tp.OverTexture = "rounded_but_over";
-			tp.DownTexture = "rounded_but_down";
-			tp.OutTexture = "";
-			tp.ToggledTexture = "rounded_but_on";
-			tp.ToggledOverTexture = "rounded_but_on_over";
-			tp.ToggledDownTexture = "rounded_but_on_down";
-			tp.Size = { 80u, _ControlHeight };
-			tp.MinSize = { 20u, _ControlHeight };
-			return std::make_shared<GuiToggle>(tp);
+			return std::make_shared<GuiToggle>(GuiToggleParams::PanelPrimary());
 		},
 		[]() {
-			GuiToggleParams tp;
-			tp.Texture = "rounded_but";
-			tp.OverTexture = "rounded_but_over";
-			tp.DownTexture = "rounded_but_down";
-			tp.OutTexture = "rounded_but_on";
-			tp.ToggledTexture = "rounded_but_on";
-			tp.ToggledOverTexture = "rounded_but_on_over";
-			tp.ToggledDownTexture = "rounded_but_on_down";
-			tp.Size = { 10u, _ControlHeight };
-			tp.MinSize = { 10u, _ControlHeight };
-			return std::make_shared<GuiToggle>(tp);
+			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
 		},
 		[]() {
-			GuiToggleParams tp;
-			tp.Texture = "rounded_but";
-			tp.OverTexture = "rounded_but_over";
-			tp.DownTexture = "rounded_but_down";
-			tp.OutTexture = "rounded_but_on";
-			tp.ToggledTexture = "rounded_but_on";
-			tp.ToggledOverTexture = "rounded_but_on_over";
-			tp.ToggledDownTexture = "rounded_but_on_down";
-			tp.Size = { 10u, _ControlHeight };
-			tp.MinSize = { 10u, _ControlHeight };
-			return std::make_shared<GuiToggle>(tp);
+			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
 		},
 		[]() {
-			GuiToggleParams tp;
-			tp.Texture = "rounded_but";
-			tp.OverTexture = "rounded_but_over";
-			tp.DownTexture = "rounded_but_down";
-			tp.OutTexture = "rounded_but_on";
-			tp.ToggledTexture = "rounded_but_on";
-			tp.ToggledOverTexture = "rounded_but_on_over";
-			tp.ToggledDownTexture = "rounded_but_on_down";
-			tp.Size = { 10u, _ControlHeight };
-			tp.MinSize = { 10u, _ControlHeight };
-			return std::make_shared<GuiToggle>(tp);
+			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
 		}
 	};
 
@@ -274,71 +161,22 @@ std::shared_ptr<GuiStackPanel> GuiMainPanel::_CreateSliderStack()
 	wParams.Spacing = 4u;
 	wParams.WrapContent = true;
 	wParams.Size = { _SectionContentWidth, _WrapStackHeight };
-	wParams.MinSize = { 60u, _ControlHeight };
+	wParams.MinSize = { 60u, GuiSliderParams::DefaultHeight };
 	auto wStack = std::make_shared<GuiStackPanel>(wParams);
 
-	{
-		GuiSliderParams sp;
-		sp.Texture = "rounded_but";
-		sp.OverTexture = "rounded_but_over";
-		sp.DownTexture = "rounded_but_down";
-		sp.OutTexture = "rounded_but_on";
-		sp.Size = { 104u, _ControlHeight };
-		sp.MinSize = { 36u, _ControlHeight };
-		sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-		sp.DragTexture = "blue";
-		sp.DragOverTexture = "yellow";
-		sp.DragControlSize = { 10u, _ControlHeight };
-		sp.DragControlOffset = { 0, 0 };
-		wStack->AddChild(std::make_shared<GuiSlider>(sp));
-	}
+	const std::array<std::string, 4> sliderDragTextures = {
+		"blue",
+		"green",
+		"red",
+		"purple"
+	};
 
+	for (std::size_t i = 0; i < sliderDragTextures.size(); ++i)
 	{
-		GuiSliderParams sp;
-		sp.Texture = "rounded_but";
-		sp.OverTexture = "rounded_but_over";
-		sp.DownTexture = "rounded_but_down";
-		sp.OutTexture = "rounded_but_on";
-		sp.Size = { 104u, _ControlHeight };
-		sp.MinSize = { 36u, _ControlHeight };
-		sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-		sp.DragTexture = "green";
-		sp.DragOverTexture = "yellow";
-		sp.DragControlSize = { 10u, _ControlHeight };
-		sp.DragControlOffset = { 0, 0 };
-		wStack->AddChild(std::make_shared<GuiSlider>(sp));
-	}
-
-	{
-		GuiSliderParams sp;
-		sp.Texture = "rounded_but";
-		sp.OverTexture = "rounded_but_over";
-		sp.DownTexture = "rounded_but_down";
-		sp.OutTexture = "rounded_but_on";
-		sp.Size = { 104u, _ControlHeight };
-		sp.MinSize = { 36u, _ControlHeight };
-		sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-		sp.DragTexture = "red";
-		sp.DragOverTexture = "yellow";
-		sp.DragControlSize = { 10u, _ControlHeight };
-		sp.DragControlOffset = { 0, 0 };
-		wStack->AddChild(std::make_shared<GuiSlider>(sp));
-	}
-	
-	{
-		GuiSliderParams sp;
-		sp.Texture = "rounded_but";
-		sp.OverTexture = "rounded_but_over";
-		sp.DownTexture = "rounded_but_down";
-		sp.OutTexture = "rounded_but_on";
-		sp.Size = { 320u, _ControlHeight };
-		sp.MinSize = { 36u, _ControlHeight };
-		sp.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
-		sp.DragTexture = "purple";
-		sp.DragOverTexture = "yellow";
-		sp.DragControlSize = { 10u, _ControlHeight };
-		sp.DragControlOffset = { 0, 0 };
-		wStack->AddChild(std::make_shared<GuiSlider>(sp));
+		const bool isWide = (i + 1u) == sliderDragTextures.size();
+		const unsigned int width = isWide ? GuiSliderParams::WideWidth : GuiSliderParams::DefaultWidth;
+		wStack->AddChild(std::make_shared<GuiSlider>(
+			GuiSliderParams::PanelHorizontal(sliderDragTextures[i], width)));
 	}
 
 	return wStack;
