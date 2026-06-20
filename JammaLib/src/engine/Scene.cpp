@@ -528,7 +528,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			_networkService->GetController());
 	}
 
-	// Ctrl+Shift+L/W/X/[/]/A - MIDI automation learn, wire, delete, lane cycle, record.
+	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
 	{
 		auto hovered = _ChildFromPath(_selector->CurrentHover());
 		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
@@ -855,12 +855,28 @@ void Scene::CloseAudio()
 	_audioEngine->Close();
 }
 
+bool Scene::InitGlobalInsertCapture()
+{
+	return _inputSubsystem->InitGlobalInsertCapture();
+}
+
+void Scene::CloseGlobalInsertCapture()
+{
+	_inputSubsystem->CloseGlobalInsertCapture();
+}
+
+bool Scene::PumpGlobalInsertCapture(actions::KeyAction& action) noexcept
+{
+	return _inputSubsystem->PumpGlobalInsertCapture(action);
+}
+
 void Scene::Shutdown()
 {
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
+	CloseGlobalInsertCapture();
 	CloseAudio();
 }
 

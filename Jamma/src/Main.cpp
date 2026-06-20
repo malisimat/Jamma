@@ -378,6 +378,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	if (window.Create(hInstance, nCmdShow) != 0)
 		PostQuitMessage(1);
 
+	scene.value()->InitGlobalInsertCapture();
+
 	scene.value()->InitAudio();
 
 	MSG msg;
@@ -399,6 +401,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 		if (!active)
 			break;
+
+		actions::KeyAction insertAction;
+		if (scene.value()->PumpGlobalInsertCapture(insertAction))
+			window.OnAction(insertAction);
 
 		window.Render();
 		window.Swap();

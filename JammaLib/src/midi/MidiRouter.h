@@ -186,7 +186,7 @@ namespace midi
 		// suppression once; idle pump ticks only age out stale sessions.
 		//
 		// Lifecycle:
-		//  • _ResetEditorTouchStates() clears all states (called on Ctrl+Shift+A press).
+		//  • _ResetEditorTouchStates() clears all states (called on Insert press).
 		//  • First VST touch after reset: freshDrag → state activated and a hold window written.
 		//  • Subsequent touches in the same record session: state stays active and writes a fresh window.
 		//  • No new touch for > cooldown samples: state expires.

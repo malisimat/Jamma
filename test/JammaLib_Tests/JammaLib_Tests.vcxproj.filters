@@ -101,6 +101,9 @@
     <ClCompile Include="src\midi\MidiLoop_Tests.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
+    <ClCompile Include="src\midi\MidiRouterAutomationKey_Tests.cpp">
+      <Filter>src\midi</Filter>
+    </ClCompile>
     <ClCompile Include="src\midi\MidiOverdub_Tests.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>

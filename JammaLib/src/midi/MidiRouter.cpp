@@ -67,14 +67,15 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 	auto eaten = actions::ActionResult::NoAction();
 	eaten.IsEaten = true;
 
-	if (65 == action.KeyChar)
+	constexpr unsigned int InsertKey = 45u;
+	if (InsertKey == action.KeyChar)
 	{
-		if (isDown && ctrlShift && !_automationRecordKeyHeld)
+		if (isDown && !_automationRecordKeyHeld)
 		{
 			_automationRecordKeyHeld = true;
 			_ResetEditorTouchStates();
 			_automationRecordHeld.store(true, std::memory_order_release);
-			std::cout << ">> Automation record armed (Ctrl+Shift+A) <<" << std::endl;
+			std::cout << ">> Automation record armed (Insert) <<" << std::endl;
 			return eaten;
 		}
 		if (isUp && _automationRecordKeyHeld)
@@ -577,7 +578,7 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 	std::uint64_t globalSampleNow,
 	const audio::AudioStreamParams& audioParams) noexcept
 {
-	// Always advance the sequence cursor so that touches made before Ctrl+Shift+A
+	// Always advance the sequence cursor so that touches made before Insert
 	// was pressed are not replayed as soon as record mode is armed.
 	const auto seq = vst::_lastTouchedParam.Sequence.load(std::memory_order_acquire);
 	const bool newTouch = (seq != _lastEditorAutomationSeq);
@@ -668,7 +669,7 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 						else
 						{
 							// First touch in this record session: the slot was inactive because
-							// Ctrl+Shift+A was just pressed (or because the previous cool-down
+							// Insert was just pressed (or because the previous cool-down
 							// expired). Each real touch rewrites one bounded future hold window.
 							const bool freshDrag = !touchState->Active;
 							if (freshDrag)
