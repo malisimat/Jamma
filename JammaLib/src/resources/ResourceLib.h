@@ -33,6 +33,7 @@ namespace resources
 		std::optional<std::weak_ptr<graphics::Font>> GetFont(graphics::FontOptions::FontSize size);
 
 	private:
+		static bool ParseUnsigned(const std::string& token, unsigned int& value);
 
 		std::map<std::string, std::shared_ptr<Resource>> _resources;
 		std::map<graphics::FontOptions::FontSize, std::shared_ptr<graphics::Font>> _fonts;
