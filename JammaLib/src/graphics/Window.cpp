@@ -208,7 +208,20 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	auto size = (WINDOWED == _config.State) ? AdjustSize(_config.Size, _style) : _config.Size;
-	auto pos = _config.Position;// (WINDOWED == _config.State) ? Center(size) : _config.Position;
+	auto pos = _config.Position;
+	if (WINDOWED == _config.State)
+	{
+		RECT desiredRect = {
+			pos.X,
+			pos.Y,
+			pos.X + static_cast<LONG>(size.Width),
+			pos.Y + static_cast<LONG>(size.Height)
+		};
+
+		RECT workArea{};
+		if (GetMonitorWorkAreaForRect(desiredRect, workArea))
+			ClampToWorkArea(pos, size, workArea);
+	}
 
 	// Create a new window and context
 	_wnd = CreateWindowEx(
@@ -586,6 +599,43 @@ Size2d Window::AdjustSize(Size2d size, DWORD style)
 		h < 1 ? 1 : (unsigned int)h };
 }
 
+bool Window::GetMonitorWorkArea(HMONITOR monitor, RECT& workArea) noexcept
+{
+	if (!monitor)
+		return false;
+
+	MONITORINFO monitorInfo{};
+	monitorInfo.cbSize = sizeof(monitorInfo);
+	if (!GetMonitorInfo(monitor, &monitorInfo))
+		return false;
+
+	workArea = monitorInfo.rcWork;
+	return true;
+}
+
+bool Window::GetMonitorWorkAreaForRect(const RECT& rect, RECT& workArea) noexcept
+{
+	const auto monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+	return GetMonitorWorkArea(monitor, workArea);
+}
+
+void Window::ClampToWorkArea(Position2d& position, Size2d& size, const RECT& workArea) noexcept
+{
+	const auto workWidth = static_cast<unsigned int>(std::max<LONG>(1, workArea.right - workArea.left));
+	const auto workHeight = static_cast<unsigned int>(std::max<LONG>(1, workArea.bottom - workArea.top));
+
+	if (size.Width > workWidth)
+		size.Width = workWidth;
+	if (size.Height > workHeight)
+		size.Height = workHeight;
+
+	const auto maxX = std::max<int>(workArea.left, workArea.right - static_cast<LONG>(size.Width));
+	const auto maxY = std::max<int>(workArea.top, workArea.bottom - static_cast<LONG>(size.Height));
+
+	position.X = std::clamp(position.X, static_cast<int>(workArea.left), maxX);
+	position.Y = std::clamp(position.Y, static_cast<int>(workArea.top), maxY);
+}
+
 Position2d Window::Center(Size2d size)
 {
 	RECT primaryDisplaySize;
@@ -702,6 +752,25 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		MinMaxInfo->ptMinTrackSize.x = (long)min.Width;
 		MinMaxInfo->ptMinTrackSize.y = (long)min.Height;
+
+		RECT workArea{};
+		const auto monitor = MonitorFromWindow(hWindow, MONITOR_DEFAULTTONEAREST);
+		if (monitor && GetMonitorWorkArea(monitor, workArea))
+		{
+			MONITORINFO monitorInfo{};
+			monitorInfo.cbSize = sizeof(monitorInfo);
+			if (GetMonitorInfo(monitor, &monitorInfo))
+			{
+				const auto workWidth = workArea.right - workArea.left;
+				const auto workHeight = workArea.bottom - workArea.top;
+				MinMaxInfo->ptMaxPosition.x = workArea.left - monitorInfo.rcMonitor.left;
+				MinMaxInfo->ptMaxPosition.y = workArea.top - monitorInfo.rcMonitor.top;
+				MinMaxInfo->ptMaxSize.x = workWidth;
+				MinMaxInfo->ptMaxSize.y = workHeight;
+				MinMaxInfo->ptMaxTrackSize.x = workWidth;
+				MinMaxInfo->ptMaxTrackSize.y = workHeight;
+			}
+		}
 		return 0;
 	}
 	case WM_ENTERSIZEMOVE:

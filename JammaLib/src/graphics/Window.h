@@ -86,6 +86,9 @@ namespace graphics
 
 		static utils::Size2d AdjustSize(utils::Size2d size, DWORD style);
 		static utils::Position2d Center(utils::Size2d size);
+		static bool GetMonitorWorkArea(HMONITOR monitor, RECT& workArea) noexcept;
+		static bool GetMonitorWorkAreaForRect(const RECT& rect, RECT& workArea) noexcept;
+		static void ClampToWorkArea(utils::Position2d& position, utils::Size2d& size, const RECT& workArea) noexcept;
 		static ATOM Register(HINSTANCE hInstance);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
