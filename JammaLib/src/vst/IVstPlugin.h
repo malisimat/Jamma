@@ -144,6 +144,13 @@ namespace vst
 	};
 	extern LastTouchedParameter _lastTouchedParam;
 
+	// Publish a host automation touch event into the shared registry.
+	// Writers store the triple first, then release-bump Sequence so readers can
+	// acquire-load Sequence and observe coherent Plugin/ParameterIndex/Value.
+	void PublishLastTouchedParameter(IVstPlugin* plugin,
+		unsigned int parameterIndex,
+		float value) noexcept;
+
 	// Factory: creates the correct plugin type based on file extension.
 	// Extension ".dll"  -> Vst2Plugin (VST2)
 	// Any other extension (e.g. ".vst3") -> Vst3Plugin (VST3)

@@ -79,9 +79,9 @@ namespace vst
 		// channelBufs must contain numChannels writable channel buffers.
 		void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept override;
 
-		// Set / get a hosted parameter by index. VST3 parameter automation is not
-		// wired through this host yet, so these are no-op stubs that satisfy the
-		// IVstPlugin interface (GetParameter returns 0).
+		// Set / get a hosted parameter by host index (mapped to VST3 ParamID).
+		// SetParameter queues a normalized automation point for the next process
+		// block; GetParameter reads the current normalized value from controller.
 		void SetParameter(unsigned int index, float value) noexcept override;
 		float GetParameter(unsigned int index) const noexcept override;
 
@@ -89,6 +89,10 @@ namespace vst
 			std::uint32_t numSamples) noexcept override;
 		void SendMidiEvent(const midi::MidiEvent& event,
 			bool isRealtime) noexcept override;
+		void UpdateHostTime(const HostTimeState& state) noexcept override;
+
+		// Host callback entry point used by the VST3 component handler.
+		void OnControllerEdit(std::uint32_t paramId, float normalizedValue) noexcept;
 
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.

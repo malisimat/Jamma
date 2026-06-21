@@ -571,10 +571,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		// changed its own parameter state before calling audioMasterAutomate.
 		if (self)
 		{
-			_lastTouchedParam.Plugin.store(self, std::memory_order_relaxed);
-			_lastTouchedParam.ParameterIndex.store(static_cast<unsigned int>(index), std::memory_order_relaxed);
-			_lastTouchedParam.Value.store(opt, std::memory_order_relaxed);
-			_lastTouchedParam.Sequence.fetch_add(1u, std::memory_order_release);
+			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), opt);
 		}
 		return 0;
 	case audioMasterIdle:
