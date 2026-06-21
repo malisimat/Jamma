@@ -470,7 +470,9 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 {
 	auto take = MakeLoopTake();
 	take->Record({}, "station", { 3u });
-	auto midiModel = std::dynamic_pointer_cast<MidiModel>(take->TryGetChild(1u));
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	auto midiLoop = take->GetMidiLoops()[0];
+	auto midiModel = midiLoop->Model();
 	ASSERT_NE(nullptr, midiModel);
 
 	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 3, 60, 100), 0u));
@@ -478,6 +480,7 @@ TEST(LoopTakeMidiVisualization, PlayFinalizesMidiModelSpans)
 	EXPECT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(0u, 3, 60), 0u));
 
 	take->Play(0ul, 960ul, 0u);
+	EXPECT_TRUE(midiLoop->UpdateModelFromEvents(960u, true));
 
 	EXPECT_EQ(1u, midiModel->NoteInstanceCount());
 }
