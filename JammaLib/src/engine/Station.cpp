@@ -712,7 +712,8 @@ ActionResult Station::OnAction(GuiAction action)
 	const bool isRackAction =
 		(action.ElementType == GuiAction::ACTIONELEMENT_RACK) ||
 		(action.ElementType == GuiAction::ACTIONELEMENT_ROUTER) ||
-		(action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE);
+		(action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE) ||
+		(action.ElementType == GuiAction::ACTIONELEMENT_MIDIQUANTISATION);
 
 	auto res = isRackAction ? ActionResult::NoAction() : GuiElement::OnAction(action);
 
@@ -724,6 +725,10 @@ ActionResult Station::OnAction(GuiAction action)
 
 	switch (action.ElementType)
 	{
+	case GuiAction::ACTIONELEMENT_MIDIQUANTISATION:
+		if (_receiver)
+			_receiver->OnAction(action);
+		break;
 	case GuiAction::ACTIONELEMENT_TOGGLE:
 		// Legacy: GuiRack handles toggles internally and does not forward them,
 		// so this case is not reached. _router is nullptr and would crash if called.
@@ -1120,6 +1125,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetSelectDepth(CurrentSelectDepth());
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
+	take->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
@@ -1189,6 +1195,24 @@ void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
 	if (_quantisationDivisionModel)
 		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
+void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept
+{
+	if (_globalMidiQuantState == state)
+		return;
+
+	_globalMidiQuantState = state;
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetGlobalMidiQuantState(state);
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetGlobalMidiQuantState(state);
+	}
 }
 
 void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept

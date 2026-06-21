@@ -226,6 +226,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
 	midi::MidiQuantisationSettings quantisation = take->MidiQuantisation();
+	quantisation.Enabled = takeStruct.MidiQuantEnabled;
+	quantisation.Fraction = midi::MidiQuantisation::ClampFractionIndex(takeStruct.MidiQuantFraction);
 	quantisation.PhaseOffsetSamps = takeStruct.TakePhaseOffsetSamps;
 	take->SetMidiQuantisation(quantisation);
 
@@ -1983,6 +1985,15 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 	{
 		_midiQuantisationUpdatePending = true;
 		_changesMade = true;
+
+		if (_receiver)
+		{
+			actions::GuiAction action;
+			action.Index = _index;
+			action.ElementType = actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION;
+			action.Data = actions::GuiAction::GuiInt{ 1 };
+			_receiver->OnAction(action);
+		}
 	}
 }
 
@@ -1995,11 +2006,39 @@ midi::MidiQuantisationSettings LoopTake::MidiQuantisation() const noexcept
 midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexcept
 {
 	auto settings = MidiQuantisation();
+	const auto globalState = static_cast<io::JamFile::GlobalMidiQuantState>(
+		_globalMidiQuantStatePacked.load(std::memory_order_acquire));
+	switch (globalState)
+	{
+	case io::JamFile::GlobalMidiQuantState::Off:
+		settings.Enabled = false;
+		break;
+	case io::JamFile::GlobalMidiQuantState::All:
+		settings.Enabled = true;
+		break;
+	case io::JamFile::GlobalMidiQuantState::Mixed:
+	default:
+		break;
+	}
+
 	auto combined = static_cast<std::int64_t>(_NaturalMidiQuantisationPhaseOffset(settings))
 		+ static_cast<std::int64_t>(settings.PhaseOffsetSamps)
 		+ static_cast<std::int64_t>(_midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire));
 	settings.PhaseOffsetSamps = _ClampPhaseOffset(combined);
 	return settings;
+}
+
+void LoopTake::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept
+{
+	const auto previous = ResolvedMidiQuantisation();
+	_globalMidiQuantStatePacked.store(static_cast<std::uint8_t>(state), std::memory_order_release);
+	const auto updated = ResolvedMidiQuantisation();
+
+	if (previous != updated)
+	{
+		_midiQuantisationUpdatePending = true;
+		_changesMade = true;
+	}
 }
 
 void LoopTake::SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept

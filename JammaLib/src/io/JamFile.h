@@ -17,12 +17,20 @@
 #include <cstdint>
 #include "Json.h"
 #include "Timer.h"
+#include "../midi/MidiQuantisation.h"
 #include "../audio/AudioMixer.h"
 
 namespace io
 {
 	struct JamFile
 	{
+		enum class GlobalMidiQuantState : std::uint8_t
+		{
+			Off = 0,
+			Mixed = 1,
+			All = 2
+		};
+
 		enum Version
 		{
 			VERSION_V,
@@ -101,6 +109,8 @@ namespace io
 			std::string Name;
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
+			bool MidiQuantEnabled = false;
+			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Whole);
 			std::int32_t TakePhaseOffsetSamps = 0;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
@@ -124,6 +134,7 @@ namespace io
 		std::vector<Station> Stations;
 		unsigned long TimerTicks;
 		unsigned int QuantiseSamps;
+		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Mixed;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		utils::Timer::QuantisationType Quantisation;
 	};

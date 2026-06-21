@@ -16,6 +16,7 @@
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRack.h"
+#include "../io/JamFile.h"
 #include "../vst/VstChain.h"
 
 using base::Audible;
@@ -213,6 +214,7 @@ namespace engine
 		void SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
+		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
@@ -315,6 +317,9 @@ namespace engine
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
 		midi::MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
+		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
+			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Mixed)
+		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
 		bool _midiQuantisationUpdatePending;

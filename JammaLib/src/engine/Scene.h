@@ -271,6 +271,9 @@ namespace engine
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
+		void _SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit = false);
+		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
+		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -337,6 +340,8 @@ namespace engine
 		timing::TimingQuantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
+		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
+		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;

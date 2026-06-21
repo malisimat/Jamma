@@ -41,6 +41,8 @@ Scene::Scene(SceneParams params,
 	_label(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
+	_globalMidiQuantRadio(nullptr),
+	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed),
 	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
@@ -88,6 +90,7 @@ Scene::Scene(SceneParams params,
 	_selector->SetSelectDepth(base::DEPTH_STATION);
 
 	GuiRadioParams modeRadioParams;
+	modeRadioParams.Index = 100u;
 	modeRadioParams.Size = { 480, 64 };
 	modeRadioParams.Position = { 0, (int)params.Size.Height - (int)modeRadioParams.Size.Height };
 	std::vector<GuiToggleParams> radioToggleParams;
@@ -131,6 +134,47 @@ Scene::Scene(SceneParams params,
 	
 	modeRadioParams.ToggleParams = radioToggleParams;
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
+
+	GuiRadioParams globalMidiQuantRadioParams;
+	globalMidiQuantRadioParams.Index = 101u;
+	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(_globalMidiQuantState);
+	globalMidiQuantRadioParams.Size = { 228, 40 };
+	globalMidiQuantRadioParams.Position = {
+		modeRadioParams.Position.X + static_cast<int>(modeRadioParams.Size.Width) + 10,
+		(int)params.Size.Height - (int)globalMidiQuantRadioParams.Size.Height - 12
+	};
+
+	std::vector<GuiToggleParams> globalQuantToggleParams;
+	for (auto i = 0u; i < 3; ++i)
+	{
+		GuiToggleParams toggleParams;
+		toggleParams.TextureShader = "texture_tinted";
+		toggleParams.Position = { static_cast<int>(i * 76), 0 };
+		toggleParams.Size = { 72, 40 };
+		toggleParams.Texture = "rounded_but";
+		toggleParams.OverTexture = "rounded_but_over";
+		toggleParams.DownTexture = "rounded_but_down";
+		toggleParams.ToggledTexture = "rounded_but_on";
+		toggleParams.ToggledOverTexture = "rounded_but_on_over";
+		toggleParams.ToggledDownTexture = "rounded_but_on_down";
+		switch (i)
+		{
+		case 0:
+			toggleParams.TintColor = glm::vec3(1.0f, 0.34f, 0.30f);
+			break;
+		case 1:
+			toggleParams.TintColor = glm::vec3(1.0f, 0.75f, 0.20f);
+			break;
+		case 2:
+		default:
+			toggleParams.TintColor = glm::vec3(0.33f, 0.92f, 0.45f);
+			break;
+		}
+
+		globalQuantToggleParams.push_back(toggleParams);
+	}
+	globalMidiQuantRadioParams.ToggleParams = globalQuantToggleParams;
+	_globalMidiQuantRadio = std::make_shared<GuiRadio>(globalMidiQuantRadioParams);
 
 	_PublishAudioStations();
 
@@ -195,6 +239,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
+	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -221,6 +266,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
+	_globalMidiQuantRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
 
 	_popupHost.Draw(ctx);
@@ -285,6 +331,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
+	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
 		if (child)
 			child->InitResources(resourceLib, forceInit);
@@ -304,6 +351,7 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
+	_globalMidiQuantRadio->ReleaseResources();
 	for (auto& child : _guiChildren)
 		if (child)
 			child->ReleaseResources();
@@ -425,6 +473,19 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
+	res = static_cast<std::shared_ptr<base::GuiElement>>(_globalMidiQuantRadio)->OnAction(_globalMidiQuantRadio->ParentToLocal(action));
+
+	if (res.IsEaten)
+	{
+		if (nullptr != res.Undo)
+			_undoHistory.Add(res.Undo);
+
+		if (!_touchDownElement.lock())
+			_touchDownElement = res.ActiveElement;
+
+		return res;
+	}
+
 	for (auto& station : _stations)
 	{
 		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
@@ -495,6 +556,11 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		}
 
 		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
+
+		if (res.IsEaten)
+			return res;
+
+		res = static_cast<std::shared_ptr<base::GuiElement>>(_globalMidiQuantRadio)->OnAction(_globalMidiQuantRadio->ParentToLocal(action));
 
 		if (res.IsEaten)
 			return res;
@@ -608,6 +674,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		return io::IoSessionExporter::ExportSession(_stations,
 			_quantisation,
+			_globalMidiQuantState,
 			_userConfig,
 			_audioEngine->GetStreamParams(),
 			_audioEngine->GetDevice(),
@@ -694,15 +761,33 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
-	switch (action.ElementType)
+	if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
 	{
-		case GuiAction::ACTIONELEMENT_RADIO:
-			if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+		_ForceGlobalMidiQuantStateMixedOnLocalEdit();
+		return ActionResult::NoAction();
+	}
+
+	if (GuiAction::ACTIONELEMENT_RADIO == action.ElementType)
+	{
+		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			if (action.Index == 100u)
 			{
 				_viewMode = (ViewMode)i->Value;
 				_UpdateSelectDepth((unsigned int)_viewMode);
 			}
-			break;
+			else if (action.Index == 101u)
+			{
+				auto stateValue = i->Value;
+				if (stateValue < static_cast<int>(io::JamFile::GlobalMidiQuantState::Off)
+					|| stateValue > static_cast<int>(io::JamFile::GlobalMidiQuantState::All))
+				{
+					stateValue = static_cast<int>(io::JamFile::GlobalMidiQuantState::Mixed);
+				}
+
+				_SetGlobalMidiQuantState(static_cast<io::JamFile::GlobalMidiQuantState>(stateValue));
+			}
+		}
 	}
 
 	return ActionResult::NoAction();
@@ -832,6 +917,7 @@ void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
@@ -920,6 +1006,7 @@ void Scene::Reset()
 void Scene::InitGui()
 {
 	_modeRadio->Init();
+	_globalMidiQuantRadio->Init();
 	_selector->Init();
 }
 
@@ -1243,6 +1330,7 @@ glm::mat4 Scene::_View()
 
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
+	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
@@ -1257,6 +1345,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	station->SetSelectDepth((SelectDepth)selectDepth);
 
 	_stations.push_back(station);
+	station->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_PublishAudioStations();
 }
 
@@ -1270,6 +1359,32 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
 {
 	_quantisation.SetMidiGrain(grainSamps, source, _stations);
+}
+
+void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit)
+{
+	if ((_globalMidiQuantState == state) && !fromLocalEdit)
+		return;
+
+	_globalMidiQuantState = state;
+	if (_globalMidiQuantRadio)
+		_globalMidiQuantRadio->SetCurrentValue(static_cast<unsigned int>(state), true);
+
+	_ApplyGlobalMidiQuantStateToAllLoopTakes();
+}
+
+void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
+{
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetGlobalMidiQuantState(_globalMidiQuantState);
+	}
+}
+
+void Scene::_ForceGlobalMidiQuantStateMixedOnLocalEdit()
+{
+	_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed, true);
 }
 
 void Scene::_UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot)
