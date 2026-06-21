@@ -31,11 +31,15 @@ std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text
 {
 	GuiLabelParams lp;
 	lp.String = text;
-	const unsigned int pad = std::min(padding, rowHeight / 2u);
-	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(rowHeight, pad);
-	lp.Position = { (int)pad, y + (int)pad };
-	lp.Size = { std::max(1u, width > 2u * pad ? width - 2u * pad : 1u), textHeight };
-	lp.MinSize = { 1u, textHeight };
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		width,
+		rowHeight,
+		padding,
+		padding,
+		true);
+	lp.Position = { (int)frame.PaddingX, y + frame.OffsetY };
+	lp.Size = { frame.ContentWidth, frame.TextHeight };
+	lp.MinSize = { 1u, frame.TextHeight };
 	return std::make_shared<GuiLabel>(lp);
 }
 
@@ -185,13 +189,15 @@ std::shared_ptr<GuiLabel> GuiDropDown::_MakeClosedLabel(const GuiDropDownParams&
 {
 	GuiLabelParams lp;
 	lp.String = (params.InitIndex < params.Items.size()) ? params.Items[params.InitIndex] : std::string();
-	const unsigned int pad = std::min(params.Padding, params.Size.Height / 2u);
-	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(params.Size.Height, pad);
-	lp.Position = { (int)pad, (int)pad };
-	const int w = std::max(1, (int)params.Size.Width - (int)(2u * pad));
-	const int h = (int)textHeight;
-	lp.Size = { (unsigned int)w, (unsigned int)h };
-	lp.MinSize = { 1u, (unsigned int)h };
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		params.Size.Width,
+		params.Size.Height,
+		params.Padding,
+		params.Padding,
+		true);
+	lp.Position = { (int)frame.PaddingX, frame.OffsetY };
+	lp.Size = { frame.ContentWidth, frame.TextHeight };
+	lp.MinSize = { 1u, frame.TextHeight };
 	return std::make_shared<GuiLabel>(lp);
 }
 
@@ -296,11 +302,14 @@ void GuiDropDown::Close()
 void GuiDropDown::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
-	const unsigned int pad = std::min(_padding, size.Height / 2u);
-	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(size.Height, pad);
-	const int w = std::max(1, (int)size.Width - (int)(2u * pad));
-	const int h = (int)textHeight;
-	_label->SetSize({ (unsigned int)w, (unsigned int)h });
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		size.Width,
+		size.Height,
+		_padding,
+		_padding,
+		true);
+	_label->SetPosition({ (int)frame.PaddingX, frame.OffsetY });
+	_label->SetSize({ frame.ContentWidth, frame.TextHeight });
 }
 
 void GuiDropDown::_InitResources(ResourceLib& resourceLib, bool forceInit)

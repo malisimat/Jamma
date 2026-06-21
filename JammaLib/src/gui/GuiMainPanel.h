@@ -39,9 +39,10 @@ namespace gui
 		static constexpr unsigned int _SectionContentWidth = 320u;
 		static constexpr unsigned int _SectionPadding = 4u;
 		static constexpr unsigned int _SectionSpacing = 8u;
-		static constexpr unsigned int _TextBoxPadding = 8u;
-		static constexpr unsigned int _NumericInputPadding = 8u;
-		static constexpr unsigned int _DropDownPadding = 2u;
+		static constexpr unsigned int _TextBoxPadding = 10u;
+		static constexpr unsigned int _NumericInputPadding = 10u;
+		static constexpr unsigned int _DropDownPadding = 10u;
+		static constexpr unsigned int _ScrollRowHorizontalInset = 10u;
 		static constexpr unsigned int _UpperSectionHeight = 248u;
 		static constexpr unsigned int _LowerSectionHeight = 264u;
 		static constexpr unsigned int _HeaderHeight = 22u;

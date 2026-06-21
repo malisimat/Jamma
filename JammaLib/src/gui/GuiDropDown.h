@@ -61,7 +61,7 @@ namespace gui
 		static constexpr unsigned int DefaultMinWidth = 60u;
 		static constexpr unsigned int DefaultMinHeight = 44u;
 		static constexpr unsigned int DefaultRowHeight = 22u;
-		static constexpr unsigned int DefaultPadding = 2u;
+		static constexpr unsigned int DefaultPadding = 10u;
 
 		GuiDropDownParams()
 		{

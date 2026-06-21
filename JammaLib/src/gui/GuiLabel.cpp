@@ -14,6 +14,7 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
 	_str(guiParams.String),
 	_pendingStr(guiParams.String),
+	_textInset{ guiParams.TextInsetX, guiParams.TextInsetY },
 	_vertexArrayDirty(true),
 	_vertexArray(0),
 	_vertexBuffers{ 0, 0 },
@@ -81,7 +82,7 @@ void GuiLabel::Draw(DrawContext& ctx)
 
 	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X + _textInset.X, pos.Y + _textInset.Y, 0.f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
 	glCtx.PopMvp();

@@ -60,7 +60,8 @@ namespace base
 			Index(0u),
 			OverTexture(""),
 			DownTexture(""),
-			OutTexture("")
+			OutTexture(""),
+			TintColor(glm::vec3(1.0f, 0.7f, 0.2f))
 		{
 		}
 
@@ -82,7 +83,8 @@ namespace base
 			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
-			OutTexture(outTexture)
+			OutTexture(outTexture),
+			TintColor(glm::vec3(1.0f, 0.7f, 0.2f))
 		{
 		}
 
@@ -96,6 +98,7 @@ namespace base
 		std::string DownTexture;
 		std::string OutTexture;
 		std::string TextureShader = "texture";
+		glm::vec3 TintColor;
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;
 	};

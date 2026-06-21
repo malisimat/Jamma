@@ -16,7 +16,7 @@ namespace gui
 		static constexpr unsigned int DefaultHeight = 44u;
 		static constexpr unsigned int DefaultMinWidth = 60u;
 		static constexpr unsigned int DefaultMinHeight = 34u;
-		static constexpr unsigned int DefaultPadding = 8u;
+		static constexpr unsigned int DefaultPadding = 10u;
 
 		GuiTextBoxParams()
 		{
@@ -35,7 +35,7 @@ namespace gui
 		}
 
 		std::string  Text;
-		unsigned int Padding     = 4u;   // inner padding in pixels.
+		unsigned int Padding     = DefaultPadding;   // inner padding in pixels.
 		std::string  CaretTexture = "blue"; // solid colour used for caret/selection.
 		std::weak_ptr<base::ActionReceiver> Receiver;
 	};

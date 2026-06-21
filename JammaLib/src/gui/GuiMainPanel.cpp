@@ -45,9 +45,18 @@ void GuiMainPanel::_BuildUpperSection()
 			_SectionContentWidth,
 			_StackRowHeight);
 		auto hStack = std::make_shared<GuiStackPanel>(hParams);
+		const std::array<glm::vec3, 3> buttonTints = {
+			glm::vec3(1.0f, 0.7f, 0.3f),
+			glm::vec3(0.3f, 1.0f, 0.7f),
+			glm::vec3(0.7f, 0.3f, 1.0f)
+		};
 
-		for (int i = 0; i < 3; ++i)
-			hStack->AddChild(std::make_shared<GuiButton>(GuiButtonParams::PanelButton()));
+		for (std::size_t i = 0; i < buttonTints.size(); ++i)
+		{
+			auto buttonParams = GuiButtonParams::PanelButton();
+			buttonParams.TintColor = buttonTints[i];
+			hStack->AddChild(std::make_shared<GuiButton>(buttonParams));
+		}
 
 		section->AddChild(hStack);
 	}
@@ -72,12 +81,14 @@ void GuiMainPanel::_BuildLowerSection()
 
 	{
 		GuiTextBoxParams tp = GuiTextBoxParams::PanelInput(_SectionContentWidth);
+		tp.Padding = _TextBoxPadding;
 		tp.Text = "edit me";
 		section->AddChild(std::make_shared<GuiTextBox>(tp));
 	}
 
 	{
 		GuiNumericInputParams np = GuiNumericInputParams::PanelInput(_SectionContentWidth);
+		np.Padding = _NumericInputPadding;
 		np.Min = 0.0;
 		np.Max = 100.0;
 		np.Step = 0.5;
@@ -88,6 +99,7 @@ void GuiMainPanel::_BuildLowerSection()
 
 	{
 		GuiDropDownParams dp = GuiDropDownParams::PanelInput(_SectionContentWidth);
+		dp.Padding = _DropDownPadding;
 		dp.Items = { "Sine", "Square", "Saw", "Triangle", "Noise" };
 		dp.InitIndex = 0u;
 		auto dd = std::make_shared<GuiDropDown>(dp);
@@ -104,7 +116,7 @@ void GuiMainPanel::_BuildLowerSection()
 		for (int i = 0; i < 12; ++i)
 		{
 			content->AddChild(std::make_shared<GuiLabel>(
-				GuiLabelParams::PanelScrollRow("Scroll row " + std::to_string(i + 1))));
+				GuiLabelParams::PanelScrollRow("Scroll row " + std::to_string(i + 1), _ScrollRowHorizontalInset)));
 		}
 
 		GuiScrollPanelParams spParams = GuiScrollPanelParams::PanelScroll(
@@ -129,16 +141,24 @@ std::shared_ptr<GuiGrid> GuiMainPanel::_CreateToggleGrid()
 	auto grid = std::make_shared<GuiGrid>(gp);
 	const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
 		[]() {
-			return std::make_shared<GuiToggle>(GuiToggleParams::PanelPrimary());
+			auto params = GuiToggleParams::PanelPrimary();
+			params.TintColor = glm::vec3(1.0f, 0.7f, 0.3f);
+			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
-			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
+			auto params = GuiToggleParams::PanelSecondary();
+			params.TintColor = glm::vec3(0.7f, 1.0f, 0.3f);
+			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
-			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
+			auto params = GuiToggleParams::PanelSecondary();
+			params.TintColor = glm::vec3(0.3f, 1.0f, 0.7f);
+			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
-			return std::make_shared<GuiToggle>(GuiToggleParams::PanelSecondary());
+			auto params = GuiToggleParams::PanelSecondary();
+			params.TintColor = glm::vec3(0.7f, 0.3f, 1.0f);
+			return std::make_shared<GuiToggle>(params);
 		}
 	};
 

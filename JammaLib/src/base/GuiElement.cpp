@@ -35,7 +35,7 @@ GuiElement::GuiElement(GuiElementParams params) :
 void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
 {
 	if (_guiParams.TextureShader == "texture_tinted")
-		ctx.SetUniform("TintColor", glm::vec3(1.0f, 0.7f, 0.2f));
+		ctx.SetUniform("TintColor", _guiParams.TintColor);
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept

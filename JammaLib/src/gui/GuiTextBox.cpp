@@ -29,12 +29,15 @@ GuiLabelParams GuiTextBox::_MakeLabelParams(const GuiTextBoxParams& params)
 {
 	GuiLabelParams lp;
 	lp.String = params.Text;
-	const int pad = (int)params.Padding;
-	const int w = std::max(1, (int)params.Size.Width - 2 * pad);
-	const int h = (int)ResourceLib::ResolveTextPixelHeightFromControlBox(params.Size.Height, params.Padding);
-	lp.Position = { pad, pad };
-	lp.Size = { (unsigned int)w, (unsigned int)h };
-	lp.MinSize = { 1u, (unsigned int)h };
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		params.Size.Width,
+		params.Size.Height,
+		params.Padding,
+		params.Padding,
+		true);
+	lp.Position = { (int)frame.PaddingX, frame.OffsetY };
+	lp.Size = { frame.ContentWidth, frame.TextHeight };
+	lp.MinSize = { 1u, frame.TextHeight };
 	return lp;
 }
 
@@ -84,11 +87,14 @@ bool GuiTextBox::WantsFocusOnPress() const { return true; }
 void GuiTextBox::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
-
-	const int pad = (int)_padding;
-	const int w = std::max(1, (int)size.Width - 2 * pad);
-	const int h = (int)ResourceLib::ResolveTextPixelHeightFromControlBox(size.Height, _padding);
-	_label->SetSize({ (unsigned int)w, (unsigned int)h });
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		size.Width,
+		size.Height,
+		_padding,
+		_padding,
+		true);
+	_label->SetPosition({ (int)frame.PaddingX, frame.OffsetY });
+	_label->SetSize({ frame.ContentWidth, frame.TextHeight });
 }
 
 // --------------------------------------------------------------------------
