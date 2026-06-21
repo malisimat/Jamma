@@ -95,6 +95,7 @@ namespace graphics
 	private:
 		void LoadResources();
 		void InitScene();
+		void ApplyPendingResize();
 		void ReleaseGlResources();
 
 		static void InitStyle(WNDCLASSEX& wcex) noexcept;
@@ -112,6 +113,7 @@ namespace graphics
 		bool _released;
 		unsigned int _buttonsDown;
 		unsigned int _lastHoverObjectId;
+		std::optional<utils::Size2d> _pendingResize;
 
 		std::optional<GlDrawContext> _drawContext;
 		std::optional<GlDrawContext> _pickContext;

@@ -35,6 +35,7 @@ Window::Window(Scene& scene,
 	_released(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
+	_pendingResize(std::nullopt),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
@@ -377,11 +378,38 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
+	if (size.Width < 1)
+		size.Width = 1;
+	if (size.Height < 1)
+		size.Height = 1;
+
 	_config.Size = size;
+	_scene.SetSize(size);
+	_lastHoverObjectId = 0;
+	_pendingResize = size;
+}
+
+void Window::ApplyPendingResize()
+{
+	if (!_pendingResize.has_value())
+		return;
+
+	if (!GlDeleteQueue::IsRenderThread())
+		return;
+
+	if (!_pickContext.has_value() || !_textureContext.has_value() || !_drawContext.has_value())
+		return;
+
+	auto size = _pendingResize.value();
+	_pickContext.emplace(size, base::DrawContext::ContextTarget::PICKING);
+	_textureContext.emplace(size, base::DrawContext::ContextTarget::TEXTURE);
+	_drawContext.emplace(size, base::DrawContext::ContextTarget::SCREEN);
 
 	_pickContext->Initialise();
 	_textureContext->Initialise();
 	_drawContext->Initialise();
+
+	_pendingResize.reset();
 }
 
 void Window::SetWindowState(WindowState state)
@@ -397,6 +425,7 @@ Size2d Window::GetSize()
 void Window::Render()
 {
 	GlDeleteQueue::FlushPendingDeletes();
+	ApplyPendingResize();
 
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
@@ -474,9 +503,8 @@ ActionResult Window::OnAction(WindowAction winAction)
 	switch (winAction.WindowEventType)
 	{
 	case WindowAction::SIZE:
-		_config.Size = winAction.Size;
+		Resize(winAction.Size);
 		isEaten = true;
-		//AdjustSize();
 		break;
 	case WindowAction::SIZE_MINIMISE:
 		SetWindowState(Window::MINIMISED);
@@ -484,9 +512,9 @@ ActionResult Window::OnAction(WindowAction winAction)
 		break;
 	case WindowAction::SIZE_MAXIMISE:
 		SetWindowState(Window::MAXIMISED);
-		_config.Size = winAction.Size;
+		Resize(winAction.Size);
 		isEaten = true;
-		//AdjustSize();
+		break;
 	case WindowAction::DESTROY:
 		break;
 	}
