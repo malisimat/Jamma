@@ -266,10 +266,8 @@ namespace engine
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
-		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
-		{
-			_quantisation.SetMidiGrain(grainSamps, source, _stations);
-		}
+		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -277,11 +275,7 @@ namespace engine
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
-		{
-			if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
-				_PublishAudioStations();
-		}
+		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		timing::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;

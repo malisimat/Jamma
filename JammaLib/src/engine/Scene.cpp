@@ -1167,6 +1167,17 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 	_quantisation.SetMidiGrain(quantiseSamps, "scene quantisation set", _stations);
 }
 
+void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+{
+	_quantisation.SetMidiGrain(grainSamps, source, _stations);
+}
+
+void Scene::_UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot)
+{
+	if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
+		_PublishAudioStations();
+}
+
 bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept
 {
 	return (Action::MODIFIER_CTRL & modifiers);
