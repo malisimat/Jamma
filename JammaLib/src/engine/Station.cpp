@@ -492,8 +492,6 @@ void Station::RebuildAutomationDispatch()
 				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
 				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
-				entry.cursorIdx = 0u;
-				entry.lastValue = -2.0f; // force first write after a rebuild
 				++count;
 			}
 		}
@@ -502,7 +500,7 @@ void Station::RebuildAutomationDispatch()
 	_automationDispatchCount[back] = count;
 	// Release pairs with the audio thread's acquire load: makes all MIDI-thread
 	// writes to lane Points visible before the new list is consumed.
-	_automationDispatch.store(buf, std::memory_order_release);
+	_automationDispatch.store(static_cast<const AutomationDispatch*>(buf), std::memory_order_release);
 	_automationDispatchBack ^= 1u;
 }
 
@@ -557,9 +555,21 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 	std::uint32_t numSamps) noexcept
 {
-	auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
+	const auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
 	if (!dispatches)
 		return;
+
+	// Detect a newly published list and reset per-entry playback state so
+	// stale cursors and last-values from the previous list are never used.
+	if (dispatches != _automationDispatchFront)
+	{
+		_automationDispatchFront = dispatches;
+		for (auto& s : _automationPlaybackState)
+		{
+			s.cursorIdx = 0u;
+			s.lastValue = -2.0f;
+		}
+	}
 
 	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
 	const auto count = _automationDispatchCount[frontIdx];
@@ -567,7 +577,7 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 
 	for (std::uint8_t i = 0u; i < count; ++i)
 	{
-		auto& entry = dispatches[i];
+		const auto& entry = dispatches[i];
 		if (!entry.plugin || !entry.loop)
 			continue;
 
@@ -586,12 +596,13 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 					/ static_cast<double>(entry.loopLengthSamps)
 			: 0.0;
 
-		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, entry.cursorIdx);
+		auto& state = _automationPlaybackState[i];
+		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, state.cursorIdx);
 
-		if (std::abs(val - entry.lastValue) > AutomationEpsilon)
+		if (std::abs(val - state.lastValue) > AutomationEpsilon)
 		{
 			entry.plugin->SetParameter(entry.paramIdx, val);
-			entry.lastValue = val;
+			state.lastValue = val;
 		}
 	}
 }

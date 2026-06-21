@@ -278,6 +278,8 @@ namespace engine
 		// One pre-resolved automation mapping ready for the audio thread. All
 		// pointer chasing and lane metadata are baked in by RebuildAutomationDispatch
 		// so the audio path is a flat loop over a hot cache line.
+		// IMMUTABLE after publication: the audio thread must never write into this
+		// struct, which is what makes the double-buffer scheme race-free.
 		struct AutomationDispatch
 		{
 			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
@@ -286,8 +288,15 @@ namespace engine
 			std::uint8_t     laneIdx = 0u;              // which lane within loop to read
 			std::uint32_t    loopLengthSamps = 0u;      // pre-resolved; avoids per-block takes lock
 			std::uint32_t    loopPhaseAnchor = 0u;      // global sample mapping to loop position 0
-			std::uint16_t    cursorIdx = 0u;            // playback cursor for amortised O(1) interpolation
-			float            lastValue = -2.0f;         // sentinel: force first write
+		};
+		// Per-entry playback state owned exclusively by the audio thread.
+		// Kept separate from AutomationDispatch so the dispatch buffers are
+		// immutable after publication; the writer can safely overwrite the
+		// back buffer without racing the audio callback's cursor/value updates.
+		struct AutomationPlaybackState
+		{
+			std::uint16_t cursorIdx = 0u;
+			float         lastValue = -2.0f;  // sentinel: force first write
 		};
 		static constexpr std::size_t MaxAutomationDispatches = 64u;
 		static constexpr float AutomationEpsilon = 1.0f / 65536.0f; // below 16-bit param resolution
@@ -327,10 +336,17 @@ namespace engine
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on
 		// the non-audio thread in RebuildAutomationDispatch.
-		std::atomic<AutomationDispatch*> _automationDispatch{ nullptr };
+		// The buffers are immutable once published — the audio thread never writes
+		// into them, so the writer can safely fill the back buffer at any time.
+		std::atomic<const AutomationDispatch*> _automationDispatch{ nullptr };
 		AutomationDispatch _automationDispatchBuf[2][MaxAutomationDispatches]{};
 		std::uint8_t       _automationDispatchCount[2]{};
 		std::uint8_t       _automationDispatchBack = 0u;
+		// Audio-thread-only playback state, parallel to the active dispatch list.
+		// Reset whenever _RunAutomationDispatch detects a new list was published.
+		AutomationPlaybackState  _automationPlaybackState[MaxAutomationDispatches]{};
+		// Last dispatch pointer seen by the audio thread; used to detect rebuilds.
+		const AutomationDispatch* _automationDispatchFront = nullptr;
 
 		// VST insert chain applied after all LoopTakes are mixed down,
 		// just before each channel is sent to the output AudioMixer.
