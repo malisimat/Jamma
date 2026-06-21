@@ -219,3 +219,34 @@ std::optional<std::weak_ptr<Font>> ResourceLib::GetFont(FontOptions::FontSize si
 
 	return std::nullopt;
 }
+
+std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFont(unsigned int desiredPixelHeight) const
+{
+	if (_fonts.empty())
+		return std::nullopt;
+
+	const unsigned int desired = std::max(1u, desiredPixelHeight);
+	const auto size = Font::GetClosestSizeForPixelHeight(desired);
+
+	if (_fonts.count(size) == 0)
+		return std::nullopt;
+
+	return FontSelection{ size, Font::GetPixelHeightForSize(size) };
+}
+
+std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFont(unsigned int desiredPixelHeight,
+	FontSelection* selection)
+{
+	auto selected = SelectClosestFont(desiredPixelHeight);
+	if (!selected.has_value())
+		return std::nullopt;
+
+	auto fontOpt = GetFont(selected->Size);
+	if (!fontOpt.has_value())
+		return std::nullopt;
+
+	if (nullptr != selection)
+		*selection = selected.value();
+
+	return fontOpt;
+}

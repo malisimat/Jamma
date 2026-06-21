@@ -32,6 +32,9 @@ GuiLabelParams GuiTextBox::_MakeLabelParams(const GuiTextBoxParams& params)
 	const int pad = (int)params.Padding;
 	const int w = std::max(1, (int)params.Size.Width - 2 * pad);
 	const int h = std::max(1, (int)params.Size.Height - 2 * pad);
+	lp.DesiredTextPixelHeight = (params.DesiredTextPixelHeight > 0u)
+		? params.DesiredTextPixelHeight
+		: (unsigned int)h;
 	lp.Position = { pad, pad };
 	lp.Size = { (unsigned int)w, (unsigned int)h };
 	lp.MinSize = { 1u, (unsigned int)h };
@@ -165,19 +168,13 @@ unsigned int GuiTextBox::_CaretFromLocalX(int localX) const
 	auto font = _font.lock();
 	if (!font || _text.empty())
 		return (unsigned int)_text.size();
-
-	const float fontH = font->GetHeight();
-	if (fontH <= 0.0f)
-		return (unsigned int)_text.size();
-
-	const float scale = (float)_label->GetSize().Height / fontH;
 	const float target = (float)(localX - (int)_padding);
 
 	unsigned int best = 0;
 	float bestDist = std::abs(target);
 	for (unsigned int i = 1; i <= _text.size(); ++i)
 	{
-		const float x = font->MeasureString(_text.substr(0, i)) * scale;
+		const float x = font->MeasureString(_text.substr(0, i));
 		const float dist = std::abs(x - target);
 		if (dist < bestDist)
 		{
@@ -337,7 +334,7 @@ void GuiTextBox::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_caretQuad.InitResources(resourceLib, forceInit);
 
-	auto fontOpt = resourceLib.GetFont(graphics::FontOptions::FONT_LARGE);
+	auto fontOpt = resourceLib.GetClosestFont(std::max(1u, _label->GetSize().Height));
 	if (fontOpt.has_value())
 		_font = fontOpt.value();
 }
@@ -359,22 +356,20 @@ void GuiTextBox::Draw(base::DrawContext& ctx)
 	auto font = _font.lock();
 	if (font && _hasFocus)
 	{
-		const float fontH = font->GetHeight();
-		const float scale = fontH > 0.0f ? (float)_label->GetSize().Height / fontH : 1.0f;
 		const int labelH = (int)_label->GetSize().Height;
 
 		// Selection underline.
 		if (HasSelection())
 		{
-			const float x0 = font->MeasureString(_text.substr(0, SelectionStart())) * scale;
-			const float x1 = font->MeasureString(_text.substr(0, SelectionStart() + SelectionLength())) * scale;
+			const float x0 = font->MeasureString(_text.substr(0, SelectionStart()));
+			const float x1 = font->MeasureString(_text.substr(0, SelectionStart() + SelectionLength()));
 			_caretQuad.SetSize({ (unsigned int)std::max(1.0f, x1 - x0), 2u });
 			_caretQuad.SetPosition({ (int)_padding + (int)x0, (int)_padding + labelH - 2 });
 			_caretQuad.Draw(ctx);
 		}
 
 		// Caret.
-		const float cx = font->MeasureString(_text.substr(0, _caret)) * scale;
+		const float cx = font->MeasureString(_text.substr(0, _caret));
 		_caretQuad.SetSize({ 2u, (unsigned int)labelH });
 		_caretQuad.SetPosition({ (int)_padding + (int)cx, (int)_padding });
 		_caretQuad.Draw(ctx);

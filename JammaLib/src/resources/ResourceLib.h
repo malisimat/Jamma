@@ -18,6 +18,12 @@ namespace resources
 	class ResourceLib
 	{
 	public:
+		struct FontSelection
+		{
+			graphics::FontOptions::FontSize Size = graphics::FontOptions::FONT_LARGE;
+			unsigned int PixelHeight = 0u;
+		};
+
 		ResourceLib();
 
 	public:
@@ -31,9 +37,11 @@ namespace resources
 		std::optional<std::weak_ptr<Resource>> GetResource(const std::string& name);
 		bool LoadFonts();
 		std::optional<std::weak_ptr<graphics::Font>> GetFont(graphics::FontOptions::FontSize size);
+		std::optional<FontSelection> SelectClosestFont(unsigned int desiredPixelHeight) const;
+		std::optional<std::weak_ptr<graphics::Font>> GetClosestFont(unsigned int desiredPixelHeight,
+			FontSelection* selection = nullptr);
 
 	private:
-
 		std::map<std::string, std::shared_ptr<Resource>> _resources;
 		std::map<graphics::FontOptions::FontSize, std::shared_ptr<graphics::Font>> _fonts;
 	};

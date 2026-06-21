@@ -2,6 +2,7 @@
 #include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
+#include <algorithm>
 #include <cmath>
 
 using namespace base;
@@ -11,6 +12,7 @@ using namespace resources;
 
 GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
+	_desiredTextPixelHeight(guiParams.DesiredTextPixelHeight),
 	_str(guiParams.String),
 	_pendingStr(guiParams.String),
 	_vertexArrayDirty(true),
@@ -18,7 +20,9 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_vertexBuffers{ 0, 0 },
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>()),
-	_font(std::weak_ptr<Font>())
+	_font(std::weak_ptr<Font>()),
+	_selectedFontSize(graphics::FontOptions::FONT_LARGE),
+	_resolvedTextPixelHeight(0u)
 {
 }
 
@@ -38,10 +42,6 @@ utils::Size2d GuiLabel::ContentSize() const
 	if (!font)
 		return GetSize();
 
-	float fontH = font->GetHeight();
-	if (fontH <= 0.0f)
-		return GetSize();
-
 	// Use _pendingStr so that ContentSize() reflects the most recent SetString()
 	// call even before Draw() has synced the vertex array.
 	std::string currentStr;
@@ -50,10 +50,8 @@ utils::Size2d GuiLabel::ContentSize() const
 		currentStr = _pendingStr;
 	}
 
-	// Draw() scales the glyph quads by (currentHeight / fontHeight).
 	auto sz = GetSize();
-	float scale = static_cast<float>(sz.Height) / fontH;
-	float measuredW = font->MeasureString(currentStr) * scale;
+	float measuredW = font->MeasureString(currentStr);
 
 	return {
 		static_cast<unsigned int>(std::ceil(measuredW)),
@@ -73,29 +71,46 @@ void GuiLabel::Draw(DrawContext& ctx)
 		return;
 
 	auto glCtx = dynamic_cast<GlDrawContext&>(ctx);
-
-	auto fontHeight = font->GetHeight();
 	auto pos = Position();
-	auto size = GetSize();
-	auto scale = size.Height / fontHeight;
-
-	glCtx.PushMvp(glm::scale(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)), glm::vec3(scale, scale, 1.0f)));
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
 	
 	font->Draw(glCtx, _vertexArray, (unsigned int)_str.size());
 	glCtx.PopMvp();
 }
 
-void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
+void GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 {
-	auto fontOpt = resourceLib.GetFont(graphics::FontOptions::FONT_LARGE);
+	ResourceLib::FontSelection selection;
+	const unsigned int desired = (_desiredTextPixelHeight > 0u)
+		? _desiredTextPixelHeight
+		: std::max(1u, GetSize().Height);
 
+	auto fontOpt = resourceLib.GetClosestFont(desired, &selection);
 	if (!fontOpt.has_value())
 	{
-		std::cout << "GuiLabel::_InitResources missing FONT_LARGE resource" << std::endl;
+		std::cout << "GuiLabel::_ResolveFont failed for desired text height " << desired << std::endl;
 		return;
 	}
 
 	_font = fontOpt.value();
+	_selectedFontSize = selection.Size;
+	_resolvedTextPixelHeight = selection.PixelHeight;
+
+	auto sz = GetSize();
+	if (sz.Height != _resolvedTextPixelHeight)
+		GuiElement::SetSize({ sz.Width, _resolvedTextPixelHeight });
+}
+
+void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
+{
+	_ResolveFont(resourceLib);
+
+	if (_font.expired())
+	{
+		std::cout << "GuiLabel::_InitResources missing resolved font resource" << std::endl;
+		return;
+	}
+
 	_vertexArrayDirty.store(true, std::memory_order_release);
 
 	auto validated = InitVertexArray();

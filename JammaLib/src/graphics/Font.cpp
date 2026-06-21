@@ -2,6 +2,7 @@
 #include "Font.h"
 #include "GlDeleteQueue.h"
 #include <iterator>
+#include <limits>
 
 using namespace graphics;
 using resources::ShaderResource;
@@ -89,6 +90,33 @@ std::string Font::GetFontFilename()
 	return "./resources/fonts/Inter-Regular.ttf";
 }
 
+unsigned int Font::GetPixelHeightForSize(FontOptions::FontSize size)
+{
+	return FontOptions::BasePixelHeight + (unsigned int)size;
+}
+
+FontOptions::FontSize Font::GetClosestSizeForPixelHeight(unsigned int desiredPixelHeight)
+{
+	FontOptions::FontSize best = FontOptions::FONT_TINY;
+	unsigned int bestDistance = std::numeric_limits<unsigned int>::max();
+
+	for (auto size : FontOptions::FontSizes)
+	{
+		const unsigned int pixelHeight = GetPixelHeightForSize(size);
+		const unsigned int distance = (pixelHeight > desiredPixelHeight)
+			? (pixelHeight - desiredPixelHeight)
+			: (desiredPixelHeight - pixelHeight);
+
+		if (distance < bestDistance)
+		{
+			best = size;
+			bestDistance = distance;
+		}
+	}
+
+	return best;
+}
+
 bool Font::_LoadGlyphs(FontOptions::FontSize size)
 {
 	if (_fontData.empty())
@@ -99,7 +127,7 @@ bool Font::_LoadGlyphs(FontOptions::FontSize size)
 
 	if (stbtt_InitFont(&_fontInfo, _fontData.data(), 0))
 	{
-		_fontScale = stbtt_ScaleForPixelHeight(&_fontInfo, 16.0f + static_cast<int>(size));
+		_fontScale = stbtt_ScaleForPixelHeight(&_fontInfo, (float)GetPixelHeightForSize(size));
 		int ascent = 0;
 		int descent = 0;
 		int lineGap = 0;

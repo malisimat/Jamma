@@ -29,6 +29,7 @@ namespace graphics
 		};
 
 		static const FontOptions::FontSize FontSizes[] = { FontOptions::FONT_LARGE, FontOptions::FONT_MEDIUM, FontOptions::FONT_SMALL, FontOptions::FONT_TINY };
+		static constexpr unsigned int BasePixelHeight = 16u;
 
 		enum TextAlign
 		{
@@ -139,6 +140,8 @@ namespace graphics
 			std::weak_ptr<resources::ShaderResource> shader);
 		static std::string GetFontName(FontOptions::FontSize size);
 		static std::string GetFontFilename();
+		static unsigned int GetPixelHeightForSize(FontOptions::FontSize size);
+		static FontOptions::FontSize GetClosestSizeForPixelHeight(unsigned int desiredPixelHeight);
 
 	private:
 		struct GlyphMetrics
