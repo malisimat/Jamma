@@ -138,7 +138,7 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 	{
 		if (TouchAction::TOUCH_DOWN == action.State)
 		{
-			if (_dragElement.HitTest(_dragElement.ParentToLocal(action.Position)))
+			if (HitTest(action.Position))
 			{
 				std::cout << "Slider DOWN" << std::endl;
 				_isDragging = true;
