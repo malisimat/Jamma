@@ -79,8 +79,6 @@ namespace gui
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;
 		GLuint _vertexBuffers[2];
-		std::weak_ptr<resources::TextureResource> _texture;
-		std::weak_ptr<resources::ShaderResource> _shader;
 		std::weak_ptr<graphics::Font> _font;
 		resources::ResourceLib* _resourceLib;
 		graphics::FontOptions::FontSize _selectedFontSize;

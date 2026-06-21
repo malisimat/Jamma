@@ -17,8 +17,6 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_vertexArrayDirty(true),
 	_vertexArray(0),
 	_vertexBuffers{ 0, 0 },
-	_texture(std::weak_ptr<TextureResource>()),
-	_shader(std::weak_ptr<ShaderResource>()),
 	_font(std::weak_ptr<Font>()),
 	_resourceLib(nullptr),
 	_selectedFontSize(graphics::FontOptions::FONT_LARGE),
