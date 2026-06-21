@@ -41,6 +41,7 @@ Scene::Scene(SceneParams params,
 	_label(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
+	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
 	_stations(),
@@ -68,16 +69,22 @@ Scene::Scene(SceneParams params,
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 
 	GuiLabelParams labelParams;
-	labelParams.String = "Jamma";
-	labelParams.Position = { 10, 2 };
-	labelParams.ModelPosition = { 10, 2, 0 };
-	labelParams.Size = { 20, 40 };
+	const std::string versionText = "Jamma v" LIB_VERSION;
+	labelParams.String = versionText;
+	labelParams.Position = { (int)params.Size.Width - 220, (int)params.Size.Height - 28 };
+	labelParams.ModelPosition = { (float)(int)params.Size.Width - 220.0f, (float)(int)params.Size.Height - 28.0f, 0.0f };
+	labelParams.Size = { 220, 24 };
 	_label = std::make_unique<GuiLabel>(labelParams);
+
+	GuiMainPanelParams mainParams;
+	mainParams.PopupHost = &_popupHost;
+	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
+	AddChild(_mainPanel);
 
 	GuiSelectorParams selectorParams;
 	selectorParams.Position = { 10, 2 };
 	selectorParams.Size = params.Size;
-	_selector = std::make_unique<GuiSelector>(selectorParams);
+	_selector = std::make_unique<SceneSelector>(selectorParams);
 	_selector->SetSelectDepth(base::DEPTH_STATION);
 
 	GuiRadioParams modeRadioParams;
@@ -205,12 +212,18 @@ void Scene::Draw(DrawContext& ctx)
 
 	_label->Draw(ctx);
 
+	for (auto& child : _guiChildren)
+		if (child)
+			child->Draw(ctx);
+
 	for (auto& station : _stations)
 		station->Draw(ctx);
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
+
+	_popupHost.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -272,6 +285,9 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
+	for (auto& child : _guiChildren)
+		if (child)
+			child->InitResources(resourceLib, forceInit);
 	_ctrlHandleOverlay.InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
@@ -288,6 +304,9 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
+	for (auto& child : _guiChildren)
+		if (child)
+			child->ReleaseResources();
 	_ctrlHandleOverlay.ReleaseResources();
 
 	for (auto& station : _stations)
@@ -304,6 +323,10 @@ ActionResult Scene::OnAction(TouchAction action)
 	_cursorPos = action.Position;
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
+
+	// Popups capture all pointer input while open (routing, outside-dismiss).
+	if (_popupHost.IsOpen())
+		return _popupHost.OnAction(action);
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
@@ -361,6 +384,34 @@ ActionResult Scene::OnAction(TouchAction action)
 		return ActionResult::NoAction();
 	}
 
+	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+	{
+		if (!*it)
+			continue;
+
+		res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+		if (res.IsEaten)
+		{
+			if (nullptr != res.Undo)
+				_undoHistory.Add(res.Undo);
+
+			if (!_touchDownElement.lock())
+				_touchDownElement = res.ActiveElement;
+
+			// Focus follows the pressed control when it wants the keyboard.
+			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+			{
+				auto active = res.ActiveElement.lock();
+				if (active && active->WantsFocusOnPress())
+					_focusManager.RequestFocus(active);
+				else
+					_focusManager.ClearFocus();
+			}
+
+			return res;
+		}
+	}
+
 	res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
 
 	if (res.IsEaten)
@@ -402,6 +453,10 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
+	// Pressing empty background clears keyboard focus.
+	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+		_focusManager.ClearFocus();
+
 	return _BeginBackgroundDrag(action);
 }
 
@@ -410,6 +465,9 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+
+	if (_popupHost.IsOpen())
+		return _popupHost.OnAction(action);
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -426,6 +484,16 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return _UpdateBackgroundDrag(action);
 	else
 	{
+		for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+		{
+			if (!*it)
+				continue;
+
+			auto res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+			if (res.IsEaten)
+				return res;
+		}
+
 		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
 
 		if (res.IsEaten)
@@ -450,6 +518,25 @@ ActionResult Scene::OnAction(KeyAction action)
 	action.SetAudioParams(_audioEngine->GetStreamParams());
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
+
+	// 1. Open popups capture the keyboard first.
+	if (_popupHost.IsOpen())
+	{
+		auto popupRes = _popupHost.OnAction(action);
+		if (popupRes.IsEaten)
+			return popupRes;
+	}
+
+	// 2. The focused control gets first refusal. While it is editing text we
+	//    swallow the key entirely so global shortcuts don't fire mid-edit.
+	if (auto focus = _focusManager.CurrentFocus())
+	{
+		auto focusRes = focus->OnAction(action);
+		if (focusRes.IsEaten)
+			return focusRes;
+		if (_focusManager.IsEditingText())
+			return ActionResult::NoAction();
+	}
 
 	if (17 == action.KeyChar)
 	{
@@ -735,6 +822,19 @@ void Scene::InitReceivers()
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
 }
 
+void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
+{
+	if (!child)
+		return;
+
+	auto it = std::find(_guiChildren.begin(), _guiChildren.end(), child);
+	if (it == _guiChildren.end())
+	{
+		_guiChildren.push_back(child);
+		child->Init();
+	}
+}
+
 void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifiers)
 {
 	bool isSelected = false;
@@ -990,7 +1090,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		// Only called when hover changed or touch down
 		switch (currentMode)
 		{
-		case GuiSelector::SELECT_NONE:
+		case SceneSelector::SELECT_NONE:
 			for (auto& station : _stations)
 				station->SetPicking3d(false);
 
@@ -999,7 +1099,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_NONEADD:
+		case SceneSelector::SELECT_NONEADD:
 			for (auto& station : _stations)
 				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
 
@@ -1008,31 +1108,31 @@ void Scene::_UpdateSelection(ActionResultType res)
 				hovering->SetPicking3d(!hovering->IsSelected());
 
 			break;
-		case GuiSelector::SELECT_SELECT:
+		case SceneSelector::SELECT_SELECT:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_SELECTADD:
+		case SceneSelector::SELECT_SELECTADD:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_SELECTREMOVE:
+		case SceneSelector::SELECT_SELECTREMOVE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(false);
 
 			break;
-		case GuiSelector::SELECT_MUTE:
+		case SceneSelector::SELECT_MUTE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);
 
 			break;
-		case GuiSelector::SELECT_UNMUTE:
+		case SceneSelector::SELECT_UNMUTE:
 			hovering = _ChildFromPath(_selector->CurrentHover());
 			if (nullptr != hovering)
 				hovering->SetPicking3d(true);

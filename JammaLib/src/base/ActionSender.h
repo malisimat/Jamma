@@ -27,8 +27,8 @@ namespace base
 
 		std::shared_ptr<ActionSender> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<ActionSender>(
-				Actionable::shared_from_this());
+			auto self = Actionable::shared_from_this();
+			return self ? std::dynamic_pointer_cast<ActionSender>(self) : nullptr;
 		}
 
 	protected:

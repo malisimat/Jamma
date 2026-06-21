@@ -13,7 +13,7 @@ namespace gui
 		GuiPanel(base::GuiElementParams guiParams);
 
 	public:
-		bool AddChild(const std::shared_ptr<base::GuiElement>& child);
+		void AddChild(std::shared_ptr<base::GuiElement> child) override;
 		bool RemoveChild(const std::shared_ptr<base::GuiElement>& child);
 	};
 }

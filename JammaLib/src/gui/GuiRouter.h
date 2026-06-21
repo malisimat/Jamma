@@ -14,6 +14,9 @@ namespace gui
 		public base::GuiElementParams
 	{
 	public:
+		static constexpr unsigned int BusWidth = 30u;
+		static constexpr unsigned int BusGap = 8u;
+
 		enum GuiRouterChannelType
 		{
 			CHANNEL_DEVICE,
@@ -67,10 +70,34 @@ namespace gui
 			GuiPassThrough = false;
 		}
 
-	public:
-		static const unsigned int BusWidth;
-		static const unsigned int BusGap;
+		static GuiRouterParams RackRouter(unsigned int width, unsigned int height,
+			unsigned int inputSpacing,
+			unsigned int inputSize)
+		{
+			GuiRouterParams params;
+			params.Size = { width, height };
+			params.MinSize = params.Size;
+			params.InputType = CHANNEL_BUS;
+			params.OutputType = CHANNEL_DEVICE;
+			params.InputSpacing = inputSpacing;
+			params.InputSize = inputSize;
+			params.OutputSpacing = BusWidth + BusGap;
+			params.OutputSize = BusWidth;
+			params.Texture = "router";
+			params.PinTexture = "";
+			params.LinkTexture = "";
+			params.DeviceInactiveTexture = "router";
+			params.DeviceActiveTexture = "router_inactive";
+			params.ChannelInactiveTexture = "router";
+			params.ChannelActiveTexture = "router_inactive";
+			params.OverTexture = "router_over";
+			params.DownTexture = "router_down";
+			params.HighlightTexture = "router_over";
+			params.LineShader = "colour";
+			return params;
+		}
 
+	public:
 		GuiRouterChannelType InputType;
 		GuiRouterChannelType OutputType;
 		unsigned int InputSpacing;
@@ -96,6 +123,8 @@ namespace gui
 			public base::GuiElementParams
 		{
 		public:
+			static constexpr int LabelInset = 2;
+
 			GuiRouterChannelParams(base::GuiElementParams guiParams,
 				unsigned int channel,
 				bool isInput,
@@ -108,6 +137,14 @@ namespace gui
 				HighlightTexture("")
 			{
 				GuiPassThrough = false;
+			}
+
+			static GuiRouterChannelParams Build(base::GuiElementParams guiParams,
+				unsigned int channel,
+				bool isInput,
+				GuiRouterParams::GuiRouterChannelType type)
+			{
+				return GuiRouterChannelParams(guiParams, channel, isInput, type);
 			}
 
 		public:

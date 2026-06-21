@@ -19,16 +19,23 @@ GuiElement::GuiElement(GuiElementParams params) :
 	_isEnabled(true),
 	_isSelected(false),
 	_isPicking3d(false),
+	_hasFocus(false),
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
-	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
 	_gestureState(),
 	_children({})
 {
+}
+
+void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
+{
+	if (_guiParams.TextureShader == "texture_tinted")
+		ctx.SetUniform("TintColor", _guiParams.TintColor);
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept
@@ -96,9 +103,63 @@ void GuiElement::SetSize(Size2d size)
 	_outTexture.SetSize(_sizeParams.Size);
 }
 
+utils::Size2d GuiElement::ContentSize() const
+{
+	return GetSize();
+}
+
+LayoutSizing GuiElement::GetHorizSizing() const
+{
+	return _guiParams.HorizSizing;
+}
+
+LayoutSizing GuiElement::GetVertSizing() const
+{
+	return _guiParams.VertSizing;
+}
+
 bool GuiElement::IsSelected() const
 {
 	return _isSelected;
+}
+
+GuiElement::GuiElementState GuiElement::GetState() const
+{
+	return _state;
+}
+
+bool GuiElement::HasFocus() const
+{
+	return _hasFocus;
+}
+
+bool GuiElement::RequestFocus()
+{
+	_hasFocus = true;
+	return true;
+}
+
+void GuiElement::ClearFocus()
+{
+	_hasFocus = false;
+}
+
+bool GuiElement::IsTextEditing() const
+{
+	return false;
+}
+
+bool GuiElement::WantsFocusOnPress() const
+{
+	return false;
+}
+
+utils::Position2d GuiElement::GlobalPosition() const
+{
+	auto pos = Position();
+	if (nullptr != _parent)
+		pos += _parent->GlobalPosition();
+	return pos;
 }
 
 bool GuiElement::IsVisible() const
@@ -149,6 +210,7 @@ void GuiElement::Draw(DrawContext& ctx)
 	if (_isVisible)
 	{
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+		_ApplyTextureTint(glCtx);
 
 		auto pos = Position();
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
@@ -226,6 +288,11 @@ ActionResult GuiElement::OnAction(KeyAction action)
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	if (_hasFocus && (action.KeyActionType == KeyAction::KEY_UP) && ((action.KeyChar == 13) || (action.KeyChar == 32)))
+	{
+		return { true, std::to_string(_index), "", ACTIONRESULT_ACTIVATE, nullptr, shared_from_this() };
+	}
+
 	for (auto child = _children.rbegin();
 		child != _children.rend(); ++child)
 	{
@@ -282,10 +349,13 @@ ActionResult GuiElement::OnAction(TouchAction action)
 		}
 		break;
 	case TouchAction::TouchState::TOUCH_UP:
-		_state = STATE_NORMAL;
-
 		if (HitTest(action.Position))
+		{
+			_state = STATE_OVER;
 			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+		}
+
+		_state = STATE_NORMAL;
 
 		break;
 	}

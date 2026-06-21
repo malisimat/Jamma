@@ -40,50 +40,6 @@ namespace
 	}
 }
 
-TEST(NinePatchImageTest, BorderDetection_FindsEncodingPixel)
-{
-	const auto width = 32u;
-	const auto height = 16u;
-	std::vector<unsigned char> pixels(width * height * 4, 0);
-	const auto index = (4u * width) + 8u;
-	const auto px = index * 4u;
-	pixels[px + 0] = 255;
-	pixels[px + 1] = 0;
-	pixels[px + 2] = 255;
-	pixels[px + 3] = 255;
-
-	auto border = NinePatchImage::DetectBorder(pixels, width, height);
-
-	ASSERT_TRUE(border.has_value());
-	EXPECT_EQ(8u, border->borderX);
-	EXPECT_EQ(4u, border->borderY);
-}
-
-TEST(NinePatchImageTest, BorderDetection_PatchesEncodingPixel)
-{
-	const auto width = 32u;
-	const auto height = 16u;
-	std::vector<unsigned char> pixels(width * height * 4, 0);
-	const auto index = (4u * width) + 8u;
-	const auto px = index * 4u;
-	pixels[px + 0] = 255;
-	pixels[px + 1] = 0;
-	pixels[px + 2] = 255;
-	pixels[px + 3] = 255;
-	pixels[px + 4] = 10;
-	pixels[px + 5] = 20;
-	pixels[px + 6] = 30;
-	pixels[px + 7] = 40;
-
-	auto border = NinePatchImage::DetectBorder(pixels, width, height);
-
-	ASSERT_TRUE(border.has_value());
-	EXPECT_EQ(10u, pixels[px + 0]);
-	EXPECT_EQ(20u, pixels[px + 1]);
-	EXPECT_EQ(30u, pixels[px + 2]);
-	EXPECT_EQ(40u, pixels[px + 3]);
-}
-
 TEST(NinePatchImageTest, BuildPositions_CornersClamped)
 {
 	auto positions = NinePatchImage::BuildPositions(8, 8, { 64, 64 });

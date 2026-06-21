@@ -9,7 +9,7 @@ namespace gui
 {
 	class GuiSelectorParams : public base::GuiElementParams {};
 
-	class GuiSelector :
+	class SceneSelector :
 		public base::GuiElement
 	{
 	public:
@@ -31,7 +31,7 @@ namespace gui
 		};
 
 	public:
-		GuiSelector(GuiSelectorParams guiParams);
+		SceneSelector(GuiSelectorParams guiParams);
 
 	public:
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;

@@ -8,17 +8,9 @@ GuiPanel::GuiPanel(GuiElementParams params) :
 {
 }
 
-bool GuiPanel::AddChild(const std::shared_ptr<base::GuiElement>& child)
+void GuiPanel::AddChild(std::shared_ptr<base::GuiElement> child)
 {
-	auto it = std::find(_children.begin(), _children.end(), child);
-
-	if (it == _children.end())
-	{
-		_children.push_back(child);
-		return true;
-	}
-
-	return false;
+	GuiElement::AddChild(child);
 }
 
 bool GuiPanel::RemoveChild(const std::shared_ptr<base::GuiElement>& child)

@@ -1,6 +1,9 @@
 #include "ResourceLib.h"
+#include "../utils/StringUtils.h"
 #include <array>
+#include <cctype>
 #include <iostream>
+#include <limits>
 
 using namespace resources;
 using namespace graphics;
@@ -27,6 +30,15 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 	{
 		case TEXTURE:
 		{
+			bool isNinePatch = false;
+			unsigned int borderX = 0;
+			unsigned int borderY = 0;
+			if (!ParseTextureArgs(args, isNinePatch, borderX, borderY))
+			{
+				std::cout << "ResourceLib: invalid texture args for '" << name << "'" << std::endl;
+				return false;
+			}
+
 			const std::array<std::string, 2> texFiles = {
 				"./resources/textures/" + name + ".tga",
 				"./Jamma/resources/textures/" + name + ".tga"
@@ -39,7 +51,14 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				if (texOpt.has_value())
 				{
 					auto[tex, width, height] = texOpt.value();
-					_resources.emplace(name, std::make_shared<TextureResource>(name, tex, width, height));
+					_resources.emplace(name, std::make_shared<TextureResource>(
+						name,
+						tex,
+						width,
+						height,
+						isNinePatch,
+						borderX,
+						borderY));
 					return true;
 				}
 			}
@@ -110,6 +129,31 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 	return false;
 }
 
+bool ResourceLib::ParseTextureArgs(const std::vector<std::string>& args,
+	bool& isNinePatch,
+	unsigned int& borderX,
+	unsigned int& borderY)
+{
+	isNinePatch = false;
+	borderX = 0;
+	borderY = 0;
+
+	if (args.empty())
+		return true;
+
+	if (args.size() != 3)
+		return false;
+
+	if (args[0] != "ninepatch")
+		return false;
+
+	if (!utils::ParseUnsigned(args[1], borderX) || !utils::ParseUnsigned(args[2], borderY))
+		return false;
+
+	isNinePatch = true;
+	return true;
+}
+
 std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::string& name)
 {
 	if (_resources.count(name) > 0)
@@ -120,19 +164,13 @@ std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::strin
 
 bool ResourceLib::LoadFonts()
 {
-	// Load font specific textures, if not already loaded
-	for (auto size : FontOptions::FontSizes)
-	{
-		LoadResource(TEXTURE, Font::GetFontName(size), {});
-	}
-
-	if (_fonts.size() >= (sizeof(FontOptions::FontSizes) / sizeof(int)))
-		return true;
-
 	_fonts.clear();
+	std::cout << "ResourceLib::LoadFonts starting font initialisation" << std::endl;
 
 	std::shared_ptr<ShaderResource> shader;
-	auto shaderOpt = GetResource("texture");
+	auto shaderOpt = GetResource("font");
+	if (!shaderOpt.has_value())
+		shaderOpt = GetResource("texture");
 
 	if (shaderOpt.has_value())
 	{
@@ -144,30 +182,25 @@ bool ResourceLib::LoadFonts()
 		}
 	}
 
-	bool res = false;
+	if (!shader)
+		std::cout << "ResourceLib::LoadFonts missing shader resource 'font'/'texture'; font draw will be unavailable" << std::endl;
+
+	bool res = true;
 	for (auto size : FontOptions::FontSizes)
 	{
 		auto fontName = Font::GetFontName(size);
-		
-		std::shared_ptr<TextureResource> texture;
-		auto textureOpt = GetResource(fontName);
-
-		if (textureOpt.has_value())
-		{
-			auto textureResource = textureOpt.value().lock();
-			if (textureResource)
-			{
-				if (TEXTURE == textureResource->GetType())
-					texture = std::dynamic_pointer_cast<TextureResource>(textureResource);
-			}
-		}
-
-		auto font = Font::Load(size, texture, shader);
+		auto font = Font::Load(size, shader);
 
 		if (font.has_value())
+		{
 			_fonts[size] = std::move(font.value());
+			std::cout << "ResourceLib::LoadFonts loaded " << fontName << std::endl;
+		}
 		else
+		{
+			std::cout << "ResourceLib: failed to load font '" << fontName << "'" << std::endl;
 			res = false;
+		}
 	}
 
 	return res;
@@ -185,4 +218,59 @@ std::optional<std::weak_ptr<Font>> ResourceLib::GetFont(FontOptions::FontSize si
 	}
 
 	return std::nullopt;
+}
+
+unsigned int ResourceLib::ResolveTextPixelHeightFromControlBox(unsigned int controlHeight, unsigned int padding)
+{
+	const unsigned int height = std::max(1u, controlHeight);
+	const unsigned int clampedPadding = std::min(padding, height / 2u);
+	const unsigned int doublePadding = 2u * clampedPadding;
+	if (height <= doublePadding)
+		return 1u;
+
+	return std::max(1u, height - doublePadding);
+}
+
+std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFont(unsigned int desiredPixelHeight) const
+{
+	if (_fonts.empty())
+		return std::nullopt;
+
+	const unsigned int desired = std::max(1u, desiredPixelHeight);
+	const auto size = Font::GetClosestSizeForPixelHeight(desired);
+
+	if (_fonts.count(size) == 0)
+		return std::nullopt;
+
+	return FontSelection{ size, Font::GetPixelHeightForSize(size) };
+}
+
+std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFontForControlBox(unsigned int controlHeight,
+	unsigned int padding) const
+{
+	return SelectClosestFont(ResolveTextPixelHeightFromControlBox(controlHeight, padding));
+}
+
+std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFont(unsigned int desiredPixelHeight,
+	FontSelection* selection)
+{
+	auto selected = SelectClosestFont(desiredPixelHeight);
+	if (!selected.has_value())
+		return std::nullopt;
+
+	auto fontOpt = GetFont(selected->Size);
+	if (!fontOpt.has_value())
+		return std::nullopt;
+
+	if (nullptr != selection)
+		*selection = selected.value();
+
+	return fontOpt;
+}
+
+std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFontForControlBox(unsigned int controlHeight,
+	unsigned int padding,
+	FontSelection* selection)
+{
+	return GetClosestFont(ResolveTextPixelHeightFromControlBox(controlHeight, padding), selection);
 }

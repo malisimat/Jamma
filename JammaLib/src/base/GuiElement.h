@@ -15,6 +15,32 @@
 
 namespace base
 {
+	// How a layout container should size this element in one axis.
+	enum class LayoutSizing : std::uint8_t
+	{
+		Fixed,  // Use the element's explicit Size; the container does not resize this axis.
+		Auto,   // Let the container size this axis to ContentSize().
+		Fill    // Stretch to fill remaining space in the container.
+	};
+
+	// Horizontal alignment of an element within a layout cell.
+	enum class LayoutHAlign : std::uint8_t
+	{
+		Left,
+		Center,
+		Right,
+		Fill    // Stretch to fill cell width.
+	};
+
+	// Vertical alignment of an element within a layout cell.
+	enum class LayoutVAlign : std::uint8_t
+	{
+		Top,
+		Center,
+		Bottom,
+		Fill    // Stretch to fill cell height.
+	};
+
 	class GuiElement;
 
 	class GuiElementParams :
@@ -34,7 +60,8 @@ namespace base
 			Index(0u),
 			OverTexture(""),
 			DownTexture(""),
-			OutTexture("")
+			OutTexture(""),
+			TintColor(glm::vec3(1.0f, 0.7f, 0.2f))
 		{
 		}
 
@@ -56,7 +83,8 @@ namespace base
 			Index(index),
 			OverTexture(overTexture),
 			DownTexture(downTexture),
-			OutTexture(outTexture)
+			OutTexture(outTexture),
+			TintColor(glm::vec3(1.0f, 0.7f, 0.2f))
 		{
 		}
 
@@ -69,6 +97,10 @@ namespace base
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
+		std::string TextureShader = "texture";
+		glm::vec3 TintColor;
+		LayoutSizing HorizSizing = LayoutSizing::Fixed;
+		LayoutSizing VertSizing  = LayoutSizing::Fixed;
 	};
 
 	class GuiElement :
@@ -136,10 +168,27 @@ namespace base
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 
+		virtual utils::Size2d ContentSize() const;
+		LayoutSizing GetHorizSizing() const;
+		LayoutSizing GetVertSizing() const;
+
 		bool IsVisible() const;
 		bool IsEnabled() const;
 		bool IsSelected() const;
+		GuiElementState GetState() const;
+		bool HasFocus() const;
+		virtual bool RequestFocus();
+		virtual void ClearFocus();
+		// True if this element should take keyboard focus when pressed.  Only
+		// editing-style controls (text boxes, dropdowns) opt in.
+		virtual bool WantsFocusOnPress() const;
+		// True while this element owns the keyboard for text entry; lets the scene
+		// suppress global shortcuts (Space/Ctrl+Z/Ctrl+S) during editing.
+		virtual bool IsTextEditing() const;
+		// Top-left position of this element in global (scene overlay) coordinates.
+		utils::Position2d GlobalPosition() const;
 		bool HitTest(utils::Position2d localPos);
+		void _ApplyTextureTint(graphics::GlDrawContext& ctx) const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
@@ -151,8 +200,8 @@ namespace base
 
 		std::shared_ptr<GuiElement> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<GuiElement>(
-				Actionable::shared_from_this());
+			auto self = Actionable::shared_from_this();
+			return self ? std::dynamic_pointer_cast<GuiElement>(self) : nullptr;
 		}
 
 	protected:
@@ -172,6 +221,7 @@ namespace base
 		bool _isEnabled;
 		bool _isSelected;
 		bool _isPicking3d;
+		bool _hasFocus;
 		unsigned int _index;
 		GuiElementParams _guiParams;
 		GuiElementState _state;

@@ -45,8 +45,8 @@ namespace base
 
 		std::shared_ptr<MultiAudioSource> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<MultiAudioSource>(
-				Sharable::shared_from_this());
+			auto self = Sharable::shared_from_this();
+			return self ? std::dynamic_pointer_cast<MultiAudioSource>(self) : nullptr;
 		}
 
 	protected:

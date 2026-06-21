@@ -33,8 +33,8 @@ namespace base
 		
 		std::shared_ptr<AudioSource> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<AudioSource>(
-				Audible::shared_from_this());
+			auto self = Audible::shared_from_this();
+			return self ? std::dynamic_pointer_cast<AudioSource>(self) : nullptr;
 		}
 
 	protected:

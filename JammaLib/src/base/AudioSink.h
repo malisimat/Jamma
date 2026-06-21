@@ -84,8 +84,8 @@ namespace base
 
 		std::shared_ptr<AudioSink> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<AudioSink>(
-				Audible::shared_from_this());
+			auto self = Audible::shared_from_this();
+			return self ? std::dynamic_pointer_cast<AudioSink>(self) : nullptr;
 		}
 
 	protected:

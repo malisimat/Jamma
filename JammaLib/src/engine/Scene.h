@@ -17,8 +17,10 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
-#include "../gui/GuiSlider.h"
-#include "../gui/GuiSelector.h"
+#include "../gui/GuiFocusManager.h"
+#include "../gui/GuiPopupHost.h"
+#include "../gui/SceneSelector.h"
+#include "../gui/GuiMainPanel.h"
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
@@ -124,7 +126,7 @@ namespace engine
 						"",
 						{}),
 					""));
-			other._selector = std::make_unique<gui::GuiSelector>(
+			other._selector = std::make_unique<gui::SceneSelector>(
 				gui::GuiSelectorParams(
 					base::GuiElementParams(
 						base::DrawableParams{ "" },
@@ -193,6 +195,7 @@ namespace engine
 		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
 
 		void InitReceivers();
+		void AddChild(std::shared_ptr<base::GuiElement> child);
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }
 		unsigned int Height() const { return _sizeParams.Size.Height; }
@@ -341,7 +344,11 @@ namespace engine
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::unique_ptr<gui::GuiLabel> _label;
-		std::unique_ptr<gui::GuiSelector> _selector;
+		std::unique_ptr<gui::SceneSelector> _selector;
+		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
+		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
+		gui::GuiFocusManager _focusManager;
+		gui::GuiPopupHost _popupHost;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

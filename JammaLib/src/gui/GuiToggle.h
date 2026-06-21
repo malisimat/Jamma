@@ -10,6 +10,12 @@ namespace gui
 		public GuiButtonParams
 	{
 	public:
+		static constexpr unsigned int DefaultHeight = GuiButtonParams::DefaultHeight;
+		static constexpr unsigned int PrimaryWidth = 80u;
+		static constexpr unsigned int PrimaryMinWidth = 20u;
+		static constexpr unsigned int SecondaryWidth = 10u;
+		static constexpr unsigned int SecondaryMinWidth = 10u;
+
 		enum ToggleState
 		{
 			TOGGLE_OFF,
@@ -17,6 +23,37 @@ namespace gui
 		};
 
 	public:
+
+		static void ApplyPanelTextures(GuiToggleParams& params)
+		{
+			params.TextureShader = "texture_tinted";
+			params.Texture = "rounded_but";
+			params.OverTexture = "rounded_but_over";
+			params.DownTexture = "rounded_but_down";
+			params.ToggledTexture = "rounded_but_on";
+			params.ToggledOverTexture = "rounded_but_on_over";
+			params.ToggledDownTexture = "rounded_but_on_down";
+		}
+
+		static GuiToggleParams PanelPrimary()
+		{
+			GuiToggleParams params;
+			ApplyPanelTextures(params);
+			params.OutTexture = "";
+			params.Size = { PrimaryWidth, DefaultHeight };
+			params.MinSize = { PrimaryMinWidth, DefaultHeight };
+			return params;
+		}
+
+		static GuiToggleParams PanelSecondary()
+		{
+			GuiToggleParams params;
+			ApplyPanelTextures(params);
+			params.OutTexture = "rounded_but_on";
+			params.Size = { SecondaryWidth, DefaultHeight };
+			params.MinSize = { SecondaryMinWidth, DefaultHeight };
+			return params;
+		}
 		GuiToggleParams() :
 			GuiButtonParams(),
 			ToggleIndex(0u),
@@ -59,6 +96,7 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 
 		GuiToggleParams::ToggleState Toggle();
 		GuiToggleParams::ToggleState GetToggleState() const;

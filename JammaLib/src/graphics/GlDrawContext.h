@@ -41,16 +41,30 @@ namespace graphics
 		void PushMvp(const glm::mat4 mat) noexcept;
 		void PopMvp() noexcept;
 		void ClearMvp() noexcept;
+		void PushScissorRect(utils::Position2d pos, utils::Size2d size) override;
+		void PopScissorRect() override;
 		utils::Position2d ProjectScreen(utils::Position3d pos);
 
 	protected:
 		static unsigned int _CreateFrameBuffer(utils::Size2d size, ContextTarget target);
+		void _ApplyScissorState() noexcept;
+
+		struct ScissorRect
+		{
+			int X;
+			int Y;
+			int Width;
+			int Height;
+		};
+
+		static ScissorRect _IntersectScissorRect(const ScissorRect& a, const ScissorRect& b) noexcept;
 
 	private:
 		const std::string _MvpUniformName = "MVP";
 
 		std::map<std::string, std::any> _uniforms;
 		std::vector<glm::mat4> _mvp;
+		std::vector<ScissorRect> _scissorStack;
 		unsigned int _frameBuffer;
 		unsigned int _texture;
 	};

@@ -7,8 +7,6 @@ using namespace utils;
 using namespace actions;
 using namespace resources;
 
-const unsigned int GuiRouterParams::BusWidth = 30;
-const unsigned int GuiRouterParams::BusGap = 8;
 const unsigned int GuiRouter::_MaxRoutes = 128;
 const int GuiRouter::_WireYOffset = 6;
 
@@ -22,12 +20,18 @@ GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 {
 	unsigned int width = params.Size.Width > 4 ? params.Size.Width - 4 : params.Size.Width;
 	unsigned int height = params.Size.Height > 4 ? params.Size.Height - 4 : params.Size.Height;
-	int labelX = 2 + ((int)width) / 6;
-	int labelY = 0 - ((int)height) / 6;
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		width,
+		height,
+		10u,
+		10u,
+		true);
+	int labelX = 2 + (int)frame.PaddingX;
+	int labelY = 2 + frame.OffsetY;
 	GuiLabelParams labelParams(GuiElementParams(0,
 		DrawableParams{ "" },
 		MoveableParams(Position2d{ labelX, labelY }, Position3d{ (float)labelX, (float)labelY, 0 }, 1.0),
-		SizeableParams{ width, height},
+		SizeableParams{ frame.ContentWidth, frame.TextHeight},
 		"",
 		"",
 		"",

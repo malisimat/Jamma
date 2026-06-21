@@ -6,11 +6,17 @@ using namespace resources;
 TextureResource::TextureResource(std::string name,
 	GLuint texture,
 	unsigned int width,
-	unsigned int height) :
+	unsigned int height,
+	bool isNinePatch,
+	unsigned int borderX,
+	unsigned int borderY) :
 	Resource(name),
 	_width(width),
 	_height(height),
-	_texture(texture)
+	_texture(texture),
+	_isNinePatch(isNinePatch),
+	_borderX(borderX),
+	_borderY(borderY)
 {
 }
 

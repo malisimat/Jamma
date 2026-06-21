@@ -11,10 +11,10 @@ GuiToggle::GuiToggle(GuiToggleParams params) :
 	GuiButton(params),
 	_toggleIndex(params.ToggleIndex),
 	_toggleState(params.InitState),
-	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
 	_buttonParams(params)
 {
 }
@@ -32,6 +32,7 @@ void GuiToggle::SetSize(Size2d size)
 void GuiToggle::Draw(DrawContext& ctx)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	_ApplyTextureTint(glCtx);
 
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
@@ -153,6 +154,32 @@ ActionResult GuiToggle::OnAction(TouchAction action)
 	}
 
 	return ActionResult::NoAction();
+}
+
+ActionResult GuiToggle::OnAction(KeyAction action)
+{
+	if (!_isEnabled || !_isVisible)
+		return ActionResult::NoAction();
+
+	if (_hasFocus
+		&& (KeyAction::KEY_UP == action.KeyActionType)
+		&& ((13 == action.KeyChar) || (32 == action.KeyChar)))
+	{
+		_toggleState = GuiToggleParams::TOGGLE_ON == _toggleState ?
+			GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON;
+		_OnToggleChange(false);
+
+		return {
+			true,
+			std::to_string(_index),
+			"",
+			ACTIONRESULT_TOGGLE,
+			nullptr,
+			std::static_pointer_cast<base::GuiElement>(shared_from_this())
+		};
+	}
+
+	return GuiElement::OnAction(action);
 }
 
 GuiToggleParams::ToggleState GuiToggle::Toggle()

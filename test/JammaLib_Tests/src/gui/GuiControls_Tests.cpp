@@ -2,8 +2,9 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiRadio.h"
-#include "gui/GuiSelector.h"
+#include "gui/SceneSelector.h"
 #include "actions/KeyAction.h"
+#include "graphics/Font.h"
 #include <stdexcept>
 
 using base::ActionReceiver;
@@ -13,7 +14,7 @@ using gui::GuiToggle;
 using gui::GuiToggleParams;
 using gui::GuiRadio;
 using gui::GuiRadioParams;
-using gui::GuiSelector;
+using gui::SceneSelector;
 using gui::GuiSelectorParams;
 using actions::GuiAction;
 using actions::TouchAction;
@@ -97,6 +98,33 @@ TEST(GuiButton, TouchInsideEatsDownAndUp) {
 
 	ASSERT_TRUE(downRes.IsEaten);
 	ASSERT_TRUE(upRes.IsEaten);
+}
+
+TEST(Font, PrefersBundledInterFontAsset) {
+	auto filename = graphics::Font::GetFontFilename();
+
+	EXPECT_NE(std::string::npos, filename.find("Inter-Regular.ttf"));
+}
+
+TEST(GuiButton, KeyboardFocusCanActivateWhenFocused) {
+	auto button = std::make_shared<GuiButton>(MakeButtonParams());
+	ASSERT_TRUE(button->RequestFocus());
+	ASSERT_TRUE(button->HasFocus());
+
+	KeyAction down;
+	down.KeyChar = 13;
+	down.KeyActionType = KeyAction::KEY_DOWN;
+	auto downRes = button->OnAction(down);
+
+	KeyAction up;
+	up.KeyChar = 13;
+	up.KeyActionType = KeyAction::KEY_UP;
+	auto upRes = button->OnAction(up);
+
+	ASSERT_FALSE(downRes.IsEaten);
+	ASSERT_TRUE(upRes.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, upRes.ResultType);
+	ASSERT_EQ(button->Index(), upRes.ActiveElement.lock()->Index());
 }
 
 TEST(GuiButton, DisabledButtonIgnoresTouch) {
@@ -332,32 +360,32 @@ TEST(GuiRadio, ChildToggleUpdatesSelectionAndNotifiesReceiver) {
 	ASSERT_EQ(2, std::get<GuiAction::GuiInt>(receiver->LastAction().Data).Value);
 }
 
-TEST(GuiSelector, ShiftKeyTogglesNoneAddMode) {
+TEST(SceneSelector, ShiftKeyTogglesNoneAddMode) {
 	GuiSelectorParams params;
-	auto selector = std::make_shared<GuiSelector>(params);
+	auto selector = std::make_shared<SceneSelector>(params);
 
 	KeyAction shiftDown;
 	shiftDown.KeyChar = 16;
 	shiftDown.KeyActionType = KeyAction::KEY_DOWN;
 	selector->OnAction(shiftDown);
-	ASSERT_EQ(GuiSelector::SELECT_NONEADD, selector->CurrentMode());
+	ASSERT_EQ(SceneSelector::SELECT_NONEADD, selector->CurrentMode());
 
 	KeyAction shiftUp;
 	shiftUp.KeyChar = 16;
 	shiftUp.KeyActionType = KeyAction::KEY_UP;
 	selector->OnAction(shiftUp);
-	ASSERT_EQ(GuiSelector::SELECT_NONE, selector->CurrentMode());
+	ASSERT_EQ(SceneSelector::SELECT_NONE, selector->CurrentMode());
 
 	KeyAction ctrlDown;
 	ctrlDown.KeyChar = 17;
 	ctrlDown.KeyActionType = KeyAction::KEY_DOWN;
 	selector->OnAction(ctrlDown);
-	ASSERT_EQ(GuiSelector::SELECT_NONE, selector->CurrentMode());
+	ASSERT_EQ(SceneSelector::SELECT_NONE, selector->CurrentMode());
 }
 
-TEST(GuiSelector, PaintSelectionPersistsWhenHoverClears) {
+TEST(SceneSelector, PaintSelectionPersistsWhenHoverClears) {
 	GuiSelectorParams params;
-	auto selector = std::make_shared<GuiSelector>(params);
+	auto selector = std::make_shared<SceneSelector>(params);
 	selector->SetSelectDepth(base::DEPTH_STATION);
 
 	const std::vector<unsigned char> hoveredPath = { 2, 4 };
@@ -372,7 +400,7 @@ TEST(GuiSelector, PaintSelectionPersistsWhenHoverClears) {
 	selector->OnAction(down);
 
 	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
-	ASSERT_EQ(GuiSelector::SELECT_SELECTADD, selector->CurrentMode());
+	ASSERT_EQ(SceneSelector::SELECT_SELECTADD, selector->CurrentMode());
 
 	selector->UpdateCurrentHover({},
 		base::Action::MODIFIER_NONE,
@@ -381,9 +409,9 @@ TEST(GuiSelector, PaintSelectionPersistsWhenHoverClears) {
 	ASSERT_EQ(hoveredPath, selector->PaintedPathForTest());
 }
 
-TEST(GuiSelector, HoverLossDoesNotClearCommittedPaintPath) {
+TEST(SceneSelector, HoverLossDoesNotClearCommittedPaintPath) {
 	GuiSelectorParams params;
-	auto selector = std::make_shared<GuiSelector>(params);
+	auto selector = std::make_shared<SceneSelector>(params);
 	selector->SetSelectDepth(base::DEPTH_STATION);
 
 	const std::vector<unsigned char> hoveredPath = { 3 };
