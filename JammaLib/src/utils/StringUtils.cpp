@@ -8,10 +8,11 @@
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <sstream>
 #include "StringUtils.h"
 
-namespace
+namespace utils
 {
 	std::string DecodeHtmlEntity(const std::string& entity)
 	{
@@ -22,6 +23,35 @@ namespace
 		if (entity == "nbsp") return " ";
 		if (entity == "#39") return "'";
 		return "&" + entity + ";";
+	}
+
+	bool ParseUnsigned(const std::string& token, unsigned int& value)
+	{
+		if (token.empty())
+			return false;
+
+		for (auto c : token)
+		{
+			if (!std::isdigit(static_cast<unsigned char>(c)))
+				return false;
+		}
+
+		try
+		{
+			size_t consumed = 0;
+			const auto parsed = std::stoull(token, &consumed, 10);
+			if (consumed != token.size())
+				return false;
+			if (parsed > std::numeric_limits<unsigned int>::max())
+				return false;
+
+			value = static_cast<unsigned int>(parsed);
+			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
 	}
 }
 

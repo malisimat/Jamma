@@ -1,4 +1,5 @@
 #include "ResourceLib.h"
+#include "../utils/StringUtils.h"
 #include <array>
 #include <cctype>
 #include <iostream>
@@ -6,38 +7,6 @@
 
 using namespace resources;
 using namespace graphics;
-
-namespace
-{
-	bool _ParseUnsigned(const std::string& token, unsigned int& value)
-	{
-		if (token.empty())
-			return false;
-
-		for (auto c : token)
-		{
-			if (!std::isdigit(static_cast<unsigned char>(c)))
-				return false;
-		}
-
-		try
-		{
-			size_t consumed = 0;
-			const auto parsed = std::stoull(token, &consumed, 10);
-			if (consumed != token.size())
-				return false;
-			if (parsed > std::numeric_limits<unsigned int>::max())
-				return false;
-
-			value = static_cast<unsigned int>(parsed);
-			return true;
-		}
-		catch (...)
-		{
-			return false;
-		}
-	}
-}
 
 ResourceLib::ResourceLib() :
 	_resources({})
@@ -178,7 +147,7 @@ bool ResourceLib::ParseTextureArgs(const std::vector<std::string>& args,
 	if (args[0] != "ninepatch")
 		return false;
 
-	if (!_ParseUnsigned(args[1], borderX) || !_ParseUnsigned(args[2], borderY))
+	if (!utils::ParseUnsigned(args[1], borderX) || !utils::ParseUnsigned(args[2], borderY))
 		return false;
 
 	isNinePatch = true;
