@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../graphics/MidiModel.h"
+#include "../include/Constants.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
 
@@ -96,9 +97,9 @@ namespace midi
 	// sparse control-point buffer recorded along the loop timeline.
 	struct AutomationLane
 	{
-		// Keep the storage comfortably above the merge threshold so the point cap is
-		// not the limiting factor for dense automation curves.
-		static constexpr std::size_t MaxPoints = 8192u;
+		// Keep the storage aligned with the renderer's uniform cap so recording and
+		// display stay bounded by the same predictable limit.
+		static constexpr std::size_t MaxPoints = 512u;
 
 		AutomationMapping Mapping;
 		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
@@ -282,6 +283,30 @@ namespace midi
 			IMidiSink& sink) noexcept;
 		void FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noexcept;
 		void PublishQuantisedEvents();
+
+		// --- Automation point helpers ---
+		static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
+		static constexpr float AutomationMergeWindowMs = 10.0f;
+		static constexpr float AutomationFutureProtectWindowMs = 800.0f;
+
+		// Convert a duration in milliseconds to a fractional position within the
+		// loop, clamped to [0, 1]. Returns 0 when loop length or sample rate is not resolved.
+		static float MsToLoopFrac(float ms, float sampleRate, std::uint32_t loopLengthSamps) noexcept;
+
+		// True when candidateFrac falls inside the half-open circular window
+		// [startFrac, startFrac + windowFrac) (with loop wraparound).
+		static bool FracIsAheadWithin(float candidateFrac, float startFrac, float windowFrac) noexcept;
+
+		static float ClampAutomationFrac(double frac) noexcept;
+		static void InsertOrUpdateAutomationPoint(
+			std::array<std::pair<float, float>, AutomationLane::MaxPoints>& points,
+			std::size_t& count,
+			float sampleRate,
+			std::uint32_t loopLengthSamps,
+			float frac,
+			float value) noexcept;
+		static float SampleToAutomationFrac(std::uint32_t sample, std::uint32_t loopLengthSamps) noexcept;
+		static bool FracWithinOverwriteWindow(float frac, float startFrac, float endFrac, bool wraps) noexcept;
 
 		std::array<MidiEvent, DefaultCapacity> _events{};
 		std::atomic<const QuantisedEventBuffer*> _quantisedEvents;

@@ -10,80 +10,152 @@
 
 using namespace midi;
 
-namespace
+float MidiLoop::MsToLoopFrac(float ms, float sampleRate, std::uint32_t loopLengthSamps) noexcept
 {
-	static constexpr std::uint32_t MidiModelUpdateIntervalSamps = constants::DefaultSampleRate / 30u;
-	static constexpr float AutomationMergeWindowMs = 10.0f;
+	if (0u == loopLengthSamps || sampleRate <= 0.0f)
+		return 0.0f;
 
-	float ClampAutomationFrac(double frac) noexcept
+	const auto frac = (ms * sampleRate / 1000.0f) / static_cast<float>(loopLengthSamps);
+	if (frac <= 0.0f) return 0.0f;
+	if (frac >= 1.0f) return 1.0f;
+	return frac;
+}
+
+bool MidiLoop::FracIsAheadWithin(float candidateFrac,
+	float startFrac,
+	float windowFrac) noexcept
+{
+	if (windowFrac <= 0.0f) return false;
+	if (windowFrac >= 1.0f) return true;
+
+	float ahead = candidateFrac - startFrac;
+	if (ahead < 0.0f) ahead += 1.0f;
+	return ahead < windowFrac;
+}
+
+float MidiLoop::ClampAutomationFrac(double frac) noexcept
+{
+	auto fracF = static_cast<float>(frac);
+	if (fracF < 0.0f)
+		return 0.0f;
+	if (fracF > 1.0f)
+		return 1.0f;
+	return fracF;
+}
+
+void MidiLoop::InsertOrUpdateAutomationPoint(std::array<std::pair<float, float>, AutomationLane::MaxPoints>& points,
+	std::size_t& count,
+	float sampleRate,
+	std::uint32_t loopLengthSamps,
+	float frac,
+	float value) noexcept
+{
+	const auto automationFracEpsilon = MsToLoopFrac(AutomationMergeWindowMs, sampleRate, loopLengthSamps);
+
+	// Find the first point at or ahead of frac (sorted array; insertAt == count means all are behind).
+	std::size_t insertAt = 0u;
+	while (insertAt < count && points[insertAt].first < frac)
+		++insertAt;
+
+	// Merge into the nearest existing point if it falls within the snap window.
+	// Prefer the ahead point over the behind point: it's what playback encounters next,
+	// and on a running write-head it's more likely to be in the overwrite zone.
+	if (insertAt < count && (points[insertAt].first - frac) <= automationFracEpsilon)
 	{
-		auto fracF = static_cast<float>(frac);
-		if (fracF < 0.0f)
-			return 0.0f;
-		if (fracF > 1.0f)
-			return 1.0f;
-		return fracF;
+		// Loop invariant guarantees points[insertAt].first >= frac, so the difference is non-negative.
+		points[insertAt].second = value;
 	}
-
-	float AutomationMergeWindowFrac(float sampleRate, std::uint32_t loopLengthSamps) noexcept
+	else if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= automationFracEpsilon)
 	{
-		if (0u == loopLengthSamps || sampleRate <= 0.0f)
-			return 0.0f;
-
-		const auto mergeWindowSamps = sampleRate * AutomationMergeWindowMs / 1000.0f;
-		return mergeWindowSamps / static_cast<float>(loopLengthSamps);
+		points[insertAt - 1u].second = value;
 	}
-
-	void InsertOrUpdateAutomationPoint(std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints>& points,
-		std::size_t& count,
-		float sampleRate,
-		std::uint32_t loopLengthSamps,
-		float frac,
-		float value) noexcept
+	else if (count < AutomationLane::MaxPoints)
 	{
-		const auto automationFracEpsilon = AutomationMergeWindowFrac(sampleRate, loopLengthSamps);
+		// Shift right and insert in sorted order.
+		for (std::size_t i = count; i > insertAt; --i)
+			points[i] = points[i - 1u];
+		points[insertAt] = std::make_pair(frac, value);
+		++count;
+	}
+	else if (count > 0u)
+	{
+		// Array is full and no nearby point to merge into — must evict one entry.
+		// Prefer evicting ahead of the write-head (likely overwrite territory),
+		// but protect the immediate future hold region used by editor automation.
+		const auto protectWindowFrac = MsToLoopFrac(AutomationFutureProtectWindowMs, sampleRate, loopLengthSamps);
+		std::size_t evictAt = count; // sentinel: no candidate yet
 
-		std::size_t insertAt = 0u;
+		// Pass 1: scan forward from the insertion position for the first ahead-point
+		// that lies outside the protect window (i.e., far enough ahead to be safe to lose).
+		for (std::size_t i = insertAt; i < count; ++i)
+		{
+			if (!FracIsAheadWithin(points[i].first, frac, protectWindowFrac))
+			{
+				evictAt = i;
+				break;
+			}
+		}
+
+		// Pass 2 (fallback): all ahead points are protected, so scan backward from the
+		// insertion position looking for a point that is NOT in the wrap-around future
+		// protect window (i.e., sufficiently far behind in the loop).
+		// Guard skipped when protectWindowFrac == 0: in that case Pass 1 always succeeds
+		// immediately since FracIsAheadWithin always returns false.
+		if (protectWindowFrac > 0.0f && evictAt == count)
+		{
+			for (std::size_t i = insertAt; i > 0u; --i)
+			{
+				const auto idx = i - 1u;
+				if (!FracIsAheadWithin(points[idx].first, frac, protectWindowFrac))
+				{
+					evictAt = idx;
+					break;
+				}
+			}
+		}
+
+		// Last resort: everything is within the protect window (e.g. all points clustered
+		// around the write-head). Evict the nearest-ahead point, or index 0 if frac is
+		// past all existing points.
+		if (evictAt == count)
+			evictAt = (insertAt < count) ? insertAt : 0u;
+
+		// Compact the array by removing the evicted entry.
+		for (std::size_t i = evictAt + 1u; i < count; ++i)
+			points[i - 1u] = points[i];
+		--count;
+
+		// Re-scan for the insertion position: evicting a point before the original
+		// insertAt shifts all subsequent indices, so we cannot reuse the old value.
+		insertAt = 0u;
 		while (insertAt < count && points[insertAt].first < frac)
 			++insertAt;
 
-		if (insertAt < count && (points[insertAt].first - frac) <= automationFracEpsilon)
-		{
-			points[insertAt].second = value;
-		}
-		else if (insertAt > 0u && (frac - points[insertAt - 1u].first) <= automationFracEpsilon)
-		{
-			points[insertAt - 1u].second = value;
-		}
-		else if (count < midi::AutomationLane::MaxPoints)
-		{
-			for (std::size_t i = count; i > insertAt; --i)
-				points[i] = points[i - 1u];
-			points[insertAt] = std::make_pair(frac, value);
-			++count;
-		}
+		for (std::size_t i = count; i > insertAt; --i)
+			points[i] = points[i - 1u];
+		points[insertAt] = std::make_pair(frac, value);
+		++count;
 	}
+}
 
-	float SampleToAutomationFrac(std::uint32_t sample,
-		std::uint32_t loopLengthSamps) noexcept
-	{
-		if (0u == loopLengthSamps)
-			return 0.0f;
-		return static_cast<float>(sample % loopLengthSamps)
-			/ static_cast<float>(loopLengthSamps);
-	}
+float MidiLoop::SampleToAutomationFrac(std::uint32_t sample,
+	std::uint32_t loopLengthSamps) noexcept
+{
+	if (0u == loopLengthSamps)
+		return 0.0f;
+	return static_cast<float>(sample % loopLengthSamps)
+		/ static_cast<float>(loopLengthSamps);
+}
 
-	bool FracWithinOverwriteWindow(float frac,
-		float startFrac,
-		float endFrac,
-		bool wraps) noexcept
-	{
-		if (!wraps)
-			return frac >= startFrac && frac < endFrac;
+bool MidiLoop::FracWithinOverwriteWindow(float frac,
+	float startFrac,
+	float endFrac,
+	bool wraps) noexcept
+{
+	if (!wraps)
+		return frac >= startFrac && frac < endFrac;
 
-		return frac >= startFrac || frac < endFrac;
-	}
-
+	return frac >= startFrac || frac < endFrac;
 }
 
 MidiLoop::MidiLoop() noexcept

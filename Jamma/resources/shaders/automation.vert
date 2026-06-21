@@ -11,7 +11,8 @@ out float vHeight;  // sampled automation value 0..1
 uniform mat4 MVP;
 
 // Sparse control points (frac, value), piecewise-linear in loop space.
-uniform vec2 AutoPoints[256];
+const int MaxAutoPoints = 512;
+uniform vec2 AutoPoints[MaxAutoPoints];
 uniform int  AutoPointCount;
 
 uniform float LaneRadius;
@@ -37,7 +38,7 @@ float SampleAutomation(float t)
     if (t >= AutoPoints[last].x)
         return AutoPoints[last].y;
 
-    for (int i = 0; i < 255; ++i)
+    for (int i = 0; i < MaxAutoPoints - 1; ++i)
     {
         if (i + 1 > last)
             break;

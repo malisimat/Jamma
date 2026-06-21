@@ -275,6 +275,35 @@ TEST(MidiAutomationPhaseAnchor, DistinctFracsFillLaneThenReplaceInPlace)
 	EXPECT_NEAR(0.6f, points[3].second, 1.0e-5f);
 }
 
+TEST(MidiAutomationPhaseAnchor, OverflowEvictsOldestPoint)
+{
+	MidiLoop loop;
+	auto* plugin = FakePlugin(0x811u);
+
+	const auto lane = loop.ResolveAutomationLaneFor(plugin, 4u);
+	ASSERT_TRUE(lane.has_value());
+	ASSERT_TRUE(loop.WireEditorAutomationLane(*lane, plugin, 4u));
+
+	const std::size_t totalPoints = midi::AutomationLane::MaxPoints + 1u;
+	for (std::size_t i = 0u; i < totalPoints; ++i)
+	{
+		const float frac = static_cast<float>(i) / static_cast<float>(totalPoints);
+		loop.SetAutomationValueAtFrac(*lane, frac, frac);
+	}
+
+	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
+	const auto count = loop.SnapshotAutomationLanePoints(*lane, points.data(), points.size());
+	ASSERT_EQ(midi::AutomationLane::MaxPoints, count);
+	EXPECT_NEAR(1.0f / static_cast<float>(totalPoints), points[0].first, 1.0e-6f);
+	EXPECT_NEAR(1.0f / static_cast<float>(totalPoints), points[0].second, 1.0e-6f);
+	EXPECT_NEAR(static_cast<float>(totalPoints - 1u) / static_cast<float>(totalPoints),
+		points[count - 1u].first,
+		1.0e-6f);
+	EXPECT_NEAR(static_cast<float>(totalPoints - 1u) / static_cast<float>(totalPoints),
+		points[count - 1u].second,
+		1.0e-6f);
+}
+
 TEST(MidiAutomationPhaseAnchor, OverwriteWindowReplacesTouchedFutureRange)
 {
 	MidiLoop loop;
@@ -329,4 +358,32 @@ TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
 	EXPECT_NEAR(0.6f, points[0].second, 1.0e-6f);
 	EXPECT_NEAR(0.70f, points[1].first, 1.0e-6f);
 	EXPECT_NEAR(0.6f, points[1].second, 1.0e-6f);
+}
+
+TEST(MidiAutomationPhaseAnchor, ShortLoopOverwriteRemainsSortedAndBounded)
+{
+	MidiLoop loop;
+	auto* plugin = FakePlugin(0x822u);
+
+	const auto lane = loop.ResolveAutomationLaneFor(plugin, 5u);
+	ASSERT_TRUE(lane.has_value());
+	ASSERT_TRUE(loop.WireEditorAutomationLane(*lane, plugin, 5u));
+
+	// 250 ms loop at 48 kHz. Repeated wrapped windows stress compact/insert paths
+	// under heavy wraparound without requiring any extra metadata.
+	loop.EndRecord(12000u, 0u);
+	for (std::uint32_t i = 0u; i < 200u; ++i)
+	{
+		const auto start = (i * 73u) % 12000u;
+		const auto duration = 38400u; // 800 ms equivalent at 48 kHz.
+		const auto value = static_cast<float>(i % 97u) / 96.0f;
+		loop.OverwriteAutomationWindow(*lane, start, duration, value);
+	}
+
+	std::array<std::pair<float, float>, midi::AutomationLane::MaxPoints> points{};
+	const auto count = loop.SnapshotAutomationLanePoints(*lane, points.data(), points.size());
+	ASSERT_LE(count, midi::AutomationLane::MaxPoints);
+
+	for (std::size_t i = 1u; i < count; ++i)
+		EXPECT_LE(points[i - 1u].first, points[i].first);
 }
