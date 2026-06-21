@@ -21,6 +21,14 @@
 #include "vst/Vst2Plugin.h"
 #include "vst/IVstPlugin.h"
 
+namespace
+{
+	void HostEchoSetParameter(AEffect*, VstInt32, float)
+	{
+		FAIL() << "audioMasterAutomate must not call setParameter on the host side";
+	}
+}
+
 // -----------------------------------------------------------------------
 // Suite: Vst2PluginDefault
 // Verifies the object's invariants immediately after construction.

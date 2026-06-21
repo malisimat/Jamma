@@ -8,6 +8,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
+#include <utility>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
 #include "../audio/AudioDevice.h"
@@ -191,9 +192,6 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
-		int CtrlOverlayVisibleButtonCountForTest() const noexcept;
-		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
-
 		void InitReceivers();
 		void AddChild(std::shared_ptr<base::GuiElement> child);
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
@@ -203,6 +201,9 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		bool InitGlobalInsertCapture();
+		void CloseGlobalInsertCapture();
+		bool PumpGlobalInsertCapture(actions::KeyAction& action) noexcept;
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
 		void InitMidi()
@@ -269,10 +270,7 @@ namespace engine
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
-		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
-		{
-			_quantisation.SetMidiGrain(grainSamps, source, _stations);
-		}
+		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -280,11 +278,7 @@ namespace engine
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
-		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
-		{
-			if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
-				_PublishAudioStations();
-		}
+		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		timing::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;

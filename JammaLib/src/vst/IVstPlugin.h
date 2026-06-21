@@ -10,6 +10,8 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <atomic>
+#include <memory>
 #include <windows.h>
 #include "../midi/MidiEvent.h"
 #include "../utils/CommonTypes.h"
@@ -64,6 +66,12 @@ namespace vst
 		// Process numSamples of an exact-match multichannel bus in-place.  Real-time safe.
 		virtual void ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept = 0;
 
+		// Set / get a plugin parameter by index. Real-time safe: a single opcode
+		// dispatch into the hosted plugin, no allocation. Used by the audio-thread
+		// automation player to drive parameters from recorded control curves.
+		virtual void SetParameter(unsigned int index, float value) noexcept = 0;
+		virtual float GetParameter(unsigned int index) const noexcept = 0;
+
 		// Called once per block before ProcessBlock to supply host transport/tempo
 		// context.  Real-time safe.  Default is a no-op (e.g. VST3 uses its own
 		// mechanism).
@@ -113,11 +121,40 @@ namespace vst
 		virtual void SetState(const std::vector<std::uint8_t>& /*blob*/) {}
 	};
 
+	// Records the most recently host-automated plugin parameter so the UI thread
+	// can wire it to a MIDI automation lane ("MIDI learn" target half), and so the
+	// non-RT MIDI pump can record live editor-driven automation while automation
+	// record mode is held.
+	//
+	// Threading: written on the audio/UI thread inside Vst2Plugin's
+	// audioMasterAutomate host callback when the user touches a parameter in a
+	// plugin editor; read on the non-audio (UI/action/job) thread when the user
+	// presses the wire key or when the MIDI pump consumes editor-origin events.
+	// Each field is independently atomic; readers must tolerate a brief torn
+	// triple, which is acceptable because wiring only happens after the user
+	// deliberately stops touching the control. Sequence is bumped (release) after
+	// the triple is stored so a consumer that acquire-loads Sequence observes a
+	// coherent Plugin/ParameterIndex/Value and can detect fresh events by change.
+	struct LastTouchedParameter
+	{
+		std::atomic<IVstPlugin*>   Plugin{ nullptr };
+		std::atomic<unsigned int>  ParameterIndex{ 0u };
+		std::atomic<float>         Value{ 0.0f };
+		std::atomic<std::uint64_t> Sequence{ 0u };
+	};
+	extern LastTouchedParameter _lastTouchedParam;
+
+	// Publish a host automation touch event into the shared registry.
+	// Writers store the triple first, then release-bump Sequence so readers can
+	// acquire-load Sequence and observe coherent Plugin/ParameterIndex/Value.
+	void PublishLastTouchedParameter(IVstPlugin* plugin,
+		unsigned int parameterIndex,
+		float value) noexcept;
+
 	// Factory: creates the correct plugin type based on file extension.
 	// Extension ".dll"  -> Vst2Plugin (VST2)
 	// Any other extension (e.g. ".vst3") -> Vst3Plugin (VST3)
 	std::shared_ptr<IVstPlugin> MakePluginForPath(const std::wstring& path);
-
 	// Queue a plugin for destruction on the UI thread.
 	// VST3 plugins must be destroyed on the UI (message-pump) thread to avoid
 	// crashing the host.  Vst2Plugin may also be queued here for uniformity.

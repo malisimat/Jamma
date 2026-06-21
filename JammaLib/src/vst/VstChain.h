@@ -44,6 +44,19 @@ namespace vst
 
 		size_t NumPlugins() const noexcept { return _plugins.size(); }
 
+		// Returns true if plugin is one of the instances held by this chain.
+		// Identity comparison only (never dereferences). Not RT-safe (walks the
+		// plugin vector); call from a non-RT thread only.
+		bool ContainsPlugin(const IVstPlugin* plugin) const noexcept
+		{
+			if (!plugin)
+				return false;
+			for (const auto& p : _plugins)
+				if (p.get() == plugin)
+					return true;
+			return false;
+		}
+
 		// Returns true if there is at least one loaded, non-bypassed plugin.
 		// Real-time safe.
 		bool IsActive() const noexcept;

@@ -133,9 +133,12 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Debug;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Debug\MD;$(ProjectDir)..\lib\njclient\x64\Debug\MD;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Debug;$(SolutionDir)vcpkg_installed\x64-windows\debug\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\ogg.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\vorbis.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\debug\bin\vorbisenc.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -180,9 +183,12 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\lib\vst2sdk\x64\Release\MD;$(ProjectDir)..\lib\njclient\x64\Release\MD;$(SolutionDir)vcpkg_installed\x64-windows\lib;$(SolutionDir)vcpkg_installed\x64-windows\lib\manual-link;$(SolutionDir)JammaLib\bin\x64\Release;$(ProjectDir)lib\x64;$(SolutionDir)vcpkg_installed\x64-windows\lib\vst3sdk;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>vst2sdk.lib;njclient.lib;ogg.lib;vorbis.lib;vorbisenc.lib;vorbisfile.lib;ws2_32.lib;JammaLib.lib;sdk_hosting.lib;sdk.lib;sdk_common.lib;pluginterfaces.lib;base.lib;opengl32.lib;Comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\ogg.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\vorbis.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SolutionDir)vcpkg_installed\x64-windows\bin\vorbisenc.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
@@ -249,6 +255,14 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="resources\shaders\automation.frag">
+      <DeploymentContent>true</DeploymentContent>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="resources\shaders\automation.vert">
+      <DeploymentContent>true</DeploymentContent>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="resources\shaders\quantisation.frag">
       <DeploymentContent>true</DeploymentContent>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -615,6 +615,18 @@ ActionResult Scene::OnAction(KeyAction action)
 			_networkService->GetController());
 	}
 
+	// Insert + Ctrl+Shift+L/W/X/[/] - MIDI automation record, learn, wire, delete, lane cycle.
+	{
+		auto hovered = _ChildFromPath(_selector->CurrentHover());
+		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
+		auto automationRes = _inputSubsystem->HandleAutomationKey(action,
+			_stations,
+			_selector->CurrentHover(),
+			hoveredTake);
+		if (automationRes.IsEaten)
+			return automationRes;
+	}
+
 	bool checkReset = false;
 	auto result = ActionResult::NoAction();
 
@@ -943,12 +955,28 @@ void Scene::CloseAudio()
 	_audioEngine->Close();
 }
 
+bool Scene::InitGlobalInsertCapture()
+{
+	return _inputSubsystem->InitGlobalInsertCapture();
+}
+
+void Scene::CloseGlobalInsertCapture()
+{
+	_inputSubsystem->CloseGlobalInsertCapture();
+}
+
+bool Scene::PumpGlobalInsertCapture(actions::KeyAction& action) noexcept
+{
+	return _inputSubsystem->PumpGlobalInsertCapture(action);
+}
+
 void Scene::Shutdown()
 {
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
+	CloseGlobalInsertCapture();
 	CloseAudio();
 }
 
@@ -1207,16 +1235,6 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
-int Scene::CtrlOverlayVisibleButtonCountForTest() const noexcept
-{
-	return _quantisationInteraction.VisibleButtonCountForTest();
-}
-
-std::optional<utils::Position2d> Scene::CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept
-{
-	return _quantisationInteraction.ButtonCenterForTest(buttonIndex);
-}
-
 glm::mat4 Scene::_View()
 {
 	auto camPos = _camera.ModelPosition();
@@ -1247,6 +1265,17 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
 	_quantisation.Set(quantiseSamps, quantisation);
 	_quantisation.SetMidiGrain(quantiseSamps, "scene quantisation set", _stations);
+}
+
+void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
+{
+	_quantisation.SetMidiGrain(grainSamps, source, _stations);
+}
+
+void Scene::_UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot)
+{
+	if (_networkService->UpdateRemoteStationsFromSnapshot(snapshot, _stations))
+		_PublishAudioStations();
 }
 
 bool Scene::_IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept

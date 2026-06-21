@@ -60,6 +60,8 @@ namespace graphics
 		void Destroy();
 
 		bool IsOpen() const noexcept { return _editorWnd.load() != nullptr; }
+		const std::shared_ptr<vst::IVstPlugin>& Plugin() const noexcept { return _plugin; }
+		HWND EditorHwnd() const noexcept { return _editorWnd.load(std::memory_order_acquire); }
 
 		// Called by the window's WNDPROC for WM_SIZE.
 		void OnAction(const actions::WindowAction& action);

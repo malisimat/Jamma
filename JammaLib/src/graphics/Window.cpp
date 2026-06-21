@@ -35,6 +35,7 @@ Window::Window(Scene& scene,
 	_released(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
+	_pendingResize(std::nullopt),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
@@ -208,7 +209,20 @@ int Window::Create(HINSTANCE hInstance, int nCmdShow)
 	}
 
 	auto size = (WINDOWED == _config.State) ? AdjustSize(_config.Size, _style) : _config.Size;
-	auto pos = _config.Position;// (WINDOWED == _config.State) ? Center(size) : _config.Position;
+	auto pos = _config.Position;
+	if (WINDOWED == _config.State)
+	{
+		RECT desiredRect = {
+			pos.X,
+			pos.Y,
+			pos.X + static_cast<LONG>(size.Width),
+			pos.Y + static_cast<LONG>(size.Height)
+		};
+
+		RECT workArea{};
+		if (GetMonitorWorkAreaForRect(desiredRect, workArea))
+			ClampToWorkArea(pos, size, workArea);
+	}
 
 	// Create a new window and context
 	_wnd = CreateWindowEx(
@@ -364,11 +378,38 @@ void Window::SetTrackingMouse(bool tracking)
 
 void Window::Resize(Size2d size)
 {
+	if (size.Width < 1)
+		size.Width = 1;
+	if (size.Height < 1)
+		size.Height = 1;
+
 	_config.Size = size;
+	_scene.SetSize(size);
+	_lastHoverObjectId = 0;
+	_pendingResize = size;
+}
+
+void Window::ApplyPendingResize()
+{
+	if (!_pendingResize.has_value())
+		return;
+
+	if (!GlDeleteQueue::IsRenderThread())
+		return;
+
+	if (!_pickContext.has_value() || !_textureContext.has_value() || !_drawContext.has_value())
+		return;
+
+	auto size = _pendingResize.value();
+	_pickContext.emplace(size, base::DrawContext::ContextTarget::PICKING);
+	_textureContext.emplace(size, base::DrawContext::ContextTarget::TEXTURE);
+	_drawContext.emplace(size, base::DrawContext::ContextTarget::SCREEN);
 
 	_pickContext->Initialise();
 	_textureContext->Initialise();
 	_drawContext->Initialise();
+
+	_pendingResize.reset();
 }
 
 void Window::SetWindowState(WindowState state)
@@ -384,6 +425,7 @@ Size2d Window::GetSize()
 void Window::Render()
 {
 	GlDeleteQueue::FlushPendingDeletes();
+	ApplyPendingResize();
 
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
@@ -461,9 +503,8 @@ ActionResult Window::OnAction(WindowAction winAction)
 	switch (winAction.WindowEventType)
 	{
 	case WindowAction::SIZE:
-		_config.Size = winAction.Size;
+		Resize(winAction.Size);
 		isEaten = true;
-		//AdjustSize();
 		break;
 	case WindowAction::SIZE_MINIMISE:
 		SetWindowState(Window::MINIMISED);
@@ -471,9 +512,9 @@ ActionResult Window::OnAction(WindowAction winAction)
 		break;
 	case WindowAction::SIZE_MAXIMISE:
 		SetWindowState(Window::MAXIMISED);
-		_config.Size = winAction.Size;
+		Resize(winAction.Size);
 		isEaten = true;
-		//AdjustSize();
+		break;
 	case WindowAction::DESTROY:
 		break;
 	}
@@ -584,6 +625,43 @@ Size2d Window::AdjustSize(Size2d size, DWORD style)
 	return {
 		w < 1 ? 1 : (unsigned int)w,
 		h < 1 ? 1 : (unsigned int)h };
+}
+
+bool Window::GetMonitorWorkArea(HMONITOR monitor, RECT& workArea) noexcept
+{
+	if (!monitor)
+		return false;
+
+	MONITORINFO monitorInfo{};
+	monitorInfo.cbSize = sizeof(monitorInfo);
+	if (!GetMonitorInfo(monitor, &monitorInfo))
+		return false;
+
+	workArea = monitorInfo.rcWork;
+	return true;
+}
+
+bool Window::GetMonitorWorkAreaForRect(const RECT& rect, RECT& workArea) noexcept
+{
+	const auto monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+	return GetMonitorWorkArea(monitor, workArea);
+}
+
+void Window::ClampToWorkArea(Position2d& position, Size2d& size, const RECT& workArea) noexcept
+{
+	const auto workWidth = static_cast<unsigned int>(std::max<LONG>(1, workArea.right - workArea.left));
+	const auto workHeight = static_cast<unsigned int>(std::max<LONG>(1, workArea.bottom - workArea.top));
+
+	if (size.Width > workWidth)
+		size.Width = workWidth;
+	if (size.Height > workHeight)
+		size.Height = workHeight;
+
+	const auto maxX = std::max<int>(workArea.left, workArea.right - static_cast<LONG>(size.Width));
+	const auto maxY = std::max<int>(workArea.top, workArea.bottom - static_cast<LONG>(size.Height));
+
+	position.X = std::clamp(position.X, static_cast<int>(workArea.left), maxX);
+	position.Y = std::clamp(position.Y, static_cast<int>(workArea.top), maxY);
 }
 
 Position2d Window::Center(Size2d size)
@@ -702,6 +780,25 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		MinMaxInfo->ptMinTrackSize.x = (long)min.Width;
 		MinMaxInfo->ptMinTrackSize.y = (long)min.Height;
+
+		RECT workArea{};
+		const auto monitor = MonitorFromWindow(hWindow, MONITOR_DEFAULTTONEAREST);
+		if (monitor && GetMonitorWorkArea(monitor, workArea))
+		{
+			MONITORINFO monitorInfo{};
+			monitorInfo.cbSize = sizeof(monitorInfo);
+			if (GetMonitorInfo(monitor, &monitorInfo))
+			{
+				const auto workWidth = workArea.right - workArea.left;
+				const auto workHeight = workArea.bottom - workArea.top;
+				MinMaxInfo->ptMaxPosition.x = workArea.left - monitorInfo.rcMonitor.left;
+				MinMaxInfo->ptMaxPosition.y = workArea.top - monitorInfo.rcMonitor.top;
+				MinMaxInfo->ptMaxSize.x = workWidth;
+				MinMaxInfo->ptMaxSize.y = workHeight;
+				MinMaxInfo->ptMaxTrackSize.x = workWidth;
+				MinMaxInfo->ptMaxTrackSize.y = workHeight;
+			}
+		}
 		return 0;
 	}
 	case WM_ENTERSIZEMOVE:

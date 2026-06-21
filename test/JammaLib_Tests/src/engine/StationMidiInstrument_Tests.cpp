@@ -1,4 +1,4 @@
-#include "gtest/gtest.h"
+﻿#include "gtest/gtest.h"
 
 #include <array>
 
@@ -6,6 +6,8 @@
 #include "actions/TriggerAction.h"
 #include "base/AudioSink.h"
 #include "engine/Station.h"
+#include "midi/MidiLoop.h"
+#include "midi/MidiRouter.h"
 
 using actions::JobAction;
 using actions::TriggerAction;
@@ -52,6 +54,19 @@ namespace
 			RealtimeFlags.push_back(isRealtime);
 		}
 
+		void SetParameter(unsigned int index, float value) noexcept override
+		{
+			ParamSetCalls++;
+			LastParamIndex = index;
+			LastParamValue = value;
+		}
+
+		float GetParameter(unsigned int index) const noexcept override
+		{
+			(void)index;
+			return LastParamValue;
+		}
+
 		bool OpenEditor(HWND) override { return false; }
 		void CloseEditor() override {}
 		utils::Size2d GetEditorSize() const noexcept override { return { 0, 0 }; }
@@ -64,6 +79,9 @@ namespace
 		std::uint32_t BlockSamples = 0u;
 		unsigned int BeginCalls = 0u;
 		unsigned int ProcessCalls = 0u;
+		unsigned int ParamSetCalls = 0u;
+		unsigned int LastParamIndex = 0u;
+		float LastParamValue = 0.0f;
 		std::vector<MidiEvent> Events;
 		std::vector<bool> RealtimeFlags;
 

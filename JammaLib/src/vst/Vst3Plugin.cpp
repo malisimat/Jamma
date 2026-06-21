@@ -9,16 +9,19 @@
 #include "Vst2Plugin.h"
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cwctype>
 #include <iostream>
 #include <mutex>
-#include <vector>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #ifdef JAMMA_VST3_ENABLED
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
 #include "vst3sdk/pluginterfaces/vst/ivstmessage.h"
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
+#include "vst3sdk/pluginterfaces/vst/ivstparameterchanges.h"
 #include "vst3sdk/pluginterfaces/vst/ivsteditcontroller.h"
 #include "vst3sdk/pluginterfaces/vst/ivstevents.h"
 #include "vst3sdk/pluginterfaces/vst/ivstmidicontrollers.h"
@@ -103,12 +106,18 @@ IMPLEMENT_FUNKNOWN_METHODS(HostPlugFrame, IPlugFrame, IPlugFrame::iid)
 class HostComponentHandler final : public IComponentHandler
 {
 public:
-	HostComponentHandler()
+	HostComponentHandler() :
+		_owner(nullptr)
 	{
 		FUNKNOWN_CTOR
 	}
 
 	~HostComponentHandler() noexcept { FUNKNOWN_DTOR }
+
+	void SetOwner(Vst3Plugin* owner) noexcept
+	{
+		_owner = owner;
+	}
 
 	tresult PLUGIN_API beginEdit(ParamID id) override
 	{
@@ -118,8 +127,8 @@ public:
 
 	tresult PLUGIN_API performEdit(ParamID id, ParamValue valueNormalized) override
 	{
-		(void)id;
-		(void)valueNormalized;
+		if (_owner)
+			_owner->OnControllerEdit(static_cast<std::uint32_t>(id), static_cast<float>(valueNormalized));
 		return kResultOk;
 	}
 
@@ -135,6 +144,10 @@ public:
 		return kResultOk;
 	}
 
+	private:
+	Vst3Plugin* _owner;
+
+	public:
 	DECLARE_FUNKNOWN_METHODS
 };
 
@@ -277,6 +290,150 @@ private:
 
 IMPLEMENT_FUNKNOWN_METHODS(FixedEventList, IEventList, IEventList::iid)
 
+class FixedParamValueQueue final : public IParamValueQueue
+{
+public:
+	static constexpr int32 MaxPoints = 32;
+
+	FixedParamValueQueue() :
+		_paramId(0),
+		_count(0),
+		_offsets{},
+		_values{}
+	{
+		FUNKNOWN_CTOR
+	}
+
+	~FixedParamValueQueue() noexcept { FUNKNOWN_DTOR }
+
+	void Begin(ParamID paramId) noexcept
+	{
+		_paramId = paramId;
+		_count = 0;
+	}
+
+	void Clear() noexcept
+	{
+		_count = 0;
+	}
+
+	ParamID PLUGIN_API getParameterId() override
+	{
+		return _paramId;
+	}
+
+	int32 PLUGIN_API getPointCount() override
+	{
+		return _count;
+	}
+
+	tresult PLUGIN_API getPoint(int32 index, int32& sampleOffset, ParamValue& value) override
+	{
+		if (index < 0 || index >= _count)
+			return kInvalidArgument;
+
+		sampleOffset = _offsets[static_cast<size_t>(index)];
+		value = _values[static_cast<size_t>(index)];
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API addPoint(int32 sampleOffset, ParamValue value, int32& index) override
+	{
+		if (_count >= MaxPoints)
+		{
+			index = _count - 1;
+			if (index >= 0)
+			{
+				_offsets[static_cast<size_t>(index)] = sampleOffset;
+				_values[static_cast<size_t>(index)] = value;
+				return kResultOk;
+			}
+			return kOutOfMemory;
+		}
+
+		index = _count;
+		_offsets[static_cast<size_t>(_count)] = sampleOffset;
+		_values[static_cast<size_t>(_count)] = value;
+		++_count;
+		return kResultOk;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+
+private:
+	ParamID _paramId;
+	int32 _count;
+	std::array<int32, MaxPoints> _offsets;
+	std::array<ParamValue, MaxPoints> _values;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(FixedParamValueQueue, IParamValueQueue, IParamValueQueue::iid)
+
+class FixedParameterChanges final : public IParameterChanges
+{
+public:
+	static constexpr int32 MaxQueues = 256;
+
+	FixedParameterChanges() :
+		_count(0),
+		_queues{}
+	{
+		FUNKNOWN_CTOR
+	}
+
+	~FixedParameterChanges() noexcept { FUNKNOWN_DTOR }
+
+	void BeginBlock() noexcept
+	{
+		_count = 0;
+	}
+
+	int32 PLUGIN_API getParameterCount() override
+	{
+		return _count;
+	}
+
+	IParamValueQueue* PLUGIN_API getParameterData(int32 index) override
+	{
+		if (index < 0 || index >= _count)
+			return nullptr;
+		return &_queues[static_cast<size_t>(index)];
+	}
+
+	IParamValueQueue* PLUGIN_API addParameterData(const ParamID& id, int32& index) override
+	{
+		for (int32 i = 0; i < _count; ++i)
+		{
+			auto& queue = _queues[static_cast<size_t>(i)];
+			if (queue.getParameterId() == id)
+			{
+				index = i;
+				return &queue;
+			}
+		}
+
+		if (_count >= MaxQueues)
+		{
+			index = _count - 1;
+			return nullptr;
+		}
+
+		auto& queue = _queues[static_cast<size_t>(_count)];
+		queue.Begin(id);
+		index = _count;
+		++_count;
+		return &queue;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+
+private:
+	int32 _count;
+	std::array<FixedParamValueQueue, MaxQueues> _queues;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(FixedParameterChanges, IParameterChanges, IParameterChanges::iid)
+
 class Vst3Plugin::Impl
 {
 public:
@@ -306,6 +463,61 @@ public:
 	std::vector<float> inputScratchStorage;
 	std::vector<float> outputScratchStorage;
 	std::unique_ptr<FixedEventList> inputEvents;
+	std::unique_ptr<FixedParameterChanges> inputParameterChanges;
+	Steinberg::Vst::ProcessContext processContext;
+	vst::HostTimeState hostTime;
+	std::vector<ParamID> hostIndexToParamId;
+	std::unordered_map<std::uint32_t, unsigned int> paramIdToHostIndex;
+
+	void ClearParameterState() noexcept
+	{
+		hostIndexToParamId.clear();
+		paramIdToHostIndex.clear();
+		if (inputParameterChanges)
+			inputParameterChanges->BeginBlock();
+	}
+
+	void BuildParameterMaps() noexcept
+	{
+		hostIndexToParamId.clear();
+		paramIdToHostIndex.clear();
+		if (!controller)
+			return;
+
+		const auto count = controller->getParameterCount();
+		if (count <= 0)
+			return;
+
+		hostIndexToParamId.resize(static_cast<size_t>(count), static_cast<ParamID>(0));
+		for (int32 i = 0; i < count; ++i)
+		{
+			ParameterInfo info{};
+			if (controller->getParameterInfo(i, info) != kResultOk)
+				continue;
+
+			hostIndexToParamId[static_cast<size_t>(i)] = info.id;
+			paramIdToHostIndex[static_cast<std::uint32_t>(info.id)] = static_cast<unsigned int>(i);
+		}
+	}
+
+	bool TryGetHostIndexForParamId(ParamID paramId, unsigned int& hostIndex) const noexcept
+	{
+		auto it = paramIdToHostIndex.find(static_cast<std::uint32_t>(paramId));
+		if (it == paramIdToHostIndex.end())
+			return false;
+
+		hostIndex = it->second;
+		return true;
+	}
+
+	bool TryGetParamIdForHostIndex(unsigned int hostIndex, ParamID& paramId) const noexcept
+	{
+		if (hostIndex >= hostIndexToParamId.size())
+			return false;
+
+		paramId = hostIndexToParamId[hostIndex];
+		return true;
+	}
 
 	Impl() :
 		factory(nullptr),
@@ -328,7 +540,12 @@ public:
 		outputChannelPtrs(),
 		inputScratchStorage(),
 		outputScratchStorage(),
-		inputEvents(std::make_unique<FixedEventList>())
+		inputEvents(std::make_unique<FixedEventList>()),
+		inputParameterChanges(std::make_unique<FixedParameterChanges>()),
+		processContext(),
+		hostTime(),
+		hostIndexToParamId(),
+		paramIdToHostIndex()
 	{
 	}
 };
@@ -350,6 +567,10 @@ Vst3Plugin::Vst3Plugin() :
 	#endif
 	)
 {
+#ifdef JAMMA_VST3_ENABLED
+	if (_impl && _impl->componentHandler)
+		_impl->componentHandler->SetOwner(this);
+#endif
 }
 
 Vst3Plugin::~Vst3Plugin()
@@ -792,9 +1013,10 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	_impl->processData.outputs = (outputBusCount > 0) ? &_impl->outputBus : nullptr;
 	_impl->processData.inputEvents = _impl->inputEvents.get();
 	_impl->processData.outputEvents = nullptr;
-	_impl->processData.inputParameterChanges = nullptr;
+	_impl->processData.inputParameterChanges = _impl->inputParameterChanges.get();
 	_impl->processData.outputParameterChanges = nullptr;
-	_impl->processData.processContext = nullptr;
+	_impl->processData.processContext = &_impl->processContext;
+	_impl->inputParameterChanges->BeginBlock();
 
 	// 10. Optionally retrieve IEditController (may be the same object or separate)
 	IEditController* rawController = nullptr;
@@ -827,6 +1049,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		std::cout << "[Vst3Plugin] No controller available (editor may not open)" << std::endl;
 	else
 	{
+		_impl->BuildParameterMaps();
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
 	}
 
@@ -918,6 +1141,8 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 	if (_impl->controller)
 		_impl->controller->setComponentHandler(nullptr);
 
+	_impl->ClearParameterState();
+
 	_impl->processor = nullptr;
 	_impl->controller = nullptr;
 	_impl->componentConnection = nullptr;
@@ -967,6 +1192,7 @@ void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	_impl->processData.numSamples = numSamples;
 
 	_impl->processor->process(_impl->processData);
+	_impl->inputParameterChanges->BeginBlock();
 
 	FoldOutputToMono(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, monoBuf);
 #else
@@ -1008,6 +1234,7 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 	_impl->processData.numSamples = numSamples;
 	_impl->processor->process(_impl->processData);
+	_impl->inputParameterChanges->BeginBlock();
 
 	float* outputChannels[] = { leftBuf, rightBuf };
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, outputChannels, 2);
@@ -1043,9 +1270,86 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 	CopyMultiToInputBuffers(channelBufs, numChannels, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
 	_impl->processData.numSamples = numSamples;
 	_impl->processor->process(_impl->processData);
+	_impl->inputParameterChanges->BeginBlock();
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
 #else
 	(void)channelBufs; (void)numChannels; (void)numSamples;
+#endif
+}
+
+void Vst3Plugin::SetParameter(unsigned int index, float value) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !_isLoaded || !_impl->inputParameterChanges)
+		return;
+
+	ParamID paramId = 0;
+	if (!_impl->TryGetParamIdForHostIndex(index, paramId))
+		return;
+
+	int32 queueIndex = -1;
+	auto* queue = _impl->inputParameterChanges->addParameterData(paramId, queueIndex);
+	if (!queue)
+		return;
+
+	const auto normalized = std::clamp<ParamValue>(static_cast<ParamValue>(value), 0.0, 1.0);
+	int32 pointIndex = -1;
+	queue->addPoint(0, normalized, pointIndex);
+#else
+	(void)index; (void)value;
+#endif
+}
+
+float Vst3Plugin::GetParameter(unsigned int index) const noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl || !_impl->controller)
+		return 0.0f;
+
+	ParamID paramId = 0;
+	if (!_impl->TryGetParamIdForHostIndex(index, paramId))
+		return 0.0f;
+
+	const auto normalized = _impl->controller->getParamNormalized(paramId);
+	return std::clamp(static_cast<float>(normalized), 0.0f, 1.0f);
+#else
+	(void)index;
+	return 0.0f;
+#endif
+}
+
+void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
+	_impl->hostTime = state;
+	_impl->processContext.projectTimeSamples = state.samplePos;
+	_impl->processContext.tempo = state.tempo;
+	_impl->processContext.timeSigNumerator = state.bpi;
+	_impl->processContext.timeSigDenominator = 4;
+	_impl->processContext.state = state.isPlaying ? 1u : 0u;
+	_impl->processContext.sampleRate = state.sampleRate;
+#else
+	(void)state;
+#endif
+}
+
+void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
+	unsigned int hostIndex = 0u;
+	if (!_impl->TryGetHostIndexForParamId(static_cast<ParamID>(paramId), hostIndex))
+		return;
+
+	PublishLastTouchedParameter(this, hostIndex, std::clamp(normalizedValue, 0.0f, 1.0f));
+#else
+	(void)paramId;
+	(void)normalizedValue;
 #endif
 }
 

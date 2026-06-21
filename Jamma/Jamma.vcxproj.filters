@@ -90,6 +90,12 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="resources\shaders\automation.frag">
+      <Filter>resources\shaders</Filter>
+    </Content>
+    <Content Include="resources\shaders\automation.vert">
+      <Filter>resources\shaders</Filter>
+    </Content>
     <Content Include="resources\shaders\texture.frag">
       <Filter>resources\shaders</Filter>
     </Content>

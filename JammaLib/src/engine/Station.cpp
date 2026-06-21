@@ -1,7 +1,9 @@
 ﻿#include "Station.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
+#include "../midi/MidiRouter.h"
 
 using namespace engine;
 using namespace timing;
@@ -355,6 +357,11 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	_RunVstBlock(chain.get(), routes, *state, vstActive,
 		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
 
+	// Drive any wired parameter automation. Runs independently of vstActive so a
+	// bypassed/idle chain still receives recorded parameter motion. Flat loop over
+	// the pre-baked dispatch list — no weak_ptr locks, no shared_ptr chasing.
+	_RunAutomationDispatch(blockStartSample, sampsToRead);
+
 	if (channelCount == 0u)
 	{
 		_masterMixer->UpdateVu(0.0f, sampsToRead);
@@ -448,6 +455,156 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+}
+
+void Station::RebuildAutomationDispatch()
+{
+	// Non-audio thread only. Walk every take and MIDI loop, resolve all raw
+	// pointers and lane metadata into a compact flat list, then publish it.
+	const std::uint8_t back = _automationDispatchBack;
+	auto* buf = _automationDispatchBuf[back];
+	std::uint8_t count = 0u;
+
+	const auto& takes = GetLoopTakes();
+	for (const auto& take : takes)
+	{
+		if (!take)
+			continue;
+
+		for (const auto& midiLoop : take->GetMidiLoops())
+		{
+			if (!midiLoop)
+				continue;
+
+			for (std::size_t laneIdx = 0u; laneIdx < midi::MidiLoop::MaxAutomationLanes; ++laneIdx)
+			{
+				if (count >= MaxAutomationDispatches)
+					break;
+
+				const auto& lane = midiLoop->GetLane(laneIdx);
+				if (!lane.Mapping.IsActive() || !lane.Mapping.TargetPlugin)
+					continue;
+
+				auto& entry = buf[count];
+				entry.plugin = lane.Mapping.TargetPlugin;
+				entry.paramIdx = lane.Mapping.TargetParameterIndex;
+				entry.loop = midiLoop.get();
+				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
+				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
+				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
+				++count;
+			}
+		}
+	}
+
+	_automationDispatchCount[back] = count;
+	// Release pairs with the audio thread's acquire load: makes all MIDI-thread
+	// writes to lane Points visible before the new list is consumed.
+	_automationDispatch.store(static_cast<const AutomationDispatch*>(buf), std::memory_order_release);
+	_automationDispatchBack ^= 1u;
+}
+
+std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take)
+{
+	std::shared_ptr<midi::MidiLoop> last;
+	if (!take)
+		return last;
+
+	for (const auto& loop : take->GetMidiLoops())
+	{
+		if (loop && loop->LoopLengthSamps() > 0u)
+			last = loop;
+	}
+	return last;
+}
+
+std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const
+{
+	if (!plugin)
+		return nullptr;
+
+	const auto& takes = GetLoopTakes();
+
+	// Take-level ownership: record into the owning take's last recorded loop.
+	for (const auto& take : takes)
+	{
+		if (take && take->OwnsPlugin(plugin))
+		{
+			if (auto loop = _LastRecordedMidiLoop(take))
+				return loop;
+		}
+	}
+
+	// Station-level ownership: record into the station's last recorded loop
+	// (the most recently created MIDI loop across all takes).
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	if (chain && chain->ContainsPlugin(plugin))
+	{
+		std::shared_ptr<midi::MidiLoop> last;
+		for (const auto& take : takes)
+		{
+			if (auto loop = _LastRecordedMidiLoop(take))
+				last = loop;
+		}
+		return last;
+	}
+
+	return nullptr;
+}
+
+void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
+	std::uint32_t numSamps) noexcept
+{
+	const auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
+	if (!dispatches)
+		return;
+
+	// Detect a newly published list and reset per-entry playback state so
+	// stale cursors and last-values from the previous list are never used.
+	if (dispatches != _automationDispatchFront)
+	{
+		_automationDispatchFront = dispatches;
+		for (auto& s : _automationPlaybackState)
+		{
+			s.cursorIdx = 0u;
+			s.lastValue = -2.0f;
+		}
+	}
+
+	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
+	const auto count = _automationDispatchCount[frontIdx];
+	const auto dispatchSample = blockStartSample + ((numSamps > 0u) ? (numSamps - 1u) : 0u);
+
+	for (std::uint8_t i = 0u; i < count; ++i)
+	{
+		const auto& entry = dispatches[i];
+		if (!entry.plugin || !entry.loop)
+			continue;
+
+		// Editor-driven recording leaves a short per-parameter cool-down so a just
+		// dragged parameter is not snapped back to its recorded curve the instant
+		// automation record is released. Only the matching (plugin, parameter) pair
+		// is held off; all other automation plays normally. Sample-domain deadline,
+		// so the audio thread never reads a wall clock.
+		if (midi::MidiRouter::IsParameterSuppressed(entry.plugin, entry.paramIdx, dispatchSample))
+			continue;
+
+		const double frac = (entry.loopLengthSamps > 0u)
+			? std::fmod(
+				static_cast<double>(dispatchSample - entry.loopPhaseAnchor),
+				static_cast<double>(entry.loopLengthSamps))
+					/ static_cast<double>(entry.loopLengthSamps)
+			: 0.0;
+
+		auto& state = _automationPlaybackState[i];
+		const float val = entry.loop->GetAutomationValueAtCursor(entry.laneIdx, frac, state.cursorIdx);
+
+		if (std::abs(val - state.lastValue) > AutomationEpsilon)
+		{
+			entry.plugin->SetParameter(entry.paramIdx, val);
+			state.lastValue = val;
+		}
+	}
 }
 
 void Station::EndMultiPlay(unsigned int numSamps)
@@ -1692,6 +1849,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 		}
 	}
 	take->Ditch();
+	RebuildAutomationDispatch();
 }
 
 void Station::LoadVstPlugin(std::wstring path,

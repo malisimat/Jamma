@@ -101,6 +101,7 @@ void GlDrawContext::Initialise()
 void GlDrawContext::Bind()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+	glViewport(0, 0, static_cast<GLsizei>(_size.Width), static_cast<GLsizei>(_size.Height));
 	_scissorStack.clear();
 	glDisable(GL_SCISSOR_TEST);
 }

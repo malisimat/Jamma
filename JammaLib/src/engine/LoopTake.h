@@ -156,6 +156,15 @@ namespace engine
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 
+		// True if plugin is hosted by this take's VST chain. Identity comparison
+		// only; non-RT (reads the published chain). Used to resolve the owner of
+		// an editor-driven automation event.
+		bool OwnsPlugin(const vst::IVstPlugin* plugin) const noexcept
+		{
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain && chain->ContainsPlugin(plugin);
+		}
+
 		void Record(std::vector<unsigned int> channels,
 			std::string stationName,
 			std::vector<unsigned int> midiChannels = {},
