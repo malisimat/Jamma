@@ -1,4 +1,4 @@
-#include "GuiSelector.h"
+#include "SceneSelector.h"
 
 using namespace base;
 using namespace gui;
@@ -6,7 +6,7 @@ using namespace utils;
 using base::Action;
 using base::Tweakable;
 
-GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
+SceneSelector::SceneSelector(GuiSelectorParams guiParams) :
 	_isSelecting(false),
 	_selectionTool(SELECTION_PAINT),
 	_selectMode(SELECT_NONE),
@@ -21,27 +21,32 @@ GuiSelector::GuiSelector(GuiSelectorParams guiParams) :
 {
 }
 
-GuiSelector::SelectMode GuiSelector::CurrentMode() const
+SceneSelector::SelectMode SceneSelector::CurrentMode() const
 {
 	return _selectMode;
 }
 
-SelectDepth GuiSelector::CurrentSelectDepth() const
+SelectDepth SceneSelector::CurrentSelectDepth() const
 {
 	return _selectDepth;
 }
 
-void GuiSelector::SetSelectDepth(SelectDepth level)
+void SceneSelector::SetSelectDepth(SelectDepth level)
 {
 	_selectDepth = level;
 }
 
-std::vector<unsigned char> GuiSelector::CurrentHover() const
+std::vector<unsigned char> SceneSelector::CurrentHover() const
 {
 	return _currentHover;
 }
 
-bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
+std::vector<unsigned char> SceneSelector::PaintedPathForTest() const
+{
+	return _paintedPath;
+}
+
+bool SceneSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 	Action::Modifiers modifiers,
 	bool isSelected,
 	base::Tweakable::TweakState tweakState)
@@ -63,7 +68,7 @@ bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 	return isHovering;
 }
 
-actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
+actions::ActionResult SceneSelector::OnAction(actions::TouchAction action)
 {
 	auto res = GuiElement::OnAction(action);
 
@@ -134,7 +139,7 @@ actions::ActionResult GuiSelector::OnAction(actions::TouchAction action)
 	return res;
 }
 
-actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
+actions::ActionResult SceneSelector::OnAction(actions::KeyAction action)
 {
 	auto res = GuiElement::OnAction(action);
 
@@ -160,7 +165,7 @@ actions::ActionResult GuiSelector::OnAction(actions::KeyAction action)
 	return res;
 }
 
-bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
+bool SceneSelector::IsHovering(std::vector<unsigned char> path) const
 {
 	auto depth = 1u + (unsigned int)_selectDepth;
 
@@ -170,7 +175,7 @@ bool GuiSelector::IsHovering(std::vector<unsigned char> path) const
 	return !path.empty();
 }
 
-void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)
+void SceneSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char> selection)
 {
 	_isSelecting = true;
 	_selectionTool = SELECTION_PAINT;
@@ -178,7 +183,7 @@ void GuiSelector::StartPaintSelection(SelectMode mode, std::vector<unsigned char
 	_paintedPath = selection;
 }
 
-void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
+void SceneSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
 {
 	_isSelecting = true;
 	_selectionTool = SELECTION_RECT;
@@ -188,7 +193,7 @@ void GuiSelector::StartRectSelection(SelectMode mode, utils::Position2d pos)
 	_currentPos = pos;
 }
 
-void GuiSelector::UpdateRectSelection(utils::Position2d pos)
+void SceneSelector::UpdateRectSelection(utils::Position2d pos)
 {
 	if (!_isSelecting)
 		return;
@@ -199,7 +204,7 @@ void GuiSelector::UpdateRectSelection(utils::Position2d pos)
 	_currentPos = pos;
 }
 
-void GuiSelector::EndSelection()
+void SceneSelector::EndSelection()
 {
 	_isSelecting = false;
 	_selectMode = SELECT_NONE;

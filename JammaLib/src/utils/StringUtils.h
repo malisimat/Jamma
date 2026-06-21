@@ -30,6 +30,7 @@ namespace utils
 	std::string Trim(std::string str);
 	std::string CollapseWhitespace(std::string str);
 	std::string ToLower(std::string str);
+	bool ParseUnsigned(const std::string& token, unsigned int& value);
 	std::string HtmlToText(const std::string& html, bool preserveLineBreaks = false);
 	std::vector<std::string> SplitLines(const std::string& text);
 	// Base64 encode a raw byte blob to a standard ASCII string.

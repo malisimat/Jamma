@@ -362,7 +362,7 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 	const MidiEvent* eventSource = quantisedEvents ? quantisedEvents->Events.data() : _events.data();
 
 	auto spans = MidiNote::ExtractSpans(eventSource, _eventCount, effectiveLength);
-	if (queueUpdate)
+	if (queueUpdate && !force)
 		_model->QueueModelUpdate(spans, effectiveLength);
 	else
 		_model->UpdateModel(spans, effectiveLength);

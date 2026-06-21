@@ -8,9 +8,6 @@
 #include "GuiElement.h"
 #include "ActionSender.h"
 #include "ActionUndo.h"
-#include "../graphics/NinePatchImage.h"
-#include "../resources/TextureResource.h"
-
 // Forward declaration to avoid circular include (AudioMixer.h -> GuiSlider.h).
 namespace audio { class AudioMixer; }
 
@@ -20,6 +17,12 @@ namespace gui
 	class GuiSliderParams : public base::GuiElementParams
 	{
 	public:
+		static constexpr unsigned int DefaultHeight = 34u;
+		static constexpr unsigned int DefaultWidth = 104u;
+		static constexpr unsigned int WideWidth = 320u;
+		static constexpr unsigned int DefaultMinWidth = 36u;
+		static constexpr unsigned int DefaultDragWidth = 10u;
+
 		GuiSliderParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
 				MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
@@ -60,6 +63,30 @@ namespace gui
 			DragGap({ 0,0 })
 		{
 			GuiPassThrough = false;
+		}
+
+		static void ApplyPanelTextures(GuiSliderParams& params)
+		{
+			params.TextureShader = "texture_tinted";
+			params.Texture = "rounded_but";
+			params.OverTexture = "rounded_but_over";
+			params.DownTexture = "rounded_but_down";
+			params.OutTexture = "rounded_but_on";
+			params.DragOverTexture = "yellow";
+		}
+
+		static GuiSliderParams PanelHorizontal(const std::string& dragTexture,
+			unsigned int width = DefaultWidth)
+		{
+			GuiSliderParams params;
+			ApplyPanelTextures(params);
+			params.Orientation = SLIDER_HORIZONTAL;
+			params.Size = { width, DefaultHeight };
+			params.MinSize = { DefaultMinWidth, DefaultHeight };
+			params.DragTexture = dragTexture;
+			params.DragControlSize = { DefaultDragWidth, DefaultHeight };
+			params.DragControlOffset = { 0, 0 };
+			return params;
 		}
 
 		enum SliderOrientation
@@ -106,6 +133,8 @@ namespace gui
 		virtual bool Undo(std::shared_ptr<base::ActionUndo> undo) override;
 		virtual bool Redo(std::shared_ptr<base::ActionUndo> undo) override;
 
+		bool DragHandleIsOverForTest() const noexcept;
+
 		// VU meter — connects this slider to its owning AudioMixer for display.
 		void SetMixer(std::shared_ptr<audio::AudioMixer> mixer);
 		void SetVuVisible(bool visible);
@@ -130,7 +159,6 @@ namespace gui
 		utils::Position2d _initClickPos;
 		utils::Position2d _initDragPos;
 		base::GuiElement _dragElement;
-		graphics::NinePatchImage _dragImage;
 		double _valueOffset;
 		double _initValue;
 		std::weak_ptr<audio::AudioMixer> _mixer;

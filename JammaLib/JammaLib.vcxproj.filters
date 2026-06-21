@@ -284,6 +284,33 @@
     <ClInclude Include="src\gui\GuiGrid.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiStackPanel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiFocusManager.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiPopupHost.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiTextBox.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiNumericInput.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiDropDown.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiMainPanel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiScrollBar.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiScrollPanel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiSlider.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -470,7 +497,7 @@
     <ClInclude Include="src\actions\DelayedAction.h">
       <Filter>src\actions</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiSelector.h">
+    <ClInclude Include="src\gui\SceneSelector.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\base\Tweakable.h">
@@ -631,6 +658,33 @@
     <ClCompile Include="src\gui\GuiGrid.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClCompile Include="src\gui\GuiStackPanel.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiFocusManager.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiPopupHost.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiTextBox.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiNumericInput.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiDropDown.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiMainPanel.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiScrollBar.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiScrollPanel.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
     <ClCompile Include="src\gui\GuiLabel.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
@@ -787,7 +841,7 @@
     <ClCompile Include="src\utils\VecUtils.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiSelector.cpp">
+    <ClCompile Include="src\gui\SceneSelector.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRouter.cpp">

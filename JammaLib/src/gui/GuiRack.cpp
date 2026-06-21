@@ -374,33 +374,14 @@ gui::GuiToggleParams GuiRack::_GetToggleParams(GuiRackParams::RackState state, u
 
 gui::GuiRouterParams GuiRack::_GetRouterParams(utils::Size2d size)
 {
-	GuiRouterParams routerParams;
-
 	auto sliderSize = _CalcSliderSize(size);
-
-	routerParams.Size = {
+	auto routerParams = GuiRouterParams::RackRouter(
 		_CalcChannelPannelWidth(sliderSize),
-		_CalcRouterHeight(size)
-	};
+		_CalcRouterHeight(size),
+		sliderSize.Width + _SliderGap.Width,
+		sliderSize.Width);
+
 	routerParams.Position = { 0, 0 };
-	routerParams.MinSize = routerParams.Size;
-	routerParams.InputType = GuiRouterParams::CHANNEL_BUS;
-	routerParams.OutputType = GuiRouterParams::CHANNEL_DEVICE;
-	routerParams.InputSpacing = sliderSize.Width + _SliderGap.Width;
-	routerParams.InputSize = sliderSize.Width;
-	routerParams.OutputSpacing = GuiRouterParams::BusWidth + GuiRouterParams::BusGap;
-	routerParams.OutputSize = GuiRouterParams::BusWidth;
-	routerParams.Texture = "router";
-	routerParams.PinTexture = "";
-	routerParams.LinkTexture = "";
-	routerParams.DeviceInactiveTexture = "router";
-	routerParams.DeviceActiveTexture = "router_inactive";
-	routerParams.ChannelInactiveTexture = "router";
-	routerParams.ChannelActiveTexture = "router_inactive";
-	routerParams.OverTexture = "router_over";
-	routerParams.DownTexture = "router_down";
-	routerParams.HighlightTexture = "router_over";
-	routerParams.LineShader = "colour";
 
 	return routerParams;
 }

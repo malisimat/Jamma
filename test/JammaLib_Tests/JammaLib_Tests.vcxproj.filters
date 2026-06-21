@@ -68,10 +68,16 @@
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
+    <ClCompile Include="src\graphics\ResourceLibTextureArgs_Tests.cpp">
+      <Filter>src\graphics</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\Window_Tests.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiControls_Tests.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiPhase3_Tests.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiRack_Tests.cpp">

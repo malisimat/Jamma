@@ -85,7 +85,7 @@
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>X64;_DEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>X64;_DEBUG;_CONSOLE;NOMINMAX;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
@@ -134,7 +134,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
-      <PreprocessorDefinitions>X64;NDEBUG;_CONSOLE;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>X64;NDEBUG;_CONSOLE;NOMINMAX;JAMMA_VST2_ENABLED;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -176,8 +176,11 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\graphics\LoopModel_Tests.cpp" />
     <ClCompile Include="src\graphics\StationModel_Tests.cpp" />
     <ClCompile Include="src\graphics\NinePatchImage_Tests.cpp" />
+    <ClCompile Include="src\graphics\ResourceLibTextureArgs_Tests.cpp" />
     <ClCompile Include="src\graphics\Window_Tests.cpp" />
     <ClCompile Include="src\gui\GuiControls_Tests.cpp" />
+    <ClCompile Include="src\gui\GuiPhase3_Tests.cpp" />
+    <ClCompile Include="src\gui\GuiLayout_Tests.cpp" />
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />
     <ClCompile Include="src\gui\GuiSlider_Tests.cpp" />
     <ClCompile Include="src\io\JamFile_Tests.cpp" />

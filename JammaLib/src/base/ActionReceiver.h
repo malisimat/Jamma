@@ -29,8 +29,8 @@ namespace base
 
 		std::shared_ptr<ActionReceiver> shared_from_this()
 		{
-			return std::dynamic_pointer_cast<ActionReceiver>(
-				Sharable::shared_from_this());
+			auto self = Sharable::shared_from_this();
+			return self ? std::dynamic_pointer_cast<ActionReceiver>(self) : nullptr;
 		}
 
 	protected:
