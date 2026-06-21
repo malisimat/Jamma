@@ -218,6 +218,12 @@ namespace engine
 		void CloseSerial() {}
 		void CommitChanges();
 
+		// Returns a locked snapshot of the current station list.  Always use
+		// this when reading _stations from outside the render/tick thread (e.g.
+		// exporters, network handlers, tests).  Holding the snapshot keeps the
+		// shared_ptrs alive even if _stations is mutated on another thread.
+		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
+
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg)
 		{
@@ -360,7 +366,7 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
-		std::mutex _sceneMutex;
+		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};

@@ -1328,6 +1328,12 @@ glm::mat4 Scene::_View()
 	return glm::lookAt(glm::vec3(camPos.X, camPos.Y, camPos.Z), glm::vec3(camPos.X, camPos.Y, 0.f), glm::vec3(0.f, 1.f, 0.f));
 }
 
+std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
+{
+	std::lock_guard<std::mutex> lock(_sceneMutex);
+	return _stations;
+}
+
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
 	station->SetReceiver(ActionReceiver::shared_from_this());
@@ -1344,7 +1350,10 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
 
-	_stations.push_back(station);
+	{
+		std::lock_guard<std::mutex> lock(_sceneMutex);
+		_stations.push_back(station);
+	}
 	station->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_PublishAudioStations();
 }
