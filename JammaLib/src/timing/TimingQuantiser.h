@@ -327,9 +327,6 @@ namespace timing
 		std::optional<actions::ActionResult> TryHandleTouchMove(actions::TouchMoveAction action,
 			unsigned int sampleRate);
 
-		int VisibleButtonCountForTest() const noexcept;
-		std::optional<utils::Position2d> ButtonCenterForTest(int buttonIndex) const noexcept;
-
 	private:
 		enum class MidiPhaseDragTargetKind : std::uint8_t
 		{

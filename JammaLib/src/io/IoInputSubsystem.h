@@ -47,8 +47,6 @@ namespace io
 
 		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
-		midi::MidiRouter& GetMidiRouterForTest() { return _midiRouter; }
-
 	private:
 		static LRESULT CALLBACK _LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) noexcept;
 		static HHOOK _globalInsertHook;

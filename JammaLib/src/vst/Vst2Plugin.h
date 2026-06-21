@@ -125,16 +125,6 @@ namespace vst
 				   (sv == "sendVstMidiEvent");
 		}
 
-		static VstIntPtr HostCallbackForTest(AEffect* effect,
-			VstInt32 opcode,
-			VstInt32 index,
-			VstIntPtr value,
-			void* ptr,
-			float opt)
-		{
-			return HostCallback(effect, opcode, index, value, ptr, opt);
-		}
-
 	private:
 #ifdef JAMMA_VST2_ENABLED
 			static constexpr size_t MaxMidiEventsPerBlock = 256u;

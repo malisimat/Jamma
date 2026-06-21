@@ -1135,16 +1135,6 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
-int Scene::CtrlOverlayVisibleButtonCountForTest() const noexcept
-{
-	return _quantisationInteraction.VisibleButtonCountForTest();
-}
-
-std::optional<utils::Position2d> Scene::CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept
-{
-	return _quantisationInteraction.ButtonCenterForTest(buttonIndex);
-}
-
 glm::mat4 Scene::_View()
 {
 	auto camPos = _camera.ModelPosition();

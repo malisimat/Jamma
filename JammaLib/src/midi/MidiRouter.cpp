@@ -187,11 +187,6 @@ bool MidiRouter::IsAutomationRecordHeld() noexcept
 	return _automationRecordHeld.load(std::memory_order_acquire);
 }
 
-void MidiRouter::SetAutomationRecordHeldForTest(bool held) noexcept
-{
-	_automationRecordHeld.store(held, std::memory_order_release);
-}
-
 void MidiRouter::_ResetEditorTouchStates() noexcept
 {
 	for (auto& state : _editorTouchStates)
@@ -274,17 +269,6 @@ void MidiRouter::RefreshAutomationSuppression(const vst::IVstPlugin* plugin,
 	slot.Plugin.store(plugin, std::memory_order_relaxed);
 	slot.ParamIndex.store(paramIdx, std::memory_order_relaxed);
 	slot.ExpirySample.store(expirySample, std::memory_order_release);
-}
-
-void MidiRouter::ResetAutomationSuppressionForTest() noexcept
-{
-	for (auto& slot : _automationSuppressions)
-	{
-		slot.Plugin.store(nullptr, std::memory_order_relaxed);
-		slot.ParamIndex.store(0u, std::memory_order_relaxed);
-		slot.ExpirySample.store(0u, std::memory_order_relaxed);
-	}
-	_automationSuppressionCount.store(0u, std::memory_order_release);
 }
 
 void MidiRouter::InitMidi(const io::UserConfig& cfg,
@@ -492,86 +476,6 @@ void MidiRouter::RegisterTrigger(const std::string& deviceName, std::shared_ptr<
 
 	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, UnresolvedMidiDeviceSlot, trigger });
 	_PublishMidiTriggerRoutes();
-}
-
-void MidiRouter::RegisterTriggerForTest(const std::string& deviceName,
-	std::shared_ptr<engine::Trigger> trigger,
-	std::uint8_t deviceSlot)
-{
-	if (!trigger)
-		return;
-
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, deviceSlot, std::move(trigger) });
-	_PublishMidiTriggerRoutes();
-}
-
-void MidiRouter::AddMidiInputDeviceForTest(const std::string& deviceName, std::uint8_t deviceSlot)
-{
-	auto currentInputs = _midiInputs.load(std::memory_order_acquire);
-	auto updatedInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
-	if (currentInputs)
-		updatedInputs->insert(updatedInputs->end(), currentInputs->begin(), currentInputs->end());
-
-	auto endpoint = std::make_shared<MidiInputEndpoint>();
-	endpoint->DeviceSlot = deviceSlot;
-	endpoint->ConfiguredName = deviceName;
-	updatedInputs->push_back(endpoint);
-
-	_midiInputs.store(updatedInputs, std::memory_order_release);
-}
-
-void MidiRouter::PushMidiEventForTest(std::uint8_t deviceSlot,
-	std::uint8_t status,
-	std::uint8_t data1,
-	std::uint8_t data2) noexcept
-{
-	auto midiInputs = _midiInputs.load(std::memory_order_acquire);
-	if (!midiInputs)
-		return;
-
-	for (const auto& input : *midiInputs)
-	{
-		if (!input || (input->DeviceSlot != deviceSlot))
-			continue;
-
-		midi::MidiEvent ingress{};
-		ingress.sampleOffset = 0u;
-		ingress.status = status;
-		ingress.data1 = data1;
-		ingress.data2 = data2;
-		ingress._pad = 0u;
-		input->Ingress.Push(ingress);
-		break;
-	}
-}
-
-bool MidiRouter::HasMidiInputDeviceForTest(std::uint8_t deviceSlot) const noexcept
-{
-	auto midiInputs = _midiInputs.load(std::memory_order_acquire);
-	if (!midiInputs)
-		return false;
-
-	for (const auto& input : *midiInputs)
-	{
-		if (input && (input->DeviceSlot == deviceSlot))
-			return true;
-	}
-
-	return false;
-}
-
-void MidiRouter::PushSerialTriggerEventForTest(const io::SerialTriggerEvent& event)
-{
-	std::scoped_lock lock(_serialIngressMutex);
-	_serialIngress.Push(event);
-}
-
-MidiRouter::TriggerDispatchSummary MidiRouter::DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
-	const midi::MidiEvent& event,
-	const io::UserConfig& userConfig,
-	const audio::AudioStreamParams& audioParams)
-{
-	return _DispatchMidiTriggerEvent(deviceSlot, event, userConfig, audioParams);
 }
 
 void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engine::Station>>& stations,

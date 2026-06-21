@@ -190,9 +190,6 @@ namespace engine
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void OnJobTick(Time curTime);
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
-		int CtrlOverlayVisibleButtonCountForTest() const noexcept;
-		std::optional<utils::Position2d> CtrlOverlayButtonCenterForTest(int buttonIndex) const noexcept;
-
 		void InitReceivers();
 		void SetHover3d(std::vector<unsigned char> path, base::Action::Modifiers modifiers);
 		unsigned int Width() const { return _sizeParams.Size.Width; }

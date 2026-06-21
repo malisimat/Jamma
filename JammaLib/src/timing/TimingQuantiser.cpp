@@ -930,16 +930,6 @@ std::optional<ActionResult> TimingQuantiserController::TryHandleTouchMove(TouchM
 	return std::nullopt;
 }
 
-int TimingQuantiserController::VisibleButtonCountForTest() const noexcept
-{
-	return _overlay.VisibleButtonCount();
-}
-
-std::optional<Position2d> TimingQuantiserController::ButtonCenterForTest(int buttonIndex) const noexcept
-{
-	return _overlay.ButtonCenter(buttonIndex);
-}
-
 void TimingQuantiserController::_CaptureContext(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {

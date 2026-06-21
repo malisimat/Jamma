@@ -194,14 +194,6 @@ namespace engine
 		// Non-audio (MIDI pump) thread only.
 		std::shared_ptr<midi::MidiLoop> ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const;
 
-		// Test hook: run one automation dispatch block in isolation (drives
-		// SetParameter on wired plugins). Non-RT; mirrors the audio-thread path.
-		void RunAutomationDispatchForTest(std::uint32_t blockStartSample,
-			std::uint32_t numSamps = 128u) noexcept
-		{
-			_RunAutomationDispatch(blockStartSample, numSamps);
-		}
-
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 

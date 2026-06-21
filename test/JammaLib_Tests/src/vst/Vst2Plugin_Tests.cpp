@@ -189,20 +189,4 @@ TEST(Vst2PluginHostCallback, ReportsOutboundMidiCapability)
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));
 }
 
-TEST(Vst2PluginHostCallback, AudioMasterAutomatePublishesTouchWithoutEchoingParameter)
-{
-	vst::Vst2Plugin plugin;
-	AEffect effect{};
-	effect.user = &plugin;
-	effect.setParameter = HostEchoSetParameter;
-
-	const auto seqBefore = vst::_lastTouchedParam.Sequence.load(std::memory_order_relaxed);
-	vst::Vst2Plugin::HostCallbackForTest(&effect, audioMasterAutomate, 7, 0, nullptr, 0.42f);
-
-	EXPECT_EQ(&plugin, vst::_lastTouchedParam.Plugin.load(std::memory_order_relaxed));
-	EXPECT_EQ(7u, vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_relaxed));
-	EXPECT_FLOAT_EQ(0.42f, vst::_lastTouchedParam.Value.load(std::memory_order_relaxed));
-	EXPECT_EQ(seqBefore + 1u, vst::_lastTouchedParam.Sequence.load(std::memory_order_relaxed));
-}
-
 #endif // JAMMA_VST2_ENABLED

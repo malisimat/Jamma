@@ -65,20 +65,6 @@ namespace midi
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
 		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
-		void RegisterTriggerForTest(const std::string& deviceName,
-			std::shared_ptr<engine::Trigger> trigger,
-			std::uint8_t deviceSlot);
-		void AddMidiInputDeviceForTest(const std::string& deviceName, std::uint8_t deviceSlot);
-		void PushMidiEventForTest(std::uint8_t deviceSlot,
-			std::uint8_t status,
-			std::uint8_t data1,
-			std::uint8_t data2) noexcept;
-		bool HasMidiInputDeviceForTest(std::uint8_t deviceSlot) const noexcept;
-		void PushSerialTriggerEventForTest(const io::SerialTriggerEvent& event);
-		TriggerDispatchSummary DispatchMidiTriggerEventForTest(std::uint8_t deviceSlot,
-			const midi::MidiEvent& event,
-			const io::UserConfig& userConfig,
-			const audio::AudioStreamParams& audioParams);
 
 		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
@@ -95,7 +81,6 @@ namespace midi
 			const std::shared_ptr<engine::LoopTake>& hoveredTake);
 
 		static bool IsAutomationRecordHeld() noexcept;
-		static void SetAutomationRecordHeldForTest(bool held) noexcept;
 
 		// --- Editor-driven automation feedback suppression ---
 		// Per (plugin, parameter) cool-down published by the non-RT MIDI pump and
@@ -121,9 +106,6 @@ namespace midi
 			unsigned int paramIdx,
 			std::uint32_t nowSample,
 			std::uint32_t expirySample) noexcept;
-
-		// Test hook: drop all suppression entries.
-		static void ResetAutomationSuppressionForTest() noexcept;
 
 	private:
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;

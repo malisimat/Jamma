@@ -41,11 +41,6 @@ std::vector<unsigned char> GuiSelector::CurrentHover() const
 	return _currentHover;
 }
 
-std::vector<unsigned char> GuiSelector::PaintedPathForTest() const
-{
-	return _paintedPath;
-}
-
 bool GuiSelector::UpdateCurrentHover(std::vector<unsigned char> path,
 	Action::Modifiers modifiers,
 	bool isSelected,
