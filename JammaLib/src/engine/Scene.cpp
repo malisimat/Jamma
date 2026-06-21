@@ -41,6 +41,7 @@ Scene::Scene(SceneParams params,
 	_label(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
+	_midiChannelOverrideInput(nullptr),
 	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
@@ -132,6 +133,22 @@ Scene::Scene(SceneParams params,
 	modeRadioParams.ToggleParams = radioToggleParams;
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
 
+	GuiNumericInputParams midiChannelOverrideParams = GuiNumericInputParams::PanelInput(72u);
+	midiChannelOverrideParams.Index = MidiChannelOverrideControlIndex;
+	midiChannelOverrideParams.Position = { 10, (int)modeRadioParams.Position.Y - ((int)modeRadioParams.Size.Height + 4) };
+	midiChannelOverrideParams.ModelPosition = {
+		(float)midiChannelOverrideParams.Position.X,
+		(float)midiChannelOverrideParams.Position.Y,
+		0.0f };
+	midiChannelOverrideParams.Size = { 80, 64 };
+	midiChannelOverrideParams.Min = 0.0;
+	midiChannelOverrideParams.Max = 16.0;
+	midiChannelOverrideParams.Step = 0.1;
+	midiChannelOverrideParams.Decimals = 0;
+	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased());
+	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
+	AddChild(_midiChannelOverrideInput);
+
 	_PublishAudioStations();
 
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
@@ -209,6 +226,13 @@ void Scene::Draw(DrawContext& ctx)
 	auto &glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_overlayViewProj);
+
+	if (_midiChannelOverrideInput && !_midiChannelOverrideInput->HasFocus())
+	{
+		const auto forcedChannel = static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased());
+		if (_midiChannelOverrideInput->Value() != forcedChannel)
+			_midiChannelOverrideInput->SetValue(forcedChannel, false);
+	}
 
 	_label->Draw(ctx);
 
@@ -527,6 +551,18 @@ ActionResult Scene::OnAction(KeyAction action)
 			return popupRes;
 	}
 
+	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action);
+		overrideRes.IsEaten)
+	{
+		if (_midiChannelOverrideInput)
+		{
+			_midiChannelOverrideInput->SetValue(
+				static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased()),
+				false);
+		}
+		return overrideRes;
+	}
+
 	// 2. The focused control gets first refusal. While it is editing text we
 	//    swallow the key entirely so global shortcuts don't fire mid-edit.
 	if (auto focus = _focusManager.CurrentFocus())
@@ -703,6 +739,35 @@ ActionResult Scene::OnAction(GuiAction action)
 				_UpdateSelectDepth((unsigned int)_viewMode);
 			}
 			break;
+		case GuiAction::ACTIONELEMENT_RACK:
+			if ((action.Index == MidiChannelOverrideControlIndex)
+				&& _midiChannelOverrideInput)
+			{
+				int clamped = 0;
+				if (auto str = std::get_if<GuiAction::GuiString>(&action.Data))
+				{
+					try
+					{
+						clamped = std::clamp(std::stoi(str->Value), 0, 16);
+					}
+					catch (...)
+					{
+						clamped = static_cast<int>(_inputSubsystem->ForcedChannelOverrideOneBased());
+					}
+				}
+				else if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
+				{
+					clamped = std::clamp(static_cast<int>(value->Value), 0, 16);
+				}
+				else
+				{
+					break;
+				}
+
+				_inputSubsystem->SetForcedChannelOverrideOneBased(static_cast<std::uint8_t>(clamped));
+				_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
+			}
+			break;
 	}
 
 	return ActionResult::NoAction();
@@ -832,6 +897,8 @@ void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+	if (_midiChannelOverrideInput)
+		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)

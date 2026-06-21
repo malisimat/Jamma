@@ -79,6 +79,14 @@ namespace midi
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake);
+		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action);
+
+		void StepChannelOverrideUp() noexcept;
+		void StepChannelOverrideDown() noexcept;
+		void ResetChannelOverride() noexcept;
+		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept;
+		std::uint8_t ForcedChannelOverrideOneBased() const noexcept;
+		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedOneBased) noexcept;
 
 		static bool IsAutomationRecordHeld() noexcept;
 
@@ -156,7 +164,10 @@ namespace midi
 		std::atomic<std::uint8_t> _learnedCC{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
+		std::atomic<std::uint8_t> _forcedInputChannelOneBased{ 0u };
 		bool _automationRecordKeyHeld = false;
+		bool _channelOverridePageUpHeld = false;
+		bool _channelOverridePageDownHeld = false;
 		static std::atomic<bool> _automationRecordHeld;
 
 		// Highest editor-origin sequence already consumed by _ConsumeEditorAutomation.

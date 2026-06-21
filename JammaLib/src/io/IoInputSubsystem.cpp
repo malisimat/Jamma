@@ -134,6 +134,21 @@ namespace io
 		return _midiRouter.HandleAutomationKey(action, stations, hoverPath, hoveredTake);
 	}
 
+	actions::ActionResult IoInputSubsystem::HandleChannelOverrideKey(const actions::KeyAction& action)
+	{
+		return _midiRouter.HandleChannelOverrideKey(action);
+	}
+
+	void IoInputSubsystem::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept
+	{
+		_midiRouter.SetForcedChannelOverrideOneBased(forcedOneBased);
+	}
+
+	std::uint8_t IoInputSubsystem::ForcedChannelOverrideOneBased() const noexcept
+	{
+		return _midiRouter.ForcedChannelOverrideOneBased();
+	}
+
 	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 	{
 		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
