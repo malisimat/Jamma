@@ -74,20 +74,18 @@ namespace gui
 		bool InitShaders(resources::ResourceLib& resourceLib);
 		bool InitVertexArray(std::vector<float> verts, std::vector<float> uvs);
 		bool InitInstanceAttributes();
-		virtual std::weak_ptr<resources::TextureResource> GetTexture()
-		{
-			if (!_modelTextures.empty())
-				return _modelTextures.front();
 
-			return std::weak_ptr<resources::TextureResource>();
-		}
-		virtual std::weak_ptr<resources::ShaderResource> GetShader()
-		{
-			if (!_modelShaders.empty())
-				return _modelShaders.front();
+		// Thread-safe locked accessors — always use these instead of _modelTextures/_modelShaders
+		// directly. They acquire _modelStateMutex so reads can never race against Init writes.
+		virtual std::weak_ptr<resources::TextureResource> GetTexture();
+		virtual std::weak_ptr<resources::ShaderResource> GetShader();
 
-			return std::weak_ptr<resources::ShaderResource>();
-		}
+		// Index-based variants for derived classes that need a specific entry
+		// (e.g. multi-shader models that swap by render pass).  Protected so
+		// only this class and its subclasses can call them — external code must
+		// go through GetTexture()/GetShader().
+		std::weak_ptr<resources::TextureResource> GetTextureAt(unsigned int index);
+		std::weak_ptr<resources::ShaderResource>  GetShaderAt(unsigned int index);
 
 	protected:
 		bool _resourcesInitialised;
@@ -106,6 +104,11 @@ namespace gui
 		unsigned int _backInstanceCount;
 		unsigned int _instanceCount;
 		mutable std::mutex _modelStateMutex;
+
+	private:
+		// Private: all access must go through the locked Get*() helpers above.
+		// Keeping these private means the compiler will reject any future attempt
+		// to read _modelTextures/_modelShaders from a derived class without locking.
 		std::vector<std::weak_ptr<resources::TextureResource>> _modelTextures;
 		std::vector<std::weak_ptr<resources::ShaderResource>> _modelShaders;
 	};
