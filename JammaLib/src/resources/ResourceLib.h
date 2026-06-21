@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <memory>
+#include <mutex>
 #include <gl/glew.h>
 #include <gl/gl.h>
 #include "Resource.h"
@@ -47,6 +48,7 @@ namespace resources
 			FontSelection* selection = nullptr);
 
 	private:
+		mutable std::mutex _resourceMutex;
 		std::map<std::string, std::shared_ptr<Resource>> _resources;
 		std::map<graphics::FontOptions::FontSize, std::shared_ptr<graphics::Font>> _fonts;
 	};

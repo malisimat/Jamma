@@ -15,11 +15,13 @@ ResourceLib::ResourceLib() :
 
 int ResourceLib::NumResources() const
 {
+	std::lock_guard<std::mutex> lock(_resourceMutex);
 	return (int)_resources.size();
 }
 
 void ResourceLib::ClearResources()
 {
+	std::lock_guard<std::mutex> lock(_resourceMutex);
 	_fonts.clear();
 	_resources.clear();
 }
@@ -51,6 +53,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				if (texOpt.has_value())
 				{
 					auto[tex, width, height] = texOpt.value();
+					std::lock_guard<std::mutex> lock(_resourceMutex);
 					_resources.emplace(name, std::make_shared<TextureResource>(
 						name,
 						tex,
@@ -83,6 +86,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 
 				if (shader.has_value())
 				{
+					std::lock_guard<std::mutex> lock(_resourceMutex);
 					_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
 					return true;
 				}
@@ -107,6 +111,7 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				if (wavOpt.has_value())
 				{
 					auto[wav, numSamps, sampleRate] = wavOpt.value();
+					std::lock_guard<std::mutex> lock(_resourceMutex);
 					_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
 					return true;
 				}
@@ -120,7 +125,10 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 		case CUBEMAP:
 		{
 			if (auto cubemapOpt = CubemapResource::Load(name))
+			{
+				std::lock_guard<std::mutex> lock(_resourceMutex);
 				_resources.emplace(name, std::make_shared<CubemapResource>(name, cubemapOpt.value()));
+			}
 
 			return true;
 		}
@@ -156,6 +164,7 @@ bool ResourceLib::ParseTextureArgs(const std::vector<std::string>& args,
 
 std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::string& name)
 {
+	std::lock_guard<std::mutex> lock(_resourceMutex);
 	if (_resources.count(name) > 0)
 		return _resources.at(name);
 
@@ -164,7 +173,10 @@ std::optional<std::weak_ptr<Resource>> ResourceLib::GetResource(const std::strin
 
 bool ResourceLib::LoadFonts()
 {
-	_fonts.clear();
+	{
+		std::lock_guard<std::mutex> lock(_resourceMutex);
+		_fonts.clear();
+	}
 	std::cout << "ResourceLib::LoadFonts starting font initialisation" << std::endl;
 
 	std::shared_ptr<ShaderResource> shader;
@@ -193,6 +205,7 @@ bool ResourceLib::LoadFonts()
 
 		if (font.has_value())
 		{
+			std::lock_guard<std::mutex> lock(_resourceMutex);
 			_fonts[size] = std::move(font.value());
 			std::cout << "ResourceLib::LoadFonts loaded " << fontName << std::endl;
 		}
@@ -208,6 +221,7 @@ bool ResourceLib::LoadFonts()
 
 std::optional<std::weak_ptr<Font>> ResourceLib::GetFont(FontOptions::FontSize size)
 {
+	std::lock_guard<std::mutex> lock(_resourceMutex);
 	if (_fonts.count(size) > 0)
 	{
 		auto font = _fonts.at(size);
@@ -233,6 +247,7 @@ unsigned int ResourceLib::ResolveTextPixelHeightFromControlBox(unsigned int cont
 
 std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFont(unsigned int desiredPixelHeight) const
 {
+	std::lock_guard<std::mutex> lock(_resourceMutex);
 	if (_fonts.empty())
 		return std::nullopt;
 

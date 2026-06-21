@@ -285,6 +285,7 @@ void MidiModel::ApplyPendingModelUpdate()
 
 std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
 {
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
 	if (!_modelShaders.empty())
 		return _modelShaders.front();
 
