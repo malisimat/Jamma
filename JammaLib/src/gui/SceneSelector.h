@@ -41,6 +41,7 @@ namespace gui
 		base::SelectDepth CurrentSelectDepth() const;
 		void SetSelectDepth(base::SelectDepth level);
 		std::vector<unsigned char> CurrentHover() const;
+		std::vector<unsigned char> PaintedPathForTest() const;
 		bool UpdateCurrentHover(std::vector<unsigned char> path,
 			base::Action::Modifiers modifiers,
 			bool isSelected,
