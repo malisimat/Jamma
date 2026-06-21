@@ -107,10 +107,9 @@ namespace midi
 
 		// Seqlock generation counter. The MIDI thread (the only writer of Points /
 		// PointCount) bumps this to an odd value before mutating the buffer and back
-		// to an even value afterwards. The render thread reads the points with a
-		// retry loop so it never observes a half-shifted buffer. Audio-thread cursor
-		// reads ignore this; a momentarily torn read there is harmless and pre-dates
-		// the display path.
+		// to an even value afterwards. Both the audio thread (GetAutomationValueAtCursor)
+		// and the render thread (SnapshotAutomationLanePoints) participate in a bounded
+		// retry loop so neither ever observes a half-shifted buffer.
 		std::atomic<std::uint32_t> Revision{ 0u };
 	};
 

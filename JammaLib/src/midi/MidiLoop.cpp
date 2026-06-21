@@ -580,37 +580,69 @@ float MidiLoop::GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std
 		return 0.0f;
 
 	const auto& lane = _lanes[laneIdx];
-	const auto count = lane.PointCount;
-	if (0u == count)
-		return 0.0f;
-
-	const auto& points = lane.Points;
 	const auto fracF = static_cast<float>(frac);
 
-	// Clamp cursor into range and reset on loop wrap (frac stepped backward).
-	if (cursorIdx >= count)
-		cursorIdx = 0u;
-	if (fracF < points[cursorIdx].first)
-		cursorIdx = 0u;
+	// Seqlock read: retry while the MIDI-thread writer holds the lock (odd generation)
+	// or the buffer shifted under us. Bounded to avoid blocking the audio path; on
+	// give-up the cursor is left unchanged and the last committed value is returned.
+	for (int attempt = 0; attempt < 8; ++attempt)
+	{
+		const auto gen0 = lane.Revision.load(std::memory_order_acquire);
+		if (gen0 & 1u)
+			continue; // Writer in progress — spin once more.
 
-	// Advance forward while the next point still starts at or before frac.
-	while ((cursorIdx + 1u) < count && points[cursorIdx + 1u].first <= fracF)
-		++cursorIdx;
+		const auto count = lane.PointCount;
+		if (0u == count)
+		{
+			const auto gen1 = lane.Revision.load(std::memory_order_acquire);
+			if (gen0 == gen1)
+				return 0.0f;
+			continue;
+		}
 
-	// Before the first point: hold the first value. At/after the last: hold last.
-	if (fracF <= points[0].first)
-		return points[0].second;
-	if ((cursorIdx + 1u) >= count)
-		return points[count - 1u].second;
+		const auto& points = lane.Points;
 
-	const auto& lo = points[cursorIdx];
-	const auto& hi = points[cursorIdx + 1u];
-	const auto span = hi.first - lo.first;
-	if (span <= 0.0f)
-		return hi.second;
+		// Stage cursor updates locally; only commit if the generation validates.
+		auto localCursor = cursorIdx;
 
-	const auto t = (fracF - lo.first) / span;
-	return lo.second + t * (hi.second - lo.second);
+		// Clamp cursor into range and reset on loop wrap (frac stepped backward).
+		if (localCursor >= count)
+			localCursor = 0u;
+		if (fracF < points[localCursor].first)
+			localCursor = 0u;
+
+		// Advance forward while the next point still starts at or before frac.
+		while ((localCursor + 1u) < count && points[localCursor + 1u].first <= fracF)
+			++localCursor;
+
+		// Before the first point: hold the first value. At/after the last: hold last.
+		float result;
+		if (fracF <= points[0].first)
+		{
+			result = points[0].second;
+		}
+		else if ((localCursor + 1u) >= count)
+		{
+			result = points[count - 1u].second;
+		}
+		else
+		{
+			const auto lo = points[localCursor];
+			const auto hi = points[localCursor + 1u];
+			const auto span = hi.first - lo.first;
+			result = (span <= 0.0f) ? hi.second
+			                        : lo.second + (fracF - lo.first) / span * (hi.second - lo.second);
+		}
+
+		const auto gen1 = lane.Revision.load(std::memory_order_acquire);
+		if (gen0 == gen1)
+		{
+			cursorIdx = static_cast<std::uint16_t>(localCursor);
+			return result;
+		}
+	}
+
+	return 0.0f;
 }
 
 void MidiLoop::ClearAutomationLane(std::size_t laneIdx) noexcept
