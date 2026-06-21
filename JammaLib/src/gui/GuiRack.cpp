@@ -55,6 +55,7 @@ GuiRack::GuiRack(GuiRackParams params) :
 		toggleParams.Size = _MidiChannelToggleSize;
 		toggleParams.MinSize = _MidiChannelToggleSize;
 		toggleParams.Position = { 0, 0 };
+		toggleParams.Text = std::to_string(channel + 1u);
 		toggleParams.Rot90 = false;
 		auto toggle = std::make_shared<gui::GuiToggle>(toggleParams);
 		_midiChannelToggles.push_back(toggle);

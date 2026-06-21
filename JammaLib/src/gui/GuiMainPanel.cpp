@@ -54,6 +54,7 @@ void GuiMainPanel::_BuildUpperSection()
 		for (std::size_t i = 0; i < buttonTints.size(); ++i)
 		{
 			auto buttonParams = GuiButtonParams::PanelButton();
+			buttonParams.Text = std::string("Button ") + std::to_string(i + 1);
 			buttonParams.TintColor = buttonTints[i];
 			hStack->AddChild(std::make_shared<GuiButton>(buttonParams));
 		}
@@ -142,21 +143,25 @@ std::shared_ptr<GuiGrid> GuiMainPanel::_CreateToggleGrid()
 	const std::array<std::function<std::shared_ptr<GuiElement>()>, 4> cellCreators = {
 		[]() {
 			auto params = GuiToggleParams::PanelPrimary();
+			params.Text = "Toggle A";
 			params.TintColor = glm::vec3(1.0f, 0.7f, 0.3f);
 			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
 			auto params = GuiToggleParams::PanelSecondary();
+			params.Text = "Toggle B";
 			params.TintColor = glm::vec3(0.7f, 1.0f, 0.3f);
 			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
 			auto params = GuiToggleParams::PanelSecondary();
+			params.Text = "Toggle C";
 			params.TintColor = glm::vec3(0.3f, 1.0f, 0.7f);
 			return std::make_shared<GuiToggle>(params);
 		},
 		[]() {
 			auto params = GuiToggleParams::PanelSecondary();
+			params.Text = "Toggle D";
 			params.TintColor = glm::vec3(0.7f, 0.3f, 1.0f);
 			return std::make_shared<GuiToggle>(params);
 		}
