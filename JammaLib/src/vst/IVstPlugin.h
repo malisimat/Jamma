@@ -154,7 +154,8 @@ namespace vst
 	// Factory: creates the correct plugin type based on file extension.
 	// Extension ".dll"  -> Vst2Plugin (VST2)
 	// Any other extension (e.g. ".vst3") -> Vst3Plugin (VST3)
-	std::shared_ptr<IVstPlugin> MakePluginForPath(const std::wstring& path);	// Queue a plugin for destruction on the UI thread.
+	std::shared_ptr<IVstPlugin> MakePluginForPath(const std::wstring& path);
+	// Queue a plugin for destruction on the UI thread.
 	// VST3 plugins must be destroyed on the UI (message-pump) thread to avoid
 	// crashing the host.  Vst2Plugin may also be queued here for uniformity.
 	// Safe to call from any thread.
