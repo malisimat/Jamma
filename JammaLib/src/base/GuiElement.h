@@ -95,6 +95,7 @@ namespace base
 		std::string OverTexture;
 		std::string DownTexture;
 		std::string OutTexture;
+		std::string TextureShader = "texture";
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;
 	};
@@ -184,6 +185,7 @@ namespace base
 		// Top-left position of this element in global (scene overlay) coordinates.
 		utils::Position2d GlobalPosition() const;
 		bool HitTest(utils::Position2d localPos);
+		void _ApplyTextureTint(graphics::GlDrawContext& ctx) const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);

@@ -11,10 +11,10 @@ GuiToggle::GuiToggle(GuiToggleParams params) :
 	GuiButton(params),
 	_toggleIndex(params.ToggleIndex),
 	_toggleState(params.InitState),
-	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_toggledTexture(ImageParams(DrawableParams{ params.ToggledTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOverTexture(ImageParams(DrawableParams{ params.ToggledOverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledDownTexture(ImageParams(DrawableParams{ params.ToggledDownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_toggledOutTexture(ImageParams(DrawableParams{ params.ToggledOutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
 	_buttonParams(params)
 {
 }
@@ -32,6 +32,7 @@ void GuiToggle::SetSize(Size2d size)
 void GuiToggle::Draw(DrawContext& ctx)
 {
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	_ApplyTextureTint(glCtx);
 
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));

@@ -13,6 +13,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) :
 	GuiStackPanel(params),
 	_popupHost(params.PopupHost)
 {
+	_guiParams.TextureShader = "texture_tinted";
 	_guiParams.Texture = "rounded_but";
 	SetDirection(StackDirection::Vertical);
 	SetSpacing(_PanelSpacing);

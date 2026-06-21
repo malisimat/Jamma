@@ -203,6 +203,7 @@ std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams&
 		SizeableParams{ params.Size.Width, std::max(1u, params.RowHeight * (unsigned int)params.Items.size()) },
 		"", "", "", {});
 	lp.Texture = params.ListTexture;
+	lp.TextureShader = params.TextureShader;
 	lp.GuiPassThrough = false;
 	return std::make_shared<GuiDropDownList>(lp,
 		params.Items,

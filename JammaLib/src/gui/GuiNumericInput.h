@@ -16,6 +16,7 @@ namespace gui
 		static GuiNumericInputParams PanelInput(unsigned int width)
 		{
 			GuiNumericInputParams params;
+			params.TextureShader = "texture_tinted";
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };

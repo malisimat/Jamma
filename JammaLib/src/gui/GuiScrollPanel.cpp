@@ -14,6 +14,7 @@ GuiScrollBarParams GuiScrollPanel::_MakeScrollBarParams(const GuiScrollPanelPara
 {
 	GuiScrollBarParams sb;
 	sb.Texture = params.ScrollBarTexture;
+	sb.TextureShader = params.TextureShader;
 	sb.ThumbTexture = params.ThumbTexture;
 	const int w = (int)params.ScrollBarWidth;
 	const int h = (int)params.Size.Height;

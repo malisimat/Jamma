@@ -23,13 +23,19 @@ GuiElement::GuiElement(GuiElementParams params) :
 	_index(params.Index),
 	_guiParams(params),
 	_state(STATE_NORMAL),
-	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_texture(ImageParams(DrawableParams{ params.Texture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_overTexture(ImageParams(DrawableParams{ params.OverTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_downTexture(ImageParams(DrawableParams{ params.DownTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_outTexture(ImageParams(DrawableParams{ params.OutTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
 	_gestureState(),
 	_children({})
 {
+}
+
+void GuiElement::_ApplyTextureTint(GlDrawContext& ctx) const
+{
+	if (_guiParams.TextureShader == "texture_tinted")
+		ctx.SetUniform("TintColor", glm::vec3(1.0f, 0.7f, 0.2f));
 }
 
 void GuiElement::_BeginGesture(GestureKind kind, Position2d startPosition, int startValue) noexcept
@@ -204,6 +210,7 @@ void GuiElement::Draw(DrawContext& ctx)
 	if (_isVisible)
 	{
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+		_ApplyTextureTint(glCtx);
 
 		auto pos = Position();
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
@@ -342,10 +349,13 @@ ActionResult GuiElement::OnAction(TouchAction action)
 		}
 		break;
 	case TouchAction::TouchState::TOUCH_UP:
-		_state = STATE_NORMAL;
-
 		if (HitTest(action.Position))
+		{
+			_state = STATE_OVER;
 			return { true, "", "", ACTIONRESULT_DEFAULT, nullptr };
+		}
+
+		_state = STATE_NORMAL;
 
 		break;
 	}

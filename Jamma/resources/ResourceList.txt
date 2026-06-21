@@ -3,6 +3,7 @@
 2 skybox MVP
 4 sky
 2 texture MVP TextureSampler
+2 texture_tinted MVP TextureSampler TintColor
 2 font MVP TextureSampler
 2 texture_shaded MVP LoopState LoopHover
 2 waveform MVP LoopState LoopHover TextureSampler WaveformSampler WaveformRadius WaveformHeightScale WaveformMinHeight WaveformColorMultiplier WaveformColorScale WaveformUnitMeshRadius

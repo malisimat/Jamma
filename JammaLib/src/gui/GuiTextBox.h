@@ -26,6 +26,7 @@ namespace gui
 		static GuiTextBoxParams PanelInput(unsigned int width)
 		{
 			GuiTextBoxParams params;
+			params.TextureShader = "texture_tinted";
 			params.Texture = "rounded_but";
 			params.Size = { width, DefaultHeight };
 			params.MinSize = { DefaultMinWidth, DefaultMinHeight };

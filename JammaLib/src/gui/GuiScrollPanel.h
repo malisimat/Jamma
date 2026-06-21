@@ -26,6 +26,7 @@ namespace gui
 		static GuiScrollPanelParams PanelScroll(unsigned int width, unsigned int height)
 		{
 			GuiScrollPanelParams params;
+			params.TextureShader = "texture_tinted";
 			params.Texture = "rounded_but";
 			params.Size = { width + DefaultPanelPaddingWidth, height };
 			params.MinSize = { DefaultPanelMinWidth, DefaultPanelMinHeight };
