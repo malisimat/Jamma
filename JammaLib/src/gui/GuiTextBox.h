@@ -35,7 +35,6 @@ namespace gui
 
 		std::string  Text;
 		unsigned int Padding     = 4u;   // inner padding in pixels.
-		unsigned int DesiredTextPixelHeight = 0u;
 		std::string  CaretTexture = "blue"; // solid colour used for caret/selection.
 		std::weak_ptr<base::ActionReceiver> Receiver;
 	};

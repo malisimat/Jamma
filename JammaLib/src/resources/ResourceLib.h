@@ -37,8 +37,13 @@ namespace resources
 		std::optional<std::weak_ptr<Resource>> GetResource(const std::string& name);
 		bool LoadFonts();
 		std::optional<std::weak_ptr<graphics::Font>> GetFont(graphics::FontOptions::FontSize size);
+		static unsigned int ResolveTextPixelHeightFromControlBox(unsigned int controlHeight, unsigned int padding);
 		std::optional<FontSelection> SelectClosestFont(unsigned int desiredPixelHeight) const;
+		std::optional<FontSelection> SelectClosestFontForControlBox(unsigned int controlHeight, unsigned int padding) const;
 		std::optional<std::weak_ptr<graphics::Font>> GetClosestFont(unsigned int desiredPixelHeight,
+			FontSelection* selection = nullptr);
+		std::optional<std::weak_ptr<graphics::Font>> GetClosestFontForControlBox(unsigned int controlHeight,
+			unsigned int padding,
 			FontSelection* selection = nullptr);
 
 	private:

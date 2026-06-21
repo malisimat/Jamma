@@ -27,16 +27,15 @@ std::shared_ptr<GuiLabel> GuiDropDownList::_MakeRowLabel(const std::string& text
 	int y,
 	unsigned int width,
 	unsigned int rowHeight,
-	unsigned int padding,
-	unsigned int desiredTextPixelHeight)
+	unsigned int padding)
 {
 	GuiLabelParams lp;
 	lp.String = text;
-	lp.DesiredTextPixelHeight = desiredTextPixelHeight;
 	const unsigned int pad = std::min(padding, rowHeight / 2u);
+	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(rowHeight, pad);
 	lp.Position = { (int)pad, y + (int)pad };
-	lp.Size = { std::max(1u, width > 2u * pad ? width - 2u * pad : 1u), std::max(1u, rowHeight > 2u * pad ? rowHeight - 2u * pad : 1u) };
-	lp.MinSize = { 1u, std::max(1u, rowHeight > 2u * pad ? rowHeight - 2u * pad : 1u) };
+	lp.Size = { std::max(1u, width > 2u * pad ? width - 2u * pad : 1u), textHeight };
+	lp.MinSize = { 1u, textHeight };
 	return std::make_shared<GuiLabel>(lp);
 }
 
@@ -48,12 +47,10 @@ GuiDropDownList::GuiDropDownList(GuiElementParams params,
 	std::vector<std::string> items,
 	unsigned int rowHeight,
 	unsigned int padding,
-	unsigned int desiredTextPixelHeight,
 	const std::string& highlightTexture) :
 	GuiElement(params),
 	_items(std::move(items)),
 	_rowHeight(rowHeight),
-	_desiredTextPixelHeight(desiredTextPixelHeight),
 	_highlight(-1),
 	_highlightQuad(_MakeQuadParams(highlightTexture)),
 	_onSelect()
@@ -61,7 +58,7 @@ GuiDropDownList::GuiDropDownList(GuiElementParams params,
 	int y = 0;
 	for (const auto& item : _items)
 	{
-		_rowLabels.push_back(_MakeRowLabel(item, y, params.Size.Width, _rowHeight, padding, _desiredTextPixelHeight));
+		_rowLabels.push_back(_MakeRowLabel(item, y, params.Size.Width, _rowHeight, padding));
 		y += (int)_rowHeight;
 	}
 }
@@ -184,29 +181,21 @@ ActionResult GuiDropDownList::OnAction(KeyAction action)
 // GuiDropDown
 // ===========================================================================
 
-unsigned int GuiDropDown::_ResolveDesiredTextPixelHeight(const GuiDropDownParams& params)
-{
-	const unsigned int pad = std::min(params.Padding, std::min(params.Size.Height, params.RowHeight) / 2u);
-	const unsigned int closedTextHeight = std::max(1u, params.Size.Height > 2u * pad ? params.Size.Height - 2u * pad : 1u);
-	const unsigned int rowTextHeight = std::max(1u, params.RowHeight > 2u * pad ? params.RowHeight - 2u * pad : 1u);
-	return std::min(closedTextHeight, rowTextHeight);
-}
-
-std::shared_ptr<GuiLabel> GuiDropDown::_MakeClosedLabel(const GuiDropDownParams& params, unsigned int desiredTextPixelHeight)
+std::shared_ptr<GuiLabel> GuiDropDown::_MakeClosedLabel(const GuiDropDownParams& params)
 {
 	GuiLabelParams lp;
 	lp.String = (params.InitIndex < params.Items.size()) ? params.Items[params.InitIndex] : std::string();
-	lp.DesiredTextPixelHeight = desiredTextPixelHeight;
 	const unsigned int pad = std::min(params.Padding, params.Size.Height / 2u);
+	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(params.Size.Height, pad);
 	lp.Position = { (int)pad, (int)pad };
 	const int w = std::max(1, (int)params.Size.Width - (int)(2u * pad));
-	const int h = std::max(1, (int)params.Size.Height - (int)(2u * pad));
+	const int h = (int)textHeight;
 	lp.Size = { (unsigned int)w, (unsigned int)h };
 	lp.MinSize = { 1u, (unsigned int)h };
 	return std::make_shared<GuiLabel>(lp);
 }
 
-std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams& params, unsigned int desiredTextPixelHeight)
+std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams& params)
 {
 	GuiElementParams lp(0,
 		DrawableParams{ "" },
@@ -219,7 +208,6 @@ std::shared_ptr<GuiDropDownList> GuiDropDown::_MakeList(const GuiDropDownParams&
 		params.Items,
 		params.RowHeight,
 		params.Padding,
-		desiredTextPixelHeight,
 		params.HighlightTexture);
 }
 
@@ -229,8 +217,8 @@ GuiDropDown::GuiDropDown(GuiDropDownParams params) :
 	_selectedIndex(params.Items.empty() ? -1 : (int)std::min((size_t)params.InitIndex, params.Items.size() - 1)),
 	_rowHeight(params.RowHeight),
 	_padding(params.Padding),
-	_label(_MakeClosedLabel(params, _ResolveDesiredTextPixelHeight(params))),
-	_list(_MakeList(params, _ResolveDesiredTextPixelHeight(params))),
+	_label(_MakeClosedLabel(params)),
+	_list(_MakeList(params)),
 	_popupHost(nullptr),
 	_open(false),
 	_receiver(params.Receiver)
@@ -308,8 +296,9 @@ void GuiDropDown::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
 	const unsigned int pad = std::min(_padding, size.Height / 2u);
+	const unsigned int textHeight = ResourceLib::ResolveTextPixelHeightFromControlBox(size.Height, pad);
 	const int w = std::max(1, (int)size.Width - (int)(2u * pad));
-	const int h = std::max(1, (int)size.Height - (int)(2u * pad));
+	const int h = (int)textHeight;
 	_label->SetSize({ (unsigned int)w, (unsigned int)h });
 }
 

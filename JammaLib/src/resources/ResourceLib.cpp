@@ -220,6 +220,17 @@ std::optional<std::weak_ptr<Font>> ResourceLib::GetFont(FontOptions::FontSize si
 	return std::nullopt;
 }
 
+unsigned int ResourceLib::ResolveTextPixelHeightFromControlBox(unsigned int controlHeight, unsigned int padding)
+{
+	const unsigned int height = std::max(1u, controlHeight);
+	const unsigned int clampedPadding = std::min(padding, height / 2u);
+	const unsigned int doublePadding = 2u * clampedPadding;
+	if (height <= doublePadding)
+		return 1u;
+
+	return std::max(1u, height - doublePadding);
+}
+
 std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFont(unsigned int desiredPixelHeight) const
 {
 	if (_fonts.empty())
@@ -232,6 +243,12 @@ std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFont(unsigne
 		return std::nullopt;
 
 	return FontSelection{ size, Font::GetPixelHeightForSize(size) };
+}
+
+std::optional<ResourceLib::FontSelection> ResourceLib::SelectClosestFontForControlBox(unsigned int controlHeight,
+	unsigned int padding) const
+{
+	return SelectClosestFont(ResolveTextPixelHeightFromControlBox(controlHeight, padding));
 }
 
 std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFont(unsigned int desiredPixelHeight,
@@ -249,4 +266,11 @@ std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFont(unsigned int desi
 		*selection = selected.value();
 
 	return fontOpt;
+}
+
+std::optional<std::weak_ptr<Font>> ResourceLib::GetClosestFontForControlBox(unsigned int controlHeight,
+	unsigned int padding,
+	FontSelection* selection)
+{
+	return GetClosestFont(ResolveTextPixelHeightFromControlBox(controlHeight, padding), selection);
 }

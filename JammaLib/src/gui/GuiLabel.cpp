@@ -12,7 +12,6 @@ using namespace resources;
 
 GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	GuiElement(guiParams),
-	_desiredTextPixelHeight(guiParams.DesiredTextPixelHeight),
 	_str(guiParams.String),
 	_pendingStr(guiParams.String),
 	_vertexArrayDirty(true),
@@ -21,9 +20,21 @@ GuiLabel::GuiLabel(GuiLabelParams guiParams) :
 	_texture(std::weak_ptr<TextureResource>()),
 	_shader(std::weak_ptr<ShaderResource>()),
 	_font(std::weak_ptr<Font>()),
+	_resourceLib(nullptr),
 	_selectedFontSize(graphics::FontOptions::FONT_LARGE),
 	_resolvedTextPixelHeight(0u)
 {
+}
+
+void GuiLabel::SetSize(utils::Size2d size)
+{
+	GuiElement::SetSize(size);
+
+	if (nullptr == _resourceLib)
+		return;
+
+	if (_ResolveFont(*_resourceLib))
+		_vertexArrayDirty.store(true, std::memory_order_release);
 }
 
 void GuiLabel::SetString(const std::string& str)
@@ -78,19 +89,22 @@ void GuiLabel::Draw(DrawContext& ctx)
 	glCtx.PopMvp();
 }
 
-void GuiLabel::_ResolveFont(ResourceLib& resourceLib)
+bool GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 {
 	ResourceLib::FontSelection selection;
-	const unsigned int desired = (_desiredTextPixelHeight > 0u)
-		? _desiredTextPixelHeight
-		: std::max(1u, GetSize().Height);
+	const unsigned int desired = ResourceLib::ResolveTextPixelHeightFromControlBox(GetSize().Height, 0u);
 
 	auto fontOpt = resourceLib.GetClosestFont(desired, &selection);
 	if (!fontOpt.has_value())
 	{
 		std::cout << "GuiLabel::_ResolveFont failed for desired text height " << desired << std::endl;
-		return;
+		return false;
 	}
+
+	auto previousFont = _font.lock();
+	const auto previousFontSize = _selectedFontSize;
+	const auto previousResolvedPixelHeight = _resolvedTextPixelHeight;
+	auto resolvedFont = fontOpt.value().lock();
 
 	_font = fontOpt.value();
 	_selectedFontSize = selection.Size;
@@ -99,10 +113,15 @@ void GuiLabel::_ResolveFont(ResourceLib& resourceLib)
 	auto sz = GetSize();
 	if (sz.Height != _resolvedTextPixelHeight)
 		GuiElement::SetSize({ sz.Width, _resolvedTextPixelHeight });
+
+	return (resolvedFont != previousFont)
+		|| (previousFontSize != _selectedFontSize)
+		|| (previousResolvedPixelHeight != _resolvedTextPixelHeight);
 }
 
 void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	_resourceLib = &resourceLib;
 	_ResolveFont(resourceLib);
 
 	if (_font.expired())
@@ -122,6 +141,7 @@ void GuiLabel::_InitResources(ResourceLib& resourceLib, bool forceInit)
 
 void GuiLabel::_ReleaseResources()
 {
+	_resourceLib = nullptr;
 	graphics::GlDeleteQueue::DeleteBuffers(2, _vertexBuffers);
 	_vertexBuffers[0] = 0;
 	_vertexBuffers[1] = 0;

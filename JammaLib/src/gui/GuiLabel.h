@@ -49,7 +49,6 @@ namespace gui
 
 	public:
 		std::string String;
-		unsigned int DesiredTextPixelHeight = 0u;
 	};
 
 	class GuiLabel :
@@ -62,6 +61,7 @@ namespace gui
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual utils::Size2d ContentSize() const override;
+		virtual void SetSize(utils::Size2d size) override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -70,10 +70,9 @@ namespace gui
 	private:
 		void SyncVertexArray();
 		bool InitVertexArray();
-		void _ResolveFont(resources::ResourceLib& resourceLib);
+		bool _ResolveFont(resources::ResourceLib& resourceLib);
 
 	private:
-		unsigned int _desiredTextPixelHeight;
 		std::string _str;
 		std::string _pendingStr;
 		mutable std::mutex _stringMutex;
@@ -83,6 +82,7 @@ namespace gui
 		std::weak_ptr<resources::TextureResource> _texture;
 		std::weak_ptr<resources::ShaderResource> _shader;
 		std::weak_ptr<graphics::Font> _font;
+		resources::ResourceLib* _resourceLib;
 		graphics::FontOptions::FontSize _selectedFontSize;
 		unsigned int _resolvedTextPixelHeight;
 	};

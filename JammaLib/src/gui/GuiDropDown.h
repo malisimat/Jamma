@@ -22,7 +22,6 @@ namespace gui
 			std::vector<std::string> items,
 			unsigned int rowHeight,
 			unsigned int padding,
-			unsigned int desiredTextPixelHeight,
 			const std::string& highlightTexture);
 
 		void SetOnSelect(std::function<void(int)> onSelect);
@@ -46,13 +45,11 @@ namespace gui
 			int y,
 			unsigned int width,
 			unsigned int rowHeight,
-			unsigned int padding,
-			unsigned int desiredTextPixelHeight);
+			unsigned int padding);
 
 		std::vector<std::string>          _items;
 		std::vector<std::shared_ptr<GuiLabel>> _rowLabels;
 		unsigned int                      _rowHeight;
-		unsigned int                      _desiredTextPixelHeight;
 		int                               _highlight;
 		base::GuiElement                  _highlightQuad;
 		std::function<void(int)>          _onSelect;
@@ -122,10 +119,9 @@ namespace gui
 	private:
 		void _Select(int index, bool notify);
 		void _SyncLabel();
-		static unsigned int _ResolveDesiredTextPixelHeight(const GuiDropDownParams& params);
 
-		static std::shared_ptr<GuiLabel> _MakeClosedLabel(const GuiDropDownParams& params, unsigned int desiredTextPixelHeight);
-		static std::shared_ptr<GuiDropDownList> _MakeList(const GuiDropDownParams& params, unsigned int desiredTextPixelHeight);
+		static std::shared_ptr<GuiLabel> _MakeClosedLabel(const GuiDropDownParams& params);
+		static std::shared_ptr<GuiDropDownList> _MakeList(const GuiDropDownParams& params);
 
 		std::vector<std::string>           _items;
 		int                                _selectedIndex;

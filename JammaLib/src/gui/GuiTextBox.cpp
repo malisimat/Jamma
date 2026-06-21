@@ -31,10 +31,7 @@ GuiLabelParams GuiTextBox::_MakeLabelParams(const GuiTextBoxParams& params)
 	lp.String = params.Text;
 	const int pad = (int)params.Padding;
 	const int w = std::max(1, (int)params.Size.Width - 2 * pad);
-	const int h = std::max(1, (int)params.Size.Height - 2 * pad);
-	lp.DesiredTextPixelHeight = (params.DesiredTextPixelHeight > 0u)
-		? params.DesiredTextPixelHeight
-		: (unsigned int)h;
+	const int h = (int)ResourceLib::ResolveTextPixelHeightFromControlBox(params.Size.Height, params.Padding);
 	lp.Position = { pad, pad };
 	lp.Size = { (unsigned int)w, (unsigned int)h };
 	lp.MinSize = { 1u, (unsigned int)h };
@@ -90,7 +87,7 @@ void GuiTextBox::SetSize(Size2d size)
 
 	const int pad = (int)_padding;
 	const int w = std::max(1, (int)size.Width - 2 * pad);
-	const int h = std::max(1, (int)size.Height - 2 * pad);
+	const int h = (int)ResourceLib::ResolveTextPixelHeightFromControlBox(size.Height, _padding);
 	_label->SetSize({ (unsigned int)w, (unsigned int)h });
 }
 
@@ -334,7 +331,7 @@ void GuiTextBox::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_caretQuad.InitResources(resourceLib, forceInit);
 
-	auto fontOpt = resourceLib.GetClosestFont(std::max(1u, _label->GetSize().Height));
+	auto fontOpt = resourceLib.GetClosestFontForControlBox(_label->GetSize().Height, 0u);
 	if (fontOpt.has_value())
 		_font = fontOpt.value();
 }
