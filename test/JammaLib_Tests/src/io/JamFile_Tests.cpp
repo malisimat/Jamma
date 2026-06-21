@@ -217,6 +217,7 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	station.Name = "station";
 	station.StationType = 0;
 	station.StationPhaseOffsetSamps = 30;
+	station.AllowedMidiChannels = { 1, 3, 16 };
 	station.LoopTakes.push_back(take);
 
 	jam.Stations.push_back(station);
@@ -233,6 +234,10 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	ASSERT_EQ(utils::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
 	ASSERT_EQ(1, parsed->Stations.size());
 	ASSERT_EQ(30, parsed->Stations[0].StationPhaseOffsetSamps);
+	ASSERT_EQ(3, parsed->Stations[0].AllowedMidiChannels.size());
+	EXPECT_EQ(1, parsed->Stations[0].AllowedMidiChannels[0]);
+	EXPECT_EQ(3, parsed->Stations[0].AllowedMidiChannels[1]);
+	EXPECT_EQ(16, parsed->Stations[0].AllowedMidiChannels[2]);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
 	ASSERT_EQ(45, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());

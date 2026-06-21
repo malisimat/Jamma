@@ -97,6 +97,8 @@ Station::Station(StationParams params,
 	_vstPathsMutex(),
 	_vstPluginPaths(),
 	_liveMidiIngress(),
+	_allowedMidiChannels(),
+	_allowedMidiChannelMask(0u),
 	_midiVstRoutes(nullptr),
 	_retainedMidiVstRoutes(),
 	_sampleRate(44100.0f),
@@ -134,6 +136,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
+	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -1494,6 +1497,46 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	return _triggers.empty();
 }
 
+bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
+{
+	const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
+	if (mask == 0u)
+		return true;
+
+	if (channel >= 16u)
+		return false;
+
+	const auto bit = static_cast<std::uint16_t>(1u << channel);
+	return (mask & bit) != 0u;
+}
+
+void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	std::vector<int> filtered;
+	filtered.reserve(channels.size());
+
+	std::uint16_t mask = 0u;
+	for (auto channel : channels)
+	{
+		if (channel < 1 || channel > 16)
+			continue;
+
+		const auto zeroBased = static_cast<std::uint8_t>(channel - 1);
+		const auto bit = static_cast<std::uint16_t>(1u << zeroBased);
+		if ((mask & bit) != 0u)
+			continue;
+
+		mask = static_cast<std::uint16_t>(mask | bit);
+		filtered.push_back(channel);
+	}
+
+	_allowedMidiChannels = std::move(filtered);
+	_allowedMidiChannelMask.store(mask, std::memory_order_release);
+
+	if (_guiRack)
+		_guiRack->SetAllowedMidiChannels(_allowedMidiChannels, true);
+}
+
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 {
 	// Synthetic events, like punch-in transitions, do not have a device name.
@@ -1502,6 +1545,12 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName)
 {
+	if (!deviceName.empty() && !AcceptsLiveMidiFromDevice(deviceName))
+		return;
+
+	if (!AcceptsLiveMidiChannel(event.Channel()))
+		return;
+
 	if (event.IsNoteOn() || event.IsNoteOff())
 	{
 		const auto channel = event.Channel();
@@ -1775,6 +1824,12 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 	rackParams.NumOutputChannels = 2;
 	rackParams.InitLevel = 1.0;
 	rackParams.InitState = gui::GuiRackParams::RACK_MASTER;
+	rackParams.AllowedMidiChannels = _allowedMidiChannels;
+	rackParams.OnAllowedMidiChannelsChanged =
+		[this](const std::vector<int>& channels)
+		{
+			SetAllowedMidiChannels(channels);
+		};
 
 	return rackParams;
 }

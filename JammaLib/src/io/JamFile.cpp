@@ -208,6 +208,17 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		{ return quoted(key) + ":" + formatDouble(value); };
 	auto kvBool = [&](const std::string& key, bool value)
 		{ return quoted(key) + ":" + (value ? "true" : "false"); };
+	auto kvIntArray = [&](const std::string& key, const std::vector<int>& values)
+		{
+			std::string out = quoted(key) + ":[";
+			for (size_t i = 0; i < values.size(); ++i)
+			{
+				if (i > 0) out += ",";
+				out += std::to_string(values[i]);
+			}
+			out += "]";
+			return out;
+		};
 
 	auto quantStr = [](utils::Timer::QuantisationType quant) -> std::string {
 		switch (quant)
@@ -338,6 +349,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 
 		ss << "]";
+		if (!station.AllowedMidiChannels.empty())
+			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
 		if (!station.VstChain.empty())
 			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
 		ss << "}";
@@ -680,6 +693,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	unsigned int stationType = 0;
 	std::vector<LoopTake> takes;
 	std::int32_t stationPhaseOffsetSamps = 0;
+	std::vector<int> allowedMidiChannels;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -719,6 +733,42 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	if (iter != json.KeyValues.end())
 		stationPhaseOffsetSamps = ParseInt32Clamped(json.KeyValues["stationphaseoffsetsamps"], 0);
 
+	iter = json.KeyValues.find("allowedmidichannels");
+	if (iter != json.KeyValues.end())
+	{
+		if (json.KeyValues["allowedmidichannels"].index() == 5)
+		{
+			auto arr = std::get<Json::JsonArray>(json.KeyValues["allowedmidichannels"]);
+			if (arr.Array.index() == 2)
+			{
+				for (auto value : std::get<std::vector<unsigned long>>(arr.Array))
+				{
+					const auto channel = static_cast<int>(value);
+					if (channel >= 1 && channel <= 16)
+						allowedMidiChannels.push_back(channel);
+				}
+			}
+			else if (arr.Array.index() == 1)
+			{
+				for (auto value : std::get<std::vector<long>>(arr.Array))
+				{
+					const auto channel = static_cast<int>(value);
+					if (channel >= 1 && channel <= 16)
+						allowedMidiChannels.push_back(channel);
+				}
+			}
+			else if (arr.Array.index() == 3)
+			{
+				for (auto value : std::get<std::vector<double>>(arr.Array))
+				{
+					const auto channel = static_cast<int>(value);
+					if (channel >= 1 && channel <= 16)
+						allowedMidiChannels.push_back(channel);
+				}
+			}
+		}
+	}
+
 	std::vector<VstEntry> vstChain;
 	iter = json.KeyValues.find("vst");
 	if (iter != json.KeyValues.end())
@@ -747,5 +797,8 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	station.LoopTakes = takes;
 	station.VstChain = vstChain;
 	station.StationPhaseOffsetSamps = stationPhaseOffsetSamps;
+	std::sort(allowedMidiChannels.begin(), allowedMidiChannels.end());
+	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
+	station.AllowedMidiChannels = std::move(allowedMidiChannels);
 	return station;
 }

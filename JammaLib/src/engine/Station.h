@@ -159,6 +159,9 @@ namespace engine
 		// VST playback. Any unrestricted trigger keeps the station open to all
 		// devices; otherwise the device must match a trigger's MidiInputDevices list.
 		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
+		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
+		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
 		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
 		// without associated deviceName.
 		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
@@ -359,6 +362,8 @@ namespace engine
 		midi::MidiQueue<1024> _liveMidiIngress;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		std::vector<int> _allowedMidiChannels;
+		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.
 		// The callback reads an immutable snapshot pointer for O(1) lookups.
 		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;

@@ -113,6 +113,7 @@ namespace io
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
+			std::vector<int> AllowedMidiChannels;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};

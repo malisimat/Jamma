@@ -1,5 +1,6 @@
 #include "GuiToggle.h"
 #include "GuiRack.h"
+#include <algorithm>
 using namespace graphics;
 
 using namespace base;
@@ -16,6 +17,9 @@ const utils::Size2d GuiRack::_RouterToggleSize = { 64, 32 };
 const unsigned int GuiRack::_RouterTogglePaddingBottom = 8;
 const utils::Size2d GuiRack::_DragGap = { 4, 4 };
 const utils::Size2d GuiRack::_DragSize = { 112, 56 };
+const utils::Size2d GuiRack::_MidiChannelToggleSize = { 42, 42 };
+const utils::Size2d GuiRack::_MidiChannelToggleGap = { 6, 6 };
+const unsigned int GuiRack::_MidiChannelPanelPadding = 8;
 
 GuiRack::GuiRack(GuiRackParams params) :
 	GuiElement(params),
@@ -28,6 +32,8 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_routerToggle(nullptr),
 	_routerPanel(nullptr),
 	_router(nullptr),
+	_midiChannelPanel(nullptr),
+	_midiChannelToggles(),
 	_rackParams(params)
 {
 	_masterPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_MASTER, params.Size));
@@ -36,23 +42,40 @@ GuiRack::GuiRack(GuiRackParams params) :
 	_channelPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_CHANNELS, params.Size));
 	_routerToggle = std::make_shared<gui::GuiToggle>(_GetToggleParams(GuiRackParams::RACK_ROUTER, params.Size));
 	_routerPanel = std::make_shared<base::GuiElement>(_GetPanelParams(GuiRackParams::RACK_ROUTER, params.Size));
+	_midiChannelPanel = std::make_shared<base::GuiElement>(base::GuiElementParams());
 
 	_router = std::make_shared<gui::GuiRouter>(_GetRouterParams(params.Size),
 		params.NumInputChannels,
 		params.NumOutputChannels);
 
+	for (auto channel = 0u; channel < 16u; ++channel)
+	{
+		auto toggleParams = gui::GuiToggleParams::PanelSecondary();
+		toggleParams.ToggleIndex = MidiChannelToggleBaseIndex + channel;
+		toggleParams.Size = _MidiChannelToggleSize;
+		toggleParams.MinSize = _MidiChannelToggleSize;
+		toggleParams.Position = { 0, 0 };
+		toggleParams.Rot90 = false;
+		auto toggle = std::make_shared<gui::GuiToggle>(toggleParams);
+		_midiChannelToggles.push_back(toggle);
+		_midiChannelPanel->AddChild(toggle);
+	}
+
 	_children.push_back(_masterPanel);
 	_children.push_back(_masterSlider);
 	_masterPanel->AddChild(_channelToggle);
 	_masterPanel->AddChild(_channelPanel);
+	_channelPanel->AddChild(_midiChannelPanel);
 	_channelPanel->AddChild(_routerToggle);
 	_channelPanel->AddChild(_routerPanel);
 	_routerPanel->AddChild(_router);
 
 	SetNumInputChannels(params.NumInputChannels);
 	SetNumOutputChannels(params.NumOutputChannels);
+	SetAllowedMidiChannels(params.AllowedMidiChannels, true);
 
 	_OnRackChange((unsigned int)params.InitState, true);
+	SetSize(params.Size);
 }
 
 
@@ -89,6 +112,25 @@ void GuiRack::SetSize(utils::Size2d size)
 	_router->SetPosition(routerParams.Position);
 	_router->SetSize(routerParams.Size);
 
+	const auto midiPanelWidth = (8u * _MidiChannelToggleSize.Width) + (7u * _MidiChannelToggleGap.Width);
+	const auto midiPanelHeight = (2u * _MidiChannelToggleSize.Height) + _MidiChannelToggleGap.Height;
+	_midiChannelPanel->SetPosition({
+		static_cast<int>(_SliderGap.Width),
+		static_cast<int>(channelPanelParams.Size.Height + _MidiChannelPanelPadding)
+	});
+	_midiChannelPanel->SetSize({ midiPanelWidth, midiPanelHeight });
+
+	for (auto channel = 0u; channel < _midiChannelToggles.size(); ++channel)
+	{
+		const auto row = channel / 8u;
+		const auto col = channel % 8u;
+		_midiChannelToggles[channel]->SetPosition({
+			static_cast<int>(col * (_MidiChannelToggleSize.Width + _MidiChannelToggleGap.Width)),
+			static_cast<int>(row * (_MidiChannelToggleSize.Height + _MidiChannelToggleGap.Height))
+		});
+		_midiChannelToggles[channel]->SetSize(_MidiChannelToggleSize);
+	}
+
 	for (auto i = 0u; i < _channelSliders.size(); ++i)
 	{
 		auto chanSliderParams = _GetSliderParams(i + 1, size);
@@ -116,6 +158,43 @@ ActionResult GuiRack::OnAction(GuiAction action)
 		switch (action.ElementType)
 		{
 		case GuiAction::ACTIONELEMENT_TOGGLE:
+			if (action.Index >= MidiChannelToggleBaseIndex &&
+				action.Index < (MidiChannelToggleBaseIndex + 16u))
+			{
+				toggleOn = false;
+				if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+					toggleOn = (1 == i->Value);
+
+				const auto channel = static_cast<int>(action.Index - MidiChannelToggleBaseIndex + 1u);
+				auto it = std::find(_rackParams.AllowedMidiChannels.begin(),
+					_rackParams.AllowedMidiChannels.end(),
+					channel);
+
+				bool changed = false;
+				if (toggleOn)
+				{
+					if (it == _rackParams.AllowedMidiChannels.end())
+					{
+						_rackParams.AllowedMidiChannels.push_back(channel);
+						std::sort(_rackParams.AllowedMidiChannels.begin(), _rackParams.AllowedMidiChannels.end());
+						changed = true;
+					}
+				}
+				else
+				{
+					if (it != _rackParams.AllowedMidiChannels.end())
+					{
+						_rackParams.AllowedMidiChannels.erase(it);
+						changed = true;
+					}
+				}
+
+				if (changed && _rackParams.OnAllowedMidiChannelsChanged)
+					_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);
+
+				break;
+			}
+
 			toggleOn = false;
 			if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
 				toggleOn = (1 == i->Value);
@@ -204,6 +283,8 @@ void GuiRack::_InitReceivers()
 
 	_routerToggle->SetReceiver(ActionReceiver::shared_from_this());
 	_router->SetReceiver(ActionReceiver::shared_from_this());
+	for (auto& toggle : _midiChannelToggles)
+		toggle->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void GuiRack::_AddChannel(unsigned int index, utils::Size2d size)
@@ -225,6 +306,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 1 == index ? true : bypassUpdates);
 		_channelPanel->SetVisible(false);
 		_routerPanel->SetVisible(false);
+		_midiChannelPanel->SetVisible(false);
 		break;
 	case GuiRackParams::RACK_CHANNELS:
 		_masterPanel->SetVisible(true);
@@ -232,6 +314,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelPanel->SetVisible(true);
 		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_OFF, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(false);
+		_midiChannelPanel->SetVisible(true);
 		break;
 	case GuiRackParams::RACK_ROUTER:
 		_masterPanel->SetVisible(true);
@@ -239,6 +322,7 @@ void GuiRack::_OnRackChange(unsigned int index, bool bypassUpdates)
 		_channelPanel->SetVisible(true);
 		_routerToggle->SetToggleState(GuiToggleParams::TOGGLE_ON, 2 == index ? true : bypassUpdates);
 		_routerPanel->SetVisible(true);
+		_midiChannelPanel->SetVisible(true);
 		break;
 	}
 
@@ -429,6 +513,34 @@ void GuiRack::AddRoute(unsigned int inputChan, unsigned int outputChan)
 void GuiRack::ClearRoutes()
 {
 	_router->ClearRoutes();
+}
+
+void GuiRack::SetAllowedMidiChannels(const std::vector<int>& channels, bool bypassUpdates)
+{
+	std::vector<int> filtered;
+	filtered.reserve(channels.size());
+	for (auto channel : channels)
+	{
+		if (channel < 1 || channel > 16)
+			continue;
+
+		if (std::find(filtered.begin(), filtered.end(), channel) == filtered.end())
+			filtered.push_back(channel);
+	}
+
+	std::sort(filtered.begin(), filtered.end());
+	_rackParams.AllowedMidiChannels = filtered;
+
+	for (auto channel = 0u; channel < _midiChannelToggles.size(); ++channel)
+	{
+		const auto channelOneBased = static_cast<int>(channel + 1u);
+		const auto on = std::find(filtered.begin(), filtered.end(), channelOneBased) != filtered.end();
+		_midiChannelToggles[channel]->SetToggleState(on ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF,
+			true);
+	}
+
+	if (!bypassUpdates && _rackParams.OnAllowedMidiChannelsChanged)
+		_rackParams.OnAllowedMidiChannelsChanged(_rackParams.AllowedMidiChannels);
 }
 
 std::shared_ptr<gui::GuiSlider> GuiRack::GetMasterSlider() const

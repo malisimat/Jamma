@@ -75,6 +75,7 @@ namespace io
 				jamStation.StationType = 0;
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
+				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 
 				for (const auto& take : station->GetLoopTakes())
 				{
