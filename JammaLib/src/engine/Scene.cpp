@@ -551,7 +551,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			return popupRes;
 	}
 
-	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action);
+	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, _stations);
 		overrideRes.IsEaten)
 	{
 		if (_midiChannelOverrideInput)
@@ -764,7 +764,7 @@ ActionResult Scene::OnAction(GuiAction action)
 					break;
 				}
 
-				_inputSubsystem->SetForcedChannelOverrideOneBased(static_cast<std::uint8_t>(clamped));
+				_inputSubsystem->SetForcedChannelOverrideOneBased(static_cast<std::uint8_t>(clamped), _stations);
 				_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 			}
 			break;

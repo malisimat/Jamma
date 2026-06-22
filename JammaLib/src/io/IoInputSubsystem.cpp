@@ -134,14 +134,16 @@ namespace io
 		return _midiRouter.HandleAutomationKey(action, stations, hoverPath, hoveredTake);
 	}
 
-	actions::ActionResult IoInputSubsystem::HandleChannelOverrideKey(const actions::KeyAction& action)
+	actions::ActionResult IoInputSubsystem::HandleChannelOverrideKey(const actions::KeyAction& action,
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
 	{
-		return _midiRouter.HandleChannelOverrideKey(action);
+		return _midiRouter.HandleChannelOverrideKey(action, stations);
 	}
 
-	void IoInputSubsystem::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept
+	void IoInputSubsystem::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+		const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
 	{
-		_midiRouter.SetForcedChannelOverrideOneBased(forcedOneBased);
+		_midiRouter.SetForcedChannelOverrideOneBased(forcedOneBased, stations);
 	}
 
 	std::uint8_t IoInputSubsystem::ForcedChannelOverrideOneBased() const noexcept

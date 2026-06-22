@@ -79,12 +79,14 @@ namespace midi
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake);
-		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action);
+		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void StepChannelOverrideUp() noexcept;
 		void StepChannelOverrideDown() noexcept;
 		void ResetChannelOverride() noexcept;
-		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept;
+		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::uint8_t ForcedChannelOverrideOneBased() const noexcept;
 		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedOneBased) noexcept;
 

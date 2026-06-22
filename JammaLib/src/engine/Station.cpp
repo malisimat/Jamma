@@ -1577,6 +1577,31 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 	_liveMidiIngress.Push(event);
 }
 
+void Station::FlushLiveHeldMidiNotes() noexcept
+{
+	midi::MidiNoteSnapshot heldSnapshot;
+	{
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		auto liveHeld = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+			[](const auto& pair) { return pair.first.empty(); });
+		if (liveHeld != _liveHeldMidi.end())
+			heldSnapshot = liveHeld->second;
+		_liveHeldMidi.clear();
+	}
+
+	if (heldSnapshot.Held.none())
+		return;
+
+	for (std::uint8_t ch = 0u; ch < 16u; ++ch)
+	{
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			if (heldSnapshot.Held.test(MidiNote::NoteSlot(ch, note)))
+				_liveMidiIngress.Push(MidiEvent::MakeNoteOff(0u, ch, note));
+		}
+	}
+}
+
 void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
 {
 	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
@@ -1884,6 +1909,8 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 {
+	FlushLiveHeldMidiNotes();
+
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
 	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
 	// drained by the audio thread on the next WriteBlock call.

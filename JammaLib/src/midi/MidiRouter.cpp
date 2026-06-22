@@ -182,7 +182,8 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 	return actions::ActionResult::NoAction();
 }
 
-actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAction& action)
+actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAction& action,
+	const std::vector<std::shared_ptr<engine::Station>>& stations)
 {
 	constexpr unsigned int PageUpKey = 0x21u;
 	constexpr unsigned int PageDownKey = 0x22u;
@@ -221,14 +222,33 @@ actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAct
 	const bool bothHeld = _channelOverridePageUpHeld && _channelOverridePageDownHeld;
 	if (bothHeld && !wasBothHeld)
 	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
 		ResetChannelOverride();
 		return eaten;
 	}
 
 	if (isPageUp && !wasPageUpHeld)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
 		StepChannelOverrideUp();
+	}
 	else if (isPageDown && !wasPageDownHeld)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
 		StepChannelOverrideDown();
+	}
 
 	return eaten;
 }
@@ -252,9 +272,21 @@ void MidiRouter::ResetChannelOverride() noexcept
 	_forcedInputChannelOneBased.store(0u, std::memory_order_release);
 }
 
-void MidiRouter::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept
+void MidiRouter::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+	const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
 {
-	_forcedInputChannelOneBased.store((std::min)(forcedOneBased, static_cast<std::uint8_t>(16u)), std::memory_order_release);
+	const auto clamped = (std::min)(forcedOneBased, static_cast<std::uint8_t>(16u));
+	const auto current = ForcedChannelOverrideOneBased();
+	if (current == clamped)
+		return;
+
+	for (const auto& station : stations)
+	{
+		if (station && !station->IsRemote())
+			station->FlushLiveHeldMidiNotes();
+	}
+
+	_forcedInputChannelOneBased.store(clamped, std::memory_order_release);
 }
 
 std::uint8_t MidiRouter::ForcedChannelOverrideOneBased() const noexcept

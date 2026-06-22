@@ -44,8 +44,10 @@ namespace io
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake);
-		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action);
-		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased) noexcept;
+		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::uint8_t ForcedChannelOverrideOneBased() const noexcept;
 
 		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
