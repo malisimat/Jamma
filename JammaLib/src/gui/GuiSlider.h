@@ -117,6 +117,8 @@ namespace gui
 		GuiSlider(GuiSliderParams guiParams);
 
 	public:
+		using base::GuiElement::OnAction;
+
 		double Value() const;
 		void SetValue(double value);
 		void SetValue(double value, bool bypassUpdate);
@@ -143,6 +145,7 @@ namespace gui
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual bool _HitTest(utils::Position2d localPos) override;
+		virtual void ApplyHoverPoint(utils::Position2d localPos) override;
 
 		static double CalcValueOffset(GuiSliderParams params,
 			utils::Size2d size,

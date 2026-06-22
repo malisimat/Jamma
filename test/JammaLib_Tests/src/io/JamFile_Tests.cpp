@@ -273,6 +273,111 @@ TEST(JamFile, MissingPhaseOffsetsDefaultToZero) {
 	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
+TEST(JamFile, MissingMidiQuantFieldsDefaultToMixedDisabledWhole) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::Off, parsed->GlobalMidiQuantStateValue);
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_FALSE(parsed->Stations[0].LoopTakes[0].MidiQuantEnabled);
+	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].MidiQuantFraction);
+}
+
+TEST(JamFile, ParsesMidiQuantFieldsPerTakeAndGlobalStateString) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"midiquantenabled\":true,\"midiquantfraction\":2,\"takephaseoffsetsamps\":7,\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"globalmidiquantstate\":\"all\",\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::All, parsed->GlobalMidiQuantStateValue);
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_TRUE(parsed->Stations[0].LoopTakes[0].MidiQuantEnabled);
+	EXPECT_EQ(2, parsed->Stations[0].LoopTakes[0].MidiQuantFraction);
+	EXPECT_EQ(7, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
+}
+
+TEST(JamFile, ParsesGlobalMidiQuantStateNumericFallbackToMixed) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"globalmidiquantstate\":99,\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::Mixed, parsed->GlobalMidiQuantStateValue);
+}
+
+TEST(JamFile, RoundTripsMidiQuantFieldsAndGlobalState) {
+	JamFile jam;
+	jam.Version = JamFile::VERSION_V;
+	jam.Name = "jam";
+	jam.GlobalMidiQuantStateValue = JamFile::GlobalMidiQuantState::Off;
+
+	JamFile::Loop loop;
+	loop.Name = "loop.wav";
+	loop.Length = 220;
+	loop.Index = 0;
+	loop.MasterLoopCount = 0;
+	loop.Level = 1.0;
+	loop.Speed = 1.0;
+	loop.MuteGroups = 0;
+	loop.SelectGroups = 0;
+	loop.Muted = false;
+	loop.Mix.Mix = JamFile::LoopMix::MIX_PAN;
+	loop.Mix.Params = std::vector<double>{ 0.5, 0.5 };
+
+	JamFile::LoopTake take;
+	take.Name = "take";
+	take.MidiQuantEnabled = true;
+	take.MidiQuantFraction = 3;
+	take.TakePhaseOffsetSamps = -9;
+	take.Loops.push_back(loop);
+
+	JamFile::Station station;
+	station.Name = "station";
+	station.StationType = 0;
+	station.LoopTakes.push_back(take);
+
+	jam.Stations.push_back(station);
+
+	std::stringstream out;
+	ASSERT_TRUE(JamFile::ToStream(jam, out));
+
+	auto parsed = JamFile::FromStream(std::move(out));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::Off, parsed->GlobalMidiQuantStateValue);
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_TRUE(parsed->Stations[0].LoopTakes[0].MidiQuantEnabled);
+	EXPECT_EQ(3, parsed->Stations[0].LoopTakes[0].MidiQuantFraction);
+	EXPECT_EQ(-9, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
+}
+
+TEST(JamFile, MidiQuantFractionOutOfRangeClamps) {
+	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
+	auto take = "{\"name\":\"take\",\"midiquantfraction\":999,\"loops\":[" + loop + "]}";
+	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	auto str = "{\"name\":\"jam\",\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1, parsed->Stations.size());
+	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
+	EXPECT_LE(parsed->Stations[0].LoopTakes[0].MidiQuantFraction, 5);
+}
+
 TEST(JamFile, ParsesSignedPhaseOffsets) {
 	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
 	auto take = "{\"name\":\"take\",\"takephaseoffsetsamps\":-7,\"loops\":[" + loop + "]}";

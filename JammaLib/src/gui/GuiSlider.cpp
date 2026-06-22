@@ -191,6 +191,12 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 	return res;
 }
 
+void GuiSlider::ApplyHoverPoint(utils::Position2d localPos)
+{
+	GuiElement::ApplyHoverPoint(localPos);
+	_dragElement.ApplyHoverPoint(_dragElement.ParentToLocal(localPos));
+}
+
 bool GuiSlider::Undo(std::shared_ptr<ActionUndo> undo)
 {
 	if (_isDragging)

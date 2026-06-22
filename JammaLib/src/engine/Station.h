@@ -138,6 +138,7 @@ namespace engine
 		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
+		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -380,6 +381,7 @@ namespace engine
 		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
+		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
 	};

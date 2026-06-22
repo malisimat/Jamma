@@ -7,9 +7,11 @@
 
 #include "JamFile.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <string>
 #include "../utils/StringUtils.h"
 
 using namespace io;
@@ -82,6 +84,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.Version = VERSION_V;
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
+	jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 	jam.GlobalPhaseOffsetSamps = 0;
 	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
@@ -129,6 +132,67 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	{
 		if (jamParams.KeyValues["quantisesamps"].index() == 2)
 			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
+	}
+
+	iter = jamParams.KeyValues.find("globalmidiquantstate");
+	if (iter != jamParams.KeyValues.end())
+	{
+		const auto& value = jamParams.KeyValues["globalmidiquantstate"];
+		auto parsed = static_cast<int>(GlobalMidiQuantState::Mixed);
+		bool parsedValue = false;
+
+		if (value.index() == 4)
+		{
+			auto state = std::get<std::string>(value);
+			std::transform(state.begin(), state.end(), state.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			if (state == "off")
+			{
+				parsed = static_cast<int>(GlobalMidiQuantState::Off);
+				parsedValue = true;
+			}
+			else if ((state == "mixed") || (state == "x"))
+			{
+				parsed = static_cast<int>(GlobalMidiQuantState::Mixed);
+				parsedValue = true;
+			}
+			else if (state == "all")
+			{
+				parsed = static_cast<int>(GlobalMidiQuantState::All);
+				parsedValue = true;
+			}
+		}
+		else if (value.index() == 1)
+		{
+			parsed = static_cast<int>(std::get<long>(value));
+			parsedValue = true;
+		}
+		else if (value.index() == 2)
+		{
+			parsed = static_cast<int>(std::get<unsigned long>(value));
+			parsedValue = true;
+		}
+		else if (value.index() == 3)
+		{
+			parsed = static_cast<int>(std::get<double>(value));
+			parsedValue = true;
+		}
+
+		if (parsedValue)
+		{
+			switch (parsed)
+			{
+			case static_cast<int>(GlobalMidiQuantState::Off):
+				jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
+				break;
+			case static_cast<int>(GlobalMidiQuantState::All):
+				jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::All;
+				break;
+			case static_cast<int>(GlobalMidiQuantState::Mixed):
+			default:
+				jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Mixed;
+				break;
+			}
+		}
 	}
 
 	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
@@ -233,6 +297,19 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 	};
 
+	auto midiGlobalQuantStr = [](JamFile::GlobalMidiQuantState state) -> std::string {
+		switch (state)
+		{
+		case JamFile::GlobalMidiQuantState::Off:
+			return "off";
+		case JamFile::GlobalMidiQuantState::All:
+			return "all";
+		case JamFile::GlobalMidiQuantState::Mixed:
+		default:
+			return "mixed";
+		}
+	};
+
 	auto mixToJson = [&](const JamFile::LoopMix& mix) -> std::string {
 		std::string chans;
 		const auto mixType = (mix.Mix == LoopMix::MIX_WIRE) ? "wire" : "pan";
@@ -299,6 +376,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvStr("name", jam.Name) << ",";
 	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
+	ss << kvStr("globalmidiquantstate", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
 	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
@@ -319,6 +397,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			const auto& take = station.LoopTakes[takeIndex];
 			if (takeIndex > 0) ss << ",";
 			ss << "{" << kvStr("name", take.Name) << ","
+				<< kvBool("midiquantenabled", take.MidiQuantEnabled) << ","
+				<< kvInt("midiquantfraction", static_cast<std::int32_t>(take.MidiQuantFraction)) << ","
 				<< kvInt("takephaseoffsetsamps", take.TakePhaseOffsetSamps) << ","
 				<< quoted("loops") << ":[";
 
@@ -625,6 +705,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	std::string name;
 	std::vector<Loop> loops;
 	std::vector<VstEntry> vstChain;
+	bool midiQuantEnabled = false;
+	int midiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 	std::int32_t takePhaseOffsetSamps = 0;
 
 	auto iter = json.KeyValues.find("name");
@@ -661,6 +743,44 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	if (iter != json.KeyValues.end())
 		takePhaseOffsetSamps = ParseInt32Clamped(json.KeyValues["takephaseoffsetsamps"], 0);
 
+	iter = json.KeyValues.find("midiquantenabled");
+	if (iter != json.KeyValues.end())
+	{
+		auto& value = json.KeyValues["midiquantenabled"];
+		switch (value.index())
+		{
+		case 0:
+			midiQuantEnabled = std::get<bool>(value);
+			break;
+		case 1:
+			midiQuantEnabled = (0 != std::get<long>(value));
+			break;
+		case 2:
+			midiQuantEnabled = (0ul != std::get<unsigned long>(value));
+			break;
+		case 3:
+			midiQuantEnabled = (0.0 != std::get<double>(value));
+			break;
+		default:
+			break;
+		}
+	}
+
+	iter = json.KeyValues.find("midiquantfraction");
+	if (iter != json.KeyValues.end())
+	{
+		auto& value = json.KeyValues["midiquantfraction"];
+		if (value.index() == 1)
+			midiQuantFraction = static_cast<int>(std::get<long>(value));
+		else if (value.index() == 2)
+			midiQuantFraction = static_cast<int>(std::get<unsigned long>(value));
+		else if (value.index() == 3)
+			midiQuantFraction = static_cast<int>(std::get<double>(value));
+
+		midiQuantFraction = midi::MidiQuantisation::FractionIndex(
+			midi::MidiQuantisation::ClampFractionIndex(midiQuantFraction));
+	}
+
 	iter = json.KeyValues.find("vst");
 	if (iter != json.KeyValues.end())
 	{
@@ -683,6 +803,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.Name = name;
 	take.Loops = loops;
 	take.VstChain = vstChain;
+	take.MidiQuantEnabled = midiQuantEnabled;
+	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;
 	return take;
 }

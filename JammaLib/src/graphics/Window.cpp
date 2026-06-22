@@ -35,6 +35,9 @@ Window::Window(Scene& scene,
 	_released(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
+	_hover3dDirty(true),
+	_cachedCursorPosition(std::nullopt),
+	_cachedCursorModifiers(Action::MODIFIER_NONE),
 	_pendingResize(std::nullopt),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
@@ -386,6 +389,7 @@ void Window::Resize(Size2d size)
 	_config.Size = size;
 	_scene.SetSize(size);
 	_lastHoverObjectId = 0;
+	_hover3dDirty = true;
 	_pendingResize = size;
 }
 
@@ -435,6 +439,21 @@ void Window::Render()
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
 	_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+
+	if (_hover3dDirty && _cachedCursorPosition.has_value())
+	{
+		auto objectId = _pickContext->GetPixel(_cachedCursorPosition.value());
+		if (objectId != _lastHoverObjectId)
+		{
+			auto path = utils::IdToVec(objectId);
+			_scene.SetHover3d(path, _cachedCursorModifiers);
+			_lastHoverObjectId = objectId;
+		}
+
+		_hover3dDirty = false;
+	}
+
+	_scene.ResolveDeferredHover();
 
 	// Save the picker render to bmp:
 	// std::vector<unsigned char> data = _pickContext->GetTexture();
@@ -550,14 +569,9 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
-	auto objectId = _pickContext->GetPixel({ touchAction.Position.X, touchAction.Position.Y });
-	if (objectId != _lastHoverObjectId)
-	{
-		auto path = utils::IdToVec(objectId);
-		_scene.SetHover3d(path, touchAction.Modifiers);
-
-		_lastHoverObjectId = objectId;
-	}
+	_cachedCursorPosition = touchAction.Position;
+	_cachedCursorModifiers = touchAction.Modifiers;
+	_hover3dDirty = true;
 
 	return _scene.OnAction(touchAction);
 }

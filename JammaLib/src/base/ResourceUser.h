@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include "Sharable.h"
 #include "../resources/Resource.h"
@@ -18,13 +19,13 @@ namespace base
 	public:
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 		{
-			if (forceInit || _resourcesNeedInitialising)
+			if (forceInit || _resourcesNeedInitialising.load(std::memory_order_acquire))
 			{
 				ReleaseResources();
 
 				_InitResources(resourceLib, true);
 				_resourcesInitialised = true;
-				_resourcesNeedInitialising = false;
+				_resourcesNeedInitialising.store(false, std::memory_order_release);
 			}
 			else
 			{
@@ -47,7 +48,10 @@ namespace base
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) { };
 		virtual void _ReleaseResources() { };
 
-		bool _resourcesNeedInitialising;
+		// Written by any thread (e.g. SetGeometry / SetInstanceAttributes from
+		// the data/audio side); read by the render thread.  Atomic so the flag
+		// flip is always visible without a mutex round-trip.
+		std::atomic<bool> _resourcesNeedInitialising;
 
 	private:
 		bool _resourcesInitialised;

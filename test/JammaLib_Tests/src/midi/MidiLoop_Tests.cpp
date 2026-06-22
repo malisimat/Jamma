@@ -61,6 +61,18 @@ namespace
 		}
 	};
 
+	class CapturingGuiReceiver : public base::ActionReceiver
+	{
+	public:
+		actions::ActionResult OnAction(actions::GuiAction action) override
+		{
+			Actions.push_back(action);
+			return actions::ActionResult::NoAction();
+		}
+
+		std::vector<actions::GuiAction> Actions;
+	};
+
 	std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
 	{
 		LoopTakeParams params;
@@ -759,6 +771,46 @@ TEST(LoopTakeMidiQuantisation, SetMidiQuantisationPropagatesToMidiLoops) {
 	EXPECT_TRUE(applied.Enabled);
 	EXPECT_EQ(MidiQuantisationFraction::Quarter, applied.Fraction);
 	EXPECT_EQ(800u, applied.GrainSamps);
+}
+
+TEST(LoopTakeMidiQuantisation, GlobalStateForcesResolvedEnabledAndMixedRestoresLocal) {
+	auto take = MakeLoopTake("global-mode-take");
+	auto station = MakeStation("global-mode-station");
+	station->AddTake(take);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = false;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	settings.GrainSamps = 480u;
+	take->SetMidiQuantisation(settings);
+
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+	EXPECT_TRUE(take->ResolvedMidiQuantisation().Enabled);
+
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off);
+	EXPECT_FALSE(take->ResolvedMidiQuantisation().Enabled);
+
+	settings.Enabled = true;
+	take->SetMidiQuantisation(settings);
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	EXPECT_TRUE(take->ResolvedMidiQuantisation().Enabled);
+}
+
+TEST(LoopTakeMidiQuantisation, LocalMidiQuantEditForwardsGuiActionToStationReceiver) {
+	auto take = MakeLoopTake("local-edit-take");
+	auto station = MakeStation("local-edit-station");
+	auto receiver = std::make_shared<CapturingGuiReceiver>();
+	station->SetReceiver(receiver);
+	station->AddTake(take);
+
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Eighth;
+	settings.GrainSamps = 960u;
+	take->SetMidiQuantisation(settings);
+
+	ASSERT_FALSE(receiver->Actions.empty());
+	EXPECT_EQ(actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION, receiver->Actions.back().ElementType);
 }
 
 TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
