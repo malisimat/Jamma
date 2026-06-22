@@ -212,6 +212,7 @@ namespace engine
 		// every owned midi::MidiLoop. Underlying recorded events are never modified;
 		// disabling restores original timing exactly.
 		void SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept;
+		void SetMidiQuantisationFromUserEdit(const midi::MidiQuantisationSettings& settings) noexcept;
 		midi::MidiQuantisationSettings MidiQuantisation() const noexcept;
 		midi::MidiQuantisationSettings ResolvedMidiQuantisation() const noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
@@ -318,7 +319,7 @@ namespace engine
 		midi::MidiOverdubSession _midiOverdubSession;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
-			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Mixed)
+			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };

@@ -282,7 +282,7 @@ TEST(JamFile, MissingMidiQuantFieldsDefaultToMixedDisabledWhole) {
 	auto parsed = JamFile::FromStream(std::stringstream(str));
 
 	ASSERT_TRUE(parsed.has_value());
-	EXPECT_EQ(JamFile::GlobalMidiQuantState::Mixed, parsed->GlobalMidiQuantStateValue);
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::Off, parsed->GlobalMidiQuantStateValue);
 	ASSERT_EQ(1, parsed->Stations.size());
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
 	EXPECT_FALSE(parsed->Stations[0].LoopTakes[0].MidiQuantEnabled);

@@ -84,7 +84,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.Version = VERSION_V;
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
-	jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Mixed;
+	jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 	jam.GlobalPhaseOffsetSamps = 0;
 	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
@@ -706,7 +706,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	std::vector<Loop> loops;
 	std::vector<VstEntry> vstChain;
 	bool midiQuantEnabled = false;
-	int midiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Whole);
+	int midiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 	std::int32_t takePhaseOffsetSamps = 0;
 
 	auto iter = json.KeyValues.find("name");

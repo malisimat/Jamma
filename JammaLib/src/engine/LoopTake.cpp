@@ -639,7 +639,7 @@ ActionResult LoopTake::OnAction(GuiAction action)
 				arr->Values.size());
 			if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 				_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, "gui-action");
-			SetMidiQuantisation(updated);
+			SetMidiQuantisationFromUserEdit(updated);
 		}
 	}
 
@@ -1985,15 +1985,20 @@ void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& setting
 	{
 		_midiQuantisationUpdatePending = true;
 		_changesMade = true;
+	}
+}
 
-		if (_receiver)
-		{
-			actions::GuiAction action;
-			action.Index = _index;
-			action.ElementType = actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION;
-			action.Data = actions::GuiAction::GuiInt{ 1 };
-			_receiver->OnAction(action);
-		}
+void LoopTake::SetMidiQuantisationFromUserEdit(const midi::MidiQuantisationSettings& settings) noexcept
+{
+	SetMidiQuantisation(settings);
+
+	if (_receiver)
+	{
+		actions::GuiAction action;
+		action.Index = _index;
+		action.ElementType = actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION;
+		action.Data = actions::GuiAction::GuiInt{ 1 };
+		_receiver->OnAction(action);
 	}
 }
 
@@ -2018,6 +2023,7 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexce
 		break;
 	case io::JamFile::GlobalMidiQuantState::Mixed:
 	default:
+		settings.Enabled = true;
 		break;
 	}
 
@@ -2622,7 +2628,7 @@ void LoopTake::_ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gestu
 	if (_loggingConfig.Ui == "verbose" && previous.Fraction != updated.Fraction)
 		_LogMidiQuantisationFractionChange(previous.Fraction, updated.Fraction, source);
 
-	SetMidiQuantisation(updated);
+	SetMidiQuantisationFromUserEdit(updated);
 }
 
 void LoopTake::_LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,

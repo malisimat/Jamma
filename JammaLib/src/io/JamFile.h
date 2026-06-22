@@ -110,7 +110,7 @@ namespace io
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
 			bool MidiQuantEnabled = false;
-			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Whole);
+			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 			std::int32_t TakePhaseOffsetSamps = 0;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
