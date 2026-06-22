@@ -273,7 +273,7 @@ TEST(JamFile, MissingPhaseOffsetsDefaultToZero) {
 	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
-TEST(JamFile, MissingMidiQuantFieldsDefaultToMixedDisabledWhole) {
+TEST(JamFile, MissingMidiQuantFieldsDefaultToOffDisabledQuarter) {
 	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
 	auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
 	auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
@@ -286,7 +286,7 @@ TEST(JamFile, MissingMidiQuantFieldsDefaultToMixedDisabledWhole) {
 	ASSERT_EQ(1, parsed->Stations.size());
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
 	EXPECT_FALSE(parsed->Stations[0].LoopTakes[0].MidiQuantEnabled);
-	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].MidiQuantFraction);
+	EXPECT_EQ(2, parsed->Stations[0].LoopTakes[0].MidiQuantFraction);
 }
 
 TEST(JamFile, ParsesMidiQuantFieldsPerTakeAndGlobalStateString) {

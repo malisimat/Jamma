@@ -19,6 +19,7 @@
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiFocusManager.h"
+#include "../gui/GuiNumericInput.h"
 #include "../gui/GuiPopupHost.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
@@ -333,6 +334,7 @@ namespace engine
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
+		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
 
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -354,6 +356,7 @@ namespace engine
 		timing::TimingQuantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
+		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
 		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		std::unique_ptr<gui::GuiLabel> _label;

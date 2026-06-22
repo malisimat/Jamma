@@ -534,8 +534,8 @@ void GuiRack::SetAllowedMidiChannels(const std::vector<int>& channels, bool bypa
 
 	for (auto channel = 0u; channel < _midiChannelToggles.size(); ++channel)
 	{
-		const auto channelOneBased = static_cast<int>(channel + 1u);
-		const auto on = std::find(filtered.begin(), filtered.end(), channelOneBased) != filtered.end();
+		const auto channelNumber = static_cast<int>(channel + 1u);
+		const auto on = std::find(filtered.begin(), filtered.end(), channelNumber) != filtered.end();
 		_midiChannelToggles[channel]->SetToggleState(on ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF,
 			true);
 	}

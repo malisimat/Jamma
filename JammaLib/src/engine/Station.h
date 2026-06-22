@@ -168,6 +168,8 @@ namespace engine
 		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
 		// For real live MIDI input, with associated deviceName.
 		void EnqueueLiveMidiEvent(const midi::MidiEvent& event, const std::string& deviceName);
+		// Emit synthetic NoteOff for currently held live notes and clear held state.
+		void FlushLiveHeldMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();

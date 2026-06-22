@@ -182,6 +182,130 @@ actions::ActionResult MidiRouter::HandleAutomationKey(const actions::KeyAction& 
 	return actions::ActionResult::NoAction();
 }
 
+actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAction& action,
+	const std::vector<std::shared_ptr<engine::Station>>& stations)
+{
+	constexpr unsigned int PageUpKey = 0x21u;
+	constexpr unsigned int PageDownKey = 0x22u;
+	const bool isPageUp = (action.KeyChar == PageUpKey);
+	const bool isPageDown = (action.KeyChar == PageDownKey);
+	if ((!isPageUp && !isPageDown)
+		|| ((base::Action::MODIFIER_ALT & action.Modifiers) == 0))
+	{
+		return actions::ActionResult::NoAction();
+	}
+
+	auto eaten = actions::ActionResult::NoAction();
+	eaten.IsEaten = true;
+
+	if (action.KeyActionType == actions::KeyAction::KEY_UP)
+	{
+		if (isPageUp)
+			_channelOverridePageUpHeld = false;
+		if (isPageDown)
+			_channelOverridePageDownHeld = false;
+		return eaten;
+	}
+
+	if (action.KeyActionType != actions::KeyAction::KEY_DOWN)
+		return eaten;
+
+	const bool wasPageUpHeld = _channelOverridePageUpHeld;
+	const bool wasPageDownHeld = _channelOverridePageDownHeld;
+	const bool wasBothHeld = wasPageUpHeld && wasPageDownHeld;
+
+	if (isPageUp)
+		_channelOverridePageUpHeld = true;
+	if (isPageDown)
+		_channelOverridePageDownHeld = true;
+
+	const bool bothHeld = _channelOverridePageUpHeld && _channelOverridePageDownHeld;
+	if (bothHeld && !wasBothHeld)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
+		ResetChannelOverride();
+		return eaten;
+	}
+
+	if (isPageUp && !wasPageUpHeld)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
+		StepChannelOverrideUp();
+	}
+	else if (isPageDown && !wasPageDownHeld)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote())
+				station->FlushLiveHeldMidiNotes();
+		}
+		StepChannelOverrideDown();
+	}
+
+	return eaten;
+}
+
+void MidiRouter::StepChannelOverrideUp() noexcept
+{
+	const auto current = ForcedChannelOverride();
+	if (current < 16u)
+		_forcedInputChannelOverride.store(static_cast<std::uint8_t>(current + 1u), std::memory_order_release);
+}
+
+void MidiRouter::StepChannelOverrideDown() noexcept
+{
+	const auto current = ForcedChannelOverride();
+	if (current > 0u)
+		_forcedInputChannelOverride.store(static_cast<std::uint8_t>(current - 1u), std::memory_order_release);
+}
+
+void MidiRouter::ResetChannelOverride() noexcept
+{
+	_forcedInputChannelOverride.store(0u, std::memory_order_release);
+}
+
+void MidiRouter::SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
+	const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+{
+	const auto clamped = (std::min)(forcedChannelOverride, static_cast<std::uint8_t>(16u));
+	const auto current = ForcedChannelOverride();
+	if (current == clamped)
+		return;
+
+	for (const auto& station : stations)
+	{
+		if (station && !station->IsRemote())
+			station->FlushLiveHeldMidiNotes();
+	}
+
+	_forcedInputChannelOverride.store(clamped, std::memory_order_release);
+}
+
+std::uint8_t MidiRouter::ForcedChannelOverride() const noexcept
+{
+	return _forcedInputChannelOverride.load(std::memory_order_acquire);
+}
+
+std::uint8_t MidiRouter::RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept
+{
+	if (forcedChannelOverride == 0u)
+		return status;
+
+	const auto messageType = static_cast<std::uint8_t>(status & midi::MidiEvent::StatusMask);
+	if ((messageType < 0x80u) || (messageType > 0xE0u))
+		return status;
+
+	return static_cast<std::uint8_t>(messageType | ((forcedChannelOverride - 1u) & midi::MidiEvent::ChannelMask));
+}
+
 bool MidiRouter::IsAutomationRecordHeld() noexcept
 {
 	return _automationRecordHeld.load(std::memory_order_acquire);
@@ -651,18 +775,22 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 
 		while (input->Ingress.Pop(ingress))
 		{
-			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, ingress, userConfig, audioParams);
+			auto effectiveIngress = ingress;
+			effectiveIngress.status = RewriteIncomingChannel(ingress.status,
+				_forcedInputChannelOverride.load(std::memory_order_acquire));
+
+			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, effectiveIngress, userConfig, audioParams);
 			summary.Activated = summary.Activated || dispatch.Activated;
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
 
-			const auto msgType = ingress.MessageType();
+			const auto msgType = effectiveIngress.MessageType();
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
 				const auto& deviceName = input->ConfiguredName;
 				for (const auto& station : stations)
 				{
 					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
-						station->EnqueueLiveMidiEvent(ingress, deviceName);
+						station->EnqueueLiveMidiEvent(effectiveIngress, deviceName);
 				}
 			}
 
@@ -670,8 +798,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			constexpr std::uint8_t ControlChange = 0xB0u;
 			if (msgType == ControlChange)
 			{
-				const auto channel = ingress.Channel();
-				const auto cc = ingress.data1;
+				const auto channel = effectiveIngress.Channel();
+				const auto cc = effectiveIngress.data1;
 
 				// Learn capture: the user moved a physical knob while in learn mode.
 				if (_learnMidiCCMode.load(std::memory_order_relaxed))
@@ -684,7 +812,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				if (_automationRecordHeld.load(std::memory_order_acquire))
 				{
 					const auto matchKey = AutomationMapping::MakeMatchKey(channel, cc);
-					const float value = static_cast<float>(ingress.data2) / 127.0f;
+					const float value = static_cast<float>(effectiveIngress.data2) / 127.0f;
 					for (const auto& station : stations)
 					{
 						if (!station || station->IsRemote())
@@ -727,7 +855,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				for (const auto& take : station->GetLoopTakes())
 				{
 					if (take->IsArmed())
-						take->RecordMidiEvent(ingress, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
+						take->RecordMidiEvent(effectiveIngress, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
 				}
 			}
 		}
