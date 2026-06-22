@@ -818,7 +818,7 @@ ActionResult Scene::OnAction(GuiAction action)
 		}
 		else if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
 		{
-			clamped = std::clamp(static_cast<int>(value->Value), 0, 16);
+			clamped = std::clamp(static_cast<int>(value->Value + 0.5), 0, 16);
 		}
 		else
 		{
