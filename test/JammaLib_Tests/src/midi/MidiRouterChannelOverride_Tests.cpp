@@ -42,22 +42,22 @@ TEST(MidiRouterChannelOverride, StepMethodsClampToSupportedRange)
 	midi::MidiRouter router;
 
 	router.StepChannelOverrideDown();
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 
 	for (int i = 0; i < 20; ++i)
 		router.StepChannelOverrideUp();
-	EXPECT_EQ(16u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(16u, router.ForcedChannelOverride());
 
 	for (int i = 0; i < 20; ++i)
 		router.StepChannelOverrideDown();
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 }
 
 TEST(MidiRouterChannelOverride, SetterClampsOutOfRangeValues)
 {
 	midi::MidiRouter router;
-	router.SetForcedChannelOverrideOneBased(99u, kEmptyStations);
-	EXPECT_EQ(16u, router.ForcedChannelOverrideOneBased());
+	router.SetForcedChannelOverride(99u, kEmptyStations);
+	EXPECT_EQ(16u, router.ForcedChannelOverride());
 }
 
 TEST(MidiRouterChannelOverride, AltPageUpStepsFromOmniToChannelOne)
@@ -66,7 +66,7 @@ TEST(MidiRouterChannelOverride, AltPageUpStepsFromOmniToChannelOne)
 	auto result = router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
 
 	EXPECT_TRUE(result.IsEaten);
-	EXPECT_EQ(1u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(1u, router.ForcedChannelOverride());
 
 	router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_UP), kEmptyStations);
 }
@@ -74,12 +74,12 @@ TEST(MidiRouterChannelOverride, AltPageUpStepsFromOmniToChannelOne)
 TEST(MidiRouterChannelOverride, AltPageDownStepsFromOneBackToOmni)
 {
 	midi::MidiRouter router;
-	router.SetForcedChannelOverrideOneBased(1u, kEmptyStations);
+	router.SetForcedChannelOverride(1u, kEmptyStations);
 
 	auto result = router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
 
 	EXPECT_TRUE(result.IsEaten);
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 
 	router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_UP), kEmptyStations);
 }
@@ -87,28 +87,28 @@ TEST(MidiRouterChannelOverride, AltPageDownStepsFromOneBackToOmni)
 TEST(MidiRouterChannelOverride, DualHeldResetIsOrderIndependentAndSingleFire)
 {
 	midi::MidiRouter router;
-	router.SetForcedChannelOverrideOneBased(7u, kEmptyStations);
+	router.SetForcedChannelOverride(7u, kEmptyStations);
 
 	router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
-	EXPECT_EQ(8u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(8u, router.ForcedChannelOverride());
 
 	router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 
-	router.SetForcedChannelOverrideOneBased(9u, kEmptyStations);
+	router.SetForcedChannelOverride(9u, kEmptyStations);
 	router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
-	EXPECT_EQ(9u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(9u, router.ForcedChannelOverride());
 
 	router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
-	EXPECT_EQ(9u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(9u, router.ForcedChannelOverride());
 
 	router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_UP), kEmptyStations);
 	router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_UP), kEmptyStations);
 
-	router.SetForcedChannelOverrideOneBased(5u, kEmptyStations);
+	router.SetForcedChannelOverride(5u, kEmptyStations);
 	router.HandleChannelOverrideKey(AltPageKey(PageDownKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
 	router.HandleChannelOverrideKey(AltPageKey(PageUpKey, actions::KeyAction::KEY_DOWN), kEmptyStations);
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 }
 
 TEST(MidiRouterChannelOverride, UnrelatedKeysAreIgnored)
@@ -121,5 +121,5 @@ TEST(MidiRouterChannelOverride, UnrelatedKeysAreIgnored)
 
 	auto result = router.HandleChannelOverrideKey(action, kEmptyStations);
 	EXPECT_FALSE(result.IsEaten);
-	EXPECT_EQ(0u, router.ForcedChannelOverrideOneBased());
+	EXPECT_EQ(0u, router.ForcedChannelOverride());
 }

@@ -145,7 +145,7 @@ Scene::Scene(SceneParams params,
 	midiChannelOverrideParams.Max = 16.0;
 	midiChannelOverrideParams.Step = 0.1;
 	midiChannelOverrideParams.Decimals = 0;
-	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased());
+	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
 	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
 	AddChild(_midiChannelOverrideInput);
 
@@ -229,7 +229,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	if (_midiChannelOverrideInput && !_midiChannelOverrideInput->HasFocus())
 	{
-		const auto forcedChannel = static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased());
+		const auto forcedChannel = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
 		if (_midiChannelOverrideInput->Value() != forcedChannel)
 			_midiChannelOverrideInput->SetValue(forcedChannel, false);
 	}
@@ -557,7 +557,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (_midiChannelOverrideInput)
 		{
 			_midiChannelOverrideInput->SetValue(
-				static_cast<double>(_inputSubsystem->ForcedChannelOverrideOneBased()),
+				static_cast<double>(_inputSubsystem->ForcedChannelOverride()),
 				false);
 		}
 		return overrideRes;
@@ -752,7 +752,7 @@ ActionResult Scene::OnAction(GuiAction action)
 					}
 					catch (...)
 					{
-						clamped = static_cast<int>(_inputSubsystem->ForcedChannelOverrideOneBased());
+						clamped = static_cast<int>(_inputSubsystem->ForcedChannelOverride());
 					}
 				}
 				else if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
@@ -764,7 +764,7 @@ ActionResult Scene::OnAction(GuiAction action)
 					break;
 				}
 
-				_inputSubsystem->SetForcedChannelOverrideOneBased(static_cast<std::uint8_t>(clamped), _stations);
+				_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), _stations);
 				_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 			}
 			break;

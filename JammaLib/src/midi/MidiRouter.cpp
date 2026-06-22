@@ -255,28 +255,28 @@ actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAct
 
 void MidiRouter::StepChannelOverrideUp() noexcept
 {
-	const auto current = ForcedChannelOverrideOneBased();
+	const auto current = ForcedChannelOverride();
 	if (current < 16u)
-		_forcedInputChannelOneBased.store(static_cast<std::uint8_t>(current + 1u), std::memory_order_release);
+		_forcedInputChannelOverride.store(static_cast<std::uint8_t>(current + 1u), std::memory_order_release);
 }
 
 void MidiRouter::StepChannelOverrideDown() noexcept
 {
-	const auto current = ForcedChannelOverrideOneBased();
+	const auto current = ForcedChannelOverride();
 	if (current > 0u)
-		_forcedInputChannelOneBased.store(static_cast<std::uint8_t>(current - 1u), std::memory_order_release);
+		_forcedInputChannelOverride.store(static_cast<std::uint8_t>(current - 1u), std::memory_order_release);
 }
 
 void MidiRouter::ResetChannelOverride() noexcept
 {
-	_forcedInputChannelOneBased.store(0u, std::memory_order_release);
+	_forcedInputChannelOverride.store(0u, std::memory_order_release);
 }
 
-void MidiRouter::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+void MidiRouter::SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
 	const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
 {
-	const auto clamped = (std::min)(forcedOneBased, static_cast<std::uint8_t>(16u));
-	const auto current = ForcedChannelOverrideOneBased();
+	const auto clamped = (std::min)(forcedChannelOverride, static_cast<std::uint8_t>(16u));
+	const auto current = ForcedChannelOverride();
 	if (current == clamped)
 		return;
 
@@ -286,24 +286,24 @@ void MidiRouter::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
 			station->FlushLiveHeldMidiNotes();
 	}
 
-	_forcedInputChannelOneBased.store(clamped, std::memory_order_release);
+	_forcedInputChannelOverride.store(clamped, std::memory_order_release);
 }
 
-std::uint8_t MidiRouter::ForcedChannelOverrideOneBased() const noexcept
+std::uint8_t MidiRouter::ForcedChannelOverride() const noexcept
 {
-	return _forcedInputChannelOneBased.load(std::memory_order_acquire);
+	return _forcedInputChannelOverride.load(std::memory_order_acquire);
 }
 
-std::uint8_t MidiRouter::RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedOneBased) noexcept
+std::uint8_t MidiRouter::RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept
 {
-	if (forcedOneBased == 0u)
+	if (forcedChannelOverride == 0u)
 		return status;
 
 	const auto messageType = static_cast<std::uint8_t>(status & midi::MidiEvent::StatusMask);
 	if ((messageType < 0x80u) || (messageType > 0xE0u))
 		return status;
 
-	return static_cast<std::uint8_t>(messageType | ((forcedOneBased - 1u) & midi::MidiEvent::ChannelMask));
+	return static_cast<std::uint8_t>(messageType | ((forcedChannelOverride - 1u) & midi::MidiEvent::ChannelMask));
 }
 
 bool MidiRouter::IsAutomationRecordHeld() noexcept
@@ -777,7 +777,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 		{
 			auto effectiveIngress = ingress;
 			effectiveIngress.status = RewriteIncomingChannel(ingress.status,
-				_forcedInputChannelOneBased.load(std::memory_order_acquire));
+				_forcedInputChannelOverride.load(std::memory_order_acquire));
 
 			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, effectiveIngress, userConfig, audioParams);
 			summary.Activated = summary.Activated || dispatch.Activated;

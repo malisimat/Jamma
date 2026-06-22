@@ -140,15 +140,15 @@ namespace io
 		return _midiRouter.HandleChannelOverrideKey(action, stations);
 	}
 
-	void IoInputSubsystem::SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+	void IoInputSubsystem::SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
 		const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
 	{
-		_midiRouter.SetForcedChannelOverrideOneBased(forcedOneBased, stations);
+		_midiRouter.SetForcedChannelOverride(forcedChannelOverride, stations);
 	}
 
-	std::uint8_t IoInputSubsystem::ForcedChannelOverrideOneBased() const noexcept
+	std::uint8_t IoInputSubsystem::ForcedChannelOverride() const noexcept
 	{
-		return _midiRouter.ForcedChannelOverrideOneBased();
+		return _midiRouter.ForcedChannelOverride();
 	}
 
 	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)

@@ -85,10 +85,10 @@ namespace midi
 		void StepChannelOverrideUp() noexcept;
 		void StepChannelOverrideDown() noexcept;
 		void ResetChannelOverride() noexcept;
-		void SetForcedChannelOverrideOneBased(std::uint8_t forcedOneBased,
+		void SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
-		std::uint8_t ForcedChannelOverrideOneBased() const noexcept;
-		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedOneBased) noexcept;
+		std::uint8_t ForcedChannelOverride() const noexcept;
+		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept;
 
 		static bool IsAutomationRecordHeld() noexcept;
 
@@ -166,7 +166,7 @@ namespace midi
 		std::atomic<std::uint8_t> _learnedCC{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
-		std::atomic<std::uint8_t> _forcedInputChannelOneBased{ 0u };
+		std::atomic<std::uint8_t> _forcedInputChannelOverride{ 0u };
 		bool _automationRecordKeyHeld = false;
 		bool _channelOverridePageUpHeld = false;
 		bool _channelOverridePageDownHeld = false;
