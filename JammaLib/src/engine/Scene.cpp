@@ -50,6 +50,8 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
+	_hoverPath2d(),
+	_hover2dDirty(true),
 	_lastLoggedHoverPath(),
 	_ctrlHandleOverlay(),
 	_quantisationInteraction(_ctrlHandleOverlay, _quantisation, _stations),
@@ -369,6 +371,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+	_InvalidateHover2d();
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
@@ -526,6 +529,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+	_InvalidateHover2d();
 
 	if (_popupHost.IsOpen())
 		return _popupHost.OnAction(action);
@@ -543,36 +547,6 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
 	else if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
-	else
-	{
-		for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
-		{
-			if (!*it)
-				continue;
-
-			auto res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
-			if (res.IsEaten)
-				return res;
-		}
-
-		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
-
-		if (res.IsEaten)
-			return res;
-
-		res = static_cast<std::shared_ptr<base::GuiElement>>(_globalMidiQuantRadio)->OnAction(_globalMidiQuantRadio->ParentToLocal(action));
-
-		if (res.IsEaten)
-			return res;
-
-		for (auto& station : _stations)
-		{
-			res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
-
-			if (res.IsEaten)
-				return res;
-		}
-	}
 
 	return ActionResult::NoAction();
 }
@@ -930,6 +904,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 	{
 		_guiChildren.push_back(child);
 		child->Init();
+		_InvalidateHover2d();
 	}
 }
 
@@ -1072,6 +1047,7 @@ void Scene::CommitChanges()
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
 	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _networkService->GetController()->TakePendingSnapshot();
+	bool hoverChanged = pendingRemoteSnapshot.has_value();
 
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -1084,6 +1060,7 @@ void Scene::CommitChanges()
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 			{
+				hoverChanged = true;
 				for (auto& job : jobs)
 				{
 					switch (job.JobActionType)
@@ -1129,6 +1106,127 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
+
+	if (hoverChanged)
+		_InvalidateHover2d();
+}
+
+void Scene::ResolveDeferredHover()
+{
+	if (!_hover2dDirty)
+		return;
+
+	if (_popupHost.IsOpen())
+	{
+		if (!_hoverPath2d.empty())
+		{
+			std::vector<std::weak_ptr<base::GuiElement>> none;
+			_ApplyHoverPath2d(none);
+			_hoverPath2d.clear();
+		}
+
+		_hover2dDirty = false;
+		return;
+	}
+
+	if (_touchDownElement.lock() || _isSceneTouching)
+		return;
+
+	auto nextPath = _ResolveHoverPath2d();
+	_ApplyHoverPath2d(nextPath);
+	_hoverPath2d = std::move(nextPath);
+	_hover2dDirty = false;
+}
+
+void Scene::_InvalidateHover2d()
+{
+	_hover2dDirty = true;
+}
+
+std::vector<std::weak_ptr<base::GuiElement>> Scene::_ResolveHoverPath2d()
+{
+	auto resolveTop = [this](const std::shared_ptr<base::GuiElement>& root) {
+		if (!root)
+			return std::shared_ptr<base::GuiElement>();
+
+		return root->FindTopmostDescendant(root->ParentToLocal(_cursorPos));
+	};
+
+	auto leaf = std::shared_ptr<base::GuiElement>();
+	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+	{
+		leaf = resolveTop(*it);
+		if (leaf)
+			break;
+	}
+
+	if (!leaf)
+		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_modeRadio));
+
+	if (!leaf)
+		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_globalMidiQuantRadio));
+
+	if (!leaf)
+	{
+		for (auto& station : _stations)
+		{
+			leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(station));
+			if (leaf)
+				break;
+		}
+	}
+
+	std::vector<std::weak_ptr<base::GuiElement>> path;
+	while (leaf)
+	{
+		path.push_back(leaf);
+		leaf = leaf->Parent();
+	}
+
+	std::reverse(path.begin(), path.end());
+	return path;
+}
+
+void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath)
+{
+	auto prevShared = _LockHoverPath(_hoverPath2d);
+	auto nextShared = _LockHoverPath(nextPath);
+	const auto prefix = _SharedHoverPathPrefix(prevShared, nextShared);
+
+	for (size_t i = prevShared.size(); i > prefix; --i)
+		prevShared[i - 1]->ApplyHoverState(false);
+
+	for (size_t i = 0; i < nextShared.size(); ++i)
+		nextShared[i]->ApplyHoverPoint(nextShared[i]->GlobalToLocal(_cursorPos));
+}
+
+std::vector<std::shared_ptr<base::GuiElement>> Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path)
+{
+	std::vector<std::shared_ptr<base::GuiElement>> sharedPath;
+	sharedPath.reserve(path.size());
+
+	for (const auto& element : path)
+	{
+		auto locked = element.lock();
+		if (!locked)
+			break;
+
+		sharedPath.push_back(std::move(locked));
+	}
+
+	return sharedPath;
+}
+
+size_t Scene::_SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
+	const std::vector<std::shared_ptr<base::GuiElement>>& rhs)
+{
+	size_t prefix = 0;
+	const auto count = std::min(lhs.size(), rhs.size());
+
+	while ((prefix < count) && (lhs[prefix].get() == rhs[prefix].get()))
+		++prefix;
+
+	return prefix;
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -1197,8 +1295,6 @@ void Scene::_UpdateSelection(ActionResultType res)
 	// Called when touch up + down, and when hover updated
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
-
-	std::cout << "Scene::UpdateSelection " << res << ", " << currentMode << std::endl;
 	switch (res)
 	{
 	case ACTIONRESULT_DEFAULT:

@@ -180,6 +180,7 @@ namespace engine
 		{
 			_sizeParams.Size = size;
 			_InitSize();
+			_InvalidateHover2d();
 		}
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
@@ -217,6 +218,7 @@ namespace engine
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
+		void ResolveDeferredHover();
 
 		// Returns a locked snapshot of the current station list.  Always use
 		// this when reading _stations from outside the render/tick thread (e.g.
@@ -300,6 +302,12 @@ namespace engine
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		timing::QuantisationInteractionContext _InteractionContext() const;
+		void _InvalidateHover2d();
+		std::vector<std::weak_ptr<base::GuiElement>> _ResolveHoverPath2d();
+		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
+		static std::vector<std::shared_ptr<base::GuiElement>> _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path);
+		static size_t _SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
+			const std::vector<std::shared_ptr<base::GuiElement>>& rhs);
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
 		void _EndBackgroundDrag();
@@ -359,6 +367,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
+		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
+		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		timing::TimingQuantiserController _quantisationInteraction;
