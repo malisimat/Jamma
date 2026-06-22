@@ -8,12 +8,13 @@ namespace
 	constexpr unsigned int PageUpKey = 0x21u;
 	constexpr unsigned int PageDownKey = 0x22u;
 	static const std::vector<std::shared_ptr<engine::Station>> kEmptyStations{};
+	using KeyActionType = decltype(actions::KeyAction::KEY_UP);
 
-	actions::KeyAction AltPageKey(unsigned int keyChar, bool isDown)
+	actions::KeyAction AltPageKey(unsigned int keyChar, KeyActionType keyActionType)
 	{
 		actions::KeyAction action{};
 		action.KeyChar = keyChar;
-		action.KeyActionType = isDown ? actions::KeyAction::KEY_DOWN : actions::KeyAction::KEY_UP;
+		action.KeyActionType = keyActionType;
 		action.Modifiers = base::Action::MODIFIER_ALT;
 		return action;
 	}

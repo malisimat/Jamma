@@ -802,12 +802,13 @@ TEST(LoopTakeMidiQuantisation, LocalMidiQuantEditForwardsGuiActionToStationRecei
 	auto receiver = std::make_shared<CapturingGuiReceiver>();
 	station->SetReceiver(receiver);
 	station->AddTake(take);
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
 	settings.Fraction = MidiQuantisationFraction::Eighth;
 	settings.GrainSamps = 960u;
-	take->SetMidiQuantisation(settings);
+	take->SetMidiQuantisationFromUserEdit(settings);
 
 	ASSERT_FALSE(receiver->Actions.empty());
 	EXPECT_EQ(actions::GuiAction::ACTIONELEMENT_MIDIQUANTISATION, receiver->Actions.back().ElementType);
@@ -831,6 +832,7 @@ TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
 
 TEST(LoopTakeMidiQuantisation, TransportStartContributesNaturalPhaseOffset) {
 	auto take = MakeLoopTake("take-phase-anchor");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
@@ -855,6 +857,7 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 	settings.GrainSamps = 100u;
 
 	auto firstTake = MakeLoopTake("take-start-zero");
+	firstTake->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 	firstTake->SetMidiQuantisation(settings);
 	firstTake->Record({}, "station", { 0u }, {}, {}, 0u);
 	firstTake->EndMultiWrite(260u, true, Audible::AUDIOSOURCE_ADC);
@@ -864,6 +867,7 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 	firstTake->Play(0u, 1000u, 0u);
 
 	auto shiftedTake = MakeLoopTake("take-start-250");
+	shiftedTake->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 	shiftedTake->SetMidiQuantisation(settings);
 	shiftedTake->Record({}, "station", { 0u }, {}, {}, 250u);
 	shiftedTake->EndMultiWrite(10u, true, Audible::AUDIOSOURCE_ADC);
@@ -930,6 +934,7 @@ TEST(LoopTakeMidiQuantisation, ResolvedPhasePublicationComposesGlobalStationTake
 	station->SetGlobalPhaseOffsetSamps(100);
 	station->SetStationPhaseOffsetSamps(25);
 	station->AddTake(take);
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
@@ -944,6 +949,7 @@ TEST(LoopTakeMidiQuantisation, ResolvedPhasePublicationComposesGlobalStationTake
 
 TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
 	auto take = MakeLoopTake("visual-phase-take");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 
 	MidiQuantisationSettings settings;
 	settings.Enabled = true;
