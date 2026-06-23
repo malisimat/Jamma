@@ -70,6 +70,7 @@ namespace graphics
 		bool IsResizing() const;
 		void SetResizing(bool resizing);
 		base::Action::Modifiers Modifiers() const;
+		void ClearModifiers();
 		bool IsTrackingMouse() const;
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);

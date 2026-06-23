@@ -369,6 +369,33 @@ Action::Modifiers Window::Modifiers() const
 	return _modifiers;
 }
 
+void Window::ClearModifiers()
+{
+	// Dispatch synthetic key-up events for any modifier we still believe is
+	// held. Routing them through the normal action path resets both the
+	// modifier bitmask and any scene state keyed off those releases (e.g. the
+	// Ctrl quantisation overlay), instead of leaving them stuck.
+	struct ModifierKey { Action::Modifiers Flag; unsigned int KeyChar; };
+	static const ModifierKey modifierKeys[] = {
+		{ Action::MODIFIER_SHIFT, 16 },
+		{ Action::MODIFIER_CTRL, 17 },
+		{ Action::MODIFIER_ALT, 18 }
+	};
+
+	for (const auto& mk : modifierKeys)
+	{
+		if (_modifiers & mk.Flag)
+		{
+			KeyAction keyAction;
+			keyAction.KeyChar = mk.KeyChar;
+			keyAction.KeyActionType = KeyAction::KEY_UP;
+			OnAction(keyAction);
+		}
+	}
+
+	_modifiers = Action::MODIFIER_NONE;
+}
+
 bool Window::IsTrackingMouse() const
 {
 	return _trackingMouse;
@@ -1140,6 +1167,16 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		keyAction.Modifiers = window->Modifiers();
 
 		window->OnAction(keyAction);
+		return 0;
+	}
+	case WM_KILLFOCUS:
+	{
+		// Key-up events for held modifiers (e.g. Ctrl/Shift) are delivered to
+		// whichever window has focus. When focus moves to a child or external
+		// window (such as a VST editor) those key-ups never reach us, leaving
+		// the modifier bitmask stuck. Clear it on focus loss so subsequent
+		// clicks aren't treated as modified gestures.
+		window->ClearModifiers();
 		return 0;
 	}
 	case WM_DESTROY:

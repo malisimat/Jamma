@@ -93,8 +93,6 @@ namespace vst
 
 		// Dispatch effEditIdle to let the plugin update its editor GUI.
 		void IdleEditor() noexcept override;
-		void OnEditorActivated() noexcept override;
-		void OnEditorDeactivated() noexcept override;
 
 		utils::Size2d GetEditorSize() const noexcept override { return _editorSize; }
 

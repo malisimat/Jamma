@@ -73,25 +73,14 @@ namespace graphics
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message,
 			WPARAM wParam, LPARAM lParam) noexcept;
 
-		// WH_CALLWNDPROCRET hook proc: dispatches effEditIdle after WM_MOUSEMOVE
-		// is processed by any child of an active editor frame window.
-		static LRESULT CALLBACK CallWndRetProc(int code, WPARAM wParam,
-			LPARAM lParam) noexcept;
-
 	private:
 		static constexpr LPCWSTR _ClassName = L"JammaVstEditorWindow";
-
-		// All VST editor operations run on the main UI thread, so a plain
-		// (non-atomic) vector is safe here — every access is on that thread.
-		static std::vector<VstEditorWindow*> s_activeEditorWindows;
-		static HHOOK s_callWndRetHook;
 
 		std::atomic<HWND> _editorWnd;
 		HWND _pluginChildWnd;
 		std::shared_ptr<vst::IVstPlugin> _plugin;
 
 		static BOOL CALLBACK _EnumChildrenProc(HWND hWnd, LPARAM lParam) noexcept;
-		static bool _IsFastIdleMessage(UINT message) noexcept;
 		void _CaptureChildWindows(std::vector<HWND>& outChildren) const;
 		void _RefreshTrackedPluginChild() noexcept;
 		void _ResizeFrameToClient(unsigned int clientWidth, unsigned int clientHeight) noexcept;

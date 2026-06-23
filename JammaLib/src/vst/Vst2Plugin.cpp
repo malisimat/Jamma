@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
-#include <sstream>
 #include "../graphics/VstEditorWindow.h"
 
 using namespace vst;
@@ -25,116 +24,6 @@ Vst2Plugin::GlContextScope::~GlContextScope()
 	// e.g. the job-thread fallback, have none — leave them untouched).
 	if (_rc)
 		wglMakeCurrent(_dc, _rc);
-}
-
-
-namespace
-{
-	void TraceVst2(const char* event,
-		HWND editorParent,
-		AEffect* effect,
-		VstInt32 opcode = -1,
-		VstInt32 index = 0,
-		VstIntPtr value = 0,
-		float opt = 0.0f)
-	{
-		std::ostringstream ss;
-		ss << "[VST2 TRACE] tid=" << GetCurrentThreadId()
-			<< " event=" << event
-			<< " parent=" << editorParent
-			<< " effect=" << effect;
-		if (opcode >= 0)
-		{
-			ss << " opcode=" << opcode
-				<< " index=" << index
-				<< " value=" << static_cast<long long>(value)
-				<< " opt=" << opt;
-		}
-		std::cout << ss.str() << std::endl;
-	}
-
-	const char* HostOpcodeName(VstInt32 opcode) noexcept
-	{
-		switch (opcode)
-		{
-		case audioMasterAutomate:
-			return "audioMasterAutomate";
-		case audioMasterVersion:
-			return "audioMasterVersion";
-		case audioMasterCurrentId:
-			return "audioMasterCurrentId";
-		case audioMasterIdle:
-			return "audioMasterIdle";
-		case audioMasterPinConnected:
-			return "audioMasterPinConnected";
-		case audioMasterWantMidi:
-			return "audioMasterWantMidi";
-		case audioMasterGetTime:
-			return "audioMasterGetTime";
-		case audioMasterProcessEvents:
-			return "audioMasterProcessEvents";
-		case audioMasterIOChanged:
-			return "audioMasterIOChanged";
-		case audioMasterNeedIdle:
-			return "audioMasterNeedIdle";
-		case audioMasterSizeWindow:
-			return "audioMasterSizeWindow";
-		case audioMasterGetSampleRate:
-			return "audioMasterGetSampleRate";
-		case audioMasterGetBlockSize:
-			return "audioMasterGetBlockSize";
-		case audioMasterGetInputLatency:
-			return "audioMasterGetInputLatency";
-		case audioMasterGetOutputLatency:
-			return "audioMasterGetOutputLatency";
-		case audioMasterGetCurrentProcessLevel:
-			return "audioMasterGetCurrentProcessLevel";
-		case audioMasterGetAutomationState:
-			return "audioMasterGetAutomationState";
-		case audioMasterGetVendorString:
-			return "audioMasterGetVendorString";
-		case audioMasterGetProductString:
-			return "audioMasterGetProductString";
-		case audioMasterGetVendorVersion:
-			return "audioMasterGetVendorVersion";
-		case audioMasterVendorSpecific:
-			return "audioMasterVendorSpecific";
-		case audioMasterCanDo:
-			return "audioMasterCanDo";
-		case audioMasterGetLanguage:
-			return "audioMasterGetLanguage";
-		case audioMasterGetDirectory:
-			return "audioMasterGetDirectory";
-		case audioMasterUpdateDisplay:
-			return "audioMasterUpdateDisplay";
-		case audioMasterBeginEdit:
-			return "audioMasterBeginEdit";
-		case audioMasterEndEdit:
-			return "audioMasterEndEdit";
-		default:
-			return "audioMasterUnknown";
-		}
-	}
-
-	// High-frequency opcodes that plugins (e.g. Battery 4) fire many times per
-	// second while their editor is open. Tracing these synchronously to the
-	// console pegs the UI thread and stalls editor repaints, so they are never
-	// traced.
-	bool IsHotHostOpcode(VstInt32 opcode) noexcept
-	{
-		switch (opcode)
-		{
-		case audioMasterGetTime:
-		case audioMasterGetCurrentProcessLevel:
-		case audioMasterIdle:
-		case audioMasterGetSampleRate:
-		case audioMasterGetBlockSize:
-		case audioMasterAutomate:
-			return true;
-		default:
-			return false;
-		}
-	}
 }
 
 Vst2Plugin::Vst2Plugin() :
@@ -183,8 +72,6 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 	if (_moduleHandle)
 		return true; // Already pre-initialised
 
-	std::wcout << L"[Vst2Plugin] PreInit: path='" << path << L"'" << std::endl;
-
 	_moduleHandle = LoadLibraryW(path.c_str());
 	if (!_moduleHandle)
 	{
@@ -205,7 +92,6 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 		return false;
 	}
 
-	std::cout << "[Vst2Plugin] PreInit: effect instantiated and opened on UI thread" << std::endl;
 	return true;
 #else
 	(void)path;
@@ -290,9 +176,6 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 		_outputChannelPtrs[static_cast<size_t>(c)] =
 			_outputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
 
-	std::cout << "[Vst2Plugin] InstantiateEffect: name='" << _name
-		<< "', inputs=" << _inputChannels
-		<< ", outputs=" << _outputChannels << std::endl;
 	return true;
 #else
 	(void)path;
@@ -310,12 +193,6 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	if (_isLoaded)
 		Unload();
 
-	std::wcout << L"[Vst2Plugin] Load: path='" << path
-		<< L"', sampleRate=" << sampleRate
-		<< L", blockSize=" << blockSize
-		<< L", requestedChannels=" << numChannels
-		<< std::endl;
-
 	_requestedChannels = static_cast<int32_t>((std::max)(1u, numChannels));
 	_sampleRate = sampleRate;
 	_blockSize = blockSize;
@@ -331,10 +208,6 @@ bool Vst2Plugin::Load(const std::wstring& path,
 			return false;
 		}
 	}
-	else
-	{
-		std::cout << "[Vst2Plugin] Load: reusing pre-loaded DLL from PreInit()" << std::endl;
-	}
 
 	// 2. Instantiate + effOpen. PreInit() normally does this on the UI thread so
 	//    the editor (effEditOpen on the UI thread) shares the effect's thread.
@@ -344,17 +217,13 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	//    thread. PreInit() is the supported path.
 	if (!_effect)
 	{
-		std::cout << "[Vst2Plugin] Load: no pre-instantiated effect — instantiating on job thread (fallback)" << std::endl;
+		std::cerr << "[Vst2Plugin] Load: no pre-instantiated effect — instantiating on job thread (fallback)" << std::endl;
 		if (!_InstantiateEffect(path))
 		{
 			FreeLibrary(_moduleHandle);
 			_moduleHandle = nullptr;
 			return false;
 		}
-	}
-	else
-	{
-		std::cout << "[Vst2Plugin] Load: reusing effect pre-instantiated by PreInit()" << std::endl;
 	}
 
 	// 3. Configure for the host audio format (safe off the editor thread).
@@ -368,7 +237,6 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	_isActivated.store(true, std::memory_order_release);
 
 	_isLoaded = true;
-	std::cout << "[Vst2Plugin] Load: success — " << _name << std::endl;
 	return true;
 #else
 	(void)path; (void)sampleRate; (void)blockSize; (void)numChannels;
@@ -629,34 +497,28 @@ void Vst2Plugin::DispatchPendingMidiEvents() noexcept
 bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST2_ENABLED
-	TraceVst2("OpenEditor.begin", parentHwnd, _effect);
 	if (!_isLoaded || !_effect)
 		return false;
 
 	if (!(_effect->flags & effFlagsHasEditor))
 	{
-		std::cout << "[Vst2Plugin] OpenEditor: plugin has no editor" << std::endl;
+		std::cerr << "[Vst2Plugin] OpenEditor: plugin has no editor" << std::endl;
 		return false;
 	}
 
 	if (_isEditorOpen.load(std::memory_order_acquire))
-	{
-		TraceVst2("OpenEditor.already_open", parentHwnd, _effect);
 		return true;
-	}
 
 	// Restore our GL render context after the plugin builds its editor — some
 	// plugins make their own context current during effEditOpen.
 	GlContextScope glScope;
 
-	TraceVst2("dispatch.effEditOpen", parentHwnd, _effect, effEditOpen, 0, reinterpret_cast<VstIntPtr>(parentHwnd), 0.0f);
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
 	_editorParentHwnd.store(parentHwnd, std::memory_order_release);
 	_isEditorOpen.store(true, std::memory_order_release);
 
 	ERect* eRect = nullptr;
-	TraceVst2("dispatch.effEditGetRect", parentHwnd, _effect, effEditGetRect, 0, 0, 0.0f);
 	_effect->dispatcher(_effect, effEditGetRect, 0, 0, &eRect, 0.0f);
 	if (eRect)
 	{
@@ -668,9 +530,6 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 		};
 	}
 
-	std::cout << "[Vst2Plugin] OpenEditor: size="
-		<< _editorSize.Width << "x" << _editorSize.Height << std::endl;
-	TraceVst2("OpenEditor.end", parentHwnd, _effect);
 	return true;
 #else
 	(void)parentHwnd;
@@ -681,19 +540,16 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 void Vst2Plugin::CloseEditor()
 {
 #ifdef JAMMA_VST2_ENABLED
-	TraceVst2("CloseEditor.begin", _editorParentHwnd.load(std::memory_order_acquire), _effect);
 	if (_effect
 		&& (_effect->flags & effFlagsHasEditor)
 		&& _isEditorOpen.exchange(false, std::memory_order_acq_rel))
 	{
 		GlContextScope glScope;
-		TraceVst2("dispatch.effEditClose", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditClose, 0, 0, 0.0f);
 		_effect->dispatcher(_effect, effEditClose, 0, 0, nullptr, 0.0f);
 	}
 #endif
 	_editorSize = { 0, 0 };
 	_editorParentHwnd.store(nullptr, std::memory_order_release);
-	TraceVst2("CloseEditor.end", nullptr, _effect);
 }
 
 void Vst2Plugin::IdleEditor() noexcept
@@ -711,51 +567,11 @@ void Vst2Plugin::IdleEditor() noexcept
 #endif
 }
 
-void Vst2Plugin::OnEditorActivated() noexcept
-{
-#ifdef JAMMA_VST2_ENABLED
-	if (_effect
-		&& (_effect->flags & effFlagsHasEditor)
-		&& _isEditorOpen.load(std::memory_order_acquire))
-	{
-		TraceVst2("dispatch.effEditTop", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditTop, 0, 0, 0.0f);
-		_effect->dispatcher(_effect, effEditTop, 0, 0, nullptr, 0.0f);
-	}
-#endif
-}
-
-void Vst2Plugin::OnEditorDeactivated() noexcept
-{
-#ifdef JAMMA_VST2_ENABLED
-	if (_effect
-		&& (_effect->flags & effFlagsHasEditor)
-		&& _isEditorOpen.load(std::memory_order_acquire))
-	{
-		TraceVst2("dispatch.effEditSleep", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditSleep, 0, 0, 0.0f);
-		_effect->dispatcher(_effect, effEditSleep, 0, 0, nullptr, 0.0f);
-	}
-#endif
-}
-
 #ifdef JAMMA_VST2_ENABLED
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
 {
 	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
-	if (!IsHotHostOpcode(opcode))
-	{
-		TraceVst2("HostCallback", self ? self->_editorParentHwnd.load(std::memory_order_acquire) : nullptr,
-			effect, opcode, index, value, opt);
-		if (self)
-		{
-			std::ostringstream op;
-			op << "[VST2 TRACE] tid=" << GetCurrentThreadId()
-				<< " event=HostCallbackName"
-				<< " name=" << HostOpcodeName(opcode)
-				<< " opcode=" << opcode;
-			std::cout << op.str() << std::endl;
-		}
-	}
 
 	// During VSTPluginMain bootstrap, effect/user may not be wired yet.
 	// Return core host identity answers before _isLoaded is true.
