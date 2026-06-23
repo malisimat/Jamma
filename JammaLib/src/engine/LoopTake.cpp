@@ -2697,6 +2697,35 @@ void LoopTake::SetSampleRate(float sampleRate)
 void LoopTake::SetParentVisualScale(float scale) noexcept
 {
 	_parentVisualScale = std::max(0.0f, scale);
+	for (auto& loop : _loops)
+	{
+		if (loop)
+			loop->SetMasterVisualScale(_parentVisualScale);
+	}
+}
+
+void LoopTake::ForceUnloadAllVstPlugins()
+{
+	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
+	DrainVstChain(std::move(chain));
+	DrainVstChain(std::move(_backVstChain));
+	_flipVstChain.store(false, std::memory_order_release);
+	_pendingVstLoads.clear();
+	_pendingVstUnloads.clear();
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		_vstPluginPaths.clear();
+	}
+	for (auto& loop : _loops)
+	{
+		if (loop)
+			loop->ForceUnloadAllVstPlugins();
+	}
+	for (auto& loop : _backLoops)
+	{
+		if (loop)
+			loop->ForceUnloadAllVstPlugins();
+	}
 }
 
 void LoopTake::LoadVstPlugin(std::wstring path,

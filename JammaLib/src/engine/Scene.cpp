@@ -1105,8 +1105,20 @@ void Scene::Shutdown()
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
+	ForceUnloadAllVstPlugins();
+
 	CloseGlobalInsertCapture();
 	CloseAudio();
+}
+
+void Scene::ForceUnloadAllVstPlugins()
+{
+	std::scoped_lock lock(_sceneMutex);
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->ForceUnloadAllVstPlugins();
+	}
 }
 
 void Scene::CommitChanges()

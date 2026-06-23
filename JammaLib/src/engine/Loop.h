@@ -246,6 +246,7 @@ namespace engine
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
+		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
 		void SetBlockSize(unsigned int blockSize) { _blockSize = blockSize; }
 		float GetSampleRate() const noexcept { return _sampleRate; }

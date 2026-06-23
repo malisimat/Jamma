@@ -151,6 +151,7 @@ namespace engine
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
+		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }

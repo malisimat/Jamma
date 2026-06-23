@@ -9,8 +9,99 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <sstream>
+#include "../graphics/VstEditorWindow.h"
 
 using namespace vst;
+
+namespace
+{
+	void TraceVst2(const char* event,
+		HWND editorParent,
+		AEffect* effect,
+		VstInt32 opcode = -1,
+		VstInt32 index = 0,
+		VstIntPtr value = 0,
+		float opt = 0.0f)
+	{
+		std::ostringstream ss;
+		ss << "[VST2 TRACE] tid=" << GetCurrentThreadId()
+			<< " event=" << event
+			<< " parent=" << editorParent
+			<< " effect=" << effect;
+		if (opcode >= 0)
+		{
+			ss << " opcode=" << opcode
+				<< " index=" << index
+				<< " value=" << static_cast<long long>(value)
+				<< " opt=" << opt;
+		}
+		std::cout << ss.str() << std::endl;
+	}
+
+	const char* HostOpcodeName(VstInt32 opcode) noexcept
+	{
+		switch (opcode)
+		{
+		case audioMasterAutomate:
+			return "audioMasterAutomate";
+		case audioMasterVersion:
+			return "audioMasterVersion";
+		case audioMasterCurrentId:
+			return "audioMasterCurrentId";
+		case audioMasterIdle:
+			return "audioMasterIdle";
+		case audioMasterPinConnected:
+			return "audioMasterPinConnected";
+		case audioMasterWantMidi:
+			return "audioMasterWantMidi";
+		case audioMasterGetTime:
+			return "audioMasterGetTime";
+		case audioMasterProcessEvents:
+			return "audioMasterProcessEvents";
+		case audioMasterIOChanged:
+			return "audioMasterIOChanged";
+		case audioMasterNeedIdle:
+			return "audioMasterNeedIdle";
+		case audioMasterSizeWindow:
+			return "audioMasterSizeWindow";
+		case audioMasterGetSampleRate:
+			return "audioMasterGetSampleRate";
+		case audioMasterGetBlockSize:
+			return "audioMasterGetBlockSize";
+		case audioMasterGetInputLatency:
+			return "audioMasterGetInputLatency";
+		case audioMasterGetOutputLatency:
+			return "audioMasterGetOutputLatency";
+		case audioMasterGetCurrentProcessLevel:
+			return "audioMasterGetCurrentProcessLevel";
+		case audioMasterGetAutomationState:
+			return "audioMasterGetAutomationState";
+		case audioMasterGetVendorString:
+			return "audioMasterGetVendorString";
+		case audioMasterGetProductString:
+			return "audioMasterGetProductString";
+		case audioMasterGetVendorVersion:
+			return "audioMasterGetVendorVersion";
+		case audioMasterVendorSpecific:
+			return "audioMasterVendorSpecific";
+		case audioMasterCanDo:
+			return "audioMasterCanDo";
+		case audioMasterGetLanguage:
+			return "audioMasterGetLanguage";
+		case audioMasterGetDirectory:
+			return "audioMasterGetDirectory";
+		case audioMasterUpdateDisplay:
+			return "audioMasterUpdateDisplay";
+		case audioMasterBeginEdit:
+			return "audioMasterBeginEdit";
+		case audioMasterEndEdit:
+			return "audioMasterEndEdit";
+		default:
+			return "audioMasterUnknown";
+		}
+	}
+}
 
 Vst2Plugin::Vst2Plugin() :
 #ifdef JAMMA_VST2_ENABLED
@@ -30,6 +121,8 @@ Vst2Plugin::Vst2Plugin() :
 	_name(),
 	_isBypassed(false),
 	_editorSize({ 0, 0 }),
+	_editorParentHwnd(nullptr),
+	_isEditorOpen(false),
 	_inputChannelPtrs(),
 	_outputChannelPtrs(),
 	_inputScratchStorage(),
@@ -247,6 +340,8 @@ void Vst2Plugin::Unload()
 	_isLoaded = false;
 	_name.clear();
 	_editorSize = { 0, 0 };
+	_editorParentHwnd.store(nullptr, std::memory_order_release);
+	_isEditorOpen.store(false, std::memory_order_release);
 	_inputChannels = 0;
 	_outputChannels = 0;
 }
@@ -457,6 +552,7 @@ void Vst2Plugin::DispatchPendingMidiEvents() noexcept
 bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 {
 #ifdef JAMMA_VST2_ENABLED
+	TraceVst2("OpenEditor.begin", parentHwnd, _effect);
 	if (!_isLoaded || !_effect)
 		return false;
 
@@ -466,10 +562,20 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 		return false;
 	}
 
+	if (_isEditorOpen.load(std::memory_order_acquire))
+	{
+		TraceVst2("OpenEditor.already_open", parentHwnd, _effect);
+		return true;
+	}
+
+	TraceVst2("dispatch.effEditOpen", parentHwnd, _effect, effEditOpen, 0, reinterpret_cast<VstIntPtr>(parentHwnd), 0.0f);
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
+	_editorParentHwnd.store(parentHwnd, std::memory_order_release);
+	_isEditorOpen.store(true, std::memory_order_release);
 
 	ERect* eRect = nullptr;
+	TraceVst2("dispatch.effEditGetRect", parentHwnd, _effect, effEditGetRect, 0, 0, 0.0f);
 	_effect->dispatcher(_effect, effEditGetRect, 0, 0, &eRect, 0.0f);
 	if (eRect)
 	{
@@ -483,6 +589,7 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 
 	std::cout << "[Vst2Plugin] OpenEditor: size="
 		<< _editorSize.Width << "x" << _editorSize.Height << std::endl;
+	TraceVst2("OpenEditor.end", parentHwnd, _effect);
 	return true;
 #else
 	(void)parentHwnd;
@@ -493,17 +600,56 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 void Vst2Plugin::CloseEditor()
 {
 #ifdef JAMMA_VST2_ENABLED
-	if (_effect && (_effect->flags & effFlagsHasEditor))
+	TraceVst2("CloseEditor.begin", _editorParentHwnd.load(std::memory_order_acquire), _effect);
+	if (_effect
+		&& (_effect->flags & effFlagsHasEditor)
+		&& _isEditorOpen.exchange(false, std::memory_order_acq_rel))
+	{
+		TraceVst2("dispatch.effEditClose", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditClose, 0, 0, 0.0f);
 		_effect->dispatcher(_effect, effEditClose, 0, 0, nullptr, 0.0f);
+	}
 #endif
 	_editorSize = { 0, 0 };
+	_editorParentHwnd.store(nullptr, std::memory_order_release);
+	TraceVst2("CloseEditor.end", nullptr, _effect);
 }
 
 void Vst2Plugin::IdleEditor() noexcept
 {
 #ifdef JAMMA_VST2_ENABLED
-	if (_effect && (_effect->flags & effFlagsHasEditor))
+	if (_effect
+		&& (_effect->flags & effFlagsHasEditor)
+		&& _isEditorOpen.load(std::memory_order_acquire))
+	{
+		TraceVst2("dispatch.effEditIdle", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditIdle, 0, 0, 0.0f);
 		_effect->dispatcher(_effect, effEditIdle, 0, 0, nullptr, 0.0f);
+	}
+#endif
+}
+
+void Vst2Plugin::OnEditorActivated() noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect
+		&& (_effect->flags & effFlagsHasEditor)
+		&& _isEditorOpen.load(std::memory_order_acquire))
+	{
+		TraceVst2("dispatch.effEditTop", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditTop, 0, 0, 0.0f);
+		_effect->dispatcher(_effect, effEditTop, 0, 0, nullptr, 0.0f);
+	}
+#endif
+}
+
+void Vst2Plugin::OnEditorDeactivated() noexcept
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect
+		&& (_effect->flags & effFlagsHasEditor)
+		&& _isEditorOpen.load(std::memory_order_acquire))
+	{
+		TraceVst2("dispatch.effEditSleep", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditSleep, 0, 0, 0.0f);
+		_effect->dispatcher(_effect, effEditSleep, 0, 0, nullptr, 0.0f);
+	}
 #endif
 }
 
@@ -511,9 +657,44 @@ void Vst2Plugin::IdleEditor() noexcept
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
 {
-	(void)value;
-
 	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
+	TraceVst2("HostCallback", self ? self->_editorParentHwnd.load(std::memory_order_acquire) : nullptr,
+		effect, opcode, index, value, opt);
+	if (self)
+	{
+		std::ostringstream op;
+		op << "[VST2 TRACE] tid=" << GetCurrentThreadId()
+			<< " event=HostCallbackName"
+			<< " name=" << HostOpcodeName(opcode)
+			<< " opcode=" << opcode;
+		std::cout << op.str() << std::endl;
+	}
+
+	// During VSTPluginMain bootstrap, effect/user may not be wired yet.
+	// Return core host identity answers before _isLoaded is true.
+	if (!self)
+	{
+		switch (opcode)
+		{
+		case audioMasterVersion:
+			return kVstVersion;
+		case audioMasterGetVendorString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
+			return 1;
+		case audioMasterGetProductString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxProductStrLen);
+			return 1;
+		case audioMasterGetVendorVersion:
+			return 1000;
+		default:
+			return 0;
+		}
+	}
+
+	if (!self->_isLoaded)
+		return 0;
 
 	switch (opcode)
 	{
@@ -543,6 +724,8 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		}
 		return 0;
 	case audioMasterGetCurrentProcessLevel:
+		if (self->_isActivated.load(std::memory_order_acquire))
+			return kVstProcessLevelRealtime;
 		return kVstProcessLevelUser;
 	case audioMasterGetVendorString:
 		if (ptr)
@@ -574,12 +757,51 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), opt);
 		}
 		return 0;
+	case audioMasterBeginEdit:
+		if (self)
+			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), 0.0f);
+		return 1;
+	case audioMasterEndEdit:
+		if (self)
+			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), 0.0f);
+		return 1;
+	case audioMasterUpdateDisplay:
+		if (self->_isEditorOpen.load(std::memory_order_acquire))
+		{
+			const HWND parentHwnd = self->_editorParentHwnd.load(std::memory_order_acquire);
+			if (parentHwnd && IsWindow(parentHwnd))
+			{
+				PostMessage(parentHwnd, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+				return 1;
+			}
+		}
+		return 0;
+	case audioMasterSizeWindow:
+		if (self->_isEditorOpen.load(std::memory_order_acquire))
+		{
+			const HWND parentHwnd = self->_editorParentHwnd.load(std::memory_order_acquire);
+			if (parentHwnd && IsWindow(parentHwnd))
+			{
+				const auto requestedWidth = static_cast<WPARAM>((std::max)(0, static_cast<int>(index)));
+				const auto requestedHeight = static_cast<LPARAM>((std::max)(0, static_cast<int>(value)));
+				const auto postResult = PostMessage(parentHwnd,
+					graphics::VstEditorWindow::MessageVst2SizeWindow,
+					requestedWidth,
+					requestedHeight);
+				return postResult ? 1 : 0;
+			}
+		}
+		return 0;
 	case audioMasterIdle:
 		// Called by some older plugins requesting idle processing.
-		if (effect)
+		if (self->_isEditorOpen.load(std::memory_order_acquire))
 		{
-			// Dispatch effEditIdle back to any open editor.
-			effect->dispatcher(effect, effEditIdle, 0, 0, nullptr, 0.0f);
+			const HWND parentHwnd = self->_editorParentHwnd.load(std::memory_order_acquire);
+			if (parentHwnd && IsWindow(parentHwnd))
+			{
+				PostMessage(parentHwnd, graphics::VstEditorWindow::MessageVst2Idle, 0, 0);
+				return 0;
+			}
 		}
 		return 0;
 	default:

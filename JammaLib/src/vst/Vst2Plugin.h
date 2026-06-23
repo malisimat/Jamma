@@ -93,6 +93,8 @@ namespace vst
 
 		// Dispatch effEditIdle to let the plugin update its editor GUI.
 		void IdleEditor() noexcept override;
+		void OnEditorActivated() noexcept override;
+		void OnEditorDeactivated() noexcept override;
 
 		utils::Size2d GetEditorSize() const noexcept override { return _editorSize; }
 
@@ -122,7 +124,10 @@ namespace vst
 			if (!canDo) return false;
 			const std::string_view sv(canDo);
 			return (sv == "sendVstEvents") ||
-				   (sv == "sendVstMidiEvent");
+				   (sv == "sendVstMidiEvent") ||
+				   (sv == "sendVstTimeInfo") ||
+				   (sv == "sendVstMidiEventFlagIsRealtime") ||
+				   (sv == "sizeWindow");
 		}
 
 	private:
@@ -159,6 +164,8 @@ namespace vst
 		std::string _name;
 		std::atomic<bool> _isBypassed;
 		utils::Size2d _editorSize;
+		std::atomic<HWND> _editorParentHwnd;
+		std::atomic<bool> _isEditorOpen;
 
 		// Pre-allocated audio buffers — never heap-allocated in ProcessBlock.
 		std::vector<float*> _inputChannelPtrs;

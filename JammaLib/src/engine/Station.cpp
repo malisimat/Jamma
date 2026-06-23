@@ -1373,6 +1373,30 @@ void Station::SetLogging(const io::LoggingConfig& config) noexcept
 	}
 }
 
+void Station::ForceUnloadAllVstPlugins()
+{
+	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
+	_DrainVstChain(std::move(chain));
+	_DrainVstChain(std::move(_backVstChain));
+	_flipVstChain.store(false, std::memory_order_release);
+	_pendingVstLoads.clear();
+	_pendingVstUnloads.clear();
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		_vstPluginPaths.clear();
+	}
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->ForceUnloadAllVstPlugins();
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->ForceUnloadAllVstPlugins();
+	}
+}
+
 void Station::SetNumBusChannels(unsigned int chans)
 {
 	_backAudioBuffers.clear();

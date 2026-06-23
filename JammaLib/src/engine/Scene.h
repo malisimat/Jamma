@@ -252,6 +252,10 @@ namespace engine
 		{
 			_networkService->Disconnect();
 		}
+
+		// Force-unload all hosted VST plugins owned by stations/takes/loops.
+		// Call on the main/non-audio thread during shutdown.
+		void ForceUnloadAllVstPlugins();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

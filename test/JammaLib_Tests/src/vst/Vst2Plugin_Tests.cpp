@@ -184,6 +184,9 @@ TEST(Vst2PluginHostCallback, ReportsOutboundMidiCapability)
 {
 	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstEvents"));
 	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstMidiEvent"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstTimeInfo"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstMidiEventFlagIsRealtime"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sizeWindow"));
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));

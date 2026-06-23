@@ -390,7 +390,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		{
 			if (msg.message == WM_QUIT)
 			{
+				std::cout << "[SHUTDOWN TRACE] WM_QUIT received" << std::endl;
+				scene.value()->CloseAllVstEditorWindows();
+				std::cout << "[SHUTDOWN TRACE] Closed all VST editor windows (WM_QUIT path)" << std::endl;
+				scene.value()->ForceUnloadAllVstPlugins();
+				std::cout << "[SHUTDOWN TRACE] Forced unload of all VST plugins (WM_QUIT path)" << std::endl;
+				std::cout << "[SHUTDOWN TRACE] DrainUiThreadDestroyQueue count="
+					<< vst::DrainUiThreadDestroyQueue() << std::endl;
 				scene.value()->CloseAudio();
+				std::cout << "[SHUTDOWN TRACE] Closed audio (WM_QUIT path)" << std::endl;
 				active = false;
 				break;
 			}
@@ -418,13 +426,18 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
 	// undefined behaviour. scene is still alive here since it goes out of scope
 	// after the explicit CoUninitialize() call below.
+	std::cout << "[SHUTDOWN TRACE] Begin scene shutdown" << std::endl;
 	scene.value()->Shutdown();
+	std::cout << "[SHUTDOWN TRACE] Scene shutdown complete" << std::endl;
 	scene.value()->CloseAllVstEditorWindows();
+	std::cout << "[SHUTDOWN TRACE] Closed all VST editor windows (post-loop path)" << std::endl;
 
 	window.Release();
+	std::cout << "[SHUTDOWN TRACE] Window release complete" << std::endl;
 
 	// Final drain for any plugins queued after the last render iteration.
-	vst::DrainUiThreadDestroyQueue();
+	std::cout << "[SHUTDOWN TRACE] DrainUiThreadDestroyQueue count="
+		<< vst::DrainUiThreadDestroyQueue() << std::endl;
 
 	// Stop the TUI before returning so console mode and cout/cerr rdbufs
 	// are fully restored before the CRT shuts down.
@@ -435,10 +448,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// Tear down Scene (joins job thread) before COM teardown, then drain once
 	// more for any failed-load plugins queued late during job-thread shutdown.
 	scene.reset();
-	vst::DrainUiThreadDestroyQueue();
+	std::cout << "[SHUTDOWN TRACE] Scene reset complete" << std::endl;
+	std::cout << "[SHUTDOWN TRACE] DrainUiThreadDestroyQueue count="
+		<< vst::DrainUiThreadDestroyQueue() << std::endl;
 
 	if (uiComInitialized)
+	{
+		std::cout << "[SHUTDOWN TRACE] CoUninitialize" << std::endl;
 		CoUninitialize();
+	}
 
 	return (int)msg.wParam;
 }

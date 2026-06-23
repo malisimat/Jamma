@@ -183,6 +183,7 @@ namespace engine
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
+		void ForceUnloadAllVstPlugins();
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;

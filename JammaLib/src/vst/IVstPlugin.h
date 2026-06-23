@@ -99,6 +99,11 @@ namespace vst
 		// Must be called from the main/UI thread only.
 		virtual void IdleEditor() noexcept {}
 
+		// Editor focus lifecycle hooks (VST2: effEditTop/effEditSleep).
+		// Called from the editor host window on activation/focus transitions.
+		virtual void OnEditorActivated() noexcept {}
+		virtual void OnEditorDeactivated() noexcept {}
+
 		// Returns the size the editor requested, or {0,0} if no editor.
 		virtual utils::Size2d GetEditorSize() const noexcept = 0;
 
