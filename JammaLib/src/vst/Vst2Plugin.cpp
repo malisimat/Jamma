@@ -14,6 +14,20 @@
 
 using namespace vst;
 
+Vst2Plugin::GlContextScope::GlContextScope() noexcept
+	: _rc(wglGetCurrentContext()), _dc(wglGetCurrentDC())
+{
+}
+
+Vst2Plugin::GlContextScope::~GlContextScope()
+{
+	// Only restore if there was a context to begin with (non-render threads,
+	// e.g. the job-thread fallback, have none — leave them untouched).
+	if (_rc)
+		wglMakeCurrent(_dc, _rc);
+}
+
+
 namespace
 {
 	void TraceVst2(const char* event,
@@ -101,6 +115,26 @@ namespace
 			return "audioMasterUnknown";
 		}
 	}
+
+	// High-frequency opcodes that plugins (e.g. Battery 4) fire many times per
+	// second while their editor is open. Tracing these synchronously to the
+	// console pegs the UI thread and stalls editor repaints, so they are never
+	// traced.
+	bool IsHotHostOpcode(VstInt32 opcode) noexcept
+	{
+		switch (opcode)
+		{
+		case audioMasterGetTime:
+		case audioMasterGetCurrentProcessLevel:
+		case audioMasterIdle:
+		case audioMasterGetSampleRate:
+		case audioMasterGetBlockSize:
+		case audioMasterAutomate:
+			return true;
+		default:
+			return false;
+		}
+	}
 }
 
 Vst2Plugin::Vst2Plugin() :
@@ -118,6 +152,7 @@ Vst2Plugin::Vst2Plugin() :
 	_sampleFramePosition(0),
 	_isLoaded(false),
 	_isActivated(false),
+	_audioThreadId(0),
 	_name(),
 	_isBypassed(false),
 	_editorSize({ 0, 0 }),
@@ -157,8 +192,41 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 		return false;
 	}
 
-	// Verify the plugin entry-point exists.  We don't call it here —
-	// that is deferred to Load() on the job thread.
+	// Instantiate the AEffect and run effOpen HERE, on the UI thread. minihost
+	// calls VSTPluginMain()/effOpen and effEditOpen on the same (main) thread.
+	// Several plugins (e.g. NI) bind their GUI/idle dispatch to the thread that
+	// instantiated the effect; if effOpen runs on the job thread and effEditOpen
+	// on the UI thread, the editor paints once then freezes and ignores input.
+	// Doing it in PreInit keeps both on the UI thread.
+	if (!_InstantiateEffect(path))
+	{
+		FreeLibrary(_moduleHandle);
+		_moduleHandle = nullptr;
+		return false;
+	}
+
+	std::cout << "[Vst2Plugin] PreInit: effect instantiated and opened on UI thread" << std::endl;
+	return true;
+#else
+	(void)path;
+	return false;
+#endif
+}
+
+bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
+{
+#ifdef JAMMA_VST2_ENABLED
+	if (_effect)
+		return true; // Already instantiated
+
+	// This runs on Jamma's UI thread, which also owns the OpenGL render
+	// context. Some plugins (e.g. Battery 4) make their own GL context current
+	// during VSTPluginMain()/effOpen and never restore ours, which leaves our
+	// framebuffer incomplete and the whole app paints white. The scope guard
+	// snapshots our GL context now and restores it when this function returns.
+	GlContextScope glScope;
+
+	// Locate and call the plugin entry-point to obtain the AEffect.
 	auto mainProc = reinterpret_cast<AEffect* (*)(audioMasterCallback)>(
 		GetProcAddress(_moduleHandle, "VSTPluginMain"));
 	if (!mainProc)
@@ -167,13 +235,64 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 
 	if (!mainProc)
 	{
-		std::cerr << "[Vst2Plugin] PreInit: no VST2 entry point found" << std::endl;
-		FreeLibrary(_moduleHandle);
-		_moduleHandle = nullptr;
+		std::cerr << "[Vst2Plugin] InstantiateEffect: no VST2 entry-point found" << std::endl;
 		return false;
 	}
 
-	std::cout << "[Vst2Plugin] PreInit: entry-point found, DLL loaded" << std::endl;
+	_effect = mainProc(Vst2Plugin::HostCallback);
+	if (!_effect || (_effect->magic != kEffectMagic))
+	{
+		std::cerr << "[Vst2Plugin] InstantiateEffect: VSTPluginMain returned null or wrong magic" << std::endl;
+		_effect = nullptr;
+		return false;
+	}
+
+	// Store our 'this' pointer in the user field for the host callback.
+	_effect->user = this;
+
+	// Open the effect. Audio configuration (sample rate, block size, resume)
+	// is deferred to Load() once the host format is known.
+	_effect->dispatcher(_effect, effOpen, 0, 0, nullptr, 0.0f);
+
+	// Query name after effOpen.
+	{
+		char effectName[64] = {};
+		if (_effect->dispatcher(_effect, effGetEffectName, 0, 0, effectName, 0.0f) != 0)
+			_name = effectName;
+		if (_name.empty())
+		{
+			char vendorName[64] = {};
+			_effect->dispatcher(_effect, effGetVendorString, 0, 0, vendorName, 0.0f);
+			_name = vendorName;
+		}
+		if (_name.empty())
+			_name = "(unknown vst2)";
+	}
+
+	_inputChannels = (std::max)(1, static_cast<int32_t>(_effect->numInputs));
+	_outputChannels = (std::max)(1, static_cast<int32_t>(_effect->numOutputs));
+
+	// Pre-allocate channel pointer arrays and scratch buffers so ProcessBlock
+	// never touches the heap.
+	_inputScratchStorage.assign(
+		static_cast<size_t>(_inputChannels) * constants::MaxBlockSize, 0.0f);
+	_outputScratchStorage.assign(
+		static_cast<size_t>(_outputChannels) * constants::MaxBlockSize, 0.0f);
+
+	_inputChannelPtrs.resize(static_cast<size_t>(_inputChannels));
+	_outputChannelPtrs.resize(static_cast<size_t>(_outputChannels));
+
+	for (int32_t c = 0; c < _inputChannels; ++c)
+		_inputChannelPtrs[static_cast<size_t>(c)] =
+			_inputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
+
+	for (int32_t c = 0; c < _outputChannels; ++c)
+		_outputChannelPtrs[static_cast<size_t>(c)] =
+			_outputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
+
+	std::cout << "[Vst2Plugin] InstantiateEffect: name='" << _name
+		<< "', inputs=" << _inputChannels
+		<< ", outputs=" << _outputChannels << std::endl;
 	return true;
 #else
 	(void)path;
@@ -217,82 +336,34 @@ bool Vst2Plugin::Load(const std::wstring& path,
 		std::cout << "[Vst2Plugin] Load: reusing pre-loaded DLL from PreInit()" << std::endl;
 	}
 
-	// 2. Locate and call the plugin entry-point to obtain the AEffect.
-	auto mainProc = reinterpret_cast<AEffect* (*)(audioMasterCallback)>(
-		GetProcAddress(_moduleHandle, "VSTPluginMain"));
-	if (!mainProc)
-		mainProc = reinterpret_cast<AEffect* (*)(audioMasterCallback)>(
-			GetProcAddress(_moduleHandle, "main"));
-
-	if (!mainProc)
+	// 2. Instantiate + effOpen. PreInit() normally does this on the UI thread so
+	//    the editor (effEditOpen on the UI thread) shares the effect's thread.
+	//    Only instantiate here as a fallback if PreInit() was skipped — note
+	//    this fallback path runs on the job thread, so editor repaint/input may
+	//    misbehave for plugins that bind GUI dispatch to the instantiating
+	//    thread. PreInit() is the supported path.
+	if (!_effect)
 	{
-		std::cerr << "[Vst2Plugin] Load: no VST2 entry-point found" << std::endl;
-		FreeLibrary(_moduleHandle);
-		_moduleHandle = nullptr;
-		return false;
+		std::cout << "[Vst2Plugin] Load: no pre-instantiated effect — instantiating on job thread (fallback)" << std::endl;
+		if (!_InstantiateEffect(path))
+		{
+			FreeLibrary(_moduleHandle);
+			_moduleHandle = nullptr;
+			return false;
+		}
+	}
+	else
+	{
+		std::cout << "[Vst2Plugin] Load: reusing effect pre-instantiated by PreInit()" << std::endl;
 	}
 
-	_effect = mainProc(Vst2Plugin::HostCallback);
-	if (!_effect || (_effect->magic != kEffectMagic))
-	{
-		std::cerr << "[Vst2Plugin] Load: VSTPluginMain returned null or wrong magic" << std::endl;
-		_effect = nullptr;
-		FreeLibrary(_moduleHandle);
-		_moduleHandle = nullptr;
-		return false;
-	}
-
-	// Store our 'this' pointer in the user field for the host callback.
-	_effect->user = this;
-
-	// 3. Open and configure.
-	_effect->dispatcher(_effect, effOpen, 0, 0, nullptr, 0.0f);
+	// 3. Configure for the host audio format (safe off the editor thread).
 	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, sampleRate);
 	_effect->dispatcher(_effect, effSetBlockSize, 0,
 		static_cast<VstIntPtr>(blockSize), nullptr, 0.0f);
 	_effect->dispatcher(_effect, effSetProgram, 0, 0, nullptr, 0.0f);
 
-	// 4. Query name after effOpen.
-	{
-		char effectName[64] = {};
-		if (_effect->dispatcher(_effect, effGetEffectName, 0, 0, effectName, 0.0f) != 0)
-			_name = effectName;
-		if (_name.empty())
-		{
-			char vendorName[64] = {};
-			_effect->dispatcher(_effect, effGetVendorString, 0, 0, vendorName, 0.0f);
-			_name = vendorName;
-		}
-		if (_name.empty())
-			_name = "(unknown vst2)";
-	}
-
-	_inputChannels = (std::max)(1, static_cast<int32_t>(_effect->numInputs));
-	_outputChannels = (std::max)(1, static_cast<int32_t>(_effect->numOutputs));
-
-	std::cout << "[Vst2Plugin] Load: name='" << _name
-		<< "', inputs=" << _inputChannels
-		<< ", outputs=" << _outputChannels << std::endl;
-
-	// 5. Pre-allocate channel pointer arrays and scratch buffers so
-	//    ProcessBlock never touches the heap.
-	_inputScratchStorage.assign(
-		static_cast<size_t>(_inputChannels) * constants::MaxBlockSize, 0.0f);
-	_outputScratchStorage.assign(
-		static_cast<size_t>(_outputChannels) * constants::MaxBlockSize, 0.0f);
-
-	_inputChannelPtrs.resize(static_cast<size_t>(_inputChannels));
-	_outputChannelPtrs.resize(static_cast<size_t>(_outputChannels));
-
-	for (int32_t c = 0; c < _inputChannels; ++c)
-		_inputChannelPtrs[static_cast<size_t>(c)] =
-			_inputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
-
-	for (int32_t c = 0; c < _outputChannels; ++c)
-		_outputChannelPtrs[static_cast<size_t>(c)] =
-			_outputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
-
-	// 6. Start the effect (resume).
+	// 4. Start the effect (resume).
 	_effect->dispatcher(_effect, effMainsChanged, 0, 1, nullptr, 0.0f);
 	_isActivated.store(true, std::memory_order_release);
 
@@ -349,6 +420,8 @@ void Vst2Plugin::Unload()
 void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST2_ENABLED
+	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
+
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
@@ -385,6 +458,8 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST2_ENABLED
+	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
+
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
@@ -431,6 +506,8 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannels, int32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST2_ENABLED
+	_audioThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
+
 	if (!_isLoaded
 		|| !_isActivated.load(std::memory_order_acquire)
 		|| _isBypassed.load(std::memory_order_relaxed)
@@ -568,6 +645,10 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 		return true;
 	}
 
+	// Restore our GL render context after the plugin builds its editor — some
+	// plugins make their own context current during effEditOpen.
+	GlContextScope glScope;
+
 	TraceVst2("dispatch.effEditOpen", parentHwnd, _effect, effEditOpen, 0, reinterpret_cast<VstIntPtr>(parentHwnd), 0.0f);
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
@@ -605,6 +686,7 @@ void Vst2Plugin::CloseEditor()
 		&& (_effect->flags & effFlagsHasEditor)
 		&& _isEditorOpen.exchange(false, std::memory_order_acq_rel))
 	{
+		GlContextScope glScope;
 		TraceVst2("dispatch.effEditClose", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditClose, 0, 0, 0.0f);
 		_effect->dispatcher(_effect, effEditClose, 0, 0, nullptr, 0.0f);
 	}
@@ -621,7 +703,9 @@ void Vst2Plugin::IdleEditor() noexcept
 		&& (_effect->flags & effFlagsHasEditor)
 		&& _isEditorOpen.load(std::memory_order_acquire))
 	{
-		TraceVst2("dispatch.effEditIdle", _editorParentHwnd.load(std::memory_order_acquire), _effect, effEditIdle, 0, 0, 0.0f);
+		// effEditIdle fires from the UI/render thread; restore our GL context
+		// afterwards so the next frame's framebuffer stays complete.
+		GlContextScope glScope;
 		_effect->dispatcher(_effect, effEditIdle, 0, 0, nullptr, 0.0f);
 	}
 #endif
@@ -658,16 +742,19 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
 {
 	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
-	TraceVst2("HostCallback", self ? self->_editorParentHwnd.load(std::memory_order_acquire) : nullptr,
-		effect, opcode, index, value, opt);
-	if (self)
+	if (!IsHotHostOpcode(opcode))
 	{
-		std::ostringstream op;
-		op << "[VST2 TRACE] tid=" << GetCurrentThreadId()
-			<< " event=HostCallbackName"
-			<< " name=" << HostOpcodeName(opcode)
-			<< " opcode=" << opcode;
-		std::cout << op.str() << std::endl;
+		TraceVst2("HostCallback", self ? self->_editorParentHwnd.load(std::memory_order_acquire) : nullptr,
+			effect, opcode, index, value, opt);
+		if (self)
+		{
+			std::ostringstream op;
+			op << "[VST2 TRACE] tid=" << GetCurrentThreadId()
+				<< " event=HostCallbackName"
+				<< " name=" << HostOpcodeName(opcode)
+				<< " opcode=" << opcode;
+			std::cout << op.str() << std::endl;
+		}
 	}
 
 	// During VSTPluginMain bootstrap, effect/user may not be wired yet.
@@ -724,9 +811,15 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		}
 		return 0;
 	case audioMasterGetCurrentProcessLevel:
-		if (self->_isActivated.load(std::memory_order_acquire))
-			return kVstProcessLevelRealtime;
-		return kVstProcessLevelUser;
+		// Report realtime ONLY when the plugin queries from the audio thread.
+		// On the UI/editor thread we must report "user", otherwise many plugins
+		// assume an audio-callback context and refuse to repaint their editor.
+		{
+			const DWORD audioTid = self->_audioThreadId.load(std::memory_order_relaxed);
+			if (audioTid != 0 && GetCurrentThreadId() == audioTid)
+				return kVstProcessLevelRealtime;
+			return kVstProcessLevelUser;
+		}
 	case audioMasterGetVendorString:
 		if (ptr)
 			vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);

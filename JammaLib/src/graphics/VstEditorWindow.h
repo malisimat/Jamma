@@ -68,7 +68,7 @@ namespace graphics
 
 		// Called by the window's WNDPROC for WM_SIZE.
 		void OnAction(const actions::WindowAction& action);
-		void ResizeEditorHostWindow() noexcept;
+		void ResizePluginChild() noexcept;
 
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message,
 			WPARAM wParam, LPARAM lParam) noexcept;
@@ -87,7 +87,6 @@ namespace graphics
 		static HHOOK s_callWndRetHook;
 
 		std::atomic<HWND> _editorWnd;
-		HWND _editorHostWnd;
 		HWND _pluginChildWnd;
 		std::shared_ptr<vst::IVstPlugin> _plugin;
 
@@ -95,6 +94,6 @@ namespace graphics
 		static bool _IsFastIdleMessage(UINT message) noexcept;
 		void _CaptureChildWindows(std::vector<HWND>& outChildren) const;
 		void _RefreshTrackedPluginChild() noexcept;
-		void _ResizeEditorHostWindow(unsigned int clientWidth, unsigned int clientHeight) noexcept;
+		void _ResizeFrameToClient(unsigned int clientWidth, unsigned int clientHeight) noexcept;
 	};
 }

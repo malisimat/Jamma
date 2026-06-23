@@ -16,12 +16,11 @@ using namespace actions;
 
 namespace
 {
-	void TraceEditorWnd(const char* event, HWND frame, HWND host, HWND child, UINT message = 0)
+	void TraceEditorWnd(const char* event, HWND frame, HWND child, UINT message = 0)
 	{
 		std::cout << "[VST EDITOR TRACE] tid=" << GetCurrentThreadId()
 			<< " event=" << event
 			<< " frame=" << frame
-			<< " host=" << host
 			<< " child=" << child;
 		if (message)
 			std::cout << " msg=0x" << std::hex << message << std::dec;
@@ -68,9 +67,7 @@ bool VstEditorWindow::_IsFastIdleMessage(UINT message) noexcept
 void VstEditorWindow::_CaptureChildWindows(std::vector<HWND>& outChildren) const
 {
 	outChildren.clear();
-	const HWND wnd = (_editorHostWnd && IsWindow(_editorHostWnd))
-		? _editorHostWnd
-		: _editorWnd.load(std::memory_order_acquire);
+	const HWND wnd = _editorWnd.load(std::memory_order_acquire);
 	if (!wnd)
 		return;
 	EnumChildWindows(wnd, _EnumChildrenProc, reinterpret_cast<LPARAM>(&outChildren));
@@ -79,26 +76,16 @@ void VstEditorWindow::_CaptureChildWindows(std::vector<HWND>& outChildren) const
 void VstEditorWindow::_RefreshTrackedPluginChild() noexcept
 {
 	_pluginChildWnd = nullptr;
-	if (_editorHostWnd && IsWindow(_editorHostWnd))
-	{
-		for (HWND child = GetWindow(_editorHostWnd, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
-		{
-			if (GetParent(child) == _editorHostWnd)
-			{
-				_pluginChildWnd = child;
-				return;
-			}
-		}
-	}
 
 	const HWND wnd = _editorWnd.load(std::memory_order_acquire);
 	if (!wnd || !IsWindow(wnd))
 		return;
 
+	// The plugin reparents/creates its editor as a direct child of the frame
+	// window (matching the Steinberg minihost convention). The first direct
+	// child is the plugin's editor window.
 	for (HWND child = GetWindow(wnd, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
 	{
-		if (child == _editorHostWnd)
-			continue;
 		if (GetParent(child) == wnd)
 		{
 			_pluginChildWnd = child;
@@ -107,7 +94,7 @@ void VstEditorWindow::_RefreshTrackedPluginChild() noexcept
 	}
 }
 
-void VstEditorWindow::_ResizeEditorHostWindow(unsigned int clientWidth, unsigned int clientHeight) noexcept
+void VstEditorWindow::_ResizeFrameToClient(unsigned int clientWidth, unsigned int clientHeight) noexcept
 {
 	const HWND wnd = _editorWnd.load(std::memory_order_acquire);
 	if (!wnd || !IsWindow(wnd))
@@ -116,6 +103,9 @@ void VstEditorWindow::_ResizeEditorHostWindow(unsigned int clientWidth, unsigned
 	if (clientWidth == 0u || clientHeight == 0u)
 		return;
 
+	// Grow the non-client frame so the client area exactly fits the plugin's
+	// requested size, then resize the frame. Mirrors minihost: AdjustWindowRectEx
+	// followed by SetWindowPos.
 	RECT frameRect{ 0, 0, static_cast<LONG>(clientWidth), static_cast<LONG>(clientHeight) };
 	const DWORD style = static_cast<DWORD>(GetWindowLongPtr(wnd, GWL_STYLE));
 	const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(wnd, GWL_EXSTYLE));
@@ -126,13 +116,6 @@ void VstEditorWindow::_ResizeEditorHostWindow(unsigned int clientWidth, unsigned
 	const int frameHeight = frameRect.bottom - frameRect.top;
 	SetWindowPos(wnd, nullptr, 0, 0, frameWidth, frameHeight,
 		SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-	if (_editorHostWnd && IsWindow(_editorHostWnd))
-	{
-		SetWindowPos(_editorHostWnd, nullptr, 0, 0,
-			static_cast<int>(clientWidth), static_cast<int>(clientHeight),
-			SWP_NOZORDER | SWP_NOACTIVATE);
-	}
 
 	if (_pluginChildWnd && IsWindow(_pluginChildWnd))
 	{
@@ -161,7 +144,6 @@ LRESULT CALLBACK VstEditorWindow::CallWndRetProc(int code, WPARAM /*wParam*/, LP
 				{
 					// Defer idle dispatch until after the current message returns to
 					// avoid re-entering plugin UI code from inside a hook callback.
-					TraceEditorWnd("CallWndRet.post_idle", editorHwnd, w->_editorHostWnd, w->_pluginChildWnd, info->message);
 					PostMessage(editorHwnd, MessageVst2Idle, 0, 0);
 					break;
 				}
@@ -173,7 +155,6 @@ LRESULT CALLBACK VstEditorWindow::CallWndRetProc(int code, WPARAM /*wParam*/, LP
 
 VstEditorWindow::VstEditorWindow() :
 	_editorWnd(nullptr),
-	_editorHostWnd(nullptr),
 	_pluginChildWnd(nullptr),
 	_plugin(nullptr)
 {
@@ -191,7 +172,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	if (!plugin || !plugin->IsLoaded())
 		return false;
 
-	TraceEditorWnd("Create.begin", nullptr, nullptr, nullptr);
+	TraceEditorWnd("Create.begin", nullptr, nullptr);
 
 	_plugin = plugin;
 
@@ -204,10 +185,9 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	if (converted > 0)
 		title.resize(converted - 1);
 
-	// Register the window class with editorhost-compatible style the first
-	// time. CS_DBLCLKS matches the reference implementation. hbrBackground=nullptr
-	// prevents Win32 from filling the client area with a colour brush, which
-	// would paint over the plugin's child window content.
+	// Register the window class. CS_DBLCLKS matches the reference implementation.
+	// hbrBackground=nullptr prevents Win32 from filling the client area with a
+	// colour brush, which would paint over the plugin's child window content.
 	{
 		WNDCLASSEX existing{};
 		existing.cbSize = sizeof(existing);
@@ -250,47 +230,30 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 		_plugin.reset();
 		return false;
 	}
-	TraceEditorWnd("Create.frame_created", wnd, nullptr, nullptr);
+	TraceEditorWnd("Create.frame_created", wnd, nullptr);
 
 	_editorWnd.store(wnd, std::memory_order_release);
-	_editorHostWnd = CreateWindowEx(
-		0,
-		L"STATIC",
-		L"",
-		WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-		0, 0, 1, 1,
-		wnd,
-		nullptr,
-		hInstance,
-		nullptr);
-	if (!_editorHostWnd)
-	{
-		_editorWnd.store(nullptr, std::memory_order_release);
-		_plugin.reset();
-		DestroyWindow(wnd);
-		return false;
-	}
-	TraceEditorWnd("Create.host_created", wnd, _editorHostWnd, nullptr);
 	_pluginChildWnd = nullptr;
 
 	std::vector<HWND> childrenBeforeOpen;
 	_CaptureChildWindows(childrenBeforeOpen);
 
-	// Call attached() directly, matching the Steinberg editorhost pattern.
-	// This must be called outside DispatchMessage so that any PostMessage-based
-	// callbacks inside attached() can be queued and processed by the caller's
-	// message pump after Create() returns.
-	const bool ok = _plugin->OpenEditor(_editorHostWnd);
+	// Open the editor directly into the frame window, exactly as the Steinberg
+	// minihost sample does (effEditOpen with the host HWND as parent). The plugin
+	// creates its editor as a direct child of this frame. Because the plugin's
+	// parent is the frame, host callbacks (audioMasterSizeWindow / idle /
+	// updateDisplay) post their notifications straight to this frame's window
+	// procedure, which understands the MessageVst2* messages.
+	const bool ok = _plugin->OpenEditor(wnd);
 	if (!ok || !IsWindow(wnd))
 	{
 		_editorWnd.store(nullptr, std::memory_order_release);
-		_editorHostWnd = nullptr;
 		_plugin.reset();
 		if (IsWindow(wnd))
 			DestroyWindow(wnd);
 		return false;
 	}
-	TraceEditorWnd("Create.open_editor_ok", wnd, _editorHostWnd, nullptr);
+	TraceEditorWnd("Create.open_editor_ok", wnd, nullptr);
 
 	std::vector<HWND> childrenAfterOpen;
 	_CaptureChildWindows(childrenAfterOpen);
@@ -304,34 +267,24 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	}
 	if (!_pluginChildWnd)
 		_RefreshTrackedPluginChild();
-	TraceEditorWnd("Create.child_tracked", wnd, _editorHostWnd, _pluginChildWnd);
+	TraceEditorWnd("Create.child_tracked", wnd, _pluginChildWnd);
 
-	// Resize the frame to the plugin's preferred client size.
+	// Resize the frame to the plugin's preferred client size, matching minihost:
+	// effEditGetRect (queried inside OpenEditor) then AdjustWindowRectEx +
+	// SetWindowPos.
 	auto sz = _plugin->GetEditorSize();
 	if (sz.Width > 0 && sz.Height > 0)
-	{
-		RECT rect{ 0, 0,
-			static_cast<LONG>(sz.Width),
-			static_cast<LONG>(sz.Height) };
-		AdjustWindowRect(&rect, kEditorStyle, FALSE);
-		SetWindowPos(wnd, nullptr, 0, 0,
-			rect.right - rect.left,
-			rect.bottom - rect.top,
-			SWP_NOMOVE | SWP_NOZORDER);
-		SetWindowPos(_editorHostWnd, nullptr, 0, 0,
-			static_cast<int>(sz.Width), static_cast<int>(sz.Height),
-			SWP_NOZORDER | SWP_NOACTIVATE);
-	}
+		_ResizeFrameToClient(sz.Width, sz.Height);
 
 	ShowWindow(wnd, SW_SHOW);
 	UpdateWindow(wnd);
 	if (!_pluginChildWnd || !IsWindow(_pluginChildWnd))
 		_RefreshTrackedPluginChild();
-	TraceEditorWnd("Create.after_show", wnd, _editorHostWnd, _pluginChildWnd);
+	TraceEditorWnd("Create.after_show", wnd, _pluginChildWnd);
 
 	// Drive periodic effEditIdle dispatches so VST2 plugins can repaint
 	// dynamic controls (sliders, meters, etc.) independently of mouse events.
-	// 20 ms (~50 Hz) tracks common editor-host idle cadence.
+	// 20 ms (~50 Hz) matches the minihost idle cadence.
 	SetTimer(wnd, 1, 20, nullptr);
 
 	// Register for the mouse-move hook so drags repaint immediately.
@@ -350,7 +303,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 
 void VstEditorWindow::Destroy()
 {
-	TraceEditorWnd("Destroy.begin", _editorWnd.load(std::memory_order_acquire), _editorHostWnd, _pluginChildWnd);
+	TraceEditorWnd("Destroy.begin", _editorWnd.load(std::memory_order_acquire), _pluginChildWnd);
 	// Unregister from the hook tracking list.
 	auto it = std::find(s_activeEditorWindows.begin(), s_activeEditorWindows.end(), this);
 	if (it != s_activeEditorWindows.end())
@@ -365,8 +318,8 @@ void VstEditorWindow::Destroy()
 
 	if (wnd)
 	{
-		// CloseEditor (IPlugView::removed) before DestroyWindow so the plugin
-		// can clean up while the HWND is still valid.
+		// CloseEditor (effEditClose) before DestroyWindow so the plugin can
+		// clean up while the HWND is still valid.
 		if (_plugin)
 			_plugin->CloseEditor();
 
@@ -375,15 +328,17 @@ void VstEditorWindow::Destroy()
 	}
 
 	_plugin.reset();
-	_editorHostWnd = nullptr;
 	_pluginChildWnd = nullptr;
-	TraceEditorWnd("Destroy.end", nullptr, nullptr, nullptr);
+	TraceEditorWnd("Destroy.end", nullptr, nullptr);
 }
 
-void VstEditorWindow::ResizeEditorHostWindow() noexcept
+void VstEditorWindow::ResizePluginChild() noexcept
 {
 	const HWND wnd = _editorWnd.load(std::memory_order_acquire);
-	if (!wnd || !IsWindow(wnd) || !_editorHostWnd || !IsWindow(_editorHostWnd))
+	if (!wnd || !IsWindow(wnd))
+		return;
+
+	if (!_pluginChildWnd || !IsWindow(_pluginChildWnd))
 		return;
 
 	RECT clientRect{};
@@ -392,21 +347,9 @@ void VstEditorWindow::ResizeEditorHostWindow() noexcept
 
 	const int clientWidth = (std::max)(0L, clientRect.right - clientRect.left);
 	const int clientHeight = (std::max)(0L, clientRect.bottom - clientRect.top);
-	SetWindowPos(_editorHostWnd, nullptr, 0, 0, clientWidth, clientHeight,
+	SetWindowPos(_pluginChildWnd, nullptr, 0, 0, clientWidth, clientHeight,
 		SWP_NOZORDER | SWP_NOACTIVATE);
-
-	if (!_pluginChildWnd || !IsWindow(_pluginChildWnd))
-		return;
-
-	RECT hostClientRect{};
-	if (!GetClientRect(_editorHostWnd, &hostClientRect))
-		return;
-
-	const int hostClientWidth = (std::max)(0L, hostClientRect.right - hostClientRect.left);
-	const int hostClientHeight = (std::max)(0L, hostClientRect.bottom - hostClientRect.top);
-	SetWindowPos(_pluginChildWnd, nullptr, 0, 0, hostClientWidth, hostClientHeight,
-		SWP_NOZORDER | SWP_NOACTIVATE);
-	TraceEditorWnd("ResizeEditorHostWindow", wnd, _editorHostWnd, _pluginChildWnd);
+	TraceEditorWnd("ResizePluginChild", wnd, _pluginChildWnd);
 }
 
 void VstEditorWindow::OnAction(const actions::WindowAction& action)
@@ -415,7 +358,6 @@ void VstEditorWindow::OnAction(const actions::WindowAction& action)
 	{
 	case WindowAction::DESTROY:
 		_editorWnd.store(nullptr, std::memory_order_release);
-		_editorHostWnd = nullptr;
 		_pluginChildWnd = nullptr;
 		break;
 
@@ -463,12 +405,12 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	}
 
 	case WM_SIZE:
-		TraceEditorWnd("WM_SIZE", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
-		self->ResizeEditorHostWindow();
+		TraceEditorWnd("WM_SIZE", hWnd, self->_pluginChildWnd, message);
+		self->ResizePluginChild();
 		return 0;
 
 	case WM_SETFOCUS:
-		TraceEditorWnd("WM_SETFOCUS", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("WM_SETFOCUS", hWnd, self->_pluginChildWnd, message);
 		if (self->_plugin)
 			self->_plugin->OnEditorActivated();
 		if (self->_pluginChildWnd && IsWindow(self->_pluginChildWnd))
@@ -476,13 +418,13 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 		return 0;
 
 	case WM_MOUSEACTIVATE:
-		TraceEditorWnd("WM_MOUSEACTIVATE", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("WM_MOUSEACTIVATE", hWnd, self->_pluginChildWnd, message);
 		if (self->_pluginChildWnd && IsWindow(self->_pluginChildWnd))
 			SetFocus(self->_pluginChildWnd);
 		return DefWindowProc(hWnd, message, wParam, lParam);
 
 	case WM_ACTIVATE:
-		TraceEditorWnd("WM_ACTIVATE", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("WM_ACTIVATE", hWnd, self->_pluginChildWnd, message);
 		if (LOWORD(wParam) != WA_INACTIVE)
 		{
 			if (self->_plugin)
@@ -498,34 +440,32 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 
 	case MessageVst2SizeWindow:
 	{
-		TraceEditorWnd("MessageVst2SizeWindow", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("MessageVst2SizeWindow", hWnd, self->_pluginChildWnd, message);
 		const auto requestedWidth = static_cast<unsigned int>((std::max)(0LL, static_cast<long long>(wParam)));
 		const auto requestedHeight = static_cast<unsigned int>((std::max)(0LL, static_cast<long long>(lParam)));
 		if (requestedWidth == 0u || requestedHeight == 0u)
 			return 0;
 		if (!self->_pluginChildWnd || !IsWindow(self->_pluginChildWnd))
 			self->_RefreshTrackedPluginChild();
-		self->_ResizeEditorHostWindow(requestedWidth, requestedHeight);
+		self->_ResizeFrameToClient(requestedWidth, requestedHeight);
 		return 1;
 	}
 
 	case MessageVst2Idle:
-		TraceEditorWnd("MessageVst2Idle", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
 		if (self->_plugin)
 			self->_plugin->IdleEditor();
 		return 1;
 
 	case WM_CLOSE:
 	{
-		TraceEditorWnd("WM_CLOSE", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("WM_CLOSE", hWnd, self->_pluginChildWnd, message);
 		// Atomically take ownership of the HWND before calling CloseEditor.
 		// The exchange guards against re-entrant WM_CLOSE if the plugin pumps
-		// messages internally during IPlugView::removed().
+		// messages internally during effEditClose.
 		HWND owned = self->_editorWnd.exchange(nullptr, std::memory_order_acq_rel);
 		if (!owned)
 			return 0;
 
-		self->_editorHostWnd = nullptr;
 		self->_pluginChildWnd = nullptr;
 		if (self->_plugin)
 		{
@@ -538,14 +478,39 @@ LRESULT CALLBACK VstEditorWindow::WindowProcedure(HWND hWnd,
 	}
 
 	case WM_TIMER:
-		TraceEditorWnd("WM_TIMER", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
 		if (self->_plugin)
 			self->_plugin->IdleEditor();
+		{
+			// 1 Hz heartbeat: confirms the timer/pump is alive on this thread and
+			// reports the tracked plugin child window state. Remove once the editor
+			// repaint issue is resolved.
+			static int s_heartbeatTick = 0;
+			if ((++s_heartbeatTick % 50) == 0)
+			{
+				RECT frameClient{};
+				GetClientRect(hWnd, &frameClient);
+				const HWND child = self->_pluginChildWnd;
+				const bool childIsWindow = child && IsWindow(child);
+				RECT childRect{};
+				if (childIsWindow)
+					GetWindowRect(child, &childRect);
+				std::cout << "[VST EDITOR HEARTBEAT] tid=" << GetCurrentThreadId()
+					<< " tick=" << s_heartbeatTick
+					<< " frameClient=" << (frameClient.right - frameClient.left)
+					<< "x" << (frameClient.bottom - frameClient.top)
+					<< " child=" << child
+					<< " isWindow=" << childIsWindow
+					<< " childSize=" << (childRect.right - childRect.left)
+					<< "x" << (childRect.bottom - childRect.top)
+					<< " childVisible=" << (childIsWindow ? IsWindowVisible(child) : 0)
+					<< std::endl;
+			}
+		}
 		return 0;
 
 	case WM_DESTROY:
 	{
-		TraceEditorWnd("WM_DESTROY", hWnd, self->_editorHostWnd, self->_pluginChildWnd, message);
+		TraceEditorWnd("WM_DESTROY", hWnd, self->_pluginChildWnd, message);
 		// CloseEditor was already called from WM_CLOSE or Destroy().
 		// Kill the idle timer and update bookkeeping.
 		// NOTE: do NOT call PostQuitMessage here — the main PeekMessage loop
