@@ -1971,8 +1971,12 @@ void LoopTake::_UpdateMidiModelRotation()
 
 	for (auto& midiLoop : _midiLoops)
 	{
-		if (midiLoop && midiLoop->Model())
-			midiLoop->Model()->SetLoopIndexFrac(loopIndexFrac);
+		if (!midiLoop)
+			continue;
+
+		auto midiModel = midiLoop->Model();
+		if (midiModel)
+			midiModel->SetLoopIndexFrac(loopIndexFrac);
 	}
 }
 
@@ -2645,10 +2649,13 @@ void LoopTake::_RemoveMidiModelChildren()
 {
 	for (auto& midiLoop : _midiLoops)
 	{
-		if (!midiLoop || !midiLoop->Model())
+		if (!midiLoop)
 			continue;
 
 		auto midiModel = midiLoop->Model();
+		if (!midiModel)
+			continue;
+
 		auto child = std::find(_children.begin(), _children.end(), midiModel);
 		if (_children.end() != child)
 			_children.erase(child);
