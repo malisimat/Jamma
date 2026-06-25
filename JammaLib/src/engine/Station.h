@@ -125,6 +125,7 @@ namespace engine
 		{
 			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
+		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
 		// Returns true if this station receives audio from a remote ninjam user.
 		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
 		virtual bool IsRemote() const noexcept { return false; }
@@ -240,9 +241,13 @@ namespace engine
 			std::vector<float*> VstBlockPtrs;
 		};
 
+		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
+
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
 		void _ApplyMidiQuantisationPhaseOffset() noexcept;
+		void _PublishLoopTakeSnapshot();
+		std::shared_ptr<const LoopTakeSnapshot> _LoopTakeSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 
@@ -326,6 +331,7 @@ namespace engine
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
+		std::atomic<std::shared_ptr<const LoopTakeSnapshot>> _loopTakeSnapshot;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

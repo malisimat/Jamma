@@ -203,6 +203,7 @@ namespace engine
 			unsigned int firstOutputIndex = 0u) noexcept;
 		// Read-only view of MIDI loops; used by Station to flush held notes on ditch.
 		const std::vector<std::shared_ptr<midi::MidiLoop>>& GetMidiLoops() const noexcept { return _midiLoops; }
+		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
@@ -246,12 +247,19 @@ namespace engine
 			std::vector<float*> VstBlockPtrs;
 		};
 
+		using MidiLoopSnapshot = std::vector<std::weak_ptr<midi::MidiLoop>>;
+
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
+		bool _RecordMidiEventUnlocked(const midi::MidiEvent& ev,
+			const std::string& device,
+			std::uint32_t globalSampleNow) noexcept;
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
+		void _PublishMidiLoopSnapshot();
+		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
@@ -318,6 +326,8 @@ namespace engine
 		std::vector<std::string> _midiLoopDevices;
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
 		midi::MidiOverdubSession _midiOverdubSession;
+		mutable std::mutex _midiCaptureMutex;
+		std::atomic<std::shared_ptr<const MidiLoopSnapshot>> _midiLoopSnapshot;
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
 			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)

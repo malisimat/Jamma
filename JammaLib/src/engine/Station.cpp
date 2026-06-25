@@ -84,6 +84,7 @@ Station::Station(StationParams params,
 	_loopTakes(),
 	_triggers(),
 	_backLoopTakes(),
+	_loopTakeSnapshot(nullptr),
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
@@ -119,6 +120,7 @@ Station::Station(StationParams params,
 	SetNumBusChannels(_DefaultNumBusChannels);
 
 	_WireVuSliders();
+	_PublishLoopTakeSnapshot();
 	_PublishAudioState();
 }
 
@@ -468,13 +470,13 @@ void Station::RebuildAutomationDispatch()
 	auto* buf = _automationDispatchBuf[back];
 	std::uint8_t count = 0u;
 
-	const auto& takes = GetLoopTakes();
+	const auto takes = GetLoopTakeSnapshot();
 	for (const auto& take : takes)
 	{
 		if (!take)
 			continue;
 
-		for (const auto& midiLoop : take->GetMidiLoops())
+		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 		{
 			if (!midiLoop)
 				continue;
@@ -513,7 +515,7 @@ std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared
 	if (!take)
 		return last;
 
-	for (const auto& loop : take->GetMidiLoops())
+	for (const auto& loop : take->GetMidiLoopSnapshot())
 	{
 		if (loop && loop->LoopLengthSamps() > 0u)
 			last = loop;
@@ -526,7 +528,7 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 	if (!plugin)
 		return nullptr;
 
-	const auto& takes = GetLoopTakes();
+	const auto takes = GetLoopTakeSnapshot();
 
 	// Take-level ownership: record into the owning take's last recorded loop.
 	for (const auto& take : takes)
@@ -1045,6 +1047,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				_ArrangeChildren();
 				_flipTakeBuffer = true;
 				_changesMade = true;
+				_PublishLoopTakeSnapshot();
 			}
 		}
 
@@ -1093,6 +1096,7 @@ void Station::Reset()
 			_children.erase(child);
 	}
 	_loopTakes.clear();
+	_PublishLoopTakeSnapshot();
 
 	for (auto& trigger : _triggers)
 	{
@@ -1131,6 +1135,24 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
+	_PublishLoopTakeSnapshot();
+}
+
+std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
+{
+	std::vector<std::shared_ptr<LoopTake>> takes;
+	auto snapshot = _LoopTakeSnapshotState();
+	if (!snapshot)
+		return takes;
+
+	takes.reserve(snapshot->size());
+	for (const auto& weakTake : *snapshot)
+	{
+		if (auto take = weakTake.lock())
+			takes.push_back(std::move(take));
+	}
+
+	return takes;
 }
 
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
@@ -1853,6 +1875,23 @@ std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 	return _audioState.load(std::memory_order_acquire);
 }
 
+std::shared_ptr<const Station::LoopTakeSnapshot> Station::_LoopTakeSnapshotState() const
+{
+	return _loopTakeSnapshot.load(std::memory_order_acquire);
+}
+
+void Station::_PublishLoopTakeSnapshot()
+{
+	auto state = std::make_shared<LoopTakeSnapshot>();
+	const auto& takes = (_changesMade.load(std::memory_order_relaxed) && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+	state->reserve(takes.size());
+	for (const auto& take : takes)
+		state->push_back(take);
+	_loopTakeSnapshot.store(std::move(state), std::memory_order_release);
+}
+
 void Station::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
@@ -1962,7 +2001,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
 	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
 	// drained by the audio thread on the next WriteBlock call.
-	for (const auto& midiLoop : take->GetMidiLoops())
+	for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 	{
 		if (!midiLoop)
 			continue;

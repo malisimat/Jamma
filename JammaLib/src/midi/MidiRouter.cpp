@@ -40,14 +40,14 @@ std::pair<std::shared_ptr<engine::Station>, std::shared_ptr<midi::MidiLoop>> Mid
 	std::shared_ptr<engine::LoopTake> take = hoveredTake;
 	if (!take)
 	{
-		const auto& takes = station->GetLoopTakes();
+		const auto takes = station->GetLoopTakeSnapshot();
 		if (!takes.empty())
 			take = takes.front();
 	}
 	if (!take)
 		return { nullptr, nullptr };
 
-	const auto& midiLoops = take->GetMidiLoops();
+	const auto midiLoops = take->GetMidiLoopSnapshot();
 	if (midiLoops.empty() || !midiLoops.front())
 		return { nullptr, nullptr };
 
@@ -818,12 +818,12 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 						if (!station || station->IsRemote())
 							continue;
 
-						for (const auto& take : station->GetLoopTakes())
+						for (const auto& take : station->GetLoopTakeSnapshot())
 						{
 							if (!take)
 								continue;
 
-							for (const auto& loop : take->GetMidiLoops())
+							for (const auto& loop : take->GetMidiLoopSnapshot())
 							{
 								if (!loop)
 									continue;
@@ -852,7 +852,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 
 			for (const auto& station : stations)
 			{
-				for (const auto& take : station->GetLoopTakes())
+				for (const auto& take : station->GetLoopTakeSnapshot())
 				{
 					if (take->IsArmed())
 						take->RecordMidiEvent(effectiveIngress, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
