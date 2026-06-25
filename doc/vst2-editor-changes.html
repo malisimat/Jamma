@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jamma — VST2 Editor Fixes (bugfix/vst2-editor)</title>
+<style>
+	:root {
+		--bg: #0f1117;
+		--panel: #171a23;
+		--panel-2: #1d2130;
+		--ink: #e6e9ef;
+		--muted: #99a1b3;
+		--accent: #5ec8ff;
+		--accent-2: #7ee787;
+		--warn: #ffb86b;
+		--danger: #ff7a85;
+		--border: #2a2f40;
+		--mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: radial-gradient(1200px 600px at 80% -10%, #1b2740 0%, var(--bg) 55%) fixed;
+		color: var(--ink);
+		font: 16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	}
+	.wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 96px; }
+	header.hero { margin-bottom: 36px; }
+	.eyebrow {
+		text-transform: uppercase; letter-spacing: .18em; font-size: 12px;
+		color: var(--accent); font-weight: 700; margin: 0 0 10px;
+	}
+	h1 { font-size: 38px; line-height: 1.15; margin: 0 0 12px; }
+	.sub { color: var(--muted); font-size: 17px; max-width: 70ch; }
+	.branchline {
+		display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap;
+		margin-top: 18px; font-family: var(--mono); font-size: 13px;
+	}
+	.chip {
+		background: var(--panel-2); border: 1px solid var(--border);
+		padding: 4px 10px; border-radius: 999px; color: var(--ink);
+	}
+	.chip.base { color: var(--muted); }
+	.arrow { color: var(--accent); }
+	h2 {
+		font-size: 24px; margin: 48px 0 6px; padding-top: 18px;
+		border-top: 1px solid var(--border);
+	}
+	h2 .num { color: var(--accent); font-family: var(--mono); font-size: 18px; margin-right: 10px; }
+	h3 { font-size: 18px; margin: 26px 0 6px; }
+	p { margin: 10px 0; }
+	.lead { color: var(--muted); margin-top: 2px; }
+	code {
+		font-family: var(--mono); font-size: .88em;
+		background: var(--panel-2); border: 1px solid var(--border);
+		padding: 1px 6px; border-radius: 6px; color: #d8def0;
+	}
+	.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 22px 0; }
+	.card {
+		background: var(--panel); border: 1px solid var(--border);
+		border-radius: 14px; padding: 18px;
+	}
+	.card h4 { margin: 0 0 6px; font-size: 15px; }
+	.card p { margin: 0; color: var(--muted); font-size: 14px; }
+	.card .k { color: var(--accent-2); font-family: var(--mono); font-size: 13px; }
+	.panel {
+		background: var(--panel); border: 1px solid var(--border);
+		border-radius: 14px; padding: 4px 22px; margin: 16px 0;
+	}
+	.flow {
+		font-family: var(--mono); font-size: 13.5px; color: var(--muted);
+		background: var(--panel-2); border: 1px solid var(--border);
+		border-radius: 12px; padding: 16px 18px; overflow-x: auto; white-space: pre;
+	}
+	.flow b { color: var(--accent); font-weight: 600; }
+	ul { margin: 10px 0; padding-left: 22px; }
+	li { margin: 6px 0; }
+	.tag {
+		display: inline-block; font-family: var(--mono); font-size: 11px;
+		padding: 2px 8px; border-radius: 6px; vertical-align: middle;
+		border: 1px solid var(--border);
+	}
+	.tag.fix { color: var(--accent-2); border-color: #2f5a3a; background: #14241a; }
+	.tag.safe { color: var(--accent); border-color: #2c4a63; background: #122230; }
+	.tag.clean { color: var(--warn); border-color: #5a4a2a; background: #241d12; }
+	table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+	th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+	th { color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+	td code { white-space: nowrap; }
+	.muted { color: var(--muted); }
+	.callout {
+		border-left: 3px solid var(--warn); background: #1c1a14;
+		padding: 12px 16px; border-radius: 0 10px 10px 0; margin: 16px 0; color: #f0e6d2;
+	}
+	.callout.danger { border-left-color: var(--danger); background: #1f1416; color: #f6dadd; }
+	footer { margin-top: 56px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); padding-top: 18px; }
+	a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+	<p class="eyebrow">Jamma · Change Brief</p>
+	<h1>Fixing the VST2 Editor:<br>repaint, input &amp; clean shutdown</h1>
+	<p class="sub">
+		What changed on this branch and why. The headline result: hosted VST2 plugin
+		editors (notably Native Instruments Battery&nbsp;4) now repaint continuously and
+		take input, instead of painting one frozen frame &mdash; without turning the rest
+		of the app white or hanging on exit.
+	</p>
+	<div class="branchline">
+		<span class="chip base">feature/play-xp</span>
+		<span class="arrow">&rarr;</span>
+		<span class="chip">bugfix/vst2-editor</span>
+	</div>
+</header>
+
+<section>
+	<h2><span class="num">01</span>The headline bug</h2>
+	<p class="lead">A hosted VST2 editor painted exactly once, then froze forever.</p>
+	<p>
+		When a VST2 plugin with an editor was opened inside Jamma, the editor drew its
+		first frame correctly and then went completely static &mdash; meters, clocks and
+		animated controls all frozen &mdash; even though the plugin was clearly alive and
+		spamming host callbacks. The reference Steinberg <em>minihost</em> sample hosts the
+		same plugin and repaints continuously, so that became the behavioural target.
+	</p>
+
+	<h3>Root cause: thread affinity between <code>effOpen</code> and <code>effEditOpen</code></h3>
+	<p>
+		The decisive cause was that the plugin was <strong>instantiated and opened on a
+		different thread</strong> from the one that drove its editor. Originally
+		<code>VSTPluginMain()</code> / <code>effOpen</code> ran on Jamma's <strong>job
+		thread</strong>, while <code>effEditOpen</code> / <code>effEditIdle</code> ran on the
+		<strong>UI thread</strong>. Many plugins (NI-style especially) bind their GUI/idle
+		dispatch to the thread that <em>instantiated</em> the effect. With that split, the
+		editor's repaint pump was orphaned: it built and painted once, then never fired
+		again. It was never an idle-cadence problem &mdash; even at ~50&nbsp;Hz the editor
+		stayed frozen because the idle calls were crossing a thread boundary the plugin
+		didn't expect.
+	</p>
+</section>
+
+<section>
+	<h2><span class="num">02</span>The core fixes</h2>
+
+	<div class="cards">
+		<div class="card">
+			<h4><span class="tag fix">FIX</span> Instantiate on the UI thread</h4>
+			<p class="k">Vst2Plugin::_InstantiateEffect()</p>
+			<p><code>VSTPluginMain()</code> + <code>effOpen</code> + name/channel setup moved into
+			<code>PreInit()</code> on the UI thread, so the effect and its editor share one thread.
+			<code>Load()</code> (job thread) only does sample-rate/block-size/resume, and instantiates
+			as a fallback only if PreInit was skipped.</p>
+		</div>
+		<div class="card">
+			<h4><span class="tag fix">FIX</span> Parent directly into the frame</h4>
+			<p class="k">VstEditorWindow::Create()</p>
+			<p>The plugin is parented straight into the editor frame <code>HWND</code> (minihost
+			convention), so host-callback posts (<code>audioMasterSizeWindow</code>, idle,
+			updateDisplay) land on a window proc that actually handles them, instead of being
+			silently dropped by an intermediate <code>STATIC</code>.</p>
+		</div>
+		<div class="card">
+			<h4><span class="tag fix">FIX</span> Per-thread process level</h4>
+			<p class="k">audioMasterGetCurrentProcessLevel</p>
+			<p>Answer <code>kVstProcessLevelRealtime</code> only when the query arrives on the
+			audio thread (stamped via <code>_audioThreadId</code> in <code>ProcessBlock*</code>);
+			otherwise answer <code>kVstProcessLevelUser</code>. Reporting realtime on the GUI
+			thread makes many plugins skip repaints.</p>
+		</div>
+		<div class="card">
+			<h4><span class="tag safe">GUARD</span> OpenGL context restore</h4>
+			<p class="k">Vst2Plugin::GlContextScope (RAII)</p>
+			<p>Some plugins make their own GL context current during effOpen/effEditOpen/idle and
+			never restore Jamma's. The guard snapshots <code>wglGetCurrentContext()</code> /
+			<code>DC</code> and restores them on scope exit, preventing the "whole app paints
+			white / framebuffer incomplete" regression.</p>
+		</div>
+	</div>
+
+	<div class="callout">
+		<strong>Why the GL guard matters:</strong> moving instantiation onto the UI thread
+		(which owns the OpenGL render context) introduced a second, closely-related failure
+		&mdash; context theft turning the entire app white on plugin load. The
+		<code>GlContextScope</code> guard wraps every UI-thread dispatch into plugin code and
+		is a no-op on the job-thread fallback path (which has no GL context).
+	</div>
+
+	<h3>Editor host-callback contract, completed</h3>
+	<table>
+		<thead><tr><th>Callback</th><th>Behaviour</th></tr></thead>
+		<tbody>
+			<tr><td><code>audioMasterIdle</code></td><td>Posts <code>MessageVst2Idle</code> to the editor frame to drive <code>effEditIdle</code> on the UI thread.</td></tr>
+			<tr><td><code>audioMasterUpdateDisplay</code></td><td>Posts <code>MessageVst2Idle</code> so the editor repaints on plugin-driven state changes.</td></tr>
+			<tr><td><code>audioMasterSizeWindow</code></td><td>Posts <code>MessageVst2SizeWindow</code>; the frame resizes its non-client area (<code>AdjustWindowRectEx</code> + <code>SetWindowPos</code>) and the plugin child to match.</td></tr>
+			<tr><td><code>audioMasterBeginEdit</code> / <code>EndEdit</code></td><td>Acknowledge the gesture only. <span class="muted">The real value flows through <code>audioMasterAutomate</code>.</span></td></tr>
+			<tr><td>bootstrap (no <code>self</code>)</td><td>Answer <code>audioMasterVersion</code> + vendor/product identity before <code>effect-&gt;user</code> is wired, so the plugin loads.</td></tr>
+		</tbody>
+	</table>
+
+	<h3>Idle &amp; child-window tracking</h3>
+	<ul>
+		<li>Replaced the global <code>WH_CALLWNDPROCRET</code> mouse-move hook with direct child
+			parenting plus a <code>20&nbsp;ms</code> (~50&nbsp;Hz) <code>WM_TIMER</code> idle, matching
+			minihost cadence.</li>
+		<li><code>VstEditorWindow</code> now tracks the plugin's child <code>HWND</code>
+			(<code>_pluginChildWnd</code>) via enum-before/after-open diffing, used for resize and
+			focus routing.</li>
+		<li><code>WM_SETFOCUS</code> forwards keyboard focus into the plugin child window.</li>
+	</ul>
+</section>
+
+<section>
+	<h2><span class="num">03</span>Stability: input, shutdown &amp; threading</h2>
+	<p class="lead">Fixes that surfaced once the editor actually worked.</p>
+
+	<h3><span class="tag fix">FIX</span> Stuck modifier keys on editor focus</h3>
+	<p>
+		Key-up events go to whichever window has focus. When focus moved to a VST editor,
+		modifier key-ups (Ctrl/Shift/Alt) never reached Jamma, leaving the modifier bitmask
+		stuck (e.g. a phantom Ctrl-quantisation overlay). <code>Window::ClearModifiers()</code>
+		on <code>WM_KILLFOCUS</code> now dispatches synthetic key-ups through the normal action
+		path so scene state unwinds cleanly.
+	</p>
+
+	<h3><span class="tag fix">FIX</span> Clean shutdown with editors open</h3>
+	<p>
+		Added <code>ForceUnloadAllVstPlugins()</code> down the full ownership chain
+		(<code>Scene&nbsp;&rarr;&nbsp;Station&nbsp;&rarr;&nbsp;LoopTake&nbsp;&rarr;&nbsp;Loop</code>),
+		draining active and back VST chains into the UI-thread destroy queue deterministically.
+		The quit path closes editors, force-unloads plugins, drains the queue, then closes audio
+		&mdash; no more hang or teardown crash on exit after opening a plugin editor.
+	</p>
+
+	<h3><span class="tag safe">THREADING</span> Immutable snapshot access</h3>
+	<p>
+		Cross-thread reads of loop-takes and MIDI loops now go through published immutable
+		snapshots instead of touching live containers from the audio/MIDI thread:
+	</p>
+	<ul>
+		<li><code>Station::GetLoopTakeSnapshot()</code> and
+			<code>LoopTake::GetMidiLoopSnapshot()</code> publish weak-ptr snapshots, consumed by
+			<code>MidiRouter</code> on the realtime path.</li>
+		<li><code>MidiLoop::_model</code> is now an <code>atomic&lt;shared_ptr&gt;</code> with an
+			acquire/release <code>Model()</code> accessor, fixing unsafe concurrent access.</li>
+		<li><code>LoopTake</code> MIDI capture/playback paths are guarded by
+			<code>_midiCaptureMutex</code>, with an unlocked <code>_RecordMidiEventUnlocked()</code>
+			helper to avoid re-entrant locking.</li>
+		<li><code>VstEditorWindowManager</code>'s window list is guarded by a mutex on its
+			cold open/close/prune paths.</li>
+	</ul>
+	<p class="muted">
+		This pattern is now codified in <code>AGENTS.md</code>: prefer the existing published
+		immutable snapshot pattern for cross-thread container access.
+	</p>
+</section>
+
+<section>
+	<h2><span class="num">04</span>Editor lifecycle at a glance</h2>
+	<div class="panel">
+		<div class="flow"><b>PreInit()</b>            UI thread   LoadLibrary + VSTPluginMain + effOpen   [GlContextScope]
+   &darr;
+<b>Load()</b>               job thread  effSetSampleRate / effSetBlockSize / effMainsChanged(resume)
+   &darr;
+<b>OpenEditor(frame)</b>    UI thread   effEditOpen(frame HWND) + effEditGetRect   [GlContextScope]
+   &darr;
+<b>idle loop</b>            UI thread   WM_TIMER 20ms &rarr; effEditIdle           [GlContextScope]
+                                   audioMaster{Idle,UpdateDisplay} &rarr; MessageVst2Idle
+   &darr;
+<b>CloseEditor()</b>        UI thread   effEditClose                           [GlContextScope]</div>
+	</div>
+</section>
+
+<section>
+	<h2><span class="num">05</span>Cleanup pass <span class="tag clean">this commit</span></h2>
+	<p class="lead">Keep the fixes; drop the development scaffolding.</p>
+	<ul>
+		<li><strong>Removed all <code>[SHUTDOWN TRACE]</code> console spam</strong> from
+			<code>Main.cpp</code>, keeping the real shutdown sequence intact.</li>
+		<li><strong>Fixed a latent automation bug:</strong> <code>audioMasterBeginEdit</code> /
+			<code>EndEdit</code> were publishing a spurious <code>0.0f</code> parameter value.
+			Because <code>EndEdit</code> fires last, it clobbered the real value recorded by
+			<code>audioMasterAutomate</code>. They now acknowledge only.</li>
+		<li><strong>Removed two stale design docs</strong>
+			(<code>vst2-editor-fix-plan.md</code>, <code>vst2-editor-unresponsive-history.md</code>)
+			that described intermediate approaches &mdash; <code>_uiThreadId</code>,
+			<code>Prefetch</code> process level, <code>MessageVst2SizeWindowSync</code>,
+			<code>_isEditorOpening</code>, the <code>WH_CALLWNDPROCRET</code> hook, <code>[VST2 TRACE]</code>
+			logging &mdash; none of which exist in the final code.</li>
+		<li><strong>Kept</strong> <code>vst2-editor-repaint-root-cause.md</code>, the accurate
+			technical record of the primary fix.</li>
+	</ul>
+
+	<div class="callout danger">
+		<strong>Regression watch:</strong> the two highest-risk things to never reintroduce are
+		(1)&nbsp;instantiating the effect off the UI thread, and (2)&nbsp;removing the
+		<code>GlContextScope</code> guards around UI-thread plugin dispatch. Either one brings
+		back a frozen editor or a white app.
+	</div>
+</section>
+
+<footer>
+	<p>
+		Verification: full solution build (Debug&nbsp;x64) green; native tests pass
+		(<code>192 passed</code>, 1 device-dependent skip). Manual target: an animated plugin
+		(Battery&nbsp;4) repaints continuously for as long as the editor stays open, matching
+		minihost.
+	</p>
+	<p class="muted">Branch <code>bugfix/vst2-editor</code> &mdash; ready to commit.</p>
+</footer>
+
+</div>
+</body>
+</html>

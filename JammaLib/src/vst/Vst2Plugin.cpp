@@ -661,18 +661,13 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		// first, then bump Sequence (release) so consumers see a coherent event.
 		// Do not feed the value back through setParameter here: the plugin already
 		// changed its own parameter state before calling audioMasterAutomate.
-		if (self)
-		{
-			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), opt);
-		}
+		PublishLastTouchedParameter(self, static_cast<unsigned int>(index), opt);
 		return 0;
 	case audioMasterBeginEdit:
-		if (self)
-			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), 0.0f);
-		return 1;
 	case audioMasterEndEdit:
-		if (self)
-			PublishLastTouchedParameter(self, static_cast<unsigned int>(index), 0.0f);
+		// Bracket a parameter gesture. Acknowledge only — the actual value flows
+		// through audioMasterAutomate; publishing here (with no value supplied)
+		// would clobber the real automation value with a spurious one.
 		return 1;
 	case audioMasterUpdateDisplay:
 		if (self->_isEditorOpen.load(std::memory_order_acquire))
