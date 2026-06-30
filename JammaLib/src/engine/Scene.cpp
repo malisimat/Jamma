@@ -42,6 +42,7 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_mainPanel(nullptr),
+	_hudPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
 	_stations(),
@@ -80,6 +81,12 @@ Scene::Scene(SceneParams params,
 	mainParams.PopupHost = &_popupHost;
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
+
+	GuiHudParams hudParams;
+	hudParams.Size = params.Size;
+	hudParams.MinSize = params.Size;
+	_hudPanel = std::make_shared<GuiHud>(hudParams);
+	AddChild(_hudPanel);
 
 	GuiSelectorParams selectorParams;
 	selectorParams.Position = { 10, 2 };
@@ -1103,6 +1110,41 @@ void Scene::_InitSize()
 	_overlayViewProj = glm::mat4(1.0);
 	_overlayViewProj = glm::translate(_overlayViewProj, glm::vec3(-1.0f, -1.0f, -1.0f));
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
+
+	if (_hudPanel)
+		_hudPanel->SetSize(_sizeParams.Size);
+
+	_UpdateHudStationAnchors();
+}
+
+void Scene::_UpdateHudStationAnchors()
+{
+	if (!_hudPanel || _sizeParams.Size.Width == 0 || _sizeParams.Size.Height == 0)
+		return;
+
+	const float w = static_cast<float>(_sizeParams.Size.Width);
+	const float h = static_cast<float>(_sizeParams.Size.Height);
+
+	std::vector<gui::GuiHud::StationAnchor> anchors;
+	anchors.reserve(_stations.size());
+
+	for (const auto& station : _stations)
+	{
+		auto modelPos = station->ModelPosition();
+		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
+		utils::Position2d screenPos{ -9999, -9999 };
+		if (std::abs(clip.w) > 1e-6f)
+		{
+			auto ndc = glm::vec3(clip) / clip.w;
+			screenPos = {
+				static_cast<int>((ndc.x + 1.0f) * 0.5f * w),
+				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
+			};
+		}
+		anchors.push_back({ screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+	}
+
+	_hudPanel->SetStationAnchors(std::move(anchors));
 }
 
 void Scene::_UpdateSelection(ActionResultType res)

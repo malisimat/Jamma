@@ -305,6 +305,9 @@
     <ClInclude Include="src\gui\GuiMainPanel.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiHud.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiScrollBar.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -677,6 +680,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiMainPanel.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiHud.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiScrollBar.cpp">

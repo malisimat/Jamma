@@ -22,6 +22,7 @@
 #include "../gui/GuiPopupHost.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
+#include "../gui/GuiHud.h"
 #include "../gui/GuiRadio.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
@@ -264,6 +265,7 @@ namespace engine
 			unsigned int numSamps);
 		bool _OnUndo(std::shared_ptr<base::ActionUndo> undo);
 		void _InitSize();
+		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
 		glm::mat4 _View();
 		void _AddStation(std::shared_ptr<Station> station);
@@ -340,6 +342,7 @@ namespace engine
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
+		std::shared_ptr<gui::GuiHud> _hudPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupHost _popupHost;

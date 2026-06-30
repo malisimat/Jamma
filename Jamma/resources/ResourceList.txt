@@ -12,6 +12,7 @@
 2 automation MVP
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius
 2 colour MVP Color
+2 cable MVP
 2 quantisation MVP Highlight OverlayAlpha
 2 quantisation_division MVP Highlight OverlayAlpha
 2 ctrl_handle MVP Color
@@ -63,3 +64,14 @@
 1 rounded_but_on ninepatch 12 12
 1 rounded_but_on_over ninepatch 12 12
 1 rounded_but_on_down ninepatch 12 12
+1 trigger_activate_down_out ninepatch 16 16
+1 trigger_activate_down ninepatch 16 16
+1 trigger_activate_over_out ninepatch 16 16
+1 trigger_activate_over ninepatch 16 16
+1 trigger_activate ninepatch 16 16
+1 trigger_back ninepatch 16 16
+1 trigger_ditch_down_out ninepatch 16 16
+1 trigger_ditch_down ninepatch 16 16
+1 trigger_ditch_over_out ninepatch 16 16
+1 trigger_ditch_red_over ninepatch 16 16
+1 trigger_ditch ninepatch 16 16
