@@ -597,7 +597,29 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	}
 
 	if (!self->_isLoaded)
-		return 0;
+	{
+		switch (opcode)
+		{
+		case audioMasterVersion:
+			return kVstVersion;
+		case audioMasterGetVendorString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
+			return 1;
+		case audioMasterGetProductString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxProductStrLen);
+			return 1;
+		case audioMasterGetVendorVersion:
+			return 1000;
+		case audioMasterCanDo:
+			if (ptr && SupportsHostCanDo(static_cast<const char*>(ptr)))
+				return 1;
+			return 0;
+		default:
+			return 0;
+		}
+	}
 
 	switch (opcode)
 	{
