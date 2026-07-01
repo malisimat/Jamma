@@ -2092,9 +2092,7 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexce
 		break;
 	case io::JamFile::GlobalMidiQuantState::Mixed:
 	default:
-		settings.Enabled = true;
 		break;
-	}
 
 	auto combined = static_cast<std::int64_t>(_NaturalMidiQuantisationPhaseOffset(settings))
 		+ static_cast<std::int64_t>(settings.PhaseOffsetSamps)
