@@ -27,7 +27,9 @@ void VstEditorWindow::_CaptureChildWindows(std::vector<HWND>& outChildren) const
 	const HWND wnd = _editorWnd.load(std::memory_order_acquire);
 	if (!wnd)
 		return;
-	EnumChildWindows(wnd, _EnumChildrenProc, reinterpret_cast<LPARAM>(&outChildren));
+
+	for (HWND child = GetWindow(wnd, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
+		outChildren.push_back(child);
 }
 
 void VstEditorWindow::_RefreshTrackedPluginChild() noexcept
