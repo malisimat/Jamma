@@ -6,6 +6,7 @@
 #include "../io/JamFile.h"
 #include "../io/TextReadWriter.h"
 #include "../io/WavReadWriter.h"
+#include "../midi/MidiQuantisation.h"
 #include "../utils/PathUtils.h"
 
 using namespace engine;
@@ -14,6 +15,7 @@ namespace io
 {
 	actions::ActionResult IoSessionExporter::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
 		const timing::TimingQuantiser& quantisation,
+		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 		const io::UserConfig& userConfig,
 		const audio::AudioStreamParams& streamParams,
 		audio::AudioDevice* device,
@@ -56,6 +58,7 @@ namespace io
 		jam.Ninjam = ninjamController ? ninjamController->Config() : io::JamFile::NinjamConfig{};
 		jam.TimerTicks = 0;
 		jam.QuantiseSamps = 0;
+		jam.GlobalMidiQuantStateValue = globalMidiQuantState;
 		jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
 		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
@@ -75,12 +78,15 @@ namespace io
 				jamStation.StationType = 0;
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
+				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 
 				for (const auto& take : station->GetLoopTakes())
 				{
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
 					jamTake.VstChain = take->VstEntries();
+					jamTake.MidiQuantEnabled = take->MidiQuantisation().Enabled;
+					jamTake.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(take->MidiQuantisation().Fraction);
 					jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
 
 					for (const auto& loop : take->GetLoops())

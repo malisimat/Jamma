@@ -41,6 +41,9 @@ Scene::Scene(SceneParams params,
 	_label(nullptr),
 	_selector(nullptr),
 	_modeRadio(nullptr),
+	_midiChannelOverrideInput(nullptr),
+	_globalMidiQuantRadio(nullptr),
+	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
 	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
@@ -48,6 +51,8 @@ Scene::Scene(SceneParams params,
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
+	_hoverPath2d(),
+	_hover2dDirty(true),
 	_lastLoggedHoverPath(),
 	_ctrlHandleOverlay(),
 	_quantisationInteraction(_ctrlHandleOverlay, _quantisation, _stations),
@@ -88,6 +93,7 @@ Scene::Scene(SceneParams params,
 	_selector->SetSelectDepth(base::DEPTH_STATION);
 
 	GuiRadioParams modeRadioParams;
+	modeRadioParams.Index = 100u;
 	modeRadioParams.Size = { 480, 64 };
 	modeRadioParams.Position = { 0, (int)params.Size.Height - (int)modeRadioParams.Size.Height };
 	std::vector<GuiToggleParams> radioToggleParams;
@@ -131,6 +137,63 @@ Scene::Scene(SceneParams params,
 	
 	modeRadioParams.ToggleParams = radioToggleParams;
 	_modeRadio = std::make_shared<GuiRadio>(modeRadioParams);
+
+	GuiNumericInputParams midiChannelOverrideParams = GuiNumericInputParams::PanelInput(72u);
+	midiChannelOverrideParams.Index = MidiChannelOverrideControlIndex;
+	midiChannelOverrideParams.Position = { 10, (int)modeRadioParams.Position.Y - ((int)modeRadioParams.Size.Height + 4) };
+	midiChannelOverrideParams.ModelPosition = {
+		(float)midiChannelOverrideParams.Position.X,
+		(float)midiChannelOverrideParams.Position.Y,
+		0.0f };
+	midiChannelOverrideParams.Size = { 80, 64 };
+	midiChannelOverrideParams.Min = 0.0;
+	midiChannelOverrideParams.Max = 16.0;
+	midiChannelOverrideParams.Step = 0.1;
+	midiChannelOverrideParams.Decimals = 0;
+	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
+	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
+	AddChild(_midiChannelOverrideInput);
+
+	GuiRadioParams globalMidiQuantRadioParams;
+	globalMidiQuantRadioParams.Index = 101u;
+	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(_globalMidiQuantState);
+	globalMidiQuantRadioParams.Size = { 228, 40 };
+	globalMidiQuantRadioParams.Position = {
+		modeRadioParams.Position.X + static_cast<int>(modeRadioParams.Size.Width) + 10,
+		(int)params.Size.Height - (int)globalMidiQuantRadioParams.Size.Height - 12
+	};
+
+	std::vector<GuiToggleParams> globalQuantToggleParams;
+	for (auto i = 0u; i < 3; ++i)
+	{
+		GuiToggleParams toggleParams;
+		toggleParams.TextureShader = "texture_tinted";
+		toggleParams.Position = { static_cast<int>(i * 76), 0 };
+		toggleParams.Size = { 72, 40 };
+		toggleParams.Texture = "rounded_but";
+		toggleParams.OverTexture = "rounded_but_over";
+		toggleParams.DownTexture = "rounded_but_down";
+		toggleParams.ToggledTexture = "rounded_but_on";
+		toggleParams.ToggledOverTexture = "rounded_but_on_over";
+		toggleParams.ToggledDownTexture = "rounded_but_on_down";
+		switch (i)
+		{
+		case 0:
+			toggleParams.TintColor = glm::vec3(1.0f, 0.34f, 0.30f);
+			break;
+		case 1:
+			toggleParams.TintColor = glm::vec3(1.0f, 0.75f, 0.20f);
+			break;
+		case 2:
+		default:
+			toggleParams.TintColor = glm::vec3(0.33f, 0.92f, 0.45f);
+			break;
+		}
+
+		globalQuantToggleParams.push_back(toggleParams);
+	}
+	globalMidiQuantRadioParams.ToggleParams = globalQuantToggleParams;
+	_globalMidiQuantRadio = std::make_shared<GuiRadio>(globalMidiQuantRadioParams);
 
 	_PublishAudioStations();
 
@@ -195,6 +258,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
+	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -210,6 +274,13 @@ void Scene::Draw(DrawContext& ctx)
 	glCtx.ClearMvp();
 	glCtx.PushMvp(_overlayViewProj);
 
+	if (_midiChannelOverrideInput && !_midiChannelOverrideInput->HasFocus())
+	{
+		const auto forcedChannel = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
+		if (_midiChannelOverrideInput->Value() != forcedChannel)
+			_midiChannelOverrideInput->SetValue(forcedChannel, false);
+	}
+
 	_label->Draw(ctx);
 
 	for (auto& child : _guiChildren)
@@ -221,6 +292,7 @@ void Scene::Draw(DrawContext& ctx)
 
 	_selector->Draw(ctx);
 	_modeRadio->Draw(ctx);
+	_globalMidiQuantRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
 
 	_popupHost.Draw(ctx);
@@ -285,6 +357,7 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
 	_modeRadio->InitResources(resourceLib, forceInit);
+	_globalMidiQuantRadio->InitResources(resourceLib, forceInit);
 	for (auto& child : _guiChildren)
 		if (child)
 			child->InitResources(resourceLib, forceInit);
@@ -304,6 +377,7 @@ void Scene::_ReleaseResources()
 	_label->ReleaseResources();
 	_selector->ReleaseResources();
 	_modeRadio->ReleaseResources();
+	_globalMidiQuantRadio->ReleaseResources();
 	for (auto& child : _guiChildren)
 		if (child)
 			child->ReleaseResources();
@@ -321,6 +395,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+	_InvalidateHover2d();
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
@@ -425,6 +500,19 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
+	res = static_cast<std::shared_ptr<base::GuiElement>>(_globalMidiQuantRadio)->OnAction(_globalMidiQuantRadio->ParentToLocal(action));
+
+	if (res.IsEaten)
+	{
+		if (nullptr != res.Undo)
+			_undoHistory.Add(res.Undo);
+
+		if (!_touchDownElement.lock())
+			_touchDownElement = res.ActiveElement;
+
+		return res;
+	}
+
 	for (auto& station : _stations)
 	{
 		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
@@ -465,6 +553,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
+	_InvalidateHover2d();
 
 	if (_popupHost.IsOpen())
 		return _popupHost.OnAction(action);
@@ -482,31 +571,6 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
 	else if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
-	else
-	{
-		for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
-		{
-			if (!*it)
-				continue;
-
-			auto res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
-			if (res.IsEaten)
-				return res;
-		}
-
-		auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
-
-		if (res.IsEaten)
-			return res;
-
-		for (auto& station : _stations)
-		{
-			res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
-
-			if (res.IsEaten)
-				return res;
-		}
-	}
 
 	return ActionResult::NoAction();
 }
@@ -525,6 +589,18 @@ ActionResult Scene::OnAction(KeyAction action)
 		auto popupRes = _popupHost.OnAction(action);
 		if (popupRes.IsEaten)
 			return popupRes;
+	}
+
+	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, _stations);
+		overrideRes.IsEaten)
+	{
+		if (_midiChannelOverrideInput)
+		{
+			_midiChannelOverrideInput->SetValue(
+				static_cast<double>(_inputSubsystem->ForcedChannelOverride()),
+				false);
+		}
+		return overrideRes;
 	}
 
 	// 2. The focused control gets first refusal. While it is editing text we
@@ -608,6 +684,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	{
 		return io::IoSessionExporter::ExportSession(_stations,
 			_quantisation,
+			_globalMidiQuantState,
 			_userConfig,
 			_audioEngine->GetStreamParams(),
 			_audioEngine->GetDevice(),
@@ -694,15 +771,62 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
-	switch (action.ElementType)
+	if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
 	{
-		case GuiAction::ACTIONELEMENT_RADIO:
-			if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+		_ForceGlobalMidiQuantStateMixedOnLocalEdit();
+		return ActionResult::NoAction();
+	}
+
+	if (GuiAction::ACTIONELEMENT_RADIO == action.ElementType)
+	{
+		if (auto i = std::get_if<GuiAction::GuiInt>(&action.Data))
+		{
+			if (action.Index == 100u)
 			{
 				_viewMode = (ViewMode)i->Value;
 				_UpdateSelectDepth((unsigned int)_viewMode);
 			}
-			break;
+			else if (action.Index == 101u)
+			{
+				auto stateValue = i->Value;
+				if (stateValue < static_cast<int>(io::JamFile::GlobalMidiQuantState::Off)
+					|| stateValue > static_cast<int>(io::JamFile::GlobalMidiQuantState::All))
+				{
+					stateValue = static_cast<int>(io::JamFile::GlobalMidiQuantState::Mixed);
+				}
+
+				_SetGlobalMidiQuantState(static_cast<io::JamFile::GlobalMidiQuantState>(stateValue));
+			}
+		}
+	}
+
+	if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
+		&& (action.Index == MidiChannelOverrideControlIndex)
+		&& _midiChannelOverrideInput)
+	{
+		int clamped = 0;
+		if (auto str = std::get_if<GuiAction::GuiString>(&action.Data))
+		{
+			try
+			{
+				clamped = std::clamp(std::stoi(str->Value), 0, 16);
+			}
+			catch (...)
+			{
+				clamped = static_cast<int>(_inputSubsystem->ForcedChannelOverride());
+			}
+		}
+		else if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			clamped = std::clamp(static_cast<int>(value->Value + 0.5), 0, 16);
+		}
+		else
+		{
+			return ActionResult::NoAction();
+		}
+
+		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), _stations);
+		_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 	}
 
 	return ActionResult::NoAction();
@@ -832,6 +956,9 @@ void Scene::InitReceivers()
 {
 	_selector->SetReceiver(ActionReceiver::shared_from_this());
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
+	if (_midiChannelOverrideInput)
+		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
+	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
 }
 
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
@@ -844,6 +971,7 @@ void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
 	{
 		_guiChildren.push_back(child);
 		child->Init();
+		_InvalidateHover2d();
 	}
 }
 
@@ -920,6 +1048,7 @@ void Scene::Reset()
 void Scene::InitGui()
 {
 	_modeRadio->Init();
+	_globalMidiQuantRadio->Init();
 	_selector->Init();
 }
 
@@ -976,8 +1105,20 @@ void Scene::Shutdown()
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
+	ForceUnloadAllVstPlugins();
+
 	CloseGlobalInsertCapture();
 	CloseAudio();
+}
+
+void Scene::ForceUnloadAllVstPlugins()
+{
+	std::scoped_lock lock(_sceneMutex);
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->ForceUnloadAllVstPlugins();
+	}
 }
 
 void Scene::CommitChanges()
@@ -985,6 +1126,7 @@ void Scene::CommitChanges()
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
 	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _networkService->GetController()->TakePendingSnapshot();
+	bool hoverChanged = pendingRemoteSnapshot.has_value();
 
 	{
 		std::scoped_lock lock(_sceneMutex);
@@ -997,6 +1139,7 @@ void Scene::CommitChanges()
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 			{
+				hoverChanged = true;
 				for (auto& job : jobs)
 				{
 					switch (job.JobActionType)
@@ -1042,6 +1185,127 @@ void Scene::CommitChanges()
 		std::scoped_lock lock(_jobMutex);
 		_jobList.insert(_jobList.end(), jobList.begin(), jobList.end());
 	}
+
+	if (hoverChanged)
+		_InvalidateHover2d();
+}
+
+void Scene::ResolveDeferredHover()
+{
+	if (!_hover2dDirty)
+		return;
+
+	if (_popupHost.IsOpen())
+	{
+		if (!_hoverPath2d.empty())
+		{
+			std::vector<std::weak_ptr<base::GuiElement>> none;
+			_ApplyHoverPath2d(none);
+			_hoverPath2d.clear();
+		}
+
+		_hover2dDirty = false;
+		return;
+	}
+
+	if (_touchDownElement.lock() || _isSceneTouching)
+		return;
+
+	auto nextPath = _ResolveHoverPath2d();
+	_ApplyHoverPath2d(nextPath);
+	_hoverPath2d = std::move(nextPath);
+	_hover2dDirty = false;
+}
+
+void Scene::_InvalidateHover2d()
+{
+	_hover2dDirty = true;
+}
+
+std::vector<std::weak_ptr<base::GuiElement>> Scene::_ResolveHoverPath2d()
+{
+	auto resolveTop = [this](const std::shared_ptr<base::GuiElement>& root) {
+		if (!root)
+			return std::shared_ptr<base::GuiElement>();
+
+		return root->FindTopmostDescendant(root->ParentToLocal(_cursorPos));
+	};
+
+	auto leaf = std::shared_ptr<base::GuiElement>();
+	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
+	{
+		leaf = resolveTop(*it);
+		if (leaf)
+			break;
+	}
+
+	if (!leaf)
+		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_modeRadio));
+
+	if (!leaf)
+		leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(_globalMidiQuantRadio));
+
+	if (!leaf)
+	{
+		for (auto& station : _stations)
+		{
+			leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(station));
+			if (leaf)
+				break;
+		}
+	}
+
+	std::vector<std::weak_ptr<base::GuiElement>> path;
+	while (leaf)
+	{
+		path.push_back(leaf);
+		leaf = leaf->Parent();
+	}
+
+	std::reverse(path.begin(), path.end());
+	return path;
+}
+
+void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath)
+{
+	auto prevShared = _LockHoverPath(_hoverPath2d);
+	auto nextShared = _LockHoverPath(nextPath);
+	const auto prefix = _SharedHoverPathPrefix(prevShared, nextShared);
+
+	for (size_t i = prevShared.size(); i > prefix; --i)
+		prevShared[i - 1]->ApplyHoverState(false);
+
+	for (size_t i = 0; i < nextShared.size(); ++i)
+		nextShared[i]->ApplyHoverPoint(nextShared[i]->GlobalToLocal(_cursorPos));
+}
+
+std::vector<std::shared_ptr<base::GuiElement>> Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path)
+{
+	std::vector<std::shared_ptr<base::GuiElement>> sharedPath;
+	sharedPath.reserve(path.size());
+
+	for (const auto& element : path)
+	{
+		auto locked = element.lock();
+		if (!locked)
+			break;
+
+		sharedPath.push_back(std::move(locked));
+	}
+
+	return sharedPath;
+}
+
+size_t Scene::_SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
+	const std::vector<std::shared_ptr<base::GuiElement>>& rhs)
+{
+	size_t prefix = 0;
+	const auto count = std::min(lhs.size(), rhs.size());
+
+	while ((prefix < count) && (lhs[prefix].get() == rhs[prefix].get()))
+		++prefix;
+
+	return prefix;
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -1110,8 +1374,6 @@ void Scene::_UpdateSelection(ActionResultType res)
 	// Called when touch up + down, and when hover updated
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
-
-	std::cout << "Scene::UpdateSelection " << res << ", " << currentMode << std::endl;
 	switch (res)
 	{
 	case ACTIONRESULT_DEFAULT:
@@ -1241,8 +1503,15 @@ glm::mat4 Scene::_View()
 	return glm::lookAt(glm::vec3(camPos.X, camPos.Y, camPos.Z), glm::vec3(camPos.X, camPos.Y, 0.f), glm::vec3(0.f, 1.f, 0.f));
 }
 
+std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
+{
+	std::lock_guard<std::mutex> lock(_sceneMutex);
+	return _stations;
+}
+
 void Scene::_AddStation(std::shared_ptr<Station> station)
 {
+	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
@@ -1256,7 +1525,11 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
 
-	_stations.push_back(station);
+	{
+		std::lock_guard<std::mutex> lock(_sceneMutex);
+		_stations.push_back(station);
+	}
+	station->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_PublishAudioStations();
 }
 
@@ -1270,6 +1543,32 @@ void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType
 void Scene::_SetMidiQuantisationGrain(unsigned int grainSamps, const char* source)
 {
 	_quantisation.SetMidiGrain(grainSamps, source, _stations);
+}
+
+void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit)
+{
+	if ((_globalMidiQuantState == state) && !fromLocalEdit)
+		return;
+
+	_globalMidiQuantState = state;
+	if (_globalMidiQuantRadio)
+		_globalMidiQuantRadio->SetCurrentValue(static_cast<unsigned int>(state), true);
+
+	_ApplyGlobalMidiQuantStateToAllLoopTakes();
+}
+
+void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
+{
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetGlobalMidiQuantState(_globalMidiQuantState);
+	}
+}
+
+void Scene::_ForceGlobalMidiQuantStateMixedOnLocalEdit()
+{
+	_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed, true);
 }
 
 void Scene::_UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot)

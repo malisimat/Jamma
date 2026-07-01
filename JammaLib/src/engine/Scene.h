@@ -19,6 +19,7 @@
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiFocusManager.h"
+#include "../gui/GuiNumericInput.h"
 #include "../gui/GuiPopupHost.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
@@ -180,6 +181,7 @@ namespace engine
 		{
 			_sizeParams.Size = size;
 			_InitSize();
+			_InvalidateHover2d();
 		}
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
@@ -217,6 +219,13 @@ namespace engine
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
+		void ResolveDeferredHover();
+
+		// Returns a locked snapshot of the current station list.  Always use
+		// this when reading _stations from outside the render/tick thread (e.g.
+		// exporters, network handlers, tests).  Holding the snapshot keeps the
+		// shared_ptrs alive even if _stations is mutated on another thread.
+		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
 
 		// Send a chat message on the active ninjam session (no-op if none).
 		void SendNinjamChat(const std::string& msg)
@@ -243,6 +252,10 @@ namespace engine
 		{
 			_networkService->Disconnect();
 		}
+
+		// Force-unload all hosted VST plugins owned by stations/takes/loops.
+		// Call on the main/non-audio thread during shutdown.
+		void ForceUnloadAllVstPlugins();
 		
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -271,6 +284,9 @@ namespace engine
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
+		void _SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit = false);
+		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
+		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
 		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
@@ -291,6 +307,12 @@ namespace engine
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		timing::QuantisationInteractionContext _InteractionContext() const;
+		void _InvalidateHover2d();
+		std::vector<std::weak_ptr<base::GuiElement>> _ResolveHoverPath2d();
+		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
+		static std::vector<std::shared_ptr<base::GuiElement>> _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path);
+		static size_t _SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
+			const std::vector<std::shared_ptr<base::GuiElement>>& rhs);
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
 		void _EndBackgroundDrag();
@@ -316,6 +338,7 @@ namespace engine
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
+		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
 
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -337,6 +360,9 @@ namespace engine
 		timing::TimingQuantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
+		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
+		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
+		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
@@ -348,6 +374,8 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
+		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
+		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		timing::TimingQuantiserController _quantisationInteraction;
@@ -355,7 +383,7 @@ namespace engine
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
-		std::mutex _sceneMutex;
+		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};

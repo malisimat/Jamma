@@ -122,7 +122,10 @@ namespace vst
 			if (!canDo) return false;
 			const std::string_view sv(canDo);
 			return (sv == "sendVstEvents") ||
-				   (sv == "sendVstMidiEvent");
+				   (sv == "sendVstMidiEvent") ||
+				   (sv == "sendVstTimeInfo") ||
+				   (sv == "sendVstMidiEventFlagIsRealtime") ||
+				   (sv == "sizeWindow");
 		}
 
 	private:
@@ -140,6 +143,29 @@ namespace vst
 			VstInt32 index, VstIntPtr value, void* ptr, float opt);
 			void DispatchPendingMidiEvents() noexcept;
 
+		// Instantiate the AEffect (VSTPluginMain), run effOpen, query name and
+		// channel counts, and pre-allocate scratch buffers. MUST run on the
+		// thread that will host the editor (the UI thread) so plugins that bind
+		// their GUI/idle machinery to the instantiating thread repaint and take
+		// input correctly. Called from PreInit() (UI thread); Load() only calls
+		// it as a fallback when PreInit() was skipped.
+		bool _InstantiateEffect(const std::wstring& path);
+
+		// RAII guard that snapshots the current OpenGL context on construction
+		// and restores it on destruction. Plugins (e.g. Battery 4) make their
+		// own GL context current during effOpen/effEditOpen/effEditIdle — these
+		// run on Jamma's OpenGL render thread, so without restoring our context
+		// the framebuffer becomes incomplete and the whole app paints white.
+		struct GlContextScope
+		{
+			GlContextScope() noexcept;
+			~GlContextScope();
+			GlContextScope(const GlContextScope&) = delete;
+			GlContextScope& operator=(const GlContextScope&) = delete;
+			HGLRC _rc;
+			HDC _dc;
+		};
+
 		AEffect* _effect;
 			std::array<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;
 			MidiEventBlock _midiEventBlock;
@@ -156,9 +182,17 @@ namespace vst
 		HMODULE _moduleHandle;
 		bool _isLoaded;
 		std::atomic<bool> _isActivated;
+		// Thread id of the most recent audio-processing call. Used by the host
+		// callback to answer audioMasterGetCurrentProcessLevel correctly: the
+		// plugin must hear "realtime" only when it queries from the audio thread,
+		// and "user" when it queries from the UI/editor thread. Reporting
+		// realtime on the UI thread makes many plugins skip editor repaints.
+		std::atomic<DWORD> _audioThreadId;
 		std::string _name;
 		std::atomic<bool> _isBypassed;
 		utils::Size2d _editorSize;
+		std::atomic<HWND> _editorParentHwnd;
+		std::atomic<bool> _isEditorOpen;
 
 		// Pre-allocated audio buffers — never heap-allocated in ProcessBlock.
 		std::vector<float*> _inputChannelPtrs;

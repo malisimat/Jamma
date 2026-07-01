@@ -188,9 +188,16 @@ namespace base
 		// Top-left position of this element in global (scene overlay) coordinates.
 		utils::Position2d GlobalPosition() const;
 		bool HitTest(utils::Position2d localPos);
+		virtual bool RouteHitTest(utils::Position2d localPos);
+		virtual std::shared_ptr<GuiElement> FindTopmostImmediateChild(utils::Position2d localPos,
+			utils::Position2d& childLocalPos);
+		virtual std::shared_ptr<GuiElement> FindTopmostDescendant(utils::Position2d localPos);
+		virtual void ApplyHoverPoint(utils::Position2d localPos);
+		virtual void ApplyHoverState(bool inside);
 		void _ApplyTextureTint(graphics::GlDrawContext& ctx) const;
 		std::vector<actions::JobAction> CommitChanges();
 		void SetParent(std::shared_ptr<GuiElement> parent);
+		std::shared_ptr<GuiElement> Parent() const;
 		actions::TouchAction GlobalToLocal(actions::TouchAction action);
 		actions::TouchAction ParentToLocal(actions::TouchAction action);
 		actions::TouchMoveAction GlobalToLocal(actions::TouchMoveAction action);
@@ -209,6 +216,7 @@ namespace base
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
 		virtual bool _HitTest(utils::Position2d localPos);
+		bool _ChildRectHitTest(utils::Position2d localPos) const;
 		void _BeginGesture(GestureKind kind, utils::Position2d startPosition, int startValue = 0) noexcept;
 		void _MarkGestureMoved() noexcept;
 		void _EndGesture() noexcept;

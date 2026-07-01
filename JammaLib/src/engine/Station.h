@@ -125,6 +125,7 @@ namespace engine
 		{
 			return (_changesMade && _flipTakeBuffer) ? _backLoopTakes : _loopTakes;
 		}
+		std::vector<std::shared_ptr<LoopTake>> GetLoopTakeSnapshot() const;
 		// Returns true if this station receives audio from a remote ninjam user.
 		// Overriding this instead of dynamic_cast keeps the audio callback path safe.
 		virtual bool IsRemote() const noexcept { return false; }
@@ -138,6 +139,7 @@ namespace engine
 		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
+		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -159,11 +161,16 @@ namespace engine
 		// VST playback. Any unrestricted trigger keeps the station open to all
 		// devices; otherwise the device must match a trigger's MidiInputDevices list.
 		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
+		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
+		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
 		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
 		// without associated deviceName.
 		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
 		// For real live MIDI input, with associated deviceName.
 		void EnqueueLiveMidiEvent(const midi::MidiEvent& event, const std::string& deviceName);
+		// Emit synthetic NoteOff for currently held live notes and clear held state.
+		void FlushLiveHeldMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
@@ -177,6 +184,7 @@ namespace engine
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		void UnloadVstPlugin(size_t index);
+		void ForceUnloadAllVstPlugins();
 
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
@@ -233,9 +241,13 @@ namespace engine
 			std::vector<float*> VstBlockPtrs;
 		};
 
+		using LoopTakeSnapshot = std::vector<std::weak_ptr<LoopTake>>;
+
 		void _CollapseOtherTakeRouters();
 		void _CollapseOtherTakeRoutersToChannels();
 		void _ApplyMidiQuantisationPhaseOffset() noexcept;
+		void _PublishLoopTakeSnapshot();
+		std::shared_ptr<const LoopTakeSnapshot> _LoopTakeSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 
@@ -319,6 +331,7 @@ namespace engine
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
+		std::atomic<std::shared_ptr<const LoopTakeSnapshot>> _loopTakeSnapshot;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
@@ -359,6 +372,8 @@ namespace engine
 		midi::MidiQueue<1024> _liveMidiIngress;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
+		std::vector<int> _allowedMidiChannels;
+		std::atomic<std::uint16_t> _allowedMidiChannelMask{ 0u };
 		// Route snapshots are published off the audio thread.
 		// The callback reads an immutable snapshot pointer for O(1) lookups.
 		std::atomic<const MidiVstRoutingSnapshot*> _midiVstRoutes;
@@ -373,6 +388,7 @@ namespace engine
 		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
+		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 		std::int32_t _stationPhaseOffsetSamps = 0;
 	};

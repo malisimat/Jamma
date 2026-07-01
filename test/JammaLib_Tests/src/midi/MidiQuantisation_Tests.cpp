@@ -130,6 +130,7 @@ TEST(MidiQuantisation, StepSampsReturnsZeroWhenDisabledOrNoGrain) {
 	s.Enabled = true;
 	EXPECT_EQ(0u, MidiQuantisationStepSamps(s));
 
+	s.Fraction = MidiQuantisationFraction::Whole;
 	s.GrainSamps = 24000u;
 	EXPECT_EQ(24000u, MidiQuantisationStepSamps(s));
 
