@@ -29,7 +29,10 @@ void VstEditorWindow::_CaptureChildWindows(std::vector<HWND>& outChildren) const
 		return;
 
 	for (HWND child = GetWindow(wnd, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
-		outChildren.push_back(child);
+	{
+		if (IsWindow(child))
+			outChildren.push_back(child);
+	}
 }
 
 void VstEditorWindow::_RefreshTrackedPluginChild() noexcept
