@@ -134,7 +134,7 @@ namespace io
 		std::vector<Station> Stations;
 		unsigned long TimerTicks;
 		unsigned int QuantiseSamps;
-		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Mixed;
+		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		utils::Timer::QuantisationType Quantisation;
 	};
