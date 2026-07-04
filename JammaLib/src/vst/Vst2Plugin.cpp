@@ -8,6 +8,7 @@
 #include "Vst2Plugin.h"
 #include <algorithm>
 #include <cstring>
+#include <float.h>
 #include <iostream>
 #include "../graphics/VstEditorWindow.h"
 
@@ -102,6 +103,8 @@ bool Vst2Plugin::PreInit(const std::wstring& path)
 bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 {
 #ifdef JAMMA_VST2_ENABLED
+	(void)path;
+
 	if (_effect)
 		return true; // Already instantiated
 
@@ -133,8 +136,14 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 		return false;
 	}
 
-	// Store our 'this' pointer in the user field for the host callback.
-	_effect->user = this;
+	// The plugin may call back into HostCallback during this bootstrap sequence.
+	// Keep resvd2 null until construction dispatches are finished, then wire it.
+	_effect->resvd2 = 0;
+
+	_effect->dispatcher(_effect, effIdentify, 0, 0, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effSetSampleRate, 0, 0, nullptr, _sampleRate);
+	_effect->dispatcher(_effect, effSetBlockSize, 0,
+		static_cast<VstIntPtr>(_blockSize), nullptr, 0.0f);
 
 	// Open the effect. Audio configuration (sample rate, block size, resume)
 	// is deferred to Load() once the host format is known.
@@ -175,6 +184,10 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 	for (int32_t c = 0; c < _outputChannels; ++c)
 		_outputChannelPtrs[static_cast<size_t>(c)] =
 			_outputScratchStorage.data() + static_cast<size_t>(c) * constants::MaxBlockSize;
+
+	// Host-owned instance pointer for HostCallback. Do not use effect->user;
+	// plugins may use that slot for their own state.
+	_effect->resvd2 = reinterpret_cast<VstIntPtr>(this);
 
 	return true;
 #else
@@ -231,9 +244,61 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	_effect->dispatcher(_effect, effSetBlockSize, 0,
 		static_cast<VstIntPtr>(blockSize), nullptr, 0.0f);
 	_effect->dispatcher(_effect, effSetProgram, 0, 0, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effGetPlugCategory, 0, 0, nullptr, 0.0f);
+
+	{
+		static const char kReceiveVstEvents[] = "receiveVstEvents";
+		static const char kReceiveVstMidiEvent[] = "receiveVstMidiEvent";
+		_effect->dispatcher(_effect, effCanDo, 0, 0,
+			const_cast<char*>(kReceiveVstEvents), 0.0f);
+		_effect->dispatcher(_effect, effCanDo, 0, 0,
+			const_cast<char*>(kReceiveVstMidiEvent), 0.0f);
+	}
+
+	for (int32_t input = 0; input < _effect->numInputs; ++input)
+		_effect->dispatcher(_effect, effConnectInput, input, 1, nullptr, 0.0f);
+
+	for (int32_t output = 0; output < _effect->numOutputs; ++output)
+		_effect->dispatcher(_effect, effConnectOutput, output, 1, nullptr, 0.0f);
+
+	if ((_effect->numInputs >= 0) && (_effect->numInputs <= 8)
+		&& (_effect->numOutputs >= 0) && (_effect->numOutputs <= 8))
+	{
+		auto arrangementTypeForChannels = [](int32_t channels) -> VstInt32
+		{
+			switch (channels)
+			{
+			case 0: return kSpeakerArrEmpty;
+			case 1: return kSpeakerArrMono;
+			case 2: return kSpeakerArrStereo;
+			default: return kSpeakerArrUserDefined;
+			}
+		};
+
+		VstSpeakerArrangement inputArrangement{};
+		inputArrangement.type = arrangementTypeForChannels(_effect->numInputs);
+		inputArrangement.numChannels = _effect->numInputs;
+
+		VstSpeakerArrangement outputArrangement{};
+		outputArrangement.type = arrangementTypeForChannels(_effect->numOutputs);
+		outputArrangement.numChannels = _effect->numOutputs;
+
+		_effect->dispatcher(_effect, effSetSpeakerArrangement,
+			0,
+			reinterpret_cast<VstIntPtr>(&inputArrangement),
+			&outputArrangement,
+			0.0f);
+	}
+
+	if ((_effect->flags & effFlagsCanDoubleReplacing) != 0)
+	{
+		_effect->dispatcher(_effect, effSetProcessPrecision, 0,
+			static_cast<VstIntPtr>(kVstProcessPrecision32), nullptr, 0.0f);
+	}
 
 	// 4. Start the effect (resume).
 	_effect->dispatcher(_effect, effMainsChanged, 0, 1, nullptr, 0.0f);
+	_effect->dispatcher(_effect, effStartProcess, 0, 0, nullptr, 0.0f);
 	_isActivated.store(true, std::memory_order_release);
 
 	_isLoaded = true;
@@ -253,7 +318,10 @@ void Vst2Plugin::Unload()
 	if (_isActivated.exchange(false, std::memory_order_acq_rel))
 	{
 		if (_effect)
+		{
+			_effect->dispatcher(_effect, effStopProcess, 0, 0, nullptr, 0.0f);
 			_effect->dispatcher(_effect, effMainsChanged, 0, 0, nullptr, 0.0f);
+		}
 	}
 
 	// Null out pointers before clearing storage so any concurrent
@@ -265,6 +333,7 @@ void Vst2Plugin::Unload()
 
 	if (_effect)
 	{
+		_effect->resvd2 = 0;
 		_effect->dispatcher(_effect, effClose, 0, 0, nullptr, 0.0f);
 		_effect = nullptr;
 	}
@@ -308,6 +377,13 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 		_inputChannelPtrs.data());
 
 	DispatchPendingMidiEvents();
+
+	for (int32_t channel = 0; channel < _outputChannels; ++channel)
+		std::fill(_outputChannelPtrs[static_cast<size_t>(channel)],
+			_outputChannelPtrs[static_cast<size_t>(channel)] + numSamples,
+			0.0f);
+
+	_clearfp();
 
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
@@ -356,6 +432,13 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 
 	DispatchPendingMidiEvents();
 
+	for (int32_t channel = 0; channel < _outputChannels; ++channel)
+		std::fill(_outputChannelPtrs[static_cast<size_t>(channel)],
+			_outputChannelPtrs[static_cast<size_t>(channel)] + numSamples,
+			0.0f);
+
+	_clearfp();
+
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
@@ -397,6 +480,13 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 		_inputChannelPtrs.data(), _inputChannels);
 
 	DispatchPendingMidiEvents();
+
+	for (int32_t channel = 0; channel < _outputChannels; ++channel)
+		std::fill(_outputChannelPtrs[static_cast<size_t>(channel)],
+			_outputChannelPtrs[static_cast<size_t>(channel)] + numSamples,
+			0.0f);
+
+	_clearfp();
 
 	_effect->processReplacing(_effect,
 		_inputChannelPtrs.data(),
@@ -468,8 +558,20 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	midiEvent = {};
 	midiEvent.type = kVstMidiType;
 	midiEvent.byteSize = sizeof(VstMidiEvent);
-	midiEvent.deltaFrames = inWindow ? static_cast<VstInt32>(event.sampleOffset - _midiBlockStartSample) : 0;
-	midiEvent.flags = isRealtime ? kVstMidiEventIsRealtime : 0;
+	{
+		const auto sampleDelta = static_cast<int64_t>(event.sampleOffset)
+			- static_cast<int64_t>(_midiBlockStartSample);
+		const auto maxDelta = (_midiBlockNumSamples > 0u)
+			? static_cast<int64_t>(_midiBlockNumSamples - 1u)
+			: 0;
+		auto clampedDelta = sampleDelta;
+		if (clampedDelta < 0)
+			clampedDelta = 0;
+		if (clampedDelta > maxDelta)
+			clampedDelta = maxDelta;
+		midiEvent.deltaFrames = static_cast<VstInt32>(clampedDelta);
+	}
+	midiEvent.flags = 0;
 	midiEvent.midiData[0] = static_cast<char>(event.status);
 	midiEvent.midiData[1] = static_cast<char>(event.data1);
 	midiEvent.midiData[2] = static_cast<char>(event.data2);
@@ -571,51 +673,38 @@ void Vst2Plugin::IdleEditor() noexcept
 VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt)
 {
-	auto* self = (effect && effect->user) ? static_cast<Vst2Plugin*>(effect->user) : nullptr;
+	auto* self = (effect && effect->resvd2)
+		? reinterpret_cast<Vst2Plugin*>(effect->resvd2)
+		: nullptr;
 
-	// During VSTPluginMain bootstrap, effect/user may not be wired yet.
-	// Return core host identity answers before _isLoaded is true.
+	// During VSTPluginMain and construction-time dispatches, resvd2 is not wired
+	// yet. Return stable bootstrap answers until the host instance is available.
 	if (!self)
 	{
 		switch (opcode)
 		{
 		case audioMasterVersion:
 			return kVstVersion;
-		case audioMasterGetVendorString:
-			if (ptr)
-				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
-			return 1;
-		case audioMasterGetProductString:
-			if (ptr)
-				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxProductStrLen);
-			return 1;
-		case audioMasterGetVendorVersion:
-			return 1000;
-		default:
-			return 0;
-		}
-	}
-
-	if (!self->_isLoaded)
-	{
-		switch (opcode)
-		{
-		case audioMasterVersion:
-			return kVstVersion;
-		case audioMasterGetVendorString:
-			if (ptr)
-				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
-			return 1;
-		case audioMasterGetProductString:
-			if (ptr)
-				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxProductStrLen);
-			return 1;
-		case audioMasterGetVendorVersion:
-			return 1000;
+		case audioMasterGetSampleRate:
+			return 44100;
+		case audioMasterGetBlockSize:
+			return 512;
+		case audioMasterGetAutomationState:
+			return kVstAutomationRead;
 		case audioMasterCanDo:
 			if (ptr && SupportsHostCanDo(static_cast<const char*>(ptr)))
 				return 1;
 			return 0;
+		case audioMasterGetVendorString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxVendorStrLen);
+			return 1;
+		case audioMasterGetProductString:
+			if (ptr)
+				vst_strncpy(static_cast<char*>(ptr), "Jamma", kVstMaxProductStrLen);
+			return 1;
+		case audioMasterGetVendorVersion:
+			return 1000;
 		default:
 			return 0;
 		}
@@ -626,9 +715,11 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	case audioMasterVersion:
 		return kVstVersion;
 	case audioMasterGetSampleRate:
-		return self ? static_cast<VstIntPtr>(self->_sampleRate) : 44100;
+		return static_cast<VstIntPtr>(self->_sampleRate);
 	case audioMasterGetBlockSize:
-		return self ? static_cast<VstIntPtr>(self->_blockSize) : 512;
+		return static_cast<VstIntPtr>(self->_blockSize);
+	case audioMasterGetAutomationState:
+		return kVstAutomationRead;
 	case audioMasterGetTime:
 		if (self)
 		{
@@ -674,6 +765,25 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 			const auto canDo = static_cast<const char*>(ptr);
 			if (SupportsHostCanDo(canDo))
 				return 1;
+		}
+		return 0;
+	case audioMasterGetDirectory:
+		if (self->_moduleHandle)
+		{
+			static thread_local char moduleDir[MAX_PATH] = {};
+			const auto len = GetModuleFileNameA(self->_moduleHandle, moduleDir, MAX_PATH);
+			if (len > 0 && len < MAX_PATH)
+			{
+				for (auto i = len; i > 0; --i)
+				{
+					if (moduleDir[i - 1] == '\\' || moduleDir[i - 1] == '/')
+					{
+						moduleDir[i - 1] = '\0';
+						break;
+					}
+				}
+				return reinterpret_cast<VstIntPtr>(moduleDir);
+			}
 		}
 		return 0;
 	case audioMasterAutomate:

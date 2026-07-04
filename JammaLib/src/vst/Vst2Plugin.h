@@ -121,11 +121,15 @@ namespace vst
 		{
 			if (!canDo) return false;
 			const std::string_view sv(canDo);
-			return (sv == "sendVstEvents") ||
+			return (sv == "supplyIdle") ||
+				   (sv == "sendVstEvents") ||
 				   (sv == "sendVstMidiEvent") ||
 				   (sv == "sendVstTimeInfo") ||
-				   (sv == "sendVstMidiEventFlagIsRealtime") ||
-				   (sv == "sizeWindow");
+				   (sv == "receiveVstEvents") ||
+				   (sv == "receiveVstMidiEvent") ||
+				   (sv == "supportShell") ||
+				   (sv == "sizeWindow") ||
+				   (sv == "shellCategory");
 		}
 
 	private:
