@@ -219,33 +219,42 @@ void ConsoleTui::Stop()
 	_coutBuf.reset();
 	_cerrBuf.reset();
 
-	// Move past the input artifact and reset SGR.
-	if (_hStdout && _hStdout != INVALID_HANDLE_VALUE)
 	{
-		const char tail[] = "\r\x1b[2K\x1b[0m";
-		DWORD written = 0;
-		WriteFile(_hStdout, tail, static_cast<DWORD>(sizeof(tail) - 1), &written, nullptr);
+		std::lock_guard<std::mutex> lk(_renderMutex);
 
-		if (_outModeSaved)
+		// Move past the input artifact and reset SGR.
+		if (_hStdout && _hStdout != INVALID_HANDLE_VALUE)
 		{
-			SetConsoleMode(_hStdout, _origOutMode);
-			_outModeSaved = false;
+			const char tail[] = "\r\x1b[2K\x1b[0m";
+			DWORD written = 0;
+			DWORD mode = 0;
+			if (GetConsoleMode(_hStdout, &mode))
+			{
+				WriteFile(_hStdout, tail, static_cast<DWORD>(sizeof(tail) - 1), &written, nullptr);
+			}
+
+			if (_outModeSaved)
+			{
+				SetConsoleMode(_hStdout, _origOutMode);
+				_outModeSaved = false;
+			}
+			if (_origOutCP != 0)
+			{
+				SetConsoleOutputCP(_origOutCP);
+				_origOutCP = 0;
+			}
 		}
-		if (_origOutCP != 0)
+
+		if (_hStdin && _hStdin != INVALID_HANDLE_VALUE && _inModeSaved)
 		{
-			SetConsoleOutputCP(_origOutCP);
-			_origOutCP = 0;
+			SetConsoleMode(_hStdin, _origInMode);
+			_inModeSaved = false;
 		}
+
+		_hStdout = nullptr;
+		_hStdin = nullptr;
 	}
 
-	if (_hStdin && _hStdin != INVALID_HANDLE_VALUE && _inModeSaved)
-	{
-		SetConsoleMode(_hStdin, _origInMode);
-		_inModeSaved = false;
-	}
-
-	_hStdout = nullptr;
-	_hStdin = nullptr;
 	_input.clear();
 }
 
@@ -253,8 +262,23 @@ void ConsoleTui::_WriteRawLocked(const char* data, std::size_t n)
 {
 	if (!_hStdout || _hStdout == INVALID_HANDLE_VALUE || n == 0)
 		return;
+
+	DWORD mode = 0;
+	if (!GetConsoleMode(_hStdout, &mode))
+	{
+		_hStdout = nullptr;
+		return;
+	}
+
 	DWORD written = 0;
-	WriteFile(_hStdout, data, static_cast<DWORD>(n), &written, nullptr);
+	const BOOL ok = WriteFile(_hStdout, data, static_cast<DWORD>(n), &written, nullptr);
+
+	if (!ok)
+	{
+		// Deactivate rendering after any hard console write failure so
+		// subsequent logging safely falls back to the restored std::cout/cerr.
+		_hStdout = nullptr;
+	}
 }
 
 void ConsoleTui::_RedrawInputLocked()
