@@ -724,7 +724,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		case audioMasterGetBlockSize:
 			return 512;
 		case audioMasterGetAutomationState:
-			return 1;
+			return kVstAutomationRead;
 		case audioMasterCanDo:
 			if (ptr && SupportsHostCanDo(static_cast<const char*>(ptr)))
 				return 1;
@@ -753,7 +753,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	case audioMasterGetBlockSize:
 		return static_cast<VstIntPtr>(self->_blockSize);
 	case audioMasterGetAutomationState:
-		return 1;
+		return kVstAutomationRead;
 	case audioMasterGetTime:
 		if (self)
 		{
