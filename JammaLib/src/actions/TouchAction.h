@@ -29,6 +29,7 @@ namespace actions
 		TouchState State;
 		TouchType Touch;
 		int Index;
+		unsigned int MouseButtonsDown;
 		int Value;
 		utils::Position2d Position;
 		Modifiers Modifiers;

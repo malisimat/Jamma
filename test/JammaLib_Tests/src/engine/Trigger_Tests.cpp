@@ -24,10 +24,14 @@ using engine::TriggerParams;
 using utils::Timer;
 using actions::TriggerAction;
 using actions::KeyAction;
+using actions::TouchAction;
+using actions::TouchMoveAction;
 using audio::MergeMixBehaviourParams;
 
 const unsigned int ActivateChar = 49;
 const unsigned int DitchChar = 50;
+const unsigned int LeftMouseButtonMask = 1u << 0;
+const unsigned int RightMouseButtonMask = 1u << 2;
 
 Time GetTime()
 {
@@ -175,7 +179,41 @@ public:
 	{
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
+
+	utils::Position3d CameraPositionForTest() const
+	{
+		return _camera.ModelPosition();
+	}
+
+	bool IsSceneTouchingForTest() const
+	{
+		return _camera.IsBackgroundDragging();
+	}
 };
+
+TouchAction MakeSceneTouch(TouchAction::TouchState state,
+	utils::Position2d pos,
+	int index,
+	unsigned int mouseButtonsDown)
+{
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.State = state;
+	action.Index = index;
+	action.Position = pos;
+	action.MouseButtonsDown = mouseButtonsDown;
+	return action;
+}
+
+TouchMoveAction MakeSceneTouchMove(utils::Position2d pos,
+	unsigned int mouseButtonsDown)
+{
+	TouchMoveAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Position = pos;
+	action.MouseButtonsDown = mouseButtonsDown;
+	return action;
+}
 
 std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
 {
@@ -861,6 +899,113 @@ TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 	ASSERT_TRUE(res.IsEaten);
 	EXPECT_EQ(2u, firstStation->NumTakes());
 	EXPECT_EQ(1u, secondStation->NumTakes());
+}
+
+TEST(SceneDrag, LeftDragPansCameraDirectly) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto downRes = scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	ASSERT_TRUE(downRes.IsEaten);
+	scene.OnAction(MakeSceneTouchMove({ 810, 490 }, LeftMouseButtonMask));
+
+	auto cameraPos = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(-10.0f, cameraPos.X);
+	EXPECT_FLOAT_EQ(10.0f, cameraPos.Y);
+	EXPECT_FLOAT_EQ(420.0f, cameraPos.Z);
+}
+
+TEST(SceneDrag, RightDragUsesDampedMotion) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto downRes = scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 2, RightMouseButtonMask));
+	ASSERT_TRUE(downRes.IsEaten);
+	scene.OnAction(MakeSceneTouchMove({ 820, 500 }, RightMouseButtonMask));
+
+	auto cameraPos = scene.CameraPositionForTest();
+	EXPECT_LT(cameraPos.X, 0.0f);
+	EXPECT_GT(cameraPos.X, -10.0f);
+	EXPECT_FLOAT_EQ(0.0f, cameraPos.Y);
+	EXPECT_FLOAT_EQ(420.0f, cameraPos.Z);
+}
+
+TEST(SceneDrag, InertialDragCoastsAfterMouseStops) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 2, RightMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 840, 500 }, RightMouseButtonMask));
+	auto cameraAfterMove = scene.CameraPositionForTest();
+
+	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	auto cameraAfterCoast = scene.CameraPositionForTest();
+
+	EXPECT_LT(cameraAfterCoast.X, cameraAfterMove.X);
+
+	for (int i = 0; i < 360; ++i)
+		scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+
+	auto cameraAfterSettle = scene.CameraPositionForTest();
+	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	auto cameraAfterFinalTick = scene.CameraPositionForTest();
+
+	EXPECT_NEAR(cameraAfterSettle.X, cameraAfterFinalTick.X, 0.1f);
+	EXPECT_NEAR(cameraAfterSettle.Y, cameraAfterFinalTick.Y, 0.1f);
+}
+
+TEST(SceneDrag, RightOverrideAndReleaseStayContinuous) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 810, 500 }, LeftMouseButtonMask));
+	auto leftCameraPos = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(-10.0f, leftCameraPos.X);
+
+	auto rightDownRes = scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 810, 500 }, 2, LeftMouseButtonMask | RightMouseButtonMask));
+	ASSERT_TRUE(rightDownRes.IsEaten);
+	auto cameraAfterRightDown = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(leftCameraPos.X, cameraAfterRightDown.X);
+
+	scene.OnAction(MakeSceneTouchMove({ 830, 500 }, LeftMouseButtonMask | RightMouseButtonMask));
+	auto inertialCameraPos = scene.CameraPositionForTest();
+	EXPECT_LT(inertialCameraPos.X, cameraAfterRightDown.X);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 830, 500 }, 2, LeftMouseButtonMask));
+	auto cameraAfterRightUp = scene.CameraPositionForTest();
+	EXPECT_NEAR(inertialCameraPos.X, cameraAfterRightUp.X, 0.001f);
+
+	scene.OnAction(MakeSceneTouchMove({ 840, 500 }, LeftMouseButtonMask));
+	auto blendedCameraPos = scene.CameraPositionForTest();
+	EXPECT_LT(blendedCameraPos.X, cameraAfterRightUp.X);
+	EXPECT_GT(blendedCameraPos.X, cameraAfterRightUp.X - 10.0f);
+}
+
+TEST(SceneDrag, FinalReleaseEndsBackgroundDrag) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	ASSERT_TRUE(scene.IsSceneTouchingForTest());
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 800, 500 }, 0, 0u));
+	EXPECT_FALSE(scene.IsSceneTouchingForTest());
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {

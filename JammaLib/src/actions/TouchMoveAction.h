@@ -15,6 +15,7 @@ namespace actions
 	public:
 		TouchAction::TouchType Touch;
 		int Index;
+		unsigned int MouseButtonsDown;
 		utils::Position2d Position;
 		Modifiers Modifiers;
 	};

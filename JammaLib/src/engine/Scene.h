@@ -291,9 +291,6 @@ namespace engine
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		timing::QuantisationInteractionContext _InteractionContext() const;
-		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
-		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
-		void _EndBackgroundDrag();
 		bool _TrySetMasterFromHover(bool confirm);
 		void _UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candidate, base::SelectDepth depth, bool confirmCandidate);
 		void _ClearStationQuantisation();
@@ -316,13 +313,8 @@ namespace engine
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
-
-		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
 		std::atomic_bool _isSceneReset;
-		bool _isSceneDragged;
-		utils::Position2d _initTouchDownPosition;
-		utils::Position3d _initTouchCamPosition;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
 		glm::mat4 _viewRotOnlyProj;

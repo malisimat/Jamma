@@ -26,12 +26,8 @@ Scene::Scene(SceneParams params,
 	Drawable(params),
 	Moveable(params),
 	Sizeable(params),
-	_isSceneTouching(false),
 	_isSceneQuitting(false),
 	_isSceneReset(true),
-	_isSceneDragged(false),
-	_initTouchDownPosition{},
-	_initTouchCamPosition{},
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
 	_viewRotOnlyProj(glm::mat4()),
@@ -232,6 +228,14 @@ void Scene::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	auto ar = _sizeParams.Size.Height > 0 ?
+		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
+		1.0f;
+	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
+	auto view = _View();
+	_viewProj = projection * view;
+	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(view));
+
 	if (PASS_SCENE == pass)
 		glEnable(GL_DEPTH_TEST);
 	else
@@ -363,14 +367,15 @@ ActionResult Scene::OnAction(TouchAction action)
 					_undoHistory.Add(res.Undo);
 			}
 		}
-		else if (_isSceneTouching)
+		else if (_camera.IsBackgroundDragging())
 		{
-			_EndBackgroundDrag();
+			auto wasDragged = _camera.BackgroundDragWasDragged();
+			_camera.HandleBackgroundDrag(action);
 
 			// Clear selection only if not dragged
-			// isSceneTouching should only be true if selector mode is SELECT_NONE
+			// background drag should only be active if selector mode is SELECT_NONE
 			// so try to use that instead!
-			if (!_isSceneDragged)
+			if (!wasDragged && !_camera.IsBackgroundDragging())
 				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
 
@@ -457,7 +462,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 		_focusManager.ClearFocus();
 
-	return _BeginBackgroundDrag(action);
+	return _camera.HandleBackgroundDrag(action);
 }
 
 ActionResult Scene::OnAction(TouchMoveAction action)
@@ -476,12 +481,13 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return overlayRes.value();
 	}
 
+	if (_camera.IsBackgroundDragging())
+		return _camera.UpdateBackgroundDrag(action);
+
 	auto activeElement = _touchDownElement.lock();
 
 	if (activeElement)
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
-	else if (_isSceneTouching)
-		return _UpdateBackgroundDrag(action);
 	else
 	{
 		for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
@@ -713,6 +719,9 @@ void Scene::OnTick(Time curTime,
 	std::optional<io::UserConfig> cfg,
 	std::optional<audio::AudioStreamParams> params)
 {
+	if (_camera.IsBackgroundDragging())
+		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
+
 	if (auto clock = _quantisation.Clock())
 		clock->Tick(samps, 0u);
 
@@ -1292,38 +1301,6 @@ QuantisationInteractionContext Scene::_InteractionContext() const
 	context.HoverPath = _selector->CurrentHover();
 	context.HoverPath3d = _hoverPath3d;
 	return context;
-}
-
-ActionResult Scene::_BeginBackgroundDrag(TouchAction action)
-{
-	_isSceneTouching = true;
-	_isSceneDragged = false;
-	_initTouchDownPosition = action.Position;
-	_initTouchCamPosition = _camera.ModelPosition();
-
-	ActionResult res;
-	res.IsEaten = true;
-	res.SourceId = "";
-	res.TargetId = "";
-	res.ResultType = ACTIONRESULT_DEFAULT;
-	res.Undo = std::shared_ptr<ActionUndo>();
-	res.ActiveElement = std::weak_ptr<GuiElement>();
-	return res;
-}
-
-ActionResult Scene::_UpdateBackgroundDrag(TouchMoveAction action)
-{
-	auto dPos = action.Position - _initTouchDownPosition;
-	_camera.SetModelPosition(_initTouchCamPosition - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0 });
-	SetSize(_sizeParams.Size);
-
-	_isSceneDragged = true;
-	return ActionResult::NoAction();
-}
-
-void Scene::_EndBackgroundDrag()
-{
-	_isSceneTouching = false;
 }
 
 void Scene::_ClearTimingState(bool clearTapTempo)

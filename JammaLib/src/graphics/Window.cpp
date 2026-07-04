@@ -545,6 +545,8 @@ ActionResult Window::OnAction(TouchAction touchAction)
 		break;
 	}
 
+	touchAction.MouseButtonsDown = _buttonsDown;
+
 	return _scene.OnAction(touchAction);
 }
 
@@ -987,7 +989,16 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 
 		TouchMoveAction touchAction;
 		touchAction.Touch = TouchAction::TOUCH_MOUSE;
+		if (0u != (window->_buttonsDown & (1u << 2)))
+			touchAction.Index = 2;
+		else if (0u != (window->_buttonsDown & (1u << 0)))
+			touchAction.Index = 0;
+		else if (0u != (window->_buttonsDown & (1u << 1)))
+			touchAction.Index = 1;
+		else
+			touchAction.Index = 0;
 		touchAction.Position = { x, winHeight - y };
+		touchAction.MouseButtonsDown = window->_buttonsDown;
 		touchAction.Modifiers = window->Modifiers();
 
 		window->OnAction(touchAction);
