@@ -210,3 +210,50 @@ ActionResult GuiScrollPanel::OnAction(TouchMoveAction action)
 
 	return ActionResult::NoAction();
 }
+
+bool GuiScrollPanel::RouteHitTest(Position2d localPos)
+{
+	if (!_isEnabled || !_isVisible)
+		return false;
+
+	return _HitTest(localPos);
+}
+
+std::shared_ptr<base::GuiElement> GuiScrollPanel::FindTopmostDescendant(Position2d localPos)
+{
+	if (!RouteHitTest(localPos))
+		return nullptr;
+
+	auto scrollBarLocal = _scrollBar->ParentToLocal(localPos);
+	auto scrollBarHit = _scrollBar->FindTopmostDescendant(scrollBarLocal);
+	if (scrollBarHit)
+		return scrollBarHit;
+
+	if (_content && _IsInViewport(localPos))
+	{
+		auto contentLocal = localPos;
+		contentLocal.Y += _scrollOffset;
+		contentLocal = _content->ParentToLocal(contentLocal);
+		auto contentHit = _content->FindTopmostDescendant(contentLocal);
+		if (contentHit)
+			return contentHit;
+	}
+
+	if (_guiParams.GuiPassThrough || !_HitTest(localPos))
+		return nullptr;
+
+	return std::static_pointer_cast<base::GuiElement>(shared_from_this());
+}
+
+bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
+{
+	const int minX = static_cast<int>(_ContentClipPadding);
+	const int minY = static_cast<int>(_ContentClipPadding);
+	const int maxX = std::max(minX, static_cast<int>(ViewportWidth()) - static_cast<int>(_ContentClipPadding));
+	const int maxY = std::max(minY, static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentClipPadding));
+
+	return (localPos.X >= minX)
+		&& (localPos.X < maxX)
+		&& (localPos.Y >= minY)
+		&& (localPos.Y < maxY);
+}

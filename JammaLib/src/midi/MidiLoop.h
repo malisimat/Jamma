@@ -187,7 +187,7 @@ namespace midi
 		const std::bitset<TotalNoteSlots>& HeldNotes() const noexcept { return _held; }
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
-		std::shared_ptr<MidiModel> Model() const noexcept { return _model; }
+		std::shared_ptr<MidiModel> Model() const noexcept;
 		bool UpdateModelFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		bool QueueModelUpdateFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
@@ -320,7 +320,7 @@ namespace midi
 		std::uint32_t _modelLengthSamps;
 		MidiLoopState _state;
 		std::bitset<TotalNoteSlots> _held;
-		std::shared_ptr<MidiModel> _model;
+		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;
 		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};

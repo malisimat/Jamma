@@ -144,7 +144,7 @@ namespace midi
 	struct MidiQuantisationSettings
 	{
 		bool Enabled = false;
-		MidiQuantisationFraction Fraction = MidiQuantisationFraction::Whole;
+		MidiQuantisationFraction Fraction = MidiQuantisationFraction::Quarter;
 		std::uint32_t GrainSamps = 0u;
 		// Take-local phase offset in samples. LoopTake composes this with inherited
 		// station/global offsets before publishing settings to MidiLoop.

@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <mutex>
 #include "../actions/ActionResult.h"
 #include "../base/GuiElement.h"
 #include "../graphics/VstEditorWindow.h"
@@ -38,6 +39,7 @@ namespace vst
 		static actions::ActionResult EatAction();
 
 	private:
+		mutable std::mutex _vstEditorWindowsMutex;
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 	};
 }

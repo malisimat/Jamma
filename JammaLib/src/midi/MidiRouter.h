@@ -79,6 +79,16 @@ namespace midi
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake);
+		actions::ActionResult HandleChannelOverrideKey(const actions::KeyAction& action,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
+
+		void StepChannelOverrideUp() noexcept;
+		void StepChannelOverrideDown() noexcept;
+		void ResetChannelOverride() noexcept;
+		void SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
+		std::uint8_t ForcedChannelOverride() const noexcept;
+		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept;
 
 		static bool IsAutomationRecordHeld() noexcept;
 
@@ -156,7 +166,10 @@ namespace midi
 		std::atomic<std::uint8_t> _learnedCC{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
+		std::atomic<std::uint8_t> _forcedInputChannelOverride{ 0u };
 		bool _automationRecordKeyHeld = false;
+		bool _channelOverridePageUpHeld = false;
+		bool _channelOverridePageDownHeld = false;
 		static std::atomic<bool> _automationRecordHeld;
 
 		// Highest editor-origin sequence already consumed by _ConsumeEditorAutomation.

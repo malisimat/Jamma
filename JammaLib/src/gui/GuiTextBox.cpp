@@ -201,6 +201,8 @@ void GuiTextBox::_NotifyReceiver(bool commit)
 {
 	auto receiver = _receiver.lock();
 	if (!receiver)
+		receiver = GetReceiver();
+	if (!receiver)
 		return;
 
 	GuiAction action;
@@ -208,6 +210,7 @@ void GuiTextBox::_NotifyReceiver(bool commit)
 	action.ElementType = GuiAction::ACTIONELEMENT_RACK; // generic text payload
 	action.Data = GuiAction::GuiString{ _text };
 	receiver->OnAction(action);
+	_receiver = receiver;
 }
 
 void GuiTextBox::_OnTextChanged()

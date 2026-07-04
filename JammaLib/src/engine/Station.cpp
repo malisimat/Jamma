@@ -84,6 +84,7 @@ Station::Station(StationParams params,
 	_loopTakes(),
 	_triggers(),
 	_backLoopTakes(),
+	_loopTakeSnapshot(nullptr),
 	_audioMixers(),
 	_backAudioMixers(),
 	_audioBuffers(),
@@ -97,6 +98,8 @@ Station::Station(StationParams params,
 	_vstPathsMutex(),
 	_vstPluginPaths(),
 	_liveMidiIngress(),
+	_allowedMidiChannels(),
+	_allowedMidiChannelMask(0u),
 	_midiVstRoutes(nullptr),
 	_retainedMidiVstRoutes(),
 	_sampleRate(44100.0f),
@@ -117,6 +120,7 @@ Station::Station(StationParams params,
 	SetNumBusChannels(_DefaultNumBusChannels);
 
 	_WireVuSliders();
+	_PublishLoopTakeSnapshot();
 	_PublishAudioState();
 }
 
@@ -134,6 +138,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
+	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -465,13 +470,13 @@ void Station::RebuildAutomationDispatch()
 	auto* buf = _automationDispatchBuf[back];
 	std::uint8_t count = 0u;
 
-	const auto& takes = GetLoopTakes();
+	const auto takes = GetLoopTakeSnapshot();
 	for (const auto& take : takes)
 	{
 		if (!take)
 			continue;
 
-		for (const auto& midiLoop : take->GetMidiLoops())
+		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 		{
 			if (!midiLoop)
 				continue;
@@ -510,7 +515,7 @@ std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared
 	if (!take)
 		return last;
 
-	for (const auto& loop : take->GetMidiLoops())
+	for (const auto& loop : take->GetMidiLoopSnapshot())
 	{
 		if (loop && loop->LoopLengthSamps() > 0u)
 			last = loop;
@@ -523,7 +528,7 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 	if (!plugin)
 		return nullptr;
 
-	const auto& takes = GetLoopTakes();
+	const auto takes = GetLoopTakeSnapshot();
 
 	// Take-level ownership: record into the owning take's last recorded loop.
 	for (const auto& take : takes)
@@ -709,7 +714,8 @@ ActionResult Station::OnAction(GuiAction action)
 	const bool isRackAction =
 		(action.ElementType == GuiAction::ACTIONELEMENT_RACK) ||
 		(action.ElementType == GuiAction::ACTIONELEMENT_ROUTER) ||
-		(action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE);
+		(action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE) ||
+		(action.ElementType == GuiAction::ACTIONELEMENT_MIDIQUANTISATION);
 
 	auto res = isRackAction ? ActionResult::NoAction() : GuiElement::OnAction(action);
 
@@ -721,6 +727,10 @@ ActionResult Station::OnAction(GuiAction action)
 
 	switch (action.ElementType)
 	{
+	case GuiAction::ACTIONELEMENT_MIDIQUANTISATION:
+		if (_receiver)
+			_receiver->OnAction(action);
+		break;
 	case GuiAction::ACTIONELEMENT_TOGGLE:
 		// Legacy: GuiRack handles toggles internally and does not forward them,
 		// so this case is not reached. _router is nullptr and would crash if called.
@@ -1037,6 +1047,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				_ArrangeChildren();
 				_flipTakeBuffer = true;
 				_changesMade = true;
+				_PublishLoopTakeSnapshot();
 			}
 		}
 
@@ -1085,6 +1096,7 @@ void Station::Reset()
 			_children.erase(child);
 	}
 	_loopTakes.clear();
+	_PublishLoopTakeSnapshot();
 
 	for (auto& trigger : _triggers)
 	{
@@ -1117,11 +1129,30 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetSelectDepth(CurrentSelectDepth());
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
+	take->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
 	_flipTakeBuffer = true;
 	_changesMade = true;
+	_PublishLoopTakeSnapshot();
+}
+
+std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
+{
+	std::vector<std::shared_ptr<LoopTake>> takes;
+	auto snapshot = _LoopTakeSnapshotState();
+	if (!snapshot)
+		return takes;
+
+	takes.reserve(snapshot->size());
+	for (const auto& weakTake : *snapshot)
+	{
+		if (auto take = weakTake.lock())
+			takes.push_back(std::move(take));
+	}
+
+	return takes;
 }
 
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
@@ -1186,6 +1217,24 @@ void Station::SetQuantisationOverlayAlpha(float alpha) noexcept
 		_quantisationModel->SetOverlayAlpha(_quantisationOverlayAlpha);
 	if (_quantisationDivisionModel)
 		_quantisationDivisionModel->SetOverlayAlpha(_quantisationOverlayAlpha);
+}
+
+void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept
+{
+	if (_globalMidiQuantState == state)
+		return;
+
+	_globalMidiQuantState = state;
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->SetGlobalMidiQuantState(state);
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->SetGlobalMidiQuantState(state);
+	}
 }
 
 void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept
@@ -1346,6 +1395,30 @@ void Station::SetLogging(const io::LoggingConfig& config) noexcept
 	}
 }
 
+void Station::ForceUnloadAllVstPlugins()
+{
+	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
+	_DrainVstChain(std::move(chain));
+	_DrainVstChain(std::move(_backVstChain));
+	_flipVstChain.store(false, std::memory_order_release);
+	_pendingVstLoads.clear();
+	_pendingVstUnloads.clear();
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		_vstPluginPaths.clear();
+	}
+	for (auto& take : _loopTakes)
+	{
+		if (take)
+			take->ForceUnloadAllVstPlugins();
+	}
+	for (auto& take : _backLoopTakes)
+	{
+		if (take)
+			take->ForceUnloadAllVstPlugins();
+	}
+}
+
 void Station::SetNumBusChannels(unsigned int chans)
 {
 	_backAudioBuffers.clear();
@@ -1494,6 +1567,46 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	return _triggers.empty();
 }
 
+bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
+{
+	const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
+	if (mask == 0u)
+		return true;
+
+	if (channel >= 16u)
+		return false;
+
+	const auto bit = static_cast<std::uint16_t>(1u << channel);
+	return (mask & bit) != 0u;
+}
+
+void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	std::vector<int> filtered;
+	filtered.reserve(channels.size());
+
+	std::uint16_t mask = 0u;
+	for (auto channel : channels)
+	{
+		if (channel < 1 || channel > 16)
+			continue;
+
+		const auto zeroBased = static_cast<std::uint8_t>(channel - 1);
+		const auto bit = static_cast<std::uint16_t>(1u << zeroBased);
+		if ((mask & bit) != 0u)
+			continue;
+
+		mask = static_cast<std::uint16_t>(mask | bit);
+		filtered.push_back(channel);
+	}
+
+	_allowedMidiChannels = std::move(filtered);
+	_allowedMidiChannelMask.store(mask, std::memory_order_release);
+
+	if (_guiRack)
+		_guiRack->SetAllowedMidiChannels(_allowedMidiChannels, true);
+}
+
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 {
 	// Synthetic events, like punch-in transitions, do not have a device name.
@@ -1502,6 +1615,12 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
 
 void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName)
 {
+	if (!deviceName.empty() && !AcceptsLiveMidiFromDevice(deviceName))
+		return;
+
+	if (!AcceptsLiveMidiChannel(event.Channel()))
+		return;
+
 	if (event.IsNoteOn() || event.IsNoteOff())
 	{
 		const auto channel = event.Channel();
@@ -1526,6 +1645,31 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 			upsert(deviceName);
 	}
 	_liveMidiIngress.Push(event);
+}
+
+void Station::FlushLiveHeldMidiNotes() noexcept
+{
+	midi::MidiNoteSnapshot heldSnapshot;
+	{
+		std::scoped_lock lock(_liveHeldMidiMutex);
+		auto liveHeld = std::find_if(_liveHeldMidi.begin(), _liveHeldMidi.end(),
+			[](const auto& pair) { return pair.first.empty(); });
+		if (liveHeld != _liveHeldMidi.end())
+			heldSnapshot = liveHeld->second;
+		_liveHeldMidi.clear();
+	}
+
+	if (heldSnapshot.Held.none())
+		return;
+
+	for (std::uint8_t ch = 0u; ch < 16u; ++ch)
+	{
+		for (std::uint8_t note = 0u; note < 128u; ++note)
+		{
+			if (heldSnapshot.Held.test(MidiNote::NoteSlot(ch, note)))
+				_liveMidiIngress.Push(MidiEvent::MakeNoteOff(0u, ch, note));
+		}
+	}
 }
 
 void Station::SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex)
@@ -1731,6 +1875,23 @@ std::shared_ptr<const Station::AudioState> Station::_AudioStateSnapshot() const
 	return _audioState.load(std::memory_order_acquire);
 }
 
+std::shared_ptr<const Station::LoopTakeSnapshot> Station::_LoopTakeSnapshotState() const
+{
+	return _loopTakeSnapshot.load(std::memory_order_acquire);
+}
+
+void Station::_PublishLoopTakeSnapshot()
+{
+	auto state = std::make_shared<LoopTakeSnapshot>();
+	const auto& takes = (_changesMade.load(std::memory_order_relaxed) && _flipTakeBuffer) ?
+		_backLoopTakes :
+		_loopTakes;
+	state->reserve(takes.size());
+	for (const auto& take : takes)
+		state->push_back(take);
+	_loopTakeSnapshot.store(std::move(state), std::memory_order_release);
+}
+
 void Station::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
@@ -1775,6 +1936,12 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 	rackParams.NumOutputChannels = 2;
 	rackParams.InitLevel = 1.0;
 	rackParams.InitState = gui::GuiRackParams::RACK_MASTER;
+	rackParams.AllowedMidiChannels = _allowedMidiChannels;
+	rackParams.OnAllowedMidiChannelsChanged =
+		[this](const std::vector<int>& channels)
+		{
+			SetAllowedMidiChannels(channels);
+		};
 
 	return rackParams;
 }
@@ -1829,10 +1996,12 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 {
+	FlushLiveHeldMidiNotes();
+
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
 	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
 	// drained by the audio thread on the next WriteBlock call.
-	for (const auto& midiLoop : take->GetMidiLoops())
+	for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 	{
 		if (!midiLoop)
 			continue;

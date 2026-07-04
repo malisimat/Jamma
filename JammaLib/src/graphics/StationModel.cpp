@@ -416,17 +416,8 @@ float StationModel::_ApplySoftDecay(float current, float target, float fallRate)
 
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
 {
-	if (_lastPass == base::PASS_PICKER)
-	{
-		if (_modelShaders.size() >= 2)
-			return _modelShaders[1];
-	}
-
-	// scene and highlight both use shaders[0]
-	if (!_modelShaders.empty())
-		return _modelShaders[0];
-
-	return {};
+	// Picker pass uses shaders[1]; scene/highlight both use shaders[0].
+	return GetShaderAt(_lastPass == base::PASS_PICKER ? 1u : 0u);
 }
 
 void StationModel::Draw3d(DrawContext& ctx,

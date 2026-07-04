@@ -188,10 +188,7 @@ std::weak_ptr<resources::ShaderResource> LoopModel::GetShader()
 		break;
 	}
 
-	if (_modelShaders.size() > shaderIndex)
-		return _modelShaders.at(shaderIndex);
-
-	return std::weak_ptr<resources::ShaderResource>();
+	return GetShaderAt(shaderIndex);
 }
 
 void LoopModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)

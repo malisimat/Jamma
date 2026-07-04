@@ -206,6 +206,36 @@ TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 	EXPECT_EQ(128u, plugin->BlockSamples);
 }
 
+TEST(StationMidiInstrument, LiveMidiAllowedChannelIsDelivered)
+{
+	auto station = MakeStation("station-live-allow");
+	auto plugin = AddPlugin(station, L"fake-live-allow.dll");
+	station->SetAllowedMidiChannels({ 2 });
+
+	auto event = MidiEvent::MakeNoteOn(32u, 1u, 61u, 100u);
+	station->EnqueueLiveMidiEvent(event, "Keys");
+
+	RenderStationBlock(station, 0u);
+
+	ASSERT_EQ(1u, plugin->Events.size());
+	EXPECT_EQ(event.status, plugin->Events[0].status);
+	EXPECT_EQ(event.data1, plugin->Events[0].data1);
+}
+
+TEST(StationMidiInstrument, LiveMidiDisallowedChannelAndNoteOffAreIgnored)
+{
+	auto station = MakeStation("station-live-ignore");
+	auto plugin = AddPlugin(station, L"fake-live-ignore.dll");
+	station->SetAllowedMidiChannels({ 1 });
+
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u), "Keys");
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(16u, 1u, 62u), "Keys");
+
+	RenderStationBlock(station, 0u);
+
+	EXPECT_TRUE(plugin->Events.empty());
+}
+
 TEST(StationMidiInstrument, SameLiveMidiInputCanPlayMultipleStations)
 {
 	auto stationA = MakeStation("station-a");

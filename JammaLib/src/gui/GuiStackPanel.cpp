@@ -70,6 +70,26 @@ void GuiStackPanel::Draw(base::DrawContext& ctx)
     GuiElement::Draw(ctx);
 }
 
+bool GuiStackPanel::RouteHitTest(utils::Position2d localPos)
+{
+    ComputeLayout();
+
+    if (GuiElement::RouteHitTest(localPos))
+        return true;
+
+    for (const auto& child : _children)
+    {
+        if (!child || !child->IsVisible() || !child->IsEnabled())
+            continue;
+
+        auto childLocal = child->ParentToLocal(localPos);
+        if (child->RouteHitTest(childLocal))
+            return true;
+    }
+
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Resource management
 // ---------------------------------------------------------------------------

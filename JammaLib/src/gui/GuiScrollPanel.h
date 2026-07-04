@@ -61,6 +61,8 @@ namespace gui
 		virtual void InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+		virtual bool RouteHitTest(utils::Position2d localPos) override;
+		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -69,6 +71,7 @@ namespace gui
 		unsigned int _ContentHeight() const;
 		void _UpdateMetrics();
 		void _ClampOffset();
+		bool _IsInViewport(utils::Position2d localPos) const;
 
 		static GuiScrollBarParams _MakeScrollBarParams(const GuiScrollPanelParams& params);
 

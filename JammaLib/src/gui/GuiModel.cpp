@@ -174,6 +174,42 @@ void GuiModel::_ReleaseResources()
 	_vertexArray = 0;
 }
 
+// ---------------------------------------------------------------------------
+// Thread-safe resource accessors
+// ---------------------------------------------------------------------------
+
+std::weak_ptr<resources::TextureResource> GuiModel::GetTexture()
+{
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	if (!_modelTextures.empty())
+		return _modelTextures.front();
+	return {};
+}
+
+std::weak_ptr<resources::ShaderResource> GuiModel::GetShader()
+{
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	if (!_modelShaders.empty())
+		return _modelShaders.front();
+	return {};
+}
+
+std::weak_ptr<resources::TextureResource> GuiModel::GetTextureAt(unsigned int index)
+{
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	if (index < _modelTextures.size())
+		return _modelTextures[index];
+	return {};
+}
+
+std::weak_ptr<resources::ShaderResource> GuiModel::GetShaderAt(unsigned int index)
+{
+	std::lock_guard<std::mutex> lock(_modelStateMutex);
+	if (index < _modelShaders.size())
+		return _modelShaders[index];
+	return {};
+}
+
 bool GuiModel::InitTextures(ResourceLib& resourceLib)
 {
 	bool result = true;

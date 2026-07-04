@@ -180,12 +180,18 @@ TEST(Vst2PluginFactory, DllExtensionCaseInsensitive)
 	EXPECT_FALSE(plugin->IsLoaded());
 }
 
-TEST(Vst2PluginHostCallback, ReportsOutboundMidiCapability)
+TEST(Vst2PluginHostCallback, ReportsCanonicalHostCanDoSet)
 {
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("supplyIdle"));
 	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstEvents"));
 	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstMidiEvent"));
-	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
-	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sendVstTimeInfo"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstEvents"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("receiveVstMidiEvent"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("supportShell"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("sizeWindow"));
+	EXPECT_TRUE(vst::Vst2Plugin::SupportsHostCanDo("shellCategory"));
+	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("sendVstMidiEventFlagIsRealtime"));
 	EXPECT_FALSE(vst::Vst2Plugin::SupportsHostCanDo("offline"));
 }
 

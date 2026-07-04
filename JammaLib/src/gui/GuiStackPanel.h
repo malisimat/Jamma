@@ -68,6 +68,7 @@ namespace gui
 		virtual void AddChild(std::shared_ptr<base::GuiElement> child) override;
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw(base::DrawContext& ctx) override;
+		virtual bool RouteHitTest(utils::Position2d localPos) override;
 
 		void InvalidateLayout();
 		void ComputeLayout();
