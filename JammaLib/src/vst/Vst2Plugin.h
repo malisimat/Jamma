@@ -145,7 +145,10 @@ namespace vst
 		// Host callback dispatched by the plugin back to us.
 		static VstIntPtr __cdecl HostCallback(AEffect* effect, VstInt32 opcode,
 			VstInt32 index, VstIntPtr value, void* ptr, float opt);
-			void DispatchPendingMidiEvents() noexcept;
+		void DispatchPendingMidiEvents() noexcept;
+		void _DispatchSpeakerArrangement();
+		static VstInt32 _SpeakerArrangementTypeForChannelCount(int32_t channelCount) noexcept;
+		static VstInt32 _SpeakerTypeForChannelIndex(int32_t channelIndex) noexcept;
 
 		// Instantiate the AEffect (VSTPluginMain), run effOpen, query name and
 		// channel counts, and pre-allocate scratch buffers. MUST run on the

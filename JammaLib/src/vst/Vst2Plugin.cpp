@@ -164,8 +164,8 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 			_name = "(unknown vst2)";
 	}
 
-	_inputChannels = (std::max)(1, static_cast<int32_t>(_effect->numInputs));
 	_outputChannels = (std::max)(1, static_cast<int32_t>(_effect->numOutputs));
+	_inputChannels = (std::max)((std::max)(1, static_cast<int32_t>(_effect->numInputs)), _outputChannels);
 
 	// Pre-allocate channel pointer arrays and scratch buffers so ProcessBlock
 	// never touches the heap.
@@ -261,34 +261,7 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	for (int32_t output = 0; output < _effect->numOutputs; ++output)
 		_effect->dispatcher(_effect, effConnectOutput, output, 1, nullptr, 0.0f);
 
-	if ((_effect->numInputs >= 0) && (_effect->numInputs <= 8)
-		&& (_effect->numOutputs >= 0) && (_effect->numOutputs <= 8))
-	{
-		auto arrangementTypeForChannels = [](int32_t channels) -> VstInt32
-		{
-			switch (channels)
-			{
-			case 0: return kSpeakerArrEmpty;
-			case 1: return kSpeakerArrMono;
-			case 2: return kSpeakerArrStereo;
-			default: return kSpeakerArrUserDefined;
-			}
-		};
-
-		VstSpeakerArrangement inputArrangement{};
-		inputArrangement.type = arrangementTypeForChannels(_effect->numInputs);
-		inputArrangement.numChannels = _effect->numInputs;
-
-		VstSpeakerArrangement outputArrangement{};
-		outputArrangement.type = arrangementTypeForChannels(_effect->numOutputs);
-		outputArrangement.numChannels = _effect->numOutputs;
-
-		_effect->dispatcher(_effect, effSetSpeakerArrangement,
-			0,
-			reinterpret_cast<VstIntPtr>(&inputArrangement),
-			&outputArrangement,
-			0.0f);
-	}
+	_DispatchSpeakerArrangement();
 
 	if ((_effect->flags & effFlagsCanDoubleReplacing) != 0)
 	{
@@ -389,6 +362,8 @@ void Vst2Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_midiEventCount = 0u;
+	_midiEventBlock.numEvents = 0;
 
 	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
 
@@ -443,6 +418,8 @@ void Vst2Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_midiEventCount = 0u;
+	_midiEventBlock.numEvents = 0;
 
 	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
 
@@ -492,6 +469,8 @@ void Vst2Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 		_inputChannelPtrs.data(),
 		_outputChannelPtrs.data(),
 		numSamples);
+	_midiEventCount = 0u;
+	_midiEventBlock.numEvents = 0;
 
 	_sampleFramePosition.fetch_add(numSamples, std::memory_order_relaxed);
 
@@ -591,8 +570,63 @@ void Vst2Plugin::DispatchPendingMidiEvents() noexcept
 		return;
 
 	_effect->dispatcher(_effect, effProcessEvents, 0, 0, &_midiEventBlock, 0.0f);
-	_midiEventCount = 0u;
-	_midiEventBlock.numEvents = 0;
+}
+
+void Vst2Plugin::_DispatchSpeakerArrangement()
+{
+	if (!_effect)
+		return;
+
+	auto makeArrangement = [](int32_t channelCount) -> std::vector<std::uint8_t>
+	{
+		channelCount = (std::max)(0, channelCount);
+		const auto extraChannels = (std::max)(0, channelCount - 8);
+		std::vector<std::uint8_t> storage(sizeof(VstSpeakerArrangement)
+			+ static_cast<size_t>(extraChannels) * sizeof(VstSpeakerProperties), 0u);
+		auto* arrangement = reinterpret_cast<VstSpeakerArrangement*>(storage.data());
+		arrangement->type = _SpeakerArrangementTypeForChannelCount(channelCount);
+		arrangement->numChannels = channelCount;
+
+		for (int32_t channel = 0; channel < channelCount; ++channel)
+			arrangement->speakers[channel].type = _SpeakerTypeForChannelIndex(channel);
+
+		return storage;
+	};
+
+	auto inputStorage = makeArrangement(_effect ? static_cast<int32_t>(_effect->numInputs) : 0);
+	auto outputStorage = makeArrangement(_effect ? static_cast<int32_t>(_effect->numOutputs) : 0);
+	auto* inputArrangement = reinterpret_cast<VstSpeakerArrangement*>(inputStorage.data());
+	auto* outputArrangement = reinterpret_cast<VstSpeakerArrangement*>(outputStorage.data());
+
+	_effect->dispatcher(_effect, effSetSpeakerArrangement, 0,
+		reinterpret_cast<VstIntPtr>(inputArrangement), outputArrangement, 0.0f);
+}
+
+VstInt32 Vst2Plugin::_SpeakerArrangementTypeForChannelCount(int32_t channelCount) noexcept
+{
+	switch (channelCount)
+	{
+	case 0: return kSpeakerArrEmpty;
+	case 1: return kSpeakerArrMono;
+	case 2: return kSpeakerArrStereo;
+	default: return kSpeakerArrUserDefined;
+	}
+}
+
+VstInt32 Vst2Plugin::_SpeakerTypeForChannelIndex(int32_t channelIndex) noexcept
+{
+	switch (channelIndex)
+	{
+	case 0: return kSpeakerL;
+	case 1: return kSpeakerR;
+	case 2: return kSpeakerC;
+	case 3: return kSpeakerLfe;
+	case 4: return kSpeakerLs;
+	case 5: return kSpeakerRs;
+	case 6: return kSpeakerLc;
+	case 7: return kSpeakerRc;
+	default: return kSpeakerUndefined;
+	}
 }
 #endif
 
@@ -690,7 +724,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		case audioMasterGetBlockSize:
 			return 512;
 		case audioMasterGetAutomationState:
-			return kVstAutomationRead;
+			return 1;
 		case audioMasterCanDo:
 			if (ptr && SupportsHostCanDo(static_cast<const char*>(ptr)))
 				return 1;
@@ -719,7 +753,7 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 	case audioMasterGetBlockSize:
 		return static_cast<VstIntPtr>(self->_blockSize);
 	case audioMasterGetAutomationState:
-		return kVstAutomationRead;
+		return 1;
 	case audioMasterGetTime:
 		if (self)
 		{
@@ -936,17 +970,77 @@ std::vector<std::uint8_t> Vst2Plugin::GetState() const
 void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 {
 #ifdef JAMMA_VST2_ENABLED
-	if (!_isLoaded || !_effect || blob.size() < 6)
+	if (!_isLoaded || !_effect)
 		return;
 
+	const std::vector<std::uint8_t>* stateBlob = &blob;
+
+	if (stateBlob->size() < 6)
+		return;
+
+	auto readBe32 = [](const std::uint8_t* bytes) -> std::uint32_t
+	{
+		return (static_cast<std::uint32_t>(bytes[0]) << 24)
+			| (static_cast<std::uint32_t>(bytes[1]) << 16)
+			| (static_cast<std::uint32_t>(bytes[2]) << 8)
+			| static_cast<std::uint32_t>(bytes[3]);
+	};
+
+	auto readLe32 = [](const std::uint8_t* bytes) -> std::uint32_t
+	{
+		return static_cast<std::uint32_t>(bytes[0])
+			| (static_cast<std::uint32_t>(bytes[1]) << 8)
+			| (static_cast<std::uint32_t>(bytes[2]) << 16)
+			| (static_cast<std::uint32_t>(bytes[3]) << 24);
+	};
+
+	auto matchesMagic = [](const std::uint8_t* bytes, const char* magic) noexcept
+	{
+		return bytes[0] == static_cast<std::uint8_t>(magic[0])
+			&& bytes[1] == static_cast<std::uint8_t>(magic[1])
+			&& bytes[2] == static_cast<std::uint8_t>(magic[2])
+			&& bytes[3] == static_cast<std::uint8_t>(magic[3]);
+	};
+
+	if (stateBlob->size() >= 160u && matchesMagic(stateBlob->data(), "CcnK"))
+	{
+		const auto* fxMagic = stateBlob->data() + 8u;
+		const bool isBankChunk = matchesMagic(fxMagic, "FBCh");
+		const bool isPresetChunk = matchesMagic(fxMagic, "FPCh");
+		if (isBankChunk || isPresetChunk)
+		{
+			const auto chunkSizeOffset = isBankChunk ? 156u : 56u;
+			const auto chunkOffset = chunkSizeOffset + 4u;
+			const auto chunkSize = readBe32(stateBlob->data() + chunkSizeOffset);
+			if (chunkSize > 0u && stateBlob->size() >= chunkOffset + static_cast<size_t>(chunkSize))
+			{
+				_effect->dispatcher(_effect, effSetChunk, isPresetChunk ? 1 : 0,
+					static_cast<VstIntPtr>(chunkSize),
+					const_cast<std::uint8_t*>(stateBlob->data() + chunkOffset),
+					0.0f);
+
+				if (!isPresetChunk)
+				{
+					const auto programCount = (std::max)(0, static_cast<int>(_effect->numPrograms));
+					for (int programIndex = 0; programIndex < programCount; ++programIndex)
+					{
+						char indexedProgramName[kVstMaxProgNameLen + 1] = {};
+						_effect->dispatcher(_effect, effGetProgramNameIndexed, programIndex, -1,
+							indexedProgramName, 0.0f);
+					}
+				}
+
+				char programName[kVstMaxProgNameLen + 1] = {};
+				_effect->dispatcher(_effect, effGetProgramNameIndexed, 0, -1, programName, 0.0f);
+				return;
+			}
+		}
+	}
+
 	// Unpack header
-	const std::uint8_t version  = blob[0];
-	const std::uint8_t typeFlag = blob[1];
-	const std::uint32_t payloadSize =
-		(static_cast<std::uint32_t>(blob[2]))       |
-		(static_cast<std::uint32_t>(blob[3]) << 8)  |
-		(static_cast<std::uint32_t>(blob[4]) << 16) |
-		(static_cast<std::uint32_t>(blob[5]) << 24);
+	const std::uint8_t version = (*stateBlob)[0];
+	const std::uint8_t typeFlag = (*stateBlob)[1];
+	const std::uint32_t payloadSize = readLe32(stateBlob->data() + 2u);
 
 	if (version != 0x01)
 	{
@@ -954,13 +1048,13 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 		return;
 	}
 
-	if (blob.size() < 6 + static_cast<size_t>(payloadSize))
+	if (stateBlob->size() < 6 + static_cast<size_t>(payloadSize))
 	{
 		std::cerr << "[Vst2Plugin] SetState: blob truncated" << std::endl;
 		return;
 	}
 
-	const std::uint8_t* payload = blob.data() + 6;
+	const std::uint8_t* payload = stateBlob->data() + 6;
 
 	if (typeFlag == 1)
 	{
@@ -969,6 +1063,17 @@ void Vst2Plugin::SetState(const std::vector<std::uint8_t>& blob)
 			static_cast<VstIntPtr>(payloadSize),
 			const_cast<void*>(static_cast<const void*>(payload)),
 			0.0f);
+
+		const auto programCount = (std::max)(0, static_cast<int>(_effect->numPrograms));
+		for (int programIndex = 0; programIndex < programCount; ++programIndex)
+		{
+			char indexedProgramName[kVstMaxProgNameLen + 1] = {};
+			_effect->dispatcher(_effect, effGetProgramNameIndexed, programIndex, -1,
+				indexedProgramName, 0.0f);
+		}
+
+		char programName[kVstMaxProgNameLen + 1] = {};
+		_effect->dispatcher(_effect, effGetProgramNameIndexed, 0, -1, programName, 0.0f);
 	}
 	else
 	{
