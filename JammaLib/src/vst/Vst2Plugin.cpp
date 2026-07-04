@@ -261,7 +261,24 @@ bool Vst2Plugin::Load(const std::wstring& path,
 	for (int32_t output = 0; output < _effect->numOutputs; ++output)
 		_effect->dispatcher(_effect, effConnectOutput, output, 1, nullptr, 0.0f);
 
-	_DispatchSpeakerArrangement();
+	VstSpeakerArrangement mono = {};
+	mono.type = kSpeakerArrMono;
+	mono.numChannels = 1;
+	mono.speakers[0].type = kSpeakerM;
+
+	VstSpeakerArrangement stereo = {};
+	stereo.type = kSpeakerArrStereo;
+	stereo.numChannels = 2;
+	stereo.speakers[0].type = kSpeakerL;
+	stereo.speakers[1].type = kSpeakerR;
+
+	auto* in = (_effect->numInputs == 1) ? &mono
+		: (_effect->numInputs == 2) ? &stereo : nullptr;
+	auto* out = (_effect->numOutputs == 1) ? &mono
+		: (_effect->numOutputs == 2) ? &stereo : nullptr;
+	if (in && out)
+		_effect->dispatcher(_effect, effSetSpeakerArrangement, 0,
+			reinterpret_cast<VstIntPtr>(in), out, 0.0f);
 
 	if ((_effect->flags & effFlagsCanDoubleReplacing) != 0)
 	{
@@ -570,63 +587,6 @@ void Vst2Plugin::DispatchPendingMidiEvents() noexcept
 		return;
 
 	_effect->dispatcher(_effect, effProcessEvents, 0, 0, &_midiEventBlock, 0.0f);
-}
-
-void Vst2Plugin::_DispatchSpeakerArrangement()
-{
-	if (!_effect)
-		return;
-
-	auto makeArrangement = [](int32_t channelCount) -> std::vector<std::uint8_t>
-	{
-		channelCount = (std::max)(0, channelCount);
-		const auto extraChannels = (std::max)(0, channelCount - 8);
-		std::vector<std::uint8_t> storage(sizeof(VstSpeakerArrangement)
-			+ static_cast<size_t>(extraChannels) * sizeof(VstSpeakerProperties), 0u);
-		auto* arrangement = reinterpret_cast<VstSpeakerArrangement*>(storage.data());
-		arrangement->type = _SpeakerArrangementTypeForChannelCount(channelCount);
-		arrangement->numChannels = channelCount;
-
-		for (int32_t channel = 0; channel < channelCount; ++channel)
-			arrangement->speakers[channel].type = _SpeakerTypeForChannelIndex(channel);
-
-		return storage;
-	};
-
-	auto inputStorage = makeArrangement(_effect ? static_cast<int32_t>(_effect->numInputs) : 0);
-	auto outputStorage = makeArrangement(_effect ? static_cast<int32_t>(_effect->numOutputs) : 0);
-	auto* inputArrangement = reinterpret_cast<VstSpeakerArrangement*>(inputStorage.data());
-	auto* outputArrangement = reinterpret_cast<VstSpeakerArrangement*>(outputStorage.data());
-
-	_effect->dispatcher(_effect, effSetSpeakerArrangement, 0,
-		reinterpret_cast<VstIntPtr>(inputArrangement), outputArrangement, 0.0f);
-}
-
-VstInt32 Vst2Plugin::_SpeakerArrangementTypeForChannelCount(int32_t channelCount) noexcept
-{
-	switch (channelCount)
-	{
-	case 0: return kSpeakerArrEmpty;
-	case 1: return kSpeakerArrMono;
-	case 2: return kSpeakerArrStereo;
-	default: return kSpeakerArrUserDefined;
-	}
-}
-
-VstInt32 Vst2Plugin::_SpeakerTypeForChannelIndex(int32_t channelIndex) noexcept
-{
-	switch (channelIndex)
-	{
-	case 0: return kSpeakerL;
-	case 1: return kSpeakerR;
-	case 2: return kSpeakerC;
-	case 3: return kSpeakerLfe;
-	case 4: return kSpeakerLs;
-	case 5: return kSpeakerRs;
-	case 6: return kSpeakerLc;
-	case 7: return kSpeakerRc;
-	default: return kSpeakerUndefined;
-	}
 }
 #endif
 
