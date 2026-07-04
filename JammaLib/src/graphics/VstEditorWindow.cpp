@@ -121,11 +121,11 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	// hbrBackground=nullptr prevents Win32 from filling the client area with a
 	// colour brush, which would paint over the plugin's child window content.
 	{
-		WNDCLASSEX existing{};
+		WNDCLASSEXW existing{};
 		existing.cbSize = sizeof(existing);
-		if (!GetClassInfoEx(hInstance, _ClassName, &existing))
+		if (!GetClassInfoExW(hInstance, _ClassName, &existing))
 		{
-			WNDCLASSEX wcex{};
+			WNDCLASSEXW wcex{};
 			wcex.cbSize = sizeof(wcex);
 			wcex.style = CS_DBLCLKS;
 			wcex.lpfnWndProc = VstEditorWindow::WindowProcedure;
@@ -133,7 +133,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 			wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
 			wcex.hbrBackground = nullptr;
 			wcex.lpszClassName = _ClassName;
-			if (!RegisterClassEx(&wcex))
+			if (!RegisterClassExW(&wcex))
 			{
 				_plugin.reset();
 				return false;
@@ -146,7 +146,7 @@ bool VstEditorWindow::Create(HINSTANCE hInstance,
 	constexpr DWORD kEditorStyle =
 		WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
-	HWND wnd = CreateWindowEx(
+	HWND wnd = CreateWindowExW(
 		0,
 		_ClassName,
 		title.c_str(),
