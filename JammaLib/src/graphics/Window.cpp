@@ -35,6 +35,9 @@ Window::Window(Scene& scene,
 	_released(false),
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
+	_hover3dDirty(true),
+	_cachedCursorPosition(std::nullopt),
+	_cachedCursorModifiers(Action::MODIFIER_NONE),
 	_pendingResize(std::nullopt),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
@@ -366,6 +369,33 @@ Action::Modifiers Window::Modifiers() const
 	return _modifiers;
 }
 
+void Window::ClearModifiers()
+{
+	// Dispatch synthetic key-up events for any modifier we still believe is
+	// held. Routing them through the normal action path resets both the
+	// modifier bitmask and any scene state keyed off those releases (e.g. the
+	// Ctrl quantisation overlay), instead of leaving them stuck.
+	struct ModifierKey { Action::Modifiers Flag; unsigned int KeyChar; };
+	static const ModifierKey modifierKeys[] = {
+		{ Action::MODIFIER_SHIFT, 16 },
+		{ Action::MODIFIER_CTRL, 17 },
+		{ Action::MODIFIER_ALT, 18 }
+	};
+
+	for (const auto& mk : modifierKeys)
+	{
+		if (_modifiers & mk.Flag)
+		{
+			KeyAction keyAction;
+			keyAction.KeyChar = mk.KeyChar;
+			keyAction.KeyActionType = KeyAction::KEY_UP;
+			OnAction(keyAction);
+		}
+	}
+
+	_modifiers = Action::MODIFIER_NONE;
+}
+
 bool Window::IsTrackingMouse() const
 {
 	return _trackingMouse;
@@ -386,6 +416,7 @@ void Window::Resize(Size2d size)
 	_config.Size = size;
 	_scene.SetSize(size);
 	_lastHoverObjectId = 0;
+	_hover3dDirty = true;
 	_pendingResize = size;
 }
 
@@ -435,6 +466,21 @@ void Window::Render()
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
 	_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+
+	if (_hover3dDirty && _cachedCursorPosition.has_value())
+	{
+		auto objectId = _pickContext->GetPixel(_cachedCursorPosition.value());
+		if (objectId != _lastHoverObjectId)
+		{
+			auto path = utils::IdToVec(objectId);
+			_scene.SetHover3d(path, _cachedCursorModifiers);
+			_lastHoverObjectId = objectId;
+		}
+
+		_hover3dDirty = false;
+	}
+
+	_scene.ResolveDeferredHover();
 
 	// Save the picker render to bmp:
 	// std::vector<unsigned char> data = _pickContext->GetTexture();
@@ -550,14 +596,9 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
 {
-	auto objectId = _pickContext->GetPixel({ touchAction.Position.X, touchAction.Position.Y });
-	if (objectId != _lastHoverObjectId)
-	{
-		auto path = utils::IdToVec(objectId);
-		_scene.SetHover3d(path, touchAction.Modifiers);
-
-		_lastHoverObjectId = objectId;
-	}
+	_cachedCursorPosition = touchAction.Position;
+	_cachedCursorModifiers = touchAction.Modifiers;
+	_hover3dDirty = true;
 
 	return _scene.OnAction(touchAction);
 }
@@ -1126,6 +1167,16 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		keyAction.Modifiers = window->Modifiers();
 
 		window->OnAction(keyAction);
+		return 0;
+	}
+	case WM_KILLFOCUS:
+	{
+		// Key-up events for held modifiers (e.g. Ctrl/Shift) are delivered to
+		// whichever window has focus. When focus moves to a child or external
+		// window (such as a VST editor) those key-ups never reach us, leaving
+		// the modifier bitmask stuck. Clear it on focus loss so subsequent
+		// clicks aren't treated as modified gestures.
+		window->ClearModifiers();
 		return 0;
 	}
 	case WM_DESTROY:

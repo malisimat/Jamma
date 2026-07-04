@@ -285,10 +285,7 @@ void MidiModel::ApplyPendingModelUpdate()
 
 std::weak_ptr<resources::ShaderResource> MidiModel::GetShader()
 {
-	if (!_modelShaders.empty())
-		return _modelShaders.front();
-
-	return std::weak_ptr<resources::ShaderResource>();
+	return GetShaderAt(0u);
 }
 
 void MidiModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)

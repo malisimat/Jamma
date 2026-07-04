@@ -587,6 +587,17 @@ void Loop::SetVisualUpdatesEnabled(bool enabled)
 	_visualUpdatesEnabled = enabled;
 }
 
+void Loop::ForceUnloadAllVstPlugins()
+{
+	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
+	DrainVstChain(std::move(chain));
+	DrainVstChain(std::move(_backVstChain));
+	_flipVstChain.store(false, std::memory_order_release);
+	_pendingVstLoads.clear();
+	_pendingVstUnloads.clear();
+	_vstPluginPaths.clear();
+}
+
 bool Loop::Load(const io::WavReadWriter& readWriter)
 {
 	auto loadOpt = readWriter.Read(utils::DecodeUtf8(_loopParams.Wav), constants::MaxLoopBufferSize);

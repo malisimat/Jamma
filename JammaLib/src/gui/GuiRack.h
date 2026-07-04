@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include "GuiSlider.h"
 #include "GuiToggle.h"
 #include "GuiRouter.h"
@@ -25,7 +26,9 @@ namespace gui
 			NumOutputChannels(0),
 			InitLevel(1.0),
 			InitState(RACK_MASTER),
-			Receiver(std::weak_ptr<base::ActionReceiver>())
+			Receiver(std::weak_ptr<base::ActionReceiver>()),
+			AllowedMidiChannels(),
+			OnAllowedMidiChannelsChanged()
 		{}
 
 		GuiRackParams(base::GuiElementParams params,
@@ -37,7 +40,9 @@ namespace gui
 			NumOutputChannels(numOutputs),
 			InitLevel(1.0),
 			InitState(RACK_MASTER),
-			Receiver(receiver)
+			Receiver(receiver),
+			AllowedMidiChannels(),
+			OnAllowedMidiChannelsChanged()
 		{}
 
 	public:
@@ -46,6 +51,8 @@ namespace gui
 		double InitLevel;
 		RackState InitState;
 		std::weak_ptr<base::ActionReceiver> Receiver;
+		std::vector<int> AllowedMidiChannels;
+		std::function<void(const std::vector<int>&)> OnAllowedMidiChannelsChanged;
 	};
 
 	class GuiRack :
@@ -56,6 +63,7 @@ namespace gui
 
 	public:
 		static constexpr unsigned int RackStateNotificationIndex = ~0u;
+		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
 
 		virtual void SetSize(utils::Size2d size) override;
 
@@ -69,6 +77,7 @@ namespace gui
 		void SetNumOutputChannels(unsigned int channels);
 		void AddRoute(unsigned int inputChan, unsigned int outputChan);
 		void ClearRoutes();
+		void SetAllowedMidiChannels(const std::vector<int>& channels, bool bypassUpdates);
 
 		std::shared_ptr<gui::GuiSlider> GetMasterSlider() const;
 		std::shared_ptr<gui::GuiSlider> GetChannelSlider(unsigned int index) const;
@@ -82,6 +91,9 @@ namespace gui
 		static const unsigned int _RouterTogglePaddingBottom;
 		static const utils::Size2d _DragGap;
 		static const utils::Size2d _DragSize;
+		static const utils::Size2d _MidiChannelToggleSize;
+		static const utils::Size2d _MidiChannelToggleGap;
+		static const unsigned int _MidiChannelPanelPadding;
 
 		virtual void _InitReceivers() override;
 
@@ -107,6 +119,8 @@ namespace gui
 		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<base::GuiElement> _routerPanel;
 		std::shared_ptr<gui::GuiRouter> _router;
+		std::shared_ptr<base::GuiElement> _midiChannelPanel;
+		std::vector<std::shared_ptr<gui::GuiToggle>> _midiChannelToggles;
 		GuiRackParams _rackParams;
 	};
 }

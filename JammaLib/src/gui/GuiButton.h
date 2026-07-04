@@ -2,6 +2,7 @@
 
 #include <memory>
 #include "GuiElement.h"
+#include "GuiLabel.h"
 #include "ActionReceiver.h"
 
 namespace gui
@@ -13,6 +14,7 @@ namespace gui
 		static constexpr unsigned int DefaultWidth = 102u;
 		static constexpr unsigned int DefaultHeight = 34u;
 		static constexpr unsigned int DefaultMinWidth = 36u;
+		static constexpr unsigned int DefaultTextPadding = 10u;
 
 		GuiButtonParams() :
 			base::GuiElementParams(0, DrawableParams{ "" },
@@ -43,6 +45,10 @@ namespace gui
 			params.MinSize = { DefaultMinWidth, DefaultHeight };
 			return params;
 		}
+
+	public:
+		std::string Text;
+		unsigned int TextPadding = DefaultTextPadding;
 	};
 
 	class GuiButton :
@@ -50,8 +56,12 @@ namespace gui
 	{
 	public:
 		GuiButton(GuiButtonParams guiParams);
+		virtual void SetSize(utils::Size2d size) override;
 
 	private:
+		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);
+
 		GuiButtonParams _buttonParams;
+		std::shared_ptr<GuiLabel> _label;
 	};
 }

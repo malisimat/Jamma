@@ -33,9 +33,24 @@ using gui::GuiScrollPanelParams;
 using actions::KeyAction;
 using actions::TouchAction;
 using actions::TouchMoveAction;
+using actions::GuiAction;
 
 namespace
 {
+	class RecordingGuiReceiver : public base::ActionReceiver
+	{
+	public:
+		actions::ActionResult OnAction(actions::GuiAction action) override
+		{
+			LastAction = action;
+			ActionCount++;
+			return actions::ActionResult::NoAction();
+		}
+
+		int ActionCount = 0;
+		std::optional<actions::GuiAction> LastAction;
+	};
+
 	static GuiButtonParams MakeSizedButton(utils::Position2d pos, utils::Size2d size)
 	{
 		GuiButtonParams p;
@@ -339,6 +354,24 @@ TEST(GuiTextBox, UnfocusedIgnoresKeys) {
 
 	EXPECT_FALSE(res.IsEaten);
 	EXPECT_EQ("", tb->Text());
+}
+
+TEST(GuiTextBox, LateBoundReceiverGetsNotifications) {
+	GuiTextBoxParams tp;
+	tp.Size = { 80, 24 };
+	tp.MinSize = { 80, 24 };
+	tp.Index = 17u;
+	auto tb = std::make_shared<GuiTextBox>(tp);
+	auto receiver = std::make_shared<RecordingGuiReceiver>();
+	tb->SetReceiver(receiver);
+
+	tb->SetText("23", true);
+
+	ASSERT_EQ(1, receiver->ActionCount);
+	ASSERT_TRUE(receiver->LastAction.has_value());
+	EXPECT_EQ(17u, receiver->LastAction->Index);
+	EXPECT_EQ(GuiAction::ACTIONELEMENT_RACK, receiver->LastAction->ElementType);
+	EXPECT_EQ("23", std::get<GuiAction::GuiString>(receiver->LastAction->Data).Value);
 }
 
 // ---------------------------------------------------------------------------

@@ -289,11 +289,17 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 
 void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
 {
-	_model = std::move(model);
-	if (_model)
-		_model->SetAutomationSource(this);
+	auto publishedModel = std::move(model);
+	if (publishedModel)
+		publishedModel->SetAutomationSource(this);
+	_model.store(std::move(publishedModel), std::memory_order_release);
 	_modelRevision = 0u;
 	_modelLengthSamps = 0u;
+}
+
+std::shared_ptr<graphics::MidiModel> MidiLoop::Model() const noexcept
+{
+	return _model.load(std::memory_order_acquire);
 }
 
 bool MidiLoop::UpdateModelFromEvents(std::uint32_t displayLengthSamps, bool force)
@@ -308,7 +314,8 @@ bool MidiLoop::QueueModelUpdateFromEvents(std::uint32_t displayLengthSamps, bool
 
 bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force, bool queueUpdate)
 {
-	if (!_model)
+	auto model = Model();
+	if (!model)
 		return false;
 
 	const auto modelLength = (MidiLoopState::Playing == _state && _loopLengthSamps > 0u) ?
@@ -363,9 +370,9 @@ bool MidiLoop::BuildModelFromEvents(std::uint32_t displayLengthSamps, bool force
 
 	auto spans = MidiNote::ExtractSpans(eventSource, _eventCount, effectiveLength);
 	if (queueUpdate && !force)
-		_model->QueueModelUpdate(spans, effectiveLength);
+		model->QueueModelUpdate(spans, effectiveLength);
 	else
-		_model->UpdateModel(spans, effectiveLength);
+		model->UpdateModel(spans, effectiveLength);
 	_modelRevision = _revision;
 	_modelLengthSamps = effectiveLength;
 

@@ -15,16 +15,23 @@ namespace vst
 
 	void VstEditorWindowManager::CloseAllVstEditorWindows()
 	{
-		for (auto& window : _vstEditorWindows)
+		std::vector<std::unique_ptr<graphics::VstEditorWindow>> windows;
+		{
+			std::scoped_lock lock(_vstEditorWindowsMutex);
+			windows = std::move(_vstEditorWindows);
+			_vstEditorWindows.clear();
+		}
+
+		for (auto& window : windows)
 		{
 			if (window)
 				window->Destroy();
 		}
-		_vstEditorWindows.clear();
 	}
 
 	void VstEditorWindowManager::PruneClosedVstEditorWindows()
 	{
+		std::scoped_lock lock(_vstEditorWindowsMutex);
 		_vstEditorWindows.erase(std::remove_if(_vstEditorWindows.begin(), _vstEditorWindows.end(), [](const std::unique_ptr<graphics::VstEditorWindow>& window) {
 			return !window || !window->IsOpen();
 		}), _vstEditorWindows.end());
@@ -131,20 +138,23 @@ namespace vst
 		if (!plugin || !plugin->IsLoaded())
 			return false;
 
-		for (const auto& window : _vstEditorWindows)
 		{
-			if (!window || !window->IsOpen())
-				continue;
-
-			if (window->Plugin().get() == plugin.get())
+			std::scoped_lock lock(_vstEditorWindowsMutex);
+			for (const auto& window : _vstEditorWindows)
 			{
-				if (const auto hwnd = window->EditorHwnd())
+				if (!window || !window->IsOpen())
+					continue;
+
+				if (window->Plugin().get() == plugin.get())
 				{
-					if (IsIconic(hwnd))
-						ShowWindow(hwnd, SW_RESTORE);
-					SetForegroundWindow(hwnd);
+					if (const auto hwnd = window->EditorHwnd())
+					{
+						if (IsIconic(hwnd))
+							ShowWindow(hwnd, SW_RESTORE);
+						SetForegroundWindow(hwnd);
+					}
+					return true;
 				}
-				return true;
 			}
 		}
 
@@ -153,7 +163,29 @@ namespace vst
 		if (!window->Create(hInstance, plugin))
 			return false;
 
-		_vstEditorWindows.push_back(std::move(window));
+		{
+			std::scoped_lock lock(_vstEditorWindowsMutex);
+			for (const auto& existingWindow : _vstEditorWindows)
+			{
+				if (!existingWindow || !existingWindow->IsOpen())
+					continue;
+
+				if (existingWindow->Plugin().get() == plugin.get())
+				{
+					if (const auto hwnd = existingWindow->EditorHwnd())
+					{
+						if (IsIconic(hwnd))
+							ShowWindow(hwnd, SW_RESTORE);
+						SetForegroundWindow(hwnd);
+					}
+
+					window->Destroy();
+					return true;
+				}
+			}
+
+			_vstEditorWindows.push_back(std::move(window));
+		}
 		return true;
 	}
 

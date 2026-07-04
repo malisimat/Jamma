@@ -174,6 +174,16 @@ TEST(GuiButton, ZeroSizedButtonNeverEatsTouch) {
 	ASSERT_FALSE(button->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 1, 1 })).IsEaten);
 }
 
+TEST(GuiButton, TextCreatesLabelChild) {
+	auto params = MakeButtonParams();
+	params.Text = "Play";
+
+	auto button = std::make_shared<GuiButton>(params);
+	button->Init();
+
+	ASSERT_NE(nullptr, button->TryGetChild(0));
+}
+
 TEST(GuiToggle, TouchUpFlipsStateAndNotifiesReceiver) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
 	auto receiver = std::make_shared<MockedGuiReceiver>();

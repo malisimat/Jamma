@@ -183,6 +183,76 @@ bool GuiElement::HitTest(Position2d localPos)
 	return _HitTest(localPos);
 }
 
+bool GuiElement::RouteHitTest(Position2d localPos)
+{
+	if (!_isEnabled || !_isVisible)
+		return false;
+
+	return _HitTest(localPos) || _ChildRectHitTest(localPos);
+}
+
+std::shared_ptr<GuiElement> GuiElement::FindTopmostImmediateChild(Position2d localPos,
+	Position2d& childLocalPos)
+{
+	for (auto child = _children.rbegin(); child != _children.rend(); ++child)
+	{
+		if (!*child)
+			continue;
+
+		auto local = (*child)->ParentToLocal(localPos);
+		if (!(*child)->RouteHitTest(local))
+			continue;
+
+		childLocalPos = local;
+		return *child;
+	}
+
+	return nullptr;
+}
+
+std::shared_ptr<GuiElement> GuiElement::FindTopmostDescendant(Position2d localPos)
+{
+	if (!RouteHitTest(localPos))
+		return nullptr;
+
+	auto local = localPos;
+	auto current = shared_from_this();
+	if (!current)
+		return nullptr;
+
+	while (current)
+	{
+		auto nextLocal = local;
+		auto next = current->FindTopmostImmediateChild(local, nextLocal);
+		if (!next)
+			break;
+
+		current = next;
+		local = nextLocal;
+	}
+
+	if (!current->_HitTest(local) || current->_guiParams.GuiPassThrough)
+		return nullptr;
+
+	return current;
+}
+
+void GuiElement::ApplyHoverPoint(Position2d localPos)
+{
+	ApplyHoverState(_HitTest(localPos));
+}
+
+void GuiElement::ApplyHoverState(bool inside)
+{
+	if (!_isEnabled || !_isVisible || _guiParams.GuiPassThrough)
+		return;
+
+	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
+		_state = inside ? STATE_DOWN : STATE_OUT;
+	else
+		_state = inside ? STATE_OVER : STATE_NORMAL;
+}
+
 std::vector<JobAction> GuiElement::CommitChanges()
 {
 	std::vector<JobAction> jobList = {};
@@ -380,16 +450,7 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 	if (_guiParams.GuiPassThrough)
 		return ActionResult::NoAction();
 
-	if ((STATE_DOWN == _state) || (STATE_OUT == _state))
-	{
-		_state = HitTest(action.Position) ?
-			STATE_DOWN : STATE_OUT;
-	}
-	else
-	{
-		_state = HitTest(action.Position) ?
-			STATE_OVER : STATE_NORMAL;
-	}
+	ApplyHoverPoint(action.Position);
 
 	return ActionResult::NoAction();
 }
@@ -397,6 +458,11 @@ ActionResult GuiElement::OnAction(TouchMoveAction action)
 void GuiElement::SetParent(std::shared_ptr<GuiElement> parent)
 {
 	_parent = parent;
+}
+
+std::shared_ptr<GuiElement> GuiElement::Parent() const
+{
+	return _parent;
 }
 
 TouchAction GuiElement::GlobalToLocal(actions::TouchAction action)
@@ -567,6 +633,21 @@ void GuiElement::_ReleaseResources()
 std::vector<JobAction> GuiElement::_CommitChanges()
 {
 	return {};
+}
+
+bool GuiElement::_ChildRectHitTest(Position2d localPos) const
+{
+	for (const auto& child : _children)
+	{
+		if (!child || !child->IsVisible() || !child->IsEnabled())
+			continue;
+
+		auto childLocal = child->ParentToLocal(localPos);
+		if (Size2d::RectTest(child->GetSize(), childLocal))
+			return true;
+	}
+
+	return false;
 }
 
 bool GuiElement::_HitTest(Position2d localPos)

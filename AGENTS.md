@@ -48,6 +48,7 @@ Prefer modern C++ and functional style where practical.
 - Keep callback and hot-path code allocation-free, exception-free, and lock-free.
 - Prefer value semantics, explicit inputs/outputs, isolated side effects, and RAII-friendly standard library types when performance allows.
 - Avoid hidden global mutable state, raw owning pointers, and exception-driven control flow in real-time paths.
+- For cross-thread state and container access, prefer the existing published immutable snapshot pattern; do not introduce a different synchronization scheme when that pattern fits.
 - Detailed real-time rules and hot-path review guidance live in doc/realtime-audio.md.
 
 ## Change Expectations
