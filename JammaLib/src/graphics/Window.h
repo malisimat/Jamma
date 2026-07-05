@@ -115,6 +115,7 @@ namespace graphics
 		unsigned int _buttonsDown;
 		unsigned int _lastHoverObjectId;
 		bool _hover3dDirty;
+		bool _forcePick;
 		std::optional<utils::Position2d> _cachedCursorPosition;
 		base::Action::Modifiers _cachedCursorModifiers;
 		std::optional<utils::Size2d> _pendingResize;

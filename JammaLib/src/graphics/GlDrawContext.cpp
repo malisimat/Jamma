@@ -9,7 +9,10 @@ GlDrawContext::GlDrawContext(Size2d size,
 	ContextTarget target) :
 	DrawContext(size, target),
 	_frameBuffer(0u),
-	_texture(0u)
+	_texture(0u),
+	_pickReadbackPbos{ 0u, 0u },
+	_pickReadbackIndex(0u),
+	_pickReadbackPrimed(false)
 {
 }
 
@@ -26,6 +29,19 @@ GlDrawContext::~GlDrawContext()
 		GlDeleteQueue::DeleteFramebuffers(1, &_frameBuffer);
 		_frameBuffer = 0u;
 	}
+
+	if (PICKING == _target)
+	{
+		if (_pickReadbackPbos[0])
+			GlDeleteQueue::DeleteBuffers(1, &_pickReadbackPbos[0]);
+		if (_pickReadbackPbos[1])
+			GlDeleteQueue::DeleteBuffers(1, &_pickReadbackPbos[1]);
+
+		_pickReadbackPbos[0] = 0u;
+		_pickReadbackPbos[1] = 0u;
+		_pickReadbackIndex = 0u;
+		_pickReadbackPrimed = false;
+	}
 }
 
 void GlDrawContext::Initialise()
@@ -40,6 +56,19 @@ void GlDrawContext::Initialise()
 	{
 		GlDeleteQueue::DeleteFramebuffers(1, &_frameBuffer);
 		_frameBuffer = 0u;
+	}
+
+	if (PICKING == _target)
+	{
+		if (_pickReadbackPbos[0])
+			GlDeleteQueue::DeleteBuffers(1, &_pickReadbackPbos[0]);
+		if (_pickReadbackPbos[1])
+			GlDeleteQueue::DeleteBuffers(1, &_pickReadbackPbos[1]);
+
+		_pickReadbackPbos[0] = 0u;
+		_pickReadbackPbos[1] = 0u;
+		_pickReadbackIndex = 0u;
+		_pickReadbackPrimed = false;
 	}
 
 	_frameBuffer = _CreateFrameBuffer(_size, _target);
@@ -59,6 +88,19 @@ void GlDrawContext::Initialise()
 	glBindTexture(GL_TEXTURE_2D, 0);
 
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _texture, 0);
+
+	if (PICKING == _target)
+	{
+		glGenBuffers(2, _pickReadbackPbos);
+		for (auto pbo : _pickReadbackPbos)
+		{
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+			glBufferData(GL_PIXEL_PACK_BUFFER, 4u, nullptr, GL_STREAM_READ);
+		}
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0u);
+		_pickReadbackIndex = 0u;
+		_pickReadbackPrimed = false;
+	}
 
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -136,6 +178,54 @@ unsigned int GlDrawContext::GetPixel(utils::Position2d pos)
 	}
 
 	return objectId;
+}
+
+GlDrawContext::PixelReadback GlDrawContext::GetPixelAsync(utils::Position2d pos)
+{
+	if (SCREEN == _target)
+		return {};
+
+	if (PICKING != _target)
+		return { true, GetPixel(pos) };
+
+	if (pos.X < 0 || ((unsigned int)pos.X) >= _size.Width ||
+		pos.Y < 0 || ((unsigned int)pos.Y) >= _size.Height)
+	{
+		_pickReadbackPrimed = false;
+		return {};
+	}
+
+	PixelReadback res{};
+	const unsigned int writeIndex = _pickReadbackIndex & 1u;
+	const unsigned int readIndex = (writeIndex + 1u) & 1u;
+
+	glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
+
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, _pickReadbackPbos[writeIndex]);
+	glReadPixels(pos.X, pos.Y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+	if (_pickReadbackPrimed)
+	{
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, _pickReadbackPbos[readIndex]);
+		auto mapped = static_cast<const GLubyte*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY));
+		if (mapped)
+		{
+			res.HasValue = true;
+			res.ObjectId = utils::VecToId({
+				static_cast<unsigned int>(mapped[0]),
+				static_cast<unsigned int>(mapped[1]),
+				static_cast<unsigned int>(mapped[2]),
+				static_cast<unsigned int>(mapped[3]) });
+			glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+		}
+	}
+
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0u);
+
+	_pickReadbackIndex = readIndex;
+	_pickReadbackPrimed = true;
+
+	return res;
 }
 
 const std::vector<unsigned char> GlDrawContext::GetPixels() const
