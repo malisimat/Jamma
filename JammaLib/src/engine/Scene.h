@@ -219,7 +219,7 @@ namespace engine
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
-		void ResolveDeferredHover();
+		void ApplyDeferredHoverUpdates();
 
 		// Returns a locked snapshot of the current station list.  Always use
 		// this when reading _stations from outside the render/tick thread (e.g.

@@ -480,7 +480,7 @@ void Window::Render()
 		_hover3dDirty = false;
 	}
 
-	_scene.ResolveDeferredHover();
+	_scene.ApplyDeferredHoverUpdates();
 
 	// Save the picker render to bmp:
 	// std::vector<unsigned char> data = _pickContext->GetTexture();

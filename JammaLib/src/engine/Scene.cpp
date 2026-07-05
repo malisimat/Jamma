@@ -1232,8 +1232,9 @@ void Scene::CommitChanges()
 		_InvalidateHover2d();
 }
 
-void Scene::ResolveDeferredHover()
+void Scene::ApplyDeferredHoverUpdates()
 {
+	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
 	if (!_hover2dDirty)
 		return;
 
@@ -1255,6 +1256,8 @@ void Scene::ResolveDeferredHover()
 
 	auto nextPath = _ResolveHoverPath2d();
 	_ApplyHoverPath2d(nextPath);
+
+	bool stationHoverPromotedFrom2d = false;
 
 	if (!nextPath.empty())
 	{
@@ -1287,7 +1290,17 @@ void Scene::ResolveDeferredHover()
 				isSelected,
 				tweakState);
 			_UpdateSelection(ACTIONRESULT_DEFAULT);
+			stationHoverPromotedFrom2d = true;
 		}
+	}
+
+	if (!stationHoverPromotedFrom2d && _hoverPath3d.empty() && !_selector->CurrentHover().empty())
+	{
+		_selector->UpdateCurrentHover({ },
+			Action::MODIFIER_NONE,
+			false,
+			base::Tweakable::TweakState::TWEAKSTATE_NONE);
+		_UpdateSelection(ACTIONRESULT_DEFAULT);
 	}
 
 	_hoverPath2d = std::move(nextPath);
