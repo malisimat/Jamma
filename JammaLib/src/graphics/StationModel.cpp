@@ -450,7 +450,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	case base::PASS_PICKER:
 	{
 		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
-		const auto usedSize = idVec.size();
+		const auto usedSize = std::min(idVec.size(), static_cast<size_t>(3));
 		idVec.resize(3);
 		for (size_t i = 0; i < usedSize; ++i)
 			idVec[i] += 1;
