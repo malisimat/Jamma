@@ -1148,6 +1148,8 @@ void Scene::CommitChanges()
 	bool hoverChanged = false;
 
 	{
+		// Non-blocking: avoid holding up the audio thread. If the lock is
+		// contended, pending snapshots remain unconsumed until next frame.
 		if (!_sceneMutex.try_lock())
 			return;
 
