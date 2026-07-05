@@ -583,29 +583,6 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
 
-	for (auto it = _guiChildren.rbegin(); it != _guiChildren.rend(); ++it)
-	{
-		if (!*it)
-			continue;
-
-		auto res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
-		if (res.IsEaten)
-			return res;
-	}
-
-	auto res = static_cast<std::shared_ptr<base::GuiElement>>(_modeRadio)->OnAction(_modeRadio->ParentToLocal(action));
-
-	if (res.IsEaten)
-		return res;
-
-	for (auto& station : _stations)
-	{
-		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
-
-		if (res.IsEaten)
-			return res;
-	}
-
 	return ActionResult::NoAction();
 }
 
@@ -1172,7 +1149,9 @@ void Scene::CommitChanges()
 	bool hoverChanged = pendingRemoteSnapshot.has_value();
 
 	{
-		std::scoped_lock lock(_sceneMutex);
+		std::unique_lock<std::mutex> lock(_sceneMutex, std::try_to_lock);
+		if (!lock.owns_lock())
+			return;
 
 		if (pendingRemoteSnapshot.has_value())
 			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());
@@ -1255,14 +1234,18 @@ void Scene::ApplyDeferredHoverUpdates()
 	if (_touchDownElement.lock() || _isSceneTouching)
 		return;
 
-	auto nextPath = _ResolveHoverPath2d();
+	_hoverPath2dScratch.clear();
+	_ResolveHoverPath2d(_hoverPath2dScratch);
+	auto& nextPath = _hoverPath2dScratch;
 	_ApplyHoverPath2d(nextPath);
 
 	bool stationHoverPromotedFrom2d = false;
 
 	if (!nextPath.empty())
 	{
-		auto nextShared = _LockHoverPath(nextPath);
+		_hoverPath2dNextSharedScratch.clear();
+		_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
+		auto& nextShared = _hoverPath2dNextSharedScratch;
 		auto stationIt = std::find_if(nextShared.begin(), nextShared.end(), [](const std::shared_ptr<base::GuiElement>& element) {
 			return nullptr != std::dynamic_pointer_cast<Station>(element);
 		});
@@ -1313,8 +1296,10 @@ void Scene::_InvalidateHover2d()
 	_hover2dDirty = true;
 }
 
-std::vector<std::weak_ptr<base::GuiElement>> Scene::_ResolveHoverPath2d()
+void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath)
 {
+	outPath.clear();
+
 	auto resolveTop = [this](const std::shared_ptr<base::GuiElement>& root) {
 		if (!root)
 			return std::shared_ptr<base::GuiElement>();
@@ -1346,34 +1331,36 @@ std::vector<std::weak_ptr<base::GuiElement>> Scene::_ResolveHoverPath2d()
 		}
 	}
 
-	std::vector<std::weak_ptr<base::GuiElement>> path;
 	while (leaf)
 	{
-		path.push_back(leaf);
+		outPath.push_back(leaf);
 		leaf = leaf->Parent();
 	}
 
-	std::reverse(path.begin(), path.end());
-	return path;
+	std::reverse(outPath.begin(), outPath.end());
 }
 
 void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath)
 {
-	auto prevShared = _LockHoverPath(_hoverPath2d);
-	auto nextShared = _LockHoverPath(nextPath);
-	const auto prefix = _SharedHoverPathPrefix(prevShared, nextShared);
+	_hoverPath2dPrevSharedScratch.clear();
+	_hoverPath2dNextSharedScratch.clear();
+	_LockHoverPath(_hoverPath2d, _hoverPath2dPrevSharedScratch);
+	_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
 
-	for (size_t i = prevShared.size(); i > prefix; --i)
-		prevShared[i - 1]->ApplyHoverState(false);
+	const auto prefix = _SharedHoverPathPrefix(_hoverPath2dPrevSharedScratch, _hoverPath2dNextSharedScratch);
 
-	for (size_t i = 0; i < nextShared.size(); ++i)
-		nextShared[i]->ApplyHoverPoint(nextShared[i]->GlobalToLocal(_cursorPos));
+	for (size_t i = _hoverPath2dPrevSharedScratch.size(); i > prefix; --i)
+		_hoverPath2dPrevSharedScratch[i - 1]->ApplyHoverState(false);
+
+	for (size_t i = 0; i < _hoverPath2dNextSharedScratch.size(); ++i)
+		_hoverPath2dNextSharedScratch[i]->ApplyHoverPoint(_hoverPath2dNextSharedScratch[i]->GlobalToLocal(_cursorPos));
 }
 
-std::vector<std::shared_ptr<base::GuiElement>> Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path)
+void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
+	std::vector<std::shared_ptr<base::GuiElement>>& outPath) const
 {
-	std::vector<std::shared_ptr<base::GuiElement>> sharedPath;
-	sharedPath.reserve(path.size());
+	outPath.clear();
+	outPath.reserve(path.size());
 
 	for (const auto& element : path)
 	{
@@ -1381,10 +1368,8 @@ std::vector<std::shared_ptr<base::GuiElement>> Scene::_LockHoverPath(const std::
 		if (!locked)
 			break;
 
-		sharedPath.push_back(std::move(locked));
+		outPath.push_back(std::move(locked));
 	}
-
-	return sharedPath;
 }
 
 size_t Scene::_SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,

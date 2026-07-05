@@ -20,6 +20,12 @@ namespace graphics
 		public base::DrawContext
 	{
 	public:
+		struct PixelReadback
+		{
+			bool HasValue = false;
+			unsigned int ObjectId = 0;
+		};
+
 		GlDrawContext(utils::Size2d size, ContextTarget target);
 		~GlDrawContext();
 
@@ -33,6 +39,7 @@ namespace graphics
 		void Bind() override;
 		unsigned int GetTexture() const;
 		unsigned int GetPixel(utils::Position2d pos) override;
+		PixelReadback GetPixelAsync(utils::Position2d pos);
 		const std::vector<unsigned char> GetPixels() const;
 
 		std::optional<std::any> GetUniform(std::string name);
@@ -67,5 +74,8 @@ namespace graphics
 		std::vector<ScissorRect> _scissorStack;
 		unsigned int _frameBuffer;
 		unsigned int _texture;
+		unsigned int _pickReadbackPbos[2];
+		unsigned int _pickReadbackIndex;
+		bool _pickReadbackPrimed;
 	};
 }

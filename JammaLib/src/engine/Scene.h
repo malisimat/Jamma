@@ -308,9 +308,10 @@ namespace engine
 		void _ApplyQuantisationOverlayAlpha(float alpha);
 		timing::QuantisationInteractionContext _InteractionContext() const;
 		void _InvalidateHover2d();
-		std::vector<std::weak_ptr<base::GuiElement>> _ResolveHoverPath2d();
+		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath);
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
-		static std::vector<std::shared_ptr<base::GuiElement>> _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path);
+		void _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
+			std::vector<std::shared_ptr<base::GuiElement>>& outPath) const;
 		static size_t _SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
 			const std::vector<std::shared_ptr<base::GuiElement>>& rhs);
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
@@ -372,6 +373,9 @@ namespace engine
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
+		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2dScratch;
+		std::vector<std::shared_ptr<base::GuiElement>> _hoverPath2dPrevSharedScratch;
+		std::vector<std::shared_ptr<base::GuiElement>> _hoverPath2dNextSharedScratch;
 		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;

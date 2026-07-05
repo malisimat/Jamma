@@ -36,6 +36,7 @@ Window::Window(Scene& scene,
 	_buttonsDown(0),
 	_lastHoverObjectId(0),
 	_hover3dDirty(true),
+	_forcePick(true),
 	_cachedCursorPosition(std::nullopt),
 	_cachedCursorModifiers(Action::MODIFIER_NONE),
 	_pendingResize(std::nullopt),
@@ -417,6 +418,7 @@ void Window::Resize(Size2d size)
 	_scene.SetSize(size);
 	_lastHoverObjectId = 0;
 	_hover3dDirty = true;
+	_forcePick = true;
 	_pendingResize = size;
 }
 
@@ -440,6 +442,7 @@ void Window::ApplyPendingResize()
 	_textureContext->Initialise();
 	_drawContext->Initialise();
 
+	_forcePick = true;
 	_pendingResize.reset();
 }
 
@@ -461,23 +464,35 @@ void Window::Render()
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
 
-	_pickContext->Bind();
-
-	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
-	_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
-
-	if (_hover3dDirty && _cachedCursorPosition.has_value())
+	const bool needsPick = _hover3dDirty || _forcePick;
+	if (needsPick)
 	{
-		auto objectId = _pickContext->GetPixel(_cachedCursorPosition.value());
-		if (objectId != _lastHoverObjectId)
+		_pickContext->Bind();
+
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+
+		if (_cachedCursorPosition.has_value())
 		{
-			auto path = utils::IdToVec(objectId);
-			_scene.SetHover3d(path, _cachedCursorModifiers);
-			_lastHoverObjectId = objectId;
+			auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
+			if (!pick.HasValue && _forcePick)
+			{
+				pick.HasValue = true;
+				pick.ObjectId = _pickContext->GetPixel(_cachedCursorPosition.value());
+			}
+
+			if (pick.HasValue && (pick.ObjectId != _lastHoverObjectId))
+			{
+				auto path = utils::IdToVec(pick.ObjectId);
+				_scene.SetHover3d(path, _cachedCursorModifiers);
+				_lastHoverObjectId = pick.ObjectId;
+			}
+
+			_hover3dDirty = false;
 		}
 
-		_hover3dDirty = false;
+		_forcePick = false;
 	}
 
 	_scene.ApplyDeferredHoverUpdates();
@@ -580,10 +595,12 @@ ActionResult Window::OnAction(TouchAction touchAction)
 		{
 		case TouchAction::TOUCH_DOWN:
 			_buttonsDown |= (1 << touchAction.Index);
+			_forcePick = true;
 			break;
 		case TouchAction::TOUCH_UP:
 			_buttonsDown &= ~(1 << touchAction.Index);
 			touchAction.Value = (1 << touchAction.Index);
+			_forcePick = true;
 
 			if (_buttonsDown == 0)
 				ReleaseCapture();
