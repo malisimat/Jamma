@@ -7,9 +7,13 @@ using namespace engine;
 
 namespace io
 {
-	HHOOK IoInputSubsystem::_globalInsertHook = nullptr;
+	HHOOK IoInputSubsystem::_globalKeyHook = nullptr;
 	std::atomic<bool> IoInputSubsystem::_globalInsertDown{ false };
 	std::atomic<bool> IoInputSubsystem::_globalInsertLastDispatchedDown{ false };
+	std::atomic<bool> IoInputSubsystem::_globalPageUpDown{ false };
+	std::atomic<bool> IoInputSubsystem::_globalPageUpLastDispatchedDown{ false };
+	std::atomic<bool> IoInputSubsystem::_globalPageDownDown{ false };
+	std::atomic<bool> IoInputSubsystem::_globalPageDownLastDispatchedDown{ false };
 
 	IoInputSubsystem::IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig) :
 		_userConfig(userConfig),
@@ -31,25 +35,33 @@ namespace io
 
 	void IoInputSubsystem::Close()
 	{
-		CloseGlobalInsertCapture();
+		CloseGlobalKeyCapture();
 		_midiRouter.CloseSerial();
 		_midiRouter.CloseMidi();
 	}
 
-	bool IoInputSubsystem::InitGlobalInsertCapture()
+	bool IoInputSubsystem::InitGlobalKeyCapture()
 	{
-		if (_globalInsertHook)
+		if (_globalKeyHook)
 			return true;
 
-		const auto down = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
-		_globalInsertDown.store(down, std::memory_order_release);
-		_globalInsertLastDispatchedDown.store(down, std::memory_order_release);
+		const auto insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+		_globalInsertDown.store(insertDown, std::memory_order_release);
+		_globalInsertLastDispatchedDown.store(insertDown, std::memory_order_release);
 
-		_globalInsertHook = SetWindowsHookEx(WH_KEYBOARD_LL, _LowLevelKeyboardProc,
+		const auto pageUpDown = (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0;
+		_globalPageUpDown.store(pageUpDown, std::memory_order_release);
+		_globalPageUpLastDispatchedDown.store(pageUpDown, std::memory_order_release);
+
+		const auto pageDownDown = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
+		_globalPageDownDown.store(pageDownDown, std::memory_order_release);
+		_globalPageDownLastDispatchedDown.store(pageDownDown, std::memory_order_release);
+
+		_globalKeyHook = SetWindowsHookEx(WH_KEYBOARD_LL, _LowLevelKeyboardProc,
 			GetModuleHandle(nullptr), 0);
-		if (!_globalInsertHook)
+		if (!_globalKeyHook)
 		{
-			std::cerr << "[Input] Global insert hook install failed, error="
+			std::cerr << "[Input] Global key hook install failed, error="
 				<< GetLastError() << std::endl;
 			return false;
 		}
@@ -57,28 +69,42 @@ namespace io
 		return true;
 	}
 
-	void IoInputSubsystem::CloseGlobalInsertCapture()
+	void IoInputSubsystem::CloseGlobalKeyCapture()
 	{
-		if (!_globalInsertHook)
+		if (!_globalKeyHook)
 			return;
 
-		UnhookWindowsHookEx(_globalInsertHook);
-		_globalInsertHook = nullptr;
+		UnhookWindowsHookEx(_globalKeyHook);
+		_globalKeyHook = nullptr;
 	}
 
-	bool IoInputSubsystem::PumpGlobalInsertCapture(actions::KeyAction& action) noexcept
+	bool IoInputSubsystem::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 	{
-		const auto down = _globalInsertDown.load(std::memory_order_acquire);
-		const auto last = _globalInsertLastDispatchedDown.load(std::memory_order_acquire);
-		if (down == last)
-			return false;
+		const auto pumpOne = [&action](unsigned int vk,
+			std::atomic<bool>& down,
+			std::atomic<bool>& lastDispatched) noexcept
+		{
+			const auto curDown = down.load(std::memory_order_acquire);
+			const auto lastDown = lastDispatched.load(std::memory_order_acquire);
+			if (curDown == lastDown)
+				return false;
 
-		_globalInsertLastDispatchedDown.store(down, std::memory_order_release);
-		action.KeyChar = VK_INSERT;
-		action.KeyActionType = down ? actions::KeyAction::KEY_DOWN : actions::KeyAction::KEY_UP;
-		action.IsSystem = false;
-		action.Modifiers = base::Action::MODIFIER_NONE;
-		return true;
+			lastDispatched.store(curDown, std::memory_order_release);
+			action.KeyChar = vk;
+			action.KeyActionType = curDown ? actions::KeyAction::KEY_DOWN : actions::KeyAction::KEY_UP;
+			action.IsSystem = false;
+			action.Modifiers = base::Action::MODIFIER_NONE;
+			return true;
+		};
+
+		if (pumpOne(VK_INSERT, _globalInsertDown, _globalInsertLastDispatchedDown))
+			return true;
+		if (pumpOne(VK_PRIOR, _globalPageUpDown, _globalPageUpLastDispatchedDown))
+			return true;
+		if (pumpOne(VK_NEXT, _globalPageDownDown, _globalPageDownLastDispatchedDown))
+			return true;
+
+		return false;
 	}
 
 	LRESULT CALLBACK IoInputSubsystem::_LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) noexcept
@@ -86,16 +112,35 @@ namespace io
 		if (nCode == HC_ACTION)
 		{
 			const auto* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
-			if (kb && kb->vkCode == VK_INSERT)
+			if (kb)
 			{
-				if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)
-					_globalInsertDown.store(true, std::memory_order_release);
-				else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP)
-					_globalInsertDown.store(false, std::memory_order_release);
+				std::atomic<bool>* keyDown = nullptr;
+				switch (kb->vkCode)
+				{
+				case VK_INSERT:
+					keyDown = &_globalInsertDown;
+					break;
+				case VK_PRIOR:
+					keyDown = &_globalPageUpDown;
+					break;
+				case VK_NEXT:
+					keyDown = &_globalPageDownDown;
+					break;
+				default:
+					break;
+				}
+
+				if (keyDown)
+				{
+					if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)
+						keyDown->store(true, std::memory_order_release);
+					else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP)
+						keyDown->store(false, std::memory_order_release);
+				}
 			}
 		}
 
-		return CallNextHookEx(_globalInsertHook, nCode, wParam, lParam);
+		return CallNextHookEx(_globalKeyHook, nCode, wParam, lParam);
 	}
 
 	IoInputSubsystem::PumpResult IoInputSubsystem::PumpMidi(std::vector<std::shared_ptr<Station>>& stations,

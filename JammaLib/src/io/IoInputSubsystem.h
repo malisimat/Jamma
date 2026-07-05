@@ -27,9 +27,9 @@ namespace io
 		void Init(std::atomic<std::uint64_t>& audioSampleCounter,
 			std::atomic<std::int64_t>& midiAnchorMicros);
 		void Close();
-		bool InitGlobalInsertCapture();
-		void CloseGlobalInsertCapture();
-		bool PumpGlobalInsertCapture(actions::KeyAction& action) noexcept;
+		bool InitGlobalKeyCapture();
+		void CloseGlobalKeyCapture();
+		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 
 		PumpResult PumpMidi(std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t audioSampleCounter,
@@ -54,9 +54,13 @@ namespace io
 
 	private:
 		static LRESULT CALLBACK _LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) noexcept;
-		static HHOOK _globalInsertHook;
+		static HHOOK _globalKeyHook;
 		static std::atomic<bool> _globalInsertDown;
 		static std::atomic<bool> _globalInsertLastDispatchedDown;
+		static std::atomic<bool> _globalPageUpDown;
+		static std::atomic<bool> _globalPageUpLastDispatchedDown;
+		static std::atomic<bool> _globalPageDownDown;
+		static std::atomic<bool> _globalPageDownLastDispatchedDown;
 
 		io::UserConfig _userConfig;
 		io::LoggingConfig _loggingConfig;
