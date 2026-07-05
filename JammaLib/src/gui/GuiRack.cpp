@@ -63,7 +63,7 @@ GuiRack::GuiRack(GuiRackParams params) :
 	}
 
 	_children.push_back(_masterPanel);
-	_children.push_back(_masterSlider);
+	_masterPanel->AddChild(_masterSlider);
 	_masterPanel->AddChild(_channelToggle);
 	_masterPanel->AddChild(_channelPanel);
 	_channelPanel->AddChild(_midiChannelPanel);
