@@ -1024,7 +1024,8 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 
 	for (auto segment : path)
 	{
-		if (0 == segment)
+		// Picker path uses 0xFF as the terminator for missing path segments.
+		if ((0xFF == segment) || (0 == segment))
 			break;
 
 		fullElementPath.push_back(segment - 1);
@@ -1036,21 +1037,21 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 
 	elementPath = TrimPath(elementPath, _selector->CurrentSelectDepth() + 1);
 
-	if ((elementPath != _lastLoggedHoverPath) && (_loggingConfig.Ui == "verbose"))
+	if (elementPath != _lastLoggedHoverPath)
 	{
-		std::string pathString = "[";
-		for (size_t i = 0; i < elementPath.size(); ++i)
+		if (_loggingConfig.Ui == "verbose")
 		{
-			pathString += std::to_string(static_cast<unsigned int>(elementPath[i]));
-			if ((i + 1) < elementPath.size())
-				pathString += ",";
+			std::string pathString = "[";
+			for (size_t i = 0; i < elementPath.size(); ++i)
+			{
+				pathString += std::to_string(static_cast<unsigned int>(elementPath[i]));
+				if ((i + 1) < elementPath.size())
+					pathString += ",";
+			}
+			pathString += "]";
+			std::cout << "Hover3d resolved: " << pathString << std::endl;
 		}
-		pathString += "]";
-		std::cout << "Hover3d resolved: " << pathString << std::endl;
-		_lastLoggedHoverPath = elementPath;
-	}
-	else if (elementPath != _lastLoggedHoverPath)
-	{
+
 		_lastLoggedHoverPath = elementPath;
 	}
 
@@ -1110,6 +1111,8 @@ void Scene::InitAudio()
 void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
+	if (_windowSubsystem)
+		_windowSubsystem->SetLogging(_loggingConfig);
 	for (auto& station : _stations)
 	{
 		if (station)
@@ -1230,8 +1233,9 @@ void Scene::CommitChanges()
 		_InvalidateHover2d();
 }
 
-void Scene::ResolveDeferredHover()
+void Scene::ApplyDeferredHoverUpdates()
 {
+	// Keep active hover in sync with both deferred 2D hit-testing and latest 3D picker result.
 	if (!_hover2dDirty)
 		return;
 
@@ -1253,6 +1257,53 @@ void Scene::ResolveDeferredHover()
 
 	auto nextPath = _ResolveHoverPath2d();
 	_ApplyHoverPath2d(nextPath);
+
+	bool stationHoverPromotedFrom2d = false;
+
+	if (!nextPath.empty())
+	{
+		auto nextShared = _LockHoverPath(nextPath);
+		auto stationIt = std::find_if(nextShared.begin(), nextShared.end(), [](const std::shared_ptr<base::GuiElement>& element) {
+			return nullptr != std::dynamic_pointer_cast<Station>(element);
+		});
+
+		if (stationIt != nextShared.end())
+		{
+			auto stationGlobalId = (*stationIt)->GlobalId();
+			std::vector<unsigned char> stationPathRaw;
+			stationPathRaw.reserve(stationGlobalId.size());
+			for (auto part : stationGlobalId)
+				stationPathRaw.push_back(static_cast<unsigned char>(part & 0xFFu));
+
+			auto stationPath = TrimPath(stationPathRaw, _selector->CurrentSelectDepth() + 1u);
+			bool isSelected = false;
+			auto tweakState = base::Tweakable::TweakState::TWEAKSTATE_NONE;
+			auto hovering = _ChildFromPath(stationPath);
+			if (hovering)
+			{
+				isSelected = hovering->IsSelected();
+				if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(hovering))
+					tweakState = tweakable->GetTweakState();
+			}
+
+			_selector->UpdateCurrentHover(stationPath,
+				Action::MODIFIER_NONE,
+				isSelected,
+				tweakState);
+			_UpdateSelection(ACTIONRESULT_DEFAULT);
+			stationHoverPromotedFrom2d = true;
+		}
+	}
+
+	if (!stationHoverPromotedFrom2d && _hoverPath3d.empty() && !_selector->CurrentHover().empty())
+	{
+		_selector->UpdateCurrentHover({ },
+			Action::MODIFIER_NONE,
+			false,
+			base::Tweakable::TweakState::TWEAKSTATE_NONE);
+		_UpdateSelection(ACTIONRESULT_DEFAULT);
+	}
+
 	_hoverPath2d = std::move(nextPath);
 	_hover2dDirty = false;
 }

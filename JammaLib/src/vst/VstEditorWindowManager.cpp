@@ -45,6 +45,11 @@ namespace vst
 		return res;
 	}
 
+	void VstEditorWindowManager::SetLogging(base::LoggingConfig config) noexcept
+	{
+		_loggingConfig = std::move(config);
+	}
+
 	actions::ActionResult VstEditorWindowManager::HandleVstInsert(const std::wstring& pluginPath,
 		base::SelectDepth depth,
 		const std::shared_ptr<base::GuiElement>& hovering,
@@ -119,6 +124,12 @@ namespace vst
 		const std::vector<std::shared_ptr<Station>>& stations)
 	{
 		PruneClosedVstEditorWindows();
+
+		if (_loggingConfig.Ui == "verbose")
+		{
+			auto hoverStation = std::dynamic_pointer_cast<Station>(hovering);
+			std::cout << "VST editor open: hovering=" << (hoverStation ? "Station '" + hoverStation->Name() + "'" : hovering ? "non-station" : "null") << ", depth=" << static_cast<int>(depth) << std::endl;
+		}
 
 		if (TryOpenVstEditorForHover(hovering, depth, 0u))
 			return EatAction();
@@ -228,35 +239,34 @@ namespace vst
 	{
 		if (!hovering)
 			return false;
+		(void)depth;
 
-		switch (depth)
+		for (auto current = hovering; current; current = current->Parent())
 		{
-		case base::SelectDepth::DEPTH_STATION:
-		{
-			auto station = std::dynamic_pointer_cast<Station>(hovering);
-			return TryOpenVstEditorForStation(station, pluginIndex);
-		}
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-		{
-			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-			if (!take)
-				return false;
-
-			for (const auto& loop : take->GetLoops())
+			if (auto loop = std::dynamic_pointer_cast<Loop>(current))
 			{
 				if (TryOpenVstEditorForLoop(loop, pluginIndex))
 					return true;
+				continue;
 			}
 
-			return false;
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(current))
+			{
+				for (const auto& loop : take->GetLoops())
+				{
+					if (TryOpenVstEditorForLoop(loop, pluginIndex))
+						return true;
+				}
+				continue;
+			}
+
+			if (auto station = std::dynamic_pointer_cast<Station>(current))
+			{
+				if (TryOpenVstEditorForStation(station, pluginIndex))
+					return true;
+			}
 		}
-		case base::SelectDepth::DEPTH_LOOP:
-		{
-			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-			return TryOpenVstEditorForLoop(loop, pluginIndex);
-		}
-		default:
-			return false;
-		}
+
+		return false;
 	}
 }

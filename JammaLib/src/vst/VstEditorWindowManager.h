@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include "../actions/ActionResult.h"
+#include "../base/LoggingConfig.h"
 #include "../base/GuiElement.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../engine/Station.h"
@@ -28,6 +29,7 @@ namespace vst
 		actions::ActionResult HandleVstEditorOpen(const std::shared_ptr<base::GuiElement>& hovering,
 			base::SelectDepth depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void SetLogging(base::LoggingConfig config) noexcept;
 
 		bool OpenVstEditorForPlugin(const std::shared_ptr<IVstPlugin>& plugin);
 		bool TryOpenVstEditorForLoop(const std::shared_ptr<engine::Loop>& loop, size_t pluginIndex);
@@ -39,6 +41,7 @@ namespace vst
 		static actions::ActionResult EatAction();
 
 	private:
+		base::LoggingConfig _loggingConfig;
 		mutable std::mutex _vstEditorWindowsMutex;
 		std::vector<std::unique_ptr<graphics::VstEditorWindow>> _vstEditorWindows;
 	};
