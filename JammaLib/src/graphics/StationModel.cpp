@@ -450,10 +450,15 @@ void StationModel::Draw3d(DrawContext& ctx,
 	case base::PASS_PICKER:
 	{
 		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
+		const auto usedSize = idVec.size();
 		idVec.resize(3);
-		for (auto& idPart : idVec)
-			idPart += 1;
+		for (size_t i = 0; i < usedSize; ++i)
+			idVec[i] += 1;
 		const auto id = utils::VecToId(idVec);
+		// Shared picker vertex shader expects loop waveform scale uniforms.
+		// Keep station picker geometry unscaled by pinning to 1:1.
+		glCtx.SetUniform("WaveformRadius", 1.0f);
+		glCtx.SetUniform("WaveformUnitMeshRadius", 1.0f);
 		glCtx.SetUniform("ObjectId", id);
 		break;
 	}

@@ -45,6 +45,11 @@ namespace vst
 		return res;
 	}
 
+	void VstEditorWindowManager::SetLogging(base::LoggingConfig config) noexcept
+	{
+		_loggingConfig = std::move(config);
+	}
+
 	actions::ActionResult VstEditorWindowManager::HandleVstInsert(const std::wstring& pluginPath,
 		base::SelectDepth depth,
 		const std::shared_ptr<base::GuiElement>& hovering,
@@ -119,6 +124,12 @@ namespace vst
 		const std::vector<std::shared_ptr<Station>>& stations)
 	{
 		PruneClosedVstEditorWindows();
+
+		if (_loggingConfig.Ui == "verbose")
+		{
+			auto hoverStation = std::dynamic_pointer_cast<Station>(hovering);
+			std::cout << "VST editor open: hovering=" << (hoverStation ? "Station '" + hoverStation->Name() + "'" : hovering ? "non-station" : "null") << ", depth=" << static_cast<int>(depth) << std::endl;
+		}
 
 		if (TryOpenVstEditorForHover(hovering, depth, 0u))
 			return EatAction();
