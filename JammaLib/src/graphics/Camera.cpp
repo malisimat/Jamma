@@ -86,7 +86,8 @@ utils::Position3d Camera::_UpdateInertialBackgroundDrag(utils::Position2d pointe
 {
 	constexpr float gain = 0.18f;
 	constexpr float carry = 0.74f;
-	constexpr float dragCoeff = 0.03f;
+	constexpr float linearDragCoeff = 0.01f;
+	constexpr float quadraticDragCoeff = 0.1f;
 	constexpr float inputDragStep = 1.0f;
 	auto inputVelocity = Position3d{ -(float)pointerDelta.X * gain, -(float)pointerDelta.Y * gain, 0.0f };
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
@@ -95,17 +96,17 @@ utils::Position3d Camera::_UpdateInertialBackgroundDrag(utils::Position2d pointe
 		0.0f
 	});
 
-	auto applyQuadraticDrag = [](float velocity, float step, float coeff)
+	auto applyDrag = [](float velocity, float step, float linearCoeff, float quadraticCoeff)
 	{
 		if (0.0f == velocity)
 			return 0.0f;
 
-		return velocity / (1.0f + (coeff * std::fabs(velocity) * step));
+		return velocity / (1.0f + ((linearCoeff + (quadraticCoeff * std::fabs(velocity))) * step));
 	};
 
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
-		applyQuadraticDrag(_backgroundDrag.Velocity.X, inputDragStep, dragCoeff),
-		applyQuadraticDrag(_backgroundDrag.Velocity.Y, inputDragStep, dragCoeff),
+		applyDrag(_backgroundDrag.Velocity.X, inputDragStep, linearDragCoeff, quadraticDragCoeff),
+		applyDrag(_backgroundDrag.Velocity.Y, inputDragStep, linearDragCoeff, quadraticDragCoeff),
 		0.0f
 	});
 	return _backgroundDrag.CameraPosition + _backgroundDrag.Velocity;
@@ -163,7 +164,8 @@ void Camera::_CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate)
 		return;
 
 	constexpr float framesPerSecond = 60.0f;
-	constexpr float dragCoeff = 0.03f;
+	constexpr float linearDragCoeff = 0.01f;
+	constexpr float quadraticDragCoeff = 0.1f;
 	const float deltaSeconds = static_cast<float>(samps) / static_cast<float>(sampleRate);
 	const float motionScale = deltaSeconds * framesPerSecond;
 	if (motionScale <= 0.0f)
@@ -179,17 +181,17 @@ void Camera::_CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate)
 		0.0f
 	};
 
-	auto applyQuadraticDrag = [](float velocity, float step, float coeff)
+	auto applyDrag = [](float velocity, float step, float linearCoeff, float quadraticCoeff)
 	{
 		if (0.0f == velocity)
 			return 0.0f;
 
-		return velocity / (1.0f + (coeff * std::fabs(velocity) * step));
+		return velocity / (1.0f + ((linearCoeff + (quadraticCoeff * std::fabs(velocity))) * step));
 	};
 
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
-		applyQuadraticDrag(velocity.X, motionScale, dragCoeff),
-		applyQuadraticDrag(velocity.Y, motionScale, dragCoeff),
+		applyDrag(velocity.X, motionScale, linearDragCoeff, quadraticDragCoeff),
+		applyDrag(velocity.Y, motionScale, linearDragCoeff, quadraticDragCoeff),
 		0.0f
 	});
 
@@ -223,6 +225,17 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 			return _BackgroundDragActionResult();
 		}
 
+		if ((BackgroundDragMode::InertialPan == _backgroundDrag.Mode)
+			&& (BackgroundDragMode::InertialPan == mode))
+		{
+			_backgroundDrag.MouseButtonsDown = mouseButtonsDown;
+			_backgroundDrag.PointerAnchor = action.Position;
+			_backgroundDrag.LastPointerPosition = action.Position;
+			_backgroundDrag.CameraAnchor = _backgroundDrag.CameraPosition;
+			_backgroundDrag.Velocity = { 0.0f, 0.0f, 0.0f };
+			return _BackgroundDragActionResult();
+		}
+
 		_SwitchBackgroundDragMode(action.Position, mouseButtonsDown);
 		return _BackgroundDragActionResult();
 	}
@@ -233,10 +246,12 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 			return ActionResult::NoAction();
 
 		auto wasDragged = _backgroundDrag.Dragged;
+		const auto releasedButton = static_cast<unsigned int>(action.Value);
 
 		if (BackgroundDragMode::None == mode)
 		{
 			if ((BackgroundDragMode::InertialPan == _backgroundDrag.Mode)
+				&& (0u != (releasedButton & BackgroundDragRightButtonMask))
 				&& ((0.0f != _backgroundDrag.Velocity.X) || (0.0f != _backgroundDrag.Velocity.Y)))
 			{
 				_backgroundDrag.MouseButtonsDown = 0u;

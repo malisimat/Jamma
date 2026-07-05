@@ -447,8 +447,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		{
 			auto wasDragged = _camera.BackgroundDragWasDragged();
 			_camera.HandleBackgroundDrag(action);
-			if (!_camera.IsBackgroundDragging())
-				_EndBackgroundDrag();
+			_EndBackgroundDrag();
 
 			// Clear selection only if not dragged
 			// background drag should only be active if selector mode is SELECT_NONE
@@ -573,7 +572,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return overlayRes.value();
 	}
 
-	if (_camera.IsBackgroundDragging())
+	if (_camera.IsBackgroundDragging() && (0u != action.MouseButtonsDown))
 		return _UpdateBackgroundDrag(action);
 
 	auto activeElement = _touchDownElement.lock();
@@ -874,6 +873,9 @@ void Scene::OnTick(Time curTime,
 {
 	if (_camera.IsBackgroundDragging())
 		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
+
+	if (_isSceneTouching && !_camera.IsBackgroundDragging())
+		_EndBackgroundDrag();
 
 	if (auto clock = _quantisation.Clock())
 		clock->Tick(samps, 0u);
@@ -1640,9 +1642,6 @@ ActionResult Scene::_BeginBackgroundDrag(actions::TouchAction action)
 
 ActionResult Scene::_UpdateBackgroundDrag(actions::TouchMoveAction action)
 {
-	if (!_isSceneTouching)
-		return ActionResult::NoAction();
-
 	auto res = _camera.UpdateBackgroundDrag(action);
 	if (!_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();

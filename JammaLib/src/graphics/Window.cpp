@@ -583,6 +583,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 			break;
 		case TouchAction::TOUCH_UP:
 			_buttonsDown &= ~(1 << touchAction.Index);
+			touchAction.Value = (1 << touchAction.Index);
 
 			if (_buttonsDown == 0)
 				ReleaseCapture();
