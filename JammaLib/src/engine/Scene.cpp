@@ -1145,13 +1145,16 @@ void Scene::CommitChanges()
 {
 	std::vector<JobAction> syncJobs = {};
 	std::vector<JobAction> jobList = {};
-	std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _networkService->GetController()->TakePendingSnapshot();
-	bool hoverChanged = pendingRemoteSnapshot.has_value();
+	bool hoverChanged = false;
 
 	{
-		std::unique_lock<std::mutex> lock(_sceneMutex, std::try_to_lock);
-		if (!lock.owns_lock())
+		if (!_sceneMutex.try_lock())
 			return;
+
+		std::lock_guard<std::mutex> lock(_sceneMutex, std::adopt_lock);
+
+		std::optional<ninjam::NinjamRemoteSnapshot> pendingRemoteSnapshot = _networkService->GetController()->TakePendingSnapshot();
+		hoverChanged = pendingRemoteSnapshot.has_value();
 
 		if (pendingRemoteSnapshot.has_value())
 			_UpdateRemoteStationsFromSnapshot(pendingRemoteSnapshot.value());

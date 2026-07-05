@@ -464,7 +464,7 @@ void Window::Render()
 	_scene.CommitChanges();
 	_scene.InitResources(_resourceLib, false);
 
-	const bool needsPick = _hover3dDirty || _forcePick;
+	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)
 	{
 		_pickContext->Bind();
@@ -473,16 +473,16 @@ void Window::Render()
 		glClear(GL_COLOR_BUFFER_BIT);
 		_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
 
-		if (_cachedCursorPosition.has_value())
+		auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
+		if (!pick.HasValue && _forcePick)
 		{
-			auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
-			if (!pick.HasValue && _forcePick)
-			{
-				pick.HasValue = true;
-				pick.ObjectId = _pickContext->GetPixel(_cachedCursorPosition.value());
-			}
+			pick.HasValue = true;
+			pick.ObjectId = _pickContext->GetPixel(_cachedCursorPosition.value());
+		}
 
-			if (pick.HasValue && (pick.ObjectId != _lastHoverObjectId))
+		if (pick.HasValue)
+		{
+			if (pick.ObjectId != _lastHoverObjectId)
 			{
 				auto path = utils::IdToVec(pick.ObjectId);
 				_scene.SetHover3d(path, _cachedCursorModifiers);
@@ -490,9 +490,8 @@ void Window::Render()
 			}
 
 			_hover3dDirty = false;
+			_forcePick = false;
 		}
-
-		_forcePick = false;
 	}
 
 	_scene.ApplyDeferredHoverUpdates();
