@@ -239,35 +239,34 @@ namespace vst
 	{
 		if (!hovering)
 			return false;
+		(void)depth;
 
-		switch (depth)
+		for (auto current = hovering; current; current = current->Parent())
 		{
-		case base::SelectDepth::DEPTH_STATION:
-		{
-			auto station = std::dynamic_pointer_cast<Station>(hovering);
-			return TryOpenVstEditorForStation(station, pluginIndex);
-		}
-		case base::SelectDepth::DEPTH_LOOPTAKE:
-		{
-			auto take = std::dynamic_pointer_cast<LoopTake>(hovering);
-			if (!take)
-				return false;
-
-			for (const auto& loop : take->GetLoops())
+			if (auto loop = std::dynamic_pointer_cast<Loop>(current))
 			{
 				if (TryOpenVstEditorForLoop(loop, pluginIndex))
 					return true;
+				continue;
 			}
 
-			return false;
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(current))
+			{
+				for (const auto& loop : take->GetLoops())
+				{
+					if (TryOpenVstEditorForLoop(loop, pluginIndex))
+						return true;
+				}
+				continue;
+			}
+
+			if (auto station = std::dynamic_pointer_cast<Station>(current))
+			{
+				if (TryOpenVstEditorForStation(station, pluginIndex))
+					return true;
+			}
 		}
-		case base::SelectDepth::DEPTH_LOOP:
-		{
-			auto loop = std::dynamic_pointer_cast<Loop>(hovering);
-			return TryOpenVstEditorForLoop(loop, pluginIndex);
-		}
-		default:
-			return false;
-		}
+
+		return false;
 	}
 }
