@@ -1024,7 +1024,8 @@ void Scene::SetHover3d(std::vector<unsigned char> path, Action::Modifiers modifi
 
 	for (auto segment : path)
 	{
-		if (0 == segment)
+		// Picker path uses 0xFF as the terminator for missing path segments.
+		if ((0xFF == segment) || (0 == segment))
 			break;
 
 		fullElementPath.push_back(segment - 1);
