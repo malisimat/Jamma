@@ -189,8 +189,7 @@ actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAct
 	constexpr unsigned int PageDownKey = 0x22u;
 	const bool isPageUp = (action.KeyChar == PageUpKey);
 	const bool isPageDown = (action.KeyChar == PageDownKey);
-	if ((!isPageUp && !isPageDown)
-		|| ((base::Action::MODIFIER_ALT & action.Modifiers) == 0))
+	if (!isPageUp && !isPageDown)
 	{
 		return actions::ActionResult::NoAction();
 	}
@@ -212,24 +211,11 @@ actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAct
 
 	const bool wasPageUpHeld = _channelOverridePageUpHeld;
 	const bool wasPageDownHeld = _channelOverridePageDownHeld;
-	const bool wasBothHeld = wasPageUpHeld && wasPageDownHeld;
 
 	if (isPageUp)
 		_channelOverridePageUpHeld = true;
 	if (isPageDown)
 		_channelOverridePageDownHeld = true;
-
-	const bool bothHeld = _channelOverridePageUpHeld && _channelOverridePageDownHeld;
-	if (bothHeld && !wasBothHeld)
-	{
-		for (const auto& station : stations)
-		{
-			if (station && !station->IsRemote())
-				station->FlushLiveHeldMidiNotes();
-		}
-		ResetChannelOverride();
-		return eaten;
-	}
 
 	if (isPageUp && !wasPageUpHeld)
 	{

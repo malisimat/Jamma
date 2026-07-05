@@ -1127,19 +1127,19 @@ void Scene::CloseAudio()
 	_audioEngine->Close();
 }
 
-bool Scene::InitGlobalInsertCapture()
+bool Scene::InitGlobalKeyCapture()
 {
-	return _inputSubsystem->InitGlobalInsertCapture();
+	return _inputSubsystem->InitGlobalKeyCapture();
 }
 
-void Scene::CloseGlobalInsertCapture()
+void Scene::CloseGlobalKeyCapture()
 {
-	_inputSubsystem->CloseGlobalInsertCapture();
+	_inputSubsystem->CloseGlobalKeyCapture();
 }
 
-bool Scene::PumpGlobalInsertCapture(actions::KeyAction& action) noexcept
+bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 {
-	return _inputSubsystem->PumpGlobalInsertCapture(action);
+	return _inputSubsystem->PumpGlobalKeyCapture(action);
 }
 
 void Scene::Shutdown()
@@ -1150,7 +1150,7 @@ void Scene::Shutdown()
 
 	ForceUnloadAllVstPlugins();
 
-	CloseGlobalInsertCapture();
+	CloseGlobalKeyCapture();
 	CloseAudio();
 }
 

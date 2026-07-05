@@ -203,9 +203,9 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
-		bool InitGlobalInsertCapture();
-		void CloseGlobalInsertCapture();
-		bool PumpGlobalInsertCapture(actions::KeyAction& action) noexcept;
+		bool InitGlobalKeyCapture();
+		void CloseGlobalKeyCapture();
+		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
 		void InitMidi()
