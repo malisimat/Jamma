@@ -210,19 +210,22 @@ void Scene::ConnectNinjam(const std::string& host)
 void Scene::ConnectNinjam(const std::string& host,
 	const ninjam::NinjamTempoJoinOptions& options)
 {
-	std::scoped_lock lock(_sceneMutex);
-	_networkService->SetTempoJoinOptions(options);
-	_networkService->PrepareTempoSyncOnConnect(_quantisation, _CurrentSampleRate());
-	_CloseRemoteTempoPrompt();
-
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_networkService->SetTempoJoinOptions(options);
+		_networkService->PrepareTempoSyncOnConnect(_quantisation, _CurrentSampleRate());
+		_CloseRemoteTempoPrompt();
+	}
 	_networkService->Connect(host);
 }
 
 void Scene::DisconnectNinjam()
 {
-	std::scoped_lock lock(_sceneMutex);
-	_CloseRemoteTempoPrompt();
-	_networkService->ResetTempoSyncOnDisconnect(_quantisation);
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_CloseRemoteTempoPrompt();
+		_networkService->ResetTempoSyncOnDisconnect(_quantisation);
+	}
 	_networkService->Disconnect();
 }
 
@@ -306,6 +309,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 {
+	std::scoped_lock lock(_sceneMutex);
 	_networkService->ResolveRemoteTempoPromptDecision(accept,
 		_quantisation,
 		_stations);

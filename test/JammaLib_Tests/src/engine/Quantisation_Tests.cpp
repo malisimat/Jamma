@@ -196,6 +196,33 @@ TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
 	EXPECT_FALSE(quantiser.HasPendingTempo());
 }
 
+TEST(Quantisation, ForceQueueCurrentTempoAsPendingSeedsAcceptedRemoteTempo)
+{
+	io::UserConfig cfg;
+	timing::TimingQuantiser quantiser;
+	auto clock = std::make_shared<utils::Timer>();
+	quantiser.SetClock(clock);
+
+	clock->SetQuantisation(22050u, utils::Timer::QUANTISE_MULTIPLE);
+	clock->SetSeedSourceLength(352800u);
+	quantiser.QueueLocalTempo(0u, 44100u, cfg);
+	ASSERT_TRUE(quantiser.HasPendingTempo());
+
+	EXPECT_TRUE(quantiser.ForceQueueCurrentTempoAsPending(true, 44100u));
+	quantiser.ResetPendingTempoSyncState();
+	EXPECT_FALSE(quantiser.HasPendingTempo());
+
+	ninjam::NinjamRemoteSnapshot snapshot;
+	snapshot.HasTiming = true;
+	snapshot.SampleRate = 44100u;
+	snapshot.IntervalLengthSamps = 352800u;
+	snapshot.IntervalPositionSamps = 0u;
+	snapshot.Bpm = 120.0f;
+	snapshot.Bpi = 16;
+
+	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
+}
+
 TEST(Quantisation, ForceQueueCurrentTempoAsPendingRequiresExistingTempo)
 {
 	timing::TimingQuantiser quantiser;

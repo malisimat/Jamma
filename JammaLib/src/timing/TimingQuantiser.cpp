@@ -582,10 +582,12 @@ void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& c
 
 bool TimingQuantiser::ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint)
 {
-	if (_masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
+	const auto masterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
+	if (masterLoopLengthSamps == 0ul)
 		return false;
 
-	if (_effectiveQuantiseSamps.load(std::memory_order_acquire) == 0u)
+	const auto effectiveQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+	if (effectiveQuantiseSamps == 0u)
 		return false;
 
 	_hasPendingTempo.store(true, std::memory_order_release);
@@ -593,14 +595,16 @@ bool TimingQuantiser::ForceQueueCurrentTempoAsPending(bool sendImmediately, unsi
 	_sendPendingTempoImmediately.store(sendImmediately, std::memory_order_release);
 
 	const auto sampleRate = (sampleRateHint > 0u) ? sampleRateHint : _remoteSampleRate;
-	const auto timing = TimingFromSeedAndMaster(_effectiveQuantiseSamps.load(std::memory_order_acquire),
-		_masterLoopLengthSamps.load(std::memory_order_acquire),
+	_remoteMasterLoopSamps = static_cast<unsigned int>(masterLoopLengthSamps);
+	_remoteSampleRate = sampleRate;
+	const auto timing = TimingFromSeedAndMaster(effectiveQuantiseSamps,
+		masterLoopLengthSamps,
 		sampleRate);
 	if (timing.has_value())
 	{
 		LogNinjamTempoEvent("Local tempo queued for join push",
-			_masterLoopLengthSamps.load(std::memory_order_acquire),
-			_effectiveQuantiseSamps.load(std::memory_order_acquire),
+			masterLoopLengthSamps,
+			effectiveQuantiseSamps,
 			timing->Bpi,
 			timing->Bpm,
 			sampleRate);
