@@ -231,7 +231,7 @@ void Scene::_EnsureRemoteTempoPromptUi()
 	if (_remoteTempoDialog)
 		return;
 
-	_remoteTempoDialog = std::make_shared<GuiConfirmPopup>(GuiConfirmPopupParams::PanelDefault());
+	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
 	_remoteTempoDialog->SetTitle("Remote NINJAM tempo changed");
 	_remoteTempoDialog->ConfigureButtons({
 		true,

@@ -10,7 +10,7 @@
 
 namespace gui
 {
-	struct GuiConfirmPopupButtonConfig
+	struct GuiPopupButtonConfig
 	{
 		bool ShowYes = true;
 		bool ShowNo = false;
@@ -28,21 +28,21 @@ namespace gui
 		std::string OkText = "Ok";
 	};
 
-	struct GuiConfirmPopupParams : public base::GuiElementParams
+	struct GuiPopupParams : public base::GuiElementParams
 	{
-		GuiConfirmPopupParams() = default;
+		GuiPopupParams() = default;
 
-		static GuiConfirmPopupParams PanelDefault();
+		static GuiPopupParams PanelDefault();
 	};
 
-	class GuiConfirmPopup : public GuiPanel
+	class GuiPopup : public GuiPanel
 	{
 	public:
-		explicit GuiConfirmPopup(const GuiConfirmPopupParams& params = GuiConfirmPopupParams::PanelDefault());
+		explicit GuiPopup(const GuiPopupParams& params = GuiPopupParams::PanelDefault());
 
 		void SetTitle(const std::string& text);
 		void SetBodyLines(const std::vector<std::string>& lines);
-		void ConfigureButtons(const GuiConfirmPopupButtonConfig& config);
+		void ConfigureButtons(const GuiPopupButtonConfig& config);
 		void SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver);
 		void ResetButtonStates();
 

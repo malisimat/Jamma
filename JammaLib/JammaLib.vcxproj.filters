@@ -293,7 +293,7 @@
     <ClInclude Include="src\gui\GuiPopupHost.h">
       <Filter>src\gui</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiConfirmPopup.h">
+    <ClInclude Include="src\gui\GuiPopup.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiTextBox.h">
@@ -670,7 +670,7 @@
     <ClCompile Include="src\gui\GuiPopupHost.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiConfirmPopup.cpp">
+    <ClCompile Include="src\gui\GuiPopup.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiTextBox.cpp">

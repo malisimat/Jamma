@@ -18,7 +18,7 @@
 #include "../graphics/GlDrawContext.h"
 #include "../graphics/Skybox.h"
 #include "../gui/GuiLabel.h"
-#include "../gui/GuiConfirmPopup.h"
+#include "../gui/GuiPopup.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
 #include "../gui/GuiPopupHost.h"
@@ -368,7 +368,7 @@ namespace engine
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupHost _popupHost;
 		bool _remoteTempoDialogOpen = false;
-		std::shared_ptr<gui::GuiConfirmPopup> _remoteTempoDialog;
+		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

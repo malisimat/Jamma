@@ -1,12 +1,12 @@
-#include "GuiConfirmPopup.h"
+#include "GuiPopup.h"
 
 #include <algorithm>
 
 using namespace gui;
 
-GuiConfirmPopupParams GuiConfirmPopupParams::PanelDefault()
+GuiPopupParams GuiPopupParams::PanelDefault()
 {
-	GuiConfirmPopupParams params;
+	GuiPopupParams params;
 	params.GuiPassThrough = false;
 	params.TextureShader = "texture_tinted";
 	params.Texture = "rounded_but";
@@ -18,7 +18,7 @@ GuiConfirmPopupParams GuiConfirmPopupParams::PanelDefault()
 	return params;
 }
 
-GuiConfirmPopup::GuiConfirmPopup(const GuiConfirmPopupParams& params) :
+GuiPopup::GuiPopup(const GuiPopupParams& params) :
 	GuiPanel(params)
 {
 	GuiLabelParams titleParams;
@@ -61,10 +61,10 @@ GuiConfirmPopup::GuiConfirmPopup(const GuiConfirmPopupParams& params) :
 	AddChild(_cancelButton);
 	AddChild(_okButton);
 
-	ConfigureButtons(GuiConfirmPopupButtonConfig{});
+	ConfigureButtons(GuiPopupButtonConfig{});
 }
 
-void GuiConfirmPopup::SetTitle(const std::string& text)
+void GuiPopup::SetTitle(const std::string& text)
 {
 	if (_titleLabel)
 	{
@@ -73,7 +73,7 @@ void GuiConfirmPopup::SetTitle(const std::string& text)
 	}
 }
 
-void GuiConfirmPopup::SetBodyLines(const std::vector<std::string>& lines)
+void GuiPopup::SetBodyLines(const std::vector<std::string>& lines)
 {
 	for (std::size_t i = 0; i < _lineLabels.size(); ++i)
 	{
@@ -93,7 +93,7 @@ void GuiConfirmPopup::SetBodyLines(const std::vector<std::string>& lines)
 	}
 }
 
-void GuiConfirmPopup::ConfigureButtons(const GuiConfirmPopupButtonConfig& config)
+void GuiPopup::ConfigureButtons(const GuiPopupButtonConfig& config)
 {
 	if (_yesButton)
 	{
@@ -127,7 +127,7 @@ void GuiConfirmPopup::ConfigureButtons(const GuiConfirmPopupButtonConfig& config
 	ResetButtonStates();
 }
 
-void GuiConfirmPopup::SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver)
+void GuiPopup::SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver)
 {
 	if (_yesButton)
 		_yesButton->SetReceiver(receiver);
@@ -139,7 +139,7 @@ void GuiConfirmPopup::SetButtonReceiver(std::shared_ptr<base::ActionReceiver> re
 		_okButton->SetReceiver(receiver);
 }
 
-void GuiConfirmPopup::ResetButtonStates()
+void GuiPopup::ResetButtonStates()
 {
 	auto reset = [](const std::shared_ptr<GuiToggle>& button) {
 		if (button)
@@ -152,7 +152,7 @@ void GuiConfirmPopup::ResetButtonStates()
 	reset(_okButton);
 }
 
-void GuiConfirmPopup::_LayoutButtons()
+void GuiPopup::_LayoutButtons()
 {
 	std::vector<std::shared_ptr<GuiToggle>> visibleButtons;
 	visibleButtons.reserve(4);

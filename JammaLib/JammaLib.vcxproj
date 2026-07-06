@@ -293,7 +293,7 @@
     <ClInclude Include="src\gui\GuiStackPanel.h" />
     <ClInclude Include="src\gui\GuiFocusManager.h" />
     <ClInclude Include="src\gui\GuiPopupHost.h" />
-    <ClInclude Include="src\gui\GuiConfirmPopup.h" />
+    <ClInclude Include="src\gui\GuiPopup.h" />
     <ClInclude Include="src\gui\GuiTextBox.h" />
     <ClInclude Include="src\gui\GuiNumericInput.h" />
     <ClInclude Include="src\gui\GuiDropDown.h" />
@@ -428,7 +428,7 @@
     <ClCompile Include="src\gui\GuiStackPanel.cpp" />
     <ClCompile Include="src\gui\GuiFocusManager.cpp" />
     <ClCompile Include="src\gui\GuiPopupHost.cpp" />
-    <ClCompile Include="src\gui\GuiConfirmPopup.cpp" />
+    <ClCompile Include="src\gui\GuiPopup.cpp" />
     <ClCompile Include="src\gui\GuiTextBox.cpp" />
     <ClCompile Include="src\gui\GuiNumericInput.cpp" />
     <ClCompile Include="src\gui\GuiDropDown.cpp" />
