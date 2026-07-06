@@ -20,10 +20,12 @@
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
+#include "../gui/GuiPanel.h"
 #include "../gui/GuiPopupHost.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
 #include "../gui/GuiRadio.h"
+#include "../gui/GuiToggle.h"
 #include "../io/JamFile.h"
 #include "../io/RigFile.h"
 #include "../io/InitFile.h"
@@ -51,6 +53,12 @@
 
 namespace engine
 {
+	struct NinjamTempoJoinOptions
+	{
+		bool PushLocalTempoOnJoin = false;
+		bool PromptBeforeApplyingRemoteTempo = true;
+	};
+
 	class SceneParams :
 		public base::DrawableParams,
 		public base::MoveableParams,
@@ -242,16 +250,12 @@ namespace engine
 
 		// Connect to an arbitrary NINJAM host ("host:port"). Reuses credentials
 		// from the loaded jam config when available; falls back to anonymous.
-		void ConnectNinjam(const std::string& host)
-		{
-			_networkService->Connect(host);
-		}
+		void ConnectNinjam(const std::string& host);
+		void ConnectNinjam(const std::string& host,
+			const NinjamTempoJoinOptions& options);
 
 		// Disconnect the active NINJAM session. No-op if not connected.
-		void DisconnectNinjam()
-		{
-			_networkService->Disconnect();
-		}
+		void DisconnectNinjam();
 
 		// Force-unload all hosted VST plugins owned by stations/takes/loops.
 		// Call on the main/non-audio thread during shutdown.
@@ -331,15 +335,20 @@ namespace engine
 		{
 			_networkService->SendQueuedTempoAtIntervalWrap(snapshot, _quantisation, _CurrentSampleRate());
 		}
-		void _ApplyRemoteTempoToClock(const ninjam::NinjamRemoteSnapshot& snapshot)
-		{
-			_networkService->ApplyRemoteTempoToClock(snapshot, _quantisation, _stations, _userConfig);
-		}
+		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _EnsureRemoteTempoPromptUi();
+		void _OpenRemoteTempoPromptIfNeeded();
+		void _HandleRemoteTempoPromptDecision(bool accept);
+		void _ResetNinjamTempoPromptState();
+		bool _IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
+			const timing::PendingRemoteTempoChange& rhs) const;
 
 
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
+		static constexpr unsigned int NinjamRemoteTempoAcceptControlIndex = 7101u;
+		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
 		bool _isSceneTouching;
 		std::atomic_bool _isSceneQuitting;
@@ -367,6 +376,18 @@ namespace engine
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupHost _popupHost;
+		NinjamTempoJoinOptions _ninjamTempoJoinOptions{};
+		bool _joinPushAwaitingOutcome = false;
+		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
+		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
+		bool _remoteTempoDialogOpen = false;
+		std::shared_ptr<gui::GuiPanel> _remoteTempoDialog;
+		std::shared_ptr<gui::GuiLabel> _remoteTempoTitleLabel;
+		std::shared_ptr<gui::GuiLabel> _remoteTempoLine1Label;
+		std::shared_ptr<gui::GuiLabel> _remoteTempoLine2Label;
+		std::shared_ptr<gui::GuiLabel> _remoteTempoLine3Label;
+		std::shared_ptr<gui::GuiToggle> _remoteTempoAcceptButton;
+		std::shared_ptr<gui::GuiToggle> _remoteTempoRejectButton;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;

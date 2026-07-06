@@ -84,6 +84,17 @@ namespace timing
 		unsigned int Bpi = 0u;
 	};
 
+	struct PendingRemoteTempoChange
+	{
+		unsigned int IntervalLengthSamps = 0u;
+		unsigned int SampleRate = 0u;
+		unsigned int GrainSamps = 0u;
+		unsigned long MasterLoopLengthSamps = 0ul;
+		float Bpm = 0.0f;
+		unsigned int Bpi = 0u;
+		unsigned int IntervalPositionSamps = 0u;
+	};
+
 	// Accumulates tap events and maintains a running average beat-gap estimate.
 	class TapTempoTracker
 	{
@@ -162,6 +173,12 @@ namespace timing
 		void ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const io::UserConfig& cfg);
+		std::optional<PendingRemoteTempoChange> ProposeRemoteTempoChange(const ninjam::NinjamRemoteSnapshot& snapshot,
+			const io::UserConfig& cfg) const;
+		void ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		bool ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint = 0u);
+		void ResetPendingTempoSyncState();
 
 		void QueueLocalTempo(unsigned int remoteSampleRate,
 			unsigned int audioDeviceSampleRate,
@@ -177,6 +194,15 @@ namespace timing
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		unsigned int RemoteSampleRate() const noexcept;
+		bool HasPendingTempo() const noexcept;
+
+		static void LogNinjamTempoEvent(const char* event,
+			unsigned long masterLoopLengthSamps,
+			unsigned int grainSamps,
+			unsigned int bpi,
+			float bpm,
+			unsigned int sampleRate);
+		static void LogNinjamManualTempoCommands(float bpm, unsigned int bpi);
 
 		static unsigned int MinSeedSamps(unsigned int sampleRate,
 			const QuantisationPolicy& policy);
@@ -236,6 +262,7 @@ namespace timing
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
 		std::atomic_bool _hasPendingTempo{ false };
+		std::atomic_bool _sendPendingTempoImmediately{ false };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;

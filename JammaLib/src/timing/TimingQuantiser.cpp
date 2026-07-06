@@ -136,6 +136,7 @@ void TimingQuantiser::Clear(bool clearTapTempo)
 	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 	_hasPendingTempo.store(false, std::memory_order_release);
+	_sendPendingTempoImmediately.store(false, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 	_remoteMasterLoopSamps = 0u;
 	_remoteSampleRate = 0u;
@@ -161,6 +162,14 @@ void TimingQuantiser::ArmReclock()
 	_armReclock.store(true, std::memory_order_release);
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 	_hasPendingTempo.store(false, std::memory_order_release);
+	_sendPendingTempoImmediately.store(false, std::memory_order_release);
+}
+
+void TimingQuantiser::ResetPendingTempoSyncState()
+{
+	_hasPendingTempo.store(false, std::memory_order_release);
+	_sendPendingTempoImmediately.store(false, std::memory_order_release);
+	_lastRemoteIntervalPos = 0u;
 }
 
 void TimingQuantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
@@ -485,14 +494,24 @@ void TimingQuantiser::ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snaps
 	const std::vector<std::shared_ptr<Station>>& stations,
 	const io::UserConfig& cfg)
 {
-	if (!_clock || !snapshot.HasTiming)
+	auto change = ProposeRemoteTempoChange(snapshot, cfg);
+	if (!change.has_value())
 		return;
+
+	ApplyAcceptedRemoteTempo(change.value(), stations);
+}
+
+std::optional<PendingRemoteTempoChange> TimingQuantiser::ProposeRemoteTempoChange(const ninjam::NinjamRemoteSnapshot& snapshot,
+	const io::UserConfig& cfg) const
+{
+	if (!_clock || !snapshot.HasTiming)
+		return std::nullopt;
 
 	if (_armReclock.load(std::memory_order_acquire))
-		return;
+		return std::nullopt;
 
 	if (_hasPendingTempo.load(std::memory_order_acquire))
-		return;
+		return std::nullopt;
 
 	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
 	if (intervalLengthSamps == 0u)
@@ -506,43 +525,89 @@ void TimingQuantiser::ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snaps
 		|| (snapshot.SampleRate != _remoteSampleRate);
 
 	if (!tempoChanged && (_effectiveQuantiseSamps.load(std::memory_order_acquire) != 0u) && _clock->IsQuantisable())
-		return;
+		return std::nullopt;
 
 	const auto timing = cfg.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
 	if (!timing.has_value() || (timing->GrainSamps == 0u))
+		return std::nullopt;
+
+	PendingRemoteTempoChange change;
+	change.IntervalLengthSamps = intervalLengthSamps;
+	change.SampleRate = snapshot.SampleRate;
+	change.GrainSamps = timing->GrainSamps;
+	change.MasterLoopLengthSamps = static_cast<unsigned long>(intervalLengthSamps);
+	change.Bpm = timing->Bpm;
+	change.Bpi = timing->Bpi;
+	change.IntervalPositionSamps = snapshot.IntervalPositionSamps;
+	return change;
+}
+
+void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
+	const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (!_clock || (change.IntervalLengthSamps == 0u) || (change.GrainSamps == 0u))
 		return;
 
-	_remoteMasterLoopSamps = intervalLengthSamps;
-	_remoteSampleRate = snapshot.SampleRate;
-	_effectiveQuantiseSamps.store(timing->GrainSamps, std::memory_order_release);
-	_masterLoopLengthSamps.store(static_cast<unsigned long>(intervalLengthSamps), std::memory_order_release);
+	_remoteMasterLoopSamps = change.IntervalLengthSamps;
+	_remoteSampleRate = change.SampleRate;
+	_effectiveQuantiseSamps.store(change.GrainSamps, std::memory_order_release);
+	_masterLoopLengthSamps.store(change.MasterLoopLengthSamps, std::memory_order_release);
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_tapTempo.Clear();
 	}
 
-	const auto quantisation = cfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
-	_clock->SetQuantisation(timing->GrainSamps, quantisation);
-	_clock->SetSeedSourceLength(intervalLengthSamps);
-	if (intervalLengthSamps > 0u)
+	const auto quantisation = _seedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
+	_clock->SetQuantisation(change.GrainSamps, quantisation);
+	_clock->SetSeedSourceLength(change.IntervalLengthSamps);
+	if (change.IntervalLengthSamps > 0u)
 	{
 		auto loopIndexFrac = 1.0;
-		if (snapshot.IntervalPositionSamps > 0u)
+		if (change.IntervalPositionSamps > 0u)
 		{
-			const auto intervalPos = snapshot.IntervalPositionSamps % intervalLengthSamps;
-			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(intervalLengthSamps));
+			const auto intervalPos = change.IntervalPositionSamps % change.IntervalLengthSamps;
+			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(change.IntervalLengthSamps));
 		}
 		_clock->SetMasterLoopIndexFrac(loopIndexFrac);
 	}
 
-	SetMidiGrain(timing->GrainSamps, "remote tempo", stations);
+	SetMidiGrain(change.GrainSamps, "remote tempo", stations);
+	LogNinjamTempoEvent("Remote tempo applied locally",
+		change.MasterLoopLengthSamps,
+		change.GrainSamps,
+		change.Bpi,
+		change.Bpm,
+		change.SampleRate);
+}
 
-	std::cout << "[NINJAM] Tempo policy applied: bpm=" << snapshot.Bpm
-		<< " bpi=" << snapshot.Bpi
-		<< " sr=" << snapshot.SampleRate
-		<< " intervalSamps=" << intervalLengthSamps
-		<< " mode=" << (cfg.Loop.SeedUsesPowers ? "power" : "multiple")
-		<< " grain=" << timing->GrainSamps << std::endl;
+bool TimingQuantiser::ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint)
+{
+	if (_masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
+		return false;
+
+	if (_effectiveQuantiseSamps.load(std::memory_order_acquire) == 0u)
+		return false;
+
+	_hasPendingTempo.store(true, std::memory_order_release);
+	_armReclock.store(false, std::memory_order_release);
+	_sendPendingTempoImmediately.store(sendImmediately, std::memory_order_release);
+
+	const auto sampleRate = (sampleRateHint > 0u) ? sampleRateHint : _remoteSampleRate;
+	const auto timing = TimingFromSeedAndMaster(_effectiveQuantiseSamps.load(std::memory_order_acquire),
+		_masterLoopLengthSamps.load(std::memory_order_acquire),
+		sampleRate);
+	if (timing.has_value())
+	{
+		LogNinjamTempoEvent("Local tempo queued for join push",
+			_masterLoopLengthSamps.load(std::memory_order_acquire),
+			_effectiveQuantiseSamps.load(std::memory_order_acquire),
+			timing->Bpi,
+			timing->Bpm,
+			sampleRate);
+		LogNinjamManualTempoCommands(timing->Bpm, timing->Bpi);
+	}
+
+	return true;
 }
 
 void TimingQuantiser::QueueLocalTempo(unsigned int remoteSampleRate,
@@ -584,15 +649,17 @@ void TimingQuantiser::QueueLocalTempo(unsigned int remoteSampleRate,
 	_effectiveQuantiseSamps.store(timing->GrainSamps, std::memory_order_release);
 	_masterLoopLengthSamps.store(seedLoopLengthSamps, std::memory_order_release);
 	_hasPendingTempo.store(true, std::memory_order_release);
+	_sendPendingTempoImmediately.store(false, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 	if (shouldPulseOverlay)
 		PulseOverlay();
 
-	std::cout << "[NINJAM] Local tempo queued: bpm=" << timing->Bpm
-		<< " bpi=" << timing->Bpi
-		<< " grain=" << timing->GrainSamps
-		<< " seedLoopLength=" << seedLoopLengthSamps
-		<< " (queued for next interval boundary)" << std::endl;
+	LogNinjamTempoEvent("Local tempo queued",
+		seedLoopLengthSamps,
+		timing->GrainSamps,
+		timing->Bpi,
+		timing->Bpm,
+		sampleRate);
 }
 
 void TimingQuantiser::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
@@ -610,7 +677,8 @@ void TimingQuantiser::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapsh
 	if (!ninjam || !ninjam->IsConnected())
 		return;
 
-	if (!wrapped)
+	const bool immediate = _sendPendingTempoImmediately.load(std::memory_order_acquire);
+	if (!immediate && !wrapped)
 		return;
 
 	auto sampleRate = remoteSampleRate;
@@ -627,7 +695,16 @@ void TimingQuantiser::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapsh
 		return;
 
 	if (ninjam->RequestServerTempo(qtOpt->Bpm, static_cast<int>(qtOpt->Bpi)))
+	{
 		_hasPendingTempo.store(false, std::memory_order_release);
+		_sendPendingTempoImmediately.store(false, std::memory_order_release);
+		LogNinjamTempoEvent("Local tempo sent to server",
+			_masterLoopLengthSamps.load(std::memory_order_acquire),
+			_effectiveQuantiseSamps.load(std::memory_order_acquire),
+			qtOpt->Bpi,
+			qtOpt->Bpm,
+			sampleRate);
+	}
 }
 
 unsigned int TimingQuantiser::EffectiveSamps() const noexcept
@@ -653,6 +730,36 @@ std::shared_ptr<Timer> TimingQuantiser::Clock() const noexcept
 unsigned int TimingQuantiser::RemoteSampleRate() const noexcept
 {
 	return _remoteSampleRate;
+}
+
+bool TimingQuantiser::HasPendingTempo() const noexcept
+{
+	return _hasPendingTempo.load(std::memory_order_acquire);
+}
+
+void TimingQuantiser::LogNinjamTempoEvent(const char* event,
+	unsigned long masterLoopLengthSamps,
+	unsigned int grainSamps,
+	unsigned int bpi,
+	float bpm,
+	unsigned int sampleRate)
+{
+	std::cout << "[NINJAM] " << event
+		<< ": master=" << masterLoopLengthSamps
+		<< " grain=" << grainSamps
+		<< " bpi=" << bpi
+		<< " bpm=" << bpm
+		<< " sr=" << sampleRate
+		<< std::endl;
+}
+
+void TimingQuantiser::LogNinjamManualTempoCommands(float bpm, unsigned int bpi)
+{
+	std::cout << "[NINJAM] Manual server tempo commands: /bpm " << static_cast<int>(bpm + 0.5f)
+		<< " /bpi " << bpi
+		<< " | !vote bpm " << static_cast<int>(bpm + 0.5f)
+		<< " | !vote bpi " << bpi
+		<< std::endl;
 }
 
 QuantisationPolicy TimingQuantiser::Policy(const io::UserConfig& cfg)

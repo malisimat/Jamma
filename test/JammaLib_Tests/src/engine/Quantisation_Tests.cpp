@@ -3,9 +3,12 @@
 #include <utility>
 #include <vector>
 #include "gtest/gtest.h"
+#include "io/UserConfig.h"
+#include "ninjam/NinjamConnection.h"
 #include "timing/TimingQuantiser.h"
 #include "graphics/QuantisationModel.h"
 #include "midi/MidiQuantisation.h"
+#include "utils/Timer.h"
 
 using timing::QuantisationPolicy;
 using timing::TapTempoTracker;
@@ -130,6 +133,74 @@ TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(0u, 384000ul, 48000u).has_value());
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 0ul, 48000u).has_value());
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 384000ul, 0u).has_value());
+}
+
+TEST(Quantisation, RemoteTempoProposalAndApplyRoundTrip)
+{
+	io::UserConfig cfg;
+	timing::TimingQuantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+
+	ninjam::NinjamRemoteSnapshot snapshot;
+	snapshot.HasTiming = true;
+	snapshot.SampleRate = 44100u;
+	snapshot.IntervalLengthSamps = 352800u;
+	snapshot.IntervalPositionSamps = 22050u;
+	snapshot.Bpm = 120.0f;
+	snapshot.Bpi = 16;
+
+	auto proposal = quantiser.ProposeRemoteTempoChange(snapshot, cfg);
+	ASSERT_TRUE(proposal.has_value());
+	EXPECT_EQ(352800u, proposal->IntervalLengthSamps);
+	EXPECT_EQ(22050u, proposal->GrainSamps);
+	EXPECT_EQ(16u, proposal->Bpi);
+	EXPECT_FLOAT_EQ(120.0f, proposal->Bpm);
+
+	quantiser.ApplyAcceptedRemoteTempo(proposal.value(), {});
+
+	// Same remote timing should not keep proposing once applied.
+	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
+}
+
+TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
+{
+	io::UserConfig cfg;
+	timing::TimingQuantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+
+	ninjam::NinjamRemoteSnapshot seedSnapshot;
+	seedSnapshot.HasTiming = true;
+	seedSnapshot.SampleRate = 44100u;
+	seedSnapshot.IntervalLengthSamps = 352800u;
+	seedSnapshot.IntervalPositionSamps = 0u;
+	seedSnapshot.Bpm = 120.0f;
+	seedSnapshot.Bpi = 16;
+
+	auto seedProposal = quantiser.ProposeRemoteTempoChange(seedSnapshot, cfg);
+	ASSERT_TRUE(seedProposal.has_value());
+	quantiser.ApplyAcceptedRemoteTempo(seedProposal.value(), {});
+
+	EXPECT_TRUE(quantiser.ForceQueueCurrentTempoAsPending(true, 44100u));
+	EXPECT_TRUE(quantiser.HasPendingTempo());
+
+	ninjam::NinjamRemoteSnapshot nextSnapshot;
+	nextSnapshot.HasTiming = true;
+	nextSnapshot.SampleRate = 44100u;
+	nextSnapshot.IntervalLengthSamps = 529200u;
+	nextSnapshot.IntervalPositionSamps = 1024u;
+	nextSnapshot.Bpm = 100.0f;
+	nextSnapshot.Bpi = 20;
+	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(nextSnapshot, cfg).has_value());
+
+	quantiser.ResetPendingTempoSyncState();
+	EXPECT_FALSE(quantiser.HasPendingTempo());
+}
+
+TEST(Quantisation, ForceQueueCurrentTempoAsPendingRequiresExistingTempo)
+{
+	timing::TimingQuantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	EXPECT_FALSE(quantiser.ForceQueueCurrentTempoAsPending(true, 48000u));
 }
 
 // ---------------------------------------------------------------------------
