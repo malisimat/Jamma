@@ -21,7 +21,7 @@
 #include "../gui/GuiPopup.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
-#include "../gui/GuiPopupHost.h"
+#include "../gui/GuiPopupManager.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
 #include "../gui/GuiRadio.h"
@@ -366,7 +366,7 @@ namespace engine
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;
 		std::vector<std::shared_ptr<base::GuiElement>> _guiChildren;
 		gui::GuiFocusManager _focusManager;
-		gui::GuiPopupHost _popupHost;
+		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;

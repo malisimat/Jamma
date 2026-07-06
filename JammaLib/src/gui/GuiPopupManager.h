@@ -11,22 +11,22 @@ namespace gui
 	// Scene-level popup layer + input capture.
 	//
 	// Popups are already-initialised GuiElements positioned in global (scene
-	// overlay) coordinates.  The host renders them after the normal GUI tree and
+	// overlay) coordinates. The manager renders them after the normal GUI tree and
 	// captures input while any popup is open:
 	//   - input is routed to the topmost popup first;
 	//   - a press outside the topmost popup dismisses it (outside-click dismiss);
 	//   - Escape dismisses the topmost popup.
-	// The host does not own resource lifetime; the opening control initialises
+	// The manager does not own resource lifetime; the opening control initialises
 	// and releases its own popup content.
-	class GuiPopupHost
+	class GuiPopupManager
 	{
 	public:
-		// Push a popup onto the stack.  `owner` is informational (the control
+		// Push a popup onto the stack. `owner` is informational (the control
 		// that opened it) and is held weakly.
 		void Open(std::shared_ptr<base::GuiElement> element,
 			std::shared_ptr<base::GuiElement> owner = nullptr);
 
-		// Close the topmost popup.  No-op when empty.
+		// Close the topmost popup. No-op when empty.
 		void Close();
 		void CloseAll();
 
@@ -36,7 +36,7 @@ namespace gui
 
 		void Draw(base::DrawContext& ctx);
 
-		// While a popup is open these capture input.  Returns an eaten result so
+		// While a popup is open these capture input. Returns an eaten result so
 		// the scene does not fall through to controls beneath the popup.
 		actions::ActionResult OnAction(actions::TouchAction action);
 		actions::ActionResult OnAction(actions::TouchMoveAction action);
@@ -46,7 +46,7 @@ namespace gui
 		struct Popup
 		{
 			std::shared_ptr<base::GuiElement> Element;
-			std::weak_ptr<base::GuiElement>   Owner;
+			std::weak_ptr<base::GuiElement> Owner;
 		};
 
 		std::vector<Popup> _popups;

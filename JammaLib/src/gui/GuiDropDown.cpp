@@ -226,14 +226,14 @@ GuiDropDown::GuiDropDown(GuiDropDownParams params) :
 	_padding(params.Padding),
 	_label(_MakeClosedLabel(params)),
 	_list(_MakeList(params)),
-	_popupHost(nullptr),
+	_popupManager(nullptr),
 	_open(false),
 	_receiver(params.Receiver)
 {
 	_list->SetOnSelect([this](int index) { _Select(index, true); });
 }
 
-void GuiDropDown::SetPopupHost(GuiPopupHost* host) { _popupHost = host; }
+void GuiDropDown::SetPopupManager(GuiPopupManager* manager) { _popupManager = manager; }
 int GuiDropDown::SelectedIndex() const { return _selectedIndex; }
 
 std::string GuiDropDown::SelectedText() const
@@ -277,14 +277,14 @@ void GuiDropDown::_Select(int index, bool notify)
 
 void GuiDropDown::Open()
 {
-	if (_open || _items.empty() || nullptr == _popupHost)
+	if (_open || _items.empty() || nullptr == _popupManager)
 		return;
 
 	// Position the list directly beneath the closed control in global coords.
 	auto global = GlobalPosition();
 	_list->SetPosition({ global.X, global.Y + (int)GetSize().Height });
 	_list->SetHighlight(_selectedIndex < 0 ? 0 : _selectedIndex);
-	_popupHost->Open(_list, shared_from_this());
+	_popupManager->Open(_list, shared_from_this());
 	_open = true;
 }
 
@@ -293,8 +293,8 @@ void GuiDropDown::Close()
 	if (!_open)
 		return;
 
-	if (_popupHost && _popupHost->Top() == _list)
-		_popupHost->Close();
+	if (_popupManager && _popupManager->Top() == _list)
+		_popupManager->Close();
 
 	_open = false;
 }

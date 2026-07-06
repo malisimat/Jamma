@@ -290,7 +290,7 @@
     <ClInclude Include="src\gui\GuiFocusManager.h">
       <Filter>src\gui</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiPopupHost.h">
+    <ClInclude Include="src\gui\GuiPopupManager.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiPopup.h">
@@ -667,7 +667,7 @@
     <ClCompile Include="src\gui\GuiFocusManager.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiPopupHost.cpp">
+    <ClCompile Include="src\gui\GuiPopupManager.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiPopup.cpp">

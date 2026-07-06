@@ -82,7 +82,7 @@ Scene::Scene(SceneParams params,
 	_label = std::make_unique<GuiLabel>(labelParams);
 
 	GuiMainPanelParams mainParams;
-	mainParams.PopupHost = &_popupHost;
+	mainParams.PopupManager = &_popupManager;
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
 
@@ -300,7 +300,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
 	_remoteTempoDialog->SetPosition({ x, y });
 
-	_popupHost.Open(_remoteTempoDialog);
+	_popupManager.Open(_remoteTempoDialog);
 	_remoteTempoDialogOpen = true;
 }
 
@@ -316,8 +316,8 @@ void Scene::_CloseRemoteTempoPrompt()
 {
 	if (_remoteTempoDialogOpen)
 	{
-		if (_popupHost.Top() == _remoteTempoDialog)
-			_popupHost.Close();
+		if (_popupManager.Top() == _remoteTempoDialog)
+			_popupManager.Close();
 		_remoteTempoDialogOpen = false;
 	}
 }
@@ -417,7 +417,7 @@ void Scene::Draw(DrawContext& ctx)
 	_globalMidiQuantRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
 
-	_popupHost.Draw(ctx);
+	_popupManager.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -534,10 +534,10 @@ ActionResult Scene::OnAction(TouchAction action)
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
 	// Popups capture all pointer input while open (routing, outside-dismiss).
-	if (_popupHost.IsOpen())
+	if (_popupManager.IsOpen())
 	{
-		auto popupRes = _popupHost.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupHost.IsOpen())
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
 			_HandleRemoteTempoPromptDecision(false);
 		return popupRes;
 	}
@@ -696,8 +696,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
 
-	if (_popupHost.IsOpen())
-		return _popupHost.OnAction(action);
+	if (_popupManager.IsOpen())
+		return _popupManager.OnAction(action);
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -729,10 +729,10 @@ ActionResult Scene::OnAction(KeyAction action)
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
 	// 1. Open popups capture the keyboard first.
-	if (_popupHost.IsOpen())
+	if (_popupManager.IsOpen())
 	{
-		auto popupRes = _popupHost.OnAction(action);
-		if (_remoteTempoDialogOpen && !_popupHost.IsOpen())
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
 			_HandleRemoteTempoPromptDecision(false);
 		if (popupRes.IsEaten)
 			return popupRes;
@@ -1377,7 +1377,7 @@ void Scene::ApplyDeferredHoverUpdates()
 	if (!_hover2dDirty)
 		return;
 
-	if (_popupHost.IsOpen())
+	if (_popupManager.IsOpen())
 	{
 		if (!_hoverPath2d.empty())
 		{
