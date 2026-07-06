@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <string>
 #include "../ninjam/NinjamController.h"
@@ -11,6 +12,12 @@
 
 namespace ninjam
 {
+	struct NinjamTempoJoinOptions
+	{
+		bool PushLocalTempoOnJoin = false;
+		bool PromptBeforeApplyingRemoteTempo = true;
+	};
+
 	class NinjamNetworkService
 	{
 	public:
@@ -22,6 +29,14 @@ namespace ninjam
 		void SendChat(const std::string& msg);
 		void Connect(const std::string& host);
 		void Disconnect();
+
+		void SetTempoJoinOptions(const NinjamTempoJoinOptions& options);
+		const NinjamTempoJoinOptions& TempoJoinOptions() const noexcept { return _tempoJoinOptions; }
+
+		void PrepareTempoSyncOnConnect(timing::TimingQuantiser& quantisation,
+			unsigned int currentSampleRate);
+
+		void ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation);
 
 		bool UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
@@ -39,7 +54,28 @@ namespace ninjam
 			timing::TimingQuantiser& quantisation,
 			unsigned int currentSampleRate);
 
+		void HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
+			timing::TimingQuantiser& quantisation,
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const io::UserConfig& userConfig);
+
+		std::optional<timing::PendingRemoteTempoChange> PendingRemoteTempoPrompt() const
+		{
+			return _pendingRemoteTempoPrompt;
+		}
+
+		void ResolveRemoteTempoPromptDecision(bool accept,
+			timing::TimingQuantiser& quantisation,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
+
 	private:
+		static bool IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
+			const timing::PendingRemoteTempoChange& rhs) noexcept;
+
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
+		NinjamTempoJoinOptions _tempoJoinOptions{};
+		bool _joinPushAwaitingOutcome = false;
+		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
+		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
 	};
 }

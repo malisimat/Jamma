@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "NinjamNetworkService.h"
+#include <cmath>
 #include <set>
 #include <iostream>
 
@@ -26,6 +27,37 @@ namespace ninjam
 	void NinjamNetworkService::Disconnect()
 	{
 		_ninjamController->Disconnect();
+	}
+
+	void NinjamNetworkService::SetTempoJoinOptions(const NinjamTempoJoinOptions& options)
+	{
+		_tempoJoinOptions = options;
+	}
+
+	void NinjamNetworkService::PrepareTempoSyncOnConnect(timing::TimingQuantiser& quantisation,
+		unsigned int currentSampleRate)
+	{
+		_pendingRemoteTempoPrompt.reset();
+		_ignoredRemoteTempoPrompt.reset();
+		_joinPushAwaitingOutcome = false;
+
+		if (_tempoJoinOptions.PushLocalTempoOnJoin)
+		{
+			const auto queued = quantisation.ForceQueueCurrentTempoAsPending(true, currentSampleRate);
+			_joinPushAwaitingOutcome = queued;
+			if (!queued)
+			{
+				std::cout << "[NINJAM] Join push requested, but no valid local tempo is available" << std::endl;
+			}
+		}
+	}
+
+	void NinjamNetworkService::ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation)
+	{
+		_pendingRemoteTempoPrompt.reset();
+		_ignoredRemoteTempoPrompt.reset();
+		_joinPushAwaitingOutcome = false;
+		quantisation.ResetPendingTempoSyncState();
 	}
 
 	bool NinjamNetworkService::UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
@@ -149,5 +181,88 @@ namespace ninjam
 			_ninjamController->Session(),
 			quantisation.RemoteSampleRate(),
 			currentSampleRate);
+	}
+
+	void NinjamNetworkService::HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
+		timing::TimingQuantiser& quantisation,
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		const io::UserConfig& userConfig)
+	{
+		auto proposal = quantisation.ProposeRemoteTempoChange(snapshot, userConfig);
+		if (!proposal.has_value())
+			return;
+
+		if (_joinPushAwaitingOutcome)
+		{
+			std::cout << "[NINJAM] Join push fallback: server stayed on another tempo" << std::endl;
+			_joinPushAwaitingOutcome = false;
+		}
+
+		if (!_tempoJoinOptions.PromptBeforeApplyingRemoteTempo)
+		{
+			quantisation.ApplyAcceptedRemoteTempo(proposal.value(), stations);
+			_pendingRemoteTempoPrompt.reset();
+			_ignoredRemoteTempoPrompt.reset();
+			return;
+		}
+
+		if (_ignoredRemoteTempoPrompt.has_value()
+			&& IsSameRemoteTempoChange(_ignoredRemoteTempoPrompt.value(), proposal.value()))
+		{
+			return;
+		}
+
+		const auto isNewProposal = !_pendingRemoteTempoPrompt.has_value()
+			|| !IsSameRemoteTempoChange(_pendingRemoteTempoPrompt.value(), proposal.value());
+		_pendingRemoteTempoPrompt = proposal;
+		if (isNewProposal)
+		{
+			timing::TimingQuantiser::LogNinjamTempoEvent("Remote tempo proposed",
+				proposal->MasterLoopLengthSamps,
+				proposal->GrainSamps,
+				proposal->Bpi,
+				proposal->Bpm,
+				proposal->SampleRate);
+		}
+	}
+
+	void NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
+		timing::TimingQuantiser& quantisation,
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
+	{
+		if (!_pendingRemoteTempoPrompt.has_value())
+			return;
+
+		const auto change = _pendingRemoteTempoPrompt.value();
+		if (accept)
+		{
+			quantisation.ApplyAcceptedRemoteTempo(change, stations);
+			_ignoredRemoteTempoPrompt.reset();
+		}
+		else
+		{
+			_ignoredRemoteTempoPrompt = change;
+			timing::TimingQuantiser::LogNinjamTempoEvent("Remote tempo ignored by user",
+				change.MasterLoopLengthSamps,
+				change.GrainSamps,
+				change.Bpi,
+				change.Bpm,
+				change.SampleRate);
+			timing::TimingQuantiser::LogNinjamManualTempoCommands(change.Bpm, change.Bpi);
+		}
+
+		_pendingRemoteTempoPrompt.reset();
+		_joinPushAwaitingOutcome = false;
+	}
+
+	bool NinjamNetworkService::IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
+		const timing::PendingRemoteTempoChange& rhs) noexcept
+	{
+		return (lhs.IntervalLengthSamps == rhs.IntervalLengthSamps)
+			&& (lhs.SampleRate == rhs.SampleRate)
+			&& (lhs.GrainSamps == rhs.GrainSamps)
+			&& (lhs.MasterLoopLengthSamps == rhs.MasterLoopLengthSamps)
+			&& (lhs.Bpi == rhs.Bpi)
+			&& (std::abs(lhs.Bpm - rhs.Bpm) < 0.01f);
 	}
 }

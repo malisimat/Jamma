@@ -57,6 +57,7 @@ namespace gui
 	public:
 		GuiButton(GuiButtonParams guiParams);
 		virtual void SetSize(utils::Size2d size) override;
+		void SetText(const std::string& text);
 
 	private:
 		static GuiLabelParams _MakeLabelParams(const GuiButtonParams& params);

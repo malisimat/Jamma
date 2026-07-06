@@ -204,25 +204,16 @@ Scene::Scene(SceneParams params,
 
 void Scene::ConnectNinjam(const std::string& host)
 {
-	ConnectNinjam(host, _ninjamTempoJoinOptions);
+	ConnectNinjam(host, _networkService->TempoJoinOptions());
 }
 
 void Scene::ConnectNinjam(const std::string& host,
-	const NinjamTempoJoinOptions& options)
+	const ninjam::NinjamTempoJoinOptions& options)
 {
 	std::scoped_lock lock(_sceneMutex);
-	_ninjamTempoJoinOptions = options;
-	_ResetNinjamTempoPromptState();
-
-	if (_ninjamTempoJoinOptions.PushLocalTempoOnJoin)
-	{
-		const auto queued = _quantisation.ForceQueueCurrentTempoAsPending(true, _CurrentSampleRate());
-		_joinPushAwaitingOutcome = queued;
-		if (!queued)
-		{
-			std::cout << "[NINJAM] Join push requested, but no valid local tempo is available" << std::endl;
-		}
-	}
+	_networkService->SetTempoJoinOptions(options);
+	_networkService->PrepareTempoSyncOnConnect(_quantisation, _CurrentSampleRate());
+	_CloseRemoteTempoPrompt();
 
 	_networkService->Connect(host);
 }
@@ -230,8 +221,8 @@ void Scene::ConnectNinjam(const std::string& host,
 void Scene::DisconnectNinjam()
 {
 	std::scoped_lock lock(_sceneMutex);
-	_ResetNinjamTempoPromptState();
-	_quantisation.ResetPendingTempoSyncState();
+	_CloseRemoteTempoPrompt();
+	_networkService->ResetTempoSyncOnDisconnect(_quantisation);
 	_networkService->Disconnect();
 }
 
@@ -240,149 +231,69 @@ void Scene::_EnsureRemoteTempoPromptUi()
 	if (_remoteTempoDialog)
 		return;
 
-	GuiElementParams popupParams;
-	popupParams.GuiPassThrough = false;
-	popupParams.TextureShader = "texture_tinted";
-	popupParams.Texture = "rounded_but";
-	popupParams.OverTexture = "rounded_but";
-	popupParams.DownTexture = "rounded_but";
-	popupParams.Size = { 460u, 210u };
-	popupParams.MinSize = { 460u, 210u };
-	popupParams.TintColor = glm::vec3(0.08f, 0.10f, 0.14f);
-
-	_remoteTempoDialog = std::make_shared<GuiPanel>(popupParams);
-
-	GuiLabelParams titleParams;
-	titleParams.String = "Remote NINJAM tempo changed";
-	titleParams.Size = { 420u, 26u };
-	titleParams.MinSize = { 100u, 26u };
-	titleParams.Position = { 20, 170 };
-	_remoteTempoTitleLabel = std::make_shared<GuiLabel>(titleParams);
-
-	GuiLabelParams line1Params;
-	line1Params.String = "";
-	line1Params.Size = { 420u, 24u };
-	line1Params.MinSize = { 80u, 24u };
-	line1Params.Position = { 20, 136 };
-	_remoteTempoLine1Label = std::make_shared<GuiLabel>(line1Params);
-
-	GuiLabelParams line2Params;
-	line2Params.String = "";
-	line2Params.Size = { 420u, 24u };
-	line2Params.MinSize = { 80u, 24u };
-	line2Params.Position = { 20, 108 };
-	_remoteTempoLine2Label = std::make_shared<GuiLabel>(line2Params);
-
-	GuiLabelParams line3Params;
-	line3Params.String = "";
-	line3Params.Size = { 420u, 24u };
-	line3Params.MinSize = { 80u, 24u };
-	line3Params.Position = { 20, 80 };
-	_remoteTempoLine3Label = std::make_shared<GuiLabel>(line3Params);
-
-	GuiToggleParams acceptParams = GuiToggleParams::PanelPrimary();
-	acceptParams.Text = "Yes";
-	acceptParams.Position = { 120, 24 };
-	acceptParams.Size = { 96u, 36u };
-	acceptParams.MinSize = { 60u, 36u };
-	acceptParams.ToggleIndex = NinjamRemoteTempoAcceptControlIndex;
-	_remoteTempoAcceptButton = std::make_shared<GuiToggle>(acceptParams);
-
-	GuiToggleParams rejectParams = GuiToggleParams::PanelPrimary();
-	rejectParams.Text = "Cancel";
-	rejectParams.Position = { 244, 24 };
-	rejectParams.Size = { 96u, 36u };
-	rejectParams.MinSize = { 60u, 36u };
-	rejectParams.ToggleIndex = NinjamRemoteTempoRejectControlIndex;
-	_remoteTempoRejectButton = std::make_shared<GuiToggle>(rejectParams);
-
-	_remoteTempoDialog->AddChild(_remoteTempoTitleLabel);
-	_remoteTempoDialog->AddChild(_remoteTempoLine1Label);
-	_remoteTempoDialog->AddChild(_remoteTempoLine2Label);
-	_remoteTempoDialog->AddChild(_remoteTempoLine3Label);
-	_remoteTempoDialog->AddChild(_remoteTempoAcceptButton);
-	_remoteTempoDialog->AddChild(_remoteTempoRejectButton);
+	_remoteTempoDialog = std::make_shared<GuiConfirmPopup>(GuiConfirmPopupParams::PanelDefault());
+	_remoteTempoDialog->SetTitle("Remote NINJAM tempo changed");
+	_remoteTempoDialog->ConfigureButtons({
+		true,
+		false,
+		true,
+		false,
+		NinjamRemoteTempoAcceptControlIndex,
+		0u,
+		NinjamRemoteTempoRejectControlIndex,
+		0u,
+		"Yes",
+		"No",
+		"Cancel",
+		"Ok"
+	});
 	_remoteTempoDialog->Init();
-}
-
-bool Scene::_IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
-	const timing::PendingRemoteTempoChange& rhs) const
-{
-	return (lhs.IntervalLengthSamps == rhs.IntervalLengthSamps)
-		&& (lhs.SampleRate == rhs.SampleRate)
-		&& (lhs.GrainSamps == rhs.GrainSamps)
-		&& (lhs.MasterLoopLengthSamps == rhs.MasterLoopLengthSamps)
-		&& (lhs.Bpi == rhs.Bpi)
-		&& (std::abs(lhs.Bpm - rhs.Bpm) < 0.01f);
 }
 
 void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
-	auto proposal = _quantisation.ProposeRemoteTempoChange(snapshot, _userConfig);
-	if (!proposal.has_value())
-		return;
+	auto previous = _networkService->PendingRemoteTempoPrompt();
+	_networkService->HandleRemoteTempoSnapshot(snapshot,
+		_quantisation,
+		_stations,
+		_userConfig);
+	auto current = _networkService->PendingRemoteTempoPrompt();
 
-	if (_joinPushAwaitingOutcome)
+	if (_remoteTempoDialogOpen
+		&& ((!current.has_value())
+			|| !previous.has_value()
+			|| (current->IntervalLengthSamps != previous->IntervalLengthSamps)
+			|| (current->SampleRate != previous->SampleRate)
+			|| (current->GrainSamps != previous->GrainSamps)
+			|| (current->MasterLoopLengthSamps != previous->MasterLoopLengthSamps)
+			|| (current->Bpi != previous->Bpi)
+			|| (std::abs(current->Bpm - previous->Bpm) >= 0.01f)))
 	{
-		std::cout << "[NINJAM] Join push fallback: server stayed on another tempo" << std::endl;
-		_joinPushAwaitingOutcome = false;
-	}
-
-	if (!_ninjamTempoJoinOptions.PromptBeforeApplyingRemoteTempo)
-	{
-		_quantisation.ApplyAcceptedRemoteTempo(proposal.value(), _stations);
-		_pendingRemoteTempoPrompt.reset();
-		_ignoredRemoteTempoPrompt.reset();
-		return;
-	}
-
-	if (_ignoredRemoteTempoPrompt.has_value()
-		&& _IsSameRemoteTempoChange(_ignoredRemoteTempoPrompt.value(), proposal.value()))
-	{
-		return;
-	}
-
-	const auto isNewProposal = !_pendingRemoteTempoPrompt.has_value()
-		|| !_IsSameRemoteTempoChange(_pendingRemoteTempoPrompt.value(), proposal.value());
-	_pendingRemoteTempoPrompt = proposal;
-	if (isNewProposal)
-	{
-		if (_remoteTempoDialogOpen)
-		{
-			if (_popupHost.Top() == _remoteTempoDialog)
-				_popupHost.Close();
-			_remoteTempoDialogOpen = false;
-		}
-
-		timing::TimingQuantiser::LogNinjamTempoEvent("Remote tempo proposed",
-			proposal->MasterLoopLengthSamps,
-			proposal->GrainSamps,
-			proposal->Bpi,
-			proposal->Bpm,
-			proposal->SampleRate);
+		_CloseRemoteTempoPrompt();
 	}
 }
 
 void Scene::_OpenRemoteTempoPromptIfNeeded()
 {
-	if (_remoteTempoDialogOpen || !_pendingRemoteTempoPrompt.has_value())
+	const auto pendingChange = _networkService->PendingRemoteTempoPrompt();
+	if (_remoteTempoDialogOpen || !pendingChange.has_value())
 		return;
 
 	_EnsureRemoteTempoPromptUi();
 	if (!_remoteTempoDialog)
 		return;
 
-	const auto& change = _pendingRemoteTempoPrompt.value();
+	const auto& change = pendingChange.value();
 	std::ostringstream bpmStream;
 	bpmStream.setf(std::ios::fixed, std::ios::floatfield);
 	bpmStream << std::setprecision(1) << change.Bpm;
 
-	_remoteTempoLine1Label->SetString("Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI");
-	_remoteTempoLine2Label->SetString("Master loop: " + std::to_string(change.MasterLoopLengthSamps) + " samples");
-	_remoteTempoLine3Label->SetString("Grain: " + std::to_string(change.GrainSamps) + " samples. Apply locally?");
-
-	_remoteTempoAcceptButton->SetToggleState(gui::GuiToggleParams::TOGGLE_OFF, true);
-	_remoteTempoRejectButton->SetToggleState(gui::GuiToggleParams::TOGGLE_OFF, true);
+	_remoteTempoDialog->SetBodyLines({
+		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
+		"Master loop: " + std::to_string(change.MasterLoopLengthSamps) + " samples",
+		"Grain: " + std::to_string(change.GrainSamps) + " samples. Apply locally?"
+	});
+	_remoteTempoDialog->ResetButtonStates();
 
 	const auto popupSize = _remoteTempoDialog->GetSize();
 	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
@@ -395,52 +306,14 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 {
-	if (!_pendingRemoteTempoPrompt.has_value())
-	{
-		if (_remoteTempoDialogOpen)
-		{
-			if (_popupHost.Top() == _remoteTempoDialog)
-				_popupHost.Close();
-			_remoteTempoDialogOpen = false;
-		}
-		return;
-	}
-
-	const auto change = _pendingRemoteTempoPrompt.value();
-	if (accept)
-	{
-		_quantisation.ApplyAcceptedRemoteTempo(change, _stations);
-		_ignoredRemoteTempoPrompt.reset();
-	}
-	else
-	{
-		_ignoredRemoteTempoPrompt = change;
-		timing::TimingQuantiser::LogNinjamTempoEvent("Remote tempo ignored by user",
-			change.MasterLoopLengthSamps,
-			change.GrainSamps,
-			change.Bpi,
-			change.Bpm,
-			change.SampleRate);
-		timing::TimingQuantiser::LogNinjamManualTempoCommands(change.Bpm, change.Bpi);
-	}
-
-	_pendingRemoteTempoPrompt.reset();
-	_joinPushAwaitingOutcome = false;
-
-	if (_remoteTempoDialogOpen)
-	{
-		if (_popupHost.Top() == _remoteTempoDialog)
-			_popupHost.Close();
-		_remoteTempoDialogOpen = false;
-	}
+	_networkService->ResolveRemoteTempoPromptDecision(accept,
+		_quantisation,
+		_stations);
+	_CloseRemoteTempoPrompt();
 }
 
-void Scene::_ResetNinjamTempoPromptState()
+void Scene::_CloseRemoteTempoPrompt()
 {
-	_pendingRemoteTempoPrompt.reset();
-	_ignoredRemoteTempoPrompt.reset();
-	_joinPushAwaitingOutcome = false;
-
 	if (_remoteTempoDialogOpen)
 	{
 		if (_popupHost.Top() == _remoteTempoDialog)
@@ -1253,10 +1126,8 @@ void Scene::InitReceivers()
 	if (_midiChannelOverrideInput)
 		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
 	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
-	if (_remoteTempoAcceptButton)
-		_remoteTempoAcceptButton->SetReceiver(ActionReceiver::shared_from_this());
-	if (_remoteTempoRejectButton)
-		_remoteTempoRejectButton->SetReceiver(ActionReceiver::shared_from_this());
+	if (_remoteTempoDialog)
+		_remoteTempoDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
 }
 
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)

@@ -1,4 +1,5 @@
 #include "GuiButton.h"
+#include <algorithm>
 
 using namespace base;
 using namespace gui;
@@ -41,6 +42,42 @@ void GuiButton::SetSize(Size2d size)
 	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
 		size.Width,
 		size.Height,
+		_buttonParams.TextPadding,
+		_buttonParams.TextPadding,
+		true);
+
+	_label->SetPosition({ (int)frame.PaddingX, frame.OffsetY });
+	_label->SetSize({ frame.ContentWidth, frame.TextHeight });
+}
+
+void GuiButton::SetText(const std::string& text)
+{
+	_buttonParams.Text = text;
+
+	if (!_label)
+	{
+		if (text.empty())
+			return;
+
+		_label = std::make_shared<GuiLabel>(_MakeLabelParams(_buttonParams));
+		_children.push_back(_label);
+		return;
+	}
+
+	if (text.empty())
+	{
+		auto it = std::find(_children.begin(), _children.end(), _label);
+		if (it != _children.end())
+			_children.erase(it);
+		_label.reset();
+		return;
+	}
+
+	_label->SetString(text);
+
+	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
+		_sizeParams.Size.Width,
+		_sizeParams.Size.Height,
 		_buttonParams.TextPadding,
 		_buttonParams.TextPadding,
 		true);

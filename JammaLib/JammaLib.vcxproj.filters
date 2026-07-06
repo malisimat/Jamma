@@ -293,6 +293,9 @@
     <ClInclude Include="src\gui\GuiPopupHost.h">
       <Filter>src\gui</Filter>
     </ClInclude>
+    <ClInclude Include="src\gui\GuiConfirmPopup.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
     <ClInclude Include="src\gui\GuiTextBox.h">
       <Filter>src\gui</Filter>
     </ClInclude>
@@ -665,6 +668,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiPopupHost.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiConfirmPopup.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiTextBox.cpp">
