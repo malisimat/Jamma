@@ -92,17 +92,14 @@ TEST(RigFile, ParsesTrigger) {
 	ASSERT_EQ(6, trig.value().TriggerPairs[2].DitchDown);
 }
 
-TEST(RigFile, ParsesMidiInputChannelsAsOneBasedRigValues) {
+TEST(RigFile, ParsesMidiInputDevicesAndRemovesDuplicates) {
 	auto pair = std::regex_replace(std::regex_replace(TriggerPairString, std::regex("%ADOWN%"), "51"), std::regex("%DDOWN%"), "52");
-	auto str = "{\"name\":\"Trig2\",\"stationtype\":0,\"pairs\":[" + pair + "],\"midiinput\":[1,16,1,0,17],\"midiinputdevices\":[\"Keys A\",\"Keys B\",\"Keys A\"]}";
+	auto str = "{\"name\":\"Trig2\",\"stationtype\":0,\"pairs\":[" + pair + "],\"midiinputdevices\":[\"Keys A\",\"Keys B\",\"Keys A\"]}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto trig = RigFile::Trigger::FromJson(json);
 
 	ASSERT_TRUE(trig.has_value());
-	ASSERT_EQ(2u, trig.value().MidiInputChannels.size());
-	EXPECT_EQ(0u, trig.value().MidiInputChannels[0]);
-	EXPECT_EQ(15u, trig.value().MidiInputChannels[1]);
 	ASSERT_EQ(2u, trig.value().MidiInputDevices.size());
 	EXPECT_EQ(0, trig.value().MidiInputDevices[0].compare("Keys A"));
 	EXPECT_EQ(0, trig.value().MidiInputDevices[1].compare("Keys B"));
@@ -219,7 +216,7 @@ TEST(RigFile, ParsesFile) {
 TEST(RigFile, ParsesFileWithMidiTriggerBinding) {
 	std::string audio = "{\"name\":\"HDMI\",\"bufsize\":255,\"inlatency\":414,\"outlatency\":414,\"numchannelsin\":0,\"numchannelsout\":10}";
 	std::string midi = "{\"devices\":[{\"name\":\"TriggerPad\",\"enabled\":true},{\"name\":\"Keys A\",\"enabled\":true}]}";
-	std::string midiTrigger = "{\"name\":\"trigMidi\",\"stationtype\":0,\"midiinput\":[1],\"midiinputdevices\":[\"TriggerPad\",\"Keys A\"],\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":48},\"ditch\":{\"kind\":\"note\",\"channel\":1,\"id\":49}}}";
+	std::string midiTrigger = "{\"name\":\"trigMidi\",\"stationtype\":0,\"midiinputdevices\":[\"TriggerPad\",\"Keys A\"],\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":48},\"ditch\":{\"kind\":\"note\",\"channel\":1,\"id\":49}}}";
 	auto str = "{\"name\":\"rig\",\"user\":{\"audio\":" + audio + ",\"midi\":" + midi + "},\"triggers\":[" + midiTrigger + "]}";
 	auto testStream = std::stringstream(str);
 	auto rig = RigFile::FromStream(std::move(testStream));

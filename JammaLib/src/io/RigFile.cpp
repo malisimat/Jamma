@@ -212,7 +212,6 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	unsigned int stationType = 0;
 	std::vector<TriggerPair> pairs;
 	std::vector<unsigned int> inputChannels;
-	std::vector<unsigned int> midiInputChannels;
 	std::vector<std::string> midiInputDevices;
 	std::optional<MidiTriggerBinding> midiTrigger;
 
@@ -269,29 +268,6 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		}
 	}
 
-	iter = json.KeyValues.find("midiinput");
-	if (iter != json.KeyValues.end())
-	{
-		if (json.KeyValues["midiinput"].index() == 5)
-		{
-			auto jsonArray = std::get<Json::JsonArray>(json.KeyValues["midiinput"]);
-
-			if (jsonArray.Array.index() == 2)
-			{
-				auto inChans = std::get<std::vector<unsigned long>>(jsonArray.Array);
-				for (auto chan : inChans)
-				{
-					if ((chan < 1ul) || (chan > 16ul))
-						continue;
-
-					const auto zeroBasedChan = static_cast<unsigned int>(chan - 1ul);
-					if (midiInputChannels.end() == std::find(midiInputChannels.begin(), midiInputChannels.end(), zeroBasedChan))
-						midiInputChannels.push_back(zeroBasedChan);
-				}
-			}
-		}
-	}
-
 	iter = json.KeyValues.find("midiinputdevices");
 	if (iter != json.KeyValues.end())
 	{
@@ -334,7 +310,6 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	trigger.StationType = stationType;
 	trigger.TriggerPairs = pairs;
 	trigger.InputChannels = inputChannels;
-	trigger.MidiInputChannels = midiInputChannels;
 	trigger.MidiInputDevices = midiInputDevices;
 	trigger.MidiTrigger = midiTrigger;
 	return trigger;

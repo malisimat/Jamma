@@ -351,7 +351,6 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
 	start.InputChannels = {};
-	start.MidiInputChannels = { 0u };
 	start.MidiInputDevices = { "Keys" };
 	auto startRes = station->OnAction(start);
 
@@ -404,7 +403,7 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	EXPECT_TRUE(foundOff[1]);
 }
 
-TEST(StationMidiInstrument, RecStartUsesStationAllowedChannelsNotTriggerMidiInputChannels)
+TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
 {
 	auto station = MakeStation("station-recstart-station-midi-channels");
 	station->SetAllowedMidiChannels({ 2 });
@@ -414,7 +413,6 @@ TEST(StationMidiInstrument, RecStartUsesStationAllowedChannelsNotTriggerMidiInpu
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
 	start.InputChannels = {};
-	start.MidiInputChannels = { 0u };
 	start.MidiInputDevices = { "Keys" };
 	auto startRes = station->OnAction(start);
 
@@ -523,7 +521,6 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 	start.InputChannels = {};
-	start.MidiInputChannels = { 3u };
 	start.MidiInputDevices = { "Keys" };
 	auto result = station->OnAction(start);
 

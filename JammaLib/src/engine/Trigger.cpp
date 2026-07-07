@@ -81,7 +81,6 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
-	_midiInputChannels(trigParams.MidiInputChannels),
 	_midiInputDevices(trigParams.MidiInputDevices),
 	_state(TRIGSTATE_DEFAULT),
 	_debounceTimeMs(trigParams.DebounceMs),
@@ -167,9 +166,6 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	for (auto inChan : trigStruct.InputChannels)
 		trigger->AddInputChannel(inChan);
-
-	for (auto midiChan : trigStruct.MidiInputChannels)
-		trigger->AddMidiInputChannel(midiChan);
 
 	for (const auto& midiDevice : trigStruct.MidiInputDevices)
 		trigger->AddMidiInputDevice(midiDevice);
@@ -429,11 +425,6 @@ void Trigger::ClearInputChannels()
 	_inputChannels.clear();
 
 	_UpdateBehaviour();
-}
-
-void Trigger::AddMidiInputChannel(unsigned int chan)
-{
-	_midiInputChannels.push_back(chan);
 }
 
 void Trigger::AddMidiInputDevice(std::string device)
@@ -828,7 +819,6 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_START;
 		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputChannels = _midiInputChannels;
 		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
@@ -938,7 +928,6 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputChannels = _midiInputChannels;
 		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
@@ -1027,8 +1016,8 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
-		const auto hasTargetMidi = !_midiInputChannels.empty();
+		const auto hasTargetAudio = !_inputChannels.empty();
+		const auto hasTargetMidi = true;
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
@@ -1091,8 +1080,8 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
-		const auto hasTargetMidi = !_midiInputChannels.empty();
+		const auto hasTargetAudio = !_inputChannels.empty();
+		const auto hasTargetMidi = true;
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;

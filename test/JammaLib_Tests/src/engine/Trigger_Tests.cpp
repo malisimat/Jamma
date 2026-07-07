@@ -705,7 +705,6 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 	trigger->AddInputChannel(0u);
-	trigger->AddMidiInputChannel(3u);
 	trigger->AddMidiInputDevice("Keys");
 
 	io::UserConfig cfg;
