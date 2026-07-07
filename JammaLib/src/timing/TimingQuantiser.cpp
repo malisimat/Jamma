@@ -580,6 +580,70 @@ void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& c
 		change.SampleRate);
 }
 
+std::optional<unsigned int> TimingQuantiser::RemotePhaseCorrectionOffset(unsigned int currentOffset,
+	unsigned int intervalPos,
+	unsigned int intervalLen,
+	unsigned int thresholdSamps) noexcept
+{
+	if (intervalLen == 0u)
+		return std::nullopt;
+
+	const auto pos = intervalPos % intervalLen;
+	const auto cur = currentOffset % intervalLen;
+
+	// Shortest circular distance between the local clock phase and remote phase.
+	long long diff = static_cast<long long>(pos) - static_cast<long long>(cur);
+	const long long len = static_cast<long long>(intervalLen);
+	if (diff > len / 2)
+		diff -= len;
+	else if (diff < -(len / 2))
+		diff += len;
+	if (diff < 0)
+		diff = -diff;
+
+	if (static_cast<unsigned long long>(diff) < static_cast<unsigned long long>(thresholdSamps))
+		return std::nullopt;
+
+	return pos;
+}
+
+bool TimingQuantiser::DisciplineRemotePhase(unsigned int intervalPositionSamps,
+	unsigned int intervalLengthSamps)
+{
+	// Small dead-band so steady-state phase noise never causes a re-seed: at least
+	// a few ms of drift, scaled to the interval so long loops tolerate more slack.
+	constexpr unsigned int MinDriftSamps = 64u;
+	constexpr unsigned int DriftDivisor = 64u;
+
+	if (!_clock || intervalLengthSamps == 0u)
+		return false;
+
+	// Only discipline when the clock is already seeded to this exact interval, i.e.
+	// the tempo is unchanged.  Genuine tempo changes are handled by the accepted
+	// remote tempo path, which re-seeds the clock wholesale.
+	const auto seeded = _clock->SeedSourceLength();
+	if (seeded == 0ul || seeded != static_cast<unsigned long>(intervalLengthSamps))
+		return false;
+
+	const auto scaled = intervalLengthSamps / DriftDivisor;
+	const auto threshold = (scaled > MinDriftSamps) ? scaled : MinDriftSamps;
+
+	const auto correction = RemotePhaseCorrectionOffset(_clock->SampOffset(),
+		intervalPositionSamps,
+		intervalLengthSamps,
+		threshold);
+	if (!correction.has_value())
+		return false;
+
+	const auto frac = 1.0 - (static_cast<double>(*correction) / static_cast<double>(intervalLengthSamps));
+	_clock->SetMasterLoopIndexFrac(frac);
+
+	std::cout << "[NINJAM] Remote phase disciplined: offset->" << *correction
+		<< " interval=" << intervalLengthSamps
+		<< std::endl;
+	return true;
+}
+
 bool TimingQuantiser::ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint)
 {
 	const auto masterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);

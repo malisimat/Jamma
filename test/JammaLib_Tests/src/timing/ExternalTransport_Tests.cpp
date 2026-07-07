@@ -1,6 +1,8 @@
 #include "gtest/gtest.h"
 #include "./timing/ExternalTransport.h"
 
+#include <cstdlib>
+
 using timing::ExternalTransport;
 using timing::ExternalTransportMode;
 using timing::ExternalTransportSnapshot;
@@ -199,3 +201,85 @@ TEST(ExternalTransport, DisconnectResetsRuntimeState)
 	transport.Connect();
 	EXPECT_EQ(0ul, transport.Published()->RemoteWrapCount);
 }
+
+// --- Master-relative re-anchoring ------------------------------------------------
+// When the external transport wraps, a loop take's play position must be re-derived
+// from its master-relative anchor back to where it would naturally have advanced to,
+// NOT reset to zero.  These tests pin that round-trip property.
+
+TEST(ExternalTransportReanchor, ReDerivesTakePositionExactlyAcrossWrap)
+{
+	constexpr unsigned long masterLen = 88200ul;
+	constexpr unsigned long takeLen = 30000ul;
+
+	// Observed mid-interval: master loop 3, offset 50000, take playing at 12345.
+	const auto absBefore = ExternalTransport::AbsoluteMasterSample(3ul, masterLen, 50000ul);
+	const auto takePosBefore = 12345ul;
+	const auto anchor = ExternalTransport::TakeAnchorSample(absBefore, takePosBefore, takeLen);
+
+	// Advance to the next remote wrap (offset 50000 -> 0, loop 3 -> 4).
+	const auto gap = masterLen - 50000ul; // 38200 samples until the wrap
+	const auto absAfter = ExternalTransport::AbsoluteMasterSample(4ul, masterLen, 0ul);
+
+	const auto natural = (takePosBefore + gap) % takeLen; // free-running position
+	const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
+
+	EXPECT_EQ(natural, derived);
+	// The whole point: it does NOT snap to zero.
+	EXPECT_NE(0ul, derived);
+}
+
+TEST(ExternalTransportReanchor, DifferentTakeLengthsEachDeriveBack)
+{
+	constexpr unsigned long masterLen = 88200ul;
+	const unsigned long takeLens[] = { 44100ul, 30000ul, 17640ul, 100000ul };
+
+	const auto absBefore = ExternalTransport::AbsoluteMasterSample(7ul, masterLen, 61234ul);
+	const auto gap = masterLen - 61234ul;
+	const auto absAfter = ExternalTransport::AbsoluteMasterSample(8ul, masterLen, 0ul);
+
+	for (const auto takeLen : takeLens)
+	{
+		const auto takePosBefore = 9876ul % takeLen;
+		const auto anchor = ExternalTransport::TakeAnchorSample(absBefore, takePosBefore, takeLen);
+		const auto natural = (takePosBefore + gap) % takeLen;
+		const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
+		EXPECT_EQ(natural, derived) << "takeLen=" << takeLen;
+	}
+}
+
+TEST(ExternalTransportReanchor, StaysCloseUnderObservationRounding)
+{
+	// The observed master offset is only known to job-tick granularity, so the
+	// anchor carries a bounded error.  The re-derived position must stay within that
+	// same small granularity of the true free-running position (never a big jump).
+	constexpr unsigned long masterLen = 88200ul;
+	constexpr unsigned long takeLen = 30000ul;
+	constexpr unsigned long jobTickSamps = 1024ul; // ~job-tick granularity
+
+	const auto trueOffset = 50123ul;
+	const auto observedOffset = (trueOffset / jobTickSamps) * jobTickSamps; // rounded down
+
+	const auto absTrue = ExternalTransport::AbsoluteMasterSample(2ul, masterLen, trueOffset);
+	const auto absObserved = ExternalTransport::AbsoluteMasterSample(2ul, masterLen, observedOffset);
+
+	const auto takePosBefore = 4321ul;
+	// Anchor is built from the (rounded) observed sample.
+	const auto anchor = ExternalTransport::TakeAnchorSample(absObserved, takePosBefore, takeLen);
+
+	const auto gap = masterLen - trueOffset;
+	const auto absAfter = ExternalTransport::AbsoluteMasterSample(3ul, masterLen, 0ul);
+
+	const auto natural = (takePosBefore + gap) % takeLen;
+	const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
+
+	// Circular distance between derived and natural must be within the rounding.
+	long long diff = static_cast<long long>(derived) - static_cast<long long>(natural);
+	const long long len = static_cast<long long>(takeLen);
+	if (diff > len / 2) diff -= len;
+	else if (diff < -(len / 2)) diff += len;
+	EXPECT_LE(std::llabs(diff), static_cast<long long>(jobTickSamps));
+
+	(void)absTrue;
+}
+

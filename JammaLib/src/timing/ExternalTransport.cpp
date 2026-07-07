@@ -166,3 +166,54 @@ void ExternalTransport::_Publish(const char* reason)
 			<< std::endl;
 	}
 }
+
+unsigned long ExternalTransport::AbsoluteMasterSample(unsigned long masterLoopCount,
+	unsigned long masterLoopLengthSamps,
+	unsigned long masterLoopOffsetSamps) noexcept
+{
+	const auto abs = static_cast<unsigned long long>(masterLoopCount)
+			* static_cast<unsigned long long>(masterLoopLengthSamps)
+		+ static_cast<unsigned long long>(masterLoopOffsetSamps);
+	return static_cast<unsigned long>(abs);
+}
+
+unsigned long ExternalTransport::AbsoluteMasterSample(const ExternalTransportState& state) noexcept
+{
+	return AbsoluteMasterSample(state.RemoteWrapCount,
+		state.RemoteIntervalLengthSamps,
+		state.RemoteIntervalPositionSamps);
+}
+
+unsigned long ExternalTransport::TakeAnchorSample(unsigned long absoluteMasterSample,
+	unsigned long takePlayPosSamps,
+	unsigned long takeLengthSamps) noexcept
+{
+	if (takeLengthSamps == 0ul)
+		return absoluteMasterSample;
+
+	const auto abs = static_cast<unsigned long long>(absoluteMasterSample);
+	const auto pos = static_cast<unsigned long long>(takePlayPosSamps)
+		% static_cast<unsigned long long>(takeLengthSamps);
+
+	// The anchor is the master sample at which the take is at loop position 0.
+	// Guard the (unlikely) case where the timeline has not yet advanced past the
+	// take's current phase so the subtraction never underflows.
+	const auto anchor = (abs >= pos)
+		? (abs - pos)
+		: (abs + static_cast<unsigned long long>(takeLengthSamps) - pos);
+	return static_cast<unsigned long>(anchor);
+}
+
+unsigned long ExternalTransport::TakePositionFromAnchor(unsigned long absoluteMasterSample,
+	unsigned long takeAnchorSample,
+	unsigned long takeLengthSamps) noexcept
+{
+	if (takeLengthSamps == 0ul)
+		return 0ul;
+
+	const auto abs = static_cast<unsigned long long>(absoluteMasterSample);
+	const auto anchor = static_cast<unsigned long long>(takeAnchorSample);
+	const auto diff = (abs >= anchor) ? (abs - anchor) : 0ull;
+	return static_cast<unsigned long>(diff % static_cast<unsigned long long>(takeLengthSamps));
+}
+

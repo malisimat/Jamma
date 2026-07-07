@@ -180,6 +180,24 @@ namespace timing
 		bool ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint = 0u);
 		void ResetPendingTempoSyncState();
 
+		// Continuously re-align the master clock phase to the authoritative remote
+		// interval position while connected.  No-op unless the clock is already
+		// seeded to this interval length (i.e. the tempo is unchanged; genuine
+		// tempo changes go through ApplyAcceptedRemoteTempo).  A correction is only
+		// applied when the accumulated drift exceeds a small threshold, so steady
+		// state incurs no phase jitter.  Returns true when a correction was applied.
+		bool DisciplineRemotePhase(unsigned int intervalPositionSamps,
+			unsigned int intervalLengthSamps);
+
+		// Pure drift math for DisciplineRemotePhase.  Returns the corrected sample
+		// offset (== the remote interval position) when the shortest circular
+		// distance between currentOffset and intervalPos exceeds thresholdSamps;
+		// std::nullopt otherwise.  Exposed for focused unit testing.
+		static std::optional<unsigned int> RemotePhaseCorrectionOffset(unsigned int currentOffset,
+			unsigned int intervalPos,
+			unsigned int intervalLen,
+			unsigned int thresholdSamps) noexcept;
+
 		void QueueLocalTempo(unsigned int remoteSampleRate,
 			unsigned int audioDeviceSampleRate,
 			const io::UserConfig& cfg);

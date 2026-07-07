@@ -134,6 +134,10 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
+		// Invariant: every audio loop in a take shares one musical length.  Returns
+		// false if two active loops report different (non-zero) lengths.  Used for
+		// debug-time diagnostics; loops within a take are always played at one length.
+		bool AudioLoopsShareLength() const noexcept;
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
 		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;

@@ -41,6 +41,11 @@ namespace ninjam
 		_ignoredRemoteTempoPrompt.reset();
 		_joinPushAwaitingOutcome = false;
 
+		// Enter connected mode and rebuild connected-sync runtime state from scratch;
+		// stale phase/alignment from a previous session must never carry over.
+		_externalTransport.Connect();
+		_externalJoinAligned = false;
+
 		if (_tempoJoinOptions.PushLocalTempoOnJoin)
 		{
 			const auto queued = quantisation.ForceQueueCurrentTempoAsPending(true, currentSampleRate);
@@ -57,6 +62,8 @@ namespace ninjam
 		_pendingRemoteTempoPrompt.reset();
 		_ignoredRemoteTempoPrompt.reset();
 		_joinPushAwaitingOutcome = false;
+		_externalTransport.Disconnect();
+		_externalJoinAligned = false;
 		quantisation.ResetPendingTempoSyncState();
 	}
 
@@ -183,11 +190,58 @@ namespace ninjam
 			currentSampleRate);
 	}
 
+	void NinjamNetworkService::_FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
+		timing::TimingQuantiser& quantisation)
+	{
+		auto clock = quantisation.Clock();
+		if (!clock)
+			return;
+
+		// Resolve the authoritative remote interval length, deriving it from tempo
+		// when the raw interval sample count is not yet available.
+		auto intervalLen = snapshot.IntervalLengthSamps;
+		if (intervalLen == 0u && snapshot.HasTiming)
+		{
+			intervalLen = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
+				static_cast<unsigned int>(snapshot.Bpi),
+				snapshot.SampleRate);
+		}
+
+		timing::ExternalTransportSnapshot xsnap;
+		xsnap.IntervalLengthSamps = intervalLen;
+		xsnap.IntervalPositionSamps = snapshot.IntervalPositionSamps;
+		xsnap.SampleRate = snapshot.SampleRate;
+		xsnap.LocalAnchorSamps = clock->AbsoluteSamplePos(0ul);
+
+		const auto wrapBefore = _externalTransport.Published()->RemoteWrapCount;
+		_externalTransport.IngestSnapshot(xsnap);
+
+		// Record the mid-cycle join alignment once, the first time we observe a
+		// valid remote interval against a seeded local master clock.  The alignment
+		// commits at the next authoritative remote wrap.
+		if (!_externalJoinAligned && intervalLen > 0u && clock->SeedSourceLength() > 0ul)
+		{
+			_externalTransport.BeginJoinAlignment(clock->SampOffset());
+			_externalJoinAligned = true;
+		}
+
+		// Wrap-gated phase discipline: absorb accumulated drift exactly once per
+		// remote interval so the local master clock stays phase-locked to NINJAM.
+		const auto wrapAfter = _externalTransport.Published()->RemoteWrapCount;
+		if (intervalLen > 0u && wrapAfter > wrapBefore)
+			quantisation.DisciplineRemotePhase(snapshot.IntervalPositionSamps, intervalLen);
+	}
+
 	void NinjamNetworkService::HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
 		timing::TimingQuantiser& quantisation,
 		const std::vector<std::shared_ptr<engine::Station>>& stations,
 		const io::UserConfig& userConfig)
 	{
+		// Continuously feed the authoritative external transport, then apply
+		// wrap-gated phase discipline so connected playback tracks the remote
+		// interval rather than free-running after a one-shot seed.
+		_FeedExternalTransport(snapshot, quantisation);
+
 		const auto joinPushSent = _joinPushAwaitingOutcome && !quantisation.HasPendingTempo();
 
 		auto proposal = quantisation.ProposeRemoteTempoChange(snapshot, userConfig);

@@ -834,6 +834,24 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 	return _midiVisualLoopLength;
 }
 
+bool LoopTake::AudioLoopsShareLength() const noexcept
+{
+	auto shared = 0ul;
+	for (const auto& loop : _loops)
+	{
+		if (!loop)
+			continue;
+		const auto length = loop->LoopLength();
+		if (length == 0ul)
+			continue;
+		if (shared == 0ul)
+			shared = length;
+		else if (length != shared)
+			return false;
+	}
+	return true;
+}
+
 double LoopTake::LoopIndexFrac() const noexcept
 {
 	const auto state = _state.load(std::memory_order_relaxed);
@@ -1316,6 +1334,11 @@ void LoopTake::Play(unsigned long index,
 	{
 		loop->Play(index, loopLength, continueCapture);
 	}
+
+#ifndef NDEBUG
+	if (!AudioLoopsShareLength())
+		std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
+#endif
 
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)

@@ -116,6 +116,34 @@ namespace timing
 
 		void SetDiagnosticsEnabled(bool enabled) noexcept;
 
+		// --- Master-relative re-anchoring -----------------------------------------
+		// A loop take never stores an absolute position against the master timeline;
+		// it stores a master-relative anchor so that when the external transport
+		// wraps (or is otherwise re-based) its play position can be re-derived to the
+		// point it would have naturally reached, rather than snapping to zero.
+
+		// Absolute position on the unbounded master timeline.
+		static unsigned long AbsoluteMasterSample(unsigned long masterLoopCount,
+			unsigned long masterLoopLengthSamps,
+			unsigned long masterLoopOffsetSamps) noexcept;
+
+		// Absolute master-timeline sample derived from the authoritative remote phase
+		// carried by a transport state (wrapCount * intervalLen + intervalPos).
+		static unsigned long AbsoluteMasterSample(const ExternalTransportState& state) noexcept;
+
+		// Master-relative anchor for a take observed playing at takePlayPosSamps while
+		// the master timeline is at absoluteMasterSample.  The anchor is the absolute
+		// master sample at which the take sits at loop-relative position 0.
+		static unsigned long TakeAnchorSample(unsigned long absoluteMasterSample,
+			unsigned long takePlayPosSamps,
+			unsigned long takeLengthSamps) noexcept;
+
+		// Re-derive a take's loop-relative play position at absoluteMasterSample from
+		// its stored anchor and its own loop length.
+		static unsigned long TakePositionFromAnchor(unsigned long absoluteMasterSample,
+			unsigned long takeAnchorSample,
+			unsigned long takeLengthSamps) noexcept;
+
 	private:
 		void _Publish(const char* reason);
 

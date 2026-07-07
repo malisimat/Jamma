@@ -8,6 +8,7 @@
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
 #include "../timing/TimingQuantiser.h"
+#include "../timing/ExternalTransport.h"
 #include "../io/UserConfig.h"
 
 namespace ninjam
@@ -68,14 +69,34 @@ namespace ninjam
 			timing::TimingQuantiser& quantisation,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Lock-free read of the authoritative connected-sync transport state.
+		std::shared_ptr<const timing::ExternalTransportState> PublishedTransportState() const noexcept
+		{
+			return _externalTransport.Published();
+		}
+
+		void SetExternalTransportDiagnostics(bool enabled) noexcept
+		{
+			_externalTransport.SetDiagnosticsEnabled(enabled);
+		}
+
 	private:
 		static bool IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
 			const timing::PendingRemoteTempoChange& rhs) noexcept;
+
+		// Ingests the current snapshot into the external transport and applies
+		// wrap-gated phase discipline to the master clock while connected.
+		void _FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
+			timing::TimingQuantiser& quantisation);
 
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		NinjamTempoJoinOptions _tempoJoinOptions{};
 		bool _joinPushAwaitingOutcome = false;
 		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
 		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
+
+		// Runtime-only continuous NINJAM transport sync (never persisted).
+		timing::ExternalTransport _externalTransport;
+		bool _externalJoinAligned = false;
 	};
 }
