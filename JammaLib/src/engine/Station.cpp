@@ -1571,7 +1571,7 @@ bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
 {
 	const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
 	if (mask == 0u)
-		return true;
+		return false;
 
 	if (channel >= 16u)
 		return false;
@@ -1585,6 +1585,7 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 	std::vector<int> filtered;
 	filtered.reserve(channels.size());
 
+	const auto oldMask = _allowedMidiChannelMask.load(std::memory_order_acquire);
 	std::uint16_t mask = 0u;
 	for (auto channel : channels)
 	{
@@ -1598,6 +1599,38 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 
 		mask = static_cast<std::uint16_t>(mask | bit);
 		filtered.push_back(channel);
+	}
+
+	const auto removedMask = static_cast<std::uint16_t>(oldMask & static_cast<std::uint16_t>(~mask));
+	if (removedMask != 0u)
+	{
+		std::vector<MidiEvent> noteOffs;
+		{
+			std::scoped_lock lock(_liveHeldMidiMutex);
+			for (auto& [deviceName, heldSnapshot] : _liveHeldMidi)
+			{
+				const bool queueNoteOffs = deviceName.empty();
+				for (std::uint8_t ch = 0u; ch < 16u; ++ch)
+				{
+					const auto bit = static_cast<std::uint16_t>(1u << ch);
+					if ((removedMask & bit) == 0u)
+						continue;
+
+					for (std::uint8_t note = 0u; note < 128u; ++note)
+					{
+						if (!heldSnapshot.Held.test(MidiNote::NoteSlot(ch, note)))
+							continue;
+
+						if (queueNoteOffs)
+							noteOffs.push_back(MidiEvent::MakeNoteOff(0u, ch, note));
+						heldSnapshot.Clear(ch, note);
+					}
+				}
+			}
+		}
+
+		for (const auto& noteOff : noteOffs)
+			_liveMidiIngress.Push(noteOff);
 	}
 
 	_allowedMidiChannels = std::move(filtered);
@@ -1618,11 +1651,13 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 	if (!deviceName.empty() && !AcceptsLiveMidiFromDevice(deviceName))
 		return;
 
-	if (!AcceptsLiveMidiChannel(event.Channel()))
-		return;
+	const auto channelAllowed = AcceptsLiveMidiChannel(event.Channel());
 
 	if (event.IsNoteOn() || event.IsNoteOff())
 	{
+		if (event.IsNoteOn() && !channelAllowed)
+			return;
+
 		const auto channel = event.Channel();
 		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
 		std::scoped_lock lock(_liveHeldMidiMutex);
@@ -1644,6 +1679,10 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 		if (!deviceName.empty())
 			upsert(deviceName);
 	}
+
+	if (!channelAllowed)
+		return;
+
 	_liveMidiIngress.Push(event);
 }
 

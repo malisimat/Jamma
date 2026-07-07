@@ -92,11 +92,6 @@ void GuiToggle::Draw(DrawContext& ctx)
 			}
 			break;
 		default:
-			if (_outTexture.IsDrawInitialised())
-			{
-				_outTexture.Draw(ctx);
-				hasDrawn = true;
-			}
 			break;
 		}
 
