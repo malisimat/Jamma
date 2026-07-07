@@ -343,7 +343,7 @@ TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
 TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 {
 	auto station = MakeStation("station-recstart-held-seed");
-	AllowAllMidiChannels(station);
+	station->SetAllowedMidiChannels({ 1 });
 
 	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
 	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
@@ -402,6 +402,51 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	EXPECT_TRUE(foundOn[1]);
 	EXPECT_TRUE(foundOff[0]);
 	EXPECT_TRUE(foundOff[1]);
+}
+
+TEST(StationMidiInstrument, RecStartUsesStationAllowedChannelsNotTriggerMidiInputChannels)
+{
+	auto station = MakeStation("station-recstart-station-midi-channels");
+	station->SetAllowedMidiChannels({ 2 });
+
+	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 62u, 90u), "Keys");
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {};
+	start.MidiInputChannels = { 0u };
+	start.MidiInputDevices = { "Keys" };
+	auto startRes = station->OnAction(start);
+
+	ASSERT_TRUE(startRes.IsEaten);
+	ASSERT_FALSE(startRes.TargetId.empty());
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> take;
+	for (const auto& candidate : station->GetLoopTakes())
+	{
+		if (candidate && candidate->Id() == startRes.TargetId)
+		{
+			take = candidate;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, take);
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(1u, take->MidiLoopChannels()[0]);
+	ASSERT_EQ("Keys", take->MidiLoopDevices()[0]);
+
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_EQ(1u, midiLoop->EventCount());
+
+	MidiEvent event{};
+	ASSERT_TRUE(midiLoop->TryGetEvent(0u, event));
+	EXPECT_TRUE(event.IsNoteOn());
+	EXPECT_EQ(1u, event.Channel());
+	EXPECT_EQ(62u, event.data1);
+	EXPECT_EQ(90u, event.data2);
 }
 
 TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
@@ -464,6 +509,7 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 {
 	auto station = MakeStation("station-overdub-source");
+	station->SetAllowedMidiChannels({ 4 });
 	auto sourceTake = MakeMidiTake("source-midi-take");
 	station->AddTake(sourceTake);
 	station->CommitChanges();

@@ -360,6 +360,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{
+			if (stationStruct.AllowedMidiChannels.empty())
+			{
+				const auto defaultChannel = static_cast<int>((stationParams.Index % 16u) + 1u);
+				station.value()->SetAllowedMidiChannels({ defaultChannel });
+			}
+
 			if (rigStruct.Triggers.size() > stationParams.Index)
 			{
 				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);

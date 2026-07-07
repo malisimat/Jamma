@@ -819,6 +819,20 @@ ActionResult Station::OnAction(TriggerAction action)
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
 
+	auto resolveMidiRecordChannels = [this]() {
+		std::vector<unsigned int> midiChannels;
+		const auto mask = _allowedMidiChannelMask.load(std::memory_order_acquire);
+		for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+		{
+			const auto bit = static_cast<std::uint16_t>(1u << channel);
+			if ((mask & bit) == 0u)
+				continue;
+
+			midiChannels.push_back(channel);
+		}
+		return midiChannels;
+	};
+
 	ActionResult res;
 	res.IsEaten = false;
 
@@ -828,8 +842,9 @@ ActionResult Station::OnAction(TriggerAction action)
 	{
 	case TriggerAction::TRIGGER_REC_START:
 	{
+		auto midiInputChannels = resolveMidiRecordChannels();
 		std::vector<std::pair<std::string, MidiNoteSnapshot>> heldSnapshot;
-		if (!action.MidiInputChannels.empty())
+		if (!midiInputChannels.empty())
 		{
 			std::scoped_lock lock(_liveHeldMidiMutex);
 			heldSnapshot = _liveHeldMidi;
@@ -838,7 +853,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
-			action.MidiInputChannels,
+			midiInputChannels,
 			action.MidiInputDevices,
 			std::move(heldSnapshot),
 			static_cast<std::uint64_t>(transportStartSamps));
@@ -911,6 +926,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	}
 	case TriggerAction::TRIGGER_OVERDUB_START:
 	{
+		auto midiInputChannels = resolveMidiRecordChannels();
 		auto sourceLoopTake = _loopTakes.empty() ? std::shared_ptr<LoopTake>() : _loopTakes.back();
 		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
@@ -918,7 +934,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),
-			action.MidiInputChannels,
+			midiInputChannels,
 			action.MidiInputDevices,
 			sourceLoopTake,
 			static_cast<std::uint64_t>(transportStartSamps));
