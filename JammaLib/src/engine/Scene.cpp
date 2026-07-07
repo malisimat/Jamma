@@ -1244,6 +1244,8 @@ void Scene::InitAudio()
 void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
+	if (_inputSubsystem)
+		_inputSubsystem->SetLogging(_loggingConfig);
 	if (_windowSubsystem)
 		_windowSubsystem->SetLogging(_loggingConfig);
 	for (auto& station : _stations)

@@ -26,6 +26,7 @@ namespace io
 
 		void Init(std::atomic<std::uint64_t>& audioSampleCounter,
 			std::atomic<std::int64_t>& midiAnchorMicros);
+		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();

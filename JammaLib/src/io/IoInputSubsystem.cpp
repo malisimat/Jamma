@@ -33,6 +33,11 @@ namespace io
 		_midiRouter.InitSerial(_userConfig);
 	}
 
+	void IoInputSubsystem::SetLogging(io::LoggingConfig loggingConfig) noexcept
+	{
+		_loggingConfig = std::move(loggingConfig);
+	}
+
 	void IoInputSubsystem::Close()
 	{
 		CloseGlobalKeyCapture();
