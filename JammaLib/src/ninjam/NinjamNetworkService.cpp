@@ -188,9 +188,23 @@ namespace ninjam
 		const std::vector<std::shared_ptr<engine::Station>>& stations,
 		const io::UserConfig& userConfig)
 	{
+		const auto joinPushSent = _joinPushAwaitingOutcome && !quantisation.HasPendingTempo();
+
 		auto proposal = quantisation.ProposeRemoteTempoChange(snapshot, userConfig);
 		if (!proposal.has_value())
+		{
+			if (joinPushSent)
+			{
+				_joinPushAwaitingOutcome = false;
+			}
 			return;
+		}
+
+		if (joinPushSent && snapshot.Users.empty())
+		{
+			_joinPushAwaitingOutcome = false;
+			return;
+		}
 
 		if (_joinPushAwaitingOutcome)
 		{
