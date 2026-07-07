@@ -226,6 +226,7 @@
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
     <ClInclude Include="src\timing\TimingQuantiser.h" />
+    <ClInclude Include="src\timing\ExternalTransport.h" />
     
     <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\graphics\QuantisationDivisionModel.h" />
@@ -393,6 +394,7 @@
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
     <ClCompile Include="src\timing\TimingQuantiser.cpp" />
+    <ClCompile Include="src\timing\ExternalTransport.cpp" />
     
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
