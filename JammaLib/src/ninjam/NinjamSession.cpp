@@ -476,13 +476,21 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
 }
 
-void NinjamSession::ProcessAudioBlock(const float* interleavedInput,
+void NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,
+	unsigned int numDacChannels,
+	const float* interleavedAdcInput,
+	unsigned int numAdcChannels,
 	unsigned int numFrames,
 	unsigned int sampleRate)
 {
 	NinjamConnectionUse conn(*this);
 	if (conn)
-		conn->ProcessAudioBlock(interleavedInput, numFrames, sampleRate);
+		conn->ProcessExportBlock(interleavedDacOutput,
+			numDacChannels,
+			interleavedAdcInput,
+			numAdcChannels,
+			numFrames,
+			sampleRate);
 }
 
 bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,

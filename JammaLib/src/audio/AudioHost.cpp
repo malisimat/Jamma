@@ -164,9 +164,6 @@ namespace audio
 		_channelMixer->Source()->EndMultiPlay(numSamps);
 
 		_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
-		
-		if (_ninjamController)
-			_ninjamController->ProcessAudioBlock(inBuf, numSamps, audioStreamParams.SampleRate);
 
 		auto ingestRemoteStation = [&](const std::shared_ptr<Station>& stationBase) {
 			if (!stationBase || !stationBase->IsRemote())
@@ -200,6 +197,16 @@ namespace audio
 			}
 
 			_channelMixer->ToDac(outBuf, audioStreamParams.NumOutputChannels, numSamps);
+
+			if (_ninjamController)
+			{
+				_ninjamController->ProcessExportBlock(outBuf,
+					audioStreamParams.NumOutputChannels,
+					inBuf,
+					audioStreamParams.NumInputChannels,
+					numSamps,
+					audioStreamParams.SampleRate);
+			}
 		}
 		else
 		{
@@ -209,6 +216,16 @@ namespace audio
 				station->WriteBlock(_channelMixer->Sink(), nullptr, 0, numSamps,
 					static_cast<std::uint32_t>(blockStartSample));
 				station->EndMultiPlay(numSamps);
+			}
+
+			if (_ninjamController)
+			{
+				_ninjamController->ProcessExportBlock(nullptr,
+					audioStreamParams.NumOutputChannels,
+					inBuf,
+					audioStreamParams.NumInputChannels,
+					numSamps,
+					audioStreamParams.SampleRate);
 			}
 		}
 

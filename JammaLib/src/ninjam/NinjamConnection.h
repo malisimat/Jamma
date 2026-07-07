@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -42,9 +43,21 @@ namespace ninjam
 		std::vector<NinjamRemoteUser> Users;
 	};
 
+	struct NinjamLanePacking
+	{
+		std::uint16_t LaneCount = 0;
+		std::uint16_t DacPairs = 0;
+		std::uint16_t AdcPairs = 0;
+		std::uint8_t Modulo = 0;
+		std::uint8_t FromFallback = 0;
+		std::uint16_t SlotLimit = 0;
+	};
+
 	class NinjamConnection
 	{
 	public:
+		static constexpr unsigned int DefaultLocalChannelSlotLimit = 8u;
+
 		enum class ConnectionState
 		{
 			Disconnected,
@@ -72,8 +85,10 @@ namespace ninjam
 			unsigned int numInputChannels,
 			unsigned int numOutputChannels);
 
-		// interleavedInput may be nullptr (sends silence as local audio).
-		void ProcessAudioBlock(const float* interleavedInput,
+		void ProcessExportBlock(const float* interleavedDacOutput,
+			unsigned int numDacChannels,
+			const float* interleavedAdcInput,
+			unsigned int numAdcChannels,
 			unsigned int numFrames,
 			unsigned int sampleRate);
 
@@ -106,6 +121,8 @@ namespace ninjam
 		void SendChat(const std::string& message);
 
 	private:
+		NinjamLanePacking _ResolveLanePacking() const;
+		void _RefreshLanePacking();
 		static void _OnChatMessage(void* userData,
 			NJClient* inst,
 			const char** parms,
@@ -115,7 +132,8 @@ namespace ninjam
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);
 		void _ScheduleRetry(std::chrono::steady_clock::time_point now);
 		void _EnsureWorkDir();
-		void _ResizeScratchBuffers(unsigned int numFrames);
+		void _ResizeScratchBuffers(unsigned int numFrames,
+			unsigned int numInputScratchChannels);
 		void _ApplyLocalChannels();
 		void _UpdateSnapshot();
 		unsigned int _AssignOutputChannel(const std::string& userName);
@@ -141,6 +159,7 @@ namespace ninjam
 		unsigned int _numInputChannels = 0u;
 		unsigned int _numOutputChannels = 2u;
 		std::atomic_uint _lastNumFrames{ 0u };
+		std::atomic<NinjamLanePacking> _lanePacking{};
 
 		std::vector<std::vector<float>> _outScratch;
 		std::vector<std::vector<float>> _inScratch;

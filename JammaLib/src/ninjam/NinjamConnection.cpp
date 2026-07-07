@@ -5,6 +5,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <set>
 #include "njclient.h"
 #include "../../include/Constants.h"
@@ -68,8 +69,98 @@ NinjamConnection::NinjamConnection(std::string host,
 	_workDir(std::move(workDir)),
 	_sampleRate(constants::DefaultSampleRate),
 	_blockSize(constants::DefaultBufferSizeSamps),
+	_lanePacking(NinjamLanePacking{}),
 	_client(std::make_unique<NJClient>())
 {
+}
+
+NinjamLanePacking NinjamConnection::_ResolveLanePacking() const
+{
+	NinjamLanePacking packing{};
+
+	auto slotLimit = static_cast<unsigned int>(DefaultLocalChannelSlotLimit);
+	auto fromFallback = true;
+
+	if (_isConnected && _client)
+	{
+		const auto runtimeLimit = _client->GetMaxLocalChannels();
+		if (runtimeLimit > 0)
+		{
+			slotLimit = static_cast<unsigned int>(runtimeLimit);
+			fromFallback = false;
+		}
+	}
+
+	const auto dacPairs = _numOutputChannels / 2u;
+	const auto adcPairs = _numInputChannels / 2u;
+	const auto totalPairs = dacPairs + adcPairs;
+
+	packing.DacPairs = static_cast<std::uint16_t>(std::min(dacPairs,
+		static_cast<unsigned int>(std::numeric_limits<std::uint16_t>::max())));
+	packing.AdcPairs = static_cast<std::uint16_t>(std::min(adcPairs,
+		static_cast<unsigned int>(std::numeric_limits<std::uint16_t>::max())));
+	packing.FromFallback = fromFallback ? 1u : 0u;
+	packing.SlotLimit = static_cast<std::uint16_t>(std::min(slotLimit,
+		static_cast<unsigned int>(std::numeric_limits<std::uint16_t>::max())));
+
+	if (slotLimit == 0u)
+	{
+		packing.LaneCount = 0u;
+		packing.Modulo = 0u;
+		return packing;
+	}
+
+	if (totalPairs <= slotLimit)
+	{
+		packing.LaneCount = static_cast<std::uint16_t>(std::min(totalPairs,
+			static_cast<unsigned int>(std::numeric_limits<std::uint16_t>::max())));
+		packing.Modulo = 0u;
+		return packing;
+	}
+
+	packing.LaneCount = static_cast<std::uint16_t>(std::min(slotLimit,
+		static_cast<unsigned int>(std::numeric_limits<std::uint16_t>::max())));
+	packing.Modulo = 1u;
+	return packing;
+}
+
+void NinjamConnection::_RefreshLanePacking()
+{
+	const auto packing = _ResolveLanePacking();
+	const auto previous = _lanePacking.load(std::memory_order_acquire);
+
+	const auto changed = (previous.LaneCount != packing.LaneCount)
+		|| (previous.DacPairs != packing.DacPairs)
+		|| (previous.AdcPairs != packing.AdcPairs)
+		|| (previous.Modulo != packing.Modulo)
+		|| (previous.FromFallback != packing.FromFallback)
+		|| (previous.SlotLimit != packing.SlotLimit);
+
+	if (!changed)
+		return;
+
+	const auto laneScratchChannels = static_cast<unsigned int>(packing.LaneCount) * 2u;
+	_ResizeScratchBuffers(_blockSize, laneScratchChannels);
+	_lanePacking.store(packing, std::memory_order_release);
+
+	std::cout << "[NINJAM] Local lane packing: lanes=" << packing.LaneCount
+		<< " mode=" << (packing.Modulo ? "modulo" : "direct")
+		<< " dacPairs=" << packing.DacPairs
+		<< " adcPairs=" << packing.AdcPairs
+		<< " slotLimit=" << packing.SlotLimit
+		<< " source=" << (packing.FromFallback ? "fallback" : "runtime")
+		<< std::endl;
+
+	if (packing.LaneCount == 0u)
+	{
+		std::cout << "[NINJAM] Local lane budget is 0; publishing no local channels" << std::endl;
+	}
+	else if (packing.Modulo)
+	{
+		std::cout << "[NINJAM] Modulo lane packing active because DAC+ADC pairs exceed slot budget" << std::endl;
+	}
+
+	_ApplyLocalChannels();
 }
 
 bool NinjamConnection::_StartConnectAttempt(std::chrono::steady_clock::time_point now)
@@ -265,9 +356,10 @@ void NinjamConnection::Pump()
 			_state = ConnectionState::Connected;
 			std::scoped_lock lock(_connectionMutex);
 			_ResetReconnectState(now);
-			_ApplyLocalChannels();
 			std::cout << "[NINJAM] Connected" << std::endl;
 		}
+
+		_RefreshLanePacking();
 	}
 	else if (status == NJClient::NJC_STATUS_PRECONNECT)
 	{
@@ -318,16 +410,18 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 		numOutputChannels > 0 ? numOutputChannels : 2u,
 		kMinimumNinjamOutputChannels);
 
-	_ResizeScratchBuffers(_blockSize);
+	_RefreshLanePacking();
 
 	if (_client)
 	{
 		_client->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
-		_ApplyLocalChannels();
 	}
 }
 
-void NinjamConnection::ProcessAudioBlock(const float* interleavedInput,
+void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
+	unsigned int numDacChannels,
+	const float* interleavedAdcInput,
+	unsigned int numAdcChannels,
 	unsigned int numFrames,
 	unsigned int sampleRate)
 {
@@ -342,31 +436,79 @@ void NinjamConnection::ProcessAudioBlock(const float* interleavedInput,
 	// skip processing — callers must invoke SetAudioFormat before the audio stream starts.
 	if (_outScratch.size() < _numOutputChannels
 		|| (!_outScratch.empty() && numFrames > _outScratch[0].size())
-		|| (_numInputChannels > 0
-			&& (_inScratch.size() < _numInputChannels
-				|| (!_inScratch.empty() && numFrames > _inScratch[0].size()))))
+		|| (!_inScratch.empty() && numFrames > _inScratch[0].size()))
 		return;
 
 	for (auto chan = 0u; chan < _numOutputChannels; chan++)
 		std::fill(_outScratch[chan].begin(), _outScratch[chan].begin() + numFrames, 0.0f);
 
-	if (interleavedInput)
+	const auto packing = _lanePacking.load(std::memory_order_acquire);
+	const auto laneCount = static_cast<unsigned int>(packing.LaneCount);
+	const auto laneChannelCount = laneCount * 2u;
+	int localInputChannelCount = 0;
+
+	if ((laneChannelCount > 0u)
+		&& (_inScratch.size() >= laneChannelCount)
+		&& !_inScratch.empty())
 	{
-		for (auto samp = 0u; samp < numFrames; samp++)
-		{
-			for (auto chan = 0u; chan < _numInputChannels; chan++)
-				_inScratch[chan][samp] = interleavedInput[samp * _numInputChannels + chan];
-		}
-	}
-	else
-	{
-		for (auto chan = 0u; chan < _numInputChannels; chan++)
+		for (auto chan = 0u; chan < laneChannelCount; chan++)
 			std::fill(_inScratch[chan].begin(), _inScratch[chan].begin() + numFrames, 0.0f);
+
+		if (interleavedDacOutput && (numDacChannels >= 2u))
+		{
+			const auto dacPairs = std::min(static_cast<unsigned int>(packing.DacPairs), numDacChannels / 2u);
+			for (auto pair = 0u; pair < dacPairs; pair++)
+			{
+				auto lane = packing.Modulo ? (pair % laneCount) : pair;
+				if (lane >= laneCount)
+					continue;
+
+				const auto srcLeft = pair * 2u;
+				const auto srcRight = srcLeft + 1u;
+				const auto dstLeft = lane * 2u;
+				const auto dstRight = dstLeft + 1u;
+
+				for (auto samp = 0u; samp < numFrames; samp++)
+				{
+					auto srcBase = samp * numDacChannels;
+					_inScratch[dstLeft][samp] += interleavedDacOutput[srcBase + srcLeft];
+					_inScratch[dstRight][samp] += interleavedDacOutput[srcBase + srcRight];
+				}
+			}
+		}
+
+		if (interleavedAdcInput && (numAdcChannels >= 2u))
+		{
+			const auto adcPairs = std::min(static_cast<unsigned int>(packing.AdcPairs), numAdcChannels / 2u);
+			for (auto pair = 0u; pair < adcPairs; pair++)
+			{
+				auto lane = packing.Modulo ? (pair % laneCount) : (static_cast<unsigned int>(packing.DacPairs) + pair);
+				if (lane >= laneCount)
+					continue;
+
+				const auto srcLeft = pair * 2u;
+				const auto srcRight = srcLeft + 1u;
+				const auto dstLeft = lane * 2u;
+				const auto dstRight = dstLeft + 1u;
+
+				for (auto samp = 0u; samp < numFrames; samp++)
+				{
+					auto srcBase = samp * numAdcChannels;
+					_inScratch[dstLeft][samp] += interleavedAdcInput[srcBase + srcLeft];
+					_inScratch[dstRight][samp] += interleavedAdcInput[srcBase + srcRight];
+				}
+			}
+		}
+
+		for (auto chan = 0u; chan < laneChannelCount; chan++)
+			_inPtrs[chan] = _inScratch[chan].data();
+
+		localInputChannelCount = static_cast<int>(laneChannelCount);
 	}
 
 	_client->AudioProc(
-		_numInputChannels > 0 ? _inPtrs.data() : nullptr,
-		static_cast<int>(_numInputChannels),
+		localInputChannelCount > 0 ? _inPtrs.data() : nullptr,
+		localInputChannelCount,
 		_numOutputChannels > 0 ? _outPtrs.data() : nullptr,
 		static_cast<int>(_numOutputChannels),
 		static_cast<int>(numFrames),
@@ -468,12 +610,13 @@ void NinjamConnection::_EnsureWorkDir()
 	}
 }
 
-void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames)
+void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames,
+	unsigned int numInputScratchChannels)
 {
-	if ((_outScratch.size() != _numOutputChannels) || (_inScratch.size() != _numInputChannels))
+	if ((_outScratch.size() != _numOutputChannels) || (_inScratch.size() != numInputScratchChannels))
 	{
 		_outScratch.assign(_numOutputChannels, std::vector<float>(numFrames, 0.0f));
-		_inScratch.assign(_numInputChannels, std::vector<float>(numFrames, 0.0f));
+		_inScratch.assign(numInputScratchChannels, std::vector<float>(numFrames, 0.0f));
 	}
 
 	for (auto& channel : _outScratch)
@@ -492,8 +635,8 @@ void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames)
 	for (auto chan = 0u; chan < _numOutputChannels; chan++)
 		_outPtrs[chan] = _outScratch[chan].data();
 
-	_inPtrs.resize(_numInputChannels, nullptr);
-	for (auto chan = 0u; chan < _numInputChannels; chan++)
+	_inPtrs.resize(numInputScratchChannels, nullptr);
+	for (auto chan = 0u; chan < numInputScratchChannels; chan++)
 		_inPtrs[chan] = _inScratch[chan].data();
 }
 
@@ -502,6 +645,8 @@ void NinjamConnection::_ApplyLocalChannels()
 	if (!_isConnected || !_client)
 		return;
 
+	const auto packing = _lanePacking.load(std::memory_order_acquire);
+
 	for (auto existingChannel = _client->EnumLocalChannels(0);
 		existingChannel >= 0;
 		existingChannel = _client->EnumLocalChannels(0))
@@ -509,28 +654,30 @@ void NinjamConnection::_ApplyLocalChannels()
 		_client->DeleteLocalChannel(existingChannel);
 	}
 
-	const auto maxLocalChannels = std::max(0, _client->GetMaxLocalChannels());
-	auto configuredChannel = 0;
-	auto inputChannel = 0u;
-
-	while ((configuredChannel < maxLocalChannels) && (inputChannel < _numInputChannels))
+	for (auto lane = 0u; lane < static_cast<unsigned int>(packing.LaneCount); lane++)
 	{
-		auto sourceChannel = static_cast<int>(inputChannel);
-		auto name = std::string("Jamma In ") + std::to_string(inputChannel + 1u);
+		const auto sourceChannel = static_cast<int>((lane * 2u) | 1024u);
+		auto name = std::string("Jamma Mix ") + std::to_string(lane + 1u);
 
-		if ((inputChannel + 1u) < _numInputChannels)
+		if (!packing.Modulo)
 		{
-			sourceChannel |= 1024;
-			name += "/" + std::to_string(inputChannel + 2u);
-			inputChannel += 2u;
-		}
-		else
-		{
-			inputChannel += 1u;
+			if (lane < static_cast<unsigned int>(packing.DacPairs))
+			{
+				const auto baseChannel = lane * 2u;
+				name = std::string("Jamma Out ") + std::to_string(baseChannel + 1u)
+					+ "/" + std::to_string(baseChannel + 2u);
+			}
+			else
+			{
+				const auto adcPairIndex = lane - static_cast<unsigned int>(packing.DacPairs);
+				const auto baseChannel = adcPairIndex * 2u;
+				name = std::string("Jamma In ") + std::to_string(baseChannel + 1u)
+					+ "/" + std::to_string(baseChannel + 2u);
+			}
 		}
 
 		_client->SetLocalChannelInfo(
-			configuredChannel,
+			static_cast<int>(lane),
 			name.c_str(),
 			true,
 			sourceChannel,
@@ -539,7 +686,7 @@ void NinjamConnection::_ApplyLocalChannels()
 			true,
 			true);
 
-		configuredChannel++;
+		std::cout << "[NINJAM] Local channel " << lane << ": " << name << std::endl;
 	}
 
 	_client->NotifyServerOfChannelChange();

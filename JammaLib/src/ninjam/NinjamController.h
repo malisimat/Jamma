@@ -32,7 +32,10 @@ namespace ninjam
 		void Disconnect();
 		void Stop();
 
-		void ProcessAudioBlock(const float* interleavedInput,
+		void ProcessExportBlock(const float* interleavedDacOutput,
+			unsigned int numDacChannels,
+			const float* interleavedAdcInput,
+			unsigned int numAdcChannels,
 			unsigned int numFrames,
 			unsigned int sampleRate);
 

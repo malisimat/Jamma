@@ -82,11 +82,19 @@ void NinjamController::Stop()
 	_pendingSnapshot.reset();
 }
 
-void NinjamController::ProcessAudioBlock(const float* interleavedInput,
+void NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
+	unsigned int numDacChannels,
+	const float* interleavedAdcInput,
+	unsigned int numAdcChannels,
 	unsigned int numFrames,
 	unsigned int sampleRate)
 {
-	_session.ProcessAudioBlock(interleavedInput, numFrames, sampleRate);
+	_session.ProcessExportBlock(interleavedDacOutput,
+		numDacChannels,
+		interleavedAdcInput,
+		numAdcChannels,
+		numFrames,
+		sampleRate);
 }
 
 bool NinjamController::ConsumeStereoPair(unsigned int outChannelLeft,
