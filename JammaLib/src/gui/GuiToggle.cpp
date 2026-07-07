@@ -132,6 +132,7 @@ ActionResult GuiToggle::OnAction(TouchAction action)
 		if (TouchAction::TouchState::TOUCH_UP == action.State)
 		{
 			_toggleState = GuiToggleParams::TOGGLE_ON == _toggleState ? GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON;
+			_state = STATE_NORMAL;
 			source = std::to_string(_index);
 			resultType = ACTIONRESULT_TOGGLE;
 
@@ -162,6 +163,7 @@ ActionResult GuiToggle::OnAction(KeyAction action)
 	{
 		_toggleState = GuiToggleParams::TOGGLE_ON == _toggleState ?
 			GuiToggleParams::TOGGLE_OFF : GuiToggleParams::TOGGLE_ON;
+		_state = STATE_NORMAL;
 		_OnToggleChange(false);
 
 		return {
