@@ -135,9 +135,7 @@ namespace engine
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
 		unsigned long MasterAnchorSample() const noexcept { return _masterAnchorSample; }
-		// Accumulated transport re-anchor correction applied externally to MIDI loop
-		// phase anchors. Written on the job thread by RepositionFromAnchor; read on
-		// the audio thread by the automation dispatch via MidiAnchorCorrectionPtr().
+		// Accumulated transport re-anchor correction for MIDI loop phase anchors.
 		std::int32_t MidiAnchorCorrection() const noexcept
 			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
 		const std::atomic<std::int32_t>* MidiAnchorCorrectionPtr() const noexcept
