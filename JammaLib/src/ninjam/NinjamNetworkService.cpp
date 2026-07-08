@@ -191,7 +191,8 @@ namespace ninjam
 	}
 
 	void NinjamNetworkService::_FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
-		timing::TimingQuantiser& quantisation)
+		timing::TimingQuantiser& quantisation,
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
 	{
 		auto clock = quantisation.Clock();
 		if (!clock)
@@ -229,7 +230,22 @@ namespace ninjam
 		// remote interval so the local master clock stays phase-locked to NINJAM.
 		const auto wrapAfter = _externalTransport.Published()->RemoteWrapCount;
 		if (intervalLen > 0u && wrapAfter > wrapBefore)
+		{
 			quantisation.DisciplineRemotePhase(snapshot.IntervalPositionSamps, intervalLen);
+
+			// Re-anchor all local (non-remote) takes from their stored master-relative
+			// anchor so play position is re-derived rather than snapping to zero.
+			const auto abs = timing::ExternalTransport::AbsoluteMasterSample(
+				*_externalTransport.Published());
+			for (const auto& station : stations)
+			{
+				if (station && !station->IsRemote())
+				{
+					for (const auto& take : station->GetLoopTakeSnapshot())
+						if (take) take->RepositionFromAnchor(abs);
+				}
+			}
+		}
 	}
 
 	void NinjamNetworkService::HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
@@ -240,7 +256,7 @@ namespace ninjam
 		// Continuously feed the authoritative external transport, then apply
 		// wrap-gated phase discipline so connected playback tracks the remote
 		// interval rather than free-running after a one-shot seed.
-		_FeedExternalTransport(snapshot, quantisation);
+		_FeedExternalTransport(snapshot, quantisation, stations);
 
 		const auto joinPushSent = _joinPushAwaitingOutcome && !quantisation.HasPendingTempo();
 

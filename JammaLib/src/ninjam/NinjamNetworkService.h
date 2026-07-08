@@ -87,7 +87,8 @@ namespace ninjam
 		// Ingests the current snapshot into the external transport and applies
 		// wrap-gated phase discipline to the master clock while connected.
 		void _FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
-			timing::TimingQuantiser& quantisation);
+			timing::TimingQuantiser& quantisation,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		NinjamTempoJoinOptions _tempoJoinOptions{};

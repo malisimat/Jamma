@@ -138,6 +138,7 @@ namespace engine
 		// false if two active loops report different (non-zero) lengths.  Used for
 		// debug-time diagnostics; loops within a take are always played at one length.
 		bool AudioLoopsShareLength() const noexcept;
+		unsigned long MasterAnchorSample() const noexcept { return _masterAnchorSample; }
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
 		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
@@ -182,7 +183,11 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0);
+			int midiQuantisationErrorSamps = 0,
+			unsigned long masterAnchorSample = 0ul);
+		// Re-derive play position for all loops from the stored master-relative anchor
+		// without snapping to zero.  No-op if no anchor has been set.
+		void RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept;
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -318,6 +323,10 @@ namespace engine
 		unsigned int _endRecordSamps;
 		unsigned long _midiVisualPlayIndex;
 		unsigned long _midiVisualLoopLength;
+		// Master-relative anchor: the absolute master-timeline sample at which this
+		// take is at loop-relative position 0.  Set on Play, used to re-derive
+		// _playIndex at authoritative remote wraps without snapping to zero.
+		unsigned long _masterAnchorSample = 0ul;
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

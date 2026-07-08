@@ -7,6 +7,7 @@
 #include "../graphics/MidiModel.h"
 #include "../midi/MidiNote.h"
 #include "../midi/MidiIndexedOutputSink.h"
+#include "../timing/ExternalTransport.h"
 
 namespace
 {
@@ -852,6 +853,31 @@ bool LoopTake::AudioLoopsShareLength() const noexcept
 	return true;
 }
 
+void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
+{
+	// Skip if no anchor has been set (take not yet played while connected).
+	if (_masterAnchorSample == 0ul)
+		return;
+
+	const auto loopLength = VisualLoopLengthSamps();
+	if (loopLength == 0ul)
+		return;
+
+	const auto newPos = timing::ExternalTransport::TakePositionFromAnchor(
+		absoluteMasterSample, _masterAnchorSample, loopLength);
+
+	for (auto& loop : _loops)
+	{
+		if (loop)
+			loop->SetPlayIndex(newPos);
+	}
+
+	// Keep the MIDI visual play index aligned with the audio position so that
+	// MIDI block dispatch and visual readout stay phase-consistent after re-anchor.
+	if (_midiVisualLoopLength > 0ul)
+		_midiVisualPlayIndex = newPos % _midiVisualLoopLength;
+}
+
 double LoopTake::LoopIndexFrac() const noexcept
 {
 	const auto state = _state.load(std::memory_order_relaxed);
@@ -1300,7 +1326,8 @@ std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps,
-	int midiQuantisationErrorSamps)
+	int midiQuantisationErrorSamps,
+	unsigned long masterAnchorSample)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -1339,6 +1366,13 @@ void LoopTake::Play(unsigned long index,
 	if (!AudioLoopsShareLength())
 		std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
 #endif
+
+	// Store the master-relative anchor so that a remote interval wrap can re-derive
+	// each loop's play position relative to the master timeline instead of snapping
+	// to zero.  Only stored when the caller knows the absolute master position.
+	if (masterAnchorSample > 0ul && loopLength > 0ul)
+		_masterAnchorSample = timing::ExternalTransport::TakeAnchorSample(
+			masterAnchorSample, index, loopLength);
 
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)

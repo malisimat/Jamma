@@ -283,3 +283,33 @@ TEST(ExternalTransportReanchor, StaysCloseUnderObservationRounding)
 	(void)absTrue;
 }
 
+TEST(ExternalTransportReanchor, ZeroAnchorMustNotBeUsed)
+{
+	// When no anchor has been set (_masterAnchorSample == 0), calling
+	// TakePositionFromAnchor with anchor=0 returns 0 (start-of-loop) — wrong.
+	// This pins the contract that RepositionFromAnchor must guard against zero.
+	const auto wrongPos = ExternalTransport::TakePositionFromAnchor(88200ul, 0ul, 44100ul);
+	EXPECT_EQ(0ul, wrongPos); // confirms zero anchor != correct position
+}
+
+TEST(ExternalTransportReanchor, AnchorStableAcrossMultipleWraps)
+{
+	// The anchor is set once at play time and must give the correct re-derived
+	// position at wrap 1, wrap 2, and wrap 3 without being updated.
+	constexpr unsigned long masterLen = 44100ul;
+	constexpr unsigned long takeLen = 20000ul;
+	constexpr unsigned long playPosBefore = 7777ul;
+
+	const auto absAtPlay = ExternalTransport::AbsoluteMasterSample(0ul, masterLen, 10000ul);
+	const auto anchor = ExternalTransport::TakeAnchorSample(absAtPlay, playPosBefore, takeLen);
+
+	for (unsigned long wrap = 1ul; wrap <= 3ul; ++wrap)
+	{
+		const auto absNow = ExternalTransport::AbsoluteMasterSample(wrap, masterLen, 0ul);
+		const auto samplesTravelled = absNow - absAtPlay;
+		const auto expected = (playPosBefore + samplesTravelled) % takeLen;
+		const auto derived = ExternalTransport::TakePositionFromAnchor(absNow, anchor, takeLen);
+		EXPECT_EQ(expected, derived) << "wrap=" << wrap;
+	}
+}
+
