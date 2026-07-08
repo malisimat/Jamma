@@ -173,19 +173,21 @@ namespace
 
 	bool IsWindowPlacementVisible(const utils::Position2d& position, const utils::Size2d& size)
 	{
+		RECT rect{
+			static_cast<LONG>(position.X),
+			static_cast<LONG>(position.Y),
+			static_cast<LONG>(position.X + static_cast<int>(size.Width)),
+			static_cast<LONG>(position.Y + static_cast<int>(size.Height))
+		};
+
 		RECT workArea{};
-		if (!SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0))
+		if (!Window::GetMonitorWorkAreaForRect(rect, workArea))
 			return true;
 
-		const LONG left = static_cast<LONG>(position.X);
-		const LONG top = static_cast<LONG>(position.Y);
-		const LONG right = left + static_cast<LONG>(size.Width);
-		const LONG bottom = top + static_cast<LONG>(size.Height);
-
-		return right > workArea.left
-			&& bottom > workArea.top
-			&& left < workArea.right
-			&& top < workArea.bottom;
+		return rect.right > workArea.left
+			&& rect.bottom > workArea.top
+			&& rect.left < workArea.right
+			&& rect.top < workArea.bottom;
 	}
 
 	bool UpdateIni(const std::wstring& finalPath, const std::string& data)

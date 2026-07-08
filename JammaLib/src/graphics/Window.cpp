@@ -40,6 +40,7 @@ Window::Window(Scene& scene,
 	_cachedCursorPosition(std::nullopt),
 	_cachedCursorModifiers(Action::MODIFIER_NONE),
 	_pendingResize(std::nullopt),
+	_restoreConfig(),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
@@ -49,6 +50,7 @@ Window::Window(Scene& scene,
 	_config.Position = { scene.Position().X, scene.Position().Y};
 	//_config.Position = { CW_USEDEFAULT, 0};
 	_config.State = WINDOWED;
+	_restoreConfig = _config;
 }
 
 Window::~Window()
@@ -415,11 +417,19 @@ void Window::Resize(Size2d size)
 		size.Height = 1;
 
 	_config.Size = size;
+	if (_config.State == WINDOWED)
+		_restoreConfig.Size = size;
 	_scene.SetSize(size);
 	_lastHoverObjectId = 0;
 	_hover3dDirty = true;
 	_forcePick = true;
 	_pendingResize = size;
+
+	if (_scene.IsUiVerbose())
+	{
+		std::cout << "[WINDOW] resize size=" << size.Width << "x" << size.Height
+			<< " state=" << _config.State << std::endl;
+	}
 }
 
 void Window::ApplyPendingResize()
@@ -453,26 +463,7 @@ void Window::SetWindowState(WindowState state)
 
 Window::Config Window::GetRestoreConfig() const
 {
-	Config config = _config;
-
-	if (_wnd)
-	{
-		WINDOWPLACEMENT placement{};
-		placement.length = sizeof(placement);
-		if (GetWindowPlacement(_wnd, &placement))
-		{
-			config.Position = {
-				placement.rcNormalPosition.left,
-				placement.rcNormalPosition.top
-			};
-			config.Size = {
-				static_cast<unsigned int>(std::max<LONG>(1, placement.rcNormalPosition.right - placement.rcNormalPosition.left)),
-				static_cast<unsigned int>(std::max<LONG>(1, placement.rcNormalPosition.bottom - placement.rcNormalPosition.top))
-			};
-		}
-	}
-
-	return config;
+	return _restoreConfig;
 }
 
 Size2d Window::GetSize()
@@ -587,6 +578,7 @@ ActionResult Window::OnAction(WindowAction winAction)
 	switch (winAction.WindowEventType)
 	{
 	case WindowAction::SIZE:
+		SetWindowState(Window::WINDOWED);
 		Resize(winAction.Size);
 		isEaten = true;
 		break;
@@ -850,6 +842,24 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		//}
 	}
 	break;
+	case WM_MOVE:
+	{
+		RECT windowRect{};
+		if (GetWindowRect(hWindow, &windowRect))
+		{
+			const utils::Position2d position{ windowRect.left, windowRect.top };
+			window->_config.Position = position;
+			if (window->_config.State == Window::WINDOWED)
+				window->_restoreConfig.Position = position;
+
+			if (window->_scene.IsUiVerbose())
+			{
+				std::cout << "[WINDOW] move pos=" << position.X << "," << position.Y
+					<< " state=" << window->_config.State << std::endl;
+			}
+		}
+		return 0;
+	}
 	case WM_SIZING:
 		window->Render();
 		window->Swap();
