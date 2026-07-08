@@ -339,13 +339,15 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	if (!state)
 		return;
 	auto stationSink = std::dynamic_pointer_cast<MultiAudioSink>(ptr);
+	const auto transportOffsetSamps = IsRemote() ? 0 : TransportOffsetSamps();
+	const auto shiftedIndexOffset = indexOffset + transportOffsetSamps;
 	for (const auto& weakTake : state->LoopTakes)
 	{
 		auto take = weakTake.lock();
 		if (!take)
 			continue;
 
-		take->WriteBlock(stationSink, trigger, indexOffset, numSamps);
+		take->WriteBlock(stationSink, trigger, shiftedIndexOffset, numSamps);
 	}
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
@@ -360,12 +362,12 @@ void Station::WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 	const bool vstActive = (channelCount > 0u) && chain && chain->IsActive() && (state->VstBlockPtrs.size() >= channelCount);
 
 	_RunVstBlock(chain.get(), routes, *state, vstActive,
-		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample);
+		static_cast<unsigned int>(channelCount), sampsToRead, blockStartSample, transportOffsetSamps);
 
 	// Drive any wired parameter automation. Runs independently of vstActive so a
 	// bypassed/idle chain still receives recorded parameter motion. Flat loop over
 	// the pre-baked dispatch list — no weak_ptr locks, no shared_ptr chasing.
-	_RunAutomationDispatch(blockStartSample, sampsToRead);
+	_RunAutomationDispatch(blockStartSample, sampsToRead, transportOffsetSamps);
 
 	if (channelCount == 0u)
 	{
@@ -415,16 +417,36 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	bool vstActive,
 	unsigned int channelCount,
 	unsigned int sampsToRead,
-	std::uint32_t blockStartSample) noexcept
+	std::uint32_t blockStartSample,
+	std::int32_t transportOffsetSamps) noexcept
 {
+	auto shiftedBlockStartSample = blockStartSample;
+	if (transportOffsetSamps >= 0)
+	{
+		shiftedBlockStartSample += static_cast<std::uint32_t>(transportOffsetSamps);
+	}
+	else
+	{
+		shiftedBlockStartSample -= static_cast<std::uint32_t>(-transportOffsetSamps);
+	}
+
 	if (vstActive)
 	{
 		vst::HostTimeState hostTime;
 		hostTime.sampleRate = static_cast<double>(_sampleRate);
 		hostTime.isPlaying  = true;
-		hostTime.samplePos  = _clock
-			? static_cast<double>(_clock->AbsoluteSamplePos(blockStartSample))
-			: static_cast<double>(blockStartSample);
+		if (_clock)
+		{
+			auto samplePos = static_cast<std::int64_t>(_clock->AbsoluteSamplePos(blockStartSample))
+				+ static_cast<std::int64_t>(transportOffsetSamps);
+			if (samplePos < 0)
+				samplePos = 0;
+			hostTime.samplePos = static_cast<double>(samplePos);
+		}
+		else
+		{
+			hostTime.samplePos = static_cast<double>(shiftedBlockStartSample);
+		}
 		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
 		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;
 		if (seedSamps > 0u && _sampleRate > 0.0f)
@@ -435,7 +457,7 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 				hostTime.bpi   = static_cast<int32_t>(timing->Bpi);
 			}
 		chain->UpdateHostTime(hostTime);
-		chain->BeginMidiBlock(blockStartSample, sampsToRead);
+		chain->BeginMidiBlock(shiftedBlockStartSample, sampsToRead);
 	}
 
 	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
@@ -456,7 +478,11 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		auto take = weakTake.lock();
 		if (!take)
 			continue;
-		midiOutputIndex += take->ReadMidiBlock(blockStartSample, sampsToRead, midiSink, midiOutputIndex);
+		midiOutputIndex += take->ReadMidiBlock(blockStartSample,
+			sampsToRead,
+			midiSink,
+			midiOutputIndex,
+			transportOffsetSamps);
 	}
 
 	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
@@ -558,7 +584,8 @@ std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::
 }
 
 void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
-	std::uint32_t numSamps) noexcept
+	std::uint32_t numSamps,
+	std::int32_t transportOffsetSamps) noexcept
 {
 	const auto* dispatches = _automationDispatch.load(std::memory_order_acquire);
 	if (!dispatches)
@@ -578,7 +605,11 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 
 	const std::uint8_t frontIdx = (dispatches == _automationDispatchBuf[0]) ? 0u : 1u;
 	const auto count = _automationDispatchCount[frontIdx];
-	const auto dispatchSample = blockStartSample + ((numSamps > 0u) ? (numSamps - 1u) : 0u);
+	auto dispatchSample = blockStartSample + ((numSamps > 0u) ? (numSamps - 1u) : 0u);
+	if (transportOffsetSamps >= 0)
+		dispatchSample += static_cast<std::uint32_t>(transportOffsetSamps);
+	else
+		dispatchSample -= static_cast<std::uint32_t>(-transportOffsetSamps);
 
 	for (std::uint8_t i = 0u; i < count; ++i)
 	{
@@ -837,6 +868,9 @@ ActionResult Station::OnAction(TriggerAction action)
 	res.IsEaten = false;
 
 	auto loopTake = _TryGetTake(action.TargetId);
+	const auto transportStart = static_cast<std::int64_t>(_clock ? _clock->AbsoluteSamplePos() : 0ul)
+		+ static_cast<std::int64_t>(TransportOffsetSamps());
+	const auto transportStartSamps = transportStart < 0 ? 0ull : static_cast<std::uint64_t>(transportStart);
 
 	switch (action.ActionType)
 	{
@@ -850,13 +884,12 @@ ActionResult Station::OnAction(TriggerAction action)
 			heldSnapshot = _liveHeldMidi;
 		}
 		auto newLoopTake = AddTake();
-		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
 			midiInputChannels,
 			action.MidiInputDevices,
 			std::move(heldSnapshot),
-			static_cast<std::uint64_t>(transportStartSamps));
+			transportStartSamps);
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -931,13 +964,12 @@ ActionResult Station::OnAction(TriggerAction action)
 		auto sourceId = sourceLoopTake ? sourceLoopTake->Id() : "";
 
 		auto newLoopTake = AddTake();
-		const auto transportStartSamps = _clock ? _clock->AbsoluteSamplePos() : 0ul;
 		newLoopTake->Overdub(action.InputChannels,
 			Name(),
 			midiInputChannels,
 			action.MidiInputDevices,
 			sourceLoopTake,
-			static_cast<std::uint64_t>(transportStartSamps));
+			transportStartSamps);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
@@ -1251,6 +1283,35 @@ void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) n
 		if (take)
 			take->SetGlobalMidiQuantState(state);
 	}
+}
+
+void Station::SetTransportOffsetLoopFrac(double loopFrac) noexcept
+{
+	if (loopFrac < -1.0)
+		loopFrac = -1.0;
+	else if (loopFrac > 1.0)
+		loopFrac = 1.0;
+
+	_transportOffsetLoopFrac.store(loopFrac, std::memory_order_release);
+}
+
+std::int32_t Station::TransportOffsetSamps() const noexcept
+{
+	const auto loopFrac = _transportOffsetLoopFrac.load(std::memory_order_acquire);
+	if (std::abs(loopFrac) < 1.0e-9)
+		return 0;
+
+	const auto masterLoopSamps = _clock ? _clock->SeedSourceLength() : 0ul;
+	if (masterLoopSamps == 0ul)
+		return 0;
+
+	auto offset = static_cast<std::int64_t>(std::llround(loopFrac * static_cast<double>(masterLoopSamps)));
+	if (offset > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
+		offset = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+	else if (offset < static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()))
+		offset = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
+
+	return static_cast<std::int32_t>(offset);
 }
 
 void Station::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept

@@ -136,6 +136,7 @@ namespace io
 		unsigned int QuantiseSamps;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
+		double TransportOffsetLoopFrac = 0.0;
 		utils::Timer::QuantisationType Quantisation;
 	};
 }

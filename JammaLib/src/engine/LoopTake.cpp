@@ -1236,14 +1236,19 @@ std::vector<midi::MidiEvent> LoopTake::_BuildMidiLiveTransitionEvents(std::uint3
 unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	std::uint32_t numSamples,
 	midi::IMidiOutputSink& sink,
-	unsigned int firstOutputIndex) noexcept
+	unsigned int firstOutputIndex,
+	std::int32_t transportOffsetSamps) noexcept
 {
 	auto snapshot = _MidiLoopSnapshotState();
 	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
 	if (IsMuted())
 		return midiLoopCount;
 
-	const auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
+	auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
+	if (transportOffsetSamps >= 0)
+		midiBlockStart += static_cast<std::uint32_t>(transportOffsetSamps);
+	else
+		midiBlockStart -= static_cast<std::uint32_t>(-transportOffsetSamps);
 	if (!snapshot)
 		return 0u;
 

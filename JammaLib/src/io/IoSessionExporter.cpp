@@ -16,6 +16,7 @@ namespace io
 	actions::ActionResult IoSessionExporter::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
 		const timing::TimingQuantiser& quantisation,
 		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
+		double transportOffsetLoopFrac,
 		const io::UserConfig& userConfig,
 		const audio::AudioStreamParams& streamParams,
 		audio::AudioDevice* device,
@@ -60,6 +61,7 @@ namespace io
 		jam.QuantiseSamps = 0;
 		jam.GlobalMidiQuantStateValue = globalMidiQuantState;
 		jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
+		jam.TransportOffsetLoopFrac = transportOffsetLoopFrac;
 		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
 		std::vector<LoopSnapshot> loops;

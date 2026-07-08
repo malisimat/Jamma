@@ -19,6 +19,7 @@ namespace io
 		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const timing::TimingQuantiser& quantisation,
 			io::JamFile::GlobalMidiQuantState globalMidiQuantState,
+			double transportOffsetLoopFrac,
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& streamParams,
 			audio::AudioDevice* device,

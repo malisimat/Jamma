@@ -140,6 +140,9 @@ namespace engine
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
+		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
+		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
+		std::int32_t TransportOffsetSamps() const noexcept;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -271,7 +274,8 @@ namespace engine
 			bool vstActive,
 			unsigned int channelCount,
 			unsigned int sampsToRead,
-			std::uint32_t blockStartSample) noexcept;
+			std::uint32_t blockStartSample,
+			std::int32_t transportOffsetSamps) noexcept;
 
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
 		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
@@ -308,7 +312,8 @@ namespace engine
 		// Run one automation dispatch block on the audio thread: advance each
 		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
 		void _RunAutomationDispatch(std::uint32_t blockStartSample,
-			std::uint32_t numSamps) noexcept;
+			std::uint32_t numSamps,
+			std::int32_t transportOffsetSamps) noexcept;
 
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.
@@ -337,6 +342,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
 
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on

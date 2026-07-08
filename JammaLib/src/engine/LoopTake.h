@@ -200,7 +200,8 @@ namespace engine
 		unsigned int ReadMidiBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			midi::IMidiOutputSink& sink,
-			unsigned int firstOutputIndex = 0u) noexcept;
+			unsigned int firstOutputIndex = 0u,
+			std::int32_t transportOffsetSamps = 0) noexcept;
 		// Read-only view of MIDI loops; used by Station to flush held notes on ditch.
 		const std::vector<std::shared_ptr<midi::MidiLoop>>& GetMidiLoops() const noexcept { return _midiLoops; }
 		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;

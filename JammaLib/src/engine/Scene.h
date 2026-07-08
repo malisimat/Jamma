@@ -282,6 +282,7 @@ namespace engine
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
 		void _SetMidiQuantisationGrain(unsigned int grainSamps, const char* source);
 		void _SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bool fromLocalEdit = false);
+		void _SetTransportOffsetLoopFrac(double loopFrac, bool updateInput = true);
 		void _ApplyGlobalMidiQuantStateToAllLoopTakes();
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
@@ -338,6 +339,7 @@ namespace engine
 	protected:
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
+		static constexpr unsigned int TransportOffsetControlIndex = 7002u;
 		static constexpr unsigned int NinjamRemoteTempoAcceptControlIndex = 7101u;
 		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
@@ -359,8 +361,10 @@ namespace engine
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
+		std::shared_ptr<gui::GuiNumericInput> _transportOffsetInput;
 		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
+		double _transportOffsetLoopFrac = 0.0;
 		std::unique_ptr<gui::GuiLabel> _label;
 		std::unique_ptr<gui::SceneSelector> _selector;
 		std::shared_ptr<gui::GuiMainPanel> _mainPanel;

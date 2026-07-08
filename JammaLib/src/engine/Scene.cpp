@@ -42,8 +42,10 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_midiChannelOverrideInput(nullptr),
+	_transportOffsetInput(nullptr),
 	_globalMidiQuantRadio(nullptr),
 	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
+	_transportOffsetLoopFrac(0.0),
 	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
@@ -155,6 +157,24 @@ Scene::Scene(SceneParams params,
 	midiChannelOverrideParams.InitValue = static_cast<double>(_inputSubsystem->ForcedChannelOverride());
 	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
 	AddChild(_midiChannelOverrideInput);
+
+	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
+	transportOffsetParams.Index = TransportOffsetControlIndex;
+	transportOffsetParams.Position = {
+		midiChannelOverrideParams.Position.X + static_cast<int>(midiChannelOverrideParams.Size.Width) + 8,
+		midiChannelOverrideParams.Position.Y };
+	transportOffsetParams.ModelPosition = {
+		static_cast<float>(transportOffsetParams.Position.X),
+		static_cast<float>(transportOffsetParams.Position.Y),
+		0.0f };
+	transportOffsetParams.Size = { 96, 64 };
+	transportOffsetParams.Min = -1.0;
+	transportOffsetParams.Max = 1.0;
+	transportOffsetParams.Step = 0.005;
+	transportOffsetParams.Decimals = 3;
+	transportOffsetParams.InitValue = _transportOffsetLoopFrac;
+	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
+	AddChild(_transportOffsetInput);
 
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
@@ -391,6 +411,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
+	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
 	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -842,6 +863,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		return io::IoSessionExporter::ExportSession(_stations,
 			_quantisation,
 			_globalMidiQuantState,
+			_transportOffsetLoopFrac,
 			_userConfig,
 			_audioEngine->GetStreamParams(),
 			_audioEngine->GetDevice(),
@@ -999,6 +1021,33 @@ ActionResult Scene::OnAction(GuiAction action)
 		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), _stations);
 		_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 	}
+	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
+		&& (action.Index == TransportOffsetControlIndex)
+		&& _transportOffsetInput)
+	{
+		double value = _transportOffsetLoopFrac;
+		if (auto str = std::get_if<GuiAction::GuiString>(&action.Data))
+		{
+			try
+			{
+				value = std::stod(str->Value);
+			}
+			catch (...)
+			{
+				value = _transportOffsetLoopFrac;
+			}
+		}
+		else if (auto numeric = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			value = numeric->Value;
+		}
+		else
+		{
+			return ActionResult::NoAction();
+		}
+
+		_SetTransportOffsetLoopFrac(value);
+	}
 
 	return ActionResult::NoAction();
 }
@@ -1135,6 +1184,8 @@ void Scene::InitReceivers()
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
 	if (_midiChannelOverrideInput)
 		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
+	if (_transportOffsetInput)
+		_transportOffsetInput->SetReceiver(ActionReceiver::shared_from_this());
 	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
 	if (_remoteTempoDialog)
 		_remoteTempoDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
@@ -1761,6 +1812,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());
+	station->SetTransportOffsetLoopFrac(_transportOffsetLoopFrac);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
@@ -1802,6 +1854,25 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 		_globalMidiQuantRadio->SetCurrentValue(static_cast<unsigned int>(state), true);
 
 	_ApplyGlobalMidiQuantStateToAllLoopTakes();
+}
+
+void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
+{
+	if (loopFrac < -1.0)
+		loopFrac = -1.0;
+	else if (loopFrac > 1.0)
+		loopFrac = 1.0;
+
+	_transportOffsetLoopFrac = loopFrac;
+
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetTransportOffsetLoopFrac(loopFrac);
+	}
+
+	if (updateInput && _transportOffsetInput)
+		_transportOffsetInput->SetValue(loopFrac, false);
 }
 
 void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
