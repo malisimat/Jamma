@@ -2,6 +2,52 @@
 
 Jamma uses vendored Ninjam client files for networked collaborative jamming.
 
+## Timing and Sync
+
+NINJAM organises collaborative sessions around a fixed **interval** (BPM × BPI beats). Every
+participant receives the same interval length and position from the server.
+
+### Transport model
+
+Jamma promotes the NINJAM interval to an authoritative external transport while connected, via
+the `timing::ExternalTransport` layer (see `JammaLib/src/timing/ExternalTransport.h`):
+
+- **Disconnected** — the local `Timer` free-runs as normal; no sync.
+- **Connected** — on every job-thread tick, `NinjamNetworkService::_FeedExternalTransport`
+  ingests the current remote `IntervalPositionSamps` and `IntervalLengthSamps`.
+
+### Wrap-gated phase discipline
+
+Drift correction is applied **once per remote interval wrap** rather than every tick, to avoid
+continuous micro-nudges during playback:
+
+1. `ExternalTransport::IngestSnapshot` detects a wrap (position rolls back to near zero).
+2. `TimingQuantiser::DisciplineRemotePhase` seeds `Timer::SetMasterLoopIndexFrac` with the
+   authoritative remote phase.
+3. All local `LoopTake` play positions are re-derived from their stored **master-relative anchor**
+   via `ExternalTransport::TakePositionFromAnchor`, avoiding a snap-to-zero reset.
+
+### MIDI and automation coherence
+
+MIDI note playback is cursor-driven (`_midiVisualPlayIndex`); it is re-anchored alongside
+audio loops at each wrap. Automation playback and CC recording derive a fractional loop
+position from a **frozen phase anchor** (`MidiLoop::_loopPhaseAnchor`, set once at
+`EndRecord`) plus a live **transport correction** (`LoopTake::_midiAnchorCorrection`):
+
+```
+effectiveAnchor = loopPhaseAnchor + midiAnchorCorrection
+frac = (globalSample - effectiveAnchor) % loopLength / loopLength
+```
+
+`_midiAnchorCorrection` is an `atomic<int32_t>` on `LoopTake`, written on the job thread by
+`RepositionFromAnchor` and read on the audio thread by `Station::_RunAutomationDispatch` via
+a baked pointer in `AutomationDispatch`. No dispatch rebuild is required at wrap time, and
+`MidiLoop` itself remains a pure recording container.
+
+For detailed design rationale and implementation history see
+[ninjam-sync-implementation-plan.md](ninjam-sync-implementation-plan.md) and
+[ninjam-sync-handoff.md](ninjam-sync-handoff.md).
+
 ## Client Files Structure
 
 Files are located under the `lib/` directory:
