@@ -835,24 +835,6 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 	return _midiVisualLoopLength;
 }
 
-bool LoopTake::AudioLoopsShareLength() const noexcept
-{
-	auto shared = 0ul;
-	for (const auto& loop : _loops)
-	{
-		if (!loop)
-			continue;
-		const auto length = loop->LoopLength();
-		if (length == 0ul)
-			continue;
-		if (shared == 0ul)
-			shared = length;
-		else if (length != shared)
-			return false;
-	}
-	return true;
-}
-
 void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
 {
 	// Skip if no anchor has been set (take not yet played while connected).
@@ -1383,8 +1365,27 @@ void LoopTake::Play(unsigned long index,
 	}
 
 #ifndef NDEBUG
-	if (!AudioLoopsShareLength())
-		std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
+	{
+		auto shared = 0ul;
+		bool shareLength = true;
+		for (const auto& loop : _loops)
+		{
+			if (!loop)
+				continue;
+			const auto length = loop->LoopLength();
+			if (length == 0ul)
+				continue;
+			if (shared == 0ul)
+				shared = length;
+			else if (length != shared)
+			{
+				shareLength = false;
+				break;
+			}
+		}
+		if (!shareLength)
+			std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
+	}
 #endif
 
 	// Store the master-relative anchor so that a remote interval wrap can re-derive

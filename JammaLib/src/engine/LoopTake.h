@@ -134,10 +134,6 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
-		// Invariant: every audio loop in a take shares one musical length.  Returns
-		// false if two active loops report different (non-zero) lengths.  Used for
-		// debug-time diagnostics; loops within a take are always played at one length.
-		bool AudioLoopsShareLength() const noexcept;
 		unsigned long MasterAnchorSample() const noexcept { return _masterAnchorSample; }
 		// Accumulated transport re-anchor correction applied externally to MIDI loop
 		// phase anchors. Written on the job thread by RepositionFromAnchor; read on
