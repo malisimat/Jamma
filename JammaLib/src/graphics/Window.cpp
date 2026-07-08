@@ -451,6 +451,30 @@ void Window::SetWindowState(WindowState state)
 	_config.State = state;
 }
 
+Window::Config Window::GetRestoreConfig() const
+{
+	Config config = _config;
+
+	if (_wnd)
+	{
+		WINDOWPLACEMENT placement{};
+		placement.length = sizeof(placement);
+		if (GetWindowPlacement(_wnd, &placement))
+		{
+			config.Position = {
+				placement.rcNormalPosition.left,
+				placement.rcNormalPosition.top
+			};
+			config.Size = {
+				static_cast<unsigned int>(std::max<LONG>(1, placement.rcNormalPosition.right - placement.rcNormalPosition.left)),
+				static_cast<unsigned int>(std::max<LONG>(1, placement.rcNormalPosition.bottom - placement.rcNormalPosition.top))
+			};
+		}
+	}
+
+	return config;
+}
+
 Size2d Window::GetSize()
 {
 	return _config.Size;

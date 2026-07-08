@@ -75,6 +75,7 @@ namespace graphics
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
 		void SetWindowState(WindowState state);
+		Config GetRestoreConfig() const;
 		utils::Size2d GetSize();
 		void Render();
 		void Swap();

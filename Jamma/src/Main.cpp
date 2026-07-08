@@ -187,6 +187,23 @@ namespace
 			&& left < workArea.right
 			&& top < workArea.bottom;
 	}
+
+	bool UpdateIni(const std::wstring& finalPath, const std::string& data)
+	{
+		const std::wstring tempPath = finalPath + L".tmp";
+		io::TextReadWriter txtFile;
+
+		if (!txtFile.Write(tempPath, data, static_cast<unsigned int>(data.size()), 0))
+			return false;
+
+		if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+		{
+			DeleteFileW(tempPath.c_str());
+			return false;
+		}
+
+		return true;
+	}
 }
 
 void SetupConsole()
@@ -423,6 +440,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// after the explicit CoUninitialize() call below.
 	scene.value()->Shutdown();
 	scene.value()->CloseAllVstEditorWindows();
+
+	if (defaults.has_value())
+	{
+		auto savedDefaults = defaults.value();
+		const auto restoreConfig = window.GetRestoreConfig();
+		savedDefaults.WinPos = restoreConfig.Position;
+		savedDefaults.WinSize = restoreConfig.Size;
+
+		std::stringstream savedDefaultsStream;
+		InitFile::ToStream(savedDefaults, savedDefaultsStream);
+		if (!UpdateIni(initPath, savedDefaultsStream.str()))
+			std::cerr << "[BOOT] Failed to save defaults atomically: " << EncodeUtf8(initPath) << std::endl;
+	}
 
 	window.Release();
 
