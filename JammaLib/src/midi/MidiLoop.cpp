@@ -162,7 +162,7 @@ MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
 	  _sampleRate(static_cast<float>(constants::DefaultSampleRate)),
 	  _loopLengthSamps(0),
-	  _loopPhaseAnchor(0),
+	  _loopPhaseAnchor(0u),
 	  _dropped(0),
 	  _revision(0),
 	  _modelRevision(0),

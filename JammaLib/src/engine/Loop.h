@@ -233,6 +233,15 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			bool continueRecording);
+		// Directly re-position the play cursor to index without altering the state
+		// machine.  Call only from a coherent reposition path (e.g. anchor re-derive
+		// at remote interval wrap); the loop must already be in a playing state.
+		void SetPlayIndex(unsigned long index) noexcept
+		{
+			const auto len = _loopLength.load(std::memory_order_relaxed);
+			if (len == 0ul) return;
+			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
+		}
 		void EndRecording();
 		void Ditch();
 		void Overdub();

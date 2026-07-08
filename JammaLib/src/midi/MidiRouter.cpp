@@ -620,6 +620,7 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 			const auto paramIdx = vst::_lastTouchedParam.ParameterIndex.load(std::memory_order_acquire);
 			const auto value    = vst::_lastTouchedParam.Value.load(std::memory_order_acquire);
 
+			std::shared_ptr<engine::Station> targetStation;
 			std::shared_ptr<midi::MidiLoop> targetLoop;
 			for (const auto& station : stations)
 			{
@@ -628,6 +629,7 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 				if (auto loop = station->ResolveEditorAutomationLoop(plugin))
 				{
 					targetLoop = loop;
+					targetStation = station;
 					break;
 				}
 			}
@@ -642,8 +644,10 @@ void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engi
 				const auto loopLen = targetLoop->LoopLengthSamps();
 				if (loopLen > 0u)
 				{
+					const auto correction = targetStation
+						? targetStation->ResolveMidiAnchorCorrectionFor(targetLoop.get()) : 0;
 					const auto loopSample = static_cast<std::uint32_t>(
-						(nowSample - targetLoop->LoopPhaseAnchor()) % loopLen);
+						(nowSample - targetLoop->LoopPhaseAnchor() - static_cast<std::uint32_t>(correction)) % loopLen);
 					const auto laneOpt = targetLoop->ResolveAutomationLaneFor(plugin, paramIdx);
 					if (!laneOpt)
 					{
@@ -819,7 +823,9 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 									continue;
 
 							const double frac = std::fmod(
-								static_cast<double>(static_cast<std::uint32_t>(globalSampleNow) - loop->LoopPhaseAnchor()),
+							static_cast<double>(static_cast<std::uint32_t>(globalSampleNow)
+								- loop->LoopPhaseAnchor()
+								- static_cast<std::uint32_t>(take->MidiAnchorCorrection())),
 								static_cast<double>(loopLen)) / static_cast<double>(loopLen);
 								for (std::size_t laneIdx = 0u; laneIdx < MidiLoop::MaxAutomationLanes; ++laneIdx)
 								{

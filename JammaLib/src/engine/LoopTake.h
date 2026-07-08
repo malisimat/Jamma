@@ -134,6 +134,18 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
+		// Invariant: every audio loop in a take shares one musical length.  Returns
+		// false if two active loops report different (non-zero) lengths.  Used for
+		// debug-time diagnostics; loops within a take are always played at one length.
+		bool AudioLoopsShareLength() const noexcept;
+		unsigned long MasterAnchorSample() const noexcept { return _masterAnchorSample; }
+		// Accumulated transport re-anchor correction applied externally to MIDI loop
+		// phase anchors. Written on the job thread by RepositionFromAnchor; read on
+		// the audio thread by the automation dispatch via MidiAnchorCorrectionPtr().
+		std::int32_t MidiAnchorCorrection() const noexcept
+			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
+		const std::atomic<std::int32_t>* MidiAnchorCorrectionPtr() const noexcept
+			{ return &_midiAnchorCorrection; }
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
 		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
@@ -178,7 +190,11 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0);
+			int midiQuantisationErrorSamps = 0,
+			unsigned long masterAnchorSample = 0ul);
+		// Re-derive play position for all loops from the stored master-relative anchor
+		// without snapping to zero.  No-op if no anchor has been set.
+		void RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept;
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -315,6 +331,14 @@ namespace engine
 		unsigned int _endRecordSamps;
 		unsigned long _midiVisualPlayIndex;
 		unsigned long _midiVisualLoopLength;
+		// Master-relative anchor: the absolute master-timeline sample at which this
+		// take is at loop-relative position 0.  Set on Play, used to re-derive
+		// _playIndex at authoritative remote wraps without snapping to zero.
+		unsigned long _masterAnchorSample = 0ul;
+		// Modular correction applied to all MIDI loop phase anchors owned by this
+		// take after remote NINJAM wrap re-anchors. Negative (backward) shift means
+		// notes jumped forward: effectiveAnchor = loopPhaseAnchor + correction.
+		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

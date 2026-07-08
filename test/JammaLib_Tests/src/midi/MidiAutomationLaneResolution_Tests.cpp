@@ -210,6 +210,60 @@ TEST(MidiAutomationPhaseAnchor, FracReflectsPhaseAnchor)
 	EXPECT_NEAR(0.25f, calcFrac(108000u), 1.0e-6f);
 }
 
+// A remote NINJAM wrap re-anchors note playback by jumping the loop-relative
+// play position forward by some delta. The LoopTake accumulates this delta as
+// _midiAnchorCorrection (negative, since effectiveAnchor = frozen + correction).
+// This test verifies the frac math: shifting the effective anchor backward by D
+// advances automation frac by D/L, matching the note position jump.
+TEST(MidiAutomationPhaseAnchor, ExternalCorrectionTracksForwardDelta)
+{
+	MidiLoop loop;
+	const std::uint32_t loopLen     = 48000u;
+	const std::uint32_t frozenAnchor = 96000u;
+	loop.EndRecord(loopLen, frozenAnchor);
+
+	// Anchor is frozen and never touched again.
+	EXPECT_EQ(frozenAnchor, loop.LoopPhaseAnchor());
+
+	const std::uint32_t globalSample = 120000u;  // frac = 0.5 before any correction
+
+	auto calcFrac = [&](std::int32_t correction) -> double {
+		const auto effectiveAnchor = frozenAnchor + static_cast<std::uint32_t>(correction);
+		return std::fmod(
+			static_cast<double>(globalSample - effectiveAnchor),
+			static_cast<double>(loopLen)) / static_cast<double>(loopLen);
+	};
+
+	EXPECT_NEAR(0.5, calcFrac(0), 1.0e-9);
+
+	// Notes jump forward by quarter loop; correction is -12000 (backward shift).
+	EXPECT_NEAR(0.75, calcFrac(-12000), 1.0e-9);
+
+	// Anchor stays frozen throughout — correction lives externally on LoopTake.
+	EXPECT_EQ(frozenAnchor, loop.LoopPhaseAnchor());
+}
+
+// Shifting by a full loop length leaves frac unchanged (modular identity).
+TEST(MidiAutomationPhaseAnchor, ExternalCorrectionByFullLoopIsFracNoOp)
+{
+	MidiLoop loop;
+	const std::uint32_t loopLen     = 48000u;
+	const std::uint32_t frozenAnchor = 96000u;
+	loop.EndRecord(loopLen, frozenAnchor);
+
+	const std::uint32_t globalSample = 108000u;  // frac = 0.25
+
+	auto calcFrac = [&](std::int32_t correction) -> double {
+		const auto effectiveAnchor = frozenAnchor + static_cast<std::uint32_t>(correction);
+		return std::fmod(
+			static_cast<double>(globalSample - effectiveAnchor),
+			static_cast<double>(loopLen)) / static_cast<double>(loopLen);
+	};
+
+	const auto before = calcFrac(0);
+	EXPECT_NEAR(before, calcFrac(-static_cast<std::int32_t>(loopLen)), 1.0e-9);
+}
+
 // Writing the same frac twice must replace the existing point's value rather
 // than accumulate a duplicate point.
 TEST(MidiAutomationPhaseAnchor, RepeatWriteAtSameFracReplacesValue)
