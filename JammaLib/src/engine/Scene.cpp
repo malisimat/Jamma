@@ -420,6 +420,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 void Scene::Draw(DrawContext& ctx)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	glDisable(GL_DEPTH_TEST);
 
 	// Draw overlays
@@ -457,6 +459,8 @@ void Scene::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
@@ -514,6 +518,8 @@ void Scene::Draw3d(DrawContext& ctx,
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	_skybox.InitResources(resourceLib, forceInit);
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
@@ -1150,6 +1156,8 @@ void Scene::OnJobTick(Time curTime)
 void Scene::_PumpMidi()
 {
     auto summary = _inputSubsystem->PumpMidi(_stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
+	std::scoped_lock lock(_sceneMutex);
+
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
@@ -1168,6 +1176,8 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 void Scene::_PumpSerial()
 {
     auto summary = _inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
+	std::scoped_lock lock(_sceneMutex);
+
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
