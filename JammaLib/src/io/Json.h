@@ -38,7 +38,7 @@ namespace io
 		};
 
 		static std::optional<JsonValue> FromStream(std::stringstream ss);
-		static bool ToStream(JsonValue json, std::stringstream ss);
+		static bool ToStream(JsonValue json, std::stringstream& ss);
 
 		static bool IsAllDigits(std::string str, bool includePeriod);
 		static bool IsTrue(std::string str);
@@ -81,5 +81,7 @@ namespace io
 		static ValueResult ParseValue(std::stringstream ss);
 		static PartResult ParseJsonPart(std::stringstream ss);
 		static JsonArray ParseJsonArray(std::vector<std::string> values);
+		static bool WriteValue(const JsonValue& json, std::stringstream& ss);
+		static bool WriteString(const std::string& value, std::stringstream& ss);
 	};
 }

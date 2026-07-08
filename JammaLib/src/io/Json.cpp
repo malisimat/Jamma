@@ -20,9 +20,92 @@ std::optional<Json::JsonValue> Json::FromStream(std::stringstream ss)
 	return root.Value;
 }
 
-bool Json::ToStream(Json::JsonValue json, std::stringstream ss)
+bool Json::ToStream(Json::JsonValue json, std::stringstream& ss)
 {
-	return false;
+	return WriteValue(json, ss);
+}
+
+bool Json::WriteString(const std::string& value, std::stringstream& ss)
+{
+	ss << '"';
+	for (const char ch : value)
+	{
+		switch (ch)
+		{
+		case '\\': ss << "\\\\"; break;
+		case '"': ss << "\\\""; break;
+		case '\b': ss << "\\b"; break;
+		case '\f': ss << "\\f"; break;
+		case '\n': ss << "\\n"; break;
+		case '\r': ss << "\\r"; break;
+		case '\t': ss << "\\t"; break;
+		default: ss << ch; break;
+		}
+	}
+	ss << '"';
+	return true;
+}
+
+bool Json::WriteValue(const JsonValue& json, std::stringstream& ss)
+{
+	return std::visit([&ss](const auto& value) -> bool
+		{
+			using ValueType = std::decay_t<decltype(value)>;
+			if constexpr (std::is_same_v<ValueType, bool>)
+			{
+				ss << (value ? "true" : "false");
+				return true;
+			}
+			else if constexpr (std::is_same_v<ValueType, long> || std::is_same_v<ValueType, unsigned long>)
+			{
+				ss << value;
+				return true;
+			}
+			else if constexpr (std::is_same_v<ValueType, double>)
+			{
+				ss << value;
+				return true;
+			}
+			else if constexpr (std::is_same_v<ValueType, std::string>)
+			{
+				return WriteString(value, ss);
+			}
+			else if constexpr (std::is_same_v<ValueType, JsonArray>)
+			{
+				ss << '[';
+				std::visit([&ss](const auto& arrayValues)
+					{
+						for (std::size_t i = 0; i < arrayValues.size(); ++i)
+						{
+							if (i > 0u)
+								ss << ',';
+							Json::WriteValue(arrayValues[i], ss);
+						}
+					}, value.Array);
+				ss << ']';
+				return true;
+			}
+			else if constexpr (std::is_same_v<ValueType, JsonPart>)
+			{
+				ss << '{';
+				bool first = true;
+				for (const auto& keyValue : value.KeyValues)
+				{
+					if (!first)
+						ss << ',';
+					first = false;
+					WriteString(keyValue.first, ss);
+					ss << ':';
+					WriteValue(keyValue.second, ss);
+				}
+				ss << '}';
+				return true;
+			}
+			else
+			{
+				return false;
+			}
+		}, json);
 }
 
 bool Json::IsAllDigits(std::string str, bool includePeriod)
