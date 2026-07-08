@@ -495,8 +495,9 @@ void Station::RebuildAutomationDispatch()
 				entry.paramIdx = lane.Mapping.TargetParameterIndex;
 				entry.loop = midiLoop.get();
 				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
-				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
+				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
+				entry.anchorCorrection = take->MidiAnchorCorrectionPtr();
 				++count;
 			}
 		}
@@ -521,6 +522,25 @@ std::shared_ptr<midi::MidiLoop> Station::_LastRecordedMidiLoop(const std::shared
 			last = loop;
 	}
 	return last;
+}
+
+std::int32_t Station::ResolveMidiAnchorCorrectionFor(const midi::MidiLoop* loop) const noexcept
+{
+	if (!loop)
+		return 0;
+
+	const auto takes = GetLoopTakeSnapshot();
+	for (const auto& take : takes)
+	{
+		if (!take)
+			continue;
+		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
+		{
+			if (midiLoop.get() == loop)
+				return take->MidiAnchorCorrection();
+		}
+	}
+	return 0;
 }
 
 std::shared_ptr<midi::MidiLoop> Station::ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const
@@ -594,9 +614,15 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 		if (midi::MidiRouter::IsParameterSuppressed(entry.plugin, entry.paramIdx, dispatchSample))
 			continue;
 
+		// Apply the live anchor correction from the owning LoopTake. The frozen
+		// loopPhaseAnchor was baked at dispatch rebuild; the correction accumulates
+		// remote NINJAM wrap re-anchor deltas without requiring a rebuild.
+		const std::int32_t correction = entry.anchorCorrection
+			? entry.anchorCorrection->load(std::memory_order_relaxed) : 0;
+		const auto effectiveAnchor = entry.loopPhaseAnchor + static_cast<std::uint32_t>(correction);
 		const double frac = (entry.loopLengthSamps > 0u)
 			? std::fmod(
-				static_cast<double>(dispatchSample - entry.loopPhaseAnchor),
+				static_cast<double>(dispatchSample - effectiveAnchor),
 				static_cast<double>(entry.loopLengthSamps))
 					/ static_cast<double>(entry.loopLengthSamps)
 			: 0.0;

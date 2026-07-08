@@ -202,6 +202,11 @@ namespace engine
 		// Non-audio (MIDI pump) thread only.
 		std::shared_ptr<midi::MidiLoop> ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const;
 
+		// Resolve the MIDI anchor correction for any loop owned by this station.
+		// Finds the owning take and returns its _midiAnchorCorrection value.
+		// Non-audio thread only (iterates take snapshot).
+		std::int32_t ResolveMidiAnchorCorrectionFor(const midi::MidiLoop* loop) const noexcept;
+
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
@@ -288,10 +293,12 @@ namespace engine
 		{
 			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
 			unsigned int     paramIdx = 0u;
-			midi::MidiLoop*  loop = nullptr;            // raw observer — lifetime owned by LoopTake
-			std::uint8_t     laneIdx = 0u;              // which lane within loop to read
-			std::uint32_t    loopLengthSamps = 0u;      // pre-resolved; avoids per-block takes lock
-			std::uint32_t    loopPhaseAnchor = 0u;      // global sample mapping to loop position 0
+			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
+			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
+			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
+			std::uint32_t                     loopPhaseAnchor = 0u;      // frozen at rebuild; loop-relative phase origin
+			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
+			// effectiveAnchor = loopPhaseAnchor + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.
 		// Kept separate from AutomationDispatch so the dispatch buffers are

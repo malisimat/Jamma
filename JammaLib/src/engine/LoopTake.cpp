@@ -875,7 +875,20 @@ void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
 	// Keep the MIDI visual play index aligned with the audio position so that
 	// MIDI block dispatch and visual readout stay phase-consistent after re-anchor.
 	if (_midiVisualLoopLength > 0ul)
-		_midiVisualPlayIndex = newPos % _midiVisualLoopLength;
+	{
+		const auto oldMidiPos = _midiVisualPlayIndex % _midiVisualLoopLength;
+		const auto newMidiPos = newPos % _midiVisualLoopLength;
+		_midiVisualPlayIndex = newMidiPos;
+
+		// MIDI notes jumped by this forward (modular) delta. Automation playback and
+		// recording derive frac as (globalSample - frozenAnchor - correction) % L,
+		// so accumulate the delta into the per-take correction (backward shift keeps
+		// note and automation phase locked). MidiLoop anchors stay frozen.
+		const auto forwardDelta = static_cast<std::int32_t>(
+			(newMidiPos + _midiVisualLoopLength - oldMidiPos) % _midiVisualLoopLength);
+		if (forwardDelta != 0)
+			_midiAnchorCorrection.fetch_sub(forwardDelta, std::memory_order_relaxed);
+	}
 }
 
 double LoopTake::LoopIndexFrac() const noexcept
@@ -1066,6 +1079,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1340,6 +1354,7 @@ void LoopTake::Play(unsigned long index,
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
 	_midiVisualLoopLength = loopLength;
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 
 	_midiVisualPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
 	if (_loggingConfig.Ui == "verbose")
@@ -1575,6 +1590,7 @@ void LoopTake::Ditch()
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1619,6 +1635,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_endRecordSamps = 0;
 	_midiVisualPlayIndex = 0ul;
 	_midiVisualLoopLength = 0ul;
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
