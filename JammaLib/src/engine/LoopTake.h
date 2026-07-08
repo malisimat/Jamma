@@ -323,8 +323,12 @@ namespace engine
 		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
-		unsigned long _midiVisualPlayIndex;
-		unsigned long _midiVisualLoopLength;
+		// Cross-thread cursor: incremented on the audio thread (EndMultiPlay), re-anchored
+		// on the NINJAM job/network thread (RepositionFromAnchor), and reset/read from the
+		// control thread (Play/Record/Overdub/Ditch) and UI (LoopIndexFrac). Must stay atomic;
+		// follows the same scalar cross-thread pattern as _recordedSampCount below.
+		std::atomic<unsigned long> _midiVisualPlayIndex;
+		std::atomic<unsigned long> _midiVisualLoopLength;
 		// Master-relative anchor: the absolute master-timeline sample at which this
 		// take is at loop-relative position 0.  Set on Play, used to re-derive
 		// _playIndex at authoritative remote wraps without snapping to zero.

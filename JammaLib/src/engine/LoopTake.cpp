@@ -466,11 +466,13 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		buffer->EndPlay(numSamps);
 	}
 
-	if (_midiVisualLoopLength > 0ul)
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
 	{
-		_midiVisualPlayIndex += numSamps;
-		while (_midiVisualPlayIndex >= _midiVisualLoopLength)
-			_midiVisualPlayIndex -= _midiVisualLoopLength;
+		auto midiPlayIndex = _midiVisualPlayIndex.load(std::memory_order_relaxed) + numSamps;
+		while (midiPlayIndex >= midiLoopLength)
+			midiPlayIndex -= midiLoopLength;
+		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	}
 }
 
@@ -832,7 +834,7 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 	if (length > 0ul)
 		return length;
 
-	return _midiVisualLoopLength;
+	return _midiVisualLoopLength.load(std::memory_order_relaxed);
 }
 
 void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
@@ -856,18 +858,19 @@ void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
 
 	// Keep the MIDI visual play index aligned with the audio position so that
 	// MIDI block dispatch and visual readout stay phase-consistent after re-anchor.
-	if (_midiVisualLoopLength > 0ul)
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
 	{
-		const auto oldMidiPos = _midiVisualPlayIndex % _midiVisualLoopLength;
-		const auto newMidiPos = newPos % _midiVisualLoopLength;
-		_midiVisualPlayIndex = newMidiPos;
+		const auto oldMidiPos = _midiVisualPlayIndex.load(std::memory_order_relaxed) % midiLoopLength;
+		const auto newMidiPos = newPos % midiLoopLength;
+		_midiVisualPlayIndex.store(newMidiPos, std::memory_order_relaxed);
 
 		// MIDI notes jumped by this forward (modular) delta. Automation playback and
 		// recording derive frac as (globalSample - frozenAnchor - correction) % L,
 		// so accumulate the delta into the per-take correction (backward shift keeps
 		// note and automation phase locked). MidiLoop anchors stay frozen.
 		const auto forwardDelta = static_cast<std::int32_t>(
-			(newMidiPos + _midiVisualLoopLength - oldMidiPos) % _midiVisualLoopLength);
+			(newMidiPos + midiLoopLength - oldMidiPos) % midiLoopLength);
 		if (forwardDelta != 0)
 			_midiAnchorCorrection.fetch_sub(forwardDelta, std::memory_order_relaxed);
 	}
@@ -896,10 +899,11 @@ double LoopTake::LoopIndexFrac() const noexcept
 	if (representativeLoop)
 		return representativeLoop->LoopIndexFrac();
 
-	if (_midiVisualLoopLength > 0ul)
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
 	{
 		return 1.0 - std::max(0.0, std::min(1.0,
-			((double)(_midiVisualPlayIndex % _midiVisualLoopLength)) / ((double)_midiVisualLoopLength)));
+			((double)(_midiVisualPlayIndex.load(std::memory_order_relaxed) % midiLoopLength)) / ((double)midiLoopLength)));
 	}
 
 	return 0.0;
@@ -1059,8 +1063,8 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
@@ -1284,7 +1288,7 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	if (IsMuted())
 		return midiLoopCount;
 
-	auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
+	auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
 	if (transportOffsetSamps >= 0)
 		midiBlockStart += static_cast<std::uint32_t>(transportOffsetSamps);
 	else
@@ -1340,10 +1344,11 @@ void LoopTake::Play(unsigned long index,
 
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
-	_midiVisualLoopLength = loopLength;
+	_midiVisualLoopLength.store(loopLength, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 
-	_midiVisualPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
+	const auto midiPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
+	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	if (_loggingConfig.Ui == "verbose")
 	{
 		const char* triggerType = (STATE_RECORDING == state) ? "record-end" : "overdub-end";
@@ -1353,7 +1358,7 @@ void LoopTake::Play(unsigned long index,
 			<< " errorSamps=" << midiQuantisationErrorSamps
 			<< " audioPlayPos=" << index
 			<< " audioEndRecordSamps=" << endRecordSamps
-			<< " midiStart=" << _midiVisualPlayIndex
+			<< " midiStart=" << midiPlayIndex
 			<< '\n';
 	}
 
@@ -1448,7 +1453,7 @@ void LoopTake::Play(unsigned long index,
 			// At global sample `index`, the play cursor is at P0, so position 0 maps to
 			// global sample (index - P0). uint32_t wraps correctly.
 			const auto phaseAnchor = static_cast<std::uint32_t>(index)
-				- static_cast<std::uint32_t>(_midiVisualPlayIndex);
+				- static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
 			midiLoop->EndRecord(midiLoopLength, phaseAnchor);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
@@ -1594,8 +1599,8 @@ void LoopTake::Ditch()
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
@@ -1639,8 +1644,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
@@ -2475,7 +2480,7 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake)
 		if (0u == state.SourceLoopLengthSamps)
 			state.SourceLoopLengthSamps = static_cast<std::uint32_t>(sourceTake->VisualLoopLengthSamps());
 		state.SourceStartSample = NormalizeMidiLoopOffset(
-			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex),
+			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)),
 			state.SourceLoopLengthSamps);
 		
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)
