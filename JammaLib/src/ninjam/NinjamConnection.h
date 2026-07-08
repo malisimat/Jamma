@@ -122,6 +122,7 @@ namespace ninjam
 
 	private:
 		NinjamLanePacking _ResolveLanePacking() const;
+		unsigned int _InputScratchChannelCapacity() const noexcept;
 		void _RefreshLanePacking();
 		static void _OnChatMessage(void* userData,
 			NJClient* inst,

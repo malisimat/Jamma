@@ -124,6 +124,13 @@ NinjamLanePacking NinjamConnection::_ResolveLanePacking() const
 	return packing;
 }
 
+unsigned int NinjamConnection::_InputScratchChannelCapacity() const noexcept
+{
+	const auto dacPairs = _numOutputChannels / 2u;
+	const auto adcPairs = _numInputChannels / 2u;
+	return (dacPairs + adcPairs) * 2u;
+}
+
 void NinjamConnection::_RefreshLanePacking()
 {
 	const auto packing = _ResolveLanePacking();
@@ -139,8 +146,6 @@ void NinjamConnection::_RefreshLanePacking()
 	if (!changed)
 		return;
 
-	const auto laneScratchChannels = static_cast<unsigned int>(packing.LaneCount) * 2u;
-	_ResizeScratchBuffers(_blockSize, laneScratchChannels);
 	_lanePacking.store(packing, std::memory_order_release);
 
 	std::cout << "[NINJAM] Local lane packing: lanes=" << packing.LaneCount
@@ -409,6 +414,7 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	_numOutputChannels = std::max(
 		numOutputChannels > 0 ? numOutputChannels : 2u,
 		kMinimumNinjamOutputChannels);
+	_ResizeScratchBuffers(_blockSize, _InputScratchChannelCapacity());
 
 	_RefreshLanePacking();
 
