@@ -371,6 +371,32 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 {
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
 
+	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
+	for (const auto& triggerCfg : rigStruct.Triggers)
+	{
+		for (const auto channel : triggerCfg.InputChannels)
+			hudAudioInputCount = std::max(hudAudioInputCount, channel + 1u);
+	}
+
+	std::vector<std::string> hudMidiInputs;
+	hudMidiInputs.reserve(rigStruct.User.Midi.Devices.size());
+	for (const auto& device : rigStruct.User.Midi.Devices)
+	{
+		if (device.Enabled && !device.Name.empty())
+			hudMidiInputs.push_back(device.Name);
+	}
+
+	std::vector<std::string> hudTriggerNames;
+	hudTriggerNames.reserve(rigStruct.Triggers.size());
+	for (const auto& triggerCfg : rigStruct.Triggers)
+	{
+		if (!triggerCfg.Name.empty())
+			hudTriggerNames.push_back(triggerCfg.Name);
+	}
+
+	if (scene->_hudPanel)
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggerNames));
+
 	TriggerParams trigParams;
 	trigParams.Size = { 24, 24 };
 	trigParams.Position = { 6, 6 };	
@@ -783,6 +809,13 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
+	if ((192u == action.KeyChar) || (96u == action.KeyChar))
+	{
+		if (_hudPanel)
+			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		return ActionResult::NoAction();
+	}
+
 	// 1. Open popups capture the keyboard first.
 	if (_popupManager.IsOpen())
 	{
@@ -1095,6 +1128,12 @@ void Scene::OnTick(Time curTime,
 
 	if (auto clock = _quantisation.Clock())
 		clock->Tick(samps, 0u);
+
+	if (_hudPanel && params.has_value())
+	{
+		for (auto channel = 0u; channel < params->NumInputChannels; ++channel)
+			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), samps);
+	}
 
 	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();

@@ -12,11 +12,11 @@
 2 automation MVP
 2 picker MVP ObjectId WaveformRadius WaveformUnitMeshRadius
 2 colour MVP Color
+2 cable MVP
 2 quantisation MVP Highlight OverlayAlpha
 2 quantisation_division MVP Highlight OverlayAlpha
 2 ctrl_handle MVP Color
 2 station MVP ObjectId Highlight StationHover StationLevel
-2 station_ring MVP Highlight StationHover StationLevel StationStateColor
 2 white MVP Highlight
 2 blur
 1 fader_back
@@ -76,14 +76,14 @@
 1 trigger_ditch_red_over ninepatch 16 16
 1 trigger_ditch ninepatch 16 16
 1 trigger_ditch ninepatch 16 16
-1 trigger_back ninepatch 35 23
-1 trigger_back_red ninepatch 35 23
-1 trigger_back_red_over ninepatch 35 23
-1 trigger_back_red_over_out ninepatch 35 23
-1 trigger_back_red_down ninepatch 35 23
-1 trigger_back_red_down_out ninepatch 35 23
-1 trigger_back_green ninepatch 35 23
-1 trigger_back_green_over ninepatch 35 23
-1 trigger_back_green_over_out ninepatch 35 23
-1 trigger_back_green_down ninepatch 35 23
-1 trigger_back_green_down_out ninepatch 35 23
+1 trigger_back ninepatch 14 9
+1 trigger_back_red ninepatch 14 9
+1 trigger_back_red_over ninepatch 14 9
+1 trigger_back_red_over_out ninepatch 14 9
+1 trigger_back_red_down ninepatch 14 9
+1 trigger_back_red_down_out ninepatch 14 9
+1 trigger_back_green ninepatch 14 9
+1 trigger_back_green_over ninepatch 14 9
+1 trigger_back_green_over_out ninepatch 14 9
+1 trigger_back_green_down ninepatch 14 9
+1 trigger_back_green_down_out ninepatch 14 9
