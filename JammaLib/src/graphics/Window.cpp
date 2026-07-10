@@ -1070,9 +1070,14 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (!repeatkey)
 		{
 			std::cout << "KeyDown " << wParam << "\n";
+			unsigned int keyCode = static_cast<unsigned int>(wParam);
+			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			// Normalise the physical key left of '1' (US backtick/tilde) across layouts.
+			if (0x29u == scanCode)
+				keyCode = 192u;
 
 			KeyAction keyAction;
-			keyAction.KeyChar = (unsigned int)wParam;
+			keyAction.KeyChar = keyCode;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
 			keyAction.Modifiers = window->Modifiers();
 
@@ -1084,9 +1089,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_KEYUP:
 	{
 		std::cout << "KeyUp " << wParam << "\n";
+		unsigned int keyCode = static_cast<unsigned int>(wParam);
+		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+		if (0x29u == scanCode)
+			keyCode = 192u;
 
 		KeyAction keyAction;
-		keyAction.KeyChar = (unsigned int)wParam;
+		keyAction.KeyChar = keyCode;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
 		keyAction.Modifiers = window->Modifiers();
 
@@ -1104,9 +1113,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (!repeatkey)
 		{
 			std::cout << "SysKeyDown " << wParam << "\n";
+			unsigned int keyCode = static_cast<unsigned int>(wParam);
+			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			if (0x29u == scanCode)
+				keyCode = 192u;
 
 			KeyAction keyAction;
-			keyAction.KeyChar = (unsigned int)wParam;
+			keyAction.KeyChar = keyCode;
 			keyAction.IsSystem = true;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
 			keyAction.Modifiers = window->Modifiers();
@@ -1118,9 +1131,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_SYSKEYUP:
 	{
 		std::cout << "SysKeyUp " << wParam << "\n";
+		unsigned int keyCode = static_cast<unsigned int>(wParam);
+		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+		if (0x29u == scanCode)
+			keyCode = 192u;
 
 		KeyAction keyAction;
-		keyAction.KeyChar = (unsigned int)wParam;
+		keyAction.KeyChar = keyCode;
 		keyAction.IsSystem = true;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
 		keyAction.Modifiers = window->Modifiers();

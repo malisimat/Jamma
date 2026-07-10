@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <vector>
 #include <mutex>
 #include <atomic>
@@ -44,6 +45,11 @@ namespace audio
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
+		float GetAdcPeak(unsigned int channel) const noexcept
+		{
+			return channel < _AdcPeakChannels ?
+				_adcPeaks[channel].load(std::memory_order_relaxed) : 0.0f;
+		}
 
 	private:
 		static int AudioCallback(void* outBuffer,
@@ -66,6 +72,8 @@ namespace audio
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
 		std::atomic<std::int64_t> _midiAnchorMicros{ 0 };
+		static constexpr unsigned int _AdcPeakChannels = 32u;
+		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;

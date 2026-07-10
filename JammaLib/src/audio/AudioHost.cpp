@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "AudioHost.h"
 #include "../utils/Timer.h"
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 using namespace engine;
@@ -124,6 +126,16 @@ namespace audio
 
 		if (nullptr != inBuf)
 		{
+			for (auto channel = 0u; channel < audioStreamParams.NumInputChannels; ++channel)
+			{
+				float peak = 0.0f;
+				for (auto sample = channel; sample < numSamps * audioStreamParams.NumInputChannels;
+					sample += audioStreamParams.NumInputChannels)
+					peak = std::max(peak, std::abs(inBuf[sample]));
+				if (channel < _AdcPeakChannels)
+					_adcPeaks[channel].store(peak, std::memory_order_relaxed);
+			}
+
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
 				_userConfig.Audio.LatencyIn :
 				audioStreamParams.InputLatency;
