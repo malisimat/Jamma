@@ -1,61 +1,148 @@
-# NINJAM Live/Loop Audio Latency and Interval-Phase Alignment
+# NINJAM Export Latency and Interval-Phase Alignment
 
-Status: **revised implementation plan.** This document supersedes the previous dual-delay proposal. It is deliberately scoped to NINJAM export timing; VST latency observability is useful but must be a separate change after this work is verified.
+Status: **implementation-ready, blocked on an upstream-supported NINJAM timing contract and MIDI baseline reconciliation.**
 
-## 1. Objective and non-negotiable invariant
+This document replaces the earlier plan that proposed editing `NinjamLib`. Jamma does
+not own that library. Do not patch its source, add a private API to its headers, or
+rebuild and stage local `njclient.lib` artifacts. Upstream may change independently;
+this design consumes only a released, supported NINJAM API.
 
-`NinjamConnection::ProcessExportBlock` currently packs the DAC mix (`outBuf`) and raw ADC input (`inBuf`) into NINJAM local channels in the same audio callback ([NinjamConnection.cpp](../JammaLib/src/ninjam/NinjamConnection.cpp)). The streams have different physical capture/emission times, so packing their current samples together is not sufficient.
+The scope is outbound NINJAM local-channel audio: the DAC mix (`outBuf`) and raw ADC
+input (`inBuf`) passed by `AudioHost` to
+`NinjamConnection::ProcessExportBlock`. It neither changes local monitoring/recording
+nor replaces Jamma's receive-side `ExternalTransport` discipline.
 
-The completed implementation must satisfy both invariants for every transmitted sample while NINJAM timing is valid:
+## 1. Definition of done
 
-1. The DAC and ADC lane samples represent the same musical/grid instant.
-2. That instant equals the NINJAM encoder phase assigned to that sample.
+For every source sample accepted by `NJClient::AudioProc` while compensation is
+enabled, each transmitted DAC and ADC lane must describe the exact NINJAM musical
+instant to which its encoder sample is assigned.
 
-For interval length $L$, encoder phase for output sample $i$ of a callback $P_i$, and source content phase $C_i$, the invariant is:
+Let $L$ be the active NINJAM interval length, $P$ the phase assigned by NINJAM to
+callback sample zero, and $i$ the callback offset. A correctly selected source sample
+has content phase:
 
-$$C_i \equiv P_i \pmod L$$
+$$C_i \equiv P + i \pmod L$$
 
-The relative relation is a consequence, not the primary oracle:
+This is the only acceptance invariant. The two streams also align with one another,
+but the following relative relation alone is insufficient because both lanes can be
+wrong by the same interval offset:
 
 $$K_{dac} - K_{adc} \equiv L_{out} + L_{in} \pmod L$$
 
-Passing only the relative relation is insufficient: two streams can be mutually aligned and still be displaced from the NINJAM interval grid.
+Compensation is complete only when the unit and physical-loopback tests in this plan
+prove the absolute invariant across normal interval wraps and accepted BPM/BPI changes.
 
-## 2. Verified NINJAM behavior and required upstream seam
+## 2. Confirmed current behavior and ownership boundary
 
-The exact NINJAM source was inspected at `C:\Users\matto\Source\Repos\NinjamLib\ninjam\ninjam\njclient.cpp`.
+### Export call chain
 
-- `NJClient::AudioProc` owns `m_interval_pos` on the audio thread. It encodes the input stream in order and increments that position after processing each contiguous interval segment.
-- It splits a callback at an interval boundary, so sample $i$ has phase $(P_0 + i) \bmod L$.
-- `GetPosition` is an unlocked read of `m_interval_pos` and `m_interval_length`. It is therefore appropriate only as an immediate audio-thread observation adjacent to `AudioProc`, not as a generic cross-thread timing API.
-- On the callback that begins at an interval boundary, `GetPosition` currently exposes the exhausted old interval (`pos == length`). `AudioProc` then applies a pending BPM/BPI update, calls `on_new_interval`, and resets its position to zero before consuming sample zero. A caller cannot derive the new interval length from the current public API before choosing source samples for that callback.
+The audio callback performs this path:
 
-The final point makes the present public API inadequate for sample-accurate behavior during tempo/BPI changes. Do not paper over it with a stale job-thread snapshot or an unanchored local counter.
-
-### Required NINJAM-library addition
-
-Add an audio-thread-only preflight method to the vendored NINJAM source:
-
-```cpp
-// Call only from the audio thread, immediately before AudioProc with this sample rate.
-// Applies an exhausted-interval transition exactly as AudioProc would, then returns the
-// phase and length assigned to input sample zero of the upcoming AudioProc call.
-void GetAudioBlockStartPosition(int sampleRate, int* position, int* length);
+```text
+AudioHost::_OnAudio
+  -> NinjamController::ProcessExportBlock
+  -> NinjamSession::ProcessExportBlock
+  -> NinjamConnection::ProcessExportBlock
+  -> NJClient::AudioProc
 ```
 
-Implement it by extracting `AudioProc`'s `m_interval_pos >= m_interval_length` / negative-position transition, including the `m_misc_cs`-guarded pending BPM/BPI update and `on_new_interval`, into one private helper called by both methods. `AudioProc` must not transition again after preflight has prepared the interval.
+`NinjamConnection::ProcessExportBlock` currently clears preallocated scratch lanes,
+packs the current callback's interleaved physical DAC and ADC samples, then calls
+`NJClient::AudioProc` once. It has no compensation and no independent encoder clock.
 
-The method has one narrow contract:
+`AudioHost::_OnAudio` already resolves device-reported input/output latency in other
+audio paths with the intended precedence: `AudioStreamParams` first, then
+`UserConfig.Audio` only when a device reports zero. The export path must use exactly
+that convention; it must not invent a third latency source.
 
-> Immediately after `GetAudioBlockStartPosition(rate, &P, &L)` and immediately before `AudioProc(..., B, rate)`, source sample $i$ passed to `AudioProc` is encoded at phase $(P+i) \bmod L$, including callbacks that cross an interval boundary.
+### Why the present public NINJAM API is insufficient
 
-Update the vendored `njclient.h`, rebuild the matching Debug and Release `njclient.lib`, and keep the header and binaries under `lib/njclient` in lockstep. The Jamma change must not begin until this dependency is available. This is the smallest honest seam: it avoids reimplementing or guessing NINJAM's boundary logic in Jamma.
+The current upstream `NJClient::GetPosition(int*, int*)` reads the current
+`m_interval_pos` and `m_interval_length`. `NJClient::AudioProc` itself owns and
+increments that state. At an exhausted boundary it applies pending BPM/BPI data, calls
+`on_new_interval`, resets the position to zero, and only then consumes sample zero.
 
-## 3. Direct encoder-phase delay math
+Consequently, immediately before `AudioProc`, `GetPosition` can report the exhausted
+old interval. Jamma cannot learn the new length before selecting the source samples.
+That makes `GetPosition` unsuitable for a proof of the invariant at a tempo/BPI
+transition. A stale remote snapshot or a local counter has the same defect.
 
-The preflight result is the direct target: for callback sample offset $i$, NINJAM assigns encoder phase $(P+i) \bmod L$. This plan relies on the existing receive-side transport discipline: before device latency, the loop content written to `outBuf[i]` is already the local musical/grid phase $(P+i) \bmod L$. If that prerequisite is false, no NINJAM-send delay can establish absolute phase; fix the local transport mapping first. `ExternalTransport` remains receive-side and must not be sampled from this callback.
+**Do not use any of these as a substitute for encoder phase:**
 
-Using the existing device-report convention, resolve `inLatencySamps` and `outLatencySamps` from `AudioStreamParams` first and `UserConfig` only when the device reports zero. The true content phase of an undelayed source sample at callback offset $i$ is:
+- `GetPosition` at an exhausted boundary;
+- `NinjamRemoteSnapshot` or `ExternalTransportState`;
+- `AudioHost::_audioSampleCounter`;
+- local loop/take positions, master-loop position, MIDI anchors, or metronome state.
+
+`ExternalTransport` is deliberately receive-side. It publishes immutable,
+wrap-gated snapshots to re-anchor Jamma loops to remote timing. It is valuable for a
+new joiner with no pre-existing master loop, but it is neither current per-sample
+encoder phase nor an audio-callback authority.
+
+## 3. External dependency gate: supported NINJAM timing contract
+
+No Jamma compensation code may be started until upstream releases, or the project
+adopts through its normal dependency process, an audio-thread contract equivalent to
+the following. The exact upstream name and shape may differ; its semantic contract may
+not.
+
+```cpp
+struct NJClientAudioBlockTiming
+{
+    int IntervalPositionSamps;
+    int IntervalLengthSamps;
+};
+
+// Audio-thread only. Call immediately before AudioProc with the same sample rate.
+// Returns the phase and interval length assigned to AudioProc input sample zero.
+// It resolves a pending/exhausted interval transition exactly once.
+bool GetNextAudioBlockTiming(int sampleRate, NJClientAudioBlockTiming* timing);
+```
+
+Required upstream guarantees:
+
+1. Given a successful result `(P, L)`, immediately followed by one
+   `AudioProc(..., B, sampleRate)`, input sample $i$ is encoded at
+   $(P + i) \bmod L$. This includes a callback that begins at, or crosses, an
+   interval boundary.
+2. `P` and `L` describe the active BPM/BPI after all pending timing changes relevant
+   to sample zero. `0 <= P < L` and `L > 0`.
+3. Calling the timing API prepares a pending transition at most once. The subsequent
+   `AudioProc` must not prepare it again.
+4. The call is valid only on the same audio thread and is adjacent to `AudioProc`.
+   No job/UI-thread use or cross-thread observation is permitted.
+5. It introduces no Jamma-owned mutex, allocation, callback, logging, or second
+   transition. Any pre-existing internal synchronization remains upstream's concern
+   and must not occur more often than in the unmodified `AudioProc` path.
+6. It has a stable versioned header/library contract. Jamma consumes the released
+   upstream artifact through the existing dependency update process; it does not
+   maintain a patch or fork.
+
+### Gate acceptance
+
+Before Phase 1, record the upstream release/version and verify a small integration
+probe against its shipped header and binary:
+
+- normal block: timing `(P, L)` advances by `B` after `AudioProc`;
+- block crossing a wrap: every segment has the predicted modulo phase;
+- pending BPM/BPI change: the first sample after the boundary reports `(0, L_new)`;
+- repeated timing queries before `AudioProc` are either prohibited or explicitly
+  specified by upstream. Jamma calls it exactly once regardless.
+
+If this contract is unavailable, the correct state is **uncompensated export**, not an
+approximation. Do not proceed with `GetPosition`, `ExternalTransport`, or a guessed
+local lane position.
+
+## 4. Timing model and latency convention
+
+The Jamma transport prerequisite is that, before physical device latency, the local
+content written to `outBuf[i]` is already the musical phase $(P+i) \bmod L$. The
+loopback integration test must validate this prerequisite for local loops and the
+remote-disciplined metronome; export compensation cannot repair a broken local
+transport mapping.
+
+For the current callback, the physical content phase of an undelayed source sample is:
 
 $$
 \begin{aligned}
@@ -64,7 +151,14 @@ C_{adc}(i) &\equiv P + i - L_{in} \pmod L
 \end{aligned}
 $$
 
-For a source sample delayed by $K$ frames and fed to NINJAM at offset $i$, require `C(i - K) == P+i`. The per-generation constant delays are:
+Where:
+
+- $L_{out}$ is output-device latency in samples;
+- $L_{in}$ is input-device latency in samples;
+- each value comes from `AudioStreamParams` unless that device value is zero, then
+  from `UserConfig.Audio.LatencyOut` or `LatencyIn` respectively.
+
+Select causal history from each physical stream using the smallest non-negative delay:
 
 $$
 \begin{aligned}
@@ -73,94 +167,215 @@ K_{adc} &\equiv -L_{in} \pmod L
 \end{aligned}
 $$
 
-Use the smallest non-negative residues. In particular, an ADC advance that would be impossible in real time is represented by an ordinary causal delay of $L-L_{in}$ frames. The resulting streams are both phase-correct and preserve:
+The ADC expression deliberately represents an apparent advance as a causal delay of
+$L - (L_{in} \bmod L)$. It may require nearly one interval of history. All arithmetic
+that subtracts latency or computes a modulus must widen to signed 64-bit before the
+subtraction; never underflow an unsigned value and then attempt to correct it.
 
-$$K_{dac} - K_{adc} \equiv L_{out} + L_{in} \pmod L$$
+## 5. Jamma-only design
 
-### Generation rules
+### Data and ownership
 
-A generation is valid only after `GetAudioBlockStartPosition` returns `L > 0` and the delay history needed for the selected $K$ values has been written.
+Keep all export timing and delay state in `NinjamConnection`, the owner of lane packing
+and the single `AudioProc` call. `AudioHost` remains a generic mixer and supplies the
+resolved fixed input/output latency through the existing audio-format relay:
 
-- Begin a new generation when the preflight interval length changes, when the connection is recreated, or when the audio format changes. Never reset an independent `_lanePos` and pretend it is an NINJAM clock.
-- On a new generation, clear audio-owned delay cursors and mark the lane history invalid. Until enough history exists for the largest required read, transmit silence on the affected lane(s), not pass-through or stale ring-buffer content. This can last at most one supported NINJAM interval.
-- A normal interval wrap with the same length is not a generation change. The preflight phase wraps naturally and the delay remains constant.
-
-The application already treats local loop timing as remote-disciplined. The integration test must confirm that the `outBuf` prerequisite matches the established audible loop/metronome alignment; the export path must not use a stale UI/transport snapshot to manufacture that result.
-
-## 4. Ownership, realtime constraints, and placement
-
-Keep the export delay state inside `NinjamConnection`. It owns NINJAM lane packing and the `AudioProc` call; `AudioHost` remains a generic RtAudio/station mixer.
-
-`AudioHost` resolves `inLatencySamps` and `outLatencySamps`, then threads them through the existing `SetAudioFormat` relay (`AudioHost -> NinjamController -> NinjamSession -> NinjamConnection`). No extra local clock is needed in the export API: preflight is the authoritative encoder clock.
-
-The only mutable delay cursors and audio sample storage are owned by the audio callback. No callback code may allocate, lock, log, resize a vector, publish a channel layout, or touch `ExternalTransport`.
-
-### Fixed storage
-
-Reuse `audio::AudioBuffer`, but allocate one buffer per **physical** DAC and ADC channel, not per current NINJAM lane. Lane packing can change on the job thread; physical device channel counts are fixed for the active audio format. This avoids a lifetime race between `_RefreshLanePacking` and `ProcessExportBlock`.
-
-- Allocate the DAC and ADC delay-buffer vectors in `SetAudioFormat` before the audio stream starts or while it is stopped. This is the existing audio-format publication boundary; do not resize in `_RefreshLanePacking`.
-- Keep `_RefreshLanePacking` limited to publishing `NinjamLanePacking` and calling the existing NINJAM local-channel configuration. `ProcessExportBlock` takes one atomic packing snapshot for its complete callback.
-- Capacity must be `MaxNinjamIntervalSamps + constants::MaxBlockSize`. The extra block is required because `AudioBuffer::Delay` is invoked after `EndWrite`.
-- Add a derived, documented `constants::MaxNinjamIntervalSamps` with an explicit supported-domain calculation: maximum supported sample rate times the maximum supported BPI divided by the minimum supported BPM, converted from minutes to seconds. Choose the actual supported limits before coding; do not use "generous" as a specification.
-- If preflight reports `L > MaxNinjamIntervalSamps`, disable compensated export for that generation and publish a non-realtime diagnostic through an atomic flag/counter. Do not call `AudioBuffer::Delay` with an oversized value: it clamps and would silently send phase-wrong content.
-
-## 5. Per-callback procedure
-
-`ProcessExportBlock` remains the callback-owned path. Its order is important.
-
-1. Load the already-published lane packing once. Validate pre-allocated scratch capacity and physical delay-buffer counts; return silently if unavailable.
-2. Write each available interleaved physical DAC/ADC channel into its corresponding `AudioBuffer` with `AudioWriteRequest{ stride = physicalChannelCount, fadeCurrent = 0, fadeNew = 1 }`, then call `EndWrite(numFrames, true)`.
-3. Call `GetAudioBlockStartPosition(sampleRate, &phase, &length)` immediately before packing and immediately before `AudioProc`. It is the sole authoritative encoder timing input. Validate `0 <= phase < length` and `length > 0`.
-4. Update or validate the current timing generation and calculate `K_dac` and `K_adc` with a signed 64-bit intermediate before calling `utils::ModNeg`. Do not subtract unsigned values before widening.
-5. Because the write cursor now points immediately after this callback's block, request `buffer.Delay(K + numFrames)`, not `buffer.Delay(K)`. `AudioBuffer::Delay(0)` after `EndWrite` points at the next unwritten location; `ChannelMixer::InitPlay` follows the same post-write convention by adding its block size.
-6. Read from the resulting per-channel play index and pack into the existing `_inScratch` using the current DAC-pair/ADC-pair mapping. Reuse `AudioBuffer::IsContiguous` / `BlockRead` for a fast contiguous segment and one wrap segment. Preserve the present additive packing behavior in modulo mode.
-7. If a delay history is not yet valid, leave the relevant scratch lanes zeroed. Then call `AudioProc` exactly once with the same `numFrames` and sample rate supplied to preflight.
-
-Do not call general NJClient getters, job-thread snapshot code, `std::cout`, a mutex, or any allocation in this sequence. The lifetime guard already used by `NinjamSession` keeps the `NinjamConnection` object alive across the call; this design must not introduce a second locking scheme.
-
-## 6. Small, deterministic tests
-
-Do not try to unit-test the whole network client. Extract a small pure helper, for example `ninjam::ExportLaneTiming`, whose input is:
-
-```cpp
-struct ExportLaneTimingInput
-{
-    unsigned int EncoderPhase = 0;
-    unsigned int IntervalLength = 0;
-    unsigned int InputLatencySamps = 0;
-    unsigned int OutputLatencySamps = 0;
-    unsigned int NumFrames = 0;
-};
+```text
+AudioHost -> NinjamController -> NinjamSession -> NinjamConnection::SetAudioFormat
 ```
 
-It returns validated generation information plus `DacDelaySamps` and `AdcDelaySamps`. The helper owns no buffers and makes no NJClient calls. In tests, a tiny fake phase source returns `(EncoderPhase, IntervalLength)`; it is a value provider, not a mock `NJClient`.
+Extend that format payload with `inputLatencySamps` and `outputLatencySamps`. Format
+publication and buffer allocation occur before the stream starts or while it is
+stopped. They must never be triggered by lane refresh or by `ProcessExportBlock`.
 
-Add these focused native tests:
+Store one delay line per **physical** DAC and ADC channel, not per NINJAM lane. Lane
+packing changes on the job thread, while physical channel counts are fixed for an
+active audio format. This preserves the existing atomic `NinjamLanePacking` snapshot
+and avoids tying callback storage lifetime to a published lane-layout change.
 
-1. **Absolute phase, both lanes.** Use a short synthetic interval, a non-zero encoder phase, non-zero input/output latency, and tagged source samples whose tag is their source phase. For each delayed selected sample, assert its tag equals `(EncoderPhase + sampleOffset) % IntervalLength` for both DAC and ADC. This is the primary test and proves more than the relative equation.
-2. **Post-write cursor and ring wrap.** Simulate two small callback blocks in a real `AudioBuffer`; write then `Delay(K + numFrames)`. Assert the first selected sample is exactly the intended historical tag across the buffer wrap. This prevents the off-by-one-block regression.
-3. **Boundary/new-generation behavior.** Feed a fake preflight result that changes from exhausted old timing to phase zero with a new interval length. Assert the helper starts a new generation, recalculates both delays, and marks history invalid until primed.
+Add a small pure `ExportLaneTiming` value helper. It accepts the upstream timing result,
+resolved latencies, and generation state; it validates values and returns:
 
-The first test must also assert the relative identity, but it must not replace the absolute-phase assertions with it. Keep test inputs deliberately small (for example, `L = 17`, blocks of 4 or 5 samples) so failures are readable.
+- `Valid`, `NewGeneration`, and `HistoryReady` flags;
+- `IntervalLengthSamps` and `EncoderPhaseSamps`;
+- `DacDelaySamps` and `AdcDelaySamps`.
 
-## 7. Integration verification
+It owns no audio buffers, does not call `NJClient`, and has no thread state.
 
-After unit tests pass:
+### Fixed capacity and generation state
 
-1. Build `JammaLib` and `JammaLib_Tests`, then run `JammaLib_Tests.exe` as described in [build.md](build.md).
-2. Add temporary non-realtime diagnostics for generation starts, preflight phase/length, selected delays, history-ready transition, and unsupported interval rejection. Drain them from the job/UI side; remove or gate noisy diagnostics after validation.
-3. Run a physical DAC-to-ADC loopback against a test NINJAM server. Confirm a tagged transient from both exported lanes arrives at the same interval phase, and the loop lane remains on the remote metronome grid across normal wraps and an accepted BPM/BPI change.
-4. Confirm local monitoring, local recording/overdub alignment, and receive-side `ExternalTransport` behavior are unchanged. This work exports a copy of audio only; it must not change station cursor or local output behavior.
+Define `constants::MaxNinjamIntervalSamps` from an explicit supported operating domain:
 
-## 8. Implementation order
+$$
+\text{ceil}(\text{MaxSampleRate} \times 60 \times \text{MaxBPI} / \text{MinBPM})
+$$
 
-1. Add and test the NINJAM-library audio-thread preflight API; rebuild and stage matching headers/libraries in Jamma's vendored dependency.
-2. Add the pure `ExportLaneTiming` helper and its three small native tests. Land the absolute-phase proof before integrating buffers.
-3. Add the fixed physical-channel delay storage and latency plumbing. Preserve the existing atomic lane-packing snapshot and do not allocate from its refresh path.
-4. Integrate the per-callback procedure, including post-write `K + numFrames` indexing, generation priming, and non-realtime diagnostics.
-5. Run the native tests and loopback/BPM-change verification. Only then update [ninjam.md](ninjam.md) with a short timing-and-sync cross-reference.
+Document all three limits beside the constant and choose them before implementation.
+Each physical delay line has capacity:
 
-## 9. Explicitly deferred work
+$$\text{MaxNinjamIntervalSamps} + \text{constants::MaxBlockSize}$$
 
-VST latency read-path plumbing and playback compensation are not part of this change. They do not establish NINJAM phase correctness and would expand the review surface across plugin, loop, MIDI, and station ownership. Revisit them in a separate plan after this export timing work has objective absolute-phase coverage.
+The added block covers `AudioBuffer`'s post-write cursor convention. If the upstream
+timing reports an interval longer than this capacity, reject that generation, emit a
+non-realtime diagnostic through an atomic counter/flag, and send silence. Never rely
+on `AudioBuffer::Delay` clamping an oversized delay because that would silently violate
+the phase invariant.
+
+A new generation begins when any of these occurs:
+
+- a valid upstream interval length changes;
+- the NINJAM connection is recreated or disconnected;
+- the audio format, physical channel count, sample rate, or resolved latency changes;
+- an invalid or unsupported upstream timing result is observed after a valid one.
+
+For a new generation, reset all callback-owned delay-line cursors/history and mark both
+stream classes unprimed. Send zeroes for an affected lane until it contains sufficient
+history for its selected delay. A normal interval wrap with unchanged length is **not**
+a new generation: upstream phase wraps naturally and the selected delays remain valid.
+
+`AudioBuffer` presently has no reset operation. Before integration, add a minimal
+audio-thread-safe history reset that resets its write/play cursors and recorded-sample
+count without resizing or clearing its backing storage, or introduce a dedicated
+fixed-capacity delay-line type with the same property. Explicit priming prevents a
+new generation from reading stale storage, so an interval-sized callback clear is both
+unnecessary and prohibited. Do not use `SetSize`, `std::vector::clear`, allocation, or
+an $O(L)$ buffer fill to reset a generation in the callback.
+
+## 6. Callback algorithm
+
+`NinjamConnection::ProcessExportBlock` is the only callback path that changes. Its
+order is contractual:
+
+1. Load one `NinjamLanePacking` snapshot. Validate scratch capacity, physical delay
+   line counts, callback frame count, and the preallocated output pointers. On a local
+   resource failure, return silently without allocating or publishing.
+2. Clear the existing NINJAM input scratch lanes for `numFrames`.
+3. Write the available interleaved physical DAC and ADC channels into their dedicated
+   delay lines using `AudioWriteRequest` with the physical-channel stride, then call
+   `EndWrite(numFrames, true)` on every written line. A missing physical input/output
+   stream stays silent; do not advance a nonexistent source.
+4. Call the supported upstream timing API exactly once, immediately before selecting
+   samples and immediately before the sole `AudioProc` call. Validate its full result.
+   If it is invalid, unsupported, or the required history is unprimed, retain zeroed
+   affected input lanes and still make the one normal `AudioProc` call.
+5. Pass the validated timing result to `ExportLaneTiming`. Handle generation changes,
+   calculate both delays, and decide whether each stream class is primed.
+6. For each ready physical line, call `Delay(K + numFrames)`. `EndWrite` leaves the
+   write index just after this callback; therefore `Delay(K)` would select a block too
+   late. Use `IsContiguous`/`BlockRead` for the fast path. For a wrapped read, either
+   pack the two segments directly or copy the wrapped data into a dedicated,
+   preallocated per-physical-channel read scratch; never reuse `_inScratch` while it
+   is accumulating mapped lane contributions.
+7. Pack selected physical DAC pairs and ADC pairs into `_inScratch` with the current
+   direct/modulo mapping. Preserve existing additive behavior when multiple physical
+   pairs map to a lane. Do not let a source that is unprimed contribute stale data.
+8. Set `_inPtrs` and invoke `NJClient::AudioProc` exactly once with the same
+   `numFrames` and sample rate used by the timing call. Never split, probe, or call
+   `AudioProc` a second time to infer timing.
+
+The callback must not allocate, resize vectors, take a Jamma lock, publish layout,
+log, touch `ExternalTransport`, or read generic NINJAM timing getters. Its only new
+NINJAM operation is the supported adjacent timing call.
+
+## 7. MIDI and receive-transport reconciliation
+
+The 2026-07-08 MIDI handoff is related only through the common remote-wrap event. It
+does not supply outbound encoder phase and must not be read by export compensation.
+
+The handoff reports a completed design in which `MidiLoop::_loopPhaseAnchor` is atomic,
+automation dispatch reads it live, and `LoopTake::RepositionFromAnchor` moves it with
+the note reposition delta. The current checkout must be reconciled before relying on
+that report: it presently shows a non-atomic `_loopPhaseAnchor` and a cached
+`AutomationDispatch::loopPhaseAnchor`, with a separate live anchor correction.
+
+Before this export work lands, resolve that discrepancy in its own focused change:
+
+1. Decide whether the shipped model is the handoff's live atomic anchor or the current
+   frozen-anchor plus `MidiAnchorCorrection` model. Do not merge both corrections;
+   that would double-shift automation.
+2. Run or restore the handoff's two MIDI phase-anchor tests, plus the existing
+   `ExternalTransportReanchor` coverage, against the selected model.
+3. Keep the zero-sentinel, VST host-time, end-to-end MIDI test, and
+   `_midiVisualPlayIndex` cross-thread concerns as separately tracked follow-ups.
+
+The export change's regression responsibility is narrower: prove that it neither
+changes receive-side `ExternalTransport` publication nor interferes with the selected
+MIDI/automation wrap-reanchor behavior.
+
+## 8. Test plan
+
+### Deterministic native tests
+
+Add localized tests before callback integration:
+
+1. **Absolute phase, DAC and ADC.** With $L = 17$, non-zero $P$, non-zero latencies,
+   and source tags equal to source phase, assert every selected tag equals
+   $(P+i) \bmod L$ for both stream classes. Also assert the relative equation, but
+   never use it as the primary proof.
+2. **Post-write cursor and wrap.** Use real fixed delay storage with two small blocks
+   and a ring wrap. After `EndWrite`, assert `Delay(K + numFrames)` selects exactly the
+   intended historical tag. This catches the one-block indexing error.
+3. **Generation and priming.** Feed a fake supported timing provider that changes from
+   an exhausted old interval to `(0, L_new)`. Assert new delays, cleared history, zero
+   output until enough samples have been written, and no reset for an ordinary wrap of
+   the same interval length.
+4. **Packing preservation.** Test direct and modulo DAC/ADC pair mappings after delay
+   selection, including an absent source and a lane receiving additive contributions.
+5. **Unsupported timing.** Invalid phase/length and `L > MaxNinjamIntervalSamps` must
+   produce silence, increment the non-realtime rejection diagnostic, and never call an
+   oversized delay.
+
+The helper tests use a value provider, not a mocked `NJClient`. A thin integration test
+against the supported upstream API belongs at the dependency gate because it validates
+the contract Jamma relies on.
+
+### Build and runtime verification
+
+1. Build the changed `JammaLib` project, then `JammaLib_Tests`, using incremental
+   Debug x64 builds and the repository's absolute `SolutionDir` convention.
+2. Run the focused new native tests, then the full `JammaLib_Tests.exe` suite. Record
+   pre-existing failures separately; no new failures are acceptable.
+3. Add temporary, rate-limited, non-realtime diagnostics for timing rejection,
+   generation start, selected delays, and history-ready transition. Drain them from a
+   job/UI context and remove or gate noisy probes once validated.
+4. Run a physical DAC-to-ADC loopback against a test NINJAM server. Tag transients at
+   known interval phases and prove that DAC and ADC exports arrive at the same NINJAM
+   phase over normal wraps and an accepted BPM/BPI change.
+5. Confirm unchanged local monitoring, local record/overdub alignment, remote join
+   alignment, receive-side `ExternalTransport`, and the selected MIDI automation
+   re-anchor behavior.
+
+## 9. Implementation sequence and release gates
+
+1. **Reconcile baseline.** Confirm the MIDI handoff's actual landed state and record
+   the selected single correction model. Do not alter upstream NINJAM.
+2. **Adopt upstream dependency.** Obtain the supported block-timing contract and its
+   released header/library through the normal dependency update path. Complete the
+   boundary/BPM/BPI contract probe.
+3. **Land pure timing proof.** Add `ExportLaneTiming` and the absolute-phase,
+   generation, unsupported-result, and post-write indexing tests.
+4. **Prepare fixed storage.** Define supported interval limits, add/reset fixed delay
+   storage, and extend the audio-format relay with resolved latencies. Verify there is
+   no allocation in the audio callback.
+5. **Integrate selection and packing.** Implement the exact callback order in Section
+   6, preserving lane packing and one `AudioProc` call.
+6. **Prove system behavior.** Run native tests, physical loopback, normal-wrap, and
+   BPM/BPI-change validation. Update `doc/ninjam.md` only after those results pass.
+
+### Release blockers
+
+Do not enable compensated export when any of these remains unresolved:
+
+- no upstream-supported block-start timing contract;
+- no proof that `outBuf` already represents the remote-disciplined local grid before
+  physical output latency;
+- unsupported interval length, invalid timing result, or unprimed delay history;
+- unresolved MIDI baseline discrepancy that could mask a receive-transport regression;
+- missing physical loopback coverage through a timing change.
+
+## 10. Explicitly out of scope
+
+VST host-time/PPQ re-derivation, VST latency compensation, the MIDI zero-anchor
+sentinel, and the `_midiVisualPlayIndex` cross-thread review remain separate work. They
+must not be folded into this callback change. Likewise, local loop transport correction
+and outbound physical latency correction are complementary, not interchangeable.
