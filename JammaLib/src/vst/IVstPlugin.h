@@ -108,6 +108,16 @@ namespace vst
 		virtual void SetBypassed(bool bypass) noexcept = 0;
 		virtual bool IsBypassed() const noexcept = 0;
 
+		// Reports the plugin's inherent processing latency (plugin delay
+		// compensation / PDC), in samples, as advertised by the plugin itself
+		// (VST2: AEffect::initialDelay; VST3: 0 for now -- not yet wired to a
+		// VST3 latency query). Real-time safe: a plain field read, no
+		// dispatch. Plumb-only for now -- not yet folded into LoopPlayPos,
+		// Loop::_playIndex, the MIDI cursor, or NINJAM export lane timing;
+		// see doc/ninjam-live-loop-latency-sync-planC.md §2 VST latency
+		// plumbing and the // TODO(latency): markers at those seams.
+		virtual int GetLatencySamples() const noexcept { return 0; }
+
 		// Capture the full plugin state as an opaque byte blob.
 		// VST2: uses effGetChunk (bank-level, index=0) when the plugin supports
 		//        program chunks; otherwise serialises all parameters as float32.

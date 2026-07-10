@@ -22,7 +22,9 @@ namespace ninjam
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,
 			unsigned int numInputChannels,
-			unsigned int numOutputChannels);
+			unsigned int numOutputChannels,
+			unsigned int inLatencySamps = 0u,
+			unsigned int outLatencySamps = 0u);
 
 		std::optional<NinjamRemoteSnapshot> Pump();
 		std::optional<NinjamRemoteSnapshot> TakePendingSnapshot();

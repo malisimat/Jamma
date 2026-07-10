@@ -134,11 +134,17 @@
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
+    <ClCompile Include="src\utils\MathUtils_Tests.cpp">
+      <Filter>src\utils</Filter>
+    </ClCompile>
     <ClCompile Include="src\timing\ExternalTransport_Tests.cpp">
       <Filter>src\timing</Filter>
     </ClCompile>
     <ClCompile Include="src\timing\RemotePhaseDiscipline_Tests.cpp">
       <Filter>src\timing</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\ExportLaneTiming_Tests.cpp">
+      <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
@@ -180,6 +186,9 @@
     </Filter>
     <Filter Include="src\timing">
       <UniqueIdentifier>{6f2a9c15-4e83-4b70-9d21-7c8e5a1f0b34}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ninjam">
+      <UniqueIdentifier>{3a7e1c9d-52f6-4b88-9d3a-1e6f8c0a2b57}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

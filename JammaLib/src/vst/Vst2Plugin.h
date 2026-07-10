@@ -109,6 +109,19 @@ namespace vst
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
 
+		// AEffect::initialDelay is only meaningful once the plugin is loaded;
+		// _effect is set up on the non-RT thread during Load() and never
+		// reassigned afterwards, so a plain read here is safe from the audio
+		// thread (matches the existing GetParameter/IsLoaded pattern).
+		int GetLatencySamples() const noexcept override
+		{
+#ifdef JAMMA_VST2_ENABLED
+			return (_isLoaded && _effect) ? static_cast<int>(_effect->initialDelay) : 0;
+#else
+			return 0;
+#endif
+		}
+
 		// Capture or restore the plugin's full state as an opaque byte blob.
 		// The blob is self-describing: a 1-byte version, a 1-byte type flag
 		// (0 = param array, 1 = VST2 chunk), a 4-byte LE payload size, then

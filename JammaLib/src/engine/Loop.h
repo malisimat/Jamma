@@ -264,6 +264,17 @@ namespace engine
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 
+		// Read-only, real-time-safe view of this loop's aggregate VST
+		// processing latency, in samples (sum across the published chain).
+		// Plumb-only for now: not yet folded into any playback-position
+		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
+		// and IVstPlugin::GetLatencySamples.
+		int CurrentVstLatencySamps() const noexcept
+		{
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->GetLatencySamples() : 0;
+		}
+
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
@@ -284,6 +295,10 @@ namespace engine
 	protected:
 		bool _visualUpdatesEnabled;
 		std::atomic<bool> _isPunchInActive;
+		// Current playback position, in samples. Advanced by ReadBlock().
+		// TODO(latency): does not yet account for this loop's VST chain latency
+		// (see CurrentVstLatencySamps()) -- see
+		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 		std::atomic<unsigned long> _playIndex;
 		float _lastPeak;
 		double _pitch;

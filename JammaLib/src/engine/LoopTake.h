@@ -173,6 +173,17 @@ namespace engine
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
+		// Read-only, real-time-safe view of this take's aggregate VST
+		// processing latency, in samples (sum across the published chain).
+		// Plumb-only for now: not yet folded into any playback-position
+		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
+		// and IVstPlugin::GetLatencySamples.
+		int CurrentVstLatencySamps() const noexcept
+		{
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->GetLatencySamples() : 0;
+		}
+
 		void Record(std::vector<unsigned int> channels,
 			std::string stationName,
 			std::vector<unsigned int> midiChannels = {},

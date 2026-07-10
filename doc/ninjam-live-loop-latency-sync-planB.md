@@ -1,7 +1,12 @@
 # NINJAM Live/Loop Audio Latency Alignment — Plan
 
-Status: **finalised plan, not yet implemented.** Implement in a later session per the
-checklist in §9.
+Status: **SUPERSEDED (2026-07-10).** See
+[ninjam-live-loop-latency-sync-planC.md](ninjam-live-loop-latency-sync-planC.md) --
+planC keeps this document's buildable design almost verbatim (delay-line ownership,
+K_dac/K_adc math, wraparound trick, buffer sizing) and adds generation/reset
+discipline, anomaly detection, and field telemetry on top. It is now implemented
+(gated off by default pending physical loopback validation). This document is kept
+for its design reasoning; do not use it as the current design.
 
 ## 1. Problem
 

@@ -44,6 +44,20 @@ frac = (globalSample - effectiveAnchor) % loopLength / loopLength
 a baked pointer in `AutomationDispatch`. No dispatch rebuild is required at wrap time, and
 `MidiLoop` itself remains a pure recording container.
 
+### Export-lane latency compensation (send path)
+
+The above covers the **receive side** (aligning local playback to the remote NINJAM
+interval). The **send side** — the DAC/ADC content `NinjamConnection::ProcessExportBlock`
+packs into local NINJAM channels — has its own latency-alignment design; see
+[ninjam-live-loop-latency-sync-planC.md](ninjam-live-loop-latency-sync-planC.md) (the
+current, implemented design; it supersedes the earlier
+[plan](ninjam-live-loop-latency-sync-plan.md) and
+[planB](ninjam-live-loop-latency-sync-planB.md)). Status: the delay-line compensation,
+`ExportLaneTiming` helper, generation-reset/anomaly-detection safety valve, and VST
+latency plumbing are implemented and unit-tested, but gated **off** by default
+(`NinjamConnection::ExportLatencyCompensationEnabled`) until a physical DAC-to-ADC
+loopback session against a real/test NINJAM server validates it (planC §5/§10).
+
 For detailed design rationale and implementation history see
 [ninjam-sync-implementation-plan.md](ninjam-sync-implementation-plan.md) and
 [ninjam-sync-handoff.md](ninjam-sync-handoff.md).

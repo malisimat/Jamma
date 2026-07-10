@@ -46,6 +46,19 @@ bool VstChain::IsActive() const noexcept
 	return false;
 }
 
+int VstChain::GetLatencySamples() const noexcept
+{
+	auto total = 0;
+
+	for (const auto& p : _plugins)
+	{
+		if (p)
+			total += p->GetLatencySamples();
+	}
+
+	return total;
+}
+
 void VstChain::ProcessBlock(float* monoBuf, int numSamps) noexcept
 {
 	if (_plugins.empty())

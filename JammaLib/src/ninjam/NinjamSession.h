@@ -92,7 +92,9 @@ namespace ninjam
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,
 			unsigned int numInputChannels,
-			unsigned int numOutputChannels);
+			unsigned int numOutputChannels,
+			unsigned int inLatencySamps = 0u,
+			unsigned int outLatencySamps = 0u);
 
 		void ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
@@ -152,6 +154,8 @@ namespace ninjam
 		std::atomic_uint _audioBlockSize{ 0u };
 		std::atomic_uint _audioNumInputChannels{ 0u };
 		std::atomic_uint _audioNumOutputChannels{ 0u };
+		std::atomic_uint _audioInLatencySamps{ 0u };
+		std::atomic_uint _audioOutLatencySamps{ 0u };
 	};
 
 	inline NinjamConnectionUse::NinjamConnectionUse(const NinjamSession& session) noexcept

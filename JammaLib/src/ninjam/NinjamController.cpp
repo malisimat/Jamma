@@ -22,9 +22,11 @@ void NinjamController::LoadConfig(const std::optional<io::JamFile::NinjamConfig>
 void NinjamController::SetAudioFormat(unsigned int sampleRate,
 	unsigned int blockSize,
 	unsigned int numInputChannels,
-	unsigned int numOutputChannels)
+	unsigned int numOutputChannels,
+	unsigned int inLatencySamps,
+	unsigned int outLatencySamps)
 {
-	_session.SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
+	_session.SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
 }
 
 std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::Pump()

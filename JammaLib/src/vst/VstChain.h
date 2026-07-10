@@ -61,6 +61,11 @@ namespace vst
 		// Real-time safe.
 		bool IsActive() const noexcept;
 
+		// Sum of GetLatencySamples() across all plugins in the chain (series
+		// processing accumulates latency additively). Real-time safe. Plumb-only
+		// for now -- see IVstPlugin::GetLatencySamples.
+		int GetLatencySamples() const noexcept;
+
 		// Apply all active plugins in series to numSamps of mono audio.
 		// monoBuf is modified in-place.
 		// Real-time safe: no heap allocation.

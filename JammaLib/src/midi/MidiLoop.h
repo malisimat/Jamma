@@ -314,6 +314,9 @@ namespace midi
 		std::size_t _eventCount;
 		float _sampleRate;
 		std::uint32_t _loopLengthSamps;
+		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
+		// playback does not yet account for this take's VST chain latency -- see
+		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 		std::uint32_t _loopPhaseAnchor;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;

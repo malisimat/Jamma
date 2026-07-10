@@ -25,6 +25,15 @@ namespace audio
 		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override;
 
 		void SetSize(unsigned int size);
+
+		// Clears cursors/counts (write index, play index, samples-recorded)
+		// without touching buffer storage or size. Safe to call from the
+		// audio callback on a generation change (see
+		// doc/ninjam-live-loop-latency-sync-planC.md §3.1); makes stale-history
+		// reads impossible by construction since SampsRecorded() reports 0
+		// immediately afterwards.
+		void Reset();
+
 		unsigned int SampsRecorded() const;
 		unsigned int BufSize() const;
 

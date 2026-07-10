@@ -65,11 +65,17 @@ namespace audio
 
 			if (_ninjamController)
 			{
+				auto outLatency = (0u == audioStreamParams.OutputLatency) ?
+					_userConfig.Audio.LatencyOut :
+					audioStreamParams.OutputLatency;
+
 				_ninjamController->SetAudioFormat(
 					audioStreamParams.SampleRate,
 					audioStreamParams.BufSize,
 					audioStreamParams.NumInputChannels,
-					audioStreamParams.NumOutputChannels);
+					audioStreamParams.NumOutputChannels,
+					inLatency,
+					outLatency);
 			}
 
 			_audioDevice->Start();

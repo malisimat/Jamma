@@ -1,6 +1,12 @@
 # NINJAM Export Latency and Interval-Phase Alignment
 
-Status: **implementation-ready, blocked on an upstream-supported NINJAM timing contract and MIDI baseline reconciliation.**
+Status: **SUPERSEDED (2026-07-10).** See
+[ninjam-live-loop-latency-sync-planC.md](ninjam-live-loop-latency-sync-planC.md) --
+planC keeps this document's real, correctly-identified wrap-boundary staleness concern
+but replaces the hard blocking gate on an upstream API with a bounded-error argument
+plus a runtime anomaly-detection safety valve, and is now implemented (gated off by
+default pending physical loopback validation). This document is kept for its reasoning
+history; do not use it as the current design.
 
 This document replaces the earlier plan that proposed editing `NinjamLib`. Jamma does
 not own that library. Do not patch its source, add a private API to its headers, or

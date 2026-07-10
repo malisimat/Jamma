@@ -196,9 +196,11 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\midi\MidiNote_Tests.cpp" />
     <ClCompile Include="src\midi\MidiQuantisation_Tests.cpp" />
     <ClCompile Include="src\midi\MidiTimestampMapper_Tests.cpp" />
+    <ClCompile Include="src\ninjam\ExportLaneTiming_Tests.cpp" />
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
+    <ClCompile Include="src\utils\MathUtils_Tests.cpp" />
     <ClCompile Include="src\timing\ExternalTransport_Tests.cpp" />
     <ClCompile Include="src\timing\RemotePhaseDiscipline_Tests.cpp" />
     <ClCompile Include="pch.cpp">

@@ -406,15 +406,21 @@ void NinjamConnection::Pump()
 void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	unsigned int blockSize,
 	unsigned int numInputChannels,
-	unsigned int numOutputChannels)
+	unsigned int numOutputChannels,
+	unsigned int inLatencySamps,
+	unsigned int outLatencySamps)
 {
 	_sampleRate = sampleRate > 0 ? sampleRate : constants::DefaultSampleRate;
 	_blockSize = blockSize > 0 ? blockSize : constants::DefaultBufferSizeSamps;
 	_numInputChannels = numInputChannels;
+	_numDacPhysicalChannels = numOutputChannels;
 	_numOutputChannels = std::max(
 		numOutputChannels > 0 ? numOutputChannels : 2u,
 		kMinimumNinjamOutputChannels);
+	_inLatencySamps = inLatencySamps;
+	_outLatencySamps = outLatencySamps;
 	_ResizeScratchBuffers(_blockSize, _InputScratchChannelCapacity());
+	_ResizeExportDelayLines();
 
 	_RefreshLanePacking();
 
@@ -422,6 +428,119 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	{
 		_client->config_remote_autochan_nch = static_cast<int>(_numOutputChannels);
 	}
+}
+
+void NinjamConnection::_ResizeExportDelayLines()
+{
+	// Sized once here (never in the audio callback) so ProcessExportBlock stays
+	// allocation-free -- same guardrail as _ResizeScratchBuffers (see
+	// doc/build-notes and doc/ninjam-live-loop-latency-sync-planC.md §5/step 1).
+	const auto delayLineSize = constants::MaxNinjamIntervalSamps + constants::MaxBlockSize;
+	const auto channelsChanged = (_dacDelayLines.size() != _numDacPhysicalChannels)
+		|| (_adcDelayLines.size() != _numInputChannels);
+
+	if (channelsChanged)
+	{
+		_dacDelayLines.clear();
+		_dacDelayLines.reserve(_numDacPhysicalChannels);
+		for (auto chan = 0u; chan < _numDacPhysicalChannels; chan++)
+			_dacDelayLines.push_back(std::make_shared<audio::AudioBuffer>(delayLineSize));
+
+		_adcDelayLines.clear();
+		_adcDelayLines.reserve(_numInputChannels);
+		for (auto chan = 0u; chan < _numInputChannels; chan++)
+			_adcDelayLines.push_back(std::make_shared<audio::AudioBuffer>(delayLineSize));
+
+		_exportTimingState = {};
+
+		// _exportTick ("n" in the K_dac/K_adc formula) must stay in lockstep
+		// with the delay lines' own internal write cursors -- only reset it
+		// here, paired with brand-new (writeIndex==0) buffers. If the
+		// channel count is unchanged, the existing buffers' write cursors are
+		// untouched, so _exportTick must be left alone too (see
+		// doc/ninjam-live-loop-latency-sync-planC.md §3.1).
+		_exportTick = 0u;
+	}
+
+	_delayedDacInterleaved.assign(static_cast<size_t>(_blockSize) * _numDacPhysicalChannels, 0.0f);
+	_delayedAdcInterleaved.assign(static_cast<size_t>(_blockSize) * _numInputChannels, 0.0f);
+	_dacDelayTemp.assign(_blockSize, 0.0f);
+	_adcDelayTemp.assign(_blockSize, 0.0f);
+	_exportSilenceScratch.assign(_blockSize, 0.0f);
+}
+
+void NinjamConnection::_WriteExportDelayLine(std::vector<std::shared_ptr<audio::AudioBuffer>>& lines,
+	const float* interleaved,
+	unsigned int numChannels,
+	unsigned int numFrames,
+	std::vector<float>& silenceScratch)
+{
+	if (lines.size() != numChannels || numFrames == 0u)
+		return;
+
+	if (!interleaved && numFrames > silenceScratch.size())
+		return;
+
+	if (!interleaved)
+		std::fill(silenceScratch.begin(), silenceScratch.begin() + numFrames, 0.0f);
+
+	for (auto chan = 0u; chan < numChannels; chan++)
+	{
+		base::AudioWriteRequest request;
+		request.numSamps = numFrames;
+		request.fadeCurrent = 0.0f;
+		request.fadeNew = 1.0f;
+
+		if (interleaved)
+		{
+			request.samples = &interleaved[chan];
+			request.stride = numChannels;
+		}
+		else
+		{
+			request.samples = silenceScratch.data();
+			request.stride = 1;
+		}
+
+		lines[chan]->OnBlockWrite(request, 0);
+		lines[chan]->EndWrite(numFrames, true);
+	}
+}
+
+void NinjamConnection::_ReadExportDelayLine(std::vector<std::shared_ptr<audio::AudioBuffer>>& lines,
+	unsigned int delaySamps,
+	unsigned int numFrames,
+	std::vector<float>& delayedInterleaved,
+	std::vector<float>& tempBuf)
+{
+	const auto numChannels = static_cast<unsigned int>(lines.size());
+	if (numChannels == 0u || numFrames == 0u || numFrames > tempBuf.size()
+		|| (static_cast<size_t>(numFrames) * numChannels) > delayedInterleaved.size())
+		return;
+
+	std::fill(delayedInterleaved.begin(), delayedInterleaved.begin() + (static_cast<size_t>(numFrames) * numChannels), 0.0f);
+
+	for (auto chan = 0u; chan < numChannels; chan++)
+	{
+		auto& buf = lines[chan];
+
+		// Still priming after a generation reset: not enough history yet for
+		// this block's K, so leave this channel silent rather than read
+		// stale/undefined content (planC §3.1).
+		if (buf->SampsRecorded() < delaySamps)
+			continue;
+
+		buf->Delay(delaySamps);
+		const auto* data = buf->PlaybackRead(tempBuf.data(), numFrames);
+
+		for (auto samp = 0u; samp < numFrames; samp++)
+			delayedInterleaved[static_cast<size_t>(samp) * numChannels + chan] = data[samp];
+	}
+}
+
+unsigned int NinjamConnection::ExportAnomalyCount() const noexcept
+{
+	return _exportAnomalyCount.load(std::memory_order_relaxed);
 }
 
 void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
@@ -448,6 +567,70 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 	for (auto chan = 0u; chan < _numOutputChannels; chan++)
 		std::fill(_outScratch[chan].begin(), _outScratch[chan].begin() + numFrames, 0.0f);
 
+	const float* dacForPacking = interleavedDacOutput;
+	const float* adcForPacking = interleavedAdcInput;
+
+	const auto useCompensation = ExportLatencyCompensationEnabled
+		&& (_dacDelayLines.size() == numDacChannels)
+		&& (_adcDelayLines.size() == numAdcChannels)
+		&& (numFrames <= _dacDelayTemp.size())
+		&& (numFrames <= _adcDelayTemp.size());
+
+	if (useCompensation)
+	{
+		// Write this block's physical DAC/ADC content into the delay lines
+		// first, then read NJClient's live interval position as late as
+		// possible (immediately before AudioProc) so K is as fresh as
+		// possible — see doc/ninjam-live-loop-latency-sync-planC.md §1/§3.
+		_WriteExportDelayLine(_dacDelayLines, interleavedDacOutput, numDacChannels, numFrames, _exportSilenceScratch);
+		_WriteExportDelayLine(_adcDelayLines, interleavedAdcInput, numAdcChannels, numFrames, _exportSilenceScratch);
+
+		int posInt = 0;
+		int lengthInt = 0;
+		_client->GetPosition(&posInt, &lengthInt);
+
+		ExportLaneTimingInput timingInput;
+		timingInput.n = _exportTick;
+		timingInput.numFrames = numFrames;
+		timingInput.pos = posInt > 0 ? static_cast<unsigned int>(posInt) : 0u;
+		timingInput.length = lengthInt > 0 ? static_cast<unsigned int>(lengthInt) : 0u;
+		// TODO(latency): inLatencySamps/outLatencySamps are hardware latency
+		// only. Loop-driven VST latency (Loop::CurrentVstLatencySamps()) is
+		// not yet folded into outLatencySamps here -- see
+		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
+		timingInput.inLatencySamps = _inLatencySamps;
+		timingInput.outLatencySamps = _outLatencySamps;
+
+		const auto timing = ExportLaneTiming::Compute(timingInput, _exportTimingState);
+		_exportTick += numFrames;
+
+		if (timing.generationReset)
+		{
+			for (auto& buf : _dacDelayLines)
+				buf->Reset();
+			for (auto& buf : _adcDelayLines)
+				buf->Reset();
+
+			if (timing.anomalyDetected)
+				_exportAnomalyCount.fetch_add(1u, std::memory_order_relaxed);
+		}
+
+		if (timing.valid)
+		{
+			_ReadExportDelayLine(_dacDelayLines, timing.dacDelaySamps, numFrames, _delayedDacInterleaved, _dacDelayTemp);
+			_ReadExportDelayLine(_adcDelayLines, timing.adcDelaySamps, numFrames, _delayedAdcInterleaved, _adcDelayTemp);
+			dacForPacking = _delayedDacInterleaved.data();
+			adcForPacking = _delayedAdcInterleaved.data();
+		}
+		else
+		{
+			// No NJClient timing yet — mute rather than send uncompensated
+			// (and therefore out-of-phase) content.
+			dacForPacking = nullptr;
+			adcForPacking = nullptr;
+		}
+	}
+
 	const auto packing = _lanePacking.load(std::memory_order_acquire);
 	const auto laneCount = static_cast<unsigned int>(packing.LaneCount);
 	const auto laneChannelCount = laneCount * 2u;
@@ -460,7 +643,7 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 		for (auto chan = 0u; chan < laneChannelCount; chan++)
 			std::fill(_inScratch[chan].begin(), _inScratch[chan].begin() + numFrames, 0.0f);
 
-		if (interleavedDacOutput && (numDacChannels >= 2u))
+		if (dacForPacking && (numDacChannels >= 2u))
 		{
 			const auto dacPairs = std::min(static_cast<unsigned int>(packing.DacPairs), numDacChannels / 2u);
 			for (auto pair = 0u; pair < dacPairs; pair++)
@@ -477,13 +660,13 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 				for (auto samp = 0u; samp < numFrames; samp++)
 				{
 					auto srcBase = samp * numDacChannels;
-					_inScratch[dstLeft][samp] += interleavedDacOutput[srcBase + srcLeft];
-					_inScratch[dstRight][samp] += interleavedDacOutput[srcBase + srcRight];
+					_inScratch[dstLeft][samp] += dacForPacking[srcBase + srcLeft];
+					_inScratch[dstRight][samp] += dacForPacking[srcBase + srcRight];
 				}
 			}
 		}
 
-		if (interleavedAdcInput && (numAdcChannels >= 2u))
+		if (adcForPacking && (numAdcChannels >= 2u))
 		{
 			const auto adcPairs = std::min(static_cast<unsigned int>(packing.AdcPairs), numAdcChannels / 2u);
 			for (auto pair = 0u; pair < adcPairs; pair++)
@@ -500,8 +683,8 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 				for (auto samp = 0u; samp < numFrames; samp++)
 				{
 					auto srcBase = samp * numAdcChannels;
-					_inScratch[dstLeft][samp] += interleavedAdcInput[srcBase + srcLeft];
-					_inScratch[dstRight][samp] += interleavedAdcInput[srcBase + srcRight];
+					_inScratch[dstLeft][samp] += adcForPacking[srcBase + srcLeft];
+					_inScratch[dstRight][samp] += adcForPacking[srcBase + srcRight];
 				}
 			}
 		}

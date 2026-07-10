@@ -452,6 +452,9 @@
     <ClInclude Include="src\ninjam\NinjamConnection.h">
       <Filter>src\ninjam</Filter>
     </ClInclude>
+    <ClInclude Include="src\ninjam\ExportLaneTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\TextReadWriter.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -797,6 +800,9 @@
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamConnection.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\ExportLaneTiming.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Camera.cpp">

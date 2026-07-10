@@ -400,7 +400,9 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 		_audioSampleRate.load(std::memory_order_relaxed),
 		_audioBlockSize.load(std::memory_order_relaxed),
 		_audioNumInputChannels.load(std::memory_order_relaxed),
-		_audioNumOutputChannels.load(std::memory_order_relaxed));
+		_audioNumOutputChannels.load(std::memory_order_relaxed),
+		_audioInLatencySamps.load(std::memory_order_relaxed),
+		_audioOutLatencySamps.load(std::memory_order_relaxed));
 
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
 	std::cout << "[NINJAM] Type a message and press Enter to chat" << std::endl;
@@ -464,16 +466,20 @@ std::optional<NinjamRemoteSnapshot> NinjamSession::Pump()
 void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	unsigned int blockSize,
 	unsigned int numInputChannels,
-	unsigned int numOutputChannels)
+	unsigned int numOutputChannels,
+	unsigned int inLatencySamps,
+	unsigned int outLatencySamps)
 {
 	_audioSampleRate = sampleRate;
 	_audioBlockSize = blockSize;
 	_audioNumInputChannels = numInputChannels;
 	_audioNumOutputChannels = numOutputChannels;
+	_audioInLatencySamps = inLatencySamps;
+	_audioOutLatencySamps = outLatencySamps;
 
 	NinjamConnectionUse conn(*this);
 	if (conn)
-		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
+		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
 }
 
 void NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,

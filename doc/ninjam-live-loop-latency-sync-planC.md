@@ -1,6 +1,16 @@
 # NINJAM Live/Loop Export Latency Alignment — Plan C (Unblocked)
 
-Status: **finalised plan, ready to implement.** Supersedes the stalemate between
+Status: **implemented (2026-07-10), gated off by default.** The delay-line
+compensation, `ExportLaneTiming` helper (`JammaLib/src/ninjam/ExportLaneTiming.h/.cpp`),
+generation-reset/anomaly-detection safety valve, VST latency plumbing (plumb-only), and
+unit tests described below are implemented on this branch. The escape hatch
+(`NinjamConnection::ExportLatencyCompensationEnabled`) defaults to **false**: this
+session could not run the physical DAC-to-ADC loopback verification in §5/step 10
+(requires real audio hardware and a live/test NINJAM server), so flipping the flag to
+true is left for whoever runs that verification. See the follow-up notes for the exact
+remaining steps.
+
+Supersedes the stalemate between
 [plan](ninjam-live-loop-latency-sync-plan.md) (correct about a real edge case, but gated
 on an upstream contract that will never ship) and
 [planB](ninjam-live-loop-latency-sync-planB.md) (correct about the buildable design, but

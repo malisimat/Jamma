@@ -1048,6 +1048,10 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 
 			auto playPos = cfg.has_value() ?
+				// TODO(latency): playPos compensates for hardware outLatency only.
+				// Fold in the loop's aggregate VST latency (Loop::CurrentVstLatencySamps())
+				// once loop-driven VST PDC is compensated -- see
+				// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 				cfg.value().LoopPlayPos(errorSamps, loopLength, outLatency) :
 				0;
 			auto endRecordSamps = cfg.has_value() ?
