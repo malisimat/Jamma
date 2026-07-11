@@ -217,6 +217,13 @@ actions::ActionResult MidiRouter::HandleChannelOverrideKey(const actions::KeyAct
 	if (isPageDown)
 		_channelOverridePageDownHeld = true;
 
+	if (_channelOverridePageUpHeld && _channelOverridePageDownHeld &&
+		!(wasPageUpHeld && wasPageDownHeld))
+	{
+		ResetChannelOverride();
+		return eaten;
+	}
+
 	if (isPageUp && !wasPageUpHeld)
 	{
 		for (const auto& station : stations)

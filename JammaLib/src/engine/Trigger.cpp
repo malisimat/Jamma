@@ -1016,8 +1016,9 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = !_inputChannels.empty();
-		const auto hasTargetMidi = true;
+		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+			cfg.value().Audio.NumChannelsIn > 0u;
+		const auto hasTargetMidi = !_midiInputDevices.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
@@ -1045,20 +1046,16 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 		DispatchTriggerAction(sourceAction);
 
+		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
 			DispatchTriggerAction(targetMidiAction);
 
-		if (!hasTargetAudio)
-			return;
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (0u == targetDelay)
+		if (hasTargetAudio)
 		{
-			DispatchTriggerAction(targetAction);
-		}
-		else
-		{
-			QueueTriggerAction(targetAction, targetDelay);
+			if (0u == targetDelay)
+				DispatchTriggerAction(targetAction);
+			else
+				QueueTriggerAction(targetAction, targetDelay);
 		}
 	}
 }
@@ -1080,8 +1077,9 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = !_inputChannels.empty();
-		const auto hasTargetMidi = true;
+		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+			cfg.value().Audio.NumChannelsIn > 0u;
+		const auto hasTargetMidi = !_midiInputDevices.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
@@ -1109,20 +1107,16 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 		DispatchTriggerAction(sourceAction);
 
+		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
 			DispatchTriggerAction(targetMidiAction);
 
-		if (!hasTargetAudio)
-			return;
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (0u == targetDelay)
+		if (hasTargetAudio)
 		{
-			DispatchTriggerAction(targetAction);
-		}
-		else
-		{
-			QueueTriggerAction(targetAction, targetDelay);
+			if (0u == targetDelay)
+				DispatchTriggerAction(targetAction);
+			else
+				QueueTriggerAction(targetAction, targetDelay);
 		}
 	}
 }
