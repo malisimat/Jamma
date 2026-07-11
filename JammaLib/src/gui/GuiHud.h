@@ -62,13 +62,13 @@ namespace gui
 		static constexpr unsigned int _TopStripSpacing = 10u;
 		static constexpr unsigned int _SourceButtonWidth = 118u;
 		static constexpr unsigned int _SourceButtonHeight = 34u;
-		static constexpr unsigned int _RightRailWidth = 236u;
+		static constexpr unsigned int _RightRailWidth = 134u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
 		static constexpr unsigned int _RightRailPadding = 12u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 212u;
-		static constexpr unsigned int _TriggerButtonHeight = 120u;
+		static constexpr unsigned int _TriggerButtonWidth = 120u;
+		static constexpr unsigned int _TriggerButtonHeight = 100u;
 
 		void _BuildPanels();
 		void _BuildTopStrip();
