@@ -165,9 +165,6 @@ void GuiHud::_BuildPanels()
 	railParams.PaddingV = _RightRailPadding;
 	railParams.Size = { _RightRailWidth, _RightRailHeight };
 	railParams.MinSize = { _RightRailWidth, _RightRailMinHeight };
-	railParams.TextureShader = "texture_tinted";
-	railParams.Texture = "rounded_but";
-	railParams.TintColor = glm::vec3(0.17f, 0.20f, 0.24f);
 	_triggerRail = std::make_shared<GuiStackPanel>(railParams);
 	AddChild(_triggerRail);
 
@@ -574,28 +571,31 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, c
 	auto button = std::make_shared<GuiButton>(buttonParams);
 
 	const int socketPadding = 8;
-	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.4) - socketPadding;
+	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.45) - socketPadding;
 	const int pedalSizeH = static_cast<int>(_TriggerButtonHeight * 0.70f);
+	const int pedalPosX = 22;
 	const int pedalPosY = 1;
 
 	base::GuiElementParams activateParams;
-	activateParams.Position = { 24 + socketPadding / 2, pedalPosY };
+	activateParams.Position = { pedalPosX, pedalPosY };
 	activateParams.Size = { static_cast<unsigned int>(pedalSizeW), static_cast<unsigned int>(pedalSizeH) };
 	activateParams.TextureShader = "texture";
 	activateParams.Texture = "trigger_activate";
 	activateParams.OverTexture = "trigger_activate_over";
 	activateParams.DownTexture = "trigger_activate_down";
 	activateParams.OutTexture = "trigger_activate_down_out";
+	activateParams.GuiPassThrough = false;
 	button->AddChild(std::make_shared<base::GuiElement>(activateParams));
 
 	base::GuiElementParams ditchParams;
-	ditchParams.Position = { static_cast<int>(24) + (socketPadding / 2) + pedalSizeW, pedalPosY };
+	ditchParams.Position = { pedalPosX + pedalSizeW + socketPadding, pedalPosY };
 	ditchParams.Size = { static_cast<unsigned int>(pedalSizeW), static_cast<unsigned int>(pedalSizeH) };
 	ditchParams.TextureShader = "texture";
 	ditchParams.Texture = "trigger_ditch";
 	ditchParams.OverTexture = "trigger_ditch_over";
 	ditchParams.DownTexture = "trigger_ditch_down";
 	ditchParams.OutTexture = "trigger_ditch_down_out";
+	ditchParams.GuiPassThrough = false;
 	button->AddChild(std::make_shared<base::GuiElement>(ditchParams));
 
 	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 12u);
@@ -603,7 +603,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, c
 	const unsigned int textWidth = std::min(_TriggerButtonWidth - 16u,
 		static_cast<unsigned int>(std::max(40, static_cast<int>(text.size()) * approxCharWidth + 8)));
 	const int textPosX = std::max(0, (static_cast<int>(_TriggerButtonWidth) - static_cast<int>(textWidth)) / 2);
-	labelParams.Position = { textPosX, static_cast<int>(_TriggerButtonHeight) - static_cast<int>(GuiLabelParams::RowHeight) - 8 };
+	labelParams.Position = { textPosX, static_cast<int>(_TriggerButtonHeight) - static_cast<int>(GuiLabelParams::RowHeight) + 12 };
 	labelParams.Size = { textWidth, GuiLabelParams::RowHeight };
 	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
