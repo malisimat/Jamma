@@ -22,6 +22,44 @@ using namespace resources;
 
 namespace gui
 {
+	class GuiHudTriggerBack : public GuiButton
+	{
+	public:
+		GuiHudTriggerBack(GuiButtonParams params, std::weak_ptr<engine::Trigger> trigger) :
+			GuiButton(params),
+			_trigger(std::move(trigger))
+		{
+		}
+
+		virtual void Draw(base::DrawContext& ctx) override
+		{
+			const auto previousTint = _guiParams.TintColor;
+			_guiParams.TintColor = _TriggerTint();
+			GuiButton::Draw(ctx);
+			_guiParams.TintColor = previousTint;
+		}
+
+	private:
+		glm::vec3 _TriggerTint() const
+		{
+			const auto trigger = _trigger.lock();
+			if (!trigger)
+				return { 0.30f, 0.90f, 0.38f };
+			if (trigger->IsDitchDown())
+				return { 0.24f, 0.68f, 0.98f };
+
+			switch (trigger->GetState())
+			{
+			case engine::TRIGSTATE_RECORDING: return { 0.94f, 0.20f, 0.22f };
+			case engine::TRIGSTATE_OVERDUBBING: return { 0.95f, 0.54f, 0.16f };
+			case engine::TRIGSTATE_PUNCHEDIN: return { 0.70f, 0.30f, 0.92f };
+			default: return { 0.30f, 0.90f, 0.38f };
+			}
+		}
+
+		std::weak_ptr<engine::Trigger> _trigger;
+	};
+
 	class GuiHudTriggerPedal : public base::GuiElement
 	{
 	public:
@@ -638,11 +676,11 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	buttonParams.Texture = "trigger_back";
 	buttonParams.OverTexture = "trigger_back";
 	buttonParams.DownTexture = "trigger_back";
-	buttonParams.TextureShader = "texture";
+	buttonParams.TextureShader = "texture_tinted";
 	buttonParams.Size = { _TriggerButtonWidth, _TriggerButtonHeight };
 	buttonParams.MinSize = { GuiButtonParams::DefaultMinWidth, _TriggerButtonHeight };
-	buttonParams.TintColor = glm::vec3(1.0f, 1.0f, 1.0f);
-	auto button = std::make_shared<GuiButton>(buttonParams);
+	buttonParams.TintColor = tint;
+	auto button = std::make_shared<GuiHudTriggerBack>(buttonParams, trigger);
 
 	const int socketPadding = 8;
 	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.45) - socketPadding;

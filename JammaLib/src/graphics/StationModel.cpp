@@ -364,6 +364,7 @@ StationModel::StationModel() :
 	_stationSelected(false),
 	_stationPicking(false),
 	_stationLevel(0.0f),
+	_stationVisualState(0u),
 	_stationFallRate(0.0f)
 {
 	_modelParams.ModelShaders = { "station", "picker" };
@@ -376,11 +377,13 @@ StationModel::StationModel() :
 void StationModel::SetStationState(const std::vector<unsigned int>& stationGlobalId,
 		bool selected,
 		bool picking,
-		float level)
+		float level,
+		std::uint8_t visualState)
 	{
 		_stationGlobalId = stationGlobalId;
 		_stationSelected = selected;
 		_stationPicking = picking;
+		_stationVisualState = visualState;
 		const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
 		const auto decayRate = std::max(_stationFallRate, 0.0f);
 		_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
@@ -452,6 +455,15 @@ void StationModel::Draw3d(DrawContext& ctx,
 		return;
 
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
+	const glm::vec3 stationStateColors[] = {
+		{ 0.30f, 0.90f, 0.38f },
+		{ 0.94f, 0.20f, 0.22f },
+		{ 0.24f, 0.68f, 0.98f },
+		{ 0.95f, 0.54f, 0.16f },
+		{ 0.70f, 0.30f, 0.92f }
+	};
+	const auto stationStateIndex = std::min<std::size_t>(_stationVisualState,
+		std::size(stationStateColors) - 1u);
 
 	// Set pass-specific uniforms before binding the program.
 	switch (pass)
@@ -470,12 +482,14 @@ void StationModel::Draw3d(DrawContext& ctx,
 			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 			glCtx.SetUniform("StationLevel", stationLevel);
+			glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 			break;
 		case base::PASS_SCENE:
 		default:
 			glCtx.SetUniform("Highlight", _stationSelected ? 0.35f : 0.0f);
 			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
+		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
 	}
 

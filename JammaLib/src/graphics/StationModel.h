@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include <tuple>
 #include "../gui/GuiModel.h"
@@ -30,7 +31,8 @@ namespace graphics
 		void SetStationState(const std::vector<unsigned int>& stationGlobalId,
 			bool selected,
 			bool picking,
-			float level = 0.0f);
+			float level = 0.0f,
+			std::uint8_t visualState = 0u);
 		void SetParams(float fallRate) noexcept;
 		void ResetStationLevel() noexcept;
 
@@ -93,6 +95,7 @@ namespace graphics
 		bool _stationSelected;
 		bool _stationPicking;
 		float _stationLevel;
+		std::uint8_t _stationVisualState;
 		float _stationFallRate;
 		static float _ApplySoftDecay(float current, float target, float fallRate) noexcept;
 	};

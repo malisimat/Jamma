@@ -25,6 +25,15 @@
 
 namespace engine
 {
+	enum class StationVisualState : std::uint8_t
+	{
+		STATIONSTATE_DEFAULT,
+		STATIONSTATE_RECORDING,
+		STATIONSTATE_PLAYING,
+		STATIONSTATE_OVERDUBBING,
+		STATIONSTATE_PUNCHIN
+	};
+
 	class StationParams :
 		public base::JammableParams
 	{
@@ -120,6 +129,7 @@ namespace engine
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) override;
 		virtual void Reset() override;
+		StationVisualState GetVisualState() const noexcept;
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
@@ -237,6 +247,7 @@ namespace engine
 		void _CollapseOtherTakeRoutersToChannels();
 		void _ApplyMidiQuantisationPhaseOffset() noexcept;
 		void _PublishAudioState();
+		void _SetVisualState(StationVisualState state) noexcept;
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
@@ -324,6 +335,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		std::atomic<std::uint8_t> _publishedVisualState{ static_cast<std::uint8_t>(StationVisualState::STATIONSTATE_DEFAULT) };
 
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on

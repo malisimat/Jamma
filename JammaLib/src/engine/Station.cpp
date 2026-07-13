@@ -205,7 +205,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
 		const auto stationPeak = _masterMixer ? _masterMixer->VuPeakLevel() : 0.0f;
-		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak);
+		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak,
+			static_cast<std::uint8_t>(GetVisualState()));
 		_stationModel->Draw3d(ctx, 1, pass);
 		glCtx.PopMvp();
 	}
@@ -247,6 +248,16 @@ void Station::Draw3d(base::DrawContext& ctx,
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
+}
+
+StationVisualState Station::GetVisualState() const noexcept
+{
+	return static_cast<StationVisualState>(_publishedVisualState.load(std::memory_order_acquire));
+}
+
+void Station::_SetVisualState(StationVisualState state) noexcept
+{
+	_publishedVisualState.store(static_cast<std::uint8_t>(state), std::memory_order_release);
 }
 
 utils::Position2d Station::Position() const
@@ -837,6 +848,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -850,6 +862,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
+			_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		}
 		else
 		{
@@ -896,6 +909,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}
@@ -917,6 +931,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -930,6 +945,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
+			_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		}
 		else
 		{
@@ -980,6 +996,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}
@@ -1001,6 +1018,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_PUNCHIN);
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
@@ -1020,6 +1038,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
@@ -1042,6 +1061,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
+		_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		break;
 	case TriggerAction::TRIGGER_DITCH_UNMUTE:
 		if (loopTake.has_value())
@@ -1071,6 +1091,7 @@ void Station::OnTick(Time curTime,
 void Station::Reset()
 {
 	Jammable::Reset();
+	_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
