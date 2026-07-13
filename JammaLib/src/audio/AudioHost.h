@@ -11,6 +11,7 @@
 #include "../io/UserConfig.h"
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
+#include "../midi/MidiClockAnchor.h"
 #include "../ninjam/NinjamController.h"
 #include "../utils/Timer.h"
 
@@ -32,9 +33,8 @@ namespace audio
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
-		std::atomic<std::uint64_t>& GetAudioSampleCounter_Ref() { return _audioSampleCounter; }
-		std::int64_t GetMidiAnchorMicros() const { return _midiAnchorMicros.load(std::memory_order_relaxed); }
-		std::atomic<std::int64_t>& GetMidiAnchorMicros_Ref() { return _midiAnchorMicros; }
+		const midi::MidiClockAnchor& GetMidiClockAnchor() const { return _midiClockAnchor; }
+		midi::MidiClockAnchor& GetMidiClockAnchor_Ref() { return _midiClockAnchor; }
 		const io::UserConfig& GetUserConfig() const { return _userConfig; }
 
 		AudioStreamParams GetStreamParams() const 
@@ -71,7 +71,7 @@ namespace audio
 		std::atomic_bool _ninjamMetronomeEnabled{ true };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
-		std::atomic<std::int64_t> _midiAnchorMicros{ 0 };
+		midi::MidiClockAnchor _midiClockAnchor;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;

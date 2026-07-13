@@ -213,7 +213,7 @@ namespace engine
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi()
 		{
-			_inputSubsystem->Init(_audioEngine->GetAudioSampleCounter_Ref(), _audioEngine->GetMidiAnchorMicros_Ref());
+			_inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref());
 		}
 		void CloseMidi()
 		{

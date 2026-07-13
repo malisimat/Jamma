@@ -1179,7 +1179,9 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
-    auto summary = _inputSubsystem->PumpMidi(_stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
+	auto stations = SnapshotStations();
+	_inputSubsystem->PublishLiveMidiRoutes(stations);
+    auto summary = _inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
 	std::scoped_lock lock(_sceneMutex);
 
 	if (summary.Activated)
@@ -2082,14 +2084,13 @@ unsigned int Scene::_CurrentSampleRate() const
 std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 {
 	const auto sampleRate = _CurrentSampleRate();
-	const auto anchorSample = _audioEngine->GetAudioSampleCounter();
-	const auto anchorMicros = _audioEngine->GetMidiAnchorMicros();
+	const auto anchor = midi::ReadMidiClockAnchor(_audioEngine->GetMidiClockAnchor(), {});
 	const auto actionMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		actionTime.time_since_epoch()).count();
 
 	return MapMidiTimestampToAudioSample(sampleRate,
-		anchorSample,
-		anchorMicros,
+		anchor.Sample,
+		anchor.SteadyMicros,
 		actionMicros);
 }
 

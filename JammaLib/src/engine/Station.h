@@ -167,11 +167,14 @@ namespace engine
 		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
-		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
-		// without associated deviceName.
-		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
-		// For real live MIDI input, with associated deviceName.
-		void EnqueueLiveMidiEvent(const midi::MidiEvent& event, const std::string& deviceName);
+		// Called only by the live MIDI dispatcher after route and channel eligibility
+		// have been resolved.
+		bool TryEnqueueImmediateLiveMidi(const midi::MidiEvent& event) noexcept;
+		// Called only by the Scene job thread for generated transitions and releases.
+		bool TryEnqueueSyntheticLiveMidi(const midi::MidiEvent& event) noexcept;
+		// Called by the job-thread legacy MIDI path. Recording-held observation must
+		// not also enqueue audible MIDI.
+		void ObservePhysicalMidiForRecording(const midi::MidiEvent& event, const std::string& deviceName);
 		// Emit synthetic NoteOff for currently held live notes and clear held state.
 		void FlushLiveHeldMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
@@ -281,9 +284,13 @@ namespace engine
 			unsigned int sampsToRead,
 			std::uint32_t blockStartSample,
 			std::int32_t transportOffsetSamps) noexcept;
+			static bool _TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
+				bool& hasLastSample,
+				std::uint32_t& lastSample,
+				const midi::MidiEvent& event) noexcept;
 
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
-		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
+		// Must be called from the action thread; NoteOffs use the synthetic queue.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
 		// --- Parameter automation dispatch ---
@@ -382,7 +389,12 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
-		midi::MidiQueue<1024> _liveMidiIngress;
+		midi::MidiQueue<1024> _immediateLiveMidiIngress;
+		midi::MidiQueue<1024> _syntheticLiveMidiIngress;
+		bool _hasLastImmediateLiveMidiSample = false;
+		std::uint32_t _lastImmediateLiveMidiSample = 0u;
+		bool _hasLastSyntheticLiveMidiSample = false;
+		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
 		std::vector<int> _allowedMidiChannels;

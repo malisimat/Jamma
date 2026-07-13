@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiRouter.h"
 
 using namespace engine;
@@ -97,7 +98,8 @@ Station::Station(StationParams params,
 	_pendingVstUnloads(),
 	_vstPathsMutex(),
 	_vstPluginPaths(),
-	_liveMidiIngress(),
+	_immediateLiveMidiIngress(),
+	_syntheticLiveMidiIngress(),
 	_allowedMidiChannels(),
 	_allowedMidiChannelMask(0u),
 	_midiVstRoutes(nullptr),
@@ -460,10 +462,44 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		chain->BeginMidiBlock(shiftedBlockStartSample, sampsToRead);
 	}
 
-	// Always drain live MIDI to avoid backlogging stale events when no instrument is active.
-	MidiEvent liveMidi{};
-	while (_liveMidiIngress.Pop(liveMidi))
+	constexpr auto MaxLiveMidiEventsPerBlock = 64u;
+	for (auto dispatched = 0u; dispatched < MaxLiveMidiEventsPerBlock; ++dispatched)
 	{
+		MidiEvent immediate{};
+		MidiEvent synthetic{};
+		const auto hasImmediate = _immediateLiveMidiIngress.Peek(immediate);
+		const auto hasSynthetic = _syntheticLiveMidiIngress.Peek(synthetic);
+		const auto immediatePosition = hasImmediate
+			? midi::ClassifyMidiSampleInBlock(immediate.sampleOffset, blockStartSample, sampsToRead)
+			: midi::MidiBlockSamplePosition::Future;
+		const auto syntheticPosition = hasSynthetic
+			? midi::ClassifyMidiSampleInBlock(synthetic.sampleOffset, blockStartSample, sampsToRead)
+			: midi::MidiBlockSamplePosition::Future;
+		if (immediatePosition == midi::MidiBlockSamplePosition::Future
+			&& syntheticPosition == midi::MidiBlockSamplePosition::Future)
+			break;
+
+		const auto immediateDelta = midi::MidiSampleDelta(immediate.sampleOffset, blockStartSample);
+		const auto syntheticDelta = midi::MidiSampleDelta(synthetic.sampleOffset, blockStartSample);
+		bool chooseSynthetic = immediatePosition == midi::MidiBlockSamplePosition::Future;
+		if (!chooseSynthetic && syntheticPosition != midi::MidiBlockSamplePosition::Future)
+		{
+			chooseSynthetic = syntheticDelta < immediateDelta
+				|| (syntheticDelta == immediateDelta
+					&& (synthetic.IsNoteOff() != immediate.IsNoteOff()
+						? synthetic.IsNoteOff()
+						: true));
+		}
+
+		MidiEvent liveMidi{};
+		if (chooseSynthetic)
+			_syntheticLiveMidiIngress.Pop(liveMidi);
+		else
+			_immediateLiveMidiIngress.Pop(liveMidi);
+
+		liveMidi.sampleOffset = midi::RebaseMidiSampleForVstBlock(liveMidi.sampleOffset,
+			blockStartSample,
+			shiftedBlockStartSample);
 		if (vstActive)
 			midi::SendMidiToVstChain(chain, routes, liveMidi, true, LiveMidiOutputIndex);
 	}
@@ -486,6 +522,26 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 	}
 
 	chain->ProcessBlockMulti(state.VstBlockPtrs.data(), static_cast<int>(channelCount), sampsToRead);
+}
+
+bool Station::_TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
+	bool& hasLastSample,
+	std::uint32_t& lastSample,
+	const midi::MidiEvent& event) noexcept
+{
+	auto queuedEvent = event;
+	if (hasLastSample
+		&& midi::MidiSampleDelta(queuedEvent.sampleOffset, lastSample) < 0)
+	{
+		queuedEvent.sampleOffset = lastSample;
+	}
+
+	if (!queue.Push(queuedEvent))
+		return false;
+
+	lastSample = queuedEvent.sampleOffset;
+	hasLastSample = true;
+	return true;
 }
 
 void Station::RebuildAutomationDispatch()
@@ -1077,7 +1133,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
 		{
 			for (const auto& event : loopTake.value()->BuildMidiPunchInLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
-				EnqueueLiveMidiEvent(event);
+				TryEnqueueSyntheticLiveMidi(event);
 		}
 
 		if (action.ApplyToTargetTake && loopTake.has_value())
@@ -1096,7 +1152,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
 		{
 			for (const auto& event : loopTake.value()->BuildMidiPunchOutLiveTransitionEvents(static_cast<std::uint32_t>(action.SampleCount)))
-				EnqueueLiveMidiEvent(event);
+				TryEnqueueSyntheticLiveMidi(event);
 		}
 
 		if (action.ApplyToTargetTake && loopTake.has_value())
@@ -1739,7 +1795,7 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 		}
 
 		for (const auto& noteOff : noteOffs)
-			_liveMidiIngress.Push(noteOff);
+			TryEnqueueSyntheticLiveMidi(noteOff);
 	}
 
 	_allowedMidiChannels = std::move(filtered);
@@ -1749,17 +1805,24 @@ void Station::SetAllowedMidiChannels(const std::vector<int>& channels)
 		_guiRack->SetAllowedMidiChannels(_allowedMidiChannels, true);
 }
 
-void Station::EnqueueLiveMidiEvent(const MidiEvent& event)
+bool Station::TryEnqueueImmediateLiveMidi(const MidiEvent& event) noexcept
 {
-	// Synthetic events, like punch-in transitions, do not have a device name.
-	EnqueueLiveMidiEvent(event, "");
+	return _TryEnqueueOrderedLiveMidi(_immediateLiveMidiIngress,
+		_hasLastImmediateLiveMidiSample,
+		_lastImmediateLiveMidiSample,
+		event);
 }
 
-void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& deviceName)
+bool Station::TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept
 {
-	if (!deviceName.empty() && !AcceptsLiveMidiFromDevice(deviceName))
-		return;
+	return _TryEnqueueOrderedLiveMidi(_syntheticLiveMidiIngress,
+		_hasLastSyntheticLiveMidiSample,
+		_lastSyntheticLiveMidiSample,
+		event);
+}
 
+void Station::ObservePhysicalMidiForRecording(const MidiEvent& event, const std::string& deviceName)
+{
 	const auto channelAllowed = AcceptsLiveMidiChannel(event.Channel());
 
 	if (event.IsNoteOn() || event.IsNoteOff())
@@ -1789,10 +1852,6 @@ void Station::EnqueueLiveMidiEvent(const MidiEvent& event, const std::string& de
 			upsert(deviceName);
 	}
 
-	if (!channelAllowed)
-		return;
-
-	_liveMidiIngress.Push(event);
 }
 
 void Station::FlushLiveHeldMidiNotes() noexcept
@@ -1815,7 +1874,7 @@ void Station::FlushLiveHeldMidiNotes() noexcept
 		for (std::uint8_t note = 0u; note < 128u; ++note)
 		{
 			if (heldSnapshot.Held.test(MidiNote::NoteSlot(ch, note)))
-				_liveMidiIngress.Push(MidiEvent::MakeNoteOff(0u, ch, note));
+				TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
 		}
 	}
 }
@@ -2147,7 +2206,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	FlushLiveHeldMidiNotes();
 
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
-	// Events are injected via EnqueueLiveMidiEvent (thread-safe live queue) and
+	// Events are injected via the synthetic live queue and
 	// drained by the audio thread on the next WriteBlock call.
 	for (const auto& midiLoop : take->GetMidiLoopSnapshot())
 	{
@@ -2161,7 +2220,7 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 			for (std::uint8_t note = 0; note < 128; ++note)
 			{
 				if (held.test(MidiLoop::NoteSlot(ch, note)))
-					EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(0u, ch, note));
+					TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOff(0u, ch, note));
 			}
 		}
 	}

@@ -278,7 +278,9 @@ namespace audio
 		}
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
-		_midiAnchorMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+		midi::PublishMidiClockAnchor(_midiClockAnchor,
+			blockStartSample + numSamps,
+			std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
 	}
 }

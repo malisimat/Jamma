@@ -41,6 +41,36 @@ TEST(MidiQueue, PushPopRoundTripPreservesEvent) {
 	ASSERT_TRUE(q.Empty());
 }
 
+TEST(MidiQueue, PeekIsNonDestructiveAndMatchesFollowingPop) {
+	MidiQueue<kCap> q;
+	const auto first = NoteOn(1234u, 60, 90);
+	const auto second = NoteOn(5678u, 61, 80);
+	ASSERT_TRUE(q.Push(first));
+	ASSERT_TRUE(q.Push(second));
+
+	MidiEvent peeked{};
+	ASSERT_TRUE(q.Peek(peeked));
+	ASSERT_EQ(first.sampleOffset, peeked.sampleOffset);
+	ASSERT_EQ(first.data1, peeked.data1);
+	ASSERT_EQ(2u, q.Size());
+
+	MidiEvent repeatedPeek{};
+	ASSERT_TRUE(q.Peek(repeatedPeek));
+	ASSERT_EQ(peeked.sampleOffset, repeatedPeek.sampleOffset);
+	ASSERT_EQ(peeked.data1, repeatedPeek.data1);
+
+	MidiEvent popped{};
+	ASSERT_TRUE(q.Pop(popped));
+	ASSERT_EQ(peeked.sampleOffset, popped.sampleOffset);
+	ASSERT_EQ(peeked.status, popped.status);
+	ASSERT_EQ(peeked.data1, popped.data1);
+	ASSERT_EQ(peeked.data2, popped.data2);
+	ASSERT_EQ(1u, q.Size());
+
+	ASSERT_TRUE(q.Pop(popped));
+	ASSERT_EQ(second.sampleOffset, popped.sampleOffset);
+}
+
 TEST(MidiQueue, PreservesPushOrder) {
 	MidiQueue<kCap> q;
 	for (std::uint32_t i = 0; i < kCap - 1; ++i)
@@ -73,6 +103,38 @@ TEST(MidiQueue, WrapsAroundInternalIndices) {
 	}
 	ASSERT_TRUE(q.Empty());
 	ASSERT_EQ(0u, q.DroppedCount());
+}
+
+TEST(MidiQueue, PeekPreservesFifoAcrossWrappedIndices) {
+	MidiQueue<kCap> q;
+	for (std::uint32_t i = 0; i < kCap - 1; ++i)
+		ASSERT_TRUE(q.Push(NoteOn(i, static_cast<std::uint8_t>(i))));
+
+	MidiEvent out{};
+	for (std::uint32_t i = 0; i < 4; ++i)
+		ASSERT_TRUE(q.Pop(out));
+
+	for (std::uint32_t i = 0; i < 4; ++i)
+		ASSERT_TRUE(q.Push(NoteOn(100u + i, static_cast<std::uint8_t>(100u + i))));
+
+	for (std::uint32_t expected = 4; expected < kCap - 1; ++expected)
+	{
+		MidiEvent peeked{};
+		ASSERT_TRUE(q.Peek(peeked));
+		ASSERT_EQ(expected, peeked.sampleOffset);
+		ASSERT_TRUE(q.Pop(out));
+		ASSERT_EQ(peeked.sampleOffset, out.sampleOffset);
+	}
+
+	for (std::uint32_t expected = 100; expected < 104; ++expected)
+	{
+		MidiEvent peeked{};
+		ASSERT_TRUE(q.Peek(peeked));
+		ASSERT_EQ(expected, peeked.sampleOffset);
+		ASSERT_TRUE(q.Pop(out));
+		ASSERT_EQ(peeked.sampleOffset, out.sampleOffset);
+	}
+	ASSERT_FALSE(q.Peek(out));
 }
 
 TEST(MidiQueue, OverflowDropsNewestAndKeepsExistingBufferedEvents) {

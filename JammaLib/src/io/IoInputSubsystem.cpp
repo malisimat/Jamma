@@ -26,10 +26,9 @@ namespace io
 		Close();
 	}
 
-	void IoInputSubsystem::Init(std::atomic<std::uint64_t>& audioSampleCounter,
-		std::atomic<std::int64_t>& midiAnchorMicros)
+	void IoInputSubsystem::Init(midi::MidiClockAnchor& midiClockAnchor)
 	{
-		_midiRouter.InitMidi(_userConfig, _loggingConfig, audioSampleCounter, midiAnchorMicros);
+		_midiRouter.InitMidi(_userConfig, _loggingConfig, midiClockAnchor);
 		_midiRouter.InitSerial(_userConfig);
 	}
 
@@ -43,6 +42,11 @@ namespace io
 		CloseGlobalKeyCapture();
 		_midiRouter.CloseSerial();
 		_midiRouter.CloseMidi();
+	}
+
+	void IoInputSubsystem::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations)
+	{
+		_midiRouter.PublishLiveMidiRoutes(stations);
 	}
 
 	bool IoInputSubsystem::InitGlobalKeyCapture()

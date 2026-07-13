@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst3Plugin.h"
+#include "../midi/MidiBlockTiming.h"
 #include "Vst2Plugin.h"
 #include <algorithm>
 #include <array>
@@ -181,14 +182,16 @@ public:
 		if (_count >= MaxEvents || 0u == _blockNumSamples)
 			return;
 
-		const auto blockEnd = _blockStartSample + _blockNumSamples;
-		const bool inWindow = (midiEvent.sampleOffset >= _blockStartSample && midiEvent.sampleOffset < blockEnd);
+		const auto position = midi::ClassifyMidiSampleInBlock(midiEvent.sampleOffset,
+			_blockStartSample, _blockNumSamples);
+		const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
 		if (!inWindow && !isRealtime)
 			return;
 
 		Event event{};
 		event.busIndex = 0;
-		event.sampleOffset = inWindow ? static_cast<int32>(midiEvent.sampleOffset - _blockStartSample) : 0;
+		event.sampleOffset = inWindow ? static_cast<int32>(midi::MidiSampleDelta(midiEvent.sampleOffset,
+			_blockStartSample)) : 0;
 		event.ppqPosition = 0.0;
 		event.flags = isRealtime ? Event::kIsLive : 0;
 

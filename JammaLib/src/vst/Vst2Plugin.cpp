@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst2Plugin.h"
+#include "../midi/MidiBlockTiming.h"
 #include <algorithm>
 #include <cstring>
 #include <float.h>
@@ -545,8 +546,9 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	if (_midiEventCount >= MaxMidiEventsPerBlock || 0u == _midiBlockNumSamples)
 		return;
 
-	const auto blockEnd = _midiBlockStartSample + _midiBlockNumSamples;
-	const bool inWindow = (event.sampleOffset >= _midiBlockStartSample && event.sampleOffset < blockEnd);
+	const auto position = midi::ClassifyMidiSampleInBlock(event.sampleOffset,
+		_midiBlockStartSample, _midiBlockNumSamples);
+	const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
 	if (!inWindow && !isRealtime)
 		return;
 
@@ -555,8 +557,8 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	midiEvent.type = kVstMidiType;
 	midiEvent.byteSize = sizeof(VstMidiEvent);
 	{
-		const auto sampleDelta = static_cast<int64_t>(event.sampleOffset)
-			- static_cast<int64_t>(_midiBlockStartSample);
+		const auto sampleDelta = static_cast<int64_t>(midi::MidiSampleDelta(event.sampleOffset,
+			_midiBlockStartSample));
 		const auto maxDelta = (_midiBlockNumSamples > 0u)
 			? static_cast<int64_t>(_midiBlockNumSamples - 1u)
 			: 0;

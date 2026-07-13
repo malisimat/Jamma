@@ -203,7 +203,7 @@ TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 	AllowAllMidiChannels(station);
 
 	auto event = MidiEvent::MakeNoteOn(72u, 0u, 60u, 100u);
-	station->EnqueueLiveMidiEvent(event);
+	station->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(station, 64u);
 
@@ -222,7 +222,7 @@ TEST(StationMidiInstrument, LiveMidiAllowedChannelIsDelivered)
 	station->SetAllowedMidiChannels({ 2 });
 
 	auto event = MidiEvent::MakeNoteOn(32u, 1u, 61u, 100u);
-	station->EnqueueLiveMidiEvent(event, "Keys");
+	station->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(station, 0u);
 
@@ -237,11 +237,14 @@ TEST(StationMidiInstrument, RemovingAllowedChannelFlushesHeldNoteAndIgnoresLater
 	auto plugin = AddPlugin(station, L"fake-live-disable.dll");
 	station->SetAllowedMidiChannels({ 1 });
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 62u, 100u), "Keys");
-	station->SetAllowedMidiChannels({});
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(16u, 0u, 62u), "Keys");
-
+	const auto noteOn = MidiEvent::MakeNoteOn(0u, 0u, 62u, 100u);
+	station->TryEnqueueImmediateLiveMidi(noteOn);
+	station->ObservePhysicalMidiForRecording(noteOn, "Keys");
 	RenderStationBlock(station, 0u);
+	station->SetAllowedMidiChannels({});
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOff(16u, 0u, 62u), "Keys");
+
+	RenderStationBlock(station, 128u);
 
 	ASSERT_EQ(2u, plugin->Events.size());
 	EXPECT_TRUE(plugin->Events[0].IsNoteOn());
@@ -260,8 +263,8 @@ TEST(StationMidiInstrument, SameLiveMidiInputCanPlayMultipleStations)
 	AllowAllMidiChannels(stationB);
 
 	auto event = MidiEvent::MakeNoteOn(10u, 1u, 64u, 96u);
-	stationA->EnqueueLiveMidiEvent(event);
-	stationB->EnqueueLiveMidiEvent(event);
+	stationA->TryEnqueueSyntheticLiveMidi(event);
+	stationB->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(stationA, 0u);
 	RenderStationBlock(stationB, 0u);
@@ -280,7 +283,7 @@ TEST(StationMidiInstrument, LiveMidiCanRouteToSpecificStationPlugin)
 	AllowAllMidiChannels(station);
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(16u, 0u, 36u, 120u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(16u, 0u, 36u, 120u));
 	RenderStationBlock(station, 0u);
 
 	EXPECT_TRUE(pluginA->Events.empty());
@@ -345,8 +348,8 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	auto station = MakeStation("station-recstart-held-seed");
 	station->SetAllowedMidiChannels({ 1 });
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
 
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
@@ -408,7 +411,7 @@ TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
 	auto station = MakeStation("station-recstart-station-midi-channels");
 	station->SetAllowedMidiChannels({ 2 });
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 62u, 90u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 1u, 62u, 90u), "Keys");
 
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
@@ -457,7 +460,7 @@ TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 2u);
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
 
 	RenderStationBlock(station, 0u);
 
@@ -476,7 +479,7 @@ TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 	station->ClearMidiVstRoutes();
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
 
 	RenderStationBlock(station, 0u);
 
@@ -494,7 +497,7 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 	AllowAllMidiChannels(station);
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 99u);
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
 
 	RenderStationBlock(station, 0u);
 

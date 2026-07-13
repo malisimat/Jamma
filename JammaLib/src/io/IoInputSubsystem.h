@@ -8,6 +8,7 @@
 #include "../io/UserConfig.h"
 #include "../io/SerialDevice.h"
 #include "../midi/MidiRouter.h"
+#include "../midi/MidiClockAnchor.h"
 #include "../engine/Station.h"
 
 namespace io
@@ -24,10 +25,10 @@ namespace io
 		IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig);
 		~IoInputSubsystem();
 
-		void Init(std::atomic<std::uint64_t>& audioSampleCounter,
-			std::atomic<std::int64_t>& midiAnchorMicros);
+		void Init(midi::MidiClockAnchor& midiClockAnchor);
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
+		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
