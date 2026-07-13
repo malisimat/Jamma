@@ -16,7 +16,11 @@
 2 quantisation_division MVP Highlight OverlayAlpha
 2 ctrl_handle MVP Color
 2 station MVP ObjectId Highlight StationHover StationLevel
+<<<<<<< HEAD
 2 station_ring MVP Highlight StationHover StationLevel StationStateColor
+=======
+2 station_ring MVP Highlight StationHover StationLevel
+>>>>>>> b211964 (Initial attempt at station cap visuals)
 2 white MVP Highlight
 2 blur
 1 fader_back
