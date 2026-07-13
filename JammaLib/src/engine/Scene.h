@@ -21,6 +21,7 @@
 #include "../gui/GuiPopup.h"
 #include "../gui/GuiFocusManager.h"
 #include "../gui/GuiNumericInput.h"
+#include "../gui/GuiToggle.h"
 #include "../gui/GuiPopupManager.h"
 #include "../gui/SceneSelector.h"
 #include "../gui/GuiMainPanel.h"
@@ -341,6 +342,7 @@ namespace engine
 		static constexpr std::uint8_t  UnresolvedMidiDeviceSlot       = 0xffu;
 		static constexpr unsigned int MidiChannelOverrideControlIndex = 7001u;
 		static constexpr unsigned int TransportOffsetControlIndex = 7002u;
+		static constexpr unsigned int NinjamMetronomeControlIndex = 7003u;
 		static constexpr unsigned int NinjamRemoteTempoAcceptControlIndex = 7101u;
 		static constexpr unsigned int NinjamRemoteTempoRejectControlIndex = 7102u;
 
@@ -363,6 +365,7 @@ namespace engine
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
 		std::shared_ptr<gui::GuiNumericInput> _transportOffsetInput;
+		std::shared_ptr<gui::GuiToggle> _ninjamMetronomeToggle;
 		std::shared_ptr<gui::GuiRadio> _globalMidiQuantRadio;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Mixed;
 		double _transportOffsetLoopFrac = 0.0;

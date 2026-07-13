@@ -7,6 +7,7 @@
 #include <functional>
 #include "AudioDevice.h"
 #include "ChannelMixer.h"
+#include "NinjamMetronome.h"
 #include "../io/UserConfig.h"
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
@@ -44,6 +45,8 @@ namespace audio
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
+		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
+		bool NinjamMetronomeEnabled() const noexcept { return _ninjamMetronomeEnabled.load(std::memory_order_acquire); }
 
 	private:
 		static int AudioCallback(void* outBuffer,
@@ -63,6 +66,9 @@ namespace audio
 		std::mutex _audioMutex;
 		std::unique_ptr<AudioDevice> _audioDevice;
 		std::shared_ptr<ChannelMixer> _channelMixer;
+		NinjamMetronome _ninjamMetronome;
+		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
+		std::atomic_bool _ninjamMetronomeEnabled{ true };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
 		std::atomic<std::int64_t> _midiAnchorMicros{ 0 };

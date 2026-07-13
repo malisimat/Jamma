@@ -706,6 +706,26 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 	_lastNumFrames = numFrames;
 }
 
+NinjamLiveTiming NinjamConnection::GetLiveTiming() const noexcept
+{
+	NinjamLiveTiming timing;
+	if (!_isConnected || !_client)
+		return timing;
+
+	int intervalPosition = 0;
+	int intervalLength = 0;
+	_client->GetPosition(&intervalPosition, &intervalLength);
+
+	timing.intervalPositionSamps = intervalPosition >= 0 ? static_cast<unsigned int>(intervalPosition) : 0u;
+	timing.intervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
+	timing.sampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
+	timing.bpm = _client->GetActualBPM();
+	timing.bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
+	timing.valid = timing.intervalLengthSamps > 0u && timing.sampleRate > 0u
+		&& timing.bpm > 0.0f && timing.bpi > 0u;
+	return timing;
+}
+
 NinjamRemoteSnapshot NinjamConnection::Snapshot() const
 {
 	std::scoped_lock lock(_snapshotMutex);

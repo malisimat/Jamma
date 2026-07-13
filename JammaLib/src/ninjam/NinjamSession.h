@@ -103,6 +103,8 @@ namespace ninjam
 			unsigned int numFrames,
 			unsigned int sampleRate);
 
+		NinjamLiveTiming GetLiveTiming() const noexcept;
+
 		// Returns false if no audio is ready for this output-channel pair.
 		bool ConsumeStereoPair(unsigned int outChannelLeft,
 			const float*& left,

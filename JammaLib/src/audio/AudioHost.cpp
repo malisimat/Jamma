@@ -37,6 +37,7 @@ namespace audio
 			_audioSampleCounter.store(0u, std::memory_order_release);
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+			_ninjamMetronome.Configure(audioStreamParams.SampleRate);
 
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
 				_userConfig.Audio.LatencyIn :
@@ -206,12 +207,46 @@ namespace audio
 
 			if (_ninjamController)
 			{
+				const auto metronomeEnabled = _ninjamMetronomeEnabled.load(std::memory_order_acquire);
+				const auto liveTiming = metronomeEnabled ?
+					_ninjamController->GetLiveTiming() : ninjam::NinjamLiveTiming{};
+
 				_ninjamController->ProcessExportBlock(outBuf,
 					audioStreamParams.NumOutputChannels,
 					inBuf,
 					audioStreamParams.NumInputChannels,
 					numSamps,
 					audioStreamParams.SampleRate);
+
+				if (metronomeEnabled && liveTiming.valid)
+				{
+					ninjam::NinjamMetronomeTimingInput timingInput;
+					timingInput.intervalPositionSamps = liveTiming.intervalPositionSamps;
+					timingInput.intervalLengthSamps = liveTiming.intervalLengthSamps;
+					timingInput.bpm = liveTiming.bpm;
+					timingInput.bpi = liveTiming.bpi;
+					timingInput.remoteSampleRate = liveTiming.sampleRate;
+					timingInput.deviceSampleRate = audioStreamParams.SampleRate;
+					timingInput.outputLatencySamps = audioStreamParams.OutputLatency == 0u ?
+						_userConfig.Audio.LatencyOut : audioStreamParams.OutputLatency;
+					timingInput.numFrames = numSamps;
+
+					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(
+						timingInput, _ninjamMetronomeTimingState);
+					if (metronomeTiming.generationReset)
+						_ninjamMetronome.Reset();
+					_ninjamMetronome.Mix(outBuf, audioStreamParams.NumOutputChannels, numSamps, metronomeTiming);
+				}
+				else
+				{
+					_ninjamMetronomeTimingState = {};
+					_ninjamMetronome.Reset();
+				}
+			}
+			else
+			{
+				_ninjamMetronomeTimingState = {};
+				_ninjamMetronome.Reset();
 			}
 		}
 		else

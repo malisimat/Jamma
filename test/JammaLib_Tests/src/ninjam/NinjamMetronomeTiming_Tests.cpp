@@ -1,0 +1,139 @@
+#include "gtest/gtest.h"
+#include "ninjam/NinjamMetronomeTiming.h"
+
+namespace
+{
+	ninjam::NinjamMetronomeTimingInput MakeInput()
+	{
+		ninjam::NinjamMetronomeTimingInput input;
+		input.intervalLengthSamps = 16000u;
+		input.bpm = 120.0f;
+		input.bpi = 8u;
+		input.remoteSampleRate = 8000u;
+		input.deviceSampleRate = 8000u;
+		input.numFrames = 128u;
+		return input;
+	}
+}
+
+TEST(NinjamMetronomeTiming, FindsBeatAtBlockStart)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 4000u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 1u);
+	EXPECT_EQ(result.onsets[0].offset, 0u);
+	EXPECT_FALSE(result.onsets[0].accent);
+}
+
+TEST(NinjamMetronomeTiming, FindsBeatInsideBlock)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 3950u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 1u);
+	EXPECT_EQ(result.onsets[0].offset, 50u);
+	EXPECT_FALSE(result.onsets[0].accent);
+}
+
+TEST(NinjamMetronomeTiming, ReportsCoincidentIntervalAccent)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 15980u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 2u);
+	EXPECT_EQ(result.onsets[0].offset, 20u);
+	EXPECT_FALSE(result.onsets[0].accent);
+	EXPECT_EQ(result.onsets[1].offset, 20u);
+	EXPECT_TRUE(result.onsets[1].accent);
+}
+
+TEST(NinjamMetronomeTiming, OrdersIntervalAccentBeforeFollowingBeat)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 15980u;
+	input.numFrames = 4096u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 3u);
+	EXPECT_EQ(result.onsets[0].offset, 20u);
+	EXPECT_FALSE(result.onsets[0].accent);
+	EXPECT_EQ(result.onsets[1].offset, 20u);
+	EXPECT_TRUE(result.onsets[1].accent);
+	EXPECT_EQ(result.onsets[2].offset, 4020u);
+	EXPECT_FALSE(result.onsets[2].accent);
+}
+
+TEST(NinjamMetronomeTiming, ConvertsDeviceSamplesToRemoteRate)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 3950u;
+	input.deviceSampleRate = 4000u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 1u);
+	EXPECT_EQ(result.onsets[0].offset, 25u);
+}
+
+TEST(NinjamMetronomeTiming, AdvancesForOutputLatency)
+{
+	auto input = MakeInput();
+	input.intervalPositionSamps = 3900u;
+	input.outputLatencySamps = 100u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 1u);
+	EXPECT_EQ(result.onsets[0].offset, 0u);
+}
+
+TEST(NinjamMetronomeTiming, RejectsInvalidTiming)
+{
+	auto input = MakeInput();
+	input.bpm = 0.0f;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	EXPECT_FALSE(result.valid);
+	EXPECT_EQ(result.onsetCount, 0u);
+}
+
+TEST(NinjamMetronomeTiming, TempoChangeStartsFreshGeneration)
+{
+	auto input = MakeInput();
+	ninjam::NinjamMetronomeTimingState state;
+
+	auto first = ninjam::NinjamMetronomeTiming::Compute(input, state);
+	EXPECT_TRUE(first.generationReset);
+
+	input.intervalPositionSamps = input.numFrames;
+	auto steady = ninjam::NinjamMetronomeTiming::Compute(input, state);
+	EXPECT_FALSE(steady.generationReset);
+
+	input.bpm = 100.0f;
+	input.intervalLengthSamps = 19200u;
+	auto changed = ninjam::NinjamMetronomeTiming::Compute(input, state);
+	EXPECT_TRUE(changed.valid);
+	EXPECT_TRUE(changed.generationReset);
+}

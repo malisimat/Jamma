@@ -99,6 +99,11 @@ void NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
 		sampleRate);
 }
 
+NinjamLiveTiming NinjamController::GetLiveTiming() const noexcept
+{
+	return _session.GetLiveTiming();
+}
+
 bool NinjamController::ConsumeStereoPair(unsigned int outChannelLeft,
 	const float*& left,
 	const float*& right,

@@ -257,6 +257,9 @@
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\NinjamMetronome.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiDevice.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -453,6 +456,9 @@
       <Filter>src\ninjam</Filter>
     </ClInclude>
     <ClInclude Include="src\ninjam\ExportLaneTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h">
       <Filter>src\ninjam</Filter>
     </ClInclude>
     <ClInclude Include="src\io\TextReadWriter.h">
@@ -709,6 +715,9 @@
     <ClCompile Include="src\audio\AudioDevice.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
+    <ClCompile Include="src\audio\NinjamMetronome.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
     <ClCompile Include="src\midi\MidiDevice.cpp">
       <Filter>src\midi</Filter>
     </ClCompile>
@@ -803,6 +812,9 @@
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\ExportLaneTiming.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamMetronomeTiming.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\graphics\Camera.cpp">

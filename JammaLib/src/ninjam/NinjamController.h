@@ -41,6 +41,8 @@ namespace ninjam
 			unsigned int numFrames,
 			unsigned int sampleRate);
 
+		NinjamLiveTiming GetLiveTiming() const noexcept;
+
 		bool ConsumeStereoPair(unsigned int outChannelLeft,
 			const float*& left,
 			const float*& right,

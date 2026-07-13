@@ -320,6 +320,7 @@
     <ClInclude Include="lib\opengl\gl\wglext.h" />
         <ClInclude Include="src\engine\Scene.h" />
     <ClInclude Include="src\audio\AudioHost.h" />
+    <ClInclude Include="src\audio\NinjamMetronome.h" />
     <ClInclude Include="src\io\IoInputSubsystem.h" />
     <ClInclude Include="src\vst\VstEditorWindowManager.h" />
     <ClInclude Include="src\ninjam\NinjamNetworkService.h" />
@@ -328,6 +329,7 @@
     <ClInclude Include="src\ninjam\NinjamConnection.h" />
     <ClInclude Include="src\ninjam\NinjamSession.h" />
     <ClInclude Include="src\ninjam\ExportLaneTiming.h" />
+    <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />
@@ -418,11 +420,13 @@
     <ClCompile Include="src\ninjam\NinjamConnection.cpp" />
     <ClCompile Include="src\ninjam\NinjamSession.cpp" />
     <ClCompile Include="src\ninjam\ExportLaneTiming.cpp" />
+    <ClCompile Include="src\ninjam\NinjamMetronomeTiming.cpp" />
     <ClCompile Include="lib\rtaudio\include\asio.cpp" />
     <ClCompile Include="lib\rtaudio\include\asiodrivers.cpp" />
     <ClCompile Include="lib\rtaudio\include\asiolist.cpp" />
     <ClCompile Include="lib\rtaudio\include\iasiothiscallresolver.cpp" />
     <ClCompile Include="src\audio\AudioDevice.cpp" />
+    <ClCompile Include="src\audio\NinjamMetronome.cpp" />
     <ClCompile Include="src\midi\MidiDevice.cpp" />
     <ClCompile Include="src\midi\MidiRouter.cpp" />
     <ClCompile Include="lib\rtmidi\RtMidi.cpp" />

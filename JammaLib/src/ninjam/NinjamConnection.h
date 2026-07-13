@@ -55,6 +55,16 @@ namespace ninjam
 		std::uint16_t SlotLimit = 0;
 	};
 
+	struct NinjamLiveTiming
+	{
+		unsigned int intervalPositionSamps = 0u;
+		unsigned int intervalLengthSamps = 0u;
+		unsigned int sampleRate = 0u;
+		float bpm = 0.0f;
+		unsigned int bpi = 0u;
+		bool valid = false;
+	};
+
 	class NinjamConnection
 	{
 	public:
@@ -102,6 +112,8 @@ namespace ninjam
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
 			unsigned int sampleRate);
+
+		NinjamLiveTiming GetLiveTiming() const noexcept;
 
 		NinjamRemoteSnapshot Snapshot() const;
 

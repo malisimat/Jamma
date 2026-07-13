@@ -43,6 +43,7 @@ Scene::Scene(SceneParams params,
 	_modeRadio(nullptr),
 	_midiChannelOverrideInput(nullptr),
 	_transportOffsetInput(nullptr),
+	_ninjamMetronomeToggle(nullptr),
 	_globalMidiQuantRadio(nullptr),
 	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
 	_transportOffsetLoopFrac(0.0),
@@ -175,6 +176,21 @@ Scene::Scene(SceneParams params,
 	transportOffsetParams.InitValue = _transportOffsetLoopFrac;
 	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
 	AddChild(_transportOffsetInput);
+
+	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
+	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
+	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
+	metronomeToggleParams.Text = "CLICK";
+	metronomeToggleParams.Position = {
+		transportOffsetParams.Position.X + static_cast<int>(transportOffsetParams.Size.Width) + 8,
+		transportOffsetParams.Position.Y };
+	metronomeToggleParams.ModelPosition = {
+		static_cast<float>(metronomeToggleParams.Position.X),
+		static_cast<float>(metronomeToggleParams.Position.Y),
+		0.0f };
+	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
+	AddChild(_ninjamMetronomeToggle);
 
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
@@ -999,7 +1015,13 @@ ActionResult Scene::OnAction(GuiAction action)
 		}
 	}
 
-	if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+		&& (action.Index == NinjamMetronomeControlIndex))
+	{
+		if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
+			_audioEngine->SetNinjamMetronomeEnabled(value->Value == GuiToggleParams::TOGGLE_ON);
+	}
+	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
 		&& (action.Index == MidiChannelOverrideControlIndex)
 		&& _midiChannelOverrideInput)
 	{
@@ -1196,6 +1218,8 @@ void Scene::InitReceivers()
 		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
 	if (_transportOffsetInput)
 		_transportOffsetInput->SetReceiver(ActionReceiver::shared_from_this());
+	if (_ninjamMetronomeToggle)
+		_ninjamMetronomeToggle->SetReceiver(ActionReceiver::shared_from_this());
 	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
 	if (_remoteTempoDialog)
 		_remoteTempoDialog->SetButtonReceiver(ActionReceiver::shared_from_this());

@@ -499,6 +499,12 @@ void NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,
 			sampleRate);
 }
 
+NinjamLiveTiming NinjamSession::GetLiveTiming() const noexcept
+{
+	NinjamConnectionUse conn(*this);
+	return conn ? conn->GetLiveTiming() : NinjamLiveTiming{};
+}
+
 bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
 	const float*& left,
 	const float*& right,
