@@ -1,7 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <optional>
@@ -268,6 +271,9 @@ namespace engine
 			unsigned int state,
 			const base::Action& action,
 			const std::string& device = "");
+		actions::ActionResult QueueExternalControlAction(bool isActivate,
+			bool isDown,
+			const base::Action& action);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
@@ -283,6 +289,8 @@ namespace engine
 		void AddMidiInputDevice(std::string device);
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		TriggerState GetState() const;
+		bool IsActivateInputDown() const;
+		bool IsDitchInputDown() const;
 		bool IsDitchDown() const;
 		void Reset();
 		std::string Name() const;
@@ -319,6 +327,9 @@ namespace engine
 			bool isActivate,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
+		void _ProcessQueuedExternalControlActions(std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params) noexcept;
+		void _PublishTriggerStateSnapshot() noexcept;
 
 		// Only call from state machine
 		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
@@ -346,9 +357,23 @@ namespace engine
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
+		// External control thread produces edges; the audio thread consumes them.
+		struct ExternalControlAction
+		{
+			bool IsActivate;
+			bool IsDown;
+		};
+		static constexpr std::size_t _ExternalControlActionQueueCapacity = 64u;
+		std::array<ExternalControlAction, _ExternalControlActionQueueCapacity> _externalControlActionQueue{};
+		std::atomic<std::size_t> _externalControlActionHead{ 0u };
+		std::atomic<std::size_t> _externalControlActionTail{ 0u };
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
 		TriggerState _state;
+		std::atomic<std::uint8_t> _publishedTriggerState{ static_cast<std::uint8_t>(TRIGSTATE_DEFAULT) };
+		std::atomic<bool> _publishedActivateInputDown{ false };
+		std::atomic<bool> _publishedDitchInputDown{ false };
+		std::atomic<bool> _publishedTriggerDitchDown{ false };
 		std::string _overdubSourceId;
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
