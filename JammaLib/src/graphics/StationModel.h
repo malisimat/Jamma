@@ -1,12 +1,30 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <vector>
+#include <span>
 #include <tuple>
+#include <vector>
 #include "../gui/GuiModel.h"
 
 namespace graphics
 {
+	struct RingProfilePoint
+	{
+		float Radius;
+		float Y;
+	};
+
+	struct RingOccluderSegment
+	{
+		unsigned int FirstSide;
+		unsigned int SideCount;
+		float InnerRadius;
+		float OuterRadius;
+		float YMin;
+		float YMax;
+	};
+
 	// Procedural "halo deck" geometry for a Station.
 	// Static mesh built once at construction; no per-frame work.
 	// UV layout: x = radialFrac (0..1), y = partKind (0=top,1=bevel,2=side,3=rib).
@@ -76,6 +94,24 @@ namespace graphics
 				float ribInnerRadius, float ribOuterRadius,
 				float ribHeight, float ribHalfWidth);
 
+		// Revolve a profile around the station axis. yOffset anchors the profile
+		// at a cap; invertY mirrors its local Y direction for the lower collar.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildLathedProfileGeometry(unsigned int numSides,
+				std::span<const RingProfilePoint> profile,
+				float yOffset, bool invertY, float partKind);
+
+		// Build raised dark shutter panels over a bright state ring. The panel
+		// endpoints taper over their first and last angular strips.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildOccluderGeometry(unsigned int numSides,
+				std::span<const RingOccluderSegment> segments,
+				float yOffset, bool invertY, float partKind);
+
+		// Build one state-specific shutter layer for the requested cap.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildStateOccluderGeometry(std::uint8_t visualState, bool bottom);
+
 		// Convenience: build all geometry and concatenate into one pair.
 		static std::tuple<std::vector<float>, std::vector<float>>
 			BuildAllGeometry(unsigned int numSides, float radius,
@@ -97,6 +133,24 @@ namespace graphics
 		float _stationLevel;
 		std::uint8_t _stationVisualState;
 		float _stationFallRate;
+		struct RingMesh
+		{
+			std::vector<float> Verts;
+			std::vector<float> Uvs;
+			GLuint VertexArray = 0u;
+			GLuint VertexBuffers[3] = { 0u, 0u, 0u };
+			unsigned int NumTris = 0u;
+		};
+		RingMesh _topRing;
+		RingMesh _bottomRing;
+		std::array<RingMesh, 6u> _topOccluders;
+		std::array<RingMesh, 6u> _bottomOccluders;
+		bool _ringsNeedInitialising;
+		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
+		static void _InitRingMesh(RingMesh& mesh);
+		static void _ReleaseRingMesh(RingMesh& mesh);
+		static void _DrawRingMesh(const RingMesh& mesh);
 		static float _ApplySoftDecay(float current, float target, float fallRate) noexcept;
 	};
 }

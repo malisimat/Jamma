@@ -50,6 +50,16 @@ TEST(StationVisualState, RecordingEndRemainsVisibleUntilTheTakeFinishes)
 	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
 }
 
+TEST(StationVisualState, RecordingEndClearsOnTickWhenNoTakeIsInRecordingTail)
+{
+	auto station = MakeStation("station");
+	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u));
+	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
+
+	station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
+	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+}
+
 TEST(StationVisualState, OverdubAndPunchInTrackTheirOwnTransitions)
 {
 	auto station = MakeStation("station");

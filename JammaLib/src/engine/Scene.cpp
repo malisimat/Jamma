@@ -167,13 +167,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	TriggerParams trigParams;
-	trigParams.Size = { 24, 24 };
-	trigParams.Position = { 6, 6 };	
-	trigParams.Texture = "green";
-	trigParams.TextureRecording = "red";
-	trigParams.TextureDitchDown = "blue";
-	trigParams.TextureOverdubbing = "orange";
-	trigParams.TexturePunchedIn = "purple";
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
@@ -187,9 +180,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	MergeMixBehaviourParams mergeParams;
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
-	std::vector<std::shared_ptr<Trigger>> hudTriggers;
-	hudTriggers.reserve(rigStruct.Triggers.size());
-
 	for (auto& stationStruct : jamStruct.Stations)
 	{
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
@@ -206,7 +196,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
-					hudTriggers.push_back(trigger.value());
 				}
 			}
 
@@ -219,7 +208,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	}
 
 	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), {});
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);

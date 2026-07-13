@@ -17,6 +17,7 @@
 2 quantisation_division MVP Highlight OverlayAlpha
 2 ctrl_handle MVP Color
 2 station MVP ObjectId Highlight StationHover StationLevel
+2 station_ring MVP Highlight StationHover StationLevel
 2 white MVP Highlight
 2 blur
 1 fader_back

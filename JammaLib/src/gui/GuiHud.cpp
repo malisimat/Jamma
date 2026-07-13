@@ -225,9 +225,6 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 			_triggerNames.push_back(trigger->Name());
 		}
 	}
-	if (_triggerNames.empty())
-		_triggerNames = { "TrigA", "TrigB", "TrigC" };
-
 	_RebuildPanels();
 }
 
@@ -325,6 +322,9 @@ void GuiHud::_BuildTopStrip()
 
 void GuiHud::_BuildTriggerRail()
 {
+	if (_triggerNames.empty())
+		return;
+
 	_triggerRail->AddChild(_MakeHeader("Triggers", _RightRailWidth - (_RightRailPadding * 2u)));
 	for (std::size_t i = 0u; i < _triggerNames.size(); ++i)
 	{
