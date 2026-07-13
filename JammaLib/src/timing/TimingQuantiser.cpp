@@ -525,8 +525,8 @@ std::optional<PendingRemoteTempoChange> TimingQuantiser::ProposeRemoteTempoChang
 			snapshot.SampleRate);
 	}
 
-	const auto tempoChanged = (intervalLengthSamps != _remoteMasterLoopSamps)
-		|| (snapshot.SampleRate != _remoteSampleRate);
+	const auto tempoChanged = (intervalLengthSamps != _remoteMasterLoopSamps.load(std::memory_order_acquire))
+		|| (snapshot.SampleRate != _remoteSampleRate.load(std::memory_order_acquire));
 
 	if (!tempoChanged && (_effectiveQuantiseSamps.load(std::memory_order_acquire) != 0u) && _clock->IsQuantisable())
 		return std::nullopt;
@@ -662,7 +662,7 @@ bool TimingQuantiser::ForceQueueCurrentTempoAsPending(bool sendImmediately, unsi
 	_armReclock.store(false, std::memory_order_release);
 	_sendPendingTempoImmediately.store(sendImmediately, std::memory_order_release);
 
-	const auto sampleRate = (sampleRateHint > 0u) ? sampleRateHint : _remoteSampleRate;
+	const auto sampleRate = (sampleRateHint > 0u) ? sampleRateHint : _remoteSampleRate.load(std::memory_order_acquire);
 	_remoteMasterLoopSamps = static_cast<unsigned int>(masterLoopLengthSamps);
 	_remoteSampleRate = sampleRate;
 	const auto timing = TimingFromSeedAndMaster(effectiveQuantiseSamps,
@@ -740,8 +740,8 @@ void TimingQuantiser::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapsh
 	unsigned int audioDeviceSampleRate)
 {
 	const auto pos = snapshot.IntervalPositionSamps;
-	const bool wrapped = (pos < _lastRemoteIntervalPos);
-	_lastRemoteIntervalPos = pos;
+	const bool wrapped = (pos < _lastRemoteIntervalPos.load(std::memory_order_acquire));
+	_lastRemoteIntervalPos.store(pos, std::memory_order_release);
 
 	if (!_hasPendingTempo.load(std::memory_order_acquire))
 		return;
@@ -801,7 +801,7 @@ std::shared_ptr<Timer> TimingQuantiser::Clock() const noexcept
 
 unsigned int TimingQuantiser::RemoteSampleRate() const noexcept
 {
-	return _remoteSampleRate;
+	return _remoteSampleRate.load(std::memory_order_acquire);
 }
 
 bool TimingQuantiser::HasPendingTempo() const noexcept

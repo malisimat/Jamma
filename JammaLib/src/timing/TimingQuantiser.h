@@ -293,9 +293,9 @@ namespace timing
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
-		unsigned int _remoteMasterLoopSamps = 0u;
-		unsigned int _remoteSampleRate = 0u;
-		unsigned int _lastRemoteIntervalPos = 0u;
+		std::atomic_uint _remoteMasterLoopSamps{ 0u };
+		std::atomic_uint _remoteSampleRate{ 0u };
+		std::atomic_uint _lastRemoteIntervalPos{ 0u };
 		bool _seedUsesPowers = true;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 	};
