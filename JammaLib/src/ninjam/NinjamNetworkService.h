@@ -84,6 +84,12 @@ namespace ninjam
 		static bool IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
 			const timing::PendingRemoteTempoChange& rhs) noexcept;
 
+		// True if any non-remote (local) station has at least one loop take.
+		// Used to auto-apply a proposed remote tempo without prompting: with no
+		// local loop content there is nothing that could conflict with the
+		// remote tempo, so there is no meaningful choice for the user to make.
+		static bool _HasAnyLocalLoopContent(const std::vector<std::shared_ptr<engine::Station>>& stations);
+
 		// Ingests the current snapshot into the external transport and applies
 		// wrap-gated phase discipline to the master clock while connected.
 		void _FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,

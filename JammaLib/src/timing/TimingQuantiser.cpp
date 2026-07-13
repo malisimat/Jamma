@@ -128,19 +128,23 @@ void TimingQuantiser::Set(unsigned int samps, utils::Timer::QuantisationType typ
 	_effectiveQuantiseSamps.store(samps, std::memory_order_release);
 }
 
-void TimingQuantiser::Clear(bool clearTapTempo)
+void TimingQuantiser::Clear(bool clearTapTempo, bool preserveRemoteSync)
 {
-	if (_clock)
-		_clock->Clear();
+	if (!preserveRemoteSync)
+	{
+		if (_clock)
+			_clock->Clear();
+		_masterLoopLengthSamps.store(0ul, std::memory_order_release);
+		_effectiveQuantiseSamps.store(0u, std::memory_order_release);
+		_remoteMasterLoopSamps = 0u;
+		_remoteSampleRate = 0u;
+		_lastRemoteIntervalPos = 0u;
+	}
+
 	_masterLoop.reset();
-	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
-	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 	_hasPendingTempo.store(false, std::memory_order_release);
 	_sendPendingTempoImmediately.store(false, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
-	_remoteMasterLoopSamps = 0u;
-	_remoteSampleRate = 0u;
-	_lastRemoteIntervalPos = 0u;
 
 	if (clearTapTempo)
 	{

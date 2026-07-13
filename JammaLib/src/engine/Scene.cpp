@@ -1970,7 +1970,17 @@ void Scene::_EndBackgroundDrag()
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	_quantisation.Clear(clearTapTempo);
+	// Lock-free read of the published transport state (safe from the audio
+	// thread - see ExternalTransport's threading contract). While connected to
+	// a NINJAM session, a scene auto-reset (e.g. ditching the last loop) must
+	// not drop remote-tempo tracking or the clock's remote-derived grain, or
+	// the very next remote snapshot looks like a "new" tempo change and
+	// re-triggers the accept/prompt flow even though nothing actually changed.
+	const auto transportState = _networkService->PublishedTransportState();
+	const auto preserveRemoteSync = transportState
+		&& (transportState->Mode == timing::ExternalTransportMode::Connected);
+
+	_quantisation.Clear(clearTapTempo, preserveRemoteSync);
 	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
 }
 

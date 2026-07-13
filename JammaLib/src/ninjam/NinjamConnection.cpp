@@ -916,7 +916,16 @@ void NinjamConnection::_UpdateSnapshot()
 	snapshot.SampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
 	snapshot.Bpm = _client->GetActualBPM();
 	snapshot.Bpi = _client->GetBPI();
-	snapshot.HasTiming = (snapshot.Bpm > 0.0f) && (snapshot.Bpi > 0) && (snapshot.SampleRate > 0u);
+	// Bounds-check against constants::MinPlausibleNinjamBpm/Bpi rather than a
+	// bare positivity check: njclient briefly reports a nonsensical placeholder
+	// tempo (e.g. bpm=2646, bpi=1) for the short window before the server's
+	// real CONFIG_CHANGE_NOTIFY has been parsed, and that placeholder still
+	// satisfies "> 0".
+	snapshot.HasTiming = (snapshot.Bpm >= constants::MinPlausibleNinjamBpm)
+		&& (snapshot.Bpm <= constants::MaxPlausibleNinjamBpm)
+		&& (snapshot.Bpi >= constants::MinPlausibleNinjamBpi)
+		&& (snapshot.Bpi <= constants::MaxPlausibleNinjamBpi)
+		&& (snapshot.SampleRate > 0u);
 	const auto localUserName = std::string(_client->GetUser() ? _client->GetUser() : "");
 
 	std::set<std::string> activeUsers;

@@ -134,7 +134,16 @@ namespace timing
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		void SetSeedUsesPowers(bool seedUsesPowers) noexcept;
 		void Set(unsigned int samps, utils::Timer::QuantisationType type);
-		void Clear(bool clearTapTempo);
+
+		// preserveRemoteSync: when true (i.e. still connected to a NINJAM session),
+		// leaves the remote-tempo-tracking fields (_remoteMasterLoopSamps,
+		// _remoteSampleRate, _lastRemoteIntervalPos), the effective quantise grain,
+		// _masterLoopLengthSamps, and the clock's own quantisation/seed untouched,
+		// so a scene auto-reset (e.g. ditching the last loop) does not desync from
+		// the remote session or re-trigger a spurious tempo-change prompt. The
+		// local hover/tap-tempo master-loop pointer and pending local-tempo-push
+		// flags are always cleared regardless.
+		void Clear(bool clearTapTempo, bool preserveRemoteSync = false);
 		void ArmReclock();
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 

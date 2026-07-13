@@ -282,8 +282,12 @@ namespace ninjam
 			_joinPushAwaitingOutcome = false;
 		}
 
-		if (!_tempoJoinOptions.PromptBeforeApplyingRemoteTempo)
+		const auto hasLocalContent = _HasAnyLocalLoopContent(stations);
+		if (!_tempoJoinOptions.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
 		{
+			if (!hasLocalContent)
+				std::cout << "[NINJAM] No local loop content - auto-applying remote tempo" << std::endl;
+
 			quantisation.ApplyAcceptedRemoteTempo(proposal.value(), stations);
 			_pendingRemoteTempoPrompt.reset();
 			_ignoredRemoteTempoPrompt.reset();
@@ -308,6 +312,17 @@ namespace ninjam
 				proposal->Bpm,
 				proposal->SampleRate);
 		}
+	}
+
+	bool NinjamNetworkService::_HasAnyLocalLoopContent(const std::vector<std::shared_ptr<Station>>& stations)
+	{
+		for (const auto& station : stations)
+		{
+			if (station && !station->IsRemote() && (station->NumTakes() > 0u))
+				return true;
+		}
+
+		return false;
 	}
 
 	void NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
