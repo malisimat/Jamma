@@ -1037,6 +1037,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_ENDRECORDING);
 		}
 		break;
 	}
@@ -1204,6 +1205,16 @@ ActionResult Station::OnAction(TriggerAction action)
 	return res;
 }
 
+StationVisualState Station::GetVisualState() const noexcept
+{
+	return static_cast<StationVisualState>(_publishedVisualState.load(std::memory_order_acquire));
+}
+
+void Station::_SetVisualState(StationVisualState state) noexcept
+{
+	_publishedVisualState.store(static_cast<std::uint8_t>(state), std::memory_order_release);
+}
+
 void Station::OnTick(Time curTime,
 	unsigned int samps,
 	std::optional<io::UserConfig> cfg,
@@ -1213,11 +1224,25 @@ void Station::OnTick(Time curTime,
 	{
 		trig->OnTick(curTime, samps, cfg, params);
 	}
+
+	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
+	{
+		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
+			[](const std::shared_ptr<LoopTake>& take) {
+				const auto state = take->TakeState();
+				return (LoopTake::STATE_PLAYINGRECORDING == state) ||
+					(LoopTake::STATE_OVERDUBBINGRECORDING == state);
+			});
+
+		if (!isEndingRecording)
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
+	}
 }
 
 void Station::Reset()
 {
 	Jammable::Reset();
+	_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
