@@ -14,6 +14,11 @@ namespace resources
 	class ShaderResource;
 }
 
+namespace engine
+{
+	class Trigger;
+}
+
 namespace gui
 {
 	struct GuiHudParams : public base::GuiElementParams
@@ -46,7 +51,7 @@ namespace gui
 		void SetAudioInputPeaks(const std::vector<float>& peaks, unsigned int numSamps);
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
-			std::vector<std::string> triggerNames);
+			std::vector<std::shared_ptr<engine::Trigger>> triggers);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -97,7 +102,9 @@ namespace gui
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
 			unsigned int width) const;
-		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text, const glm::vec3& tint) const;
+		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
+			const glm::vec3& tint,
+			std::weak_ptr<engine::Trigger> trigger) const;
 
 		std::shared_ptr<GuiStackPanel> _topStrip;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
@@ -108,6 +115,7 @@ namespace gui
 		unsigned int _audioInputCount = 4u;
 		std::vector<std::string> _midiInputNames;
 		std::vector<std::string> _triggerNames;
+		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
 		bool _cableRevealHeld = false;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;

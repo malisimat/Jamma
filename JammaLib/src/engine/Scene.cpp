@@ -166,17 +166,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			hudMidiInputs.push_back(device.Name);
 	}
 
-	std::vector<std::string> hudTriggerNames;
-	hudTriggerNames.reserve(rigStruct.Triggers.size());
-	for (const auto& triggerCfg : rigStruct.Triggers)
-	{
-		if (!triggerCfg.Name.empty())
-			hudTriggerNames.push_back(triggerCfg.Name);
-	}
-
-	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggerNames));
-
 	TriggerParams trigParams;
 	trigParams.Size = { 24, 24 };
 	trigParams.Position = { 6, 6 };	
@@ -198,6 +187,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	MergeMixBehaviourParams mergeParams;
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
+	std::vector<std::shared_ptr<Trigger>> hudTriggers;
+	hudTriggers.reserve(rigStruct.Triggers.size());
 
 	for (auto& stationStruct : jamStruct.Stations)
 	{
@@ -215,6 +206,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					hudTriggers.push_back(trigger.value());
 				}
 			}
 
@@ -225,6 +217,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+
+	if (scene->_hudPanel)
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
@@ -353,6 +348,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	ActionResult res;
 	action.SetActionTime(Timer::GetTime());
 	action.SetUserConfig(_userConfig);
+	action.SetAudioParams(_audioEngine->GetStreamParams());
 	_cursorPos = action.Position;
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
@@ -389,6 +385,10 @@ ActionResult Scene::OnAction(TouchAction action)
 		if (activeElement)
 		{
 			res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			if (res.ResultType == ACTIONRESULT_ACTIVATE)
+				_isSceneReset.store(false, std::memory_order_relaxed);
+			else if (res.ResultType == ACTIONRESULT_DITCH)
+				_ResetIfEmpty();
 
 			if (res.IsEaten)
 			{
@@ -425,6 +425,11 @@ ActionResult Scene::OnAction(TouchAction action)
 		res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
 		if (res.IsEaten)
 		{
+			if (res.ResultType == ACTIONRESULT_ACTIVATE)
+				_isSceneReset.store(false, std::memory_order_relaxed);
+			else if (res.ResultType == ACTIONRESULT_DITCH)
+				_ResetIfEmpty();
+
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 

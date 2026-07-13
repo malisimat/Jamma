@@ -8,6 +8,7 @@
 #include "GuiButton.h"
 #include "GuiLabel.h"
 #include "GlUtils.h"
+#include "../engine/Trigger.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/ResourceLib.h"
@@ -18,6 +19,72 @@ using namespace gui;
 using namespace utils;
 using namespace graphics;
 using namespace resources;
+
+namespace gui
+{
+	class GuiHudTriggerPedal : public base::GuiElement
+	{
+	public:
+		GuiHudTriggerPedal(base::GuiElementParams params,
+			std::weak_ptr<engine::Trigger> trigger,
+			bool isActivate) :
+			GuiElement(params),
+			_trigger(std::move(trigger)),
+			_isActivate(isActivate)
+		{
+		}
+
+		virtual void Draw(base::DrawContext& ctx) override
+		{
+			const auto trigger = _trigger.lock();
+			const bool inputDown = trigger && (_isActivate
+				? trigger->IsActivateInputDown()
+				: trigger->IsDitchInputDown());
+			const auto pointerState = _state;
+			_state = inputDown || pointerState == STATE_DOWN ? STATE_DOWN : pointerState;
+			GuiElement::Draw(ctx);
+			_state = pointerState;
+		}
+
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override
+		{
+			if (!_isEnabled || !_isVisible)
+				return actions::ActionResult::NoAction();
+
+			if ((actions::TouchAction::TOUCH_DOWN == action.State) && HitTest(action.Position))
+			{
+				_state = STATE_DOWN;
+				return _Dispatch(action);
+			}
+
+			if (actions::TouchAction::TOUCH_UP == action.State)
+			{
+				_state = HitTest(action.Position) ? STATE_OVER : STATE_NORMAL;
+				return _Dispatch(action);
+			}
+
+			return actions::ActionResult::NoAction();
+		}
+
+	private:
+		actions::ActionResult _Dispatch(const actions::TouchAction& action)
+		{
+			if (auto trigger = _trigger.lock())
+			{
+				auto result = trigger->QueueExternalControlAction(_isActivate,
+					actions::TouchAction::TOUCH_DOWN == action.State,
+					action);
+				result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
+				return result;
+			}
+
+			return actions::ActionResult::NoAction();
+		}
+
+		std::weak_ptr<engine::Trigger> _trigger;
+		bool _isActivate;
+	};
+}
 
 GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params)
@@ -99,7 +166,7 @@ void GuiHud::SetAudioInputPeaks(const std::vector<float>& peaks, unsigned int nu
 
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
-	std::vector<std::string> triggerNames)
+	std::vector<std::shared_ptr<engine::Trigger>> triggers)
 {
 	_audioInputCount = std::max(1u, audioInputCount);
 
@@ -110,11 +177,15 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 			_midiInputNames.push_back(std::move(name));
 	}
 
+	_triggers.clear();
 	_triggerNames.clear();
-	for (auto& name : triggerNames)
+	for (const auto& trigger : triggers)
 	{
-		if (!name.empty())
-			_triggerNames.push_back(std::move(name));
+		if (trigger && !trigger->Name().empty())
+		{
+			_triggers.push_back(trigger);
+			_triggerNames.push_back(trigger->Name());
+		}
 	}
 	if (_triggerNames.empty())
 		_triggerNames = { "TrigA", "TrigB", "TrigC" };
@@ -221,7 +292,8 @@ void GuiHud::_BuildTriggerRail()
 	{
 		const float hue = static_cast<float>(i % 3u) / 3.0f;
 		auto tint = glm::vec3(0.40f + 0.10f * hue, 0.36f + 0.08f * hue, 0.34f + 0.06f * hue);
-		auto button = _MakeTriggerButton(_triggerNames[i], tint);
+		auto button = _MakeTriggerButton(_triggerNames[i], tint,
+			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
 		_triggerButtons.push_back(button);
 		_triggerRail->AddChild(button);
 	}
@@ -558,7 +630,9 @@ std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 	return button;
 }
 
-std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, const glm::vec3& tint) const
+std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
+	const glm::vec3& tint,
+	std::weak_ptr<engine::Trigger> trigger) const
 {
 	auto buttonParams = GuiButtonParams::PanelButton(_TriggerButtonWidth);
 	buttonParams.Texture = "trigger_back";
@@ -585,7 +659,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, c
 	activateParams.DownTexture = "trigger_activate_down";
 	activateParams.OutTexture = "trigger_activate_down_out";
 	activateParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<base::GuiElement>(activateParams));
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true));
 
 	base::GuiElementParams ditchParams;
 	ditchParams.Position = { pedalPosX + pedalSizeW + socketPadding, pedalPosY };
@@ -596,7 +670,7 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, c
 	ditchParams.DownTexture = "trigger_ditch_down";
 	ditchParams.OutTexture = "trigger_ditch_down_out";
 	ditchParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<base::GuiElement>(ditchParams));
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false));
 
 	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 12u);
 	const int approxCharWidth = 8;

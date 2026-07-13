@@ -268,6 +268,57 @@ TEST(Trigger, DitchesLoop) {
 	ASSERT_TRUE(receiver->GetLastMatched());
 }
 
+TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	base::Action action;
+
+	auto activateDown = trigger->QueueExternalControlAction(true, true, action);
+	ASSERT_TRUE(activateDown.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, activateDown.ResultType);
+	ASSERT_TRUE(receiver->Actions().empty());
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+	ASSERT_TRUE(trigger->IsActivateInputDown());
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+
+	auto ditchDown = trigger->QueueExternalControlAction(false, true, action);
+	ASSERT_TRUE(ditchDown.IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->IsDitchDown());
+	ASSERT_TRUE(trigger->IsDitchInputDown());
+
+	auto ditchUp = trigger->QueueExternalControlAction(false, false, action);
+	ASSERT_TRUE(ditchUp.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_DITCH, ditchUp.ResultType);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
+	ASSERT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+	ASSERT_FALSE(trigger->IsDitchInputDown());
+	ASSERT_FALSE(trigger->IsDitchDown());
+}
+
+TEST(Trigger, ResetClearsPublishedDitchState) {
+	auto trigger = MakeSharedDefaultTrigger();
+	base::Action action;
+
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->IsDitchDown());
+
+	trigger->Reset();
+
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+	ASSERT_FALSE(trigger->IsDitchInputDown());
+	ASSERT_FALSE(trigger->IsDitchDown());
+}
+
 TEST(Trigger, RecordsTwoLoops) {
 	auto receiver = std::make_shared<MockedTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
