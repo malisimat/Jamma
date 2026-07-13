@@ -9,6 +9,7 @@ out vec4 ColorOUT;
 
 uniform float Highlight;
 uniform float StationHover;
+uniform vec3 StationStateColor;
 
 // uv.x = radial fraction on top/bevel, vertical fraction on side (0=bottom,1=top)
 // uv.y = part kind:  0=deck-top, 1=bevel, 2=side
@@ -41,6 +42,10 @@ void main()
 
 		vec3 lowMid = mix(lowHue, midHue, yellowToOrange);
 		base = mix(lowMid, highHue, orangeToRed);
+	}
+	else if (partKind < 0.5)
+	{
+		base = StationStateColor;
 	}
 
 	// -- cheap normal-based diffuse (single overhead light) --
