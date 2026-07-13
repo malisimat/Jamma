@@ -7,8 +7,8 @@ using namespace audio;
 
 void NinjamMetronome::Configure(unsigned int sampleRate)
 {
-	_normalTable = _BuildTable(sampleRate, 8.0f, 0.12589254f);
-	_accentTable = _BuildTable(sampleRate, 12.0f, 0.19952623f);
+	_normalTable = _BuildTable(sampleRate, 8.0f, 0.12589254f, 1.0f);
+	_accentTable = _BuildTable(sampleRate, 14.0f, 0.25118864f, 1.35f);
 	Reset();
 }
 
@@ -48,7 +48,10 @@ void NinjamMetronome::Mix(float* interleavedOutput,
 	}
 }
 
-std::vector<float> NinjamMetronome::_BuildTable(unsigned int sampleRate, float durationMs, float gain)
+std::vector<float> NinjamMetronome::_BuildTable(unsigned int sampleRate,
+	float durationMs,
+	float gain,
+	float frequencyScale)
 {
 	if (sampleRate == 0u)
 		return {};
@@ -64,11 +67,11 @@ std::vector<float> NinjamMetronome::_BuildTable(unsigned int sampleRate, float d
 		const auto attackPhase = std::min(1.0f, phase * 20.0f);
 		const auto envelope = 0.5f - 0.5f * std::cos(pi * attackPhase);
 		const auto decay = (1.0f - phase) * (1.0f - phase);
-		const auto body = 0.58f * std::sin(2.0f * pi * 983.0f * time)
-			+ 0.27f * std::sin(2.0f * pi * 1437.0f * time)
-			+ 0.15f * std::sin(2.0f * pi * 2179.0f * time);
-		const auto ring = 0.25f * std::sin(2.0f * pi * 3911.0f * time)
-			* std::sin(2.0f * pi * 587.0f * time);
+		const auto body = 0.58f * std::sin(2.0f * pi * 983.0f * frequencyScale * time)
+			+ 0.27f * std::sin(2.0f * pi * 1437.0f * frequencyScale * time)
+			+ 0.15f * std::sin(2.0f * pi * 2179.0f * frequencyScale * time);
+		const auto ring = 0.25f * std::sin(2.0f * pi * 3911.0f * frequencyScale * time)
+			* std::sin(2.0f * pi * 587.0f * frequencyScale * time);
 		table[sample] = gain * envelope * decay * (body + ring);
 	}
 

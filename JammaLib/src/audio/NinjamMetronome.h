@@ -19,7 +19,10 @@ namespace audio
 		const std::vector<float>& AccentTable() const noexcept { return _accentTable; }
 
 	private:
-		static std::vector<float> _BuildTable(unsigned int sampleRate, float durationMs, float gain);
+		static std::vector<float> _BuildTable(unsigned int sampleRate,
+			float durationMs,
+			float gain,
+			float frequencyScale);
 		void _MixTable(float* interleavedOutput,
 			unsigned int numOutputChannels,
 			unsigned int sampleOffset,

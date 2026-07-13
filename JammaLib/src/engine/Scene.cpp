@@ -181,6 +181,8 @@ Scene::Scene(SceneParams params,
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "CLICK";
+	metronomeToggleParams.Size = { 80, 64 };
+	metronomeToggleParams.MinSize = { 80, 64 };
 	metronomeToggleParams.Position = {
 		transportOffsetParams.Position.X + static_cast<int>(transportOffsetParams.Size.Width) + 8,
 		transportOffsetParams.Position.Y };
