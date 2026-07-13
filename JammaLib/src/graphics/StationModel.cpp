@@ -458,6 +458,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	const glm::vec3 stationStateColors[] = {
 		{ 0.30f, 0.90f, 0.38f },
 		{ 0.94f, 0.20f, 0.22f },
+		{ 0.96f, 0.82f, 0.20f },
 		{ 0.24f, 0.68f, 0.98f },
 		{ 0.95f, 0.54f, 0.16f },
 		{ 0.70f, 0.30f, 0.92f }

@@ -909,7 +909,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
-			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
+			_SetVisualState(StationVisualState::STATIONSTATE_ENDRECORDING);
 		}
 		break;
 	}
@@ -1085,6 +1085,19 @@ void Station::OnTick(Time curTime,
 	for (auto& trig : _triggers)
 	{
 		trig->OnTick(curTime, samps, cfg, params);
+	}
+
+	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
+	{
+		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
+			[](const std::shared_ptr<LoopTake>& take) {
+				const auto state = take->TakeState();
+				return (LoopTake::STATE_PLAYINGRECORDING == state) ||
+					(LoopTake::STATE_OVERDUBBINGRECORDING == state);
+			});
+
+		if (!isEndingRecording)
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 	}
 }
 

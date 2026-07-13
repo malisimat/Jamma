@@ -39,7 +39,7 @@ TEST(StationVisualState, StartsDefault)
 	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, station->GetVisualState());
 }
 
-TEST(StationVisualState, RecordingEndsInPlaying)
+TEST(StationVisualState, RecordingEndRemainsVisibleUntilTheTakeFinishes)
 {
 	auto station = MakeStation("station");
 
@@ -47,7 +47,7 @@ TEST(StationVisualState, RecordingEndsInPlaying)
 	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, station->GetVisualState());
 
 	station->OnAction(MakeTriggerAction(TriggerAction::TRIGGER_REC_END, 64u));
-	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+	EXPECT_EQ(StationVisualState::STATIONSTATE_ENDRECORDING, station->GetVisualState());
 }
 
 TEST(StationVisualState, OverdubAndPunchInTrackTheirOwnTransitions)

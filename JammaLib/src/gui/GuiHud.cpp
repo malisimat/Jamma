@@ -51,7 +51,7 @@ namespace gui
 			switch (trigger->GetState())
 			{
 			case engine::TRIGSTATE_RECORDING: return { 0.94f, 0.20f, 0.22f };
-			case engine::TRIGSTATE_OVERDUBBING: return { 0.95f, 0.54f, 0.16f };
+			case engine::TRIGSTATE_OVERDUBBING: return { 0.95f, 0.94f, 0.07f };
 			case engine::TRIGSTATE_PUNCHEDIN: return { 0.70f, 0.30f, 0.92f };
 			default: return { 0.30f, 0.90f, 0.38f };
 			}
