@@ -2108,8 +2108,13 @@ void LoopTake::_UpdateMidiModels(bool force)
 	if (_midiOverdubSession.Active)
 		_RefreshMidiOverdubPreview(displayLength);
 
-	for (auto& midiLoop : _midiLoops)
+	auto snapshot = _MidiLoopSnapshotState();
+	if (!snapshot)
+		return;
+
+	for (const auto& weakLoop : *snapshot)
 	{
+		auto midiLoop = weakLoop.lock();
 		if (midiLoop)
 			midiLoop->QueueModelUpdateFromEvents(displayLength, force);
 	}
@@ -2118,9 +2123,13 @@ void LoopTake::_UpdateMidiModels(bool force)
 void LoopTake::_UpdateMidiModelRotation()
 {
 	const auto loopIndexFrac = LoopIndexFrac();
+	auto snapshot = _MidiLoopSnapshotState();
+	if (!snapshot)
+		return;
 
-	for (auto& midiLoop : _midiLoops)
+	for (const auto& weakLoop : *snapshot)
 	{
+		auto midiLoop = weakLoop.lock();
 		if (!midiLoop)
 			continue;
 
