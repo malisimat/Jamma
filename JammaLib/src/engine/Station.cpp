@@ -212,13 +212,18 @@ void Station::Draw3d(base::DrawContext& ctx,
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
 		const auto stationPeak = _masterMixer ? _masterMixer->VuPeakLevel() : 0.0f;
-		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak);
+		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak,
+			static_cast<std::uint8_t>(GetVisualState()));
 		_stationModel->Draw3d(ctx, 1, pass);
 		glCtx.PopMvp();
 	}
 
-	for (auto& child : _children)
-		child->Draw3d(ctx, 1, pass);
+	auto children = _children;
+	for (auto& child : children)
+	{
+		if (child)
+			child->Draw3d(ctx, 1, pass);
+	}
 
 	if ((_quantisationModel || _quantisationDivisionModel) && (base::PASS_SCENE == pass))
 	{
