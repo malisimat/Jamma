@@ -218,12 +218,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 		glCtx.PopMvp();
 	}
 
-	auto children = _children;
-	for (auto& child : children)
-	{
-		if (child)
-			child->Draw3d(ctx, 1, pass);
-	}
+	for (auto& child : _children)
+		child->Draw3d(ctx, 1, pass);
 
 	if ((_quantisationModel || _quantisationDivisionModel) && (base::PASS_SCENE == pass))
 	{
