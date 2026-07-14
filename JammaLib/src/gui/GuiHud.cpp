@@ -451,7 +451,7 @@ void GuiHud::_RebuildCableVertices()
 	{
 		const auto triggerIndex = sourceIndex % _triggerButtons.size();
 		_AppendCurve(_ButtonCenter(_sourceButtons[sourceIndex]),
-			_ButtonCenter(_triggerButtons[triggerIndex]),
+			_TriggerAnchorFromTopLeft(_triggerButtons[triggerIndex], 7, 12),
 			inputToTriggerColor);
 	}
 
@@ -463,7 +463,7 @@ void GuiHud::_RebuildCableVertices()
 		if (anchor.screenPos.X < -1000)
 			continue;
 		_AppendStationCurve(
-			_ButtonRightEdge(_triggerButtons[i]),
+			_TriggerAnchorFromBottomLeft(_triggerButtons[i], 7, 12),
 			anchor.screenPos,
 			triggerToStationColor);
 	}
@@ -482,14 +482,35 @@ utils::Position2d GuiHud::_ButtonCenter(const std::shared_ptr<GuiButton>& button
 	};
 }
 
-utils::Position2d GuiHud::_ButtonRightEdge(const std::shared_ptr<GuiButton>& button) const
+utils::Position2d GuiHud::_TriggerAnchorFromTopLeft(const std::shared_ptr<GuiButton>& button,
+	int offsetX,
+	int offsetFromTopY) const
 {
 	const auto rootPos = GlobalPosition();
 	const auto buttonPos = button->GlobalPosition();
 	const auto buttonSize = button->GetSize();
+	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
+	const int yFromBottom = std::clamp(static_cast<int>(buttonSize.Height) - offsetFromTopY,
+		0,
+		static_cast<int>(buttonSize.Height));
 	return {
-		buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width),
-		buttonPos.Y - rootPos.Y + static_cast<int>(buttonSize.Height / 2u)
+		buttonPos.X - rootPos.X + clampedX,
+		buttonPos.Y - rootPos.Y + yFromBottom
+	};
+}
+
+utils::Position2d GuiHud::_TriggerAnchorFromBottomLeft(const std::shared_ptr<GuiButton>& button,
+	int offsetX,
+	int offsetFromBottomY) const
+{
+	const auto rootPos = GlobalPosition();
+	const auto buttonPos = button->GlobalPosition();
+	const auto buttonSize = button->GetSize();
+	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
+	const int clampedY = std::clamp(offsetFromBottomY, 0, static_cast<int>(buttonSize.Height));
+	return {
+		buttonPos.X - rootPos.X + clampedX,
+		buttonPos.Y - rootPos.Y + clampedY
 	};
 }
 

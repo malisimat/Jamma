@@ -387,9 +387,15 @@ void Trigger::_ProcessQueuedExternalControlActions(std::optional<io::UserConfig>
 	const auto action = _externalControlActionQueue[head];
 	_externalControlActionHead.store((head + 1u) % _ExternalControlActionQueueCapacity, std::memory_order_release);
 	if (action.IsActivate)
+	{
 		_isLastActivateDownRaw = action.IsDown;
+		_isLastActivateDown = action.IsDown;
+	}
 	else
+	{
 		_isLastDitchDownRaw = action.IsDown;
+		_isLastDitchDown = action.IsDown;
+	}
 	StateMachine(action.IsDown, action.IsActivate, cfg, params);
 }
 

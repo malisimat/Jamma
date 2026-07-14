@@ -66,12 +66,12 @@ namespace gui
 		static constexpr unsigned int _TopStripSpacing = 10u;
 		static constexpr unsigned int _SourceButtonWidth = 118u;
 		static constexpr unsigned int _SourceButtonHeight = 34u;
-		static constexpr unsigned int _RightRailWidth = 236u;
+		static constexpr unsigned int _RightRailWidth = 134u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
-		static constexpr unsigned int _RightRailPadding = 12u;
+		static constexpr unsigned int _RightRailPadding = 34u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
-		static constexpr unsigned int _TriggerButtonWidth = 204u;
+		static constexpr unsigned int _TriggerButtonWidth = 120u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
 
 		void _BuildPanels();
@@ -84,7 +84,12 @@ namespace gui
 		void _DrawCables(base::DrawContext& ctx);
 		void _RebuildCableVertices();
 		utils::Position2d _ButtonCenter(const std::shared_ptr<GuiButton>& button) const;
-		utils::Position2d _ButtonRightEdge(const std::shared_ptr<GuiButton>& button) const;
+		utils::Position2d _TriggerAnchorFromTopLeft(const std::shared_ptr<GuiButton>& button,
+			int offsetX,
+			int offsetFromTopY) const;
+		utils::Position2d _TriggerAnchorFromBottomLeft(const std::shared_ptr<GuiButton>& button,
+			int offsetX,
+			int offsetFromBottomY) const;
 		void _AppendCurve(const utils::Position2d& start,
 			const utils::Position2d& end,
 			const glm::vec4& color);

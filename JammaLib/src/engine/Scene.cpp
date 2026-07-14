@@ -522,6 +522,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto view = _View();
 	_viewProj = projection * view;
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(view));
+	_UpdateHudStationAnchors();
 
 	if (PASS_SCENE == pass)
 		glEnable(GL_DEPTH_TEST);
