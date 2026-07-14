@@ -1,6 +1,4 @@
 #include "Trigger.h"
-#include "glm/glm.hpp"
-#include "glm/ext.hpp"
 
 #include <cstdint>
 
@@ -11,11 +9,7 @@ using actions::ActionResult;
 using actions::KeyAction;
 using actions::TriggerAction;
 using actions::DelayedAction;
-using graphics::GlDrawContext;
-using graphics::Image;
-using graphics::ImageParams;
 using audio::AudioMixer;
-using resources::ResourceLib;
 
 namespace
 {
@@ -76,7 +70,6 @@ namespace
 }
 
 Trigger::Trigger(TriggerParams trigParams) :
-	GuiElement(trigParams),
 	_name(trigParams.Name),
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
@@ -92,10 +85,6 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_isLastActivateDownRaw(false),
 	_isLastDitchDownRaw(false),
 	_recordSampCount(0),
-	_textureRecording(ImageParams(DrawableParams{ trigParams.TextureRecording }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
 	_loopTakeHistory({}),
 	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
 	_delayedActions({}),
@@ -209,17 +198,8 @@ audio::AudioMixerParams Trigger::GetOverdubMixerParams(std::vector<unsigned int>
 	return mixerParams;
 }
 
-utils::Position2d Trigger::Position() const
-{
-	auto pos = ModelPosition();
-	return { (int)round(pos.X), (int)round(pos.Y) };
-}
-
 ActionResult Trigger::OnAction(KeyAction action)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
 	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1u : 0u;
 	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
@@ -263,9 +243,6 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 	const base::Action& action,
 	const std::string& device)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;
@@ -298,9 +275,6 @@ ActionResult Trigger::QueueExternalControlAction(bool isActivate,
 	bool isDown,
 	const base::Action&)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
 	const auto tail = _externalControlActionTail.load(std::memory_order_relaxed);
 	const auto head = _externalControlActionHead.load(std::memory_order_acquire);
 	const auto nextTail = (tail + 1u) % _ExternalControlActionQueueCapacity;
@@ -405,44 +379,6 @@ void Trigger::_PublishTriggerStateSnapshot() noexcept
 	_publishedDitchInputDown.store(_isLastDitchDownRaw, std::memory_order_release);
 	_publishedTriggerDitchDown.store(_isDitchDown, std::memory_order_release);
 	_publishedTriggerState.store(static_cast<std::uint8_t>(_state), std::memory_order_release);
-}
-
-void Trigger::Draw(base::DrawContext& ctx)
-{
-	const auto state = GetState();
-	const bool ditchDown = IsDitchDown();
-	if (TRIGSTATE_DEFAULT == state)
-	{
-		GuiElement::Draw(ctx);
-		return;
-	}
-
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	if (ditchDown)
-		_textureDitchDown.Draw(ctx);
-	else
-	{
-		switch (state)
-		{
-		case TRIGSTATE_RECORDING:
-			_textureRecording.Draw(ctx);
-			break;
-		case TRIGSTATE_OVERDUBBING:
-			_textureOverdubbing.Draw(ctx);
-			break;
-		case TRIGSTATE_PUNCHEDIN:
-			_texturePunchedIn.Draw(ctx);
-			break;
-		}
-	}
-
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
 }
 
 void Trigger::AddBinding(DualBinding activate, DualBinding ditch)
@@ -1236,26 +1172,6 @@ unsigned int Trigger::CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg
 		return 0u;
 
 	return cfg.value().TriggerLoopAlignmentSamps();
-}
-
-void Trigger::_InitResources(ResourceLib& resourceLib, bool forceInit)
-{
-	_textureRecording.InitResources(resourceLib, forceInit);
-	_textureDitchDown.InitResources(resourceLib, forceInit);
-	_textureOverdubbing.InitResources(resourceLib, forceInit);
-	_texturePunchedIn.InitResources(resourceLib, forceInit);
-
-	GuiElement::_InitResources(resourceLib, forceInit);
-}
-
-void Trigger::_ReleaseResources()
-{
-	GuiElement::_ReleaseResources();
-
-	_textureRecording.ReleaseResources();
-	_textureDitchDown.ReleaseResources();
-	_textureOverdubbing.ReleaseResources();
-	_texturePunchedIn.ReleaseResources();
 }
 
 void Trigger::_UpdateBehaviour()

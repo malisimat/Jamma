@@ -1266,12 +1266,6 @@ void Station::Reset()
 	_loopTakes.clear();
 	_PublishLoopTakeSnapshot();
 
-	for (auto& trigger : _triggers)
-	{
-		auto child = std::find(_children.begin(), _children.end(), trigger);
-		if (_children.end() != child)
-			_children.erase(child);
-	}
 	_triggers.clear();
 }
 
@@ -1328,7 +1322,6 @@ void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 	trigger->SetReceiver(ActionReceiver::shared_from_this());
 
 	_triggers.push_back(trigger);
-	_children.push_back(trigger);
 }
 
 unsigned int Station::NumTakes() const

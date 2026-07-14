@@ -396,13 +396,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	hudTriggers.reserve(rigStruct.Triggers.size());
 
 	TriggerParams trigParams;
-	trigParams.Size = { 24, 24 };
-	trigParams.Position = { 6, 6 };	
-	trigParams.Texture = "green";
-	trigParams.TextureRecording = "red";
-	trigParams.TextureDitchDown = "blue";
-	trigParams.TextureOverdubbing = "orange";
-	trigParams.TexturePunchedIn = "purple";
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;

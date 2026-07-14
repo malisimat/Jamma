@@ -489,24 +489,24 @@ void StationModel::SetStationState(const std::vector<unsigned int>& stationGloba
 		bool picking,
 		float level,
 		std::uint8_t visualState)
-	{
-		_stationGlobalId = stationGlobalId;
-		_stationSelected = selected;
-		_stationPicking = picking;
-		_stationVisualState = visualState;
-		const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
-		const auto decayRate = std::max(_stationFallRate, 0.0f);
-		_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
+{
+	_stationGlobalId = stationGlobalId;
+	_stationSelected = selected;
+	_stationPicking = picking;
+	_stationVisualState = visualState;
+	const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
+	const auto decayRate = std::max(_stationFallRate, 0.0f);
+	_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
 }
 
 void StationModel::SetParams(float fallRate) noexcept
-	{
-		_stationFallRate = std::max(fallRate, 0.0f);
-	}
+{
+	_stationFallRate = std::max(fallRate, 0.0f);
+}
 
-	void StationModel::ResetStationLevel() noexcept
-	{
-		_stationLevel = 0.0f;
+void StationModel::ResetStationLevel() noexcept
+{
+	_stationLevel = 0.0f;
 }
 
 float StationModel::_ApplySoftDecay(float current, float target, float fallRate) noexcept

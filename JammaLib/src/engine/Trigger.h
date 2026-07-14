@@ -8,8 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include "ActionReceiver.h"
-#include "GuiElement.h"
+#include "ActionSender.h"
 #include "Tickable.h"
 #include "../utils/Timer.h"
 #include "../midi/MidiEvent.h"
@@ -206,30 +205,14 @@ namespace engine
 		bool _isDown;
 	};
 
-	class TriggerParams :
-		public base::GuiElementParams
+	struct TriggerParams
 	{
-	public:
-		TriggerParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-			SizeableParams{ 1,1 },
-			"",
-			"",
-			"",
-			{})
-		{};
-
-	public:
+		unsigned int Index = 0u;
 		std::string Name;
 		std::vector<DualBinding> Activate;
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
-		std::string TextureRecording;
-		std::string TextureDitchDown;
-		std::string TextureOverdubbing;
-		std::string TexturePunchedIn;
 		unsigned int DebounceMs = 0u;
 	};
 
@@ -249,7 +232,7 @@ namespace engine
 	
 	class Trigger :
 		public base::Tickable,
-		public base::GuiElement
+		public base::ActionSender
 	{
 	public:
 		Trigger(TriggerParams trigParams);
@@ -262,8 +245,7 @@ namespace engine
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
 		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
-		virtual	utils::Position2d Position() const override;
-		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		actions::ActionResult OnAction(actions::KeyAction action);
 		actions::ActionResult OnEvent(const midi::MidiEvent& event,
 			const base::Action& action);
 		actions::ActionResult OnEvent(TriggerSource source,
@@ -278,7 +260,6 @@ namespace engine
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) override;
-		virtual void Draw(base::DrawContext& ctx) override;
 
 		void AddBinding(DualBinding activate, DualBinding ditch);
 		void RemoveBinding(DualBinding activate, DualBinding ditch);
@@ -302,9 +283,6 @@ namespace engine
 			unsigned int destChannel);
 
 	protected:
-		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
-		virtual void _ReleaseResources() override;
-
 		void _UpdateBehaviour();
 
 	private:
@@ -386,10 +364,6 @@ namespace engine
 		bool _isLastDitchDown;
 		bool _isLastActivateDownRaw;
 		bool _isLastDitchDownRaw;
-		graphics::Image _textureRecording;
-		graphics::Image _textureDitchDown;
-		graphics::Image _textureOverdubbing;
-		graphics::Image _texturePunchedIn;
 		std::vector<TriggerTake> _loopTakeHistory;
 		std::vector<actions::DelayedAction> _delayedActions;
 		std::vector<DelayedTriggerAction> _delayedTriggerActions;
