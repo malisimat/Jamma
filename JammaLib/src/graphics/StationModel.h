@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <span>
 #include <tuple>
@@ -13,16 +12,6 @@ namespace graphics
 	{
 		float Radius;
 		float Y;
-	};
-
-	struct RingOccluderSegment
-	{
-		unsigned int FirstSide;
-		unsigned int SideCount;
-		float InnerRadius;
-		float OuterRadius;
-		float YMin;
-		float YMax;
 	};
 
 	// Procedural "halo deck" geometry for a Station.
@@ -99,18 +88,14 @@ namespace graphics
 		static std::tuple<std::vector<float>, std::vector<float>>
 			BuildLathedProfileGeometry(unsigned int numSides,
 				std::span<const RingProfilePoint> profile,
-				float yOffset, bool invertY, float partKind);
+				float yOffset, bool invertY, float partKind,
+				float profileScale = 1.0f);
 
-		// Build raised dark shutter panels over a bright state ring. The panel
-		// endpoints taper over their first and last angular strips.
+		// Build the upper and lower closed-prism templates used by every
+		// instanced state-ring occluder segment.
 		static std::tuple<std::vector<float>, std::vector<float>>
-			BuildOccluderGeometry(unsigned int numSides,
-				std::span<const RingOccluderSegment> segments,
-				float yOffset, bool invertY, float partKind);
-
-		// Build one state-specific shutter layer for the requested cap.
-		static std::tuple<std::vector<float>, std::vector<float>>
-			BuildStateOccluderGeometry(std::uint8_t visualState, bool bottom);
+			BuildOccluderPrismGeometry(float innerRadius, float outerRadius,
+				float partKind);
 
 		// Convenience: build all geometry and concatenate into one pair.
 		static std::tuple<std::vector<float>, std::vector<float>>
@@ -143,14 +128,14 @@ namespace graphics
 		};
 		RingMesh _topRing;
 		RingMesh _bottomRing;
-		std::array<RingMesh, 6u> _topOccluders;
-		std::array<RingMesh, 6u> _bottomOccluders;
+		RingMesh _ringOccluder;
 		bool _ringsNeedInitialising;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		static void _InitRingMesh(RingMesh& mesh);
 		static void _ReleaseRingMesh(RingMesh& mesh);
 		static void _DrawRingMesh(const RingMesh& mesh);
+		static void _DrawRingOccluder(const RingMesh& mesh);
 		static float _ApplySoftDecay(float current, float target, float fallRate) noexcept;
 	};
 }

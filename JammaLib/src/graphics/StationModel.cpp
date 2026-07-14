@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <algorithm>
-#include <array>
 
 #include "../../include/Constants.h"
 #include "../utils/VecUtils.h"
@@ -36,9 +35,10 @@ namespace
 	constexpr float UV_STATE_RING_DARK = 5.0f;
 
 	constexpr unsigned int StateRingSides = 64u;
-	constexpr float StateRingInnerRadius = 9.3f;
-	constexpr float StateRingOuterRadius = 15.8f;
-	constexpr float StateRingOccluderLift = 0.55f;
+	constexpr unsigned int StateRingOccluderInstances = 20u;
+	constexpr float StateRingScale = 5.0f;
+	constexpr float StateRingOccluderInnerRadius = 9.0f;
+	constexpr float StateRingOccluderOuterRadius = 17.0f;
 	constexpr float StateRingTopY = -2.0f;
 	constexpr float StateRingBottomY = -(2.0f * BevelHeight + SideHeight) + 2.0f;
 
@@ -50,52 +50,6 @@ namespace
 		{ 9.30f, 0.00f }, { 11.60f, 1.10f }, { 16.60f, 3.20f },
 		{ 16.60f, 8.20f }, { 15.30f, 12.40f }, { 12.00f, 17.50f },
 		{ 10.20f, 19.00f }
-	};
-
-	constexpr RingOccluderSegment DefaultSegments[] = {
-		{ 0u, 4u, 11.0f, 16.1f, -11.5f, -4.0f }, { 8u, 4u, 11.0f, 16.1f, -11.5f, -4.0f },
-		{ 16u, 4u, 11.0f, 16.1f, -11.5f, -4.0f }, { 24u, 4u, 11.0f, 16.1f, -11.5f, -4.0f },
-		{ 32u, 4u, 11.0f, 16.1f, -11.5f, -4.0f }, { 40u, 4u, 11.0f, 16.1f, -11.5f, -4.0f },
-		{ 48u, 4u, 11.0f, 16.1f, -11.5f, -4.0f }, { 56u, 4u, 11.0f, 16.1f, -11.5f, -4.0f }
-	};
-	constexpr RingOccluderSegment RecordingSegments[] = {
-		{ 0u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 4u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 8u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 12u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 16u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 20u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 24u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 28u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 32u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 36u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 40u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 44u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 48u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 52u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 56u, 2u, 12.0f, 16.1f, -11.0f, -4.5f }, { 60u, 2u, 12.0f, 16.1f, -11.0f, -4.5f },
-		{ 3u, 1u, 13.2f, 15.0f, -10.0f, -5.5f }, { 19u, 1u, 13.2f, 15.0f, -10.0f, -5.5f },
-		{ 35u, 1u, 13.2f, 15.0f, -10.0f, -5.5f }, { 51u, 1u, 13.2f, 15.0f, -10.0f, -5.5f }
-	};
-	constexpr RingOccluderSegment EndRecordingSegments[] = {
-		{ 0u, 8u, 11.2f, 16.1f, -12.0f, -4.0f }, { 16u, 8u, 11.2f, 16.1f, -12.0f, -4.0f },
-		{ 32u, 8u, 11.2f, 16.1f, -12.0f, -4.0f }, { 48u, 8u, 11.2f, 16.1f, -12.0f, -4.0f },
-		{ 6u, 2u, 12.0f, 15.5f, -5.5f, -3.5f }, { 22u, 2u, 12.0f, 15.5f, -5.5f, -3.5f },
-		{ 38u, 2u, 12.0f, 15.5f, -5.5f, -3.5f }, { 54u, 2u, 12.0f, 15.5f, -5.5f, -3.5f }
-	};
-	constexpr RingOccluderSegment PlayingSegments[] = {
-		{ 0u, 5u, 11.4f, 16.1f, -12.0f, -5.0f }, { 11u, 5u, 11.4f, 16.1f, -11.0f, -4.0f },
-		{ 22u, 5u, 11.4f, 16.1f, -12.0f, -5.0f }, { 33u, 5u, 11.4f, 16.1f, -11.0f, -4.0f },
-		{ 44u, 5u, 11.4f, 16.1f, -12.0f, -5.0f }, { 55u, 5u, 11.4f, 16.1f, -11.0f, -4.0f },
-		{ 5u, 1u, 13.0f, 15.0f, -8.0f, -4.0f }, { 27u, 1u, 13.0f, 15.0f, -8.0f, -4.0f },
-		{ 49u, 1u, 13.0f, 15.0f, -8.0f, -4.0f }
-	};
-	constexpr RingOccluderSegment OverdubbingSegments[] = {
-		{ 0u, 5u, 11.3f, 16.1f, -12.0f, -8.0f }, { 8u, 5u, 11.3f, 16.1f, -7.5f, -3.5f },
-		{ 16u, 5u, 11.3f, 16.1f, -12.0f, -8.0f }, { 24u, 5u, 11.3f, 16.1f, -7.5f, -3.5f },
-		{ 32u, 5u, 11.3f, 16.1f, -12.0f, -8.0f }, { 40u, 5u, 11.3f, 16.1f, -7.5f, -3.5f },
-		{ 48u, 5u, 11.3f, 16.1f, -12.0f, -8.0f }, { 56u, 5u, 11.3f, 16.1f, -7.5f, -3.5f }
-	};
-	constexpr RingOccluderSegment PunchInSegments[] = {
-		{ 0u, 5u, 11.0f, 16.1f, -12.0f, -3.5f }, { 16u, 5u, 11.0f, 16.1f, -12.0f, -3.5f },
-		{ 32u, 5u, 11.0f, 16.1f, -12.0f, -3.5f }, { 48u, 5u, 11.0f, 16.1f, -12.0f, -3.5f },
-		{ 6u, 1u, 12.0f, 15.5f, -6.0f, -3.5f }, { 10u, 1u, 12.0f, 15.5f, -12.0f, -9.5f },
-		{ 22u, 1u, 12.0f, 15.5f, -6.0f, -3.5f }, { 26u, 1u, 12.0f, 15.5f, -12.0f, -9.5f },
-		{ 38u, 1u, 12.0f, 15.5f, -6.0f, -3.5f }, { 42u, 1u, 12.0f, 15.5f, -12.0f, -9.5f },
-		{ 54u, 1u, 12.0f, 15.5f, -6.0f, -3.5f }, { 58u, 1u, 12.0f, 15.5f, -12.0f, -9.5f }
 	};
 
 	void PushTri(std::vector<float>& verts,
@@ -397,7 +351,7 @@ StationModel::BuildRibs(unsigned int numSides, float radius,
 std::tuple<std::vector<float>, std::vector<float>>
 StationModel::BuildLathedProfileGeometry(unsigned int numSides,
 	std::span<const RingProfilePoint> profile,
-	float yOffset, bool invertY, float partKind)
+	float yOffset, bool invertY, float partKind, float profileScale)
 {
 	std::vector<float> verts;
 	std::vector<float> uvs;
@@ -406,7 +360,7 @@ StationModel::BuildLathedProfileGeometry(unsigned int numSides,
 
 	verts.reserve(numSides * (profile.size() - 1u) * 6u * 3u);
 	uvs.reserve(numSides * (profile.size() - 1u) * 6u * 2u);
-	const auto profileY = [yOffset, invertY](float y) { return yOffset + (invertY ? -y : y); };
+	const auto profileY = [yOffset, invertY, profileScale](float y) { return yOffset + (invertY ? -y : y) * profileScale; };
 
 	for (unsigned int side = 0u; side < numSides; ++side)
 	{
@@ -418,10 +372,10 @@ StationModel::BuildLathedProfileGeometry(unsigned int numSides,
 		{
 			const auto& inner = profile[profileIndex];
 			const auto& outer = profile[profileIndex + 1u];
-			const glm::vec3 p00(std::cos(a0) * inner.Radius, profileY(inner.Y), std::sin(a0) * inner.Radius);
-			const glm::vec3 p01(std::cos(a0) * outer.Radius, profileY(outer.Y), std::sin(a0) * outer.Radius);
-			const glm::vec3 p11(std::cos(a1) * outer.Radius, profileY(outer.Y), std::sin(a1) * outer.Radius);
-			const glm::vec3 p10(std::cos(a1) * inner.Radius, profileY(inner.Y), std::sin(a1) * inner.Radius);
+			const glm::vec3 p00(std::cos(a0) * inner.Radius * profileScale, profileY(inner.Y), std::sin(a0) * inner.Radius * profileScale);
+			const glm::vec3 p01(std::cos(a0) * outer.Radius * profileScale, profileY(outer.Y), std::sin(a0) * outer.Radius * profileScale);
+			const glm::vec3 p11(std::cos(a1) * outer.Radius * profileScale, profileY(outer.Y), std::sin(a1) * outer.Radius * profileScale);
+			const glm::vec3 p10(std::cos(a1) * inner.Radius * profileScale, profileY(inner.Y), std::sin(a1) * inner.Radius * profileScale);
 			PushQuad(verts, uvs, p00, u0, partKind, p01, u0, partKind,
 				p11, u1, partKind, p10, u1, partKind);
 		}
@@ -431,62 +385,44 @@ StationModel::BuildLathedProfileGeometry(unsigned int numSides,
 }
 
 std::tuple<std::vector<float>, std::vector<float>>
-StationModel::BuildOccluderGeometry(unsigned int numSides,
-	std::span<const RingOccluderSegment> segments,
-	float yOffset, bool invertY, float partKind)
+StationModel::BuildOccluderPrismGeometry(float innerRadius, float outerRadius,
+	float partKind)
 {
 	std::vector<float> verts;
 	std::vector<float> uvs;
-	if (numSides < 3u)
-		return { verts, uvs };
-
-	const auto profileY = [yOffset, invertY](float y) { return yOffset + (invertY ? -y : y); };
-	for (const auto& segment : segments)
+	verts.reserve(2u * 12u * 3u * 3u);
+	uvs.reserve(2u * 12u * 3u * 2u);
+	for (unsigned int bar = 0u; bar < 2u; ++bar)
 	{
-		const auto sideCount = std::min(segment.SideCount, numSides);
-		for (unsigned int strip = 0u; strip < sideCount; ++strip)
+		const auto prismVertex = [innerRadius, outerRadius](bool outer, bool high, bool next)
 		{
-			const auto side0 = (segment.FirstSide + strip) % numSides;
-			const auto side1 = (side0 + 1u) % numSides;
-			const float a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(side0) / static_cast<float>(numSides);
-			const float a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(side1) / static_cast<float>(numSides);
-			const float t = (static_cast<float>(strip) + 0.5f) / static_cast<float>(sideCount);
-			const float taper = std::min(1.0f, std::min(t, 1.0f - t) * 3.0f);
-			const float innerRadius = segment.InnerRadius + StateRingOccluderLift;
-			const float outerRadius = innerRadius + (segment.OuterRadius - segment.InnerRadius) * (0.65f + 0.35f * taper);
-			const float yCenter = 0.5f * (segment.YMin + segment.YMax);
-			const float yHalf = 0.5f * (segment.YMax - segment.YMin) * (0.70f + 0.30f * taper);
-			const float yMin = profileY(yCenter - yHalf);
-			const float yMax = profileY(yCenter + yHalf);
-			const glm::vec3 p00(std::cos(a0) * innerRadius, yMin, std::sin(a0) * innerRadius);
-			const glm::vec3 p01(std::cos(a0) * outerRadius, yMax, std::sin(a0) * outerRadius);
-			const glm::vec3 p11(std::cos(a1) * outerRadius, yMax, std::sin(a1) * outerRadius);
-			const glm::vec3 p10(std::cos(a1) * innerRadius, yMin, std::sin(a1) * innerRadius);
-			const float u0 = static_cast<float>(side0) / static_cast<float>(numSides);
-			const float u1 = static_cast<float>(side1) / static_cast<float>(numSides);
-			PushQuad(verts, uvs, p00, u0, partKind, p01, u0, partKind,
-				p11, u1, partKind, p10, u1, partKind);
-		}
+			return glm::vec3(outer ? outerRadius : innerRadius,
+				high ? 1.0f : 0.0f, next ? 1.0f : 0.0f);
+		};
+		const auto pushFace = [&verts, &uvs, partKind, bar](const glm::vec3& a,
+			const glm::vec3& b, const glm::vec3& c, const glm::vec3& d)
+		{
+			const auto barKind = static_cast<float>(bar);
+			PushQuad(verts, uvs, a, barKind, partKind, b, barKind, partKind,
+				c, barKind, partKind, d, barKind, partKind);
+		};
+		const auto il = prismVertex(false, false, false);
+		const auto ol = prismVertex(true, false, false);
+		const auto ih = prismVertex(false, true, false);
+		const auto oh = prismVertex(true, true, false);
+		const auto iln = prismVertex(false, false, true);
+		const auto oln = prismVertex(true, false, true);
+		const auto ihn = prismVertex(false, true, true);
+		const auto ohn = prismVertex(true, true, true);
+		pushFace(il, ol, oh, ih);
+		pushFace(iln, ihn, ohn, oln);
+		pushFace(ol, oln, ohn, oh);
+		pushFace(il, ih, ihn, iln);
+		pushFace(ih, oh, ohn, ihn);
+		pushFace(il, iln, oln, ol);
 	}
 
 	return { verts, uvs };
-}
-
-std::tuple<std::vector<float>, std::vector<float>>
-StationModel::BuildStateOccluderGeometry(std::uint8_t visualState, bool bottom)
-{
-	const auto yOffset = bottom ? StateRingBottomY : StateRingTopY;
-	const auto invertY = bottom;
-	const auto partKind = UV_STATE_RING_DARK;
-	switch (std::min<std::uint8_t>(visualState, 5u))
-	{
-	case 0u: return BuildOccluderGeometry(StateRingSides, DefaultSegments, yOffset, invertY, partKind);
-	case 1u: return BuildOccluderGeometry(StateRingSides, RecordingSegments, yOffset, invertY, partKind);
-	case 2u: return BuildOccluderGeometry(StateRingSides, EndRecordingSegments, yOffset, invertY, partKind);
-	case 3u: return BuildOccluderGeometry(StateRingSides, PlayingSegments, yOffset, invertY, partKind);
-	case 4u: return BuildOccluderGeometry(StateRingSides, OverdubbingSegments, yOffset, invertY, partKind);
-	default: return BuildOccluderGeometry(StateRingSides, PunchInSegments, yOffset, invertY, partKind);
-	}
 }
 
 std::tuple<std::vector<float>, std::vector<float>>
@@ -530,8 +466,7 @@ StationModel::StationModel() :
 	_stationFallRate(0.0f),
 	_topRing(),
 	_bottomRing(),
-	_topOccluders(),
-	_bottomOccluders(),
+	_ringOccluder(),
 	_ringsNeedInitialising(true)
 {
 	_modelParams.ModelShaders = { "station", "picker", "station_ring" };
@@ -540,14 +475,13 @@ StationModel::StationModel() :
 	auto [verts, uvs] = BuildAllGeometry(DefaultNumSides, DeckRadius, DefaultNumRibs);
 	SetGeometry(std::move(verts), std::move(uvs));
 	std::tie(_topRing.Verts, _topRing.Uvs) = BuildLathedProfileGeometry(
-		StateRingSides, StateRingProfile, StateRingTopY, false, UV_STATE_RING_BRIGHT);
+		StateRingSides, StateRingProfile, StateRingTopY, false, UV_STATE_RING_BRIGHT, StateRingScale);
 	std::tie(_bottomRing.Verts, _bottomRing.Uvs) = BuildLathedProfileGeometry(
-		StateRingSides, StateRingBottomProfile, StateRingBottomY, false, UV_STATE_RING_BRIGHT);
-	for (std::uint8_t state = 0u; state < _topOccluders.size(); ++state)
-	{
-		std::tie(_topOccluders[state].Verts, _topOccluders[state].Uvs) = BuildStateOccluderGeometry(state, false);
-		std::tie(_bottomOccluders[state].Verts, _bottomOccluders[state].Uvs) = BuildStateOccluderGeometry(state, true);
-	}
+		StateRingSides, StateRingBottomProfile, StateRingBottomY, false, UV_STATE_RING_BRIGHT, StateRingScale);
+	std::tie(_ringOccluder.Verts, _ringOccluder.Uvs) = BuildOccluderPrismGeometry(
+		StateRingOccluderInnerRadius * StateRingScale,
+		StateRingOccluderOuterRadius * StateRingScale,
+		UV_STATE_RING_DARK);
 }
 
 void StationModel::SetStationState(const std::vector<unsigned int>& stationGlobalId,
@@ -601,10 +535,7 @@ void StationModel::_InitResources(resources::ResourceLib& resourceLib, bool forc
 
 	_InitRingMesh(_topRing);
 	_InitRingMesh(_bottomRing);
-	for (auto& mesh : _topOccluders)
-		_InitRingMesh(mesh);
-	for (auto& mesh : _bottomOccluders)
-		_InitRingMesh(mesh);
+	_InitRingMesh(_ringOccluder);
 	_ringsNeedInitialising = false;
 }
 
@@ -613,10 +544,7 @@ void StationModel::_ReleaseResources()
 	GuiModel::_ReleaseResources();
 	_ReleaseRingMesh(_topRing);
 	_ReleaseRingMesh(_bottomRing);
-	for (auto& mesh : _topOccluders)
-		_ReleaseRingMesh(mesh);
-	for (auto& mesh : _bottomOccluders)
-		_ReleaseRingMesh(mesh);
+	_ReleaseRingMesh(_ringOccluder);
 	_ringsNeedInitialising = true;
 }
 
@@ -683,6 +611,14 @@ void StationModel::_DrawRingMesh(const RingMesh& mesh)
 	glDrawArrays(GL_TRIANGLES, 0, mesh.NumTris * 3u);
 }
 
+void StationModel::_DrawRingOccluder(const RingMesh& mesh)
+{
+	if (mesh.VertexArray == 0u || mesh.NumTris == 0u)
+		return;
+	glBindVertexArray(mesh.VertexArray);
+	glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.NumTris * 3u, StateRingOccluderInstances);
+}
+
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
 {
 	return GetShaderAt(_lastPass == base::PASS_PICKER ? 1u : 0u);
@@ -714,7 +650,7 @@ void StationModel::Draw3d(DrawContext& ctx,
 	const glm::vec3 stationStateColors[] = {
 		{ 0.34f, 0.78f, 0.89f },
 		{ 0.94f, 0.20f, 0.22f },
-		{ 0.96f, 0.82f, 0.22f },
+		{ 0.20f, 0.96f, 0.38f },
 		{ 0.24f, 0.68f, 0.98f },
 		{ 0.95f, 0.54f, 0.16f },
 		{ 0.71f, 0.33f, 0.93f }
@@ -764,8 +700,6 @@ void StationModel::Draw3d(DrawContext& ctx,
 		shader->SetUniforms(glCtx);
 		_DrawRingMesh(_topRing);
 		_DrawRingMesh(_bottomRing);
-		_DrawRingMesh(_topOccluders[stationStateIndex]);
-		_DrawRingMesh(_bottomOccluders[stationStateIndex]);
 		glBindVertexArray(0);
 		glUseProgram(0);
 		return;
@@ -779,12 +713,20 @@ void StationModel::Draw3d(DrawContext& ctx,
 	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 	glCtx.SetUniform("StationLevel", stationLevel);
 	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
+	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));
+	glCtx.SetUniform("RingScale", StateRingScale);
 	glUseProgram(ringShader->GetId());
 	ringShader->SetUniforms(glCtx);
 	_DrawRingMesh(_topRing);
 	_DrawRingMesh(_bottomRing);
-	_DrawRingMesh(_topOccluders[stationStateIndex]);
-	_DrawRingMesh(_bottomOccluders[stationStateIndex]);
+	glCtx.SetUniform("RingCapY", StateRingTopY);
+	glCtx.SetUniform("RingDirection", 1.0f);
+	ringShader->SetUniforms(glCtx);
+	_DrawRingOccluder(_ringOccluder);
+	glCtx.SetUniform("RingCapY", StateRingBottomY);
+	glCtx.SetUniform("RingDirection", -1.0f);
+	ringShader->SetUniforms(glCtx);
+	_DrawRingOccluder(_ringOccluder);
 	glBindVertexArray(0);
 	glUseProgram(0);
 }

@@ -197,22 +197,14 @@ TEST(StationModel_Rings, LathedProfilesCloseAndMatchUvCount)
 	}
 }
 
-TEST(StationModel_Rings, StateOccludersAreNonEmptyAndDistinct)
+TEST(StationModel_Rings, OccluderPrismHasTwoBarsAndScalesWithRadius)
 {
-	std::vector<std::vector<float>> topMeshes;
-	topMeshes.reserve(6u);
-	for (std::uint8_t state = 0u; state < 6u; ++state)
-	{
-		auto [topVerts, topUvs] = StationModel::BuildStateOccluderGeometry(state, false);
-		auto [bottomVerts, bottomUvs] = StationModel::BuildStateOccluderGeometry(state, true);
-		EXPECT_FALSE(topVerts.empty());
-		EXPECT_FALSE(bottomVerts.empty());
-		EXPECT_EQ(topVerts.size() / 3u, topUvs.size() / 2u);
-		EXPECT_EQ(bottomVerts.size() / 3u, bottomUvs.size() / 2u);
-		topMeshes.push_back(std::move(topVerts));
-	}
+	auto [verts, uvs] = StationModel::BuildOccluderPrismGeometry(45.0f, 85.0f, 5.0f);
+	auto [smallerVerts, smallerUvs] = StationModel::BuildOccluderPrismGeometry(9.0f, 17.0f, 5.0f);
 
-	for (std::size_t lhs = 0u; lhs < topMeshes.size(); ++lhs)
-		for (std::size_t rhs = lhs + 1u; rhs < topMeshes.size(); ++rhs)
-			EXPECT_NE(topMeshes[lhs], topMeshes[rhs]);
+	EXPECT_EQ(verts.size() / 9u, 24u);
+	EXPECT_EQ(verts.size() / 3u, uvs.size() / 2u);
+	EXPECT_EQ(smallerVerts.size(), verts.size());
+	EXPECT_EQ(smallerUvs.size(), uvs.size());
+	EXPECT_NE(smallerVerts, verts);
 }

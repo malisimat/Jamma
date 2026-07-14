@@ -10,6 +10,7 @@ out vec4 ColorOUT;
 uniform float Highlight;
 uniform float StationHover;
 uniform vec3 StationStateColor;
+uniform float RingScale;
 
 void main()
 {
@@ -23,7 +24,7 @@ void main()
     if (partKind < brightPart + 0.5)
     {
         float radialDistance = length(WorldPos.xz);
-        float outerHighlight = smoothstep(13.8, 16.2, radialDistance);
+        float outerHighlight = smoothstep(13.8 * RingScale, 16.2 * RingScale, radialDistance);
         vec3 halfDir = normalize(lightDir + viewDir);
         float specular = pow(max(dot(normal, halfDir), 0.0), 26.0);
         vec3 colour = StationStateColor * (0.62 + 0.48 * diffuse);
