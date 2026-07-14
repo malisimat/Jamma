@@ -648,12 +648,12 @@ void StationModel::Draw3d(DrawContext& ctx,
 
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
 	const glm::vec3 stationStateColors[] = {
-		{ 0.34f, 0.78f, 0.89f },
-		{ 0.94f, 0.20f, 0.22f },
-		{ 0.20f, 0.96f, 0.38f },
 		{ 0.24f, 0.68f, 0.98f },
+		{ 0.94f, 0.20f, 0.22f },
 		{ 0.95f, 0.54f, 0.16f },
-		{ 0.71f, 0.33f, 0.93f }
+		{ 0.20f, 0.96f, 0.38f },
+		{ 0.71f, 0.33f, 0.93f },
+		{ 0.95f, 0.94f, 0.07f }
 	};
 	const auto stationStateIndex = std::min<std::size_t>(_stationVisualState,
 		std::size(stationStateColors) - 1u);

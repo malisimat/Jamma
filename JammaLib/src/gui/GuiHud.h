@@ -69,7 +69,10 @@ namespace gui
 		static constexpr unsigned int _RightRailWidth = 134u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
-		static constexpr unsigned int _RightRailPadding = 34u;
+		static constexpr unsigned int _RightRailPaddingH = 0u;
+		static constexpr unsigned int _RightRailPaddingV = 12u;
+		static constexpr unsigned int _RightRailOverhang = 34u;
+		static constexpr unsigned int _RightRailTopInset = 60u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
 		static constexpr unsigned int _TriggerButtonWidth = 120u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
@@ -97,12 +100,13 @@ namespace gui
 			const utils::Position2d& end,
 			const glm::vec4& color);
 
-		std::shared_ptr<GuiLabel> _MakeHeader(const std::string& text, unsigned int width) const;
+		std::shared_ptr<GuiLabel> _MakeHeader(const std::string& text,
+			unsigned int width,
+			unsigned int horizontalInset = 0u) const;
 		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
 			const glm::vec3& tint,
 			unsigned int width) const;
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
-			const glm::vec3& tint,
 			std::weak_ptr<engine::Trigger> trigger) const;
 
 		std::shared_ptr<GuiStackPanel> _topStrip;

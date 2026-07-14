@@ -44,7 +44,7 @@ namespace gui
 		{
 			const auto trigger = _trigger.lock();
 			if (!trigger)
-				return { 0.30f, 0.90f, 0.38f };
+				return { 0.92f, 0.92f, 0.92f };
 			if (trigger->IsDitchDown())
 				return { 0.24f, 0.68f, 0.98f };
 
@@ -53,7 +53,7 @@ namespace gui
 			case engine::TRIGSTATE_RECORDING: return { 0.94f, 0.20f, 0.22f };
 			case engine::TRIGSTATE_OVERDUBBING: return { 0.95f, 0.94f, 0.07f };
 			case engine::TRIGSTATE_PUNCHEDIN: return { 0.70f, 0.30f, 0.92f };
-			default: return { 0.30f, 0.90f, 0.38f };
+			default: return { 0.92f, 0.92f, 0.92f };
 			}
 		}
 
@@ -219,10 +219,10 @@ void GuiHud::_BuildPanels()
 	GuiStackPanelParams railParams;
 	railParams.Direction = StackDirection::Vertical;
 	railParams.Spacing = _RightRailSpacing;
-	railParams.PaddingH = _RightRailPadding;
-	railParams.PaddingV = _RightRailPadding;
-	railParams.Size = { _RightRailWidth, _RightRailHeight };
-	railParams.MinSize = { _RightRailWidth, _RightRailMinHeight };
+	railParams.PaddingH = _RightRailPaddingH;
+	railParams.PaddingV = _RightRailPaddingV;
+	railParams.Size = { _RightRailWidth - 6u, _RightRailHeight };
+	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
 	railParams.Texture = "rounded_but";
 	railParams.TintColor = glm::vec3(0.17f, 0.20f, 0.24f);
@@ -272,12 +272,10 @@ void GuiHud::_BuildTriggerRail()
 	if (_triggerNames.empty())
 		return;
 
-	_triggerRail->AddChild(_MakeHeader("Triggers", _RightRailWidth - (_RightRailPadding * 2u)));
+	_triggerRail->AddChild(_MakeHeader("Triggers", _RightRailWidth, 38u));
 	for (std::size_t i = 0u; i < _triggerNames.size(); ++i)
 	{
-		const float hue = static_cast<float>(i % 3u) / 3.0f;
-		auto tint = glm::vec3(0.40f + 0.10f * hue, 0.36f + 0.08f * hue, 0.34f + 0.06f * hue);
-		auto button = _MakeTriggerButton(_triggerNames[i], tint,
+		auto button = _MakeTriggerButton(_triggerNames[i],
 			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
 		_triggerButtons.push_back(button);
 		_triggerRail->AddChild(button);
@@ -345,7 +343,7 @@ void GuiHud::_LayoutPanels()
 	const unsigned int railHeight = std::max(_RightRailMinHeight,
 		viewHeight - 2u * static_cast<unsigned int>(_OuterMargin + _TopPosY));
 
-	const int railPosX = static_cast<int>(viewWidth) - static_cast<int>(_RightRailWidth) - _OuterMargin;
+	const int railPosX = static_cast<int>(viewWidth) - static_cast<int>(_RightRailWidth) - _OuterMargin + _RightRailOverhang;
 	const int topPosX = std::max(_OuterMargin, railPosX - _OuterMargin - static_cast<int>(topWidth));
 	const int topPosY = static_cast<int>(viewHeight) - static_cast<int>(_TopStripHeight) - _TopPosY;
 	_topStrip->SetPosition({ topPosX, topPosY });
@@ -354,9 +352,9 @@ void GuiHud::_LayoutPanels()
 	if (_topInputRow)
 		_topInputRow->SetSize({ topWidth - (_TopStripPadding * 2u), _SourceButtonHeight });
 
-	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY;
+	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY + 42u;
 	_triggerRail->SetPosition({ railPosX, railPosY });
-	_triggerRail->SetSize({ _RightRailWidth, railHeight });
+	_triggerRail->SetSize({ _RightRailWidth - 6u, railHeight - _RightRailTopInset });
 
 	_cablesDirty = true;
 }
@@ -596,9 +594,13 @@ void GuiHud::_AppendStationCurve(const utils::Position2d& start,
 	_cableColors.push_back(color);
 }
 
-std::shared_ptr<GuiLabel> GuiHud::_MakeHeader(const std::string& text, unsigned int width) const
+std::shared_ptr<GuiLabel> GuiHud::_MakeHeader(const std::string& text,
+	unsigned int width,
+	unsigned int horizontalInset) const
 {
-	return std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(text, width));
+	auto params = GuiLabelParams::PanelHeader(text, width);
+	params.TextInsetX = static_cast<int>(horizontalInset);
+	return std::make_shared<GuiLabel>(params);
 }
 
 std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
@@ -653,7 +655,6 @@ std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
 }
 
 std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
-	const glm::vec3& tint,
 	std::weak_ptr<engine::Trigger> trigger) const
 {
 	auto buttonParams = GuiButtonParams::PanelButton(_TriggerButtonWidth);
@@ -663,14 +664,13 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	buttonParams.TextureShader = "texture_tinted";
 	buttonParams.Size = { _TriggerButtonWidth, _TriggerButtonHeight };
 	buttonParams.MinSize = { GuiButtonParams::DefaultMinWidth, _TriggerButtonHeight };
-	buttonParams.TintColor = tint;
 	auto button = std::make_shared<GuiHudTriggerBack>(buttonParams, trigger);
 
-	const int socketPadding = 8;
+	const int socketPadding = 4;
 	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.45) - socketPadding;
 	const int pedalSizeH = static_cast<int>(_TriggerButtonHeight * 0.70f);
-	const int pedalPosX = 22;
-	const int pedalPosY = 1;
+	const int pedalPosX = 16;
+	const int pedalPosY = 14;
 
 	base::GuiElementParams activateParams;
 	activateParams.Position = { pedalPosX, pedalPosY };
