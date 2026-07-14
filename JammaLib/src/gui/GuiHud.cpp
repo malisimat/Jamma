@@ -180,6 +180,27 @@ void GuiHud::_BuildTriggerRail()
 	}
 }
 
+void GuiHud::SetCableRevealHeld(bool held)
+{
+	(void)held;
+}
+
+void GuiHud::SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps)
+{
+	(void)channel;
+	(void)peak;
+	(void)numSamps;
+}
+
+void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
+	std::vector<std::string> midiInputNames,
+	std::vector<std::string> triggerNames)
+{
+	(void)audioInputCount;
+	(void)midiInputNames;
+	(void)triggerNames;
+}
+
 void GuiHud::_LayoutPanels()
 {
 	const unsigned int minViewWidth = _TopStripMinWidth + _RightRailWidth + 3u * static_cast<unsigned int>(_OuterMargin);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <vector>
 #include <mutex>
@@ -47,6 +48,10 @@ namespace audio
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
 		bool NinjamMetronomeEnabled() const noexcept { return _ninjamMetronomeEnabled.load(std::memory_order_acquire); }
+		float GetAdcPeak(unsigned int channel) const noexcept
+		{
+			return channel < _AdcPeakChannels ? _adcPeaks[channel].load(std::memory_order_relaxed) : 0.0f;
+		}
 
 	private:
 		static int AudioCallback(void* outBuffer,
@@ -72,6 +77,8 @@ namespace audio
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
 		midi::MidiClockAnchor _midiClockAnchor;
+		static constexpr unsigned int _AdcPeakChannels = 32u;
+		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;

@@ -39,6 +39,11 @@ namespace gui
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void SetSize(utils::Size2d size) override;
+		void SetCableRevealHeld(bool held);
+		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
+		void SetRoutingConfig(unsigned int audioInputCount,
+			std::vector<std::string> midiInputNames,
+			std::vector<std::string> triggerNames);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 
 	protected:
