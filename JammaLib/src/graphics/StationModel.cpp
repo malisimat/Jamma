@@ -21,7 +21,7 @@ namespace
 	constexpr unsigned int  DefaultNumSides    = 32u;
 	constexpr unsigned int  DefaultNumRibs     = 0u;
 	constexpr unsigned int  SideVerticalSections = 12u;
-	constexpr float         DeckRadius         = 9.6f;
+	constexpr float         DeckRadius         = 30.0f;
 	constexpr float         BevelWidth         = 2.0f;
 	constexpr float         BevelHeight        = 10.0f;
 	constexpr float         SideHeight         = 450.0f;
