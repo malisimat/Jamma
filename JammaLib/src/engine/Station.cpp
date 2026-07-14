@@ -977,6 +977,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -1059,6 +1060,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -1127,6 +1129,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}
@@ -1148,6 +1151,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_PUNCHIN);
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
@@ -1167,6 +1171,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
@@ -1190,6 +1195,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
+		_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		break;
 	case TriggerAction::TRIGGER_DITCH_UNMUTE:
 		if (loopTake.has_value())
