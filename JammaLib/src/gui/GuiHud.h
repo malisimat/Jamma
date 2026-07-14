@@ -116,8 +116,10 @@ namespace gui
 		std::vector<std::string> _triggerNames;
 		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
 		bool _cableRevealHeld = false;
+		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;
+		std::vector<glm::vec4> _cableRenderColors;
 		std::weak_ptr<resources::ShaderResource> _cableShader;
 		unsigned int _cableVertexArray = 0;
 		unsigned int _cableVertexBuffer = 0;

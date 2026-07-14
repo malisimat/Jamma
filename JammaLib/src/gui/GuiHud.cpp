@@ -132,6 +132,7 @@ GuiHud::GuiHud(GuiHudParams params) :
 	SetPosition({ 0, 0 });
 	_cableControlPoints.reserve((12u + 8u) * 4u);
 	_cableColors.reserve(12u + 8u);
+	_cableRenderColors.reserve(12u + 8u);
 	_BuildPanels();
 	SetSize(params.Size);
 }
@@ -397,7 +398,14 @@ bool GuiHud::_InitCableVertexArray()
 
 void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
-	if (!_cableRevealHeld)
+	const float fadeInStep = 0.16f;
+	const float fadeOutStep = 0.08f;
+	if (_cableRevealHeld)
+		_cableRevealAlpha = std::min(1.0f, _cableRevealAlpha + fadeInStep);
+	else
+		_cableRevealAlpha = std::max(0.0f, _cableRevealAlpha - fadeOutStep);
+
+	if (_cableRevealAlpha <= 0.001f)
 		return;
 
 	auto shader = _cableShader.lock();
@@ -410,21 +418,43 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 	if (_cableColors.empty())
 		return;
 
+	_cableRenderColors = _cableColors;
+
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	const auto program = shader->GetId();
-	glLineWidth(3.0f);
 	glUseProgram(program);
 	shader->SetUniforms(glCtx);
 	glUniform4fv(glGetUniformLocation(program, "CableControlPoints"),
 		static_cast<GLint>(_cableControlPoints.size()),
 		reinterpret_cast<const GLfloat*>(_cableControlPoints.data()));
-	glUniform4fv(glGetUniformLocation(program, "CableColors"),
-		static_cast<GLint>(_cableColors.size()),
-		reinterpret_cast<const GLfloat*>(_cableColors.data()));
 	glUniform1i(glGetUniformLocation(program, "CableCount"), static_cast<GLint>(_cableColors.size()));
 	glUniform1i(glGetUniformLocation(program, "SegmentCount"), _CableSegments);
 	glBindVertexArray(_cableVertexArray);
-	glDrawArraysInstanced(GL_LINE_STRIP, 0, _CableSegments, static_cast<GLsizei>(_cableColors.size()));
+
+	const auto colorUniform = glGetUniformLocation(program, "CableColors");
+	const auto drawPass = [&](float width, float brightness, float alphaMultiplier)
+	{
+		for (std::size_t i = 0u; i < _cableColors.size(); ++i)
+		{
+			const auto& color = _cableColors[i];
+			_cableRenderColors[i] = glm::vec4(
+				std::clamp(color.r * brightness, 0.0f, 1.0f),
+				std::clamp(color.g * brightness, 0.0f, 1.0f),
+				std::clamp(color.b * brightness, 0.0f, 1.0f),
+				std::clamp(color.a * alphaMultiplier * _cableRevealAlpha, 0.0f, 1.0f));
+		}
+
+		glLineWidth(width);
+		glUniform4fv(colorUniform,
+			static_cast<GLint>(_cableRenderColors.size()),
+			reinterpret_cast<const GLfloat*>(_cableRenderColors.data()));
+		glDrawArraysInstanced(GL_LINE_STRIP, 0, _CableSegments,
+			static_cast<GLsizei>(_cableRenderColors.size()));
+	};
+
+	drawPass(6.5f, 0.52f, 0.95f);
+	drawPass(3.2f, 1.08f, 1.00f);
+
 	glBindVertexArray(0);
 	glUseProgram(0);
 }
