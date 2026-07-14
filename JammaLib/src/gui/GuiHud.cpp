@@ -2,10 +2,13 @@
 
 #include <array>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <memory>
 #include "GuiButton.h"
 #include "GuiLabel.h"
 #include "GlUtils.h"
+#include "../engine/Trigger.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/ResourceLib.h"
@@ -17,6 +20,108 @@ using namespace utils;
 using namespace graphics;
 using namespace resources;
 
+namespace gui
+{
+	class GuiHudTriggerBack : public GuiButton
+	{
+	public:
+		GuiHudTriggerBack(GuiButtonParams params, std::weak_ptr<engine::Trigger> trigger) :
+			GuiButton(params),
+			_trigger(std::move(trigger))
+		{
+		}
+
+		virtual void Draw(base::DrawContext& ctx) override
+		{
+			const auto previousTint = _guiParams.TintColor;
+			_guiParams.TintColor = _TriggerTint();
+			GuiButton::Draw(ctx);
+			_guiParams.TintColor = previousTint;
+		}
+
+	private:
+		glm::vec3 _TriggerTint() const
+		{
+			const auto trigger = _trigger.lock();
+			if (!trigger)
+				return { 0.30f, 0.90f, 0.38f };
+			if (trigger->IsDitchDown())
+				return { 0.24f, 0.68f, 0.98f };
+
+			switch (trigger->GetState())
+			{
+			case engine::TRIGSTATE_RECORDING: return { 0.94f, 0.20f, 0.22f };
+			case engine::TRIGSTATE_OVERDUBBING: return { 0.95f, 0.94f, 0.07f };
+			case engine::TRIGSTATE_PUNCHEDIN: return { 0.70f, 0.30f, 0.92f };
+			default: return { 0.30f, 0.90f, 0.38f };
+			}
+		}
+
+		std::weak_ptr<engine::Trigger> _trigger;
+	};
+
+	class GuiHudTriggerPedal : public base::GuiElement
+	{
+	public:
+		GuiHudTriggerPedal(base::GuiElementParams params,
+			std::weak_ptr<engine::Trigger> trigger,
+			bool isActivate) :
+			GuiElement(params),
+			_trigger(std::move(trigger)),
+			_isActivate(isActivate)
+		{
+		}
+
+		virtual void Draw(base::DrawContext& ctx) override
+		{
+			const auto trigger = _trigger.lock();
+			const bool inputDown = trigger && (_isActivate ? trigger->IsActivateInputDown() : trigger->IsDitchInputDown());
+			const auto pointerState = _state;
+			_state = inputDown || pointerState == STATE_DOWN ? STATE_DOWN : pointerState;
+			GuiElement::Draw(ctx);
+			_state = pointerState;
+		}
+
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override
+		{
+			if (!_isEnabled || !_isVisible)
+				return actions::ActionResult::NoAction();
+
+			if ((actions::TouchAction::TOUCH_DOWN == action.State) && HitTest(action.Position))
+			{
+				_state = STATE_DOWN;
+				return _Dispatch(action);
+			}
+
+			if (actions::TouchAction::TOUCH_UP == action.State)
+			{
+				_state = HitTest(action.Position) ? STATE_OVER : STATE_NORMAL;
+				return _Dispatch(action);
+			}
+
+			return actions::ActionResult::NoAction();
+		}
+
+	private:
+		actions::ActionResult _Dispatch(const actions::TouchAction& action)
+		{
+			if (auto trigger = _trigger.lock())
+			{
+				auto result = trigger->QueueExternalControlAction(_isActivate,
+					actions::TouchAction::TOUCH_DOWN == action.State,
+					action);
+				result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
+				return result;
+			}
+
+			return actions::ActionResult::NoAction();
+		}
+
+		std::weak_ptr<engine::Trigger> _trigger;
+		bool _isActivate;
+	};
+}
+
 GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params)
 {
@@ -25,8 +130,8 @@ GuiHud::GuiHud(GuiHudParams params) :
 	_guiParams.DownTexture = "";
 	_guiParams.GuiPassThrough = true;
 	SetPosition({ 0, 0 });
-	_cableControlPoints.reserve((7u + 8u) * 4u);
-	_cableColors.reserve(7u + 8u);
+	_cableControlPoints.reserve((12u + 8u) * 4u);
+	_cableColors.reserve(12u + 8u);
 	_BuildPanels();
 	SetSize(params.Size);
 }
@@ -36,14 +141,22 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	if (!_isVisible)
 		return;
 
-	if (_topAudioRow)
-		_topAudioRow->ComputeLayout();
-	if (_topMidiRow)
-		_topMidiRow->ComputeLayout();
+	if (_topInputRow)
+		_topInputRow->ComputeLayout();
 	if (_topStrip)
 		_topStrip->ComputeLayout();
 	if (_triggerRail)
 		_triggerRail->ComputeLayout();
+
+	for (std::size_t i = 0u; i < _audioInputVus.size() && i < _sourceButtons.size(); ++i)
+	{
+		const auto buttonPos = _sourceButtons[i]->GlobalPosition();
+		const auto buttonSize = _sourceButtons[i]->GetSize();
+		const auto rootPos = GlobalPosition();
+		_audioInputVus[i]->SetPosition({ buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width) - 13,
+			buttonPos.Y - rootPos.Y + 4 });
+		_audioInputVus[i]->SetSize({ 7u, _SourceButtonHeight - 8u });
+	}
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	auto pos = Position();
@@ -53,6 +166,9 @@ void GuiHud::Draw(base::DrawContext& ctx)
 
 	for (auto& child : _children)
 		child->Draw(ctx);
+
+	for (auto& vu : _audioInputVus)
+		vu->Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -68,6 +184,8 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto valid = _InitCableShader(resourceLib);
 	if (valid)
 		valid = _InitCableVertexArray();
+	for (auto& vu : _audioInputVus)
+		vu->InitResources(resourceLib, forceInit);
 
 	GlUtils::CheckError("GuiHud::_InitResources()");
 }
@@ -79,6 +197,9 @@ void GuiHud::_ReleaseResources()
 
 	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_cableVertexArray);
 	_cableVertexArray = 0;
+
+	for (auto& vu : _audioInputVus)
+		vu->ReleaseResources();
 }
 
 void GuiHud::_BuildPanels()
@@ -115,113 +236,124 @@ void GuiHud::_BuildTopStrip()
 {
 	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u)));
 
-	GuiStackPanelParams audioRowParams = GuiStackPanelParams::PanelHorizontalRow(
+	GuiStackPanelParams inputRowParams = GuiStackPanelParams::PanelHorizontalRow(
 		_TopStripWidth - (_TopStripPadding * 2u),
 		_SourceButtonHeight);
-	audioRowParams.WrapContent = true;
-	_topAudioRow = std::make_shared<GuiStackPanel>(audioRowParams);
+	inputRowParams.WrapContent = false;
+	_topInputRow = std::make_shared<GuiStackPanel>(inputRowParams);
 
-	const std::array<std::string, 4> audioInputs = {
-		"Audio In 1",
-		"Audio In 2",
-		"Audio In 3",
-		"Audio In 4"
-	};
+	const unsigned int totalInputs = _audioInputCount + static_cast<unsigned int>(_midiInputNames.size());
+	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
+	const unsigned int totalSpacing = totalInputs > 1u ? GuiStackPanelParams::PanelRowSpacing * (totalInputs - 1u) : 0u;
+	const unsigned int widthBudget = innerWidth > totalSpacing ? innerWidth - totalSpacing : innerWidth;
+	const unsigned int sourceButtonWidth = totalInputs > 0u ? std::max(64u, widthBudget / totalInputs) : _SourceButtonWidth;
 
-	for (const auto& input : audioInputs)
+	for (auto i = 0u; i < _audioInputCount; ++i)
 	{
-		auto button = _MakeSourceButton(input, glm::vec3(0.92f, 0.52f, 0.24f));
+		auto button = _MakeSourceButton("Audio In " + std::to_string(i + 1u), glm::vec3(0.92f, 0.52f, 0.24f), sourceButtonWidth);
 		_sourceButtons.push_back(button);
-		_topAudioRow->AddChild(button);
+		_topInputRow->AddChild(button);
+		_audioInputVus.push_back(std::make_unique<GuiVu>());
 	}
 
-	_topStrip->AddChild(_topAudioRow);
-
-	GuiStackPanelParams midiRowParams = GuiStackPanelParams::PanelHorizontalRow(
-		_TopStripWidth - (_TopStripPadding * 2u),
-		_SourceButtonHeight);
-	midiRowParams.WrapContent = true;
-	_topMidiRow = std::make_shared<GuiStackPanel>(midiRowParams);
-
-	const std::array<std::string, 3> midiInputs = {
-		"MIDI Drum Pad",
-		"MIDI Keys",
-		"MIDI Foot Ctrl"
-	};
-
-	for (const auto& input : midiInputs)
+	for (const auto& midiName : _midiInputNames)
 	{
-		auto button = _MakeSourceButton(input, glm::vec3(0.22f, 0.72f, 0.66f));
+		auto button = _MakeSourceButton("MIDI " + midiName, glm::vec3(0.22f, 0.72f, 0.66f), sourceButtonWidth);
 		_sourceButtons.push_back(button);
-		_topMidiRow->AddChild(button);
+		_topInputRow->AddChild(button);
 	}
 
-	_topStrip->AddChild(_topMidiRow);
+	_topStrip->AddChild(_topInputRow);
 }
 
 void GuiHud::_BuildTriggerRail()
 {
+	if (_triggerNames.empty())
+		return;
+
 	_triggerRail->AddChild(_MakeHeader("Triggers", _RightRailWidth - (_RightRailPadding * 2u)));
-
-	const std::array<std::pair<std::string, glm::vec3>, 6> triggers = {{
-		{ "Activate A", glm::vec3(0.95f, 0.49f, 0.26f) },
-		{ "Ditch A", glm::vec3(0.80f, 0.22f, 0.20f) },
-		{ "Activate B", glm::vec3(0.96f, 0.70f, 0.27f) },
-		{ "Overdub B", glm::vec3(0.22f, 0.65f, 0.44f) },
-		{ "Punch In", glm::vec3(0.24f, 0.55f, 0.83f) },
-		{ "Scene Ditch", glm::vec3(0.55f, 0.34f, 0.84f) }
-	}};
-
-	for (const auto& trigger : triggers)
+	for (std::size_t i = 0u; i < _triggerNames.size(); ++i)
 	{
-		auto button = _MakeTriggerButton(trigger.first, trigger.second);
+		const float hue = static_cast<float>(i % 3u) / 3.0f;
+		auto tint = glm::vec3(0.40f + 0.10f * hue, 0.36f + 0.08f * hue, 0.34f + 0.06f * hue);
+		auto button = _MakeTriggerButton(_triggerNames[i], tint,
+			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
 		_triggerButtons.push_back(button);
 		_triggerRail->AddChild(button);
 	}
 }
 
+void GuiHud::_RebuildPanels()
+{
+	_sourceButtons.clear();
+	_triggerButtons.clear();
+	_audioInputVus.clear();
+	_topStrip.reset();
+	_topInputRow.reset();
+	_triggerRail.reset();
+	_children.clear();
+
+	_BuildPanels();
+	_LayoutPanels();
+	_cablesDirty = true;
+}
+
 void GuiHud::SetCableRevealHeld(bool held)
 {
-	(void)held;
+	_cableRevealHeld = held;
 }
 
 void GuiHud::SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps)
 {
-	(void)channel;
-	(void)peak;
-	(void)numSamps;
+	if (channel < _audioInputVus.size())
+		_audioInputVus[channel]->SetPeak(peak, numSamps);
 }
 
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
-	std::vector<std::string> triggerNames)
+	std::vector<std::shared_ptr<engine::Trigger>> triggers)
 {
-	(void)audioInputCount;
-	(void)midiInputNames;
-	(void)triggerNames;
+	_audioInputCount = audioInputCount;
+	_midiInputNames.clear();
+	for (auto& name : midiInputNames)
+		if (!name.empty())
+			_midiInputNames.push_back(std::move(name));
+
+	_triggers.clear();
+	_triggerNames.clear();
+	for (const auto& trigger : triggers)
+	{
+		if (trigger && !trigger->Name().empty())
+		{
+			_triggers.push_back(trigger);
+			_triggerNames.push_back(trigger->Name());
+		}
+	}
+	_RebuildPanels();
 }
 
 void GuiHud::_LayoutPanels()
 {
 	const unsigned int minViewWidth = _TopStripMinWidth + _RightRailWidth + 3u * static_cast<unsigned int>(_OuterMargin);
-	const unsigned int minViewHeight = _TopPosY + _TopStripHeight + _RightRailMinHeight + 2u * static_cast<unsigned int>(_OuterMargin);
+	const unsigned int minViewHeight = std::max(_TopStripHeight, _RightRailMinHeight) +
+		2u * static_cast<unsigned int>(_OuterMargin + _TopPosY);
 	const unsigned int viewWidth = std::max(_sizeParams.Size.Width, minViewWidth);
 	const unsigned int viewHeight = std::max(_sizeParams.Size.Height, minViewHeight);
 	const unsigned int topWidth = std::max(_TopStripMinWidth,
 		std::min(_TopStripWidth, viewWidth - _RightRailWidth - 3u * static_cast<unsigned int>(_OuterMargin)));
 	const unsigned int railHeight = std::max(_RightRailMinHeight,
-		viewHeight - static_cast<unsigned int>(_TopPosY) - _TopStripHeight - 2u * static_cast<unsigned int>(_OuterMargin));
-
-	_topStrip->SetPosition({ _OuterMargin, _TopPosY });
-	_topStrip->SetSize({ topWidth, _TopStripHeight });
-
-	if (_topAudioRow)
-		_topAudioRow->SetSize({ topWidth - (_TopStripPadding * 2u), _SourceButtonHeight });
-	if (_topMidiRow)
-		_topMidiRow->SetSize({ topWidth - (_TopStripPadding * 2u), _SourceButtonHeight });
+		viewHeight - 2u * static_cast<unsigned int>(_OuterMargin + _TopPosY));
 
 	const int railPosX = static_cast<int>(viewWidth) - static_cast<int>(_RightRailWidth) - _OuterMargin;
-	const int railPosY = _TopPosY + static_cast<int>(_TopStripHeight) + _OuterMargin;
+	const int topPosX = std::max(_OuterMargin, railPosX - _OuterMargin - static_cast<int>(topWidth));
+	const int topPosY = static_cast<int>(viewHeight) - static_cast<int>(_TopStripHeight) - _TopPosY;
+	_topStrip->SetPosition({ topPosX, topPosY });
+	_topStrip->SetSize({ topWidth, _TopStripHeight });
+
+	if (_topInputRow)
+		_topInputRow->SetSize({ topWidth - (_TopStripPadding * 2u), _SourceButtonHeight });
+
+	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY;
 	_triggerRail->SetPosition({ railPosX, railPosY });
 	_triggerRail->SetSize({ _RightRailWidth, railHeight });
 
@@ -265,6 +397,9 @@ bool GuiHud::_InitCableVertexArray()
 
 void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
+	if (!_cableRevealHeld)
+		return;
+
 	auto shader = _cableShader.lock();
 	if (!shader || (_cableVertexArray == 0) || (_cableVertexBuffer == 0))
 		return;
@@ -304,26 +439,20 @@ void GuiHud::_RebuildCableVertices()
 {
 	_cableControlPoints.clear();
 	_cableColors.clear();
-	if (_sourceButtons.size() < 7u || _triggerButtons.size() < 6u)
-		return;
-
-	const std::array<std::tuple<std::size_t, std::size_t, glm::vec4>, 7> routes = {{
-		{ 0u, 0u, glm::vec4(0.96f, 0.54f, 0.26f, 0.85f) },
-		{ 1u, 1u, glm::vec4(0.86f, 0.29f, 0.20f, 0.82f) },
-		{ 2u, 5u, glm::vec4(0.98f, 0.74f, 0.27f, 0.80f) },
-		{ 3u, 4u, glm::vec4(0.30f, 0.61f, 0.93f, 0.78f) },
-		{ 4u, 2u, glm::vec4(0.22f, 0.80f, 0.70f, 0.82f) },
-		{ 5u, 3u, glm::vec4(0.18f, 0.71f, 0.46f, 0.82f) },
-		{ 6u, 4u, glm::vec4(0.58f, 0.43f, 0.95f, 0.76f) }
-	}};
-
-	for (const auto& route : routes)
+	if (_sourceButtons.empty() || _triggerButtons.empty())
 	{
-		const auto sourceIndex = std::get<0>(route);
-		const auto triggerIndex = std::get<1>(route);
+		_cablesDirty = false;
+		return;
+	}
+
+	const glm::vec4 inputToTriggerColor(0.86f, 0.24f, 0.26f, 0.90f);
+	const glm::vec4 triggerToStationColor(0.92f, 0.79f, 0.20f, 0.88f);
+	for (std::size_t sourceIndex = 0u; sourceIndex < _sourceButtons.size(); ++sourceIndex)
+	{
+		const auto triggerIndex = sourceIndex % _triggerButtons.size();
 		_AppendCurve(_ButtonCenter(_sourceButtons[sourceIndex]),
 			_ButtonCenter(_triggerButtons[triggerIndex]),
-			std::get<2>(route));
+			inputToTriggerColor);
 	}
 
 	// Trigger -> station cables: one per trigger button if a station anchor exists.
@@ -336,7 +465,7 @@ void GuiHud::_RebuildCableVertices()
 		_AppendStationCurve(
 			_ButtonRightEdge(_triggerButtons[i]),
 			anchor.screenPos,
-			anchor.color);
+			triggerToStationColor);
 	}
 
 	_cablesDirty = false;
@@ -421,51 +550,106 @@ std::shared_ptr<GuiLabel> GuiHud::_MakeHeader(const std::string& text, unsigned 
 	return std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader(text, width));
 }
 
-std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text, const glm::vec3& tint) const
+std::shared_ptr<GuiButton> GuiHud::_MakeSourceButton(const std::string& text,
+	const glm::vec3& tint,
+	unsigned int width) const
 {
-	auto buttonParams = GuiButtonParams::PanelButton(_SourceButtonWidth);
-	buttonParams.Texture = "";
-	buttonParams.OverTexture = "";
-	buttonParams.DownTexture = "";
-	buttonParams.Size = { _SourceButtonWidth, _SourceButtonHeight };
+	auto buttonParams = GuiButtonParams::PanelButton(width);
+	buttonParams.Texture = "rounded_but";
+	buttonParams.OverTexture = "rounded_but";
+	buttonParams.DownTexture = "rounded_but";
+	buttonParams.Size = { width, _SourceButtonHeight };
 	buttonParams.MinSize = { 64u, _SourceButtonHeight };
-	buttonParams.TintColor = tint;
+	buttonParams.TintColor = glm::vec3(0.02f, 0.02f, 0.02f);
 	auto button = std::make_shared<GuiButton>(buttonParams);
 
-	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 10u);
-	labelParams.Position = { 0, 5 };
-	labelParams.Size = { _SourceButtonWidth, GuiLabelParams::RowHeight };
-	button->AddChild(std::make_shared<GuiLabel>(labelParams));
+	auto trim = [](std::string value)
+	{
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+			value.erase(value.begin());
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+			value.pop_back();
+		return value;
+	};
+
+	const std::size_t maxLineChars = 8u;
+	std::string line1 = text;
+	std::string line2;
+	if (text.size() > maxLineChars)
+	{
+		std::size_t split = text.rfind(' ', maxLineChars);
+		if (split == std::string::npos || split == 0u)
+			split = maxLineChars;
+		line1 = trim(text.substr(0, split));
+		line2 = trim(text.substr(split));
+		if (line2.size() > maxLineChars)
+			line2 = trim(line2.substr(0, maxLineChars));
+	}
+
+	GuiLabelParams line1Params = GuiLabelParams::PanelScrollRow(line1, 0u);
+	line1Params.Position = { 4, 18 };
+	line1Params.Size = { width - 8u, 14u };
+	button->AddChild(std::make_shared<GuiLabel>(line1Params));
+
+	if (!line2.empty())
+	{
+		GuiLabelParams line2Params = GuiLabelParams::PanelScrollRow(line2, 0u);
+		line2Params.Position = { 4, 4 };
+		line2Params.Size = { width - 8u, 14u };
+		button->AddChild(std::make_shared<GuiLabel>(line2Params));
+	}
 	return button;
 }
 
-std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text, const glm::vec3& tint) const
+std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
+	const glm::vec3& tint,
+	std::weak_ptr<engine::Trigger> trigger) const
 {
 	auto buttonParams = GuiButtonParams::PanelButton(_TriggerButtonWidth);
 	buttonParams.Texture = "trigger_back";
 	buttonParams.OverTexture = "trigger_back";
 	buttonParams.DownTexture = "trigger_back";
+	buttonParams.TextureShader = "texture_tinted";
 	buttonParams.Size = { _TriggerButtonWidth, _TriggerButtonHeight };
 	buttonParams.MinSize = { GuiButtonParams::DefaultMinWidth, _TriggerButtonHeight };
 	buttonParams.TintColor = tint;
-	auto button = std::make_shared<GuiButton>(buttonParams);
+	auto button = std::make_shared<GuiHudTriggerBack>(buttonParams, trigger);
 
-	const bool isDitch = (text.find("Ditch") != std::string::npos);
-	base::GuiElementParams overlayParams;
-	overlayParams.Position = { 10, 6 };
-	overlayParams.Size = { 28, 28 };
-	overlayParams.TextureShader = "texture_tinted";
-	overlayParams.Texture = isDitch ? "trigger_ditch" : "trigger_activate";
-	overlayParams.OverTexture = isDitch ? "trigger_ditch" : "trigger_activate";
-	overlayParams.DownTexture = isDitch ? "trigger_ditch" : "trigger_activate";
-	overlayParams.GuiPassThrough = true;
-	overlayParams.TintColor = glm::vec3(1.0f, 1.0f, 1.0f);
-	auto overlay = std::make_shared<base::GuiElement>(overlayParams);
-	button->AddChild(overlay);
+	const int socketPadding = 8;
+	const int pedalSizeW = static_cast<int>(_TriggerButtonWidth * 0.45) - socketPadding;
+	const int pedalSizeH = static_cast<int>(_TriggerButtonHeight * 0.70f);
+	const int pedalPosX = 22;
+	const int pedalPosY = 1;
+
+	base::GuiElementParams activateParams;
+	activateParams.Position = { pedalPosX, pedalPosY };
+	activateParams.Size = { static_cast<unsigned int>(pedalSizeW), static_cast<unsigned int>(pedalSizeH) };
+	activateParams.TextureShader = "texture";
+	activateParams.Texture = "trigger_activate";
+	activateParams.OverTexture = "trigger_activate_over";
+	activateParams.DownTexture = "trigger_activate_down";
+	activateParams.OutTexture = "trigger_activate_down_out";
+	activateParams.GuiPassThrough = false;
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true));
+
+	base::GuiElementParams ditchParams;
+	ditchParams.Position = { pedalPosX + pedalSizeW + socketPadding, pedalPosY };
+	ditchParams.Size = { static_cast<unsigned int>(pedalSizeW), static_cast<unsigned int>(pedalSizeH) };
+	ditchParams.TextureShader = "texture";
+	ditchParams.Texture = "trigger_ditch";
+	ditchParams.OverTexture = "trigger_ditch_over";
+	ditchParams.DownTexture = "trigger_ditch_down";
+	ditchParams.OutTexture = "trigger_ditch_down_out";
+	ditchParams.GuiPassThrough = false;
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false));
 
 	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 12u);
-	labelParams.Position = { 44, 5 };
-	labelParams.Size = { _TriggerButtonWidth - 52u, GuiLabelParams::RowHeight };
+	const int approxCharWidth = 8;
+	const unsigned int textWidth = std::min(_TriggerButtonWidth - 16u,
+		static_cast<unsigned int>(std::max(40, static_cast<int>(text.size()) * approxCharWidth + 8)));
+	const int textPosX = std::max(0, (static_cast<int>(_TriggerButtonWidth) - static_cast<int>(textWidth)) / 2);
+	labelParams.Position = { textPosX, static_cast<int>(_TriggerButtonHeight) - static_cast<int>(GuiLabelParams::RowHeight) + 12 };
+	labelParams.Size = { textWidth, GuiLabelParams::RowHeight };
 	button->AddChild(std::make_shared<GuiLabel>(labelParams));
 	return button;
 }

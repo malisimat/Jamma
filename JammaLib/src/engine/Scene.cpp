@@ -89,6 +89,12 @@ Scene::Scene(SceneParams params,
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
 
+	GuiHudParams hudParams;
+	hudParams.Size = params.Size;
+	hudParams.MinSize = params.Size;
+	_hudPanel = std::make_shared<GuiHud>(hudParams);
+	AddChild(_hudPanel);
+
 	_EnsureRemoteTempoPromptUi();
 
 	GuiSelectorParams selectorParams;
@@ -386,16 +392,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			hudMidiInputs.push_back(device.Name);
 	}
 
-	std::vector<std::string> hudTriggerNames;
-	hudTriggerNames.reserve(rigStruct.Triggers.size());
-	for (const auto& triggerCfg : rigStruct.Triggers)
-	{
-		if (!triggerCfg.Name.empty())
-			hudTriggerNames.push_back(triggerCfg.Name);
-	}
-
-	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggerNames));
+	std::vector<std::shared_ptr<Trigger>> hudTriggers;
+	hudTriggers.reserve(rigStruct.Triggers.size());
 
 	TriggerParams trigParams;
 	trigParams.Size = { 24, 24 };
@@ -441,6 +439,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					hudTriggers.push_back(trigger.value());
 				}
 			}
 
@@ -451,6 +450,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+
+	if (scene->_hudPanel)
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
@@ -481,6 +483,14 @@ void Scene::Draw(DrawContext& ctx)
 	}
 
 	_label->Draw(ctx);
+
+	if (_hudPanel)
+	{
+		const auto streamParams = _audioEngine->GetStreamParams();
+		const auto numSamps = std::max(1u, streamParams.BufSize);
+		for (auto channel = 0u; channel < streamParams.NumInputChannels; ++channel)
+			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
+	}
 
 	for (auto& child : _guiChildren)
 		if (child)
@@ -1129,12 +1139,6 @@ void Scene::OnTick(Time curTime,
 	if (auto clock = _quantisation.Clock())
 		clock->Tick(samps, 0u);
 
-	if (_hudPanel && params.has_value())
-	{
-		for (auto channel = 0u; channel < params->NumInputChannels; ++channel)
-			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), samps);
-	}
-
 	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
@@ -1742,6 +1746,41 @@ void Scene::_InitSize()
 	_overlayViewProj = glm::mat4(1.0);
 	_overlayViewProj = glm::translate(_overlayViewProj, glm::vec3(-1.0f, -1.0f, -1.0f));
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
+
+	if (_hudPanel)
+		_hudPanel->SetSize(_sizeParams.Size);
+
+	_UpdateHudStationAnchors();
+}
+
+void Scene::_UpdateHudStationAnchors()
+{
+	if (!_hudPanel || (_sizeParams.Size.Width == 0) || (_sizeParams.Size.Height == 0))
+		return;
+
+	const float w = static_cast<float>(_sizeParams.Size.Width);
+	const float h = static_cast<float>(_sizeParams.Size.Height);
+
+	std::vector<gui::GuiHud::StationAnchor> anchors;
+	anchors.reserve(_stations.size());
+
+	for (const auto& station : _stations)
+	{
+		auto modelPos = station->ModelPosition();
+		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
+		utils::Position2d screenPos{ -9999, -9999 };
+		if (std::abs(clip.w) > 1e-6f)
+		{
+			auto ndc = glm::vec3(clip) / clip.w;
+			screenPos = {
+				static_cast<int>((ndc.x + 1.0f) * 0.5f * w),
+				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
+			};
+		}
+		anchors.push_back({ screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+	}
+
+	_hudPanel->SetStationAnchors(std::move(anchors));
 }
 
 void Scene::_UpdateSelection(ActionResultType res)

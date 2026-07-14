@@ -6,11 +6,17 @@
 #include <vector>
 #include "GuiPanel.h"
 #include "GuiStackPanel.h"
+#include "GuiVu.h"
 
 namespace resources
 {
 	class ResourceLib;
 	class ShaderResource;
+}
+
+namespace engine
+{
+	class Trigger;
 }
 
 namespace gui
@@ -43,7 +49,7 @@ namespace gui
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
-			std::vector<std::string> triggerNames);
+			std::vector<std::shared_ptr<engine::Trigger>> triggers);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 
 	protected:
@@ -66,11 +72,12 @@ namespace gui
 		static constexpr unsigned int _RightRailPadding = 12u;
 		static constexpr unsigned int _RightRailSpacing = 10u;
 		static constexpr unsigned int _TriggerButtonWidth = 204u;
-		static constexpr unsigned int _TriggerButtonHeight = 40u;
+		static constexpr unsigned int _TriggerButtonHeight = 100u;
 
 		void _BuildPanels();
 		void _BuildTopStrip();
 		void _BuildTriggerRail();
+		void _RebuildPanels();
 		void _LayoutPanels();
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
@@ -86,15 +93,24 @@ namespace gui
 			const glm::vec4& color);
 
 		std::shared_ptr<GuiLabel> _MakeHeader(const std::string& text, unsigned int width) const;
-		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text, const glm::vec3& tint) const;
-		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text, const glm::vec3& tint) const;
+		std::shared_ptr<GuiButton> _MakeSourceButton(const std::string& text,
+			const glm::vec3& tint,
+			unsigned int width) const;
+		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
+			const glm::vec3& tint,
+			std::weak_ptr<engine::Trigger> trigger) const;
 
 		std::shared_ptr<GuiStackPanel> _topStrip;
-		std::shared_ptr<GuiStackPanel> _topAudioRow;
-		std::shared_ptr<GuiStackPanel> _topMidiRow;
+		std::shared_ptr<GuiStackPanel> _topInputRow;
 		std::shared_ptr<GuiStackPanel> _triggerRail;
 		std::vector<std::shared_ptr<GuiButton>> _sourceButtons;
 		std::vector<std::shared_ptr<GuiButton>> _triggerButtons;
+		std::vector<std::unique_ptr<GuiVu>> _audioInputVus;
+		unsigned int _audioInputCount = 0u;
+		std::vector<std::string> _midiInputNames;
+		std::vector<std::string> _triggerNames;
+		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
+		bool _cableRevealHeld = false;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;
 		std::weak_ptr<resources::ShaderResource> _cableShader;
