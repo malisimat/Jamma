@@ -217,3 +217,30 @@ unsigned long ExternalTransport::TakePositionFromAnchor(unsigned long absoluteMa
 	return static_cast<unsigned long>(diff % static_cast<unsigned long long>(takeLengthSamps));
 }
 
+unsigned long ExternalTransport::ApproachTakePosition(unsigned long currentPositionSamps,
+	unsigned long targetPositionSamps,
+	unsigned long takeLengthSamps,
+	unsigned long maxAdjustmentSamps) noexcept
+{
+	if (takeLengthSamps == 0ul)
+		return 0ul;
+
+	const auto current = currentPositionSamps % takeLengthSamps;
+	const auto target = targetPositionSamps % takeLengthSamps;
+	const auto length = static_cast<long long>(takeLengthSamps);
+	auto delta = static_cast<long long>(target) - static_cast<long long>(current);
+	if (delta > length / 2)
+		delta -= length;
+	else if (delta < -(length / 2))
+		delta += length;
+
+	const auto maxAdjustment = static_cast<long long>(maxAdjustmentSamps);
+	if (delta > maxAdjustment)
+		delta = maxAdjustment;
+	else if (delta < -maxAdjustment)
+		delta = -maxAdjustment;
+
+	const auto next = static_cast<long long>(current) + delta;
+	return static_cast<unsigned long>((next + length) % length);
+}
+

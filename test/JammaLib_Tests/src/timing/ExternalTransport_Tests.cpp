@@ -313,3 +313,63 @@ TEST(ExternalTransportReanchor, AnchorStableAcrossMultipleWraps)
 	}
 }
 
+TEST(ExternalTransportReanchor, JoinRebasePreservesLocalTakePhase)
+{
+	constexpr unsigned long intervalLength = 88200ul;
+	constexpr unsigned long takeLength = 30000ul;
+	constexpr unsigned long localAbsoluteAtJoin = (9ul * intervalLength) + 45123ul;
+	constexpr unsigned long takePositionAtJoin = 12345ul;
+
+	const auto localAnchor = ExternalTransport::TakeAnchorSample(
+		localAbsoluteAtJoin, takePositionAtJoin, takeLength);
+	const auto remoteAbsoluteAtJoin = ExternalTransport::AbsoluteMasterSample(1ul, intervalLength, 0ul);
+
+	// Evaluating a local anchor in the new NINJAM-origin timeline would jump.
+	EXPECT_NE(takePositionAtJoin, ExternalTransport::TakePositionFromAnchor(
+		remoteAbsoluteAtJoin, localAnchor, takeLength));
+
+	// Rebasing from the current cursor moves the anchor into the remote timeline
+	// without changing that cursor.
+	const auto remoteAnchor = ExternalTransport::TakeAnchorSample(
+		remoteAbsoluteAtJoin, takePositionAtJoin, takeLength);
+	EXPECT_EQ(takePositionAtJoin, ExternalTransport::TakePositionFromAnchor(
+		remoteAbsoluteAtJoin, remoteAnchor, takeLength));
+
+	const auto remoteAbsoluteAfterNextInterval = ExternalTransport::AbsoluteMasterSample(
+		2ul, intervalLength, 0ul);
+	EXPECT_EQ((takePositionAtJoin + intervalLength) % takeLength,
+		ExternalTransport::TakePositionFromAnchor(remoteAbsoluteAfterNextInterval,
+			remoteAnchor,
+			takeLength));
+}
+
+TEST(ExternalTransportReanchor, JoinRebasePreservesDifferentTakeLengths)
+{
+	constexpr unsigned long intervalLength = 88200ul;
+	constexpr unsigned long remoteAbsoluteAtJoin = 88200ul;
+	const unsigned long takeLengths[] = { 30000ul, 44100ul, 52789ul };
+	const unsigned long takePositions[] = { 12345ul, 22050ul, 39420ul };
+
+	for (auto index = 0u; index < std::size(takeLengths); ++index)
+	{
+		const auto takeLength = takeLengths[index];
+		const auto takePosition = takePositions[index] % takeLength;
+		const auto anchor = ExternalTransport::TakeAnchorSample(
+			remoteAbsoluteAtJoin, takePosition, takeLength);
+
+		EXPECT_EQ(takePosition, ExternalTransport::TakePositionFromAnchor(
+			remoteAbsoluteAtJoin, anchor, takeLength));
+		EXPECT_EQ((takePosition + intervalLength) % takeLength,
+			ExternalTransport::TakePositionFromAnchor(remoteAbsoluteAtJoin + intervalLength,
+				anchor,
+				takeLength));
+	}
+}
+
+TEST(ExternalTransportReanchor, ApproachesTargetByBoundedShortestPath)
+{
+	EXPECT_EQ(564ul, ExternalTransport::ApproachTakePosition(500ul, 800ul, 1000ul, 64ul));
+	EXPECT_EQ(936ul, ExternalTransport::ApproachTakePosition(0ul, 900ul, 1000ul, 64ul));
+	EXPECT_EQ(20ul, ExternalTransport::ApproachTakePosition(980ul, 20ul, 1000ul, 64ul));
+}
+

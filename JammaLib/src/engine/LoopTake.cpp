@@ -837,18 +837,37 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 	return _midiVisualLoopLength.load(std::memory_order_relaxed);
 }
 
-void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
+void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample,
+	unsigned long maxAdjustmentSamps) noexcept
 {
 	// Skip if no anchor has been set (take not yet played while connected).
-	if (_masterAnchorSample == 0ul)
+	if (!_hasMasterAnchor)
 		return;
 
 	const auto loopLength = VisualLoopLengthSamps();
 	if (loopLength == 0ul)
 		return;
 
-	const auto newPos = timing::ExternalTransport::TakePositionFromAnchor(
+	const auto targetPos = timing::ExternalTransport::TakePositionFromAnchor(
 		absoluteMasterSample, _masterAnchorSample, loopLength);
+
+	auto currentPos = 0ul;
+	bool hasAudioLoop = false;
+	for (const auto& loop : _loops)
+	{
+		if (loop)
+		{
+			currentPos = loop->PlayIndex();
+			hasAudioLoop = true;
+			break;
+		}
+	}
+
+	if (!hasAudioLoop)
+		currentPos = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+
+	const auto newPos = timing::ExternalTransport::ApproachTakePosition(
+		currentPos, targetPos, loopLength, maxAdjustmentSamps);
 
 	for (auto& loop : _loops)
 	{
@@ -874,6 +893,35 @@ void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept
 		if (forwardDelta != 0)
 			_midiAnchorCorrection.fetch_sub(forwardDelta, std::memory_order_relaxed);
 	}
+}
+
+void LoopTake::RebaseMasterAnchor(unsigned long absoluteMasterSample) noexcept
+{
+	if (!_hasMasterAnchor)
+		return;
+
+	const auto loopLength = VisualLoopLengthSamps();
+	if (loopLength == 0ul)
+		return;
+
+	auto playPosition = 0ul;
+	bool hasAudioLoop = false;
+	for (const auto& loop : _loops)
+	{
+		if (loop)
+		{
+			playPosition = loop->PlayIndex();
+			hasAudioLoop = true;
+			break;
+		}
+	}
+
+	if (!hasAudioLoop)
+		playPosition = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+
+	_masterAnchorSample = timing::ExternalTransport::TakeAnchorSample(
+		absoluteMasterSample, playPosition, loopLength);
+	_hasMasterAnchor = true;
 }
 
 double LoopTake::LoopIndexFrac() const noexcept
@@ -1302,7 +1350,12 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		if (!midiLoop)
 			continue;
 
-		midi::MidiIndexedOutputSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
+		const auto masterVelocityScale = static_cast<float>(_masterMixer->UnmutedLevel());
+		midi::MidiIndexedOutputSink indexedSink(sink,
+			firstOutputIndex + i,
+			midiBlockStart,
+			globalSample,
+			masterVelocityScale);
 		midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
@@ -1396,9 +1449,12 @@ void LoopTake::Play(unsigned long index,
 	// Store the master-relative anchor so that a remote interval wrap can re-derive
 	// each loop's play position relative to the master timeline instead of snapping
 	// to zero.  Only stored when the caller knows the absolute master position.
-	if (masterAnchorSample > 0ul && loopLength > 0ul)
+	if (loopLength > 0ul)
+	{
 		_masterAnchorSample = timing::ExternalTransport::TakeAnchorSample(
 			masterAnchorSample, index, loopLength);
+		_hasMasterAnchor = true;
+	}
 
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)

@@ -197,9 +197,13 @@ namespace engine
 			unsigned int endRecordSamps,
 			int midiQuantisationErrorSamps = 0,
 			unsigned long masterAnchorSample = 0ul);
+		// Rebase the take's anchor into a newly authoritative master timeline
+		// while preserving its current audio or MIDI play position.
+		void RebaseMasterAnchor(unsigned long absoluteMasterSample) noexcept;
 		// Re-derive play position for all loops from the stored master-relative anchor
 		// without snapping to zero.  No-op if no anchor has been set.
-		void RepositionFromAnchor(unsigned long absoluteMasterSample) noexcept;
+		void RepositionFromAnchor(unsigned long absoluteMasterSample,
+			unsigned long maxAdjustmentSamps) noexcept;
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -344,6 +348,7 @@ namespace engine
 		// take is at loop-relative position 0.  Set on Play, used to re-derive
 		// _playIndex at authoritative remote wraps without snapping to zero.
 		unsigned long _masterAnchorSample = 0ul;
+		bool _hasMasterAnchor = false;
 		// Modular correction applied to all MIDI loop phase anchors owned by this
 		// take after remote NINJAM wrap re-anchors. Negative (backward) shift means
 		// notes jumped forward: effectiveAnchor = loopPhaseAnchor + correction.

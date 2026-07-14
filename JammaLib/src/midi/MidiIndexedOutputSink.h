@@ -12,7 +12,8 @@ namespace midi
 		MidiIndexedOutputSink(IMidiOutputSink& outputSink,
 			unsigned int outputIndex,
 			std::uint32_t midiBlockStart,
-			std::uint32_t outputBlockStart) noexcept;
+			std::uint32_t outputBlockStart,
+			float velocityScale = 1.0f) noexcept;
 
 		void OnEvent(const MidiEvent& ev) noexcept override;
 
@@ -21,5 +22,6 @@ namespace midi
 		unsigned int _outputIndex;
 		std::uint32_t _midiBlockStart;
 		std::uint32_t _outputBlockStart;
+		float _velocityScale;
 	};
 }

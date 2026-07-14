@@ -9,6 +9,8 @@ using namespace timing;
 
 namespace ninjam
 {
+	constexpr unsigned long NinjamPhaseCorrectionStepSamps = 64ul;
+
 	NinjamNetworkService::NinjamNetworkService() :
 		_ninjamController(std::make_shared<ninjam::NinjamController>())
 	{
@@ -233,16 +235,24 @@ namespace ninjam
 		{
 			quantisation.DisciplineRemotePhase(snapshot.IntervalPositionSamps, intervalLen);
 
-			// Re-anchor all local (non-remote) takes from their stored master-relative
-			// anchor so play position is re-derived rather than snapping to zero.
-			const auto abs = timing::ExternalTransport::AbsoluteMasterSample(
-				*_externalTransport.Published());
+			const auto state = _externalTransport.Published();
+			const auto abs = timing::ExternalTransport::AbsoluteMasterSample(*state);
+			const auto joinedThisWrap = state->HasCommittedAlignment
+				&& (state->LastCommittedRemoteWrap == wrapAfter);
 			for (const auto& station : stations)
 			{
 				if (station && !station->IsRemote())
 				{
 					for (const auto& take : station->GetLoopTakeSnapshot())
-						if (take) take->RepositionFromAnchor(abs);
+					{
+						if (!take)
+							continue;
+
+						if (joinedThisWrap)
+							take->RebaseMasterAnchor(abs);
+						else
+							take->RepositionFromAnchor(abs, NinjamPhaseCorrectionStepSamps);
+					}
 				}
 			}
 		}

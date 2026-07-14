@@ -144,6 +144,13 @@ namespace timing
 			unsigned long takeAnchorSample,
 			unsigned long takeLengthSamps) noexcept;
 
+		// Move a take cursor toward its master-derived target through the shortest
+		// modular path, capped at maxAdjustmentSamps for seamless phase discipline.
+		static unsigned long ApproachTakePosition(unsigned long currentPositionSamps,
+			unsigned long targetPositionSamps,
+			unsigned long takeLengthSamps,
+			unsigned long maxAdjustmentSamps) noexcept;
+
 	private:
 		void _Publish(const char* reason);
 

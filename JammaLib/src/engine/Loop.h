@@ -242,6 +242,10 @@ namespace engine
 			if (len == 0ul) return;
 			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
 		}
+		unsigned long PlayIndex() const noexcept
+		{
+			return _playIndex.load(std::memory_order_relaxed);
+		}
 		void EndRecording();
 		void Ditch();
 		void Overdub();

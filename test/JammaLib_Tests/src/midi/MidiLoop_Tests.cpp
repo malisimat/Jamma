@@ -544,6 +544,39 @@ TEST(LoopTakeMidiTiming, FirstPlaybackStartsAtRecordedStartAfterAudioDelayCompen
 	EXPECT_TRUE(sink.events[0].event.IsNoteOn());
 }
 
+TEST(LoopTakeMidiPlayback, MasterLevelScalesNoteVelocityOnly)
+{
+	auto take = MakeLoopTake();
+	take->SetVisible(true);
+	take->SetEnabled(true);
+	take->Record({}, "station", { 0u });
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), 0u));
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(10u, 0u, 60u, 64u), 10u));
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent{ 20u, 0xB0u, 1u, 100u, 0u }, 20u));
+	take->Play(0u, 100u, 0u);
+
+	actions::GuiAction masterAction;
+	masterAction.ElementType = actions::GuiAction::ACTIONELEMENT_SLIDER;
+	masterAction.Index = 0u;
+	masterAction.Data = actions::GuiAction::GuiDouble(0.5);
+	take->OnAction(masterAction);
+
+	CapturingOutputSink sink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(0u, 32u, sink));
+	ASSERT_EQ(3u, sink.events.size());
+	for (const auto& captured : sink.events)
+	{
+		if (captured.event.IsNoteOn())
+			EXPECT_EQ(50u, captured.event.data2);
+		else if (captured.event.IsNoteOff())
+			EXPECT_EQ(64u, captured.event.data2);
+		else if (captured.event.MessageType() == 0xB0u)
+			EXPECT_EQ(100u, captured.event.data2);
+		else
+			FAIL() << "Unexpected MIDI message type";
+	}
+}
+
 // ── Slice 5: Quantised record-end ─────────────────────────────────────────────
 //
 // MidiLoop has no Timer dependency in its hot path, but record-end length

@@ -29,6 +29,31 @@ static std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
 	return std::make_shared<LoopTake>(params, mixerParams);
 }
 
+class TestLoopTake :
+	public LoopTake
+{
+public:
+	TestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
+		LoopTake(params, mixerParams)
+	{
+	}
+
+	std::size_t ChildCount() const
+	{
+		return _children.size();
+	}
+};
+
+static std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "take-0")
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<TestLoopTake>(params, mixerParams);
+}
+
 static std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
 {
 	StationParams params;
@@ -190,10 +215,11 @@ static void AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ActionE
 // reflects the (now-promoted) front buffer. Both readings should equal 1.
 TEST(LoopTakeFlipBuffer, AddLoopStagesInBackBuffer)
 {
-	auto take = MakeLoopTake();
+	auto take = MakeTestLoopTake();
 
 	// Before any AddLoop, both buffers are empty.
 	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+	EXPECT_EQ(1u, take->ChildCount());
 
 	// AddLoop stages a loop into the back buffer.
 	take->AddLoop(0u, "station");
@@ -201,6 +227,7 @@ TEST(LoopTakeFlipBuffer, AddLoopStagesInBackBuffer)
 	// NumInputChannels now reads from the back buffer (changesMade == true,
 	// flipLoopBuffer == true), so it should be 1.
 	EXPECT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+	EXPECT_EQ(1u, take->ChildCount());
 }
 
 // After CommitChanges the front buffer matches the back buffer, and
@@ -386,17 +413,19 @@ TEST(StationFlipBuffer, RackConnectionsUpdateEachChannelMixer)
 // NumInputChannels returns 0 because _loops is empty and _changesMade is false.
 TEST(LoopTakeFlipBuffer, DitchClearsAllLoopsAfterCommit)
 {
-	auto take = MakeLoopTake();
+	auto take = MakeTestLoopTake();
 
 	take->AddLoop(0u, "station");
 	take->CommitChanges();
 	ASSERT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+	ASSERT_EQ(2u, take->ChildCount());
 
 	take->Ditch();
 
 	// Ditch clears _loops directly; _changesMade is not set by Ditch, so
 	// NumInputChannels reads from the (now-empty) front buffer.
 	EXPECT_EQ(0u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+	EXPECT_EQ(1u, take->ChildCount());
 }
 
 // Ditch with multiple committed loops clears all channels.
