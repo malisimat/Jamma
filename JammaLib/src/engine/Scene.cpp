@@ -483,6 +483,17 @@ void Scene::Draw(DrawContext& ctx)
 		const auto numSamps = std::max(1u, streamParams.BufSize);
 		for (auto channel = 0u; channel < streamParams.NumInputChannels; ++channel)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
+
+		unsigned int midiInput = 0u;
+		for (const auto& device : _userConfig.Midi.Devices)
+		{
+			if (!device.Enabled || device.Name.empty())
+				continue;
+
+			_hudPanel->SetMidiInputPeak(midiInput++,
+				_inputSubsystem->ConsumeMidiInputPeak(device.Name),
+				numSamps);
+		}
 	}
 
 	for (auto& child : _guiChildren)

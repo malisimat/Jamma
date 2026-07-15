@@ -84,6 +84,7 @@ namespace midi
 			midi::MidiClockAnchor& midiClockAnchor);
 		void CloseMidi();
 		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
 		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
@@ -156,6 +157,7 @@ namespace midi
 			MidiClockAnchorSnapshot LastClockAnchor;
 			std::uint32_t NextLiveSequence = 0u;
 			std::uint64_t LastDroppedCount = 0u;
+			std::atomic<float> PendingActivityPeak{ 0.0f };
 		};
 
 		struct LiveMidiDispatchNotification

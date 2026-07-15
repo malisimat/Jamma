@@ -29,6 +29,7 @@ namespace io
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
 		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;

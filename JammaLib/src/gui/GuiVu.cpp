@@ -13,14 +13,20 @@ using resources::ResourceLib;
 using resources::ShaderResource;
 
 GuiVu::GuiVu() :
+	GuiVu(GuiVuParams())
+{
+}
+
+GuiVu::GuiVu(GuiVuParams params) :
 	ResourceUser(),
 	_isVisible(true),
-	_position({ 0, 0 }),
-	_size({ VuWidth, 1 }),
-	_value(audio::FallingValue({ 0.00005, 0.00003, 12000u })),
+	_position(params.Position),
+	_size(params.Size),
+	_value(audio::FallingValue({ params.FallRate, params.HoldFallRate, params.HoldSamps })),
 	_peakValue(0.0f),
 	_displayValue(0.0f),
 	_displayHold(0.0f),
+	_useDecibelScale(params.UseDecibelScale),
 	_vertexArray(0),
 	_vertexBuffer{ 0, 0 },
 	_shader(std::weak_ptr<ShaderResource>())
@@ -222,13 +228,15 @@ unsigned int GuiVu::_CalcTotalLeds(unsigned int height)
 	return ((height - (unsigned int)LedHeight) / (unsigned int)LedPitch) + 1u;
 }
 
-unsigned int GuiVu::_CalcCurrentLeds(double value, unsigned int totalLeds)
+unsigned int GuiVu::_CalcCurrentLeds(double value, unsigned int totalLeds) const
 {
 	if (totalLeds == 0u)
 		return 0u;
 
 	auto linear = value;
 	if (linear < 0.0) linear = 0.0;
+	if (!_useDecibelScale)
+		return static_cast<unsigned int>(std::ceil(std::min(1.0, linear) * totalLeds));
 
 	// Peaks are linear amplitude (0..1), but real-world signal levels sit well
 	// below 0 dBFS (e.g. -40 to -60 dB for quiet input). A straight linear

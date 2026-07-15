@@ -47,6 +47,7 @@ namespace gui
 		virtual void SetSize(utils::Size2d size) override;
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
+		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
 			std::vector<std::shared_ptr<engine::Trigger>> triggers);
@@ -76,6 +77,10 @@ namespace gui
 		static constexpr unsigned int _RightRailSpacing = 10u;
 		static constexpr unsigned int _TriggerButtonWidth = 120u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
+		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
+		static constexpr double _MidiInputFallRate = 0.003;
+		static constexpr double _MidiInputHoldFallRate = 0.003;
+		static constexpr unsigned int _MidiInputPeakHoldSamps = 320u;
 
 		void _BuildPanels();
 		void _BuildTopStrip();
@@ -114,7 +119,7 @@ namespace gui
 		std::shared_ptr<GuiStackPanel> _triggerRail;
 		std::vector<std::shared_ptr<GuiButton>> _sourceButtons;
 		std::vector<std::shared_ptr<GuiButton>> _triggerButtons;
-		std::vector<std::unique_ptr<GuiVu>> _audioInputVus;
+		std::vector<std::unique_ptr<GuiVu>> _inputVus;
 		unsigned int _audioInputCount = 0u;
 		std::vector<std::string> _midiInputNames;
 		std::vector<std::string> _triggerNames;

@@ -209,4 +209,9 @@ namespace io
 	{
 		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
 	}
+
+	float IoInputSubsystem::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
+	{
+		return _midiRouter.ConsumeMidiInputPeak(deviceName);
+	}
 }

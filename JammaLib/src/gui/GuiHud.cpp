@@ -149,14 +149,14 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	if (_triggerRail)
 		_triggerRail->ComputeLayout();
 
-	for (std::size_t i = 0u; i < _audioInputVus.size() && i < _sourceButtons.size(); ++i)
+	for (std::size_t i = 0u; i < _inputVus.size() && i < _sourceButtons.size(); ++i)
 	{
 		const auto buttonPos = _sourceButtons[i]->GlobalPosition();
 		const auto buttonSize = _sourceButtons[i]->GetSize();
 		const auto rootPos = GlobalPosition();
-		_audioInputVus[i]->SetPosition({ buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width) - 13,
+		_inputVus[i]->SetPosition({ buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width) - 13,
 			buttonPos.Y - rootPos.Y + 4 });
-		_audioInputVus[i]->SetSize({ 7u, _SourceButtonHeight - 8u });
+		_inputVus[i]->SetSize({ 7u, _SourceButtonHeight - 8u });
 	}
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -168,7 +168,7 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	for (auto& child : _children)
 		child->Draw(ctx);
 
-	for (auto& vu : _audioInputVus)
+	for (auto& vu : _inputVus)
 		vu->Draw(ctx);
 
 	glCtx.PopMvp();
@@ -185,7 +185,7 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	auto valid = _InitCableShader(resourceLib);
 	if (valid)
 		valid = _InitCableVertexArray();
-	for (auto& vu : _audioInputVus)
+	for (auto& vu : _inputVus)
 		vu->InitResources(resourceLib, forceInit);
 
 	GlUtils::CheckError("GuiHud::_InitResources()");
@@ -199,7 +199,7 @@ void GuiHud::_ReleaseResources()
 	graphics::GlDeleteQueue::DeleteVertexArrays(1, &_cableVertexArray);
 	_cableVertexArray = 0;
 
-	for (auto& vu : _audioInputVus)
+	for (auto& vu : _inputVus)
 		vu->ReleaseResources();
 }
 
@@ -254,7 +254,9 @@ void GuiHud::_BuildTopStrip()
 		auto button = _MakeSourceButton("Audio In " + std::to_string(i + 1u), glm::vec3(0.92f, 0.52f, 0.24f), sourceButtonWidth);
 		_sourceButtons.push_back(button);
 		_topInputRow->AddChild(button);
-		_audioInputVus.push_back(std::make_unique<GuiVu>());
+		GuiVuParams vuParams;
+		vuParams.HoldSamps = _AudioInputPeakHoldSamps;
+		_inputVus.push_back(std::make_unique<GuiVu>(vuParams));
 	}
 
 	for (const auto& midiName : _midiInputNames)
@@ -262,6 +264,12 @@ void GuiHud::_BuildTopStrip()
 		auto button = _MakeSourceButton("MIDI " + midiName, glm::vec3(0.22f, 0.72f, 0.66f), sourceButtonWidth);
 		_sourceButtons.push_back(button);
 		_topInputRow->AddChild(button);
+		GuiVuParams vuParams;
+		vuParams.FallRate = _MidiInputFallRate;
+		vuParams.HoldFallRate = _MidiInputHoldFallRate;
+		vuParams.HoldSamps = _MidiInputPeakHoldSamps;
+		vuParams.UseDecibelScale = false;
+		_inputVus.push_back(std::make_unique<GuiVu>(vuParams));
 	}
 
 	_topStrip->AddChild(_topInputRow);
@@ -286,7 +294,7 @@ void GuiHud::_RebuildPanels()
 {
 	_sourceButtons.clear();
 	_triggerButtons.clear();
-	_audioInputVus.clear();
+	_inputVus.clear();
 	_topStrip.reset();
 	_topInputRow.reset();
 	_triggerRail.reset();
@@ -304,8 +312,15 @@ void GuiHud::SetCableRevealHeld(bool held)
 
 void GuiHud::SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps)
 {
-	if (channel < _audioInputVus.size())
-		_audioInputVus[channel]->SetPeak(peak, numSamps);
+	if (channel < _inputVus.size())
+		_inputVus[channel]->SetPeak(peak, numSamps);
+}
+
+void GuiHud::SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps)
+{
+	const auto vuIndex = _audioInputCount + input;
+	if (vuIndex < _inputVus.size())
+		_inputVus[vuIndex]->SetPeak(peak, numSamps);
 }
 
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,

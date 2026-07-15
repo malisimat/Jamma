@@ -453,6 +453,9 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 			endpoint->ConfiguredName,
 			[endpoint, sampleRate, midiClockAnchor = &midiClockAnchor, notification = _liveMidiDispatchNotification](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
 			{
+				const auto activityPeak = std::max(0.15f, static_cast<float>(data2) / 127.0f);
+				endpoint->PendingActivityPeak.store(activityPeak, std::memory_order_relaxed);
+
 				midi::MidiEvent ingress{};
 				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -526,6 +529,21 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 	if (midiInputs->empty())
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+}
+
+float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
+{
+	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
+	if (!midiInputs)
+		return 0.0f;
+
+	for (const auto& input : *midiInputs)
+	{
+		if (input && input->ConfiguredName == deviceName)
+			return input->PendingActivityPeak.exchange(0.0f, std::memory_order_relaxed);
+	}
+
+	return 0.0f;
 }
 
 void MidiRouter::CloseMidi()
