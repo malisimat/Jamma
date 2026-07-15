@@ -1,12 +1,14 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <optional>
-#include "ActionReceiver.h"
-#include "GuiElement.h"
+#include "ActionSender.h"
 #include "Tickable.h"
 #include "../utils/Timer.h"
 #include "../midi/MidiEvent.h"
@@ -203,30 +205,14 @@ namespace engine
 		bool _isDown;
 	};
 
-	class TriggerParams :
-		public base::GuiElementParams
+	struct TriggerParams
 	{
-	public:
-		TriggerParams() :
-			base::GuiElementParams(0, DrawableParams{ "" },
-			MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-			SizeableParams{ 1,1 },
-			"",
-			"",
-			"",
-			{})
-		{};
-
-	public:
+		unsigned int Index = 0u;
 		std::string Name;
 		std::vector<DualBinding> Activate;
 		std::vector<DualBinding> Ditch;
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
-		std::string TextureRecording;
-		std::string TextureDitchDown;
-		std::string TextureOverdubbing;
-		std::string TexturePunchedIn;
 		unsigned int DebounceMs = 0u;
 	};
 
@@ -246,7 +232,7 @@ namespace engine
 	
 	class Trigger :
 		public base::Tickable,
-		public base::GuiElement
+		public base::ActionSender
 	{
 	public:
 		Trigger(TriggerParams trigParams);
@@ -259,8 +245,7 @@ namespace engine
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
 		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
-		virtual	utils::Position2d Position() const override;
-		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
+		actions::ActionResult OnAction(actions::KeyAction action);
 		actions::ActionResult OnEvent(const midi::MidiEvent& event,
 			const base::Action& action);
 		actions::ActionResult OnEvent(TriggerSource source,
@@ -268,11 +253,13 @@ namespace engine
 			unsigned int state,
 			const base::Action& action,
 			const std::string& device = "");
+		actions::ActionResult QueueExternalControlAction(bool isActivate,
+			bool isDown,
+			const base::Action& action);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params) override;
-		virtual void Draw(base::DrawContext& ctx) override;
 
 		void AddBinding(DualBinding activate, DualBinding ditch);
 		void RemoveBinding(DualBinding activate, DualBinding ditch);
@@ -283,6 +270,8 @@ namespace engine
 		void AddMidiInputDevice(std::string device);
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		TriggerState GetState() const;
+		bool IsActivateInputDown() const;
+		bool IsDitchInputDown() const;
 		bool IsDitchDown() const;
 		void Reset();
 		std::string Name() const;
@@ -294,9 +283,6 @@ namespace engine
 			unsigned int destChannel);
 
 	protected:
-		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
-		virtual void _ReleaseResources() override;
-
 		void _UpdateBehaviour();
 
 	private:
@@ -319,6 +305,9 @@ namespace engine
 			bool isActivate,
 			std::optional<io::UserConfig> cfg,
 			std::optional<audio::AudioStreamParams> params);
+		void _ProcessQueuedExternalControlActions(std::optional<io::UserConfig> cfg,
+			std::optional<audio::AudioStreamParams> params) noexcept;
+		void _PublishTriggerStateSnapshot() noexcept;
 
 		// Only call from state machine
 		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
@@ -346,9 +335,23 @@ namespace engine
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
+		// External control thread produces edges; the audio thread consumes them.
+		struct ExternalControlAction
+		{
+			bool IsActivate;
+			bool IsDown;
+		};
+		static constexpr std::size_t _ExternalControlActionQueueCapacity = 64u;
+		std::array<ExternalControlAction, _ExternalControlActionQueueCapacity> _externalControlActionQueue{};
+		std::atomic<std::size_t> _externalControlActionHead{ 0u };
+		std::atomic<std::size_t> _externalControlActionTail{ 0u };
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
 		TriggerState _state;
+		std::atomic<std::uint8_t> _publishedTriggerState{ static_cast<std::uint8_t>(TRIGSTATE_DEFAULT) };
+		std::atomic<bool> _publishedActivateInputDown{ false };
+		std::atomic<bool> _publishedDitchInputDown{ false };
+		std::atomic<bool> _publishedTriggerDitchDown{ false };
 		std::string _overdubSourceId;
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
@@ -361,10 +364,6 @@ namespace engine
 		bool _isLastDitchDown;
 		bool _isLastActivateDownRaw;
 		bool _isLastDitchDownRaw;
-		graphics::Image _textureRecording;
-		graphics::Image _textureDitchDown;
-		graphics::Image _textureOverdubbing;
-		graphics::Image _texturePunchedIn;
 		std::vector<TriggerTake> _loopTakeHistory;
 		std::vector<actions::DelayedAction> _delayedActions;
 		std::vector<DelayedTriggerAction> _delayedTriggerActions;

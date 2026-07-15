@@ -335,8 +335,12 @@ void GuiElement::Draw3d(DrawContext& ctx,
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, pos.Z)));
 		glCtx.PushMvp(glm::scale(glm::mat4(1.0), glm::vec3(scale, scale, scale)));
 
-		for (auto& child : _children)
-			child->Draw3d(ctx, 1, pass);
+		auto children = _children;
+		for (auto& child : children)
+		{
+			if (child)
+				child->Draw3d(ctx, 1, pass);
+		}
 
 		glCtx.PopMvp();
 		glCtx.PopMvp();

@@ -114,7 +114,10 @@ bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& f
 
 	if (!f.is_open())
 	{
-		std::cout << "Failed to open file: " << filePath << std::endl;
+		std::cout << "Failed to open "
+			<< (shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment")
+			<< " shader file: " << filePath << std::endl;
+		return false;
 	}
 
 	std::stringstream buffer;
@@ -137,7 +140,9 @@ bool ShaderResource::AddStageFromFile(GLuint shaderProgram, const std::string& f
 
 	if (GL_FALSE == status)
 	{
-		std::string msg("Compile failure in shader:\n");
+		std::string msg("Compile failure in ");
+		msg += shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment";
+		msg += " shader '" + filePath + "':\n";
 
 		GLint infoLogLength;
 		glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLogLength);

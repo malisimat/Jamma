@@ -212,7 +212,8 @@ void Station::Draw3d(base::DrawContext& ctx,
 	{
 		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.0f, _StationModelYOffset, 0.01f)));
 		const auto stationPeak = _masterMixer ? _masterMixer->VuPeakLevel() : 0.0f;
-		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak);
+		_stationModel->SetStationState(GlobalId(), IsSelected(), _isPicking3d, stationPeak,
+			static_cast<std::uint8_t>(GetVisualState()));
 		_stationModel->Draw3d(ctx, 1, pass);
 		glCtx.PopMvp();
 	}
@@ -977,6 +978,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
 		break;
 	}
 	case TriggerAction::TRIGGER_REC_END:
@@ -1037,6 +1039,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_ENDRECORDING);
 		}
 		break;
 	}
@@ -1058,6 +1061,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.TargetId = newLoopTake->Id();
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	}
 	case TriggerAction::TRIGGER_OVERDUB_END:
@@ -1126,6 +1130,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
 		}
 		break;
 	}
@@ -1147,6 +1152,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_PUNCHIN);
 		break;
 	case TriggerAction::TRIGGER_PUNCHIN_END:
 		if (action.ApplyToTargetTake && action.ApplyToTargetMidi && loopTake.has_value())
@@ -1166,6 +1172,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
+		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
 		break;
 	case TriggerAction::TRIGGER_DITCH:
 		if (loopTake.has_value())
@@ -1189,6 +1196,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
+		_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 		break;
 	case TriggerAction::TRIGGER_DITCH_UNMUTE:
 		if (loopTake.has_value())
@@ -1204,6 +1212,16 @@ ActionResult Station::OnAction(TriggerAction action)
 	return res;
 }
 
+StationVisualState Station::GetVisualState() const noexcept
+{
+	return static_cast<StationVisualState>(_publishedVisualState.load(std::memory_order_acquire));
+}
+
+void Station::_SetVisualState(StationVisualState state) noexcept
+{
+	_publishedVisualState.store(static_cast<std::uint8_t>(state), std::memory_order_release);
+}
+
 void Station::OnTick(Time curTime,
 	unsigned int samps,
 	std::optional<io::UserConfig> cfg,
@@ -1213,11 +1231,25 @@ void Station::OnTick(Time curTime,
 	{
 		trig->OnTick(curTime, samps, cfg, params);
 	}
+
+	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
+	{
+		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
+			[](const std::shared_ptr<LoopTake>& take) {
+				const auto state = take->TakeState();
+				return (LoopTake::STATE_PLAYINGRECORDING == state) ||
+					(LoopTake::STATE_OVERDUBBINGRECORDING == state);
+			});
+
+		if (!isEndingRecording)
+			_SetVisualState(StationVisualState::STATIONSTATE_PLAYING);
+	}
 }
 
 void Station::Reset()
 {
 	Jammable::Reset();
+	_SetVisualState(StationVisualState::STATIONSTATE_DEFAULT);
 	{
 		std::scoped_lock lock(_liveHeldMidiMutex);
 		_liveHeldMidi.clear();
@@ -1234,12 +1266,6 @@ void Station::Reset()
 	_loopTakes.clear();
 	_PublishLoopTakeSnapshot();
 
-	for (auto& trigger : _triggers)
-	{
-		auto child = std::find(_children.begin(), _children.end(), trigger);
-		if (_children.end() != child)
-			_children.erase(child);
-	}
 	_triggers.clear();
 }
 
@@ -1296,7 +1322,6 @@ void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 	trigger->SetReceiver(ActionReceiver::shared_from_this());
 
 	_triggers.push_back(trigger);
-	_children.push_back(trigger);
 }
 
 unsigned int Station::NumTakes() const

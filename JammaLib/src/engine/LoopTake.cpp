@@ -1045,8 +1045,6 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	mixer->SetUnmutedLevel(1.0);
 	_backAudioMixers.push_back(mixer);
 
-	_children.push_back(loop);
-
 	Init();
 
 	_ArrangeChildren();
@@ -1667,6 +1665,10 @@ void LoopTake::Ditch()
 	for (auto& loop : _loops)
 	{
 		loop->Ditch();
+
+		auto child = std::find(_children.begin(), _children.end(), loop);
+		if (child != _children.end())
+			_children.erase(child);
 	}
 
 	Zero(_lastBufSize, Audible::AUDIOSOURCE_LOOPS);
