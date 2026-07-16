@@ -9,8 +9,6 @@ using namespace timing;
 
 namespace ninjam
 {
-	constexpr unsigned long NinjamPhaseCorrectionStepSamps = 64ul;
-
 	NinjamNetworkService::NinjamNetworkService() :
 		_ninjamController(std::make_shared<ninjam::NinjamController>())
 	{
@@ -37,7 +35,8 @@ namespace ninjam
 	}
 
 	void NinjamNetworkService::PrepareTempoSyncOnConnect(timing::TimingQuantiser& quantisation,
-		unsigned int currentSampleRate)
+		unsigned int currentSampleRate,
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
 	{
 		_pendingRemoteTempoPrompt.reset();
 		_ignoredRemoteTempoPrompt.reset();
@@ -47,6 +46,8 @@ namespace ninjam
 		// stale phase/alignment from a previous session must never carry over.
 		_externalTransport.Connect();
 		_externalJoinAligned = false;
+		_externalGeneration = 0u;
+		_InvalidateExternalPhaseCorrections(stations);
 
 		if (_tempoJoinOptions.PushLocalTempoOnJoin)
 		{
@@ -59,13 +60,16 @@ namespace ninjam
 		}
 	}
 
-	void NinjamNetworkService::ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation)
+	void NinjamNetworkService::ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation,
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
 	{
 		_pendingRemoteTempoPrompt.reset();
 		_ignoredRemoteTempoPrompt.reset();
 		_joinPushAwaitingOutcome = false;
 		_externalTransport.Disconnect();
 		_externalJoinAligned = false;
+		_externalGeneration = 0u;
+		_InvalidateExternalPhaseCorrections(stations);
 		quantisation.ResetPendingTempoSyncState();
 	}
 
@@ -216,8 +220,14 @@ namespace ninjam
 		xsnap.SampleRate = snapshot.SampleRate;
 		xsnap.LocalAnchorSamps = clock->AbsoluteSamplePos(0ul);
 
-		const auto wrapBefore = _externalTransport.Published()->RemoteWrapCount;
-		_externalTransport.IngestSnapshot(xsnap);
+		const auto decision = _externalTransport.IngestSnapshot(xsnap);
+		const auto generation = _externalTransport.Generation();
+		if (generation != _externalGeneration)
+		{
+			_externalGeneration = generation;
+			_externalJoinAligned = false;
+			_InvalidateExternalPhaseCorrections(stations);
+		}
 
 		// Record the mid-cycle join alignment once, the first time we observe a
 		// valid remote interval against a seeded local master clock.  The alignment
@@ -230,31 +240,47 @@ namespace ninjam
 
 		// Wrap-gated phase discipline: absorb accumulated drift exactly once per
 		// remote interval so the local master clock stays phase-locked to NINJAM.
-		const auto wrapAfter = _externalTransport.Published()->RemoteWrapCount;
-		if (intervalLen > 0u && wrapAfter > wrapBefore)
+		if (decision.has_value())
 		{
-			quantisation.DisciplineRemotePhase(snapshot.IntervalPositionSamps, intervalLen);
-
-			const auto state = _externalTransport.Published();
-			const auto abs = timing::ExternalTransport::AbsoluteMasterSample(*state);
-			const auto joinedThisWrap = state->HasCommittedAlignment
-				&& (state->LastCommittedRemoteWrap == wrapAfter);
-			for (const auto& station : stations)
+			std::optional<long long> correction;
+			if (decision->IsJoin)
 			{
-				if (station && !station->IsRemote())
-				{
-					for (const auto& take : station->GetLoopTakeSnapshot())
-					{
-						if (!take)
-							continue;
-
-						if (joinedThisWrap)
-							take->RebaseMasterAnchor(abs);
-						else
-							take->RepositionFromAnchor(abs, NinjamPhaseCorrectionStepSamps);
-					}
-				}
+				if (quantisation.ApplyRemotePhaseCorrection(decision->DeltaSamps,
+					decision->IntervalLengthSamps))
+					correction = decision->DeltaSamps;
 			}
+			else
+				correction = quantisation.DisciplineRemotePhase(decision->RemotePositionSamps,
+					decision->IntervalLengthSamps);
+
+			if (correction.has_value() && *correction != 0)
+				_QueueExternalPhaseCorrection(stations, *correction, decision->Generation);
+		}
+	}
+
+	void NinjamNetworkService::_QueueExternalPhaseCorrection(
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		long long deltaSamps,
+		std::uint64_t generation)
+	{
+		for (const auto& station : stations)
+		{
+			if (!station || station->IsRemote())
+				continue;
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->QueueExternalPhaseCorrection(deltaSamps, generation);
+		}
+	}
+
+	void NinjamNetworkService::_InvalidateExternalPhaseCorrections(
+		const std::vector<std::shared_ptr<engine::Station>>& stations)
+	{
+		for (const auto& station : stations)
+		{
+			if (!station || station->IsRemote())
+				continue;
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->InvalidateExternalPhaseCorrection();
 		}
 	}
 

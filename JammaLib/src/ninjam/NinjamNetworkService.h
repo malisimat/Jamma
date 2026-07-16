@@ -35,9 +35,11 @@ namespace ninjam
 		const NinjamTempoJoinOptions& TempoJoinOptions() const noexcept { return _tempoJoinOptions; }
 
 		void PrepareTempoSyncOnConnect(timing::TimingQuantiser& quantisation,
-			unsigned int currentSampleRate);
+			unsigned int currentSampleRate,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
-		void ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation);
+		void ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		bool UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
@@ -89,6 +91,12 @@ namespace ninjam
 		// local loop content there is nothing that could conflict with the
 		// remote tempo, so there is no meaningful choice for the user to make.
 		static bool _HasAnyLocalLoopContent(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		static void _QueueExternalPhaseCorrection(
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			long long deltaSamps,
+			std::uint64_t generation);
+		static void _InvalidateExternalPhaseCorrections(
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		// Ingests the current snapshot into the external transport and applies
 		// wrap-gated phase discipline to the master clock while connected.
@@ -105,5 +113,6 @@ namespace ninjam
 		// Runtime-only continuous NINJAM transport sync (never persisted).
 		timing::ExternalTransport _externalTransport;
 		bool _externalJoinAligned = false;
+		std::uint64_t _externalGeneration = 0u;
 	};
 }

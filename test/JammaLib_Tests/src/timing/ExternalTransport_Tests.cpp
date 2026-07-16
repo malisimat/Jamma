@@ -60,15 +60,53 @@ TEST(ExternalTransport, DerivesIntervalStartFromAnchorAndPosition)
 	ExternalTransport transport;
 	transport.Connect();
 
-	// Non-wrapping snapshots stage but do not publish; force a wrap to observe.
-	transport.IngestSnapshot(MakeSnapshot(1000u, 200u, 5200ul));
-	transport.IngestSnapshot(MakeSnapshot(1000u, 100u, 5100ul)); // wrap (100 < 200)
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 5900ul));
+	transport.IngestSnapshot(MakeSnapshot(1000u, 100u, 5100ul));
 
 	auto state = transport.Published();
 	ASSERT_TRUE(state != nullptr);
 	EXPECT_EQ(100u, state->RemoteIntervalPositionSamps);
 	// Interval start = anchor - normalised position.
 	EXPECT_EQ(5000ul, state->AuthoritativeIntervalStartSamps);
+}
+
+TEST(ExternalTransport, LengthChangePrimesNewGenerationWithoutWrap)
+{
+	ExternalTransport transport;
+	transport.Connect();
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul));
+
+	auto decision = transport.IngestSnapshot(MakeSnapshot(2000u, 100u, 2100ul));
+	EXPECT_FALSE(decision.has_value());
+	EXPECT_EQ(0ul, transport.Published()->RemoteWrapCount);
+	EXPECT_EQ(2u, transport.Generation());
+}
+
+TEST(ExternalTransport, BackwardJumpAwayFromBoundaryIsRejected)
+{
+	ExternalTransport transport;
+	transport.Connect();
+	transport.IngestSnapshot(MakeSnapshot(1000u, 700u, 1700ul));
+
+	auto decision = transport.IngestSnapshot(MakeSnapshot(1000u, 400u, 1800ul));
+	EXPECT_FALSE(decision.has_value());
+	EXPECT_EQ(0ul, transport.Published()->RemoteWrapCount);
+	EXPECT_EQ(1u, transport.Diagnostics().RejectedWrapCandidates);
+}
+
+TEST(ExternalTransport, DuplicateSnapshotDoesNotEmitDecision)
+{
+	ExternalTransport transport;
+	transport.Connect();
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul));
+	EXPECT_FALSE(transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul)).has_value());
+	EXPECT_TRUE(transport.IngestSnapshot(MakeSnapshot(1000u, 50u, 2050ul)).has_value());
+	EXPECT_FALSE(transport.IngestSnapshot(MakeSnapshot(1000u, 50u, 2050ul)).has_value());
+	EXPECT_EQ(1ul, transport.Published()->RemoteWrapCount);
+	const auto diagnostics = transport.Diagnostics();
+	EXPECT_EQ(1u, diagnostics.GenerationPrimes);
+	EXPECT_EQ(1u, diagnostics.AcceptedWraps);
+	EXPECT_EQ(2u, diagnostics.DuplicateSnapshots);
 }
 
 TEST(ExternalTransport, WrapDetectedExactlyOncePerInterval)
@@ -91,6 +129,7 @@ TEST(ExternalTransport, WrapDetectedExactlyOncePerInterval)
 	EXPECT_EQ(1ul, transport.Published()->RemoteWrapCount);
 
 	// Second wrap.
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 2900ul));
 	transport.IngestSnapshot(MakeSnapshot(1000u, 20u, 3020ul));
 	EXPECT_EQ(2ul, transport.Published()->RemoteWrapCount);
 }
@@ -108,6 +147,7 @@ TEST(ExternalTransport, PublishesOnlyAtWrap)
 	EXPECT_EQ(0u, transport.Published()->RemoteIntervalPositionSamps);
 
 	// Wrap publishes the staged state.
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul));
 	transport.IngestSnapshot(MakeSnapshot(1000u, 30u, 2030ul));
 	EXPECT_EQ(30u, transport.Published()->RemoteIntervalPositionSamps);
 }
@@ -153,6 +193,7 @@ TEST(ExternalTransport, JoinAlignmentCommitsMasterZeroAtWrap)
 	transport.BeginJoinAlignment(700ul);
 
 	// Wrap: commit alignment, zero the master loop.
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul));
 	transport.IngestSnapshot(MakeSnapshot(1000u, 40u, 2040ul));
 
 	auto state = transport.Published();
@@ -172,6 +213,7 @@ TEST(ExternalTransport, JoinAlignmentDeltaIsPhaseDifference)
 
 	// Local master phase 700, remote phase 300 -> delta = 300 - 700 = -400.
 	transport.BeginJoinAlignment(700ul);
+	transport.IngestSnapshot(MakeSnapshot(1000u, 900u, 1900ul));
 	transport.IngestSnapshot(MakeSnapshot(1000u, 40u, 2040ul)); // wrap publishes
 
 	auto state = transport.Published();
@@ -201,175 +243,3 @@ TEST(ExternalTransport, DisconnectResetsRuntimeState)
 	transport.Connect();
 	EXPECT_EQ(0ul, transport.Published()->RemoteWrapCount);
 }
-
-// --- Master-relative re-anchoring ------------------------------------------------
-// When the external transport wraps, a loop take's play position must be re-derived
-// from its master-relative anchor back to where it would naturally have advanced to,
-// NOT reset to zero.  These tests pin that round-trip property.
-
-TEST(ExternalTransportReanchor, ReDerivesTakePositionExactlyAcrossWrap)
-{
-	constexpr unsigned long masterLen = 88200ul;
-	constexpr unsigned long takeLen = 30000ul;
-
-	// Observed mid-interval: master loop 3, offset 50000, take playing at 12345.
-	const auto absBefore = ExternalTransport::AbsoluteMasterSample(3ul, masterLen, 50000ul);
-	const auto takePosBefore = 12345ul;
-	const auto anchor = ExternalTransport::TakeAnchorSample(absBefore, takePosBefore, takeLen);
-
-	// Advance to the next remote wrap (offset 50000 -> 0, loop 3 -> 4).
-	const auto gap = masterLen - 50000ul; // 38200 samples until the wrap
-	const auto absAfter = ExternalTransport::AbsoluteMasterSample(4ul, masterLen, 0ul);
-
-	const auto natural = (takePosBefore + gap) % takeLen; // free-running position
-	const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
-
-	EXPECT_EQ(natural, derived);
-	// The whole point: it does NOT snap to zero.
-	EXPECT_NE(0ul, derived);
-}
-
-TEST(ExternalTransportReanchor, DifferentTakeLengthsEachDeriveBack)
-{
-	constexpr unsigned long masterLen = 88200ul;
-	const unsigned long takeLens[] = { 44100ul, 30000ul, 17640ul, 100000ul };
-
-	const auto absBefore = ExternalTransport::AbsoluteMasterSample(7ul, masterLen, 61234ul);
-	const auto gap = masterLen - 61234ul;
-	const auto absAfter = ExternalTransport::AbsoluteMasterSample(8ul, masterLen, 0ul);
-
-	for (const auto takeLen : takeLens)
-	{
-		const auto takePosBefore = 9876ul % takeLen;
-		const auto anchor = ExternalTransport::TakeAnchorSample(absBefore, takePosBefore, takeLen);
-		const auto natural = (takePosBefore + gap) % takeLen;
-		const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
-		EXPECT_EQ(natural, derived) << "takeLen=" << takeLen;
-	}
-}
-
-TEST(ExternalTransportReanchor, StaysCloseUnderObservationRounding)
-{
-	// The observed master offset is only known to job-tick granularity, so the
-	// anchor carries a bounded error.  The re-derived position must stay within that
-	// same small granularity of the true free-running position (never a big jump).
-	constexpr unsigned long masterLen = 88200ul;
-	constexpr unsigned long takeLen = 30000ul;
-	constexpr unsigned long jobTickSamps = 1024ul; // ~job-tick granularity
-
-	const auto trueOffset = 50123ul;
-	const auto observedOffset = (trueOffset / jobTickSamps) * jobTickSamps; // rounded down
-
-	const auto absTrue = ExternalTransport::AbsoluteMasterSample(2ul, masterLen, trueOffset);
-	const auto absObserved = ExternalTransport::AbsoluteMasterSample(2ul, masterLen, observedOffset);
-
-	const auto takePosBefore = 4321ul;
-	// Anchor is built from the (rounded) observed sample.
-	const auto anchor = ExternalTransport::TakeAnchorSample(absObserved, takePosBefore, takeLen);
-
-	const auto gap = masterLen - trueOffset;
-	const auto absAfter = ExternalTransport::AbsoluteMasterSample(3ul, masterLen, 0ul);
-
-	const auto natural = (takePosBefore + gap) % takeLen;
-	const auto derived = ExternalTransport::TakePositionFromAnchor(absAfter, anchor, takeLen);
-
-	// Circular distance between derived and natural must be within the rounding.
-	long long diff = static_cast<long long>(derived) - static_cast<long long>(natural);
-	const long long len = static_cast<long long>(takeLen);
-	if (diff > len / 2) diff -= len;
-	else if (diff < -(len / 2)) diff += len;
-	EXPECT_LE(std::llabs(diff), static_cast<long long>(jobTickSamps));
-
-	(void)absTrue;
-}
-
-TEST(ExternalTransportReanchor, ZeroAnchorMustNotBeUsed)
-{
-	// When no anchor has been set (_masterAnchorSample == 0), calling
-	// TakePositionFromAnchor with anchor=0 returns 0 (start-of-loop) — wrong.
-	// This pins the contract that RepositionFromAnchor must guard against zero.
-	const auto wrongPos = ExternalTransport::TakePositionFromAnchor(88200ul, 0ul, 44100ul);
-	EXPECT_EQ(0ul, wrongPos); // confirms zero anchor != correct position
-}
-
-TEST(ExternalTransportReanchor, AnchorStableAcrossMultipleWraps)
-{
-	// The anchor is set once at play time and must give the correct re-derived
-	// position at wrap 1, wrap 2, and wrap 3 without being updated.
-	constexpr unsigned long masterLen = 44100ul;
-	constexpr unsigned long takeLen = 20000ul;
-	constexpr unsigned long playPosBefore = 7777ul;
-
-	const auto absAtPlay = ExternalTransport::AbsoluteMasterSample(0ul, masterLen, 10000ul);
-	const auto anchor = ExternalTransport::TakeAnchorSample(absAtPlay, playPosBefore, takeLen);
-
-	for (unsigned long wrap = 1ul; wrap <= 3ul; ++wrap)
-	{
-		const auto absNow = ExternalTransport::AbsoluteMasterSample(wrap, masterLen, 0ul);
-		const auto samplesTravelled = absNow - absAtPlay;
-		const auto expected = (playPosBefore + samplesTravelled) % takeLen;
-		const auto derived = ExternalTransport::TakePositionFromAnchor(absNow, anchor, takeLen);
-		EXPECT_EQ(expected, derived) << "wrap=" << wrap;
-	}
-}
-
-TEST(ExternalTransportReanchor, JoinRebasePreservesLocalTakePhase)
-{
-	constexpr unsigned long intervalLength = 88200ul;
-	constexpr unsigned long takeLength = 30000ul;
-	constexpr unsigned long localAbsoluteAtJoin = (9ul * intervalLength) + 45123ul;
-	constexpr unsigned long takePositionAtJoin = 12345ul;
-
-	const auto localAnchor = ExternalTransport::TakeAnchorSample(
-		localAbsoluteAtJoin, takePositionAtJoin, takeLength);
-	const auto remoteAbsoluteAtJoin = ExternalTransport::AbsoluteMasterSample(1ul, intervalLength, 0ul);
-
-	// Evaluating a local anchor in the new NINJAM-origin timeline would jump.
-	EXPECT_NE(takePositionAtJoin, ExternalTransport::TakePositionFromAnchor(
-		remoteAbsoluteAtJoin, localAnchor, takeLength));
-
-	// Rebasing from the current cursor moves the anchor into the remote timeline
-	// without changing that cursor.
-	const auto remoteAnchor = ExternalTransport::TakeAnchorSample(
-		remoteAbsoluteAtJoin, takePositionAtJoin, takeLength);
-	EXPECT_EQ(takePositionAtJoin, ExternalTransport::TakePositionFromAnchor(
-		remoteAbsoluteAtJoin, remoteAnchor, takeLength));
-
-	const auto remoteAbsoluteAfterNextInterval = ExternalTransport::AbsoluteMasterSample(
-		2ul, intervalLength, 0ul);
-	EXPECT_EQ((takePositionAtJoin + intervalLength) % takeLength,
-		ExternalTransport::TakePositionFromAnchor(remoteAbsoluteAfterNextInterval,
-			remoteAnchor,
-			takeLength));
-}
-
-TEST(ExternalTransportReanchor, JoinRebasePreservesDifferentTakeLengths)
-{
-	constexpr unsigned long intervalLength = 88200ul;
-	constexpr unsigned long remoteAbsoluteAtJoin = 88200ul;
-	const unsigned long takeLengths[] = { 30000ul, 44100ul, 52789ul };
-	const unsigned long takePositions[] = { 12345ul, 22050ul, 39420ul };
-
-	for (auto index = 0u; index < std::size(takeLengths); ++index)
-	{
-		const auto takeLength = takeLengths[index];
-		const auto takePosition = takePositions[index] % takeLength;
-		const auto anchor = ExternalTransport::TakeAnchorSample(
-			remoteAbsoluteAtJoin, takePosition, takeLength);
-
-		EXPECT_EQ(takePosition, ExternalTransport::TakePositionFromAnchor(
-			remoteAbsoluteAtJoin, anchor, takeLength));
-		EXPECT_EQ((takePosition + intervalLength) % takeLength,
-			ExternalTransport::TakePositionFromAnchor(remoteAbsoluteAtJoin + intervalLength,
-				anchor,
-				takeLength));
-	}
-}
-
-TEST(ExternalTransportReanchor, ApproachesTargetByBoundedShortestPath)
-{
-	EXPECT_EQ(564ul, ExternalTransport::ApproachTakePosition(500ul, 800ul, 1000ul, 64ul));
-	EXPECT_EQ(936ul, ExternalTransport::ApproachTakePosition(0ul, 900ul, 1000ul, 64ul));
-	EXPECT_EQ(20ul, ExternalTransport::ApproachTakePosition(980ul, 20ul, 1000ul, 64ul));
-}
-

@@ -460,6 +460,17 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
+	const auto correction = _pendingExternalPhaseCorrectionSamps.exchange(0,
+		std::memory_order_acq_rel);
+	const auto generation = _externalPhaseGeneration.load(std::memory_order_acquire);
+	const auto applyCorrection = generation != 0u && correction != 0;
+	if (applyCorrection)
+	{
+		_consumedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(correction);
+	}
+
 	for (auto& buffer : state->AudioBuffers)
 	{
 		buffer->EndWrite(numSamps, true);
@@ -472,8 +483,40 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		auto midiPlayIndex = _midiVisualPlayIndex.load(std::memory_order_relaxed) + numSamps;
 		while (midiPlayIndex >= midiLoopLength)
 			midiPlayIndex -= midiLoopLength;
+		if (applyCorrection)
+		{
+			const auto length = static_cast<long long>(midiLoopLength);
+			auto shifted = (static_cast<long long>(midiPlayIndex) + (correction % length)) % length;
+			if (shifted < 0)
+				shifted += length;
+			midiPlayIndex = static_cast<unsigned long>(shifted);
+			_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(correction),
+				std::memory_order_relaxed);
+		}
 		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	}
+}
+
+void LoopTake::QueueExternalPhaseCorrection(long long deltaSamps,
+	std::uint64_t generation) noexcept
+{
+	if (generation == 0u || deltaSamps == 0)
+		return;
+
+	const auto previousGeneration = _externalPhaseGeneration.load(std::memory_order_relaxed);
+	if (previousGeneration != generation)
+	{
+		_pendingExternalPhaseCorrectionSamps.store(0, std::memory_order_release);
+		_externalPhaseGeneration.store(generation, std::memory_order_release);
+	}
+	_pendingExternalPhaseCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
+	_queuedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+void LoopTake::InvalidateExternalPhaseCorrection() noexcept
+{
+	_pendingExternalPhaseCorrectionSamps.store(0, std::memory_order_release);
+	_externalPhaseGeneration.store(0u, std::memory_order_release);
 }
 
 bool LoopTake::IsArmed() const
@@ -835,93 +878,6 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 		return length;
 
 	return _midiVisualLoopLength.load(std::memory_order_relaxed);
-}
-
-void LoopTake::RepositionFromAnchor(unsigned long absoluteMasterSample,
-	unsigned long maxAdjustmentSamps) noexcept
-{
-	// Skip if no anchor has been set (take not yet played while connected).
-	if (!_hasMasterAnchor)
-		return;
-
-	const auto loopLength = VisualLoopLengthSamps();
-	if (loopLength == 0ul)
-		return;
-
-	const auto targetPos = timing::ExternalTransport::TakePositionFromAnchor(
-		absoluteMasterSample, _masterAnchorSample, loopLength);
-
-	auto currentPos = 0ul;
-	bool hasAudioLoop = false;
-	for (const auto& loop : _loops)
-	{
-		if (loop)
-		{
-			currentPos = loop->PlayIndex();
-			hasAudioLoop = true;
-			break;
-		}
-	}
-
-	if (!hasAudioLoop)
-		currentPos = _midiVisualPlayIndex.load(std::memory_order_relaxed);
-
-	const auto newPos = timing::ExternalTransport::ApproachTakePosition(
-		currentPos, targetPos, loopLength, maxAdjustmentSamps);
-
-	for (auto& loop : _loops)
-	{
-		if (loop)
-			loop->SetPlayIndex(newPos);
-	}
-
-	// Keep the MIDI visual play index aligned with the audio position so that
-	// MIDI block dispatch and visual readout stay phase-consistent after re-anchor.
-	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
-	if (midiLoopLength > 0ul)
-	{
-		const auto oldMidiPos = _midiVisualPlayIndex.load(std::memory_order_relaxed) % midiLoopLength;
-		const auto newMidiPos = newPos % midiLoopLength;
-		_midiVisualPlayIndex.store(newMidiPos, std::memory_order_relaxed);
-
-		// MIDI notes jumped by this forward (modular) delta. Automation playback and
-		// recording derive frac as (globalSample - frozenAnchor - correction) % L,
-		// so accumulate the delta into the per-take correction (backward shift keeps
-		// note and automation phase locked). MidiLoop anchors stay frozen.
-		const auto forwardDelta = static_cast<std::int32_t>(
-			(newMidiPos + midiLoopLength - oldMidiPos) % midiLoopLength);
-		if (forwardDelta != 0)
-			_midiAnchorCorrection.fetch_sub(forwardDelta, std::memory_order_relaxed);
-	}
-}
-
-void LoopTake::RebaseMasterAnchor(unsigned long absoluteMasterSample) noexcept
-{
-	if (!_hasMasterAnchor)
-		return;
-
-	const auto loopLength = VisualLoopLengthSamps();
-	if (loopLength == 0ul)
-		return;
-
-	auto playPosition = 0ul;
-	bool hasAudioLoop = false;
-	for (const auto& loop : _loops)
-	{
-		if (loop)
-		{
-			playPosition = loop->PlayIndex();
-			hasAudioLoop = true;
-			break;
-		}
-	}
-
-	if (!hasAudioLoop)
-		playPosition = _midiVisualPlayIndex.load(std::memory_order_relaxed);
-
-	_masterAnchorSample = timing::ExternalTransport::TakeAnchorSample(
-		absoluteMasterSample, playPosition, loopLength);
-	_hasMasterAnchor = true;
 }
 
 double LoopTake::LoopIndexFrac() const noexcept
@@ -1382,8 +1338,7 @@ std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 void LoopTake::Play(unsigned long index,
 	unsigned long loopLength,
 	unsigned int endRecordSamps,
-	int midiQuantisationErrorSamps,
-	unsigned long masterAnchorSample)
+	int midiQuantisationErrorSamps)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
@@ -1443,16 +1398,6 @@ void LoopTake::Play(unsigned long index,
 			std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
 	}
 #endif
-
-	// Store the master-relative anchor so that a remote interval wrap can re-derive
-	// each loop's play position relative to the master timeline instead of snapping
-	// to zero.  Only stored when the caller knows the absolute master position.
-	if (loopLength > 0ul)
-	{
-		_masterAnchorSample = timing::ExternalTransport::TakeAnchorSample(
-			masterAnchorSample, index, loopLength);
-		_hasMasterAnchor = true;
-	}
 
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)

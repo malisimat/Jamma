@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "base/AudioSink.h"
 #include "actions/TriggerAction.h"
+#include "engine/Loop.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
 
@@ -42,6 +43,17 @@ public:
 	{
 		return _children.size();
 	}
+
+	void SetMidiVisualPosition(unsigned long position, unsigned long length)
+	{
+		_midiVisualPlayIndex.store(position, std::memory_order_relaxed);
+		_midiVisualLoopLength.store(length, std::memory_order_relaxed);
+	}
+
+	unsigned long MidiVisualPosition() const
+	{
+		return _midiVisualPlayIndex.load(std::memory_order_relaxed);
+	}
 };
 
 static std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "take-0")
@@ -52,6 +64,55 @@ static std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "t
 	MergeMixBehaviourParams merge;
 	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
 	return std::make_shared<TestLoopTake>(params, mixerParams);
+}
+
+static std::shared_ptr<engine::Loop> MakePlayingLoop(unsigned long loopLength)
+{
+	audio::WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0u };
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Size = { 160, 320 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = mixBehaviour;
+
+	engine::LoopParams loopParams;
+	loopParams.Wav = "phase-test";
+	loopParams.Size = { 80, 80 };
+	loopParams.Position = { 10, 22 };
+	auto loop = std::make_shared<engine::Loop>(loopParams, mixerParams);
+
+	loop->Record();
+	const auto recordedLength = constants::MaxLoopFadeSamps + loopLength;
+	std::vector<float> samples(recordedLength, 1.0f);
+	AudioWriteRequest request;
+	request.samples = samples.data();
+	request.numSamps = static_cast<unsigned int>(recordedLength);
+	request.stride = 1u;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = Audible::AUDIOSOURCE_ADC;
+	loop->OnBlockWrite(request, 0);
+	loop->EndWrite(static_cast<unsigned int>(recordedLength), true);
+	loop->Play(constants::MaxLoopFadeSamps, loopLength, false);
+	return loop;
+}
+
+static std::shared_ptr<TestLoopTake> MakePlayingTake(const std::string& id,
+	unsigned long loopLength,
+	unsigned long position)
+{
+	auto take = MakeTestLoopTake(id);
+	auto loop = MakePlayingLoop(loopLength);
+	loop->ShiftPlayIndex(static_cast<long long>(position));
+	take->AddLoop(loop);
+	take->CommitChanges();
+	take->SetMidiVisualPosition(position % loopLength, loopLength);
+	return take;
+}
+
+static unsigned long LoopBodyPosition(const engine::Loop& loop)
+{
+	return loop.PlayIndex() - constants::MaxLoopFadeSamps;
 }
 
 static std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
@@ -208,6 +269,117 @@ static void AssertStationRouterUpdateReassignsPerChannelMixer(GuiAction::ActionE
 // ---------------------------------------------------------------------------
 // LoopTake flip-buffer tests
 // ---------------------------------------------------------------------------
+
+TEST(ExternalPhaseCorrection, SharedDeltaPreservesDifferentTakeLengths)
+{
+	constexpr unsigned long length = 1000ul;
+	auto shortTake = MakePlayingTake("short", length, 0ul);
+	auto longTake = MakePlayingTake("long", length * 2ul, length);
+	auto oddTake = MakePlayingTake("odd", 777ul, 700ul);
+
+	shortTake->QueueExternalPhaseCorrection(2, 1u);
+	longTake->QueueExternalPhaseCorrection(2, 1u);
+	oddTake->QueueExternalPhaseCorrection(100, 1u);
+	shortTake->EndMultiPlay(0u);
+	longTake->EndMultiPlay(0u);
+	oddTake->EndMultiPlay(0u);
+
+	EXPECT_EQ(2ul, LoopBodyPosition(*shortTake->GetLoops().front()));
+	EXPECT_EQ(length + 2ul, LoopBodyPosition(*longTake->GetLoops().front()));
+	EXPECT_EQ(23ul, LoopBodyPosition(*oddTake->GetLoops().front()));
+}
+
+TEST(ExternalPhaseCorrection, EveryChannelConsumesInSameBlock)
+{
+	auto take = MakePlayingTake("channels", 1000ul, 100ul);
+	auto secondLoop = MakePlayingLoop(1000ul);
+	secondLoop->ShiftPlayIndex(100);
+	take->AddLoop(secondLoop);
+	take->CommitChanges();
+
+	take->QueueExternalPhaseCorrection(-150, 2u);
+	take->EndMultiPlay(0u);
+	ASSERT_EQ(2u, take->GetLoops().size());
+	EXPECT_EQ(950ul, LoopBodyPosition(*take->GetLoops()[0]));
+	EXPECT_EQ(950ul, LoopBodyPosition(*take->GetLoops()[1]));
+}
+
+TEST(ExternalPhaseCorrection, NegativeDeltaMovesAudioAndMidiWithSameSign)
+{
+	auto take = MakePlayingTake("negative", 30000ul, 5000ul);
+	take->QueueExternalPhaseCorrection(-4900, 1u);
+	take->EndMultiPlay(0u);
+
+	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(-4900, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
+{
+	auto take = MakePlayingTake("accumulate", 1000ul, 100ul);
+	take->QueueExternalPhaseCorrection(20, 7u);
+	take->QueueExternalPhaseCorrection(-5, 7u);
+	take->EndMultiPlay(10u);
+	EXPECT_EQ(125ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(2u, take->QueuedExternalPhaseCorrectionCount());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+
+	take->EndMultiPlay(10u);
+	EXPECT_EQ(135ul, LoopBodyPosition(*take->GetLoops().front()));
+}
+
+TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
+{
+	auto take = MakePlayingTake("disconnect", 1000ul, 100ul);
+	take->QueueExternalPhaseCorrection(200, 3u);
+	take->InvalidateExternalPhaseCorrection();
+	take->EndMultiPlay(10u);
+	take->EndMultiPlay(10u);
+
+	EXPECT_EQ(120ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(120ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, ReconnectCannotConsumeStaleGeneration)
+{
+	auto take = MakePlayingTake("reconnect", 1000ul, 100ul);
+	take->QueueExternalPhaseCorrection(300, 4u);
+	take->InvalidateExternalPhaseCorrection();
+	take->QueueExternalPhaseCorrection(-20, 5u);
+	take->EndMultiPlay(10u);
+
+	EXPECT_EQ(90ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(90ul, take->MidiVisualPosition());
+	EXPECT_EQ(-20, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, LongSimulationRemainsExactAcrossLengths)
+{
+	const unsigned long lengths[] = { 1000ul, 2000ul, 500ul, 777ul };
+	std::shared_ptr<TestLoopTake> takes[std::size(lengths)];
+	unsigned long expected[std::size(lengths)]{};
+	for (auto index = 0u; index < std::size(lengths); ++index)
+		takes[index] = MakePlayingTake("simulation-" + std::to_string(index), lengths[index], 0ul);
+
+	for (auto interval = 0u; interval < 2000u; ++interval)
+	{
+		const auto delta = static_cast<long long>(interval % 15u) - 7;
+		for (auto index = 0u; index < std::size(lengths); ++index)
+		{
+			takes[index]->QueueExternalPhaseCorrection(delta, 9u);
+			takes[index]->EndMultiPlay(64u);
+			const auto length = static_cast<long long>(lengths[index]);
+			auto next = (static_cast<long long>(expected[index]) + 64 + delta) % length;
+			if (next < 0)
+				next += length;
+			expected[index] = static_cast<unsigned long>(next);
+			EXPECT_EQ(expected[index], LoopBodyPosition(*takes[index]->GetLoops().front()))
+				<< "interval=" << interval << " length=" << lengths[index];
+		}
+	}
+}
 
 // AddLoop should stage into the back buffer. NumInputChannels reflects the
 // back buffer while _changesMade && _flipLoopBuffer; after CommitChanges it

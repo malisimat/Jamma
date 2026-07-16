@@ -134,8 +134,7 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
-		unsigned long MasterAnchorSample() const noexcept { return _masterAnchorSample; }
-		// Accumulated transport re-anchor correction for MIDI loop phase anchors.
+		// Accumulated signed transport correction for MIDI loop phase anchors.
 		std::int32_t MidiAnchorCorrection() const noexcept
 			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
 		const std::atomic<std::int32_t>* MidiAnchorCorrectionPtr() const noexcept
@@ -195,15 +194,14 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
-			int midiQuantisationErrorSamps = 0,
-			unsigned long masterAnchorSample = 0ul);
-		// Rebase the take's anchor into a newly authoritative master timeline
-		// while preserving its current audio or MIDI play position.
-		void RebaseMasterAnchor(unsigned long absoluteMasterSample) noexcept;
-		// Re-derive play position for all loops from the stored master-relative anchor
-		// without snapping to zero.  No-op if no anchor has been set.
-		void RepositionFromAnchor(unsigned long absoluteMasterSample,
-			unsigned long maxAdjustmentSamps) noexcept;
+			int midiQuantisationErrorSamps = 0);
+		void QueueExternalPhaseCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
+		void InvalidateExternalPhaseCorrection() noexcept;
+		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
+			{ return _queuedExternalPhaseCorrectionCount.load(std::memory_order_relaxed); }
+		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
+			{ return _consumedExternalPhaseCorrectionCount.load(std::memory_order_relaxed); }
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -338,21 +336,16 @@ namespace engine
 		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
-		// Cross-thread cursor: incremented on the audio thread (EndMultiPlay), re-anchored
-		// on the NINJAM job/network thread (RepositionFromAnchor), and reset/read from the
-		// control thread (Play/Record/Overdub/Ditch) and UI (LoopIndexFrac). Must stay atomic;
-		// follows the same scalar cross-thread pattern as _recordedSampCount below.
+		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
-		// Master-relative anchor: the absolute master-timeline sample at which this
-		// take is at loop-relative position 0.  Set on Play, used to re-derive
-		// _playIndex at authoritative remote wraps without snapping to zero.
-		unsigned long _masterAnchorSample = 0ul;
-		bool _hasMasterAnchor = false;
-		// Modular correction applied to all MIDI loop phase anchors owned by this
-		// take after remote NINJAM wrap re-anchors. Negative (backward) shift means
-		// notes jumped forward: effectiveAnchor = loopPhaseAnchor + correction.
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
+		// Job thread publishes one shared signed transport delta; the audio thread
+		// consumes it once after normal block advancement. Generation zero invalidates it.
+		std::atomic<long long> _pendingExternalPhaseCorrectionSamps{ 0 };
+		std::atomic<std::uint64_t> _externalPhaseGeneration{ 0u };
+		std::atomic<std::uint64_t> _queuedExternalPhaseCorrectionCount{ 0u };
+		std::atomic<std::uint64_t> _consumedExternalPhaseCorrectionCount{ 0u };
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

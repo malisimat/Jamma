@@ -1,4 +1,5 @@
 #include "TimingQuantiser.h"
+#include "ExternalTransport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -584,7 +585,14 @@ void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& c
 		change.SampleRate);
 }
 
-std::optional<unsigned int> TimingQuantiser::RemotePhaseCorrectionOffset(unsigned int currentOffset,
+long long TimingQuantiser::SignedCircularDifference(unsigned int currentOffset,
+	unsigned int targetOffset,
+	unsigned int intervalLen) noexcept
+{
+	return ExternalTransport::SignedCircularDifference(currentOffset, targetOffset, intervalLen);
+}
+
+std::optional<long long> TimingQuantiser::RemotePhaseCorrectionDelta(unsigned int currentOffset,
 	unsigned int intervalPos,
 	unsigned int intervalLen,
 	unsigned int thresholdSamps) noexcept
@@ -592,59 +600,70 @@ std::optional<unsigned int> TimingQuantiser::RemotePhaseCorrectionOffset(unsigne
 	if (intervalLen == 0u)
 		return std::nullopt;
 
-	const auto pos = intervalPos % intervalLen;
-	const auto cur = currentOffset % intervalLen;
-
-	// Shortest circular distance between the local clock phase and remote phase.
-	long long diff = static_cast<long long>(pos) - static_cast<long long>(cur);
-	const long long len = static_cast<long long>(intervalLen);
-	if (diff > len / 2)
-		diff -= len;
-	else if (diff < -(len / 2))
-		diff += len;
-	if (diff < 0)
-		diff = -diff;
-
-	if (static_cast<unsigned long long>(diff) < static_cast<unsigned long long>(thresholdSamps))
+	const auto delta = SignedCircularDifference(currentOffset, intervalPos, intervalLen);
+	const auto magnitude = (delta < 0) ? -delta : delta;
+	if (static_cast<unsigned long long>(magnitude) < static_cast<unsigned long long>(thresholdSamps))
 		return std::nullopt;
 
-	return pos;
+	return delta;
 }
 
-bool TimingQuantiser::DisciplineRemotePhase(unsigned int intervalPositionSamps,
+std::optional<long long> TimingQuantiser::DisciplineRemotePhase(unsigned int intervalPositionSamps,
 	unsigned int intervalLengthSamps)
 {
-	// Small dead-band so steady-state phase noise never causes a re-seed: at least
-	// a few ms of drift, scaled to the interval so long loops tolerate more slack.
-	constexpr unsigned int MinDriftSamps = 64u;
-	constexpr unsigned int DriftDivisor = 64u;
+	constexpr unsigned int DeadBandSamps = 1u;
+	constexpr unsigned int SafetyLimitSamps = constants::DefaultBufferSizeSamps * 2u;
 
 	if (!_clock || intervalLengthSamps == 0u)
-		return false;
+		return std::nullopt;
 
 	// Only discipline when the clock is already seeded to this exact interval, i.e.
 	// the tempo is unchanged.  Genuine tempo changes are handled by the accepted
 	// remote tempo path, which re-seeds the clock wholesale.
 	const auto seeded = _clock->SeedSourceLength();
 	if (seeded == 0ul || seeded != static_cast<unsigned long>(intervalLengthSamps))
-		return false;
+		return std::nullopt;
 
-	const auto scaled = intervalLengthSamps / DriftDivisor;
-	const auto threshold = (scaled > MinDriftSamps) ? scaled : MinDriftSamps;
-
-	const auto correction = RemotePhaseCorrectionOffset(_clock->SampOffset(),
+	const auto correction = RemotePhaseCorrectionDelta(_clock->SampOffset(),
 		intervalPositionSamps,
 		intervalLengthSamps,
-		threshold);
+		DeadBandSamps);
 	if (!correction.has_value())
-		return false;
+		return std::nullopt;
+	const auto magnitude = (*correction < 0) ? -*correction : *correction;
+	if (magnitude > static_cast<long long>(SafetyLimitSamps))
+	{
+		std::cout << "[NINJAM] Remote phase anomaly rejected: delta=" << *correction
+			<< " interval=" << intervalLengthSamps
+			<< std::endl;
+		return std::nullopt;
+	}
 
-	const auto frac = 1.0 - (static_cast<double>(*correction) / static_cast<double>(intervalLengthSamps));
-	_clock->SetMasterLoopIndexFrac(frac);
+	if (!ApplyRemotePhaseCorrection(*correction, intervalLengthSamps))
+		return std::nullopt;
 
-	std::cout << "[NINJAM] Remote phase disciplined: offset->" << *correction
+	std::cout << "[NINJAM] Remote phase disciplined: delta=" << *correction
 		<< " interval=" << intervalLengthSamps
 		<< std::endl;
+	return correction;
+}
+
+bool TimingQuantiser::ApplyRemotePhaseCorrection(long long deltaSamps,
+	unsigned int intervalLengthSamps)
+{
+	if (!_clock || intervalLengthSamps == 0u)
+		return false;
+
+	const auto seeded = _clock->SeedSourceLength();
+	if (seeded == 0ul || seeded != static_cast<unsigned long>(intervalLengthSamps))
+		return false;
+
+	const auto correctedOffset = static_cast<unsigned int>(
+		(static_cast<long long>(_clock->SampOffset()) + (deltaSamps % intervalLengthSamps)
+			+ static_cast<long long>(intervalLengthSamps))
+		% static_cast<long long>(intervalLengthSamps));
+	const auto frac = 1.0 - (static_cast<double>(correctedOffset) / static_cast<double>(intervalLengthSamps));
+	_clock->SetMasterLoopIndexFrac(frac);
 	return true;
 }
 

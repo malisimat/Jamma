@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace timing
 {
@@ -39,6 +41,26 @@ namespace timing
 		// Signed phase delta (remote interval phase - local master phase) in samples.
 		// Positive means the local master is behind the remote interval.
 		long long AlignmentDeltaSamps = 0;
+		std::uint64_t Generation = 0u;
+	};
+
+	struct RemoteTransportWrap
+	{
+		std::uint64_t Generation = 0u;
+		unsigned long RemoteWrap = 0ul;
+		unsigned int IntervalLengthSamps = 0u;
+		unsigned int RemotePositionSamps = 0u;
+		long long DeltaSamps = 0;
+		bool IsJoin = false;
+	};
+
+	struct ExternalTransportDiagnostics
+	{
+		std::uint64_t Snapshots = 0u;
+		std::uint64_t GenerationPrimes = 0u;
+		std::uint64_t AcceptedWraps = 0u;
+		std::uint64_t RejectedWrapCandidates = 0u;
+		std::uint64_t DuplicateSnapshots = 0u;
 	};
 
 	// Immutable, double-buffered transport state POCO.  One instance is the
@@ -104,7 +126,7 @@ namespace timing
 		// Ingest a fresh authoritative remote snapshot into the staging state.
 		// Detects the authoritative interval wrap; on wrap it commits any pending
 		// join alignment, advances the master-loop count, and publishes.
-		void IngestSnapshot(const ExternalTransportSnapshot& snapshot);
+		std::optional<RemoteTransportWrap> IngestSnapshot(const ExternalTransportSnapshot& snapshot);
 
 		// Record a mid-cycle join alignment immediately (against the current remote
 		// interval phase) without touching the master loop.  The alignment is
@@ -115,6 +137,11 @@ namespace timing
 		std::shared_ptr<const ExternalTransportState> Published() const noexcept;
 
 		void SetDiagnosticsEnabled(bool enabled) noexcept;
+		ExternalTransportDiagnostics Diagnostics() const noexcept;
+		std::uint64_t Generation() const noexcept { return _generation; }
+		static long long SignedCircularDifference(unsigned int currentOffset,
+			unsigned int targetOffset,
+			unsigned int intervalLength) noexcept;
 
 		// --- Master-relative re-anchoring -----------------------------------------
 		// A loop take never stores an absolute position against the master timeline;
@@ -122,36 +149,15 @@ namespace timing
 		// wraps (or is otherwise re-based) its play position can be re-derived to the
 		// point it would have naturally reached, rather than snapping to zero.
 
-		// Absolute position on the unbounded master timeline.
-		static unsigned long AbsoluteMasterSample(unsigned long masterLoopCount,
-			unsigned long masterLoopLengthSamps,
-			unsigned long masterLoopOffsetSamps) noexcept;
-
-		// Absolute master-timeline sample derived from the authoritative remote phase
-		// carried by a transport state (wrapCount * intervalLen + intervalPos).
-		static unsigned long AbsoluteMasterSample(const ExternalTransportState& state) noexcept;
-
-		// Master-relative anchor for a take observed playing at takePlayPosSamps while
-		// the master timeline is at absoluteMasterSample.  The anchor is the absolute
-		// master sample at which the take sits at loop-relative position 0.
-		static unsigned long TakeAnchorSample(unsigned long absoluteMasterSample,
-			unsigned long takePlayPosSamps,
-			unsigned long takeLengthSamps) noexcept;
-
-		// Re-derive a take's loop-relative play position at absoluteMasterSample from
-		// its stored anchor and its own loop length.
-		static unsigned long TakePositionFromAnchor(unsigned long absoluteMasterSample,
-			unsigned long takeAnchorSample,
-			unsigned long takeLengthSamps) noexcept;
-
-		// Move a take cursor toward its master-derived target through the shortest
-		// modular path, capped at maxAdjustmentSamps for seamless phase discipline.
-		static unsigned long ApproachTakePosition(unsigned long currentPositionSamps,
-			unsigned long targetPositionSamps,
-			unsigned long takeLengthSamps,
-			unsigned long maxAdjustmentSamps) noexcept;
-
 	private:
+		static unsigned long _DeriveIntervalStart(unsigned long localAnchorSamps,
+			unsigned int normalisedPos) noexcept;
+		void _LogSnapshot(const ExternalTransportSnapshot& snapshot,
+			unsigned int normalisedPos,
+			unsigned int previousPosition,
+			bool wrapCandidate,
+			bool wrapAccepted,
+			const char* reason) const;
 		void _Publish(const char* reason);
 
 		// Staging (back) state.  Mutated only on the ingestion thread.
@@ -161,6 +167,13 @@ namespace timing
 
 		bool _hasLastPos = false;
 		unsigned int _lastRemoteIntervalPos = 0u;
+		unsigned int _observedIntervalLength = 0u;
+		std::uint64_t _generation = 0u;
+		std::atomic<std::uint64_t> _snapshotSequence{ 0u };
 		std::atomic_bool _diagnostics{ false };
+		std::atomic<std::uint64_t> _generationPrimeCount{ 0u };
+		std::atomic<std::uint64_t> _acceptedWrapCount{ 0u };
+		std::atomic<std::uint64_t> _rejectedWrapCandidateCount{ 0u };
+		std::atomic<std::uint64_t> _duplicateSnapshotCount{ 0u };
 	};
 }

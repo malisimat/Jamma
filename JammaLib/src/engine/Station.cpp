@@ -1034,8 +1034,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
 
 			if (loopTake.has_value())
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps,
-					_clock ? _clock->AbsoluteSamplePos() : 0ul);
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
@@ -1121,8 +1120,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
 
 			if (loopTake.has_value())
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps,
-					_clock ? _clock->AbsoluteSamplePos() : 0ul);
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
 			if (sourceLoopTake.has_value())

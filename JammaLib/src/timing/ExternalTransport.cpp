@@ -4,19 +4,6 @@
 
 using namespace timing;
 
-namespace
-{
-	// Local sample corresponding to remote interval position 0, clamped so we
-	// never underflow the unsigned local timeline when joining mid-interval.
-	unsigned long DeriveIntervalStart(unsigned long localAnchorSamps,
-		unsigned int normalisedPos) noexcept
-	{
-		if (static_cast<unsigned long>(normalisedPos) >= localAnchorSamps)
-			return 0ul;
-		return localAnchorSamps - static_cast<unsigned long>(normalisedPos);
-	}
-}
-
 ExternalTransport::ExternalTransport()
 {
 	_published.store(std::make_shared<const ExternalTransportState>(_staging),
@@ -30,6 +17,13 @@ void ExternalTransport::Connect(unsigned long masterLoopLengthSamps)
 	_staging.MasterLoopLengthSamps = masterLoopLengthSamps;
 	_hasLastPos = false;
 	_lastRemoteIntervalPos = 0u;
+	_observedIntervalLength = 0u;
+	_generation = 0u;
+	_snapshotSequence.store(0u, std::memory_order_relaxed);
+	_generationPrimeCount.store(0u, std::memory_order_relaxed);
+	_acceptedWrapCount.store(0u, std::memory_order_relaxed);
+	_rejectedWrapCandidateCount.store(0u, std::memory_order_relaxed);
+	_duplicateSnapshotCount.store(0u, std::memory_order_relaxed);
 	_Publish("connect");
 }
 
@@ -39,6 +33,8 @@ void ExternalTransport::Disconnect()
 	_staging = ExternalTransportState{};
 	_hasLastPos = false;
 	_lastRemoteIntervalPos = 0u;
+	_observedIntervalLength = 0u;
+	_generation = 0u;
 	_Publish("disconnect");
 }
 
@@ -47,27 +43,70 @@ bool ExternalTransport::IsConnected() const noexcept
 	return _staging.Mode == ExternalTransportMode::Connected;
 }
 
-void ExternalTransport::IngestSnapshot(const ExternalTransportSnapshot& snapshot)
+std::optional<RemoteTransportWrap> ExternalTransport::IngestSnapshot(
+	const ExternalTransportSnapshot& snapshot)
 {
 	if (_staging.Mode != ExternalTransportMode::Connected)
-		return;
+		return std::nullopt;
 
+	_snapshotSequence.fetch_add(1u, std::memory_order_relaxed);
 	const auto length = snapshot.IntervalLengthSamps;
 	const auto normalisedPos = (length > 0u)
 		? (snapshot.IntervalPositionSamps % length)
 		: 0u;
-
-	bool wrapped = false;
-	if (length > 0u)
+	if (length == 0u)
 	{
-		if (_hasLastPos && normalisedPos < _lastRemoteIntervalPos)
+		_hasLastPos = false;
+		_observedIntervalLength = 0u;
+		_LogSnapshot(snapshot, normalisedPos, _lastRemoteIntervalPos, false, false, "zero-length");
+		return std::nullopt;
+	}
+
+	if (length != _observedIntervalLength)
+	{
+		const auto previousPosition = _lastRemoteIntervalPos;
+		_observedIntervalLength = length;
+		++_generation;
+		_generationPrimeCount.fetch_add(1u, std::memory_order_relaxed);
+		_hasLastPos = true;
+		_lastRemoteIntervalPos = normalisedPos;
+		_staging.PendingAlignment = PendingJoinAlignment{};
+		_staging.HasCommittedAlignment = false;
+		_staging.LocalAnchorSamps = snapshot.LocalAnchorSamps;
+		_staging.RemoteIntervalLengthSamps = length;
+		_staging.RemoteIntervalPositionSamps = normalisedPos;
+		_staging.MasterLoopLengthSamps = length;
+		_staging.AuthoritativeIntervalStartSamps =
+			_DeriveIntervalStart(snapshot.LocalAnchorSamps, normalisedPos);
+		_LogSnapshot(snapshot, normalisedPos, previousPosition, false, false, "generation-prime");
+		return std::nullopt;
+	}
+
+	if (_hasLastPos && normalisedPos == _lastRemoteIntervalPos)
+	{
+		_duplicateSnapshotCount.fetch_add(1u, std::memory_order_relaxed);
+		_LogSnapshot(snapshot, normalisedPos, _lastRemoteIntervalPos, false, false, "duplicate");
+		return std::nullopt;
+	}
+
+	const auto previousPosition = _lastRemoteIntervalPos;
+	const auto wrapCandidate = _hasLastPos && normalisedPos < _lastRemoteIntervalPos;
+	bool wrapped = false;
+	if (wrapCandidate)
+	{
+		const auto endWindowStart = length - (length / 4u);
+		const auto startWindowEnd = length / 4u;
+		if (_lastRemoteIntervalPos >= endWindowStart && normalisedPos <= startWindowEnd)
 		{
 			++_staging.RemoteWrapCount;
+			_acceptedWrapCount.fetch_add(1u, std::memory_order_relaxed);
 			wrapped = true;
 		}
-		_lastRemoteIntervalPos = normalisedPos;
-		_hasLastPos = true;
+		else
+			_rejectedWrapCandidateCount.fetch_add(1u, std::memory_order_relaxed);
 	}
+	_lastRemoteIntervalPos = normalisedPos;
+	_hasLastPos = true;
 
 	// Update the staging (back) state from the fresh snapshot.  Between wraps this
 	// tracks continuous remote phase but is not yet published.
@@ -78,13 +117,25 @@ void ExternalTransport::IngestSnapshot(const ExternalTransportSnapshot& snapshot
 		_staging.MasterLoopLengthSamps = length;
 	_staging.MasterLoopCount = _staging.RemoteWrapCount;
 	_staging.AuthoritativeIntervalStartSamps =
-		DeriveIntervalStart(snapshot.LocalAnchorSamps, normalisedPos);
+		_DeriveIntervalStart(snapshot.LocalAnchorSamps, normalisedPos);
 
 	if (!wrapped)
-		return;
+	{
+		_LogSnapshot(snapshot,
+			normalisedPos,
+			previousPosition,
+			wrapCandidate,
+			false,
+			wrapCandidate ? "backward-away-boundary" : "advance");
+		return std::nullopt;
+	}
 
 	// Wrap boundary: commit any pending join alignment and zero the master loop.
-	if (_staging.PendingAlignment.HasPending && !_staging.PendingAlignment.Committed)
+	const auto isJoin = _staging.PendingAlignment.HasPending
+		&& !_staging.PendingAlignment.Committed
+		&& _staging.PendingAlignment.Generation == _generation;
+	const auto joinDelta = isJoin ? _staging.PendingAlignment.AlignmentDeltaSamps : 0;
+	if (isJoin)
 	{
 		_staging.PendingAlignment.Committed = true;
 		_staging.HasCommittedAlignment = true;
@@ -100,6 +151,15 @@ void ExternalTransport::IngestSnapshot(const ExternalTransportSnapshot& snapshot
 	}
 
 	_Publish("wrap");
+	_LogSnapshot(snapshot, normalisedPos, previousPosition, true, true, "wrap");
+	return RemoteTransportWrap{
+		_generation,
+		_staging.RemoteWrapCount,
+		length,
+		normalisedPos,
+		joinDelta,
+		isJoin
+	};
 }
 
 void ExternalTransport::BeginJoinAlignment(unsigned long localMasterPlayPositionSamps)
@@ -118,8 +178,9 @@ void ExternalTransport::BeginJoinAlignment(unsigned long localMasterPlayPosition
 	alignment.Committed = false;
 	alignment.LocalMasterPositionAtJoin = localMasterPlayPositionSamps;
 	alignment.RemoteIntervalPositionAtJoin = remotePhase;
-	alignment.AlignmentDeltaSamps =
-		static_cast<long long>(remotePhase) - static_cast<long long>(localPhase);
+	alignment.AlignmentDeltaSamps = SignedCircularDifference(
+		static_cast<unsigned int>(localPhase), remotePhase, length);
+	alignment.Generation = _generation;
 
 	_staging.PendingAlignment = alignment;
 
@@ -142,6 +203,42 @@ std::shared_ptr<const ExternalTransportState> ExternalTransport::Published() con
 void ExternalTransport::SetDiagnosticsEnabled(bool enabled) noexcept
 {
 	_diagnostics.store(enabled, std::memory_order_relaxed);
+}
+
+ExternalTransportDiagnostics ExternalTransport::Diagnostics() const noexcept
+{
+	return {
+		_snapshotSequence.load(std::memory_order_relaxed),
+		_generationPrimeCount.load(std::memory_order_relaxed),
+		_acceptedWrapCount.load(std::memory_order_relaxed),
+		_rejectedWrapCandidateCount.load(std::memory_order_relaxed),
+		_duplicateSnapshotCount.load(std::memory_order_relaxed)
+	};
+}
+
+void ExternalTransport::_LogSnapshot(const ExternalTransportSnapshot& snapshot,
+	unsigned int normalisedPos,
+	unsigned int previousPosition,
+	bool wrapCandidate,
+	bool wrapAccepted,
+	const char* reason) const
+{
+	if (!_diagnostics.load(std::memory_order_relaxed))
+		return;
+	const auto localPhase = snapshot.IntervalLengthSamps > 0u
+		? snapshot.LocalAnchorSamps % snapshot.IntervalLengthSamps
+		: 0ul;
+	std::cout << "[XTransportSnapshot] generation=" << _generation
+		<< " sequence=" << _snapshotSequence.load(std::memory_order_relaxed)
+		<< " intervalLength=" << snapshot.IntervalLengthSamps
+		<< " remotePosition=" << normalisedPos
+		<< " localAbsoluteSample=" << snapshot.LocalAnchorSamps
+		<< " localPhase=" << localPhase
+		<< " previousRemotePosition=" << previousPosition
+		<< " wrapCandidate=" << (wrapCandidate ? 1 : 0)
+		<< " wrapAccepted=" << (wrapAccepted ? 1 : 0)
+		<< " reason=" << reason
+		<< std::endl;
 }
 
 void ExternalTransport::_Publish(const char* reason)
@@ -167,80 +264,29 @@ void ExternalTransport::_Publish(const char* reason)
 	}
 }
 
-unsigned long ExternalTransport::AbsoluteMasterSample(unsigned long masterLoopCount,
-	unsigned long masterLoopLengthSamps,
-	unsigned long masterLoopOffsetSamps) noexcept
+long long ExternalTransport::SignedCircularDifference(unsigned int currentOffset,
+	unsigned int targetOffset,
+	unsigned int intervalLength) noexcept
 {
-	const auto abs = static_cast<unsigned long long>(masterLoopCount)
-			* static_cast<unsigned long long>(masterLoopLengthSamps)
-		+ static_cast<unsigned long long>(masterLoopOffsetSamps);
-	return static_cast<unsigned long>(abs);
-}
-
-unsigned long ExternalTransport::AbsoluteMasterSample(const ExternalTransportState& state) noexcept
-{
-	return AbsoluteMasterSample(state.RemoteWrapCount,
-		state.RemoteIntervalLengthSamps,
-		state.RemoteIntervalPositionSamps);
-}
-
-unsigned long ExternalTransport::TakeAnchorSample(unsigned long absoluteMasterSample,
-	unsigned long takePlayPosSamps,
-	unsigned long takeLengthSamps) noexcept
-{
-	if (takeLengthSamps == 0ul)
-		return absoluteMasterSample;
-
-	const auto abs = static_cast<unsigned long long>(absoluteMasterSample);
-	const auto pos = static_cast<unsigned long long>(takePlayPosSamps)
-		% static_cast<unsigned long long>(takeLengthSamps);
-
-	// The anchor is the master sample at which the take is at loop position 0.
-	// Guard the (unlikely) case where the timeline has not yet advanced past the
-	// take's current phase so the subtraction never underflows.
-	const auto anchor = (abs >= pos)
-		? (abs - pos)
-		: (abs + static_cast<unsigned long long>(takeLengthSamps) - pos);
-	return static_cast<unsigned long>(anchor);
-}
-
-unsigned long ExternalTransport::TakePositionFromAnchor(unsigned long absoluteMasterSample,
-	unsigned long takeAnchorSample,
-	unsigned long takeLengthSamps) noexcept
-{
-	if (takeLengthSamps == 0ul)
-		return 0ul;
-
-	const auto abs = static_cast<unsigned long long>(absoluteMasterSample);
-	const auto anchor = static_cast<unsigned long long>(takeAnchorSample);
-	const auto diff = (abs >= anchor) ? (abs - anchor) : 0ull;
-	return static_cast<unsigned long>(diff % static_cast<unsigned long long>(takeLengthSamps));
-}
-
-unsigned long ExternalTransport::ApproachTakePosition(unsigned long currentPositionSamps,
-	unsigned long targetPositionSamps,
-	unsigned long takeLengthSamps,
-	unsigned long maxAdjustmentSamps) noexcept
-{
-	if (takeLengthSamps == 0ul)
-		return 0ul;
-
-	const auto current = currentPositionSamps % takeLengthSamps;
-	const auto target = targetPositionSamps % takeLengthSamps;
-	const auto length = static_cast<long long>(takeLengthSamps);
+	if (intervalLength == 0u)
+		return 0;
+	const auto current = currentOffset % intervalLength;
+	const auto target = targetOffset % intervalLength;
+	const auto length = static_cast<long long>(intervalLength);
 	auto delta = static_cast<long long>(target) - static_cast<long long>(current);
 	if (delta > length / 2)
 		delta -= length;
 	else if (delta < -(length / 2))
 		delta += length;
-
-	const auto maxAdjustment = static_cast<long long>(maxAdjustmentSamps);
-	if (delta > maxAdjustment)
-		delta = maxAdjustment;
-	else if (delta < -maxAdjustment)
-		delta = -maxAdjustment;
-
-	const auto next = static_cast<long long>(current) + delta;
-	return static_cast<unsigned long>((next + length) % length);
+	else if ((intervalLength % 2u) == 0u && delta == -(length / 2))
+		delta = length / 2;
+	return delta;
 }
 
+unsigned long ExternalTransport::_DeriveIntervalStart(unsigned long localAnchorSamps,
+	unsigned int normalisedPos) noexcept
+{
+	if (static_cast<unsigned long>(normalisedPos) >= localAnchorSamps)
+		return 0ul;
+	return localAnchorSamps - static_cast<unsigned long>(normalisedPos);
+}

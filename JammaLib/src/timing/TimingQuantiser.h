@@ -195,14 +195,19 @@ namespace timing
 		// tempo changes go through ApplyAcceptedRemoteTempo).  A correction is only
 		// applied when the accumulated drift exceeds a small threshold, so steady
 		// state incurs no phase jitter.  Returns true when a correction was applied.
-		bool DisciplineRemotePhase(unsigned int intervalPositionSamps,
+		std::optional<long long> DisciplineRemotePhase(unsigned int intervalPositionSamps,
+			unsigned int intervalLengthSamps);
+		bool ApplyRemotePhaseCorrection(long long deltaSamps,
 			unsigned int intervalLengthSamps);
 
 		// Pure drift math for DisciplineRemotePhase.  Returns the corrected sample
 		// offset (== the remote interval position) when the shortest circular
 		// distance between currentOffset and intervalPos exceeds thresholdSamps;
 		// std::nullopt otherwise.  Exposed for focused unit testing.
-		static std::optional<unsigned int> RemotePhaseCorrectionOffset(unsigned int currentOffset,
+		static long long SignedCircularDifference(unsigned int currentOffset,
+			unsigned int targetOffset,
+			unsigned int intervalLen) noexcept;
+		static std::optional<long long> RemotePhaseCorrectionDelta(unsigned int currentOffset,
 			unsigned int intervalPos,
 			unsigned int intervalLen,
 			unsigned int thresholdSamps) noexcept;
