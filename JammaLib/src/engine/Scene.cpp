@@ -357,7 +357,8 @@ void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 	std::scoped_lock lock(_sceneMutex);
 	_networkService->ResolveRemoteTempoPromptDecision(accept,
 		_quantisation,
-		_stations);
+		_stations,
+		_CurrentSampleRate());
 	_CloseRemoteTempoPrompt();
 }
 

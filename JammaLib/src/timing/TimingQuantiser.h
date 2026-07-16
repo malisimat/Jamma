@@ -184,8 +184,12 @@ namespace timing
 			const io::UserConfig& cfg);
 		std::optional<PendingRemoteTempoChange> ProposeRemoteTempoChange(const ninjam::NinjamRemoteSnapshot& snapshot,
 			const io::UserConfig& cfg) const;
-		void ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		// Re-clock into the remote interval expressed in local audio samples, then
+		// queue the corresponding shared cursor translation for existing local takes.
+		// Returns that translation so focused tests can verify the re-clock boundary.
+		long long ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			unsigned int localSampleRate = 0u);
 		void AcknowledgeLocallyRequestedRemoteTempo(const PendingRemoteTempoChange& change) noexcept;
 		bool ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint = 0u);
 		void ResetPendingTempoSyncState();

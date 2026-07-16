@@ -98,6 +98,19 @@ TEST(DisciplineRemotePhase, DifferentIntervalLengthFallsThrough)
 	EXPECT_EQ(500u, clock->SampOffset());
 }
 
+TEST(DisciplineRemotePhase, NearRemoteIntervalCorrectsRoundedTempoAtWrap)
+{
+	// A server can round a locally requested fractional BPM by one sample per
+	// interval. Correct the local master and loop cursors by that residual rather
+	// than letting it accumulate as visible drift.
+	auto clock = MakeSeededClock(1000ul, 1u);
+	TimingQuantiser quantiser;
+	quantiser.SetClock(clock);
+
+	EXPECT_EQ(-1, quantiser.DisciplineRemotePhase(0u, 1001u));
+	EXPECT_EQ(0u, clock->SampOffset());
+}
+
 TEST(DisciplineRemotePhase, MatchingPhaseLeavesClockUntouched)
 {
 	auto clock = MakeSeededClock(1000ul, 500u);

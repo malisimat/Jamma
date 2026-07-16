@@ -162,6 +162,30 @@ TEST(Quantisation, RemoteTempoProposalAndApplyRoundTrip)
 	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
 }
 
+TEST(Quantisation, AcceptedRemoteTempoUsesLocalSampleDomainAndReclocksExistingTransport)
+{
+	timing::TimingQuantiser quantiser;
+	auto clock = std::make_shared<utils::Timer>();
+	quantiser.SetClock(clock);
+	clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+	clock->SetSeedSourceLength(384000u);
+	clock->Tick(100000u, 0u);
+
+	timing::PendingRemoteTempoChange change;
+	change.IntervalLengthSamps = 352800u;
+	change.IntervalPositionSamps = 22050u;
+	change.SampleRate = 44100u;
+	change.GrainSamps = 22050u;
+	change.MasterLoopLengthSamps = 352800u;
+	change.Bpm = 120.0f;
+	change.Bpi = 16u;
+
+	EXPECT_EQ(-76000, quantiser.ApplyAcceptedRemoteTempo(change, {}, 48000u));
+	EXPECT_EQ(384000u, clock->SeedSourceLength());
+	EXPECT_EQ(24000u, clock->QuantiseSamps());
+	EXPECT_EQ(24000u, clock->SampOffset());
+}
+
 TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
 {
 	io::UserConfig cfg;

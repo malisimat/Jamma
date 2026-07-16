@@ -251,10 +251,12 @@ namespace ninjam
 			_InvalidateExternalPhaseCorrections(stations);
 		}
 
-		// Record the mid-cycle join alignment once, the first time we observe a
-		// valid remote interval against a seeded local master clock.  The alignment
-		// commits at the next authoritative remote wrap.
-		if (!_externalJoinAligned && intervalLen > 0u && clock->SeedSourceLength() > 0ul)
+		// Record the mid-cycle join alignment only once the local clock has been
+		// seeded to this remote interval. A pre-acceptance local tempo has a
+		// different phase domain, so its offset cannot be committed after a remote
+		// tempo change. The alignment commits at the next authoritative remote wrap.
+		if (!_externalJoinAligned && intervalLen > 0u
+			&& clock->SeedSourceLength() == static_cast<unsigned long>(intervalLen))
 		{
 			_externalTransport.BeginJoinAlignment(clock->SampOffset());
 			_externalJoinAligned = true;
@@ -366,7 +368,7 @@ namespace ninjam
 			if (!hasLocalContent)
 				std::cout << "[NINJAM] No local loop content - auto-applying remote tempo" << std::endl;
 
-			quantisation.ApplyAcceptedRemoteTempo(proposal.value(), stations);
+			quantisation.ApplyAcceptedRemoteTempo(proposal.value(), stations, currentSampleRate);
 			_pendingRemoteTempoPrompt.reset();
 			_ignoredRemoteTempoPrompt.reset();
 			return;
@@ -405,7 +407,8 @@ namespace ninjam
 
 	void NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
 		timing::TimingQuantiser& quantisation,
-		const std::vector<std::shared_ptr<engine::Station>>& stations)
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		unsigned int currentSampleRate)
 	{
 		if (!_pendingRemoteTempoPrompt.has_value())
 			return;
@@ -413,7 +416,7 @@ namespace ninjam
 		const auto change = _pendingRemoteTempoPrompt.value();
 		if (accept)
 		{
-			quantisation.ApplyAcceptedRemoteTempo(change, stations);
+			quantisation.ApplyAcceptedRemoteTempo(change, stations, currentSampleRate);
 			_ignoredRemoteTempoPrompt.reset();
 		}
 		else

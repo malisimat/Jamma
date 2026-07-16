@@ -70,7 +70,8 @@ namespace ninjam
 
 		void ResolveRemoteTempoPromptDecision(bool accept,
 			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			unsigned int currentSampleRate);
 
 		// Lock-free read of the authoritative connected-sync transport state.
 		std::shared_ptr<const timing::ExternalTransportState> PublishedTransportState() const noexcept

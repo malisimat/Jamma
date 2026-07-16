@@ -547,42 +547,72 @@ std::optional<PendingRemoteTempoChange> TimingQuantiser::ProposeRemoteTempoChang
 	return change;
 }
 
-void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
-	const std::vector<std::shared_ptr<Station>>& stations)
+long long TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
+	const std::vector<std::shared_ptr<Station>>& stations,
+	unsigned int localSampleRate)
 {
 	if (!_clock || (change.IntervalLengthSamps == 0u) || (change.GrainSamps == 0u))
-		return;
+		return 0;
+
+	if (localSampleRate == 0u)
+		localSampleRate = change.SampleRate;
+	const auto localIntervalLength = ExternalTransport::ScaleSampleRate(
+		change.IntervalLengthSamps, change.SampleRate, localSampleRate);
+	const auto localIntervalPosition = ExternalTransport::ScaleSampleRate(
+		change.IntervalPositionSamps, change.SampleRate, localSampleRate);
+	const auto localGrain = ExternalTransport::ScaleSampleRate(
+		change.GrainSamps, change.SampleRate, localSampleRate);
+	if (localIntervalLength == 0u || localGrain == 0u)
+		return 0;
+
+	const auto oldMasterPosition = _clock->SampOffset();
+	const auto hadLocalMaster = _clock->SeedSourceLength() > 0ul;
+	const auto reClockDelta = hadLocalMaster
+		? SignedCircularDifference(oldMasterPosition, localIntervalPosition, localIntervalLength)
+		: 0;
 
 	_remoteMasterLoopSamps = change.IntervalLengthSamps;
 	_remoteSampleRate = change.SampleRate;
-	_effectiveQuantiseSamps.store(change.GrainSamps, std::memory_order_release);
-	_masterLoopLengthSamps.store(change.MasterLoopLengthSamps, std::memory_order_release);
+	_effectiveQuantiseSamps.store(localGrain, std::memory_order_release);
+	_masterLoopLengthSamps.store(localIntervalLength, std::memory_order_release);
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_tapTempo.Clear();
 	}
 
 	const auto quantisation = _seedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
-	_clock->SetQuantisation(change.GrainSamps, quantisation);
-	_clock->SetSeedSourceLength(change.IntervalLengthSamps);
-	if (change.IntervalLengthSamps > 0u)
+	_clock->SetQuantisation(localGrain, quantisation);
+	_clock->SetSeedSourceLength(localIntervalLength);
+	if (localIntervalLength > 0u)
 	{
 		auto loopIndexFrac = 1.0;
-		if (change.IntervalPositionSamps > 0u)
+		if (localIntervalPosition > 0u)
 		{
-			const auto intervalPos = change.IntervalPositionSamps % change.IntervalLengthSamps;
-			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(change.IntervalLengthSamps));
+			const auto intervalPos = localIntervalPosition % localIntervalLength;
+			loopIndexFrac = 1.0 - (static_cast<double>(intervalPos) / static_cast<double>(localIntervalLength));
 		}
 		_clock->SetMasterLoopIndexFrac(loopIndexFrac);
 	}
 
-	SetMidiGrain(change.GrainSamps, "remote tempo", stations);
+	if (reClockDelta != 0)
+	{
+		for (const auto& station : stations)
+		{
+			if (!station || station->IsRemote())
+				continue;
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->QueueTransportPhaseCorrection(reClockDelta);
+		}
+	}
+
+	SetMidiGrain(localGrain, "remote tempo", stations);
 	LogNinjamTempoEvent("Remote tempo applied locally",
-		change.MasterLoopLengthSamps,
-		change.GrainSamps,
+		localIntervalLength,
+		localGrain,
 		change.Bpi,
 		change.Bpm,
-		change.SampleRate);
+		localSampleRate);
+	return reClockDelta;
 }
 
 void TimingQuantiser::AcknowledgeLocallyRequestedRemoteTempo(
@@ -624,16 +654,23 @@ std::optional<long long> TimingQuantiser::DisciplineRemotePhase(unsigned int int
 	if (!_clock || intervalLengthSamps == 0u)
 		return std::nullopt;
 
-	// Only discipline when the clock is already seeded to this exact interval, i.e.
-	// the tempo is unchanged.  Genuine tempo changes are handled by the accepted
-	// remote tempo path, which re-seeds the clock wholesale.
 	const auto seeded = _clock->SeedSourceLength();
-	if (seeded == 0ul || seeded != static_cast<unsigned long>(intervalLengthSamps))
+	if (seeded == 0ul || seeded > static_cast<unsigned long>((std::numeric_limits<unsigned int>::max)()))
+		return std::nullopt;
+
+	// A remote server may round a locally requested fractional BPM to a nearby
+	// interval. Keep the existing local loop domain and correct that bounded
+	// discrepancy at each remote wrap. Larger changes require an explicit re-clock.
+	const auto seededLength = static_cast<unsigned int>(seeded);
+	const auto lengthDifference = seededLength > intervalLengthSamps
+		? seededLength - intervalLengthSamps
+		: intervalLengthSamps - seededLength;
+	if (lengthDifference > SafetyLimitSamps)
 		return std::nullopt;
 
 	const auto correction = RemotePhaseCorrectionDelta(_clock->SampOffset(),
 		intervalPositionSamps,
-		intervalLengthSamps,
+		seededLength,
 		DeadBandSamps);
 	if (!correction.has_value())
 		return std::nullopt;
@@ -662,14 +699,13 @@ bool TimingQuantiser::ApplyRemotePhaseCorrection(long long deltaSamps,
 		return false;
 
 	const auto seeded = _clock->SeedSourceLength();
-	if (seeded == 0ul || seeded != static_cast<unsigned long>(intervalLengthSamps))
+	if (seeded == 0ul)
 		return false;
 
+	const auto length = static_cast<long long>(seeded);
 	const auto correctedOffset = static_cast<unsigned int>(
-		(static_cast<long long>(_clock->SampOffset()) + (deltaSamps % intervalLengthSamps)
-			+ static_cast<long long>(intervalLengthSamps))
-		% static_cast<long long>(intervalLengthSamps));
-	const auto frac = 1.0 - (static_cast<double>(correctedOffset) / static_cast<double>(intervalLengthSamps));
+		(static_cast<long long>(_clock->SampOffset()) + (deltaSamps % length) + length) % length);
+	const auto frac = 1.0 - (static_cast<double>(correctedOffset) / static_cast<double>(seeded));
 	_clock->SetMasterLoopIndexFrac(frac);
 	return true;
 }
