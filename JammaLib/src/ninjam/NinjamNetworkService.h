@@ -60,7 +60,8 @@ namespace ninjam
 		void HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
 			timing::TimingQuantiser& quantisation,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& userConfig);
+			const io::UserConfig& userConfig,
+			unsigned int currentSampleRate);
 
 		std::optional<timing::PendingRemoteTempoChange> PendingRemoteTempoPrompt() const
 		{
@@ -85,6 +86,11 @@ namespace ninjam
 	private:
 		static bool IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
 			const timing::PendingRemoteTempoChange& rhs) noexcept;
+		static bool _MatchesLocallyRequestedTempo(const timing::PendingRemoteTempoChange& proposal,
+			const timing::QuantisationTiming& requested) noexcept;
+		static bool _MatchesLocallyRequestedTempo(float bpm,
+			unsigned int bpi,
+			const timing::QuantisationTiming& requested) noexcept;
 
 		// True if any non-remote (local) station has at least one loop take.
 		// Used to auto-apply a proposed remote tempo without prompting: with no
@@ -102,11 +108,14 @@ namespace ninjam
 		// wrap-gated phase discipline to the master clock while connected.
 		void _FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
 			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+			const std::vector<std::shared_ptr<engine::Station>>& stations,
+			unsigned int currentSampleRate);
 
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		NinjamTempoJoinOptions _tempoJoinOptions{};
 		bool _joinPushAwaitingOutcome = false;
+		std::uint64_t _joinPushSentAtAcceptedWrap = 0u;
+		std::optional<timing::QuantisationTiming> _locallyRequestedTempo;
 		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
 		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
 

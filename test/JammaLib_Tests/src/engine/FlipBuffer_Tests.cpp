@@ -329,6 +329,34 @@ TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
 	EXPECT_EQ(135ul, LoopBodyPosition(*take->GetLoops().front()));
 }
 
+TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
+{
+	auto take = MakePlayingTake("transport-offset", 1000ul, 100ul);
+	take->QueueTransportPhaseCorrection(350);
+	take->EndMultiPlay(0u);
+	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(450ul, take->MidiVisualPosition());
+	EXPECT_EQ(350, take->MidiAnchorCorrection());
+
+	take->QueueTransportPhaseCorrection(-350);
+	take->EndMultiPlay(0u);
+	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
+{
+	auto take = MakePlayingTake("transport-offset-pending", 1000ul, 100ul);
+	take->GetLoops().front()->Reset();
+	take->QueueTransportPhaseCorrection(250);
+	take->EndMultiPlay(0u);
+
+	take->GetLoops().front()->Play(constants::MaxLoopFadeSamps, 1000ul, false);
+	take->EndMultiPlay(0u);
+	EXPECT_EQ(250ul, LoopBodyPosition(*take->GetLoops().front()));
+}
+
 TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
 {
 	auto take = MakePlayingTake("disconnect", 1000ul, 100ul);

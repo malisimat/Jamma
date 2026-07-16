@@ -197,6 +197,7 @@ namespace engine
 			int midiQuantisationErrorSamps = 0);
 		void QueueExternalPhaseCorrection(long long deltaSamps,
 			std::uint64_t generation) noexcept;
+		void QueueTransportPhaseCorrection(long long deltaSamps) noexcept;
 		void InvalidateExternalPhaseCorrection() noexcept;
 		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
 			{ return _queuedExternalPhaseCorrectionCount.load(std::memory_order_relaxed); }
@@ -223,8 +224,7 @@ namespace engine
 		unsigned int ReadMidiBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			midi::IMidiOutputSink& sink,
-			unsigned int firstOutputIndex = 0u,
-			std::int32_t transportOffsetSamps = 0) noexcept;
+			unsigned int firstOutputIndex = 0u) noexcept;
 		// Read-only view of MIDI loops; used by Station to flush held notes on ditch.
 		const std::vector<std::shared_ptr<midi::MidiLoop>>& GetMidiLoops() const noexcept { return _midiLoops; }
 		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;
@@ -343,6 +343,7 @@ namespace engine
 		// Job thread publishes one shared signed transport delta; the audio thread
 		// consumes it once after normal block advancement. Generation zero invalidates it.
 		std::atomic<long long> _pendingExternalPhaseCorrectionSamps{ 0 };
+		std::atomic<long long> _pendingTransportPhaseCorrectionSamps{ 0 };
 		std::atomic<std::uint64_t> _externalPhaseGeneration{ 0u };
 		std::atomic<std::uint64_t> _queuedExternalPhaseCorrectionCount{ 0u };
 		std::atomic<std::uint64_t> _consumedExternalPhaseCorrectionCount{ 0u };

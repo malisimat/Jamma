@@ -131,6 +131,7 @@ namespace ninjam
 		// job tick (~20 ms).
 		// Safe to call from the job thread; returns false if not connected.
 		bool RequestServerTempo(float bpm, int bpi);
+		static std::string FormatTempoBpm(float bpm);
 
 		// Fills left/right with the decoded stereo pair for the given output-channel
 		// index (assigned by NinjamConnection). Returns false if no audio is ready.

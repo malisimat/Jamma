@@ -460,13 +460,34 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
-	const auto correction = _pendingExternalPhaseCorrectionSamps.exchange(0,
+	const auto externalCorrection = _pendingExternalPhaseCorrectionSamps.exchange(0,
+		std::memory_order_acq_rel);
+	const auto transportCorrection = _pendingTransportPhaseCorrectionSamps.exchange(0,
 		std::memory_order_acq_rel);
 	const auto generation = _externalPhaseGeneration.load(std::memory_order_acquire);
-	const auto applyCorrection = generation != 0u && correction != 0;
+	const auto validExternalCorrection = generation != 0u ? externalCorrection : 0;
+	const auto correction = validExternalCorrection + transportCorrection;
+	const auto hasCorrection = correction != 0;
+	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
+		[](const std::weak_ptr<Loop>& weakLoop)
+		{
+			auto loop = weakLoop.lock();
+			return loop && loop->LoopLength() > 0ul;
+		});
+	if (hasCorrection && !hasPlayableLoop)
+	{
+		if (validExternalCorrection != 0)
+			_pendingExternalPhaseCorrectionSamps.fetch_add(validExternalCorrection,
+				std::memory_order_release);
+		if (transportCorrection != 0)
+			_pendingTransportPhaseCorrectionSamps.fetch_add(transportCorrection,
+				std::memory_order_release);
+	}
+	const auto applyCorrection = hasCorrection && hasPlayableLoop;
 	if (applyCorrection)
 	{
-		_consumedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+		if (validExternalCorrection != 0)
+			_consumedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
 		for (const auto& weakLoop : state->Loops)
 			if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(correction);
 	}
@@ -511,6 +532,12 @@ void LoopTake::QueueExternalPhaseCorrection(long long deltaSamps,
 	}
 	_pendingExternalPhaseCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
 	_queuedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+void LoopTake::QueueTransportPhaseCorrection(long long deltaSamps) noexcept
+{
+	if (deltaSamps != 0)
+		_pendingTransportPhaseCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
 }
 
 void LoopTake::InvalidateExternalPhaseCorrection() noexcept
@@ -1282,19 +1309,15 @@ std::vector<midi::MidiEvent> LoopTake::_BuildMidiLiveTransitionEvents(std::uint3
 unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	std::uint32_t numSamples,
 	midi::IMidiOutputSink& sink,
-	unsigned int firstOutputIndex,
-	std::int32_t transportOffsetSamps) noexcept
+	unsigned int firstOutputIndex) noexcept
 {
 	auto snapshot = _MidiLoopSnapshotState();
 	const auto midiLoopCount = snapshot ? static_cast<unsigned int>(snapshot->size()) : 0u;
 	if (IsMuted())
 		return midiLoopCount;
 
-	auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
-	if (transportOffsetSamps >= 0)
-		midiBlockStart += static_cast<std::uint32_t>(transportOffsetSamps);
-	else
-		midiBlockStart -= static_cast<std::uint32_t>(-transportOffsetSamps);
+	const auto midiBlockStart = static_cast<std::uint32_t>(
+		_midiVisualPlayIndex.load(std::memory_order_relaxed));
 	if (!snapshot)
 		return 0u;
 

@@ -41,6 +41,8 @@ namespace ninjam
 		_pendingRemoteTempoPrompt.reset();
 		_ignoredRemoteTempoPrompt.reset();
 		_joinPushAwaitingOutcome = false;
+		_joinPushSentAtAcceptedWrap = 0u;
+		_locallyRequestedTempo.reset();
 
 		// Enter connected mode and rebuild connected-sync runtime state from scratch;
 		// stale phase/alignment from a previous session must never carry over.
@@ -66,6 +68,8 @@ namespace ninjam
 		_pendingRemoteTempoPrompt.reset();
 		_ignoredRemoteTempoPrompt.reset();
 		_joinPushAwaitingOutcome = false;
+		_joinPushSentAtAcceptedWrap = 0u;
+		_locallyRequestedTempo.reset();
 		_externalTransport.Disconnect();
 		_externalJoinAligned = false;
 		_externalGeneration = 0u;
@@ -183,22 +187,33 @@ namespace ninjam
 		const io::UserConfig& userConfig,
 		unsigned int currentSampleRate)
 	{
-		quantisation.QueueLocalTempo(quantisation.RemoteSampleRate(), currentSampleRate, userConfig);
+		quantisation.QueueLocalTempo(0u, currentSampleRate, userConfig);
 	}
 
 	void NinjamNetworkService::SendQueuedTempoAtIntervalWrap(const NinjamRemoteSnapshot& snapshot,
 		timing::TimingQuantiser& quantisation,
 		unsigned int currentSampleRate)
 	{
+		const auto hadPendingTempo = quantisation.HasPendingTempo();
+		const auto requestSampleRate = currentSampleRate;
+		const auto requestedTempo = hadPendingTempo
+			? quantisation.CurrentTempoTiming(requestSampleRate)
+			: std::nullopt;
 		quantisation.SendQueuedTempo(snapshot,
 			_ninjamController->Session(),
-			quantisation.RemoteSampleRate(),
+			0u,
 			currentSampleRate);
+		if (hadPendingTempo && !quantisation.HasPendingTempo() && requestedTempo.has_value())
+		{
+			_locallyRequestedTempo = requestedTempo;
+			_joinPushSentAtAcceptedWrap = _externalTransport.Diagnostics().AcceptedWraps;
+		}
 	}
 
 	void NinjamNetworkService::_FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
 		timing::TimingQuantiser& quantisation,
-		const std::vector<std::shared_ptr<engine::Station>>& stations)
+		const std::vector<std::shared_ptr<engine::Station>>& stations,
+		unsigned int currentSampleRate)
 	{
 		auto clock = quantisation.Clock();
 		if (!clock)
@@ -206,18 +221,25 @@ namespace ninjam
 
 		// Resolve the authoritative remote interval length, deriving it from tempo
 		// when the raw interval sample count is not yet available.
-		auto intervalLen = snapshot.IntervalLengthSamps;
-		if (intervalLen == 0u && snapshot.HasTiming)
+		auto remoteIntervalLen = snapshot.IntervalLengthSamps;
+		if (remoteIntervalLen == 0u && snapshot.HasTiming)
 		{
-			intervalLen = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
+			remoteIntervalLen = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
 				static_cast<unsigned int>(snapshot.Bpi),
 				snapshot.SampleRate);
 		}
+		const auto intervalLen = timing::ExternalTransport::ScaleSampleRate(remoteIntervalLen,
+			snapshot.SampleRate,
+			currentSampleRate);
+		const auto intervalPos = timing::ExternalTransport::ScaleSampleRate(
+			snapshot.IntervalPositionSamps,
+			snapshot.SampleRate,
+			currentSampleRate);
 
 		timing::ExternalTransportSnapshot xsnap;
 		xsnap.IntervalLengthSamps = intervalLen;
-		xsnap.IntervalPositionSamps = snapshot.IntervalPositionSamps;
-		xsnap.SampleRate = snapshot.SampleRate;
+		xsnap.IntervalPositionSamps = intervalPos;
+		xsnap.SampleRate = currentSampleRate;
 		xsnap.LocalAnchorSamps = clock->AbsoluteSamplePos(0ul);
 
 		const auto decision = _externalTransport.IngestSnapshot(xsnap);
@@ -287,35 +309,55 @@ namespace ninjam
 	void NinjamNetworkService::HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
 		timing::TimingQuantiser& quantisation,
 		const std::vector<std::shared_ptr<engine::Station>>& stations,
-		const io::UserConfig& userConfig)
+		const io::UserConfig& userConfig,
+		unsigned int currentSampleRate)
 	{
 		// Continuously feed the authoritative external transport, then apply
 		// wrap-gated phase discipline so connected playback tracks the remote
 		// interval rather than free-running after a one-shot seed.
-		_FeedExternalTransport(snapshot, quantisation, stations);
-
-		const auto joinPushSent = _joinPushAwaitingOutcome && !quantisation.HasPendingTempo();
+		_FeedExternalTransport(snapshot, quantisation, stations, currentSampleRate);
 
 		auto proposal = quantisation.ProposeRemoteTempoChange(snapshot, userConfig);
 		if (!proposal.has_value())
 		{
-			if (joinPushSent)
+			if (_locallyRequestedTempo.has_value()
+				&& _MatchesLocallyRequestedTempo(snapshot.Bpm,
+					static_cast<unsigned int>(std::max(0, snapshot.Bpi)),
+					_locallyRequestedTempo.value()))
 			{
+				_locallyRequestedTempo.reset();
 				_joinPushAwaitingOutcome = false;
 			}
 			return;
 		}
 
-		if (joinPushSent && snapshot.Users.empty())
+		if (_locallyRequestedTempo.has_value()
+			&& _MatchesLocallyRequestedTempo(proposal.value(), _locallyRequestedTempo.value()))
 		{
+			quantisation.AcknowledgeLocallyRequestedRemoteTempo(proposal.value());
+			_pendingRemoteTempoPrompt.reset();
+			_ignoredRemoteTempoPrompt.reset();
+			_locallyRequestedTempo.reset();
 			_joinPushAwaitingOutcome = false;
+			TimingQuantiser::LogNinjamTempoEvent("Local tempo acknowledged by server",
+				proposal->MasterLoopLengthSamps,
+				proposal->GrainSamps,
+				proposal->Bpi,
+				proposal->Bpm,
+				proposal->SampleRate);
 			return;
 		}
 
 		if (_joinPushAwaitingOutcome)
 		{
+			const auto acceptedWraps = _externalTransport.Diagnostics().AcceptedWraps;
+			if (snapshot.Users.empty()
+				&& acceptedWraps <= (_joinPushSentAtAcceptedWrap + 1u))
+				return;
+
 			std::cout << "[NINJAM] Join push fallback: server stayed on another tempo" << std::endl;
 			_joinPushAwaitingOutcome = false;
+			_locallyRequestedTempo.reset();
 		}
 
 		const auto hasLocalContent = _HasAnyLocalLoopContent(stations);
@@ -399,5 +441,19 @@ namespace ninjam
 			&& (lhs.MasterLoopLengthSamps == rhs.MasterLoopLengthSamps)
 			&& (lhs.Bpi == rhs.Bpi)
 			&& (std::abs(lhs.Bpm - rhs.Bpm) < 0.01f);
+	}
+
+	bool NinjamNetworkService::_MatchesLocallyRequestedTempo(
+		const timing::PendingRemoteTempoChange& proposal,
+		const timing::QuantisationTiming& requested) noexcept
+	{
+		return _MatchesLocallyRequestedTempo(proposal.Bpm, proposal.Bpi, requested);
+	}
+
+	bool NinjamNetworkService::_MatchesLocallyRequestedTempo(float bpm,
+		unsigned int bpi,
+		const timing::QuantisationTiming& requested) noexcept
+	{
+		return bpi == requested.Bpi && std::abs(bpm - requested.Bpm) < 0.01f;
 	}
 }

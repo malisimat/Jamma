@@ -139,6 +139,9 @@ namespace timing
 		void SetDiagnosticsEnabled(bool enabled) noexcept;
 		ExternalTransportDiagnostics Diagnostics() const noexcept;
 		std::uint64_t Generation() const noexcept { return _generation; }
+		static unsigned int ScaleSampleRate(unsigned int samples,
+			unsigned int sourceSampleRate,
+			unsigned int targetSampleRate) noexcept;
 		static long long SignedCircularDifference(unsigned int currentOffset,
 			unsigned int targetOffset,
 			unsigned int intervalLength) noexcept;

@@ -737,7 +737,7 @@ bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 	if (bpm <= 0.0f || bpi <= 0)
 		return false;
 
-	const auto bpmVal = std::to_string(static_cast<int>(bpm + 0.5f));
+	const auto bpmVal = FormatTempoBpm(bpm);
 	const auto bpiVal = std::to_string(bpi);
 
 	// Admin form: honoured immediately if the connected user has admin privileges.
@@ -770,6 +770,17 @@ bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 		<< " bpi=" << bpiVal
 		<< " (admin + vote)" << std::endl;
 	return true;
+}
+std::string NinjamConnection::FormatTempoBpm(float bpm)
+{
+	std::ostringstream stream;
+	stream << std::fixed << std::setprecision(3) << bpm;
+	auto value = stream.str();
+	while (!value.empty() && value.back() == '0')
+		value.pop_back();
+	if (!value.empty() && value.back() == '.')
+		value.pop_back();
+	return value;
 }
 
 bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,

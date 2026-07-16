@@ -186,6 +186,7 @@ namespace timing
 			const io::UserConfig& cfg) const;
 		void ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void AcknowledgeLocallyRequestedRemoteTempo(const PendingRemoteTempoChange& change) noexcept;
 		bool ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint = 0u);
 		void ResetPendingTempoSyncState();
 
@@ -227,6 +228,7 @@ namespace timing
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		unsigned int RemoteSampleRate() const noexcept;
 		bool HasPendingTempo() const noexcept;
+		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
 
 		static void LogNinjamTempoEvent(const char* event,
 			unsigned long masterLoopLengthSamps,

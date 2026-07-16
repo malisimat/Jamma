@@ -294,8 +294,7 @@ namespace engine
 			bool vstActive,
 			unsigned int channelCount,
 			unsigned int sampsToRead,
-			std::uint32_t blockStartSample,
-			std::int32_t transportOffsetSamps) noexcept;
+			std::uint32_t blockStartSample) noexcept;
 			static bool _TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
 				bool& hasLastSample,
 				std::uint32_t& lastSample,
@@ -338,8 +337,7 @@ namespace engine
 		// Run one automation dispatch block on the audio thread: advance each
 		// lane's cursor, interpolate, and SetParameter (delta-gated). Real-time safe.
 		void _RunAutomationDispatch(std::uint32_t blockStartSample,
-			std::uint32_t numSamps,
-			std::int32_t transportOffsetSamps) noexcept;
+			std::uint32_t numSamps) noexcept;
 
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.

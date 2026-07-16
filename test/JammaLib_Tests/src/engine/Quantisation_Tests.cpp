@@ -230,6 +230,28 @@ TEST(Quantisation, ForceQueueCurrentTempoAsPendingRequiresExistingTempo)
 	EXPECT_FALSE(quantiser.ForceQueueCurrentTempoAsPending(true, 48000u));
 }
 
+TEST(Quantisation, LocallyRequestedRemoteTempoAcknowledgementPreservesLocalClockDomain)
+{
+	timing::TimingQuantiser quantiser;
+	auto clock = std::make_shared<utils::Timer>();
+	quantiser.SetClock(clock);
+	clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+	clock->SetSeedSourceLength(384000u);
+
+	timing::PendingRemoteTempoChange acknowledged;
+	acknowledged.IntervalLengthSamps = 352800u;
+	acknowledged.SampleRate = 44100u;
+	acknowledged.GrainSamps = 22050u;
+	acknowledged.MasterLoopLengthSamps = 352800u;
+	acknowledged.Bpm = 120.0f;
+	acknowledged.Bpi = 16u;
+	quantiser.AcknowledgeLocallyRequestedRemoteTempo(acknowledged);
+
+	EXPECT_EQ(384000u, clock->SeedSourceLength());
+	EXPECT_EQ(24000u, clock->QuantiseSamps());
+	EXPECT_EQ(44100u, quantiser.RemoteSampleRate());
+}
+
 // ---------------------------------------------------------------------------
 // DeduceSeedTiming: seed sizes from master loop length
 // ---------------------------------------------------------------------------

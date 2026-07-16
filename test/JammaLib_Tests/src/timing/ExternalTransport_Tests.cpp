@@ -31,6 +31,20 @@ TEST(ExternalTransport, StartsDisconnected)
 	EXPECT_EQ(ExternalTransportMode::Disconnected, state->Mode);
 }
 
+TEST(ExternalTransport, ScalesRemoteSamplesIntoLocalAudioDomain)
+{
+	EXPECT_EQ(384000u, ExternalTransport::ScaleSampleRate(352800u, 44100u, 48000u));
+	EXPECT_EQ(24000u, ExternalTransport::ScaleSampleRate(22050u, 44100u, 48000u));
+	EXPECT_EQ(352800u, ExternalTransport::ScaleSampleRate(352800u, 44100u, 44100u));
+}
+
+TEST(ExternalTransport, SampleRateScalingRoundsToNearestLocalSample)
+{
+	EXPECT_EQ(1u, ExternalTransport::ScaleSampleRate(1u, 44100u, 48000u));
+	EXPECT_EQ(2u, ExternalTransport::ScaleSampleRate(1u, 22050u, 48000u));
+	EXPECT_EQ(0u, ExternalTransport::ScaleSampleRate(0u, 44100u, 48000u));
+}
+
 TEST(ExternalTransport, ConnectPublishesConnectedState)
 {
 	ExternalTransport transport;

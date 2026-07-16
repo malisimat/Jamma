@@ -1,6 +1,7 @@
 #include "ExternalTransport.h"
 
 #include <iostream>
+#include <limits>
 
 using namespace timing;
 
@@ -281,6 +282,20 @@ long long ExternalTransport::SignedCircularDifference(unsigned int currentOffset
 	else if ((intervalLength % 2u) == 0u && delta == -(length / 2))
 		delta = length / 2;
 	return delta;
+}
+
+unsigned int ExternalTransport::ScaleSampleRate(unsigned int samples,
+	unsigned int sourceSampleRate,
+	unsigned int targetSampleRate) noexcept
+{
+	if (sourceSampleRate == 0u || targetSampleRate == 0u || sourceSampleRate == targetSampleRate)
+		return samples;
+
+	const auto scaled = (static_cast<std::uint64_t>(samples) * targetSampleRate
+		+ (sourceSampleRate / 2u)) / sourceSampleRate;
+	return scaled > (std::numeric_limits<unsigned int>::max)()
+		? (std::numeric_limits<unsigned int>::max)()
+		: static_cast<unsigned int>(scaled);
 }
 
 unsigned long ExternalTransport::_DeriveIntervalStart(unsigned long localAnchorSamps,

@@ -585,6 +585,13 @@ void TimingQuantiser::ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& c
 		change.SampleRate);
 }
 
+void TimingQuantiser::AcknowledgeLocallyRequestedRemoteTempo(
+	const PendingRemoteTempoChange& change) noexcept
+{
+	_remoteMasterLoopSamps.store(change.IntervalLengthSamps, std::memory_order_release);
+	_remoteSampleRate.store(change.SampleRate, std::memory_order_release);
+}
+
 long long TimingQuantiser::SignedCircularDifference(unsigned int currentOffset,
 	unsigned int targetOffset,
 	unsigned int intervalLen) noexcept
@@ -826,6 +833,14 @@ unsigned int TimingQuantiser::RemoteSampleRate() const noexcept
 bool TimingQuantiser::HasPendingTempo() const noexcept
 {
 	return _hasPendingTempo.load(std::memory_order_acquire);
+}
+
+std::optional<QuantisationTiming> TimingQuantiser::CurrentTempoTiming(unsigned int sampleRate) const
+{
+	return TimingFromSeedAndMaster(
+		_effectiveQuantiseSamps.load(std::memory_order_acquire),
+		_masterLoopLengthSamps.load(std::memory_order_acquire),
+		sampleRate);
 }
 
 void TimingQuantiser::LogNinjamTempoEvent(const char* event,

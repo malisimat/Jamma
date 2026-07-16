@@ -303,7 +303,8 @@ void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snaps
 	_networkService->HandleRemoteTempoSnapshot(snapshot,
 		_quantisation,
 		_stations,
-		_userConfig);
+		_userConfig,
+		_CurrentSampleRate());
 	auto current = _networkService->PendingRemoteTempoPrompt();
 
 	if (_remoteTempoDialogOpen

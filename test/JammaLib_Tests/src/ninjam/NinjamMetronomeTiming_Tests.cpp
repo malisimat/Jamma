@@ -1,5 +1,13 @@
 #include "gtest/gtest.h"
+#include "ninjam/NinjamConnection.h"
 #include "ninjam/NinjamMetronomeTiming.h"
+
+TEST(NinjamTempoCommand, PreservesUsefulFractionalBpmPrecision)
+{
+	EXPECT_EQ("120", ninjam::NinjamConnection::FormatTempoBpm(120.0f));
+	EXPECT_EQ("120.375", ninjam::NinjamConnection::FormatTempoBpm(120.375f));
+	EXPECT_EQ("99.01", ninjam::NinjamConnection::FormatTempoBpm(99.01f));
+}
 
 namespace
 {
