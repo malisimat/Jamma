@@ -4,6 +4,7 @@
 
 using ninjam::NinjamTiming;
 using ninjam::NinjamTimingCoordinator;
+using ninjam::NinjamTimingUpdate;
 using utils::Timer;
 
 namespace
@@ -17,6 +18,14 @@ namespace
 		timing.SourceSampleRate = 44100u;
 		timing.IntervalLengthSamps = length;
 		timing.IntervalPositionSamps = position;
+		return timing;
+	}
+
+	NinjamTiming MakeTimingTempo(unsigned int length, unsigned int position, float bpm, unsigned int bpi)
+	{
+		auto timing = MakeTiming(length, position);
+		timing.Bpm = bpm;
+		timing.Bpi = bpi;
 		return timing;
 	}
 
@@ -164,4 +173,135 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 	}
 	EXPECT_LE(maxDelta, static_cast<long long>(constants::DefaultBufferSizeSamps * 2u));
 	EXPECT_GT(coordinator.Diagnostics().GenerationChanges, 0u);
+}
+
+// ── Phase 3: join alignment accepts full documented range (§2.2) ─────────────
+
+namespace
+{
+	// Drives the coordinator through a generation change plus a frozen join delta
+	// of the requested magnitude, then triggers the wrap that emits the Join.
+	// The join delta = circularDifference(localOffset, remoteAnchorPos). The anchor
+	// sits in the final quarter so the following backward move is a valid wrap, and
+	// localOffset is chosen so the frozen delta equals `delta`.
+	NinjamTimingUpdate DriveJoin(unsigned int length, long long delta)
+	{
+		const auto anchorPos = length - (length / 8u);
+		const auto localOffset = static_cast<unsigned int>(
+			(static_cast<long long>(anchorPos) - delta + length) % length);
+		Timer clock;
+		clock.SetSeedSourceLength(length);
+		clock.Tick(localOffset, 0u);
+		NinjamTimingCoordinator coordinator;
+		Connect(coordinator, false, false);
+
+		// Generation change: records remote anchor and freezes the join delta.
+		coordinator.Observe(MakeTiming(length, anchorPos), std::nullopt, false, io::UserConfig{}, clock);
+		// A backward move from the final quarter into the first quarter is the wrap
+		// that releases the pending Join event.
+		return coordinator.Observe(MakeTiming(length, 1000u), std::nullopt, false, io::UserConfig{}, clock);
+	}
+}
+
+TEST(NinjamTimingCoordinator, QuarterIntervalJoinIsAccepted)
+{
+	// 96000-sample interval at 48 kHz; a quarter-interval (24000) join is far above
+	// the old two-buffer cap yet must be accepted through the join path.
+	const auto update = DriveJoin(96000u, 24000);
+	ASSERT_TRUE(update.PhaseCorrection.has_value());
+	EXPECT_TRUE(update.PhaseCorrection->IsJoin);
+	EXPECT_EQ(24000, update.PhaseCorrection->DeltaSamps);
+}
+
+TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
+{
+	// The half-interval tie (48000) is the largest legitimate join delta and must
+	// still be accepted (safety limit is seedLength/2).
+	const auto update = DriveJoin(96000u, 48000);
+	ASSERT_TRUE(update.PhaseCorrection.has_value());
+	EXPECT_TRUE(update.PhaseCorrection->IsJoin);
+	EXPECT_EQ(48000, update.PhaseCorrection->DeltaSamps);
+}
+
+// ── Phase 5: tempo request state machine (§2.6/§3.5) ─────────────────────────
+
+namespace
+{
+	// Cycles one full interval: a forward move into the final quarter followed by
+	// a backward wrap into the first quarter. Returns the wrap observation update.
+	NinjamTimingUpdate CycleWrap(NinjamTimingCoordinator& coordinator, Timer& clock,
+		unsigned int length, unsigned int wrapPos, float bpm, unsigned int bpi)
+	{
+		coordinator.Observe(MakeTimingTempo(length, length - (length / 8u), bpm, bpi),
+			std::nullopt, true, io::UserConfig{}, clock);
+		return coordinator.Observe(MakeTimingTempo(length, wrapPos, bpm, bpi),
+			std::nullopt, true, io::UserConfig{}, clock);
+	}
+}
+
+TEST(NinjamTimingCoordinator, TempoRequestAcknowledgedByMatchingTimingWithoutGenerationChange)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, true, local);
+
+	// Gen change auto-accepts (no prompt); request stays queued until a wrap.
+	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTiming(384000u, 1000u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+
+	// The server applies the tempo but the rounded device interval is unchanged, so
+	// no generation-change event occurs. A matching fresh observation must still
+	// acknowledge the request (§2.6).
+	auto ack = CycleWrap(coordinator, clock, 384000u, 2000u, 120.0f, 16u);
+	EXPECT_FALSE(ack.TempoRequest.has_value());
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
+}
+
+TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, true, local);
+
+	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTiming(384000u, 1000u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+
+	// A failed network send returns the request to the queue.
+	coordinator.NotifyTempoRequestSent(false);
+	EXPECT_EQ(ninjam::TempoRequestState::Queued, coordinator.RequestState());
+
+	// The next interval boundary re-sends it (server has not applied the tempo, so
+	// the observed tempo does not match yet).
+	auto resend = CycleWrap(coordinator, clock, 384000u, 2000u, 90.0f, 8u);
+	EXPECT_TRUE(resend.TempoRequest.has_value());
+	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+}
+
+TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	ninjam::NinjamTempoJoinOptions options;
+	options.PromptBeforeApplyingRemoteTempo = false;
+	options.PushLocalTempoOnJoin = true;
+	options.MaxTempoRequestRetries = 2u;
+	NinjamTimingCoordinator coordinator;
+	coordinator.Connect(options, local);
+
+	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTiming(384000u, 1000u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+
+	// Never match the requested tempo (server never applies it). Cycle wraps until
+	// retries are exhausted and the request expires.
+	for (unsigned int i = 0u; i < 6u; ++i)
+		CycleWrap(coordinator, clock, 384000u, 2000u + i, 90.0f, 8u);
+
+	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
 }

@@ -53,6 +53,12 @@ namespace utils
 		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
 		void PublishCommand(const Command& command) noexcept;
 		bool ConsumePendingCommand() noexcept;
+		// Applies a command directly on the audio thread (no mailbox handoff).
+		// Used by the unified audio-boundary transport fan-out so the Timer and
+		// every active local take consume one coherent command in the same block.
+		// Returns true when the command was observed (even if superseded by an
+		// older generation); generation filtering matches ConsumePendingCommand.
+		bool ApplyCommand(const Command& command) noexcept;
 		unsigned int QuantiseSamps() const;
 		QuantisationType Quantisation() const;
 		unsigned long SeedSourceLength() const;

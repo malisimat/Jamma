@@ -162,7 +162,10 @@ namespace ninjam
 
 	void NinjamNetworkService::SendTempoRequest(const NinjamTempoRequest& request)
 	{
+		bool sent = false;
 		if (auto* session = _ninjamController->Session())
-			session->RequestServerTempo(request.Bpm, static_cast<int>(request.Bpi));
+			sent = session->RequestServerTempo(request.Bpm, static_cast<int>(request.Bpi));
+		// Report delivery back so the coordinator can retry on failure (§3.5).
+		_timingCoordinator.NotifyTempoRequestSent(sent);
 	}
 }

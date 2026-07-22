@@ -15,6 +15,7 @@
 #include "../midi/MidiClockAnchor.h"
 #include "../ninjam/NinjamController.h"
 #include "../ninjam/NinjamTimingObservationMailbox.h"
+#include "../ninjam/NinjamAudioTimingCommand.h"
 #include "../utils/Timer.h"
 
 namespace audio
@@ -53,6 +54,19 @@ namespace audio
 		{
 			return _ninjamTimingMailbox.ReadLatest();
 		}
+		// Job thread publishes one coherent transport command; the audio callback
+		// consumes it once at the top of the block and applies it to the Timer and
+		// every active local take together.
+		void PublishTimingCommand(const ninjam::NinjamAudioTimingCommand& command) noexcept
+		{
+			_ninjamTimingCommandMailbox.Publish(command);
+		}
+		// Shares the master transport clock so the audio callback can apply unified
+		// timing commands to it at the same boundary as the local takes.
+		void SetTimingClock(std::shared_ptr<utils::Timer> clock) noexcept
+		{
+			_timingClock.store(std::move(clock), std::memory_order_release);
+		}
 		float GetAdcPeak(unsigned int channel) const noexcept
 		{
 			return channel < _AdcPeakChannels ? _adcPeaks[channel].load(std::memory_order_relaxed) : 0.0f;
@@ -79,6 +93,8 @@ namespace audio
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
+		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
+		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
 		std::atomic_bool _ninjamMetronomeEnabled{ true };
 

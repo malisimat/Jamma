@@ -17,6 +17,21 @@ namespace ninjam
 	{
 		bool PushLocalTempoOnJoin = false;
 		bool PromptBeforeApplyingRemoteTempo = true;
+		// Maximum re-sends of a local tempo request before it is abandoned. Retries
+		// do not move the original sent-at anchor (§2.6/§3.5).
+		unsigned int MaxTempoRequestRetries = 3u;
+	};
+
+	// Explicit lifecycle for a locally pushed tempo request. Replaces the ad hoc
+	// boolean flags so acknowledgement, retry, expiry, and send-failure are
+	// modelled as discrete transitions (§2.6/§3.5).
+	enum class TempoRequestState : std::uint8_t
+	{
+		Idle,
+		Queued,
+		SentAwaitingOutcome,
+		Acknowledged,
+		Expired
 	};
 
 	struct NinjamPhaseCorrection
@@ -48,6 +63,10 @@ namespace ninjam
 		unsigned int QuantiseSamps = 0u;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		unsigned int PhaseSamps = 0u;
+		// Explicit generation for the timing replacement, independent of whether a
+		// nonzero phase correction is present. Prevents a valid zero-phase tempo
+		// replacement from being silently rejected by the audio generation gate.
+		std::uint64_t Generation = 0u;
 	};
 
 	struct NinjamTimingUpdate
@@ -96,6 +115,11 @@ namespace ninjam
 			const std::optional<timing::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		void NotifyPhaseCorrectionConsumed() noexcept { ++_diagnostics.PhaseEventsConsumed; }
+		// Feedback from the network layer after attempting to deliver a tempo
+		// request. A failed send returns the request to Queued so the next interval
+		// boundary re-sends it; success leaves it awaiting server acknowledgement.
+		void NotifyTempoRequestSent(bool success) noexcept;
+		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 
@@ -111,10 +135,10 @@ namespace ninjam
 		NinjamTempoJoinOptions _options{};
 		std::optional<NinjamTempoChange> _pendingTempoChange;
 		std::optional<NinjamTempoChange> _ignoredTempoChange;
-		std::optional<timing::QuantisationTiming> _locallyRequestedTempo;
-		bool _joinPushAwaitingOutcome = false;
-		bool _joinPushSent = false;
-		unsigned long _joinPushWrap = 0ul;
+		std::optional<timing::QuantisationTiming> _requestedTempo;
+		TempoRequestState _requestState = TempoRequestState::Idle;
+		unsigned long _requestSentAtWrap = 0ul;
+		unsigned int _requestRetries = 0u;
 		bool _joinAligned = false;
 		NinjamTimingDiagnostics _diagnostics;
 	};

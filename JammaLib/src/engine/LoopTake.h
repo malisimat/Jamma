@@ -207,6 +207,14 @@ namespace engine
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
 		void InvalidateTimingCorrections() noexcept;
+		// Applies one unified audio-boundary transport correction directly on the
+		// audio thread, before block advancement. Shifts every playable loop and
+		// the MIDI visual/anchor position by the same signed delta. Generation
+		// filtering uses an audio-thread-only counter so stale or superseded
+		// commands never move audio or MIDI state.
+		void ApplyTimingCommand(long long deltaSamps,
+			std::uint64_t generation,
+			TimingCorrectionReason reason) noexcept;
 		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
 			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
@@ -354,6 +362,8 @@ namespace engine
 		std::atomic<std::uint64_t> _timingCorrectionGeneration{ 0u };
 		std::atomic<std::uint64_t> _queuedTimingCorrectionCount{ 0u };
 		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
+		// Audio-thread-only generation gate for the unified audio-boundary command.
+		std::uint64_t _audioTimingGeneration{ 0u };
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

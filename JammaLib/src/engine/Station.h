@@ -110,6 +110,11 @@ namespace engine
 			unsigned int numSamps,
 			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
+		// Fans one unified audio-boundary transport correction out to every local
+		// take. Audio-thread only; called once at the top of the callback block.
+		void ApplyTimingCommand(long long deltaSamps,
+			std::uint64_t generation,
+			LoopTake::TimingCorrectionReason reason) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;

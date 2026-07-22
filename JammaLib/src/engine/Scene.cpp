@@ -269,9 +269,15 @@ void Scene::DisconnectNinjam()
 		std::scoped_lock lock(_sceneMutex);
 		_CloseRemoteTempoPrompt();
 		_networkService->ResetTempoSyncOnDisconnect();
-		for (const auto& station : _stations)
-			for (const auto& take : station->GetLoopTakeSnapshot())
-				if (take) take->InvalidateTimingCorrections();
+		// Publish one coherent invalidation to the shared audio-boundary command
+		// path so any Timer or take correction already published but not yet
+		// consumed cannot execute and move local-only playback after disconnect.
+		if (_audioEngine)
+		{
+			ninjam::NinjamAudioTimingCommand invalidate;
+			invalidate.Type = ninjam::NinjamTimingCommandType::Invalidate;
+			_audioEngine->PublishTimingCommand(invalidate);
+		}
 	}
 	_networkService->Disconnect();
 }
@@ -369,44 +375,43 @@ void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 
 void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 {
-	if (update.InvalidatePendingCorrections)
-		for (const auto& station : _stations)
-			for (const auto& take : station->GetLoopTakeSnapshot())
-				if (take) take->InvalidateTimingCorrections();
+	// One coherent transport command is published to the audio callback, which
+	// consumes it once at the top of the block and applies it to the Timer and
+	// every active local take together. This removes the split-block window that
+	// separate Timer and per-take publications previously allowed.
+	ninjam::NinjamAudioTimingCommand command;
+	bool hasCommand = false;
 
 	if (update.ClockSettings.has_value())
 	{
 		const auto& settings = update.ClockSettings.value();
-		utils::Timer::Command command;
-		command.Type = utils::Timer::CommandType::ReplaceTiming;
-		command.Generation = update.PhaseCorrection ? update.PhaseCorrection->Generation : 1u;
+		command.Type = ninjam::NinjamTimingCommandType::ReplaceTiming;
+		command.Generation = settings.Generation;
 		command.SeedLengthSamps = settings.SeedLengthSamps;
 		command.QuantiseSamps = settings.QuantiseSamps;
 		command.Quantisation = settings.Quantisation;
-		command.PhaseDeltaSamps = settings.PhaseSamps;
-		if (auto clock = _quantisation.Clock()) clock->PublishCommand(command);
+		command.AbsolutePhaseSamps = settings.PhaseSamps;
+		command.PhaseDeltaSamps = update.PhaseCorrection ? update.PhaseCorrection->DeltaSamps : 0;
+		hasCommand = true;
 		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
 	}
-
-	if (update.PhaseCorrection.has_value())
+	else if (update.PhaseCorrection.has_value())
 	{
 		const auto& correction = update.PhaseCorrection.value();
-		if (!update.ClockSettings.has_value())
-		{
-			utils::Timer::Command command;
-			command.Type = utils::Timer::CommandType::PhaseCorrection;
-			command.Generation = correction.Generation;
-			command.PhaseDeltaSamps = correction.DeltaSamps;
-			if (auto clock = _quantisation.Clock()) clock->PublishCommand(command);
-		}
-		for (const auto& station : _stations)
-		{
-			if (!station || station->IsRemote()) continue;
-			for (const auto& take : station->GetLoopTakeSnapshot())
-				if (take) take->QueueTimingCorrection(correction.DeltaSamps, correction.Generation,
-					correction.IsJoin ? LoopTake::TimingCorrectionReason::JoinAlignment : LoopTake::TimingCorrectionReason::PhaseDiscipline);
-		}
+		command.Type = correction.IsJoin ? ninjam::NinjamTimingCommandType::JoinAlignment
+			: ninjam::NinjamTimingCommandType::PhaseDiscipline;
+		command.Generation = correction.Generation;
+		command.PhaseDeltaSamps = correction.DeltaSamps;
+		hasCommand = true;
 	}
+	else if (update.InvalidatePendingCorrections)
+	{
+		command.Type = ninjam::NinjamTimingCommandType::Invalidate;
+		hasCommand = true;
+	}
+
+	if (hasCommand && _audioEngine)
+		_audioEngine->PublishTimingCommand(command);
 
 	if (update.TempoRequest.has_value())
 		_networkService->SendTempoRequest(update.TempoRequest.value());
@@ -1195,7 +1200,6 @@ void Scene::OnTick(Time curTime,
 
 	if (auto clock = _quantisation.Clock())
 	{
-		clock->ConsumePendingCommand();
 		clock->Tick(samps, 0u);
 	}
 
@@ -1426,6 +1430,10 @@ void Scene::InitAudio()
 	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps, const io::UserConfig& cfg, const audio::AudioStreamParams& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
 	});
+
+	// Share the master transport clock so the audio callback can apply unified
+	// NINJAM timing commands to the Timer and local takes at one boundary.
+	_audioEngine->SetTimingClock(_quantisation.Clock());
 
 	if (started) {
 		InitMidi();

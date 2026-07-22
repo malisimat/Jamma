@@ -131,6 +131,60 @@ namespace audio
 		static const std::vector<std::shared_ptr<Station>> emptyStations;
 		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
+		// Unified audio-boundary transport fan-out. Consume at most one coherent
+		// command before any station playback advancement so the Timer and every
+		// active local take apply the same signed correction in the same block.
+		if (const auto command = _ninjamTimingCommandMailbox.Consume())
+		{
+			const auto timingClock = _timingClock.load(std::memory_order_acquire);
+			if (timingClock)
+			{
+				utils::Timer::Command timerCommand;
+				timerCommand.Generation = command->Generation;
+				timerCommand.SeedLengthSamps = command->SeedLengthSamps;
+				timerCommand.QuantiseSamps = command->QuantiseSamps;
+				timerCommand.Quantisation = command->Quantisation;
+				switch (command->Type)
+				{
+				case ninjam::NinjamTimingCommandType::ReplaceTiming:
+					timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
+					timerCommand.PhaseDeltaSamps = static_cast<long long>(command->AbsolutePhaseSamps);
+					break;
+				case ninjam::NinjamTimingCommandType::Invalidate:
+					timerCommand.Type = utils::Timer::CommandType::Invalidate;
+					break;
+				default:
+					timerCommand.Type = utils::Timer::CommandType::PhaseCorrection;
+					timerCommand.PhaseDeltaSamps = command->PhaseDeltaSamps;
+					break;
+				}
+				timingClock->ApplyCommand(timerCommand);
+			}
+
+			engine::LoopTake::TimingCorrectionReason reason =
+				engine::LoopTake::TimingCorrectionReason::PhaseDiscipline;
+			switch (command->Type)
+			{
+			case ninjam::NinjamTimingCommandType::ReplaceTiming:
+				reason = engine::LoopTake::TimingCorrectionReason::TempoReplacement;
+				break;
+			case ninjam::NinjamTimingCommandType::JoinAlignment:
+				reason = engine::LoopTake::TimingCorrectionReason::JoinAlignment;
+				break;
+			case ninjam::NinjamTimingCommandType::Invalidate:
+				reason = engine::LoopTake::TimingCorrectionReason::Invalidation;
+				break;
+			default:
+				reason = engine::LoopTake::TimingCorrectionReason::PhaseDiscipline;
+				break;
+			}
+			for (auto& station : stations)
+			{
+				if (station && !station->IsRemote())
+					station->ApplyTimingCommand(command->PhaseDeltaSamps, command->Generation, reason);
+			}
+		}
+
 		if (nullptr != inBuf)
 		{
 			for (auto channel = 0u; channel < audioStreamParams.NumInputChannels; ++channel)
@@ -206,8 +260,17 @@ namespace audio
 		if (_ninjamController)
 		{
 			const auto remoteTiming = _ninjamController->GetLiveTiming();
+			// Anchor the observation to the Timer's block-start position (the Timer
+			// is ticked at end-of-block, so it still reflects block start here). The
+			// coordinator projects phase back to this anchor so job-scheduling delay
+			// does not masquerade as phase error (§2.7).
+			const auto anchorClock = _timingClock.load(std::memory_order_acquire);
+			const auto localAnchor = anchorClock
+				? static_cast<std::uint64_t>(anchorClock->AbsoluteSamplePos(
+					static_cast<unsigned long>(blockStartSample)))
+				: blockStartSample;
 			liveTiming = ninjam::ToDeviceTiming(remoteTiming, remoteTiming.IsConnected,
-				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, blockStartSample);
+				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, localAnchor);
 			_ninjamTimingMailbox.Publish(liveTiming);
 		}
 

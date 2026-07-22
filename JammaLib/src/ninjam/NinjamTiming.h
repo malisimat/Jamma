@@ -34,6 +34,27 @@ namespace ninjam
 		std::uint64_t LocalBlockStartSample = 0u;
 	};
 
+	// Shared validity boundary for remote timing. Used for both the live NJClient
+	// query and the periodic snapshot so a placeholder tempo the snapshot rejects
+	// cannot slip through the live path (§2.9). Bounds default to the plausible
+	// NINJAM tempo range (mirrors constants::*PlausibleNinjam*); callers may pass
+	// tighter values. Kept self-contained so the test project (which does not add
+	// JammaLib\include to its search path) can include this header freely.
+	inline bool IsValidRemoteTiming(unsigned int intervalLengthSamps,
+		unsigned int sourceSampleRate,
+		float bpm,
+		unsigned int bpi,
+		float minBpm = 20.0f,
+		float maxBpm = 400.0f,
+		unsigned int minBpi = 1u,
+		unsigned int maxBpi = 32u) noexcept
+	{
+		return intervalLengthSamps > 0u
+			&& sourceSampleRate > 0u
+			&& bpm >= minBpm && bpm <= maxBpm
+			&& bpi >= minBpi && bpi <= maxBpi;
+	}
+
 	inline unsigned int ScaleSampleRate(unsigned int samples,
 		unsigned int sourceSampleRate,
 		unsigned int targetSampleRate) noexcept

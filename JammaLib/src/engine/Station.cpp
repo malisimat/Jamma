@@ -722,6 +722,18 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
+void Station::ApplyTimingCommand(long long deltaSamps,
+	std::uint64_t generation,
+	LoopTake::TimingCorrectionReason reason) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->ApplyTimingCommand(deltaSamps, generation, reason);
+}
+
 void Station::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)

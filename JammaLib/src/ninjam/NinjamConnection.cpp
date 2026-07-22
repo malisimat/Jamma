@@ -722,8 +722,14 @@ NinjamRemoteTiming NinjamConnection::GetLiveTiming() const noexcept
 	timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
 	timing.Bpm = _client->GetActualBPM();
 	timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
-	timing.IsValid = timing.IntervalLengthSamps > 0u && timing.SourceSampleRate > 0u
-		&& timing.Bpm > 0.0f && timing.Bpi > 0u;
+	// Same plausibility boundary as the snapshot path: njclient briefly reports a
+	// nonsensical placeholder tempo before the server CONFIG_CHANGE_NOTIFY is
+	// parsed, and that placeholder still satisfies "> 0" (§2.9).
+	timing.IsValid = ninjam::IsValidRemoteTiming(timing.IntervalLengthSamps,
+		timing.SourceSampleRate, timing.Bpm, timing.Bpi,
+		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
+		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
+		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi));
 	return timing;
 }
 
@@ -932,12 +938,12 @@ void NinjamConnection::_UpdateSnapshot()
 	// bare positivity check: njclient briefly reports a nonsensical placeholder
 	// tempo (e.g. bpm=2646, bpi=1) for the short window before the server's
 	// real CONFIG_CHANGE_NOTIFY has been parsed, and that placeholder still
-	// satisfies "> 0".
-	snapshot.Timing.IsValid = (snapshot.Timing.Bpm >= constants::MinPlausibleNinjamBpm)
-		&& (snapshot.Timing.Bpm <= constants::MaxPlausibleNinjamBpm)
-		&& (snapshot.Timing.Bpi >= constants::MinPlausibleNinjamBpi)
-		&& (snapshot.Timing.Bpi <= constants::MaxPlausibleNinjamBpi)
-		&& (snapshot.Timing.SourceSampleRate > 0u);
+	// satisfies "> 0". Shared with the live path via IsValidRemoteTiming (§2.9).
+	snapshot.Timing.IsValid = ninjam::IsValidRemoteTiming(snapshot.Timing.IntervalLengthSamps,
+		snapshot.Timing.SourceSampleRate, snapshot.Timing.Bpm, snapshot.Timing.Bpi,
+		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
+		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
+		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi));
 	const auto localUserName = std::string(_client->GetUser() ? _client->GetUser() : "");
 
 	std::set<std::string> activeUsers;

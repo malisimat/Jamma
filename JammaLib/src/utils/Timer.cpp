@@ -152,6 +152,11 @@ bool Timer::ConsumePendingCommand() noexcept
 		return false;
 
 	_commandConsumedSequence.store(after, std::memory_order_relaxed);
+	return ApplyCommand(command);
+}
+
+bool Timer::ApplyCommand(const Command& command) noexcept
+{
 	if (command.Type == CommandType::Invalidate)
 	{
 		_audioGeneration = 0u;

@@ -14,10 +14,10 @@ void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	_options = options;
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
-	_locallyRequestedTempo = options.PushLocalTempoOnJoin ? localTiming : std::nullopt;
-	_joinPushAwaitingOutcome = _locallyRequestedTempo.has_value();
-	_joinPushSent = false;
-	_joinPushWrap = 0ul;
+	_requestedTempo = options.PushLocalTempoOnJoin ? localTiming : std::nullopt;
+	_requestState = _requestedTempo.has_value() ? TempoRequestState::Queued : TempoRequestState::Idle;
+	_requestSentAtWrap = 0ul;
+	_requestRetries = 0u;
 	_joinAligned = false;
 	_diagnostics = {};
 }
@@ -27,12 +27,22 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	_tracker.Disconnect();
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
-	_locallyRequestedTempo.reset();
-	_joinPushAwaitingOutcome = false;
-	_joinPushSent = false;
-	_joinPushWrap = 0ul;
+	_requestedTempo.reset();
+	_requestState = TempoRequestState::Idle;
+	_requestSentAtWrap = 0ul;
+	_requestRetries = 0u;
 	_joinAligned = false;
 	++_diagnostics.PhaseEventsInvalidated;
+}
+
+void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success) noexcept
+{
+	if (_requestState != TempoRequestState::SentAwaitingOutcome)
+		return;
+	// A failed delivery returns the request to the queue so the next interval
+	// boundary re-sends it without consuming a retry against a stale anchor.
+	if (!success)
+		_requestState = TempoRequestState::Queued;
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
@@ -48,7 +58,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	NinjamTimingObservation observation;
 	observation.IntervalLengthSamps = timing.IntervalLengthSamps;
 	observation.IntervalPositionSamps = timing.IntervalPositionSamps;
-	observation.LocalSample = clock.AbsoluteSamplePos(0ul);
+	// Preserve the callback-time local anchor (Timer absolute domain) so phase is
+	// compared at the observation instant rather than at job-processing time (§2.7).
+	observation.LocalSample = timing.LocalBlockStartSample;
 	const auto event = _tracker.Observe(observation);
 	const auto trackerDiagnostics = _tracker.Diagnostics();
 	_diagnostics.ObservationsAccepted = trackerDiagnostics.ObservationsAccepted;
@@ -77,11 +89,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		if (proposal.has_value())
 		{
 			++_diagnostics.TempoProposals;
-			if (_locallyRequestedTempo.has_value() && _joinPushSent
-				&& _MatchesRequest(proposal.value(), _locallyRequestedTempo.value()))
+			if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
+				&& _MatchesRequest(proposal.value(), _requestedTempo.value()))
 			{
-				_locallyRequestedTempo.reset();
-				_joinPushAwaitingOutcome = false;
+				_requestedTempo.reset();
+				_requestState = TempoRequestState::Acknowledged;
 				++_diagnostics.TempoAcknowledged;
 			}
 			else if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
@@ -97,30 +109,78 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	if (event->Type != NinjamTimingEventType::Wrap && event->Type != NinjamTimingEventType::Join)
 		return update;
 
-	if (_locallyRequestedTempo.has_value() && (!_joinPushAwaitingOutcome || event->RemoteWrapCount > _joinPushWrap))
+	// A fresh valid observation whose tempo matches our request acknowledges it even
+	// when the applied tempo left the rounded device interval length unchanged and
+	// therefore produced no generation-change event (§2.6).
+	if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
+		&& timing.Bpi == _requestedTempo->Bpi
+		&& std::abs(timing.Bpm - _requestedTempo->Bpm) < 0.01f)
 	{
-		update.TempoRequest = NinjamTempoRequest{ _locallyRequestedTempo->Bpm, _locallyRequestedTempo->Bpi };
-		_joinPushWrap = event->RemoteWrapCount;
-		_joinPushAwaitingOutcome = true;
-		_joinPushSent = true;
+		_requestedTempo.reset();
+		_requestState = TempoRequestState::Acknowledged;
+		++_diagnostics.TempoAcknowledged;
 	}
-	else if (_joinPushAwaitingOutcome && event->RemoteWrapCount > (_joinPushWrap + 1ul))
+
+	if (_requestState == TempoRequestState::Queued && _requestedTempo.has_value())
 	{
-		_joinPushAwaitingOutcome = false;
-		_locallyRequestedTempo.reset();
+		update.TempoRequest = NinjamTempoRequest{ _requestedTempo->Bpm, _requestedTempo->Bpi };
+		_requestSentAtWrap = event->RemoteWrapCount;
+		_requestState = TempoRequestState::SentAwaitingOutcome;
+		_requestRetries = 0u;
+	}
+	else if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
+		&& event->RemoteWrapCount > (_requestSentAtWrap + 1ul))
+	{
+		if (_requestRetries < _options.MaxTempoRequestRetries)
+		{
+			// Re-send against the original anchor; the sent-at wrap is deliberately
+			// not advanced so the expiry window measures from the first attempt.
+			update.TempoRequest = NinjamTempoRequest{ _requestedTempo->Bpm, _requestedTempo->Bpi };
+			++_requestRetries;
+		}
+		else
+		{
+			_requestState = TempoRequestState::Expired;
+			_requestedTempo.reset();
+		}
 	}
 
 	const auto seedLength = clock.SeedSourceLength();
 	if (seedLength == 0ul)
 		return update;
+	// Project the current Timer offset back to the observation's callback anchor so
+	// remote (observation-time) and local phase are compared at the same instant.
+	// Both anchors live in the Timer absolute-sample domain. A zero anchor means no
+	// callback anchor was supplied, so compare against the live offset directly.
+	unsigned int localOffset = clock.SampOffset();
+	if (observation.LocalSample != 0u)
+	{
+		const auto nowAnchor = static_cast<std::uint64_t>(
+			clock.AbsoluteSamplePos(static_cast<unsigned long>(observation.LocalSample)));
+		if (nowAnchor >= observation.LocalSample)
+		{
+			const auto elapsed = static_cast<unsigned int>(
+				(nowAnchor - observation.LocalSample) % seedLength);
+			localOffset = static_cast<unsigned int>(
+				(static_cast<unsigned long>(localOffset) + seedLength - elapsed) % seedLength);
+		}
+	}
 	const auto delta = event->Type == NinjamTimingEventType::Join ? event->PhaseDeltaSamps :
-		SignedCircularDifference(clock.SampOffset(), event->RemotePositionSamps,
+		SignedCircularDifference(localOffset, event->RemotePositionSamps,
 			static_cast<unsigned int>(seedLength));
 	const auto magnitude = delta < 0 ? -delta : delta;
 	_diagnostics.MaxPhaseErrorSamps = std::max(_diagnostics.MaxPhaseErrorSamps, magnitude);
 	const auto bucket = magnitude <= 1 ? 0u : magnitude <= 16 ? 1u : magnitude <= 128 ? 2u : 3u;
 	++_diagnostics.PhaseErrorBuckets[bucket];
-	if (magnitude > static_cast<long long>(constants::DefaultBufferSizeSamps * 2u))
+	// A join can legitimately align anywhere within the interval, so it is bounded
+	// only by the seed half-interval (the circular difference already guarantees
+	// that). Ongoing phase discipline from wrap events is expected to be tiny, so
+	// keep the small buffer-scale cap to reject anomalous drift on that path only.
+	const bool isJoin = event->Type == NinjamTimingEventType::Join;
+	const auto safetyLimit = isJoin
+		? static_cast<long long>(seedLength / 2ul)
+		: static_cast<long long>(constants::DefaultBufferSizeSamps * 2u);
+	if (magnitude > safetyLimit)
 	{
 		++_diagnostics.SafetyLimitRejections;
 		return update;
@@ -173,10 +233,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	const auto oldLength = clock.SeedSourceLength();
 	const auto delta = oldLength == 0ul ? 0 : SignedCircularDifference(clock.SampOffset(),
 		change.IntervalPositionSamps, change.IntervalLengthSamps);
+	const auto generation = _tracker.Generation();
 	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
-		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps };
+		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation };
 	if (delta != 0)
-		update.PhaseCorrection = NinjamPhaseCorrection{ delta, _tracker.Generation(), false };
+		update.PhaseCorrection = NinjamPhaseCorrection{ delta, generation, false };
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	++_diagnostics.TempoAccepted;

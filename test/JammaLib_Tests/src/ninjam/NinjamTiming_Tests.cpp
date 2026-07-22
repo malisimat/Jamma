@@ -57,3 +57,21 @@ TEST(NinjamTiming, InvalidRemoteTimingClearsIntervalFields)
 	EXPECT_EQ(0u, timing.DeviceSampleRate);
 	EXPECT_EQ(0u, timing.SourceSampleRate);
 }
+
+TEST(NinjamTiming, SharedValidityAcceptsPlausibleTiming)
+{
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 120.0f, 8u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 20.0f, 1u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 400.0f, 32u));
+}
+
+TEST(NinjamTiming, SharedValidityRejectsPlaceholderTempo)
+{
+	// The njclient placeholder (e.g. bpm=2646, bpi=1) satisfies "> 0" but must be
+	// rejected on both the live and snapshot paths through one boundary (§2.9).
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 44100u, 2646.0f, 1u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 44100u, 5.0f, 8u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 44100u, 120.0f, 64u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(0u, 44100u, 120.0f, 8u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(22050u, 0u, 120.0f, 8u));
+}

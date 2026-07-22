@@ -459,6 +459,10 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
+	// Queue-based take-only phase shift (transport offset / global phase offset).
+	// NINJAM connected corrections do NOT use this path; they arrive through the
+	// unified audio-boundary command (ApplyTimingCommand) applied at the top of
+	// the callback block alongside the Timer.
 	const auto correction = _pendingTimingCorrectionSamps.exchange(0, std::memory_order_acq_rel);
 	const auto generation = _timingCorrectionGeneration.load(std::memory_order_acquire);
 	const auto validCorrection = generation != 0u ? correction : 0;
@@ -506,6 +510,52 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 				std::memory_order_relaxed);
 		}
 		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
+	}
+}
+
+void LoopTake::ApplyTimingCommand(long long deltaSamps,
+	std::uint64_t generation,
+	TimingCorrectionReason reason) noexcept
+{
+	if (reason == TimingCorrectionReason::Invalidation)
+	{
+		_audioTimingGeneration = 0u;
+		return;
+	}
+	if (generation == 0u || generation < _audioTimingGeneration)
+		return;
+	_audioTimingGeneration = generation;
+	if (deltaSamps == 0)
+		return;
+
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
+		[](const std::weak_ptr<Loop>& weakLoop)
+		{
+			auto loop = weakLoop.lock();
+			return loop && loop->LoopLength() > 0ul;
+		});
+	if (!hasPlayableLoop)
+		return;
+
+	for (const auto& weakLoop : state->Loops)
+		if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(deltaSamps);
+	_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		const auto length = static_cast<long long>(midiLoopLength);
+		auto midiPlayIndex = static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
+		auto shifted = (midiPlayIndex + (deltaSamps % length)) % length;
+		if (shifted < 0)
+			shifted += length;
+		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
+		_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(deltaSamps),
+			std::memory_order_relaxed);
 	}
 }
 
