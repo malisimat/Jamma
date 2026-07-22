@@ -15,6 +15,7 @@
 #include <memory>
 #include <windows.h>
 #include "IVstPlugin.h"
+#include "VstGlContextScope.h"
 #include "../../include/Constants.h"
 
 // Include the VST2 SDK headers only when VST2 support is compiled in.
@@ -167,21 +168,6 @@ namespace vst
 		// input correctly. Called from PreInit() (UI thread); Load() only calls
 		// it as a fallback when PreInit() was skipped.
 		bool _InstantiateEffect(const std::wstring& path);
-
-		// RAII guard that snapshots the current OpenGL context on construction
-		// and restores it on destruction. Plugins (e.g. Battery 4) make their
-		// own GL context current during effOpen/effEditOpen/effEditIdle — these
-		// run on Jamma's OpenGL render thread, so without restoring our context
-		// the framebuffer becomes incomplete and the whole app paints white.
-		struct GlContextScope
-		{
-			GlContextScope() noexcept;
-			~GlContextScope();
-			GlContextScope(const GlContextScope&) = delete;
-			GlContextScope& operator=(const GlContextScope&) = delete;
-			HGLRC _rc;
-			HDC _dc;
-		};
 
 		AEffect* _effect;
 			std::array<VstMidiEvent, MaxMidiEventsPerBlock> _midiEvents;

@@ -574,6 +574,18 @@
     <ClCompile Include="src\vst\VstChain.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\Vst3Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst2Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3StateBlob.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3MidiMapping.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\VstEditorWindow.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>

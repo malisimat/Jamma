@@ -15,19 +15,6 @@
 
 using namespace vst;
 
-Vst2Plugin::GlContextScope::GlContextScope() noexcept
-	: _rc(wglGetCurrentContext()), _dc(wglGetCurrentDC())
-{
-}
-
-Vst2Plugin::GlContextScope::~GlContextScope()
-{
-	// Only restore if there was a context to begin with (non-render threads,
-	// e.g. the job-thread fallback, have none — leave them untouched).
-	if (_rc)
-		wglMakeCurrent(_dc, _rc);
-}
-
 Vst2Plugin::Vst2Plugin() :
 #ifdef JAMMA_VST2_ENABLED
 	_effect(nullptr),
@@ -114,7 +101,7 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 	// during VSTPluginMain()/effOpen and never restore ours, which leaves our
 	// framebuffer incomplete and the whole app paints white. The scope guard
 	// snapshots our GL context now and restores it when this function returns.
-	GlContextScope glScope;
+	VstGlContextScope glScope;
 
 	// Locate and call the plugin entry-point to obtain the AEffect.
 	auto mainProc = reinterpret_cast<AEffect* (*)(audioMasterCallback)>(
@@ -609,7 +596,7 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 
 	// Restore our GL render context after the plugin builds its editor — some
 	// plugins make their own context current during effEditOpen.
-	GlContextScope glScope;
+	VstGlContextScope glScope;
 
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
@@ -642,7 +629,7 @@ void Vst2Plugin::CloseEditor()
 		&& (_effect->flags & effFlagsHasEditor)
 		&& _isEditorOpen.exchange(false, std::memory_order_acq_rel))
 	{
-		GlContextScope glScope;
+		VstGlContextScope glScope;
 		_effect->dispatcher(_effect, effEditClose, 0, 0, nullptr, 0.0f);
 	}
 #endif
@@ -659,7 +646,7 @@ void Vst2Plugin::IdleEditor() noexcept
 	{
 		// effEditIdle fires from the UI/render thread; restore our GL context
 		// afterwards so the next frame's framebuffer stays complete.
-		GlContextScope glScope;
+		VstGlContextScope glScope;
 		_effect->dispatcher(_effect, effEditIdle, 0, 0, nullptr, 0.0f);
 	}
 #endif
