@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "io/UserConfig.h"
 #include "ninjam/NinjamConnection.h"
+#include "ninjam/NinjamTiming.h"
 #include "timing/TimingQuantiser.h"
 #include "graphics/QuantisationModel.h"
 #include "midi/MidiQuantisation.h"
@@ -42,10 +43,10 @@ TEST(Quantisation, EnforcesMinimumTapSeed)
 
 TEST(Quantisation, ConvertsNinjamTempoToIntervalSamples)
 {
-	EXPECT_EQ(384000u, timing::IntervalSampsFromTempo(120.0f, 16u, 48000u));
-	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(0.0f, 16u, 48000u));
-	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(120.0f, 0u, 48000u));
-	EXPECT_EQ(0u, timing::IntervalSampsFromTempo(120.0f, 16u, 0u));
+	EXPECT_EQ(384000u, ninjam::IntervalSampsFromTempo(120.0f, 16u, 48000u));
+	EXPECT_EQ(0u, ninjam::IntervalSampsFromTempo(0.0f, 16u, 48000u));
+	EXPECT_EQ(0u, ninjam::IntervalSampsFromTempo(120.0f, 0u, 48000u));
+	EXPECT_EQ(0u, ninjam::IntervalSampsFromTempo(120.0f, 16u, 0u));
 }
 
 TEST(Quantisation, ResolvePhaseOffsetDragConvertsHorizontalPixelsToMilliseconds)
@@ -133,147 +134,6 @@ TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(0u, 384000ul, 48000u).has_value());
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 0ul, 48000u).has_value());
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 384000ul, 0u).has_value());
-}
-
-TEST(Quantisation, RemoteTempoProposalAndApplyRoundTrip)
-{
-	io::UserConfig cfg;
-	timing::TimingQuantiser quantiser;
-	quantiser.SetClock(std::make_shared<utils::Timer>());
-
-	ninjam::NinjamRemoteSnapshot snapshot;
-	snapshot.Timing.IsValid = true;
-	snapshot.Timing.SourceSampleRate = 44100u;
-	snapshot.Timing.IntervalLengthSamps = 352800u;
-	snapshot.Timing.IntervalPositionSamps = 22050u;
-	snapshot.Timing.Bpm = 120.0f;
-	snapshot.Timing.Bpi = 16u;
-
-	auto proposal = quantiser.ProposeRemoteTempoChange(snapshot, cfg);
-	ASSERT_TRUE(proposal.has_value());
-	EXPECT_EQ(352800u, proposal->IntervalLengthSamps);
-	EXPECT_EQ(22050u, proposal->GrainSamps);
-	EXPECT_EQ(16u, proposal->Bpi);
-	EXPECT_FLOAT_EQ(120.0f, proposal->Bpm);
-
-	quantiser.ApplyAcceptedRemoteTempo(proposal.value(), {});
-
-	// Same remote timing should not keep proposing once applied.
-	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
-}
-
-TEST(Quantisation, AcceptedRemoteTempoUsesLocalSampleDomainAndReclocksExistingTransport)
-{
-	timing::TimingQuantiser quantiser;
-	auto clock = std::make_shared<utils::Timer>();
-	quantiser.SetClock(clock);
-	clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
-	clock->SetSeedSourceLength(384000u);
-	clock->Tick(100000u, 0u);
-
-	timing::PendingRemoteTempoChange change;
-	change.IntervalLengthSamps = 352800u;
-	change.IntervalPositionSamps = 22050u;
-	change.SampleRate = 44100u;
-	change.GrainSamps = 22050u;
-	change.MasterLoopLengthSamps = 352800u;
-	change.Bpm = 120.0f;
-	change.Bpi = 16u;
-
-	EXPECT_EQ(-76000, quantiser.ApplyAcceptedRemoteTempo(change, {}, 48000u));
-	EXPECT_EQ(384000u, clock->SeedSourceLength());
-	EXPECT_EQ(24000u, clock->QuantiseSamps());
-	EXPECT_EQ(24000u, clock->SampOffset());
-}
-
-TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
-{
-	io::UserConfig cfg;
-	timing::TimingQuantiser quantiser;
-	quantiser.SetClock(std::make_shared<utils::Timer>());
-
-	ninjam::NinjamRemoteSnapshot seedSnapshot;
-	seedSnapshot.Timing.IsValid = true;
-	seedSnapshot.Timing.SourceSampleRate = 44100u;
-	seedSnapshot.Timing.IntervalLengthSamps = 352800u;
-	seedSnapshot.Timing.IntervalPositionSamps = 0u;
-	seedSnapshot.Timing.Bpm = 120.0f;
-	seedSnapshot.Timing.Bpi = 16u;
-
-	auto seedProposal = quantiser.ProposeRemoteTempoChange(seedSnapshot, cfg);
-	ASSERT_TRUE(seedProposal.has_value());
-	quantiser.ApplyAcceptedRemoteTempo(seedProposal.value(), {});
-
-	EXPECT_TRUE(quantiser.ForceQueueCurrentTempoAsPending(true, 44100u));
-	EXPECT_TRUE(quantiser.HasPendingTempo());
-
-	ninjam::NinjamRemoteSnapshot nextSnapshot;
-	nextSnapshot.Timing.IsValid = true;
-	nextSnapshot.Timing.SourceSampleRate = 44100u;
-	nextSnapshot.Timing.IntervalLengthSamps = 529200u;
-	nextSnapshot.Timing.IntervalPositionSamps = 1024u;
-	nextSnapshot.Timing.Bpm = 100.0f;
-	nextSnapshot.Timing.Bpi = 20u;
-	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(nextSnapshot, cfg).has_value());
-
-	quantiser.ResetPendingTempoSyncState();
-	EXPECT_FALSE(quantiser.HasPendingTempo());
-}
-
-TEST(Quantisation, ForceQueueCurrentTempoAsPendingSeedsAcceptedRemoteTempo)
-{
-	io::UserConfig cfg;
-	timing::TimingQuantiser quantiser;
-	auto clock = std::make_shared<utils::Timer>();
-	quantiser.SetClock(clock);
-
-	clock->SetQuantisation(22050u, utils::Timer::QUANTISE_MULTIPLE);
-	clock->SetSeedSourceLength(352800u);
-	quantiser.QueueLocalTempo(0u, 44100u, cfg);
-	ASSERT_TRUE(quantiser.HasPendingTempo());
-
-	EXPECT_TRUE(quantiser.ForceQueueCurrentTempoAsPending(true, 44100u));
-	quantiser.ResetPendingTempoSyncState();
-	EXPECT_FALSE(quantiser.HasPendingTempo());
-
-	ninjam::NinjamRemoteSnapshot snapshot;
-	snapshot.Timing.IsValid = true;
-	snapshot.Timing.SourceSampleRate = 44100u;
-	snapshot.Timing.IntervalLengthSamps = 352800u;
-	snapshot.Timing.IntervalPositionSamps = 0u;
-	snapshot.Timing.Bpm = 120.0f;
-	snapshot.Timing.Bpi = 16u;
-
-	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
-}
-
-TEST(Quantisation, ForceQueueCurrentTempoAsPendingRequiresExistingTempo)
-{
-	timing::TimingQuantiser quantiser;
-	quantiser.SetClock(std::make_shared<utils::Timer>());
-	EXPECT_FALSE(quantiser.ForceQueueCurrentTempoAsPending(true, 48000u));
-}
-
-TEST(Quantisation, LocallyRequestedRemoteTempoAcknowledgementPreservesLocalClockDomain)
-{
-	timing::TimingQuantiser quantiser;
-	auto clock = std::make_shared<utils::Timer>();
-	quantiser.SetClock(clock);
-	clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
-	clock->SetSeedSourceLength(384000u);
-
-	timing::PendingRemoteTempoChange acknowledged;
-	acknowledged.IntervalLengthSamps = 352800u;
-	acknowledged.SampleRate = 44100u;
-	acknowledged.GrainSamps = 22050u;
-	acknowledged.MasterLoopLengthSamps = 352800u;
-	acknowledged.Bpm = 120.0f;
-	acknowledged.Bpi = 16u;
-	quantiser.AcknowledgeLocallyRequestedRemoteTempo(acknowledged);
-
-	EXPECT_EQ(384000u, clock->SeedSourceLength());
-	EXPECT_EQ(24000u, clock->QuantiseSamps());
-	EXPECT_EQ(44100u, quantiser.RemoteSampleRate());
 }
 
 // ---------------------------------------------------------------------------
@@ -466,11 +326,11 @@ TEST(Quantisation, NinjamRoundTrip_100bpm_4bpi)
 	// Seed = one beat = 60*sr/BPM = 28800 samps; no halving policy applies.
 	const unsigned int sr = 48000u;
 
-	const auto interval = timing::IntervalSampsFromTempo(100.0f, 4u, sr);
+	const auto interval = ninjam::IntervalSampsFromTempo(100.0f, 4u, sr);
 	ASSERT_EQ(115200u, interval);
 
 	// Derive seed directly as one beat: IntervalSampsFromTempo(bpm, 1, sr).
-	const auto seed = timing::IntervalSampsFromTempo(100.0f, 1u, sr);
+	const auto seed = ninjam::IntervalSampsFromTempo(100.0f, 1u, sr);
 	ASSERT_EQ(28800u, seed);
 
 	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
@@ -479,7 +339,7 @@ TEST(Quantisation, NinjamRoundTrip_100bpm_4bpi)
 	EXPECT_EQ(4u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(100.0f, timingOpt->Bpm);
 	EXPECT_EQ(4u, timingOpt->Bpi);
-	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, ninjam::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
@@ -488,10 +348,10 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
 	// Seed = one beat = 60*sr/BPM = 24000 samps.
 	const unsigned int sr = 48000u;
 
-	const auto interval = timing::IntervalSampsFromTempo(120.0f, 8u, sr);
+	const auto interval = ninjam::IntervalSampsFromTempo(120.0f, 8u, sr);
 	ASSERT_EQ(192000u, interval);
 
-	const auto seed = timing::IntervalSampsFromTempo(120.0f, 1u, sr);
+	const auto seed = ninjam::IntervalSampsFromTempo(120.0f, 1u, sr);
 	ASSERT_EQ(24000u, seed);
 
 	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
@@ -500,7 +360,7 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_8bpi)
 	EXPECT_EQ(8u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(8u, timingOpt->Bpi);
-	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, ninjam::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
@@ -510,10 +370,10 @@ TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
 	// are recovered exactly.
 	const unsigned int sr = 48000u;
 
-	const auto interval = timing::IntervalSampsFromTempo(180.0f, 16u, sr);
+	const auto interval = ninjam::IntervalSampsFromTempo(180.0f, 16u, sr);
 	ASSERT_EQ(256000u, interval);
 
-	const auto seed = timing::IntervalSampsFromTempo(180.0f, 1u, sr);
+	const auto seed = ninjam::IntervalSampsFromTempo(180.0f, 1u, sr);
 	ASSERT_EQ(16000u, seed);
 
 	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
@@ -522,7 +382,7 @@ TEST(Quantisation, NinjamRoundTrip_180bpm_16bpi)
 	EXPECT_EQ(16u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(180.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
-	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, ninjam::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
@@ -531,10 +391,10 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
 	// Seed = one beat = 60*sr/BPM = 22050 samps.
 	const unsigned int sr = 44100u;
 
-	const auto interval = timing::IntervalSampsFromTempo(120.0f, 16u, sr);
+	const auto interval = ninjam::IntervalSampsFromTempo(120.0f, 16u, sr);
 	ASSERT_EQ(352800u, interval);
 
-	const auto seed = timing::IntervalSampsFromTempo(120.0f, 1u, sr);
+	const auto seed = ninjam::IntervalSampsFromTempo(120.0f, 1u, sr);
 	ASSERT_EQ(22050u, seed);
 
 	auto timingOpt = timing::TimingFromSeedAndMaster(seed, interval, sr);
@@ -543,7 +403,7 @@ TEST(Quantisation, NinjamRoundTrip_120bpm_16bpi_44100Hz)
 	EXPECT_EQ(16u, timingOpt->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timingOpt->Bpm);
 	EXPECT_EQ(16u, timingOpt->Bpi);
-	EXPECT_EQ(interval, timing::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
+	EXPECT_EQ(interval, ninjam::IntervalSampsFromTempo(timingOpt->Bpm, timingOpt->Bpi, sr));
 }
 
 // ---------------------------------------------------------------------------

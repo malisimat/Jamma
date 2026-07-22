@@ -226,7 +226,7 @@
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
     <ClInclude Include="src\timing\TimingQuantiser.h" />
-    <ClInclude Include="src\timing\ExternalTransport.h" />
+    <ClInclude Include="src\ninjam\NinjamTimingTracker.h" />
     
     <ClInclude Include="src\graphics\QuantisationModel.h" />
     <ClInclude Include="src\graphics\QuantisationDivisionModel.h" />
@@ -333,6 +333,7 @@
     <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h" />
     <ClInclude Include="src\ninjam\NinjamTiming.h" />
     <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h" />
+    <ClInclude Include="src\ninjam\NinjamTimingCoordinator.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />
@@ -400,7 +401,7 @@
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
     <ClCompile Include="src\timing\TimingQuantiser.cpp" />
-    <ClCompile Include="src\timing\ExternalTransport.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingTracker.cpp" />
     
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
     <ClCompile Include="src\graphics\QuantisationDivisionModel.cpp" />
@@ -472,6 +473,7 @@
     <ClCompile Include="src\io\IoInputSubsystem.cpp" />
     <ClCompile Include="src\vst\VstEditorWindowManager.cpp" />
     <ClCompile Include="src\ninjam\NinjamNetworkService.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingCoordinator.cpp" />
     <ClCompile Include="src\io\IoSessionExporter.cpp" />
     <ClCompile Include="src\engine\Station.cpp" />
     <ClCompile Include="src\engine\Loop.cpp" />

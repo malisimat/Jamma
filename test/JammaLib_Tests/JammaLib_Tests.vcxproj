@@ -203,12 +203,12 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\ninjam\NinjamMetronomeTiming_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamTiming_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox_Tests.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingCoordinator_Tests.cpp" />
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp" />
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp" />
     <ClCompile Include="src\utils\MathUtils_Tests.cpp" />
-    <ClCompile Include="src\timing\ExternalTransport_Tests.cpp" />
-    <ClCompile Include="src\timing\RemotePhaseDiscipline_Tests.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingTracker_Tests.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>

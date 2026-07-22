@@ -140,11 +140,8 @@
     <ClCompile Include="src\utils\MathUtils_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>
-    <ClCompile Include="src\timing\ExternalTransport_Tests.cpp">
-      <Filter>src\timing</Filter>
-    </ClCompile>
-    <ClCompile Include="src\timing\RemotePhaseDiscipline_Tests.cpp">
-      <Filter>src\timing</Filter>
+    <ClCompile Include="src\ninjam\NinjamTimingTracker_Tests.cpp">
+      <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\ExportLaneTiming_Tests.cpp">
       <Filter>src\ninjam</Filter>
@@ -156,6 +153,9 @@
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTimingCoordinator_Tests.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\NinjamMetronome_Tests.cpp">

@@ -108,6 +108,7 @@ TEST(DisciplineRemotePhase, NearRemoteIntervalCorrectsRoundedTempoAtWrap)
 	quantiser.SetClock(clock);
 
 	EXPECT_EQ(-1, quantiser.DisciplineRemotePhase(0u, 1001u));
+	EXPECT_TRUE(clock->ConsumePendingCommand());
 	EXPECT_EQ(0u, clock->SampOffset());
 }
 
@@ -128,6 +129,7 @@ TEST(DisciplineRemotePhase, DriftBeyondThresholdRealignsClock)
 	quantiser.SetClock(clock);
 
 	EXPECT_EQ(300, quantiser.DisciplineRemotePhase(800u, 1000u));
+	EXPECT_TRUE(clock->ConsumePendingCommand());
 	EXPECT_EQ(800u, clock->SampOffset());
 }
 
@@ -148,6 +150,7 @@ TEST(DisciplineRemotePhase, DeliberateJoinDeltaAppliesInFull)
 	quantiser.SetClock(clock);
 
 	EXPECT_TRUE(quantiser.ApplyRemotePhaseCorrection(4000, 10000u));
+	EXPECT_TRUE(clock->ConsumePendingCommand());
 	EXPECT_EQ(5000u, clock->SampOffset());
 }
 

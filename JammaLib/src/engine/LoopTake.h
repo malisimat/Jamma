@@ -81,6 +81,14 @@ namespace engine
 			STATE_OVERDUBBINGRECORDING
 		};
 
+		enum class TimingCorrectionReason : std::uint8_t
+		{
+			TempoReplacement,
+			JoinAlignment,
+			PhaseDiscipline,
+			Invalidation
+		};
+
 	public:
 		LoopTake(LoopTakeParams params,
 			audio::AudioMixerParams mixerParams);
@@ -195,14 +203,14 @@ namespace engine
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
 			int midiQuantisationErrorSamps = 0);
-		void QueueExternalPhaseCorrection(long long deltaSamps,
-			std::uint64_t generation) noexcept;
-		void QueueTransportPhaseCorrection(long long deltaSamps) noexcept;
-		void InvalidateExternalPhaseCorrection() noexcept;
+		void QueueTimingCorrection(long long deltaSamps,
+			std::uint64_t generation,
+			TimingCorrectionReason reason) noexcept;
+		void InvalidateTimingCorrections() noexcept;
 		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
-			{ return _queuedExternalPhaseCorrectionCount.load(std::memory_order_relaxed); }
+			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
-			{ return _consumedExternalPhaseCorrectionCount.load(std::memory_order_relaxed); }
+			{ return _consumedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -342,11 +350,10 @@ namespace engine
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
 		// Job thread publishes one shared signed transport delta; the audio thread
 		// consumes it once after normal block advancement. Generation zero invalidates it.
-		std::atomic<long long> _pendingExternalPhaseCorrectionSamps{ 0 };
-		std::atomic<long long> _pendingTransportPhaseCorrectionSamps{ 0 };
-		std::atomic<std::uint64_t> _externalPhaseGeneration{ 0u };
-		std::atomic<std::uint64_t> _queuedExternalPhaseCorrectionCount{ 0u };
-		std::atomic<std::uint64_t> _consumedExternalPhaseCorrectionCount{ 0u };
+		std::atomic<long long> _pendingTimingCorrectionSamps{ 0 };
+		std::atomic<std::uint64_t> _timingCorrectionGeneration{ 0u };
+		std::atomic<std::uint64_t> _queuedTimingCorrectionCount{ 0u };
+		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;

@@ -325,15 +325,8 @@ namespace engine
 		bool _HasQuantisationSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		void _QueueLocalTempoFromClock()
-		{
-			_networkService->QueueLocalTempoFromClock(_quantisation, _userConfig, _CurrentSampleRate());
-		}
-		void _SendQueuedTempoAtIntervalWrap(const ninjam::NinjamRemoteSnapshot& snapshot)
-		{
-			_networkService->SendQueuedTempoAtIntervalWrap(snapshot, _quantisation, _CurrentSampleRate());
-		}
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
 		void _EnsureRemoteTempoPromptUi();
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);

@@ -7,7 +7,6 @@
 #include "../graphics/MidiModel.h"
 #include "../midi/MidiNote.h"
 #include "../midi/MidiIndexedOutputSink.h"
-#include "../timing/ExternalTransport.h"
 
 namespace
 {
@@ -460,13 +459,9 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
-	const auto externalCorrection = _pendingExternalPhaseCorrectionSamps.exchange(0,
-		std::memory_order_acq_rel);
-	const auto transportCorrection = _pendingTransportPhaseCorrectionSamps.exchange(0,
-		std::memory_order_acq_rel);
-	const auto generation = _externalPhaseGeneration.load(std::memory_order_acquire);
-	const auto validExternalCorrection = generation != 0u ? externalCorrection : 0;
-	const auto correction = validExternalCorrection + transportCorrection;
+	const auto correction = _pendingTimingCorrectionSamps.exchange(0, std::memory_order_acq_rel);
+	const auto generation = _timingCorrectionGeneration.load(std::memory_order_acquire);
+	const auto validCorrection = generation != 0u ? correction : 0;
 	const auto hasCorrection = correction != 0;
 	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
 		[](const std::weak_ptr<Loop>& weakLoop)
@@ -476,18 +471,14 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		});
 	if (hasCorrection && !hasPlayableLoop)
 	{
-		if (validExternalCorrection != 0)
-			_pendingExternalPhaseCorrectionSamps.fetch_add(validExternalCorrection,
-				std::memory_order_release);
-		if (transportCorrection != 0)
-			_pendingTransportPhaseCorrectionSamps.fetch_add(transportCorrection,
-				std::memory_order_release);
+		if (validCorrection != 0)
+			_pendingTimingCorrectionSamps.fetch_add(validCorrection, std::memory_order_release);
 	}
 	const auto applyCorrection = hasCorrection && hasPlayableLoop;
 	if (applyCorrection)
 	{
-		if (validExternalCorrection != 0)
-			_consumedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+		if (validCorrection != 0)
+			_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
 		for (const auto& weakLoop : state->Loops)
 			if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(correction);
 	}
@@ -518,32 +509,32 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-void LoopTake::QueueExternalPhaseCorrection(long long deltaSamps,
-	std::uint64_t generation) noexcept
+void LoopTake::QueueTimingCorrection(long long deltaSamps,
+	std::uint64_t generation,
+	TimingCorrectionReason reason) noexcept
 {
+	if (reason == TimingCorrectionReason::Invalidation)
+	{
+		InvalidateTimingCorrections();
+		return;
+	}
 	if (generation == 0u || deltaSamps == 0)
 		return;
 
-	const auto previousGeneration = _externalPhaseGeneration.load(std::memory_order_relaxed);
+	const auto previousGeneration = _timingCorrectionGeneration.load(std::memory_order_relaxed);
 	if (previousGeneration != generation)
 	{
-		_pendingExternalPhaseCorrectionSamps.store(0, std::memory_order_release);
-		_externalPhaseGeneration.store(generation, std::memory_order_release);
+		_pendingTimingCorrectionSamps.store(0, std::memory_order_release);
+		_timingCorrectionGeneration.store(generation, std::memory_order_release);
 	}
-	_pendingExternalPhaseCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
-	_queuedExternalPhaseCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+	_pendingTimingCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
+	_queuedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
 }
 
-void LoopTake::QueueTransportPhaseCorrection(long long deltaSamps) noexcept
+void LoopTake::InvalidateTimingCorrections() noexcept
 {
-	if (deltaSamps != 0)
-		_pendingTransportPhaseCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
-}
-
-void LoopTake::InvalidateExternalPhaseCorrection() noexcept
-{
-	_pendingExternalPhaseCorrectionSamps.store(0, std::memory_order_release);
-	_externalPhaseGeneration.store(0u, std::memory_order_release);
+	_pendingTimingCorrectionSamps.store(0, std::memory_order_release);
+	_timingCorrectionGeneration.store(0u, std::memory_order_release);
 }
 
 bool LoopTake::IsArmed() const

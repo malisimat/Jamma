@@ -66,6 +66,42 @@ TEST(Timer, SetMasterLoopIndexFracClampsOutOfRangeValues) {
 	EXPECT_NEAR(1.0 / 48000.0, t.MasterLoopIndexFrac(), 1e-9);
 }
 
+TEST(Timer, AudioCommandIsConsumedBeforeTheFollowingTickExactlyOnce) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+
+	Timer::Command command;
+	command.Type = Timer::CommandType::PhaseCorrection;
+	command.Generation = 7u;
+	command.PhaseDeltaSamps = 200;
+	t.PublishCommand(command);
+
+	EXPECT_TRUE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(300u, t.SampOffset());
+	EXPECT_FALSE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(400u, t.SampOffset());
+}
+
+TEST(Timer, InvalidationPreventsAnOlderGenerationFromMovingTheClock) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+
+	Timer::Command correction;
+	correction.Type = Timer::CommandType::PhaseCorrection;
+	correction.Generation = 3u;
+	correction.PhaseDeltaSamps = 250;
+	t.PublishCommand(correction);
+	t.PublishCommand(Timer::Command{});
+
+	EXPECT_TRUE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(100u, t.SampOffset());
+}
+
 // ── QUANTISE_OFF ─────────────────────────────────────────────────────────────
 
 TEST(Timer, QuantiseOff_ReturnsSampleCountAndZeroError) {

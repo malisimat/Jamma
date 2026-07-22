@@ -121,6 +121,70 @@ void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
 }
 
+void Timer::PublishCommand(const Command& command) noexcept
+{
+	const auto writingSequence = _commandSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
+	_commandType.store(command.Type, std::memory_order_relaxed);
+	_commandGeneration.store(command.Generation, std::memory_order_relaxed);
+	_commandSeedLengthSamps.store(command.SeedLengthSamps, std::memory_order_relaxed);
+	_commandQuantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
+	_commandQuantisation.store(command.Quantisation, std::memory_order_relaxed);
+	_commandPhaseDeltaSamps.store(command.PhaseDeltaSamps, std::memory_order_relaxed);
+	_commandSequence.store(writingSequence + 1u, std::memory_order_release);
+}
+
+bool Timer::ConsumePendingCommand() noexcept
+{
+	const auto before = _commandSequence.load(std::memory_order_acquire);
+	if ((before & 1u) != 0u || before == _commandConsumedSequence.load(std::memory_order_relaxed))
+		return false;
+
+	const Command command{
+		_commandType.load(std::memory_order_relaxed),
+		_commandGeneration.load(std::memory_order_relaxed),
+		_commandSeedLengthSamps.load(std::memory_order_relaxed),
+		_commandQuantiseSamps.load(std::memory_order_relaxed),
+		_commandQuantisation.load(std::memory_order_relaxed),
+		_commandPhaseDeltaSamps.load(std::memory_order_relaxed)
+	};
+	const auto after = _commandSequence.load(std::memory_order_acquire);
+	if (before != after || (after & 1u) != 0u)
+		return false;
+
+	_commandConsumedSequence.store(after, std::memory_order_relaxed);
+	if (command.Type == CommandType::Invalidate)
+	{
+		_audioGeneration = 0u;
+		return true;
+	}
+
+	if (command.Generation == 0u || command.Generation < _audioGeneration)
+		return true;
+
+	_audioGeneration = command.Generation;
+	if (command.Type == CommandType::ReplaceTiming)
+	{
+		_quantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
+		_quantisation.store(command.Quantisation, std::memory_order_relaxed);
+		_seedSourceLengthSamps.store(command.SeedLengthSamps, std::memory_order_relaxed);
+		const auto offset = command.SeedLengthSamps == 0ul ? 0ul :
+			static_cast<unsigned long>(command.PhaseDeltaSamps) % command.SeedLengthSamps;
+		_sampOffset.store(static_cast<unsigned int>(offset), std::memory_order_relaxed);
+		_loopCount.store(0ul, std::memory_order_relaxed);
+		return true;
+	}
+
+	const auto length = _seedSourceLengthSamps.load(std::memory_order_relaxed);
+	if (length == 0ul)
+		return true;
+	const auto current = static_cast<long long>(_sampOffset.load(std::memory_order_relaxed));
+	auto corrected = (current + (command.PhaseDeltaSamps % static_cast<long long>(length))) % static_cast<long long>(length);
+	if (corrected < 0)
+		corrected += static_cast<long long>(length);
+	_sampOffset.store(static_cast<unsigned int>(corrected), std::memory_order_relaxed);
+	return true;
+}
+
 unsigned int Timer::QuantiseSamps() const
 {
 	return _quantiseSamps.load(std::memory_order_acquire);

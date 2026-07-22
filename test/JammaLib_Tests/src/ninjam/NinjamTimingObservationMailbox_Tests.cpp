@@ -1,6 +1,9 @@
 #include "gtest/gtest.h"
 #include "./ninjam/NinjamTimingObservationMailbox.h"
 
+#include <atomic>
+#include <thread>
+
 TEST(NinjamTimingObservationMailbox, ReadsPublishedObservationAsOneValue)
 {
 	ninjam::NinjamTimingObservationMailbox mailbox;
@@ -59,4 +62,54 @@ TEST(NinjamTimingObservationMailbox, ReplacesThePreviousCompleteObservation)
 	EXPECT_EQ(240000u, observed->IntervalLengthSamps);
 	EXPECT_EQ(42u, observed->IntervalPositionSamps);
 	EXPECT_EQ(2u, observed->ObservationSequence);
+}
+
+TEST(NinjamTimingObservationMailbox, ConcurrentReadsAreCompleteOrDeferred)
+{
+	ninjam::NinjamTimingObservationMailbox mailbox;
+	std::atomic_bool writerFinished{ false };
+
+	std::thread writer([&mailbox, &writerFinished]()
+		{
+			for (std::uint64_t sequence = 1u; sequence <= 200000u; ++sequence)
+			{
+				ninjam::NinjamTiming timing;
+				timing.IsConnected = true;
+				timing.IsValid = true;
+				timing.IntervalLengthSamps = static_cast<unsigned int>(sequence);
+				timing.IntervalPositionSamps = static_cast<unsigned int>(sequence + 1u);
+				timing.DeviceSampleRate = static_cast<unsigned int>(sequence + 2u);
+				timing.SourceSampleRate = static_cast<unsigned int>(sequence + 3u);
+				timing.Bpm = static_cast<float>(sequence + 4u);
+				timing.Bpi = static_cast<unsigned int>(sequence + 5u);
+				timing.Generation = sequence + 6u;
+				timing.RemoteWrapCount = static_cast<unsigned long>(sequence + 7u);
+				timing.ObservationSequence = sequence;
+				timing.LocalBlockStartSample = sequence + 8u;
+				mailbox.Publish(timing);
+			}
+			writerFinished.store(true, std::memory_order_release);
+		});
+
+	while (!writerFinished.load(std::memory_order_acquire))
+	{
+		const auto observed = mailbox.ReadLatest();
+		if (!observed.has_value())
+			continue;
+
+		const auto sequence = observed->ObservationSequence;
+		EXPECT_TRUE(observed->IsConnected);
+		EXPECT_TRUE(observed->IsValid);
+		EXPECT_EQ(sequence, observed->IntervalLengthSamps);
+		EXPECT_EQ(sequence + 1u, observed->IntervalPositionSamps);
+		EXPECT_EQ(sequence + 2u, observed->DeviceSampleRate);
+		EXPECT_EQ(sequence + 3u, observed->SourceSampleRate);
+		EXPECT_EQ(static_cast<float>(sequence + 4u), observed->Bpm);
+		EXPECT_EQ(sequence + 5u, observed->Bpi);
+		EXPECT_EQ(sequence + 6u, observed->Generation);
+		EXPECT_EQ(sequence + 7u, observed->RemoteWrapCount);
+		EXPECT_EQ(sequence + 8u, observed->LocalBlockStartSample);
+	}
+
+	writer.join();
 }

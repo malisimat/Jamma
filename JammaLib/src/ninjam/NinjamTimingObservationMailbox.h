@@ -30,11 +30,15 @@ namespace ninjam
 			_observationSequence.store(timing.ObservationSequence, std::memory_order_relaxed);
 			_localBlockStartSample.store(timing.LocalBlockStartSample, std::memory_order_relaxed);
 			_sequence.store(sequence + 2u, std::memory_order_release);
+			_hasPublication.store(true, std::memory_order_release);
 		}
 
 		std::optional<NinjamTiming> ReadLatest() const noexcept
 		{
-			for (;;)
+			if (!_hasPublication.load(std::memory_order_acquire))
+				return std::nullopt;
+
+			for (unsigned int attempt = 0u; attempt < _MaxReadAttempts; ++attempt)
 			{
 				const auto before = _sequence.load(std::memory_order_acquire);
 				if ((before & 1u) != 0u)
@@ -58,10 +62,14 @@ namespace ninjam
 				if (before == after)
 					return timing;
 			}
+
+			return std::nullopt;
 		}
 
 	private:
+		static constexpr unsigned int _MaxReadAttempts = 3u;
 		std::atomic<std::uint64_t> _sequence{ 0u };
+		std::atomic_bool _hasPublication{ false };
 		std::atomic_bool _isConnected{ false };
 		std::atomic_bool _isValid{ false };
 		std::atomic<unsigned int> _intervalLengthSamps{ 0u };

@@ -18,6 +18,23 @@ namespace utils
 			QUANTISE_POWER
 		};
 
+		enum class CommandType : std::uint8_t
+		{
+			ReplaceTiming,
+			PhaseCorrection,
+			Invalidate
+		};
+
+		struct Command
+		{
+			CommandType Type = CommandType::Invalidate;
+			std::uint64_t Generation = 0u;
+			unsigned long SeedLengthSamps = 0ul;
+			unsigned int QuantiseSamps = 0u;
+			QuantisationType Quantisation = QUANTISE_OFF;
+			long long PhaseDeltaSamps = 0;
+		};
+
 	public:
 		Timer();
 		~Timer();
@@ -34,6 +51,8 @@ namespace utils
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
 		void SetSeedSourceLength(unsigned long loopLengthSamps);
 		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
+		void PublishCommand(const Command& command) noexcept;
+		bool ConsumePendingCommand() noexcept;
 		unsigned int QuantiseSamps() const;
 		QuantisationType Quantisation() const;
 		unsigned long SeedSourceLength() const;
@@ -61,5 +80,14 @@ namespace utils
 		std::atomic_uint _quantiseSamps;
 		std::atomic_ulong _seedSourceLengthSamps;
 		std::atomic<QuantisationType> _quantisation;
+		std::atomic<std::uint64_t> _commandSequence{ 0u };
+		std::atomic<std::uint64_t> _commandConsumedSequence{ 0u };
+		std::atomic<std::uint64_t> _commandGeneration{ 0u };
+		std::atomic<unsigned long> _commandSeedLengthSamps{ 0ul };
+		std::atomic<unsigned int> _commandQuantiseSamps{ 0u };
+		std::atomic<QuantisationType> _commandQuantisation{ QUANTISE_OFF };
+		std::atomic<long long> _commandPhaseDeltaSamps{ 0 };
+		std::atomic<CommandType> _commandType{ CommandType::Invalidate };
+		std::uint64_t _audioGeneration = 0u;
 	};
 }

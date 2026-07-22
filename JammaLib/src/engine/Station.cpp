@@ -1270,7 +1270,8 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	take->SetGlobalMidiQuantState(_globalMidiQuantState);
-	take->QueueTransportPhaseCorrection(TransportOffsetSamps());
+	take->QueueTimingCorrection(TransportOffsetSamps(), 1u,
+		LoopTake::TimingCorrectionReason::TempoReplacement);
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
@@ -1396,7 +1397,8 @@ void Station::SetTransportOffsetLoopFrac(double loopFrac) noexcept
 	const auto deltaSamps = static_cast<long long>(std::llround(
 		(loopFrac - previousLoopFrac) * static_cast<double>(masterLoopSamps)));
 	for (const auto& take : GetLoopTakeSnapshot())
-		if (take) take->QueueTransportPhaseCorrection(deltaSamps);
+		if (take) take->QueueTimingCorrection(deltaSamps, 1u,
+			LoopTake::TimingCorrectionReason::TempoReplacement);
 }
 
 std::int32_t Station::TransportOffsetSamps() const noexcept

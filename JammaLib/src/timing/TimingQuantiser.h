@@ -35,12 +35,6 @@ namespace io
 	struct UserConfig;
 }
 
-namespace ninjam
-{
-	struct NinjamRemoteSnapshot;
-	class NinjamSession;
-}
-
 namespace midi
 {
 	enum class MidiQuantisationFraction : std::uint8_t;
@@ -84,17 +78,6 @@ namespace timing
 		unsigned int Bpi = 0u;
 	};
 
-	struct PendingRemoteTempoChange
-	{
-		unsigned int IntervalLengthSamps = 0u;
-		unsigned int SampleRate = 0u;
-		unsigned int GrainSamps = 0u;
-		unsigned long MasterLoopLengthSamps = 0ul;
-		float Bpm = 0.0f;
-		unsigned int Bpi = 0u;
-		unsigned int IntervalPositionSamps = 0u;
-	};
-
 	// Accumulates tap events and maintains a running average beat-gap estimate.
 	class TapTempoTracker
 	{
@@ -135,15 +118,7 @@ namespace timing
 		void SetSeedUsesPowers(bool seedUsesPowers) noexcept;
 		void Set(unsigned int samps, utils::Timer::QuantisationType type);
 
-		// preserveRemoteSync: when true (i.e. still connected to a NINJAM session),
-		// leaves the remote-tempo-tracking fields (_remoteMasterLoopSamps,
-		// _remoteSampleRate, _lastRemoteIntervalPos), the effective quantise grain,
-		// _masterLoopLengthSamps, and the clock's own quantisation/seed untouched,
-		// so a scene auto-reset (e.g. ditching the last loop) does not desync from
-		// the remote session or re-trigger a spurious tempo-change prompt. The
-		// local hover/tap-tempo master-loop pointer and pending local-tempo-push
-		// flags are always cleared regardless.
-		void Clear(bool clearTapTempo, bool preserveRemoteSync = false);
+		void Clear(bool clearTapTempo, bool preserveTiming = false);
 		void ArmReclock();
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 
@@ -179,59 +154,10 @@ namespace timing
 		void ApplyOverlayAlpha(float alpha,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
-		void ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& cfg);
-		std::optional<PendingRemoteTempoChange> ProposeRemoteTempoChange(const ninjam::NinjamRemoteSnapshot& snapshot,
-			const io::UserConfig& cfg) const;
-		// Re-clock into the remote interval expressed in local audio samples, then
-		// queue the corresponding shared cursor translation for existing local takes.
-		// Returns that translation so focused tests can verify the re-clock boundary.
-		long long ApplyAcceptedRemoteTempo(const PendingRemoteTempoChange& change,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			unsigned int localSampleRate = 0u);
-		void AcknowledgeLocallyRequestedRemoteTempo(const PendingRemoteTempoChange& change) noexcept;
-		bool ForceQueueCurrentTempoAsPending(bool sendImmediately, unsigned int sampleRateHint = 0u);
-		void ResetPendingTempoSyncState();
-
-		// Continuously re-align the master clock phase to the authoritative remote
-		// interval position while connected.  No-op unless the clock is already
-		// seeded to this interval length (i.e. the tempo is unchanged; genuine
-		// tempo changes go through ApplyAcceptedRemoteTempo).  A correction is only
-		// applied when the accumulated drift exceeds a small threshold, so steady
-		// state incurs no phase jitter.  Returns true when a correction was applied.
-		std::optional<long long> DisciplineRemotePhase(unsigned int intervalPositionSamps,
-			unsigned int intervalLengthSamps);
-		bool ApplyRemotePhaseCorrection(long long deltaSamps,
-			unsigned int intervalLengthSamps);
-
-		// Pure drift math for DisciplineRemotePhase.  Returns the corrected sample
-		// offset (== the remote interval position) when the shortest circular
-		// distance between currentOffset and intervalPos exceeds thresholdSamps;
-		// std::nullopt otherwise.  Exposed for focused unit testing.
-		static long long SignedCircularDifference(unsigned int currentOffset,
-			unsigned int targetOffset,
-			unsigned int intervalLen) noexcept;
-		static std::optional<long long> RemotePhaseCorrectionDelta(unsigned int currentOffset,
-			unsigned int intervalPos,
-			unsigned int intervalLen,
-			unsigned int thresholdSamps) noexcept;
-
-		void QueueLocalTempo(unsigned int remoteSampleRate,
-			unsigned int audioDeviceSampleRate,
-			const io::UserConfig& cfg);
-
-		void SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
-			ninjam::NinjamSession* ninjam,
-			unsigned int remoteSampleRate,
-			unsigned int audioDeviceSampleRate);
-
 		unsigned int EffectiveSamps() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
-		unsigned int RemoteSampleRate() const noexcept;
-		bool HasPendingTempo() const noexcept;
 		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
 
 		static void LogNinjamTempoEvent(const char* event,
@@ -247,9 +173,6 @@ namespace timing
 		static std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 			int deltaX,
 			unsigned int sampleRate) noexcept;
-		static unsigned int IntervalSampsFromTempo(float bpm,
-			unsigned int bpi,
-			unsigned int sampleRate);
 		static std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
 			unsigned long masterSamps,
 			unsigned int sampleRate);
@@ -299,14 +222,9 @@ namespace timing
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
-		std::atomic_bool _hasPendingTempo{ false };
-		std::atomic_bool _sendPendingTempoImmediately{ false };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
-		std::atomic_uint _remoteMasterLoopSamps{ 0u };
-		std::atomic_uint _remoteSampleRate{ 0u };
-		std::atomic_uint _lastRemoteIntervalPos{ 0u };
 		bool _seedUsesPowers = true;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 	};
@@ -321,11 +239,6 @@ namespace timing
 		unsigned int sampleRate) noexcept
 	{
 		return TimingQuantiser::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
-	}
-
-	inline unsigned int IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate)
-	{
-		return TimingQuantiser::IntervalSampsFromTempo(bpm, bpi, sampleRate);
 	}
 
 	inline std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,

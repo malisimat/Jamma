@@ -8,17 +8,11 @@
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
 #include "../timing/TimingQuantiser.h"
-#include "../timing/ExternalTransport.h"
 #include "../io/UserConfig.h"
+#include "NinjamTimingCoordinator.h"
 
 namespace ninjam
 {
-	struct NinjamTempoJoinOptions
-	{
-		bool PushLocalTempoOnJoin = false;
-		bool PromptBeforeApplyingRemoteTempo = true;
-	};
-
 	class NinjamNetworkService
 	{
 	public:
@@ -34,101 +28,31 @@ namespace ninjam
 		void SetTempoJoinOptions(const NinjamTempoJoinOptions& options);
 		const NinjamTempoJoinOptions& TempoJoinOptions() const noexcept { return _tempoJoinOptions; }
 
-		void PrepareTempoSyncOnConnect(timing::TimingQuantiser& quantisation,
-			unsigned int currentSampleRate,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void PrepareTempoSyncOnConnect(const std::optional<timing::QuantisationTiming>& localTiming);
 
-		void ResetTempoSyncOnDisconnect(timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void ResetTempoSyncOnDisconnect();
 
 		bool UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
-		void ApplyRemoteTempoToClock(const NinjamRemoteSnapshot& snapshot,
-			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& userConfig);
-
-		void QueueLocalTempoFromClock(timing::TimingQuantiser& quantisation,
+		NinjamTimingUpdate ObserveTiming(const NinjamTiming& timing,
+			const std::optional<timing::QuantisationTiming>& localTiming,
+			bool hasLocalContent,
 			const io::UserConfig& userConfig,
-			unsigned int currentSampleRate);
-
-		void SendQueuedTempoAtIntervalWrap(const NinjamRemoteSnapshot& snapshot,
-			timing::TimingQuantiser& quantisation,
-			unsigned int currentSampleRate);
-
-		void HandleRemoteTempoSnapshot(const NinjamRemoteSnapshot& snapshot,
-			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& userConfig,
-			unsigned int currentSampleRate);
-
-		void ObserveLiveTiming(const NinjamTiming& timing) noexcept
+			utils::Timer& clock);
+		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(bool accept,
+			const std::optional<timing::QuantisationTiming>& localTiming,
+			utils::Timer& clock);
+		std::optional<NinjamTempoChange> PendingRemoteTempoPrompt() const
 		{
-			_latestLiveTiming = timing;
+			return _timingCoordinator.PendingTempoChange();
 		}
-
-		std::optional<timing::PendingRemoteTempoChange> PendingRemoteTempoPrompt() const
-		{
-			return _pendingRemoteTempoPrompt;
-		}
-
-		void ResolveRemoteTempoPromptDecision(bool accept,
-			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			unsigned int currentSampleRate);
-
-		// Lock-free read of the authoritative connected-sync transport state.
-		std::shared_ptr<const timing::ExternalTransportState> PublishedTransportState() const noexcept
-		{
-			return _externalTransport.Published();
-		}
-
-		void SetExternalTransportDiagnostics(bool enabled) noexcept
-		{
-			_externalTransport.SetDiagnosticsEnabled(enabled);
-		}
+		void SendTempoRequest(const NinjamTempoRequest& request);
+		bool HasConnectedTiming() const noexcept { return _timingCoordinator.IsConnected(); }
 
 	private:
-		static bool IsSameRemoteTempoChange(const timing::PendingRemoteTempoChange& lhs,
-			const timing::PendingRemoteTempoChange& rhs) noexcept;
-		static bool _MatchesLocallyRequestedTempo(const timing::PendingRemoteTempoChange& proposal,
-			const timing::QuantisationTiming& requested) noexcept;
-		static bool _MatchesLocallyRequestedTempo(float bpm,
-			unsigned int bpi,
-			const timing::QuantisationTiming& requested) noexcept;
-
-		// True if any non-remote (local) station has at least one loop take.
-		// Used to auto-apply a proposed remote tempo without prompting: with no
-		// local loop content there is nothing that could conflict with the
-		// remote tempo, so there is no meaningful choice for the user to make.
-		static bool _HasAnyLocalLoopContent(const std::vector<std::shared_ptr<engine::Station>>& stations);
-		static void _QueueExternalPhaseCorrection(
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			long long deltaSamps,
-			std::uint64_t generation);
-		static void _InvalidateExternalPhaseCorrections(
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
-
-		// Ingests the current snapshot into the external transport and applies
-		// wrap-gated phase discipline to the master clock while connected.
-		void _FeedExternalTransport(const NinjamRemoteSnapshot& snapshot,
-			timing::TimingQuantiser& quantisation,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			unsigned int currentSampleRate);
-
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		NinjamTempoJoinOptions _tempoJoinOptions{};
-		bool _joinPushAwaitingOutcome = false;
-		std::uint64_t _joinPushSentAtAcceptedWrap = 0u;
-		std::optional<timing::QuantisationTiming> _locallyRequestedTempo;
-		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
-		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
-		std::optional<NinjamTiming> _latestLiveTiming;
-
-		// Runtime-only continuous NINJAM transport sync (never persisted).
-		timing::ExternalTransport _externalTransport;
-		bool _externalJoinAligned = false;
-		std::uint64_t _externalGeneration = 0u;
+		NinjamTimingCoordinator _timingCoordinator;
 	};
 }

@@ -277,9 +277,9 @@ TEST(ExternalPhaseCorrection, SharedDeltaPreservesDifferentTakeLengths)
 	auto longTake = MakePlayingTake("long", length * 2ul, length);
 	auto oddTake = MakePlayingTake("odd", 777ul, 700ul);
 
-	shortTake->QueueExternalPhaseCorrection(2, 1u);
-	longTake->QueueExternalPhaseCorrection(2, 1u);
-	oddTake->QueueExternalPhaseCorrection(100, 1u);
+	shortTake->QueueTimingCorrection(2, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	longTake->QueueTimingCorrection(2, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	oddTake->QueueTimingCorrection(100, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	shortTake->EndMultiPlay(0u);
 	longTake->EndMultiPlay(0u);
 	oddTake->EndMultiPlay(0u);
@@ -297,7 +297,7 @@ TEST(ExternalPhaseCorrection, EveryChannelConsumesInSameBlock)
 	take->AddLoop(secondLoop);
 	take->CommitChanges();
 
-	take->QueueExternalPhaseCorrection(-150, 2u);
+	take->QueueTimingCorrection(-150, 2u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	take->EndMultiPlay(0u);
 	ASSERT_EQ(2u, take->GetLoops().size());
 	EXPECT_EQ(950ul, LoopBodyPosition(*take->GetLoops()[0]));
@@ -307,7 +307,7 @@ TEST(ExternalPhaseCorrection, EveryChannelConsumesInSameBlock)
 TEST(ExternalPhaseCorrection, NegativeDeltaMovesAudioAndMidiWithSameSign)
 {
 	auto take = MakePlayingTake("negative", 30000ul, 5000ul);
-	take->QueueExternalPhaseCorrection(-4900, 1u);
+	take->QueueTimingCorrection(-4900, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	take->EndMultiPlay(0u);
 
 	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
@@ -318,8 +318,8 @@ TEST(ExternalPhaseCorrection, NegativeDeltaMovesAudioAndMidiWithSameSign)
 TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
 {
 	auto take = MakePlayingTake("accumulate", 1000ul, 100ul);
-	take->QueueExternalPhaseCorrection(20, 7u);
-	take->QueueExternalPhaseCorrection(-5, 7u);
+	take->QueueTimingCorrection(20, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->QueueTimingCorrection(-5, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	take->EndMultiPlay(10u);
 	EXPECT_EQ(125ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(2u, take->QueuedExternalPhaseCorrectionCount());
@@ -332,13 +332,13 @@ TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
 TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
 {
 	auto take = MakePlayingTake("transport-offset", 1000ul, 100ul);
-	take->QueueTransportPhaseCorrection(350);
+	take->QueueTimingCorrection(350, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
 	take->EndMultiPlay(0u);
 	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(450ul, take->MidiVisualPosition());
 	EXPECT_EQ(350, take->MidiAnchorCorrection());
 
-	take->QueueTransportPhaseCorrection(-350);
+	take->QueueTimingCorrection(-350, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
 	take->EndMultiPlay(0u);
 	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(100ul, take->MidiVisualPosition());
@@ -349,7 +349,7 @@ TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
 {
 	auto take = MakePlayingTake("transport-offset-pending", 1000ul, 100ul);
 	take->GetLoops().front()->Reset();
-	take->QueueTransportPhaseCorrection(250);
+	take->QueueTimingCorrection(250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
 	take->EndMultiPlay(0u);
 
 	take->GetLoops().front()->Play(constants::MaxLoopFadeSamps, 1000ul, false);
@@ -360,8 +360,8 @@ TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
 TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
 {
 	auto take = MakePlayingTake("disconnect", 1000ul, 100ul);
-	take->QueueExternalPhaseCorrection(200, 3u);
-	take->InvalidateExternalPhaseCorrection();
+	take->QueueTimingCorrection(200, 3u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->InvalidateTimingCorrections();
 	take->EndMultiPlay(10u);
 	take->EndMultiPlay(10u);
 
@@ -373,9 +373,9 @@ TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
 TEST(ExternalPhaseCorrection, ReconnectCannotConsumeStaleGeneration)
 {
 	auto take = MakePlayingTake("reconnect", 1000ul, 100ul);
-	take->QueueExternalPhaseCorrection(300, 4u);
-	take->InvalidateExternalPhaseCorrection();
-	take->QueueExternalPhaseCorrection(-20, 5u);
+	take->QueueTimingCorrection(300, 4u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->InvalidateTimingCorrections();
+	take->QueueTimingCorrection(-20, 5u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	take->EndMultiPlay(10u);
 
 	EXPECT_EQ(90ul, LoopBodyPosition(*take->GetLoops().front()));
@@ -396,7 +396,7 @@ TEST(ExternalPhaseCorrection, LongSimulationRemainsExactAcrossLengths)
 		const auto delta = static_cast<long long>(interval % 15u) - 7;
 		for (auto index = 0u; index < std::size(lengths); ++index)
 		{
-			takes[index]->QueueExternalPhaseCorrection(delta, 9u);
+			takes[index]->QueueTimingCorrection(delta, 9u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 			takes[index]->EndMultiPlay(64u);
 			const auto length = static_cast<long long>(lengths[index]);
 			auto next = (static_cast<long long>(expected[index]) + 64 + delta) % length;

@@ -257,7 +257,7 @@ void Scene::ConnectNinjam(const std::string& host,
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_networkService->SetTempoJoinOptions(options);
-		_networkService->PrepareTempoSyncOnConnect(_quantisation, _CurrentSampleRate(), _stations);
+		_networkService->PrepareTempoSyncOnConnect(_quantisation.CurrentTempoTiming(_CurrentSampleRate()));
 		_CloseRemoteTempoPrompt();
 	}
 	_networkService->Connect(host);
@@ -268,7 +268,10 @@ void Scene::DisconnectNinjam()
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_CloseRemoteTempoPrompt();
-		_networkService->ResetTempoSyncOnDisconnect(_quantisation, _stations);
+		_networkService->ResetTempoSyncOnDisconnect();
+		for (const auto& station : _stations)
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->InvalidateTimingCorrections();
 	}
 	_networkService->Disconnect();
 }
@@ -300,20 +303,23 @@ void Scene::_EnsureRemoteTempoPromptUi()
 void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
 {
 	auto previous = _networkService->PendingRemoteTempoPrompt();
-	_networkService->HandleRemoteTempoSnapshot(snapshot,
-		_quantisation,
-		_stations,
-		_userConfig,
-		_CurrentSampleRate());
+	const auto liveTiming = _audioEngine->LatestNinjamTiming();
+	NinjamTiming timing = liveTiming.value_or(ToDeviceTiming(snapshot.Timing, true,
+		_CurrentSampleRate(), 0u, 0ul, 0u, 0u));
+	bool hasLocalContent = false;
+	for (const auto& station : _stations)
+		hasLocalContent = hasLocalContent || (station && !station->IsRemote() && station->NumTakes() > 0u);
+	if (auto clock = _quantisation.Clock())
+		_ApplyNinjamTimingUpdate(_networkService->ObserveTiming(timing,
+			_quantisation.CurrentTempoTiming(_CurrentSampleRate()), hasLocalContent, _userConfig, *clock));
 	auto current = _networkService->PendingRemoteTempoPrompt();
 
 	if (_remoteTempoDialogOpen
 		&& ((!current.has_value())
 			|| !previous.has_value()
 			|| (current->IntervalLengthSamps != previous->IntervalLengthSamps)
-			|| (current->SampleRate != previous->SampleRate)
+			|| (current->SourceSampleRate != previous->SourceSampleRate)
 			|| (current->GrainSamps != previous->GrainSamps)
-			|| (current->MasterLoopLengthSamps != previous->MasterLoopLengthSamps)
 			|| (current->Bpi != previous->Bpi)
 			|| (std::abs(current->Bpm - previous->Bpm) >= 0.01f)))
 	{
@@ -338,7 +344,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 	_remoteTempoDialog->SetBodyLines({
 		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
-		"Master loop: " + std::to_string(change.MasterLoopLengthSamps) + " samples",
+		"Master loop: " + std::to_string(change.IntervalLengthSamps) + " samples",
 		"Grain: " + std::to_string(change.GrainSamps) + " samples. Apply locally?"
 	});
 	_remoteTempoDialog->ResetButtonStates();
@@ -355,11 +361,55 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 {
 	std::scoped_lock lock(_sceneMutex);
-	_networkService->ResolveRemoteTempoPromptDecision(accept,
-		_quantisation,
-		_stations,
-		_CurrentSampleRate());
+	if (auto clock = _quantisation.Clock())
+		_ApplyNinjamTimingUpdate(_networkService->ResolveRemoteTempoPromptDecision(accept,
+			_quantisation.CurrentTempoTiming(_CurrentSampleRate()), *clock));
 	_CloseRemoteTempoPrompt();
+}
+
+void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
+{
+	if (update.InvalidatePendingCorrections)
+		for (const auto& station : _stations)
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->InvalidateTimingCorrections();
+
+	if (update.ClockSettings.has_value())
+	{
+		const auto& settings = update.ClockSettings.value();
+		utils::Timer::Command command;
+		command.Type = utils::Timer::CommandType::ReplaceTiming;
+		command.Generation = update.PhaseCorrection ? update.PhaseCorrection->Generation : 1u;
+		command.SeedLengthSamps = settings.SeedLengthSamps;
+		command.QuantiseSamps = settings.QuantiseSamps;
+		command.Quantisation = settings.Quantisation;
+		command.PhaseDeltaSamps = settings.PhaseSamps;
+		if (auto clock = _quantisation.Clock()) clock->PublishCommand(command);
+		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
+	}
+
+	if (update.PhaseCorrection.has_value())
+	{
+		const auto& correction = update.PhaseCorrection.value();
+		if (!update.ClockSettings.has_value())
+		{
+			utils::Timer::Command command;
+			command.Type = utils::Timer::CommandType::PhaseCorrection;
+			command.Generation = correction.Generation;
+			command.PhaseDeltaSamps = correction.DeltaSamps;
+			if (auto clock = _quantisation.Clock()) clock->PublishCommand(command);
+		}
+		for (const auto& station : _stations)
+		{
+			if (!station || station->IsRemote()) continue;
+			for (const auto& take : station->GetLoopTakeSnapshot())
+				if (take) take->QueueTimingCorrection(correction.DeltaSamps, correction.Generation,
+					correction.IsJoin ? LoopTake::TimingCorrectionReason::JoinAlignment : LoopTake::TimingCorrectionReason::PhaseDiscipline);
+		}
+	}
+
+	if (update.TempoRequest.has_value())
+		_networkService->SendTempoRequest(update.TempoRequest.value());
 }
 
 void Scene::_CloseRemoteTempoPrompt()
@@ -1144,7 +1194,10 @@ void Scene::OnTick(Time curTime,
 		_EndBackgroundDrag();
 
 	if (auto clock = _quantisation.Clock())
+	{
+		clock->ConsumePendingCommand();
 		clock->Tick(samps, 0u);
+	}
 
 	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
@@ -1179,14 +1232,8 @@ void Scene::OnJobTick(Time curTime)
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_sceneMutex);
-		if (const auto liveTiming = _audioEngine->LatestNinjamTiming(); liveTiming.has_value())
-			_networkService->ObserveLiveTiming(liveTiming.value());
-		_QueueLocalTempoFromClock();
 		if (snapshot.has_value())
-		{
-			_SendQueuedTempoAtIntervalWrap(snapshot.value());
 			_HandleRemoteTempoSnapshot(snapshot.value());
-		}
 	}
 
 	actions::JobAction job;
@@ -2059,17 +2106,7 @@ void Scene::_EndBackgroundDrag()
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	// Lock-free read of the published transport state (safe from the audio
-	// thread - see ExternalTransport's threading contract). While connected to
-	// a NINJAM session, a scene auto-reset (e.g. ditching the last loop) must
-	// not drop remote-tempo tracking or the clock's remote-derived grain, or
-	// the very next remote snapshot looks like a "new" tempo change and
-	// re-triggers the accept/prompt flow even though nothing actually changed.
-	const auto transportState = _networkService->PublishedTransportState();
-	const auto preserveRemoteSync = transportState
-		&& (transportState->Mode == timing::ExternalTransportMode::Connected);
-
-	_quantisation.Clear(clearTapTempo, preserveRemoteSync);
+	_quantisation.Clear(clearTapTempo, _networkService->HasConnectedTiming());
 	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
 }
 

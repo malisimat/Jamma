@@ -202,6 +202,15 @@ namespace audio
 			}
 		};
 
+		ninjam::NinjamTiming liveTiming;
+		if (_ninjamController)
+		{
+			const auto remoteTiming = _ninjamController->GetLiveTiming();
+			liveTiming = ninjam::ToDeviceTiming(remoteTiming, remoteTiming.IsConnected,
+				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, blockStartSample);
+			_ninjamTimingMailbox.Publish(liveTiming);
+		}
+
 		if (nullptr != outBuf)
 		{
 			std::fill(outBuf, outBuf + numSamps * audioStreamParams.NumOutputChannels, 0.0f);
@@ -220,10 +229,6 @@ namespace audio
 			if (_ninjamController)
 			{
 				const auto metronomeEnabled = _ninjamMetronomeEnabled.load(std::memory_order_acquire);
-				const auto remoteTiming = _ninjamController->GetLiveTiming();
-				const auto liveTiming = ninjam::ToDeviceTiming(remoteTiming, remoteTiming.IsConnected,
-					audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, blockStartSample);
-				_ninjamTimingMailbox.Publish(liveTiming);
 
 				_ninjamController->ProcessExportBlock(outBuf,
 					audioStreamParams.NumOutputChannels,
