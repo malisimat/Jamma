@@ -152,6 +152,12 @@
     <ClCompile Include="src\ninjam\NinjamMetronomeTiming_Tests.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTiming_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\NinjamMetronome_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>

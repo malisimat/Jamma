@@ -17,7 +17,6 @@ namespace ninjam
 		unsigned int intervalLengthSamps = 0u;
 		float bpm = 0.0f;
 		unsigned int bpi = 0u;
-		unsigned int remoteSampleRate = 0u;
 		unsigned int deviceSampleRate = 0u;
 		unsigned int outputLatencySamps = 0u;
 		unsigned int numFrames = 0u;
@@ -35,7 +34,6 @@ namespace ninjam
 		unsigned int intervalLengthSamps = 0u;
 		float bpm = 0.0f;
 		unsigned int bpi = 0u;
-		unsigned int remoteSampleRate = 0u;
 		unsigned int deviceSampleRate = 0u;
 	};
 

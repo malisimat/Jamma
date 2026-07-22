@@ -706,23 +706,24 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 	_lastNumFrames = numFrames;
 }
 
-NinjamLiveTiming NinjamConnection::GetLiveTiming() const noexcept
+NinjamRemoteTiming NinjamConnection::GetLiveTiming() const noexcept
 {
-	NinjamLiveTiming timing;
+	NinjamRemoteTiming timing;
 	if (!_isConnected || !_client)
 		return timing;
+	timing.IsConnected = true;
 
 	int intervalPosition = 0;
 	int intervalLength = 0;
 	_client->GetPosition(&intervalPosition, &intervalLength);
 
-	timing.intervalPositionSamps = intervalPosition >= 0 ? static_cast<unsigned int>(intervalPosition) : 0u;
-	timing.intervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
-	timing.sampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
-	timing.bpm = _client->GetActualBPM();
-	timing.bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
-	timing.valid = timing.intervalLengthSamps > 0u && timing.sampleRate > 0u
-		&& timing.bpm > 0.0f && timing.bpi > 0u;
+	timing.IntervalPositionSamps = intervalPosition >= 0 ? static_cast<unsigned int>(intervalPosition) : 0u;
+	timing.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
+	timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
+	timing.Bpm = _client->GetActualBPM();
+	timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
+	timing.IsValid = timing.IntervalLengthSamps > 0u && timing.SourceSampleRate > 0u
+		&& timing.Bpm > 0.0f && timing.Bpi > 0u;
 	return timing;
 }
 
@@ -922,21 +923,21 @@ void NinjamConnection::_UpdateSnapshot()
 	int intervalPos = 0;
 	int intervalLength = 0;
 	_client->GetPosition(&intervalPos, &intervalLength);
-	snapshot.IntervalPositionSamps = intervalPos > 0 ? static_cast<unsigned int>(intervalPos) : 0u;
-	snapshot.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
-	snapshot.SampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
-	snapshot.Bpm = _client->GetActualBPM();
-	snapshot.Bpi = _client->GetBPI();
+	snapshot.Timing.IntervalPositionSamps = intervalPos > 0 ? static_cast<unsigned int>(intervalPos) : 0u;
+	snapshot.Timing.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
+	snapshot.Timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
+	snapshot.Timing.Bpm = _client->GetActualBPM();
+	snapshot.Timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
 	// Bounds-check against constants::MinPlausibleNinjamBpm/Bpi rather than a
 	// bare positivity check: njclient briefly reports a nonsensical placeholder
 	// tempo (e.g. bpm=2646, bpi=1) for the short window before the server's
 	// real CONFIG_CHANGE_NOTIFY has been parsed, and that placeholder still
 	// satisfies "> 0".
-	snapshot.HasTiming = (snapshot.Bpm >= constants::MinPlausibleNinjamBpm)
-		&& (snapshot.Bpm <= constants::MaxPlausibleNinjamBpm)
-		&& (snapshot.Bpi >= constants::MinPlausibleNinjamBpi)
-		&& (snapshot.Bpi <= constants::MaxPlausibleNinjamBpi)
-		&& (snapshot.SampleRate > 0u);
+	snapshot.Timing.IsValid = (snapshot.Timing.Bpm >= constants::MinPlausibleNinjamBpm)
+		&& (snapshot.Timing.Bpm <= constants::MaxPlausibleNinjamBpm)
+		&& (snapshot.Timing.Bpi >= constants::MinPlausibleNinjamBpi)
+		&& (snapshot.Timing.Bpi <= constants::MaxPlausibleNinjamBpi)
+		&& (snapshot.Timing.SourceSampleRate > 0u);
 	const auto localUserName = std::string(_client->GetUser() ? _client->GetUser() : "");
 
 	std::set<std::string> activeUsers;

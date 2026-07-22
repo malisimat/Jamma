@@ -1,5 +1,6 @@
 #include "TimingQuantiser.h"
 #include "ExternalTransport.h"
+#include "../ninjam/NinjamTiming.h"
 
 #include <algorithm>
 #include <cmath>
@@ -509,7 +510,7 @@ void TimingQuantiser::ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snaps
 std::optional<PendingRemoteTempoChange> TimingQuantiser::ProposeRemoteTempoChange(const ninjam::NinjamRemoteSnapshot& snapshot,
 	const io::UserConfig& cfg) const
 {
-	if (!_clock || !snapshot.HasTiming)
+	if (!_clock || !snapshot.Timing.IsValid)
 		return std::nullopt;
 
 	if (_armReclock.load(std::memory_order_acquire))
@@ -518,32 +519,32 @@ std::optional<PendingRemoteTempoChange> TimingQuantiser::ProposeRemoteTempoChang
 	if (_hasPendingTempo.load(std::memory_order_acquire))
 		return std::nullopt;
 
-	auto intervalLengthSamps = snapshot.IntervalLengthSamps;
+	auto intervalLengthSamps = snapshot.Timing.IntervalLengthSamps;
 	if (intervalLengthSamps == 0u)
 	{
-		intervalLengthSamps = IntervalSampsFromTempo(snapshot.Bpm,
-			static_cast<unsigned int>(snapshot.Bpi),
-			snapshot.SampleRate);
+		intervalLengthSamps = IntervalSampsFromTempo(snapshot.Timing.Bpm,
+			snapshot.Timing.Bpi,
+			snapshot.Timing.SourceSampleRate);
 	}
 
 	const auto tempoChanged = (intervalLengthSamps != _remoteMasterLoopSamps.load(std::memory_order_acquire))
-		|| (snapshot.SampleRate != _remoteSampleRate.load(std::memory_order_acquire));
+		|| (snapshot.Timing.SourceSampleRate != _remoteSampleRate.load(std::memory_order_acquire));
 
 	if (!tempoChanged && (_effectiveQuantiseSamps.load(std::memory_order_acquire) != 0u) && _clock->IsQuantisable())
 		return std::nullopt;
 
-	const auto timing = cfg.DeduceLoopTiming(intervalLengthSamps, snapshot.SampleRate);
+	const auto timing = cfg.DeduceLoopTiming(intervalLengthSamps, snapshot.Timing.SourceSampleRate);
 	if (!timing.has_value() || (timing->GrainSamps == 0u))
 		return std::nullopt;
 
 	PendingRemoteTempoChange change;
 	change.IntervalLengthSamps = intervalLengthSamps;
-	change.SampleRate = snapshot.SampleRate;
+	change.SampleRate = snapshot.Timing.SourceSampleRate;
 	change.GrainSamps = timing->GrainSamps;
 	change.MasterLoopLengthSamps = static_cast<unsigned long>(intervalLengthSamps);
 	change.Bpm = timing->Bpm;
 	change.Bpi = timing->Bpi;
-	change.IntervalPositionSamps = snapshot.IntervalPositionSamps;
+	change.IntervalPositionSamps = snapshot.Timing.IntervalPositionSamps;
 	return change;
 }
 
@@ -801,7 +802,7 @@ void TimingQuantiser::SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapsh
 	unsigned int remoteSampleRate,
 	unsigned int audioDeviceSampleRate)
 {
-	const auto pos = snapshot.IntervalPositionSamps;
+	const auto pos = snapshot.Timing.IntervalPositionSamps;
 	const bool wrapped = (pos < _lastRemoteIntervalPos.load(std::memory_order_acquire));
 	_lastRemoteIntervalPos.store(pos, std::memory_order_release);
 
@@ -925,10 +926,7 @@ unsigned int TimingQuantiser::MinSeedSamps(unsigned int sampleRate, const Quanti
 
 unsigned int TimingQuantiser::IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate)
 {
-	if ((bpm <= 0.0f) || (bpi == 0u) || (sampleRate == 0u))
-		return 0u;
-
-	return _RoundedToUInt((static_cast<double>(sampleRate) * 60.0 * static_cast<double>(bpi)) / static_cast<double>(bpm));
+	return ninjam::IntervalSampsFromTempo(bpm, bpi, sampleRate);
 }
 
 std::optional<QuantisationTiming> TimingQuantiser::TimingFromSeedAndMaster(unsigned int seedSamps,

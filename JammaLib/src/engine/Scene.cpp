@@ -1179,6 +1179,8 @@ void Scene::OnJobTick(Time curTime)
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_sceneMutex);
+		if (const auto liveTiming = _audioEngine->LatestNinjamTiming(); liveTiming.has_value())
+			_networkService->ObserveLiveTiming(liveTiming.value());
 		_QueueLocalTempoFromClock();
 		if (snapshot.has_value())
 		{

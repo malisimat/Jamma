@@ -464,6 +464,12 @@
     <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h">
       <Filter>src\ninjam</Filter>
     </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\TextReadWriter.h">
       <Filter>src\io</Filter>
     </ClInclude>

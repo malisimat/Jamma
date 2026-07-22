@@ -17,7 +17,6 @@ namespace
 		input.intervalLengthSamps = 16000u;
 		input.bpm = 120.0f;
 		input.bpi = 8u;
-		input.remoteSampleRate = 8000u;
 		input.deviceSampleRate = 8000u;
 		input.numFrames = 128u;
 		return input;
@@ -87,18 +86,19 @@ TEST(NinjamMetronomeTiming, OrdersIntervalAccentBeforeFollowingBeat)
 	EXPECT_FALSE(result.onsets[2].accent);
 }
 
-TEST(NinjamMetronomeTiming, ConvertsDeviceSamplesToRemoteRate)
+TEST(NinjamMetronomeTiming, UsesCanonicalDeviceRateSamples)
 {
 	auto input = MakeInput();
-	input.intervalPositionSamps = 3950u;
-	input.deviceSampleRate = 4000u;
+	input.intervalPositionSamps = 7900u;
+	input.intervalLengthSamps = 32000u;
+	input.deviceSampleRate = 16000u;
 	ninjam::NinjamMetronomeTimingState state;
 
 	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
 
 	ASSERT_TRUE(result.valid);
 	ASSERT_EQ(result.onsetCount, 1u);
-	EXPECT_EQ(result.onsets[0].offset, 25u);
+	EXPECT_EQ(result.onsets[0].offset, 100u);
 }
 
 TEST(NinjamMetronomeTiming, AdvancesForOutputLatency)

@@ -99,7 +99,7 @@ void NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
 		sampleRate);
 }
 
-NinjamLiveTiming NinjamController::GetLiveTiming() const noexcept
+NinjamRemoteTiming NinjamController::GetLiveTiming() const noexcept
 {
 	return _session.GetLiveTiming();
 }

@@ -1,7 +1,7 @@
 #include "ExternalTransport.h"
+#include "../ninjam/NinjamTiming.h"
 
 #include <iostream>
-#include <limits>
 
 using namespace timing;
 
@@ -269,33 +269,14 @@ long long ExternalTransport::SignedCircularDifference(unsigned int currentOffset
 	unsigned int targetOffset,
 	unsigned int intervalLength) noexcept
 {
-	if (intervalLength == 0u)
-		return 0;
-	const auto current = currentOffset % intervalLength;
-	const auto target = targetOffset % intervalLength;
-	const auto length = static_cast<long long>(intervalLength);
-	auto delta = static_cast<long long>(target) - static_cast<long long>(current);
-	if (delta > length / 2)
-		delta -= length;
-	else if (delta < -(length / 2))
-		delta += length;
-	else if ((intervalLength % 2u) == 0u && delta == -(length / 2))
-		delta = length / 2;
-	return delta;
+	return ninjam::SignedCircularDifference(currentOffset, targetOffset, intervalLength);
 }
 
 unsigned int ExternalTransport::ScaleSampleRate(unsigned int samples,
 	unsigned int sourceSampleRate,
 	unsigned int targetSampleRate) noexcept
 {
-	if (sourceSampleRate == 0u || targetSampleRate == 0u || sourceSampleRate == targetSampleRate)
-		return samples;
-
-	const auto scaled = (static_cast<std::uint64_t>(samples) * targetSampleRate
-		+ (sourceSampleRate / 2u)) / sourceSampleRate;
-	return scaled > (std::numeric_limits<unsigned int>::max)()
-		? (std::numeric_limits<unsigned int>::max)()
-		: static_cast<unsigned int>(scaled);
+	return ninjam::ScaleSampleRate(samples, sourceSampleRate, targetSampleRate);
 }
 
 unsigned long ExternalTransport::_DeriveIntervalStart(unsigned long localAnchorSamps,

@@ -10,6 +10,7 @@
 #include <vector>
 #include "../audio/AudioBuffer.h"
 #include "ExportLaneTiming.h"
+#include "NinjamTiming.h"
 
 class NJClient;
 
@@ -36,12 +37,7 @@ namespace ninjam
 	// Populated on the job thread; consumed by audio and UI.
 	struct NinjamRemoteSnapshot
 	{
-		unsigned int IntervalPositionSamps = 0;
-		unsigned int IntervalLengthSamps = 0;
-		unsigned int SampleRate = 0;
-		float Bpm = 0.0f;
-		int Bpi = 0;
-		bool HasTiming = false;
+		NinjamRemoteTiming Timing;
 		std::vector<NinjamRemoteUser> Users;
 	};
 
@@ -53,16 +49,6 @@ namespace ninjam
 		std::uint8_t Modulo = 0;
 		std::uint8_t FromFallback = 0;
 		std::uint16_t SlotLimit = 0;
-	};
-
-	struct NinjamLiveTiming
-	{
-		unsigned int intervalPositionSamps = 0u;
-		unsigned int intervalLengthSamps = 0u;
-		unsigned int sampleRate = 0u;
-		float bpm = 0.0f;
-		unsigned int bpi = 0u;
-		bool valid = false;
 	};
 
 	class NinjamConnection
@@ -113,7 +99,7 @@ namespace ninjam
 			unsigned int numFrames,
 			unsigned int sampleRate);
 
-		NinjamLiveTiming GetLiveTiming() const noexcept;
+		NinjamRemoteTiming GetLiveTiming() const noexcept;
 
 		NinjamRemoteSnapshot Snapshot() const;
 

@@ -142,12 +142,12 @@ TEST(Quantisation, RemoteTempoProposalAndApplyRoundTrip)
 	quantiser.SetClock(std::make_shared<utils::Timer>());
 
 	ninjam::NinjamRemoteSnapshot snapshot;
-	snapshot.HasTiming = true;
-	snapshot.SampleRate = 44100u;
-	snapshot.IntervalLengthSamps = 352800u;
-	snapshot.IntervalPositionSamps = 22050u;
-	snapshot.Bpm = 120.0f;
-	snapshot.Bpi = 16;
+	snapshot.Timing.IsValid = true;
+	snapshot.Timing.SourceSampleRate = 44100u;
+	snapshot.Timing.IntervalLengthSamps = 352800u;
+	snapshot.Timing.IntervalPositionSamps = 22050u;
+	snapshot.Timing.Bpm = 120.0f;
+	snapshot.Timing.Bpi = 16u;
 
 	auto proposal = quantiser.ProposeRemoteTempoChange(snapshot, cfg);
 	ASSERT_TRUE(proposal.has_value());
@@ -193,12 +193,12 @@ TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
 	quantiser.SetClock(std::make_shared<utils::Timer>());
 
 	ninjam::NinjamRemoteSnapshot seedSnapshot;
-	seedSnapshot.HasTiming = true;
-	seedSnapshot.SampleRate = 44100u;
-	seedSnapshot.IntervalLengthSamps = 352800u;
-	seedSnapshot.IntervalPositionSamps = 0u;
-	seedSnapshot.Bpm = 120.0f;
-	seedSnapshot.Bpi = 16;
+	seedSnapshot.Timing.IsValid = true;
+	seedSnapshot.Timing.SourceSampleRate = 44100u;
+	seedSnapshot.Timing.IntervalLengthSamps = 352800u;
+	seedSnapshot.Timing.IntervalPositionSamps = 0u;
+	seedSnapshot.Timing.Bpm = 120.0f;
+	seedSnapshot.Timing.Bpi = 16u;
 
 	auto seedProposal = quantiser.ProposeRemoteTempoChange(seedSnapshot, cfg);
 	ASSERT_TRUE(seedProposal.has_value());
@@ -208,12 +208,12 @@ TEST(Quantisation, ForceQueueCurrentTempoAsPendingBlocksRemoteProposal)
 	EXPECT_TRUE(quantiser.HasPendingTempo());
 
 	ninjam::NinjamRemoteSnapshot nextSnapshot;
-	nextSnapshot.HasTiming = true;
-	nextSnapshot.SampleRate = 44100u;
-	nextSnapshot.IntervalLengthSamps = 529200u;
-	nextSnapshot.IntervalPositionSamps = 1024u;
-	nextSnapshot.Bpm = 100.0f;
-	nextSnapshot.Bpi = 20;
+	nextSnapshot.Timing.IsValid = true;
+	nextSnapshot.Timing.SourceSampleRate = 44100u;
+	nextSnapshot.Timing.IntervalLengthSamps = 529200u;
+	nextSnapshot.Timing.IntervalPositionSamps = 1024u;
+	nextSnapshot.Timing.Bpm = 100.0f;
+	nextSnapshot.Timing.Bpi = 20u;
 	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(nextSnapshot, cfg).has_value());
 
 	quantiser.ResetPendingTempoSyncState();
@@ -237,12 +237,12 @@ TEST(Quantisation, ForceQueueCurrentTempoAsPendingSeedsAcceptedRemoteTempo)
 	EXPECT_FALSE(quantiser.HasPendingTempo());
 
 	ninjam::NinjamRemoteSnapshot snapshot;
-	snapshot.HasTiming = true;
-	snapshot.SampleRate = 44100u;
-	snapshot.IntervalLengthSamps = 352800u;
-	snapshot.IntervalPositionSamps = 0u;
-	snapshot.Bpm = 120.0f;
-	snapshot.Bpi = 16;
+	snapshot.Timing.IsValid = true;
+	snapshot.Timing.SourceSampleRate = 44100u;
+	snapshot.Timing.IntervalLengthSamps = 352800u;
+	snapshot.Timing.IntervalPositionSamps = 0u;
+	snapshot.Timing.Bpm = 120.0f;
+	snapshot.Timing.Bpi = 16u;
 
 	EXPECT_FALSE(quantiser.ProposeRemoteTempoChange(snapshot, cfg).has_value());
 }

@@ -63,6 +63,11 @@ namespace ninjam
 			const io::UserConfig& userConfig,
 			unsigned int currentSampleRate);
 
+		void ObserveLiveTiming(const NinjamTiming& timing) noexcept
+		{
+			_latestLiveTiming = timing;
+		}
+
 		std::optional<timing::PendingRemoteTempoChange> PendingRemoteTempoPrompt() const
 		{
 			return _pendingRemoteTempoPrompt;
@@ -119,6 +124,7 @@ namespace ninjam
 		std::optional<timing::QuantisationTiming> _locallyRequestedTempo;
 		std::optional<timing::PendingRemoteTempoChange> _pendingRemoteTempoPrompt;
 		std::optional<timing::PendingRemoteTempoChange> _ignoredRemoteTempoPrompt;
+		std::optional<NinjamTiming> _latestLiveTiming;
 
 		// Runtime-only continuous NINJAM transport sync (never persisted).
 		timing::ExternalTransport _externalTransport;

@@ -331,6 +331,8 @@
     <ClInclude Include="src\ninjam\NinjamSession.h" />
     <ClInclude Include="src\ninjam\ExportLaneTiming.h" />
     <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h" />
+    <ClInclude Include="src\ninjam\NinjamTiming.h" />
+    <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />

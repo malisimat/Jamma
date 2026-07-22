@@ -131,19 +131,20 @@ namespace ninjam
 			remoteStation->SetRemoteChannelCount(remoteUser.ChannelCount);
 			remoteStation->SetConnectedRemote(true);
 
-			if (snapshot.IntervalLengthSamps > 0)
+			if (snapshot.Timing.IntervalLengthSamps > 0)
 			{
-				auto visualIntervalSamps = snapshot.IntervalLengthSamps;
-				if (snapshot.HasTiming)
+				auto visualIntervalSamps = snapshot.Timing.IntervalLengthSamps;
+				if (snapshot.Timing.IsValid)
 				{
-					const auto derivedInterval = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
-						static_cast<unsigned int>(snapshot.Bpi),
-						snapshot.SampleRate);
+					const auto derivedInterval = TimingQuantiser::IntervalSampsFromTempo(snapshot.Timing.Bpm,
+						snapshot.Timing.Bpi,
+						snapshot.Timing.SourceSampleRate);
 					if (derivedInterval > 0u)
 						visualIntervalSamps = std::max(visualIntervalSamps, derivedInterval);
 				}
 
-				remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
+				remoteStation->SetRemoteInterval(snapshot.Timing.IntervalLengthSamps,
+					snapshot.Timing.IntervalPositionSamps, visualIntervalSamps);
 			}
 
 			remoteStation->EnsureRemoteTake();
@@ -221,20 +222,33 @@ namespace ninjam
 
 		// Resolve the authoritative remote interval length, deriving it from tempo
 		// when the raw interval sample count is not yet available.
-		auto remoteIntervalLen = snapshot.IntervalLengthSamps;
-		if (remoteIntervalLen == 0u && snapshot.HasTiming)
+		const auto hasLiveTiming = _latestLiveTiming.has_value()
+			&& _latestLiveTiming->IsConnected
+			&& _latestLiveTiming->IsValid
+			&& (_latestLiveTiming->DeviceSampleRate == currentSampleRate);
+
+		auto remoteIntervalLen = hasLiveTiming
+			? _latestLiveTiming->IntervalLengthSamps
+			: snapshot.Timing.IntervalLengthSamps;
+		auto intervalPos = hasLiveTiming
+			? _latestLiveTiming->IntervalPositionSamps
+			: 0u;
+		if (!hasLiveTiming && remoteIntervalLen == 0u && snapshot.Timing.IsValid)
 		{
-			remoteIntervalLen = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
-				static_cast<unsigned int>(snapshot.Bpi),
-				snapshot.SampleRate);
+			remoteIntervalLen = TimingQuantiser::IntervalSampsFromTempo(snapshot.Timing.Bpm,
+				snapshot.Timing.Bpi,
+				snapshot.Timing.SourceSampleRate);
 		}
-		const auto intervalLen = timing::ExternalTransport::ScaleSampleRate(remoteIntervalLen,
-			snapshot.SampleRate,
-			currentSampleRate);
-		const auto intervalPos = timing::ExternalTransport::ScaleSampleRate(
-			snapshot.IntervalPositionSamps,
-			snapshot.SampleRate,
-			currentSampleRate);
+		const auto intervalLen = hasLiveTiming
+			? remoteIntervalLen
+			: timing::ExternalTransport::ScaleSampleRate(remoteIntervalLen,
+				snapshot.Timing.SourceSampleRate,
+				currentSampleRate);
+		if (!hasLiveTiming)
+			intervalPos = timing::ExternalTransport::ScaleSampleRate(
+				snapshot.Timing.IntervalPositionSamps,
+				snapshot.Timing.SourceSampleRate,
+				currentSampleRate);
 
 		timing::ExternalTransportSnapshot xsnap;
 		xsnap.IntervalLengthSamps = intervalLen;
@@ -323,8 +337,8 @@ namespace ninjam
 		if (!proposal.has_value())
 		{
 			if (_locallyRequestedTempo.has_value()
-				&& _MatchesLocallyRequestedTempo(snapshot.Bpm,
-					static_cast<unsigned int>(std::max(0, snapshot.Bpi)),
+				&& _MatchesLocallyRequestedTempo(snapshot.Timing.Bpm,
+					snapshot.Timing.Bpi,
 					_locallyRequestedTempo.value()))
 			{
 				_locallyRequestedTempo.reset();

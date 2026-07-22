@@ -14,6 +14,7 @@
 #include "../engine/StationRemote.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../ninjam/NinjamController.h"
+#include "../ninjam/NinjamTimingObservationMailbox.h"
 #include "../utils/Timer.h"
 
 namespace audio
@@ -48,6 +49,10 @@ namespace audio
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
 		bool NinjamMetronomeEnabled() const noexcept { return _ninjamMetronomeEnabled.load(std::memory_order_acquire); }
+		std::optional<ninjam::NinjamTiming> LatestNinjamTiming() const noexcept
+		{
+			return _ninjamTimingMailbox.ReadLatest();
+		}
 		float GetAdcPeak(unsigned int channel) const noexcept
 		{
 			return channel < _AdcPeakChannels ? _adcPeaks[channel].load(std::memory_order_relaxed) : 0.0f;
@@ -73,6 +78,8 @@ namespace audio
 		std::shared_ptr<ChannelMixer> _channelMixer;
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
+		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
+		std::uint64_t _ninjamTimingObservationSequence = 0u;
 		std::atomic_bool _ninjamMetronomeEnabled{ true };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
