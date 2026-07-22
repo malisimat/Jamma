@@ -2373,9 +2373,17 @@ ActionResult Station::OnAction(JobAction action)
 		{
 			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
 			{
-				if (i == removeIndex)
-					continue;
 				auto existing = chainSnapshot->GetPlugin(i);
+				if (i == removeIndex)
+				{
+					// The old live chain is released by the audio thread after the
+					// atomic swap. Keep the removed plugin alive until the UI thread
+					// owns its final reference; otherwise its destructor can call
+					// effClose/FreeLibrary on the audio thread.
+					if (existing)
+						vst::QueueForUiThreadDestroy(std::move(existing));
+					continue;
+				}
 				if (existing)
 					newChain->AddPlugin(existing);
 			}
