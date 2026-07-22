@@ -78,6 +78,18 @@ namespace ninjam
 		bool PromptForTempoChange = false;
 	};
 
+	// Kind of the most recent transport command the coordinator emitted, recorded
+	// for live telemetry so the job thread can reconcile emitted commands against
+	// audio-side consumption without any per-block logging (Phase 7).
+	enum class NinjamEmittedCommand : std::uint8_t
+	{
+		None,
+		Replace,
+		Join,
+		Discipline,
+		Invalidate
+	};
+
 	struct NinjamTimingDiagnostics
 	{
 		std::uint64_t ObservationsAccepted = 0u;
@@ -96,7 +108,16 @@ namespace ninjam
 		std::uint64_t TempoAcknowledged = 0u;
 		long long MaxPhaseErrorSamps = 0;
 		std::uint64_t PhaseErrorBuckets[4]{};
+		// Phase 7 live-validation telemetry (job-thread drained fixed counters).
+		std::uint64_t MaxObservationAgeSamps = 0u;   // Oldest observation age at consume time.
+		std::uint64_t TempoRequestsSent = 0u;        // First-attempt local tempo pushes.
+		std::uint64_t TempoRequestRetries = 0u;      // Re-sends against the original anchor.
+		std::uint64_t TempoRequestsExpired = 0u;     // Requests abandoned after exhausting retries.
+		std::uint64_t CommandsEmitted = 0u;          // Monotonic emitted-command sequence.
+		std::uint64_t LastCommandGeneration = 0u;    // Generation tag of the last emitted command.
+		NinjamEmittedCommand LastCommandType = NinjamEmittedCommand::None;
 	};
+
 
 	class NinjamTimingCoordinator
 	{
@@ -131,6 +152,7 @@ namespace ninjam
 			const io::UserConfig& config);
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			utils::Timer& clock);
+		void _RecordEmittedCommand(NinjamEmittedCommand kind, std::uint64_t generation) noexcept;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
 		std::optional<NinjamTempoChange> _pendingTempoChange;

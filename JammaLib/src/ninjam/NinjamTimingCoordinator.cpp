@@ -77,6 +77,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_joinAligned = false;
 		update.InvalidatePendingCorrections = true;
 		++_diagnostics.PhaseEventsInvalidated;
+		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, event->Generation);
 	}
 	if (!_joinAligned && clock.SeedSourceLength() == timing.IntervalLengthSamps)
 	{
@@ -127,6 +128,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_requestSentAtWrap = event->RemoteWrapCount;
 		_requestState = TempoRequestState::SentAwaitingOutcome;
 		_requestRetries = 0u;
+		++_diagnostics.TempoRequestsSent;
 	}
 	else if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
 		&& event->RemoteWrapCount > (_requestSentAtWrap + 1ul))
@@ -137,11 +139,13 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			// not advanced so the expiry window measures from the first attempt.
 			update.TempoRequest = NinjamTempoRequest{ _requestedTempo->Bpm, _requestedTempo->Bpi };
 			++_requestRetries;
+			++_diagnostics.TempoRequestRetries;
 		}
 		else
 		{
 			_requestState = TempoRequestState::Expired;
 			_requestedTempo.reset();
+			++_diagnostics.TempoRequestsExpired;
 		}
 	}
 
@@ -161,6 +165,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		{
 			const auto elapsed = static_cast<unsigned int>(
 				(nowAnchor - observation.LocalSample) % seedLength);
+			_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
+				static_cast<std::uint64_t>(nowAnchor - observation.LocalSample));
 			localOffset = static_cast<unsigned int>(
 				(static_cast<unsigned long>(localOffset) + seedLength - elapsed) % seedLength);
 		}
@@ -190,6 +196,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		update.PhaseCorrection = NinjamPhaseCorrection{ delta, event->Generation,
 			event->Type == NinjamTimingEventType::Join };
 		++_diagnostics.PhaseEventsQueued;
+		_RecordEmittedCommand(isJoin ? NinjamEmittedCommand::Join : NinjamEmittedCommand::Discipline,
+			event->Generation);
 	}
 	return update;
 }
@@ -241,6 +249,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	++_diagnostics.TempoAccepted;
+	_RecordEmittedCommand(NinjamEmittedCommand::Replace, generation);
 	return update;
 }
 
@@ -265,4 +274,12 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 NinjamTimingDiagnostics NinjamTimingCoordinator::Diagnostics() const noexcept
 {
 	return _diagnostics;
+}
+
+void NinjamTimingCoordinator::_RecordEmittedCommand(NinjamEmittedCommand kind,
+	std::uint64_t generation) noexcept
+{
+	++_diagnostics.CommandsEmitted;
+	_diagnostics.LastCommandGeneration = generation;
+	_diagnostics.LastCommandType = kind;
 }
