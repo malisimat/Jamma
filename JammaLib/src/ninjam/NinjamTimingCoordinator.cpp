@@ -69,6 +69,15 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	_diagnostics.GenerationChanges = trackerDiagnostics.GenerationChanges;
 	_diagnostics.WrapEvents = trackerDiagnostics.WrapEvents;
 	_diagnostics.JoinEvents = trackerDiagnostics.JoinEvents;
+	if (_pendingTempoChange.has_value())
+	{
+		const auto proposal = _MakeProposal(timing, config);
+		if (proposal.has_value() && _SameTempo(_pendingTempoChange.value(), proposal.value()))
+		{
+			_pendingTempoChange->IntervalPositionSamps = timing.IntervalPositionSamps;
+			_pendingTempoChange->AudioBlockStartSample = timing.AudioBlockStartSample;
+		}
+	}
 	if (!event.has_value())
 		return update;
 
@@ -83,6 +92,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	{
 		_tracker.BeginJoinAlignment(clock.SampOffset());
 		_joinAligned = true;
+		_pendingTempoChange.reset();
+		_ignoredTempoChange.reset();
 	}
 	if (event->Type == NinjamTimingEventType::GenerationChanged)
 	{
@@ -108,6 +119,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	}
 
 	if (event->Type != NinjamTimingEventType::Wrap && event->Type != NinjamTimingEventType::Join)
+		return update;
+	if (clock.SeedSourceLength() != timing.IntervalLengthSamps
+		&& (_pendingTempoChange.has_value() || _ignoredTempoChange.has_value()))
 		return update;
 
 	// A fresh valid observation whose tempo matches our request acknowledges it even
@@ -231,21 +245,17 @@ std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const Ni
 	if (!derived.has_value() || derived->GrainSamps == 0u)
 		return std::nullopt;
 	return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, derived->GrainSamps,
-		derived->Bpm, derived->Bpi, timing.IntervalPositionSamps };
+		derived->Bpm, derived->Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempoChange& change,
 	utils::Timer& clock)
 {
 	NinjamTimingUpdate update;
-	const auto oldLength = clock.SeedSourceLength();
-	const auto delta = oldLength == 0ul ? 0 : SignedCircularDifference(clock.SampOffset(),
-		change.IntervalPositionSamps, change.IntervalLengthSamps);
 	const auto generation = _tracker.Generation();
 	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
-		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation };
-	if (delta != 0)
-		update.PhaseCorrection = NinjamPhaseCorrection{ delta, generation, false };
+		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation,
+		change.AudioBlockStartSample };
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	++_diagnostics.TempoAccepted;

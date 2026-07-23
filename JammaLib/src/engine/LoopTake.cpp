@@ -529,21 +529,18 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 		return;
 
 	auto state = _AudioStateSnapshot();
-	if (!state)
-		return;
-
-	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
-		[](const std::weak_ptr<Loop>& weakLoop)
+	bool moved = false;
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
 		{
-			auto loop = weakLoop.lock();
-			return loop && loop->LoopLength() > 0ul;
-		});
-	if (!hasPlayableLoop)
-		return;
-
-	for (const auto& weakLoop : state->Loops)
-		if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(deltaSamps);
-	_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			{
+				loop->ShiftPlayIndex(deltaSamps);
+				moved = true;
+			}
+		}
+	}
 
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul)
@@ -556,7 +553,10 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
 		_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(deltaSamps),
 			std::memory_order_relaxed);
+		moved = true;
 	}
+	if (moved)
+		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
 }
 
 void LoopTake::QueueTimingCorrection(long long deltaSamps,

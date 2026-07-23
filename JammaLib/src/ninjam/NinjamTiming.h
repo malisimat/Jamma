@@ -32,6 +32,7 @@ namespace ninjam
 		unsigned long RemoteWrapCount = 0ul;
 		std::uint64_t ObservationSequence = 0u;
 		std::uint64_t LocalBlockStartSample = 0u;
+		std::uint64_t AudioBlockStartSample = 0u;
 	};
 
 	// Shared validity boundary for remote timing. Used for both the live NJClient
@@ -89,6 +90,37 @@ namespace ninjam
 		return delta;
 	}
 
+	struct NinjamBoundaryTimingReplacement
+	{
+		unsigned int RemotePhaseSamps = 0u;
+		long long LocalDeltaSamps = 0;
+	};
+
+	inline NinjamBoundaryTimingReplacement ResolveBoundaryTimingReplacement(
+		unsigned long oldMasterLengthSamps,
+		unsigned int oldMasterPhaseSamps,
+		unsigned int newIntervalLengthSamps,
+		unsigned int observedRemotePhaseSamps,
+		std::uint64_t observationAudioSample,
+		std::uint64_t boundaryAudioSample) noexcept
+	{
+		if (newIntervalLengthSamps == 0u)
+			return {};
+
+		const auto observedPhase = observedRemotePhaseSamps % newIntervalLengthSamps;
+		const auto elapsed = observationAudioSample != 0u && boundaryAudioSample >= observationAudioSample
+			? (boundaryAudioSample - observationAudioSample) % newIntervalLengthSamps
+			: 0u;
+		const auto remotePhase = static_cast<unsigned int>(
+			(static_cast<std::uint64_t>(observedPhase) + elapsed) % newIntervalLengthSamps);
+		if (oldMasterLengthSamps == 0ul)
+			return { remotePhase, 0 };
+
+		const auto oldMasterLength = static_cast<unsigned int>(oldMasterLengthSamps);
+		return { remotePhase, SignedCircularDifference(oldMasterPhaseSamps,
+			remotePhase % oldMasterLength, oldMasterLength) };
+	}
+
 	inline unsigned int IntervalSampsFromTempo(float bpm,
 		unsigned int bpi,
 		unsigned int sampleRate) noexcept
@@ -109,7 +141,8 @@ namespace ninjam
 		std::uint64_t generation,
 		unsigned long remoteWrapCount,
 		std::uint64_t observationSequence,
-		std::uint64_t localBlockStartSample) noexcept
+		std::uint64_t localBlockStartSample,
+		std::uint64_t audioBlockStartSample) noexcept
 	{
 		NinjamTiming timing;
 		timing.IsConnected = isConnected;
@@ -135,6 +168,7 @@ namespace ninjam
 		timing.RemoteWrapCount = remoteWrapCount;
 		timing.ObservationSequence = observationSequence;
 		timing.LocalBlockStartSample = localBlockStartSample;
+		timing.AudioBlockStartSample = audioBlockStartSample;
 		return timing;
 	}
 }

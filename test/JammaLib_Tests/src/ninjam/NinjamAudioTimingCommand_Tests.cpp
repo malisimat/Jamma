@@ -20,6 +20,7 @@ namespace
 		command.QuantiseSamps = 100u;
 		command.Quantisation = Timer::QUANTISE_MULTIPLE;
 		command.AbsolutePhaseSamps = absolutePhase;
+		command.PhaseObservationSample = 12345u;
 		return command;
 	}
 }
@@ -43,6 +44,7 @@ TEST(NinjamAudioTimingCommandMailbox, PublishedCommandIsConsumedExactlyOnce)
 	EXPECT_EQ(3u, first->Generation);
 	EXPECT_EQ(1000ul, first->SeedLengthSamps);
 	EXPECT_EQ(250u, first->AbsolutePhaseSamps);
+	EXPECT_EQ(12345u, first->PhaseObservationSample);
 
 	// A second consume with no intervening publication must move nothing.
 	EXPECT_FALSE(mailbox.Consume().has_value());

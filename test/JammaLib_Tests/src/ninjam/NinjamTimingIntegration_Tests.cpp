@@ -231,7 +231,8 @@ TEST(NinjamTimingIntegration, SampleRateConvertedReplacementFansOutToTimerAndTak
 	// 48 kHz it must round to 384000, matching a native 48 kHz interval.
 	const auto remote = MakeRemote(352800u, 100u, 44100u, 120.0f, 16u);
 	const auto device = ToDeviceTiming(remote, /*connected*/ true, /*deviceRate*/ 48000u,
-		/*generation*/ 1u, /*wrap*/ 0ul, /*sequence*/ 1u, /*anchor*/ 0u);
+		/*generation*/ 1u, /*wrap*/ 0ul, /*sequence*/ 1u, /*anchor*/ 0u,
+		/*audioBlockStart*/ 0u);
 	ASSERT_TRUE(device.IsValid);
 	EXPECT_EQ(384000u, device.IntervalLengthSamps);
 
@@ -251,6 +252,52 @@ TEST(NinjamTimingIntegration, SampleRateConvertedReplacementFansOutToTimerAndTak
 		EXPECT_EQ(generation, take.Generation);
 	EXPECT_EQ(beforeDiffs, harness.PairwiseDiffs());
 	EXPECT_EQ(384000ul, harness.Clock.SeedSourceLength());
+}
+
+TEST(NinjamTimingIntegration, DelayedReplacementProjectsAndRebasesAllPhysicalCursors)
+{
+	constexpr unsigned long oldMasterLength = 1000ul;
+	constexpr unsigned int oldMasterPhase = 850u;
+	constexpr unsigned int acceptedIntervalLength = 1200u;
+	constexpr unsigned int observedRemotePhase = 100u;
+	constexpr std::uint64_t observationSample = 10000u;
+	constexpr std::uint64_t boundarySample = 11350u;
+
+	NinjamAudioTimingCommandMailbox mailbox;
+	NinjamAudioTimingCommand command;
+	command.Type = NinjamTimingCommandType::ReplaceTiming;
+	command.Generation = 7u;
+	command.SeedLengthSamps = acceptedIntervalLength;
+	command.AbsolutePhaseSamps = observedRemotePhase;
+	command.PhaseObservationSample = observationSample;
+	mailbox.Publish(command);
+
+	Timer clock;
+	clock.SetSeedSourceLength(oldMasterLength);
+	clock.Tick(oldMasterPhase, 0u);
+	const auto consumed = mailbox.Consume();
+	ASSERT_TRUE(consumed.has_value());
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(oldMasterLength,
+		oldMasterPhase, static_cast<unsigned int>(consumed->SeedLengthSamps),
+		consumed->AbsolutePhaseSamps, consumed->PhaseObservationSample, boundarySample);
+
+	Timer::Command timerCommand;
+	timerCommand.Type = Timer::CommandType::ReplaceTiming;
+	timerCommand.Generation = consumed->Generation;
+	timerCommand.SeedLengthSamps = consumed->SeedLengthSamps;
+	timerCommand.PhaseDeltaSamps = replacement.RemotePhaseSamps;
+	ASSERT_TRUE(clock.ApplyCommand(timerCommand));
+	EXPECT_EQ(250u, clock.SampOffset());
+
+	auto wrap = [](long long value, unsigned long length)
+	{
+		value %= static_cast<long long>(length);
+		return static_cast<unsigned long>(value < 0 ? value + length : value);
+	};
+	EXPECT_EQ(500ul, wrap(100 + replacement.LocalDeltaSamps, oldMasterLength));
+	EXPECT_EQ(1500ul, wrap(1100 + replacement.LocalDeltaSamps, oldMasterLength * 2ul));
+	EXPECT_EQ(500ul, wrap(100 + replacement.LocalDeltaSamps, oldMasterLength));
+	EXPECT_EQ(400, replacement.LocalDeltaSamps);
 }
 
 TEST(NinjamTimingIntegration, RelativeTakeOffsetsInvariantAcrossPhaseCorrections)

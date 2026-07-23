@@ -139,6 +139,7 @@ namespace audio
 		if (const auto command = _ninjamTimingCommandMailbox.Consume())
 		{
 			const auto timingClock = _timingClock.load(std::memory_order_acquire);
+			long long stationDelta = command->PhaseDeltaSamps;
 			if (timingClock)
 			{
 				utils::Timer::Command timerCommand;
@@ -149,9 +150,16 @@ namespace audio
 				switch (command->Type)
 				{
 				case ninjam::NinjamTimingCommandType::ReplaceTiming:
+				{
+					const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+						timingClock->SeedSourceLength(), timingClock->SampOffset(),
+						static_cast<unsigned int>(command->SeedLengthSamps), command->AbsolutePhaseSamps,
+						command->PhaseObservationSample, blockStartSample);
 					timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
-					timerCommand.PhaseDeltaSamps = static_cast<long long>(command->AbsolutePhaseSamps);
+					timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemotePhaseSamps);
+					stationDelta = replacement.LocalDeltaSamps;
 					break;
+				}
 				case ninjam::NinjamTimingCommandType::Invalidate:
 					timerCommand.Type = utils::Timer::CommandType::Invalidate;
 					break;
@@ -183,7 +191,7 @@ namespace audio
 			for (auto& station : stations)
 			{
 				if (station && !station->IsRemote())
-					station->ApplyTimingCommand(command->PhaseDeltaSamps, command->Generation, reason);
+					station->ApplyTimingCommand(stationDelta, command->Generation, reason);
 			}
 		}
 
@@ -272,7 +280,8 @@ namespace audio
 					static_cast<unsigned long>(blockStartSample)))
 				: blockStartSample;
 			liveTiming = ninjam::ToDeviceTiming(remoteTiming, remoteTiming.IsConnected,
-				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, localAnchor);
+				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, localAnchor,
+				blockStartSample);
 			_ninjamTimingMailbox.Publish(liveTiming);
 		}
 

@@ -34,6 +34,7 @@ namespace ninjam
 		unsigned int QuantiseSamps = 0u;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		unsigned int AbsolutePhaseSamps = 0u;
+		std::uint64_t PhaseObservationSample = 0u;
 		long long PhaseDeltaSamps = 0;
 	};
 
@@ -54,6 +55,7 @@ namespace ninjam
 			_quantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
 			_quantisation.store(command.Quantisation, std::memory_order_relaxed);
 			_absolutePhaseSamps.store(command.AbsolutePhaseSamps, std::memory_order_relaxed);
+			_phaseObservationSample.store(command.PhaseObservationSample, std::memory_order_relaxed);
 			_phaseDeltaSamps.store(command.PhaseDeltaSamps, std::memory_order_relaxed);
 			_sequence.store(writingSequence + 1u, std::memory_order_release);
 			_hasPublication.store(true, std::memory_order_release);
@@ -82,6 +84,7 @@ namespace ninjam
 				command.QuantiseSamps = _quantiseSamps.load(std::memory_order_relaxed);
 				command.Quantisation = _quantisation.load(std::memory_order_relaxed);
 				command.AbsolutePhaseSamps = _absolutePhaseSamps.load(std::memory_order_relaxed);
+				command.PhaseObservationSample = _phaseObservationSample.load(std::memory_order_relaxed);
 				command.PhaseDeltaSamps = _phaseDeltaSamps.load(std::memory_order_relaxed);
 
 				const auto after = _sequence.load(std::memory_order_acquire);
@@ -110,6 +113,7 @@ namespace ninjam
 		std::atomic<unsigned int> _quantiseSamps{ 0u };
 		std::atomic<utils::Timer::QuantisationType> _quantisation{ utils::Timer::QUANTISE_OFF };
 		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
+		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };
 		std::atomic<long long> _phaseDeltaSamps{ 0 };
 		std::uint64_t _consumedSequence = 0u;
 	};

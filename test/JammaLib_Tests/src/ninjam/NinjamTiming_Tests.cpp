@@ -19,6 +19,58 @@ TEST(NinjamTiming, UsesPositiveDeltaForHalfIntervalTie)
 	EXPECT_EQ(-400, ninjam::SignedCircularDifference(700u, 300u, 1000u));
 }
 
+TEST(NinjamTiming, ResolvesBoundaryReplacementUsingProjectedRemotePhase)
+{
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+		800ul, 100u, 1000u, 100u, 1000u, 4500u);
+	EXPECT_EQ(600u, replacement.RemotePhaseSamps);
+	EXPECT_EQ(-300, replacement.LocalDeltaSamps);
+	EXPECT_EQ(600u, static_cast<unsigned int>((100 + replacement.LocalDeltaSamps + 800) % 800));
+}
+
+TEST(NinjamTiming, BoundaryReplacementFallsBackWithoutUsableAnchor)
+{
+	const auto zeroAnchor = ninjam::ResolveBoundaryTimingReplacement(
+		1000ul, 100u, 1000u, 700u, 0u, 9000u);
+	EXPECT_EQ(700u, zeroAnchor.RemotePhaseSamps);
+	EXPECT_EQ(-400, zeroAnchor.LocalDeltaSamps);
+
+	const auto earlierBoundary = ninjam::ResolveBoundaryTimingReplacement(
+		1000ul, 100u, 1000u, 700u, 9000u, 1000u);
+	EXPECT_EQ(700u, earlierBoundary.RemotePhaseSamps);
+	EXPECT_EQ(-400, earlierBoundary.LocalDeltaSamps);
+}
+
+TEST(NinjamTiming, BoundaryReplacementRetainsRemotePhaseWithoutOldMaster)
+{
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+		0ul, 0u, 1000u, 100u, 1000u, 3500u);
+	EXPECT_EQ(600u, replacement.RemotePhaseSamps);
+	EXPECT_EQ(0, replacement.LocalDeltaSamps);
+}
+
+TEST(NinjamTiming, BoundaryReplacementUsesOldMasterForNonCommensurateIntervals)
+{
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+		900ul, 850u, 1000u, 100u, 100u, 800u);
+	EXPECT_EQ(800u, replacement.RemotePhaseSamps);
+	EXPECT_EQ(-50, replacement.LocalDeltaSamps);
+	EXPECT_EQ(800u, static_cast<unsigned int>((850 + replacement.LocalDeltaSamps + 900) % 900));
+}
+
+TEST(NinjamTiming, BoundaryReplacementPreservesPositiveHalfIntervalTie)
+{
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+		1000ul, 500u, 1200u, 0u, 100u, 600u);
+	EXPECT_EQ(500u, replacement.RemotePhaseSamps);
+	EXPECT_EQ(0, replacement.LocalDeltaSamps);
+
+	const auto tie = ninjam::ResolveBoundaryTimingReplacement(
+		1000ul, 500u, 1200u, 0u, 0u, 600u);
+	EXPECT_EQ(0u, tie.RemotePhaseSamps);
+	EXPECT_EQ(500, tie.LocalDeltaSamps);
+}
+
 TEST(NinjamTiming, ConvertsValidRemoteTimingToDeviceDomain)
 {
 	ninjam::NinjamRemoteTiming remote;
@@ -29,7 +81,7 @@ TEST(NinjamTiming, ConvertsValidRemoteTimingToDeviceDomain)
 	remote.Bpi = 8u;
 	remote.IsValid = true;
 
-	const auto timing = ninjam::ToDeviceTiming(remote, true, 48000u, 3u, 7ul, 11u, 13u);
+	const auto timing = ninjam::ToDeviceTiming(remote, true, 48000u, 3u, 7ul, 11u, 13u, 17u);
 	EXPECT_TRUE(timing.IsConnected);
 	EXPECT_TRUE(timing.IsValid);
 	EXPECT_EQ(24000u, timing.IntervalLengthSamps);
@@ -40,6 +92,7 @@ TEST(NinjamTiming, ConvertsValidRemoteTimingToDeviceDomain)
 	EXPECT_EQ(7ul, timing.RemoteWrapCount);
 	EXPECT_EQ(11u, timing.ObservationSequence);
 	EXPECT_EQ(13u, timing.LocalBlockStartSample);
+	EXPECT_EQ(17u, timing.AudioBlockStartSample);
 }
 
 TEST(NinjamTiming, InvalidRemoteTimingClearsIntervalFields)
@@ -49,7 +102,7 @@ TEST(NinjamTiming, InvalidRemoteTimingClearsIntervalFields)
 	remote.IntervalPositionSamps = 11025u;
 	remote.SourceSampleRate = 44100u;
 
-	const auto timing = ninjam::ToDeviceTiming(remote, true, 48000u, 3u, 7ul, 11u, 13u);
+	const auto timing = ninjam::ToDeviceTiming(remote, true, 48000u, 3u, 7ul, 11u, 13u, 17u);
 	EXPECT_TRUE(timing.IsConnected);
 	EXPECT_FALSE(timing.IsValid);
 	EXPECT_EQ(0u, timing.IntervalLengthSamps);

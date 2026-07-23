@@ -311,7 +311,7 @@ void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snaps
 	auto previous = _networkService->PendingRemoteTempoPrompt();
 	const auto liveTiming = _audioEngine->LatestNinjamTiming();
 	NinjamTiming timing = liveTiming.value_or(ToDeviceTiming(snapshot.Timing, true,
-		_CurrentSampleRate(), 0u, 0ul, 0u, 0u));
+		_CurrentSampleRate(), 0u, 0ul, 0u, 0u, 0u));
 	bool hasLocalContent = false;
 	for (const auto& station : _stations)
 		hasLocalContent = hasLocalContent || (station && !station->IsRemote() && station->NumTakes() > 0u);
@@ -391,7 +391,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.QuantiseSamps = settings.QuantiseSamps;
 		command.Quantisation = settings.Quantisation;
 		command.AbsolutePhaseSamps = settings.PhaseSamps;
-		command.PhaseDeltaSamps = update.PhaseCorrection ? update.PhaseCorrection->DeltaSamps : 0;
+		command.PhaseObservationSample = settings.AudioBlockStartSample;
 		hasCommand = true;
 		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
 	}

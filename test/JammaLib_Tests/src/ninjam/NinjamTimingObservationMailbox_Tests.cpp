@@ -20,6 +20,7 @@ TEST(NinjamTimingObservationMailbox, ReadsPublishedObservationAsOneValue)
 	timing.RemoteWrapCount = 7ul;
 	timing.ObservationSequence = 11u;
 	timing.LocalBlockStartSample = 13u;
+	timing.AudioBlockStartSample = 17u;
 
 	mailbox.Publish(timing);
 	const auto observed = mailbox.ReadLatest();
@@ -37,6 +38,7 @@ TEST(NinjamTimingObservationMailbox, ReadsPublishedObservationAsOneValue)
 	EXPECT_EQ(7ul, observed->RemoteWrapCount);
 	EXPECT_EQ(11u, observed->ObservationSequence);
 	EXPECT_EQ(13u, observed->LocalBlockStartSample);
+	EXPECT_EQ(17u, observed->AudioBlockStartSample);
 }
 
 TEST(NinjamTimingObservationMailbox, ReplacesThePreviousCompleteObservation)
@@ -86,6 +88,7 @@ TEST(NinjamTimingObservationMailbox, ConcurrentReadsAreCompleteOrDeferred)
 				timing.RemoteWrapCount = static_cast<unsigned long>(sequence + 7u);
 				timing.ObservationSequence = sequence;
 				timing.LocalBlockStartSample = sequence + 8u;
+				timing.AudioBlockStartSample = sequence + 9u;
 				mailbox.Publish(timing);
 			}
 			writerFinished.store(true, std::memory_order_release);
@@ -109,6 +112,7 @@ TEST(NinjamTimingObservationMailbox, ConcurrentReadsAreCompleteOrDeferred)
 		EXPECT_EQ(sequence + 6u, observed->Generation);
 		EXPECT_EQ(sequence + 7u, observed->RemoteWrapCount);
 		EXPECT_EQ(sequence + 8u, observed->LocalBlockStartSample);
+		EXPECT_EQ(sequence + 9u, observed->AudioBlockStartSample);
 	}
 
 	writer.join();

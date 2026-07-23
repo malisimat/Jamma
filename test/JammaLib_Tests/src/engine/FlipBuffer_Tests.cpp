@@ -357,6 +357,36 @@ TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
 	EXPECT_EQ(250ul, LoopBodyPosition(*take->GetLoops().front()));
 }
 
+TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
+{
+	auto take = MakeTestLoopTake("midi-only");
+	take->SetMidiVisualPosition(100ul, 1000ul);
+	take->ApplyTimingCommand(-1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(850ul, take->MidiVisualPosition());
+	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
+{
+	auto take = MakePlayingTake("direct-audio-midi", 1000ul, 100ul);
+	take->ApplyTimingCommand(1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(350ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandLeavesEmptyTakeUnmoved)
+{
+	auto take = MakeTestLoopTake("empty");
+	take->ApplyTimingCommand(250, 2u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyTimingCommand(500, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(0ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
 TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
 {
 	auto take = MakePlayingTake("disconnect", 1000ul, 100ul);

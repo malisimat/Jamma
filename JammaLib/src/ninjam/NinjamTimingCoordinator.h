@@ -49,6 +49,7 @@ namespace ninjam
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 		unsigned int IntervalPositionSamps = 0u;
+		std::uint64_t AudioBlockStartSample = 0u;
 	};
 
 	struct NinjamTempoRequest
@@ -67,6 +68,7 @@ namespace ninjam
 		// nonzero phase correction is present. Prevents a valid zero-phase tempo
 		// replacement from being silently rejected by the audio generation gate.
 		std::uint64_t Generation = 0u;
+		std::uint64_t AudioBlockStartSample = 0u;
 	};
 
 	struct NinjamTimingUpdate

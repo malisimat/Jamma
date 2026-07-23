@@ -114,6 +114,38 @@ TEST(NinjamTimingCoordinator, PromptAcceptRejectAndChangedProposal)
 	EXPECT_TRUE(accepted.ClockSettings.has_value());
 }
 
+TEST(NinjamTimingCoordinator, AcceptedPromptUsesLatestAnchoredObservation)
+{
+	Timer clock;
+	clock.SetSeedSourceLength(384000ul);
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	auto first = MakeTiming(480000u, 100u);
+	first.AudioBlockStartSample = 1000u;
+	EXPECT_TRUE(coordinator.Observe(first, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
+
+	auto latest = MakeTiming(480000u, 200u);
+	latest.AudioBlockStartSample = 5000u;
+	EXPECT_FALSE(coordinator.Observe(latest, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
+	const auto accepted = coordinator.ResolveTempoChange(true, std::nullopt, clock);
+	ASSERT_TRUE(accepted.ClockSettings.has_value());
+	EXPECT_EQ(200u, accepted.ClockSettings->PhaseSamps);
+	EXPECT_EQ(5000u, accepted.ClockSettings->AudioBlockStartSample);
+}
+
+TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
+{
+	Timer clock;
+	clock.SetSeedSourceLength(384000ul);
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	coordinator.Observe(MakeTiming(480000u, 400000u), std::nullopt, true, io::UserConfig{}, clock);
+	coordinator.ResolveTempoChange(false, std::nullopt, clock);
+	const auto update = coordinator.Observe(MakeTiming(480000u, 1000u), std::nullopt, true,
+		io::UserConfig{}, clock);
+	EXPECT_FALSE(update.PhaseCorrection.has_value());
+}
+
 TEST(NinjamTimingCoordinator, LocalRequestWaitsForWrapAndAcknowledges)
 {
 	Timer clock;

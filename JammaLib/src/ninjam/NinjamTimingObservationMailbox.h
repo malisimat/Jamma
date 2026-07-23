@@ -29,6 +29,7 @@ namespace ninjam
 			_remoteWrapCount.store(timing.RemoteWrapCount, std::memory_order_relaxed);
 			_observationSequence.store(timing.ObservationSequence, std::memory_order_relaxed);
 			_localBlockStartSample.store(timing.LocalBlockStartSample, std::memory_order_relaxed);
+			_audioBlockStartSample.store(timing.AudioBlockStartSample, std::memory_order_relaxed);
 			_sequence.store(sequence + 2u, std::memory_order_release);
 			_hasPublication.store(true, std::memory_order_release);
 		}
@@ -57,6 +58,7 @@ namespace ninjam
 				timing.RemoteWrapCount = _remoteWrapCount.load(std::memory_order_relaxed);
 				timing.ObservationSequence = _observationSequence.load(std::memory_order_relaxed);
 				timing.LocalBlockStartSample = _localBlockStartSample.load(std::memory_order_relaxed);
+				timing.AudioBlockStartSample = _audioBlockStartSample.load(std::memory_order_relaxed);
 
 				const auto after = _sequence.load(std::memory_order_acquire);
 				if (before == after)
@@ -82,5 +84,6 @@ namespace ninjam
 		std::atomic<unsigned long> _remoteWrapCount{ 0ul };
 		std::atomic<std::uint64_t> _observationSequence{ 0u };
 		std::atomic<std::uint64_t> _localBlockStartSample{ 0u };
+		std::atomic<std::uint64_t> _audioBlockStartSample{ 0u };
 	};
 }
