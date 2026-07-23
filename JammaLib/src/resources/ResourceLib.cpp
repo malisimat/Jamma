@@ -1,7 +1,6 @@
 #include "ResourceLib.h"
+#include "ResourcePaths.h"
 #include "../utils/StringUtils.h"
-#include <array>
-#include <cctype>
 #include <iostream>
 #include <limits>
 
@@ -41,84 +40,62 @@ bool ResourceLib::LoadResource(Type type, std::string name, std::vector<std::str
 				return false;
 			}
 
-			const std::array<std::string, 2> texFiles = {
-				"./resources/textures/" + name + ".tga",
-				"./Jamma/resources/textures/" + name + ".tga"
-			};
+			const auto texFile = ResolveResourcePath("textures/" + name + ".tga");
+			auto texOpt = TextureResource::Load(texFile);
 
-			for (const auto& texFile : texFiles)
+			if (texOpt.has_value())
 			{
-				auto texOpt = TextureResource::Load(texFile);
-
-				if (texOpt.has_value())
-				{
-					auto[tex, width, height] = texOpt.value();
-					std::lock_guard<std::mutex> lock(_resourceMutex);
-					_resources.emplace(name, std::make_shared<TextureResource>(
-						name,
-						tex,
-						width,
-						height,
-						isNinePatch,
-						borderX,
-						borderY));
-					return true;
-				}
+				auto[tex, width, height] = texOpt.value();
+				std::lock_guard<std::mutex> lock(_resourceMutex);
+				_resources.emplace(name, std::make_shared<TextureResource>(
+					name,
+					tex,
+					width,
+					height,
+					isNinePatch,
+					borderX,
+					borderY));
+				return true;
 			}
 
 			std::cout << "ResourceLib: failed to load texture '" << name
-				<< "' from known texture paths" << std::endl;
+				<< "' from resource path " << texFile << std::endl;
 
 			break;
 		}
 		case SHADER:
 		{
-			const std::array<std::string, 2> shaderRoots = {
-				"./resources/shaders/",
-				"./Jamma/resources/shaders/"
-			};
+			const auto vertFile = ResolveResourcePath("shaders/" + name + ".vert");
+			const auto fragFile = ResolveResourcePath("shaders/" + name + ".frag");
+			auto shader = ShaderResource::Load(vertFile, fragFile);
 
-			for (const auto& shaderRoot : shaderRoots)
+			if (shader.has_value())
 			{
-				auto vertFile = shaderRoot + name + ".vert";
-				auto fragFile = shaderRoot + name + ".frag";
-				auto shader = ShaderResource::Load(vertFile, fragFile);
-
-				if (shader.has_value())
-				{
-					std::lock_guard<std::mutex> lock(_resourceMutex);
-					_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
-					return true;
-				}
+				std::lock_guard<std::mutex> lock(_resourceMutex);
+				_resources.emplace(name, std::make_shared<ShaderResource>(name, shader.value(), args));
+				return true;
 			}
 
 			std::cout << "ResourceLib: failed to load shader '" << name
-				<< "' from known shader paths" << std::endl;
+				<< "' from resource paths " << vertFile << " and " << fragFile << std::endl;
 
 			break;
 		}
 		case WAV:
 		{
-			const std::array<std::string, 2> wavFiles = {
-				"./resources/wav/" + name + ".wav",
-				"./Jamma/resources/wav/" + name + ".wav"
-			};
+			const auto wavFile = ResolveResourcePath("wav/" + name + ".wav");
+			auto wavOpt = WavResource::Load(wavFile);
 
-			for (const auto& wavFile : wavFiles)
+			if (wavOpt.has_value())
 			{
-				auto wavOpt = WavResource::Load(wavFile);
-
-				if (wavOpt.has_value())
-				{
-					auto[wav, numSamps, sampleRate] = wavOpt.value();
-					std::lock_guard<std::mutex> lock(_resourceMutex);
-					_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
-					return true;
-				}
+				auto[wav, numSamps, sampleRate] = wavOpt.value();
+				std::lock_guard<std::mutex> lock(_resourceMutex);
+				_resources.emplace(name, std::make_shared<WavResource>(name, wav, numSamps, sampleRate));
+				return true;
 			}
 
 			std::cout << "ResourceLib: failed to load wav '" << name
-				<< "' from known wav paths" << std::endl;
+				<< "' from resource path " << wavFile << std::endl;
 
 			break;
 		}

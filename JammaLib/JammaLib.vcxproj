@@ -465,6 +465,7 @@
     <ClCompile Include="src\utils\MathUtils.cpp" />
     <ClCompile Include="src\utils\PathUtils.cpp" />
     <ClCompile Include="src\utils\ImageUtils.cpp" />
+    <ClCompile Include="src\resources\ResourcePaths.cpp" />
     <ClCompile Include="src\resources\ShaderResource.cpp" />
     <ClCompile Include="src\resources\ResourceLib.cpp" />
     <ClCompile Include="src\graphics\Font.cpp" />
@@ -513,6 +514,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\graphics\Window.h" />
+    <ClInclude Include="src\resources\ResourcePaths.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\stdafx.cpp" />

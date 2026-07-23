@@ -1,6 +1,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "Font.h"
 #include "GlDeleteQueue.h"
+#include "../resources/ResourcePaths.h"
 #include <iterator>
 #include <limits>
 
@@ -87,7 +88,7 @@ std::string Font::GetFontName(FontOptions::FontSize size)
 
 std::string Font::GetFontFilename()
 {
-	return "./resources/fonts/Inter-Regular.ttf";
+	return resources::ResolveResourcePath("fonts/Inter-Regular.ttf");
 }
 
 unsigned int Font::GetPixelHeightForSize(FontOptions::FontSize size)

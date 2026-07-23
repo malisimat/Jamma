@@ -8,6 +8,7 @@
 #include "Window.h"
 #include "StringUtils.h"
 #include "GlDeleteQueue.h"
+#include "../resources/ResourcePaths.h"
 #include <thread>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
@@ -77,7 +78,8 @@ void Window::ReleaseGlResources()
 void Window::LoadResources()
 {
 	std::ifstream inputFile;
-	inputFile.open("./resources/ResourceList.txt", std::ios::in);
+	const auto resourceListPath = resources::ResolveResourceListPath();
+	inputFile.open(resourceListPath, std::ios::in);
 
 	if (inputFile.good())
 	{
@@ -110,6 +112,10 @@ void Window::LoadResources()
 				}
 			}
 		}
+	}
+	else
+	{
+		std::cout << "Window::LoadResources failed to open " << resourceListPath << std::endl;
 	}
 
 	_resourceLib.LoadFonts();
