@@ -1214,8 +1214,8 @@ void Station::_SetVisualState(StationVisualState state) noexcept
 
 void Station::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	for (auto& trig : _triggers)
 	{

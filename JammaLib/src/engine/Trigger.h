@@ -258,8 +258,8 @@ namespace engine
 			const base::Action& action);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) override;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) override;
 
 		void AddBinding(DualBinding activate, DualBinding ditch);
 		void RemoveBinding(DualBinding activate, DualBinding ditch);
@@ -303,32 +303,32 @@ namespace engine
 			const std::string& device);
 		bool StateMachine(bool isDown,
 			bool isActivate,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params);
-		void _ProcessQueuedExternalControlActions(std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) noexcept;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params);
+		void _ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) noexcept;
 		void _PublishTriggerStateSnapshot() noexcept;
 
 		// Only call from state machine
-		void StartRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void EndRecording(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void SetDitchDown(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void SetDitchUp(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void Ditch(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void StartOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void EndOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void DitchOverdub(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void StartPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		void EndPunchIn(std::optional<io::UserConfig> cfg, std::optional<audio::AudioStreamParams> params);
-		unsigned int CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) const;
-		unsigned int CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const;
+		void StartRecording(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void EndRecording(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void SetDitchDown(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void SetDitchUp(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void Ditch(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void StartOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void EndOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void DitchOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void StartPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		void EndPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		unsigned int CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) const;
+		unsigned int CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const;
 		void QueueTriggerAction(const actions::TriggerAction& action, unsigned int sampsDelay);
 		void DispatchTriggerAction(const actions::TriggerAction& action);
 		void FlushDelayedTriggerActions(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params);
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params);
 
 	private:
 		std::string _name;

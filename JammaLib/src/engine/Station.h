@@ -132,8 +132,8 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) override;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void Reset() override;
 				StationVisualState GetVisualState() const noexcept;
 				void _SetVisualState(StationVisualState state) noexcept;

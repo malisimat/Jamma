@@ -1189,8 +1189,8 @@ ActionResult Scene::OnAction(GuiAction action)
 
 void Scene::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	if (_camera.IsBackgroundDragging())
 		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
@@ -1208,12 +1208,13 @@ void Scene::OnTick(Time curTime,
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
+	const auto streamParams = _audioEngine->GetStreamParams();
 	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
 			_userConfig,
-			_audioEngine->GetStreamParams());
+			streamParams);
 
 		totalNumLoops += station->NumTakes();
 	}
@@ -1427,7 +1428,9 @@ void Scene::InitGui()
 void Scene::InitAudio()
 {
 	// Setup audio engine which starts device
-	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps, const io::UserConfig& cfg, const audio::AudioStreamParams& params) {
+	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
+		const std::optional<io::UserConfig>& cfg,
+		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
 	});
 

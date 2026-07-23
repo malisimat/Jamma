@@ -12,6 +12,7 @@ namespace audio
 {
 	AudioHost::AudioHost(io::UserConfig userConfig) :
 		_userConfig(userConfig),
+		_tickUserConfig(_userConfig),
 		_channelMixer(std::make_shared<audio::ChannelMixer>(audio::ChannelMixerParams{}))
 	{
 	}
@@ -39,6 +40,7 @@ namespace audio
 			_audioSampleCounter.store(0u, std::memory_order_release);
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
+			_tickStreamParams = audioStreamParams;
 			_ninjamMetronome.Configure(audioStreamParams.SampleRate);
 
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
@@ -355,7 +357,7 @@ namespace audio
 
 		if (_tickCallback)
 		{
-			_tickCallback(Timer::GetTime(), numSamps, _userConfig, audioStreamParams);
+			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _tickStreamParams);
 		}
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);

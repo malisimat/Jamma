@@ -23,7 +23,9 @@ namespace audio
 	class AudioHost
 	{
 	public:
-		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps, const io::UserConfig& cfg, const AudioStreamParams& params)>;
+		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps,
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<AudioStreamParams>& params)>;
 
 		AudioHost(io::UserConfig userConfig);
 		~AudioHost();
@@ -87,6 +89,8 @@ namespace audio
 
 	private:
 		io::UserConfig _userConfig;
+		std::optional<io::UserConfig> _tickUserConfig;
+		std::optional<AudioStreamParams> _tickStreamParams;
 		std::mutex _audioMutex;
 		std::unique_ptr<AudioDevice> _audioDevice;
 		std::shared_ptr<ChannelMixer> _channelMixer;

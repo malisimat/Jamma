@@ -299,8 +299,8 @@ ActionResult Trigger::QueueExternalControlAction(bool isActivate,
 
 void Trigger::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_ProcessQueuedExternalControlActions(cfg, params);
 
@@ -350,8 +350,8 @@ void Trigger::OnTick(Time curTime,
 	}
 }
 
-void Trigger::_ProcessQueuedExternalControlActions(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params) noexcept
+void Trigger::_ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params) noexcept
 {
 	const auto head = _externalControlActionHead.load(std::memory_order_relaxed);
 	const auto tail = _externalControlActionTail.load(std::memory_order_acquire);
@@ -551,8 +551,8 @@ void Trigger::DispatchTriggerAction(const TriggerAction& action)
 
 void Trigger::FlushDelayedTriggerActions(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	for (auto& action : _delayedTriggerActions)
 	{
@@ -702,8 +702,8 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 bool Trigger::StateMachine(bool isDown,
 	bool isActivate,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	bool changedState = false;
 
@@ -828,8 +828,8 @@ bool Trigger::StateMachine(bool isDown,
 	return changedState;
 }
 
-void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_RECORDING;
 
@@ -863,8 +863,8 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -891,8 +891,8 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::Ditch(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -935,8 +935,8 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 		_loopTakeHistory.pop_back();
 }
 
-void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
@@ -964,8 +964,8 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -991,8 +991,8 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -1023,8 +1023,8 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 		_loopTakeHistory.pop_back();
 }
 
-void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_PUNCHEDIN;
 
@@ -1084,8 +1084,8 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
@@ -1145,8 +1145,8 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	}
 }
 
-unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params) const
+unsigned int Trigger::CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params) const
 {
 	if (!cfg.has_value())
 		return 0u;
@@ -1166,7 +1166,7 @@ unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> c
 	return inputLatency + readDelay;
 }
 
-unsigned int Trigger::CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const
+unsigned int Trigger::CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const
 {
 	if (!cfg.has_value())
 		return 0u;
