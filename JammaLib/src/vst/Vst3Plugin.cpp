@@ -7,8 +7,8 @@
 
 #include "Vst3Plugin.h"
 #include "../midi/MidiBlockTiming.h"
+#include "../midi/MidiQueue.h"
 #include "Vst2Plugin.h"
-#include "Vst3ControllerEditQueue.h"
 #include "Vst3MidiMapping.h"
 #include "Vst3StateBlob.h"
 #include "VstGlContextScope.h"
@@ -767,27 +767,27 @@ public:
 		return true;
 	}
 
-	// --- Step 4: editor automation forwarding ------------------------------
-	//
-	// controllerEditQueue carries UI-thread performEdit() values to the audio
-	// thread so they reach the processor's IParameterChanges on the next
-	// process block (see Vst3ControllerEditQueue.h for the threading
-	// contract). PrepareProcessBlock() is the sole consumer, called from
-	// ProcessBlock/ProcessBlockStereo/ProcessBlockMulti immediately before
-	// processor->process().
-	Vst3ControllerEditQueue controllerEditQueue;
+	struct ControllerEdit
+	{
+		std::uint32_t paramId;
+		double value;
+	};
+
+	// The editor is the sole producer and the audio callback the sole consumer.
+	// This uses the same lock-free handoff as MIDI ingress and holds 255 edits.
+	midi::MidiQueue<256, ControllerEdit> controllerEditQueue;
 
 	void PrepareProcessBlock() noexcept
 	{
-		Vst3ControllerEditQueue::Edit edit;
+		ControllerEdit edit;
 		while (controllerEditQueue.Pop(edit))
 		{
 			int32 queueIndex = -1;
-			auto* queue = inputParameterChanges->addParameterData(static_cast<ParamID>(edit.ParamId), queueIndex);
+			auto* queue = inputParameterChanges->addParameterData(static_cast<ParamID>(edit.paramId), queueIndex);
 			if (queue)
 			{
 				int32 pointIndex = -1;
-				queue->addPoint(0, static_cast<ParamValue>(edit.Value), pointIndex);
+				queue->addPoint(0, static_cast<ParamValue>(edit.value), pointIndex);
 			}
 			// Fixed-capacity queue full: drop silently, consistent with the
 			// existing fixed-capacity RT policy elsewhere in this file.
@@ -1786,7 +1786,7 @@ void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) 
 	// Always enqueue for the processor, even if this ParamID is unknown to
 	// Jamma's host-index map (e.g. a plugin-only meta parameter) — the
 	// processor still needs the value on its next process() call.
-	_impl->controllerEditQueue.Push(paramId, static_cast<double>(clamped));
+	_impl->controllerEditQueue.Push({ paramId, static_cast<double>(clamped) });
 
 	unsigned int hostIndex = 0u;
 	if (!_impl->TryGetHostIndexForParamId(static_cast<ParamID>(paramId), hostIndex))
@@ -2080,10 +2080,6 @@ std::vector<std::uint8_t> Vst3Plugin::GetState() const
 #ifdef JAMMA_VST3_ENABLED
 	if (!_isLoaded || !_impl || !_impl->component)
 		return {};
-
-	// Give plugins without an open editor a chance to refresh their MIDI
-	// controller-mapping table before we capture state.
-	PollPendingControllerChanges();
 
 	MemoryIBStream componentStream;
 	if (_impl->component->getState(&componentStream) != kResultOk)

@@ -360,7 +360,6 @@
     <ClInclude Include="src\vst\Vst2Plugin.h" />
     <ClInclude Include="src\vst\Vst3StateBlob.h" />
     <ClInclude Include="src\vst\Vst3MidiMapping.h" />
-    <ClInclude Include="src\vst\Vst3ControllerEditQueue.h" />
     <ClInclude Include="src\vst\VstGlContextScope.h" />
     <ClInclude Include="src\vst\VstChain.h" />
 

@@ -140,9 +140,6 @@
     <ClCompile Include="src\vst\Vst3MidiMapping_Tests.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
-    <ClCompile Include="src\vst\Vst3ControllerEditQueue_Tests.cpp">
-      <Filter>src\vst</Filter>
-    </ClCompile>
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>

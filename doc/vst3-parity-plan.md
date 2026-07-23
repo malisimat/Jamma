@@ -34,35 +34,6 @@ Authoritative SDK references:
 Do not copy the SDK preset-file container. JAM already stores an opaque Base64
 blob and only needs a compact, self-describing Jamma container.
 
-## Corrections to the original review
-
-- Controller restoration is not just `IEditController::setState`. The same
-  component bytes passed to `IComponent::setState` must be rewound and passed
-  to `IEditController::setComponentState` first. Controller-only bytes are then
-  passed to `IEditController::setState`.
-- Component and controller state need separate lengths and separate streams.
-  Concatenating both into one unframed stream is not parseable.
-- Existing load call sites invoke `SetState` after `Load` returns. Therefore
-  state cannot be restored "inside Load" without changing the generic API.
-  `Vst3Plugin::SetState` must temporarily stop processing/deactivate, restore,
-  then reactivate on the existing non-RT job path.
-- MIDI mappings are per event bus and MIDI channel. Do not cache channel 0 only,
-  and do not query a hand-picked subset of CCs.
-- MIDI CC mapping belongs in `IParameterChanges`; mapped messages should not
-  also be emitted as `kLegacyMIDICCOutEvent`, or a plugin can apply them twice.
-  Keep the legacy event only when no mapping exists.
-- A recent-host-write timestamp is not a reliable automation feedback guard.
-  It can discard a genuine editor touch that follows playback. Normal VST3
-  processor parameter input does not call the host's `performEdit` callback.
-- The real automation gap is that Jamma's `performEdit` path publishes a touch
-  but does not forward the value to the processor. Fix that with a bounded
-  UI-to-audio queue. Do not make `FixedParameterChanges` multi-threaded.
-- `IComponentHandler2::setDirty` is a plugin-to-host notification, not a VST3
-  equivalent of VST2 `audioMasterGetCurrentProcessLevel`. No speculative
-  process-level feature is required.
-
----
-
 ## Step 1 - Add VST3 project-state persistence
 
 ### Files
@@ -136,10 +107,10 @@ plugin.
 4. return empty if component `getState` fails; and
 5. frame both byte vectors using the format above.
 
-State capture must be coordinated with the job/UI owner so no audio callback is
-inside `process()` while plugin state is read. Do not add a mutex to processing.
-The current save/load owners must establish this externally, as already required
-by `Unload`.
+Live state capture still needs an owner-level quiescence protocol: current save
+callers can invoke `GetState()` while audio processing is active. Do not add a
+mutex in the audio path; establish this owner contract before relying on live
+saves.
 
 ### Restore algorithm and lifecycle
 
@@ -232,6 +203,7 @@ to a failed view.
 ### Files
 
 - `JammaLib/src/vst/Vst3Plugin.cpp`
+- `JammaLib/src/vst/Vst3MidiMapping.{h,cpp}`
 
 `IMidiMapping` is declared by the already included `ivsteditcontroller.h`;
 `ivstmidilearn.h` contains the separate `IMidiLearn` interface and is not needed.
@@ -274,9 +246,8 @@ exists. Treat the table as an immutable RT snapshot once published.
 
 When `restartComponent(kMidiCCAssignmentChanged)` is received, set an atomic
 rebuild-request flag only. Override `Vst3Plugin::IdleEditor()` to run a concrete
-non-RT `PollPendingControllerChanges()` method from the existing editor timer;
-also call that method from the owner immediately before non-RT save operations
-so plugins without an open editor are eventually refreshed. Build a complete
+non-RT `PollPendingControllerChanges()` method from the existing editor timer.
+It must run on the UI owner thread; do not call it from save operations. Build a complete
 replacement table off-thread and publish it through the repository's existing
 fixed snapshot/mailbox pattern; never mutate the table currently read by the
 audio thread. If no suitable fixed mailbox exists in the VST subsystem, add a
@@ -302,11 +273,10 @@ sample offset within the current block:
   `8192 / 16383`); and
 - clamp all values to `[0, 1]`.
 
-If a mapping exists and the fixed parameter queue accepts the point, do not add
-a legacy event. If no mapping exists, preserve the existing
-`kLegacyMIDICCOutEvent` representation. If the fixed parameter queue is full,
-drop the mapped point consistently with the existing fixed-capacity RT policy;
-do not allocate and do not send a duplicate fallback event.
+If a mapping exists, do not add a legacy event. If no mapping exists, preserve
+the existing `kLegacyMIDICCOutEvent` representation. A full fixed parameter
+queue replaces its final point with the newest value; do not allocate or send a
+duplicate fallback event.
 
 Note-on, note-off, and poly-pressure remain native VST3 events. Program change
 remains a legacy MIDI CC output event.
@@ -348,13 +318,9 @@ struct PendingControllerEdit
 ```
 
 The UI thread is the producer (`performEdit`); the audio thread is the consumer
-(immediately before each `processor->process`). This SPSC design relies on the
-SDK contract that `performEdit` is called from one UI thread. Use atomic
-read/write indices with acquire/release publication and a power-of-two array.
-No allocation, mutex, logging, plugin call, or scan of occupied entries is
-permitted in push/pop. Choose a documented capacity such as 256; when full,
-drop the incoming entry. Producer-side coalescing or advancing the consumer's
-read index would violate slot ownership and race the consumer.
+(immediately before each `processor->process`). Reuse
+`midi::MidiQueue<256, ControllerEdit>` for this SPSC handoff. It has 255 usable
+slots and drops the newest edit on overflow.
 
 Add one `PrepareProcessBlock()` helper and call it before all three process
 entry points (`ProcessBlock`, `ProcessBlockStereo`, `ProcessBlockMulti`). It
@@ -403,7 +369,6 @@ snapshot publication described in Step 3 rather than leaving an unconsumed flag.
 
 ### Focused validation
 
-- Unit-test queue order, wraparound, full policy, and unknown parameter IDs.
 - With a fake owner/handler, assert `performEdit` enqueues one processor change
   and advances `_lastTouchedParam.Sequence` once; `beginEdit`/`endEdit` alone do
   not publish values.
