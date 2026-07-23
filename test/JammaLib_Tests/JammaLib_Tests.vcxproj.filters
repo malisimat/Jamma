@@ -134,6 +134,12 @@
     <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\Vst3StateBlob_Tests.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3MidiMapping_Tests.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
     <ClCompile Include="src\utils\CommonTypes_Tests.cpp">
       <Filter>src\utils</Filter>
     </ClCompile>

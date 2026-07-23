@@ -1,5 +1,6 @@
 #include "CubemapResource.h"
 #include "../graphics/GlDeleteQueue.h"
+#include "ResourcePaths.h"
 
 using namespace resources;
 
@@ -33,7 +34,7 @@ std::optional<GLuint> CubemapResource::Load(const std::string& baseName)
 
 	for (int i = 0; i < 6; ++i)
 	{
-		auto fileName = "./resources/textures/" + baseName + "_" + faces[i] + ".tga";
+		auto fileName = ResolveResourcePath("textures/" + baseName + "_" + faces[i] + ".tga");
 		auto imageLoaded = utils::ImageUtils::LoadTga(fileName);
 
 		if (!imageLoaded.has_value())

@@ -360,6 +360,9 @@
     <ClInclude Include="src\vst\IVstPlugin.h" />
     <ClInclude Include="src\vst\Vst3Plugin.h" />
     <ClInclude Include="src\vst\Vst2Plugin.h" />
+    <ClInclude Include="src\vst\Vst3StateBlob.h" />
+    <ClInclude Include="src\vst\Vst3MidiMapping.h" />
+    <ClInclude Include="src\vst\VstGlContextScope.h" />
     <ClInclude Include="src\vst\VstChain.h" />
 
     <ClInclude Include="src\graphics\VstEditorWindow.h" />
@@ -464,6 +467,7 @@
     <ClCompile Include="src\utils\MathUtils.cpp" />
     <ClCompile Include="src\utils\PathUtils.cpp" />
     <ClCompile Include="src\utils\ImageUtils.cpp" />
+    <ClCompile Include="src\resources\ResourcePaths.cpp" />
     <ClCompile Include="src\resources\ShaderResource.cpp" />
     <ClCompile Include="src\resources\ResourceLib.cpp" />
     <ClCompile Include="src\graphics\Font.cpp" />
@@ -490,6 +494,8 @@
     <ClCompile Include="src\vst\Vst.cpp" />
     <ClCompile Include="src\vst\Vst3Plugin.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin.cpp" />
+    <ClCompile Include="src\vst\Vst3StateBlob.cpp" />
+    <ClCompile Include="src\vst\Vst3MidiMapping.cpp" />
     <ClCompile Include="src\vst\VstChain.cpp" />
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
@@ -511,6 +517,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\graphics\Window.h" />
+    <ClInclude Include="src\resources\ResourcePaths.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\stdafx.cpp" />

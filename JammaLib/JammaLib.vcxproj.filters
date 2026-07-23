@@ -194,6 +194,9 @@
     <ClInclude Include="src\resources\ShaderResource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
+    <ClInclude Include="src\resources\ResourcePaths.h">
+      <Filter>src\resources</Filter>
+    </ClInclude>
     <ClInclude Include="src\utils\FunctionUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
@@ -574,6 +577,18 @@
     <ClCompile Include="src\vst\VstChain.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\Vst3Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst2Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3StateBlob.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3MidiMapping.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\VstEditorWindow.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
@@ -614,6 +629,9 @@
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\ResourceLib.cpp">
+      <Filter>src\resources</Filter>
+    </ClCompile>
+    <ClCompile Include="src\resources\ResourcePaths.cpp">
       <Filter>src\resources</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiPanel.cpp">
