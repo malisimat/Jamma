@@ -332,14 +332,16 @@ TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
 TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
 {
 	auto take = MakePlayingTake("transport-offset", 1000ul, 100ul);
-	take->QueueTimingCorrection(350, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
-	take->EndMultiPlay(0u);
+	take->SetLocalTransportOffsetSamps(350);
 	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(450ul, take->MidiVisualPosition());
 	EXPECT_EQ(350, take->MidiAnchorCorrection());
 
-	take->QueueTimingCorrection(-350, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
-	take->EndMultiPlay(0u);
+	take->SetLocalTransportOffsetSamps(350);
+	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(450ul, take->MidiVisualPosition());
+
+	take->SetLocalTransportOffsetSamps(0);
 	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(100ul, take->MidiVisualPosition());
 	EXPECT_EQ(0, take->MidiAnchorCorrection());
@@ -347,14 +349,33 @@ TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
 
 TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
 {
-	auto take = MakePlayingTake("transport-offset-pending", 1000ul, 100ul);
-	take->GetLoops().front()->Reset();
-	take->QueueTimingCorrection(250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	auto take = MakeTestLoopTake("transport-offset-pending");
+	take->SetLocalTransportOffsetSamps(250);
+	take->SetMidiVisualPosition(100ul, 1000ul);
 	take->EndMultiPlay(0u);
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(250, take->MidiAnchorCorrection());
 
-	take->GetLoops().front()->Play(constants::MaxLoopFadeSamps, 1000ul, false);
-	take->EndMultiPlay(0u);
-	EXPECT_EQ(250ul, LoopBodyPosition(*take->GetLoops().front()));
+	take->SetLocalTransportOffsetSamps(0);
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(TransportPhaseOffset, FractionalTargetsRestoreOriginalCursorWithoutRoundingResidue)
+{
+	constexpr long long masterLength = 101;
+	auto take = MakePlayingTake("transport-offset-fractional", 1000ul, 100ul);
+	const auto setFraction = [&](double fraction)
+	{
+		take->SetLocalTransportOffsetSamps(std::llround(fraction * masterLength));
+	};
+
+	setFraction(0.005);
+	setFraction(0.010);
+	setFraction(0.0);
+	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
 }
 
 TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
@@ -375,6 +396,17 @@ TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
 	EXPECT_EQ(1250, take->MidiAnchorCorrection());
 	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
+{
+	auto take = MakeTestLoopTake("midi-only-local-offset");
+	take->SetMidiVisualPosition(100ul, 1000ul);
+	take->ApplyTimingCommand(0, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->SetLocalTransportOffsetSamps(-1250);
+	EXPECT_EQ(850ul, take->MidiVisualPosition());
+	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
 }
 
 TEST(TransportPhaseOffset, DirectTimingCommandLeavesEmptyTakeUnmoved)

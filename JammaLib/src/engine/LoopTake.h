@@ -215,6 +215,11 @@ namespace engine
 		void ApplyTimingCommand(long long deltaSamps,
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
+		// Audio-thread absolute setter. The target is persistent so an empty take
+		// can reconcile when it first becomes playable.
+		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
+		// Non-audio initialization before this take enters an audio snapshot.
+		void SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
 			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
@@ -303,6 +308,8 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		void _TryApplyLocalTransportOffset() noexcept;
+		static long long _OffsetDelta(long long targetSamps, long long appliedSamps) noexcept;
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
 			midi::MidiQuantisationFraction updated,
 			const char* source) const;
@@ -356,6 +363,9 @@ namespace engine
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
+		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
+		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
+		long long _appliedLocalTransportOffsetSamps = 0;
 		// Job thread publishes one shared signed transport delta; the audio thread
 		// consumes it once after normal block advancement. Generation zero invalidates it.
 		std::atomic<long long> _pendingTimingCorrectionSamps{ 0 };

@@ -5,6 +5,7 @@
 using ninjam::NinjamAudioTimingCommand;
 using ninjam::NinjamAudioTimingCommandMailbox;
 using ninjam::NinjamTimingCommandType;
+using ninjam::LocalTransportOffsetLoopFracMailbox;
 using utils::Timer;
 
 namespace
@@ -76,6 +77,19 @@ TEST(NinjamAudioTimingCommandMailbox, InvalidatePublicationIsDeliveredToConsumer
 	const auto consumed = mailbox.Consume();
 	ASSERT_TRUE(consumed.has_value());
 	EXPECT_EQ(NinjamTimingCommandType::Invalidate, consumed->Type);
+}
+
+TEST(LocalTransportOffsetLoopFracMailbox, LatestPublicationWinsAndZeroIsDeliveredOnce)
+{
+	LocalTransportOffsetLoopFracMailbox mailbox;
+	mailbox.Publish(0.005);
+	mailbox.Publish(0.010);
+	mailbox.Publish(0.0);
+
+	const auto consumed = mailbox.ConsumeLatest();
+	ASSERT_TRUE(consumed.has_value());
+	EXPECT_DOUBLE_EQ(0.0, consumed.value());
+	EXPECT_FALSE(mailbox.ConsumeLatest().has_value());
 }
 
 // ── Timer::ApplyCommand: audio-thread application and generation gating ───────

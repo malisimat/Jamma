@@ -115,6 +115,7 @@ namespace engine
 		void ApplyTimingCommand(long long deltaSamps,
 			std::uint64_t generation,
 			LoopTake::TimingCorrectionReason reason) noexcept;
+		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;

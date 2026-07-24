@@ -63,6 +63,10 @@ namespace audio
 		{
 			_ninjamTimingCommandMailbox.Publish(command);
 		}
+		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
+		{
+			_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
+		}
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
 		void SetTimingClock(std::shared_ptr<utils::Timer> clock) noexcept
@@ -98,8 +102,12 @@ namespace audio
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
 		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
+		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
+		double _localTransportOffsetLoopFrac = 0.0;
+		unsigned long _localTransportOffsetMasterLength = 0ul;
+		long long _localTransportOffsetTargetSamps = 0;
 		std::atomic_bool _ninjamMetronomeEnabled{ true };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };

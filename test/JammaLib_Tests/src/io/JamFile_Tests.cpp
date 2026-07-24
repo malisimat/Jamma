@@ -273,6 +273,14 @@ TEST(JamFile, MissingPhaseOffsetsDefaultToZero) {
 	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
+TEST(JamFile, NormalizesLegacyNegativeTransportOffset) {
+	auto str = std::string("{\"name\":\"jam\",\"transportoffsetloopfrac\":-0.25,\"stations\":[]}");
+	auto parsed = JamFile::FromStream(std::stringstream(str));
+
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_DOUBLE_EQ(0.75, parsed->TransportOffsetLoopFrac);
+}
+
 TEST(JamFile, MissingMidiQuantFieldsDefaultToOffDisabledQuarter) {
 	auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop"), std::regex("%INDEX%"), "1");
 	auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";

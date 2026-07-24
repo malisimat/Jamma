@@ -511,6 +511,8 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 		}
 		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	}
+
+	_TryApplyLocalTransportOffset();
 }
 
 void LoopTake::ApplyTimingCommand(long long deltaSamps,
@@ -557,6 +559,66 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 	}
 	if (moved)
 		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+void LoopTake::SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept
+{
+	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
+}
+
+void LoopTake::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
+{
+	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
+	_TryApplyLocalTransportOffset();
+}
+
+long long LoopTake::_OffsetDelta(long long targetSamps, long long appliedSamps) noexcept
+{
+	if (targetSamps >= 0 && appliedSamps < 0
+		&& targetSamps > (std::numeric_limits<long long>::max)() + appliedSamps)
+		return (std::numeric_limits<long long>::max)();
+	if (targetSamps < 0 && appliedSamps > 0
+		&& targetSamps < (std::numeric_limits<long long>::min)() + appliedSamps)
+		return (std::numeric_limits<long long>::min)();
+	return targetSamps - appliedSamps;
+}
+
+void LoopTake::_TryApplyLocalTransportOffset() noexcept
+{
+	const auto targetSamps = _desiredLocalTransportOffsetSamps.load(std::memory_order_acquire);
+	const auto deltaSamps = _OffsetDelta(targetSamps, _appliedLocalTransportOffsetSamps);
+	if (deltaSamps == 0)
+		return;
+
+	auto state = _AudioStateSnapshot();
+	bool moved = false;
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
+		{
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			{
+				loop->ShiftPlayIndex(deltaSamps);
+				moved = true;
+			}
+		}
+	}
+
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		const auto length = static_cast<long long>(midiLoopLength);
+		auto shifted = (static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
+			+ (deltaSamps % length)) % length;
+		if (shifted < 0)
+			shifted += length;
+		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
+		_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(deltaSamps), std::memory_order_relaxed);
+		moved = true;
+	}
+
+	if (moved)
+		_appliedLocalTransportOffsetSamps = targetSamps;
 }
 
 void LoopTake::QueueTimingCorrection(long long deltaSamps,
@@ -1144,6 +1206,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
 	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1427,6 +1490,7 @@ void LoopTake::Play(unsigned long index,
 
 	const auto midiPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
 	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	if (_loggingConfig.Ui == "verbose")
 	{
 		const char* triggerType = (STATE_RECORDING == state) ? "record-end" : "overdub-end";
@@ -1673,6 +1737,7 @@ void LoopTake::Ditch()
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
 	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1722,6 +1787,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
 	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
 	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();

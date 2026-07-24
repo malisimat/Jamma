@@ -5,6 +5,7 @@
 #include <sstream>
 #include "glm/ext.hpp"
 #include "../utils/PathUtils.h"
+#include "../utils/MathUtils.h"
 #include "../midi/MidiTimestampMapper.h"
 #include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
@@ -175,7 +176,7 @@ Scene::Scene(SceneParams params,
 		static_cast<float>(transportOffsetParams.Position.Y),
 		0.0f };
 	transportOffsetParams.Size = { 96, 64 };
-	transportOffsetParams.Min = -1.0;
+	transportOffsetParams.Min = 0.0;
 	transportOffsetParams.Max = 1.0;
 	transportOffsetParams.Step = 0.005;
 	transportOffsetParams.Decimals = 3;
@@ -2041,11 +2042,8 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 
 void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 {
-	if (loopFrac < -1.0)
-		loopFrac = -1.0;
-	else if (loopFrac > 1.0)
-		loopFrac = 1.0;
-
+	loopFrac = utils::NormalizeLoopFraction(loopFrac);
+	const auto previousLoopFrac = _transportOffsetLoopFrac;
 	_transportOffsetLoopFrac = loopFrac;
 
 	for (auto& station : _stations)
@@ -2053,6 +2051,8 @@ void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 		if (station)
 			station->SetTransportOffsetLoopFrac(loopFrac);
 	}
+	if (_audioEngine && previousLoopFrac != loopFrac)
+		_audioEngine->PublishLocalTransportOffsetLoopFrac(loopFrac);
 
 	if (updateInput && _transportOffsetInput)
 		_transportOffsetInput->SetValue(loopFrac, false);

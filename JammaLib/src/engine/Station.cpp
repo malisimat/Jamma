@@ -5,6 +5,7 @@
 #include <memory>
 #include "../midi/MidiBlockTiming.h"
 #include "../midi/MidiRouter.h"
+#include "../utils/MathUtils.h"
 
 using namespace engine;
 using namespace timing;
@@ -734,6 +735,16 @@ void Station::ApplyTimingCommand(long long deltaSamps,
 		if (auto take = weakTake.lock()) take->ApplyTimingCommand(deltaSamps, generation, reason);
 }
 
+void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->SetLocalTransportOffsetSamps(targetSamps);
+}
+
 void Station::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)
@@ -1282,8 +1293,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	take->SetGlobalMidiQuantState(_globalMidiQuantState);
-	take->QueueTimingCorrection(TransportOffsetSamps(), 1u,
-		LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->SetInitialLocalTransportOffsetSamps(TransportOffsetSamps());
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();
 	_ArrangeChildren();
@@ -1392,25 +1402,8 @@ void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) n
 
 void Station::SetTransportOffsetLoopFrac(double loopFrac) noexcept
 {
-	if (loopFrac < -1.0)
-		loopFrac = -1.0;
-	else if (loopFrac > 1.0)
-		loopFrac = 1.0;
-
-	const auto previousLoopFrac = _transportOffsetLoopFrac.exchange(loopFrac,
-		std::memory_order_acq_rel);
-	if (IsRemote() || previousLoopFrac == loopFrac)
-		return;
-
-	const auto masterLoopSamps = _clock ? _clock->SeedSourceLength() : 0ul;
-	if (masterLoopSamps == 0ul)
-		return;
-
-	const auto deltaSamps = static_cast<long long>(std::llround(
-		(loopFrac - previousLoopFrac) * static_cast<double>(masterLoopSamps)));
-	for (const auto& take : GetLoopTakeSnapshot())
-		if (take) take->QueueTimingCorrection(deltaSamps, 1u,
-			LoopTake::TimingCorrectionReason::TempoReplacement);
+	_transportOffsetLoopFrac.store(utils::NormalizeLoopFraction(loopFrac),
+		std::memory_order_release);
 }
 
 std::int32_t Station::TransportOffsetSamps() const noexcept

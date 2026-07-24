@@ -195,6 +195,25 @@ namespace audio
 			}
 		}
 
+		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())
+			_localTransportOffsetLoopFrac = localTransportOffsetLoopFrac.value();
+
+		const auto timingClock = _timingClock.load(std::memory_order_acquire);
+		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
+		if (masterLength != _localTransportOffsetMasterLength)
+			_localTransportOffsetMasterLength = masterLength;
+		const auto localTransportOffsetTargetSamps = masterLength == 0ul ? 0 :
+			static_cast<long long>(std::llround(_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
+		if (localTransportOffsetTargetSamps != _localTransportOffsetTargetSamps)
+		{
+			_localTransportOffsetTargetSamps = localTransportOffsetTargetSamps;
+			for (auto& station : stations)
+			{
+				if (station && !station->IsRemote())
+					station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
+			}
+		}
+
 		if (nullptr != inBuf)
 		{
 			for (auto channel = 0u; channel < audioStreamParams.NumInputChannels; ++channel)

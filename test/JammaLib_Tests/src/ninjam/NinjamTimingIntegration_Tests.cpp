@@ -25,6 +25,7 @@
 
 using ninjam::NinjamAudioTimingCommand;
 using ninjam::NinjamAudioTimingCommandMailbox;
+using ninjam::LocalTransportOffsetLoopFracMailbox;
 using ninjam::NinjamRemoteTiming;
 using ninjam::NinjamTiming;
 using ninjam::NinjamTimingCommandType;
@@ -43,6 +44,7 @@ namespace
 		long long Position = 0;
 		unsigned int Length = 0u;
 		std::uint64_t Generation = 0u;
+		bool IsRemote = false;
 	};
 
 	class TransportHarness
@@ -51,6 +53,9 @@ namespace
 		Timer Clock;
 		NinjamTimingCoordinator Coordinator;
 		NinjamAudioTimingCommandMailbox Mailbox;
+		LocalTransportOffsetLoopFracMailbox LocalOffsetMailbox;
+		double LocalOffsetLoopFrac = 0.0;
+		long long LocalOffsetTargetSamps = 0;
 		std::vector<ModelTake> Takes;
 
 		unsigned int PhaseCommandsPublished = 0u;
@@ -111,6 +116,11 @@ namespace
 			Mailbox.Publish(command);
 		}
 
+		void PublishLocalOffset(double loopFrac)
+		{
+			LocalOffsetMailbox.Publish(loopFrac);
+		}
+
 		// Mirrors the top of AudioHost::_OnAudio: consume one command, apply it to
 		// the Timer and every take, then advance all consumers by numSamps.
 		void AudioBlock(unsigned int numSamps)
@@ -151,6 +161,18 @@ namespace
 					++PhaseCommandsConsumed;
 					Coordinator.NotifyPhaseCorrectionConsumed();
 				}
+			}
+
+			if (const auto localOffsetLoopFrac = LocalOffsetMailbox.ConsumeLatest())
+				LocalOffsetLoopFrac = localOffsetLoopFrac.value();
+			const auto localOffsetTargetSamps = static_cast<long long>(std::llround(
+				LocalOffsetLoopFrac * static_cast<double>(Clock.SeedSourceLength())));
+			if (localOffsetTargetSamps != LocalOffsetTargetSamps)
+			{
+				const auto localOffsetDelta = localOffsetTargetSamps - LocalOffsetTargetSamps;
+				LocalOffsetTargetSamps = localOffsetTargetSamps;
+				for (auto& take : Takes)
+					if (!take.IsRemote) take.Position += localOffsetDelta;
 			}
 
 			Clock.Tick(numSamps, 0u);
@@ -298,6 +320,55 @@ TEST(NinjamTimingIntegration, DelayedReplacementProjectsAndRebasesAllPhysicalCur
 	EXPECT_EQ(1500ul, wrap(1100 + replacement.LocalDeltaSamps, oldMasterLength * 2ul));
 	EXPECT_EQ(500ul, wrap(100 + replacement.LocalDeltaSamps, oldMasterLength));
 	EXPECT_EQ(400, replacement.LocalDeltaSamps);
+}
+
+TEST(NinjamTimingIntegration, LocalOffsetAndNinjamCorrectionComposeAtOneBoundary)
+{
+	TransportHarness harness;
+	harness.Clock.SetSeedSourceLength(1000ul);
+	harness.Clock.Tick(100u, 0u);
+	harness.Takes = {
+		ModelTake{ 100, 1000u, 7u, false },
+		ModelTake{ 400, 1500u, 7u, false },
+		ModelTake{ 700, 1000u, 7u, true },
+	};
+
+	NinjamAudioTimingCommand correction;
+	correction.Type = NinjamTimingCommandType::PhaseDiscipline;
+	correction.Generation = 7u;
+	correction.PhaseDeltaSamps = 25;
+	harness.Publish(correction);
+	harness.PublishLocalOffset(0.040);
+	harness.PublishLocalOffset(0.010);
+	harness.AudioBlock(0u);
+
+	EXPECT_EQ(125u, harness.Clock.SampOffset());
+	EXPECT_EQ(135, harness.Takes[0].Position);
+	EXPECT_EQ(435, harness.Takes[1].Position);
+	EXPECT_EQ(725, harness.Takes[2].Position);
+}
+
+TEST(NinjamTimingIntegration, ReplacementPreservesOneActiveLocalOffset)
+{
+	constexpr unsigned long oldMasterLength = 1000ul;
+	constexpr unsigned int oldMasterPhase = 850u;
+	constexpr unsigned int remotePhase = 250u;
+	constexpr long long localOffset = 250;
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(oldMasterLength,
+		oldMasterPhase, 1200u, 100u, 10000u, 11350u);
+	ASSERT_EQ(remotePhase, replacement.RemotePhaseSamps);
+
+	const auto wrap = [](long long value, unsigned long length)
+	{
+		value %= static_cast<long long>(length);
+		return value < 0 ? value + length : value;
+	};
+	const auto localPosition = wrap(static_cast<long long>(oldMasterPhase) + localOffset,
+		oldMasterLength);
+	const auto rebasedPosition = wrap(localPosition + replacement.LocalDeltaSamps, oldMasterLength);
+
+	EXPECT_EQ(wrap(static_cast<long long>(remotePhase) + localOffset, oldMasterLength), rebasedPosition);
+	EXPECT_NE(wrap(static_cast<long long>(remotePhase) + (2 * localOffset), oldMasterLength), rebasedPosition);
 }
 
 TEST(NinjamTimingIntegration, RelativeTakeOffsetsInvariantAcrossPhaseCorrections)

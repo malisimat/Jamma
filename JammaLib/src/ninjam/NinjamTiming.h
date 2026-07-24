@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -117,8 +118,9 @@ namespace ninjam
 			return { remotePhase, 0 };
 
 		const auto oldMasterLength = static_cast<unsigned int>(oldMasterLengthSamps);
-		return { remotePhase, SignedCircularDifference(oldMasterPhaseSamps,
-			remotePhase % oldMasterLength, oldMasterLength) };
+		const auto baseLocalDelta = SignedCircularDifference(oldMasterPhaseSamps,
+			remotePhase % oldMasterLength, oldMasterLength);
+		return { remotePhase, baseLocalDelta };
 	}
 
 	inline unsigned int IntervalSampsFromTempo(float bpm,

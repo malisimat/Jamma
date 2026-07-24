@@ -86,7 +86,6 @@ namespace ninjam
 				command.AbsolutePhaseSamps = _absolutePhaseSamps.load(std::memory_order_relaxed);
 				command.PhaseObservationSample = _phaseObservationSample.load(std::memory_order_relaxed);
 				command.PhaseDeltaSamps = _phaseDeltaSamps.load(std::memory_order_relaxed);
-
 				const auto after = _sequence.load(std::memory_order_acquire);
 				if (before == after)
 				{
@@ -115,6 +114,54 @@ namespace ninjam
 		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
 		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };
 		std::atomic<long long> _phaseDeltaSamps{ 0 };
+		std::uint64_t _consumedSequence = 0u;
+	};
+
+	// Single-writer (UI thread) / single-reader (audio thread) latest-value
+	// mailbox for the local-only normalized transport offset. It deliberately
+	// coalesces drag events: the audio thread needs only the newest absolute
+	// target, including an explicit zero publication.
+	class LocalTransportOffsetLoopFracMailbox
+	{
+	public:
+		void Publish(double normalizedLoopFrac) noexcept
+		{
+			const auto writingSequence = _sequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
+			_normalizedLoopFrac.store(normalizedLoopFrac, std::memory_order_relaxed);
+			_sequence.store(writingSequence + 1u, std::memory_order_release);
+			_hasPublication.store(true, std::memory_order_release);
+		}
+
+		std::optional<double> ConsumeLatest() noexcept
+		{
+			if (!_hasPublication.load(std::memory_order_acquire))
+				return std::nullopt;
+
+			for (unsigned int attempt = 0u; attempt < _MaxReadAttempts; ++attempt)
+			{
+				const auto before = _sequence.load(std::memory_order_acquire);
+				if ((before & 1u) != 0u)
+					continue;
+				if (before == _consumedSequence)
+					return std::nullopt;
+
+				const auto normalizedLoopFrac = _normalizedLoopFrac.load(std::memory_order_relaxed);
+				const auto after = _sequence.load(std::memory_order_acquire);
+				if (before == after)
+				{
+					_consumedSequence = before;
+					return normalizedLoopFrac;
+				}
+			}
+
+			return std::nullopt;
+		}
+
+	private:
+		static constexpr unsigned int _MaxReadAttempts = 4u;
+		std::atomic<std::uint64_t> _sequence{ 0u };
+		std::atomic_bool _hasPublication{ false };
+		std::atomic<double> _normalizedLoopFrac{ 0.0 };
 		std::uint64_t _consumedSequence = 0u;
 	};
 }

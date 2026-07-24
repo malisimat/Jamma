@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <limits>
 #include <string>
+#include "../utils/MathUtils.h"
 #include "../utils/StringUtils.h"
 
 using namespace io;
@@ -220,8 +221,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			break;
 		}
 
-		if (std::isfinite(parsed))
-			jam.TransportOffsetLoopFrac = std::clamp(parsed, -1.0, 1.0);
+		jam.TransportOffsetLoopFrac = utils::NormalizeLoopFraction(parsed);
 	}
 
 	std::string quantiseStr = "";
@@ -403,7 +403,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
 	ss << kvStr("globalmidiquantstate", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
 	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
-	ss << kvDouble("transportoffsetloopfrac", jam.TransportOffsetLoopFrac) << ",";
+	ss << kvDouble("transportoffsetloopfrac", utils::NormalizeLoopFraction(jam.TransportOffsetLoopFrac)) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
 		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";

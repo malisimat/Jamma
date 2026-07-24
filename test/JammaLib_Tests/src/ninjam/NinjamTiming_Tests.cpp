@@ -58,6 +58,14 @@ TEST(NinjamTiming, BoundaryReplacementUsesOldMasterForNonCommensurateIntervals)
 	EXPECT_EQ(800u, static_cast<unsigned int>((850 + replacement.LocalDeltaSamps + 900) % 900));
 }
 
+TEST(NinjamTiming, BoundaryReplacementDoesNotAddConfiguredLocalOffset)
+{
+	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
+		1000ul, 850u, 1200u, 100u, 10000u, 11350u);
+	EXPECT_EQ(250u, replacement.RemotePhaseSamps);
+	EXPECT_EQ(400, replacement.LocalDeltaSamps);
+}
+
 TEST(NinjamTiming, BoundaryReplacementPreservesPositiveHalfIntervalTie)
 {
 	const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
