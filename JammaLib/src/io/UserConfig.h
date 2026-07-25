@@ -76,6 +76,8 @@ namespace io
 		struct MidiConfig
 		{
 			std::vector<MidiSettings> Devices;
+			bool ChannelOverrideTriggers = false;
+			bool ChannelOverrideLive = true;
 
 			static std::optional<MidiConfig> FromJson(Json::JsonPart json);
 		};

@@ -283,6 +283,14 @@ std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::Jso
 		return std::nullopt;
 
 	MidiConfig midi;
+	iter = json.KeyValues.find("channelOverrideTriggers");
+	if (iter != json.KeyValues.end() && iter->second.index() == 0)
+		midi.ChannelOverrideTriggers = std::get<bool>(iter->second);
+
+	iter = json.KeyValues.find("channelOverrideLive");
+	if (iter != json.KeyValues.end() && iter->second.index() == 0)
+		midi.ChannelOverrideLive = std::get<bool>(iter->second);
+
 	auto devices = std::get<std::vector<Json::JsonPart>>(devicesArray.Array);
 	for (const auto& deviceJson : devices)
 	{

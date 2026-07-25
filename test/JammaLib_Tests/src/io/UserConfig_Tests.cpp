@@ -62,7 +62,7 @@ TEST(UserConfig, ParsesMidiSettings) {
 }
 
 TEST(UserConfig, ParsesMidiDeviceList) {
-	auto str = "{\"devices\":[{\"name\":\"MPK mini\",\"enabled\":true},{\"name\":\"Launchpad X\",\"enabled\":false}]}";
+	auto str = "{\"devices\":[{\"name\":\"MPK mini\",\"enabled\":true},{\"name\":\"Launchpad X\",\"enabled\":false}],\"channelOverrideTriggers\":true,\"channelOverrideLive\":false}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto midi = UserConfig::MidiConfig::FromJson(json);
@@ -73,6 +73,20 @@ TEST(UserConfig, ParsesMidiDeviceList) {
 	EXPECT_TRUE(midi->Devices[0].Enabled);
 	EXPECT_EQ(0, midi->Devices[1].Name.compare("Launchpad X"));
 	EXPECT_FALSE(midi->Devices[1].Enabled);
+	EXPECT_TRUE(midi->ChannelOverrideTriggers);
+	EXPECT_FALSE(midi->ChannelOverrideLive);
+}
+
+TEST(UserConfig, MidiChannelOverrideDefaultsPreserveTriggerIsolation)
+{
+	auto str = "{\"devices\":[{\"name\":\"default\",\"enabled\":true}]}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto midi = UserConfig::MidiConfig::FromJson(json);
+
+	ASSERT_TRUE(midi.has_value());
+	EXPECT_FALSE(midi->ChannelOverrideTriggers);
+	EXPECT_TRUE(midi->ChannelOverrideLive);
 }
 
 TEST(UserConfig, RejectsLegacySingleMidiDeviceShape) {

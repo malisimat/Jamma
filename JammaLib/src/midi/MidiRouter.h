@@ -113,6 +113,11 @@ namespace midi
 		std::uint8_t ForcedChannelOverride() const noexcept;
 		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept;
 
+		// Keep the raw ingress event available for trigger matching while deriving
+		// the separately routed station/live event.
+		static midi::MidiEvent DeriveStationEvent(const midi::MidiEvent& rawEvent,
+			std::uint8_t forcedChannelOverride) noexcept;
+
 		static bool IsAutomationRecordHeld() noexcept;
 
 		// --- Editor-driven automation feedback suppression ---
@@ -144,6 +149,7 @@ namespace midi
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
 		static constexpr std::size_t MaxLiveMidiEventsPerDispatchPass = 1024u;
 		static constexpr std::uint64_t LiveInputConfigChannelMask = 0xffu;
+		static constexpr std::uint64_t LiveInputConfigAffectsLiveBit = 1ull << 8u;
 		static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
 			"Live MIDI ingress configuration must remain lock-free");
 
@@ -186,11 +192,15 @@ namespace midi
 		void _StopLiveMidiDispatcher();
 		void _LiveMidiDispatchLoop() noexcept;
 		void _DispatchAvailableLiveMidi() noexcept;
-		void _PublishLiveMidiInputConfig(std::uint32_t generation, std::uint8_t forcedChannelOverride) noexcept;
+		void _PublishLiveMidiInputConfig(std::uint32_t generation,
+			std::uint8_t forcedChannelOverride,
+			bool channelOverrideLive) noexcept;
 		static std::uint64_t _PackLiveMidiInputConfig(std::uint32_t generation,
-			std::uint8_t forcedChannelOverride) noexcept;
+			std::uint8_t forcedChannelOverride,
+			bool channelOverrideLive) noexcept;
 		static std::uint32_t _LiveMidiConfigGeneration(std::uint64_t config) noexcept;
 		static std::uint8_t _LiveMidiConfigForcedChannel(std::uint64_t config) noexcept;
+		static bool _LiveMidiConfigAffectsLive(std::uint64_t config) noexcept;
 
 		// Non-RT: poll vst::_lastTouchedParam for a fresh editor-origin parameter
 		// change and, while automation record is held, record it into the owning
@@ -218,6 +228,8 @@ namespace midi
 		std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
 		std::atomic<std::uint8_t> _forcedInputChannelOverride{ 0u };
+		std::atomic<bool> _channelOverrideTriggers{ false };
+		std::atomic<bool> _channelOverrideLive{ true };
 		bool _automationRecordKeyHeld = false;
 		bool _channelOverridePageUpHeld = false;
 		bool _channelOverridePageDownHeld = false;

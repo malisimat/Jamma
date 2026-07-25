@@ -11,7 +11,7 @@
 
 using namespace io;
 
-const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}]},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
+const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}],\"channelOverrideTriggers\":false,\"channelOverrideLive\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
 
 std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 {
@@ -106,6 +106,8 @@ bool RigFile::ToStream(RigFile rig, std::stringstream& ss)
 		ss << "Device: " << device.Name
 			<< " Enabled: " << device.Enabled << std::endl;
 	}
+	ss << "Channel override triggers: " << rig.User.Midi.ChannelOverrideTriggers << std::endl;
+	ss << "Channel override live: " << rig.User.Midi.ChannelOverrideLive << std::endl;
 
 	return true;
 }

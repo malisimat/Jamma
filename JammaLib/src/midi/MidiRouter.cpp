@@ -255,7 +255,8 @@ void MidiRouter::StepChannelOverrideUp() noexcept
 		const auto next = static_cast<std::uint8_t>(current + 1u);
 		_forcedInputChannelOverride.store(next, std::memory_order_release);
 		const auto config = _liveMidiDispatchNotification ? _liveMidiDispatchNotification->InputConfig.load(std::memory_order_acquire) : 0u;
-		_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), next);
+		_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), next,
+			_channelOverrideLive.load(std::memory_order_acquire));
 	}
 }
 
@@ -267,7 +268,8 @@ void MidiRouter::StepChannelOverrideDown() noexcept
 		const auto next = static_cast<std::uint8_t>(current - 1u);
 		_forcedInputChannelOverride.store(next, std::memory_order_release);
 		const auto config = _liveMidiDispatchNotification ? _liveMidiDispatchNotification->InputConfig.load(std::memory_order_acquire) : 0u;
-		_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), next);
+		_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), next,
+			_channelOverrideLive.load(std::memory_order_acquire));
 	}
 }
 
@@ -275,7 +277,8 @@ void MidiRouter::ResetChannelOverride() noexcept
 {
 	_forcedInputChannelOverride.store(0u, std::memory_order_release);
 	const auto config = _liveMidiDispatchNotification ? _liveMidiDispatchNotification->InputConfig.load(std::memory_order_acquire) : 0u;
-	_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), 0u);
+	_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), 0u,
+		_channelOverrideLive.load(std::memory_order_acquire));
 }
 
 void MidiRouter::SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
@@ -294,7 +297,8 @@ void MidiRouter::SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
 
 	_forcedInputChannelOverride.store(clamped, std::memory_order_release);
 	const auto config = _liveMidiDispatchNotification ? _liveMidiDispatchNotification->InputConfig.load(std::memory_order_acquire) : 0u;
-	_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), clamped);
+	_PublishLiveMidiInputConfig(_LiveMidiConfigGeneration(config), clamped,
+		_channelOverrideLive.load(std::memory_order_acquire));
 }
 
 std::uint8_t MidiRouter::ForcedChannelOverride() const noexcept
@@ -312,6 +316,14 @@ std::uint8_t MidiRouter::RewriteIncomingChannel(std::uint8_t status, std::uint8_
 		return status;
 
 	return static_cast<std::uint8_t>(messageType | ((forcedChannelOverride - 1u) & midi::MidiEvent::ChannelMask));
+}
+
+midi::MidiEvent MidiRouter::DeriveStationEvent(const midi::MidiEvent& rawEvent,
+	std::uint8_t forcedChannelOverride) noexcept
+{
+	midi::MidiEvent stationEvent = rawEvent;
+	stationEvent.status = RewriteIncomingChannel(rawEvent.status, forcedChannelOverride);
+	return stationEvent;
 }
 
 bool MidiRouter::IsAutomationRecordHeld() noexcept
@@ -411,6 +423,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 	const auto initialAnchor = midi::ReadMidiClockAnchor(midiClockAnchor, {});
 	_liveMidiDispatchNotification = std::make_shared<LiveMidiDispatchNotification>();
+	_channelOverrideTriggers.store(cfg.Midi.ChannelOverrideTriggers, std::memory_order_release);
+	_channelOverrideLive.store(cfg.Midi.ChannelOverrideLive, std::memory_order_release);
 	_liveMidiDispatchNotification->WorkEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 	_liveMidiStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 	if (!_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
@@ -418,7 +432,7 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 		CloseMidi();
 		return;
 	}
-	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride());
+	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(), cfg.Midi.ChannelOverrideLive);
 
 	if (cfg.Midi.Devices.empty())
 	{
@@ -468,12 +482,16 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
 				const auto inputConfig = notification->InputConfig.load(std::memory_order_acquire);
-				ingress.status = RewriteIncomingChannel(status, _LiveMidiConfigForcedChannel(inputConfig));
+				// Keep trigger matching on the physical channel; derive the station copy below.
+				ingress.status = status;
 				ingress.data1 = data1;
 				ingress.data2 = data2;
 				ingress._pad = 0u;
 				endpoint->Ingress.Push(ingress);
-				endpoint->LiveIngress.Push({ ingress,
+
+				const auto liveEvent = DeriveStationEvent(ingress,
+					_LiveMidiConfigAffectsLive(inputConfig) ? _LiveMidiConfigForcedChannel(inputConfig) : 0u);
+				endpoint->LiveIngress.Push({ liveEvent,
 					_LiveMidiConfigGeneration(inputConfig), endpoint->NextLiveSequence++ });
 				SetEvent(notification->WorkEvent);
 			},
@@ -548,7 +566,8 @@ float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
 
 void MidiRouter::CloseMidi()
 {
-	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride());
+	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(),
+		_channelOverrideLive.load(std::memory_order_acquire));
 	_liveMidiRoutes.store(std::make_shared<const LiveMidiRoutingSnapshot>(), std::memory_order_release);
 	for (auto& route : _midiTriggerRoutes)
 		route.DeviceSlot = UnresolvedMidiDeviceSlot;
@@ -600,7 +619,8 @@ void MidiRouter::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine:
 	}
 
 	_liveMidiRoutes.store(routes, std::memory_order_release);
-	_PublishLiveMidiInputConfig(routes->Generation, ForcedChannelOverride());
+	_PublishLiveMidiInputConfig(routes->Generation, ForcedChannelOverride(),
+		_channelOverrideLive.load(std::memory_order_acquire));
 	if (_liveMidiDispatchNotification && _liveMidiDispatchNotification->WorkEvent)
 		SetEvent(_liveMidiDispatchNotification->WorkEvent);
 }
@@ -860,13 +880,19 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 
 		while (input->Ingress.Pop(ingress))
 		{
-			const auto& effectiveIngress = ingress;
+			const auto triggerEvent = DeriveStationEvent(ingress,
+				_channelOverrideTriggers.load(std::memory_order_acquire)
+					? ForcedChannelOverride() : 0u);
+			const auto stationEvent = DeriveStationEvent(ingress,
+				_channelOverrideLive.load(std::memory_order_acquire)
+					? ForcedChannelOverride() : 0u);
 
-			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, effectiveIngress, userConfig, audioParams);
+			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, triggerEvent, userConfig, audioParams);
 			summary.Activated = summary.Activated || dispatch.Activated;
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
 
-			const auto msgType = effectiveIngress.MessageType();
+			// Derive trigger and station events independently from the raw ingress event.
+			const auto msgType = ingress.MessageType();
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
 				const auto& deviceName = input->ConfiguredName;
@@ -874,7 +900,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				{
 					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
 					{
-						station->ObservePhysicalMidiForRecording(effectiveIngress, deviceName);
+						station->ObservePhysicalMidiForRecording(stationEvent, deviceName);
 					}
 				}
 			}
@@ -883,8 +909,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			constexpr std::uint8_t ControlChange = 0xB0u;
 			if (msgType == ControlChange)
 			{
-				const auto channel = effectiveIngress.Channel();
-				const auto cc = effectiveIngress.data1;
+				const auto channel = stationEvent.Channel();
+				const auto cc = stationEvent.data1;
 
 				// Learn capture: the user moved a physical knob while in learn mode.
 				if (_learnMidiCCMode.load(std::memory_order_relaxed))
@@ -897,7 +923,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				if (_automationRecordHeld.load(std::memory_order_acquire))
 				{
 					const auto matchKey = AutomationMapping::MakeMatchKey(channel, cc);
-					const float value = static_cast<float>(effectiveIngress.data2) / 127.0f;
+					const float value = static_cast<float>(stationEvent.data2) / 127.0f;
 					for (const auto& station : stations)
 					{
 						if (!station || station->IsRemote())
@@ -942,7 +968,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				for (const auto& take : station->GetLoopTakeSnapshot())
 				{
 					if (take->IsArmed())
-						take->RecordMidiEvent(effectiveIngress, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
+						take->RecordMidiEvent(stationEvent, input->ConfiguredName, static_cast<std::uint32_t>(globalSampleNow));
 				}
 			}
 		}
@@ -1061,15 +1087,17 @@ void MidiRouter::_PublishMidiTriggerRoutes()
 }
 
 std::uint64_t MidiRouter::_PackLiveMidiInputConfig(std::uint32_t generation,
-	std::uint8_t forcedChannelOverride) noexcept
+	std::uint8_t forcedChannelOverride,
+	bool channelOverrideLive) noexcept
 {
-	return (static_cast<std::uint64_t>(generation) << 8u)
+	return (static_cast<std::uint64_t>(generation) << 9u)
+		| (channelOverrideLive ? LiveInputConfigAffectsLiveBit : 0u)
 		| static_cast<std::uint64_t>(forcedChannelOverride);
 }
 
 std::uint32_t MidiRouter::_LiveMidiConfigGeneration(std::uint64_t config) noexcept
 {
-	return static_cast<std::uint32_t>(config >> 8u);
+	return static_cast<std::uint32_t>(config >> 9u);
 }
 
 std::uint8_t MidiRouter::_LiveMidiConfigForcedChannel(std::uint64_t config) noexcept
@@ -1077,13 +1105,19 @@ std::uint8_t MidiRouter::_LiveMidiConfigForcedChannel(std::uint64_t config) noex
 	return static_cast<std::uint8_t>(config & LiveInputConfigChannelMask);
 }
 
+bool MidiRouter::_LiveMidiConfigAffectsLive(std::uint64_t config) noexcept
+{
+	return (config & LiveInputConfigAffectsLiveBit) != 0u;
+}
+
 void MidiRouter::_PublishLiveMidiInputConfig(std::uint32_t generation,
-	std::uint8_t forcedChannelOverride) noexcept
+	std::uint8_t forcedChannelOverride,
+	bool channelOverrideLive) noexcept
 {
 	if (_liveMidiDispatchNotification)
 	{
 		_liveMidiDispatchNotification->InputConfig.store(
-			_PackLiveMidiInputConfig(generation, forcedChannelOverride), std::memory_order_release);
+			_PackLiveMidiInputConfig(generation, forcedChannelOverride, channelOverrideLive), std::memory_order_release);
 	}
 }
 
