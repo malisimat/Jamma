@@ -506,7 +506,7 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 			if (shifted < 0)
 				shifted += length;
 			midiPlayIndex = static_cast<unsigned long>(shifted);
-			_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(correction),
+			_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(correction),
 				std::memory_order_relaxed);
 		}
 		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
@@ -553,7 +553,7 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 		if (shifted < 0)
 			shifted += length;
 		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
-		_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(deltaSamps),
+		_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(deltaSamps),
 			std::memory_order_relaxed);
 		moved = true;
 	}
@@ -613,7 +613,7 @@ void LoopTake::_TryApplyLocalTransportOffset() noexcept
 		if (shifted < 0)
 			shifted += length;
 		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
-		_midiAnchorCorrection.fetch_add(static_cast<std::int32_t>(deltaSamps), std::memory_order_relaxed);
+		_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(deltaSamps), std::memory_order_relaxed);
 		moved = true;
 	}
 

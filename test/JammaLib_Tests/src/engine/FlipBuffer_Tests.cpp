@@ -312,7 +312,7 @@ TEST(ExternalPhaseCorrection, NegativeDeltaMovesAudioAndMidiWithSameSign)
 
 	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(100ul, take->MidiVisualPosition());
-	EXPECT_EQ(-4900, take->MidiAnchorCorrection());
+	EXPECT_EQ(4900, take->MidiAnchorCorrection());
 }
 
 TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
@@ -335,7 +335,7 @@ TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
 	take->SetLocalTransportOffsetSamps(350);
 	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(450ul, take->MidiVisualPosition());
-	EXPECT_EQ(350, take->MidiAnchorCorrection());
+	EXPECT_EQ(-350, take->MidiAnchorCorrection());
 
 	take->SetLocalTransportOffsetSamps(350);
 	EXPECT_EQ(450ul, LoopBodyPosition(*take->GetLoops().front()));
@@ -354,7 +354,7 @@ TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
 	take->SetMidiVisualPosition(100ul, 1000ul);
 	take->EndMultiPlay(0u);
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
-	EXPECT_EQ(250, take->MidiAnchorCorrection());
+	EXPECT_EQ(-250, take->MidiAnchorCorrection());
 
 	take->SetLocalTransportOffsetSamps(0);
 	EXPECT_EQ(100ul, take->MidiVisualPosition());
@@ -384,7 +384,7 @@ TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
 	take->SetMidiVisualPosition(100ul, 1000ul);
 	take->ApplyTimingCommand(-1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
 	EXPECT_EQ(850ul, take->MidiVisualPosition());
-	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1250, take->MidiAnchorCorrection());
 	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
 }
 
@@ -394,8 +394,21 @@ TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
 	take->ApplyTimingCommand(1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
 	EXPECT_EQ(350ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
-	EXPECT_EQ(1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
 	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
+{
+	auto take = MakePlayingTake("direct-midi-automation", 1000ul, 100ul);
+	take->ApplyTimingCommand(250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+
+	constexpr auto globalSample = 1000;
+	constexpr auto frozenAnchor = 900;
+	const auto automationPosition = static_cast<unsigned long>(
+		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 1000);
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }
 
 TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
@@ -405,7 +418,7 @@ TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
 	take->ApplyTimingCommand(0, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
 	take->SetLocalTransportOffsetSamps(-1250);
 	EXPECT_EQ(850ul, take->MidiVisualPosition());
-	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1250, take->MidiAnchorCorrection());
 	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
 }
 
@@ -442,7 +455,7 @@ TEST(ExternalPhaseCorrection, ReconnectCannotConsumeStaleGeneration)
 
 	EXPECT_EQ(90ul, LoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(90ul, take->MidiVisualPosition());
-	EXPECT_EQ(-20, take->MidiAnchorCorrection());
+	EXPECT_EQ(20, take->MidiAnchorCorrection());
 }
 
 TEST(ExternalPhaseCorrection, LongSimulationRemainsExactAcrossLengths)
