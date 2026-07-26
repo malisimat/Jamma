@@ -31,6 +31,8 @@ Windows builds also compile VST3 hosting support by default via the `vst3sdk` vc
 4. For direct `.vcxproj` builds, pass absolute paths and `/p:SolutionDir=<repo-root>\` with exactly one trailing backslash.
 5. If you hit `C1041` PDB contention, apply `/FS` and a project-specific `ProgramDataBaseFileName` in the affected project.
 
+Release configurations enable compiler whole-program optimization (`/GL`) for the native projects, and their executable Release link steps are also to use `/LTCG` (Debug unchanged).
+
 `Directory.Build.props` backfills `SolutionDir` and the vcpkg manifest properties when they are unset, but direct project builds should still pass `SolutionDir` explicitly so `.tlog` state stays stable.
 
 ## Preferred PowerShell Build Snippet

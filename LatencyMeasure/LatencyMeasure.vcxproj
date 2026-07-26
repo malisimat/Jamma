@@ -135,6 +135,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>dsound.lib;winmm.lib;ole32.lib;comsuppw.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -154,6 +155,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>dsound.lib;winmm.lib;ole32.lib;comsuppw.lib;%(AdditionalDependencies)</AdditionalDependencies>
