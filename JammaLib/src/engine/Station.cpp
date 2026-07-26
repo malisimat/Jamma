@@ -1192,6 +1192,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				_flipTakeBuffer = true;
 				_changesMade = true;
 				_PublishLoopTakeSnapshot();
+				_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 			}
 		}
 
@@ -1300,6 +1301,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_flipTakeBuffer = true;
 	_changesMade = true;
 	_PublishLoopTakeSnapshot();
+	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 }
 
 std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const

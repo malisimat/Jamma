@@ -609,6 +609,12 @@ ActionResult Window::OnAction(TouchAction touchAction)
 	switch (touchAction.Touch)
 	{
 	case TouchAction::TOUCH_MOUSE:
+		if (4 == touchAction.Index)
+		{
+			touchAction.MouseButtonsDown = _buttonsDown;
+			return _scene.OnAction(touchAction);
+		}
+
 		if (0 == _buttonsDown)
 			SetCapture(_wnd);
 

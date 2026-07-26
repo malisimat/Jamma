@@ -185,6 +185,51 @@ public:
 		return _camera.ModelPosition();
 	}
 
+	graphics::Camera::View CameraViewForTest() const
+	{
+		return _camera.CurrentView();
+	}
+
+	graphics::Camera::Pose CameraPoseForTest() const
+	{
+		return _camera.CurrentPose();
+	}
+
+	ViewMode CameraSelectDepthForTest() const
+	{
+		return _viewMode;
+	}
+
+	void SetCameraSelectDepthForTest(unsigned int value)
+	{
+		actions::GuiAction action;
+		action.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO;
+		action.Index = 100u;
+		action.Data = actions::GuiAction::GuiInt(static_cast<int>(value));
+		OnAction(action);
+	}
+
+	bool IsCameraTransitioningForTest() const
+	{
+		return _camera.IsTransitioning();
+	}
+
+	void UpdateCameraStationFollowForTest()
+	{
+		_UpdateCameraStationFollow();
+	}
+
+	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
+	{
+		_camera.TickBackgroundDrag(samps, sampleRate);
+	}
+
+	void SettleCameraForTest()
+	{
+		for (unsigned int tick = 0u; tick < 8u; ++tick)
+			TickCameraForTest(2205u, 44100u);
+	}
+
 	bool IsSceneTouchingForTest() const
 	{
 		return _camera.IsBackgroundDragging();
@@ -202,6 +247,17 @@ TouchAction MakeSceneTouch(TouchAction::TouchState state,
 	action.Index = index;
 	action.Position = pos;
 	action.MouseButtonsDown = mouseButtonsDown;
+	return action;
+}
+
+TouchAction MakeSceneWheel(int value, utils::Position2d pos = { 800, 500 })
+{
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.State = TouchAction::TOUCH_DOWN;
+	action.Index = 4;
+	action.Value = value;
+	action.Position = pos;
 	return action;
 }
 
@@ -1056,6 +1112,147 @@ TEST(SceneDrag, FinalReleaseEndsBackgroundDrag) {
 
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 800, 500 }, 0, 0u));
 	EXPECT_FALSE(scene.IsSceneTouchingForTest());
+}
+
+TEST(CameraView, WheelZoomUsesNotchesInsteadOfPointerPosition) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto wheelRes = scene.OnAction(MakeSceneWheel(1, { 100000, -100000 }));
+	ASSERT_TRUE(wheelRes.IsEaten);
+	ASSERT_TRUE(scene.IsCameraTransitioningForTest());
+	scene.SettleCameraForTest();
+
+	auto cameraPos = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(348.0f, cameraPos.Z);
+	EXPECT_FLOAT_EQ(0.0f, cameraPos.X);
+	EXPECT_FLOAT_EQ(0.0f, cameraPos.Y);
+}
+
+TEST(CameraView, WheelZoomPreservesFrontPanPosition) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 810, 490 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneWheel(1));
+	scene.SettleCameraForTest();
+
+	auto cameraPos = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(-10.0f, cameraPos.X);
+	EXPECT_FLOAT_EQ(10.0f, cameraPos.Y);
+	EXPECT_FLOAT_EQ(348.0f, cameraPos.Z);
+}
+
+TEST(CameraView, TabCyclesFrontInteriorAndTopDown) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(1.0f, scene.CameraPoseForTest().Forward.Z);
+
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(-1.0f, scene.CameraPoseForTest().Forward.Y);
+
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
+}
+
+TEST(CameraView, StationInteriorTemporarilyForcesLoopTakeSelectDepth) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	EXPECT_EQ(Scene::VIEW_LOOPTAKE, scene.CameraSelectDepthForTest());
+
+	scene.OnAction(tab);
+	EXPECT_EQ(Scene::VIEW_STATION, scene.CameraSelectDepthForTest());
+}
+
+TEST(CameraView, StationInteriorKeepsUserSelectedLoopDepth) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SetCameraSelectDepthForTest(Scene::VIEW_LOOP);
+	scene.OnAction(tab);
+
+	EXPECT_EQ(Scene::VIEW_LOOP, scene.CameraSelectDepthForTest());
+}
+
+TEST(CameraView, TopDownVerticalDragMovesPositiveWorldZ) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 800, 510 }, LeftMouseButtonMask));
+	EXPECT_FLOAT_EQ(10.0f, scene.CameraPositionForTest().Z);
+}
+
+TEST(CameraView, StationInteriorFollowsLoopTakeAddition) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->SetModelPosition({ -200.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(firstStation);
+	auto secondStation = MakeTestStation("station-b");
+	secondStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(secondStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	secondStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+	EXPECT_FLOAT_EQ(0.0f, scene.CameraPositionForTest().Z);
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
