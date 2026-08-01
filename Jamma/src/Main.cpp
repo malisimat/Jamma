@@ -120,7 +120,12 @@ namespace
 				return true;
 			}
 			if (scene)
-				scene->ConnectNinjam(servers[idx - 1].Host);
+			{
+				ninjam::NinjamTempoJoinOptions options;
+				options.PushLocalTempoOnJoin = true;
+				options.PromptBeforeApplyingRemoteTempo = true;
+				scene->ConnectNinjam(servers[idx - 1].Host, options);
+			}
 			else
 				std::cout << "[NINJAM] Not ready yet" << std::endl;
 			return true;

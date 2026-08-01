@@ -165,6 +165,12 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			long long stationDelta = command->PhaseDeltaSamps;
 			auto policy = command->LocalFollowPolicy;
 			std::uint64_t sceneCoordinate = command->SceneCoordinateSamps;
+			if (command->InvalidateSceneAnchors)
+			{
+				for (auto& station : stations)
+					if (station && !station->IsRemote()) station->InvalidateSceneAnchors();
+				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+			}
 			if (timingClock)
 			{
 				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)

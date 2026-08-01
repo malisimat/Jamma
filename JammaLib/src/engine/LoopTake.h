@@ -99,6 +99,10 @@ namespace engine
 			std::uint64_t AudioLoopCount = 0u;
 			std::uint64_t MidiLoopCount = 0u;
 			std::uint64_t MaxResidualSamps = 0u;
+			std::uint64_t CapturedMidiAnchorSamps = 0u;
+			std::uint64_t RestoredMidiCursorSamps = 0u;
+			std::uint64_t MidiEventPhaseResidualSamps = 0u;
+			std::uint64_t MidiAutomationPhaseResidualSamps = 0u;
 		};
 
 	public:
@@ -234,6 +238,7 @@ namespace engine
 			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline,
 			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
 		bool IsRemoteTimingCompatible(std::uint64_t grainSamps,
 			std::uint64_t intervalSamps) const noexcept;
 		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
@@ -403,6 +408,10 @@ namespace engine
 		std::atomic<std::uint64_t> _alignmentReceiptAudioLoopCount{ 0u };
 		std::atomic<std::uint64_t> _alignmentReceiptMidiLoopCount{ 0u };
 		std::atomic<std::uint64_t> _alignmentReceiptMaxResidual{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptCapturedMidiAnchor{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptRestoredMidiCursor{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptMidiEventPhaseResidual{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptMidiAutomationPhaseResidual{ 0u };
 		// Audio-thread-only generation gate for the unified audio-boundary command.
 		std::uint64_t _audioTimingGeneration{ 0u };
 		std::atomic<bool> _isPunchInActive;

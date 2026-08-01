@@ -748,6 +748,16 @@ void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
 		if (auto take = weakTake.lock()) take->CaptureSceneAnchors(sceneCoordinateSamps);
 }
 
+void Station::InvalidateSceneAnchors() noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->InvalidateSceneAnchors();
+}
+
 bool Station::IsRemoteTimingCompatible(std::uint64_t grainSamps,
 	std::uint64_t intervalSamps, bool& hasPlayableContent) const noexcept
 {
@@ -2332,7 +2342,11 @@ void Station::_LogLocalLoopAlignment(const char* event,
 				<< " delta=" << receipt->DeltaSamps
 				<< " audioLoops=" << receipt->AudioLoopCount
 				<< " midiLoops=" << receipt->MidiLoopCount
-				<< " maxResidual=" << receipt->MaxResidualSamps << '\n';
+				<< " maxResidual=" << receipt->MaxResidualSamps
+				<< " midiAnchor=" << receipt->CapturedMidiAnchorSamps
+				<< " midiCursor=" << receipt->RestoredMidiCursorSamps
+				<< " midiEventResidual=" << receipt->MidiEventPhaseResidualSamps
+				<< " midiAutomationResidual=" << receipt->MidiAutomationPhaseResidualSamps << '\n';
 		}
 
 		for (const auto& loop : take->GetLoops())

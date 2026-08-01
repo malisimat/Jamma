@@ -46,6 +46,7 @@ namespace ninjam
 		long long PhaseDeltaSamps = 0;
 		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::SeamlessDiscipline;
 		std::uint64_t SceneCoordinateSamps = 0u;
+		bool InvalidateSceneAnchors = false;
 	};
 
 	// Single-writer (job thread) / single-reader (audio thread) latest-command
@@ -69,6 +70,7 @@ namespace ninjam
 			_phaseDeltaSamps.store(command.PhaseDeltaSamps, std::memory_order_relaxed);
 			_localFollowPolicy.store(command.LocalFollowPolicy, std::memory_order_relaxed);
 			_sceneCoordinateSamps.store(command.SceneCoordinateSamps, std::memory_order_relaxed);
+			_invalidateSceneAnchors.store(command.InvalidateSceneAnchors, std::memory_order_relaxed);
 			_sequence.store(writingSequence + 1u, std::memory_order_release);
 			_hasPublication.store(true, std::memory_order_release);
 		}
@@ -100,6 +102,7 @@ namespace ninjam
 				command.PhaseDeltaSamps = _phaseDeltaSamps.load(std::memory_order_relaxed);
 				command.LocalFollowPolicy = _localFollowPolicy.load(std::memory_order_relaxed);
 				command.SceneCoordinateSamps = _sceneCoordinateSamps.load(std::memory_order_relaxed);
+				command.InvalidateSceneAnchors = _invalidateSceneAnchors.load(std::memory_order_relaxed);
 				const auto after = _sequence.load(std::memory_order_acquire);
 				if (before == after)
 				{
@@ -130,6 +133,7 @@ namespace ninjam
 		std::atomic<long long> _phaseDeltaSamps{ 0 };
 		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::SeamlessDiscipline };
 		std::atomic<std::uint64_t> _sceneCoordinateSamps{ 0u };
+		std::atomic_bool _invalidateSceneAnchors{ false };
 		std::uint64_t _consumedSequence = 0u;
 	};
 

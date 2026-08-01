@@ -436,6 +436,10 @@ TEST(TransportPhaseOffset, BoundaryRestoreUsesPreTransitionAudioAndMidiAnchorsAc
 		EXPECT_EQ(1u, receipt->AudioLoopCount);
 		EXPECT_EQ(1u, receipt->MidiLoopCount);
 		EXPECT_EQ(0u, receipt->MaxResidualSamps);
+		EXPECT_EQ(900u, receipt->CapturedMidiAnchorSamps);
+		EXPECT_EQ(expected, receipt->RestoredMidiCursorSamps);
+		EXPECT_EQ(0u, receipt->MidiEventPhaseResidualSamps);
+		EXPECT_EQ(0u, receipt->MidiAutomationPhaseResidualSamps);
 	};
 
 	restore(1u, 6400u, 125);

@@ -158,6 +158,21 @@ TEST(NinjamTimingCoordinator, LocalRequestWaitsForWrapAndAcknowledges)
 	EXPECT_FLOAT_EQ(120.0f, update.TempoRequest->Bpm);
 }
 
+TEST(NinjamTimingCoordinator, DefaultJoinOptionsPushValidLocalTempo)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	coordinator.Connect(ninjam::NinjamTempoJoinOptions{}, local);
+
+	coordinator.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	const auto update = coordinator.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u),
+		local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(update.TempoRequest.has_value());
+	EXPECT_FLOAT_EQ(local.Bpm, update.TempoRequest->Bpm);
+	EXPECT_EQ(local.Bpi, update.TempoRequest->Bpi);
+}
+
 TEST(NinjamTimingCoordinator, DisconnectClearsPromptRequestAndCorrections)
 {
 	Timer clock;
@@ -318,6 +333,44 @@ TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesReque
 	EXPECT_EQ(384000ul, confirmed.ClockSettings->SeedLengthSamps);
 }
 
+TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSend)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, true, local);
+
+	coordinator.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true);
+
+	const auto acknowledged = coordinator.Observe(MakeTimingTempo(384000u, 2000u, 120.75f, 16u),
+		local, true, io::UserConfig{}, clock);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+	EXPECT_TRUE(acknowledged.ClockSettings.has_value());
+	EXPECT_FALSE(acknowledged.PromptForTempoChange);
+}
+
+TEST(NinjamTimingCoordinator, DistantServerTempoDoesNotAcknowledgeRequest)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, true, local);
+
+	coordinator.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true);
+
+	const auto update = coordinator.Observe(MakeTimingTempo(384000u, 2000u, 121.01f, 16u),
+		local, true, io::UserConfig{}, clock);
+	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+	EXPECT_FALSE(update.ClockSettings.has_value());
+	EXPECT_FALSE(update.PromptForTempoChange);
+}
+
 TEST(NinjamTimingCoordinator, MatchingObservationBeforeSendDoesNotAcknowledgeRequest)
 {
 	Timer clock;
@@ -406,4 +459,36 @@ TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
 	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
 	EXPECT_TRUE(sawPrompt);
 	EXPECT_TRUE(coordinator.PendingTempoChange().has_value());
+}
+
+TEST(NinjamTimingCoordinator, TempoRequestDeadlinePromptsOnceWithLatestServerTiming)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	ninjam::NinjamTempoJoinOptions options;
+	options.PushLocalTempoOnJoin = true;
+	options.PromptBeforeApplyingRemoteTempo = true;
+	options.TempoRequestDeadline = std::chrono::seconds(1);
+	NinjamTimingCoordinator coordinator;
+	coordinator.Connect(options, local);
+	const auto start = std::chrono::steady_clock::time_point{};
+
+	coordinator.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start);
+	auto request = coordinator.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true, start);
+
+	const auto early = coordinator.Observe(MakeTimingTempo(480000u, 2000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start + std::chrono::milliseconds(999));
+	EXPECT_FALSE(early.PromptForTempoChange);
+	const auto expired = coordinator.Observe(MakeTimingTempo(480000u, 3000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start + std::chrono::seconds(1));
+	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
+	EXPECT_TRUE(expired.PromptForTempoChange);
+	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+	EXPECT_EQ(480000u, coordinator.PendingTempoChange()->IntervalLengthSamps);
+	EXPECT_FALSE(coordinator.Observe(MakeTimingTempo(480000u, 4000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start + std::chrono::seconds(2)).PromptForTempoChange);
 }

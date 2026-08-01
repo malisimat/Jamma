@@ -136,6 +136,21 @@ TEST(Quantisation, TimingFromSeedAndMasterRejectsZeroInputs)
 	EXPECT_FALSE(timing::TimingFromSeedAndMaster(96000u, 384000ul, 0u).has_value());
 }
 
+TEST(Quantisation, CurrentTempoTimingUsesActiveClockWhenMasterCacheIsUnset)
+{
+	auto clock = std::make_shared<utils::Timer>();
+	clock->SetQuantisation(16896u, utils::Timer::QUANTISE_POWER);
+	clock->SetSeedSourceLength(67584ul);
+	timing::TimingQuantiser quantiser;
+	quantiser.SetClock(clock);
+
+	const auto timing = quantiser.CurrentTempoTiming(44100u);
+	ASSERT_TRUE(timing.has_value());
+	EXPECT_EQ(16896u, timing->SeedSamps);
+	EXPECT_EQ(67584u, timing->MasterLoopSamps);
+	EXPECT_EQ(4u, timing->Bpi);
+}
+
 // ---------------------------------------------------------------------------
 // DeduceSeedTiming: seed sizes from master loop length
 // ---------------------------------------------------------------------------

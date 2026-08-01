@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include "NinjamTiming.h"
@@ -15,11 +16,15 @@ namespace ninjam
 {
 	struct NinjamTempoJoinOptions
 	{
-		bool PushLocalTempoOnJoin = false;
+		static constexpr float TempoRequestAcknowledgementToleranceBpm = 1.0f;
+		static constexpr auto DefaultTempoRequestDeadline = std::chrono::seconds(15);
+
+		bool PushLocalTempoOnJoin = true;
 		bool PromptBeforeApplyingRemoteTempo = true;
 		// Maximum re-sends of a local tempo request before it is abandoned. Retries
 		// do not move the original sent-at anchor (§2.6/§3.5).
 		unsigned int MaxTempoRequestRetries = 3u;
+		std::chrono::steady_clock::duration TempoRequestDeadline = DefaultTempoRequestDeadline;
 	};
 
 	// Explicit lifecycle for a locally pushed tempo request. Replaces the ad hoc
@@ -131,7 +136,8 @@ namespace ninjam
 			const std::optional<timing::QuantisationTiming>& localTiming,
 			bool hasLocalContent,
 		const io::UserConfig& config,
-		utils::Timer& clock);
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		void BeginJoinAlignment(utils::Timer& clock) noexcept;
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
@@ -141,14 +147,15 @@ namespace ninjam
 		// Feedback from the network layer after attempting to deliver a tempo
 		// request. A failed send returns the request to Queued so the next interval
 		// boundary re-sends it; success leaves it awaiting server acknowledgement.
-		void NotifyTempoRequestSent(bool success) noexcept;
+		void NotifyTempoRequestSent(bool success,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 
 	private:
 		static bool _SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept;
-		static bool _MatchesRequest(const NinjamTempoChange& proposal,
+		static bool _MatchesRequest(const NinjamTiming& timing,
 			const timing::QuantisationTiming& request) noexcept;
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing,
 			const io::UserConfig& config);
@@ -159,7 +166,9 @@ namespace ninjam
 		NinjamTempoJoinOptions _options{};
 		std::optional<NinjamTempoChange> _pendingTempoChange;
 		std::optional<NinjamTempoChange> _ignoredTempoChange;
+		std::optional<NinjamTempoChange> _latestObservedTempoChange;
 		std::optional<timing::QuantisationTiming> _requestedTempo;
+		std::optional<std::chrono::steady_clock::time_point> _firstSuccessfulTempoRequestSend;
 		TempoRequestState _requestState = TempoRequestState::Idle;
 		unsigned long _requestSentAtWrap = 0ul;
 		std::uint64_t _observationOrdinal = 0u;

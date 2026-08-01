@@ -539,6 +539,10 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 		std::uint64_t audioLoopCount = 0u;
 		std::uint64_t midiLoopCount = 0u;
 		std::uint64_t maxResidual = 0u;
+		std::uint64_t capturedMidiAnchor = 0u;
+		std::uint64_t restoredMidiCursor = 0u;
+		std::uint64_t midiEventPhaseResidual = 0u;
+		std::uint64_t midiAutomationPhaseResidual = 0u;
 		auto state = _AudioStateSnapshot();
 		bool moved = false;
 		if (state)
@@ -569,16 +573,24 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 			const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
 			if (_hasMidiSceneAnchor.load(std::memory_order_acquire))
 			{
+				capturedMidiAnchor = _midiSceneAnchor.load(std::memory_order_relaxed);
+				const auto correctionBefore = _midiAnchorCorrection.load(std::memory_order_relaxed);
 				const auto target = static_cast<unsigned long>(ninjam::RestoreScenePhaseAfterDelta(
 					sceneCoordinateSamps, deltaSamps,
-					_midiSceneAnchor.load(std::memory_order_relaxed), midiLoopLength));
+					capturedMidiAnchor, midiLoopLength));
 				_midiVisualPlayIndex.store(target, std::memory_order_relaxed);
-				_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(
-					static_cast<long long>(target) - static_cast<long long>(before)), std::memory_order_relaxed);
-				const auto residual = ninjam::PositiveModulo(
+				const auto cursorDelta = static_cast<long long>(target) - static_cast<long long>(before);
+				_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(cursorDelta), std::memory_order_relaxed);
+				restoredMidiCursor = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+				midiEventPhaseResidual = ninjam::PositiveModulo(
 					static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
 					- static_cast<long long>(target), midiLoopLength);
-				maxResidual = std::max(maxResidual, residual);
+				const auto expectedCorrection = static_cast<long long>(correctionBefore) - cursorDelta;
+				const auto actualCorrection = static_cast<long long>(_midiAnchorCorrection.load(std::memory_order_relaxed));
+				midiAutomationPhaseResidual = static_cast<std::uint64_t>(
+					actualCorrection >= expectedCorrection ? actualCorrection - expectedCorrection : expectedCorrection - actualCorrection);
+				maxResidual = std::max(maxResidual, midiEventPhaseResidual);
+				maxResidual = std::max(maxResidual, midiAutomationPhaseResidual);
 				midiLoopCount = 1u;
 				moved = moved || target != before;
 			}
@@ -591,6 +603,10 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 		_alignmentReceiptAudioLoopCount.store(audioLoopCount, std::memory_order_relaxed);
 		_alignmentReceiptMidiLoopCount.store(midiLoopCount, std::memory_order_relaxed);
 		_alignmentReceiptMaxResidual.store(maxResidual, std::memory_order_relaxed);
+		_alignmentReceiptCapturedMidiAnchor.store(capturedMidiAnchor, std::memory_order_relaxed);
+		_alignmentReceiptRestoredMidiCursor.store(restoredMidiCursor, std::memory_order_relaxed);
+		_alignmentReceiptMidiEventPhaseResidual.store(midiEventPhaseResidual, std::memory_order_relaxed);
+		_alignmentReceiptMidiAutomationPhaseResidual.store(midiAutomationPhaseResidual, std::memory_order_relaxed);
 		_alignmentReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 		return;
 	}
@@ -652,6 +668,17 @@ void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
 	}
 }
 
+void LoopTake::InvalidateSceneAnchors() noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock()) loop->InvalidateSceneAnchor();
+	}
+	_hasMidiSceneAnchor.store(false, std::memory_order_release);
+}
+
 bool LoopTake::IsRemoteTimingCompatible(std::uint64_t grainSamps,
 	std::uint64_t intervalSamps) const noexcept
 {
@@ -683,7 +710,11 @@ std::optional<LoopTake::AlignmentReceipt> LoopTake::LastAlignmentReceipt() const
 			_alignmentReceiptDelta.load(std::memory_order_relaxed),
 			_alignmentReceiptAudioLoopCount.load(std::memory_order_relaxed),
 			_alignmentReceiptMidiLoopCount.load(std::memory_order_relaxed),
-			_alignmentReceiptMaxResidual.load(std::memory_order_relaxed)
+			_alignmentReceiptMaxResidual.load(std::memory_order_relaxed),
+			_alignmentReceiptCapturedMidiAnchor.load(std::memory_order_relaxed),
+			_alignmentReceiptRestoredMidiCursor.load(std::memory_order_relaxed),
+			_alignmentReceiptMidiEventPhaseResidual.load(std::memory_order_relaxed),
+			_alignmentReceiptMidiAutomationPhaseResidual.load(std::memory_order_relaxed)
 		};
 		if (before == _alignmentReceiptSequence.load(std::memory_order_acquire))
 			return receipt;

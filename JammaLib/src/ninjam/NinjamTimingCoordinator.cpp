@@ -14,7 +14,9 @@ void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	_options = options;
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
+	_latestObservedTempoChange.reset();
 	_requestedTempo = options.PushLocalTempoOnJoin ? localTiming : std::nullopt;
+	_firstSuccessfulTempoRequestSend.reset();
 	_requestState = _requestedTempo.has_value() ? TempoRequestState::Queued : TempoRequestState::Idle;
 	_requestSentAtWrap = 0ul;
 	_observationOrdinal = 0u;
@@ -31,7 +33,9 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	_tracker.Disconnect();
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
+	_latestObservedTempoChange.reset();
 	_requestedTempo.reset();
+	_firstSuccessfulTempoRequestSend.reset();
 	_requestState = TempoRequestState::Idle;
 	_requestSentAtWrap = 0ul;
 	_observationOrdinal = 0u;
@@ -42,7 +46,8 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	++_diagnostics.PhaseEventsInvalidated;
 }
 
-void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success) noexcept
+void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success,
+	std::chrono::steady_clock::time_point now) noexcept
 {
 	if (_requestState != TempoRequestState::SentAwaitingOutcome)
 		return;
@@ -50,6 +55,8 @@ void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success) noexcept
 	if (success)
 	{
 		_requestSentObservationOrdinal = _observationOrdinal;
+		if (!_firstSuccessfulTempoRequestSend.has_value())
+			_firstSuccessfulTempoRequestSend = now;
 		return;
 	}
 	// A failed delivery returns the request to the queue so the next interval
@@ -62,12 +69,32 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	const std::optional<timing::QuantisationTiming>& localTiming,
 	bool hasLocalContent,
 	const io::UserConfig& config,
-	utils::Timer& clock)
+	utils::Timer& clock,
+	std::chrono::steady_clock::time_point now)
 {
 	NinjamTimingUpdate update;
 	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
 		return update;
 	++_observationOrdinal;
+	_latestObservedTempoChange = _MakeProposal(timing, config);
+
+	if (_requestState == TempoRequestState::SentAwaitingOutcome
+		&& _firstSuccessfulTempoRequestSend.has_value()
+		&& now - _firstSuccessfulTempoRequestSend.value() >= _options.TempoRequestDeadline)
+	{
+		const bool preservePushedLocalTransport = _requestedTempo.has_value();
+		_requestState = TempoRequestState::Expired;
+		_requestedTempo.reset();
+		++_diagnostics.TempoRequestsExpired;
+		if (_latestObservedTempoChange.has_value())
+		{
+			if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
+				return _AcceptTempoChange(_latestObservedTempoChange.value(), clock);
+			_pendingTempoChange = _latestObservedTempoChange;
+			update.PromptForTempoChange = true;
+		}
+		return update;
+	}
 
 	NinjamTimingObservation observation;
 	observation.IntervalLengthSamps = timing.IntervalLengthSamps;
@@ -92,6 +119,17 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			_pendingTempoChange->AudioBlockStartSample = timing.AudioBlockStartSample;
 		}
 	}
+	if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed
+		&& _requestedTempo.has_value() && _latestObservedTempoChange.has_value()
+		&& _observationOrdinal > _requestSentObservationOrdinal
+		&& _MatchesRequest(timing, _requestedTempo.value()))
+	{
+		_requestedTempo.reset();
+		_requestState = TempoRequestState::Acknowledged;
+		++_diagnostics.TempoAcknowledged;
+		return _AcceptTempoChange(_latestObservedTempoChange.value(), clock);
+	}
+
 	if (!event.has_value())
 		return update;
 
@@ -115,16 +153,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		if (proposal.has_value())
 		{
 			++_diagnostics.TempoProposals;
-			if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed && _requestedTempo.has_value()
-				&& _observationOrdinal > _requestSentObservationOrdinal
-				&& _MatchesRequest(proposal.value(), _requestedTempo.value()))
-			{
-				_requestedTempo.reset();
-				_requestState = TempoRequestState::Acknowledged;
-				++_diagnostics.TempoAcknowledged;
-				return _AcceptTempoChange(proposal.value(), clock);
-			}
-			else if (_requestState == TempoRequestState::Queued
+			if (_requestState == TempoRequestState::Queued
 				|| _requestState == TempoRequestState::SentAwaitingOutcome)
 			{
 				// The server's old timing remains context while a local push is plausible.
@@ -145,19 +174,6 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	if (clock.SeedSourceLength() != timing.IntervalLengthSamps
 		&& (_pendingTempoChange.has_value() || _ignoredTempoChange.has_value()))
 		return update;
-
-	// A fresh valid observation whose tempo matches our request acknowledges it even
-	// when the applied tempo left the rounded device interval length unchanged and
-	// therefore produced no generation-change event (§2.6).
-	if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed && _requestedTempo.has_value()
-		&& _observationOrdinal > _requestSentObservationOrdinal
-		&& timing.Bpi == _requestedTempo->Bpi
-		&& std::abs(timing.Bpm - _requestedTempo->Bpm) < 0.01f)
-	{
-		_requestedTempo.reset();
-		_requestState = TempoRequestState::Acknowledged;
-		++_diagnostics.TempoAcknowledged;
-	}
 
 	if (_requestState == TempoRequestState::Queued && _requestedTempo.has_value())
 	{
@@ -264,10 +280,12 @@ bool NinjamTimingCoordinator::_SameTempo(const NinjamTempoChange& lhs, const Nin
 		&& std::abs(lhs.Bpm - rhs.Bpm) < 0.01f;
 }
 
-bool NinjamTimingCoordinator::_MatchesRequest(const NinjamTempoChange& proposal,
+bool NinjamTimingCoordinator::_MatchesRequest(const NinjamTiming& timing,
 	const timing::QuantisationTiming& request) noexcept
 {
-	return proposal.Bpi == request.Bpi && std::abs(proposal.Bpm - request.Bpm) < 0.01f;
+	return timing.Bpi == request.Bpi
+		&& std::abs(timing.Bpm - request.Bpm)
+		<= NinjamTempoJoinOptions::TempoRequestAcknowledgementToleranceBpm;
 }
 
 std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const NinjamTiming& timing,

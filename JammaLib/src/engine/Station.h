@@ -118,6 +118,7 @@ namespace engine
 			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline,
 			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
 		bool IsRemoteTimingCompatible(std::uint64_t grainSamps,
 			std::uint64_t intervalSamps, bool& hasPlayableContent) const noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;

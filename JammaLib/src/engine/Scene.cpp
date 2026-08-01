@@ -264,6 +264,13 @@ void Scene::ConnectNinjam(const std::string& host,
 		_networkService->SetTempoJoinOptions(options);
 		_networkService->PrepareTempoSyncOnConnect(localTiming);
 		_CloseRemoteTempoPrompt();
+		if (_audioEngine)
+		{
+			ninjam::NinjamAudioTimingCommand invalidate;
+			invalidate.Type = ninjam::NinjamTimingCommandType::Invalidate;
+			invalidate.InvalidateSceneAnchors = true;
+			_audioEngine->PublishTimingCommand(invalidate);
+		}
 	}
 	std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
 		<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
@@ -290,6 +297,7 @@ void Scene::DisconnectNinjam()
 		{
 			ninjam::NinjamAudioTimingCommand invalidate;
 			invalidate.Type = ninjam::NinjamTimingCommandType::Invalidate;
+			invalidate.InvalidateSceneAnchors = true;
 			_audioEngine->PublishTimingCommand(invalidate);
 		}
 	}

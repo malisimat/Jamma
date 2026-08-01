@@ -500,10 +500,14 @@ std::shared_ptr<Timer> TimingQuantiser::Clock() const noexcept
 
 std::optional<QuantisationTiming> TimingQuantiser::CurrentTempoTiming(unsigned int sampleRate) const
 {
-	return TimingFromSeedAndMaster(
-		_effectiveQuantiseSamps.load(std::memory_order_acquire),
-		_masterLoopLengthSamps.load(std::memory_order_acquire),
-		sampleRate);
+	auto seedSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+	auto masterLoopSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
+	if (_clock && (seedSamps == 0u || masterLoopSamps == 0ul))
+	{
+		seedSamps = _clock->QuantiseSamps();
+		masterLoopSamps = _clock->SeedSourceLength();
+	}
+	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
 }
 
 void TimingQuantiser::LogNinjamTempoEvent(const char* event,
