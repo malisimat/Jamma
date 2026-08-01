@@ -109,6 +109,26 @@ namespace audio
 		_audioStations.store(stations, std::memory_order_release);
 	}
 
+std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() const noexcept
+{
+	for (auto attempt = 0u; attempt < 2u; ++attempt)
+	{
+		const auto before = _lastAppliedTimingCommandSequence.load(std::memory_order_acquire);
+		if (before == 0u)
+			return std::nullopt;
+
+		const NinjamTimingCommandReceipt receipt{
+			before,
+			_lastAppliedTimingCommandGeneration.load(std::memory_order_relaxed),
+			_lastAppliedTimingCommandType.load(std::memory_order_relaxed)
+		};
+		if (before == _lastAppliedTimingCommandSequence.load(std::memory_order_acquire))
+			return receipt;
+	}
+
+	return std::nullopt;
+}
+
 	int AudioHost::AudioCallback(void* outBuffer,
 		void* inBuffer,
 		unsigned int numSamps,
@@ -193,6 +213,9 @@ namespace audio
 				if (station && !station->IsRemote())
 					station->ApplyTimingCommand(stationDelta, command->Generation, reason);
 			}
+			_lastAppliedTimingCommandGeneration.store(command->Generation, std::memory_order_relaxed);
+			_lastAppliedTimingCommandType.store(command->Type, std::memory_order_relaxed);
+			_lastAppliedTimingCommandSequence.store(command->Sequence, std::memory_order_release);
 		}
 
 		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())

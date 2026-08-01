@@ -418,6 +418,39 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		_networkService->SendTempoRequest(update.TempoRequest.value());
 }
 
+void Scene::_LogAppliedNinjamLoopAlignment()
+{
+	if (!_audioEngine)
+		return;
+
+	const auto receipt = _audioEngine->LastAppliedTimingCommand();
+	if (!receipt.has_value() || receipt->Sequence == _lastLoggedNinjamTimingCommandSequence)
+		return;
+
+	_lastLoggedNinjamTimingCommandSequence = receipt->Sequence;
+	const char* event = nullptr;
+	switch (receipt->Type)
+	{
+	case ninjam::NinjamTimingCommandType::ReplaceTiming:
+		event = "ninjam-remote-tempo-applied";
+		break;
+	case ninjam::NinjamTimingCommandType::JoinAlignment:
+		event = "ninjam-join-aligned";
+		break;
+	default:
+		return;
+	}
+
+	std::cout << "[NINJAM] Local loop alignment snapshot: event=" << event
+		<< " generation=" << receipt->Generation
+		<< " commandSequence=" << receipt->Sequence << '\n';
+	for (const auto& station : _stations)
+	{
+		if (station && !station->IsRemote())
+			station->LogLocalLoopAlignment(event);
+	}
+}
+
 void Scene::_CloseRemoteTempoPrompt()
 {
 	if (_remoteTempoDialogOpen)
@@ -1240,6 +1273,7 @@ void Scene::OnJobTick(Time curTime)
 		std::scoped_lock lock(_sceneMutex);
 		if (snapshot.has_value())
 			_HandleRemoteTempoSnapshot(snapshot.value());
+		_LogAppliedNinjamLoopAlignment();
 	}
 
 	actions::JobAction job;

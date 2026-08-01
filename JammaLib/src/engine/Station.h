@@ -169,6 +169,7 @@ namespace engine
 		void SetupBuffers(unsigned int bufSize);
 		void SetSampleRate(float sampleRate);
 		void SetLogging(const io::LoggingConfig& config) noexcept;
+		void LogLocalLoopAlignment(const char* event) const;
 		void SetNumBusChannels(unsigned int chans);
 		void SetNumAdcChannels(unsigned int chans);
 		void SetNumDacChannels(unsigned int chans);
@@ -283,6 +284,8 @@ namespace engine
 		gui::GuiRackParams _GetRackParams(utils::Size2d size);
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
+		void _LogLocalLoopAlignment(const char* event,
+			const std::shared_ptr<LoopTake>& focusTake) const;
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
 
 		// --- WriteBlock helpers (audio thread) ---

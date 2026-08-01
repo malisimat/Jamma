@@ -20,6 +20,13 @@
 
 namespace audio
 {
+	struct NinjamTimingCommandReceipt
+	{
+		std::uint64_t Sequence = 0u;
+		std::uint64_t Generation = 0u;
+		ninjam::NinjamTimingCommandType Type = ninjam::NinjamTimingCommandType::Invalidate;
+	};
+
 	class AudioHost
 	{
 	public:
@@ -63,6 +70,7 @@ namespace audio
 		{
 			_ninjamTimingCommandMailbox.Publish(command);
 		}
+		std::optional<NinjamTimingCommandReceipt> LastAppliedTimingCommand() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
 		{
 			_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
@@ -102,6 +110,10 @@ namespace audio
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
 		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
+		std::atomic<std::uint64_t> _lastAppliedTimingCommandSequence{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedTimingCommandGeneration{ 0u };
+		std::atomic<ninjam::NinjamTimingCommandType> _lastAppliedTimingCommandType{
+			ninjam::NinjamTimingCommandType::Invalidate };
 		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;

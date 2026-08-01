@@ -142,6 +142,10 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
+		unsigned long MidiPlayIndex() const noexcept
+			{ return _midiVisualPlayIndex.load(std::memory_order_relaxed); }
+		unsigned long MidiLoopLengthSamps() const noexcept
+			{ return _midiVisualLoopLength.load(std::memory_order_relaxed); }
 		// Accumulated signed transport correction for MIDI loop phase anchors.
 		std::int32_t MidiAnchorCorrection() const noexcept
 			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }

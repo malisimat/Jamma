@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jamma Local Loop Alignment</title>
+<style>
+  :root { color-scheme: light; font-family: Georgia, serif; color: #18242a; background: #edf3f1; }
+  body { margin: 0; line-height: 1.55; }
+  main { max-width: 900px; margin: 0 auto; padding: 48px 24px 72px; }
+  h1, h2 { font-family: "Trebuchet MS", sans-serif; letter-spacing: 0; color: #0f5b5a; }
+  h1 { font-size: 2.3rem; margin: 0 0 0.3rem; }
+  h2 { margin-top: 2.4rem; }
+  .lede { font-size: 1.16rem; max-width: 46rem; }
+  .note { border-left: 5px solid #c15d32; background: #fff8ee; padding: 12px 16px; }
+  code, pre { font-family: Consolas, monospace; }
+  pre { overflow-x: auto; background: #172b32; color: #e7f3ef; padding: 16px; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #bfd0cb; padding: 9px; }
+  th { font-family: "Trebuchet MS", sans-serif; color: #0f5b5a; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Local Loop Alignment</h1>
+  <p class="lede">This is the calculation that lets a scene of differently sized local loops stay phase-related. It is written for investigating the specific failure mode where a NINJAM transport change leaves local loops mutually displaced.</p>
+
+  <h2>Where The Clock Lives</h2>
+  <p><code>utils::Timer</code> is the scene's master transport. It owns <code>LoopCount</code>, <code>SampOffset</code>, and the seeded master length <code>M</code>. Its absolute position is:</p>
+  <pre>A = LoopCount * M + SampOffset</pre>
+  <p>It advances in <code>Timer::Tick</code>. A local audio loop owns only its own wrapped playback cursor in <code>engine::Loop::_playIndex</code>. The cursor advances in <code>Loop::EndMultiPlay</code>. A loop take does not have an independent master counter in the current runtime model.</p>
+
+  <h2>The Alignment Calculation</h2>
+  <p>There is no universal zero-origin phase. Audio playback includes a storage-only fade prefix and MIDI playback does not, so each playable loop needs its own master-relative anchor.</p>
+  <pre>audioPhase_i = normalize(rawPlayIndex - MaxLoopFadeSamps, L_i)
+midiPhase_j  = midiPlayIndex mod L_j
+masterAnchor_k = normalize(masterAbsolute - localPhase_k, L_k)</pre>
+  <p>At any later master position <code>A'</code>, restore the local cursor exactly with:</p>
+  <pre>localPhase_k = normalize(A' - masterAnchor_k, L_k)</pre>
+  <p>For audio, convert that body phase back to the fade-prefixed storage cursor before calling the audio-loop restore path. For MIDI, use the phase directly; no fade subtraction or addition applies. A pair of loops is relatively aligned when each is restored from its own captured <code>masterAnchor</code> against the same <code>A'</code>.</p>
+
+  <h2>Grain Constraint</h2>
+  <p>With local grain <code>G</code>, a clean quantized loop has <code>L_i mod G = 0</code>. The diagnostic prints both <code>grains = L_i / G</code> and <code>grainRemainder = L_i mod G</code>. A nonzero remainder means that grid recovery can only be approximate unless the loop is resized or a different grain is selected.</p>
+  <table>
+    <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>masterCycle</code></td><td>How many complete master loops have elapsed.</td></tr>
+      <tr><td><code>masterOffset</code></td><td>Current sample inside the master loop.</td></tr>
+      <tr><td><code>masterAbsolute</code></td><td><code>A</code>, the shared recovery coordinate.</td></tr>
+      <tr><td><code>musicalIndex</code></td><td>Audio loop-body phase after removing the fade prefix.</td></tr>
+      <tr><td><code>midiCursor</code></td><td>MIDI event-playback phase. It is already a loop-body phase.</td></tr>
+      <tr><td><code>masterAnchor</code></td><td>Per-loop recovery anchor: <code>(masterAbsolute - localPhase) mod length</code>.</td></tr>
+      <tr><td><code>automationAnchor</code></td><td>MIDI automation's separate global-sample anchor, not the MIDI event-playback cursor.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Console Snapshots</h2>
+  <p><code>Station::_LogLocalLoopAlignment</code> emits one header and one row per local audio and MIDI loop immediately after record or overdub finalization, and immediately before deletion. The output is deliberately stable and grep-friendly:</p>
+  <pre>[LocalLoopAlignment] event=recorded ... masterLength=... masterCycle=... masterOffset=... masterAbsolute=... grain=...
+[LocalLoopAlignment] take=... loop=... length=... rawIndex=... musicalIndex=... masterAnchor=... localCycle=... grains=... grainRemainder=...
+[LocalLoopAlignment] take=... midiLoop=1 length=... midiCursor=... masterAnchor=... automationAnchor=... automationCorrection=... events=...</pre>
+  <p>These lifecycle logs capture the data needed to compare recovery anchors. When NINJAM applies either a remote-tempo replacement or its join-alignment correction, the audio callback publishes a receipt only after it has moved the Timer and all local takes. The job thread then emits <code>ninjam-remote-tempo-applied</code> or <code>ninjam-join-aligned</code>. Console output remains outside the real-time callback.</p>
+
+  <h2>MIDI Is A Separate Cursor</h2>
+  <p><code>LoopTake::ReadMidiBlock</code> passes its fade-free MIDI cursor to <code>MidiLoop::ReadBlock</code>, which emits events at <code>midiCursor mod loopLength</code>. This is the event timing that must be restored. <code>MidiLoop::LoopPhaseAnchor</code> is different: it is frozen at record end and is used to calculate VST automation fractions. Transport corrections shift the MIDI cursor and apply the inverse value to <code>MidiAnchorCorrection</code>, preserving the automation relationship.</p>
+  <p>Therefore an exact MIDI restore needs both the event-playback <code>masterAnchor</code> and the automation anchor/correction state. Treating <code>LoopPhaseAnchor</code> as the event cursor would be wrong.</p>
+
+  <h2>NINJAM Re-Anchor Path</h2>
+  <p>Remote timing commands fan out through <code>Station::ApplyTimingCommand</code> to <code>LoopTake::ApplyTimingCommand</code>, which invokes <code>Loop::ShiftPlayIndex</code> for every playable local loop. The timer command and take commands are consumed at the same audio boundary. For phase discipline and join alignment, one signed delta is applied once to the master and every participating audio and MIDI event cursor; MIDI automation receives the inverse correction in its anchor calculation. This preserves the local relative arrangement.</p>
+  <p>A remote-tempo replacement is different: it starts a new Timer epoch with the accepted remote interval length and phase, then rebases every local cursor by one common delta. Do not expect a pre-replacement <code>masterAnchor</code> to equal its post-replacement value; take the post-apply snapshot as the new recovery baseline. With an empty session accepting the tempo just requested, the interval should be effectively identical, and the subsequent <code>ninjam-join-aligned</code> snapshot is the direct check that the local scene stayed coherent.</p>
+  <p class="note"><strong>Can a mixed project restore exactly?</strong> Yes for its timeline and scheduled MIDI events, provided a save records one coherent block-boundary snapshot: master length, master cycle, master offset, quantisation/grain, global/station/take transport offsets, every audio loop's body phase or master anchor, and every MIDI loop's playback master anchor. MIDI must also serialize its events, length, channel/device routing, quantisation settings, automation lanes and points, <code>LoopPhaseAnchor</code>, and correction state. Store active MIDI note state too if resume must preserve notes already sounding. Exact rendered sound still depends on external VST state and device latency.</p>
+  <p class="note"><strong>Current persistence caveat.</strong> The jam format serializes audio loops only. A MIDI-only take is omitted by <code>IoSessionExporter</code>; MIDI events, MIDI playback cursor, automation, and MIDI anchor state are not serialized. Separately, the audio exporter writes <code>MasterLoopCount = 0</code>; the loader calls <code>Loop::Play(masterloopcount, length, false)</code> and does not use saved <code>Index</code>. Current project load therefore cannot restore mixed audio/MIDI alignment exactly.</p>
+
+  <h2>Code Map</h2>
+  <ul>
+    <li><code>JammaLib/src/utils/Timer.cpp</code>: master counter, offset, and absolute timeline.</li>
+    <li><code>JammaLib/src/engine/Loop.cpp</code>: local cursor advancement and modular cursor shifts.</li>
+    <li><code>JammaLib/src/engine/LoopTake.cpp</code>: fans a timing correction to all loops in a take.</li>
+    <li><code>JammaLib/src/engine/Station.cpp</code>: record/delete snapshots and station-wide correction fan-out.</li>
+    <li><code>JammaLib/src/io/IoSessionExporter.cpp</code> and <code>JammaLib/src/engine/Loop.cpp</code>: current save/load anchor gap.</li>
+  </ul>
+</main>
+</body>
+</html>

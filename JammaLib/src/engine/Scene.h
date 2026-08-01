@@ -327,6 +327,7 @@ namespace engine
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
+		void _LogAppliedNinjamLoopAlignment();
 		void _EnsureRemoteTempoPromptUi();
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
@@ -372,6 +373,7 @@ namespace engine
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
+		std::uint64_t _lastLoggedNinjamTimingCommandSequence = 0u;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;

@@ -745,6 +745,11 @@ void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
 		if (auto take = weakTake.lock()) take->SetLocalTransportOffsetSamps(targetSamps);
 }
 
+void Station::LogLocalLoopAlignment(const char* event) const
+{
+	_LogLocalLoopAlignment(event, nullptr);
+}
+
 void Station::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)
@@ -1037,7 +1042,10 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
 
 			if (loopTake.has_value())
+			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
+				_LogLocalLoopAlignment("recorded", loopTake.value());
+			}
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
@@ -1123,7 +1131,10 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
 
 			if (loopTake.has_value())
+			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
+				_LogLocalLoopAlignment("overdub-recorded", loopTake.value());
+			}
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
 			if (sourceLoopTake.has_value())
@@ -2226,6 +2237,7 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 {
+	_LogLocalLoopAlignment("deleted", take);
 	FlushLiveHeldMidiNotes();
 
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
@@ -2249,6 +2261,95 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	}
 	take->Ditch();
 	RebuildAutomationDispatch();
+}
+
+void Station::_LogLocalLoopAlignment(const char* event,
+	const std::shared_ptr<LoopTake>& focusTake) const
+{
+	const auto masterLength = _clock ? _clock->SeedSourceLength() : 0ul;
+	const auto masterCount = _clock ? _clock->LoopCount() : 0ul;
+	const auto masterOffset = _clock ? static_cast<unsigned long>(_clock->SampOffset()) : 0ul;
+	const auto masterAbsolute = _clock ? _clock->AbsoluteSamplePos() : 0ul;
+	const auto grainSamps = _clock ? _clock->QuantiseSamps() : 0u;
+
+	std::cout << "[LocalLoopAlignment] event=" << event
+		<< " station=" << _name
+		<< " focusTake=" << (focusTake ? focusTake->Id() : "")
+		<< " masterLength=" << masterLength
+		<< " masterCycle=" << masterCount
+		<< " masterOffset=" << masterOffset
+		<< " masterAbsolute=" << masterAbsolute
+		<< " grain=" << grainSamps
+		<< " transportOffset=" << TransportOffsetSamps()
+		<< '\n';
+
+	for (const auto& take : GetLoopTakeSnapshot())
+	{
+		if (!take)
+			continue;
+
+		for (const auto& loop : take->GetLoops())
+		{
+			if (!loop)
+				continue;
+
+			const auto length = loop->LoopLength();
+			if (length == 0ul)
+				continue;
+
+			const auto rawIndex = loop->PlayIndex();
+			const auto fade = static_cast<unsigned long>(constants::MaxLoopFadeSamps) % length;
+			const auto musicalIndex = (rawIndex >= constants::MaxLoopFadeSamps) ?
+				((rawIndex - constants::MaxLoopFadeSamps) % length) :
+				((rawIndex + length - fade) % length);
+			const auto masterAnchor = (masterAbsolute + length - musicalIndex) % length;
+
+			std::cout << "[LocalLoopAlignment] take=" << take->Id()
+				<< " loop=" << loop->Id()
+				<< " length=" << length
+				<< " rawIndex=" << rawIndex
+				<< " musicalIndex=" << musicalIndex
+				<< " masterAnchor=" << masterAnchor
+				<< " localCycle=" << (masterAbsolute / length)
+				<< " grains=" << (grainSamps > 0u ? length / grainSamps : 0ul)
+				<< " grainRemainder=" << (grainSamps > 0u ? length % grainSamps : 0ul)
+				<< '\n';
+		}
+
+		const auto midiCursor = take->MidiPlayIndex();
+		const auto midiAnchorCorrection = take->MidiAnchorCorrection();
+		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
+		{
+			if (!midiLoop)
+				continue;
+
+			const auto length = midiLoop->LoopLengthSamps();
+			if (length == 0u)
+				continue;
+
+			const auto musicalIndex = midiCursor % length;
+			const auto masterAnchor = static_cast<unsigned long>(
+				(masterAbsolute + length - musicalIndex) % length);
+			const auto automationAnchor = midiLoop->LoopPhaseAnchor();
+			const auto effectiveAutomationAnchor = static_cast<std::uint32_t>(
+				automationAnchor + midiAnchorCorrection);
+
+			std::cout << "[LocalLoopAlignment] take=" << take->Id()
+				<< " midiLoop=1"
+				<< " length=" << length
+				<< " midiCursor=" << musicalIndex
+				<< " masterAnchor=" << masterAnchor
+				<< " automationAnchor=" << automationAnchor
+				<< " automationCorrection=" << midiAnchorCorrection
+				<< " effectiveAutomationAnchor=" << effectiveAutomationAnchor
+				<< " events=" << midiLoop->EventCount()
+				<< " droppedEvents=" << midiLoop->DroppedEventCount()
+				<< " localCycle=" << (masterAbsolute / length)
+				<< " grains=" << (grainSamps > 0u ? length / grainSamps : 0u)
+				<< " grainRemainder=" << (grainSamps > 0u ? length % grainSamps : 0u)
+				<< '\n';
+		}
+	}
 }
 
 void Station::LoadVstPlugin(std::wstring path,
