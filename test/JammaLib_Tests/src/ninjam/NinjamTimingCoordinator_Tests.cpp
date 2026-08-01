@@ -164,7 +164,7 @@ TEST(NinjamTimingCoordinator, DisconnectClearsPromptRequestAndCorrections)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, true, timing::QuantisationTiming{ 24000u, 384000u, 16u, 120.0f, 16u });
 	coordinator.Observe(MakeTiming(480000u, 100u), std::nullopt, true, io::UserConfig{}, clock);
-	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+	ASSERT_FALSE(coordinator.PendingTempoChange().has_value());
 	coordinator.Disconnect();
 	EXPECT_FALSE(coordinator.IsConnected());
 	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
@@ -282,6 +282,7 @@ TEST(NinjamTimingCoordinator, TempoRequestAcknowledgedByMatchingTimingWithoutGen
 	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
 	auto request = coordinator.Observe(MakeTiming(384000u, 1000u), local, true, io::UserConfig{}, clock);
 	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true);
 	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
 
 	// The server applies the tempo but the rounded device interval is unchanged, so
@@ -293,6 +294,53 @@ TEST(NinjamTimingCoordinator, TempoRequestAcknowledgedByMatchingTimingWithoutGen
 	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
 }
 
+TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesRequestedTempo)
+{
+	Timer clock;
+	clock.SetQuantisation(24000u, Timer::QUANTISE_MULTIPLE);
+	clock.SetSeedSourceLength(384000ul);
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, true, local);
+
+	coordinator.Observe(MakeTimingTempo(256000u, 220000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTimingTempo(256000u, 1000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true);
+
+	const auto confirmed = coordinator.Observe(MakeTimingTempo(384000u, 100u, 120.0f, 16u),
+		local, true, io::UserConfig{}, clock);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
+	ASSERT_TRUE(confirmed.ClockSettings.has_value());
+	EXPECT_EQ(384000ul, confirmed.ClockSettings->SeedLengthSamps);
+}
+
+TEST(NinjamTimingCoordinator, MatchingObservationBeforeSendDoesNotAcknowledgeRequest)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, true, local);
+
+	// This matching observation occurs before the first request is emitted.
+	coordinator.Observe(MakeTimingTempo(384000u, 300000u, 120.0f, 16u), local, true,
+		io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTimingTempo(384000u, 1000u, 120.0f, 16u), local, true,
+		io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true);
+	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+	EXPECT_EQ(0u, coordinator.Diagnostics().TempoAcknowledged);
+
+	// A later matching observation is the first legitimate acknowledgement.
+	CycleWrap(coordinator, clock, 384000u, 2000u, 120.0f, 16u);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
+}
+
 TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
 {
 	Timer clock;
@@ -300,7 +348,10 @@ TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 
-	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
+	const auto oldServer = coordinator.Observe(MakeTimingTempo(384000u, 300000u, 90.0f, 8u),
+		local, true, io::UserConfig{}, clock);
+	EXPECT_FALSE(oldServer.PromptForTempoChange);
+	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
 	auto request = coordinator.Observe(MakeTiming(384000u, 1000u), local, true, io::UserConfig{}, clock);
 	ASSERT_TRUE(request.TempoRequest.has_value());
 
@@ -315,12 +366,27 @@ TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
 	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
 }
 
+TEST(NinjamTimingCoordinator, FailedSendCannotBeAcknowledgedByInterveningObservation)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, true, local);
+	coordinator.Observe(MakeTimingTempo(384000u, 300000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	auto request = coordinator.Observe(MakeTimingTempo(384000u, 1000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(false);
+	CycleWrap(coordinator, clock, 384000u, 2000u, 120.0f, 16u);
+	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+	EXPECT_EQ(0u, coordinator.Diagnostics().TempoAcknowledged);
+}
+
 TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
 {
 	Timer clock;
 	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	ninjam::NinjamTempoJoinOptions options;
-	options.PromptBeforeApplyingRemoteTempo = false;
+	options.PromptBeforeApplyingRemoteTempo = true;
 	options.PushLocalTempoOnJoin = true;
 	options.MaxTempoRequestRetries = 2u;
 	NinjamTimingCoordinator coordinator;
@@ -332,8 +398,12 @@ TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
 
 	// Never match the requested tempo (server never applies it). Cycle wraps until
 	// retries are exhausted and the request expires.
+	bool sawPrompt = false;
 	for (unsigned int i = 0u; i < 6u; ++i)
-		CycleWrap(coordinator, clock, 384000u, 2000u + i, 90.0f, 8u);
+		sawPrompt = CycleWrap(coordinator, clock, 384000u, 2000u + i, 90.0f, 8u).PromptForTempoChange
+			|| sawPrompt;
 
 	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
+	EXPECT_TRUE(sawPrompt);
+	EXPECT_TRUE(coordinator.PendingTempoChange().has_value());
 }

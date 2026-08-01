@@ -21,6 +21,14 @@ namespace ninjam
 		Invalidate
 	};
 
+	enum class NinjamLocalFollowPolicy : std::uint8_t
+	{
+		SeamlessDiscipline,
+		ContinuousRemote,
+		BoundaryRestore,
+		StayLocal
+	};
+
 	// One immutable transport command published by the job thread and consumed
 	// exactly once at the top of the audio callback, before any station playback
 	// advancement. The Timer and every active local take apply the same local
@@ -36,6 +44,8 @@ namespace ninjam
 		unsigned int AbsolutePhaseSamps = 0u;
 		std::uint64_t PhaseObservationSample = 0u;
 		long long PhaseDeltaSamps = 0;
+		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::SeamlessDiscipline;
+		std::uint64_t SceneCoordinateSamps = 0u;
 	};
 
 	// Single-writer (job thread) / single-reader (audio thread) latest-command
@@ -57,6 +67,8 @@ namespace ninjam
 			_absolutePhaseSamps.store(command.AbsolutePhaseSamps, std::memory_order_relaxed);
 			_phaseObservationSample.store(command.PhaseObservationSample, std::memory_order_relaxed);
 			_phaseDeltaSamps.store(command.PhaseDeltaSamps, std::memory_order_relaxed);
+			_localFollowPolicy.store(command.LocalFollowPolicy, std::memory_order_relaxed);
+			_sceneCoordinateSamps.store(command.SceneCoordinateSamps, std::memory_order_relaxed);
 			_sequence.store(writingSequence + 1u, std::memory_order_release);
 			_hasPublication.store(true, std::memory_order_release);
 		}
@@ -86,6 +98,8 @@ namespace ninjam
 				command.AbsolutePhaseSamps = _absolutePhaseSamps.load(std::memory_order_relaxed);
 				command.PhaseObservationSample = _phaseObservationSample.load(std::memory_order_relaxed);
 				command.PhaseDeltaSamps = _phaseDeltaSamps.load(std::memory_order_relaxed);
+				command.LocalFollowPolicy = _localFollowPolicy.load(std::memory_order_relaxed);
+				command.SceneCoordinateSamps = _sceneCoordinateSamps.load(std::memory_order_relaxed);
 				const auto after = _sequence.load(std::memory_order_acquire);
 				if (before == after)
 				{
@@ -114,6 +128,8 @@ namespace ninjam
 		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
 		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };
 		std::atomic<long long> _phaseDeltaSamps{ 0 };
+		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::SeamlessDiscipline };
+		std::atomic<std::uint64_t> _sceneCoordinateSamps{ 0u };
 		std::uint64_t _consumedSequence = 0u;
 	};
 

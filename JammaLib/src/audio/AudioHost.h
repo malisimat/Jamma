@@ -25,6 +25,9 @@ namespace audio
 		std::uint64_t Sequence = 0u;
 		std::uint64_t Generation = 0u;
 		ninjam::NinjamTimingCommandType Type = ninjam::NinjamTimingCommandType::Invalidate;
+		ninjam::NinjamLocalFollowPolicy Policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+		std::uint64_t SceneCoordinateSamps = 0u;
+		long long DeltaSamps = 0;
 	};
 
 	class AudioHost
@@ -110,10 +113,15 @@ namespace audio
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
 		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
+		std::atomic<std::uint64_t> _lastAppliedTimingReceiptSequence{ 0u };
 		std::atomic<std::uint64_t> _lastAppliedTimingCommandSequence{ 0u };
 		std::atomic<std::uint64_t> _lastAppliedTimingCommandGeneration{ 0u };
 		std::atomic<ninjam::NinjamTimingCommandType> _lastAppliedTimingCommandType{
 			ninjam::NinjamTimingCommandType::Invalidate };
+		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedTimingCommandPolicy{
+			ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline };
+		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
+		std::atomic<long long> _lastAppliedTimingDelta{ 0 };
 		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
@@ -129,6 +137,9 @@ namespace audio
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
+		// Audio-thread owned after construction. It remains active after a material
+		// replacement so subsequent remote boundaries restore durable anchors.
+		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
 		TickCallback _tickCallback;
 	};
 }

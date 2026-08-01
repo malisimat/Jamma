@@ -113,16 +113,19 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 {
 	for (auto attempt = 0u; attempt < 2u; ++attempt)
 	{
-		const auto before = _lastAppliedTimingCommandSequence.load(std::memory_order_acquire);
-		if (before == 0u)
+		const auto before = _lastAppliedTimingReceiptSequence.load(std::memory_order_acquire);
+		if (before == 0u || (before & 1u) != 0u)
 			return std::nullopt;
 
 		const NinjamTimingCommandReceipt receipt{
-			before,
+			_lastAppliedTimingCommandSequence.load(std::memory_order_relaxed),
 			_lastAppliedTimingCommandGeneration.load(std::memory_order_relaxed),
-			_lastAppliedTimingCommandType.load(std::memory_order_relaxed)
+			_lastAppliedTimingCommandType.load(std::memory_order_relaxed),
+			_lastAppliedTimingCommandPolicy.load(std::memory_order_relaxed),
+			_lastAppliedTimingSceneCoordinate.load(std::memory_order_relaxed),
+			_lastAppliedTimingDelta.load(std::memory_order_relaxed)
 		};
-		if (before == _lastAppliedTimingCommandSequence.load(std::memory_order_acquire))
+		if (before == _lastAppliedTimingReceiptSequence.load(std::memory_order_acquire))
 			return receipt;
 	}
 
@@ -160,8 +163,42 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 		{
 			const auto timingClock = _timingClock.load(std::memory_order_acquire);
 			long long stationDelta = command->PhaseDeltaSamps;
+			auto policy = command->LocalFollowPolicy;
+			std::uint64_t sceneCoordinate = command->SceneCoordinateSamps;
 			if (timingClock)
 			{
+				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
+				{
+					sceneCoordinate = timingClock->SceneSamplePos();
+					for (auto& station : stations)
+						if (station && !station->IsRemote()) station->CaptureSceneAnchors(sceneCoordinate);
+					const auto sameGeometry = timingClock->SeedSourceLength() == command->SeedLengthSamps
+						&& timingClock->QuantiseSamps() == command->QuantiseSamps;
+					if (sameGeometry)
+						policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+					else
+					{
+						bool hasPlayableContent = false;
+						bool compatible = true;
+						for (const auto& station : stations)
+							if (station && !station->IsRemote()
+								&& !station->IsRemoteTimingCompatible(command->QuantiseSamps,
+									command->SeedLengthSamps, hasPlayableContent))
+							{
+								compatible = false;
+								break;
+							}
+						policy = compatible || !hasPlayableContent
+							? ninjam::NinjamLocalFollowPolicy::ContinuousRemote
+							: ninjam::NinjamLocalFollowPolicy::BoundaryRestore;
+					}
+					_activeNinjamFollowPolicy = policy;
+				}
+				else if (_activeNinjamFollowPolicy == ninjam::NinjamLocalFollowPolicy::BoundaryRestore)
+				{
+					policy = _activeNinjamFollowPolicy;
+					sceneCoordinate = timingClock->SceneSamplePos();
+				}
 				utils::Timer::Command timerCommand;
 				timerCommand.Generation = command->Generation;
 				timerCommand.SeedLengthSamps = command->SeedLengthSamps;
@@ -211,11 +248,18 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			for (auto& station : stations)
 			{
 				if (station && !station->IsRemote())
-					station->ApplyTimingCommand(stationDelta, command->Generation, reason);
+					station->ApplyTimingCommand(stationDelta, command->Generation, reason,
+						policy, sceneCoordinate);
 			}
+			const auto writingReceipt = _lastAppliedTimingReceiptSequence.fetch_add(
+				1u, std::memory_order_acq_rel) + 1u;
+			_lastAppliedTimingCommandSequence.store(command->Sequence, std::memory_order_relaxed);
 			_lastAppliedTimingCommandGeneration.store(command->Generation, std::memory_order_relaxed);
 			_lastAppliedTimingCommandType.store(command->Type, std::memory_order_relaxed);
-			_lastAppliedTimingCommandSequence.store(command->Sequence, std::memory_order_release);
+			_lastAppliedTimingCommandPolicy.store(policy, std::memory_order_relaxed);
+			_lastAppliedTimingSceneCoordinate.store(sceneCoordinate, std::memory_order_relaxed);
+			_lastAppliedTimingDelta.store(stationDelta, std::memory_order_relaxed);
+			_lastAppliedTimingReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 		}
 
 		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())

@@ -17,6 +17,10 @@ void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	_requestedTempo = options.PushLocalTempoOnJoin ? localTiming : std::nullopt;
 	_requestState = _requestedTempo.has_value() ? TempoRequestState::Queued : TempoRequestState::Idle;
 	_requestSentAtWrap = 0ul;
+	_observationOrdinal = 0u;
+	_requestSentObservationOrdinal = 0u;
+	_commandGeneration = 0u;
+	_tempoRequestSendConfirmed = false;
 	_requestRetries = 0u;
 	_joinAligned = false;
 	_diagnostics = {};
@@ -30,6 +34,9 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	_requestedTempo.reset();
 	_requestState = TempoRequestState::Idle;
 	_requestSentAtWrap = 0ul;
+	_observationOrdinal = 0u;
+	_requestSentObservationOrdinal = 0u;
+	_tempoRequestSendConfirmed = false;
 	_requestRetries = 0u;
 	_joinAligned = false;
 	++_diagnostics.PhaseEventsInvalidated;
@@ -39,10 +46,16 @@ void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success) noexcept
 {
 	if (_requestState != TempoRequestState::SentAwaitingOutcome)
 		return;
+	_tempoRequestSendConfirmed = success;
+	if (success)
+	{
+		_requestSentObservationOrdinal = _observationOrdinal;
+		return;
+	}
 	// A failed delivery returns the request to the queue so the next interval
 	// boundary re-sends it without consuming a retry against a stale anchor.
-	if (!success)
-		_requestState = TempoRequestState::Queued;
+	_requestState = TempoRequestState::Queued;
+	_requestSentObservationOrdinal = 0u;
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
@@ -54,6 +67,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	NinjamTimingUpdate update;
 	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
 		return update;
+	++_observationOrdinal;
 
 	NinjamTimingObservation observation;
 	observation.IntervalLengthSamps = timing.IntervalLengthSamps;
@@ -101,12 +115,20 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		if (proposal.has_value())
 		{
 			++_diagnostics.TempoProposals;
-			if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
+			if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed && _requestedTempo.has_value()
+				&& _observationOrdinal > _requestSentObservationOrdinal
 				&& _MatchesRequest(proposal.value(), _requestedTempo.value()))
 			{
 				_requestedTempo.reset();
 				_requestState = TempoRequestState::Acknowledged;
 				++_diagnostics.TempoAcknowledged;
+				return _AcceptTempoChange(proposal.value(), clock);
+			}
+			else if (_requestState == TempoRequestState::Queued
+				|| _requestState == TempoRequestState::SentAwaitingOutcome)
+			{
+				// The server's old timing remains context while a local push is plausible.
+				// Do not turn it into an apply-now proposal before the request resolves.
 			}
 			else if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
 				return _AcceptTempoChange(proposal.value(), clock);
@@ -127,7 +149,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	// A fresh valid observation whose tempo matches our request acknowledges it even
 	// when the applied tempo left the rounded device interval length unchanged and
 	// therefore produced no generation-change event (§2.6).
-	if (_requestState == TempoRequestState::SentAwaitingOutcome && _requestedTempo.has_value()
+	if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed && _requestedTempo.has_value()
+		&& _observationOrdinal > _requestSentObservationOrdinal
 		&& timing.Bpi == _requestedTempo->Bpi
 		&& std::abs(timing.Bpm - _requestedTempo->Bpm) < 0.01f)
 	{
@@ -140,6 +163,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	{
 		update.TempoRequest = NinjamTempoRequest{ _requestedTempo->Bpm, _requestedTempo->Bpi };
 		_requestSentAtWrap = event->RemoteWrapCount;
+		_requestSentObservationOrdinal = 0u;
+		_tempoRequestSendConfirmed = false;
 		_requestState = TempoRequestState::SentAwaitingOutcome;
 		_requestRetries = 0u;
 		++_diagnostics.TempoRequestsSent;
@@ -160,6 +185,15 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			_requestState = TempoRequestState::Expired;
 			_requestedTempo.reset();
 			++_diagnostics.TempoRequestsExpired;
+			const auto proposal = _MakeProposal(timing, config);
+			if (proposal.has_value())
+			{
+				if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
+					return _AcceptTempoChange(proposal.value(), clock);
+				_pendingTempoChange = proposal;
+				update.PromptForTempoChange = true;
+				return update;
+			}
 		}
 	}
 
@@ -205,9 +239,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		++_diagnostics.SafetyLimitRejections;
 		return update;
 	}
-	if (delta != 0)
+	if (delta != 0 || event->Type == NinjamTimingEventType::Wrap)
 	{
-		update.PhaseCorrection = NinjamPhaseCorrection{ delta, event->Generation,
+		update.PhaseCorrection = NinjamPhaseCorrection{ delta, ++_commandGeneration,
 			event->Type == NinjamTimingEventType::Join };
 		++_diagnostics.PhaseEventsQueued;
 		_RecordEmittedCommand(isJoin ? NinjamEmittedCommand::Join : NinjamEmittedCommand::Discipline,
@@ -252,7 +286,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	utils::Timer& clock)
 {
 	NinjamTimingUpdate update;
-	const auto generation = _tracker.Generation();
+	const auto generation = ++_commandGeneration;
 	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
 		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation,
 		change.AudioBlockStartSample };

@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "ninjam/NinjamAudioTimingCommand.h"
+#include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
 
 using ninjam::NinjamAudioTimingCommand;
@@ -90,6 +91,23 @@ TEST(LocalTransportOffsetLoopFracMailbox, LatestPublicationWinsAndZeroIsDelivere
 	ASSERT_TRUE(consumed.has_value());
 	EXPECT_DOUBLE_EQ(0.0, consumed.value());
 	EXPECT_FALSE(mailbox.ConsumeLatest().has_value());
+}
+
+TEST(NinjamLoopAlignment, DistinctAnchorsRestoreExactlyAtSharedSceneCoordinates)
+{
+	const auto audioAnchor = ninjam::CaptureSceneAnchor(1000u, 125u, 300u);
+	const auto midiAnchor = ninjam::CaptureSceneAnchor(1000u, 77u, 128u);
+	EXPECT_EQ(0u, ninjam::SceneAlignmentResidual(
+		ninjam::RestoreScenePhase(3400u, audioAnchor, 300u), 3400u, audioAnchor, 300u));
+	EXPECT_EQ(0u, ninjam::SceneAlignmentResidual(
+		ninjam::RestoreScenePhase(3400u, midiAnchor, 128u), 3400u, midiAnchor, 128u));
+}
+
+TEST(NinjamLoopAlignment, HandlesNegativeCoordinatesAndRejectsNonRecurringGrainMultiple)
+{
+	EXPECT_EQ(75u, ninjam::PositiveModulo(-25, 100u));
+	EXPECT_TRUE(ninjam::IsRemoteTimingCompatible(200u, 100u, 1000u));
+	EXPECT_FALSE(ninjam::IsRemoteTimingCompatible(300u, 100u, 1000u));
 }
 
 // ── Timer::ApplyCommand: audio-thread application and generation gating ───────
@@ -188,15 +206,35 @@ TEST(TimerApplyCommand, PhaseCorrectionWrapsCircularly)
 
 	Timer::Command forward;
 	forward.Type = Timer::CommandType::PhaseCorrection;
-	forward.Generation = 1u;
+	forward.Generation = 2u;
 	forward.PhaseDeltaSamps = 200; // 900 + 200 wraps to 100
 	ASSERT_TRUE(clock.ApplyCommand(forward));
 	EXPECT_EQ(100u, clock.SampOffset());
 
 	Timer::Command backward;
 	backward.Type = Timer::CommandType::PhaseCorrection;
-	backward.Generation = 1u;
+	backward.Generation = 3u;
 	backward.PhaseDeltaSamps = -300; // 100 - 300 wraps to 800
 	ASSERT_TRUE(clock.ApplyCommand(backward));
 	EXPECT_EQ(800u, clock.SampOffset());
+}
+
+TEST(TimerApplyCommand, EqualGenerationCommandDoesNotMovePhaseTwice)
+{
+	Timer clock;
+	Timer::Command seed;
+	seed.Type = Timer::CommandType::ReplaceTiming;
+	seed.Generation = 1u;
+	seed.SeedLengthSamps = 1000ul;
+	seed.PhaseDeltaSamps = 100;
+	ASSERT_TRUE(clock.ApplyCommand(seed));
+
+	Timer::Command correction;
+	correction.Type = Timer::CommandType::PhaseCorrection;
+	correction.Generation = 2u;
+	correction.PhaseDeltaSamps = 75;
+	ASSERT_TRUE(clock.ApplyCommand(correction));
+	ASSERT_EQ(175u, clock.SampOffset());
+	EXPECT_TRUE(clock.ApplyCommand(correction));
+	EXPECT_EQ(175u, clock.SampOffset());
 }

@@ -162,6 +162,10 @@ namespace ninjam
 		std::optional<timing::QuantisationTiming> _requestedTempo;
 		TempoRequestState _requestState = TempoRequestState::Idle;
 		unsigned long _requestSentAtWrap = 0ul;
+		std::uint64_t _observationOrdinal = 0u;
+		std::uint64_t _requestSentObservationOrdinal = 0u;
+		std::uint64_t _commandGeneration = 0u;
+		bool _tempoRequestSendConfirmed = false;
 		unsigned int _requestRetries = 0u;
 		bool _joinAligned = false;
 		NinjamTimingDiagnostics _diagnostics;

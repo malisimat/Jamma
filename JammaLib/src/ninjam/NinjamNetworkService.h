@@ -49,6 +49,8 @@ namespace ninjam
 		}
 		void SendTempoRequest(const NinjamTempoRequest& request);
 		bool HasConnectedTiming() const noexcept { return _timingCoordinator.IsConnected(); }
+		TempoRequestState TempoJoinRequestState() const noexcept { return _timingCoordinator.RequestState(); }
+		NinjamTimingDiagnostics TimingDiagnostics() const noexcept { return _timingCoordinator.Diagnostics(); }
 
 	private:
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;

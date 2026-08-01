@@ -18,6 +18,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../ninjam/NinjamAudioTimingCommand.h"
 
 using base::Audible;
 
@@ -87,6 +88,17 @@ namespace engine
 			JoinAlignment,
 			PhaseDiscipline,
 			Invalidation
+		};
+
+		struct AlignmentReceipt
+		{
+			std::uint64_t Sequence = 0u;
+			std::uint64_t Generation = 0u;
+			std::uint64_t SceneCoordinateSamps = 0u;
+			long long DeltaSamps = 0;
+			std::uint64_t AudioLoopCount = 0u;
+			std::uint64_t MidiLoopCount = 0u;
+			std::uint64_t MaxResidualSamps = 0u;
 		};
 
 	public:
@@ -218,7 +230,13 @@ namespace engine
 		// commands never move audio or MIDI state.
 		void ApplyTimingCommand(long long deltaSamps,
 			std::uint64_t generation,
-			TimingCorrectionReason reason) noexcept;
+			TimingCorrectionReason reason,
+			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline,
+			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
+		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		bool IsRemoteTimingCompatible(std::uint64_t grainSamps,
+			std::uint64_t intervalSamps) const noexcept;
+		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
@@ -367,6 +385,8 @@ namespace engine
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
+		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
+		std::atomic_bool _hasMidiSceneAnchor{ false };
 		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
 		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
 		long long _appliedLocalTransportOffsetSamps = 0;
@@ -376,6 +396,13 @@ namespace engine
 		std::atomic<std::uint64_t> _timingCorrectionGeneration{ 0u };
 		std::atomic<std::uint64_t> _queuedTimingCorrectionCount{ 0u };
 		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptSequence{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptGeneration{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptSceneCoordinate{ 0u };
+		std::atomic<long long> _alignmentReceiptDelta{ 0 };
+		std::atomic<std::uint64_t> _alignmentReceiptAudioLoopCount{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptMidiLoopCount{ 0u };
+		std::atomic<std::uint64_t> _alignmentReceiptMaxResidual{ 0u };
 		// Audio-thread-only generation gate for the unified audio-boundary command.
 		std::uint64_t _audioTimingGeneration{ 0u };
 		std::atomic<bool> _isPunchInActive;

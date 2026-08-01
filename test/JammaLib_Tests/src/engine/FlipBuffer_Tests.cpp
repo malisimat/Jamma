@@ -5,6 +5,7 @@
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
 #include "engine/Station.h"
+#include "ninjam/NinjamLoopAlignment.h"
 
 using actions::GuiAction;
 using actions::TriggerAction;
@@ -409,6 +410,37 @@ TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 1000);
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
 	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
+}
+
+TEST(TransportPhaseOffset, BoundaryRestoreUsesPreTransitionAudioAndMidiAnchorsAcrossWraps)
+{
+	auto take = MakePlayingTake("boundary-restore", 1000ul, 100ul);
+	take->CaptureSceneAnchors(5000u);
+
+	const auto restore = [&](std::uint64_t generation, std::uint64_t sceneCoordinate, long long delta)
+	{
+		take->ApplyTimingCommand(delta, generation, LoopTake::TimingCorrectionReason::TempoReplacement,
+			ninjam::NinjamLocalFollowPolicy::BoundaryRestore, sceneCoordinate);
+		const auto expected = static_cast<unsigned long>(ninjam::RestoreScenePhaseAfterDelta(
+			sceneCoordinate, delta, 4900u, 1000u));
+		EXPECT_EQ(expected, LoopBodyPosition(*take->GetLoops().front()));
+		EXPECT_EQ(expected, take->MidiVisualPosition());
+		const auto automationPosition = static_cast<unsigned long>(ninjam::PositiveModulo(
+			1000 - 900 - take->MidiAnchorCorrection(), 1000u));
+		EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
+		const auto receipt = take->LastAlignmentReceipt();
+		ASSERT_TRUE(receipt.has_value());
+		EXPECT_EQ(generation, receipt->Generation);
+		EXPECT_EQ(sceneCoordinate, receipt->SceneCoordinateSamps);
+		EXPECT_EQ(delta, receipt->DeltaSamps);
+		EXPECT_EQ(1u, receipt->AudioLoopCount);
+		EXPECT_EQ(1u, receipt->MidiLoopCount);
+		EXPECT_EQ(0u, receipt->MaxResidualSamps);
+	};
+
+	restore(1u, 6400u, 125);
+	restore(2u, 7700u, -250);
+	restore(3u, 8900u, 0);
 }
 
 TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)

@@ -725,14 +725,49 @@ void Station::EndMultiPlay(unsigned int numSamps)
 
 void Station::ApplyTimingCommand(long long deltaSamps,
 	std::uint64_t generation,
-	LoopTake::TimingCorrectionReason reason) noexcept
+	LoopTake::TimingCorrectionReason reason,
+	ninjam::NinjamLocalFollowPolicy policy,
+	std::uint64_t sceneCoordinateSamps) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
 
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->ApplyTimingCommand(deltaSamps, generation, reason);
+		if (auto take = weakTake.lock()) take->ApplyTimingCommand(deltaSamps, generation, reason,
+			policy, sceneCoordinateSamps);
+}
+
+void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->CaptureSceneAnchors(sceneCoordinateSamps);
+}
+
+bool Station::IsRemoteTimingCompatible(std::uint64_t grainSamps,
+	std::uint64_t intervalSamps, bool& hasPlayableContent) const noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return true;
+
+	for (const auto& weakTake : state->LoopTakes)
+	{
+		if (auto take = weakTake.lock())
+		{
+			const auto length = take->VisualLoopLengthSamps();
+			if (length == 0ul)
+				continue;
+			hasPlayableContent = true;
+			if (!take->IsRemoteTimingCompatible(grainSamps, intervalSamps))
+				return false;
+		}
+	}
+	return true;
 }
 
 void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
@@ -2287,6 +2322,18 @@ void Station::_LogLocalLoopAlignment(const char* event,
 	{
 		if (!take)
 			continue;
+		if (const auto receipt = take->LastAlignmentReceipt())
+		{
+			std::cout << "[NINJAM][TempoJoin] alignment-receipt"
+				<< " take=" << take->Id()
+				<< " sequence=" << receipt->Sequence
+				<< " generation=" << receipt->Generation
+				<< " scene=" << receipt->SceneCoordinateSamps
+				<< " delta=" << receipt->DeltaSamps
+				<< " audioLoops=" << receipt->AudioLoopCount
+				<< " midiLoops=" << receipt->MidiLoopCount
+				<< " maxResidual=" << receipt->MaxResidualSamps << '\n';
+		}
 
 		for (const auto& loop : take->GetLoops())
 		{

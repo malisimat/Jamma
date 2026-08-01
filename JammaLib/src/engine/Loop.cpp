@@ -659,6 +659,7 @@ void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
 {
+	InvalidateSceneAnchor();
 	auto physBufSize = _bufferBank.Length();
 
 	if (0 == physBufSize)

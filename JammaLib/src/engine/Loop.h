@@ -242,10 +242,33 @@ namespace engine
 			if (len == 0ul) return;
 			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
 		}
+		void SetSceneAnchor(unsigned long anchor) noexcept
+		{
+			_sceneAnchor.store(anchor, std::memory_order_relaxed);
+			_hasSceneAnchor.store(true, std::memory_order_release);
+		}
+		bool HasSceneAnchor() const noexcept { return _hasSceneAnchor.load(std::memory_order_acquire); }
+		unsigned long SceneAnchor() const noexcept { return _sceneAnchor.load(std::memory_order_relaxed); }
+		void InvalidateSceneAnchor() noexcept { _hasSceneAnchor.store(false, std::memory_order_release); }
 		void ShiftPlayIndex(long long deltaSamps) noexcept;
 		unsigned long PlayIndex() const noexcept
 		{
 			return _playIndex.load(std::memory_order_relaxed);
+		}
+		unsigned long BodyPlayIndex() const noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return 0ul;
+			const auto index = _playIndex.load(std::memory_order_relaxed);
+			return (index + length - constants::MaxLoopFadeSamps) % length;
+		}
+		void SetBodyPlayIndex(unsigned long index) noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return;
+			_playIndex.store(constants::MaxLoopFadeSamps + (index % length), std::memory_order_relaxed);
 		}
 		void EndRecording();
 		void Ditch();
@@ -305,6 +328,8 @@ namespace engine
 		// (see CurrentVstLatencySamps()) -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 		std::atomic<unsigned long> _playIndex;
+		std::atomic<unsigned long> _sceneAnchor{ 0ul };
+		std::atomic_bool _hasSceneAnchor{ false };
 		float _lastPeak;
 		double _pitch;
 		std::atomic<unsigned long> _loopLength;

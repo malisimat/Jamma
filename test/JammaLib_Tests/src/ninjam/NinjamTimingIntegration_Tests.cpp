@@ -396,6 +396,7 @@ TEST(NinjamTimingIntegration, RelativeTakeOffsetsInvariantAcrossPhaseCorrections
 	ASSERT_EQ(invariantDiffs, harness.PairwiseDiffs());
 
 	const long long deltas[] = { 50, -30, 120, -200, 15, -75 };
+	std::uint64_t generation = 6u;
 	for (const auto delta : deltas)
 	{
 		const auto priorOffset = static_cast<long long>(harness.Clock.SampOffset());
@@ -405,7 +406,7 @@ TEST(NinjamTimingIntegration, RelativeTakeOffsetsInvariantAcrossPhaseCorrections
 
 		NinjamAudioTimingCommand discipline;
 		discipline.Type = NinjamTimingCommandType::PhaseDiscipline;
-		discipline.Generation = 5u;
+		discipline.Generation = generation++;
 		discipline.PhaseDeltaSamps = delta;
 		harness.Publish(discipline);
 		harness.AudioBlock(0u);
@@ -459,10 +460,10 @@ TEST(NinjamTimingIntegration, StaleAndZeroGenerationCommandsMoveNothing)
 	for (std::size_t i = 0u; i < harness.Takes.size(); ++i)
 		EXPECT_EQ(seeded[i], harness.Takes[i].Position);
 
-	// A current-generation command still applies to all consumers.
+	// The next command generation applies to all consumers.
 	NinjamAudioTimingCommand current;
 	current.Type = NinjamTimingCommandType::PhaseDiscipline;
-	current.Generation = 5u;
+	current.Generation = 6u;
 	current.PhaseDeltaSamps = 100;
 	harness.Publish(current);
 	harness.AudioBlock(0u);

@@ -255,12 +255,25 @@ void Scene::ConnectNinjam(const std::string& host)
 void Scene::ConnectNinjam(const std::string& host,
 	const ninjam::NinjamTempoJoinOptions& options)
 {
+	const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+	++_ninjamJoinGeneration;
+	if (options.PushLocalTempoOnJoin)
+		++_ninjamTempoRequestId;
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_networkService->SetTempoJoinOptions(options);
-		_networkService->PrepareTempoSyncOnConnect(_quantisation.CurrentTempoTiming(_CurrentSampleRate()));
+		_networkService->PrepareTempoSyncOnConnect(localTiming);
 		_CloseRemoteTempoPrompt();
 	}
+	std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
+		<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
+		<< " pushLocal=" << options.PushLocalTempoOnJoin;
+	if (localTiming.has_value())
+		std::cout << " bpm=" << localTiming->Bpm << " bpi=" << localTiming->SeedCount
+			<< " interval=" << localTiming->MasterLoopSamps << " grain=" << localTiming->SeedSamps;
+	std::cout << '\n';
+	_lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
+	_LogNinjamTempoJoinState();
 	_networkService->Connect(host);
 }
 
@@ -289,7 +302,7 @@ void Scene::_EnsureRemoteTempoPromptUi()
 		return;
 
 	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
-	_remoteTempoDialog->SetTitle("Remote NINJAM tempo changed");
+	_remoteTempoDialog->SetTitle("Current server tempo");
 	_remoteTempoDialog->ConfigureButtons({
 		true,
 		false,
@@ -299,8 +312,8 @@ void Scene::_EnsureRemoteTempoPromptUi()
 		0u,
 		NinjamRemoteTempoRejectControlIndex,
 		0u,
-		"Yes",
-		"No",
+		"Follow server",
+		"Stay local",
 		"Cancel",
 		"Ok"
 	});
@@ -416,6 +429,33 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 
 	if (update.TempoRequest.has_value())
 		_networkService->SendTempoRequest(update.TempoRequest.value());
+	_LogNinjamTempoJoinState();
+}
+
+void Scene::_LogNinjamTempoJoinState()
+{
+	const auto state = _networkService->TempoJoinRequestState();
+	if (state == _lastLoggedTempoRequestState)
+		return;
+
+	_lastLoggedTempoRequestState = state;
+	const char* name = "idle";
+	switch (state)
+	{
+	case ninjam::TempoRequestState::Queued: name = "queued"; break;
+	case ninjam::TempoRequestState::SentAwaitingOutcome: name = "awaiting-server-observation"; break;
+	case ninjam::TempoRequestState::Acknowledged: name = "acknowledged"; break;
+	case ninjam::TempoRequestState::Expired: name = "expired-unknown"; break;
+	default: break;
+	}
+	const auto diagnostics = _networkService->TimingDiagnostics();
+	std::cout << "[NINJAM][TempoJoin] state join=" << _ninjamJoinGeneration
+		<< " request=" << _ninjamTempoRequestId
+		<< " value=" << name
+		<< " sent=" << diagnostics.TempoRequestsSent
+		<< " retries=" << diagnostics.TempoRequestRetries
+		<< " acknowledged=" << diagnostics.TempoAcknowledged
+		<< " expired=" << diagnostics.TempoRequestsExpired << '\n';
 }
 
 void Scene::_LogAppliedNinjamLoopAlignment()
@@ -437,13 +477,30 @@ void Scene::_LogAppliedNinjamLoopAlignment()
 	case ninjam::NinjamTimingCommandType::JoinAlignment:
 		event = "ninjam-join-aligned";
 		break;
+	case ninjam::NinjamTimingCommandType::PhaseDiscipline:
+		if (receipt->Policy == ninjam::NinjamLocalFollowPolicy::BoundaryRestore)
+			event = "ninjam-boundary-restored";
+		break;
 	default:
+		break;
+	}
+	if (!event)
 		return;
+	const char* policy = "seamless-discipline";
+	switch (receipt->Policy)
+	{
+	case ninjam::NinjamLocalFollowPolicy::ContinuousRemote: policy = "continuous-remote"; break;
+	case ninjam::NinjamLocalFollowPolicy::BoundaryRestore: policy = "boundary-restore"; break;
+	case ninjam::NinjamLocalFollowPolicy::StayLocal: policy = "stay-local"; break;
+	default: break;
 	}
 
-	std::cout << "[NINJAM] Local loop alignment snapshot: event=" << event
+	std::cout << "[NINJAM][TempoJoin] Local loop alignment snapshot: event=" << event
 		<< " generation=" << receipt->Generation
-		<< " commandSequence=" << receipt->Sequence << '\n';
+		<< " commandSequence=" << receipt->Sequence
+		<< " policy=" << policy
+		<< " scene=" << receipt->SceneCoordinateSamps
+		<< " delta=" << receipt->DeltaSamps << '\n';
 	for (const auto& station : _stations)
 	{
 		if (station && !station->IsRemote())

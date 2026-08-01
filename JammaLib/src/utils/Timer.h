@@ -79,9 +79,14 @@ namespace utils
 			return _loopCount.load(std::memory_order_relaxed) * loopLength
 				+ static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
 		}
+		std::uint64_t SceneSamplePos() const noexcept
+		{
+			return _sceneSamplePos.load(std::memory_order_relaxed);
+		}
 
 	private:
 		std::atomic_ulong _loopCount;
+		std::atomic<std::uint64_t> _sceneSamplePos{ 0u };
 		std::atomic_uint _sampOffset;
 		std::atomic_uint _quantiseSamps;
 		std::atomic_ulong _seedSourceLengthSamps;

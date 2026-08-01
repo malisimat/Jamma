@@ -328,6 +328,7 @@ namespace engine
 		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
 		void _LogAppliedNinjamLoopAlignment();
+		void _LogNinjamTempoJoinState();
 		void _EnsureRemoteTempoPromptUi();
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
@@ -374,6 +375,9 @@ namespace engine
 		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
 		std::uint64_t _lastLoggedNinjamTimingCommandSequence = 0u;
+		std::uint64_t _ninjamJoinGeneration = 0u;
+		std::uint64_t _ninjamTempoRequestId = 0u;
+		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;

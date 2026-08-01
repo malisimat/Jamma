@@ -40,6 +40,7 @@ double Timer::GetElapsedSeconds(Time t1, Time t2)
 void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
 	(void)loopCountIncrement;
+	_sceneSamplePos.fetch_add(sampsIncrement, std::memory_order_relaxed);
 
 	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
 	if (0ul == loopLength)
@@ -163,7 +164,7 @@ bool Timer::ApplyCommand(const Command& command) noexcept
 		return true;
 	}
 
-	if (command.Generation == 0u || command.Generation < _audioGeneration)
+	if (command.Generation == 0u || command.Generation <= _audioGeneration)
 		return true;
 
 	_audioGeneration = command.Generation;
