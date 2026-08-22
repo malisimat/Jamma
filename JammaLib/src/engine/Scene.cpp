@@ -273,6 +273,9 @@ void Scene::ConnectNinjam(const std::string& host,
 			_audioEngine->PublishTimingCommand(invalidate);
 		}
 	}
+	if (_loggingConfig.Event == "verbose")
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=reconnect"
+			<< " join=" << _ninjamJoinGeneration << '\n';
 	std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
 		<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
 		<< " pushLocal=" << options.PushLocalTempoOnJoin;
@@ -302,6 +305,8 @@ void Scene::DisconnectNinjam()
 			_audioEngine->PublishTimingCommand(invalidate);
 		}
 	}
+	if (_loggingConfig.Event == "verbose")
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=disconnect\n";
 	_networkService->Disconnect();
 }
 
@@ -408,6 +413,23 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 	if (update.ClockSettings.has_value())
 	{
 		const auto& settings = update.ClockSettings.value();
+		if (_loggingConfig.Event == "verbose")
+		{
+			const auto bpmDelta = settings.HasLocalTiming
+				? std::abs(settings.RemoteBpm - settings.LocalBpm) : 0.0f;
+			const char* reason = settings.HasLocalTiming
+				? (settings.LocalFollowPolicy == ninjam::NinjamLocalFollowPolicy::ContinuousSync
+					? "within-tolerance" : "material-tempo-difference")
+				: "no-local-timing";
+			std::cout << "[NINJAM][TimingPolicy] determined policy="
+				<< ninjam::NinjamTimingCoordinator::FollowPolicyName(settings.LocalFollowPolicy)
+				<< " reason=" << reason
+				<< " localBpm=" << (settings.HasLocalTiming ? std::to_string(settings.LocalBpm) : "none")
+				<< " remoteBpm=" << settings.RemoteBpm
+				<< " bpmDelta=" << bpmDelta
+				<< " generation=" << settings.Generation
+				<< " observationSample=" << settings.AudioBlockStartSample << '\n';
+		}
 		command.Type = ninjam::NinjamTimingCommandType::ReplaceTiming;
 		command.Generation = settings.Generation;
 		command.SeedLengthSamps = settings.SeedLengthSamps;
@@ -433,10 +455,24 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.Type = ninjam::NinjamTimingCommandType::Invalidate;
 		command.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		hasCommand = true;
+		if (_loggingConfig.Event == "verbose" && update.NoSyncReason == ninjam::NinjamNoSyncReason::StayLocal)
+			std::cout << "[NINJAM][TimingPolicy] determined policy=no-sync reason=stay-local\n";
 	}
 
 	if (hasCommand && _audioEngine)
+	{
+		if (_loggingConfig.Audio == "verbose"
+			&& command.Type != ninjam::NinjamTimingCommandType::Invalidate)
+		{
+			const char* event = command.Type == ninjam::NinjamTimingCommandType::ReplaceTiming
+				? "ninjam-before-remote-tempo"
+				: command.Type == ninjam::NinjamTimingCommandType::JoinAlignment
+					? "ninjam-before-join-aligned" : "ninjam-before-phase-disciplined";
+			for (const auto& station : _stations)
+				if (station && !station->IsRemote()) station->LogLocalLoopAlignment(event);
+		}
 		_audioEngine->PublishTimingCommand(command);
+	}
 
 	if (update.TempoRequest.has_value())
 		_networkService->SendTempoRequest(update.TempoRequest.value());
@@ -445,6 +481,8 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 
 void Scene::_LogNinjamTempoJoinState()
 {
+	if (_loggingConfig.Event != "verbose")
+		return;
 	const auto state = _networkService->TempoJoinRequestState();
 	if (state == _lastLoggedTempoRequestState)
 		return;
@@ -471,6 +509,8 @@ void Scene::_LogNinjamTempoJoinState()
 
 void Scene::_LogAppliedNinjamLoopAlignment()
 {
+	if (_loggingConfig.Event != "verbose")
+		return;
 	if (!_audioEngine)
 		return;
 
@@ -479,6 +519,16 @@ void Scene::_LogAppliedNinjamLoopAlignment()
 		return;
 
 	_lastLoggedNinjamTimingCommandSequence = receipt->Sequence;
+	const auto policyName = ninjam::NinjamTimingCoordinator::FollowPolicyName(receipt->Policy);
+	if (receipt->Policy != _lastLoggedNinjamFollowPolicy)
+	{
+		std::cout << "[NINJAM][TimingPolicy] changed from="
+			<< ninjam::NinjamTimingCoordinator::FollowPolicyName(_lastLoggedNinjamFollowPolicy)
+			<< " to=" << policyName
+			<< " generation=" << receipt->Generation
+			<< " scene=" << receipt->SceneCoordinateSamps << '\n';
+		_lastLoggedNinjamFollowPolicy = receipt->Policy;
+	}
 	const char* event = nullptr;
 	switch (receipt->Type)
 	{
@@ -492,23 +542,18 @@ void Scene::_LogAppliedNinjamLoopAlignment()
 		if (receipt->Policy != ninjam::NinjamLocalFollowPolicy::NoSync)
 			event = "ninjam-phase-disciplined";
 		break;
+	case ninjam::NinjamTimingCommandType::Invalidate:
+		event = "ninjam-follow-policy-cleared";
+		break;
 	default:
 		break;
 	}
 	if (!event)
 		return;
-	const char* policy = "no-sync";
-	switch (receipt->Policy)
-	{
-	case ninjam::NinjamLocalFollowPolicy::ContinuousSync: policy = "continuous-sync"; break;
-	case ninjam::NinjamLocalFollowPolicy::BlockSync: policy = "block-sync"; break;
-	default: break;
-	}
-
 	std::cout << "[NINJAM][TempoJoin] Local loop alignment snapshot: event=" << event
 		<< " generation=" << receipt->Generation
 		<< " commandSequence=" << receipt->Sequence
-		<< " policy=" << policy
+		<< " policy=" << policyName
 		<< " scene=" << receipt->SceneCoordinateSamps
 		<< " delta=" << receipt->DeltaSamps << '\n';
 	for (const auto& station : _stations)

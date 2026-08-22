@@ -44,6 +44,31 @@ frac = (globalSample - effectiveAnchor) % loopLength / loopLength
 a baked pointer in `AutomationDispatch`. No dispatch rebuild is required at wrap time, and
 `MidiLoop` itself remains a pure recording container.
 
+### Tempo join and follow contract
+
+When joining with valid local timing, Jamma first attempts to push the local BPM/BPI. The
+request is asynchronous: local playback, recording, and overdubbing continue while it is
+queued or awaiting a server observation. Successful delivery of the chat/control messages is
+not acknowledgement.
+
+A fresh server observation acknowledges the request only when its BPI matches and its BPM is
+within the inclusive +/-1.0 BPM near-tempo tolerance of the requested BPM. On
+acknowledgement, Jamma follows the actual observed server interval and phase; it does not ask
+the user to accept stale pre-push timing. This allows for server rounding and quantisation.
+
+If no near-local observation arrives before the request deadline, Jamma presents the latest
+server timing as `Current server tempo` with `Follow server` and `Stay local`. `Follow server`
+publishes one material timing replacement; `Stay local` publishes none. While the request is
+pending, old server timing is context only and must not create an early apply dialog.
+
+The phase-preservation mechanism used after a tempo join is the sync map described in
+[Loop Alignment and NINJAM Sync](loop-alignment-and-ninjam-sync.md). Its purpose is to let the
+master follow the accepted remote geometry without collapsing the relative phases of local
+loops with different lengths or starting positions. The detailed request lifecycle and
+follow-up implementation notes are in
+[NINJAM tempo push follow-up plan](ninjam-tempo-push-followup-plan.md) and
+[NINJAM tempo push UX plan](ninjam-tempo-push-ux-plan.md).
+
 ### Export-lane latency compensation (send path)
 
 The above covers the **receive side** (aligning local playback to the remote NINJAM

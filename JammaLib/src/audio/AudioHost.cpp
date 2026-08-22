@@ -190,6 +190,17 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				{
 					policy = _activeNinjamFollowPolicy;
 					sceneCoordinate = timingClock->SceneSamplePos();
+					// EndMultiPlay advances local cursors at device rate. Before a
+					// remote discipline command rebases the source-rate phase map,
+					// restore that map at this exact boundary. Otherwise each take
+					// captures a different one-block device-rate residue as its new
+					// origin, which changes intentional audio/MIDI relative offsets.
+					if (policy != ninjam::NinjamLocalFollowPolicy::NoSync
+						&& _syncPhaseMapLocalMasterLength > 0ul
+						&& _syncPhaseMapRemoteMasterLength > 0ul)
+						for (auto& station : stations)
+							if (station && !station->IsRemote())
+								station->RestoreSyncPhaseMap(sceneCoordinate);
 				}
 				utils::Timer::Command timerCommand;
 				timerCommand.Generation = command->Generation;

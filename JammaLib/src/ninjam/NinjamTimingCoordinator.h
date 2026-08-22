@@ -78,6 +78,17 @@ namespace ninjam
 		std::uint64_t Generation = 0u;
 		std::uint64_t AudioBlockStartSample = 0u;
 		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::ContinuousSync;
+		float RemoteBpm = 0.0f;
+		float LocalBpm = 0.0f;
+		bool HasLocalTiming = false;
+	};
+
+	enum class NinjamNoSyncReason : std::uint8_t
+	{
+		None,
+		StayLocal,
+		Reconnect,
+		Disconnect
 	};
 
 	struct NinjamTimingUpdate
@@ -87,6 +98,7 @@ namespace ninjam
 		std::optional<NinjamTempoRequest> TempoRequest;
 		bool InvalidatePendingCorrections = false;
 		bool PromptForTempoChange = false;
+		NinjamNoSyncReason NoSyncReason = NinjamNoSyncReason::None;
 	};
 
 	// Kind of the most recent transport command the coordinator emitted, recorded
@@ -156,6 +168,7 @@ namespace ninjam
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
+		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
 			const std::optional<timing::QuantisationTiming>& localTiming,
 			float remoteBpm) noexcept;

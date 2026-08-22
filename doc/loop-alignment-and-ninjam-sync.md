@@ -1,11 +1,37 @@
 # Loop Alignment and NINJAM Sync
 
-This is the working reference for local loop phase preservation and NINJAM
-tempo joining. Treat all positions as sample positions. The audio callback owns
-live Timer and loop cursor mutation; cross-thread timing messages must use the
+This is the design reference for preserving local loop phase while following a
+NINJAM transport. Treat positions as sample positions. The audio callback owns
+live Timer and loop-cursor mutation; cross-thread timing messages use the
 existing fixed-size, latest-wins mailbox.
 
-## Local Transport and Loop Recovery
+## The sync-map idea
+
+Following a remote transport changes the master interval, and sometimes the
+master phase. Correcting only `utils::Timer` is not enough: each local loop may
+have a different length and may intentionally start at a different relative
+position. Giving every loop the same raw cursor would destroy those musical
+relationships.
+
+The sync map is the bridge between two master rulers. At a sync boundary it
+remembers:
+
+- the local master interval, `M_l`;
+- the remote master interval, `M_r`;
+- the monotonic scene coordinate at the boundary, `S_0`; and
+- each local loop's phase at that coordinate.
+
+Later, remote elapsed time is converted into equivalent local-master progress.
+Every local audio or MIDI entity receives that same mapped elapsed time, then
+wraps it in its own coordinate system. This is why different loop lengths and
+intentional offsets remain stable while the common transport follows remote
+time.
+
+This is a common master timeline, not a shared loop cursor. The master phase
+describes where the transport is inside its interval; a loop phase describes
+where one particular loop is inside its own buffer.
+
+## Local transport and loop phase
 
 `utils::Timer` owns the local master transport:
 
@@ -13,48 +39,139 @@ $$
 A = C \times M + p
 $$
 
-where $M$ is master/interval length in samples, $C$ is `LoopCount`, $p$ is
+where $M$ is the master/interval length in samples, $C$ is `LoopCount`, $p$ is
 `SampOffset`, and $A$ is `AbsoluteSamplePos`. `Timer::SceneSamplePos` ($S$) is
-a monotonic scene sample coordinate which does not reset when NINJAM replaces
-Timer geometry. Use $S$ for durable NINJAM recovery anchors.
+a monotonic scene coordinate that does not reset when NINJAM replaces Timer
+geometry. Use $S$ as the durable time ruler for sync-map anchors.
 
 Each playable entity has its own wrapped phase $q_i$ and length $L_i$:
 
-- Audio: use `Loop::BodyPlayIndex`, not fade-prefixed storage `PlayIndex`.
-- MIDI: use `LoopTake`'s MIDI event cursor (`_midiVisualPlayIndex`).
+- Audio uses `Loop::BodyPlayIndex`, not fade-prefixed storage `PlayIndex`.
+- MIDI uses `LoopTake`'s MIDI event cursor, `_midiVisualPlayIndex`.
   `MidiLoop::LoopPhaseAnchor` is an automation-recording anchor, not the MIDI
   event cursor.
 
-Capture an entity's scene-relative anchor at a common audio boundary:
+At a common audio boundary, capture a scene-relative anchor:
 
 $$
-a_i = (S-q_i) \bmod L_i
+a_i = (S_0-q_i) \bmod L_i
 $$
 
-At a later scene coordinate, restore it with:
+At a later scene coordinate, restore that entity with:
 
 $$
-q_i = (S-a_i) \bmod L_i
+q_i(S) = (S-a_i) \bmod L_i
 $$
 
-If remote alignment supplies a common correction $d$, use:
+If a common correction $d$ is applied, then:
 
 $$
 q_i' = (S+d-a_i) \bmod L_i = (q_i+d) \bmod L_i
 $$
 
-The last equality is the key invariant: one global correction preserves every
-intentional relative offset. Example: local master phase $0.5M$, a $2M$ loop
-at $0.75(2M)$, and $d=-0.5M$ puts the master at zero and the long loop at
-$0.5(2M)$.
+The final equality is the important invariant: one global correction changes
+every phase by the same scene-time amount, so relative offsets are preserved.
+For example, a master at $0.5M$ and a $2M$ loop at $0.75(2M)$ can be moved by
+$d=-0.5M$; the master reaches zero while the long loop reaches $0.5(2M)$.
 
-Do not recapture anchors at each remote wrap. Capture fresh anchors once at the
-first material follow transition of a connection, retain them through that
-connection's boundary restores, and invalidate them before the next independent
-follow session so the next capture reflects current local phase. Invalidating
-an anchor does not move a cursor or discard phase.
+Do not recapture anchors at every remote wrap. Capture them once at the first
+material follow transition for a connection, retain them through that
+connection's restores, and invalidate them before the next independent follow
+session. Invalidating an anchor does not move a cursor or discard phase; it
+only permits the next session to capture the current phase as its new origin.
 
-## Grain and Geometry
+## Mapping remote time to local time
+
+The sync map converts elapsed remote time into local-master progress:
+
+$$
+E_l = \operatorname{round}\left((S-S_0)\frac{M_l}{M_r}\right)
+$$
+
+The implementation calculates this as whole remote intervals plus a rounded
+remainder using integer sample arithmetic. It is not a floating-point phase
+accumulator. Each entity is then restored as:
+
+$$
+q_i(S) = (q_{i0} + E_l) \bmod L_i
+$$
+
+where $q_{i0}$ is its captured phase at `S_0`. The same $E_l$ is used for every
+entity, but each entity applies its own modulo $L_i$. Thus a 2-master-length
+loop and a shorter loop can have different raw indices while remaining tied to
+the same transport moment.
+
+Until rate adjustment exists, integer remapping may repeat or skip source
+audio/MIDI samples. These effects are deliberately small for `ContinuousSync`
+and can be conspicuous for `BlockSync`; the map preserves phase relationships,
+not sample-perfect time stretching.
+
+## Map lifecycle and AudioHost ordering
+
+For an accepted sync policy, `AudioHost` consumes one timing command at the top
+of an audio block. It applies the command coherently to the Timer and every
+local station, before normal station advancement. A replacement records the
+old local master length and the new remote master length; all accepted sync
+commands then establish or rebase the map at the command's scene coordinate.
+
+The validity guard around `syncPhaseMap` requires both master lengths to be
+nonzero. When valid, `AudioHost` calls `RestoreSyncPhaseMap` for each local
+station. That fans into every local take, which restores each audio loop and
+MIDI cursor from its own anchor and the common mapped elapsed time.
+
+The restore before discipline is intentional. `EndMultiPlay` advances local
+cursors at device rate. A remote discipline command can arrive after that
+advancement but before the source-rate map is rebased. Restoring at this exact
+boundary removes the one-block device-rate residue; otherwise different takes
+could capture slightly different origins and lose their intentional relative
+offsets. The new common correction is then applied, and the map is begun again
+at that same scene coordinate.
+
+On later blocks, the active map reconstructs local cursors from the current
+scene coordinate. On a new join or material replacement, fresh anchors and map
+origins are captured. On `NoSync`, invalidation, or disconnect, the map and
+scene anchors are cleared so local timing can free-run.
+
+MIDI event-cursor translations subtract the identical translation from the MIDI
+automation correction. This keeps effective automation phase equal to MIDI
+event phase across wrap, repeat, and skip movement.
+
+## Remote timing and follow policies
+
+Tempo-join request/acknowledgement and `Follow server` / `Stay local` behavior
+are NINJAM session concerns documented in [Ninjam Integration Guide](ninjam.md).
+This document covers the phase-map mechanics after a follow decision has been
+accepted.
+
+Remote intervals are converted to the device sample rate before entering the
+map:
+
+$$
+M_d = \operatorname{round}\left(M_r\frac{f_d}{f_r}\right)
+$$
+
+Remote timing is authoritative only when BPM/BPI, interval, and sample rate
+are plausible. Transient pre-handshake values are not valid geometry.
+
+There are three local follow policies:
+
+- `ContinuousSync` follows a remote tempo close to local timing. Corrections
+  should normally be small.
+- `BlockSync` follows a materially different accepted tempo. It uses the same
+  map and anchor model, but the correction can be visibly larger.
+- `NoSync` clears the map and scene anchors and leaves Timer geometry and local
+  cursors free-running. It is used for `Stay local`, invalidation, and
+  disconnect.
+
+The policy changes the expected correction size, not the underlying per-loop
+phase algorithm. For ordinary discipline, use the signed shortest delta
+between local and remote master phase. Join corrections may be as large as
+half an interval; ongoing wrap discipline is bounded to two audio buffers to
+reject implausible drift. A valid correction is applied once per generation;
+stale or equal generations move nothing. Invalidation resets that generation
+gate.
+
+## Grain and continuous recurrence
 
 Local quantisation grain is $G$. A loop is locally grain-clean when:
 
@@ -62,128 +179,20 @@ $$
 L_i \bmod G = 0
 $$
 
-For continuous recurrence under remote grain $G_r$ and remote interval $M_r$,
-every playable audio and MIDI loop must satisfy:
+For continuous recurrence under remote grain $G_r$ and interval $M_r$, a
+playable audio or MIDI loop also needs:
 
 $$
 L_i \bmod G_r = 0 \quad\text{and}\quad M_r \bmod L_i = 0
 $$
 
-If either condition fails for any playable entity, do not pretend it is a
-continuous grid match. Use durable per-loop boundary restoration so relative
-phase remains intentional even if the remote grid cannot contain every loop.
+If either condition fails, the remote grid cannot contain every loop as a
+perfect repeating subdivision. Do not represent that as a continuous grid
+match. Durable per-loop boundary restoration still preserves the intended
+relative phase.
 
-## NINJAM Timing Flow
+## Relevant implementation
 
-The audio callback obtains NINJAM timing, converts remote samples to device
-sample rate, and publishes an observation. The job/UI side runs
-`NinjamTimingCoordinator`, which produces one `NinjamAudioTimingCommand`.
-`AudioHost` consumes that command at the top of an audio block, before local
-station advancement, and applies it to Timer and every local take in that same
-block.
-
-Remote interval conversion is:
-
-$$
-M_d = \operatorname{round}\left(M_r\frac{f_d}{f_r}\right)
-$$
-
-Remote timing is valid only with plausible BPM/BPI and nonzero interval/sample
-rate. Do not use transient NJClient pre-handshake values as authoritative.
-
-There are exactly three local follow policies. `ContinuousSync` is selected
-when accepted remote tempo is within the fixed inclusive `1.0 BPM` distance of
-local timing (or no local timing exists). `BlockSync` is selected for a
-materially different accepted tempo. Both replace Timer geometry and use the
-same audio-thread phase map; the names describe the expected correction size.
-`NoSync` explicitly clears that map and leaves Timer geometry and local cursors
-free-running. It is used for `Stay local`, invalidation, and disconnect.
-
-For either sync policy the accepted callback boundary records local master
-length, remote master length, the scene coordinate, and every local audio-body
-and MIDI-event phase. Later blocks derive every cursor from that one map:
-
-$$
-q_i = (q_{i0} + \operatorname{round}((S-S_0)M_l/M_r)) \bmod L_i
-$$
-
-The calculation is integer round-to-nearest, not a floating accumulator. A
-join or discipline delta moves Timer/audio/MIDI together and immediately
-rebases map origins at that scene coordinate, so the next block preserves the
-correction. MIDI cursor translations subtract the identical translation from
-the automation correction. This keeps effective automation phase equal to MIDI
-event phase even across wrap, repeat, and skip movement.
-
-Until rate adjustment exists, the map can repeat or skip source samples/MIDI:
-these corrections are deliberately small in `ContinuousSync` and can be
-conspicuous in `BlockSync`.
-
-For ordinary phase discipline, compute the signed shortest delta between local
-and remote phase. Joins may correct up to half an interval. Ongoing wrap
-discipline is bounded to two audio buffers to reject implausible drift. Apply a
-valid correction exactly once by generation; stale/equal generations move
-nothing. An invalidation resets this generation gate.
-
-For a material replacement, project the observed remote phase to the actual
-audio boundary before applying it. Timer receives the remote absolute phase;
-local loops receive the one corresponding local delta or the anchor restoration
-formula above. MIDI event cursor moves with audio body phase. MIDI automation
-correction changes by the inverse cursor translation exactly once, so automation
-and MIDI events retain the same effective phase.
-
-## Join Tempo Contract
-
-### Intended behavior
-
-When joining with valid local timing, the normal user path should push local
-BPM/BPI automatically. The server request sends both admin (`/bpm`, `/bpi`) and
-vote (`!vote bpm`, `!vote bpi`) forms. A successful client send only means the
-messages entered the send path; it is not server acknowledgement.
-
-While the request is queued or awaiting a result:
-
-- local recording, overdubbing, and playback continue;
-- retain old server timing only as context;
-- do not show a dialog proposing that old timing;
-- retry at usable remote boundaries and expire after a finite wall-clock
-  deadline, not only after a number of long remote intervals.
-
-A server result acknowledges a push only when it is a fresh observation after a
-successful send, has the same BPI, and is near requested BPM. The intended
-tolerance is the fixed inclusive `+/- 1.0` BPM so a server-rounded result can succeed. On
-acknowledgement, automatically follow the observed server interval/phase; do
-not prompt to accept the stale pre-push tempo.
-
-If the request expires or produces a materially different result, show `Current
-server tempo` with `Follow server` and `Stay local`. `Follow server` publishes
-one material replacement; `Stay local` publishes none. Local tempo remains
-active while waiting and after `Stay local`.
-
-### Current known caveat
-
-The historical implementation defaulted `PushLocalTempoOnJoin` to false, and
-the `/connect` command used that default. A log containing `request=0
-pushLocal=0` means no local push was attempted, so an immediate old-server
-dialog is expected behavior from that configuration, not acknowledgement.
-`doc/ninjam-tempo-push-followup-plan.md` defines the pending fix: enable the
-normal command path, use the 1 BPM acknowledgement rule, and add a wall-clock
-deadline.
-
-## Diagnostics and Tests
-
-Use `[NINJAM][TempoJoin]` logs for request states: `queued`,
-`awaiting-server-observation`, `acknowledged`, and `expired-unknown`. Use
-`[LocalLoopAlignment]` logs for Timer geometry, MIDI/audio cursors, anchors,
-and grain remainders. A `maxResidual=0` receipt alone is insufficient if it
-only compares a value with the target just assigned; tests must verify emitted
-MIDI event phase and automation phase.
-
-Cover at least: pre-send observation rejection; old-server proposal suppression
-while pending; rounded near-tempo acknowledgement; timeout fallback; equal
-geometry discipline; compatible material replacement; incompatible MIDI loops
-over three remote wraps; and disconnect/reconnect anchor recapture.
-
-Relevant implementation: `utils/Timer`, `audio/AudioHost`,
+The main building blocks are `utils/Timer`, `audio/AudioHost`,
 `ninjam/NinjamTimingCoordinator`, `ninjam/NinjamLoopAlignment`, `engine/Loop`,
-`engine/LoopTake`, and `engine/Station`. For implementation work, also read
-`doc/ninjam-tempo-push-followup-plan.md`.
+`engine/LoopTake`, and `engine/Station`.

@@ -1,0 +1,430 @@
+#include "gtest/gtest.h"
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/AudioSink.h"
+#include "engine/Loop.h"
+#include "engine/LoopTake.h"
+#include "utils/Timer.h"
+
+using audio::MergeMixBehaviourParams;
+using base::AudioWriteRequest;
+using base::Audible;
+using engine::LoopTake;
+using engine::LoopTakeParams;
+using utils::Timer;
+
+class TimingTestLoopTake : public LoopTake
+{
+public:
+	TimingTestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
+		LoopTake(params, mixerParams)
+	{
+	}
+
+	void SetMidiVisualPosition(unsigned long position, unsigned long length)
+	{
+		_midiVisualPlayIndex.store(position, std::memory_order_relaxed);
+		_midiVisualLoopLength.store(length, std::memory_order_relaxed);
+	}
+
+	unsigned long MidiVisualPosition() const
+	{
+		return _midiVisualPlayIndex.load(std::memory_order_relaxed);
+	}
+
+	void InvalidateMidiSceneAnchor()
+	{
+		_hasMidiSceneAnchor.store(false, std::memory_order_release);
+	}
+};
+
+static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::string& id = "take-0")
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<TimingTestLoopTake>(params, mixerParams);
+}
+
+static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength)
+{
+	audio::WireMixBehaviourParams mixBehaviour;
+	mixBehaviour.Channels = { 0u };
+	audio::AudioMixerParams mixerParams;
+	mixerParams.Size = { 160, 320 };
+	mixerParams.Position = { 6, 6 };
+	mixerParams.Behaviour = mixBehaviour;
+
+	engine::LoopParams loopParams;
+	loopParams.Wav = "phase-test";
+	loopParams.Size = { 80, 80 };
+	loopParams.Position = { 10, 22 };
+	auto loop = std::make_shared<engine::Loop>(loopParams, mixerParams);
+
+	loop->Record();
+	const auto recordedLength = constants::MaxLoopFadeSamps + loopLength;
+	std::vector<float> samples(recordedLength, 1.0f);
+	AudioWriteRequest request;
+	request.samples = samples.data();
+	request.numSamps = static_cast<unsigned int>(recordedLength);
+	request.stride = 1u;
+	request.fadeCurrent = 0.0f;
+	request.fadeNew = 1.0f;
+	request.source = Audible::AUDIOSOURCE_ADC;
+	loop->OnBlockWrite(request, 0);
+	loop->EndWrite(static_cast<unsigned int>(recordedLength), true);
+	loop->Play(constants::MaxLoopFadeSamps, loopLength, false);
+	return loop;
+}
+
+static std::shared_ptr<TimingTestLoopTake> MakePlayingTimingTake(const std::string& id,
+	unsigned long loopLength, unsigned long position)
+{
+	auto take = MakeTimingTestLoopTake(id);
+	auto loop = MakeTimingLoop(loopLength);
+	loop->ShiftPlayIndex(static_cast<long long>(position));
+	take->AddLoop(loop);
+	take->CommitChanges();
+	take->SetMidiVisualPosition(position % loopLength, loopLength);
+	return take;
+}
+
+static unsigned long TimingLoopBodyPosition(const engine::Loop& loop)
+{
+	return loop.PlayIndex() - constants::MaxLoopFadeSamps;
+}
+
+static void ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
+	ninjam::NinjamLocalFollowPolicy policy)
+{
+	constexpr unsigned long shortLength = 1000ul;
+	constexpr unsigned long longLength = shortLength * 3ul;
+	constexpr unsigned long shortStart = shortLength / 4ul;
+	constexpr unsigned long longStart = (longLength * 3ul) / 8ul;
+	constexpr long long masterDelta = 7600;
+	constexpr unsigned long recurrenceSamps = 1400ul;
+
+	Timer master;
+	master.SetSeedSourceLength(shortLength);
+	master.Tick(static_cast<unsigned int>(shortStart), 0u);
+	const Timer::Command masterAdjustment{
+		Timer::CommandType::PhaseCorrection, 1u, 0ul, 0u,
+		Timer::QUANTISE_OFF, masterDelta };
+
+	auto shortTake = MakePlayingTimingTake("independent-short", shortLength, shortStart);
+	auto longTake = MakePlayingTimingTake("independent-long", longLength, longStart);
+	master.ApplyCommand(masterAdjustment);
+	shortTake->ApplyTimingCommand(masterDelta, 1u,
+		LoopTake::TimingCorrectionReason::PhaseDiscipline, policy);
+	longTake->ApplyTimingCommand(masterDelta, 1u,
+		LoopTake::TimingCorrectionReason::PhaseDiscipline, policy);
+
+	for (auto sample = 0ul; sample < recurrenceSamps; ++sample)
+	{
+		master.Tick(1u, 0u);
+		shortTake->EndMultiPlay(1u);
+		longTake->EndMultiPlay(1u);
+	}
+
+	EXPECT_EQ(shortStart, master.SampOffset());
+	EXPECT_EQ(shortStart, TimingLoopBodyPosition(*shortTake->GetLoops().front()));
+	EXPECT_EQ(shortStart, shortTake->MidiVisualPosition());
+	EXPECT_EQ(longStart, TimingLoopBodyPosition(*longTake->GetLoops().front()));
+	EXPECT_EQ(longStart, longTake->MidiVisualPosition());
+}
+
+TEST(ExternalPhaseCorrection, SharedDeltaPreservesDifferentTakeLengths)
+{
+	constexpr unsigned long length = 1000ul;
+	auto shortTake = MakePlayingTimingTake("short", length, 0ul);
+	auto longTake = MakePlayingTimingTake("long", length * 2ul, length);
+	auto oddTake = MakePlayingTimingTake("odd", 777ul, 700ul);
+
+	shortTake->QueueTimingCorrection(2, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	longTake->QueueTimingCorrection(2, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	oddTake->QueueTimingCorrection(100, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	shortTake->EndMultiPlay(0u);
+	longTake->EndMultiPlay(0u);
+	oddTake->EndMultiPlay(0u);
+
+	EXPECT_EQ(2ul, TimingLoopBodyPosition(*shortTake->GetLoops().front()));
+	EXPECT_EQ(length + 2ul, TimingLoopBodyPosition(*longTake->GetLoops().front()));
+	EXPECT_EQ(23ul, TimingLoopBodyPosition(*oddTake->GetLoops().front()));
+}
+
+TEST(ExternalPhaseCorrection, EveryChannelConsumesInSameBlock)
+{
+	auto take = MakePlayingTimingTake("channels", 1000ul, 100ul);
+	auto secondLoop = MakeTimingLoop(1000ul);
+	secondLoop->ShiftPlayIndex(100);
+	take->AddLoop(secondLoop);
+	take->CommitChanges();
+
+	take->QueueTimingCorrection(-150, 2u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->EndMultiPlay(0u);
+	ASSERT_EQ(2u, take->GetLoops().size());
+	EXPECT_EQ(950ul, TimingLoopBodyPosition(*take->GetLoops()[0]));
+	EXPECT_EQ(950ul, TimingLoopBodyPosition(*take->GetLoops()[1]));
+}
+
+TEST(ExternalPhaseCorrection, NegativeDeltaMovesAudioAndMidiWithSameSign)
+{
+	auto take = MakePlayingTimingTake("negative", 30000ul, 5000ul);
+	take->QueueTimingCorrection(-4900, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->EndMultiPlay(0u);
+
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(4900, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
+{
+	auto take = MakePlayingTimingTake("accumulate", 1000ul, 100ul);
+	take->QueueTimingCorrection(20, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->QueueTimingCorrection(-5, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->EndMultiPlay(10u);
+	EXPECT_EQ(125ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(2u, take->QueuedExternalPhaseCorrectionCount());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+
+	take->EndMultiPlay(10u);
+	EXPECT_EQ(135ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+}
+
+TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
+{
+	auto take = MakePlayingTimingTake("transport-offset", 1000ul, 100ul);
+	take->SetLocalTransportOffsetSamps(350);
+	EXPECT_EQ(450ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(450ul, take->MidiVisualPosition());
+	EXPECT_EQ(-350, take->MidiAnchorCorrection());
+
+	take->SetLocalTransportOffsetSamps(350);
+	EXPECT_EQ(450ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(450ul, take->MidiVisualPosition());
+
+	take->SetLocalTransportOffsetSamps(0);
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(TransportPhaseOffset, PendingOffsetWaitsForPlayableLoop)
+{
+	auto take = MakeTimingTestLoopTake("transport-offset-pending");
+	take->SetLocalTransportOffsetSamps(250);
+	take->SetMidiVisualPosition(100ul, 1000ul);
+	take->EndMultiPlay(0u);
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(-250, take->MidiAnchorCorrection());
+
+	take->SetLocalTransportOffsetSamps(0);
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(TransportPhaseOffset, FractionalTargetsRestoreOriginalCursorWithoutRoundingResidue)
+{
+	constexpr long long masterLength = 101;
+	auto take = MakePlayingTimingTake("transport-offset-fractional", 1000ul, 100ul);
+	const auto setFraction = [&](double fraction)
+	{
+		take->SetLocalTransportOffsetSamps(std::llround(fraction * masterLength));
+	};
+
+	setFraction(0.005);
+	setFraction(0.010);
+	setFraction(0.0);
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
+{
+	auto take = MakeTimingTestLoopTake("midi-only");
+	take->SetMidiVisualPosition(100ul, 1000ul);
+	take->ApplyTimingCommand(-1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(850ul, take->MidiVisualPosition());
+	EXPECT_EQ(1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
+{
+	auto take = MakePlayingTimingTake("direct-audio-midi", 1000ul, 100ul);
+	take->ApplyTimingCommand(1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
+{
+	auto take = MakePlayingTimingTake("direct-midi-automation", 1000ul, 100ul);
+	take->ApplyTimingCommand(250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+
+	constexpr auto globalSample = 1000;
+	constexpr auto frozenAnchor = 900;
+	const auto automationPosition = static_cast<unsigned long>(
+		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 1000);
+	EXPECT_EQ(350ul, take->MidiVisualPosition());
+	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
+}
+
+TEST(TransportPhaseOffset, ContinuousSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
+{
+	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync);
+}
+
+TEST(TransportPhaseOffset, BlockSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
+{
+	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
+		ninjam::NinjamLocalFollowPolicy::BlockSync);
+}
+
+TEST(TransportPhaseOffset, SyncPhaseMapRebasesAfterTimingCorrection)
+{
+	auto take = MakePlayingTimingTake("boundary-restore", 1000ul, 100ul);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	take->RestoreSyncPhaseMap(6100u);
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 6100u);
+	take->BeginSyncPhaseMap(6100u, 1000ul, 1100ul);
+	take->RestoreSyncPhaseMap(7200u);
+	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(225ul, take->MidiVisualPosition());
+}
+
+TEST(TransportPhaseOffset, SyncPhaseMapRestoresBeforeRebasingAfterDeviceRateAdvance)
+{
+	auto take = MakePlayingTimingTake("boundary-restore-device-advance", 1000ul, 100ul);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	take->EndMultiPlay(550u);
+	EXPECT_EQ(650ul, take->MidiVisualPosition());
+	take->RestoreSyncPhaseMap(5550u);
+	EXPECT_EQ(600ul, take->MidiVisualPosition());
+
+	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 5550u);
+	take->BeginSyncPhaseMap(5550u, 1000ul, 1100ul);
+	take->RestoreSyncPhaseMap(6100u);
+
+	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(225ul, take->MidiVisualPosition());
+}
+
+TEST(TransportPhaseOffset, SyncPhaseMapMapsAudioAndMidiFromTheSameRemoteMaster)
+{
+	auto take = MakePlayingTimingTake("boundary-map", 1000ul, 100ul);
+	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::TempoReplacement,
+		ninjam::NinjamLocalFollowPolicy::BlockSync, 5000u);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+
+	for (const auto scene : { 5000u, 5550u, 6100u, 7200u })
+	{
+		take->RestoreSyncPhaseMap(scene);
+		const auto elapsed = static_cast<std::uint64_t>(scene - 5000u);
+		const auto scaled = (elapsed * 1000u + 550u) / 1100u;
+		const auto expected = static_cast<unsigned long>((225u + scaled) % 1000u);
+		EXPECT_EQ(expected, TimingLoopBodyPosition(*take->GetLoops().front()));
+		EXPECT_EQ(expected, take->MidiVisualPosition());
+	}
+}
+
+TEST(TransportPhaseOffset, SyncPhaseMapPreservesLateAudioAndMidiOrigins)
+{
+	auto take = MakePlayingTimingTake("late-sync-map", 1000ul, 100ul);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	auto loop = take->GetLoops().front();
+	loop->SetBodyPlayIndex(700ul);
+	loop->InvalidateSceneAnchor();
+	take->SetMidiVisualPosition(700ul, 1000ul);
+	take->InvalidateMidiSceneAnchor();
+
+	take->RestoreSyncPhaseMap(5550u);
+	EXPECT_EQ(700ul, TimingLoopBodyPosition(*loop));
+	EXPECT_EQ(700ul, take->MidiVisualPosition());
+}
+
+TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
+{
+	auto take = MakeTimingTestLoopTake("midi-only-local-offset");
+	take->SetMidiVisualPosition(100ul, 1000ul);
+	take->ApplyTimingCommand(0, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->SetLocalTransportOffsetSamps(-1250);
+	EXPECT_EQ(850ul, take->MidiVisualPosition());
+	EXPECT_EQ(1250, take->MidiAnchorCorrection());
+	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandLeavesEmptyTakeUnmoved)
+{
+	auto take = MakeTimingTestLoopTake("empty");
+	take->ApplyTimingCommand(250, 2u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyTimingCommand(500, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	EXPECT_EQ(0ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(ExternalPhaseCorrection, InvalidationLeavesDisconnectedAdvanceUnchanged)
+{
+	auto take = MakePlayingTimingTake("disconnect", 1000ul, 100ul);
+	take->QueueTimingCorrection(200, 3u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->InvalidateTimingCorrections();
+	take->EndMultiPlay(10u);
+	take->EndMultiPlay(10u);
+
+	EXPECT_EQ(120ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(120ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, ReconnectCannotConsumeStaleGeneration)
+{
+	auto take = MakePlayingTimingTake("reconnect", 1000ul, 100ul);
+	take->QueueTimingCorrection(300, 4u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->InvalidateTimingCorrections();
+	take->QueueTimingCorrection(-20, 5u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->EndMultiPlay(10u);
+
+	EXPECT_EQ(90ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(90ul, take->MidiVisualPosition());
+	EXPECT_EQ(20, take->MidiAnchorCorrection());
+}
+
+TEST(ExternalPhaseCorrection, LongSimulationRemainsExactAcrossLengths)
+{
+	const unsigned long lengths[] = { 1000ul, 2000ul, 500ul, 777ul };
+	std::shared_ptr<TimingTestLoopTake> takes[std::size(lengths)];
+	unsigned long expected[std::size(lengths)]{};
+	for (auto index = 0u; index < std::size(lengths); ++index)
+		takes[index] = MakePlayingTimingTake("simulation-" + std::to_string(index), lengths[index], 0ul);
+
+	for (auto interval = 0u; interval < 2000u; ++interval)
+	{
+		const auto delta = static_cast<long long>(interval % 15u) - 7;
+		for (auto index = 0u; index < std::size(lengths); ++index)
+		{
+			takes[index]->QueueTimingCorrection(delta, 9u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+			takes[index]->EndMultiPlay(64u);
+			const auto length = static_cast<long long>(lengths[index]);
+			auto next = (static_cast<long long>(expected[index]) + 64 + delta) % length;
+			if (next < 0)
+				next += length;
+			expected[index] = static_cast<unsigned long>(next);
+			EXPECT_EQ(expected[index], TimingLoopBodyPosition(*takes[index]->GetLoops().front()))
+				<< "interval=" << interval << " length=" << lengths[index];
+		}
+	}
+}

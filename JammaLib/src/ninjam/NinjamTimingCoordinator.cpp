@@ -307,9 +307,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	NinjamTimingUpdate update;
 	const auto generation = ++_commandGeneration;
 	const auto policy = SelectLocalFollowPolicy(localTiming, change.Bpm);
+	const auto hasLocalTiming = localTiming.has_value();
 	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
 		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation,
-		change.AudioBlockStartSample, policy };
+		change.AudioBlockStartSample, policy, change.Bpm,
+		hasLocalTiming ? localTiming->Bpm : 0.0f, hasLocalTiming };
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	++_diagnostics.TempoAccepted;
@@ -332,6 +334,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 		++_diagnostics.TempoRejected;
 		NinjamTimingUpdate update;
 		update.InvalidatePendingCorrections = true;
+		update.NoSyncReason = NinjamNoSyncReason::StayLocal;
 		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, ++_commandGeneration);
 		return update;
 	}
@@ -341,6 +344,16 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 NinjamTimingDiagnostics NinjamTimingCoordinator::Diagnostics() const noexcept
 {
 	return _diagnostics;
+}
+
+const char* NinjamTimingCoordinator::FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept
+{
+	switch (policy)
+	{
+	case NinjamLocalFollowPolicy::ContinuousSync: return "continuous-sync";
+	case NinjamLocalFollowPolicy::BlockSync: return "block-sync";
+	default: return "no-sync";
+	}
 }
 
 NinjamLocalFollowPolicy NinjamTimingCoordinator::SelectLocalFollowPolicy(

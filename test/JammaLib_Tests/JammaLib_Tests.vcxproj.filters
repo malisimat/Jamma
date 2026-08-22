@@ -38,6 +38,9 @@
     <ClCompile Include="src\engine\FlipBuffer_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\engine\LoopTakeTiming_Tests.cpp">
+      <Filter>src\engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\engine\VstStaging_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>

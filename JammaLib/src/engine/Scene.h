@@ -375,6 +375,7 @@ namespace engine
 		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
 		std::uint64_t _lastLoggedNinjamTimingCommandSequence = 0u;
+		ninjam::NinjamLocalFollowPolicy _lastLoggedNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;

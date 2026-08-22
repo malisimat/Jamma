@@ -358,6 +358,12 @@ namespace engine
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.
 		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
+		struct LoggedLoopPosition
+		{
+			std::string Key;
+			unsigned long Position = 0ul;
+			unsigned long Length = 0ul;
+		};
 
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
@@ -385,6 +391,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
+		mutable std::vector<LoggedLoopPosition> _ninjamBeforePositions;
 
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on
