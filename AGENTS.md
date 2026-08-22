@@ -40,6 +40,8 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
 - For architecture and flow questions, prefer semantic/codegraph tools over blunt text search.
 - When using agent subtools, cite the specific files and lines involved.
 - For text search, use rg (ripgrep), not grep or Select-String in PowerShell.
+- For local loop phase, NINJAM timing, tempo join behavior, and remote-follow
+  changes, read doc/loop-alignment-and-ninjam-sync.md before editing.
 
 ## Coding Guidance
 
