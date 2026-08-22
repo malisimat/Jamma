@@ -103,6 +103,10 @@ $testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Test
 
 ## VS Code Tasks
 
+The default F5 configuration, `Launch Jamma (Debug x64)`, runs the incremental
+`Build Solution (Debug x64)` task first. This keeps the x64 Debug `Jamma.exe`
+current with all source and library changes before debugging.
+
 `.vscode\tasks.json` is ignored by git so each developer can keep local tweaks. To bootstrap a local copy from the tracked starter:
 
 ```powershell
