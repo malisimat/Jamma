@@ -507,10 +507,10 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 			if (shifted < 0)
 				shifted += length;
 			midiPlayIndex = static_cast<unsigned long>(shifted);
-			_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(correction),
-				std::memory_order_relaxed);
+			_MoveMidiVisualCursor(midiPlayIndex, correction);
 		}
-		_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
+		else
+			_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	}
 
 	_TryApplyLocalTransportOffset();
@@ -530,86 +530,8 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 	if (generation == 0u || generation <= _audioTimingGeneration)
 		return;
 	_audioTimingGeneration = generation;
-	if (policy == ninjam::NinjamLocalFollowPolicy::StayLocal)
+	if (policy == ninjam::NinjamLocalFollowPolicy::NoSync)
 		return;
-	if (policy == ninjam::NinjamLocalFollowPolicy::BoundaryRestore)
-	{
-		const auto writingReceipt = _alignmentReceiptSequence.fetch_add(1u,
-			std::memory_order_acq_rel) + 1u;
-		std::uint64_t audioLoopCount = 0u;
-		std::uint64_t midiLoopCount = 0u;
-		std::uint64_t maxResidual = 0u;
-		std::uint64_t capturedMidiAnchor = 0u;
-		std::uint64_t restoredMidiCursor = 0u;
-		std::uint64_t midiEventPhaseResidual = 0u;
-		std::uint64_t midiAutomationPhaseResidual = 0u;
-		auto state = _AudioStateSnapshot();
-		bool moved = false;
-		if (state)
-		{
-			for (const auto& weakLoop : state->Loops)
-			{
-				if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
-				{
-					const auto length = loop->LoopLength();
-					const auto before = loop->BodyPlayIndex();
-					if (!loop->HasSceneAnchor())
-						continue;
-					const auto target = static_cast<unsigned long>(ninjam::RestoreScenePhaseAfterDelta(
-						sceneCoordinateSamps, deltaSamps, loop->SceneAnchor(), length));
-					loop->SetBodyPlayIndex(target);
-					const auto residual = ninjam::PositiveModulo(
-						static_cast<long long>(loop->BodyPlayIndex()) - static_cast<long long>(target), length);
-					maxResidual = std::max(maxResidual, residual);
-					++audioLoopCount;
-					moved = moved || target != before;
-				}
-			}
-		}
-
-		const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
-		if (midiLoopLength > 0ul)
-		{
-			const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
-			if (_hasMidiSceneAnchor.load(std::memory_order_acquire))
-			{
-				capturedMidiAnchor = _midiSceneAnchor.load(std::memory_order_relaxed);
-				const auto correctionBefore = _midiAnchorCorrection.load(std::memory_order_relaxed);
-				const auto target = static_cast<unsigned long>(ninjam::RestoreScenePhaseAfterDelta(
-					sceneCoordinateSamps, deltaSamps,
-					capturedMidiAnchor, midiLoopLength));
-				_midiVisualPlayIndex.store(target, std::memory_order_relaxed);
-				const auto cursorDelta = static_cast<long long>(target) - static_cast<long long>(before);
-				_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(cursorDelta), std::memory_order_relaxed);
-				restoredMidiCursor = _midiVisualPlayIndex.load(std::memory_order_relaxed);
-				midiEventPhaseResidual = ninjam::PositiveModulo(
-					static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
-					- static_cast<long long>(target), midiLoopLength);
-				const auto expectedCorrection = static_cast<long long>(correctionBefore) - cursorDelta;
-				const auto actualCorrection = static_cast<long long>(_midiAnchorCorrection.load(std::memory_order_relaxed));
-				midiAutomationPhaseResidual = static_cast<std::uint64_t>(
-					actualCorrection >= expectedCorrection ? actualCorrection - expectedCorrection : expectedCorrection - actualCorrection);
-				maxResidual = std::max(maxResidual, midiEventPhaseResidual);
-				maxResidual = std::max(maxResidual, midiAutomationPhaseResidual);
-				midiLoopCount = 1u;
-				moved = moved || target != before;
-			}
-		}
-		if (moved)
-			_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
-		_alignmentReceiptGeneration.store(generation, std::memory_order_relaxed);
-		_alignmentReceiptSceneCoordinate.store(sceneCoordinateSamps, std::memory_order_relaxed);
-		_alignmentReceiptDelta.store(deltaSamps, std::memory_order_relaxed);
-		_alignmentReceiptAudioLoopCount.store(audioLoopCount, std::memory_order_relaxed);
-		_alignmentReceiptMidiLoopCount.store(midiLoopCount, std::memory_order_relaxed);
-		_alignmentReceiptMaxResidual.store(maxResidual, std::memory_order_relaxed);
-		_alignmentReceiptCapturedMidiAnchor.store(capturedMidiAnchor, std::memory_order_relaxed);
-		_alignmentReceiptRestoredMidiCursor.store(restoredMidiCursor, std::memory_order_relaxed);
-		_alignmentReceiptMidiEventPhaseResidual.store(midiEventPhaseResidual, std::memory_order_relaxed);
-		_alignmentReceiptMidiAutomationPhaseResidual.store(midiAutomationPhaseResidual, std::memory_order_relaxed);
-		_alignmentReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
-		return;
-	}
 	if (deltaSamps == 0)
 		return;
 
@@ -631,13 +553,11 @@ void LoopTake::ApplyTimingCommand(long long deltaSamps,
 	if (midiLoopLength > 0ul)
 	{
 		const auto length = static_cast<long long>(midiLoopLength);
-		auto midiPlayIndex = static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
-		auto shifted = (midiPlayIndex + (deltaSamps % length)) % length;
+		auto shifted = (static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
+			+ (deltaSamps % length)) % length;
 		if (shifted < 0)
 			shifted += length;
-		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
-		_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(deltaSamps),
-			std::memory_order_relaxed);
+		_MoveMidiVisualCursor(static_cast<unsigned long>(shifted), deltaSamps);
 		moved = true;
 	}
 	if (moved)
@@ -677,23 +597,87 @@ void LoopTake::InvalidateSceneAnchors() noexcept
 			if (auto loop = weakLoop.lock()) loop->InvalidateSceneAnchor();
 	}
 	_hasMidiSceneAnchor.store(false, std::memory_order_release);
+	_hasSyncPhaseMap = false;
 }
 
-bool LoopTake::IsRemoteTimingCompatible(std::uint64_t grainSamps,
-	std::uint64_t intervalSamps) const noexcept
+void LoopTake::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
+	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps) noexcept
 {
+	_hasSyncPhaseMap = localMasterLengthSamps > 0ul && remoteMasterLengthSamps > 0ul;
+	_syncPhaseMapSceneOrigin = sceneCoordinateSamps;
+	_syncPhaseMapLocalMasterLength = localMasterLengthSamps;
+	_syncPhaseMapRemoteMasterLength = remoteMasterLengthSamps;
 	auto state = _AudioStateSnapshot();
 	if (state)
-	{
 		for (const auto& weakLoop : state->Loops)
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul
-				&& !ninjam::IsRemoteTimingCompatible(loop->LoopLength(), grainSamps, intervalSamps))
-				return false;
-	}
-
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(sceneCoordinateSamps,
+					loop->BodyPlayIndex(), loop->LoopLength())));
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
-	return midiLoopLength == 0ul
-		|| ninjam::IsRemoteTimingCompatible(midiLoopLength, grainSamps, intervalSamps);
+	if (midiLoopLength > 0ul)
+	{
+		_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(sceneCoordinateSamps,
+			_midiVisualPlayIndex.load(std::memory_order_relaxed), midiLoopLength)), std::memory_order_relaxed);
+		_hasMidiSceneAnchor.store(true, std::memory_order_release);
+	}
+}
+
+void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
+{
+	if (!_hasSyncPhaseMap || sceneCoordinateSamps < _syncPhaseMapSceneOrigin)
+		return;
+	const auto elapsed = sceneCoordinateSamps - _syncPhaseMapSceneOrigin;
+	const auto wholeRemoteIntervals = elapsed / _syncPhaseMapRemoteMasterLength;
+	const auto remainder = elapsed % _syncPhaseMapRemoteMasterLength;
+	const auto scaledElapsed = wholeRemoteIntervals * _syncPhaseMapLocalMasterLength
+		+ (remainder * _syncPhaseMapLocalMasterLength
+			+ (_syncPhaseMapRemoteMasterLength / 2ul)) / _syncPhaseMapRemoteMasterLength;
+	auto state = _AudioStateSnapshot();
+	if (state)
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			{
+				const auto length = loop->LoopLength();
+				if (!loop->HasSceneAnchor())
+				{
+					const auto originPhase = ninjam::PositiveModulo(
+						static_cast<long long>(loop->BodyPlayIndex()) - static_cast<long long>(scaledElapsed), length);
+					loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(
+						_syncPhaseMapSceneOrigin, originPhase, length)));
+				}
+				const auto originPhase = ninjam::RestoreScenePhase(_syncPhaseMapSceneOrigin,
+					loop->SceneAnchor(), length);
+				loop->SetBodyPlayIndex(static_cast<unsigned long>((originPhase + scaledElapsed) % length));
+			}
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		if (!_hasMidiSceneAnchor.load(std::memory_order_acquire))
+		{
+			const auto originPhase = ninjam::PositiveModulo(
+				static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
+				- static_cast<long long>(scaledElapsed), midiLoopLength);
+			_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(
+				_syncPhaseMapSceneOrigin, originPhase, midiLoopLength)),
+				std::memory_order_relaxed);
+			_hasMidiSceneAnchor.store(true, std::memory_order_release);
+		}
+		const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+		const auto originPhase = ninjam::RestoreScenePhase(_syncPhaseMapSceneOrigin,
+			_midiSceneAnchor.load(std::memory_order_relaxed), midiLoopLength);
+		const auto target = static_cast<unsigned long>((originPhase + scaledElapsed) % midiLoopLength);
+		_MoveMidiVisualCursor(target, static_cast<long long>(target) - static_cast<long long>(before));
+	}
+}
+
+void LoopTake::_MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept
+{
+	const auto length = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (length == 0ul)
+		return;
+	_midiVisualPlayIndex.store(target % length, std::memory_order_relaxed);
+	_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(translationSamps),
+		std::memory_order_relaxed);
 }
 
 std::optional<LoopTake::AlignmentReceipt> LoopTake::LastAlignmentReceipt() const noexcept
@@ -773,8 +757,7 @@ void LoopTake::_TryApplyLocalTransportOffset() noexcept
 			+ (deltaSamps % length)) % length;
 		if (shifted < 0)
 			shifted += length;
-		_midiVisualPlayIndex.store(static_cast<unsigned long>(shifted), std::memory_order_relaxed);
-		_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(deltaSamps), std::memory_order_relaxed);
+		_MoveMidiVisualCursor(static_cast<unsigned long>(shifted), deltaSamps);
 		moved = true;
 	}
 

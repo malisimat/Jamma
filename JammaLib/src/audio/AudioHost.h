@@ -25,7 +25,7 @@ namespace audio
 		std::uint64_t Sequence = 0u;
 		std::uint64_t Generation = 0u;
 		ninjam::NinjamTimingCommandType Type = ninjam::NinjamTimingCommandType::Invalidate;
-		ninjam::NinjamLocalFollowPolicy Policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+		ninjam::NinjamLocalFollowPolicy Policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t SceneCoordinateSamps = 0u;
 		long long DeltaSamps = 0;
 	};
@@ -119,7 +119,7 @@ namespace audio
 		std::atomic<ninjam::NinjamTimingCommandType> _lastAppliedTimingCommandType{
 			ninjam::NinjamTimingCommandType::Invalidate };
 		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedTimingCommandPolicy{
-			ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline };
+			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedTimingDelta{ 0 };
 		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
@@ -137,9 +137,11 @@ namespace audio
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
-		// Audio-thread owned after construction. It remains active after a material
-		// replacement so subsequent remote boundaries restore durable anchors.
-		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+		// Audio-thread owned phase-map geometry. The map is rebased after every
+		// accepted common correction so the next block cannot undo it.
+		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		unsigned long _syncPhaseMapLocalMasterLength = 0ul;
+		unsigned long _syncPhaseMapRemoteMasterLength = 0ul;
 		TickCallback _tickCallback;
 	};
 }

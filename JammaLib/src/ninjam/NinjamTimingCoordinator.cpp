@@ -89,7 +89,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		if (_latestObservedTempoChange.has_value())
 		{
 			if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
-				return _AcceptTempoChange(_latestObservedTempoChange.value(), clock);
+				return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
 			_pendingTempoChange = _latestObservedTempoChange;
 			update.PromptForTempoChange = true;
 		}
@@ -127,7 +127,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_requestedTempo.reset();
 		_requestState = TempoRequestState::Acknowledged;
 		++_diagnostics.TempoAcknowledged;
-		return _AcceptTempoChange(_latestObservedTempoChange.value(), clock);
+		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
 	}
 
 	if (!event.has_value())
@@ -160,7 +160,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 				// Do not turn it into an apply-now proposal before the request resolves.
 			}
 			else if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
-				return _AcceptTempoChange(proposal.value(), clock);
+				return _AcceptTempoChange(proposal.value(), localTiming, clock);
 			else if (!_ignoredTempoChange.has_value() || !_SameTempo(_ignoredTempoChange.value(), proposal.value()))
 			{
 				_pendingTempoChange = proposal;
@@ -205,7 +205,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			if (proposal.has_value())
 			{
 				if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
-					return _AcceptTempoChange(proposal.value(), clock);
+					return _AcceptTempoChange(proposal.value(), localTiming, clock);
 				_pendingTempoChange = proposal;
 				update.PromptForTempoChange = true;
 				return update;
@@ -301,13 +301,15 @@ std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const Ni
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempoChange& change,
+	const std::optional<timing::QuantisationTiming>& localTiming,
 	utils::Timer& clock)
 {
 	NinjamTimingUpdate update;
 	const auto generation = ++_commandGeneration;
+	const auto policy = SelectLocalFollowPolicy(localTiming, change.Bpm);
 	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
 		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation,
-		change.AudioBlockStartSample };
+		change.AudioBlockStartSample, policy };
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
 	++_diagnostics.TempoAccepted;
@@ -328,14 +330,27 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 		_ignoredTempoChange = change;
 		_pendingTempoChange.reset();
 		++_diagnostics.TempoRejected;
-		return {};
+		NinjamTimingUpdate update;
+		update.InvalidatePendingCorrections = true;
+		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, ++_commandGeneration);
+		return update;
 	}
-	return _AcceptTempoChange(change, clock);
+	return _AcceptTempoChange(change, localTiming, clock);
 }
 
 NinjamTimingDiagnostics NinjamTimingCoordinator::Diagnostics() const noexcept
 {
 	return _diagnostics;
+}
+
+NinjamLocalFollowPolicy NinjamTimingCoordinator::SelectLocalFollowPolicy(
+	const std::optional<timing::QuantisationTiming>& localTiming, float remoteBpm) noexcept
+{
+	return !localTiming.has_value()
+		|| std::abs(remoteBpm - localTiming->Bpm)
+		<= NinjamTempoJoinOptions::TempoRequestAcknowledgementToleranceBpm
+		? NinjamLocalFollowPolicy::ContinuousSync
+		: NinjamLocalFollowPolicy::BlockSync;
 }
 
 void NinjamTimingCoordinator::_RecordEmittedCommand(NinjamEmittedCommand kind,

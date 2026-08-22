@@ -235,12 +235,13 @@ namespace engine
 		void ApplyTimingCommand(long long deltaSamps,
 			std::uint64_t generation,
 			TimingCorrectionReason reason,
-			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline,
+			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::ContinuousSync,
 			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
-		bool IsRemoteTimingCompatible(std::uint64_t grainSamps,
-			std::uint64_t intervalSamps) const noexcept;
+		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
+			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps) noexcept;
+		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
 		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
@@ -392,6 +393,11 @@ namespace engine
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
 		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
 		std::atomic_bool _hasMidiSceneAnchor{ false };
+		void _MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept;
+		bool _hasSyncPhaseMap = false;
+		std::uint64_t _syncPhaseMapSceneOrigin = 0u;
+		unsigned long _syncPhaseMapLocalMasterLength = 0ul;
+		unsigned long _syncPhaseMapRemoteMasterLength = 0ul;
 		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
 		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
 		long long _appliedLocalTransportOffsetSamps = 0;

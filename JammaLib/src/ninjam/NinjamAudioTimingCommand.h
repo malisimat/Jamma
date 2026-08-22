@@ -23,10 +23,9 @@ namespace ninjam
 
 	enum class NinjamLocalFollowPolicy : std::uint8_t
 	{
-		SeamlessDiscipline,
-		ContinuousRemote,
-		BoundaryRestore,
-		StayLocal
+		ContinuousSync,
+		BlockSync,
+		NoSync
 	};
 
 	// One immutable transport command published by the job thread and consumed
@@ -44,7 +43,7 @@ namespace ninjam
 		unsigned int AbsolutePhaseSamps = 0u;
 		std::uint64_t PhaseObservationSample = 0u;
 		long long PhaseDeltaSamps = 0;
-		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::SeamlessDiscipline;
+		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t SceneCoordinateSamps = 0u;
 		bool InvalidateSceneAnchors = false;
 	};
@@ -131,7 +130,7 @@ namespace ninjam
 		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
 		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };
 		std::atomic<long long> _phaseDeltaSamps{ 0 };
-		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::SeamlessDiscipline };
+		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _sceneCoordinateSamps{ 0u };
 		std::atomic_bool _invalidateSceneAnchors{ false };
 		std::uint64_t _consumedSequence = 0u;

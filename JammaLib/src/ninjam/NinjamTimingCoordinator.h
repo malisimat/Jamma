@@ -5,6 +5,7 @@
 #include <optional>
 #include "NinjamTiming.h"
 #include "NinjamTimingTracker.h"
+#include "NinjamAudioTimingCommand.h"
 #include "../timing/TimingQuantiser.h"
 
 namespace io
@@ -16,6 +17,8 @@ namespace ninjam
 {
 	struct NinjamTempoJoinOptions
 	{
+		// Servers commonly quantise a requested decimal BPM to an integer. Treat a
+		// near result as the pushed tempo so local content follows its transport.
 		static constexpr float TempoRequestAcknowledgementToleranceBpm = 1.0f;
 		static constexpr auto DefaultTempoRequestDeadline = std::chrono::seconds(15);
 
@@ -74,6 +77,7 @@ namespace ninjam
 		// replacement from being silently rejected by the audio generation gate.
 		std::uint64_t Generation = 0u;
 		std::uint64_t AudioBlockStartSample = 0u;
+		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::ContinuousSync;
 	};
 
 	struct NinjamTimingUpdate
@@ -152,6 +156,9 @@ namespace ninjam
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
+		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
+			const std::optional<timing::QuantisationTiming>& localTiming,
+			float remoteBpm) noexcept;
 
 	private:
 		static bool _SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept;
@@ -160,6 +167,7 @@ namespace ninjam
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing,
 			const io::UserConfig& config);
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
+			const std::optional<timing::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		void _RecordEmittedCommand(NinjamEmittedCommand kind, std::uint64_t generation) noexcept;
 		NinjamTimingTracker _tracker;

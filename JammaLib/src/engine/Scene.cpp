@@ -268,6 +268,7 @@ void Scene::ConnectNinjam(const std::string& host,
 		{
 			ninjam::NinjamAudioTimingCommand invalidate;
 			invalidate.Type = ninjam::NinjamTimingCommandType::Invalidate;
+			invalidate.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			invalidate.InvalidateSceneAnchors = true;
 			_audioEngine->PublishTimingCommand(invalidate);
 		}
@@ -414,6 +415,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.Quantisation = settings.Quantisation;
 		command.AbsolutePhaseSamps = settings.PhaseSamps;
 		command.PhaseObservationSample = settings.AudioBlockStartSample;
+		command.LocalFollowPolicy = settings.LocalFollowPolicy;
 		hasCommand = true;
 		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
 	}
@@ -429,6 +431,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 	else if (update.InvalidatePendingCorrections)
 	{
 		command.Type = ninjam::NinjamTimingCommandType::Invalidate;
+		command.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		hasCommand = true;
 	}
 
@@ -486,20 +489,19 @@ void Scene::_LogAppliedNinjamLoopAlignment()
 		event = "ninjam-join-aligned";
 		break;
 	case ninjam::NinjamTimingCommandType::PhaseDiscipline:
-		if (receipt->Policy == ninjam::NinjamLocalFollowPolicy::BoundaryRestore)
-			event = "ninjam-boundary-restored";
+		if (receipt->Policy != ninjam::NinjamLocalFollowPolicy::NoSync)
+			event = "ninjam-phase-disciplined";
 		break;
 	default:
 		break;
 	}
 	if (!event)
 		return;
-	const char* policy = "seamless-discipline";
+	const char* policy = "no-sync";
 	switch (receipt->Policy)
 	{
-	case ninjam::NinjamLocalFollowPolicy::ContinuousRemote: policy = "continuous-remote"; break;
-	case ninjam::NinjamLocalFollowPolicy::BoundaryRestore: policy = "boundary-restore"; break;
-	case ninjam::NinjamLocalFollowPolicy::StayLocal: policy = "stay-local"; break;
+	case ninjam::NinjamLocalFollowPolicy::ContinuousSync: policy = "continuous-sync"; break;
+	case ninjam::NinjamLocalFollowPolicy::BlockSync: policy = "block-sync"; break;
 	default: break;
 	}
 

@@ -758,26 +758,24 @@ void Station::InvalidateSceneAnchors() noexcept
 		if (auto take = weakTake.lock()) take->InvalidateSceneAnchors();
 }
 
-bool Station::IsRemoteTimingCompatible(std::uint64_t grainSamps,
-	std::uint64_t intervalSamps, bool& hasPlayableContent) const noexcept
+void Station::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
+	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
-		return true;
-
+		return;
 	for (const auto& weakTake : state->LoopTakes)
-	{
-		if (auto take = weakTake.lock())
-		{
-			const auto length = take->VisualLoopLengthSamps();
-			if (length == 0ul)
-				continue;
-			hasPlayableContent = true;
-			if (!take->IsRemoteTimingCompatible(grainSamps, intervalSamps))
-				return false;
-		}
-	}
-	return true;
+		if (auto take = weakTake.lock()) take->BeginSyncPhaseMap(sceneCoordinateSamps,
+			localMasterLengthSamps, remoteMasterLengthSamps);
+}
+
+void Station::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->RestoreSyncPhaseMap(sceneCoordinateSamps);
 }
 
 void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept

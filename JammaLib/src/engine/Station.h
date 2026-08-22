@@ -115,12 +115,13 @@ namespace engine
 		void ApplyTimingCommand(long long deltaSamps,
 			std::uint64_t generation,
 			LoopTake::TimingCorrectionReason reason,
-			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline,
+			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::ContinuousSync,
 			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
-		bool IsRemoteTimingCompatible(std::uint64_t grainSamps,
-			std::uint64_t intervalSamps, bool& hasPlayableContent) const noexcept;
+		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
+			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps) noexcept;
+		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,

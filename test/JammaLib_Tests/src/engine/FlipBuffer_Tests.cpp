@@ -55,6 +55,11 @@ public:
 	{
 		return _midiVisualPlayIndex.load(std::memory_order_relaxed);
 	}
+
+	void InvalidateMidiSceneAnchor()
+	{
+		_hasMidiSceneAnchor.store(false, std::memory_order_release);
+	}
 };
 
 static std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "take-0")
@@ -412,39 +417,51 @@ TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }
 
-TEST(TransportPhaseOffset, BoundaryRestoreUsesPreTransitionAudioAndMidiAnchorsAcrossWraps)
+TEST(TransportPhaseOffset, SyncPhaseMapRebasesAfterTimingCorrection)
 {
 	auto take = MakePlayingTake("boundary-restore", 1000ul, 100ul);
-	take->CaptureSceneAnchors(5000u);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	take->RestoreSyncPhaseMap(6100u);
+	EXPECT_EQ(100ul, LoopBodyPosition(*take->GetLoops().front()));
+	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 6100u);
+	take->BeginSyncPhaseMap(6100u, 1000ul, 1100ul);
+	take->RestoreSyncPhaseMap(7200u);
+	EXPECT_EQ(225ul, LoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(225ul, take->MidiVisualPosition());
+}
 
-	const auto restore = [&](std::uint64_t generation, std::uint64_t sceneCoordinate, long long delta)
+TEST(TransportPhaseOffset, SyncPhaseMapMapsAudioAndMidiFromTheSameRemoteMaster)
+{
+	auto take = MakePlayingTake("boundary-map", 1000ul, 100ul);
+	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::TempoReplacement,
+		ninjam::NinjamLocalFollowPolicy::BlockSync, 5000u);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+
+	for (const auto scene : { 5000u, 5550u, 6100u, 7200u })
 	{
-		take->ApplyTimingCommand(delta, generation, LoopTake::TimingCorrectionReason::TempoReplacement,
-			ninjam::NinjamLocalFollowPolicy::BoundaryRestore, sceneCoordinate);
-		const auto expected = static_cast<unsigned long>(ninjam::RestoreScenePhaseAfterDelta(
-			sceneCoordinate, delta, 4900u, 1000u));
+		take->RestoreSyncPhaseMap(scene);
+		const auto elapsed = static_cast<std::uint64_t>(scene - 5000u);
+		const auto scaled = (elapsed * 1000u + 550u) / 1100u;
+		const auto expected = static_cast<unsigned long>((225u + scaled) % 1000u);
 		EXPECT_EQ(expected, LoopBodyPosition(*take->GetLoops().front()));
 		EXPECT_EQ(expected, take->MidiVisualPosition());
-		const auto automationPosition = static_cast<unsigned long>(ninjam::PositiveModulo(
-			1000 - 900 - take->MidiAnchorCorrection(), 1000u));
-		EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
-		const auto receipt = take->LastAlignmentReceipt();
-		ASSERT_TRUE(receipt.has_value());
-		EXPECT_EQ(generation, receipt->Generation);
-		EXPECT_EQ(sceneCoordinate, receipt->SceneCoordinateSamps);
-		EXPECT_EQ(delta, receipt->DeltaSamps);
-		EXPECT_EQ(1u, receipt->AudioLoopCount);
-		EXPECT_EQ(1u, receipt->MidiLoopCount);
-		EXPECT_EQ(0u, receipt->MaxResidualSamps);
-		EXPECT_EQ(900u, receipt->CapturedMidiAnchorSamps);
-		EXPECT_EQ(expected, receipt->RestoredMidiCursorSamps);
-		EXPECT_EQ(0u, receipt->MidiEventPhaseResidualSamps);
-		EXPECT_EQ(0u, receipt->MidiAutomationPhaseResidualSamps);
-	};
+	}
+}
 
-	restore(1u, 6400u, 125);
-	restore(2u, 7700u, -250);
-	restore(3u, 8900u, 0);
+TEST(TransportPhaseOffset, SyncPhaseMapPreservesLateAudioAndMidiOrigins)
+{
+	auto take = MakePlayingTake("late-sync-map", 1000ul, 100ul);
+	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	auto loop = take->GetLoops().front();
+	loop->SetBodyPlayIndex(700ul);
+	loop->InvalidateSceneAnchor();
+	take->SetMidiVisualPosition(700ul, 1000ul);
+	take->InvalidateMidiSceneAnchor();
+
+	take->RestoreSyncPhaseMap(5550u);
+	EXPECT_EQ(700ul, LoopBodyPosition(*loop));
+	EXPECT_EQ(700ul, take->MidiVisualPosition());
 }
 
 TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)

@@ -140,10 +140,49 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
 	coordinator.Observe(MakeTiming(480000u, 400000u), std::nullopt, true, io::UserConfig{}, clock);
-	coordinator.ResolveTempoChange(false, std::nullopt, clock);
+	const auto rejected = coordinator.ResolveTempoChange(false, std::nullopt, clock);
+	EXPECT_TRUE(rejected.InvalidatePendingCorrections);
 	const auto update = coordinator.Observe(MakeTiming(480000u, 1000u), std::nullopt, true,
 		io::UserConfig{}, clock);
 	EXPECT_FALSE(update.PhaseCorrection.has_value());
+}
+
+TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
+{
+	Timer clock;
+	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	NinjamTimingCoordinator lower;
+	Connect(lower, false, true, local);
+	lower.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	lower.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	lower.NotifyTempoRequestSent(true);
+	lower.Observe(MakeTimingTempo(384000u, 2000u, 119.0f, 16u), local, true, io::UserConfig{}, clock);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, lower.RequestState());
+
+	NinjamTimingCoordinator upper;
+	Connect(upper, false, true, local);
+	upper.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	upper.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
+	upper.NotifyTempoRequestSent(true);
+	upper.Observe(MakeTimingTempo(384000u, 2000u, 121.0f, 16u), local, true, io::UserConfig{}, clock);
+	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, upper.RequestState());
+}
+
+TEST(NinjamTimingCoordinator, ClassifiesContinuousAndBlockSyncAtFixedOneBpmBoundary)
+{
+	const timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 120.0f));
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 120.99f));
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 121.0f));
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::BlockSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 118.99f));
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::BlockSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 121.01f));
+	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
+		NinjamTimingCoordinator::SelectLocalFollowPolicy(std::nullopt, 90.0f));
 }
 
 TEST(NinjamTimingCoordinator, LocalRequestWaitsForWrapAndAcknowledges)

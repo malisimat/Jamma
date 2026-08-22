@@ -91,17 +91,32 @@ $$
 Remote timing is valid only with plausible BPM/BPI and nonzero interval/sample
 rate. Do not use transient NJClient pre-handshake values as authoritative.
 
-There are three follow policies:
+There are exactly three local follow policies. `ContinuousSync` is selected
+when accepted remote tempo is within the fixed inclusive `1.0 BPM` distance of
+local timing (or no local timing exists). `BlockSync` is selected for a
+materially different accepted tempo. Both replace Timer geometry and use the
+same audio-thread phase map; the names describe the expected correction size.
+`NoSync` explicitly clears that map and leaves Timer geometry and local cursors
+free-running. It is used for `Stay local`, invalidation, and disconnect.
 
-- `SeamlessDiscipline`: old and new Timer seed length and grain are identical.
-  Keep geometry and apply signed circular phase corrections only.
-- `ContinuousRemote`: material replacement, but every playable loop is
-  compatible with remote grain and interval. Replace Timer geometry and follow
-  remotely without per-boundary hard restores.
-- `BoundaryRestore`: material replacement and at least one loop is
-  incompatible. Replace Timer geometry, preserve per-loop anchors, and restore
-  each local audio/MIDI phase at every remote wrap, including zero-delta wraps.
-- `StayLocal`: do not apply a remote replacement or phase movement.
+For either sync policy the accepted callback boundary records local master
+length, remote master length, the scene coordinate, and every local audio-body
+and MIDI-event phase. Later blocks derive every cursor from that one map:
+
+$$
+q_i = (q_{i0} + \operatorname{round}((S-S_0)M_l/M_r)) \bmod L_i
+$$
+
+The calculation is integer round-to-nearest, not a floating accumulator. A
+join or discipline delta moves Timer/audio/MIDI together and immediately
+rebases map origins at that scene coordinate, so the next block preserves the
+correction. MIDI cursor translations subtract the identical translation from
+the automation correction. This keeps effective automation phase equal to MIDI
+event phase even across wrap, repeat, and skip movement.
+
+Until rate adjustment exists, the map can repeat or skip source samples/MIDI:
+these corrections are deliberately small in `ContinuousSync` and can be
+conspicuous in `BlockSync`.
 
 For ordinary phase discipline, compute the signed shortest delta between local
 and remote phase. Joins may correct up to half an interval. Ongoing wrap
@@ -135,7 +150,7 @@ While the request is queued or awaiting a result:
 
 A server result acknowledges a push only when it is a fresh observation after a
 successful send, has the same BPI, and is near requested BPM. The intended
-tolerance is within `1.0` BPM so a server-rounded result can succeed. On
+tolerance is the fixed inclusive `+/- 1.0` BPM so a server-rounded result can succeed. On
 acknowledgement, automatically follow the observed server interval/phase; do
 not prompt to accept the stale pre-push tempo.
 

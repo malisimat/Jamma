@@ -77,13 +77,43 @@ TEST(NinjamMetronomeTiming, OrdersIntervalAccentBeforeFollowingBeat)
 	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
 
 	ASSERT_TRUE(result.valid);
-	ASSERT_EQ(result.onsetCount, 3u);
+	ASSERT_EQ(result.onsetCount, 4u);
 	EXPECT_EQ(result.onsets[0].offset, 20u);
 	EXPECT_FALSE(result.onsets[0].accent);
 	EXPECT_EQ(result.onsets[1].offset, 20u);
 	EXPECT_TRUE(result.onsets[1].accent);
-	EXPECT_EQ(result.onsets[2].offset, 4020u);
+	EXPECT_EQ(result.onsets[2].offset, 2020u);
 	EXPECT_FALSE(result.onsets[2].accent);
+	EXPECT_EQ(result.onsets[3].offset, 4020u);
+	EXPECT_FALSE(result.onsets[3].accent);
+}
+
+TEST(NinjamMetronomeTiming, UsesIntervalGeometryWhenReportedBpmDisagrees)
+{
+	auto input = MakeInput();
+	input.bpm = 60.0f; // Deliberately contradictory: canonical spacing is 2000 samples.
+	input.intervalPositionSamps = 1950u;
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	ASSERT_TRUE(result.valid);
+	ASSERT_EQ(result.onsetCount, 1u);
+	EXPECT_EQ(result.onsets[0].offset, 50u);
+	EXPECT_FALSE(result.onsets[0].accent);
+}
+
+TEST(NinjamMetronomeTiming, DoesNotResetForBpmMetadataChange)
+{
+	auto input = MakeInput();
+	ninjam::NinjamMetronomeTimingState state;
+
+	const auto first = ninjam::NinjamMetronomeTiming::Compute(input, state);
+	input.bpm = 60.0f;
+	const auto changedBpm = ninjam::NinjamMetronomeTiming::Compute(input, state);
+
+	EXPECT_TRUE(first.generationReset);
+	EXPECT_FALSE(changedBpm.generationReset);
 }
 
 TEST(NinjamMetronomeTiming, UsesCanonicalDeviceRateSamples)
@@ -115,10 +145,10 @@ TEST(NinjamMetronomeTiming, AdvancesForOutputLatency)
 	EXPECT_EQ(result.onsets[0].offset, 0u);
 }
 
-TEST(NinjamMetronomeTiming, RejectsInvalidTiming)
+TEST(NinjamMetronomeTiming, RejectsInvalidGeometry)
 {
 	auto input = MakeInput();
-	input.bpm = 0.0f;
+	input.bpi = 0u;
 	ninjam::NinjamMetronomeTimingState state;
 
 	const auto result = ninjam::NinjamMetronomeTiming::Compute(input, state);

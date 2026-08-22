@@ -165,42 +165,28 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			long long stationDelta = command->PhaseDeltaSamps;
 			auto policy = command->LocalFollowPolicy;
 			std::uint64_t sceneCoordinate = command->SceneCoordinateSamps;
-			if (command->InvalidateSceneAnchors)
+			unsigned long previousMasterLength = 0ul;
+			const auto disablesSync = command->Type == ninjam::NinjamTimingCommandType::Invalidate
+				|| (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming
+					&& policy == ninjam::NinjamLocalFollowPolicy::NoSync);
+			if (disablesSync || command->InvalidateSceneAnchors)
 			{
 				for (auto& station : stations)
 					if (station && !station->IsRemote()) station->InvalidateSceneAnchors();
-				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
+				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+				_syncPhaseMapLocalMasterLength = 0ul;
+				_syncPhaseMapRemoteMasterLength = 0ul;
+				policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			}
-			if (timingClock)
+			if (!disablesSync && timingClock)
 			{
+				previousMasterLength = timingClock->SeedSourceLength();
 				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
 				{
 					sceneCoordinate = timingClock->SceneSamplePos();
-					for (auto& station : stations)
-						if (station && !station->IsRemote()) station->CaptureSceneAnchors(sceneCoordinate);
-					const auto sameGeometry = timingClock->SeedSourceLength() == command->SeedLengthSamps
-						&& timingClock->QuantiseSamps() == command->QuantiseSamps;
-					if (sameGeometry)
-						policy = ninjam::NinjamLocalFollowPolicy::SeamlessDiscipline;
-					else
-					{
-						bool hasPlayableContent = false;
-						bool compatible = true;
-						for (const auto& station : stations)
-							if (station && !station->IsRemote()
-								&& !station->IsRemoteTimingCompatible(command->QuantiseSamps,
-									command->SeedLengthSamps, hasPlayableContent))
-							{
-								compatible = false;
-								break;
-							}
-						policy = compatible || !hasPlayableContent
-							? ninjam::NinjamLocalFollowPolicy::ContinuousRemote
-							: ninjam::NinjamLocalFollowPolicy::BoundaryRestore;
-					}
 					_activeNinjamFollowPolicy = policy;
 				}
-				else if (_activeNinjamFollowPolicy == ninjam::NinjamLocalFollowPolicy::BoundaryRestore)
+				else
 				{
 					policy = _activeNinjamFollowPolicy;
 					sceneCoordinate = timingClock->SceneSamplePos();
@@ -251,11 +237,24 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				reason = engine::LoopTake::TimingCorrectionReason::PhaseDiscipline;
 				break;
 			}
-			for (auto& station : stations)
+			if (!disablesSync)
 			{
-				if (station && !station->IsRemote())
-					station->ApplyTimingCommand(stationDelta, command->Generation, reason,
-						policy, sceneCoordinate);
+				for (auto& station : stations)
+					if (station && !station->IsRemote()) station->ApplyTimingCommand(stationDelta,
+						command->Generation, reason, policy, sceneCoordinate);
+				if (timingClock && (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming
+					|| command->Type == ninjam::NinjamTimingCommandType::JoinAlignment
+					|| command->Type == ninjam::NinjamTimingCommandType::PhaseDiscipline))
+				{
+					if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
+					{
+						_syncPhaseMapLocalMasterLength = previousMasterLength;
+						_syncPhaseMapRemoteMasterLength = command->SeedLengthSamps;
+					}
+					for (auto& station : stations)
+						if (station && !station->IsRemote()) station->BeginSyncPhaseMap(sceneCoordinate,
+							_syncPhaseMapLocalMasterLength, _syncPhaseMapRemoteMasterLength);
+				}
 			}
 			const auto writingReceipt = _lastAppliedTimingReceiptSequence.fetch_add(
 				1u, std::memory_order_acq_rel) + 1u;
@@ -376,6 +375,12 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				blockStartSample);
 			_ninjamTimingMailbox.Publish(liveTiming);
 		}
+
+		if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
+			&& timingClock && _syncPhaseMapLocalMasterLength > 0ul
+			&& _syncPhaseMapRemoteMasterLength > 0ul)
+			for (auto& station : stations)
+				if (station && !station->IsRemote()) station->RestoreSyncPhaseMap(timingClock->SceneSamplePos());
 
 		if (nullptr != outBuf)
 		{
