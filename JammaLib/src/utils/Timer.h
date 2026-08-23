@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <tuple>
+#include "../ninjam/NinjamMusicalTransport.h"
 
 typedef std::chrono::time_point<std::chrono::steady_clock> Time;
 
@@ -83,6 +84,31 @@ namespace utils
 		{
 			return _sceneSamplePos.load(std::memory_order_relaxed);
 		}
+		void ReanchorNinjamMusicalTransport(std::uint64_t sceneCoordinateSamps,
+			std::uint64_t remotePhaseSamps, std::uint64_t intervalLengthSamps,
+			unsigned int beatsPerInterval) noexcept
+		{
+			_ninjamMusicalTransport.QueueRemote(sceneCoordinateSamps, remotePhaseSamps,
+				intervalLengthSamps, beatsPerInterval, NinjamMusicalPosition(), QuantiseSamps());
+		}
+		void AdvanceNinjamMusicalTransport() noexcept
+		{
+			_ninjamMusicalTransport.Advance(SceneSamplePos());
+		}
+		void ReanchorNinjamMusicalTransportCurrentGeometry(std::uint64_t sceneCoordinateSamps,
+			std::uint64_t remotePhaseSamps) noexcept
+		{
+			_ninjamMusicalTransport.QueueRemote(sceneCoordinateSamps, remotePhaseSamps,
+				SeedSourceLength(), NinjamMusicalPosition().BeatsPerInterval,
+				NinjamMusicalPosition(), QuantiseSamps());
+		}
+		void ResetNinjamMusicalTransport() noexcept { _ninjamMusicalTransport.Reset(); }
+		ninjam::NinjamMusicalPosition NinjamMusicalPosition() const noexcept
+		{
+			const auto local = ninjam::NinjamMusicalTransport::LocalPosition(LoopCount(), SampOffset(),
+				SeedSourceLength(), QuantiseSamps());
+			return _ninjamMusicalTransport.PositionAt(SceneSamplePos(), local);
+		}
 
 	private:
 		std::atomic_ulong _loopCount;
@@ -100,5 +126,7 @@ namespace utils
 		std::atomic<long long> _commandPhaseDeltaSamps{ 0 };
 		std::atomic<CommandType> _commandType{ CommandType::Invalidate };
 		std::uint64_t _audioGeneration = 0u;
+		// Audio-thread-owned, scene-time-based VST musical transport.
+		ninjam::NinjamMusicalTransport _ninjamMusicalTransport;
 	};
 }

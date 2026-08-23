@@ -713,11 +713,16 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 			ti.tempo      = self->_hostTime.tempo;
 			ti.timeSigNumerator   = self->_hostTime.bpi;
 			ti.timeSigDenominator = 4;
-			// Jamma does not yet publish one non-wrapping musical PPQ epoch that
-			// represents remote NINJAM phase. Do not advertise a fabricated value.
 			ti.flags = kVstTempoValid | kVstTimeSigValid;
+			if (self->_hostTime.hasPpqPos)
+			{
+				ti.ppqPos = self->_hostTime.ppqPos;
+				ti.flags |= kVstPpqPosValid;
+			}
 			if (self->_hostTime.isPlaying)
 				ti.flags |= kVstTransportPlaying;
+			if (self->_hostTime.musicalPositionChanged)
+				ti.flags |= kVstTransportChanged;
 			return reinterpret_cast<VstIntPtr>(&ti);
 		}
 		return 0;

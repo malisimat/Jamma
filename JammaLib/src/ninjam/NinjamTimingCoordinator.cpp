@@ -308,7 +308,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 	const auto generation = ++_commandGeneration;
 	const auto policy = SelectLocalFollowPolicy(localTiming, change.Bpm);
 	const auto hasLocalTiming = localTiming.has_value();
-	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps,
+	update.ClockSettings = NinjamClockSettings{ change.IntervalLengthSamps, change.GrainSamps, change.Bpi,
 		utils::Timer::QUANTISE_POWER, change.IntervalPositionSamps, generation,
 		change.AudioBlockStartSample, policy, change.Bpm,
 		hasLocalTiming ? localTiming->Bpm : 0.0f, hasLocalTiming };

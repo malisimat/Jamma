@@ -70,6 +70,7 @@ namespace ninjam
 	{
 		unsigned long SeedLengthSamps = 0ul;
 		unsigned int QuantiseSamps = 0u;
+		unsigned int BeatsPerInterval = 0u;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		unsigned int PhaseSamps = 0u;
 		// Explicit generation for the timing replacement, independent of whether a

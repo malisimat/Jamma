@@ -1,6 +1,71 @@
 #include "gtest/gtest.h"
+#include <cmath>
 #include "./ninjam/NinjamTiming.h"
 #include "./ninjam/NinjamLoopAlignment.h"
+#include "./ninjam/NinjamMusicalTransport.h"
+
+TEST(NinjamMusicalTransport, LocalTimerGeometryProducesImmediatePpq)
+{
+	const auto position = ninjam::NinjamMusicalTransport::LocalPosition(3ul, 300u, 1200ul, 150u);
+	ASSERT_TRUE(position.IsValid);
+	EXPECT_DOUBLE_EQ(26.0, position.Ppq);
+	EXPECT_EQ(8, position.BeatsPerInterval);
+}
+
+TEST(NinjamMusicalTransport, LocalPpqRejectsNonIntegralMasterAndGrainGeometry)
+{
+	EXPECT_FALSE(ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1000ul, 128u).IsValid);
+}
+
+TEST(NinjamMusicalTransport, RemoteJoinKeepsLocalPpqUntilTheNextRemoteWrap)
+{
+	ninjam::NinjamMusicalTransport transport;
+	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(3ul, 300u, 1200ul, 150u);
+	transport.QueueRemote(1000u, 400u, 1200u, 8u, local, 150u);
+	EXPECT_DOUBLE_EQ(26.0, transport.PositionAt(1000u, local).Ppq);
+	transport.Advance(1800u);
+	const auto atWrap = transport.PositionAt(1800u, local);
+	ASSERT_TRUE(atWrap.IsValid);
+	EXPECT_TRUE(atWrap.PositionChanged);
+	EXPECT_DOUBLE_EQ(32.0, atWrap.Ppq);
+}
+
+TEST(NinjamMusicalTransport, RemoteProgressionIsContinuousAfterTheForwardLocate)
+{
+	ninjam::NinjamMusicalTransport transport;
+	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1200ul, 150u);
+	transport.QueueRemote(0u, 0u, 1200u, 8u, local, 150u);
+	transport.Advance(0u);
+	EXPECT_DOUBLE_EQ(0.0, transport.PositionAt(0u, local).Ppq);
+	transport.Advance(300u);
+	EXPECT_DOUBLE_EQ(2.0, transport.PositionAt(300u, local).Ppq);
+}
+
+TEST(NinjamMusicalTransport, ReconnectUsesTheCurrentLocalEpochAndNotRemoteZero)
+{
+	ninjam::NinjamMusicalTransport transport;
+	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(4ul, 0u, 1200ul, 150u);
+	transport.Reset();
+	transport.QueueRemote(5000u, 400u, 1000u, 4u, local, 150u);
+	transport.Advance(5600u);
+	const auto atWrap = transport.PositionAt(5600u, local);
+	ASSERT_TRUE(atWrap.IsValid);
+	EXPECT_GE(atWrap.Ppq, local.Ppq);
+}
+
+TEST(NinjamMusicalTransport, PhaseDisciplineUsesAnotherForwardOnlyRemoteWrapAlignment)
+{
+	ninjam::NinjamMusicalTransport transport;
+	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1200ul, 150u);
+	transport.QueueRemote(0u, 0u, 1200u, 8u, local, 150u);
+	transport.Advance(0u);
+	const auto before = transport.PositionAt(600u, local);
+	transport.QueueRemote(600u, 400u, 1200u, 8u, before, 150u);
+	transport.Advance(1400u);
+	const auto after = transport.PositionAt(1400u, local);
+	EXPECT_GE(after.Ppq, before.Ppq);
+	EXPECT_DOUBLE_EQ(0.0, std::fmod(after.Ppq, 8.0));
+}
 
 TEST(NinjamLoopAlignment, SourcePhaseReachesZeroAtNextRemoteWrapAcrossUnequalRulers)
 {

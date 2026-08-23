@@ -1772,6 +1772,13 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 	_impl->processContext.state = Steinberg::Vst::ProcessContext::kContTimeValid
 		| Steinberg::Vst::ProcessContext::kTempoValid
 		| Steinberg::Vst::ProcessContext::kTimeSigValid;
+	if (state.hasPpqPos)
+	{
+		_impl->processContext.projectTimeMusic = state.ppqPos;
+		// VST3 has no per-block transport-locate flag. The updated project-time,
+		// tempo, and time-signature fields are delivered atomically in this context.
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kProjectTimeMusicValid;
+	}
 	if (state.isPlaying)
 		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kPlaying;
 	_impl->processContext.sampleRate = state.sampleRate;

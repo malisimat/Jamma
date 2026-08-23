@@ -178,6 +178,8 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					if (station && !station->IsRemote()) station->InvalidateSceneAnchors();
 				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 				_syncPhaseMap = {};
+				if (timingClock)
+					timingClock->ResetNinjamMusicalTransport();
 				policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			}
 			if (!disablesSync && timingClock)
@@ -210,6 +212,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 								station->RestoreSyncPhaseMap(sceneCoordinate);
 				}
 				utils::Timer::Command timerCommand;
+				unsigned int musicalRemotePhase = timingClock->SampOffset();
 				timerCommand.Generation = command->Generation;
 				timerCommand.SeedLengthSamps = command->SeedLengthSamps;
 				timerCommand.QuantiseSamps = command->QuantiseSamps;
@@ -224,6 +227,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 						command->PhaseObservationSample, blockStartSample);
 					timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
 					timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemotePhaseSamps);
+					musicalRemotePhase = replacement.RemotePhaseSamps;
 					if (_syncPhaseMap.SourceLengthSamps == 0ul)
 						_syncPhaseMap.SourceLengthSamps = previousMasterLength;
 					const auto sourceLength = _syncPhaseMap.SourceLengthSamps;
@@ -249,6 +253,16 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					timerCommand.PhaseDeltaSamps = command->PhaseDeltaSamps;
 					break;
 				}
+				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
+					timingClock->ReanchorNinjamMusicalTransport(sceneCoordinate,
+						musicalRemotePhase, command->SeedLengthSamps,
+						command->BeatsPerInterval);
+				else if (command->Type == ninjam::NinjamTimingCommandType::JoinAlignment
+					|| command->Type == ninjam::NinjamTimingCommandType::PhaseDiscipline)
+					timingClock->ReanchorNinjamMusicalTransportCurrentGeometry(sceneCoordinate,
+						static_cast<unsigned int>(ninjam::PositiveModulo(
+							static_cast<std::int64_t>(timingClock->SampOffset()) + command->PhaseDeltaSamps,
+							timingClock->SeedSourceLength())));
 				timingClock->ApplyCommand(timerCommand);
 				if (command->Type != ninjam::NinjamTimingCommandType::ReplaceTiming
 					&& _syncPhaseMap.IsActive())
@@ -312,6 +326,8 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			_localTransportOffsetLoopFrac = localTransportOffsetLoopFrac.value();
 
 		const auto timingClock = _timingClock.load(std::memory_order_acquire);
+		if (timingClock)
+			timingClock->AdvanceNinjamMusicalTransport();
 		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
 		if (masterLength != _localTransportOffsetMasterLength)
 			_localTransportOffsetMasterLength = masterLength;

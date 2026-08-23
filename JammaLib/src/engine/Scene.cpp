@@ -434,6 +434,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.Generation = settings.Generation;
 		command.SeedLengthSamps = settings.SeedLengthSamps;
 		command.QuantiseSamps = settings.QuantiseSamps;
+		command.BeatsPerInterval = settings.BeatsPerInterval;
 		command.Quantisation = settings.Quantisation;
 		command.AbsolutePhaseSamps = settings.PhaseSamps;
 		command.PhaseObservationSample = settings.AudioBlockStartSample;

@@ -30,6 +30,9 @@ namespace vst
 		double sampleRate = 44100.0;
 		double tempo      = 120.0;
 		int32_t bpi       = 4;
+		double ppqPos     = 0.0;
+		bool hasPpqPos    = false;
+		bool musicalPositionChanged = false;
 		bool isPlaying    = false;
 	};
 

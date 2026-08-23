@@ -446,6 +446,17 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 				hostTime.tempo = static_cast<double>(timing->Bpm);
 				hostTime.bpi   = static_cast<int32_t>(timing->Bpi);
 			}
+		if (_clock)
+		{
+			const auto musicalPosition = _clock->NinjamMusicalPosition();
+			if (musicalPosition.IsValid)
+			{
+				hostTime.ppqPos = musicalPosition.Ppq;
+				hostTime.hasPpqPos = true;
+				hostTime.musicalPositionChanged = musicalPosition.PositionChanged;
+				hostTime.bpi = musicalPosition.BeatsPerInterval;
+			}
+		}
 		chain->UpdateHostTime(hostTime);
 		chain->BeginMidiBlock(blockStartSample, sampsToRead);
 	}
