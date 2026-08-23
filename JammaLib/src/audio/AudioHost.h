@@ -16,6 +16,7 @@
 #include "../ninjam/NinjamController.h"
 #include "../ninjam/NinjamTimingObservationMailbox.h"
 #include "../ninjam/NinjamAudioTimingCommand.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 
 namespace audio
@@ -140,8 +141,7 @@ namespace audio
 		// Audio-thread owned phase-map geometry. The map is rebased after every
 		// accepted common correction so the next block cannot undo it.
 		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
-		unsigned long _syncPhaseMapLocalMasterLength = 0ul;
-		unsigned long _syncPhaseMapRemoteMasterLength = 0ul;
+		ninjam::SyncPhaseMap _syncPhaseMap;
 		TickCallback _tickCallback;
 	};
 }

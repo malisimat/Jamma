@@ -428,14 +428,14 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		hostTime.isPlaying  = true;
 		if (_clock)
 		{
-			auto samplePos = static_cast<std::int64_t>(_clock->AbsoluteSamplePos(blockStartSample));
-			if (samplePos < 0)
-				samplePos = 0;
-			hostTime.samplePos = static_cast<double>(samplePos);
+			// NINJAM replaces the musical Timer epoch to establish remote phase.
+			// VST project time must remain continuous across that normal follow
+			// operation; scene time is the callback-owned monotonic ruler.
+			hostTime.samplePos = _clock->SceneSamplePos();
 		}
 		else
 		{
-			hostTime.samplePos = static_cast<double>(blockStartSample);
+			hostTime.samplePos = static_cast<std::uint64_t>(blockStartSample);
 		}
 		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
 		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;

@@ -23,7 +23,10 @@ namespace vst
 	// each audio block.  Populated on the audio thread; must be trivially copyable.
 	struct HostTimeState
 	{
-		double samplePos  = 0.0;
+		// Monotonic callback-owned project timeline. Keep this integral until an
+		// adapter converts it to its SDK representation; the old uint32 block
+		// counter wraps during a long-running live session.
+		std::uint64_t samplePos = 0u;
 		double sampleRate = 44100.0;
 		double tempo      = 120.0;
 		int32_t bpi       = 4;

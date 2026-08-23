@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "AudioHost.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 #include <algorithm>
 #include <cmath>
@@ -155,6 +156,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 		const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
 		static const std::vector<std::shared_ptr<Station>> emptyStations;
 		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
+		bool beginSyncPhaseMapAfterOffset = false;
 
 		// Unified audio-boundary transport fan-out. Consume at most one coherent
 		// command before any station playback advancement so the Timer and every
@@ -166,6 +168,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			auto policy = command->LocalFollowPolicy;
 			std::uint64_t sceneCoordinate = command->SceneCoordinateSamps;
 			unsigned long previousMasterLength = 0ul;
+			unsigned int previousRemotePhase = 0u;
 			const auto disablesSync = command->Type == ninjam::NinjamTimingCommandType::Invalidate
 				|| (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming
 					&& policy == ninjam::NinjamLocalFollowPolicy::NoSync);
@@ -174,17 +177,22 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				for (auto& station : stations)
 					if (station && !station->IsRemote()) station->InvalidateSceneAnchors();
 				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
-				_syncPhaseMapLocalMasterLength = 0ul;
-				_syncPhaseMapRemoteMasterLength = 0ul;
+				_syncPhaseMap = {};
 				policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			}
 			if (!disablesSync && timingClock)
 			{
 				previousMasterLength = timingClock->SeedSourceLength();
+				previousRemotePhase = timingClock->SampOffset();
 				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
 				{
 					sceneCoordinate = timingClock->SceneSamplePos();
 					_activeNinjamFollowPolicy = policy;
+					// A replacement can arrive while an earlier remote map is active.
+					// Restore its source-ruler position before calculating the next map.
+					if (_syncPhaseMap.IsActive())
+						for (auto& station : stations)
+							if (station && !station->IsRemote()) station->RestoreSyncPhaseMap(sceneCoordinate);
 				}
 				else
 				{
@@ -196,8 +204,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					// captures a different one-block device-rate residue as its new
 					// origin, which changes intentional audio/MIDI relative offsets.
 					if (policy != ninjam::NinjamLocalFollowPolicy::NoSync
-						&& _syncPhaseMapLocalMasterLength > 0ul
-						&& _syncPhaseMapRemoteMasterLength > 0ul)
+						&& _syncPhaseMap.IsActive())
 						for (auto& station : stations)
 							if (station && !station->IsRemote())
 								station->RestoreSyncPhaseMap(sceneCoordinate);
@@ -217,7 +224,21 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 						command->PhaseObservationSample, blockStartSample);
 					timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
 					timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemotePhaseSamps);
-					stationDelta = replacement.LocalDeltaSamps;
+					if (_syncPhaseMap.SourceLengthSamps == 0ul)
+						_syncPhaseMap.SourceLengthSamps = previousMasterLength;
+					const auto sourceLength = _syncPhaseMap.SourceLengthSamps;
+					if (sourceLength > 0ul)
+					{
+						const auto sourceBefore = _syncPhaseMap.IsActive()
+							? _syncPhaseMap.SourcePhaseAt(sceneCoordinate)
+							: static_cast<unsigned long>(previousRemotePhase) % sourceLength;
+						const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(replacement.RemotePhaseSamps,
+							sourceLength, command->SeedLengthSamps);
+						stationDelta = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
+							static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(sourceLength));
+					}
+					else
+						stationDelta = 0;
 					break;
 				}
 				case ninjam::NinjamTimingCommandType::Invalidate:
@@ -229,6 +250,15 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					break;
 				}
 				timingClock->ApplyCommand(timerCommand);
+				if (command->Type != ninjam::NinjamTimingCommandType::ReplaceTiming
+					&& _syncPhaseMap.IsActive())
+				{
+					const auto sourceBefore = _syncPhaseMap.SourcePhaseAt(sceneCoordinate);
+					const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
+						_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
+					stationDelta = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
+						static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(_syncPhaseMap.SourceLengthSamps));
+				}
 			}
 
 			engine::LoopTake::TimingCorrectionReason reason =
@@ -259,12 +289,12 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				{
 					if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
 					{
-						_syncPhaseMapLocalMasterLength = previousMasterLength;
-						_syncPhaseMapRemoteMasterLength = command->SeedLengthSamps;
+						_syncPhaseMap.RemoteLengthSamps = command->SeedLengthSamps;
 					}
-					for (auto& station : stations)
-						if (station && !station->IsRemote()) station->BeginSyncPhaseMap(sceneCoordinate,
-							_syncPhaseMapLocalMasterLength, _syncPhaseMapRemoteMasterLength);
+					const auto sourcePhase = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
+						_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
+					_syncPhaseMap.Rebase(sceneCoordinate, sourcePhase);
+					beginSyncPhaseMapAfterOffset = true;
 				}
 			}
 			const auto writingReceipt = _lastAppliedTimingReceiptSequence.fetch_add(
@@ -296,6 +326,13 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
 			}
 		}
+		// Offset is loop-local, so capture the new map only after every local take
+		// has applied it. This is a single post-command fan-out, rather than a
+		// speculative capture followed by an offset-dependent rebase.
+		if (beginSyncPhaseMapAfterOffset)
+			for (auto& station : stations)
+				if (station && !station->IsRemote()) station->BeginSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
+					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
 
 		if (nullptr != inBuf)
 		{
@@ -388,8 +425,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 		}
 
 		if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
-			&& timingClock && _syncPhaseMapLocalMasterLength > 0ul
-			&& _syncPhaseMapRemoteMasterLength > 0ul)
+			&& timingClock && _syncPhaseMap.IsActive())
 			for (auto& station : stations)
 				if (station && !station->IsRemote()) station->RestoreSyncPhaseMap(timingClock->SceneSamplePos());
 

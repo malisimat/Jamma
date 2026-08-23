@@ -1,5 +1,45 @@
 #include "gtest/gtest.h"
 #include "./ninjam/NinjamTiming.h"
+#include "./ninjam/NinjamLoopAlignment.h"
+
+TEST(NinjamLoopAlignment, SourcePhaseReachesZeroAtNextRemoteWrapAcrossUnequalRulers)
+{
+	constexpr std::uint64_t localMaster = 1000u;
+	constexpr std::uint64_t remoteMaster = 1200u;
+	constexpr std::uint64_t remotePhase = 250u;
+	const auto sourcePhase = ninjam::SourcePhaseAtRemotePhase(remotePhase, localMaster, remoteMaster);
+	const auto remainingRemote = remoteMaster - remotePhase;
+	const auto elapsed = ninjam::MapRemoteElapsedToLocal(remainingRemote, localMaster, remoteMaster);
+
+	EXPECT_EQ(208u, sourcePhase);
+	EXPECT_EQ(0u, (sourcePhase + elapsed) % localMaster);
+}
+
+TEST(NinjamLoopAlignment, MapsWholeRemoteIntervalsExactlyToWholeLocalIntervals)
+{
+	EXPECT_EQ(3000u, ninjam::MapRemoteElapsedToLocal(3600u, 1000u, 1200u));
+	EXPECT_EQ(0u, ninjam::MapRemoteElapsedToLocal(1u, 0u, 1200u));
+	EXPECT_EQ(0u, ninjam::MapRemoteElapsedToLocal(1u, 1000u, 0u));
+}
+
+TEST(NinjamLoopAlignment, RebaseUsesTheActiveMapOriginWhenRoundingUnequalRulers)
+{
+	constexpr std::uint64_t localMaster = 1000u;
+	constexpr std::uint64_t remoteMaster = 1200u;
+	constexpr std::uint64_t initialRemotePhase = 250u;
+	constexpr std::uint64_t elapsedRemote = 64u;
+	const auto sourceOrigin = ninjam::SourcePhaseAtRemotePhase(initialRemotePhase, localMaster, remoteMaster);
+	const auto activeSourcePhase = (sourceOrigin + ninjam::MapRemoteElapsedToLocal(elapsedRemote,
+		localMaster, remoteMaster)) % localMaster;
+	const auto observedRemotePhase = initialRemotePhase + elapsedRemote;
+	const auto targetSourcePhase = ninjam::SourcePhaseAtRemotePhase(observedRemotePhase,
+		localMaster, remoteMaster);
+
+	EXPECT_EQ(261u, activeSourcePhase);
+	EXPECT_EQ(262u, targetSourcePhase);
+	EXPECT_EQ(0u, (targetSourcePhase + ninjam::MapRemoteElapsedToLocal(
+		remoteMaster - observedRemotePhase, localMaster, remoteMaster)) % localMaster);
+}
 
 TEST(NinjamTiming, ScalesSourceSamplesToDeviceRate)
 {

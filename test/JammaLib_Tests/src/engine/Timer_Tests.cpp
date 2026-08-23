@@ -85,6 +85,24 @@ TEST(Timer, AudioCommandIsConsumedBeforeTheFollowingTickExactlyOnce) {
 	EXPECT_EQ(400u, t.SampOffset());
 }
 
+TEST(Timer, SceneTimelineRemainsMonotonicWhenTimingReplacementResetsMusicalEpoch) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+	t.Tick(2500u, 0u);
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(2500ul, t.AbsoluteSamplePos());
+
+	const Timer::Command replacement{
+		Timer::CommandType::ReplaceTiming, 1u, 1200ul, 120u,
+		Timer::QUANTISE_MULTIPLE, 250 };
+	ASSERT_TRUE(t.ApplyCommand(replacement));
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(250ul, t.AbsoluteSamplePos());
+	t.Tick(64u, 0u);
+	EXPECT_EQ(2564u, t.SceneSamplePos());
+}
+
 TEST(Timer, InvalidationPreventsAnOlderGenerationFromMovingTheClock) {
 	Timer t;
 	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);

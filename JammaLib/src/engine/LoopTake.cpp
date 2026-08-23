@@ -627,11 +627,8 @@ void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
 	if (!_hasSyncPhaseMap || sceneCoordinateSamps < _syncPhaseMapSceneOrigin)
 		return;
 	const auto elapsed = sceneCoordinateSamps - _syncPhaseMapSceneOrigin;
-	const auto wholeRemoteIntervals = elapsed / _syncPhaseMapRemoteMasterLength;
-	const auto remainder = elapsed % _syncPhaseMapRemoteMasterLength;
-	const auto scaledElapsed = wholeRemoteIntervals * _syncPhaseMapLocalMasterLength
-		+ (remainder * _syncPhaseMapLocalMasterLength
-			+ (_syncPhaseMapRemoteMasterLength / 2ul)) / _syncPhaseMapRemoteMasterLength;
+	const auto scaledElapsed = ninjam::MapRemoteElapsedToLocal(elapsed,
+		_syncPhaseMapLocalMasterLength, _syncPhaseMapRemoteMasterLength);
 	auto state = _AudioStateSnapshot();
 	if (state)
 		for (const auto& weakLoop : state->Loops)

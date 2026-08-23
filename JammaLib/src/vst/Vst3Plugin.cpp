@@ -1764,11 +1764,16 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 		return;
 
 	_impl->hostTime = state;
-	_impl->processContext.projectTimeSamples = state.samplePos;
+	_impl->processContext.projectTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
+	_impl->processContext.continousTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
 	_impl->processContext.tempo = state.tempo;
 	_impl->processContext.timeSigNumerator = state.bpi;
 	_impl->processContext.timeSigDenominator = 4;
-	_impl->processContext.state = state.isPlaying ? 1u : 0u;
+	_impl->processContext.state = Steinberg::Vst::ProcessContext::kContTimeValid
+		| Steinberg::Vst::ProcessContext::kTempoValid
+		| Steinberg::Vst::ProcessContext::kTimeSigValid;
+	if (state.isPlaying)
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kPlaying;
 	_impl->processContext.sampleRate = state.sampleRate;
 #else
 	(void)state;
