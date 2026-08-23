@@ -5,7 +5,6 @@
 #include <iostream>
 
 using namespace engine;
-using namespace timing;
 
 namespace ninjam
 {
@@ -35,7 +34,7 @@ namespace ninjam
 	}
 
 	void NinjamNetworkService::PrepareTempoSyncOnConnect(
-		const std::optional<timing::QuantisationTiming>& localTiming)
+		const std::optional<engine::QuantisationTiming>& localTiming)
 	{
 		_timingCoordinator.Connect(_tempoJoinOptions, localTiming);
 	}
@@ -145,7 +144,7 @@ namespace ninjam
 	}
 
 	NinjamTimingUpdate NinjamNetworkService::ObserveTiming(const NinjamTiming& timing,
-		const std::optional<timing::QuantisationTiming>& localTiming,
+		const std::optional<engine::QuantisationTiming>& localTiming,
 		bool hasLocalContent,
 		const io::UserConfig& userConfig,
 		utils::Timer& clock)
@@ -154,7 +153,7 @@ namespace ninjam
 	}
 
 	NinjamTimingUpdate NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
-		const std::optional<timing::QuantisationTiming>& localTiming,
+		const std::optional<engine::QuantisationTiming>& localTiming,
 		utils::Timer& clock)
 	{
 		return _timingCoordinator.ResolveTempoChange(accept, localTiming, clock);

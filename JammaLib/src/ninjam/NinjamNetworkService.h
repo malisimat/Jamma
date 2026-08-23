@@ -7,7 +7,7 @@
 #include "../ninjam/NinjamController.h"
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../io/UserConfig.h"
 #include "NinjamTimingCoordinator.h"
 
@@ -28,7 +28,7 @@ namespace ninjam
 		void SetTempoJoinOptions(const NinjamTempoJoinOptions& options);
 		const NinjamTempoJoinOptions& TempoJoinOptions() const noexcept { return _tempoJoinOptions; }
 
-		void PrepareTempoSyncOnConnect(const std::optional<timing::QuantisationTiming>& localTiming);
+		void PrepareTempoSyncOnConnect(const std::optional<engine::QuantisationTiming>& localTiming);
 
 		void ResetTempoSyncOnDisconnect();
 
@@ -36,12 +36,12 @@ namespace ninjam
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		NinjamTimingUpdate ObserveTiming(const NinjamTiming& timing,
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent,
 			const io::UserConfig& userConfig,
 			utils::Timer& clock);
 		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(bool accept,
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		std::optional<NinjamTempoChange> PendingRemoteTempoPrompt() const
 		{

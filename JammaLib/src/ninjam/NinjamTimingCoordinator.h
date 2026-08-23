@@ -6,7 +6,7 @@
 #include "NinjamTiming.h"
 #include "NinjamTimingTracker.h"
 #include "NinjamAudioTimingCommand.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 
 namespace io
 {
@@ -147,10 +147,10 @@ namespace ninjam
 	{
 	public:
 		void Connect(const NinjamTempoJoinOptions& options,
-			const std::optional<timing::QuantisationTiming>& localTiming) noexcept;
+			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		void Disconnect() noexcept;
 		NinjamTimingUpdate Observe(const NinjamTiming& timing,
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent,
 		const io::UserConfig& config,
 			utils::Timer& clock,
@@ -158,7 +158,7 @@ namespace ninjam
 		void BeginJoinAlignment(utils::Timer& clock) noexcept;
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		void NotifyPhaseCorrectionConsumed() noexcept { ++_diagnostics.PhaseEventsConsumed; }
 		// Feedback from the network layer after attempting to deliver a tempo
@@ -171,17 +171,17 @@ namespace ninjam
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			float remoteBpm) noexcept;
 
 	private:
 		static bool _SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept;
 		static bool _MatchesRequest(const NinjamTiming& timing,
-			const timing::QuantisationTiming& request) noexcept;
+			const engine::QuantisationTiming& request) noexcept;
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing,
 			const io::UserConfig& config);
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
-			const std::optional<timing::QuantisationTiming>& localTiming,
+			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		void _RecordEmittedCommand(NinjamEmittedCommand kind, std::uint64_t generation) noexcept;
 		NinjamTimingTracker _tracker;
@@ -189,7 +189,7 @@ namespace ninjam
 		std::optional<NinjamTempoChange> _pendingTempoChange;
 		std::optional<NinjamTempoChange> _ignoredTempoChange;
 		std::optional<NinjamTempoChange> _latestObservedTempoChange;
-		std::optional<timing::QuantisationTiming> _requestedTempo;
+		std::optional<engine::QuantisationTiming> _requestedTempo;
 		std::optional<std::chrono::steady_clock::time_point> _firstSuccessfulTempoRequestSend;
 		TempoRequestState _requestState = TempoRequestState::Idle;
 		unsigned long _requestSentAtWrap = 0ul;

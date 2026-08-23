@@ -10,17 +10,16 @@
 #include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
+using namespace engine;
 using namespace base;
 using namespace actions;
 using namespace audio;
-using namespace engine;
 using namespace gui;
 using namespace io;
 using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
-using namespace timing;
 using namespace vst;
 using namespace ninjam;
 using namespace std::placeholders;
@@ -435,6 +434,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.SeedLengthSamps = settings.SeedLengthSamps;
 		command.QuantiseSamps = settings.QuantiseSamps;
 		command.BeatsPerInterval = settings.BeatsPerInterval;
+		command.TempoBpm = settings.RemoteBpm;
 		command.Quantisation = settings.Quantisation;
 		command.AbsolutePhaseSamps = settings.PhaseSamps;
 		command.PhaseObservationSample = settings.AudioBlockStartSample;

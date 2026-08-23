@@ -8,7 +8,7 @@
 using namespace ninjam;
 
 void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
-	const std::optional<timing::QuantisationTiming>& localTiming) noexcept
+	const std::optional<engine::QuantisationTiming>& localTiming) noexcept
 {
 	_tracker.Connect();
 	_options = options;
@@ -66,7 +66,7 @@ void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success,
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
-	const std::optional<timing::QuantisationTiming>& localTiming,
+	const std::optional<engine::QuantisationTiming>& localTiming,
 	bool hasLocalContent,
 	const io::UserConfig& config,
 	utils::Timer& clock,
@@ -281,7 +281,7 @@ bool NinjamTimingCoordinator::_SameTempo(const NinjamTempoChange& lhs, const Nin
 }
 
 bool NinjamTimingCoordinator::_MatchesRequest(const NinjamTiming& timing,
-	const timing::QuantisationTiming& request) noexcept
+	const engine::QuantisationTiming& request) noexcept
 {
 	return timing.Bpi == request.Bpi
 		&& std::abs(timing.Bpm - request.Bpm)
@@ -301,7 +301,7 @@ std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const Ni
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempoChange& change,
-	const std::optional<timing::QuantisationTiming>& localTiming,
+	const std::optional<engine::QuantisationTiming>& localTiming,
 	utils::Timer& clock)
 {
 	NinjamTimingUpdate update;
@@ -320,7 +320,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempo
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
-	const std::optional<timing::QuantisationTiming>& localTiming,
+	const std::optional<engine::QuantisationTiming>& localTiming,
 	utils::Timer& clock)
 {
 	(void)localTiming;
@@ -357,7 +357,7 @@ const char* NinjamTimingCoordinator::FollowPolicyName(NinjamLocalFollowPolicy po
 }
 
 NinjamLocalFollowPolicy NinjamTimingCoordinator::SelectLocalFollowPolicy(
-	const std::optional<timing::QuantisationTiming>& localTiming, float remoteBpm) noexcept
+	const std::optional<engine::QuantisationTiming>& localTiming, float remoteBpm) noexcept
 {
 	return !localTiming.has_value()
 		|| std::abs(remoteBpm - localTiming->Bpm)

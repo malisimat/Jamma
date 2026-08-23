@@ -2,65 +2,79 @@
 #include <cmath>
 #include "./ninjam/NinjamTiming.h"
 #include "./ninjam/NinjamLoopAlignment.h"
-#include "./ninjam/NinjamMusicalTransport.h"
+#include "utils/MusicalTransport.h"
+#include "utils/Timer.h"
 
-TEST(NinjamMusicalTransport, LocalTimerGeometryProducesImmediatePpq)
+TEST(MusicalTransport, LocalTimerGeometryProducesImmediatePpq)
 {
-	const auto position = ninjam::NinjamMusicalTransport::LocalPosition(3ul, 300u, 1200ul, 150u);
+	utils::Timer timer;
+	timer.SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+	timer.SetSeedSourceLength(192000ul);
+	timer.Tick(624000u, 0u);
+	const auto position = timer.LocalMusicalPosition(48000u);
 	ASSERT_TRUE(position.IsValid);
 	EXPECT_DOUBLE_EQ(26.0, position.Ppq);
 	EXPECT_EQ(8, position.BeatsPerInterval);
+	EXPECT_DOUBLE_EQ(120.0, position.Tempo);
 }
 
-TEST(NinjamMusicalTransport, LocalPpqRejectsNonIntegralMasterAndGrainGeometry)
+TEST(MusicalTransport, LocalPpqRejectsInvalidGeometry)
 {
-	EXPECT_FALSE(ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1000ul, 128u).IsValid);
+	utils::Timer timer;
+	timer.SetQuantisation(128u, utils::Timer::QUANTISE_MULTIPLE);
+	timer.SetSeedSourceLength(1000ul);
+	EXPECT_FALSE(timer.LocalMusicalPosition(48000u).IsValid);
+	EXPECT_FALSE(timer.LocalMusicalPosition(0u).IsValid);
 }
 
-TEST(NinjamMusicalTransport, RemoteJoinKeepsLocalPpqUntilTheNextRemoteWrap)
+TEST(MusicalTransport, ExternalJoinKeepsLocalPpqUntilTheNextExternalWrap)
 {
-	ninjam::NinjamMusicalTransport transport;
-	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(3ul, 300u, 1200ul, 150u);
-	transport.QueueRemote(1000u, 400u, 1200u, 8u, local, 150u);
+	utils::MusicalTransport transport;
+	const utils::MusicalPosition local{ true, false, 26.0, 120.0, 8 };
+	transport.QueueExternal(1000u, 400u, 1200u, 8u, 120.0, local, 150u);
 	EXPECT_DOUBLE_EQ(26.0, transport.PositionAt(1000u, local).Ppq);
 	transport.Advance(1800u);
 	const auto atWrap = transport.PositionAt(1800u, local);
 	ASSERT_TRUE(atWrap.IsValid);
 	EXPECT_TRUE(atWrap.PositionChanged);
 	EXPECT_DOUBLE_EQ(32.0, atWrap.Ppq);
+	EXPECT_DOUBLE_EQ(120.0, atWrap.Tempo);
+	EXPECT_EQ(8, atWrap.BeatsPerInterval);
+	transport.Advance(1801u);
+	EXPECT_FALSE(transport.PositionAt(1801u, local).PositionChanged);
 }
 
-TEST(NinjamMusicalTransport, RemoteProgressionIsContinuousAfterTheForwardLocate)
+TEST(MusicalTransport, ExternalProgressionIsContinuousAfterTheForwardLocate)
 {
-	ninjam::NinjamMusicalTransport transport;
-	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1200ul, 150u);
-	transport.QueueRemote(0u, 0u, 1200u, 8u, local, 150u);
+	utils::MusicalTransport transport;
+	const utils::MusicalPosition local{ true, false, 0.0, 120.0, 8 };
+	transport.QueueExternal(0u, 0u, 1200u, 8u, 120.0, local, 150u);
 	transport.Advance(0u);
 	EXPECT_DOUBLE_EQ(0.0, transport.PositionAt(0u, local).Ppq);
 	transport.Advance(300u);
 	EXPECT_DOUBLE_EQ(2.0, transport.PositionAt(300u, local).Ppq);
 }
 
-TEST(NinjamMusicalTransport, ReconnectUsesTheCurrentLocalEpochAndNotRemoteZero)
+TEST(MusicalTransport, ReconnectUsesTheCurrentLocalEpochAndNotExternalZero)
 {
-	ninjam::NinjamMusicalTransport transport;
-	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(4ul, 0u, 1200ul, 150u);
+	utils::MusicalTransport transport;
+	const utils::MusicalPosition local{ true, false, 32.0, 120.0, 8 };
 	transport.Reset();
-	transport.QueueRemote(5000u, 400u, 1000u, 4u, local, 150u);
+	transport.QueueExternal(5000u, 400u, 1000u, 4u, 96.0, local, 150u);
 	transport.Advance(5600u);
 	const auto atWrap = transport.PositionAt(5600u, local);
 	ASSERT_TRUE(atWrap.IsValid);
 	EXPECT_GE(atWrap.Ppq, local.Ppq);
 }
 
-TEST(NinjamMusicalTransport, PhaseDisciplineUsesAnotherForwardOnlyRemoteWrapAlignment)
+TEST(MusicalTransport, PhaseDisciplineUsesAnotherForwardOnlyExternalWrapAlignment)
 {
-	ninjam::NinjamMusicalTransport transport;
-	const auto local = ninjam::NinjamMusicalTransport::LocalPosition(0ul, 0u, 1200ul, 150u);
-	transport.QueueRemote(0u, 0u, 1200u, 8u, local, 150u);
+	utils::MusicalTransport transport;
+	const utils::MusicalPosition local{ true, false, 0.0, 120.0, 8 };
+	transport.QueueExternal(0u, 0u, 1200u, 8u, 120.0, local, 150u);
 	transport.Advance(0u);
 	const auto before = transport.PositionAt(600u, local);
-	transport.QueueRemote(600u, 400u, 1200u, 8u, before, 150u);
+	transport.QueueExternal(600u, 400u, 1200u, 8u, 120.0, before, 150u);
 	transport.Advance(1400u);
 	const auto after = transport.PositionAt(1400u, local);
 	EXPECT_GE(after.Ppq, before.Ppq);

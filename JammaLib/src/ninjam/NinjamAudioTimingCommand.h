@@ -40,6 +40,7 @@ namespace ninjam
 		unsigned long SeedLengthSamps = 0ul;
 		unsigned int QuantiseSamps = 0u;
 		unsigned int BeatsPerInterval = 0u;
+		float TempoBpm = 0.0f;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		unsigned int AbsolutePhaseSamps = 0u;
 		std::uint64_t PhaseObservationSample = 0u;
@@ -65,6 +66,7 @@ namespace ninjam
 			_seedLengthSamps.store(command.SeedLengthSamps, std::memory_order_relaxed);
 			_quantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
 			_beatsPerInterval.store(command.BeatsPerInterval, std::memory_order_relaxed);
+			_tempoBpm.store(command.TempoBpm, std::memory_order_relaxed);
 			_quantisation.store(command.Quantisation, std::memory_order_relaxed);
 			_absolutePhaseSamps.store(command.AbsolutePhaseSamps, std::memory_order_relaxed);
 			_phaseObservationSample.store(command.PhaseObservationSample, std::memory_order_relaxed);
@@ -98,6 +100,7 @@ namespace ninjam
 				command.SeedLengthSamps = _seedLengthSamps.load(std::memory_order_relaxed);
 				command.QuantiseSamps = _quantiseSamps.load(std::memory_order_relaxed);
 				command.BeatsPerInterval = _beatsPerInterval.load(std::memory_order_relaxed);
+				command.TempoBpm = _tempoBpm.load(std::memory_order_relaxed);
 				command.Quantisation = _quantisation.load(std::memory_order_relaxed);
 				command.AbsolutePhaseSamps = _absolutePhaseSamps.load(std::memory_order_relaxed);
 				command.PhaseObservationSample = _phaseObservationSample.load(std::memory_order_relaxed);
@@ -130,6 +133,7 @@ namespace ninjam
 		std::atomic<unsigned long> _seedLengthSamps{ 0ul };
 		std::atomic<unsigned int> _quantiseSamps{ 0u };
 		std::atomic<unsigned int> _beatsPerInterval{ 0u };
+		std::atomic<float> _tempoBpm{ 0.0f };
 		std::atomic<utils::Timer::QuantisationType> _quantisation{ utils::Timer::QUANTISE_OFF };
 		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
 		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };

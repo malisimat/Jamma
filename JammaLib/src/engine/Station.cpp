@@ -1,4 +1,4 @@
-﻿#include "Station.h"
+#include "Station.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -8,7 +8,6 @@
 #include "../utils/MathUtils.h"
 
 using namespace engine;
-using namespace timing;
 using namespace audio;
 using namespace actions;
 using namespace base;
@@ -437,23 +436,16 @@ void Station::_RunVstBlock(vst::VstChain* chain,
 		{
 			hostTime.samplePos = static_cast<std::uint64_t>(blockStartSample);
 		}
-		const auto seedSamps   = _clock ? _clock->QuantiseSamps() : 0u;
-		const auto masterSamps = _clock ? _clock->SeedSourceLength() : 0ul;
-		if (seedSamps > 0u && _sampleRate > 0.0f)
-			if (const auto timing = TimingQuantiser::TimingFromSeedAndMaster(
-					seedSamps, masterSamps, static_cast<unsigned int>(_sampleRate)))
-			{
-				hostTime.tempo = static_cast<double>(timing->Bpm);
-				hostTime.bpi   = static_cast<int32_t>(timing->Bpi);
-			}
 		if (_clock)
 		{
-			const auto musicalPosition = _clock->NinjamMusicalPosition();
+			const auto musicalPosition = _clock->CurrentMusicalPosition(
+				static_cast<unsigned int>(_sampleRate));
 			if (musicalPosition.IsValid)
 			{
 				hostTime.ppqPos = musicalPosition.Ppq;
 				hostTime.hasPpqPos = true;
 				hostTime.musicalPositionChanged = musicalPosition.PositionChanged;
+				hostTime.tempo = musicalPosition.Tempo;
 				hostTime.bpi = musicalPosition.BeatsPerInterval;
 			}
 		}
@@ -1413,7 +1405,7 @@ void Station::SetClock(std::shared_ptr<utils::Timer> clock)
 	_clock = clock;
 }
 
-void Station::SetQuantisationParams(std::optional<timing::QuantisationParams> params,
+void Station::SetQuantisationParams(std::optional<engine::QuantisationParams> params,
 	bool confirm)
 {
 	if (!_quantisationModel)
@@ -1426,7 +1418,7 @@ void Station::SetQuantisationParams(std::optional<timing::QuantisationParams> pa
 		return;
 	}
 
-	_pendingQuantisationParams = timing::QuantisationParams{
+	_pendingQuantisationParams = engine::QuantisationParams{
 		params->SeedSamps,
 		params->MasterSamps
 	};

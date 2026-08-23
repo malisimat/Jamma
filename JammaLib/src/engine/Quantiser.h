@@ -40,7 +40,7 @@ namespace midi
 	enum class MidiQuantisationFraction : std::uint8_t;
 }
 
-namespace timing
+namespace engine
 {
 	struct QuantisationParams
 	{
@@ -109,10 +109,10 @@ namespace timing
 		std::optional<double> _estimatedGapSamps;
 	};
 
-	class TimingQuantiser
+	class Quantiser
 	{
 	public:
-		TimingQuantiser() = default;
+		Quantiser() = default;
 
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		void SetSeedUsesPowers(bool seedUsesPowers) noexcept;
@@ -231,45 +231,45 @@ namespace timing
 
 	inline unsigned int MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::MinSeedSamps(sampleRate, policy);
+		return Quantiser::MinSeedSamps(sampleRate, policy);
 	}
 
 	inline std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 		int deltaX,
 		unsigned int sampleRate) noexcept
 	{
-		return TimingQuantiser::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
+		return Quantiser::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
 	}
 
 	inline std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
 		unsigned long masterSamps,
 		unsigned int sampleRate)
 	{
-		return TimingQuantiser::TimingFromSeedAndMaster(seedSamps, masterSamps, sampleRate);
+		return Quantiser::TimingFromSeedAndMaster(seedSamps, masterSamps, sampleRate);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceSeedTiming(unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::DeduceSeedTiming(masterLoopSamps, sampleRate, policy);
+		return Quantiser::DeduceSeedTiming(masterLoopSamps, sampleRate, policy);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceTapSeedTiming(unsigned long requestedSeedSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
+		return Quantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
 		unsigned long masterLoopSamps,
 		unsigned int sampleRate)
 	{
-		return TimingQuantiser::DeduceTapSeedTimingFromMaster(tapGapSamps, masterLoopSamps, sampleRate);
+		return Quantiser::DeduceTapSeedTimingFromMaster(tapGapSamps, masterLoopSamps, sampleRate);
 	}
 
-	// ── TimingQuantiserController (merged from QuantisationInteractionController) ───
+	// ── QuantiserController (merged from QuantisationInteractionController) ───
 
 	struct QuantisationInteractionContext
 	{
@@ -280,13 +280,13 @@ namespace timing
 		std::vector<unsigned char> HoverPath3d;
 	};
 
-	class TimingQuantiserController
+	class QuantiserController
 	{
 	public:
 		using ChildResolver = std::function<std::shared_ptr<base::GuiElement>(const std::vector<unsigned char>& path)>;
 
-		TimingQuantiserController(graphics::CtrlHandleOverlay& overlay,
-			TimingQuantiser& quantisation,
+		QuantiserController(graphics::CtrlHandleOverlay& overlay,
+			Quantiser& quantisation,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void OnCtrlModifierChanged(bool held,
@@ -380,7 +380,7 @@ namespace timing
 			std::int32_t offsetSamps) noexcept;
 
 		graphics::CtrlHandleOverlay& _overlay;
-		TimingQuantiser& _quantisation;
+		Quantiser& _quantisation;
 		std::vector<std::shared_ptr<engine::Station>>& _stations;
 
 		bool _ctrlHandleHeld = false;

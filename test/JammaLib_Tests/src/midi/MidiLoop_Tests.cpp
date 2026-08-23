@@ -1,4 +1,4 @@
-﻿#include <array>
+#include <array>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -125,7 +125,7 @@ namespace
 	std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
 		const utils::Position2d& finish)
 	{
-		return timing::ResolvePhaseOffsetDrag(0,
+		return engine::Quantiser::ResolvePhaseOffsetDrag(0,
 			finish.X - start.X,
 			ScenePhaseDragSampleRate);
 	}
@@ -954,7 +954,7 @@ TEST(LoopTakeMidiQuantisation, QuantisationGlobalPhasePropagatesAcrossStations) 
 	secondStation->AddTake(secondTake);
 	secondStation->SetStationPhaseOffsetSamps(30);
 
-	timing::TimingQuantiser quantisation;
+	engine::Quantiser quantisation;
 	quantisation.SetGlobalPhaseOffsetSamps(240, { firstStation, secondStation });
 
 	EXPECT_EQ(240, firstTake->ResolvedMidiQuantisation().PhaseOffsetSamps);

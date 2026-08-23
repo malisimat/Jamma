@@ -179,7 +179,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 				_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 				_syncPhaseMap = {};
 				if (timingClock)
-					timingClock->ResetNinjamMusicalTransport();
+					timingClock->ResetMusicalTransport();
 				policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			}
 			if (!disablesSync && timingClock)
@@ -254,15 +254,16 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					break;
 				}
 				if (command->Type == ninjam::NinjamTimingCommandType::ReplaceTiming)
-					timingClock->ReanchorNinjamMusicalTransport(sceneCoordinate,
+					timingClock->ReanchorMusicalTransport(sceneCoordinate,
 						musicalRemotePhase, command->SeedLengthSamps,
-						command->BeatsPerInterval);
+						command->BeatsPerInterval, command->TempoBpm,
+						audioStreamParams.SampleRate);
 				else if (command->Type == ninjam::NinjamTimingCommandType::JoinAlignment
 					|| command->Type == ninjam::NinjamTimingCommandType::PhaseDiscipline)
-					timingClock->ReanchorNinjamMusicalTransportCurrentGeometry(sceneCoordinate,
+					timingClock->ReanchorMusicalTransportCurrentGeometry(sceneCoordinate,
 						static_cast<unsigned int>(ninjam::PositiveModulo(
 							static_cast<std::int64_t>(timingClock->SampOffset()) + command->PhaseDeltaSamps,
-							timingClock->SeedSourceLength())));
+							timingClock->SeedSourceLength())), audioStreamParams.SampleRate);
 				timingClock->ApplyCommand(timerCommand);
 				if (command->Type != ninjam::NinjamTimingCommandType::ReplaceTiming
 					&& _syncPhaseMap.IsActive())
@@ -327,7 +328,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 
 		const auto timingClock = _timingClock.load(std::memory_order_acquire);
 		if (timingClock)
-			timingClock->AdvanceNinjamMusicalTransport();
+			timingClock->AdvanceMusicalTransport();
 		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
 		if (masterLength != _localTransportOffsetMasterLength)
 			_localTransportOffsetMasterLength = masterLength;

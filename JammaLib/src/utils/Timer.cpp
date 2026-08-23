@@ -122,6 +122,52 @@ void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
 }
 
+MusicalPosition Timer::LocalMusicalPosition(unsigned int sampleRate) const noexcept
+{
+	const auto masterLength = SeedSourceLength();
+	const auto samplesPerBeat = QuantiseSamps();
+	if (masterLength == 0ul || samplesPerBeat == 0u || sampleRate == 0u
+		|| masterLength % samplesPerBeat != 0ul)
+		return {};
+
+	const auto beatsPerInterval = static_cast<std::int32_t>(masterLength / samplesPerBeat);
+	const auto phase = static_cast<unsigned long>(SampOffset()) % masterLength;
+	return { true, false, static_cast<double>(LoopCount()) * beatsPerInterval
+		+ static_cast<double>(phase) / samplesPerBeat,
+		60.0 * sampleRate / samplesPerBeat, beatsPerInterval };
+}
+
+MusicalPosition Timer::CurrentMusicalPosition(unsigned int sampleRate) const noexcept
+{
+	return _musicalTransport.PositionAt(SceneSamplePos(), LocalMusicalPosition(sampleRate));
+}
+
+void Timer::ReanchorMusicalTransport(std::uint64_t sceneCoordinateSamps,
+	std::uint64_t remotePhaseSamps, std::uint64_t intervalLengthSamps,
+	unsigned int beatsPerInterval, double tempo, unsigned int sampleRate) noexcept
+{
+	_musicalTransport.QueueExternal(sceneCoordinateSamps, remotePhaseSamps, intervalLengthSamps,
+		beatsPerInterval, tempo, CurrentMusicalPosition(sampleRate), QuantiseSamps());
+}
+
+void Timer::ReanchorMusicalTransportCurrentGeometry(std::uint64_t sceneCoordinateSamps,
+	std::uint64_t remotePhaseSamps, unsigned int sampleRate) noexcept
+{
+	const auto current = CurrentMusicalPosition(sampleRate);
+	_musicalTransport.QueueExternal(sceneCoordinateSamps, remotePhaseSamps, SeedSourceLength(),
+		static_cast<unsigned int>(current.BeatsPerInterval), current.Tempo, current, QuantiseSamps());
+}
+
+void Timer::AdvanceMusicalTransport() noexcept
+{
+	_musicalTransport.Advance(SceneSamplePos());
+}
+
+void Timer::ResetMusicalTransport() noexcept
+{
+	_musicalTransport.Reset();
+}
+
 void Timer::PublishCommand(const Command& command) noexcept
 {
 	const auto writingSequence = _commandSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;

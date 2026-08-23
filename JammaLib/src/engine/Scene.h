@@ -40,7 +40,7 @@
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../graphics/CtrlHandleOverlay.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -297,10 +297,10 @@ namespace engine
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
-		timing::QuantisationPolicy _QuantisationPolicy() const;
+		engine::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
-		void _ApplyQuantisationTiming(const timing::QuantisationTiming& timing, const char* source);
+		void _ApplyQuantisationTiming(const engine::QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
@@ -308,7 +308,7 @@ namespace engine
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
-		timing::QuantisationInteractionContext _InteractionContext() const;
+		engine::QuantisationInteractionContext _InteractionContext() const;
 		void _InvalidateHover2d();
 		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath);
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
@@ -357,7 +357,7 @@ namespace engine
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
-		timing::TimingQuantiser _quantisation;
+		engine::Quantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
@@ -392,7 +392,7 @@ namespace engine
 		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
-		timing::TimingQuantiserController _quantisationInteraction;
+		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;

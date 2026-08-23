@@ -8,7 +8,7 @@
 #include "../io/JamFile.h"
 #include "../io/UserConfig.h"
 #include "../ninjam/NinjamController.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../engine/Station.h"
 
 namespace io
@@ -17,7 +17,7 @@ namespace io
 	{
 	public:
 		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const timing::TimingQuantiser& quantisation,
+			const engine::Quantiser& quantisation,
 			io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 			double transportOffsetLoopFrac,
 			const io::UserConfig& userConfig,

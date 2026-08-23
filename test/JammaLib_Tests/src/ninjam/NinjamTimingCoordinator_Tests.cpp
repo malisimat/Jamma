@@ -30,7 +30,7 @@ namespace
 	}
 
 	void Connect(NinjamTimingCoordinator& coordinator, bool prompt, bool push,
-		const std::optional<timing::QuantisationTiming>& local = std::nullopt)
+		const std::optional<engine::QuantisationTiming>& local = std::nullopt)
 	{
 		ninjam::NinjamTempoJoinOptions options;
 		options.PromptBeforeApplyingRemoteTempo = prompt;
@@ -150,7 +150,7 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator lower;
 	Connect(lower, false, true, local);
 	lower.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
@@ -170,7 +170,7 @@ TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
 
 TEST(NinjamTimingCoordinator, ClassifiesContinuousAndBlockSyncAtFixedOneBpmBoundary)
 {
-	const timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	const engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
 		NinjamTimingCoordinator::SelectLocalFollowPolicy(local, 120.0f));
 	EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::ContinuousSync,
@@ -188,7 +188,7 @@ TEST(NinjamTimingCoordinator, ClassifiesContinuousAndBlockSyncAtFixedOneBpmBound
 TEST(NinjamTimingCoordinator, LocalRequestWaitsForWrapAndAcknowledges)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 	coordinator.Observe(MakeTiming(384000u, 300000u), local, true, io::UserConfig{}, clock);
@@ -200,7 +200,7 @@ TEST(NinjamTimingCoordinator, LocalRequestWaitsForWrapAndAcknowledges)
 TEST(NinjamTimingCoordinator, DefaultJoinOptionsPushValidLocalTempo)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	coordinator.Connect(ninjam::NinjamTempoJoinOptions{}, local);
 
@@ -216,7 +216,7 @@ TEST(NinjamTimingCoordinator, DisconnectClearsPromptRequestAndCorrections)
 {
 	Timer clock;
 	NinjamTimingCoordinator coordinator;
-	Connect(coordinator, true, true, timing::QuantisationTiming{ 24000u, 384000u, 16u, 120.0f, 16u });
+	Connect(coordinator, true, true, engine::QuantisationTiming{ 24000u, 384000u, 16u, 120.0f, 16u });
 	coordinator.Observe(MakeTiming(480000u, 100u), std::nullopt, true, io::UserConfig{}, clock);
 	ASSERT_FALSE(coordinator.PendingTempoChange().has_value());
 	coordinator.Disconnect();
@@ -328,7 +328,7 @@ namespace
 TEST(NinjamTimingCoordinator, TempoRequestAcknowledgedByMatchingTimingWithoutGenerationChange)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 
@@ -353,7 +353,7 @@ TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesReque
 	Timer clock;
 	clock.SetQuantisation(24000u, Timer::QUANTISE_MULTIPLE);
 	clock.SetSeedSourceLength(384000ul);
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, true, local);
 
@@ -375,7 +375,7 @@ TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesReque
 TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSend)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, true, local);
 
@@ -394,7 +394,7 @@ TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSen
 TEST(NinjamTimingCoordinator, DistantServerTempoDoesNotAcknowledgeRequest)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, true, local);
 
@@ -413,7 +413,7 @@ TEST(NinjamTimingCoordinator, DistantServerTempoDoesNotAcknowledgeRequest)
 TEST(NinjamTimingCoordinator, MatchingObservationBeforeSendDoesNotAcknowledgeRequest)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 
@@ -436,7 +436,7 @@ TEST(NinjamTimingCoordinator, MatchingObservationBeforeSendDoesNotAcknowledgeReq
 TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 
@@ -461,7 +461,7 @@ TEST(NinjamTimingCoordinator, TempoRequestSendFailureRequeuesForRetry)
 TEST(NinjamTimingCoordinator, FailedSendCannotBeAcknowledgedByInterveningObservation)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, true, local);
 	coordinator.Observe(MakeTimingTempo(384000u, 300000u, 90.0f, 8u), local, true, io::UserConfig{}, clock);
@@ -476,7 +476,7 @@ TEST(NinjamTimingCoordinator, FailedSendCannotBeAcknowledgedByInterveningObserva
 TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	ninjam::NinjamTempoJoinOptions options;
 	options.PromptBeforeApplyingRemoteTempo = true;
 	options.PushLocalTempoOnJoin = true;
@@ -503,7 +503,7 @@ TEST(NinjamTimingCoordinator, TempoRequestExpiresAfterConfiguredRetries)
 TEST(NinjamTimingCoordinator, TempoRequestDeadlinePromptsOnceWithLatestServerTiming)
 {
 	Timer clock;
-	timing::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
 	ninjam::NinjamTempoJoinOptions options;
 	options.PushLocalTempoOnJoin = true;
 	options.PromptBeforeApplyingRemoteTempo = true;

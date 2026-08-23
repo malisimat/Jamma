@@ -1,4 +1,4 @@
-﻿#include "LoopTake.h"
+#include "LoopTake.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -145,7 +145,6 @@ namespace
 }
 
 using namespace engine;
-using namespace timing;
 using base::Action;
 using base::AudioSink;
 using base::AudioSource;
@@ -1197,7 +1196,7 @@ float LoopTake::VisualRadius() const noexcept
 	return static_cast<float>(Loop::CalcDrawRadius(VisualLoopLengthSamps()));
 }
 
-std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
+std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
 {
 	const auto loopLengthSamps = VisualLoopLengthSamps();
 	if (loopLengthSamps == 0ul)
@@ -1224,10 +1223,10 @@ std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 	};
 }
 
-std::vector<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
+std::vector<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
 	const std::vector<std::shared_ptr<LoopTake>>& takes)
 {
-	std::vector<timing::QuantisationLoopTakeVisual> visuals;
+	std::vector<engine::QuantisationLoopTakeVisual> visuals;
 	visuals.reserve(takes.size());
 
 	for (const auto& take : takes)

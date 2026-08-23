@@ -225,7 +225,7 @@
     <ClInclude Include="src\graphics\ImageFullscreen.h" />
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
-    <ClInclude Include="src\timing\TimingQuantiser.h" />
+    <ClInclude Include="src\engine\Quantiser.h" />
     <ClInclude Include="src\ninjam\NinjamTimingTracker.h" />
     
     <ClInclude Include="src\graphics\QuantisationModel.h" />
@@ -335,6 +335,7 @@
     <ClInclude Include="src\ninjam\NinjamTiming.h" />
     <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h" />
     <ClInclude Include="src\ninjam\NinjamTimingCoordinator.h" />
+	<ClInclude Include="src\utils\MusicalTransport.h" />
     <ClInclude Include="src\graphics\Shader.h" />
     <ClInclude Include="src\graphics\Image.h" />
     <ClInclude Include="src\graphics\NinePatchImage.h" />
@@ -404,7 +405,7 @@
     <ClCompile Include="src\graphics\ImageFullscreen.cpp" />
     <ClCompile Include="src\graphics\Skybox.cpp" />
     <ClCompile Include="src\graphics\LoopModel.cpp" />
-    <ClCompile Include="src\timing\TimingQuantiser.cpp" />
+    <ClCompile Include="src\engine\Quantiser.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingTracker.cpp" />
     
     <ClCompile Include="src\graphics\QuantisationModel.cpp" />
@@ -500,6 +501,7 @@
     <ClCompile Include="src\graphics\VstEditorWindow.cpp" />
     <ClCompile Include="src\engine\Trigger.cpp" />
     <ClCompile Include="src\utils\Timer.cpp" />
+	<ClCompile Include="src\utils\MusicalTransport.cpp" />
     <ClCompile Include="src\actions\ActionUndoHistory.cpp" />
     <ClCompile Include="src\io\WavReadWriter.cpp" />
     <ClCompile Include="src\resources\TextureResource.cpp" />

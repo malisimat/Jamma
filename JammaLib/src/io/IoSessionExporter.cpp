@@ -14,7 +14,7 @@ using namespace engine;
 namespace io
 {
 	actions::ActionResult IoSessionExporter::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
-		const timing::TimingQuantiser& quantisation,
+		const engine::Quantiser& quantisation,
 		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 		double transportOffsetLoopFrac,
 		const io::UserConfig& userConfig,

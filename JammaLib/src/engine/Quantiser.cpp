@@ -1,4 +1,4 @@
-#include "TimingQuantiser.h"
+#include "Quantiser.h"
 #include "../ninjam/NinjamTiming.h"
 
 #include <algorithm>
@@ -17,19 +17,19 @@ using namespace base;
 using namespace engine;
 using namespace utils;
 
-namespace timing
+namespace engine
 {
 
 
 
-unsigned int TimingQuantiser::_ClampToUInt(unsigned long value)
+unsigned int Quantiser::_ClampToUInt(unsigned long value)
 {
 	return value > std::numeric_limits<unsigned int>::max() ?
 		std::numeric_limits<unsigned int>::max() :
 		static_cast<unsigned int>(value);
 }
 
-unsigned int TimingQuantiser::_RoundedToUInt(double value)
+unsigned int Quantiser::_RoundedToUInt(double value)
 {
 	if (value <= 0.0)
 		return 0u;
@@ -40,7 +40,7 @@ unsigned int TimingQuantiser::_RoundedToUInt(double value)
 	return static_cast<unsigned int>(value + 0.5);
 }
 
-std::int32_t TimingQuantiser::_ClampPhaseOffset(std::int64_t offsetSamps) noexcept
+std::int32_t Quantiser::_ClampPhaseOffset(std::int64_t offsetSamps) noexcept
 {
 	if (offsetSamps > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()))
 		return std::numeric_limits<std::int32_t>::max();
@@ -49,7 +49,7 @@ std::int32_t TimingQuantiser::_ClampPhaseOffset(std::int64_t offsetSamps) noexce
 	return static_cast<std::int32_t>(offsetSamps);
 }
 
-unsigned long TimingQuantiser::_SnapSeedToMasterDivisor(unsigned long requestedSeedSamps,
+unsigned long Quantiser::_SnapSeedToMasterDivisor(unsigned long requestedSeedSamps,
 	unsigned long masterLoopSamps)
 {
 	if (masterLoopSamps == 0ul)
@@ -87,7 +87,7 @@ unsigned long TimingQuantiser::_SnapSeedToMasterDivisor(unsigned long requestedS
 	return bestSeed;
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::_TimingFromSeed(unsigned int seedSamps,
+std::optional<QuantisationTiming> Quantiser::_TimingFromSeed(unsigned int seedSamps,
 	unsigned long masterLoopSamps,
 	unsigned int sampleRate)
 {
@@ -110,24 +110,24 @@ std::optional<QuantisationTiming> TimingQuantiser::_TimingFromSeed(unsigned int 
 	return timing;
 }
 
-void TimingQuantiser::SetClock(std::shared_ptr<Timer> clock)
+void Quantiser::SetClock(std::shared_ptr<Timer> clock)
 {
 	_clock = std::move(clock);
 }
 
-void TimingQuantiser::SetSeedUsesPowers(bool seedUsesPowers) noexcept
+void Quantiser::SetSeedUsesPowers(bool seedUsesPowers) noexcept
 {
 	_seedUsesPowers = seedUsesPowers;
 }
 
-void TimingQuantiser::Set(unsigned int samps, utils::Timer::QuantisationType type)
+void Quantiser::Set(unsigned int samps, utils::Timer::QuantisationType type)
 {
 	if (_clock)
 		_clock->SetQuantisation(samps, type);
 	_effectiveQuantiseSamps.store(samps, std::memory_order_release);
 }
 
-void TimingQuantiser::Clear(bool clearTapTempo, bool preserveTiming)
+void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 {
 	if (!preserveTiming)
 	{
@@ -147,7 +147,7 @@ void TimingQuantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	}
 }
 
-void TimingQuantiser::ArmReclock()
+void Quantiser::ArmReclock()
 {
 	if (_clock)
 		_clock->Clear();
@@ -161,7 +161,7 @@ void TimingQuantiser::ArmReclock()
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
 }
 
-void TimingQuantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
+void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
 {
 	if (!_clock || (timing.SeedSamps == 0u))
 		return;
@@ -181,7 +181,7 @@ void TimingQuantiser::ApplyTiming(const QuantisationTiming& timing, const char* 
 		<< " bpi=" << timing.Bpi << std::endl;
 }
 
-void TimingQuantiser::SetMidiGrain(unsigned int grainSamps,
+void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	const char* source,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
@@ -210,7 +210,7 @@ void TimingQuantiser::SetMidiGrain(unsigned int grainSamps,
 	(void)takeCount;
 }
 
-void TimingQuantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
+void Quantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
 	if (_globalPhaseOffsetSamps == offsetSamps)
@@ -224,7 +224,7 @@ void TimingQuantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 	}
 }
 
-std::int32_t TimingQuantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
+std::int32_t Quantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 	int deltaX,
 	unsigned int sampleRate) noexcept
 {
@@ -236,7 +236,7 @@ std::int32_t TimingQuantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSam
 	return _ClampPhaseOffset(static_cast<std::int64_t>(startOffsetSamps) + dragSamps);
 }
 
-bool TimingQuantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
+bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
 	unsigned int sampleRate,
 	const std::vector<std::shared_ptr<Station>>& stations,
 	const io::UserConfig& cfg)
@@ -272,7 +272,7 @@ bool TimingQuantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
 	return true;
 }
 
-void TimingQuantiser::PulseOverlay()
+void Quantiser::PulseOverlay()
 {
 	auto expected = _overlayState.load(std::memory_order_relaxed);
 	do {
@@ -285,19 +285,19 @@ void TimingQuantiser::PulseOverlay()
 		std::memory_order_relaxed));
 }
 
-void TimingQuantiser::SetOverlayHeld(bool held)
+void Quantiser::SetOverlayHeld(bool held)
 {
 	_overlayState.store(
 		held ? StateHeld : utils::Timer::GetTime().time_since_epoch().count(),
 		std::memory_order_release);
 }
 
-void TimingQuantiser::ClearOverlay() noexcept
+void Quantiser::ClearOverlay() noexcept
 {
 	_overlayState.store(StateInactive, std::memory_order_release);
 }
 
-float TimingQuantiser::OverlayAlpha(Time now) const
+float Quantiser::OverlayAlpha(Time now) const
 {
 	const auto state = _overlayState.load(std::memory_order_acquire);
 	if (state == StateHeld)
@@ -313,7 +313,7 @@ float TimingQuantiser::OverlayAlpha(Time now) const
 	return static_cast<float>(1.0 - (elapsed / OverlayFadeSeconds));
 }
 
-void TimingQuantiser::ApplyOverlayAlpha(float alpha,
+void Quantiser::ApplyOverlayAlpha(float alpha,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
 	for (const auto& station : stations)
@@ -323,7 +323,7 @@ void TimingQuantiser::ApplyOverlayAlpha(float alpha,
 	}
 }
 
-bool TimingQuantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
+bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
 	unsigned int depth,
 	const std::vector<std::shared_ptr<Station>>& stations,
 	unsigned int sampleRate,
@@ -361,7 +361,7 @@ bool TimingQuantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiEleme
 	return true;
 }
 
-void TimingQuantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& candidate,
+void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& candidate,
 	unsigned int depth,
 	bool confirmCandidate,
 	const std::vector<std::shared_ptr<Station>>& stations)
@@ -402,13 +402,13 @@ void TimingQuantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>
 	}
 }
 
-void TimingQuantiser::ClearStationHints(const std::vector<std::shared_ptr<Station>>& stations)
+void Quantiser::ClearStationHints(const std::vector<std::shared_ptr<Station>>& stations)
 {
 	for (const auto& station : stations)
 		station->ClearQuantisationParams();
 }
 
-std::optional<TimingQuantiser::InteractionTarget> TimingQuantiser::_ResolveInteractionTarget(
+std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget(
 	const std::shared_ptr<base::GuiElement>& target,
 	unsigned int depth,
 	const std::vector<std::shared_ptr<Station>>& stations) const
@@ -478,27 +478,27 @@ std::optional<TimingQuantiser::InteractionTarget> TimingQuantiser::_ResolveInter
 	}
 }
 
-unsigned int TimingQuantiser::EffectiveSamps() const noexcept
+unsigned int Quantiser::EffectiveSamps() const noexcept
 {
 	return _effectiveQuantiseSamps.load(std::memory_order_acquire);
 }
 
-std::int32_t TimingQuantiser::GlobalPhaseOffsetSamps() const noexcept
+std::int32_t Quantiser::GlobalPhaseOffsetSamps() const noexcept
 {
 	return _globalPhaseOffsetSamps;
 }
 
-bool TimingQuantiser::IsArmedForReclock() const noexcept
+bool Quantiser::IsArmedForReclock() const noexcept
 {
 	return _armReclock.load(std::memory_order_acquire);
 }
 
-std::shared_ptr<Timer> TimingQuantiser::Clock() const noexcept
+std::shared_ptr<Timer> Quantiser::Clock() const noexcept
 {
 	return _clock;
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::CurrentTempoTiming(unsigned int sampleRate) const
+std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sampleRate) const
 {
 	auto seedSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
 	auto masterLoopSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
@@ -510,7 +510,7 @@ std::optional<QuantisationTiming> TimingQuantiser::CurrentTempoTiming(unsigned i
 	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
 }
 
-void TimingQuantiser::LogNinjamTempoEvent(const char* event,
+void Quantiser::LogNinjamTempoEvent(const char* event,
 	unsigned long masterLoopLengthSamps,
 	unsigned int grainSamps,
 	unsigned int bpi,
@@ -526,7 +526,7 @@ void TimingQuantiser::LogNinjamTempoEvent(const char* event,
 		<< std::endl;
 }
 
-void TimingQuantiser::LogNinjamManualTempoCommands(float bpm, unsigned int bpi)
+void Quantiser::LogNinjamManualTempoCommands(float bpm, unsigned int bpi)
 {
 	std::cout << "[NINJAM] Manual server tempo commands: /bpm " << static_cast<int>(bpm + 0.5f)
 		<< " /bpi " << bpi
@@ -535,7 +535,7 @@ void TimingQuantiser::LogNinjamManualTempoCommands(float bpm, unsigned int bpi)
 		<< std::endl;
 }
 
-QuantisationPolicy TimingQuantiser::Policy(const io::UserConfig& cfg)
+QuantisationPolicy Quantiser::Policy(const io::UserConfig& cfg)
 {
 	QuantisationPolicy policy;
 	policy.SeedGrainMinMs = cfg.Loop.SeedGrainMinMs;
@@ -545,7 +545,7 @@ QuantisationPolicy TimingQuantiser::Policy(const io::UserConfig& cfg)
 	return policy;
 }
 
-unsigned int TimingQuantiser::MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)
+unsigned int Quantiser::MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)
 {
 	if (sampleRate == 0u)
 		return 0u;
@@ -554,7 +554,7 @@ unsigned int TimingQuantiser::MinSeedSamps(unsigned int sampleRate, const Quanti
 	return _RoundedToUInt((static_cast<double>(sampleRate) * static_cast<double>(minMs)) / 1000.0);
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::TimingFromSeedAndMaster(unsigned int seedSamps,
+std::optional<QuantisationTiming> Quantiser::TimingFromSeedAndMaster(unsigned int seedSamps,
 	unsigned long masterSamps,
 	unsigned int sampleRate)
 {
@@ -564,7 +564,7 @@ std::optional<QuantisationTiming> TimingQuantiser::TimingFromSeedAndMaster(unsig
 	return _TimingFromSeed(seedSamps, masterSamps, sampleRate);
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::DeduceSeedTiming(unsigned long masterLoopSamps,
+std::optional<QuantisationTiming> Quantiser::DeduceSeedTiming(unsigned long masterLoopSamps,
 	unsigned int sampleRate,
 	const QuantisationPolicy& policy)
 {
@@ -596,7 +596,7 @@ std::optional<QuantisationTiming> TimingQuantiser::DeduceSeedTiming(unsigned lon
 	return _TimingFromSeed(static_cast<unsigned int>(seedSamps), masterLoopSamps, sampleRate);
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::DeduceTapSeedTiming(unsigned long requestedSeedSamps,
+std::optional<QuantisationTiming> Quantiser::DeduceTapSeedTiming(unsigned long requestedSeedSamps,
 	unsigned int sampleRate,
 	const QuantisationPolicy& policy)
 {
@@ -670,9 +670,9 @@ std::optional<QuantisationTiming> TapTempoTracker::CurrentTiming(unsigned long m
 
 	const auto requestedSeedSamps = static_cast<unsigned long>(_estimatedGapSamps.value() + 0.5);
 	if (masterLoopSamps > 0ul)
-		return TimingQuantiser::DeduceTapSeedTimingFromMaster(requestedSeedSamps, masterLoopSamps, sampleRate);
+		return Quantiser::DeduceTapSeedTimingFromMaster(requestedSeedSamps, masterLoopSamps, sampleRate);
 
-	return TimingQuantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
+	return Quantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
 }
 
 bool TapTempoTracker::HasEstimate() const noexcept
@@ -680,7 +680,7 @@ bool TapTempoTracker::HasEstimate() const noexcept
 	return _estimatedGapSamps.has_value();
 }
 
-std::optional<QuantisationTiming> TimingQuantiser::DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
+std::optional<QuantisationTiming> Quantiser::DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
 	unsigned long masterLoopSamps,
 	unsigned int sampleRate)
 {
@@ -695,10 +695,10 @@ std::optional<QuantisationTiming> TimingQuantiser::DeduceTapSeedTimingFromMaster
 	return _TimingFromSeed(static_cast<unsigned int>(bestSeed), masterLoopSamps, sampleRate);
 }
 
-	// ── TimingQuantiserController implementation ──
+	// ── QuantiserController implementation ──
 
-TimingQuantiserController::TimingQuantiserController(graphics::CtrlHandleOverlay& overlay,
-	TimingQuantiser& quantisation,
+QuantiserController::QuantiserController(graphics::CtrlHandleOverlay& overlay,
+	Quantiser& quantisation,
 	std::vector<std::shared_ptr<Station>>& stations) :
 	_overlay(overlay),
 	_quantisation(quantisation),
@@ -708,7 +708,7 @@ TimingQuantiserController::TimingQuantiserController(graphics::CtrlHandleOverlay
 {
 }
 
-void TimingQuantiserController::OnCtrlModifierChanged(bool held,
+void QuantiserController::OnCtrlModifierChanged(bool held,
 	Time now,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
@@ -723,7 +723,7 @@ void TimingQuantiserController::OnCtrlModifierChanged(bool held,
 	RefreshOverlay(context, childResolver);
 }
 
-void TimingQuantiserController::RefreshOverlay(const QuantisationInteractionContext& context,
+void QuantiserController::RefreshOverlay(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
 	if (_ctrlOverlayContext.has_value())
@@ -740,12 +740,12 @@ void TimingQuantiserController::RefreshOverlay(const QuantisationInteractionCont
 		_overlay.SetAnchor(context.CursorPos, context.ViewportSize);
 }
 
-void TimingQuantiserController::Tick(Time now)
+void QuantiserController::Tick(Time now)
 {
 	_ApplyCtrlHandleAlpha(_CtrlHandleAlpha(now));
 }
 
-std::optional<ActionResult> TimingQuantiserController::TryHandleTouchAction(TouchAction action,
+std::optional<ActionResult> QuantiserController::TryHandleTouchAction(TouchAction action,
 	unsigned int sampleRate,
 	bool ctrlModifier,
 	const QuantisationInteractionContext& context,
@@ -790,7 +790,7 @@ std::optional<ActionResult> TimingQuantiserController::TryHandleTouchAction(Touc
 	return res;
 }
 
-std::optional<ActionResult> TimingQuantiserController::TryHandleTouchMove(TouchMoveAction action,
+std::optional<ActionResult> QuantiserController::TryHandleTouchMove(TouchMoveAction action,
 	unsigned int sampleRate)
 {
 	if (_isMidiPhaseDragging)
@@ -802,7 +802,7 @@ std::optional<ActionResult> TimingQuantiserController::TryHandleTouchMove(TouchM
 	return std::nullopt;
 }
 
-void TimingQuantiserController::_CaptureContext(const QuantisationInteractionContext& context,
+void QuantiserController::_CaptureContext(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
 	CtrlOverlayContext captured;
@@ -824,7 +824,7 @@ void TimingQuantiserController::_CaptureContext(const QuantisationInteractionCon
 	_ctrlOverlayContext = std::move(captured);
 }
 
-float TimingQuantiserController::_CtrlHandleAlpha(Time now) const
+float QuantiserController::_CtrlHandleAlpha(Time now) const
 {
 	if (_ctrlHandleHeld)
 		return 1.0f;
@@ -837,14 +837,14 @@ float TimingQuantiserController::_CtrlHandleAlpha(Time now) const
 	return static_cast<float>(1.0 - elapsed / FadeSeconds);
 }
 
-void TimingQuantiserController::_ApplyCtrlHandleAlpha(float alpha)
+void QuantiserController::_ApplyCtrlHandleAlpha(float alpha)
 {
 	_overlay.SetAlpha(alpha);
 	if ((alpha <= 0.001f) && !_ctrlHandleHeld)
 		_ctrlOverlayContext = std::nullopt;
 }
 
-int TimingQuantiserController::_VisibleButtonCount(const QuantisationInteractionContext& context) const
+int QuantiserController::_VisibleButtonCount(const QuantisationInteractionContext& context) const
 {
 	if (_ctrlOverlayContext.has_value())
 		return _ctrlOverlayContext->VisibleButtonCount;
@@ -860,7 +860,7 @@ int TimingQuantiserController::_VisibleButtonCount(const QuantisationInteraction
 	}
 }
 
-SelectDepth TimingQuantiserController::_SelectDepth(const QuantisationInteractionContext& context) const noexcept
+SelectDepth QuantiserController::_SelectDepth(const QuantisationInteractionContext& context) const noexcept
 {
 	if (_ctrlOverlayContext.has_value())
 		return _ctrlOverlayContext->SelectDepth;
@@ -868,7 +868,7 @@ SelectDepth TimingQuantiserController::_SelectDepth(const QuantisationInteractio
 	return context.SelectDepth;
 }
 
-std::shared_ptr<GuiElement> TimingQuantiserController::_HoverElement(const QuantisationInteractionContext& context,
+std::shared_ptr<GuiElement> QuantiserController::_HoverElement(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
 	if (_ctrlOverlayContext.has_value())
@@ -880,7 +880,7 @@ std::shared_ptr<GuiElement> TimingQuantiserController::_HoverElement(const Quant
 	return hovering;
 }
 
-void TimingQuantiserController::_ApplyOverlayScopes(const QuantisationInteractionContext& context,
+void QuantiserController::_ApplyOverlayScopes(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
 	_overlay.SetButtonScope(0,
@@ -893,7 +893,7 @@ void TimingQuantiserController::_ApplyOverlayScopes(const QuantisationInteractio
 			: graphics::CtrlHandleOverlay::ButtonScope::Local);
 }
 
-std::shared_ptr<Station> TimingQuantiserController::_StationFromElement(const std::shared_ptr<GuiElement>& element) const
+std::shared_ptr<Station> QuantiserController::_StationFromElement(const std::shared_ptr<GuiElement>& element) const
 {
 	if (!element)
 		return nullptr;
@@ -909,7 +909,7 @@ std::shared_ptr<Station> TimingQuantiserController::_StationFromElement(const st
 	return _StationForTake(_TakeForLoop(std::dynamic_pointer_cast<Loop>(element)));
 }
 
-std::vector<std::shared_ptr<Station>> TimingQuantiserController::_SelectedStations() const
+std::vector<std::shared_ptr<Station>> QuantiserController::_SelectedStations() const
 {
 	std::vector<std::shared_ptr<Station>> selected;
 	for (const auto& station : _stations)
@@ -921,7 +921,7 @@ std::vector<std::shared_ptr<Station>> TimingQuantiserController::_SelectedStatio
 	return selected;
 }
 
-std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_SelectedLoopTakes(base::SelectDepth depth) const
+std::vector<std::shared_ptr<LoopTake>> QuantiserController::_SelectedLoopTakes(base::SelectDepth depth) const
 {
 	std::vector<std::shared_ptr<LoopTake>> selected;
 	auto addTake = [&selected](const std::shared_ptr<LoopTake>& take) {
@@ -958,7 +958,7 @@ std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_SelectedLoopT
 	return selected;
 }
 
-std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_AllLocalLoopTakes() const
+std::vector<std::shared_ptr<LoopTake>> QuantiserController::_AllLocalLoopTakes() const
 {
 	std::vector<std::shared_ptr<LoopTake>> targets;
 	_ForEachTake([&targets](const std::shared_ptr<Station>& station,
@@ -970,7 +970,7 @@ std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_AllLocalLoopT
 	return targets;
 }
 
-std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_LoopTakesForStations(const std::vector<std::shared_ptr<Station>>& stations) const
+std::vector<std::shared_ptr<LoopTake>> QuantiserController::_LoopTakesForStations(const std::vector<std::shared_ptr<Station>>& stations) const
 {
 	std::vector<std::shared_ptr<LoopTake>> targets;
 	for (const auto& station : stations)
@@ -989,7 +989,7 @@ std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_LoopTakesForS
 	return targets;
 }
 
-bool TimingQuantiserController::_IsPhaseGlobalTarget(const QuantisationInteractionContext& context,
+bool QuantiserController::_IsPhaseGlobalTarget(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
 	const auto depth = _SelectDepth(context);
@@ -1011,7 +1011,7 @@ bool TimingQuantiserController::_IsPhaseGlobalTarget(const QuantisationInteracti
 	return true;
 }
 
-bool TimingQuantiserController::_IsDivisionGlobalTarget(const QuantisationInteractionContext& context,
+bool QuantiserController::_IsDivisionGlobalTarget(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
 	const auto depth = _SelectDepth(context);
@@ -1033,7 +1033,7 @@ bool TimingQuantiserController::_IsDivisionGlobalTarget(const QuantisationIntera
 	return true;
 }
 
-ActionResult TimingQuantiserController::_BeginMidiPhaseDrag(TouchAction action,
+ActionResult QuantiserController::_BeginMidiPhaseDrag(TouchAction action,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
@@ -1050,11 +1050,11 @@ ActionResult TimingQuantiserController::_BeginMidiPhaseDrag(TouchAction action,
 	return res;
 }
 
-ActionResult TimingQuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction action,
+ActionResult QuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction action,
 	unsigned int sampleRate)
 {
 	const auto delta = action.Position - _midiPhaseDragStartPosition;
-	const auto offsetSamps = TimingQuantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
+	const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		sampleRate);
 	_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
@@ -1066,13 +1066,13 @@ ActionResult TimingQuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction act
 	return res;
 }
 
-ActionResult TimingQuantiserController::_EndMidiPhaseDrag(TouchAction action,
+ActionResult QuantiserController::_EndMidiPhaseDrag(TouchAction action,
 	unsigned int sampleRate)
 {
 	if (_isMidiPhaseDragging)
 	{
 		const auto delta = action.Position - _midiPhaseDragStartPosition;
-		const auto offsetSamps = TimingQuantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
+		const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 			delta.X,
 			sampleRate);
 		_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, offsetSamps);
@@ -1087,7 +1087,7 @@ ActionResult TimingQuantiserController::_EndMidiPhaseDrag(TouchAction action,
 	return ActionResult::NoAction();
 }
 
-ActionResult TimingQuantiserController::_BeginFractionDrag(TouchAction action,
+ActionResult QuantiserController::_BeginFractionDrag(TouchAction action,
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
@@ -1123,7 +1123,7 @@ ActionResult TimingQuantiserController::_BeginFractionDrag(TouchAction action,
 	return res;
 }
 
-ActionResult TimingQuantiserController::_UpdateFractionDrag(TouchMoveAction action)
+ActionResult QuantiserController::_UpdateFractionDrag(TouchMoveAction action)
 {
 	if (!_isFractionDragging)
 		return ActionResult::NoAction();
@@ -1159,7 +1159,7 @@ ActionResult TimingQuantiserController::_UpdateFractionDrag(TouchMoveAction acti
 	return res;
 }
 
-ActionResult TimingQuantiserController::_EndFractionDrag(TouchAction action)
+ActionResult QuantiserController::_EndFractionDrag(TouchAction action)
 {
 	auto take = _fractionDragTake;
 	auto targets = _fractionDragTargets;
@@ -1195,7 +1195,7 @@ ActionResult TimingQuantiserController::_EndFractionDrag(TouchAction action)
 	return res;
 }
 
-void TimingQuantiserController::_ForEachTake(const std::function<void(const std::shared_ptr<Station>& station,
+void QuantiserController::_ForEachTake(const std::function<void(const std::shared_ptr<Station>& station,
 	const std::shared_ptr<LoopTake>& take)>& visit) const
 {
 	for (const auto& station : _stations)
@@ -1213,7 +1213,7 @@ void TimingQuantiserController::_ForEachTake(const std::function<void(const std:
 	}
 }
 
-std::shared_ptr<Station> TimingQuantiserController::_StationForTake(const std::shared_ptr<LoopTake>& take) const
+std::shared_ptr<Station> QuantiserController::_StationForTake(const std::shared_ptr<LoopTake>& take) const
 {
 	if (!take)
 		return nullptr;
@@ -1227,7 +1227,7 @@ std::shared_ptr<Station> TimingQuantiserController::_StationForTake(const std::s
 	return resolved;
 }
 
-std::shared_ptr<LoopTake> TimingQuantiserController::_TakeForLoop(const std::shared_ptr<Loop>& loop) const
+std::shared_ptr<LoopTake> QuantiserController::_TakeForLoop(const std::shared_ptr<Loop>& loop) const
 {
 	if (!loop)
 		return nullptr;
@@ -1244,7 +1244,7 @@ std::shared_ptr<LoopTake> TimingQuantiserController::_TakeForLoop(const std::sha
 	return resolved;
 }
 
-std::shared_ptr<LoopTake> TimingQuantiserController::_TakeFromElement(const std::shared_ptr<GuiElement>& element) const
+std::shared_ptr<LoopTake> QuantiserController::_TakeFromElement(const std::shared_ptr<GuiElement>& element) const
 {
 	if (!element)
 		return nullptr;
@@ -1256,7 +1256,7 @@ std::shared_ptr<LoopTake> TimingQuantiserController::_TakeFromElement(const std:
 	return _TakeForLoop(std::dynamic_pointer_cast<Loop>(element));
 }
 
-std::shared_ptr<LoopTake> TimingQuantiserController::_FirstTakeForStation(const std::shared_ptr<Station>& station) const
+std::shared_ptr<LoopTake> QuantiserController::_FirstTakeForStation(const std::shared_ptr<Station>& station) const
 {
 	if (!station)
 		return nullptr;
@@ -1270,7 +1270,7 @@ std::shared_ptr<LoopTake> TimingQuantiserController::_FirstTakeForStation(const 
 	return nullptr;
 }
 
-std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_ResolveFractionDragTargets(const QuantisationInteractionContext& context,
+std::vector<std::shared_ptr<LoopTake>> QuantiserController::_ResolveFractionDragTargets(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
 	const auto depth = _SelectDepth(context);
@@ -1303,7 +1303,7 @@ std::vector<std::shared_ptr<LoopTake>> TimingQuantiserController::_ResolveFracti
 	return {};
 }
 
-TimingQuantiserController::MidiPhaseDragTarget TimingQuantiserController::_ResolveMidiPhaseDragTarget(
+QuantiserController::MidiPhaseDragTarget QuantiserController::_ResolveMidiPhaseDragTarget(
 	const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver) const
 {
@@ -1354,7 +1354,7 @@ TimingQuantiserController::MidiPhaseDragTarget TimingQuantiserController::_Resol
 	return target;
 }
 
-std::int32_t TimingQuantiserController::_MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept
+std::int32_t QuantiserController::_MidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target) const noexcept
 {
 	switch (target.Kind)
 	{
@@ -1368,7 +1368,7 @@ std::int32_t TimingQuantiserController::_MidiPhaseOffsetForTarget(const MidiPhas
 	}
 }
 
-void TimingQuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
+void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget& target,
 	std::int32_t offsetSamps) noexcept
 {
 	switch (target.Kind)
@@ -1397,4 +1397,4 @@ void TimingQuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDrag
 		break;
 	}
 }
-} // namespace timing
+} // namespace engine

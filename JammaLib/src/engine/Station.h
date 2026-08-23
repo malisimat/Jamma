@@ -8,7 +8,7 @@
 #include <mutex>
 #include <vector>
 #include "LoopTake.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../graphics/QuantisationModel.h"
 #include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
@@ -161,7 +161,7 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<utils::Timer> clock);
-		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
+		void SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
@@ -445,7 +445,7 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
+		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;
