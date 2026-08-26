@@ -299,7 +299,9 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasesAfterTimingCorrection)
 	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
 		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 6100u);
-	take->BeginSyncPhaseMap(6100u, 1000ul, 1100ul);
+	// The source ruler moved by the same correction. Rebase it without
+	// recapturing this take's anchor.
+	take->RebaseSyncPhaseMap(6100u, 1000ul, 1100ul, 125ul);
 	take->RestoreSyncPhaseMap(7200u);
 	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(225ul, take->MidiVisualPosition());
@@ -316,7 +318,7 @@ TEST(TransportPhaseOffset, SyncPhaseMapRestoresBeforeRebasingAfterDeviceRateAdva
 
 	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
 		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 5550u);
-	take->BeginSyncPhaseMap(5550u, 1000ul, 1100ul);
+	take->RebaseSyncPhaseMap(5550u, 1000ul, 1100ul, 625ul);
 	take->RestoreSyncPhaseMap(6100u);
 
 	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
@@ -338,6 +340,44 @@ TEST(TransportPhaseOffset, SyncPhaseMapMapsAudioAndMidiFromTheSameRemoteMaster)
 		const auto expected = static_cast<unsigned long>((225u + scaled) % 1000u);
 		EXPECT_EQ(expected, TimingLoopBodyPosition(*take->GetLoops().front()));
 		EXPECT_EQ(expected, take->MidiVisualPosition());
+	}
+}
+
+TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
+{
+	auto earlyTake = MakePlayingTimingTake("early-sync-origin", 1000ul, 100ul);
+	auto lateTake = MakePlayingTimingTake("late-sync-origin", 1000ul, 700ul);
+
+	earlyTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
+	lateTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
+	for (const auto scene : { 5550u, 6100u, 7200u })
+	{
+		earlyTake->RestoreSyncPhaseMap(scene);
+		lateTake->RestoreSyncPhaseMap(scene);
+	}
+
+	// A remote phase correction changes the common source phase, never either
+	// loop's independently recorded origin.
+	earlyTake->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
+	lateTake->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
+		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
+	earlyTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 525ul);
+	lateTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 525ul);
+
+	for (const auto scene : { 7200u, 7750u, 8300u, 9400u })
+	{
+		const auto elapsed = static_cast<std::uint64_t>(scene - 7200u);
+		const auto sourcePhase = static_cast<unsigned long>((525u
+			+ ((elapsed * 1000u + 550u) / 1100u)) % 1000u);
+		earlyTake->RestoreSyncPhaseMap(scene);
+		lateTake->RestoreSyncPhaseMap(scene);
+		EXPECT_EQ((sourcePhase + 700ul) % 1000ul,
+			TimingLoopBodyPosition(*earlyTake->GetLoops().front()));
+		EXPECT_EQ((sourcePhase + 300ul) % 1000ul,
+			TimingLoopBodyPosition(*lateTake->GetLoops().front()));
+		EXPECT_EQ((TimingLoopBodyPosition(*earlyTake->GetLoops().front()) + 600ul) % 1000ul,
+			TimingLoopBodyPosition(*lateTake->GetLoops().front()));
 	}
 }
 

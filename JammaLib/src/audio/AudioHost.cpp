@@ -157,12 +157,14 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 		static const std::vector<std::shared_ptr<Station>> emptyStations;
 		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 		bool beginSyncPhaseMapAfterOffset = false;
+		bool rebaseSyncPhaseMapAfterOffset = false;
 
 		// Unified audio-boundary transport fan-out. Consume at most one coherent
 		// command before any station playback advancement so the Timer and every
 		// active local take apply the same signed correction in the same block.
 		if (const auto command = _ninjamTimingCommandMailbox.Consume())
 		{
+			const auto hadSyncPhaseMap = _syncPhaseMap.IsActive();
 			const auto timingClock = _timingClock.load(std::memory_order_acquire);
 			long long stationDelta = command->PhaseDeltaSamps;
 			auto policy = command->LocalFollowPolicy;
@@ -309,7 +311,8 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					const auto sourcePhase = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
 						_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
 					_syncPhaseMap.Rebase(sceneCoordinate, sourcePhase);
-					beginSyncPhaseMapAfterOffset = true;
+					beginSyncPhaseMapAfterOffset = !hadSyncPhaseMap;
+					rebaseSyncPhaseMapAfterOffset = hadSyncPhaseMap;
 				}
 			}
 			const auto writingReceipt = _lastAppliedTimingReceiptSequence.fetch_add(
@@ -349,7 +352,13 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 		if (beginSyncPhaseMapAfterOffset)
 			for (auto& station : stations)
 				if (station && !station->IsRemote()) station->BeginSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
-					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
+					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
+					_syncPhaseMap.SourcePhaseAtOrigin);
+		else if (rebaseSyncPhaseMapAfterOffset)
+			for (auto& station : stations)
+				if (station && !station->IsRemote()) station->RebaseSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
+					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
+					_syncPhaseMap.SourcePhaseAtOrigin);
 
 		if (nullptr != inBuf)
 		{

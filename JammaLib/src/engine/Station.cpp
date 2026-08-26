@@ -762,14 +762,27 @@ void Station::InvalidateSceneAnchors() noexcept
 }
 
 void Station::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps) noexcept
+	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
+	unsigned long sourcePhaseAtOriginSamps) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
 	for (const auto& weakTake : state->LoopTakes)
 		if (auto take = weakTake.lock()) take->BeginSyncPhaseMap(sceneCoordinateSamps,
-			localMasterLengthSamps, remoteMasterLengthSamps);
+			localMasterLengthSamps, remoteMasterLengthSamps, sourcePhaseAtOriginSamps);
+}
+
+void Station::RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
+	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
+	unsigned long sourcePhaseAtOriginSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->RebaseSyncPhaseMap(sceneCoordinateSamps,
+			localMasterLengthSamps, remoteMasterLengthSamps, sourcePhaseAtOriginSamps);
 }
 
 void Station::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
