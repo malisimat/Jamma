@@ -310,7 +310,10 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					}
 					const auto sourcePhase = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
 						_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
-					_syncPhaseMap.Rebase(sceneCoordinate, sourcePhase);
+					const auto sourceCoordinate = hadSyncPhaseMap
+						? _syncPhaseMap.SourceCoordinateAt(sceneCoordinate) + stationDelta
+						: static_cast<std::int64_t>(sourcePhase);
+					_syncPhaseMap.Rebase(sceneCoordinate, sourceCoordinate);
 					beginSyncPhaseMapAfterOffset = !hadSyncPhaseMap;
 					rebaseSyncPhaseMapAfterOffset = hadSyncPhaseMap;
 				}
@@ -353,12 +356,12 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			for (auto& station : stations)
 				if (station && !station->IsRemote()) station->BeginSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
 					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
-					_syncPhaseMap.SourcePhaseAtOrigin);
+					_syncPhaseMap.SourceCoordinateAtOrigin);
 		else if (rebaseSyncPhaseMapAfterOffset)
 			for (auto& station : stations)
 				if (station && !station->IsRemote()) station->RebaseSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
 					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
-					_syncPhaseMap.SourcePhaseAtOrigin);
+					_syncPhaseMap.SourceCoordinateAtOrigin);
 
 		if (nullptr != inBuf)
 		{

@@ -601,26 +601,25 @@ void LoopTake::InvalidateSceneAnchors() noexcept
 
 void LoopTake::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	unsigned long sourcePhaseAtOriginSamps) noexcept
+	std::int64_t sourceCoordinateAtOriginSamps) noexcept
 {
 	_hasSyncPhaseMap = localMasterLengthSamps > 0ul && remoteMasterLengthSamps > 0ul;
 	_syncPhaseMapSceneOrigin = sceneCoordinateSamps;
 	_syncPhaseMapLocalMasterLength = localMasterLengthSamps;
 	_syncPhaseMapRemoteMasterLength = remoteMasterLengthSamps;
-	_syncPhaseMapSourcePhaseAtOrigin = localMasterLengthSamps == 0ul ? 0ul :
-		sourcePhaseAtOriginSamps % localMasterLengthSamps;
+	_syncPhaseMapSourceCoordinateAtOrigin = sourceCoordinateAtOriginSamps;
 	auto state = _AudioStateSnapshot();
 	if (state)
 		for (const auto& weakLoop : state->Loops)
 			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
 				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
-					static_cast<long long>(_syncPhaseMapSourcePhaseAtOrigin)
+					_syncPhaseMapSourceCoordinateAtOrigin
 					- static_cast<long long>(loop->BodyPlayIndex()), loop->LoopLength())));
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul)
 	{
 		_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
-			static_cast<long long>(_syncPhaseMapSourcePhaseAtOrigin)
+			_syncPhaseMapSourceCoordinateAtOrigin
 			- static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
 			std::memory_order_relaxed);
 		_hasMidiSceneAnchor.store(true, std::memory_order_release);
@@ -629,14 +628,13 @@ void LoopTake::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 
 void LoopTake::RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	unsigned long sourcePhaseAtOriginSamps) noexcept
+	std::int64_t sourceCoordinateAtOriginSamps) noexcept
 {
 	_hasSyncPhaseMap = localMasterLengthSamps > 0ul && remoteMasterLengthSamps > 0ul;
 	_syncPhaseMapSceneOrigin = sceneCoordinateSamps;
 	_syncPhaseMapLocalMasterLength = localMasterLengthSamps;
 	_syncPhaseMapRemoteMasterLength = remoteMasterLengthSamps;
-	_syncPhaseMapSourcePhaseAtOrigin = localMasterLengthSamps == 0ul ? 0ul :
-		sourcePhaseAtOriginSamps % localMasterLengthSamps;
+	_syncPhaseMapSourceCoordinateAtOrigin = sourceCoordinateAtOriginSamps;
 }
 
 void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
@@ -646,8 +644,8 @@ void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
 	const auto elapsed = sceneCoordinateSamps - _syncPhaseMapSceneOrigin;
 	const auto scaledElapsed = ninjam::MapRemoteElapsedToLocal(elapsed,
 		_syncPhaseMapLocalMasterLength, _syncPhaseMapRemoteMasterLength);
-	const auto sourcePhase = _syncPhaseMapLocalMasterLength == 0ul ? 0ul :
-		(_syncPhaseMapSourcePhaseAtOrigin + scaledElapsed) % _syncPhaseMapLocalMasterLength;
+	const auto sourceCoordinate = _syncPhaseMapSourceCoordinateAtOrigin
+		+ static_cast<std::int64_t>(scaledElapsed);
 	auto state = _AudioStateSnapshot();
 	if (state)
 		for (const auto& weakLoop : state->Loops)
@@ -656,36 +654,25 @@ void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
 				const auto length = loop->LoopLength();
 				if (!loop->HasSceneAnchor())
 				{
-					const auto currentSourcePhase = ninjam::PositiveModulo(
-						static_cast<long long>(sourcePhase) - static_cast<long long>(scaledElapsed),
-						_syncPhaseMapLocalMasterLength);
-					const auto originPhase = ninjam::PositiveModulo(
-						static_cast<long long>(loop->BodyPlayIndex()) - static_cast<long long>(scaledElapsed), length);
 					loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
-						static_cast<long long>(currentSourcePhase) - static_cast<long long>(originPhase), length)));
+						sourceCoordinate - static_cast<long long>(loop->BodyPlayIndex()), length)));
 				}
 				loop->SetBodyPlayIndex(static_cast<unsigned long>(ninjam::PositiveModulo(
-					static_cast<long long>(sourcePhase) - static_cast<long long>(loop->SceneAnchor()), length)));
+					sourceCoordinate - static_cast<long long>(loop->SceneAnchor()), length)));
 			}
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul)
 	{
 		if (!_hasMidiSceneAnchor.load(std::memory_order_acquire))
 		{
-			const auto currentSourcePhase = ninjam::PositiveModulo(
-				static_cast<long long>(sourcePhase) - static_cast<long long>(scaledElapsed),
-				_syncPhaseMapLocalMasterLength);
-			const auto originPhase = ninjam::PositiveModulo(
-				static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
-				- static_cast<long long>(scaledElapsed), midiLoopLength);
 			_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
-				static_cast<long long>(currentSourcePhase) - static_cast<long long>(originPhase), midiLoopLength)),
+				sourceCoordinate - static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
 				std::memory_order_relaxed);
 			_hasMidiSceneAnchor.store(true, std::memory_order_release);
 		}
 		const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
 		const auto target = static_cast<unsigned long>(ninjam::PositiveModulo(
-			static_cast<long long>(sourcePhase)
+			sourceCoordinate
 			- static_cast<long long>(_midiSceneAnchor.load(std::memory_order_relaxed)), midiLoopLength));
 		_MoveMidiVisualCursor(target, static_cast<long long>(target) - static_cast<long long>(before));
 	}

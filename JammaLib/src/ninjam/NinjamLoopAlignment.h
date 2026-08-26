@@ -52,6 +52,10 @@ namespace ninjam
 		unsigned long RemoteLengthSamps = 0ul;
 		std::uint64_t SceneOriginSamps = 0u;
 		unsigned long SourcePhaseAtOrigin = 0ul;
+		// Monotonic local-source coordinate. Unlike SourcePhaseAtOrigin this does
+		// not repeat at a remote interval boundary, so longer local loops retain
+		// their own recurrence.
+		std::int64_t SourceCoordinateAtOrigin = 0;
 
 		constexpr bool IsActive() const noexcept
 		{
@@ -64,13 +68,24 @@ namespace ninjam
 				return 0ul;
 			const auto elapsed = MapRemoteElapsedToLocal(sceneCoordinateSamps - SceneOriginSamps,
 				SourceLengthSamps, RemoteLengthSamps);
-			return static_cast<unsigned long>((SourcePhaseAtOrigin + elapsed) % SourceLengthSamps);
+			return static_cast<unsigned long>(PositiveModulo(SourceCoordinateAt(sceneCoordinateSamps),
+				SourceLengthSamps));
 		}
 
-		constexpr void Rebase(std::uint64_t sceneCoordinateSamps, unsigned long sourcePhase) noexcept
+		constexpr std::int64_t SourceCoordinateAt(std::uint64_t sceneCoordinateSamps) const noexcept
+		{
+			if (!IsActive() || sceneCoordinateSamps < SceneOriginSamps)
+				return SourceCoordinateAtOrigin;
+			return SourceCoordinateAtOrigin + static_cast<std::int64_t>(MapRemoteElapsedToLocal(
+				sceneCoordinateSamps - SceneOriginSamps, SourceLengthSamps, RemoteLengthSamps));
+		}
+
+		constexpr void Rebase(std::uint64_t sceneCoordinateSamps, std::int64_t sourceCoordinate) noexcept
 		{
 			SceneOriginSamps = sceneCoordinateSamps;
-			SourcePhaseAtOrigin = SourceLengthSamps == 0ul ? 0ul : sourcePhase % SourceLengthSamps;
+			SourceCoordinateAtOrigin = sourceCoordinate;
+			SourcePhaseAtOrigin = SourceLengthSamps == 0ul ? 0ul :
+				static_cast<unsigned long>(PositiveModulo(sourceCoordinate, SourceLengthSamps));
 		}
 	};
 

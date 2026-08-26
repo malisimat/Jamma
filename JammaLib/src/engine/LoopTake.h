@@ -241,13 +241,13 @@ namespace engine
 		void InvalidateSceneAnchors() noexcept;
 		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			unsigned long sourcePhaseAtOriginSamps = 0ul) noexcept;
+			std::int64_t sourceCoordinateAtOriginSamps = 0) noexcept;
 		// Rebase the common source ruler without recapturing any loop origin.  The
 		// anchors belong to the whole follow session, not an individual remote
 		// timing observation.
 		void RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			unsigned long sourcePhaseAtOriginSamps) noexcept;
+			std::int64_t sourceCoordinateAtOriginSamps) noexcept;
 		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
 		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
@@ -405,7 +405,7 @@ namespace engine
 		std::uint64_t _syncPhaseMapSceneOrigin = 0u;
 		unsigned long _syncPhaseMapLocalMasterLength = 0ul;
 		unsigned long _syncPhaseMapRemoteMasterLength = 0ul;
-		unsigned long _syncPhaseMapSourcePhaseAtOrigin = 0ul;
+		std::int64_t _syncPhaseMapSourceCoordinateAtOrigin = 0;
 		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
 		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
 		long long _appliedLocalTransportOffsetSamps = 0;

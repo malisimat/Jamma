@@ -7,6 +7,7 @@
 #include "base/AudioSink.h"
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
+#include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
 
 using audio::MergeMixBehaviourParams;
@@ -346,14 +347,21 @@ TEST(TransportPhaseOffset, SyncPhaseMapMapsAudioAndMidiFromTheSameRemoteMaster)
 TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
 {
 	auto earlyTake = MakePlayingTimingTake("early-sync-origin", 1000ul, 100ul);
-	auto lateTake = MakePlayingTimingTake("late-sync-origin", 1000ul, 700ul);
+	auto lateTake = MakePlayingTimingTake("late-sync-origin", 2000ul, 1700ul);
 
 	earlyTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
 	lateTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
 	for (const auto scene : { 5550u, 6100u, 7200u })
 	{
+		const auto elapsed = static_cast<std::uint64_t>(scene - 5000u);
+		const auto sourceCoordinate = static_cast<std::int64_t>(400u
+			+ ((elapsed * 1000u + 550u) / 1100u));
 		earlyTake->RestoreSyncPhaseMap(scene);
 		lateTake->RestoreSyncPhaseMap(scene);
+		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 300, 1000ul),
+			TimingLoopBodyPosition(*earlyTake->GetLoops().front()));
+		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 700, 2000ul),
+			TimingLoopBodyPosition(*lateTake->GetLoops().front()));
 	}
 
 	// A remote phase correction changes the common source phase, never either
@@ -362,21 +370,19 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
 		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
 	lateTake->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
 		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
-	earlyTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 525ul);
-	lateTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 525ul);
+	earlyTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 2925);
+	lateTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 2925);
 
 	for (const auto scene : { 7200u, 7750u, 8300u, 9400u })
 	{
 		const auto elapsed = static_cast<std::uint64_t>(scene - 7200u);
-		const auto sourcePhase = static_cast<unsigned long>((525u
-			+ ((elapsed * 1000u + 550u) / 1100u)) % 1000u);
+		const auto sourceCoordinate = static_cast<std::int64_t>(2925u
+			+ ((elapsed * 1000u + 550u) / 1100u));
 		earlyTake->RestoreSyncPhaseMap(scene);
 		lateTake->RestoreSyncPhaseMap(scene);
-		EXPECT_EQ((sourcePhase + 700ul) % 1000ul,
+		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 300, 1000ul),
 			TimingLoopBodyPosition(*earlyTake->GetLoops().front()));
-		EXPECT_EQ((sourcePhase + 300ul) % 1000ul,
-			TimingLoopBodyPosition(*lateTake->GetLoops().front()));
-		EXPECT_EQ((TimingLoopBodyPosition(*earlyTake->GetLoops().front()) + 600ul) % 1000ul,
+		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 700, 2000ul),
 			TimingLoopBodyPosition(*lateTake->GetLoops().front()));
 	}
 }

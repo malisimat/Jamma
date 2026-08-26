@@ -121,10 +121,10 @@ namespace engine
 		void InvalidateSceneAnchors() noexcept;
 		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			unsigned long sourcePhaseAtOriginSamps = 0ul) noexcept;
+			std::int64_t sourceCoordinateAtOriginSamps = 0) noexcept;
 		void RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			unsigned long sourcePhaseAtOriginSamps) noexcept;
+			std::int64_t sourceCoordinateAtOriginSamps) noexcept;
 		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
