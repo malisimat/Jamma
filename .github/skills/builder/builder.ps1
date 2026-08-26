@@ -64,6 +64,58 @@ function Get-MSBuildPath {
     throw "MSBuild.exe not found. Install Visual Studio with the C++ desktop workload."
 }
 
+function Invoke-MSBuild {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    # Windows environment names are case-insensitive, but a host can still
+    # hand us both PATH and Path. MSBuild imports environment variables as
+    # properties and rejects that duplicate. Build a clean child environment
+    # with one canonical Path entry before starting MSBuild.
+    $environment = [System.Diagnostics.ProcessStartInfo]::new().Environment
+    $environment.Clear()
+
+    $pathValue = $env:Path
+    foreach ($entry in [Environment]::GetEnvironmentVariables('Process').GetEnumerator()) {
+        if ($entry.Key -ieq 'PATH') {
+            continue
+        }
+
+        $environment[$entry.Key] = [string]$entry.Value
+    }
+    $environment['Path'] = $pathValue
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Executable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.Environment.Clear()
+    foreach ($entry in $environment.GetEnumerator()) {
+        $startInfo.Environment[$entry.Key] = $entry.Value
+    }
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Failed to start MSBuild: $Executable"
+    }
+
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    if ($exitCode -ne 0) {
+        throw "MSBuild failed with exit code $exitCode."
+    }
+}
+
 $repoRoot = Get-RepoRoot
 $msbuild = Get-MSBuildPath
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
@@ -98,7 +150,7 @@ else {
 Write-Host "MSBuild: $msbuild"
 Write-Host "Target: $targetPath"
 Write-Host "Action: $Action"
-& $msbuild @buildArgs
+Invoke-MSBuild -Executable $msbuild -Arguments $buildArgs
 
 if (($RunTests -or $Target -eq "JammaLib_Tests") -and $Action -ne "Clean") {
     if ($Target -ne "JammaLib_Tests") {
@@ -112,7 +164,7 @@ if (($RunTests -or $Target -eq "JammaLib_Tests") -and $Action -ne "Clean") {
         )
 
         Write-Host "Building tests before execution..."
-        & $msbuild @testsBuildArgs
+        Invoke-MSBuild -Executable $msbuild -Arguments $testsBuildArgs
     }
 
     $testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\$Platform\$Configuration\JammaLib_Tests.exe"
