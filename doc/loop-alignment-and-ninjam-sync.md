@@ -171,15 +171,45 @@ reject implausible drift. A valid correction is applied once per generation;
 stale or equal generations move nothing. Invalidation resets that generation
 gate.
 
+## Local geometry and the active-grid migration
+
+The local grain is an exact audio construction unit, not a remote beat and not
+necessarily the current musical grid step.  For a first local recording with
+physical length $R$, candidate geometry satisfies $M = G \times BPI$ and
+$M \leq R$. The worktree retains the current master/timing fields separately;
+persisted `LocalAudioGeometry` storage is still pending. The logical source
+interval $M$ may exclude a short recorded tail; the physical buffer remains
+$R$ and loop readers always wrap within their own logical/physical bounds.
+
+The active quantisation grid is separately represented as a division count
+$D$ of its current interval. Its boundary is evaluated directly as
+
+$$
+Q(k) = \operatorname{round}(kM/D)
+$$
+
+instead of repeatedly adding a rounded step. Thus $Q(0)=0$ and $Q(D)=M$ even
+when interior cells differ by one sample. This is the target representation for
+MIDI, visual overlays, and PPQ; those consumers still use integer timing while
+their migration is in progress. Audio loop construction uses $G$. Record,
+overdub, and punch trigger scheduling is not grid-quantised and retains its
+action/latency timing.
+
+The current tap gate is one committed `LoopTake` in the current
+start/reclock generation; a take may contain multiple channel loops.
+Pre-reclock loops remain playable but do not close that gate. Rebuilding from
+the immutable $R$, remote-authority gating, and frozen-grid selection are
+remaining migration work.
+
 ## Grain and continuous recurrence
 
-Local quantisation grain is $G$. A loop is locally grain-clean when:
+A loop is locally grain-clean when:
 
 $$
 L_i \bmod G = 0
 $$
 
-For continuous recurrence under remote grain $G_r$ and interval $M_r$, a
+For continuous recurrence under a remote grid step $G_r$ and interval $M_r$, a
 playable audio or MIDI loop also needs:
 
 $$
@@ -188,8 +218,8 @@ $$
 
 If either condition fails, the remote grid cannot contain every loop as a
 perfect repeating subdivision. Do not represent that as a continuous grid
-match. Durable per-loop boundary restoration still preserves the intended
-relative phase.
+match. The current sync map preserves relative phase; separating remote
+geometry so it never replaces local Timer timing remains migration work.
 
 ## Relevant implementation
 

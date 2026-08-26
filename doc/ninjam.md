@@ -9,23 +9,22 @@ participant receives the same interval length and position from the server.
 
 ### Transport model
 
-Jamma promotes the NINJAM interval to an authoritative external transport while connected, via
-the `timing::ExternalTransport` layer (see `JammaLib/src/timing/ExternalTransport.h`):
+Jamma observes the NINJAM interval through `NinjamNetworkService` and publishes
+coherent timing commands to `AudioHost`:
 
 - **Disconnected** — the local `Timer` free-runs as normal; no sync.
-- **Connected** — on every job-thread tick, `NinjamNetworkService::_FeedExternalTransport`
-  ingests the current remote `IntervalPositionSamps` and `IntervalLengthSamps`.
+- **Connected** — job-thread observations carry the current remote interval and
+  phase; the audio callback applies accepted commands at one block boundary.
 
 ### Wrap-gated phase discipline
 
 Drift correction is applied **once per remote interval wrap** rather than every tick, to avoid
 continuous micro-nudges during playback:
 
-1. `ExternalTransport::IngestSnapshot` detects a wrap (position rolls back to near zero).
-2. `TimingQuantiser::DisciplineRemotePhase` seeds `Timer::SetMasterLoopIndexFrac` with the
-   authoritative remote phase.
-3. All local `LoopTake` play positions are re-derived from their stored **master-relative anchor**
-   via `ExternalTransport::TakePositionFromAnchor`, avoiding a snap-to-zero reset.
+1. `NinjamTimingCoordinator` accepts a newer remote timing generation.
+2. `AudioHost` applies the corresponding command once at the next audio boundary.
+3. Local `LoopTake` positions are restored through the shared sync map and their
+   stored scene anchors, avoiding a snap-to-zero reset.
 
 ### MIDI and automation coherence
 

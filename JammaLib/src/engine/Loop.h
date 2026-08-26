@@ -222,6 +222,13 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
+		// Recorded storage length is an upper bound for any logical loop length.
+		// It intentionally remains distinct after first-master tail normalisation.
+		unsigned long PhysicalLoopLength() const noexcept
+		{
+			const auto length = _bufferBank.Length();
+			return length > constants::MaxLoopFadeSamps ? length - constants::MaxLoopFadeSamps : 0ul;
+		}
 		static double CalcDrawRadius(unsigned long loopLength);
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;

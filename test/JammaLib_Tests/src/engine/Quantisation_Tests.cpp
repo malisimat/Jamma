@@ -14,6 +14,32 @@
 using engine::QuantisationPolicy;
 using engine::TapTempoTracker;
 
+TEST(QuantisationGeometry, ValidatesExactLocalAudioGeometry)
+{
+	const auto geometry = engine::LocalAudioGeometry::Create(1003ul, 1001ul, 143u, 7u);
+	ASSERT_TRUE(geometry.has_value());
+	EXPECT_TRUE(geometry->IsValid());
+	EXPECT_FALSE(engine::LocalAudioGeometry::Create(1003ul, 1002ul, 143u, 7u).has_value());
+	EXPECT_FALSE(engine::LocalAudioGeometry::Create(1003ul, 1004ul, 251u, 4u).has_value());
+}
+
+TEST(QuantisationGrid, CalculatesFractionalCellsDirectlyWithExactEndpoints)
+{
+	const engine::QuantisationGrid grid{ 7u, engine::QuantisationGridSource::Tap };
+	const unsigned long expected[] = { 0ul, 143ul, 286ul, 429ul, 571ul, 714ul, 857ul, 1000ul };
+	for (auto index = 0u; index <= 7u; ++index)
+		EXPECT_EQ(expected[index], grid.SampleAt(index, 1000ul));
+}
+
+TEST(Quantisation, MasterTapUsesRequestedBpiRatherThanSampleDivisor)
+{
+	const auto timing = engine::Quantiser::DeduceTapSeedTimingFromMaster(143ul, 1003ul, 48000u);
+	ASSERT_TRUE(timing.has_value());
+	EXPECT_EQ(143u, timing->SeedSamps);
+	EXPECT_EQ(1001u, timing->MasterLoopSamps);
+	EXPECT_EQ(7u, timing->Bpi);
+}
+
 TEST(Quantisation, DerivesSeedTimingFromMasterLoop)
 {
 	QuantisationPolicy policy;

@@ -1213,7 +1213,7 @@ ActionResult Scene::OnAction(KeyAction action)
 void Scene::_HandleReclockArm()
 {
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-	_quantisation.ArmReclock();
+	_quantisation.ArmReclock(_stations);
 	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
 }
 

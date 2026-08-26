@@ -8,8 +8,8 @@ The overlay is a direct manipulation layer for quantisation settings. Which hand
 
 The overlay currently exposes two control families:
 
-* Phase offset, shown in blue for global edits and green for selection-local edits. Drag left and right to change the quantisation grid phase.
-* Division factor, shown in orange for global edits and red for selection-local edits. Drag up and down to change the quantisation grid division.
+* Phase offset, shown in blue for global edits and green for selection-local edits. Drag left and right to change MIDI/take quantisation phase.
+* Division factor, shown in orange for global edits and red for selection-local edits. Drag up and down to change MIDI/take quantisation division.
 
 These controls are intentionally simple and should remain consistent across Station, LoopTake, and Loop modes.
 

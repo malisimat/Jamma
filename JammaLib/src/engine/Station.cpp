@@ -56,7 +56,7 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 	{
 		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
-		clock->SetSeedSourceLength(loopLengthSamps);
+		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
 		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
 			<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
 			<< " loopGrains=" << timing->LoopGrains
@@ -1065,6 +1065,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				else
 				{
 						_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
+						loopLength = _clock->SeedSourceLength();
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -1150,6 +1151,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				else
 				{
 					_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
+					loopLength = _clock->SeedSourceLength();
 				}
 			}
 			auto outLatency = streamParams.has_value() ?

@@ -42,6 +42,64 @@ namespace midi
 
 namespace engine
 {
+	// Exact, frozen audio geometry for locally recorded loops. This deliberately
+	// does not describe the musical grid: a grid cell may be fractional in samples.
+	struct LocalAudioGeometry
+	{
+		unsigned long OriginalMasterBufferLengthSamps = 0ul;
+		unsigned long MasterLengthSamps = 0ul;
+		unsigned int GrainSamps = 0u;
+		unsigned int BPI = 0u;
+
+		static std::optional<LocalAudioGeometry> Create(unsigned long originalLength,
+			unsigned long masterLength, unsigned int grainSamps, unsigned int bpi) noexcept
+		{
+			if (originalLength == 0ul || masterLength == 0ul || grainSamps == 0u || bpi == 0u
+				|| masterLength > originalLength)
+				return std::nullopt;
+			const auto product = static_cast<std::uint64_t>(grainSamps) * bpi;
+			if (product != masterLength)
+				return std::nullopt;
+			return LocalAudioGeometry{ originalLength, masterLength, grainSamps, bpi };
+		}
+
+		bool IsValid() const noexcept
+		{
+			return Create(OriginalMasterBufferLengthSamps, MasterLengthSamps, GrainSamps, BPI).has_value();
+		}
+	};
+
+	enum class QuantisationGridSource : std::uint8_t { Default, Tap, Remote };
+
+	struct QuantisationGrid
+	{
+		unsigned int DivisionCount = 0u;
+		QuantisationGridSource Source = QuantisationGridSource::Default;
+
+		bool IsValid(unsigned long intervalLengthSamps) const noexcept
+		{
+			return intervalLengthSamps > 0ul && DivisionCount > 0u;
+		}
+
+		// Direct evaluation avoids cumulative rounding drift. Ties round upward.
+		unsigned long SampleAt(unsigned int index, unsigned long intervalLengthSamps) const noexcept
+		{
+			if (!IsValid(intervalLengthSamps)) return 0ul;
+			if (index >= DivisionCount) return intervalLengthSamps;
+			const auto numerator = static_cast<std::uint64_t>(index) * intervalLengthSamps;
+			return static_cast<unsigned long>((numerator + DivisionCount / 2u) / DivisionCount);
+		}
+	};
+
+	struct RemoteTransportGeometry
+	{
+		unsigned long IntervalLengthSamps = 0ul;
+		unsigned int BPI = 0u;
+		unsigned int PhaseSamps = 0u;
+		float BPM = 0.0f;
+		std::uint64_t Generation = 0u;
+	};
+
 	struct QuantisationParams
 	{
 		unsigned int SeedSamps = 0u;
@@ -119,7 +177,9 @@ namespace engine
 		void Set(unsigned int samps, utils::Timer::QuantisationType type);
 
 		void Clear(bool clearTapTempo, bool preserveTiming = false);
+		// Compatibility entry point for callers without a scene snapshot.
 		void ArmReclock();
+		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 
 		void SetMidiGrain(unsigned int grainSamps,
@@ -155,6 +215,8 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		unsigned int EffectiveSamps() const noexcept;
+		unsigned int ActiveGridDivisions() const noexcept;
+		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
@@ -220,11 +282,16 @@ namespace engine
 		std::shared_ptr<utils::Timer> _clock;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
+		std::atomic_ulong _masterOriginalBufferLengthSamps{ 0ul };
+		std::atomic_uint _activeGridDivisions{ 0u };
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
+		// UI-thread snapshot: takes existing before the current reclock do not
+		// participate in selecting its new local master.
+		std::vector<std::string> _preReclockTakeIds;
 		bool _seedUsesPowers = true;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 	};

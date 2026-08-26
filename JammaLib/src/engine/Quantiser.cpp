@@ -103,7 +103,9 @@ std::optional<QuantisationTiming> Quantiser::_TimingFromSeed(unsigned int seedSa
 
 	QuantisationTiming timing;
 	timing.SeedSamps = seedSamps;
-	timing.MasterLoopSamps = _ClampToUInt(masterLoopSamps);
+	// Preserve the recording buffer separately from this logical source interval.
+	// Normalising downward makes every committed local loop grain-clean.
+	timing.MasterLoopSamps = _ClampToUInt(seedCount * static_cast<unsigned long>(seedSamps));
 	timing.SeedCount = static_cast<unsigned int>(seedCount);
 	timing.Bpm = (60.0f * static_cast<float>(sampleRate)) / static_cast<float>(seedSamps);
 	timing.Bpi = timing.SeedCount;
@@ -134,11 +136,14 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 		if (_clock)
 			_clock->Clear();
 		_masterLoopLengthSamps.store(0ul, std::memory_order_release);
+		_masterOriginalBufferLengthSamps.store(0ul, std::memory_order_release);
 		_effectiveQuantiseSamps.store(0u, std::memory_order_release);
+		_activeGridDivisions.store(0u, std::memory_order_release);
 	}
 
 	_masterLoop.reset();
 	_armReclock.store(false, std::memory_order_release);
+	_preReclockTakeIds.clear();
 
 	if (clearTapTempo)
 	{
@@ -149,16 +154,29 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 
 void Quantiser::ArmReclock()
 {
+	ArmReclock({});
+}
+
+void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations)
+{
 	if (_clock)
 		_clock->Clear();
 	_masterLoop.reset();
 	_masterLoopLengthSamps.store(0ul, std::memory_order_release);
+	_masterOriginalBufferLengthSamps.store(0ul, std::memory_order_release);
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_tapTempo.Clear();
 	}
 	_armReclock.store(true, std::memory_order_release);
 	_effectiveQuantiseSamps.store(0u, std::memory_order_release);
+	_activeGridDivisions.store(0u, std::memory_order_release);
+	_preReclockTakeIds.clear();
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take)
+					_preReclockTakeIds.push_back(take->Id());
 }
 
 void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
@@ -171,6 +189,7 @@ void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source
 	_clock->SetSeedSourceLength(timing.MasterLoopSamps);
 
 	_effectiveQuantiseSamps.store(timing.SeedSamps, std::memory_order_release);
+	_activeGridDivisions.store(timing.Bpi, std::memory_order_release);
 	_armReclock.store(false, std::memory_order_release);
 
 	std::cout << "Quantisation " << source
@@ -241,6 +260,33 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
 	const std::vector<std::shared_ptr<Station>>& stations,
 	const io::UserConfig& cfg)
 {
+	// First recordings establish their master locally, before a user has used
+	// the hover/master UI. After reclock, only takes created after the arm point
+	// participate; older loops may continue playing on their old rulers.
+	if (_masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
+	{
+		std::shared_ptr<Loop> soleLoop;
+		unsigned int musicalLoopCount = 0u;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+					if (take && take->VisualLoopLengthSamps() > 0ul
+						&& (_preReclockTakeIds.empty()
+							|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
+								== _preReclockTakeIds.end()))
+					{
+						++musicalLoopCount;
+						if (!take->GetLoops().empty())
+							soleLoop = take->GetLoops().front();
+					}
+		if (musicalLoopCount == 1u && soleLoop)
+		{
+			_masterLoop = soleLoop;
+			_masterLoopLengthSamps.store(soleLoop->LoopLength(), std::memory_order_release);
+			_masterOriginalBufferLengthSamps.store(soleLoop->PhysicalLoopLength(), std::memory_order_release);
+		}
+	}
+
 	std::optional<QuantisationTiming> timing;
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
@@ -263,7 +309,69 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
 		return true;
 	}
 
+	// Only the sole committed local loop in the current reclock generation may
+	// redefine local geometry. A LoopTake is one musical loop regardless of its
+	// number of audio channels.
+	// A LoopTake is one musical loop regardless of its number of audio channels.
+	unsigned int committedLocalLoops = 0u;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take && take->VisualLoopLengthSamps() > 0ul
+					&& (_preReclockTakeIds.empty()
+						|| std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
+							== _preReclockTakeIds.end()))
+					++committedLocalLoops;
+
+	const auto originalLength = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+	const auto canResizeMaster = committedLocalLoops == 1u && _masterLoop && originalLength > 0ul;
 	const auto quantisation = cfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
+	if (!canResizeMaster)
+	{
+		// Local audio geometry is frozen. Pick the nearest permitted musical
+		// division LocalBPI * 2^p; ties resolve toward the smaller division.
+		const auto localMasterLength = _clock ? _clock->SeedSourceLength() : 0ul;
+		const auto localGrain = _clock ? _clock->QuantiseSamps() : 0u;
+		const auto localBpi = localGrain == 0u ? 0u : static_cast<unsigned int>(localMasterLength / localGrain);
+		if (localBpi == 0u)
+			return true;
+		const auto requested = static_cast<double>(_masterLoopLengthSamps.load(std::memory_order_acquire)) /
+			std::max(1u, timing->SeedSamps);
+		unsigned int best = localBpi;
+		for (unsigned int p = 1u; p < 16u && best <= std::numeric_limits<unsigned int>::max() / 2u; ++p)
+		{
+			const auto candidate = localBpi << p;
+			if (std::abs(static_cast<double>(candidate) - requested) < std::abs(static_cast<double>(best) - requested))
+				best = candidate;
+		}
+		_activeGridDivisions.store(best, std::memory_order_release);
+		return true;
+	}
+
+	if (auto geometry = LocalAudioGeometry::Create(originalLength, timing->MasterLoopSamps,
+		timing->SeedSamps, timing->Bpi); !geometry.has_value())
+		return true;
+
+	// Apply the sole take's logical boundary before publishing the replacement
+	// timer geometry. A take may contain several audio channels, but it is one
+	// musical loop and every channel must retain the same geometry.
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote())
+			continue;
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+			const auto& loops = take->GetLoops();
+			if (std::find(loops.begin(), loops.end(), _masterLoop) == loops.end())
+				continue;
+			for (const auto& loop : loops)
+				if (loop)
+					loop->Play(loop->PlayIndex(), timing->MasterLoopSamps, false);
+			break;
+		}
+	}
 	if (_clock)
 		_clock->SetQuantisation(timing->SeedSamps, quantisation);
 	SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
@@ -346,6 +454,8 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 	{
 		std::scoped_lock tapTempoLock(_tapTempoMutex);
 		_masterLoopLengthSamps.store(masterLength, std::memory_order_release);
+		_masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : masterLength,
+			std::memory_order_release);
 		_tapTempo.Clear();
 	}
 
@@ -481,6 +591,16 @@ std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget
 unsigned int Quantiser::EffectiveSamps() const noexcept
 {
 	return _effectiveQuantiseSamps.load(std::memory_order_acquire);
+}
+
+unsigned int Quantiser::ActiveGridDivisions() const noexcept
+{
+	return _activeGridDivisions.load(std::memory_order_acquire);
+}
+
+QuantisationGrid Quantiser::ActiveGrid() const noexcept
+{
+	return { ActiveGridDivisions(), QuantisationGridSource::Default };
 }
 
 std::int32_t Quantiser::GlobalPhaseOffsetSamps() const noexcept
@@ -687,12 +807,16 @@ std::optional<QuantisationTiming> Quantiser::DeduceTapSeedTimingFromMaster(unsig
 	if ((tapGapSamps == 0ul) || (masterLoopSamps == 0ul) || (sampleRate == 0u))
 		return std::nullopt;
 
-	const auto bestSeed = _SnapSeedToMasterDivisor(tapGapSamps, masterLoopSamps);
-
-	if ((bestSeed == 0ul) || (bestSeed > std::numeric_limits<unsigned int>::max()))
+	// Taps express musical divisions, not a sample divisor search. Rebuild the
+	// exact local geometry from the immutable recording length so repeated meter
+	// changes never compound a previous trim.
+	const auto requestedBpi = static_cast<unsigned long>((masterLoopSamps + (tapGapSamps / 2ul)) / tapGapSamps);
+	if (requestedBpi == 0ul || requestedBpi > std::numeric_limits<unsigned int>::max())
 		return std::nullopt;
-
-	return _TimingFromSeed(static_cast<unsigned int>(bestSeed), masterLoopSamps, sampleRate);
+	const auto grain = masterLoopSamps / requestedBpi;
+	if (grain == 0ul || grain > std::numeric_limits<unsigned int>::max())
+		return std::nullopt;
+	return _TimingFromSeed(static_cast<unsigned int>(grain), masterLoopSamps, sampleRate);
 }
 
 	// ── QuantiserController implementation ──
