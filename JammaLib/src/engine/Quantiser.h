@@ -185,6 +185,9 @@ namespace engine
 		void SetMidiGrain(unsigned int grainSamps,
 			const char* source,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 

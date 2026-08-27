@@ -261,7 +261,8 @@ namespace midi
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
-		void SetQuantisation(const MidiQuantisationSettings& settings);
+		void SetQuantisation(const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps = 0u);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
@@ -326,6 +327,7 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;
+		std::uint64_t _quantisationTransportStartSamps = 0u;
 		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};
 }

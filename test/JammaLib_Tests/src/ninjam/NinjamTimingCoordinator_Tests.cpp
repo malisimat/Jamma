@@ -147,6 +147,20 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 	EXPECT_FALSE(update.PhaseCorrection.has_value());
 }
 
+TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, false);
+	const auto update = coordinator.Observe(MakeTimingTempo(78985u, 123u, 120.0f, 4u),
+		std::nullopt, false, io::UserConfig{}, clock);
+	ASSERT_TRUE(update.ClockSettings.has_value());
+	EXPECT_EQ(78985ul, update.ClockSettings->SeedLengthSamps);
+	EXPECT_EQ(4u, update.ClockSettings->BeatsPerInterval);
+	EXPECT_EQ(19746u, update.ClockSettings->QuantiseSamps);
+	EXPECT_EQ(123u, update.ClockSettings->PhaseSamps);
+}
+
 TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
 {
 	Timer clock;

@@ -293,11 +293,24 @@ std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const Ni
 {
 	if (!timing.IsValid || timing.IntervalLengthSamps == 0u || timing.DeviceSampleRate == 0u)
 		return std::nullopt;
-	const auto derived = config.DeduceLoopTiming(timing.IntervalLengthSamps, timing.DeviceSampleRate);
-	if (!derived.has_value() || derived->GrainSamps == 0u)
+	if (timing.Bpi == 0u)
+	{
+		// Older/partial observations did not carry BPI. Retain the local deduction
+		// only for that compatibility case; a supplied remote BPI is never replaced.
+		const auto derived = config.DeduceLoopTiming(timing.IntervalLengthSamps, timing.DeviceSampleRate);
+		if (!derived.has_value() || derived->GrainSamps == 0u)
+			return std::nullopt;
+		return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, derived->GrainSamps,
+			derived->Bpm, derived->Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
+	}
+	// The server BPI is authoritative. Local deduction is only for the initial
+	// local seed and must not rewrite the accepted remote grid.
+	const auto grain = static_cast<unsigned int>((static_cast<std::uint64_t>(timing.IntervalLengthSamps)
+		+ timing.Bpi / 2u) / timing.Bpi);
+	if (grain == 0u)
 		return std::nullopt;
-	return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, derived->GrainSamps,
-		derived->Bpm, derived->Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
+	return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, grain,
+		timing.Bpm, timing.Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::_AcceptTempoChange(const NinjamTempoChange& change,

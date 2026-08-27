@@ -440,7 +440,13 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 		command.PhaseObservationSample = settings.AudioBlockStartSample;
 		command.LocalFollowPolicy = settings.LocalFollowPolicy;
 		hasCommand = true;
-		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
+		// Retain the authoritative remote interval and BPI. Grain-only forwarding
+		// loses both the fractional-cell boundaries and observed phase.
+		const auto origin = static_cast<std::int64_t>(settings.AudioBlockStartSample)
+			- static_cast<std::int64_t>(settings.PhaseSamps);
+		_quantisation.SetRemoteMidiGrid({ settings.SeedLengthSamps,
+			settings.BeatsPerInterval, settings.PhaseSamps, settings.RemoteBpm,
+			settings.Generation }, origin, _stations);
 	}
 	else if (update.PhaseCorrection.has_value())
 	{

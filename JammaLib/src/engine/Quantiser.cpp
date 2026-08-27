@@ -214,6 +214,8 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 		{
 			if (!take)
 				continue;
+			// A local/tap update supersedes the live remote descriptor.
+			take->SetRemoteMidiQuantisationGrid({}, 0u);
 
 			midi::MidiQuantisationSettings settings = take->MidiQuantisation();
 			if (settings.GrainSamps != grainSamps)
@@ -227,6 +229,22 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 
 	(void)source;
 	(void)takeCount;
+}
+
+void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
+	std::int64_t originSamps,
+	const std::vector<std::shared_ptr<Station>>& stations)
+{
+	for (const auto& station : stations)
+	{
+		if (!station)
+			continue;
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (take)
+				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
+		}
+	}
 }
 
 void Quantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,

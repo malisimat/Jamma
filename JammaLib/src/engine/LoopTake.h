@@ -301,6 +301,8 @@ namespace engine
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
+		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -448,7 +450,13 @@ namespace engine
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
-		bool _midiQuantisationUpdatePending;
+		// Seqlock-style publication avoids torn remote-grid reads without placing a
+		// lock or allocation on any real-time path.
+		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };
+		std::atomic<std::int64_t> _remoteMidiOriginSamps{ 0 };
+		std::atomic_bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

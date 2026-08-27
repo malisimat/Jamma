@@ -66,8 +66,9 @@ namespace ninjam
 		{
 			if (!IsActive() || sceneCoordinateSamps < SceneOriginSamps)
 				return 0ul;
-			const auto elapsed = MapRemoteElapsedToLocal(sceneCoordinateSamps - SceneOriginSamps,
-				SourceLengthSamps, RemoteLengthSamps);
+			// SourceCoordinateAt is the single mapping implementation used by both
+			// phase and cursor restore. Keeping phase derived from it prevents a
+			// second elapsed-time calculation from drifting at a rounded rebase.
 			return static_cast<unsigned long>(PositiveModulo(SourceCoordinateAt(sceneCoordinateSamps),
 				SourceLengthSamps));
 		}

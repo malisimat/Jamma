@@ -1095,7 +1095,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
-				midiLoop->SetQuantisation(settings);
+				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
@@ -1216,9 +1216,10 @@ std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 
 	const auto resolvedQuantisation = ResolvedMidiQuantisation();
 	const auto grainSamps = resolvedQuantisation.GrainSamps;
-	const auto loopGrains = (grainSamps > 0u && (loopLengthSamps % grainSamps) == 0ul) ?
-		static_cast<std::uint32_t>(loopLengthSamps / grainSamps) :
-		0u;
+	// Fractional remote cells need not divide a locally recorded loop. Keep the
+	// overlay visible and let its boundary source determine the final positions.
+	const auto loopGrains = grainSamps > 0u ? static_cast<std::uint32_t>(
+		(loopLengthSamps + grainSamps - 1u) / grainSamps) : 0u;
 
 	const auto takeSize = GetSize();
 	const auto takePos = ModelPosition();
@@ -1389,7 +1390,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1969,7 +1970,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -2196,10 +2197,8 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		jobs.push_back(job);
 	}
 
-	if (_midiQuantisationUpdatePending)
+	if (_midiQuantisationUpdatePending.exchange(false, std::memory_order_acq_rel))
 	{
-		_midiQuantisationUpdatePending = false;
-
 		JobAction job;
 		job.JobActionType = JobAction::JOB_UPDATEMIDIQUANTISATION;
 		job.SourceId = Id();
@@ -2482,7 +2481,22 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexce
 		break;
 	}
 
-	auto combined = static_cast<std::int64_t>(_NaturalMidiQuantisationPhaseOffset(settings))
+	for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+	{
+		const auto before = _remoteMidiGridSequence.load(std::memory_order_acquire);
+		if ((before & 1u) != 0u)
+			continue;
+		settings.RemoteIntervalSamps = _remoteMidiIntervalSamps.load(std::memory_order_relaxed);
+		settings.RemoteBpi = _remoteMidiBpi.load(std::memory_order_relaxed);
+		settings.RemoteOriginSamps = _remoteMidiOriginSamps.load(std::memory_order_relaxed);
+		if (before == _remoteMidiGridSequence.load(std::memory_order_acquire))
+			break;
+	}
+	// Recording-start translation is implicit in the absolute remote-grid
+	// conversion. Applying the legacy rounded-grain correction as well would
+	// shift user-zero takes onto a second grid.
+	const auto naturalOffset = settings.HasRemoteGrid() ? 0 : _NaturalMidiQuantisationPhaseOffset(settings);
+	auto combined = static_cast<std::int64_t>(naturalOffset)
 		+ static_cast<std::int64_t>(settings.PhaseOffsetSamps)
 		+ static_cast<std::int64_t>(_midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire));
 	settings.PhaseOffsetSamps = _ClampPhaseOffset(combined);
@@ -2531,6 +2545,17 @@ void LoopTake::SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) 
 std::uint64_t LoopTake::MidiQuantisationTransportStartSamps() const noexcept
 {
 	return _midiTransportStartSamps.load(std::memory_order_acquire);
+}
+
+void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+	std::int64_t originSamps) noexcept
+{
+	const auto writing = _remoteMidiGridSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
+	_remoteMidiIntervalSamps.store(static_cast<std::uint32_t>(geometry.IntervalLengthSamps), std::memory_order_relaxed);
+	_remoteMidiBpi.store(geometry.BPI, std::memory_order_relaxed);
+	_remoteMidiOriginSamps.store(originSamps, std::memory_order_relaxed);
+	_remoteMidiGridSequence.store(writing + 1u, std::memory_order_release);
+	_midiQuantisationUpdatePending = true;
 }
 
 std::int32_t LoopTake::_NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept

@@ -31,6 +31,14 @@ TEST(QuantisationGrid, CalculatesFractionalCellsDirectlyWithExactEndpoints)
 		EXPECT_EQ(expected[index], grid.SampleAt(index, 1000ul));
 }
 
+TEST(QuantisationGrid, CalculatesRemoteFractionalCellsFromOneInterval)
+{
+	const engine::QuantisationGrid grid{ 4u, engine::QuantisationGridSource::Remote };
+	const unsigned long expected[] = { 0ul, 19746ul, 39493ul, 59239ul, 78985ul };
+	for (auto index = 0u; index <= 4u; ++index)
+		EXPECT_EQ(expected[index], grid.SampleAt(index, 78985ul));
+}
+
 TEST(Quantisation, MasterTapUsesRequestedBpiRatherThanSampleDivisor)
 {
 	const auto timing = engine::Quantiser::DeduceTapSeedTimingFromMaster(143ul, 1003ul, 48000u);
