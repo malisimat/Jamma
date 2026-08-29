@@ -1,0 +1,166 @@
+# Merge-readiness scope and inventory
+
+## Kickoff baseline
+
+- Captured: 2026-08-27 (America/Mexico_City).
+- Review branch: `bugfix/align-remote-join`.
+- `HEAD`: `e72f3b0f489cfa12ea697e966d3c0f619e31d1f6`.
+- Merge base with `master`: `4941b780f7ff5a46f742167d79338e3ab592a565`.
+- `master` tip: `4941b780f7ff5a46f742167d79338e3ab592a565` (equal to the merge base at kickoff).
+- Commit range: `master..HEAD`; comparison: `master...HEAD`.
+- Commit count: 123 total, including 3 merge commits.
+- Diff summary: 199 files changed, 14,691 insertions, 1,507 deletions.
+- Change kinds: 71 additions, 124 modifications, and 4 renames.
+- Worktree before review-artifact creation: no tracked modifications; `doc/merge-readiness-review/` was an untracked directory containing the five supplied plan/phase documents. Those files are review inputs and must not be overwritten. No other pre-existing change was reported by `git status --porcelain=v2 --branch`.
+- Review writes authorized by the plan: only this file, the canonical review artifacts, assigned stage reports, phase packets, and later batch reviews. Production code, tests, project/build files, and unrelated changes are read-only during Phase 1.
+
+## Protected timing glossary
+
+These distinctions are review constraints, not simplification opportunities.
+
+| Term | Protected meaning |
+| --- | --- |
+| Local master transport | `utils::Timer` geometry and position: interval/master length, loop count, sample offset/master phase, absolute sample position, and the monotonic scene coordinate. |
+| Monotonic scene coordinate | `Timer::SceneSamplePos`; a durable, unwrapped coordinate that does not reset when NINJAM replaces Timer geometry. It is not wrapped Timer geometry. |
+| Master phase | Position inside the current master interval. It is not a per-loop cursor. |
+| Per-loop phase | An entity-specific wrapped cursor using that loop/entity's own logical length. Audio uses `Loop::BodyPlayIndex`; MIDI event playback uses the `LoopTake` MIDI event cursor. |
+| Sync phase map | The bridge from a remote master ruler to local-source progress. It retains a scene anchor, old local master length, new remote master length, and per-entity source/phase anchors. It separates master phase correction from source/scene coordinates. |
+| Mapped elapsed time | Common local-master progress derived from remote elapsed time. Every entity receives the same elapsed amount and wraps it by its own length; it is not a shared loop cursor. |
+| Source/scene anchor | A durable relationship between the monotonic scene coordinate and an entity's phase/source coordinate. It survives accepted restores within one follow session and is invalidated before an independent session. |
+| Local timing | Device-rate local transport and loop advancement, including intentionally different loop lengths and offsets. It remains distinct from remote authority. |
+| Remote timing | NINJAM interval/phase observations validated for plausible BPM/BPI, interval, and sample rate, then converted to the device sample rate before use. |
+| Remote join | Session-level request/acknowledgement and follow decision followed by audio-boundary application of an accepted timing command. It is not itself a coordinate system. |
+| Loop alignment | Restoration of each local audio/MIDI entity from its own anchor plus common mapped elapsed time, preserving intentional relative offsets. |
+| `ContinuousSync` | Follow policy for a remote tempo close to local timing; normally small corrections. |
+| `BlockSync` | Follow policy for a materially different accepted tempo; same map/anchor model, potentially larger corrections. |
+| `NoSync` | Follow policy for staying local, invalid timing, or disconnect. It clears the map and scene anchors and leaves local timing free-running. |
+| Follow policy | Chooses whether/how accepted remote authority disciplines local state. It is not a clock, cursor, or coordinate system. |
+| Local grain | Exact audio construction unit used for local loop geometry. It is not a remote beat and need not equal the active quantisation grid step. |
+| Active quantisation grid | A division count of the current interval, evaluated by rounded boundaries. Its migration is separate from sync-map phase preservation. |
+
+Any proposed merge of these concepts is out of bounds unless it proves behavioural equivalence for different loop lengths, intentional offsets, reconnects, and `NoSync` invalidation.
+
+## Scope inventory
+
+### Objective branch shape
+
+The branch is much broader than its name: timing/remote-join work is interleaved with engine refactors, MIDI timing/routing, VST3 parity and state, GUI/HUD/resources, persistence, build tooling, documentation, and extensive native tests. Phase 1 must determine which breadth is intentional and which is accidental without treating breadth alone as a defect.
+
+The kickoff approximation was reconciled by Stage 1 into this exact, non-overlapping partition of all 199 diff rows. Binary files count as files but not textual additions/deletions:
+
+| Area | Files | Insertions | Deletions | Binary files |
+| --- | ---: | ---: | ---: | --- |
+| Native tests | 35 | 4,123 | 106 | 0 |
+| Engine/local loop state (including quantiser renames) | 12 | 2,438 | 666 | 0 |
+| NINJAM/session timing | 20 | 2,268 | 107 | 0 |
+| VST | 12 | 1,268 | 81 | 0 |
+| GUI | 17 | 1,245 | 46 | 0 |
+| Documentation | 8 | 676 | 17 | 0 |
+| MIDI | 11 | 603 | 51 | 0 |
+| Audio/timing application | 6 | 557 | 12 | 0 |
+| Graphics/model/window | 10 | 390 | 51 | 0 |
+| Utilities/transport | 6 | 301 | 2 | 0 |
+| App resources | 25 | 193 | 16 | 19 |
+| Repository tooling/policy | 6 | 181 | 8 | 0 |
+| Persistence/I/O | 13 | 177 | 51 | 0 |
+| Remaining library/build | 9 | 117 | 16 | 0 |
+| Library resources | 6 | 100 | 58 | 0 |
+| App shell/project | 3 | 54 | 219 | 0 |
+| **Total** | **199** | **14,691** | **1,507** | **19** |
+
+Top added-line concentration: `GuiHud.cpp` (721), `Vst3Plugin.cpp` (720), `NinjamTimingIntegration_Tests.cpp` (650), `Scene.cpp` (607), `NinjamTimingCoordinator_Tests.cpp` (547), `Station.cpp` (521), `LoopTakeTiming_Tests.cpp` (476), `LoopTake.cpp` (452), `NinjamConnection.cpp` (428), and `NinjamTimingCoordinator.cpp` (388).
+
+### Subsystem partition and ownership
+
+| Partition | Primary implementation ownership | Phase 1 questions |
+| --- | --- | --- |
+| App/build/tooling | `Jamma`, project files, `.github`, `.vscode` | Intentional scope, project/resource membership, thin wiring, accidental branch growth. |
+| Audio/timing application | `audio/AudioHost`, `utils/Timer`, `utils/MusicalTransport` | Boundary between accepted commands, Timer geometry, scene coordinate, and station restores. |
+| Engine/local loop state | `engine/Scene`, `Station`, `LoopTake`, `Loop`, `Trigger`, `Quantiser` | Station -> LoopTake -> Loop ownership; per-entity phase and quantisation placement. |
+| NINJAM/session timing | `ninjam/*` | Remote observation, validity, follow policy, coordinator, audio-boundary command, map/alignment, connection/session ownership. |
+| MIDI | `midi/*` and engine MIDI cursors | Event cursor vs automation anchor, block timestamps, routing, quantisation, source-coordinate restores. |
+| GUI/graphics/resources | `gui/*`, `graphics/*`, `resources/*`, app assets | HUD/popup/resource scope, model boundaries, new assets, and intentional UX work. |
+| VST | `vst/*` | Plugin parity/state/mapping scope and interface ownership. |
+| Persistence/I/O | `io/*` | Public/persisted contracts and whether timing/UI/VST changes leaked into formats. |
+| Tests/docs | `test/JammaLib_Tests/*`, `doc/*` | Evidence and intent inputs only in Phase 1; quality is Phase 3 ownership. |
+
+### Public/interface surface changed
+
+The diff changes 61 header paths: 18 additions, 41 modifications, and 2 renames. Only `JammaLib/include/Constants.h` is in the explicit public include directory; the other 60 are source-tree interfaces, many consumed across subsystems and by tests. Particularly consequential surfaces include `AudioHost.h`, `Loop.h`, `LoopTake.h`, `Scene.h`, `Station.h`, `Trigger.h`, `Timer.h`, `MidiRouter.h`, `NinjamConnection.h`, `NinjamSession.h`, `NinjamTiming*.h`, `NinjamAudioTimingCommand.h`, `NinjamLoopAlignment.h`, `MusicalTransport.h`, `IVstPlugin.h`, and `Vst3Plugin.h`.
+
+### Hot-path map
+
+All callback-owned implementation files named by the real-time guide are changed where applicable: `Scene.cpp`, `Loop.cpp`, `LoopTake.cpp`, `Station.cpp`, `Trigger.cpp`, and `NinjamConnection.cpp`. The timing path additionally crosses changed `AudioHost.cpp`, `Timer.cpp`, `MidiRouter.cpp`, and NINJAM timing command/coordinator code. Phase 1 reviews placement and vocabulary only; synchronization, cost, runtime correctness, and lifetime belong to Phase 2.
+
+### Generated/binary/assets scope
+
+- 19 TGA binaries were added under `Jamma/resources/textures/`.
+- Four shader files were added and existing shader/resource-list files changed.
+- Project/filter files changed for the app, library, and native tests.
+- No file is classified as generated solely from its extension; Stage 1 must identify provenance and whether these assets/build entries intentionally belong to the branch.
+
+### Commit-to-feature map (kickoff grouping)
+
+The 123-commit history contains repeated plans, implementations, debugging, cleanup, and merges. The stable intent groups for archaeology are:
+
+| Feature/history group | Representative commits/subjects |
+| --- | --- |
+| Initial NINJAM UX and tempo policy | `0125b4c`, `5258f85`, `3ca53c7`, `92fc5e7` |
+| Transport phase and MIDI anchor sync | `eb9db69`, `1cba2d6`, `aa76ab0`, `fbc76ba`, `6dc0c73`, `f68f4c8` |
+| NINJAM audio wiring/latency/metronome | `adb7b38`, `782b8a8`, `c4c0607`, `e0bc33b` |
+| MIDI routing/jitter/quantisation | `7668c29`, `95dea73`, `3db18e9`, `5bfebcd` |
+| HUD/trigger/station visuals and resources | merge chain around `034c3ca` through `24a43a0`, followed by HUD fixes |
+| VST3 parity/state/mapping | `711e24f`, `62fc990`, `e5081de`, merged by `880112d` |
+| Timing refactor and unified command model | `9c7ca51`, `d0d208e`, `f36bfe7`, `d6fdb88`, `b9619b9` |
+| Local-loop alignment/source-coordinate map | `b41b5a8`, `4c1c0e1`, `f74d4ec`, `6abf7c7`, `e0f669c`, `0d90bac`, `bef7943`, `e72f3b0` |
+| Build/resource/tooling | `2d1b02c`, `70ba98c`, `5daefa3`, `b43abbe`, `4a74ca9`, `f37e9c0` |
+| Active-grid/local geometry migration | `92e8907`, with remaining work described in the timing design document |
+
+Stage 5 owns commit-backed reversions, superseded experiments, and direction changes; this grouping does not itself declare residue.
+
+## Phase 1 scope partition
+
+| Stage | Primary ownership | Explicit exclusions | Required report |
+| --- | --- | --- | --- |
+| 1 — Diff and ownership inventory | Objective scope, stats, partition, churn, public surface, accidental growth | Layout/code-quality judgments | `stage-reports/01-diff-inventory.md` |
+| 2 — Logical layout | Placement, dependency direction, layer leakage, duplicate ownership | Naming/style; runtime correctness | `stage-reports/02-logical-layout.md` |
+| 3 — Conventions | Policy/style rules, headers/implementations, naming form, RAII/value semantics, hidden globals | Architecture, semantic vocabulary, dead reachability | `stage-reports/03-conventions.md` |
+| 4 — Naming and vocabulary | Coordinate, authority, lifetime, thread ownership, protected glossary | General style; merging protected concepts | `stage-reports/04-vocabulary.md` |
+| 5 — Git-history archaeology | Intent, reversions, superseded experiments, fixup chains, changed direction | Declaring current code dead/incorrect | `stage-reports/05-history.md` |
+| 6 — Stale/dead-code sweep | Reachability/redundancy and dead/dormant/duplicated/complex distinctions | Broad simplification of live abstractions; repeat archaeology | `stage-reports/06-stale-code.md` |
+
+## Artifact directories and single-writer ownership
+
+- Lead only: `00-scope-and-inventory.md`, human entries in `decisions.md`, backlog status.
+- Stage investigator only while active: its assigned immutable `stage-reports/NN-short-name.md`.
+- Phase integrator only: `findings.md`, `verification-matrix.md`, and `phase-packets/phase-1.md`.
+- Reserved for later phases: `cleanup-backlog.md`, `batch-reviews/`; `merge-brief.md` must not be created before Phase 4.
+- Chat is coordination only. Every dispatched stage must create its report, including a complete `no findings` report when applicable.
+
+## Task board
+
+Phase 1 status: **awaiting human gate decisions**. Stages 1–6 are integrated; Stages 7–21 remain pending and must not start before the gate is recorded.
+
+| Stage | Status |
+| --- | --- |
+| 01 Diff and ownership inventory | integrated |
+| 02 Logical layout | integrated |
+| 03 Conventions | integrated |
+| 04 Naming and domain vocabulary | integrated |
+| 05 Git-history archaeology | integrated |
+| 06 Stale/dead-code sweep | integrated |
+| 07 Thread safety | pending |
+| 08 Audio and other hot-path performance | pending |
+| 09 Timing and remote-join correctness | pending |
+| 10 State-machine and failure paths | pending |
+| 11 Numerical, boundary, and clock domains | pending |
+| 12 Resource and lifetime review | pending |
+| 13 Simplification and code size | pending |
+| 14 Unit-test quality | pending |
+| 15 Docs and comments | pending |
+| 16 Compatibility and persistence | pending |
+| 17 Observability and diagnosability | pending |
+| 18 Security and input robustness | pending |
+| 19 Cross-review reconciliation | pending |
+| 20 Change impact and regression surface | pending |
+| 21 Build, test, and merge hygiene | pending |
