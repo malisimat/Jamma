@@ -52,6 +52,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-046 | Producer/consumer contract and retired-fallback audit | Full plausible BPI accepted; BPI absent makes no authority change; supplied BPI retained | Remote prompt/grid trace uses authoritative BPI | Human compatibility gate; Stages 15/16/20 |
 | F-047 | Existing-value-field and no-parallel-logger audit | Every rejection reason/counter; epoch + desired/applied version; bounded lag/suppression | Readable geometry/discipline/NoSync/loss/retry trace without hierarchy dumps | Stages 17/20; implement with F-024–F-028/F-032 |
 | F-048 | Checked/saturating conversion and config-bound audit | Defaults/zero/`UINT32_MAX`/exact-fit/first-overflow/min>max/max-rate table | Extreme config fails deterministically and sends no malformed tempo | Stages 18/20; local geometry prerequisite |
+| F-049 | Export serialization secret/redaction audit | Sentinel config export proves password absent and approved fields retained | Exported session cannot authenticate silently; anonymous flow works | Human credential-policy gate; Stages 18/20 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 

@@ -590,3 +590,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: local seed/grain policy, local master geometry, requested BPM/BPI, and remote authority remain distinct.
 - Verification: defaults, zero, `UINT32_MAX`, exact-fit/first-overflow, min>max, max sample rate; deterministic reject/clamp, finite BPM, consistent nonzero geometry, no malformed request.
 - Human decision: pending Phase 3 gate.
+
+## F-049 — Redact NINJAM passwords from portable session exports
+
+- Stage / reviewer: S18-03.
+- Scope reviewed / exclusions: sensitive NINJAM session-config serialization; no general credential-store redesign.
+- Severity: must fix before merge.
+- Evidence: `JamFile::NinjamConfig::Pass` is parsed/written in cleartext at `JamFile.cpp:368`–`:377`, `:469`–`:509`. `IoSessionExporter.cpp:50`–`:60`, `:132`–`:140` copies the controller config wholesale into user-selected `session.jam`.
+- Why it matters: session export silently places credentials in an artifact likely to be shared or archived.
+- Recommended disposition: exclude `Pass` from exported `session.jam`; if authenticated reconnect is needed, obtain credentials from an explicitly local trusted setting/prompt. Any decision to retain a password in private app-owned config is separate. Never persist live timing authority as a workaround.
+- Protected timing concepts affected: none; credentials are not timing authority.
+- Verification: export sentinel host/user/password/workdir; password sentinel absent while approved non-secret fields round trip; export cannot authenticate silently; anonymous empty-password flow remains usable per decision.
+- Human decision: pending Phase 3 gate.
