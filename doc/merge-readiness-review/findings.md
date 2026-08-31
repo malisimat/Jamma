@@ -412,12 +412,13 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-034 — Remove callback-side alignment logging and slim Station diagnostics
 
-- Stage / reviewer: S08-02; related to approved F-019 and future Stage 17.
-- Scope reviewed / exclusions: callback reachability, disabled-path cost, and code size; supported diagnostic audience/format belongs to Stage 17.
+- Stage / reviewer: S08-02; refined by S13-01/S17-01 and related to approved F-019.
+- Scope reviewed / exclusions: callback reachability, disabled-path cost, code size, supported diagnostic audience/fields/volume; operational state is excluded.
 - Severity: must fix before merge.
 - Evidence: alignment logging remains reachable from callback-owned Station paths while `Station::_LogLocalLoopAlignment` and related before/after formatting occupy a large Station implementation surface (`JammaLib/src/engine/Station.cpp:809`, `:1107`, `:1197`, `:2301`, `:2327`–`:2470`). The early gate avoids string construction when disabled but still leaves callback entry/branching and large engine-level diagnostic responsibility.
 - Why it matters: the human decision requires retained timing logging to be configuration-gated with zero disabled-path performance cost and rejects large Scene/Station `_Log*` implementations. Callback logging also risks unbounded formatting/I/O when enabled.
-- Recommended disposition: remove callback-side logging calls entirely; capture only bounded preallocated diagnostic values when explicitly enabled and format/write them off-thread in an existing owner. Remove F-019's dead receipt subset in the same later batch without deleting useful bounded telemetry.
+- Recommended disposition: keep compact coordinator state and the coherent AudioHost applied receipt, correlated by session epoch plus desired/applied state version, and format transition-only/rate-bounded records off-thread in an existing NINJAM/job owner. Remove `Scene::_LogAppliedNinjamLoopAlignment`, the Station hierarchy logger/before-state vector/call sites, and F-019's dead receipt. Optional entity detail has fixed capacity plus overflow count. Disabled callback code has no diagnostic call, branch, traversal, allocation, or I/O; add no logging class.
+- Estimated simplification: remove roughly 160–230 lines from Scene/Station before a smaller 40–100-line off-thread presentation path, for about 80–150 net production-line deletion.
 - Protected timing concepts affected: diagnostic mirrors only; operational timing authority remains unchanged.
-- Verification: static callback call-chain proving no formatting/I/O logger is reachable; disabled build/path has no diagnostic branch/work; bounded enabled capture plus normal/verbose remote-join manual trace.
+- Verification: static callback call-chain proving no formatter/I/O/hierarchy traversal; disabled instrumentation or disassembly proves zero work; bounded enabled capture tests capacity/overflow and epoch/version correlation; normal/verbose empty/populated join, record/overdub, `Stay local`, disconnect, reconnect, and logging-on/off phase equivalence.
 - Human decision: accepted ([decision](decisions.md#findings)).

@@ -37,7 +37,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-031 | Conversion bounds/rounding audit | Exhaust source tails and small ratios; 96→48 and non-integer ratios never wrap early | Remote join near interval tail at differing sample rates | Stage 14/20 |
 | F-032 | Finite/plausible validation audit at helper and outgoing request | NaN, ±infinity, zero, negative, endpoints, just-outside and extreme finite inputs; request sends nothing on reject | Malformed observed/requested timing causes no authority or network change | Follow-up hardening; Stages 17/18/20 |
 | F-033 | Borrow-scope/callback-destruction audit | Controlled Stop attempt between acquire and consume using preallocated buffers | Repeated live start/stop/reconnect under ASan/page heap/Application Verifier | Prerequisite lifetime stress; Phase 4 + Stages 14/20 |
-| F-034 | No callback-reachable formatter/I/O audit; disabled capture compiles to no work | Bounded enabled diagnostic capture and dead-receipt removal tests | Normal and verbose join trace; callback profiler | Coordinate F-019 and Stage 17 before batch |
+| F-034 | No callback formatter/I/O/hierarchy traversal; zero disabled work; bounded fixed record | Capacity/overflow, epoch + desired/applied correlation, dead-receipt removal, logging on/off phase equivalence | Normal/verbose join/record/overdub/Stay-local/disconnect/reconnect trace; profiler | Coordinate F-019; Stages 13/17/20 before batch |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
