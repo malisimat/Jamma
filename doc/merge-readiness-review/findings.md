@@ -602,3 +602,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: none; credentials are not timing authority.
 - Verification: export sentinel host/user/password/workdir; password sentinel absent while approved non-secret fields round trip; export cannot authenticate silently; anonymous empty-password flow remains usable per decision.
 - Human decision: pending Phase 3 gate.
+
+## F-050 — Remove portable `.jam` authority over NJClient work directories
+
+- Stage / reviewer: S18-04.
+- Scope reviewed / exclusions: NINJAM work-directory trust/failure; generic path pickers/resources excluded.
+- Severity: must fix before merge.
+- Evidence: `JamFile.cpp:469`–`:509` accepts arbitrary `WorkDir`; `NinjamSession.cpp:383`–`:417` auto-starts with it; `NinjamConnection.cpp:171`–`:215`, `:816`–`:838` calls `create_directories`, swallows errors, and passes the same unvalidated path to NJClient without canonicalization, allowed root, length bound, or confirmation.
+- Why it matters: loading a crafted portable session can attempt filesystem mutation outside app-controlled directories and select upstream remote-file storage; failed preparation is not deterministic.
+- Recommended disposition: treat portable `WorkDir` as non-authoritative and use the existing app-controlled temp fallback. Any expert custom directory must come from explicit local trusted configuration/picker, be canonicalized and restricted by documented policy, and fail connection visibly if preparation fails. Keep ownership in existing session integration; do not edit NJClient.
+- Protected timing concepts affected: none; a work directory is not authority, epoch, policy, clock, or coordinate.
+- Verification: absolute, traversal, UNC/device-like, overlong/invalid, unwritable and reparse/symlink cases plus empty default; no mutation outside approved root; NJClient not started on failure; normal temp path connects.
+- Human decision: pending Phase 3 gate.
