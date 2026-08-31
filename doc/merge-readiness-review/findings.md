@@ -494,3 +494,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: remote observation and local Timer transport remain separate complete values.
 - Verification: run the corrected P5 repeatedly and under race tooling where practical; assert overlap/read counts and no mixed generation.
 - Human decision: pending Phase 3 gate.
+
+## F-041 — Add controllable session-loss and buffer-borrow test seams
+
+- Stage / reviewer: S14-05.
+- Scope reviewed / exclusions: absence/observability of native prerequisites; correctness remains F-027/F-028/F-033.
+- Severity: must fix before merge.
+- Evidence: no focused `NinjamSession`/`NinjamConnection` native test is registered in `JammaLib_Tests.vcxproj:204`–`:216`; coordinator disconnect tests call `Disconnect()` directly and deadline tests keep supplying valid observations (`NinjamTimingCoordinator_Tests.cpp:229`–`:240`, `:517`–`:546`). No test forces physical retry/failure or stop between buffer acquire and consume.
+- Why it matters: the highest-risk recovery and lifetime changes otherwise lack deterministic passing prerequisites.
+- Recommended disposition: add minimal injectable/fake state and clock hooks to an existing session/integration owner plus test-only synchronization around scoped synchronous consumption. Do not expose raw connection/buffer APIs or add callback allocation.
+- Protected timing concepts affected: physical availability, epoch, timing validity, follow authority, local free-run, and buffer lifetime remain separate.
+- Verification: P7–P9: exactly-once loss invalidation/fresh epoch, no-observation deadline, repeated-invalid idempotence, controlled stop-during-consume; follow with sanitizer/page-heap/Application Verifier and manual reconnect.
+- Human decision: pending Phase 3 gate.
