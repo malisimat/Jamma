@@ -1,13 +1,14 @@
 # Human decisions
 
-Below are ALL the human-written decisions following Phase 1 of the merge-readiness review.
+Below are ALL the human-written decisions following Phase 1 and 2 of the merge-readiness review.
 
 ## Primary Notes
 
 * This branch intentionally has multiple features merged into it, so we must restrict focus of the review to the ninjam timing / remote tempo sync changes and not HUD, VST3 parity or window/tooling updates (see [02 - Diff Inventory] below).
 * Almost all findings approved.
-* Two stages highlighted a potential duplication of the same concept, which must be carefully addressed: S05-01 and S06-01 (see [05 - History] below).
+* Two stages highlighted a potential duplication of the same concept, which must be carefully addressed: S05-01 and S06-01 (see [05 - History] below).  Also S08-01 and S12-02 seem related.
 * In order to perform these more complex updates, we must have sufficient unit test coverage to verify the updates have not broken the critical functionality.  This means one or two high quality tests to be identified/created before each major refactor.
+* Start with larger structural / behavioural changes first.  Each and every stage must consist of at least one separate git commit (multiple if writing tests, refactoring/fixing, etc) and commit message should include finding and stage number.
 * We added a LOT of code to Scene, Station and LoopTake, but we must attempt to keep these as slim as possible - especially Scene.  If bloat due to logging, then we can try to reduce this significantly.  If due to increased responsibility, then try to move functionality out and into other existing classes.
 
 This last point may add to scope of review - that is desired.
@@ -36,10 +37,24 @@ Decisions on the [overall findings doc](findings.md):
 * F-018 - Approved.
 * F-019 - Approved.
 * F-020 - Approved.
+* F-021 - Approved.  Check notes from S08-01 and S12-02 below.
+* F-022 - Approved.
+* F-023 - Approved.
+* F-024 - Not approved, although a simpler approach is proposed in S09-01 below, which is approved.
+* F-025 - Approved.
+* F-026 - Approved.
+* F-027 - Approved.
+* F-028 - Approved.
+* F-029 - Approved.
+* F-030 - Approved.
+* F-031 - Approved.
+* F-032 - Approved.
+* F-033 - Approved.
+* F-034 - Approved.
 
 ## Stage Reports
 
-Below we respond in detail to all the points raised in the separate stages run as part of phase 1.
+Below we respond in detail to all the points raised in the separate stages run as part of phase 1 and 2.
 
 ### [01 - Diff Inventory](stage-reports/01-diff-inventory.md)
 
@@ -93,3 +108,40 @@ Also, in terms of naming, I'm happy with the meaning of all terms in [the glossa
 * S06-01 - Approved, same comments as S05-01.
 * S06-02 - Approved.
 * S06-03 - Approved.
+
+### [07 - Thread Safety](stage-reports/07-thread-safety.md)
+
+* S07-01 - Approved.
+* S07-02 - Approved.
+* S07-03 - Approved.
+* S07-04 - Approved.
+
+### [08 - Hot Paths](stage-reports/08-hot-paths.md)
+
+* S08-01 - Approved.  One implementation caveat: the existing NinjamRemoteSnapshot is not suitable as-is for the callback—it is vector-backed and Snapshot() takes _snapshotMutex ([NinjamConnection.cpp (line 736)](JammaLib/src/ninjam/NinjamConnection.cpp:736)). A fixed-size lock-free timing mailbox is needed. To retain the exact block-start timing coordinate, the best shape is for AudioProc itself to publish/capture the pre-advance timing internally, then expose that data through the mailbox—without another NJClient call from the callback.
+* S08-02 - Approved.  Although logging is desirable it must NEVER interfere with audio hotpath performance and so do whatever sliming/moving to prevent std::cout or string heap creation or heavy synchronous operations in audio thread, even at the expense of logging info.
+* S08-03 - Approved.
+* S08-04 - Approved.
+
+### [09 - Timing Correctness](stage-reports/09-timing-correctness.md)
+
+* S09-01 - Not approved.  Attempting to cope with all scenarios would add too much complexity, so instead try something simple like: Publish only the latest complete desired remote transport state: session epoch, follow policy, full remote geometry, and remote phase at an observation sample. Never publish standalone invalidation or phase-delta commands. At each audio boundary, AudioHost compares the desired state with the last applied state: epoch changes clear anchors/map, geometry changes replace Timer timing, and unchanged geometry derives phase correction from the timestamped remote phase.
+* S09-02 - Approved.
+* S09-03 - Approved, although go for simplicity and surgical fix.
+
+### [10 - State Machine](stage-reports/10-state-machine.md)
+
+* S10-01 - Approved.
+* S10-02 - Approved.  Use common and simple approach, use tests to confirm fix and avoid regressions.
+
+### [11 - Numerics](stage-reports/11-numerics.md)
+
+* S11-01 - Approved.
+* S11-02 - Approved, but must keep simple.
+* S11-03 - Approved.
+* S11-04 - Approved.
+
+### [12 - Lifetimes](stage-reports/12-lifetimes.md)
+
+* S12-01 - Approved.
+* S12-02 - Approved, bear in mind we covered similar before in S08-01.

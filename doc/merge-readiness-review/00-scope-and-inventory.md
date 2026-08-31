@@ -133,13 +133,47 @@ Stage 5 owns commit-backed reversions, superseded experiments, and direction cha
 
 - Lead only: `00-scope-and-inventory.md`, human entries in `decisions.md`, backlog status.
 - Stage investigator only while active: its assigned immutable `stage-reports/NN-short-name.md`.
-- Phase integrator only: `findings.md`, `verification-matrix.md`, and `phase-packets/phase-1.md`.
+- Phase integrator only: `findings.md`, `verification-matrix.md`, and the active phase packet (`phase-packets/phase-1.md`, `phase-packets/phase-2.md`).
 - Reserved for later phases: `cleanup-backlog.md`, `batch-reviews/`; `merge-brief.md` must not be created before Phase 4.
 - Chat is coordination only. Every dispatched stage must create its report, including a complete `no findings` report when applicable.
 
+## Phase 2 scope and reconciled thread/ownership matrix
+
+The human gate restricts deep Phase 2 review to remote timing/sync structural and behavioral changes. HUD, VST3 parity, window persistence, and tooling remain in the merge but are excluded from cleanup review except where a timing seam requires evidence. Stage ownership was: S07 concurrency/publication; S08 proven callback/hot-path cost; S09 timing behavior; S10 failure transitions; S11 numeric/clock domains; S12 timing/session lifetimes.
+
+| Shared state / item | Writer / owner | Reader / thread | Handoff and compound invariant | Lifetime / hot-path status | Conclusion |
+| --- | --- | --- | --- | --- | --- |
+| Live remote timing observation | Audio callback at `AudioHost.cpp:437`–`:453` | Scene job at `Scene.cpp:336`–`:347` | Fixed atomic odd/even snapshot; complete value or no value | AudioHost member; writer hot | Mailbox coherent, but upstream getter source violates thread contract: F-021 |
+| Unified timing command | Scene job/UI sites at `Scene.cpp:254`–`:305`, `:394`–`:482`, serialized by `_sceneMutex` | Audio callback at `AudioHost.cpp:162`–`:330` | Atomic complete latest value; producer contract externally enforced; latest value does not subsume all transitions | AudioHost member; reader hot | Race-free publication, semantically unsafe ordering: F-024; producer ownership enriches F-009 |
+| Applied-command receipt | Audio callback at `AudioHost.cpp:321`–`:329` | Job logger at `Scene.cpp:517`–`:535` | Atomic odd/even complete receipt | AudioHost member; writer hot | Race-free |
+| Local transport-offset mailbox | UI/setup through `Scene.cpp:2196`–`:2208`; audio consumes at `AudioHost.cpp:332`–`:350` | Audio callback | Atomic latest value preserves explicit zero | AudioHost member; reader hot | Race-free under current one-writer assumption; concurrent test required |
+| Published station membership | Scene publishes after mutations at `Scene.cpp:2147`–`:2301` | AudioHost/Scene audio paths | Immutable `shared_ptr<const vector<shared_ptr<Station>>>`, release/acquire | Snapshot pins stations; hot | Safe except raw `_stations` bypass in empty reset: F-022 |
+| AudioHost policy/common map | Audio callback at `AudioHost.cpp:167`–`:365` | Audio callback | Thread-confined transaction | AudioHost member; hot | Race-free; common coordinate should be computed once under F-006 |
+| Per-take map/anchors/cursors | Audio callback through Station fan-out at `LoopTake.cpp:518`–`:679` | Audio plus atomic diagnostic/UI readers | Map thread-confined; anchor value published before presence; immutable membership snapshots | Take pinned by Station snapshot; hot | Race-free, but invalidation skips generation reset: F-025 |
+| Timer transport tuple | Audio callback `Timer.cpp:40`–`:58`, `:205`–`:237`; some Scene/Quantiser paths | Audio plus coordinator/job reads | Individual atomics only; no version spans length/count/phase/scene | Shared Timer; hot | Scalar-race-free but compound tuple incoherent: F-023; width: F-029 |
+| Timer musical transport | Audio callback remote reanchor/advance/reset | Audio callback/plugin transport consumers | Thread-confined mutable value | Timer-owned; hot | Safe if ownership remains audio-only |
+| Coordinator/tracker/options | Job/UI under `_sceneMutex` | Job/UI, plus exceptional audio `HasConnectedTiming` read | Plain compound state machine under intended owner | Network service owned; exceptional reader hot | Audio read and reset path unsafe: F-022 |
+| Remote MIDI grid | Job/UI Quantiser writer | Audio quantisation reader | Atomic odd/even complete snapshot | Take lifetime; reader hot | Safe with serialized writers; audio empty-reset creates second writer: F-022 |
+| NJClient connection/timing | Job calls `Run()`/snapshot getters; audio calls `AudioProc` and current timing getters | Job and audio | Session guard pins object, but no permitted coherent publication protects getters | Connection-owned; hot | Only `AudioProc` is supported on audio thread: F-021 |
+| Connection identity | Lifecycle under `_lifecycleMutex` | Job/audio via `NinjamConnectionUse` | Atomic pointer plus active-user retirement | Live guard pins connection; acquire is hot/unbounded | Identity publication sound; borrowed stereo escapes guard: F-033 |
+| Whole connection/UI snapshot | Job `_UpdateSnapshot` | Job/UI consumers | Mutex-protected value copies | Non-audio | Race-free; physical loss needs explicit epoch transition: F-027 |
+| MIDI clock anchor | Audio publisher | MIDI/control readers | Atomic sequence plus two bounded reads | AudioHost member; writer hot | No proven race; retain targeted concurrency test obligation |
+| Alignment diagnostics | Audio/job atomic snapshots plus job-owned before/after state | Off-thread logger, with callback entry sites | Operational state is separate; dead receipt has no writer | Reads touch hot-owned state | F-019 removes dead receipt; F-034 removes callback logging and formats off-thread |
+
+Intentional non-real-time synchronization retained for the human gate: Scene `_sceneMutex` serializes job/UI coordinator and command-publication work; connection/snapshot/controller mutexes protect lifecycle and job/UI snapshots; request/network operations remain off callback. No intentional callback lock, allocation, wait, or I/O is accepted. `atomic<shared_ptr>` snapshot loads and reference-count traffic remain callback costs whose platform lock-freedom/performance must be measured at maximum configured hierarchy size.
+
 ## Task board
 
-Phase 1 status: **awaiting human gate decisions**. Stages 1–6 are integrated; Stages 7–21 remain pending and must not start before the gate is recorded.
+Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **awaiting human gate decisions** in [`phase-packets/phase-2.md`](phase-packets/phase-2.md). Stages 1–12 are integrated; Stages 13–21 remain pending and must not start before the Phase 2 gate is recorded.
+
+### Phase 2 kickoff baseline
+
+- Branch: `bugfix/align-remote-join`.
+- Review kickoff `HEAD`: `a202d27a6923288846577b03cd9b305bfa6405db`.
+- Merge base and `master` tip: `4941b780f7ff5a46f742167d79338e3ab592a565`.
+- Worktree at dispatch: clean.
+- Production code tip under review remains `e72f3b0f489cfa12ea697e966d3c0f619e31d1f6`, with the Phase 1 inventory of 199 files, 14,691 insertions, and 1,507 deletions.
+- The newer `a202d27` commit contains Phase 1 review artifacts and human decisions only. Raw `master...HEAD` now includes those artifacts (216 files, 16,364 insertions, and 1,507 deletions); Stages 7–12 exclude `doc/merge-readiness-review/` from production-code conclusions.
 
 | Stage | Status |
 | --- | --- |
@@ -149,12 +183,12 @@ Phase 1 status: **awaiting human gate decisions**. Stages 1–6 are integrated; 
 | 04 Naming and domain vocabulary | integrated |
 | 05 Git-history archaeology | integrated |
 | 06 Stale/dead-code sweep | integrated |
-| 07 Thread safety | pending |
-| 08 Audio and other hot-path performance | pending |
-| 09 Timing and remote-join correctness | pending |
-| 10 State-machine and failure paths | pending |
-| 11 Numerical, boundary, and clock domains | pending |
-| 12 Resource and lifetime review | pending |
+| 07 Thread safety | integrated |
+| 08 Audio and other hot-path performance | integrated |
+| 09 Timing and remote-join correctness | integrated |
+| 10 State-machine and failure paths | integrated |
+| 11 Numerical, boundary, and clock domains | integrated |
+| 12 Resource and lifetime review | integrated |
 | 13 Simplification and code size | pending |
 | 14 Unit-test quality | pending |
 | 15 Docs and comments | pending |

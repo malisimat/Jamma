@@ -148,4 +148,4 @@ Phase 2 must not start until G1, G2, and F-001–F-020 have explicit outcomes in
 
 ## Human outcome
 
-Pending. Phase 1 is stopped at the human gate. No cleanup implementation, Phase 2 investigation, build, or test is authorized by this packet.
+Accepted. The human reviewer approved the baseline, protected glossary, and F-001–F-020 dispositions in [`decisions.md`](../decisions.md). F-001–F-004 retain their feature/tooling lineages in the merge while keeping them outside timing-cleanup scope; F-005–F-020 are approved for later reconciliation. This acceptance authorizes Phase 2 investigation only, not cleanup implementation.

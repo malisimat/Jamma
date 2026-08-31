@@ -1,6 +1,6 @@
 # Verification matrix
 
-Phase 1 added obligations only; no build, native test, or runtime scenario was executed. Before future builds/tests, read local `.vscode/tasks.json` and `doc/build.md`, use the repository environment-normalizing wrapper, and run affected incremental targets.
+Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/tasks.json` and `doc/build.md` were read, the authoritative incremental `JammaLib_Tests` target built successfully through `.github/skills/builder/invoke-msbuild.ps1`, and the full native executable passed 821 of 822 tests; `MidiDevice.OpensPreferredDeviceWhenAvailable` was the sole hardware-dependent skip. No interactive Jamma/NINJAM runtime scenario, race sanitizer, profiler, ASan, page heap, or Application Verifier run was executed. The passing suite does not cover the blockers below.
 
 | Finding | Build/static evidence | Native test evidence | Runtime/manual evidence | Later owner/sign-off |
 | --- | --- | --- | --- | --- |
@@ -12,7 +12,7 @@ Phase 1 added obligations only; no build, native test, or runtime scenario was e
 | F-006 | JammaLib build; one common-map owner audit | Unequal lengths, offsets, rebase/wrap | Join, reconnect, free-run after `NoSync` | Stages 7/8/9/11/20 |
 | F-007 | Include-graph and JammaLib build | Coordinator/local timing tests | None | Stages 13/20 |
 | F-008 | JammaLib build; include audit | Latest/zero mailbox and local-offset tests | Disconnected and `NoSync` offset control | Stages 7/8/9/20 |
-| F-009 | JammaLib build | Coordinator command + integration forwarding tests | Join/leave command trace | Stages 9/10/20 |
+| F-009 | JammaLib build; producer/publication call-site audit | Coordinator forwarding plus overlapping job/UI producer and coherent-reader contract tests | Join/leave command trace; confirm one integration owner | Stages 7/9/10/20; Phase 2 enrichment gate |
 | F-010 | JammaLib/tests compile; identifier audit | Affected timing tests | None | Stage 15/20 |
 | F-011 | JammaLib/tests compile; retired-name audit | Export/metronome helper tests | None | Stages 14/15/20 |
 | F-012 | Incremental JammaLib link/build | Timing/command/mailbox tests | None | Stages 7/8/20 |
@@ -24,9 +24,35 @@ Phase 1 added obligations only; no build, native test, or runtime scenario was e
 | F-018 | Incremental JammaLib/test build | Sync-map, offsets, reconnect, `NoSync` tests | Focused remote join/local loop | Stages 9/20 |
 | F-019 | Incremental JammaLib/test build | Existing timing/logging-adjacent tests | Normal and verbose logging; remote join | Stages 8/17/20 |
 | F-020 | App build and copied-resource audit | Relevant HUD/graphics tests | Trigger default/hover/down/out rendering | Dependent on F-001; Stages 12/16/20/21 |
+| F-021 | Audit `_OnAudio` call graph: only NJClient `AudioProc`; prove no callback lock/allocation | Alternating coherent remote-observation generations; delayed projection | Join/reconnect/disconnect/export while network pump runs; race tooling | Prerequisite before F-009/F-015 refactor; Phase 4 + Stages 14/20 |
+| F-022 | Callback audit excludes `_ClearTimingState`, raw `_stations`, locks and destruction | Empty connected preserves accepted timing; final local take removed while disconnected clears once; race against grid/connect transitions | Remove final take and reconnect while audio runs; RT profiler | Prerequisite empty-transition contracts; Phase 4 + Stages 14/20 |
+| F-023 | Versioned local-transport value audit | Alternating length/count/phase sentinels never form mixed tuple | Tempo replacement while job processing is delayed | Prerequisite coherent-snapshot test; coordinate with F-029 |
+| F-024 | Command-state/overflow audit | `Invalidate -> Replace` and `Replace -> Discipline` before one callback; assert Timer/map/audio/MIDI/gates | Stress job cadence faster than callback; trace applied complete authority | Highest-priority prerequisite regression before F-005/F-009 |
+| F-025 | Audit invalidation reaches every generation gate | Two sessions: first generation >1, production invalidate, second starts at 1; stale old command rejected | Disconnect/free-run/reconnect with unequal lengths/offsets | Highest-priority prerequisite regression before authority refactor |
+| F-026 | Observation-coordinate audit | Initial join processed at zero vs multiple-block delay emits identical delta | Populated same-tempo join under job-thread delay | Prerequisite delayed-initial-observation test |
+| F-027 | Availability/epoch transition audit | Loss/retry success creates exactly one invalidation and a fresh epoch | Server/cable loss, retries, manual disconnect during retry, station cleanup | Phase 4 + Stages 14/20 |
+| F-028 | Deadline/state-table audit | No-observation timeout; valid→invalid→valid; malformed zero/rate/BPM/BPI | Loss of timing while socket remains available | Phase 4 + Stages 14/20 |
+| F-029 | 64-bit symbol/type audit | Cross `UINT32_MAX`; near-max seed/phase + Tick increment; multiply before widening; distinct Timer/device sentinels | Run/simulate >24 h 51 min at 48 kHz | Coordinate with F-023; Stage 20 |
+| F-030 | No zero-as-sentinel audit | Independently test valid zero vs absent vs nonzero for device-audio and Timer-absolute anchors; delayed first-block commands | Join immediately after audio start/reconnect | Stage 14/20 |
+| F-031 | Conversion bounds/rounding audit | Exhaust source tails and small ratios; 96→48 and non-integer ratios never wrap early | Remote join near interval tail at differing sample rates | Stage 14/20 |
+| F-032 | `isfinite` validation audit | NaN, ±infinity, zero, negative, and extreme finite timing inputs | Malformed upstream timing is rejected without state change | Follow-up hardening; Stage 18/20 |
+| F-033 | Borrow-scope/callback-destruction audit | Controlled Stop attempt between acquire and consume using preallocated buffers | Repeated live start/stop/reconnect under ASan/page heap/Application Verifier | Prerequisite lifetime stress; Phase 4 + Stages 14/20 |
+| F-034 | No callback-reachable formatter/I/O audit; disabled capture compiles to no work | Bounded enabled diagnostic capture and dead-receipt removal tests | Normal and verbose join trace; callback profiler | Coordinate F-019 and Stage 17 before batch |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
 - Stage 8 must assess callback-side cost of retained before/after alignment diagnostics.
 - Stage 17 must decide the supported audience and volume for live/dormant alignment snapshots and coordinator counters.
-- Phase 2 must prove that the unified command, Timer update, common map, and per-entity restores remain coherent under all three follow policies.
+- After the accepted fixes, Phase 4 and Stages 14/20 must prove that the unified command, Timer update, common map, and per-entity restores are coherent under all three follow policies; current F-024/F-025 evidence shows this obligation is unmet.
+
+## Phase 2 focused scenario assertions
+
+1. **Empty join:** valid remote authority may seed Timer without inventing a local loop cursor; the first later audio/MIDI take captures disciplined geometry.
+2. **Populated join:** zero and delayed job processing of the same observation produce the same join delta; unequal loop lengths and intentional offsets change by one common mapped elapsed amount.
+3. **Continuous and block sync:** replacement precedes dependent discipline, one generation applies once, audio/MIDI cursors remain coherent, and each entity wraps by its own length.
+4. **Stay local / invalid / disconnect:** exactly one complete `NoSync` transition clears map, anchors, and every session generation gate without moving local phase; local transport free-runs.
+5. **Reconnect:** physical retry and explicit reconnect create a fresh epoch; no old command, map, remote buffer, station, prompt, or request survives into new authority.
+6. **Late observation / wrap:** Timer-absolute, device-audio, scene, remote phase, source coordinate, loop cursor, and automation origin use distinct sentinel values; projection is stable across delays, device sample zero, `UINT32_MAX`, and sample-rate conversion at the last source sample.
+7. **Real-time/lifetime:** no callback lock, allocation, wait, logging/I/O, forbidden NJClient getter, callback-side container destruction, or escaped connection-owned buffer borrow. Snapshot/refcount/map costs are measured at maximum configured station/take/loop counts.
+
+Per the human decision, each major Phase 4 refactor must select one or two of the focused tests above as passing prerequisites before source movement begins. The first required pair is F-024/F-025's command-order and two-session reconnect regressions.
