@@ -287,17 +287,18 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Verification: alternating sentinel-geometry concurrency test that never yields a mixed tuple; replacement/tick boundary test; late-observation tests using one coherent local snapshot.
 - Human decision: accepted ([decision](decisions.md#findings)).
 
-## F-024 — Preserve non-substitutable timing transitions across the audio mailbox
+## F-024 — Publish one latest complete desired remote transport state
 
-- Stage / reviewer: S09-01.
-- Scope reviewed / exclusions: command semantics/order; low-level publication mechanism choice deferred.
+- Stage / reviewer: S09-01; disposition replaced by the human decision and refined by S13-02/S15-02.
+- Scope reviewed / exclusions: complete desired-state semantics across integration publication and audio-boundary comparison; no ordered command queue or standalone delta/invalidation compatibility.
 - Severity: merge blocker.
 - Evidence: the mailbox retains only the latest command at `JammaLib/src/ninjam/NinjamAudioTimingCommand.h:53`–`:119`, while Scene can publish `Invalidate -> Replace` and `Replace -> PhaseDiscipline` between callbacks at `JammaLib/src/engine/Scene.cpp:254`–`:305`, `:403`–`:481`; AudioHost consumes only one at `JammaLib/src/audio/AudioHost.cpp:162`–`:165`.
 - Why it matters: a delta does not subsume replacement geometry or session invalidation. Coalescing can lose an accepted tempo change, apply a correction against old geometry, or retain old-session gates/anchors.
-- Recommended disposition: after prerequisite regressions, make each latest publication a complete accepted timing state plus optional correction, or use a bounded ordered mechanism with explicit overflow/coalescing rules. Keep command materialization with the NINJAM integration owner per F-009.
+- Recommended disposition: after prerequisite regressions, publish only the latest complete desired remote transport state: session epoch, follow policy, full validated device-rate remote geometry, and remote master phase at an explicit observation sample/presence. AudioHost compares it with the last applied state: epoch change clears map/anchors/gates; geometry change replaces Timer timing; unchanged geometry derives phase correction; `NoSync` clears authority without moving cursors. Keep production with the NINJAM integration owner per F-009.
 - Protected timing concepts affected: remote authority, follow policy, Timer geometry, sync map, anchors, mapped elapsed time, and per-loop phase remain distinct.
-- Verification: production-faithful `Invalidate -> Replace` and `Replace -> Discipline` before one callback; Timer/map/audio/MIDI/generation coherence; both sync policies and unequal loop lengths/offsets.
-- Human decision: rejected as written; replace ordered/delta command choices with the approved latest complete desired remote transport state: session epoch, follow policy, full remote geometry, and timestamped remote phase ([decision](decisions.md#09---timing-correctness)).
+- Verification: production-faithful former `Invalidate -> Replace` and `Replace -> Discipline` intent sequences before one callback must resolve to one complete final desired state; test same-state idempotence, epoch/geometry/phase comparisons, Timer/map/audio/MIDI/generation coherence, both sync policies, unequal loop lengths/offsets, and valid zero observation.
+- Documentation obligation: replace claims that each event publication is consumed exactly once or that remote geometry never replaces Timer timing with the approved desired-versus-applied rule; clearly label current defects versus target behavior until implemented.
+- Human decision: accepted only in this replacement form; the ordered/delta command choice was rejected ([decision](decisions.md#09---timing-correctness)).
 
 ## F-025 — Reset every timing generation gate at a reconnect boundary
 
