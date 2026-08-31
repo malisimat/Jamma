@@ -57,9 +57,9 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
-- Stage 8 must assess callback-side cost of retained before/after alignment diagnostics.
-- Stage 17 must decide the supported audience and volume for live/dormant alignment snapshots and coordinator counters.
-- After the accepted fixes, Phase 4 and Stages 14/20 must prove that the unified command, Timer update, common map, and per-entity restores are coherent under all three follow policies; current F-024/F-025 evidence shows this obligation is unmet.
+- Stage 17 resolved the diagnostic-audience/volume handoff in F-034/F-047: transition-only bounded off-thread output, fixed enabled capture, and zero disabled callback work.
+- After accepted fixes, Phase 4 and Stages 14/20 must prove the complete desired state, Timer update, common map, and per-entity restores are coherent under all three follow policies; current F-024/F-025 evidence shows this obligation is unmet.
+- Generic JSON file/depth limits and unverified upstream NJClient user/channel/work budgets are explicit Stage 18 residuals outside timing-cleanup scope; they are not security-certified by this review.
 
 ## Phase 2 focused scenario assertions
 
@@ -72,3 +72,28 @@ Cross-phase obligations not represented as Phase 1 deletions:
 7. **Real-time/lifetime:** no callback lock, allocation, wait, logging/I/O, forbidden NJClient getter, callback-side container destruction, or escaped connection-owned buffer borrow. Snapshot/refcount/map costs are measured at maximum configured station/take/loop counts.
 
 Per the human decision, each major Phase 4 refactor must select one or two of the focused tests above as passing prerequisites before source movement begins. The first required pair is F-024/F-025's command-order and two-session reconnect regressions.
+
+## Phase 3 lean prerequisite suite
+
+| ID | Contract | Required before |
+| --- | --- | --- |
+| P1 | Complete desired-state former `Invalidate -> Replace -> Discipline` intent sequence at the production audio boundary | F-009/F-024 owner/state refactor |
+| P2 | Overlapping job/UI intents publish only one coherent complete desired value and one applied version | F-009 producer move |
+| P3 | Two real unequal-length audio/MIDI takes with intentional offsets, session 1 generation >1, `NoSync`, then epoch-2 generation 1 | F-005/F-006/F-025 structural work |
+| P4 | Delayed restore-before-rebase preserves anchors and entity-relative phase | F-006 common-map consolidation |
+| P5 | Deterministic concurrent observation/local-transport publication proves nonzero overlap and no mixed tuple | F-021/F-023 publication work |
+| P6 | Present-zero/absent/nonzero anchors, `UINT32_MAX` Timer crossing, and 96→48 final-source-sample conversion | F-026/F-029/F-030/F-031 |
+| P7 | Connected → retrying/failed → connected produces one `NoSync` and a fresh epoch, including persisted/default start | F-027 lifecycle work |
+| P8 | No-observation deadlines and valid → invalid → repeated invalid → valid are idempotent and recoverable | F-028 recovery work |
+| P9 | Controlled stop after connection-use acquisition but before synchronous stereo consumption | F-033 lifetime fix |
+| P10 | Diagnostics disabled produces zero captured work; enabled mode has fixed capacity/overflow and epoch/version correlation | F-019/F-034/F-047 diagnostics cleanup |
+
+For every major Phase 4 refactor, choose and pass only the one or two closest prerequisites before moving source. Do not land P1–P10 as an umbrella test batch.
+
+## Phase 3 manual acceptance additions
+
+1. Launch from the shipped/default and a saved `.jam` NINJAM identity; timing lifecycle/epoch begins without manual reconnect and matches interactive connect choices.
+2. Decide and verify signed-offset compatibility for `M`, `2M`, and non-divisor audio/MIDI loops; document or guard older-binary offset loss.
+3. Run normal and verbose join, record, overdub, `Stay local`, disconnect, physical loss, retry, and reconnect traces; logging on/off produces identical phases and bounded output.
+4. Export a session with sentinel credentials/path; no password is exported and no portable file can mutate outside the approved work-directory root.
+5. Retain Phase 2's remote-join/local-loop scenarios and add malformed observed/requested timing plus extreme local seed-policy rejection without authority/network change.
