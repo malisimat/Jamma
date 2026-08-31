@@ -434,3 +434,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: per-loop audio phase, MIDI event cursor, and automation origin remain distinct values moved by one common correction.
 - Verification: positive/negative/zero delta; unequal audio lengths; MIDI-only/audio-only/empty takes; automation correction sign; local-offset accounting; reconnect/`NoSync` no-call; queued behavior unchanged.
 - Human decision: pending Phase 3 gate.
+
+## F-036 — Centralize remote-tempo proposal identity
+
+- Stage / reviewer: S13-07.
+- Scope reviewed / exclusions: prompt proposal identity only; prompt wording and tempo validity remain F-013/F-032.
+- Severity: follow-up.
+- Evidence: Scene manually compares interval, source rate, grid step, BPI, and BPM tolerance at `JammaLib/src/engine/Scene.cpp:336`–`:360`; the coordinator repeats the same identity comparison at `JammaLib/src/ninjam/NinjamTimingCoordinator.cpp:274`–`:281`.
+- Why it matters: field additions or renames require synchronized edits and can make prompts close on phase-only refresh or retain stale geometry.
+- Recommended disposition: put one value-level identity comparison in the existing NINJAM value/owner and let Scene ask whether the proposal changed. Exclude observation phase/sample from identity; add no class. Estimated deletion: 6–12 lines.
+- Protected timing concepts affected: remote geometry identity remains distinct from remote phase/observation and prompt lifecycle.
+- Verification: same geometry with new phase/sample keeps the prompt; changes to interval/rate/grid/BPI/BPM replace it; disconnect/reconnect clears it; one comparison remains.
+- Human decision: pending Phase 3 gate.

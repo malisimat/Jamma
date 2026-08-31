@@ -39,6 +39,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-033 | Borrow-scope/callback-destruction audit | Controlled Stop attempt between acquire and consume using preallocated buffers | Repeated live start/stop/reconnect under ASan/page heap/Application Verifier | Prerequisite lifetime stress; Phase 4 + Stages 14/20 |
 | F-034 | No callback formatter/I/O/hierarchy traversal; zero disabled work; bounded fixed record | Capacity/overflow, epoch + desired/applied correlation, dead-receipt removal, logging on/off phase equivalence | Normal/verbose join/record/overdub/Stay-local/disconnect/reconnect trace; profiler | Coordinate F-019; Stages 13/17/20 before batch |
 | F-035 | Private-helper call-site audit; queued path diff unchanged | Signed/zero shift across unequal audio, MIDI-only/audio-only/empty; automation sign and local-offset accounting | Reconnect/`NoSync` confirms direct helper is not invoked | Stage 13/20; after F-005 boundary shape |
+| F-036 | One proposal identity implementation; retired comparison audit | Same geometry/new observation stable; each geometry/policy field change detected | Prompt persists/replaces correctly and clears on reconnect | Stage 13/20; coordinate F-013 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
