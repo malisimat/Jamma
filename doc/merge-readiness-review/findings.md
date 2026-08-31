@@ -554,3 +554,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: local transport offset and per-entity phase only.
 - Verification: master file loads with zero default; current writer/current reader round trips endpoints/fractions; older-read/resave loss is documented or guarded and manually verified.
 - Human decision: pending Phase 3 gate.
+
+## F-046 — Make full authoritative BPI the remote-geometry compatibility boundary
+
+- Stage / reviewer: S16-04.
+- Scope reviewed / exclusions: well-formed older/partial producer shapes; hostile numeric values are F-032/Stage 18.
+- Severity: follow-up.
+- Evidence: both current producers populate BPI and validate it at `NinjamConnection.cpp:709`–`:733`, `:922`–`:946`; validity requires `Bpi >= 1` at `NinjamTiming.h:45`–`:57`, so coordinator's BPI-zero deduction fallback at `NinjamTimingCoordinator.cpp:291`–`:304` is unreachable from any valid producer.
+- Why it matters: the code advertises two contradictory contracts—authoritative required BPI and locally synthesized missing BPI—while supporting neither partial producer explicitly.
+- Recommended disposition: declare BPI-less remote observations unsupported and remove the unreachable fallback/comment. Full server BPI remains mandatory in complete desired geometry; local seed deduction remains local. If partial compatibility is required, it needs an explicit versioned producer contract instead.
+- Protected timing concepts affected: remote BPI/grid authority and local seed deduction remain distinct.
+- Verification: complete plausible BPI accepted; absent BPI changes no authority; retired fallback audit; supplied server BPI is never overwritten.
+- Human decision: pending Phase 3 gate.
