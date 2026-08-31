@@ -18,6 +18,18 @@ Turn independent findings into a safe, minimal cleanup sequence and a merge deci
 4. A separate subagent reviews each completed batch against its approved findings, protected concepts, and final diff, recording approval or rework in `batch-reviews/B###.md` without editing implementation. New unrelated concerns become new findings; they are not silently folded into the batch.
 5. Build and run only the applicable native target/tests after each engine change. At the end, run the agreed full relevant suite and manual remote-join regression scenarios. A failed check reopens the batch and its dependent batches.
 
+## Single final execution pass after batch approval
+
+The proposed-batch human gate is the last planned pause before final merge evidence. When the human approves the complete `cleanup-backlog.md` batch set:
+
+1. capture the literal approval-gate commit hash in the backlog and Phase 4 packet before any source movement;
+2. execute all approved batches sequentially in dependency order, landing each batch's one or two closest prerequisite tests before its production refactor, then focused verification and an independent `batch-reviews/B###.md` review;
+3. update findings, backlog status, verification rows, and documentation with each owning batch rather than deferring artifact reconciliation;
+4. after every batch is approved, complete the deferred Stage 21 execution section, final incremental builds/full native suite/manual scenarios, and both complete-range and cleanup-only diff audits;
+5. synthesize `merge-brief.md` from the final diff and every artifact, then stop at the final human merge decision.
+
+No routine human pause is required between approved batches. Return to a human gate only if scope must expand, a required check cannot be made to pass within the approved boundary, or an independent review requires a materially different invariant or batch shape. This makes cleanup, testing, backlog closure, final verification, and merge evidence one remaining phase without weakening any batch rollback/review requirement.
+
 ## Lead synthesis
 
 After all human-reviewed phases and cleanup batches are complete, the lead synthesizer—not an investigator working from chat summaries—reads every shared artefact, the current diff, and relevant source, then produces `merge-brief.md`. It must:

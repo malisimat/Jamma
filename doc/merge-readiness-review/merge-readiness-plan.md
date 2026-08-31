@@ -90,3 +90,7 @@ At every agent dispatch, include: stage number and title, primary ownership, exp
 - The final human review approves the synthesized merge brief and the remaining risk statement.
 - Every stage has a report, every report is represented in its phase packet, and all declared exclusions are either covered by another stage or explicitly accepted.
 - Canonical artefacts have no unresolved duplicate IDs, contradictory dispositions, or cleanup work lacking an owner and dependency order.
+
+## Remaining execution after the Phase 4 batch gate
+
+Once the human approves the complete proposed batch set in `cleanup-backlog.md`, one final execution pass completes the review: capture the gate commit; execute dependency-ordered prerequisite/implementation/verification/review commits for every batch; close all backlog and matrix rows; finish Stage 21's deferred results; run final builds, native tests, manual timing scenarios, and diff hygiene; write `merge-brief.md`; and stop at the final human merge decision. Do not introduce another routine planning gate between approved batches, but return to the human if scope changes or an approved batch cannot pass within its boundary.

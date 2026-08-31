@@ -73,22 +73,25 @@ Cross-phase obligations not represented as Phase 1 deletions:
 
 Per the human decision, each major Phase 4 refactor must select one or two of the focused tests above as passing prerequisites before source movement begins. The first required pair is F-024/F-025's command-order and two-session reconnect regressions.
 
-## Phase 3 lean prerequisite suite
+## Lean prerequisite suite (Phase 3 base, Phase 4 concrete refinements)
 
-| ID | Contract | Required before |
-| --- | --- | --- |
-| P1 | Complete desired-state former `Invalidate -> Replace -> Discipline` intent sequence at the production audio boundary | F-009/F-024 owner/state refactor |
-| P2 | Overlapping job/UI intents publish only one coherent complete desired value and one applied version | F-009 producer move |
-| P3 | Two real unequal-length audio/MIDI takes with intentional offsets, session 1 generation >1, `NoSync`, then epoch-2 generation 1 | F-005/F-006/F-025 structural work |
-| P4 | Delayed restore-before-rebase preserves anchors and entity-relative phase | F-006 common-map consolidation |
-| P5 | Deterministic concurrent observation/local-transport publication proves nonzero overlap and no mixed tuple | F-021/F-023 publication work |
-| P6 | Present-zero/absent/nonzero anchors, `UINT32_MAX` Timer crossing, and 96→48 final-source-sample conversion | F-026/F-029/F-030/F-031 |
-| P7 | Connected → retrying/failed → connected produces one `NoSync` and a fresh epoch, including persisted/default start | F-027 lifecycle work |
-| P8 | No-observation deadlines and valid → invalid → repeated invalid → valid are idempotent and recoverable | F-028 recovery work |
-| P9 | Controlled stop after connection-use acquisition but before synchronous stereo consumption | F-033 lifetime fix |
-| P10 | Diagnostics disabled produces zero captured work; enabled mode has fixed capacity/overflow and epoch/version correlation | F-019/F-034/F-047 diagnostics cleanup |
+| ID | Contract | Planned GoogleTest name | Required before |
+| --- | --- | --- | --- |
+| P1 | Complete desired-state former `Invalidate -> Replace -> Discipline` intent sequence at the production audio boundary | `NinjamTimingProductionBoundary.CompleteDesiredStateSupersedesFormerCommandSequences` | F-024/F-025 desired-state refactor |
+| P2 | Overlapping job/UI intents publish only one coherent complete desired value and one applied version | `NinjamTimingProductionBoundary.OverlappingIntentsPublishOneCoherentDesiredVersion` | F-009 producer move |
+| P3 | Real `M`/`2M`/`3M` audio/MIDI takes with intentional offsets, session 1 generation >1, `NoSync`, then epoch-2 generation 1 | `NinjamTimingProductionBoundary.ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne` | F-005/F-006/F-025 structural work |
+| P4 | Delayed restore-before-rebase preserves anchors and entity-relative phase | `NinjamTimingProductionBoundary.RestoreBeforeRebasePreservesEntityAnchors` | F-006 common-map consolidation |
+| P5 | Deterministic concurrent observation/local-transport publication proves nonzero overlap and no mixed tuple | `NinjamTimingObservationMailbox.ConcurrentReadProvesOverlapAndCoherence` | F-021/F-023 publication work |
+| P6 | Present-zero/absent/nonzero anchors, `UINT32_MAX` Timer crossing, and 96→48 final-source-sample conversion | `NinjamTiming.PresenceWidthAndDownsampleTailRemainDistinct` | F-026/F-029/F-030/F-031 |
+| P7 | Connected → retrying/failed → connected produces one `NoSync` and a fresh epoch, including persisted/default start | `NinjamSessionTiming.PhysicalLossRetryCreatesOneNoSyncAndFreshEpoch` | F-027 lifecycle work |
+| P8 | No-observation deadlines and valid → invalid → repeated invalid → valid are idempotent and recoverable | `NinjamTimingCoordinator.NoObservationAndInvalidTimingRecoverIdempotently` | F-028 recovery work |
+| P9 | Controlled stop after connection-use acquisition but before synchronous stereo consumption | `NinjamSessionAudio.StopCannotInvalidateBorrowDuringSynchronousConsume` | F-033 lifetime fix |
+| P10 | Diagnostics disabled produces zero captured work; enabled mode has fixed capacity/overflow and epoch/version correlation | `NinjamTimingDiagnostics.DisabledIsZeroWorkAndEnabledIsBounded` | F-019/F-034/F-047 diagnostics cleanup |
+| P11 | Signed offsets apply the same correction to `M`/`2M`/`3M` audio/MIDI entities; missing state defaults to zero | `JamFile.SignedTransportOffsetPreservesM2M3MEntityPhases` | F-044 compatibility fix |
+| P12 | NaN/infinite/out-of-range remote tempo is rejected before conversion and network egress | `NinjamTimingInput.RejectsNonFiniteTempoWithoutEgress` | F-032 remote-input hardening |
+| P13 | Local seed policy covers default/zero/exact-fit/first-overflow/`UINT32_MAX`/min>max before Windows conversion | `Quantisation.SeedPolicyBoundsConversionBeforeCast` | F-048 local seed hardening |
 
-For every major Phase 4 refactor, choose and pass only the one or two closest prerequisites before moving source. Do not land P1–P10 as an umbrella test batch.
+For every major Phase 4 refactor, choose and pass only the one or two closest prerequisites before moving source. P11–P13 are Phase 4 refinements of already accepted F-044/F-032/F-048 verification obligations. Do not land P1–P13 as an umbrella test batch.
 
 ## Phase 3 manual acceptance additions
 

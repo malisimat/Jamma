@@ -164,7 +164,17 @@ Intentional non-real-time synchronization retained for the human gate: Scene `_s
 
 ## Task board
 
-Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Phase 3 stages are integrated and stopped at the human gate in [`phase-packets/phase-3.md`](phase-packets/phase-3.md). Cleanup implementation remains prohibited until Phase 4 reconciliation, batching, and approval.
+Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Phase 3 status: **human gate accepted** in [`phase-packets/phase-3.md`](phase-packets/phase-3.md). Phase 4 Stages 19–21 are integrated in planning/design mode and stopped at the proposed cleanup-batch human gate in [`phase-packets/phase-4.md`](phase-packets/phase-4.md). Cleanup implementation remains prohibited until that gate is approved.
+
+### Phase 4 kickoff baseline
+
+- Branch: `bugfix/align-remote-join`.
+- Phase 4 kickoff `HEAD`: `8cd8725bd4447d4125f671b9524f95e277396939`.
+- Production tip under review remains `e72f3b0f489cfa12ea697e966d3c0f619e31d1f6`; later commits contain review evidence and human decisions only.
+- Merge base and `master` tip: `4941b780f7ff5a46f742167d79338e3ab592a565`.
+- Worktree at kickoff: clean.
+- Cleanup scope remains remote timing/sync structural and behavioral work only. G3-5 explicitly strengthens the protected per-entity recovery invariant for `M`, `2M`, and `3M` loops with different relative play positions.
+- Stage 21 execution, cleanup verification, batch reviews, and `merge-brief.md` are deferred until the proposed batches are approved.
 
 ### Phase 3 kickoff baseline
 
@@ -205,6 +215,6 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 | 16 Compatibility and persistence | integrated |
 | 17 Observability and diagnosability | integrated |
 | 18 Security and input robustness | integrated |
-| 19 Cross-review reconciliation | pending |
-| 20 Change impact and regression surface | pending |
-| 21 Build, test, and merge hygiene | pending |
+| 19 Cross-review reconciliation | integrated |
+| 20 Change impact and regression surface | integrated |
+| 21 Build, test, and merge hygiene | design integrated; execution deferred |
