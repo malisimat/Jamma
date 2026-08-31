@@ -518,3 +518,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: observation ownership, source/scene anchor, MIDI cursor, automation origin, follow policy, and `NoSync` remain distinct.
 - Verification: statement/source audit plus callback/job ownership trace and manual `Stay local`/reconnect trace.
 - Human decision: pending Phase 3 gate.
+
+## F-043 — Reconcile the MIDI quantisation investigation with the implemented remote-grid path
+
+- Stage / reviewer: S15-03.
+- Scope reviewed / exclusions: document status/truth; no claim that all residual visual/manual acceptance cases pass.
+- Severity: must fix before merge.
+- Evidence: `doc/ninjam-midi-quantisation-investigation.md:90`–`:141`, `:197`–`:201` labels remote geometry/origin, direct-boundary evaluation, and authoritative BPI as absent, but commit `e72f3b0` implements them through `Scene.cpp:443`–`:449`, `Quantiser.cpp:234`–`:247`, `MidiQuantisation.cpp:214`–`:272`, and `NinjamTimingCoordinator.cpp:291`–`:313`. Lines `:274`–`:279`, `:324`–`:336` also preserve rejected latest-command/generation semantics.
+- Why it matters: a live TDD plan now directs maintainers to reimplement completed work and retain contracts explicitly rejected at the human gate.
+- Recommended disposition: convert it to a dated implementation record with `implemented by e72f3b0 / residual verification` status, or rewrite verified-state/remaining-work from current code. Replace latest-command wording with complete desired state/epoch and retain unverified acceptance cases as such.
+- Protected timing concepts affected: active remote grid, local grain, authoritative BPI, phase/origin, desired-state lifecycle, and epoch remain distinct.
+- Verification: statement-by-statement source/test audit; link executable residual contracts and do not mark overlay/manual cases green without evidence.
+- Human decision: pending Phase 3 gate.
