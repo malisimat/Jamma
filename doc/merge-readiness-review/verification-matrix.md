@@ -23,7 +23,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-017 | JammaLib/tests compile | Export-lane pure-helper tests | Only if compensation path is retained/enabled | Stages 8/13/15/20 |
 | F-018 | Incremental JammaLib/test build | Sync-map, offsets, reconnect, `NoSync` tests | Focused remote join/local loop | Stages 9/20 |
 | F-019 | Incremental JammaLib/test build | Existing timing/logging-adjacent tests | Normal and verbose logging; remote join | Stages 8/17/20 |
-| F-020 | App build and copied-resource audit | Relevant HUD/graphics tests | Trigger default/hover/down/out rendering | Dependent on F-001; Stages 12/16/20/21 |
+| F-020 | Cleanup-only diff proves no HUD/resource edit under G3-1 | No cleanup test required | Retained HUD behavior remains a final branch regression sentinel only | Accepted no-change/out-of-scope residual; final diff audit |
 | F-021 | Audit `_OnAudio`: NJClient `AudioProc` only; no retired live-timing adapters; no callback lock/allocation | Deterministic overlapping sentinel generations; exact pre-advance observation; delayed projection | Join/reconnect/disconnect/export while network pump runs; race tooling | Stage 13/14 prerequisite before F-009/F-015; Phase 4/20 |
 | F-022 | Callback audit excludes `_ClearTimingState`, raw `_stations`, locks and destruction | Empty connected preserves accepted timing; final local take removed while disconnected clears once; race against grid/connect transitions | Remove final take and reconnect while audio runs; RT profiler | Prerequisite empty-transition contracts; Phase 4 + Stages 14/20 |
 | F-023 | Versioned local-transport value audit | Alternating length/count/phase sentinels never form mixed tuple | Tempo replacement while job processing is delayed | Prerequisite coherent-snapshot test; coordinate with F-029 |
@@ -48,12 +48,12 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-042 | Statement/source and ownership audit after contract fixes | Relevant F-021/F-024/F-025/F-027/F-028 tests linked, not duplicated | `Stay local`, join and reconnect guide trace | Stage 15/20; docs update with implementation batch |
 | F-043 | Statement-by-statement implemented/residual audit against `e72f3b0+` | Link remote-grid/BPI/direct-boundary tests; preserve unverified status | Overlay/manual remote-grid cases only when executed | Stage 15/20; docs-only correction after contracts settle |
 | F-044 | Migration-policy/schema audit | Signed values/endpoints across `M`, `2M`, non-divisor audio/MIDI lengths; compare deltas and round trip | Load affected session; join/`NoSync` does not reinterpret offset | Human compatibility gate; Stages 16/20 |
-| F-045 | Schema/version/unknown-field audit | Master→current zero default; current round-trip endpoints/fractions | Older open/resave loss documented or guard warning demonstrated | Human compatibility gate; Stages 16/20 |
+| F-045 | Confirm no schema/version guard is added | Missing field defaults to zero; current round-trip endpoints/fractions | Older-binary resave loss is an accepted residual | Decision-resolved/no implementation; document with F-044 |
 | F-046 | Producer/consumer contract and retired-fallback audit | Full plausible BPI accepted; BPI absent makes no authority change; supplied BPI retained | Remote prompt/grid trace uses authoritative BPI | Human compatibility gate; Stages 15/16/20 |
 | F-047 | Existing-value-field and no-parallel-logger audit | Every rejection reason/counter; epoch + desired/applied version; bounded lag/suppression | Readable geometry/discipline/NoSync/loss/retry trace without hierarchy dumps | Stages 17/20; implement with F-024–F-028/F-032 |
 | F-048 | Checked/saturating conversion and config-bound audit | Defaults/zero/`UINT32_MAX`/exact-fit/first-overflow/min>max/max-rate table | Extreme config fails deterministically and sends no malformed tempo | Stages 18/20; local geometry prerequisite |
-| F-049 | Export serialization secret/redaction audit | Sentinel config export proves password absent and approved fields retained | Exported session cannot authenticate silently; anonymous flow works | Human credential-policy gate; Stages 18/20 |
-| F-050 | Portable-path authority/canonical-root audit | Absolute/traversal/UNC/device/overlong/unwritable/reparse cases plus empty default | No outside-root mutation; no NJClient start on failure; temp fallback connects | Human workdir-policy gate; Stages 18/20 |
+| F-049 | Cleanup-only diff proves no password-serialization change | No cleanup test required | Cleartext portable export remains an accepted residual risk | Rejected/no implementation; final risk statement |
+| F-050 | Cleanup-only diff proves no work-directory policy change | No cleanup test required | Portable work-directory authority remains an accepted residual risk | Rejected/no implementation; final risk statement |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
@@ -95,5 +95,5 @@ For every major Phase 4 refactor, choose and pass only the one or two closest pr
 1. Launch from the shipped/default and a saved `.jam` NINJAM identity; timing lifecycle/epoch begins without manual reconnect and matches interactive connect choices.
 2. Decide and verify signed-offset compatibility for `M`, `2M`, and non-divisor audio/MIDI loops; document or guard older-binary offset loss.
 3. Run normal and verbose join, record, overdub, `Stay local`, disconnect, physical loss, retry, and reconnect traces; logging on/off produces identical phases and bounded output.
-4. Export a session with sentinel credentials/path; no password is exported and no portable file can mutate outside the approved work-directory root.
+4. Do not change `.jam` password or work-directory writing under this cleanup. Record their current behavior as accepted residual risk and verify the cleanup-only diff contains no F-049/F-050 implementation.
 5. Retain Phase 2's remote-join/local-loop scenarios and add malformed observed/requested timing plus extreme local seed-policy rejection without authority/network change.

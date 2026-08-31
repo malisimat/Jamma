@@ -248,7 +248,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: if F-001 retains HUD, remove the ten variants; if HUD is moved, resolve them with that lineage and do not create a duplicate cleanup.
 - Protected timing concepts affected: none.
 - Verification: app build/output audit and manual trigger default/hover/down/out rendering.
-- Human decision: accepted, conditional on retained HUD scope ([decision](decisions.md#findings)).
+- Human decision: accepted in Phase 1, then excluded from Phase 4 cleanup by the later timing-only G3-1 scope decision; retain as an explicit no-change residual ([decision](decisions.md#gate-3-decisions)).
 
 ## F-021 â€” Remove non-`AudioProc` NJClient access from the audio callback
 
@@ -433,7 +433,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: add one small private, allocation-free `LoopTake` primitive for the two equivalent direct paths. Preserve generation/accounting, applied-target gates, and the queued path in their callers. Estimated net deletion: 20â€“30 lines.
 - Protected timing concepts affected: per-loop audio phase, MIDI event cursor, and automation origin remain distinct values moved by one common correction.
 - Verification: positive/negative/zero delta; unequal audio lengths; MIDI-only/audio-only/empty takes; automation correction sign; local-offset accounting; reconnect/`NoSync` no-call; queued behavior unchanged.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; keep the simplification surgical and leave the queued path unchanged ([decision](decisions.md#small-simplifications)).
 
 ## F-036 â€” Centralize remote-tempo proposal identity
 
@@ -445,7 +445,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: put one value-level identity comparison in the existing NINJAM value/owner and let Scene ask whether the proposal changed. Exclude observation phase/sample from identity; add no class. Estimated deletion: 6â€“12 lines.
 - Protected timing concepts affected: remote geometry identity remains distinct from remote phase/observation and prompt lifecycle.
 - Verification: same geometry with new phase/sample keeps the prompt; changes to interval/rate/grid/BPI/BPM replace it; disconnect/reconnect clears it; one comparison remains.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; implement in the existing owner without adding a class ([decision](decisions.md#small-simplifications)).
 
 ## F-037 â€” Delete the uncompiled obsolete remote-phase test suite
 
@@ -457,7 +457,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: delete the file; do not re-register it or recreate the removed Quantiser APIs. Retain current `NinjamTiming`, coordinator, Timer, and real `LoopTake` coverage.
 - Protected timing concepts affected: none.
 - Verification: project-membership and retired-symbol audit; incremental native build; current circular-delta/coordinator/Timer/LoopTake tests remain registered and passing.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted ([decision](decisions.md#small-simplifications)).
 
 ## F-038 â€” Replace the pseudo-integration harness with a production-faithful timing boundary
 
@@ -469,7 +469,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: test a narrow production-owned seam in an existing owner using Timer, AudioHost map, Station, and real LoopTake objects. Move complete-state and two-session reconnect contracts there; retain only distinct coordinator/telemetry simulations and remove duplicated model-phase tests after replacements pass.
 - Protected timing concepts affected: epoch, policy, Timer geometry, common map, entity anchors/lengths, audio phase, MIDI cursor, automation origin, and `NoSync` remain independently asserted.
 - Verification: P1â€“P4 from Stage 14: complete desired-state sequences, two real unequal-length audio/MIDI takes with intentional offsets, session-2 generation 1, stale/equal rejection, restore-before-rebase.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted as prerequisite evidence for the protected production refactors ([decision](decisions.md#small-simplifications)).
 
 ## F-039 â€” Rewrite tests that preserve rejected command and zero-anchor semantics
 
@@ -481,7 +481,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: rewrite around complete desired state plus session epoch and a presence-bearing observation value. Keep latest-value/projection contracts but replace their semantics; do not add compatibility shims for rejected behavior.
 - Protected timing concepts affected: epoch, policy, geometry, timestamped remote phase, device observation, and Timer-absolute observation remain separate fields.
 - Verification: P1/P2/P6: both former command orderings, final applied epoch/geometry/phase, valid zero/explicit absent/nonzero anchors, translated pairs, delayed first-block behavior.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; rejected command and zero-sentinel expectations must not be retained ([decision](decisions.md#small-simplifications)).
 
 ## F-040 â€” Make the timing-mailbox concurrency test prove overlap
 
@@ -493,7 +493,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: add deterministic start/overlap coordination, keep the writer active until reads occur, require a nonzero completed-observation count, and use incompatible related sentinels across every field with generation-rich failures.
 - Protected timing concepts affected: remote observation and local Timer transport remain separate complete values.
 - Verification: run the corrected P5 repeatedly and under race tooling where practical; assert overlap/read counts and no mixed generation.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; the concurrency test must deterministically prove nonzero overlap ([decision](decisions.md#small-simplifications)).
 
 ## F-041 â€” Add controllable session-loss and buffer-borrow test seams
 
@@ -505,7 +505,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: add minimal injectable/fake state and clock hooks to an existing session/integration owner plus test-only synchronization around scoped synchronous consumption. Do not expose raw connection/buffer APIs or add callback allocation.
 - Protected timing concepts affected: physical availability, epoch, timing validity, follow authority, local free-run, and buffer lifetime remain separate.
 - Verification: P7â€“P9: exactly-once loss invalidation/fresh epoch, no-observation deadline, repeated-invalid idempotence, controlled stop-during-consume; follow with sanitizer/page-heap/Application Verifier and manual reconnect.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; seams remain minimal and owned by existing session/integration classes ([decision](decisions.md#small-simplifications)).
 
 ## F-042 â€” Correct the NINJAM integration guide's timing ownership and Stay-local contract
 
@@ -517,7 +517,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: after each accepted contract is implemented, document the final owner; until then mark current defect versus approved target. Describe retained session anchors, audio-thread cursor/automation correction, explicit desired `NoSync`, and interval duration `60 * BPI / BPM` seconds.
 - Protected timing concepts affected: observation ownership, source/scene anchor, MIDI cursor, automation origin, follow policy, and `NoSync` remain distinct.
 - Verification: statement/source audit plus callback/job ownership trace and manual `Stay local`/reconnect trace.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted under G3-4; update statements with the implementation that makes them true ([decision](decisions.md#small-simplifications)).
 
 ## F-043 â€” Reconcile the MIDI quantisation investigation with the implemented remote-grid path
 
@@ -529,7 +529,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: convert it to a dated implementation record with `implemented by e72f3b0 / residual verification` status, or rewrite verified-state/remaining-work from current code. Replace latest-command wording with complete desired state/epoch and retain unverified acceptance cases as such.
 - Protected timing concepts affected: active remote grid, local grain, authoritative BPI, phase/origin, desired-state lifecycle, and epoch remain distinct.
 - Verification: statement-by-statement source/test audit; link executable residual contracts and do not mark overlay/manual cases green without evidence.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted under G3-4; retain residual/manual cases as explicitly unverified until executed ([decision](decisions.md#small-simplifications)).
 
 ## F-044 â€” Decide signed transport-offset migration for unequal loop lengths
 
@@ -541,7 +541,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: decide whether intermediate signed files are supported. If yes, retain signed/turn information long enough to apply the same source correction to each entity; if no, record the unequal-length phase change as an intentional break and remove the misleading compatibility claim. Never assign every loop one master cursor.
 - Protected timing concepts affected: local offset, master phase, per-loop phase, common correction, unequal lengths, and intentional offsets remain distinct.
 - Verification: load signed `-0.25`, `-1`, positive, zero, and endpoints with audio/MIDI lengths `M`, `2M`, and non-divisors; compare cursor deltas, round trip current writer, and keep join/`NoSync` independent.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted with mandatory behavior-preserving recovery for distinct `M`, `2M`, and `3M` loop positions; never reduce entity phase modulo the master length ([decision](decisions.md#gate-3-decisions)).
 
 ## F-045 â€” Decide unversioned downgrade loss of local timing state
 
@@ -553,7 +553,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: explicitly accept/document pre-branch downgrade loss, or require a focused schema marker/warning/unknown-field preservation guard. Do not persist remote epoch, map, anchors, policy, geometry, or phase.
 - Protected timing concepts affected: local transport offset and per-entity phase only.
 - Verification: master file loads with zero default; current writer/current reader round trips endpoints/fractions; older-read/resave loss is documented or guarded and manually verified.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted no-change compatibility policy; missing state defaults to zero and silent older-binary downgrade loss is an accepted residual ([decision](decisions.md#gate-3-decisions)).
 
 ## F-046 â€” Make full authoritative BPI the remote-geometry compatibility boundary
 
@@ -565,7 +565,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: declare BPI-less remote observations unsupported and remove the unreachable fallback/comment. Full server BPI remains mandatory in complete desired geometry; local seed deduction remains local. If partial compatibility is required, it needs an explicit versioned producer contract instead.
 - Protected timing concepts affected: remote BPI/grid authority and local seed deduction remain distinct.
 - Verification: complete plausible BPI accepted; absent BPI changes no authority; retired fallback audit; supplied server BPI is never overwritten.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; full BPI is mandatory for remote authority, while disconnected local BPI is inferred by pure local master-length/grain calculations ([decision](decisions.md#finding-details)).
 
 ## F-047 â€” Correlate timing rejection, desired authority, and audio application
 
@@ -577,7 +577,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: extend existing coordinator/desired-state/applied-receipt values with fixed reason counters, a bounded latest-anomaly record, shared session epoch, and desired/applied version. Log transitions/first anomalies and bounded suppression summaries; never assume every intermediate publication is applied.
 - Protected timing concepts affected: epoch, authority lifecycle, policy, geometry, phase, device/Timer/scene coordinates, and per-entity phase remain separate diagnostic fields.
 - Verification: table tests for each rejection reason/counter; two-session epoch correlation; geometry/discipline/`NoSync` desired-applied traces; one bounded lag warning that clears on application; manual loss/retry trace.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted, provided correlation/diagnostics remain bounded and surgically reuse existing owners ([decision](decisions.md#small-simplifications)).
 
 ## F-048 â€” Bound seed-timing policy before Windows integer conversion
 
@@ -589,7 +589,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: validate/clamp policy in the existing config/Quantiser boundary and use one checked/saturating conversion for minimum and target maximum. Reject impossible relationships deterministically; add no class.
 - Protected timing concepts affected: local seed/grain policy, local master geometry, requested BPM/BPI, and remote authority remain distinct.
 - Verification: defaults, zero, `UINT32_MAX`, exact-fit/first-overflow, min>max, max sample rate; deterministic reject/clamp, finite BPM, consistent nonzero geometry, no malformed request.
-- Human decision: pending Phase 3 gate.
+- Human decision: accepted; keep validation surgical and avoid code bloat ([decision](decisions.md#small-simplifications)).
 
 ## F-049 â€” Redact NINJAM passwords from portable session exports
 
@@ -601,7 +601,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: exclude `Pass` from exported `session.jam`; if authenticated reconnect is needed, obtain credentials from an explicitly local trusted setting/prompt. Any decision to retain a password in private app-owned config is separate. Never persist live timing authority as a workaround.
 - Protected timing concepts affected: none; credentials are not timing authority.
 - Verification: export sentinel host/user/password/workdir; password sentinel absent while approved non-secret fields round trip; export cannot authenticate silently; anonymous empty-password flow remains usable per decision.
-- Human decision: pending Phase 3 gate.
+- Human decision: rejected; leave `.jam` password writing unchanged and carry the disclosure behavior as an accepted residual risk ([decision](decisions.md#small-simplifications)).
 
 ## F-050 â€” Remove portable `.jam` authority over NJClient work directories
 
@@ -613,4 +613,4 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: treat portable `WorkDir` as non-authoritative and use the existing app-controlled temp fallback. Any expert custom directory must come from explicit local trusted configuration/picker, be canonicalized and restricted by documented policy, and fail connection visibly if preparation fails. Keep ownership in existing session integration; do not edit NJClient.
 - Protected timing concepts affected: none; a work directory is not authority, epoch, policy, clock, or coordinate.
 - Verification: absolute, traversal, UNC/device-like, overlong/invalid, unwritable and reparse/symlink cases plus empty default; no mutation outside approved root; NJClient not started on failure; normal temp path connects.
-- Human decision: pending Phase 3 gate.
+- Human decision: rejected; leave `.jam` work-directory writing unchanged and carry the filesystem-authority behavior as an accepted residual risk ([decision](decisions.md#small-simplifications)).
