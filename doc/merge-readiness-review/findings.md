@@ -482,3 +482,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: epoch, policy, geometry, timestamped remote phase, device observation, and Timer-absolute observation remain separate fields.
 - Verification: P1/P2/P6: both former command orderings, final applied epoch/geometry/phase, valid zero/explicit absent/nonzero anchors, translated pairs, delayed first-block behavior.
 - Human decision: pending Phase 3 gate.
+
+## F-040 — Make the timing-mailbox concurrency test prove overlap
+
+- Stage / reviewer: S14-04.
+- Scope reviewed / exclusions: deterministic test construction; mailbox memory model remains F-021/F-023.
+- Severity: must fix before merge.
+- Evidence: `NinjamTimingObservationMailbox_Tests.cpp:69`–`:119` reads only while `writerFinished` is false; if the writer finishes first, the loop executes zero times and every coherence assertion is skipped. There is no start barrier, read counter, or required final sentinel.
+- Why it matters: the sole claimed concurrent complete-value proof can pass vacuously and is not a reliable publication prerequisite.
+- Recommended disposition: add deterministic start/overlap coordination, keep the writer active until reads occur, require a nonzero completed-observation count, and use incompatible related sentinels across every field with generation-rich failures.
+- Protected timing concepts affected: remote observation and local Timer transport remain separate complete values.
+- Verification: run the corrected P5 repeatedly and under race tooling where practical; assert overlap/read counts and no mixed generation.
+- Human decision: pending Phase 3 gate.
