@@ -164,7 +164,7 @@ Intentional non-real-time synchronization retained for the human gate: Scene `_s
 
 ## Task board
 
-Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Stages 1–12 are integrated. Phase 3 is authorized for investigation only; cleanup implementation remains prohibited until Phase 4 batching and approval.
+Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Phase 3 stages are integrated and stopped at the human gate in [`phase-packets/phase-3.md`](phase-packets/phase-3.md). Cleanup implementation remains prohibited until Phase 4 reconciliation, batching, and approval.
 
 ### Phase 3 kickoff baseline
 
@@ -199,12 +199,12 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 | 10 State-machine and failure paths | integrated |
 | 11 Numerical, boundary, and clock domains | integrated |
 | 12 Resource and lifetime review | integrated |
-| 13 Simplification and code size | reported |
-| 14 Unit-test quality | reported |
-| 15 Docs and comments | reported |
-| 16 Compatibility and persistence | reported |
-| 17 Observability and diagnosability | reported |
-| 18 Security and input robustness | reported |
+| 13 Simplification and code size | integrated |
+| 14 Unit-test quality | integrated |
+| 15 Docs and comments | integrated |
+| 16 Compatibility and persistence | integrated |
+| 17 Observability and diagnosability | integrated |
+| 18 Security and input robustness | integrated |
 | 19 Cross-review reconciliation | pending |
 | 20 Change impact and regression surface | pending |
 | 21 Build, test, and merge hygiene | pending |
