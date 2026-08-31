@@ -50,6 +50,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-044 | Migration-policy/schema audit | Signed values/endpoints across `M`, `2M`, non-divisor audio/MIDI lengths; compare deltas and round trip | Load affected session; join/`NoSync` does not reinterpret offset | Human compatibility gate; Stages 16/20 |
 | F-045 | Schema/version/unknown-field audit | Master→current zero default; current round-trip endpoints/fractions | Older open/resave loss documented or guard warning demonstrated | Human compatibility gate; Stages 16/20 |
 | F-046 | Producer/consumer contract and retired-fallback audit | Full plausible BPI accepted; BPI absent makes no authority change; supplied BPI retained | Remote prompt/grid trace uses authoritative BPI | Human compatibility gate; Stages 15/16/20 |
+| F-047 | Existing-value-field and no-parallel-logger audit | Every rejection reason/counter; epoch + desired/applied version; bounded lag/suppression | Readable geometry/discipline/NoSync/loss/retry trace without hierarchy dumps | Stages 17/20; implement with F-024–F-028/F-032 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 

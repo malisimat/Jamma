@@ -566,3 +566,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: remote BPI/grid authority and local seed deduction remain distinct.
 - Verification: complete plausible BPI accepted; absent BPI changes no authority; retired fallback audit; supplied server BPI is never overwritten.
 - Human decision: pending Phase 3 gate.
+
+## F-047 — Correlate timing rejection, desired authority, and audio application
+
+- Stage / reviewer: S17-02.
+- Scope reviewed / exclusions: diagnosability companion to F-024–F-028/F-032; no parallel timing owner.
+- Severity: must fix before merge.
+- Evidence: coordinator drops disconnected/invalid/zero timing without diagnostic state at `NinjamTimingCoordinator.cpp:76`–`:77`; tracker folds distinct rejections into one counter (`NinjamTimingTracker.cpp:28`–`:33`, `:56`–`:64`); safety rejection stores no attempted delta/limit (`NinjamTimingCoordinator.cpp:241`–`:256`). Existing diagnostics/applied receipt lack shared physical epoch and desired/applied version (`NinjamTimingCoordinator.h:117`–`:143`; `AudioHost.cpp:113`–`:133`).
+- Why it matters: support cannot locate a failure at validation, tracker, policy, publication, audio application, or invalidation, nor distinguish retries/sessions.
+- Recommended disposition: extend existing coordinator/desired-state/applied-receipt values with fixed reason counters, a bounded latest-anomaly record, shared session epoch, and desired/applied version. Log transitions/first anomalies and bounded suppression summaries; never assume every intermediate publication is applied.
+- Protected timing concepts affected: epoch, authority lifecycle, policy, geometry, phase, device/Timer/scene coordinates, and per-entity phase remain separate diagnostic fields.
+- Verification: table tests for each rejection reason/counter; two-session epoch correlation; geometry/discipline/`NoSync` desired-applied traces; one bounded lag warning that clears on application; manual loss/retry trace.
+- Human decision: pending Phase 3 gate.
