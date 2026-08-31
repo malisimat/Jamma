@@ -470,3 +470,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: epoch, policy, Timer geometry, common map, entity anchors/lengths, audio phase, MIDI cursor, automation origin, and `NoSync` remain independently asserted.
 - Verification: P1–P4 from Stage 14: complete desired-state sequences, two real unequal-length audio/MIDI takes with intentional offsets, session-2 generation 1, stale/equal rejection, restore-before-rebase.
 - Human decision: pending Phase 3 gate.
+
+## F-039 — Rewrite tests that preserve rejected command and zero-anchor semantics
+
+- Stage / reviewer: S14-03; description defects S15-05.
+- Scope reviewed / exclusions: expected test behavior; production implementation remains F-024/F-030.
+- Severity: must fix before merge.
+- Evidence: `NinjamAudioTimingCommand_Tests.cpp:55`–`:81` encodes benign independent-command coalescing/invalidation, while the human approved complete desired state. `NinjamTiming_Tests.cpp:150`–`:160`, `:188`–`:198` treats numeric zero as absent, contrary to accepted F-030.
+- Why it matters: unchanged tests would make approved fixes fail by design and leave the dangerous coalescing/first-block cases untested.
+- Recommended disposition: rewrite around complete desired state plus session epoch and a presence-bearing observation value. Keep latest-value/projection contracts but replace their semantics; do not add compatibility shims for rejected behavior.
+- Protected timing concepts affected: epoch, policy, geometry, timestamped remote phase, device observation, and Timer-absolute observation remain separate fields.
+- Verification: P1/P2/P6: both former command orderings, final applied epoch/geometry/phase, valid zero/explicit absent/nonzero anchors, translated pairs, delayed first-block behavior.
+- Human decision: pending Phase 3 gate.

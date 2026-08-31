@@ -42,6 +42,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-036 | One proposal identity implementation; retired comparison audit | Same geometry/new observation stable; each geometry/policy field change detected | Prompt persists/replaces correctly and clears on reconnect | Stage 13/20; coordinate F-013 |
 | F-037 | File/project/retired-symbol audit; incremental tests build | Current timing/coordinator/Timer/LoopTake suites remain registered and passing | None | Stage 14/20; direct 156-line deletion |
 | F-038 | Production-seam call audit; model omissions no longer claim end-to-end fidelity | P1–P4: complete state, real unequal audio/MIDI takes, two-session generation-1 reconnect, restore-before-rebase | Production-faithful join/reconnect trace | Stage 14/20; prerequisite before F-005/F-006/F-009/F-025 |
+| F-039 | Retired command/sentinel expectation audit | Complete-state supersession; valid zero vs explicit absent vs nonzero in both clock domains; delayed first block | First-block join/reconnect trace | Stage 14/20; coordinate F-024/F-030 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
