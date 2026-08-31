@@ -9,7 +9,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-003 | Affected app build if retained | Persistence tests | Multi-monitor window save/restore | Human scope gate; Stage 16 |
 | F-004 | Validate task commands and wrapper if retained | Applicable native target invocation | None | Human scope gate; Stage 21 |
 | F-005 | Include/dependency audit; no `engine -> ninjam` policy edge; JammaLib build | Neutral correction for Continuous/Block; explicit epoch reset; `NoSync` moves no cursor | Reconnect and `NoSync` invalidation with unequal audio/MIDI lengths/offsets | Stages 13/20; depends on complete state and F-025 regression |
-| F-006 | JammaLib build; one common-map owner audit | Unequal lengths, offsets, rebase/wrap | Join, reconnect, free-run after `NoSync` | Stages 7/8/9/11/20 |
+| F-006 | JammaLib build; one AudioHost map owner; one common calculation per block independent of take count | Unequal audio/MIDI lengths and offsets; rebase without anchor recapture; wrap | Join, reconnect, free-run after `NoSync`; maximum-hierarchy callback benchmark | Stages 13/20; after F-025 epoch regression |
 | F-007 | Include-graph and JammaLib build | Coordinator/local timing tests | None | Stages 13/20 |
 | F-008 | JammaLib build; include audit | Latest/zero mailbox and local-offset tests | Disconnected and `NoSync` offset control | Stages 7/8/9/20 |
 | F-009 | JammaLib build; producer/publication call-site audit | Coordinator forwarding plus overlapping job/UI producer and coherent-reader contract tests | Join/leave command trace; confirm one integration owner | Stages 7/9/10/20; Phase 2 enrichment gate |

@@ -65,7 +65,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-006 — Consolidate the common sync-map owner without deleting live entity state prematurely
 
-- Stage / reviewer: S02-02; reconciled with S06 current-reachability evidence.
+- Stage / reviewer: S02-02; reconciled with S06 current-reachability evidence and refined by S08-03/S13-03.
 - Scope reviewed / exclusions: future structural ownership, not a dead-code finding or correctness proof.
 - Severity: follow-up.
 - Evidence: authoritative-looking map state is held by `AudioHost` at `JammaLib/src/audio/AudioHost.h:141`–`:144`, then copied through begin/rebase APIs at `JammaLib/src/audio/AudioHost.cpp:352`–`:364`; each `LoopTake` stores and recomputes parallel map geometry at `JammaLib/src/engine/LoopTake.h:406`–`:410` and `JammaLib/src/engine/LoopTake.cpp:602`–`:679`.
@@ -75,6 +75,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Verification: unequal loop lengths, intentional offsets, rebase/wrap, reconnect, and `NoSync` invalidation.
 - Phase 2 enrichment: S08-03 shows every followed block recomputes the same 64-bit common mapped source coordinate independently in each take (`AudioHost.cpp:456`–`:459`; `LoopTake.cpp:640`–`:679`). The approved consolidation should compute it once per block, then apply per-entity anchors/modulo without collapsing per-loop phase.
 - Phase 2 enrichment decision: accepted; compute the common mapped source coordinate once per block while preserving entity-specific anchors and modulo ([decision](decisions.md#findings)).
+- Phase 3 refinement: replace begin/rebase/restore geometry propagation with neutral entity operations that capture a missing anchor against, or restore from, the single AudioHost-computed source coordinate. Rebasing changes only the AudioHost ruler and must not recapture entity anchors. Estimated net production deletion: 45–75 lines plus five per-take map fields.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
 
 ## F-007 — Separate value-only local timing contracts from the Quantiser/UI aggregate
