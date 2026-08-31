@@ -422,3 +422,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: diagnostic mirrors only; operational timing authority remains unchanged.
 - Verification: static callback call-chain proving no formatter/I/O/hierarchy traversal; disabled instrumentation or disassembly proves zero work; bounded enabled capture tests capacity/overflow and epoch/version correlation; normal/verbose empty/populated join, record/overdub, `Stay local`, disconnect, reconnect, and logging-on/off phase equivalence.
 - Human decision: accepted ([decision](decisions.md#findings)).
+
+## F-035 — Consolidate direct LoopTake audio/MIDI cursor shifting
+
+- Stage / reviewer: S13-05.
+- Scope reviewed / exclusions: duplicated immediate cursor mutation in accepted timing correction and local transport offset; queued `EndMultiPlay` ordering and caller gates remain separate.
+- Severity: follow-up.
+- Evidence: unified boundary correction shifts playable audio loops and the MIDI/automation cursor at `JammaLib/src/engine/LoopTake.cpp:537`–`:563`; local transport offset repeats the same immediate mechanics at `:746`–`:773`. The queued path at `:466`–`:513` interleaves ordinary advancement and is not equivalent.
+- Why it matters: the invariant that audio body cursors and MIDI event/automation coordinates move by the same signed amount is duplicated and can drift.
+- Recommended disposition: add one small private, allocation-free `LoopTake` primitive for the two equivalent direct paths. Preserve generation/accounting, applied-target gates, and the queued path in their callers. Estimated net deletion: 20–30 lines.
+- Protected timing concepts affected: per-loop audio phase, MIDI event cursor, and automation origin remain distinct values moved by one common correction.
+- Verification: positive/negative/zero delta; unequal audio lengths; MIDI-only/audio-only/empty takes; automation correction sign; local-offset accounting; reconnect/`NoSync` no-call; queued behavior unchanged.
+- Human decision: pending Phase 3 gate.
