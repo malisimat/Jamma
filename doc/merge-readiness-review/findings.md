@@ -252,12 +252,13 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-021 — Remove non-`AudioProc` NJClient access from the audio callback
 
-- Stage / reviewer: S07-01, corroborated by S08-01 and S12-02.
+- Stage / reviewer: S07-01, corroborated by S08-01/S12-02 and refined by S13-06.
 - Scope reviewed / exclusions: NJClient caller/thread contract and callback cost; upstream NJClient remains read-only.
 - Severity: merge blocker.
 - Evidence: `AudioHost::_OnAudio` obtains live timing at `JammaLib/src/audio/AudioHost.cpp:437`–`:453`, reaching `_client->GetPosition`, `GetSampleRate`, `GetActualBPM`, and `GetBPI` at `JammaLib/src/ninjam/NinjamConnection.cpp:709`–`:730`, while the job thread calls `Run()` and snapshot getters. The compile-time-disabled export-compensation path would also call `_client->GetPosition` at `NinjamConnection.cpp:579`–`:605`. The bundled contract says `AudioProc`, and only `AudioProc`, belongs on the audio thread at `lib/njclient/njclient.h:165`–`:172`.
 - Why it matters: the callback violates the upstream thread-affinity contract, can assemble timing fields from different upstream states, and repeatedly enters an unbounded connection-use acquisition path. Adding a mutex would violate real-time rules.
 - Recommended disposition: publish one coherent, timestamped remote observation from the permitted job/network owner and combine it with separate device/Timer block anchors at the audio boundary. Keep only `AudioProc` reachable from the callback and do not edit NJClient.
+- Phase 3 refinement: capture/publish the exact pre-advance block timing through the existing Jamma-owned `AudioProc` seam without another NJClient call, then delete the Controller/Session/Connection `GetLiveTiming` adapter chain. Estimated net reduction after bounded publication: 15–35 lines; upstream remains read-only.
 - Protected timing concepts affected: remote observation, remote phase/rate, device-audio anchor, and Timer-absolute anchor remain distinct.
 - Verification: static audio-call-chain audit; concurrent sentinel-publication test; delayed-observation projection; join/reconnect/disconnect and export-compensation scenarios; race tooling where practical.
 - Human decision: accepted ([decision](decisions.md#findings)).
