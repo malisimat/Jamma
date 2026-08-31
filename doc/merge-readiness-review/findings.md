@@ -446,3 +446,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: remote geometry identity remains distinct from remote phase/observation and prompt lifecycle.
 - Verification: same geometry with new phase/sample keeps the prompt; changes to interval/rate/grid/BPI/BPM replace it; disconnect/reconnect clears it; one comparison remains.
 - Human decision: pending Phase 3 gate.
+
+## F-037 — Delete the uncompiled obsolete remote-phase test suite
+
+- Stage / reviewer: S14-01.
+- Scope reviewed / exclusions: test reachability and duplication; no production API deletion.
+- Severity: follow-up.
+- Evidence: `test/JammaLib_Tests/src/timing/RemotePhaseDiscipline_Tests.cpp:11`–`:156` calls removed Quantiser remote-discipline APIs and is absent from `JammaLib_Tests.vcxproj:204`–`:216`. Commit `f36bfe7` removed it from the project after current-owner tests replaced the old contract.
+- Why it matters: 156 lines appear to be regression evidence but neither compile nor represent the current owner model.
+- Recommended disposition: delete the file; do not re-register it or recreate the removed Quantiser APIs. Retain current `NinjamTiming`, coordinator, Timer, and real `LoopTake` coverage.
+- Protected timing concepts affected: none.
+- Verification: project-membership and retired-symbol audit; incremental native build; current circular-delta/coordinator/Timer/LoopTake tests remain registered and passing.
+- Human decision: pending Phase 3 gate.
