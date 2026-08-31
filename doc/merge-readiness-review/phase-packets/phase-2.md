@@ -202,7 +202,7 @@ For each item, record **accept**, **reject with rationale**, or **defer with nam
 
 ## Human outcome
 
-Pending. Phase 2 is stopped at the human gate. Phase 3 investigation and all cleanup/source/test implementation remain unauthorized until the reviewer records G2-1–G2-9, the F-006/F-009 Phase 2 enrichment decisions, and F-021–F-034 outcomes in `../decisions.md`.
+Accepted in [`../decisions.md`](../decisions.md). The reviewer approved the reconciled concurrency, hot-path, timing-transition, numerical-domain, lifetime, and verification models; accepted the F-006/F-009 enrichments and F-021–F-023/F-025–F-034 dispositions; and rejected F-024's open choice of ordered commands in favour of the approved S09-01 simplification: publish only the latest complete desired remote transport state and compare it with the last applied state at each audio boundary. This acceptance authorizes Phase 3 investigation only. Cleanup/source/test implementation remains prohibited until Phase 4 reconciliation produces human-approved batches.
 
 After accepting or otherwise deciding this packet, use the prompt below:
 

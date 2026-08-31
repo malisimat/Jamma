@@ -164,7 +164,17 @@ Intentional non-real-time synchronization retained for the human gate: Scene `_s
 
 ## Task board
 
-Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **awaiting human gate decisions** in [`phase-packets/phase-2.md`](phase-packets/phase-2.md). Stages 1–12 are integrated; Stages 13–21 remain pending and must not start before the Phase 2 gate is recorded.
+Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Stages 1–12 are integrated. Phase 3 is authorized for investigation only; cleanup implementation remains prohibited until Phase 4 batching and approval.
+
+### Phase 3 kickoff baseline
+
+- Branch: `bugfix/align-remote-join`.
+- Phase 3 kickoff `HEAD`: `70e48a5403dd409aca73e7efc0490464c8636a00`.
+- Production tip under review remains `e72f3b0f489cfa12ea697e966d3c0f619e31d1f6`; later commits contain review evidence and human decisions only.
+- Merge base and `master` tip: `4941b780f7ff5a46f742167d79338e3ab592a565`.
+- Worktree at kickoff: clean.
+- Raw `master...HEAD` at kickoff: 223 files changed, 17,676 insertions, and 1,507 deletions. Phase 3 excludes `doc/merge-readiness-review/` from production-code conclusions except as governing evidence.
+- Cleanup scope: remote timing/sync structural and behavioural changes only, including the human-directed review of timing/logging responsibility added to `Scene`, `Station`, and `LoopTake`. Retained HUD, VST3 parity, window/tooling, and unrelated changes are deliberate exclusions.
 
 ### Phase 2 kickoff baseline
 
@@ -189,9 +199,9 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 | 10 State-machine and failure paths | integrated |
 | 11 Numerical, boundary, and clock domains | integrated |
 | 12 Resource and lifetime review | integrated |
-| 13 Simplification and code size | pending |
-| 14 Unit-test quality | pending |
-| 15 Docs and comments | pending |
+| 13 Simplification and code size | active |
+| 14 Unit-test quality | active |
+| 15 Docs and comments | active |
 | 16 Compatibility and persistence | pending |
 | 17 Observability and diagnosability | pending |
 | 18 Security and input robustness | pending |

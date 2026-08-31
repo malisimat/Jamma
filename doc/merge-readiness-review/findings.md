@@ -73,7 +73,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: sync map, mapped elapsed time, source/scene anchors, per-loop phase, monotonic scene coordinate; none may be collapsed.
 - Verification: unequal loop lengths, intentional offsets, rebase/wrap, reconnect, and `NoSync` invalidation.
 - Phase 2 enrichment: S08-03 shows every followed block recomputes the same 64-bit common mapped source coordinate independently in each take (`AudioHost.cpp:456`â€“`:459`; `LoopTake.cpp:640`â€“`:679`). The approved consolidation should compute it once per block, then apply per-entity anchors/modulo without collapsing per-loop phase.
-- Phase 2 enrichment decision: pending Phase 2 human gate; the original F-006 disposition remains accepted.
+- Phase 2 enrichment decision: accepted; compute the common mapped source coordinate once per block while preserving entity-specific anchors and modulo ([decision](decisions.md#findings)).
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
 
 ## F-007 â€” Separate value-only local timing contracts from the Quantiser/UI aggregate
@@ -111,7 +111,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote join, follow policy, command lifecycle, `NoSync` invalidation remain distinct.
 - Verification: coordinator command-contract tests and integration forwarding tests; producer call-site audit; overlapping job/UI publication with one coherent reader; assert one explicit integration owner and restrict the public publication surface.
 - Phase 2 enrichment: S07-04 found the mailbox's stated single job-thread producer contract is inaccurate; job and UI publication sites are currently serialized only by outer `Scene::_sceneMutex`. The approved owner move must make producer serialization explicit and self-enforcing.
-- Phase 2 enrichment decision: pending Phase 2 human gate; the original F-009 disposition remains accepted.
+- Phase 2 enrichment decision: accepted; make command production explicit and self-enforcing within the approved owner move ([decision](decisions.md#findings)).
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
 
 ## F-010 â€” Normalize new timing aggregate acronym casing
@@ -257,7 +257,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: publish one coherent, timestamped remote observation from the permitted job/network owner and combine it with separate device/Timer block anchors at the audio boundary. Keep only `AudioProc` reachable from the callback and do not edit NJClient.
 - Protected timing concepts affected: remote observation, remote phase/rate, device-audio anchor, and Timer-absolute anchor remain distinct.
 - Verification: static audio-call-chain audit; concurrent sentinel-publication test; delayed-observation projection; join/reconnect/disconnect and export-compensation scenarios; race tooling where practical.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-022 â€” Move the empty-scene timing reset off the audio callback
 
@@ -269,7 +269,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: make empty/non-empty an edge published to the job owner, perform non-real-time cleanup there, and send only a bounded immutable invalidation to the audio boundary. Use the existing published station snapshot for any callback traversal.
 - Protected timing concepts affected: `NoSync` invalidation, local grid state, and remote timing availability remain distinct.
 - Verification: prerequisite contracts that an empty connected session preserves accepted remote timing and removing the final local take while disconnected clears local timing exactly once; race those transitions with connect/disconnect and remote-grid updates; callback audit for locks/allocation/destruction/raw `_stations`; ThreadSanitizer or equivalent where practical.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-023 â€” Publish a coherent local Timer transport observation
 
@@ -281,7 +281,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: publish one versioned local-transport observation from the audio boundary and consume it as a value in the coordinator. Reuse an existing owner/value contract; do not add a class solely for this change.
 - Protected timing concepts affected: Timer absolute position, master phase, scene coordinate, and device-audio position remain distinct fields/domains.
 - Verification: alternating sentinel-geometry concurrency test that never yields a mixed tuple; replacement/tick boundary test; late-observation tests using one coherent local snapshot.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-024 â€” Preserve non-substitutable timing transitions across the audio mailbox
 
@@ -293,7 +293,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: after prerequisite regressions, make each latest publication a complete accepted timing state plus optional correction, or use a bounded ordered mechanism with explicit overflow/coalescing rules. Keep command materialization with the NINJAM integration owner per F-009.
 - Protected timing concepts affected: remote authority, follow policy, Timer geometry, sync map, anchors, mapped elapsed time, and per-loop phase remain distinct.
 - Verification: production-faithful `Invalidate -> Replace` and `Replace -> Discipline` before one callback; Timer/map/audio/MIDI/generation coherence; both sync policies and unequal loop lengths/offsets.
-- Human decision: pending.
+- Human decision: rejected as written; replace ordered/delta command choices with the approved latest complete desired remote transport state: session epoch, follow policy, full remote geometry, and timestamped remote phase ([decision](decisions.md#09---timing-correctness)).
 
 ## F-025 â€” Reset every timing generation gate at a reconnect boundary
 
@@ -305,7 +305,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: add a two-session production-path regression, then reset all consumer gates atomically at invalidation or introduce an explicit session epoch plus within-session generation. A globally monotonic generation alone does not solve F-024.
 - Protected timing concepts affected: session authority/generation, `NoSync`, anchors, Timer geometry, and per-loop phase remain separate.
 - Verification: session 1 beyond generation 1; production-path invalidate; session 2 generation 1 accepted by Timer and real audio/MIDI takes; stale session-1 command rejected; free-run and offsets preserved.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-026 â€” Anchor the initial join delta to one observation instant
 
@@ -317,7 +317,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: project local phase to the initial observation anchor before beginning alignment, or retain both anchors and derive the correction at the audio boundary.
 - Protected timing concepts affected: remote master phase, local Timer phase, observation anchors, join policy, and scene/source mapping remain distinct.
 - Verification: zero and multi-block delays before processing the same initial observation must emit the same join delta; positive/negative/half-interval cases; unequal loop lengths and offsets.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-027 â€” Model physical loss and auto-reconnect as timing-session epoch transitions
 
@@ -329,7 +329,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: publish explicit connection availability and epoch from the connection/integration owner. Loss emits one complete `NoSync` transition; successful retry accepts fresh valid timing only in a new epoch.
 - Protected timing concepts affected: connection availability, remote session authority, follow policy, sync map, and generation remain distinct.
 - Verification: cable/server loss, retry failure/backoff/success, manual disconnect during retry, exactly-once invalidation, fresh epoch/generation, remote-station cleanup, and local free-run.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-028 â€” Recover explicitly from invalid/absent timing and tick deadlines without observations
 
@@ -341,7 +341,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: add an observation-independent job tick/deadline transition and distinguish pre-authority waiting from post-authority loss. Make `NoSync` invalidation edge-triggered/idempotent and coordinate it with F-027.
 - Protected timing concepts affected: request/acknowledgement, validity, follow policy, and remote authority remain distinct.
 - Verification: no-observation timeout/retry exhaustion; validâ†’invalidâ†’valid; malformed/zero interval/rate/BPM/BPI; one invalidation per loss edge; reconnect recovery.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-029 â€” Widen Timer absolute arithmetic before projecting long-session observations
 
@@ -353,7 +353,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: use 64-bit intermediate and result arithmetic for Tick addition, loop multiplication, and absolute coordinates end to end in the existing Timer/timing value boundary; combine it with F-023's coherent snapshot.
 - Protected timing concepts affected: Timer absolute, scene coordinate, and device-audio position remain separate 64-bit rulers.
 - Verification: values spanning `UINT32_MAX`, near-maximum seed/phase plus increment with exact loop-count/phase result, multi-interval multiplication before widening, distinct Timer/device sentinels, and long-running projection.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-030 â€” Separate observation validity from the valid sample-zero coordinate
 
@@ -365,7 +365,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: carry explicit anchor validity/presence separately from the numeric coordinate, using an existing value contract rather than a sentinel.
 - Protected timing concepts affected: device-audio observation coordinate, Timer-absolute observation coordinate, and each domain's validity remain distinct.
 - Verification: valid zero/absent/nonzero anchors independently in both device-audio and Timer-absolute domains; delayed first-block replacement/discipline; no ambiguity after reconnect.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-031 â€” Prevent downsampling conversion from manufacturing an early remote wrap
 
@@ -377,7 +377,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: convert wrapped phase with an explicit rule that preserves `0 <= phase < convertedLength` and source ordering near the final sample; document the rounding contract.
 - Protected timing concepts affected: remote wrapped phase and remote interval length remain related but distinct values.
 - Verification: exhaustive small-ratio/source-tail cases; 96â†’48 and non-integer ratios; first/last source samples; monotonicity/no premature wrap.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-032 â€” Make tempo-to-samples conversion total for non-finite BPM
 
@@ -389,7 +389,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: require `std::isfinite` at the owned validation boundary before arithmetic/cast; keep upstream NJClient unchanged.
 - Protected timing concepts affected: remote BPM/BPI inputs and the derived source-rate interval length remain distinct.
 - Verification: NaN, positive/negative infinity, zero, negative, extreme finite BPM/BPI/rate/interval values.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-033 â€” Keep remote stereo buffer borrows inside the connection lifetime guard
 
@@ -401,7 +401,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: keep the guard alive through synchronous ingestion, or copy into caller-owned preallocated storage while guarded. Do not add callback allocation, blocking locks, or callback-side final destruction.
 - Protected timing concepts affected: none directly.
 - Verification: controlled stop between acquire and consume; repeated live start/stop/reconnect under ASan/page heap/Application Verifier where supported; silence/clean handoff and callback-allocation audit.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-034 â€” Remove callback-side alignment logging and slim Station diagnostics
 
@@ -413,4 +413,4 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Recommended disposition: remove callback-side logging calls entirely; capture only bounded preallocated diagnostic values when explicitly enabled and format/write them off-thread in an existing owner. Remove F-019's dead receipt subset in the same later batch without deleting useful bounded telemetry.
 - Protected timing concepts affected: diagnostic mirrors only; operational timing authority remains unchanged.
 - Verification: static callback call-chain proving no formatting/I/O logger is reachable; disabled build/path has no diagnostic branch/work; bounded enabled capture plus normal/verbose remote-join manual trace.
-- Human decision: pending.
+- Human decision: accepted ([decision](decisions.md#findings)).
