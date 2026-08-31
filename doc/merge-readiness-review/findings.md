@@ -458,3 +458,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: none.
 - Verification: project-membership and retired-symbol audit; incremental native build; current circular-delta/coordinator/Timer/LoopTake tests remain registered and passing.
 - Human decision: pending Phase 3 gate.
+
+## F-038 — Replace the pseudo-integration harness with a production-faithful timing boundary
+
+- Stage / reviewer: S14-02; test-description corroboration S15-05.
+- Scope reviewed / exclusions: whether tests observe AudioHost/real LoopTake behavior; production defects remain F-024/F-025.
+- Severity: must fix before merge.
+- Evidence: `NinjamTimingIntegration_Tests.cpp:12`–`:24`, `:124`–`:126` claims exact AudioHost behavior, but its model always fans out invalidation/resets gates (`:142`–`:157`, `:194`–`:200`), accepts equal generations (`:202`–`:207`), and never uses `ModelTake::Length` to wrap (`:42`–`:48`, `:178`–`:180`). Production skips take invalidation at `AudioHost.cpp:174`–`:187`, `:298`–`:320`, and real `LoopTake` rejects equal generations at `LoopTake.cpp:524`–`:534`.
+- Why it matters: the suite passes by simulating the missing behavior and cannot protect the complete-state, reconnect, or common-map refactors.
+- Recommended disposition: test a narrow production-owned seam in an existing owner using Timer, AudioHost map, Station, and real LoopTake objects. Move complete-state and two-session reconnect contracts there; retain only distinct coordinator/telemetry simulations and remove duplicated model-phase tests after replacements pass.
+- Protected timing concepts affected: epoch, policy, Timer geometry, common map, entity anchors/lengths, audio phase, MIDI cursor, automation origin, and `NoSync` remain independently asserted.
+- Verification: P1–P4 from Stage 14: complete desired-state sequences, two real unequal-length audio/MIDI takes with intentional offsets, session-2 generation 1, stale/equal rejection, restore-before-rebase.
+- Human decision: pending Phase 3 gate.

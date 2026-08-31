@@ -41,6 +41,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-035 | Private-helper call-site audit; queued path diff unchanged | Signed/zero shift across unequal audio, MIDI-only/audio-only/empty; automation sign and local-offset accounting | Reconnect/`NoSync` confirms direct helper is not invoked | Stage 13/20; after F-005 boundary shape |
 | F-036 | One proposal identity implementation; retired comparison audit | Same geometry/new observation stable; each geometry/policy field change detected | Prompt persists/replaces correctly and clears on reconnect | Stage 13/20; coordinate F-013 |
 | F-037 | File/project/retired-symbol audit; incremental tests build | Current timing/coordinator/Timer/LoopTake suites remain registered and passing | None | Stage 14/20; direct 156-line deletion |
+| F-038 | Production-seam call audit; model omissions no longer claim end-to-end fidelity | P1–P4: complete state, real unequal audio/MIDI takes, two-session generation-1 reconnect, restore-before-rebase | Production-faithful join/reconnect trace | Stage 14/20; prerequisite before F-005/F-006/F-009/F-025 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
