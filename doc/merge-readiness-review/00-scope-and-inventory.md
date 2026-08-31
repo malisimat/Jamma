@@ -199,12 +199,12 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 | 10 State-machine and failure paths | integrated |
 | 11 Numerical, boundary, and clock domains | integrated |
 | 12 Resource and lifetime review | integrated |
-| 13 Simplification and code size | active |
+| 13 Simplification and code size | reported |
 | 14 Unit-test quality | reported |
 | 15 Docs and comments | reported |
 | 16 Compatibility and persistence | active |
 | 17 Observability and diagnosability | active |
-| 18 Security and input robustness | pending |
+| 18 Security and input robustness | active |
 | 19 Cross-review reconciliation | pending |
 | 20 Change impact and regression surface | pending |
 | 21 Build, test, and merge hygiene | pending |
