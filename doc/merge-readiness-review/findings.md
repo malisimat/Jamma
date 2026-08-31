@@ -542,3 +542,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: local offset, master phase, per-loop phase, common correction, unequal lengths, and intentional offsets remain distinct.
 - Verification: load signed `-0.25`, `-1`, positive, zero, and endpoints with audio/MIDI lengths `M`, `2M`, and non-divisors; compare cursor deltas, round trip current writer, and keep join/`NoSync` independent.
 - Human decision: pending Phase 3 gate.
+
+## F-045 — Decide unversioned downgrade loss of local timing state
+
+- Stage / reviewer: S16-03.
+- Scope reviewed / exclusions: current well-formed `.jam` opened/resaved by older binaries; no broad persistence redesign.
+- Severity: follow-up compatibility decision.
+- Evidence: `JamFile.h:34`–`:38` declares versions, but every parse is assigned `VERSION_V` at `JamFile.cpp:85` and `ToStream` writes no version at `:400`–`:465`. Older binaries ignore the new `transportoffsetloopfrac` and drop it on resave.
+- Why it matters: the file remains parseable while a musically relevant local phase setting disappears without warning.
+- Recommended disposition: explicitly accept/document pre-branch downgrade loss, or require a focused schema marker/warning/unknown-field preservation guard. Do not persist remote epoch, map, anchors, policy, geometry, or phase.
+- Protected timing concepts affected: local transport offset and per-entity phase only.
+- Verification: master file loads with zero default; current writer/current reader round trips endpoints/fractions; older-read/resave loss is documented or guarded and manually verified.
+- Human decision: pending Phase 3 gate.
