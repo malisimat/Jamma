@@ -8,7 +8,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-002 | Regenerate diff/interface inventory if VST moves | VST3 mapping/state plus affected engine tests | VST2/VST3 load, editor, MIDI, state | Human scope gate; Stages 12/14/16/20/21 |
 | F-003 | Affected app build if retained | Persistence tests | Multi-monitor window save/restore | Human scope gate; Stage 16 |
 | F-004 | Validate task commands and wrapper if retained | Applicable native target invocation | None | Human scope gate; Stage 21 |
-| F-005 | Include/dependency audit; JammaLib build | Continuous/Block/NoSync timing tests | Reconnect and `NoSync` invalidation | Stages 7/9/20 |
+| F-005 | Include/dependency audit; no `engine -> ninjam` policy edge; JammaLib build | Neutral correction for Continuous/Block; explicit epoch reset; `NoSync` moves no cursor | Reconnect and `NoSync` invalidation with unequal audio/MIDI lengths/offsets | Stages 13/20; depends on complete state and F-025 regression |
 | F-006 | JammaLib build; one common-map owner audit | Unequal lengths, offsets, rebase/wrap | Join, reconnect, free-run after `NoSync` | Stages 7/8/9/11/20 |
 | F-007 | Include-graph and JammaLib build | Coordinator/local timing tests | None | Stages 13/20 |
 | F-008 | JammaLib build; include audit | Latest/zero mailbox and local-offset tests | Disconnected and `NoSync` offset control | Stages 7/8/9/20 |

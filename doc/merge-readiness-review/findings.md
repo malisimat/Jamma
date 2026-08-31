@@ -52,12 +52,13 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-005 — Translate NINJAM follow policy before entering the core loop hierarchy
 
-- Stage / reviewer: S02-01.
+- Stage / reviewer: S02-01; refined by S13-04.
 - Scope reviewed / exclusions: dependency direction; no behavioral-correctness claim.
 - Severity: follow-up.
 - Evidence: `JammaLib/src/engine/LoopTake.h:21` imports the NINJAM command header; `LoopTake::ApplyTimingCommand` and Station fan-out accept `ninjam::NinjamLocalFollowPolicy` at `JammaLib/src/engine/LoopTake.h:235`–`:239` and `JammaLib/src/engine/Station.h:113`–`:128`. `AudioHost` already interprets disable/invalidation at `JammaLib/src/audio/AudioHost.cpp:174`–`:186` and `:298`–`:305`.
 - Why it matters: low-level local loop state depends on session policy and duplicates the `NoSync` decision.
 - Recommended disposition: move policy interpretation to NINJAM/AudioHost and expose neutral accepted correction/invalidation operations to engine entities.
+- Phase 3 refinement: use separate neutral engine operations for an accepted signed correction carrying epoch/generation and for explicit epoch reset/invalidation. Remove the NINJAM policy, command reason, and unused scene-coordinate payload from `Station`/`LoopTake`; `ContinuousSync`, `BlockSync`, and `NoSync` remain distinct at the AudioHost boundary.
 - Protected timing concepts affected: follow policy, `NoSync` invalidation, per-loop phase; all remain separate.
 - Verification: include-graph check plus continuous/block/no-sync, reconnect, and invalidation tests.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
