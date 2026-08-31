@@ -204,7 +204,7 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 | 15 Docs and comments | reported |
 | 16 Compatibility and persistence | reported |
 | 17 Observability and diagnosability | reported |
-| 18 Security and input robustness | active |
+| 18 Security and input robustness | reported |
 | 19 Cross-review reconciliation | pending |
 | 20 Change impact and regression surface | pending |
 | 21 Build, test, and merge hygiene | pending |
