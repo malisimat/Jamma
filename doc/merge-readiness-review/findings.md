@@ -104,16 +104,17 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-009 — Complete update-to-command materialization in the NINJAM integration layer
 
-- Stage / reviewer: S02-05.
+- Stage / reviewer: S02-05; refined by S07-04/S13-02.
 - Scope reviewed / exclusions: orchestration placement; UI presentation and runtime correctness excluded.
 - Severity: follow-up.
 - Evidence: the coordinator decides policy/generation/update semantics, but `engine::Scene` constructs every command field and invalidation at `JammaLib/src/engine/Scene.cpp:254`–`:305` and `:403`–`:482`; AudioHost then applies it.
 - Why it matters: command meaning and construction are split across coordinator and Scene, so field changes require synchronized mechanical edits and thicken glue code.
-- Recommended disposition: have the NINJAM integration layer emit the complete immutable audio command; keep Scene for prompts/forwarding and AudioHost for block-boundary application.
+- Recommended disposition: have the existing NINJAM integration owner emit the complete immutable desired remote transport state defined by F-024; keep Scene for prompts/forwarding and AudioHost for block-boundary comparison/application.
 - Protected timing concepts affected: remote join, follow policy, command lifecycle, `NoSync` invalidation remain distinct.
 - Verification: coordinator command-contract tests and integration forwarding tests; producer call-site audit; overlapping job/UI publication with one coherent reader; assert one explicit integration owner and restrict the public publication surface.
 - Phase 2 enrichment: S07-04 found the mailbox's stated single job-thread producer contract is inaccurate; job and UI publication sites are currently serialized only by outer `Scene::_sceneMutex`. The approved owner move must make producer serialization explicit and self-enforcing.
 - Phase 2 enrichment decision: accepted; make command production explicit and self-enforcing within the approved owner move ([decision](decisions.md#findings)).
+- Phase 3 refinement: remove Scene's optionals-to-event translation and separate connect/disconnect invalidation construction. The producer value contains session epoch, follow policy, full validated device-rate remote geometry, and timestamped remote master phase; no ordered queue, standalone invalidation, or phase-delta command is retained.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
 
 ## F-010 — Normalize new timing aggregate acronym casing

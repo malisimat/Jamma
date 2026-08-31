@@ -12,7 +12,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-006 | JammaLib build; one AudioHost map owner; one common calculation per block independent of take count | Unequal audio/MIDI lengths and offsets; rebase without anchor recapture; wrap | Join, reconnect, free-run after `NoSync`; maximum-hierarchy callback benchmark | Stages 13/20; after F-025 epoch regression |
 | F-007 | Include-graph and JammaLib build | Coordinator/local timing tests | None | Stages 13/20 |
 | F-008 | JammaLib build; include audit | Latest/zero mailbox and local-offset tests | Disconnected and `NoSync` offset control | Stages 7/8/9/20 |
-| F-009 | JammaLib build; producer/publication call-site audit | Coordinator forwarding plus overlapping job/UI producer and coherent-reader contract tests | Join/leave command trace; confirm one integration owner | Stages 7/9/10/20; Phase 2 enrichment gate |
+| F-009 | JammaLib build; one explicit integration producer; Scene has no transport-state construction | Overlapping job/UI intent resolves to one complete desired value; coherent reader; final state applies once | Join/leave trace correlates one integration owner with AudioHost desired/applied versions | Stages 13/20; coupled to F-024 prerequisites |
 | F-010 | JammaLib/tests compile; identifier audit | Affected timing tests | None | Stage 15/20 |
 | F-011 | JammaLib/tests compile; retired-name audit | Export/metronome helper tests | None | Stages 14/15/20 |
 | F-012 | Incremental JammaLib link/build | Timing/command/mailbox tests | None | Stages 7/8/20 |
