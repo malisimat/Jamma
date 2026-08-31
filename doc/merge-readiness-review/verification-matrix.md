@@ -45,6 +45,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-039 | Retired command/sentinel expectation audit | Complete-state supersession; valid zero vs explicit absent vs nonzero in both clock domains; delayed first block | First-block join/reconnect trace | Stage 14/20; coordinate F-024/F-030 |
 | F-040 | Deterministic overlap/start-barrier audit | P5 requires nonzero overlapping complete reads with incompatible field sentinels and generation diagnostics | Repeated run plus race tooling where practical | Stage 14/20; prerequisite F-021/F-023 publication changes |
 | F-041 | Existing-owner fault/clock/consume seam audit; no raw-buffer test API | P7–P9 loss/retry/invalid/deadline and controlled stop-during-consume | Sanitizer/page heap/Application Verifier plus manual reconnect | Stage 14/20; prerequisite F-027/F-028/F-033 |
+| F-042 | Statement/source and ownership audit after contract fixes | Relevant F-021/F-024/F-025/F-027/F-028 tests linked, not duplicated | `Stay local`, join and reconnect guide trace | Stage 15/20; docs update with implementation batch |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 

@@ -506,3 +506,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: physical availability, epoch, timing validity, follow authority, local free-run, and buffer lifetime remain separate.
 - Verification: P7–P9: exactly-once loss invalidation/fresh epoch, no-observation deadline, repeated-invalid idempotence, controlled stop-during-consume; follow with sanitizer/page-heap/Application Verifier and manual reconnect.
 - Human decision: pending Phase 3 gate.
+
+## F-042 — Correct the NINJAM integration guide's timing ownership and Stay-local contract
+
+- Stage / reviewer: S15-01; related command-target corrections attach to F-024.
+- Scope reviewed / exclusions: statement truthfulness; runtime fixes remain F-021/F-024/F-025/F-027/F-028.
+- Severity: must fix before merge.
+- Evidence: `doc/ninjam.md:12`–`:17` assigns timing observation to the job path although current callback getters are the F-021 defect; `:31`–`:44` describes nonexistent job-thread MIDI re-anchoring at each wrap; `:58`–`:61` says `Stay local` publishes nothing although current/approved behavior requires explicit `NoSync`. Line `:7` also describes interval duration dimensionally as “BPM × BPI beats” instead of BPI beats at BPM.
+- Why it matters: the guide assigns mutation to the wrong thread and hides the authority-loss transition maintainers must preserve.
+- Recommended disposition: after each accepted contract is implemented, document the final owner; until then mark current defect versus approved target. Describe retained session anchors, audio-thread cursor/automation correction, explicit desired `NoSync`, and interval duration `60 * BPI / BPM` seconds.
+- Protected timing concepts affected: observation ownership, source/scene anchor, MIDI cursor, automation origin, follow policy, and `NoSync` remain distinct.
+- Verification: statement/source audit plus callback/job ownership trace and manual `Stay local`/reconnect trace.
+- Human decision: pending Phase 3 gate.
