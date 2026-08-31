@@ -578,3 +578,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: epoch, authority lifecycle, policy, geometry, phase, device/Timer/scene coordinates, and per-entity phase remain separate diagnostic fields.
 - Verification: table tests for each rejection reason/counter; two-session epoch correlation; geometry/discipline/`NoSync` desired-applied traces; one bounded lag warning that clears on application; manual loss/retry trace.
 - Human decision: pending Phase 3 gate.
+
+## F-048 — Bound seed-timing policy before Windows integer conversion
+
+- Stage / reviewer: S18-02.
+- Scope reviewed / exclusions: extreme local timing policy that feeds local geometry/optional remote tempo; no broad config redesign.
+- Severity: must fix before merge.
+- Evidence: `UserConfig.cpp:176`–`:222` accepts unbounded unsigned seed policy. `Quantiser.cpp:686`–`:735` computes `sampleRate * targetMaxMs / 1000` as double and casts directly to Windows 32-bit `unsigned long`; at 44.1 kHz and `UINT32_MAX` ms the result is about 189 billion samples, outside the destination range and undefined to convert.
+- Why it matters: syntactically valid config can make local geometry derivation undefined before failure handling, then feed a server tempo request.
+- Recommended disposition: validate/clamp policy in the existing config/Quantiser boundary and use one checked/saturating conversion for minimum and target maximum. Reject impossible relationships deterministically; add no class.
+- Protected timing concepts affected: local seed/grain policy, local master geometry, requested BPM/BPI, and remote authority remain distinct.
+- Verification: defaults, zero, `UINT32_MAX`, exact-fit/first-overflow, min>max, max sample rate; deterministic reject/clamp, finite BPM, consistent nonzero geometry, no malformed request.
+- Human decision: pending Phase 3 gate.
