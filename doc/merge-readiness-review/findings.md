@@ -385,16 +385,17 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Verification: exhaustive small-ratio/source-tail cases; 96→48 and non-integer ratios; first/last source samples; monotonicity/no premature wrap.
 - Human decision: accepted ([decision](decisions.md#findings)).
 
-## F-032 — Make tempo-to-samples conversion total for non-finite BPM
+## F-032 — Reject non-finite tempo values at conversion and network egress
 
-- Stage / reviewer: S11-04.
+- Stage / reviewer: S11-04; trust-boundary refinement S18-01.
 - Scope reviewed / exclusions: numeric input hardening only.
 - Severity: follow-up.
 - Evidence: `IntervalSampsFromTempo` rejects non-positive BPM/zero BPI/rate, then casts `samples + 0.5` to `unsigned int` at `JammaLib/src/ninjam/NinjamTiming.h:126`–`:138`; NaN bypasses its comparisons and reaches the conversion. Current production callers first apply stricter shared validity, so this is hardening rather than a demonstrated live failure.
+- Phase 3 evidence: `NinjamConnection::RequestServerTempo` repeats the incomplete `bpm <= 0` predicate at `JammaLib/src/ninjam/NinjamConnection.cpp:742`–`:779`; NaN or positive infinity can be serialized into four malformed admin/vote messages.
 - Why it matters: malformed upstream values can reach undefined or implementation-dependent conversion behavior even though ordinary plausibility checks reject common bad values.
-- Recommended disposition: require `std::isfinite` at the owned validation boundary before arithmetic/cast; keep upstream NJClient unchanged.
+- Recommended disposition: require finite, product-plausible BPM/BPI at each Jamma-owned conversion and outgoing NINJAM command boundary before arithmetic or formatting; reject the request and send nothing. Keep upstream NJClient unchanged.
 - Protected timing concepts affected: remote BPM/BPI inputs and the derived source-rate interval length remain distinct.
-- Verification: NaN, positive/negative infinity, zero, negative, extreme finite BPM/BPI/rate/interval values.
+- Verification: table-drive NaN, positive/negative infinity, zero, negative, plausible endpoints, just-outside endpoints, and extreme finite BPM/BPI/rate values; helper returns zero, outgoing request returns false and sends nothing, valid formatting remains stable.
 - Human decision: accepted ([decision](decisions.md#findings)).
 
 ## F-033 — Keep remote stereo buffer borrows inside the connection lifetime guard
