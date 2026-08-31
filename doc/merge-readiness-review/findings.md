@@ -530,3 +530,15 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: active remote grid, local grain, authoritative BPI, phase/origin, desired-state lifecycle, and epoch remain distinct.
 - Verification: statement-by-statement source/test audit; link executable residual contracts and do not mark overlay/manual cases green without evidence.
 - Human decision: pending Phase 3 gate.
+
+## F-044 — Decide signed transport-offset migration for unequal loop lengths
+
+- Stage / reviewer: S16-02.
+- Scope reviewed / exclusions: well-formed intermediate branch `.jam` artifacts; malformed values are Stage 18.
+- Severity: must fix before merge unless the human explicitly declares intermediate artifacts unsupported.
+- Evidence: commit `6dc0c73` persisted signed `transportoffsetloopfrac`; current `JamFile.cpp:204`–`:224`, `:406` normalizes negative values, and `JamFile_Tests.cpp:276`–`:282` expects `-0.25 -> 0.75`. For master `M=1000`, loop `L=2000`, phase 100, signed `-250` restores 1850 while normalized `+750` restores 850; they differ by one master interval and are not equivalent modulo the entity length.
+- Why it matters: the migration assumes master-wrapped positions are interchangeable for every entity, contradicting the protected per-loop phase model.
+- Recommended disposition: decide whether intermediate signed files are supported. If yes, retain signed/turn information long enough to apply the same source correction to each entity; if no, record the unequal-length phase change as an intentional break and remove the misleading compatibility claim. Never assign every loop one master cursor.
+- Protected timing concepts affected: local offset, master phase, per-loop phase, common correction, unequal lengths, and intentional offsets remain distinct.
+- Verification: load signed `-0.25`, `-1`, positive, zero, and endpoints with audio/MIDI lengths `M`, `2M`, and non-divisors; compare cursor deltas, round trip current writer, and keep join/`NoSync` independent.
+- Human decision: pending Phase 3 gate.

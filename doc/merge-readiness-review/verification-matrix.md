@@ -47,6 +47,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-041 | Existing-owner fault/clock/consume seam audit; no raw-buffer test API | P7–P9 loss/retry/invalid/deadline and controlled stop-during-consume | Sanitizer/page heap/Application Verifier plus manual reconnect | Stage 14/20; prerequisite F-027/F-028/F-033 |
 | F-042 | Statement/source and ownership audit after contract fixes | Relevant F-021/F-024/F-025/F-027/F-028 tests linked, not duplicated | `Stay local`, join and reconnect guide trace | Stage 15/20; docs update with implementation batch |
 | F-043 | Statement-by-statement implemented/residual audit against `e72f3b0+` | Link remote-grid/BPI/direct-boundary tests; preserve unverified status | Overlay/manual remote-grid cases only when executed | Stage 15/20; docs-only correction after contracts settle |
+| F-044 | Migration-policy/schema audit | Signed values/endpoints across `M`, `2M`, non-divisor audio/MIDI lengths; compare deltas and round trip | Load affected session; join/`NoSync` does not reinterpret offset | Human compatibility gate; Stages 16/20 |
 
 Cross-phase obligations not represented as Phase 1 deletions:
 
