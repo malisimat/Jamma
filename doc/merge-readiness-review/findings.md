@@ -326,12 +326,13 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 
 ## F-027 — Model physical loss and auto-reconnect as timing-session epoch transitions
 
-- Stage / reviewer: S10-01.
+- Stage / reviewer: S10-01; persisted-start compatibility path added by S16-01.
 - Scope reviewed / exclusions: connection availability state/recovery; lifetime and command mechanics are F-033/F-024.
 - Severity: merge blocker.
 - Evidence: `NinjamConnection::Pump` can report failure/retry while `NinjamSession::Pump` returns only `nullopt`; Scene does nothing when no snapshot arrives. Coordinator/tracker connected state, requests/prompts, remote stations, and AudioHost's old sync map can therefore remain active. Automatic retry can resume snapshots without `Connect` establishing a fresh timing epoch (`JammaLib/src/ninjam/NinjamConnection.cpp:299`–`:404`; `NinjamSession.cpp:486`–`:500`; `JammaLib/src/engine/Scene.cpp:1382`–`:1396`).
+- Phase 3 evidence: well-formed/default `.jam` auto-connect calls `Scene::FromFile -> NinjamController::LoadConfig -> NinjamSession::Start` without the interactive `PrepareTempoSyncOnConnect` path (`Scene.cpp:249`–`:288`, `:664`; `NinjamController.cpp:7`–`:19`). The timing tracker can therefore remain disconnected even while NINJAM audio connects.
 - Why it matters: physical loss is indistinguishable from “no update,” so stale remote authority may continue and a new physical connection may reuse old state.
-- Recommended disposition: publish explicit connection availability and epoch from the connection/integration owner. Loss emits one complete `NoSync` transition; successful retry accepts fresh valid timing only in a new epoch.
+- Recommended disposition: publish explicit connection availability and epoch from the connection/integration owner, and route persisted/default and interactive starts through one existing-owner lifecycle operation. Every start begins at `NoSync`; loss emits one complete `NoSync` transition; successful retry accepts fresh valid timing only in a new epoch. Do not persist the live epoch/authority.
 - Protected timing concepts affected: connection availability, remote session authority, follow policy, sync map, and generation remain distinct.
 - Verification: cable/server loss, retry failure/backoff/success, manual disconnect during retry, exactly-once invalidation, fresh epoch/generation, remote-station cleanup, and local free-run.
 - Human decision: accepted ([decision](decisions.md#findings)).
