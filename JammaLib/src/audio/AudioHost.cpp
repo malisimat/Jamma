@@ -423,11 +423,16 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			auto station = std::static_pointer_cast<StationRemote>(stationBase);
 			if (!station || !station->IsConnectedRemote())
 				return;
+			if (!_ninjamController)
+				return;
 
+			// The decoded samples belong to the connection scratch buffers, so the
+			// scoped connection use must remain alive through synchronous ingestion.
+			auto connectionUse = _ninjamController->AcquireConnectionUse();
 			const float* left = nullptr;
 			const float* right = nullptr;
 			unsigned int frameCount = 0u;
-			if (_ninjamController && _ninjamController->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
+			if (connectionUse && connectionUse->ConsumeStereoPair(station->AssignedOutputChannel(), left, right, frameCount))
 			{
 				auto ingestFrames = frameCount < numSamps ? frameCount : numSamps;
 				station->IngestStereoBlock(left, right, ingestFrames);

@@ -104,10 +104,7 @@ NinjamRemoteTiming NinjamController::GetLiveTiming() const noexcept
 	return _session.GetLiveTiming();
 }
 
-bool NinjamController::ConsumeStereoPair(unsigned int outChannelLeft,
-	const float*& left,
-	const float*& right,
-	unsigned int& numFrames) const
+NinjamConnectionUse NinjamController::AcquireConnectionUse() const noexcept
 {
-	return _session.ConsumeStereoPair(outChannelLeft, left, right, numFrames);
+	return NinjamConnectionUse(_session);
 }

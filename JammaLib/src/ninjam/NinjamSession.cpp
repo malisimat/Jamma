@@ -505,18 +505,6 @@ NinjamRemoteTiming NinjamSession::GetLiveTiming() const noexcept
 	return conn ? conn->GetLiveTiming() : NinjamRemoteTiming{};
 }
 
-bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
-	const float*& left,
-	const float*& right,
-	unsigned int& numFrames) const
-{
-	NinjamConnectionUse conn(*this);
-	if (!conn)
-		return false;
-
-	return conn->ConsumeStereoPair(outChannelLeft, left, right, numFrames);
-}
-
 bool NinjamSession::RequestServerTempo(float bpm, int bpi)
 {
 	NinjamConnectionUse conn(*this);

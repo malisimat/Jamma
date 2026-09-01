@@ -43,10 +43,9 @@ namespace ninjam
 
 		NinjamRemoteTiming GetLiveTiming() const noexcept;
 
-		bool ConsumeStereoPair(unsigned int outChannelLeft,
-			const float*& left,
-			const float*& right,
-			unsigned int& numFrames) const;
+		// Pins the current connection; keep the guard alive while using any
+		// connection-owned storage returned through it.
+		NinjamConnectionUse AcquireConnectionUse() const noexcept;
 
 		NinjamSession* Session() noexcept { return &_session; }
 

@@ -105,12 +105,6 @@ namespace ninjam
 
 		NinjamRemoteTiming GetLiveTiming() const noexcept;
 
-		// Returns false if no audio is ready for this output-channel pair.
-		bool ConsumeStereoPair(unsigned int outChannelLeft,
-			const float*& left,
-			const float*& right,
-			unsigned int& numFrames) const;
-
 		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
 		// No-op if not connected.
 		void SendChat(const std::string& msg);
