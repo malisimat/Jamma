@@ -43,6 +43,7 @@
 - **Prerequisite:** add P9 `NinjamSessionAudio.StopCannotInvalidateBorrowDuringSynchronousConsume`; it must pass alone before production edits.
 - **Rollback:** pre-B001 gate commit; revert the scoped API chain and P9 together if no safe synchronous ownership is achieved.
 - **Verification:** P9; focused start/stop/reconnect stress; incremental tests; callback/lifetime audit; later ASan/page heap/Application Verifier evidence. Independent review writes `batch-reviews/B001.md`.
+- **Execution result (2026-08-31):** prerequisite `9b46803ea4bf37f0bb7b3488128da02f1ef4546b`; implementation `996bda2a49de9857f31eb9d9b0f3478f3e28f6da`. Wrapped incremental Debug x64 JammaLib and JammaLib_Tests builds passed. P9 plus the two focused `StationRemote` ingestion tests passed 3/3; repeated P9 stress passed 100/100. Static scope, raw-borrow lifetime, and callback-safety audits passed. No live server was available for genuine reconnect stress, and ASan/page heap/Application Verifier remain deferred to Stage 21. Status: implemented and verified; independent review pending.
 
 ### B002 — Reject invalid remote tempo before conversion and egress
 

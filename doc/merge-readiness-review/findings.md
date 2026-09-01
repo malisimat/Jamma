@@ -409,6 +409,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: none directly.
 - Verification: controlled stop between acquire and consume; repeated live start/stop/reconnect under ASan/page heap/Application Verifier where supported; silence/clean handoff and callback-allocation audit.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: resolved by B001 prerequisite `9b46803ea4bf37f0bb7b3488128da02f1ef4546b` and implementation `996bda2a49de9857f31eb9d9b0f3478f3e28f6da`. `AudioHost` now holds the existing `NinjamConnectionUse` through synchronous `StationRemote` ingestion; the escaping Session/Controller raw-pointer wrappers were removed. P9 plus both focused ingestion tests passed 3/3, P9 passed 100/100 repeated controlled stop attempts, and the callback/lifetime audit found no new allocation, lock, wait, I/O, formatting, dynamic copy, or callback-side final destruction. Live-server reconnect and ASan/page heap/Application Verifier remain Stage 21 evidence, not claimed here.
 
 ## F-034 â€” Remove callback-side alignment logging and slim Station diagnostics
 
@@ -506,6 +507,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: physical availability, epoch, timing validity, follow authority, local free-run, and buffer lifetime remain separate.
 - Verification: P7â€“P9: exactly-once loss invalidation/fresh epoch, no-observation deadline, repeated-invalid idempotence, controlled stop-during-consume; follow with sanitizer/page-heap/Application Verifier and manual reconnect.
 - Human decision: accepted; seams remain minimal and owned by existing session/integration classes ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: B001 registered P9 in the native test project/filter at `9b46803ea4bf37f0bb7b3488128da02f1ef4546b` without adding a raw-buffer test API. The existing scoped connection-use object supplies the deterministic borrow seam and passed alone before production movement. B001 closes the buffer-borrow portion of F-041; P7/P8 and physical lifecycle evidence remain owned by B005.
 
 ## F-042 â€” Correct the NINJAM integration guide's timing ownership and Stay-local contract
 
