@@ -3,7 +3,7 @@
 using namespace utils;
 
 Timer::Timer() :
-	_loopCount(0ul),
+	_loopCount(0u),
 	_sampOffset(0u),
 	_quantiseSamps(0u),
 	_seedSourceLengthSamps(0ul),
@@ -46,12 +46,13 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 	if (0ul == loopLength)
 		return;
 
-	const auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
-	const auto totalSamps = sampleOffset + static_cast<unsigned long>(sampsIncrement);
-	const auto wraps = totalSamps / loopLength;
-	const auto next = totalSamps % loopLength;
+	const auto sampleOffset = static_cast<std::uint64_t>(_sampOffset.load(std::memory_order_relaxed));
+	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
+	const auto totalSamps = sampleOffset + static_cast<std::uint64_t>(sampsIncrement);
+	const auto wraps = totalSamps / wideLoopLength;
+	const auto next = totalSamps % wideLoopLength;
 
-	if (wraps > 0ul)
+	if (wraps > 0u)
 		_loopCount.fetch_add(wraps, std::memory_order_relaxed);
 
 	_sampOffset.store(static_cast<unsigned int>(next), std::memory_order_relaxed);
@@ -62,7 +63,7 @@ void Timer::Clear()
 	_quantiseSamps.store(0u, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);
-	_loopCount.store(0ul, std::memory_order_release);
+	_loopCount.store(0u, std::memory_order_release);
 }
 
 bool Timer::IsQuantisable() const
@@ -76,7 +77,7 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 	_quantiseSamps.store(quantiseSamps, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);
-	_loopCount.store(0ul, std::memory_order_release);
+	_loopCount.store(0u, std::memory_order_release);
 	_quantisation.store(quantisation, std::memory_order_release);
 }
 
@@ -222,7 +223,7 @@ bool Timer::ApplyCommand(const Command& command) noexcept
 		const auto offset = command.SeedLengthSamps == 0ul ? 0ul :
 			static_cast<unsigned long>(command.PhaseDeltaSamps) % command.SeedLengthSamps;
 		_sampOffset.store(static_cast<unsigned int>(offset), std::memory_order_relaxed);
-		_loopCount.store(0ul, std::memory_order_relaxed);
+		_loopCount.store(0u, std::memory_order_relaxed);
 		return true;
 	}
 

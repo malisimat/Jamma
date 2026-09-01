@@ -155,7 +155,6 @@ namespace ninjam
 		const io::UserConfig& config,
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
-		void BeginJoinAlignment(utils::Timer& clock) noexcept;
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,

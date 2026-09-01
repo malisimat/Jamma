@@ -28,8 +28,16 @@ namespace ninjam
 			_generation.store(timing.Generation, std::memory_order_relaxed);
 			_remoteWrapCount.store(timing.RemoteWrapCount, std::memory_order_relaxed);
 			_observationSequence.store(timing.ObservationSequence, std::memory_order_relaxed);
+			_hasLocalTransport.store(timing.HasLocalTransport, std::memory_order_relaxed);
+			_localMasterLengthSamps.store(timing.LocalTransport.MasterLengthSamps, std::memory_order_relaxed);
+			_localMasterPhaseSamps.store(timing.LocalTransport.MasterPhaseSamps, std::memory_order_relaxed);
+			_localLoopCount.store(timing.LocalTransport.LoopCount, std::memory_order_relaxed);
+			_localAbsoluteSamplePos.store(timing.LocalTransport.AbsoluteSamplePos, std::memory_order_relaxed);
+			_localSceneSamplePos.store(timing.LocalTransport.SceneSamplePos, std::memory_order_relaxed);
+			_hasAudioBlockStartSample.store(timing.HasAudioBlockStartSample, std::memory_order_relaxed);
 			_localBlockStartSample.store(timing.LocalBlockStartSample, std::memory_order_relaxed);
 			_audioBlockStartSample.store(timing.AudioBlockStartSample, std::memory_order_relaxed);
+			_observationAgeSamps.store(timing.ObservationAgeSamps, std::memory_order_relaxed);
 			_sequence.store(sequence + 2u, std::memory_order_release);
 			_hasPublication.store(true, std::memory_order_release);
 		}
@@ -57,8 +65,16 @@ namespace ninjam
 				timing.Generation = _generation.load(std::memory_order_relaxed);
 				timing.RemoteWrapCount = _remoteWrapCount.load(std::memory_order_relaxed);
 				timing.ObservationSequence = _observationSequence.load(std::memory_order_relaxed);
+				timing.HasLocalTransport = _hasLocalTransport.load(std::memory_order_relaxed);
+				timing.LocalTransport.MasterLengthSamps = _localMasterLengthSamps.load(std::memory_order_relaxed);
+				timing.LocalTransport.MasterPhaseSamps = _localMasterPhaseSamps.load(std::memory_order_relaxed);
+				timing.LocalTransport.LoopCount = _localLoopCount.load(std::memory_order_relaxed);
+				timing.LocalTransport.AbsoluteSamplePos = _localAbsoluteSamplePos.load(std::memory_order_relaxed);
+				timing.LocalTransport.SceneSamplePos = _localSceneSamplePos.load(std::memory_order_relaxed);
+				timing.HasAudioBlockStartSample = _hasAudioBlockStartSample.load(std::memory_order_relaxed);
 				timing.LocalBlockStartSample = _localBlockStartSample.load(std::memory_order_relaxed);
 				timing.AudioBlockStartSample = _audioBlockStartSample.load(std::memory_order_relaxed);
+				timing.ObservationAgeSamps = _observationAgeSamps.load(std::memory_order_relaxed);
 
 				const auto after = _sequence.load(std::memory_order_acquire);
 				if (before == after)
@@ -83,7 +99,15 @@ namespace ninjam
 		std::atomic<std::uint64_t> _generation{ 0u };
 		std::atomic<unsigned long> _remoteWrapCount{ 0ul };
 		std::atomic<std::uint64_t> _observationSequence{ 0u };
+		std::atomic_bool _hasLocalTransport{ false };
+		std::atomic<std::uint64_t> _localMasterLengthSamps{ 0u };
+		std::atomic<std::uint64_t> _localMasterPhaseSamps{ 0u };
+		std::atomic<std::uint64_t> _localLoopCount{ 0u };
+		std::atomic<std::uint64_t> _localAbsoluteSamplePos{ 0u };
+		std::atomic<std::uint64_t> _localSceneSamplePos{ 0u };
+		std::atomic_bool _hasAudioBlockStartSample{ false };
 		std::atomic<std::uint64_t> _localBlockStartSample{ 0u };
 		std::atomic<std::uint64_t> _audioBlockStartSample{ 0u };
+		std::atomic<std::uint64_t> _observationAgeSamps{ 0u };
 	};
 }

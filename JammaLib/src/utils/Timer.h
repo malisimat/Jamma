@@ -12,6 +12,15 @@ namespace utils
 	class Timer
 	{
 	public:
+		struct TransportObservation
+		{
+			std::uint64_t MasterLengthSamps = 0u;
+			std::uint64_t MasterPhaseSamps = 0u;
+			std::uint64_t LoopCount = 0u;
+			std::uint64_t AbsoluteSamplePos = 0u;
+			std::uint64_t SceneSamplePos = 0u;
+		};
+
 		enum QuantisationType
 		{
 			QUANTISE_OFF,
@@ -67,18 +76,29 @@ namespace utils
 		std::tuple<unsigned long, int> QuantiseLength(unsigned long length);
 
 		unsigned int SampOffset() const noexcept { return _sampOffset.load(std::memory_order_relaxed); }
-		unsigned long LoopCount() const noexcept { return _loopCount.load(std::memory_order_relaxed); }
+		std::uint64_t LoopCount() const noexcept { return _loopCount.load(std::memory_order_relaxed); }
 
 		// Returns (LoopCount * SeedSourceLength) + SampOffset, the absolute timeline
 		// position in samples since the clock was seeded.  Returns `fallback` when
 		// the clock has not yet been seeded (SeedSourceLength == 0).
-		unsigned long AbsoluteSamplePos(unsigned long fallback = 0ul) const noexcept
+		std::uint64_t AbsoluteSamplePos(std::uint64_t fallback = 0u) const noexcept
 		{
 			const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
 			if (loopLength == 0ul)
 				return fallback;
-			return _loopCount.load(std::memory_order_relaxed) * loopLength
-				+ static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
+			return _loopCount.load(std::memory_order_relaxed) * static_cast<std::uint64_t>(loopLength)
+				+ static_cast<std::uint64_t>(_sampOffset.load(std::memory_order_relaxed));
+		}
+		TransportObservation ObserveTransport() const noexcept
+		{
+			const auto masterLength = static_cast<std::uint64_t>(
+				_seedSourceLengthSamps.load(std::memory_order_acquire));
+			const auto loopCount = _loopCount.load(std::memory_order_relaxed);
+			const auto masterPhase = static_cast<std::uint64_t>(
+				_sampOffset.load(std::memory_order_relaxed));
+			return { masterLength, masterPhase, loopCount,
+				masterLength == 0u ? 0u : loopCount * masterLength + masterPhase,
+				_sceneSamplePos.load(std::memory_order_relaxed) };
 		}
 		std::uint64_t SceneSamplePos() const noexcept
 		{
@@ -95,7 +115,7 @@ namespace utils
 		MusicalPosition CurrentMusicalPosition(unsigned int sampleRate) const noexcept;
 
 	private:
-		std::atomic_ulong _loopCount;
+		std::atomic<std::uint64_t> _loopCount;
 		std::atomic<std::uint64_t> _sceneSamplePos{ 0u };
 		std::atomic_uint _sampOffset;
 		std::atomic_uint _quantiseSamps;

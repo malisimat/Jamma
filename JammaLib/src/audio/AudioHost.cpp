@@ -226,7 +226,7 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 					const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
 						timingClock->SeedSourceLength(), timingClock->SampOffset(),
 						static_cast<unsigned int>(command->SeedLengthSamps), command->AbsolutePhaseSamps,
-						command->PhaseObservationSample, blockStartSample);
+						std::optional<std::uint64_t>{ command->PhaseObservationSample }, blockStartSample);
 					timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
 					timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemotePhaseSamps);
 					musicalRemotePhase = replacement.RemotePhaseSamps;

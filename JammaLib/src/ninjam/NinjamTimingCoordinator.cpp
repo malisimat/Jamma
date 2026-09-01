@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace ninjam;
 
@@ -75,6 +76,13 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	NinjamTimingUpdate update;
 	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
 		return update;
+	// Remote and local phase must describe the same audio boundary. An observation
+	// without either explicit anchor is deferred; never substitute a live Timer
+	// read taken later on the job thread.
+	if (!timing.HasAudioBlockStartSample || !timing.HasLocalTransport)
+		return update;
+	_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
+		timing.ObservationAgeSamps);
 	++_observationOrdinal;
 	_latestObservedTempoChange = _MakeProposal(timing, config);
 
@@ -101,7 +109,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	observation.IntervalPositionSamps = timing.IntervalPositionSamps;
 	// Preserve the callback-time local anchor (Timer absolute domain) so phase is
 	// compared at the observation instant rather than at job-processing time (§2.7).
-	observation.LocalSample = timing.LocalBlockStartSample;
+	observation.LocalSample = timing.LocalTransport.AbsoluteSamplePos;
 	const auto event = _tracker.Observe(observation);
 	const auto trackerDiagnostics = _tracker.Diagnostics();
 	_diagnostics.ObservationsAccepted = trackerDiagnostics.ObservationsAccepted;
@@ -140,9 +148,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		++_diagnostics.PhaseEventsInvalidated;
 		_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, event->Generation);
 	}
-	if (!_joinAligned && clock.SeedSourceLength() == timing.IntervalLengthSamps)
+	if (!_joinAligned
+		&& timing.LocalTransport.MasterLengthSamps == timing.IntervalLengthSamps)
 	{
-		_tracker.BeginJoinAlignment(clock.SampOffset());
+		_tracker.BeginJoinAlignment(static_cast<unsigned long>(
+			timing.LocalTransport.MasterPhaseSamps));
 		_joinAligned = true;
 		_pendingTempoChange.reset();
 		_ignoredTempoChange.reset();
@@ -171,7 +181,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 
 	if (event->Type != NinjamTimingEventType::Wrap && event->Type != NinjamTimingEventType::Join)
 		return update;
-	if (clock.SeedSourceLength() != timing.IntervalLengthSamps
+	if (timing.LocalTransport.MasterLengthSamps != timing.IntervalLengthSamps
 		&& (_pendingTempoChange.has_value() || _ignoredTempoChange.has_value()))
 		return update;
 
@@ -213,28 +223,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		}
 	}
 
-	const auto seedLength = clock.SeedSourceLength();
-	if (seedLength == 0ul)
+	const auto seedLength = timing.LocalTransport.MasterLengthSamps;
+	if (seedLength == 0u || seedLength > (std::numeric_limits<unsigned int>::max)())
 		return update;
-	// Project the current Timer offset back to the observation's callback anchor so
-	// remote (observation-time) and local phase are compared at the same instant.
-	// Both anchors live in the Timer absolute-sample domain. A zero anchor means no
-	// callback anchor was supplied, so compare against the live offset directly.
-	unsigned int localOffset = clock.SampOffset();
-	if (observation.LocalSample != 0u)
-	{
-		const auto nowAnchor = static_cast<std::uint64_t>(
-			clock.AbsoluteSamplePos(static_cast<unsigned long>(observation.LocalSample)));
-		if (nowAnchor >= observation.LocalSample)
-		{
-			const auto elapsed = static_cast<unsigned int>(
-				(nowAnchor - observation.LocalSample) % seedLength);
-			_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
-				static_cast<std::uint64_t>(nowAnchor - observation.LocalSample));
-			localOffset = static_cast<unsigned int>(
-				(static_cast<unsigned long>(localOffset) + seedLength - elapsed) % seedLength);
-		}
-	}
+	const auto localOffset = static_cast<unsigned int>(
+		timing.LocalTransport.MasterPhaseSamps % seedLength);
 	const auto delta = event->Type == NinjamTimingEventType::Join ? event->PhaseDeltaSamps :
 		SignedCircularDifference(localOffset, event->RemotePositionSamps,
 			static_cast<unsigned int>(seedLength));
@@ -248,7 +241,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	// keep the small buffer-scale cap to reject anomalous drift on that path only.
 	const bool isJoin = event->Type == NinjamTimingEventType::Join;
 	const auto safetyLimit = isJoin
-		? static_cast<long long>(seedLength / 2ul)
+		? static_cast<long long>(seedLength / 2u)
 		: static_cast<long long>(constants::DefaultBufferSizeSamps * 2u);
 	if (magnitude > safetyLimit)
 	{
@@ -264,11 +257,6 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			event->Generation);
 	}
 	return update;
-}
-
-void NinjamTimingCoordinator::BeginJoinAlignment(utils::Timer& clock) noexcept
-{
-	_tracker.BeginJoinAlignment(clock.SampOffset());
 }
 
 bool NinjamTimingCoordinator::_SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept

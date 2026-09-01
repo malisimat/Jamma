@@ -9,7 +9,8 @@ using utils::Timer;
 
 namespace
 {
-	NinjamTiming MakeTiming(unsigned int length, unsigned int position)
+	NinjamTiming MakeTiming(unsigned int length, unsigned int position,
+		unsigned int localPhase = 0u, unsigned int localLength = 0u)
 	{
 		NinjamTiming timing;
 		timing.IsConnected = true;
@@ -18,6 +19,12 @@ namespace
 		timing.SourceSampleRate = 44100u;
 		timing.IntervalLengthSamps = length;
 		timing.IntervalPositionSamps = position;
+		timing.HasAudioBlockStartSample = true;
+		timing.AudioBlockStartSample = 0u;
+		timing.HasLocalTransport = true;
+		timing.LocalTransport.MasterLengthSamps = localLength == 0u ? length : localLength;
+		timing.LocalTransport.MasterPhaseSamps = localPhase;
+		timing.LocalTransport.AbsoluteSamplePos = position;
 		return timing;
 	}
 
@@ -47,12 +54,7 @@ TEST(NinjamTimingCoordinator, FirstGenerationInvalidatesOldCorrectionsWithoutEmi
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
 
-	NinjamTiming timing;
-	timing.IsConnected = true;
-	timing.IsValid = true;
-	timing.DeviceSampleRate = 48000u;
-	timing.IntervalLengthSamps = 1000u;
-	timing.IntervalPositionSamps = 300u;
+	auto timing = MakeTiming(1000u, 300u);
 	const auto update = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock);
 
 	EXPECT_TRUE(update.InvalidatePendingCorrections);
@@ -68,12 +70,7 @@ TEST(NinjamTimingCoordinator, AcceptedWrapProducesOneGenerationTaggedCorrection)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, false);
 
-	NinjamTiming timing;
-	timing.IsConnected = true;
-	timing.IsValid = true;
-	timing.DeviceSampleRate = 48000u;
-	timing.IntervalLengthSamps = 1000u;
-	timing.IntervalPositionSamps = 900u;
+	auto timing = MakeTiming(1000u, 900u);
 	coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
 	timing.IntervalPositionSamps = 10u;
 	const auto update = coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
@@ -139,10 +136,11 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 	clock.SetSeedSourceLength(384000ul);
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
-	coordinator.Observe(MakeTiming(480000u, 400000u), std::nullopt, true, io::UserConfig{}, clock);
+	coordinator.Observe(MakeTiming(480000u, 400000u, 0u, 384000u),
+		std::nullopt, true, io::UserConfig{}, clock);
 	const auto rejected = coordinator.ResolveTempoChange(false, std::nullopt, clock);
 	EXPECT_TRUE(rejected.InvalidatePendingCorrections);
-	const auto update = coordinator.Observe(MakeTiming(480000u, 1000u), std::nullopt, true,
+	const auto update = coordinator.Observe(MakeTiming(480000u, 1000u, 0u, 384000u), std::nullopt, true,
 		io::UserConfig{}, clock);
 	EXPECT_FALSE(update.PhaseCorrection.has_value());
 }
@@ -296,10 +294,12 @@ namespace
 		Connect(coordinator, false, false);
 
 		// Generation change: records remote anchor and freezes the join delta.
-		coordinator.Observe(MakeTiming(length, anchorPos), std::nullopt, false, io::UserConfig{}, clock);
+		coordinator.Observe(MakeTiming(length, anchorPos, localOffset),
+			std::nullopt, false, io::UserConfig{}, clock);
 		// A backward move from the final quarter into the first quarter is the wrap
 		// that releases the pending Join event.
-		return coordinator.Observe(MakeTiming(length, 1000u), std::nullopt, false, io::UserConfig{}, clock);
+		return coordinator.Observe(MakeTiming(length, 1000u, localOffset),
+			std::nullopt, false, io::UserConfig{}, clock);
 	}
 }
 
@@ -321,6 +321,35 @@ TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
 	ASSERT_TRUE(update.PhaseCorrection.has_value());
 	EXPECT_TRUE(update.PhaseCorrection->IsJoin);
 	EXPECT_EQ(48000, update.PhaseCorrection->DeltaSamps);
+}
+
+TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLiveTimer)
+{
+	const auto runScenario = [](unsigned int delayBlocks)
+		{
+			Timer clock;
+			clock.SetSeedSourceLength(1000ul);
+			clock.Tick(900u, 0u);
+			NinjamTimingCoordinator coordinator;
+			Connect(coordinator, false, false);
+
+			coordinator.Observe(MakeTiming(1000u, 875u, 250u),
+				std::nullopt, false, io::UserConfig{}, clock);
+			for (unsigned int block = 0u; block < delayBlocks; ++block)
+				clock.Tick(256u, 0u);
+			return coordinator.Observe(MakeTiming(1000u, 100u, 250u),
+				std::nullopt, false, io::UserConfig{}, clock);
+		};
+
+	const auto immediate = runScenario(0u);
+	const auto delayed = runScenario(7u);
+	ASSERT_TRUE(immediate.PhaseCorrection.has_value());
+	ASSERT_TRUE(delayed.PhaseCorrection.has_value());
+	EXPECT_TRUE(immediate.PhaseCorrection->IsJoin);
+	EXPECT_TRUE(delayed.PhaseCorrection->IsJoin);
+	EXPECT_EQ(-375, immediate.PhaseCorrection->DeltaSamps);
+	EXPECT_EQ(immediate.PhaseCorrection->DeltaSamps,
+		delayed.PhaseCorrection->DeltaSamps);
 }
 
 // ── Phase 5: tempo request state machine (§2.6/§3.5) ─────────────────────────

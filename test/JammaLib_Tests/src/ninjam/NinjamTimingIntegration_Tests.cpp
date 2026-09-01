@@ -219,6 +219,8 @@ namespace
 		remote.SourceSampleRate = sourceRate;
 		remote.Bpm = bpm;
 		remote.Bpi = bpi;
+		remote.HasAudioBlockStartSample = true;
+		remote.AudioBlockStartSample = 0u;
 		return remote;
 	}
 
@@ -232,6 +234,13 @@ namespace
 		timing.SourceSampleRate = 48000u;
 		timing.IntervalLengthSamps = length;
 		timing.IntervalPositionSamps = position;
+		timing.HasAudioBlockStartSample = true;
+		timing.AudioBlockStartSample = anchor;
+		timing.HasLocalTransport = true;
+		timing.LocalTransport.MasterLengthSamps = length;
+		timing.LocalTransport.MasterPhaseSamps = anchor % length;
+		timing.LocalTransport.AbsoluteSamplePos = anchor;
+		timing.LocalTransport.SceneSamplePos = anchor;
 		timing.LocalBlockStartSample = anchor;
 		return timing;
 	}
@@ -252,9 +261,13 @@ TEST(NinjamTimingIntegration, SampleRateConvertedReplacementFansOutToTimerAndTak
 	// 352800 source samples at 44.1 kHz is exactly one 8-second bar; scaled to
 	// 48 kHz it must round to 384000, matching a native 48 kHz interval.
 	const auto remote = MakeRemote(352800u, 100u, 44100u, 120.0f, 16u);
-	const auto device = ToDeviceTiming(remote, /*connected*/ true, /*deviceRate*/ 48000u,
+	auto device = ToDeviceTiming(remote, /*connected*/ true, /*deviceRate*/ 48000u,
 		/*generation*/ 1u, /*wrap*/ 0ul, /*sequence*/ 1u, /*anchor*/ 0u,
 		/*audioBlockStart*/ 0u);
+	device.HasLocalTransport = true;
+	device.LocalTransport.MasterLengthSamps = 0u;
+	device.LocalTransport.MasterPhaseSamps = 0u;
+	device.LocalTransport.AbsoluteSamplePos = 0u;
 	ASSERT_TRUE(device.IsValid);
 	EXPECT_EQ(384000u, device.IntervalLengthSamps);
 
@@ -531,9 +544,11 @@ TEST(NinjamTimingIntegration, DiagnosticsReconcileQueuedAndConsumedCorrections)
 	const unsigned int length = 384000u;
 	for (unsigned int cycle = 0u; cycle < 12u; ++cycle)
 	{
-		harness.Coordinator.Observe(MakeTiming48(length, length - (length / 8u)),
+		const auto endAnchor = harness.Clock.AbsoluteSamplePos();
+		harness.Coordinator.Observe(MakeTiming48(length, length - (length / 8u), endAnchor),
 			std::nullopt, false, io::UserConfig{}, harness.Clock);
-		const auto wrap = harness.Coordinator.Observe(MakeTiming48(length, 5000u),
+		const auto wrapAnchor = harness.Clock.AbsoluteSamplePos();
+		const auto wrap = harness.Coordinator.Observe(MakeTiming48(length, 5000u, wrapAnchor),
 			std::nullopt, false, io::UserConfig{}, harness.Clock);
 		if (wrap.PhaseCorrection.has_value())
 			++emittedCorrections;
@@ -573,12 +588,12 @@ TEST(NinjamTimingIntegration, JobSchedulingDelayDoesNotChangeCorrectionTarget)
 		coordinator.Connect(options, std::nullopt);
 
 		// First observation (final quarter) establishes the generation.
-		coordinator.Observe(MakeTiming48(length, length - (length / 8u)), std::nullopt,
+		const auto anchor = static_cast<std::uint64_t>(clock.AbsoluteSamplePos(0u));
+		coordinator.Observe(MakeTiming48(length, length - (length / 8u), anchor), std::nullopt,
 			false, io::UserConfig{}, clock);
 
 		// The anchor is the Timer-domain absolute sample captured when the audio
 		// block produced the reading, before any job-scheduling delay.
-		const auto anchor = static_cast<std::uint64_t>(clock.AbsoluteSamplePos(0u));
 
 		// Simulate the job thread being late: the Timer keeps advancing before the
 		// wrap observation is processed.
@@ -620,7 +635,9 @@ TEST(NinjamTimingIntegration, TelemetryReconcilesObservationAgeAndEmittedCommand
 
 	// The first observation is a generation change that auto-accepts the remote
 	// tempo, so the coordinator emits an Invalidate followed by a Replace.
-	const auto first = harness.Coordinator.Observe(MakeTiming48(length, length - (length / 8u)),
+	const auto firstAnchor = harness.Clock.AbsoluteSamplePos();
+	const auto first = harness.Coordinator.Observe(MakeTiming48(
+		length, length - (length / 8u), firstAnchor),
 		std::nullopt, false, io::UserConfig{}, harness.Clock);
 	harness.PublishUpdate(first);
 
@@ -634,7 +651,13 @@ TEST(NinjamTimingIntegration, TelemetryReconcilesObservationAgeAndEmittedCommand
 	// observation carries a measurable age when the coordinator processes it.
 	const auto anchor = static_cast<std::uint64_t>(harness.Clock.AbsoluteSamplePos(0u));
 	harness.Clock.Tick(1536u, 0u);
-	const auto wrap = harness.Coordinator.Observe(MakeTiming48(length, 5000u, anchor),
+	auto projected = ninjam::ProjectTimingToAudioSample(
+		MakeTiming48(length, 5000u, anchor), anchor + 1536u);
+	projected.LocalTransport.MasterPhaseSamps = harness.Clock.SampOffset();
+	projected.LocalTransport.AbsoluteSamplePos = harness.Clock.AbsoluteSamplePos();
+	projected.LocalTransport.SceneSamplePos = harness.Clock.SceneSamplePos();
+	projected.LocalBlockStartSample = projected.LocalTransport.AbsoluteSamplePos;
+	const auto wrap = harness.Coordinator.Observe(projected,
 		std::nullopt, false, io::UserConfig{}, harness.Clock);
 	harness.PublishUpdate(wrap);
 
