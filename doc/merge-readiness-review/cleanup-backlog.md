@@ -53,6 +53,7 @@
 - **Prerequisite:** P12 `NinjamTimingInput.RejectsNonFiniteTempoWithoutEgress` passes before production edits.
 - **Rollback:** revert the two Jamma-owned validation boundaries and P12; valid endpoint behavior must return together.
 - **Verification:** P12 plus existing `NinjamTiming.SharedValidityAcceptsPlausibleTiming`; audit that rejection sends nothing and changes no authority. Review: `B002.md`.
+- **Execution result (2026-08-31):** prerequisite `c9bec2fa0616de5fedda801959fc878a7e1d7370`; implementation `e0d60f2d0141b42a7e3ade5cb161ff264b1200a6`. Wrapped incremental Debug x64 native-test build passed. Required policy filter passed 2/2 and related conversion/formatting filter passed 3/3. Invalid BPM/BPI now returns before arithmetic/conversion and before formatting/string/lock/send/logging; static call-chain audit found no tempo-egress bypass or authority mutation. Dynamic send counting was not added because it would require a prohibited seam. Status: implemented and verified; independent review pending.
 
 ### B003 — Bound local seed-policy conversion
 

@@ -397,6 +397,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote BPM/BPI inputs and the derived source-rate interval length remain distinct.
 - Verification: table-drive NaN, positive/negative infinity, zero, negative, plausible endpoints, just-outside endpoints, and extreme finite BPM/BPI/rate values; helper returns zero, outgoing request returns false and sends nothing, valid formatting remains stable.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: B002 prerequisite `c9bec2fa0616de5fedda801959fc878a7e1d7370` locks the existing plausible BPM/BPI policy under P12. Implementation `e0d60f2d0141b42a7e3ade5cb161ff264b1200a6` factors that policy into `IsValidNinjamTempo` and applies it before `IntervalSampsFromTempo` arithmetic/conversion and as the first statement of `NinjamConnection::RequestServerTempo`. P12 plus plausible timing passed 2/2; placeholder/conversion/fractional-formatting tests passed 3/3. Static egress audit proves invalid input returns before formatting, string construction, locking, all four admin/vote sends, logging, or authority mutation. Dynamic send-count instrumentation was not added because it would require a prohibited connection/NJClient seam. Independent review pending.
 
 ## F-033 â€” Keep remote stereo buffer borrows inside the connection lifetime guard
 
