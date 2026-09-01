@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include <cmath>
 #include <limits>
+#include "./ninjam/NinjamConnection.h"
 #include "./ninjam/NinjamTiming.h"
 #include "./ninjam/NinjamLoopAlignment.h"
 #include "utils/MusicalTransport.h"
@@ -250,33 +251,52 @@ TEST(NinjamTimingInput, RejectsNonFiniteTempoWithoutEgress)
 {
 	constexpr auto intervalLengthSamps = 22050u;
 	constexpr auto sourceSampleRate = 44100u;
+	constexpr auto conversionSampleRate = 48000u;
 	constexpr auto validBpi = 8u;
 	constexpr auto minBpm = 20.0f;
 	constexpr auto maxBpm = 400.0f;
+	ninjam::NinjamConnection disconnected("", "", "", "");
+	ASSERT_FALSE(disconnected.IsConnected());
 
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		std::numeric_limits<float>::quiet_NaN(), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		std::numeric_limits<float>::infinity(), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		-std::numeric_limits<float>::infinity(), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 0.0f, validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, -1.0f, validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		std::nextafter(minBpm, -std::numeric_limits<float>::infinity()), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		std::nextafter(maxBpm, std::numeric_limits<float>::infinity()), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		(std::numeric_limits<float>::lowest)(), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
-		(std::numeric_limits<float>::max)(), validBpi));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f, 0u));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f, 33u));
-	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f,
-		(std::numeric_limits<unsigned int>::max)()));
+	const auto expectRejected = [&](float bpm, unsigned int bpi)
+	{
+		EXPECT_FALSE(ninjam::IsValidRemoteTiming(
+			intervalLengthSamps, sourceSampleRate, bpm, bpi));
+		EXPECT_EQ(0u, ninjam::IntervalSampsFromTempo(bpm, bpi, conversionSampleRate));
+		if (bpi <= static_cast<unsigned int>((std::numeric_limits<int>::max)()))
+			EXPECT_FALSE(disconnected.RequestServerTempo(bpm, static_cast<int>(bpi)));
+	};
+
+	expectRejected(std::numeric_limits<float>::quiet_NaN(), validBpi);
+	expectRejected(std::numeric_limits<float>::infinity(), validBpi);
+	expectRejected(-std::numeric_limits<float>::infinity(), validBpi);
+	expectRejected(0.0f, validBpi);
+	expectRejected(-1.0f, validBpi);
+	expectRejected(std::nextafter(minBpm, -std::numeric_limits<float>::infinity()), validBpi);
+	expectRejected(std::nextafter(maxBpm, std::numeric_limits<float>::infinity()), validBpi);
+	expectRejected((std::numeric_limits<float>::lowest)(), validBpi);
+	expectRejected((std::numeric_limits<float>::max)(), validBpi);
+	expectRejected(120.0f, 0u);
+	expectRejected(120.0f, 33u);
+	expectRejected(120.0f, (std::numeric_limits<unsigned int>::max)());
+	EXPECT_FALSE(ninjam::IsValidNinjamTempo(120.0f, -1));
+	EXPECT_FALSE(disconnected.RequestServerTempo(120.0f, -1));
+	EXPECT_FALSE(ninjam::IsValidNinjamTempo(120.0f, (std::numeric_limits<int>::max)()));
+	EXPECT_FALSE(disconnected.RequestServerTempo(120.0f, (std::numeric_limits<int>::max)()));
 
 	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, minBpm, 1u));
 	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, maxBpm, 32u));
+	EXPECT_EQ(144000u, ninjam::IntervalSampsFromTempo(minBpm, 1u, conversionSampleRate));
+	EXPECT_EQ(230400u, ninjam::IntervalSampsFromTempo(maxBpm, 32u, conversionSampleRate));
+	EXPECT_EQ((std::numeric_limits<unsigned int>::max)(), ninjam::IntervalSampsFromTempo(
+		minBpm, 32u, (std::numeric_limits<unsigned int>::max)()));
+	EXPECT_EQ("20", ninjam::NinjamConnection::FormatTempoBpm(minBpm));
+	EXPECT_EQ("400", ninjam::NinjamConnection::FormatTempoBpm(maxBpm));
+
+	// This existing-owner disconnected instance proves rejection results without
+	// network I/O. It cannot count sends; no-send remains a structural guarantee
+	// of RequestServerTempo's first-statement guard before formatting/locking/sends.
+	EXPECT_FALSE(disconnected.IsConnected());
 }
 
 TEST(NinjamTiming, SharedValidityRejectsPlaceholderTempo)
