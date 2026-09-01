@@ -34,14 +34,13 @@ namespace ninjam
 		void Disconnect();
 		void Stop();
 
-		void ProcessExportBlock(const float* interleavedDacOutput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
 			const float* interleavedAdcInput,
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
-
-		NinjamRemoteTiming GetLiveTiming() const noexcept;
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
 		// Pins the current connection; keep the guard alive while using any
 		// connection-owned storage returned through it.

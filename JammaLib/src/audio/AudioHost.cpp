@@ -439,24 +439,27 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			}
 		};
 
+		const auto localTransport = timingClock
+			? std::optional<utils::Timer::TransportObservation>{ timingClock->ObserveTransport() }
+			: std::nullopt;
 		ninjam::NinjamTiming liveTiming;
-		if (_ninjamController)
-		{
-			const auto remoteTiming = _ninjamController->GetLiveTiming();
-			// Anchor the observation to the Timer's block-start position (the Timer
-			// is ticked at end-of-block, so it still reflects block start here). The
-			// coordinator projects phase back to this anchor so job-scheduling delay
-			// does not masquerade as phase error (§2.7).
-			const auto anchorClock = _timingClock.load(std::memory_order_acquire);
-			const auto localAnchor = anchorClock
-				? static_cast<std::uint64_t>(anchorClock->AbsoluteSamplePos(
-					static_cast<unsigned long>(blockStartSample)))
-				: blockStartSample;
-			liveTiming = ninjam::ToDeviceTiming(remoteTiming, remoteTiming.IsConnected,
-				audioStreamParams.SampleRate, 0u, 0ul, ++_ninjamTimingObservationSequence, localAnchor,
-				blockStartSample);
-			_ninjamTimingMailbox.Publish(liveTiming);
-		}
+		const auto publishNinjamTiming = [&](const ninjam::NinjamRemoteTiming& remoteTiming)
+			{
+				liveTiming = ninjam::ProjectTimingToAudioSample(ninjam::ToDeviceTiming(remoteTiming,
+					remoteTiming.IsConnected, audioStreamParams.SampleRate, 0u, 0ul,
+					++_ninjamTimingObservationSequence), blockStartSample);
+				if (localTransport.has_value())
+				{
+					liveTiming.HasLocalTransport = true;
+					liveTiming.LocalTransport.MasterLengthSamps = localTransport->MasterLengthSamps;
+					liveTiming.LocalTransport.MasterPhaseSamps = localTransport->MasterPhaseSamps;
+					liveTiming.LocalTransport.LoopCount = localTransport->LoopCount;
+					liveTiming.LocalTransport.AbsoluteSamplePos = localTransport->AbsoluteSamplePos;
+					liveTiming.LocalTransport.SceneSamplePos = localTransport->SceneSamplePos;
+					liveTiming.LocalBlockStartSample = localTransport->AbsoluteSamplePos;
+				}
+				_ninjamTimingMailbox.Publish(liveTiming);
+			};
 
 		if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
 			&& timingClock && _syncPhaseMap.IsActive())
@@ -482,12 +485,14 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 			{
 				const auto metronomeEnabled = _ninjamMetronomeEnabled.load(std::memory_order_acquire);
 
-				_ninjamController->ProcessExportBlock(outBuf,
+				const auto remoteTiming = _ninjamController->ProcessExportBlock(outBuf,
 					audioStreamParams.NumOutputChannels,
 					inBuf,
 					audioStreamParams.NumInputChannels,
 					numSamps,
-					audioStreamParams.SampleRate);
+					audioStreamParams.SampleRate,
+					blockStartSample);
+				publishNinjamTiming(remoteTiming);
 
 				if (metronomeEnabled && liveTiming.IsValid)
 				{
@@ -531,12 +536,14 @@ std::optional<NinjamTimingCommandReceipt> AudioHost::LastAppliedTimingCommand() 
 
 			if (_ninjamController)
 			{
-				_ninjamController->ProcessExportBlock(nullptr,
+				const auto remoteTiming = _ninjamController->ProcessExportBlock(nullptr,
 					audioStreamParams.NumOutputChannels,
 					inBuf,
 					audioStreamParams.NumInputChannels,
 					numSamps,
-					audioStreamParams.SampleRate);
+					audioStreamParams.SampleRate,
+					blockStartSample);
+				publishNinjamTiming(remoteTiming);
 			}
 		}
 

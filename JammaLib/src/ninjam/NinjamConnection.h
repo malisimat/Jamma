@@ -92,14 +92,13 @@ namespace ninjam
 			unsigned int inLatencySamps = 0u,
 			unsigned int outLatencySamps = 0u);
 
-		void ProcessExportBlock(const float* interleavedDacOutput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
 			const float* interleavedAdcInput,
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
-
-		NinjamRemoteTiming GetLiveTiming() const noexcept;
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
 		NinjamRemoteSnapshot Snapshot() const;
 
@@ -153,6 +152,8 @@ namespace ninjam
 			unsigned int numInputScratchChannels);
 		void _ApplyLocalChannels();
 		void _UpdateSnapshot();
+		void _PublishRemoteTiming(const NinjamRemoteTiming& timing) noexcept;
+		NinjamRemoteTiming _ReadPublishedRemoteTiming() const noexcept;
 		unsigned int _AssignOutputChannel(const std::string& userName);
 		void _ResizeExportDelayLines();
 		static void _WriteExportDelayLine(std::vector<std::shared_ptr<audio::AudioBuffer>>& lines,
@@ -218,6 +219,24 @@ namespace ninjam
 		unsigned int _exportTick = 0u;
 		ExportLaneTimingState _exportTimingState;
 		std::atomic_uint _exportAnomalyCount{ 0u };
+		// AudioProc is bracketed odd/even so the job owner can reject timing
+		// getter samples that overlap NJClient mutation.
+		std::atomic<std::uint64_t> _audioProcSequence{ 0u };
+		std::atomic_bool _hasCompletedAudioSample{ false };
+		std::atomic<std::uint64_t> _completedAudioSample{ 0u };
+
+		// One job-thread writer publishes the accepted NJClient timing tuple;
+		// the audio callback performs a bounded coherent read.
+		std::atomic<std::uint64_t> _remoteTimingSequence{ 0u };
+		std::atomic_bool _remoteTimingIsConnected{ false };
+		std::atomic_uint _remoteTimingIntervalLength{ 0u };
+		std::atomic_uint _remoteTimingIntervalPosition{ 0u };
+		std::atomic_uint _remoteTimingSourceSampleRate{ 0u };
+		std::atomic<float> _remoteTimingBpm{ 0.0f };
+		std::atomic_uint _remoteTimingBpi{ 0u };
+		std::atomic_bool _remoteTimingIsValid{ false };
+		std::atomic_bool _remoteTimingHasAudioBlockStartSample{ false };
+		std::atomic<std::uint64_t> _remoteTimingAudioBlockStartSample{ 0u };
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
 		std::vector<std::string> _lastLoggedUsers;

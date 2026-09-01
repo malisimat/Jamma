@@ -475,27 +475,24 @@ void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
 }
 
-void NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,
+NinjamRemoteTiming NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,
 	unsigned int numDacChannels,
 	const float* interleavedAdcInput,
 	unsigned int numAdcChannels,
 	unsigned int numFrames,
-	unsigned int sampleRate)
+	unsigned int sampleRate,
+	std::uint64_t audioBlockStartSample)
 {
 	NinjamConnectionUse conn(*this);
 	if (conn)
-		conn->ProcessExportBlock(interleavedDacOutput,
+		return conn->ProcessExportBlock(interleavedDacOutput,
 			numDacChannels,
 			interleavedAdcInput,
 			numAdcChannels,
 			numFrames,
-			sampleRate);
-}
-
-NinjamRemoteTiming NinjamSession::GetLiveTiming() const noexcept
-{
-	NinjamConnectionUse conn(*this);
-	return conn ? conn->GetLiveTiming() : NinjamRemoteTiming{};
+			sampleRate,
+			audioBlockStartSample);
+	return {};
 }
 
 bool NinjamSession::RequestServerTempo(float bpm, int bpi)

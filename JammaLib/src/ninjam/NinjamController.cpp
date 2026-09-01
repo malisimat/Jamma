@@ -84,24 +84,21 @@ void NinjamController::Stop()
 	_pendingSnapshot.reset();
 }
 
-void NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
+NinjamRemoteTiming NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
 	unsigned int numDacChannels,
 	const float* interleavedAdcInput,
 	unsigned int numAdcChannels,
 	unsigned int numFrames,
-	unsigned int sampleRate)
+	unsigned int sampleRate,
+	std::uint64_t audioBlockStartSample)
 {
-	_session.ProcessExportBlock(interleavedDacOutput,
+	return _session.ProcessExportBlock(interleavedDacOutput,
 		numDacChannels,
 		interleavedAdcInput,
 		numAdcChannels,
 		numFrames,
-		sampleRate);
-}
-
-NinjamRemoteTiming NinjamController::GetLiveTiming() const noexcept
-{
-	return _session.GetLiveTiming();
+		sampleRate,
+		audioBlockStartSample);
 }
 
 NinjamConnectionUse NinjamController::AcquireConnectionUse() const noexcept

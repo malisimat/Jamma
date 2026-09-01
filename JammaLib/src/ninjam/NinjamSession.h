@@ -96,14 +96,13 @@ namespace ninjam
 			unsigned int inLatencySamps = 0u,
 			unsigned int outLatencySamps = 0u);
 
-		void ProcessExportBlock(const float* interleavedDacOutput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
 			const float* interleavedAdcInput,
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
-
-		NinjamRemoteTiming GetLiveTiming() const noexcept;
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
 		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
 		// No-op if not connected.
