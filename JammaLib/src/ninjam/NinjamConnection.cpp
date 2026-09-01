@@ -741,7 +741,10 @@ NinjamRemoteSnapshot NinjamConnection::Snapshot() const
 
 bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 {
-	if (bpm <= 0.0f || bpi <= 0)
+	if (!IsValidNinjamTempo(bpm, bpi,
+		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
+		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
+		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi)))
 		return false;
 
 	const auto bpmVal = FormatTempoBpm(bpm);

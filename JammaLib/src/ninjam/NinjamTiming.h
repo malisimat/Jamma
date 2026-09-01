@@ -36,6 +36,19 @@ namespace ninjam
 		std::uint64_t AudioBlockStartSample = 0u;
 	};
 
+	inline bool IsValidNinjamTempo(float bpm,
+		std::int64_t bpi,
+		float minBpm = 20.0f,
+		float maxBpm = 400.0f,
+		unsigned int minBpi = 1u,
+		unsigned int maxBpi = 32u) noexcept
+	{
+		return std::isfinite(bpm)
+			&& bpm >= minBpm && bpm <= maxBpm
+			&& bpi >= static_cast<std::int64_t>(minBpi)
+			&& bpi <= static_cast<std::int64_t>(maxBpi);
+	}
+
 	// Shared validity boundary for remote timing. Used for both the live NJClient
 	// query and the periodic snapshot so a placeholder tempo the snapshot rejects
 	// cannot slip through the live path (§2.9). Bounds default to the plausible
@@ -53,8 +66,7 @@ namespace ninjam
 	{
 		return intervalLengthSamps > 0u
 			&& sourceSampleRate > 0u
-			&& bpm >= minBpm && bpm <= maxBpm
-			&& bpi >= minBpi && bpi <= maxBpi;
+			&& IsValidNinjamTempo(bpm, bpi, minBpm, maxBpm, minBpi, maxBpi);
 	}
 
 	inline unsigned int ScaleSampleRate(unsigned int samples,
@@ -127,7 +139,7 @@ namespace ninjam
 		unsigned int bpi,
 		unsigned int sampleRate) noexcept
 	{
-		if (bpm <= 0.0f || bpi == 0u || sampleRate == 0u)
+		if (!IsValidNinjamTempo(bpm, bpi) || sampleRate == 0u)
 			return 0u;
 
 		const auto samples = (static_cast<double>(sampleRate) * 60.0 * static_cast<double>(bpi))
