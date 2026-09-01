@@ -66,54 +66,92 @@ TEST(NinjamTimingObservationMailbox, ReplacesThePreviousCompleteObservation)
 	EXPECT_EQ(2u, observed->ObservationSequence);
 }
 
-TEST(NinjamTimingObservationMailbox, ConcurrentReadsAreCompleteOrDeferred)
+TEST(NinjamTimingObservationMailbox, ConcurrentReadProvesOverlapAndCoherence)
 {
 	ninjam::NinjamTimingObservationMailbox mailbox;
+	std::atomic_bool readerReady{ false };
+	std::atomic_bool writerStarted{ false };
 	std::atomic_bool writerFinished{ false };
+	std::atomic_uint successfulOverlappingReads{ 0u };
+	constexpr auto requiredOverlappingReads = 64u;
+	constexpr std::uint64_t finalSequence = 400000u;
 
-	std::thread writer([&mailbox, &writerFinished]()
+	const auto makeTiming = [](std::uint64_t sequence)
 		{
-			for (std::uint64_t sequence = 1u; sequence <= 200000u; ++sequence)
+			ninjam::NinjamTiming timing;
+			timing.IsConnected = (sequence & 1u) != 0u;
+			timing.IsValid = (sequence & 2u) != 0u;
+			timing.IntervalLengthSamps = static_cast<unsigned int>(1000u + sequence);
+			timing.IntervalPositionSamps = static_cast<unsigned int>(2000u + sequence);
+			timing.DeviceSampleRate = static_cast<unsigned int>(3000u + sequence);
+			timing.SourceSampleRate = static_cast<unsigned int>(4000u + sequence);
+			timing.Bpm = static_cast<float>(5000u + sequence);
+			timing.Bpi = static_cast<unsigned int>(6000u + sequence);
+			timing.Generation = 7000u + sequence;
+			timing.RemoteWrapCount = static_cast<unsigned long>(8000u + sequence);
+			timing.ObservationSequence = sequence;
+			timing.LocalBlockStartSample = 9000u + sequence;
+			timing.AudioBlockStartSample = 10000u + sequence;
+			return timing;
+		};
+
+	std::thread writer([&]()
+		{
+			while (!readerReady.load(std::memory_order_acquire))
+				std::this_thread::yield();
+
+			writerStarted.store(true, std::memory_order_release);
+			std::uint64_t sequence = 1u;
+			while (successfulOverlappingReads.load(std::memory_order_acquire)
+				< requiredOverlappingReads)
 			{
-				ninjam::NinjamTiming timing;
-				timing.IsConnected = true;
-				timing.IsValid = true;
-				timing.IntervalLengthSamps = static_cast<unsigned int>(sequence);
-				timing.IntervalPositionSamps = static_cast<unsigned int>(sequence + 1u);
-				timing.DeviceSampleRate = static_cast<unsigned int>(sequence + 2u);
-				timing.SourceSampleRate = static_cast<unsigned int>(sequence + 3u);
-				timing.Bpm = static_cast<float>(sequence + 4u);
-				timing.Bpi = static_cast<unsigned int>(sequence + 5u);
-				timing.Generation = sequence + 6u;
-				timing.RemoteWrapCount = static_cast<unsigned long>(sequence + 7u);
-				timing.ObservationSequence = sequence;
-				timing.LocalBlockStartSample = sequence + 8u;
-				timing.AudioBlockStartSample = sequence + 9u;
-				mailbox.Publish(timing);
+				mailbox.Publish(makeTiming(sequence));
+				++sequence;
+				std::this_thread::yield();
 			}
+
+			mailbox.Publish(makeTiming(finalSequence));
 			writerFinished.store(true, std::memory_order_release);
 		});
 
+	readerReady.store(true, std::memory_order_release);
+	while (!writerStarted.load(std::memory_order_acquire))
+		std::this_thread::yield();
+
+	unsigned int readAttemptsDuringWrite = 0u;
 	while (!writerFinished.load(std::memory_order_acquire))
 	{
+		++readAttemptsDuringWrite;
 		const auto observed = mailbox.ReadLatest();
 		if (!observed.has_value())
 			continue;
 
 		const auto sequence = observed->ObservationSequence;
-		EXPECT_TRUE(observed->IsConnected);
-		EXPECT_TRUE(observed->IsValid);
-		EXPECT_EQ(sequence, observed->IntervalLengthSamps);
-		EXPECT_EQ(sequence + 1u, observed->IntervalPositionSamps);
-		EXPECT_EQ(sequence + 2u, observed->DeviceSampleRate);
-		EXPECT_EQ(sequence + 3u, observed->SourceSampleRate);
-		EXPECT_EQ(static_cast<float>(sequence + 4u), observed->Bpm);
-		EXPECT_EQ(sequence + 5u, observed->Bpi);
-		EXPECT_EQ(sequence + 6u, observed->Generation);
-		EXPECT_EQ(sequence + 7u, observed->RemoteWrapCount);
-		EXPECT_EQ(sequence + 8u, observed->LocalBlockStartSample);
-		EXPECT_EQ(sequence + 9u, observed->AudioBlockStartSample);
+		EXPECT_EQ((sequence & 1u) != 0u, observed->IsConnected) << "sequence=" << sequence;
+		EXPECT_EQ((sequence & 2u) != 0u, observed->IsValid) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 1000u, observed->IntervalLengthSamps) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 2000u, observed->IntervalPositionSamps) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 3000u, observed->DeviceSampleRate) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 4000u, observed->SourceSampleRate) << "sequence=" << sequence;
+		EXPECT_EQ(static_cast<float>(sequence + 5000u), observed->Bpm) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 6000u, observed->Bpi) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 7000u, observed->Generation) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 8000u, observed->RemoteWrapCount) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 9000u, observed->LocalBlockStartSample) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 10000u, observed->AudioBlockStartSample) << "sequence=" << sequence;
+		successfulOverlappingReads.fetch_add(1u, std::memory_order_release);
 	}
 
 	writer.join();
+	EXPECT_GT(readAttemptsDuringWrite, 0u);
+	EXPECT_GE(successfulOverlappingReads.load(std::memory_order_acquire),
+		requiredOverlappingReads);
+
+	const auto finalObservation = mailbox.ReadLatest();
+	ASSERT_TRUE(finalObservation.has_value());
+	EXPECT_EQ(finalSequence, finalObservation->ObservationSequence);
+	EXPECT_EQ(finalSequence + 1000u, finalObservation->IntervalLengthSamps);
+	EXPECT_EQ(finalSequence + 7000u, finalObservation->Generation);
+	EXPECT_EQ(finalSequence + 9000u, finalObservation->LocalBlockStartSample);
+	EXPECT_EQ(finalSequence + 10000u, finalObservation->AudioBlockStartSample);
 }

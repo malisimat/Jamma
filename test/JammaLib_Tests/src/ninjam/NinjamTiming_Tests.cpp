@@ -128,6 +128,66 @@ TEST(NinjamTiming, ScalesSourceSamplesToDeviceRate)
 	EXPECT_EQ(2u, ninjam::ScaleSampleRate(1u, 22050u, 48000u));
 }
 
+TEST(NinjamTiming, PresenceWidthAndDownsampleTailRemainDistinct)
+{
+	constexpr auto oldMasterLengthSamps = 1000ul;
+	constexpr auto oldMasterPhaseSamps = 100u;
+	constexpr auto remoteIntervalLengthSamps = 1000u;
+	constexpr auto observedRemotePhaseSamps = 700u;
+	constexpr auto projectionDistanceSamps = 250u;
+
+	// The pre-fix API has no explicit presence bit. These translated pairs prove
+	// that sample zero is data, not the absence representation that B004 must add.
+	const auto presentAtZero = ninjam::ResolveBoundaryTimingReplacement(
+		oldMasterLengthSamps, oldMasterPhaseSamps, remoteIntervalLengthSamps,
+		observedRemotePhaseSamps, 0u, projectionDistanceSamps);
+	const auto presentAtNonzero = ninjam::ResolveBoundaryTimingReplacement(
+		oldMasterLengthSamps, oldMasterPhaseSamps, remoteIntervalLengthSamps,
+		observedRemotePhaseSamps, 100u, 100u + projectionDistanceSamps);
+	EXPECT_EQ(presentAtNonzero.RemotePhaseSamps, presentAtZero.RemotePhaseSamps)
+		<< "valid zero and nonzero observation anchors must project equally";
+	EXPECT_EQ(presentAtNonzero.LocalDeltaSamps, presentAtZero.LocalDeltaSamps)
+		<< "valid zero and nonzero Timer anchors must remain equivalent";
+	EXPECT_EQ(950u, presentAtZero.RemotePhaseSamps);
+	EXPECT_EQ(-150, presentAtZero.LocalDeltaSamps);
+
+	const auto maxUint = (std::numeric_limits<unsigned int>::max)();
+	utils::Timer longRunningTimer;
+	longRunningTimer.SetQuantisation(1u, utils::Timer::QUANTISE_MULTIPLE);
+	longRunningTimer.SetSeedSourceLength(static_cast<unsigned long>(maxUint));
+	longRunningTimer.Tick(maxUint, 0u);
+	longRunningTimer.Tick(1u, 0u);
+	EXPECT_EQ(static_cast<std::uint64_t>(maxUint) + 1u,
+		longRunningTimer.AbsoluteSamplePos())
+		<< "Timer absolute position must not wrap at UINT32_MAX";
+
+	utils::Timer crossingTimer;
+	crossingTimer.SetQuantisation(1u, utils::Timer::QUANTISE_MULTIPLE);
+	crossingTimer.SetSeedSourceLength(static_cast<unsigned long>(maxUint - 7u));
+	crossingTimer.Tick(maxUint, 0u);
+	crossingTimer.Tick(maxUint, 0u);
+	EXPECT_EQ(2ul, crossingTimer.LoopCount())
+		<< "Tick must widen phase plus increment before division";
+	EXPECT_EQ(14u, crossingTimer.SampOffset())
+		<< "Tick must retain the exact remainder after crossing UINT32_MAX";
+
+	ninjam::NinjamRemoteTiming remoteTail;
+	remoteTail.IsConnected = true;
+	remoteTail.IsValid = true;
+	remoteTail.IntervalLengthSamps = 96u;
+	remoteTail.IntervalPositionSamps = 95u;
+	remoteTail.SourceSampleRate = 96u;
+	remoteTail.Bpm = 60.0f;
+	remoteTail.Bpi = 1u;
+	const auto convertedTail = ninjam::ToDeviceTiming(
+		remoteTail, true, 48u, 1u, 0ul, 1u, 0u, 0u);
+	ASSERT_TRUE(convertedTail.IsValid);
+	ASSERT_EQ(48u, convertedTail.IntervalLengthSamps);
+	EXPECT_EQ(47u, convertedTail.IntervalPositionSamps)
+		<< "the final 96 Hz source sample must not manufacture an early 48 Hz wrap";
+	EXPECT_LT(convertedTail.IntervalPositionSamps, convertedTail.IntervalLengthSamps);
+}
+
 TEST(NinjamTiming, ComputesIntervalLengthFromTempo)
 {
 	EXPECT_EQ(192000u, ninjam::IntervalSampsFromTempo(120.0f, 8u, 48000u));
