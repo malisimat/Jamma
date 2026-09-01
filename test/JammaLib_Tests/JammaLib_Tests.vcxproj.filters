@@ -167,6 +167,9 @@
     <ClCompile Include="src\ninjam\NinjamTimingCoordinator_Tests.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamSessionAudio_Tests.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
     <ClCompile Include="src\audio\NinjamMetronome_Tests.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
