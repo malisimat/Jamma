@@ -102,7 +102,7 @@ Also, in terms of naming, I'm happy with the meaning of all terms in [the glossa
 
 #### [05 - History](stage-reports/05-history.md)
 
-* S05-01 - Approved.  THIS IS PROBABLY THE MOST CRITICAL FINDING, and exactly why we are carrying out this review.  We must safely ensure we have one authoritative owner and implementation of each core feature (such as local and remote transport / coordinate systems) and mclarify both its responsibility boundary and its naming to be semantically correct.  Spend effort (e.g. dedicated fleet of subagents) ensuring we do what we can to clean this up, and safely.
+* S05-01 - Approved.  THIS IS PROBABLY THE MOST CRITICAL FINDING, and exactly why we are carrying out this review.  We must safely ensure we have one authoritative owner and implementation of each core feature (such as local and remote transport / coordinate systems) and clarify both its responsibility boundary and its naming to be semantically correct.  Spend effort (e.g. dedicated fleet of subagents) ensuring we do what we can to clean this up, and safely.
 * S05-02 - Approved with note.  We do need to align/clean the debugging parts added in this branch.  We need to unify where possible, but we must retain some logging for loop / timing sync (gated behind a logging configuration param) for later use.  Agreed unacceptable to keep large Scene and Station level "_Log*()" functions as-is, must be slimmed.  Reduce code size and ensure ZERO performance hit if toggled off.
 
 #### [06 - Stale Code](stage-reports/06-stale-code.md)
@@ -181,3 +181,12 @@ In general follow recommendations and prior acceptance of findings and stages.  
 * F-046 - See G3-7.  When not connected to remote session, local BPI is to be inferred by calculations in pure functions based off local master loop length / grain.
 * F-047, F-048 - Accept (but avoid code bloat; surgical only).
 * F-049, F-050 - Reject (leave .jam writing as-is).
+
+## Phase 4 decisions
+
+## Gate 4 decisions
+
+* B001 to B017 - Approved all batches.
+
+Ensure we do include addressing S05-01 (may have already done this in prior gates - confirm).
+Refer back to full list of fixes to ensure we have accounted for all accepted/approved in some way.
