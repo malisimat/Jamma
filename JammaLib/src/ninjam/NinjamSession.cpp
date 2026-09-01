@@ -349,11 +349,11 @@ NinjamSession::~NinjamSession()
 
 std::unique_ptr<NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
 {
-	auto* published = _connection.exchange(nullptr, std::memory_order_acq_rel);
+	auto* published = _connection.exchange(nullptr, std::memory_order_seq_cst);
 	if (!published)
 		return {};
 
-	while (_activeConnectionUsers.load(std::memory_order_acquire) != 0u)
+	while (_activeConnectionUsers.load(std::memory_order_seq_cst) != 0u)
 		std::this_thread::yield();
 
 	return std::move(_ownedConnection);
@@ -361,23 +361,16 @@ std::unique_ptr<NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
 
 NinjamConnection* NinjamSession::_AcquireConnectionUse() const noexcept
 {
-	while (true)
-	{
-		auto* connection = _connection.load(std::memory_order_acquire);
-		if (!connection)
-			return nullptr;
-
-		_activeConnectionUsers.fetch_add(1u, std::memory_order_acq_rel);
-		if (connection == _connection.load(std::memory_order_acquire))
-			return connection;
-
-		_activeConnectionUsers.fetch_sub(1u, std::memory_order_acq_rel);
-	}
+	_activeConnectionUsers.fetch_add(1u, std::memory_order_seq_cst);
+	auto* connection = _connection.load(std::memory_order_seq_cst);
+	if (!connection)
+		_ReleaseConnectionUse();
+	return connection;
 }
 
 void NinjamSession::_ReleaseConnectionUse() const noexcept
 {
-	_activeConnectionUsers.fetch_sub(1u, std::memory_order_acq_rel);
+	_activeConnectionUsers.fetch_sub(1u, std::memory_order_seq_cst);
 }
 
 void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
@@ -413,7 +406,7 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 		std::scoped_lock lifecycleLock(_lifecycleMutex);
 		auto* published = conn.get();
 		_ownedConnection = std::move(conn);
-		_connection.store(published, std::memory_order_release);
+		_connection.store(published, std::memory_order_seq_cst);
 	}
 }
 

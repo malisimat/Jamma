@@ -137,6 +137,8 @@ namespace ninjam
 		static std::vector<PublicServerInfo> MergeServerLists(const std::vector<PublicServerInfo>& fetched);
 
 		// Serializes Start/Stop while keeping audio and job paths lock-free.
+		// The user count and published pointer use one sequentially consistent
+		// order so every use either pins its connection or observes retirement.
 		mutable std::mutex _lifecycleMutex;
 		std::unique_ptr<NinjamConnection> _ownedConnection;
 		std::atomic<NinjamConnection*> _connection{ nullptr };
