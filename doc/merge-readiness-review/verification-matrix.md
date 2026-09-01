@@ -51,7 +51,7 @@ Phase 1 added obligations only. During Phase 2 integration, the local `.vscode/t
 | F-045 | Confirm no schema/version guard is added | Missing field defaults to zero; current round-trip endpoints/fractions | Older-binary resave loss is an accepted residual | Decision-resolved/no implementation; document with F-044 |
 | F-046 | Producer/consumer contract and retired-fallback audit | Full plausible BPI accepted; BPI absent makes no authority change; supplied BPI retained | Remote prompt/grid trace uses authoritative BPI | Human compatibility gate; Stages 15/16/20 |
 | F-047 | Existing-value-field and no-parallel-logger audit | Every rejection reason/counter; epoch + desired/applied version; bounded lag/suppression | Readable geometry/discipline/NoSync/loss/retry trace without hierarchy dumps | Stages 17/20; implement with F-024–F-028/F-032 |
-| F-048 | Checked/saturating conversion and config-bound audit | Defaults/zero/`UINT32_MAX`/exact-fit/first-overflow/min>max/max-rate table | Extreme config fails deterministically and sends no malformed tempo | Stages 18/20; local geometry prerequisite |
+| F-048 | B003 `749ff1ca` routes target maximum through existing `_RoundedToUInt` saturation before Windows-width widening; no remaining direct target cast | P13 + derivation 2/2; `Quantisation.*` 33/33; related UserConfig timing 3/3; finite/nonzero coherent geometry asserted | Parser/manual extreme config and no-malformed-request runtime remain Stage 21 limitations | B003 implemented/verified; independent review pending |
 | F-049 | Cleanup-only diff proves no password-serialization change | No cleanup test required | Cleartext portable export remains an accepted residual risk | Rejected/no implementation; final risk statement |
 | F-050 | Cleanup-only diff proves no work-directory policy change | No cleanup test required | Portable work-directory authority remains an accepted residual risk | Rejected/no implementation; final risk statement |
 
@@ -114,6 +114,17 @@ Per the human decision, each major Phase 4 refactor must select one or two of th
 - Static no-egress audit: `NinjamConnection::RequestServerTempo` contains the sole four tempo-admin/vote sends and rejects before every formatting, allocation-bearing string construction, mutex, send, and success log. Its sole production chain is NetworkService to Session to the guarded Connection method. `IntervalSampsFromTempo` rejects before floating arithmetic or unsigned conversion. Rejection publishes no authority.
 - Limitation: a dynamic send-count test would require a new connection/NJClient seam outside B002's approved boundary, so no-egress is structural plus return-policy evidence. Manual malformed observed/requested timing remains Stage 21.
 - Review remediation at 2026-08-31T23:46:03-06:00, commit `93594c5a`: after rereading task/build authority, the wrapped incremental native-test build exited 0; corrected P12 alone passed 1, failed 0, skipped 0; the five-test review filter passed 5, failed 0, skipped 0. P12 now invokes both approved production boundaries. A disconnected owner cannot count sends and would also reject valid requests, so the first-statement source audit remains the no-send proof.
+
+### B003 — F-048
+
+- Prerequisite commit: `d1b6a7698a51078d1363032888d6ce3c67b633ca`; implementation under test: `749ff1ca98f86a061d2cc1732eca7291548afcb7`.
+- Every invocation below was preceded by a reread of `.vscode/tasks.json` and `doc/build.md`. Builds used the task-derived MSBuild executable only through `.github\skills\builder\invoke-msbuild.ps1`, with `/m /t:Build /p:Configuration=Debug /p:Platform=x64` and absolute `/p:SolutionDir=C:\Users\matto\OneDrive\Source\Jamma\`.
+- 2026-08-31T23:56:24-06:00, commit `749ff1ca`: incremental `JammaLib\JammaLib.vcxproj` build, exit 0; incremental `test\JammaLib_Tests\JammaLib_Tests.vcxproj` build including references, exit 0.
+- 2026-08-31T23:56:24-06:00, commit `749ff1ca`: `JammaLib_Tests.exe --gtest_filter=Quantisation.SeedPolicyBoundsConversionBeforeCast:Quantisation.TimingFromSeedAndMasterDerivesBpmAndBpi`, exit 0; passed 2, failed 0, skipped 0.
+- 2026-08-31T23:56:24-06:00, commit `749ff1ca`: `JammaLib_Tests.exe --gtest_filter=Quantisation.*`, exit 0; passed 33, failed 0, skipped 0.
+- 2026-08-31T23:56:24-06:00, commit `749ff1ca`: related UserConfig filters `DeducesDefaultLoopTimingFromLongLoop`, `DeducesDefaultLoopTimingBelowThreeSecondsWhenPossible`, and `LoopTimingHonoursConfiguredTargetMaxGrain`, exit 0; passed 3, failed 0, skipped 0.
+- Static audit: the target maximum remains `double` only until `_RoundedToUInt`, which clamps at `UINT_MAX` before its cast; only that bounded result widens to `unsigned long`. No new helper/class/header/parser/schema/remote request or authority change was introduced.
+- Limitation: P13 exercises exact-fit/first-overflow/`UINT_MAX` through the shared safe minimum boundary and coherent target-policy derivation at ordinary/high supported rates. The formerly unsafe target-site extreme is proven structurally through the same checked helper; no parser/manual extreme-config request scenario is claimed.
 
 For every major Phase 4 refactor, choose and pass only the one or two closest prerequisites before moving source. P11–P13 are Phase 4 refinements of already accepted F-044/F-032/F-048 verification obligations. Do not land P1–P13 as an umbrella test batch.
 

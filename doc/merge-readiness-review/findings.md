@@ -593,6 +593,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: local seed/grain policy, local master geometry, requested BPM/BPI, and remote authority remain distinct.
 - Verification: defaults, zero, `UINT32_MAX`, exact-fit/first-overflow, min>max, max sample rate; deterministic reject/clamp, finite BPM, consistent nonzero geometry, no malformed request.
 - Human decision: accepted; keep validation surgical and avoid code bloat ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: B003 prerequisite `d1b6a7698a51078d1363032888d6ce3c67b633ca` locks default/zero/exact-fit/overflow/`UINT_MAX`/high-rate/min-greater-than-max seed-policy and coherent timing behavior. Implementation `749ff1ca98f86a061d2cc1732eca7291548afcb7` routes the target-maximum product through the existing saturating `_RoundedToUInt` boundary before widening to Windows `unsigned long`; no parser, schema, remote authority, or request path changed. Wrapped incremental JammaLib and native-test builds passed; P13/derivation 2/2, `Quantisation.*` 33/33, and related UserConfig timing 3/3. The formerly unsafe target-site extreme is proven structurally through the same checked helper; parser/manual extreme-config egress remains unexecuted. Independent review pending.
 
 ## F-049 â€” Redact NINJAM passwords from portable session exports
 
