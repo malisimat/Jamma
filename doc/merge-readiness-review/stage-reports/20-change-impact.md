@@ -99,7 +99,7 @@ No two active batches may edit `AudioHost`, `Scene`, `Station`, `LoopTake`, `Tim
 ### Explicit over-broad batch rejections
 
 - Reject one “timing refactor” batch spanning CI-04, CI-05, and CI-08. It would simultaneously change observation, authority, epoch, Timer, map, and entity restoration, defeating rollback and causal verification.
-- Reject a single P1–P10 umbrella test batch. The accepted rule is one or two closest passing prerequisites immediately before each major refactor (`verification-matrix.md:91`).
+- Reject a single P1–P10 umbrella test batch. The accepted rule is one or two closest focused prerequisites immediately before each major refactor, using the passing-first default or characterization-first exception (`verification-matrix.md`).
 - Reject bundling CI-07 lifetime safety with connection lifecycle CI-05 merely because both touch `NinjamSession`; their invariants and failure tools differ.
 - Reject combining diagnostics CI-13 with Scene/Station operational refactors CI-05/CI-08. Diagnostics must remain a mirror and must be rollbackable without changing playback.
 - Reject combining signed persistence CI-14 with remote authority/map work. Local transport offset remains valid and independently controllable while disconnected and under `NoSync`.
@@ -121,7 +121,7 @@ No two active batches may edit `AudioHost`, `Scene`, `Station`, `LoopTake`, `Tim
 
 ### To proposed cleanup-batch design
 
-Every major refactor batch should name exactly one or two of P1–P10 as already passing prerequisites and retain its own rollback point. Required prohibited collateral across all batches: no anonymous namespace introduction; no new timing/logger/mailbox class; no callback lock/allocation/wait/I/O/final destruction; no generic hierarchy traversal; no collapse of policy/clock/coordinate concepts; no remote BPI fallback; no per-loop phase reduction modulo master length; no upstream NJClient, HUD, VST implementation, window/tooling, unrelated MIDI/resource, password, or work-directory changes.
+Every major refactor batch should name exactly one or two of P1–P10, record either their pre-production pass or authorized characterization failure, and retain its own rollback point. Required prohibited collateral across all batches: no anonymous namespace introduction; no new timing/logger/mailbox class; no callback lock/allocation/wait/I/O/final destruction; no generic hierarchy traversal; no collapse of policy/clock/coordinate concepts; no remote BPI fallback; no per-loop phase reduction modulo master length; no upstream NJClient, HUD, VST implementation, window/tooling, unrelated MIDI/resource, password, or work-directory changes.
 
 ## Uncertainties
 

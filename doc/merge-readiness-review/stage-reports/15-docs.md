@@ -131,7 +131,7 @@ The MIDI remote-grid path changed after its TDD plan was written. Commit `e72f3b
 - Stage 14: own test rewrite/removal and minimum suite for S15-05. In particular, separate model tests from production-faithful F-024/F-025 prerequisites and add/narrow F-026/F-030 contracts.
 - Stage 17: if any alignment logger survives F-034, use S15-04's exact field semantics when defining the supported symptom-to-signal map. Do not retain `grain`, `masterAnchor`, or unqualified `observationSample` merely for log compatibility.
 - Stage 18: F-032's non-finite input hardening may require nearby comments/tests to say “finite and plausible”; this stage found no separate documentation defect beyond the already accepted boundary.
-- Later documentation owner: update behavior docs in the same cleanup batch as the contract they describe, after its prerequisite tests pass. A standalone wording commit before implementation must explicitly label current defect versus approved target.
+- Later documentation owner: update behavior docs in the same cleanup batch as the contract they describe, after its prerequisite tests pass or after its characterization-first pre-fix failures are recorded. A standalone wording commit before implementation must explicitly label current defect versus approved target.
 
 ## Uncertainties
 

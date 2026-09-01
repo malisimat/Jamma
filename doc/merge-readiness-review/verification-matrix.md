@@ -126,7 +126,7 @@ Per the human decision, each major Phase 4 refactor must select one or two focus
 - Static audit: the target maximum remains `double` only until `_RoundedToUInt`, which clamps at `UINT_MAX` before its cast; only that bounded result widens to `unsigned long`. No new helper/class/header/parser/schema/remote request or authority change was introduced.
 - Limitation: P13 exercises exact-fit/first-overflow/`UINT_MAX` through the shared safe minimum boundary and coherent target-policy derivation at ordinary/high supported rates. The formerly unsafe target-site extreme is proven structurally through the same checked helper; no parser/manual extreme-config request scenario is claimed.
 
-For every major Phase 4 refactor, choose and pass only the one or two closest prerequisites before moving source. P11–P13 are Phase 4 refinements of already accepted F-044/F-032/F-048 verification obligations. Do not land P1–P13 as an umbrella test batch.
+For every major Phase 4 refactor, choose only the one or two closest prerequisites and use the passing-first default or the approved characterization-first exception above. P11–P13 are Phase 4 refinements of already accepted F-044/F-032/F-048 verification obligations. Do not land P1–P13 as an umbrella test batch.
 
 ## Phase 3 manual acceptance additions
 
