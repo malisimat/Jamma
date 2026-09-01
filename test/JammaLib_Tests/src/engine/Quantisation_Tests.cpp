@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 #include "gtest/gtest.h"
@@ -60,6 +62,63 @@ TEST(Quantisation, DerivesSeedTimingFromMasterLoop)
 	EXPECT_EQ(16u, timing->SeedCount);
 	EXPECT_FLOAT_EQ(120.0f, timing->Bpm);
 	EXPECT_EQ(16u, timing->Bpi);
+}
+
+TEST(Quantisation, SeedPolicyBoundsConversionBeforeCast)
+{
+	constexpr auto maxUInt = (std::numeric_limits<unsigned int>::max)();
+
+	QuantisationPolicy policy;
+	EXPECT_EQ(14400u, engine::Quantiser::MinSeedSamps(48000u, policy));
+
+	policy.SeedGrainMinMs = 0u;
+	EXPECT_EQ(48u, engine::Quantiser::MinSeedSamps(48000u, policy));
+
+	policy.SeedGrainMinMs = 1000u;
+	EXPECT_EQ(maxUInt, engine::Quantiser::MinSeedSamps(maxUInt, policy));
+
+	policy.SeedGrainMinMs = 1001u;
+	EXPECT_EQ(maxUInt, engine::Quantiser::MinSeedSamps(maxUInt, policy));
+
+	policy.SeedGrainMinMs = maxUInt;
+	EXPECT_EQ(maxUInt, engine::Quantiser::MinSeedSamps(1000u, policy));
+
+	policy.SeedGrainMinMs = 1u;
+	EXPECT_EQ(4294967u, engine::Quantiser::MinSeedSamps(maxUInt, policy));
+
+	const auto expectConsistentTiming = [](const char* name,
+		unsigned long masterLoopSamps,
+		unsigned int sampleRate,
+		const QuantisationPolicy& candidate)
+	{
+		SCOPED_TRACE(name);
+		const auto timing = engine::Quantiser::DeduceSeedTiming(masterLoopSamps, sampleRate, candidate);
+		ASSERT_TRUE(timing.has_value());
+		EXPECT_GT(timing->SeedSamps, 0u);
+		EXPECT_GT(timing->MasterLoopSamps, 0u);
+		EXPECT_GT(timing->SeedCount, 0u);
+		EXPECT_TRUE(std::isfinite(timing->Bpm));
+		EXPECT_GT(timing->Bpm, 0.0f);
+		EXPECT_EQ(timing->SeedCount, timing->Bpi);
+		EXPECT_EQ(static_cast<std::uint64_t>(timing->MasterLoopSamps),
+			static_cast<std::uint64_t>(timing->SeedSamps) * timing->SeedCount);
+	};
+
+	expectConsistentTiming("default", 384000ul, 48000u, QuantisationPolicy{});
+
+	QuantisationPolicy zeroPolicy;
+	zeroPolicy.SeedGrainMinMs = 0u;
+	zeroPolicy.SeedGrainTargetMaxMs = 0u;
+	zeroPolicy.SeedBpmMin = 0u;
+	expectConsistentTiming("zero", 48000ul, 48000u, zeroPolicy);
+
+	QuantisationPolicy maxRatePolicy;
+	expectConsistentTiming("max supported rate", 3072000ul, 384000u, maxRatePolicy);
+
+	QuantisationPolicy invertedPolicy;
+	invertedPolicy.SeedGrainMinMs = 400u;
+	invertedPolicy.SeedGrainTargetMaxMs = 300u;
+	expectConsistentTiming("minimum exceeds target maximum", 192000ul, 48000u, invertedPolicy);
 }
 
 TEST(Quantisation, EnforcesMinimumTapSeed)
