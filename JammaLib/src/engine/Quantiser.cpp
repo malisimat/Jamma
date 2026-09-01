@@ -715,8 +715,8 @@ std::optional<QuantisationTiming> Quantiser::DeduceSeedTiming(unsigned long mast
 		return std::nullopt;
 
 	const auto targetMaxMs = std::max(std::max(1u, policy.SeedGrainMinMs), policy.SeedGrainTargetMaxMs);
-	const auto targetMaxSeed = static_cast<unsigned long>(std::max(static_cast<double>(minSeed),
-		(static_cast<double>(sampleRate) * static_cast<double>(targetMaxMs)) / 1000.0));
+	const auto targetMaxSeed = static_cast<unsigned long>(_RoundedToUInt(std::max(static_cast<double>(minSeed),
+		(static_cast<double>(sampleRate) * static_cast<double>(targetMaxMs)) / 1000.0)));
 
 	while ((seedSamps >= targetMaxSeed) && ((seedSamps / 2ul) >= minSeed))
 		seedSamps /= 2ul;
