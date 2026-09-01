@@ -1,6 +1,6 @@
 # Phase 4 packet — Reconciliation and proposed cleanup batches
 
-> **Status: stopped at the cleanup-batch approval human gate.** No cleanup, cleanup verification, batch review, post-cleanup Stage 21 result, or `merge-brief.md` exists yet.
+> **Status: cleanup-batch gate approved; final execution pass in progress.** The human approved the complete gate at commit `2e770b743d9f2466b2edafff5c92faf139d93108`. No cleanup, cleanup verification, batch review, post-cleanup Stage 21 result, or `merge-brief.md` existed when execution began.
 
 ## Inputs received
 
@@ -80,6 +80,6 @@ Approval of this packet must answer all of the following as one proposed-batch g
 
 ## Human outcome
 
-Pending. Phase 4 reconciliation/design is complete and stops here. Cleanup implementation, cleanup verification, batch reviews, the Stage 21 execution section, final artifact/status reconciliation, and `merge-brief.md` remain unauthorized until the human approves the proposed batches.
+Approved at gate commit `2e770b743d9f2466b2edafff5c92faf139d93108`. The approval explicitly covers B001–B017, their dependency order, prerequisites, owners, prohibited collateral, rollback points, verification requirements, independent reviews, protected timing invariants, and recorded no-batch residual risks. It authorizes the single final execution pass described in the plan without another routine gate between batches.
 
-At approval, record the literal gate commit hash in this packet and `../cleanup-backlog.md` before any source movement. That approval begins the single final execution pass described in the plan.
+Execution must return to the human only for scope expansion, a batch failure that cannot be corrected inside its approved boundary, or an independent review requiring a different invariant or boundary. The final execution pass still stops at the human merge-decision gate after Stage 21 evidence and `merge-brief.md` are complete.

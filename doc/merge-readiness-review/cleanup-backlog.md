@@ -1,6 +1,6 @@
 # Cleanup backlog
 
-> **Status: proposed; implementation is not authorized.** This backlog is the Phase 4 cleanup-batch human gate. Approving it authorizes the one remaining execution pass to run B001–B017 sequentially, subject to each prerequisite, rollback, verification, and independent review. Any scope expansion, failed prerequisite, or irreconcilable batch review returns to the human gate.
+> **Status: approved for execution.** The human approved this complete Phase 4 cleanup-batch gate at commit `2e770b743d9f2466b2edafff5c92faf139d93108`, including B001–B017, their dependency order, prerequisites, owners, prohibited collateral, rollback points, verification requirements, independent reviews, protected timing invariants, and recorded no-batch residual risks. This authorizes the one remaining execution pass to run B001–B017 sequentially. Any scope expansion, failed prerequisite that cannot be corrected within its batch, or irreconcilable batch review returns to the human gate.
 
 ## Controlling invariants and execution contract
 
@@ -201,3 +201,5 @@
 ## Human batch-approval gate
 
 Approval must explicitly accept B001–B017, their order/dependencies, protected invariants, owned/prohibited files, rollback points, prerequisite tests, verification, and no-batch residuals. After approval, record the literal gate commit hash in this file and `phase-packets/phase-4.md`; that single approval authorizes the final sequential execution pass without another routine gate between batches. Stop and request a new decision only for scope expansion, a failed check that cannot be corrected inside its batch, or an independent review that requires a different invariant/boundary.
+
+**Human outcome:** approved at gate commit `2e770b743d9f2466b2edafff5c92faf139d93108`. The approved single final execution pass is authorized under the contract above.
