@@ -262,6 +262,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote observation, remote phase/rate, device-audio anchor, and Timer-absolute anchor remain distinct.
 - Verification: static audio-call-chain audit; concurrent sentinel-publication test; delayed-observation projection; join/reconnect/disconnect and export-compensation scenarios; race tooling where practical.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: characterization `523714c`, explicit-presence/wide-local rollback point `18663f3`, and ownership migration `88e3ecc` move the NJClient timing getters exclusively into job-owned `_UpdateSnapshot`. AudioProc is bracketed by an odd/even sequence, the completed device coordinate and remote tuple are published only across a stable even observation, and the callback performs a bounded read/projection before publishing the combined remote/local value. The dormant export-compensation getter and Controller/Session/Connection `GetLiveTiming` chain are gone; static audit leaves `AudioProc` as the only upstream callback call. P5 passed 20/20 repeated overlap runs and the focused filter passed 134/134. Live network/race tooling remains Stage 21.
 
 ## F-022 â€” Move the empty-scene timing reset off the audio callback
 
@@ -286,6 +287,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: Timer absolute position, master phase, scene coordinate, and device-audio position remain distinct fields/domains.
 - Verification: alternating sentinel-geometry concurrency test that never yields a mixed tuple; replacement/tick boundary test; late-observation tests using one coherent local snapshot.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `18663f3` adds one audio-captured Timer transport value containing master length/phase, loop count, absolute position, and scene position; the existing timing mailbox publishes it with the projected remote observation. Coordinator join/wrap handling now consumes that value and defers when it is absent instead of reconstructing a mixed tuple from live Timer scalars. P5 covers every added field under mandatory overlap and passed 20/20; focused timing/integration coverage passed at `88e3ecc`.
 
 ## F-024 â€” Publish one latest complete desired remote transport state
 
@@ -323,6 +325,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote master phase, local Timer phase, observation anchors, join policy, and scene/source mapping remain distinct.
 - Verification: zero and multi-block delays before processing the same initial observation must emit the same join delta; positive/negative/half-interval cases; unequal loop lengths and offsets.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: coordinator alignment now freezes `LocalTransport.MasterPhaseSamps` from the same published audio boundary as remote phase. The production coordinator regression runs the same join immediately and after seven 256-sample Timer blocks; both emit the expected `-375` delta. Existing positive/negative/half-interval timing cases remain green in the 134-test focused filter.
 
 ## F-027 â€” Model physical loss and auto-reconnect as timing-session epoch transitions
 
@@ -360,6 +363,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: Timer absolute, scene coordinate, and device-audio position remain separate 64-bit rulers.
 - Verification: values spanning `UINT32_MAX`, near-maximum seed/phase plus increment with exact loop-count/phase result, multi-interval multiplication before widening, distinct Timer/device sentinels, and long-running projection.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `18663f3` changes Timer loop count and absolute results to `std::uint64_t` and widens Tick addition plus loop-count multiplication before arithmetic. Green P6 proves absolute `UINT32_MAX + 1` and exact two-wrap/remainder-14 behavior; the separate device-audio and Timer-absolute fields remain distinct in the published observation.
 
 ## F-030 â€” Separate observation validity from the valid sample-zero coordinate
 
@@ -372,6 +376,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: device-audio observation coordinate, Timer-absolute observation coordinate, and each domain's validity remain distinct.
 - Verification: valid zero/absent/nonzero anchors independently in both device-audio and Timer-absolute domains; delayed first-block replacement/discipline; no ambiguity after reconnect.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `18663f3` replaces the replacement helper's zero sentinel with explicit optional device-anchor presence and adds explicit presence for the combined local transport. Missing anchors defer coordinator processing; numeric zero is valid data. P6 passes absent, present-zero, and translated present-nonzero cases; reconnect ambiguity remains coupled to B005's lifecycle evidence.
 
 ## F-031 â€” Prevent downsampling conversion from manufacturing an early remote wrap
 
@@ -384,6 +389,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote wrapped phase and remote interval length remain related but distinct values.
 - Verification: exhaustive small-ratio/source-tail cases; 96â†’48 and non-integer ratios; first/last source samples; monotonicity/no premature wrap.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `ScaleWrappedSampleRate` at `18663f3` converts the wrapped source phase and bounds it to `convertedLength - 1` after validating both lengths. P6 now maps source position 95/96 to destination 47/48 instead of manufacturing phase zero; the broader focused NINJAM timing suite passes. Exhaustive small-ratio and live differing-rate scenarios remain Stage 21 limitations.
 
 ## F-032 â€” Reject non-finite tempo values at conversion and network egress
 
@@ -484,6 +490,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: epoch, policy, geometry, timestamped remote phase, device observation, and Timer-absolute observation remain separate fields.
 - Verification: P1/P2/P6: both former command orderings, final applied epoch/geometry/phase, valid zero/explicit absent/nonzero anchors, translated pairs, delayed first-block behavior.
 - Human decision: accepted; rejected command and zero-sentinel expectations must not be retained ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: the P6 portion is corrected at `18663f3`: tests now encode explicit absent/present-zero/present-nonzero semantics and delayed first-block projection without a zero-sentinel compatibility path. The complete desired-state/command-order portion remains deliberately owned by B006 and was not pulled forward.
 
 ## F-040 â€” Make the timing-mailbox concurrency test prove overlap
 
@@ -496,6 +503,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote observation and local Timer transport remain separate complete values.
 - Verification: run the corrected P5 repeatedly and under race tooling where practical; assert overlap/read counts and no mixed generation.
 - Human decision: accepted; the concurrency test must deterministically prove nonzero overlap ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: P5 at `523714c` adds reader/writer start coordination, keeps the writer active until at least 64 successful overlapping reads, checks incompatible sequence-derived values across every timing/local field, and requires a final sentinel. It passed 20/20 before production movement and again after B004; race tooling remains Stage 21.
 
 ## F-041 â€” Add controllable session-loss and buffer-borrow test seams
 
