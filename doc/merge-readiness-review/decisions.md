@@ -187,6 +187,7 @@ In general follow recommendations and prior acceptance of findings and stages.  
 ## Gate 4 decisions
 
 * B001 to B017 - Approved all batches.
+* Characterization-first sequencing is permitted when a named prerequisite cannot truthfully pass until its already-approved production behavior exists. Commit and record the expected pre-fix failure before production movement, keep the implementation inside the batch's existing boundary, and require the test plus all focused verification to pass before independent approval or dependent work begins. This changes ordering only, not scope, invariants, ownership, collateral prohibitions, rollback, or final evidence.
 
 Ensure we do include addressing S05-01 (may have already done this in prior gates - confirm).
 Refer back to full list of fixes to ensure we have accounted for all accepted/approved in some way.

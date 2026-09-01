@@ -71,7 +71,7 @@ Cross-phase obligations not represented as Phase 1 deletions:
 6. **Late observation / wrap:** Timer-absolute, device-audio, scene, remote phase, source coordinate, loop cursor, and automation origin use distinct sentinel values; projection is stable across delays, device sample zero, `UINT32_MAX`, and sample-rate conversion at the last source sample.
 7. **Real-time/lifetime:** no callback lock, allocation, wait, logging/I/O, forbidden NJClient getter, callback-side container destruction, or escaped connection-owned buffer borrow. Snapshot/refcount/map costs are measured at maximum configured station/take/loop counts.
 
-Per the human decision, each major Phase 4 refactor must select one or two of the focused tests above as passing prerequisites before source movement begins. The first required pair is F-024/F-025's command-order and two-session reconnect regressions.
+Per the human decision, each major Phase 4 refactor must select one or two focused tests above. Passing before source movement is the default. If a truthful test necessarily characterizes behavior supplied by the already-approved batch, it may instead be committed and recorded with its exact expected pre-fix failure before bounded production movement; it and all focused verification must pass before independent approval or dependent work. The first required pair is F-024/F-025's command-order and two-session reconnect regressions.
 
 ## Lean prerequisite suite (Phase 3 base, Phase 4 concrete refinements)
 

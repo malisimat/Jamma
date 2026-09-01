@@ -59,7 +59,7 @@ Impact dimensions are therefore interpreted as follows:
 
 ## Candidate findings
 
-Stage 20 adds no new canonical finding. It reconciles accepted findings into the following complete candidate impact/dependency matrix. `P1`–`P10` refer to the accepted lean prerequisites at `verification-matrix.md:76`–`:91`. “Passing prerequisite” means the selected one or two tests must be added/corrected and observed passing before the corresponding production refactor begins; it is not permission to run them in this planning stage.
+Stage 20 adds no new canonical finding. It reconciles accepted findings into the following complete candidate impact/dependency matrix. `P1`–`P10` refer to the accepted lean prerequisites at `verification-matrix.md:76`–`:91`. “Passing prerequisite” describes the default: add/correct and observe the selected tests passing before the production refactor. The later Phase 4 decision also permits characterization-first ordering when approved behavior is necessarily absent, provided the exact pre-fix failure is recorded and the test is green before review or dependent work; neither rule authorized execution in this planning stage.
 
 ### Accepted-candidate impact and dependency matrix
 

@@ -99,7 +99,7 @@ No investigator contradiction remains. The only unresolved choices are human pro
 
 ## Verification additions
 
-`../verification-matrix.md` now contains one row for every F-001–F-050 finding, the Phase 2 scenarios, the P1–P10 lean prerequisite suite, and five Phase 3 manual additions. The central rule is unchanged: before each major refactor, select and pass only the one or two closest prerequisite tests in their own Stage/Finding commit; do not create one umbrella test batch.
+`../verification-matrix.md` now contains one row for every F-001–F-050 finding, the Phase 2 scenarios, the P1–P10 lean prerequisite suite, and five Phase 3 manual additions. For each major refactor, select only the one or two closest prerequisite tests in their own Stage/Finding commit; passing before source movement is the default, with the Phase 4 characterization-first exception available when the approved behavior does not yet exist. Do not create one umbrella test batch.
 
 Priority order:
 
