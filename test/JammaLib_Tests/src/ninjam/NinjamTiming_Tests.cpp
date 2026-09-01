@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include <cmath>
+#include <limits>
 #include "./ninjam/NinjamTiming.h"
 #include "./ninjam/NinjamLoopAlignment.h"
 #include "utils/MusicalTransport.h"
@@ -243,6 +244,39 @@ TEST(NinjamTiming, SharedValidityAcceptsPlausibleTiming)
 	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 120.0f, 8u));
 	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 20.0f, 1u));
 	EXPECT_TRUE(ninjam::IsValidRemoteTiming(22050u, 44100u, 400.0f, 32u));
+}
+
+TEST(NinjamTimingInput, RejectsNonFiniteTempoWithoutEgress)
+{
+	constexpr auto intervalLengthSamps = 22050u;
+	constexpr auto sourceSampleRate = 44100u;
+	constexpr auto validBpi = 8u;
+	constexpr auto minBpm = 20.0f;
+	constexpr auto maxBpm = 400.0f;
+
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		std::numeric_limits<float>::quiet_NaN(), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		std::numeric_limits<float>::infinity(), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		-std::numeric_limits<float>::infinity(), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 0.0f, validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, -1.0f, validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		std::nextafter(minBpm, -std::numeric_limits<float>::infinity()), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		std::nextafter(maxBpm, std::numeric_limits<float>::infinity()), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		(std::numeric_limits<float>::lowest)(), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate,
+		(std::numeric_limits<float>::max)(), validBpi));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f, 0u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f, 33u));
+	EXPECT_FALSE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, 120.0f,
+		(std::numeric_limits<unsigned int>::max)()));
+
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, minBpm, 1u));
+	EXPECT_TRUE(ninjam::IsValidRemoteTiming(intervalLengthSamps, sourceSampleRate, maxBpm, 32u));
 }
 
 TEST(NinjamTiming, SharedValidityRejectsPlaceholderTempo)
