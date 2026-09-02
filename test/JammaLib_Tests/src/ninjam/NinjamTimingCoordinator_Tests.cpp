@@ -149,6 +149,44 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 	EXPECT_FALSE(update.DesiredTransport.has_value());
 }
 
+TEST(NinjamTimingDiagnostics, DisabledIsZeroWorkAndEnabledIsBounded)
+{
+	ninjam::NinjamTimingDiagnostics diagnostics;
+	diagnostics.SetCaptureEnabled(false);
+	diagnostics.Capture(ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag,
+		1u, 3u, 1u, 7u, 2, 1u);
+
+	EXPECT_EQ(0u, diagnostics.CapturedEventCount);
+	EXPECT_EQ(0u, diagnostics.EventOverflowCount);
+	EXPECT_EQ(0u, diagnostics.EventSequence);
+
+	diagnostics.SetCaptureEnabled(true);
+	const auto eventTotal = ninjam::NinjamTimingDiagnostics::EventCapacity + 3u;
+	for (auto eventIndex = 0u; eventIndex < eventTotal; ++eventIndex)
+	{
+		const auto epoch = eventIndex < 2u ? 1u : 2u;
+		const auto reason = (eventIndex & 1u) == 0u
+			? ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag
+			: ninjam::NinjamTimingDiagnosticReason::DesiredApplyCaughtUp;
+		diagnostics.Capture(reason, epoch, eventIndex + 1u, eventIndex,
+			eventIndex + 10u, static_cast<long long>(eventIndex + 1u), eventIndex);
+	}
+
+	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
+		diagnostics.CapturedEventCount);
+	EXPECT_EQ(3u, diagnostics.EventOverflowCount);
+	EXPECT_EQ(eventTotal, diagnostics.EventSequence);
+	EXPECT_EQ(eventTotal, diagnostics.LatestEvent.Sequence);
+	EXPECT_EQ(2u, diagnostics.LatestEvent.SessionEpoch);
+	EXPECT_EQ(eventTotal, diagnostics.LatestEvent.DesiredVersion);
+	EXPECT_EQ(eventTotal - 1u, diagnostics.LatestEvent.AppliedVersion);
+	ASSERT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
+		diagnostics.Events.size());
+	EXPECT_EQ(1u, diagnostics.Events.front().Sequence);
+	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
+		diagnostics.Events.back().Sequence);
+}
+
 TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
 {
 	Timer clock;
