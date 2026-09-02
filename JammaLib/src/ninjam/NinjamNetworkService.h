@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 #include <string>
@@ -26,11 +27,12 @@ namespace ninjam
 		void Disconnect();
 
 		void SetTempoJoinOptions(const NinjamTempoJoinOptions& options);
-		const NinjamTempoJoinOptions& TempoJoinOptions() const noexcept { return _tempoJoinOptions; }
+		NinjamTempoJoinOptions TempoJoinOptions() const noexcept;
 
-		void PrepareTempoSyncOnConnect(const std::optional<engine::QuantisationTiming>& localTiming);
+		NinjamTimingUpdate PrepareTempoSyncOnConnect(
+			const std::optional<engine::QuantisationTiming>& localTiming);
 
-		void ResetTempoSyncOnDisconnect();
+		NinjamTimingUpdate ResetTempoSyncOnDisconnect();
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const std::optional<engine::QuantisationTiming>& localTiming);
 
@@ -51,18 +53,16 @@ namespace ninjam
 		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
-		std::optional<NinjamTempoChange> PendingRemoteTempoPrompt() const
-		{
-			return _timingCoordinator.PendingTempoChange();
-		}
+		std::optional<NinjamTempoChange> PendingRemoteTempoPrompt() const;
 		void SendTempoRequest(const NinjamTempoRequest& request);
-		bool HasConnectedTiming() const noexcept { return _timingCoordinator.IsConnected(); }
-		TempoRequestState TempoJoinRequestState() const noexcept { return _timingCoordinator.RequestState(); }
-		NinjamTimingDiagnostics TimingDiagnostics() const noexcept { return _timingCoordinator.Diagnostics(); }
+		bool HasConnectedTiming() const noexcept;
+		TempoRequestState TempoJoinRequestState() const noexcept;
+		NinjamTimingDiagnostics TimingDiagnostics() const noexcept;
 
 	private:
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		NinjamTempoJoinOptions _tempoJoinOptions{};
 		NinjamTimingCoordinator _timingCoordinator;
+		mutable std::mutex _timingMutex;
 	};
 }

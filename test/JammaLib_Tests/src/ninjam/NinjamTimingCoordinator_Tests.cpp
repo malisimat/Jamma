@@ -57,8 +57,8 @@ TEST(NinjamTimingCoordinator, FirstGenerationInvalidatesOldCorrectionsWithoutEmi
 	auto timing = MakeTiming(1000u, 300u);
 	const auto update = coordinator.Observe(timing, std::nullopt, true, io::UserConfig{}, clock);
 
-	EXPECT_TRUE(update.InvalidatePendingCorrections);
-	EXPECT_FALSE(update.PhaseCorrection.has_value());
+	ASSERT_TRUE(update.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, update.DesiredTransport->Intent);
 	EXPECT_EQ(1u, coordinator.Diagnostics().GenerationChanges);
 }
 
@@ -75,9 +75,9 @@ TEST(NinjamTimingCoordinator, AcceptedWrapProducesOneGenerationTaggedCorrection)
 	timing.IntervalPositionSamps = 10u;
 	const auto update = coordinator.Observe(timing, std::nullopt, false, io::UserConfig{}, clock);
 
-	ASSERT_TRUE(update.PhaseCorrection.has_value());
-	EXPECT_NE(0, update.PhaseCorrection->DeltaSamps);
-	EXPECT_NE(0u, update.PhaseCorrection->Generation);
+	ASSERT_TRUE(update.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, update.DesiredTransport->Intent);
+	EXPECT_NE(0u, update.DesiredTransport->Generation);
 	EXPECT_EQ(1u, coordinator.Diagnostics().PhaseEventsQueued);
 }
 
@@ -87,9 +87,9 @@ TEST(NinjamTimingCoordinator, AutoAcceptsRemoteTempoWithoutLocalContent)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
 	const auto update = coordinator.Observe(MakeTiming(384000u, 100u), std::nullopt, false, io::UserConfig{}, clock);
-	ASSERT_TRUE(update.ClockSettings.has_value());
+	ASSERT_TRUE(update.DesiredTransport.has_value());
 	EXPECT_FALSE(update.PromptForTempoChange);
-	EXPECT_EQ(384000ul, update.ClockSettings->SeedLengthSamps);
+	EXPECT_EQ(384000ul, update.DesiredTransport->IntervalLengthSamps);
 }
 
 TEST(NinjamTimingCoordinator, PromptAcceptRejectAndChangedProposal)
@@ -102,13 +102,14 @@ TEST(NinjamTimingCoordinator, PromptAcceptRejectAndChangedProposal)
 	auto update = coordinator.Observe(MakeTiming(480000u, 100u), std::nullopt, true, io::UserConfig{}, clock);
 	EXPECT_TRUE(update.PromptForTempoChange);
 	EXPECT_TRUE(coordinator.PendingTempoChange().has_value());
-	EXPECT_FALSE(coordinator.ResolveTempoChange(false, std::nullopt, clock).ClockSettings.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync,
+		coordinator.ResolveTempoChange(false, std::nullopt, clock).DesiredTransport->Intent);
 	update = coordinator.Observe(MakeTiming(480000u, 200u), std::nullopt, true, io::UserConfig{}, clock);
 	EXPECT_FALSE(update.PromptForTempoChange);
 	update = coordinator.Observe(MakeTiming(576000u, 100u), std::nullopt, true, io::UserConfig{}, clock);
 	EXPECT_TRUE(update.PromptForTempoChange);
 	auto accepted = coordinator.ResolveTempoChange(true, std::nullopt, clock);
-	EXPECT_TRUE(accepted.ClockSettings.has_value());
+	EXPECT_TRUE(accepted.DesiredTransport.has_value());
 }
 
 TEST(NinjamTimingCoordinator, AcceptedPromptUsesLatestAnchoredObservation)
@@ -125,9 +126,9 @@ TEST(NinjamTimingCoordinator, AcceptedPromptUsesLatestAnchoredObservation)
 	latest.AudioBlockStartSample = 5000u;
 	EXPECT_FALSE(coordinator.Observe(latest, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
 	const auto accepted = coordinator.ResolveTempoChange(true, std::nullopt, clock);
-	ASSERT_TRUE(accepted.ClockSettings.has_value());
-	EXPECT_EQ(200u, accepted.ClockSettings->PhaseSamps);
-	EXPECT_EQ(5000u, accepted.ClockSettings->AudioBlockStartSample);
+	ASSERT_TRUE(accepted.DesiredTransport.has_value());
+	EXPECT_EQ(200u, accepted.DesiredTransport->RemotePhaseSamps);
+	EXPECT_EQ(5000u, accepted.DesiredTransport->ObservationSample);
 }
 
 TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
@@ -139,10 +140,11 @@ TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
 	coordinator.Observe(MakeTiming(480000u, 400000u, 0u, 384000u),
 		std::nullopt, true, io::UserConfig{}, clock);
 	const auto rejected = coordinator.ResolveTempoChange(false, std::nullopt, clock);
-	EXPECT_TRUE(rejected.InvalidatePendingCorrections);
+	ASSERT_TRUE(rejected.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, rejected.DesiredTransport->Intent);
 	const auto update = coordinator.Observe(MakeTiming(480000u, 1000u, 0u, 384000u), std::nullopt, true,
 		io::UserConfig{}, clock);
-	EXPECT_FALSE(update.PhaseCorrection.has_value());
+	EXPECT_FALSE(update.DesiredTransport.has_value());
 }
 
 TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
@@ -152,11 +154,11 @@ TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
 	Connect(coordinator, false, false);
 	const auto update = coordinator.Observe(MakeTimingTempo(78985u, 123u, 120.0f, 4u),
 		std::nullopt, false, io::UserConfig{}, clock);
-	ASSERT_TRUE(update.ClockSettings.has_value());
-	EXPECT_EQ(78985ul, update.ClockSettings->SeedLengthSamps);
-	EXPECT_EQ(4u, update.ClockSettings->BeatsPerInterval);
-	EXPECT_EQ(19746u, update.ClockSettings->QuantiseSamps);
-	EXPECT_EQ(123u, update.ClockSettings->PhaseSamps);
+	ASSERT_TRUE(update.DesiredTransport.has_value());
+	EXPECT_EQ(78985ul, update.DesiredTransport->IntervalLengthSamps);
+	EXPECT_EQ(4u, update.DesiredTransport->BeatsPerInterval);
+	EXPECT_EQ(19746u, update.DesiredTransport->GrainSamps);
+	EXPECT_EQ(123u, update.DesiredTransport->RemotePhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
@@ -234,7 +236,11 @@ TEST(NinjamTimingCoordinator, DisconnectClearsPromptRequestAndCorrections)
 	coordinator.Disconnect();
 	EXPECT_FALSE(coordinator.IsConnected());
 	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
-	EXPECT_FALSE(coordinator.Observe(MakeTiming(480000u, 10u), std::nullopt, true, io::UserConfig{}, clock).PhaseCorrection.has_value());
+	const auto postDisconnect = coordinator.Observe(MakeTiming(480000u, 10u),
+		std::nullopt, true, io::UserConfig{}, clock);
+	EXPECT_TRUE(postDisconnect.DesiredTransport.has_value());
+	EXPECT_NE(ninjam::NinjamDesiredTimingIntent::PhaseDiscipline,
+		postDisconnect.DesiredTransport->Intent);
 }
 
 TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGenerationSafe)
@@ -245,7 +251,7 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, false, false);
 	const unsigned int lengths[] = { 384000u, 768000u, 192000u, 123457u };
-	long long maxDelta = 0;
+	unsigned long maxRemotePhase = 0ul;
 	for (unsigned int generation = 0u; generation < 4u; ++generation)
 	{
 		const auto length = lengths[generation];
@@ -256,8 +262,9 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 				const auto jitter = static_cast<int>((interval + step) % 5u) - 2;
 				auto position = static_cast<unsigned int>((static_cast<unsigned long long>(step) * length / 8u + length + jitter) % length);
 				auto update = coordinator.Observe(MakeTiming(length, position), std::nullopt, false, io::UserConfig{}, clock);
-				if (update.PhaseCorrection.has_value())
-					maxDelta = std::max(maxDelta, std::llabs(update.PhaseCorrection->DeltaSamps));
+				if (update.DesiredTransport.has_value())
+					maxRemotePhase = std::max(maxRemotePhase,
+						static_cast<unsigned long>(update.DesiredTransport->RemotePhaseSamps));
 			}
 			coordinator.Observe(MakeTiming(length, length - 10u), std::nullopt, false, io::UserConfig{}, clock);
 			coordinator.Observe(MakeTiming(length, 10u), std::nullopt, false, io::UserConfig{}, clock);
@@ -265,11 +272,15 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 		if (generation == 1u)
 		{
 			coordinator.Disconnect();
-			EXPECT_FALSE(coordinator.Observe(MakeTiming(length, 0u), std::nullopt, false, io::UserConfig{}, clock).PhaseCorrection.has_value());
+			const auto freshDesired = coordinator.Observe(MakeTiming(length, 0u),
+				std::nullopt, false, io::UserConfig{}, clock);
+			EXPECT_TRUE(freshDesired.DesiredTransport.has_value());
+			EXPECT_NE(ninjam::NinjamDesiredTimingIntent::PhaseDiscipline,
+				freshDesired.DesiredTransport->Intent);
 			Connect(coordinator, false, false);
 		}
 	}
-	EXPECT_LE(maxDelta, static_cast<long long>(constants::DefaultBufferSizeSamps * 2u));
+	EXPECT_LT(maxRemotePhase, 768000ul);
 	EXPECT_GT(coordinator.Diagnostics().GenerationChanges, 0u);
 }
 
@@ -308,9 +319,9 @@ TEST(NinjamTimingCoordinator, QuarterIntervalJoinIsAccepted)
 	// 96000-sample interval at 48 kHz; a quarter-interval (24000) join is far above
 	// the old two-buffer cap yet must be accepted through the join path.
 	const auto update = DriveJoin(96000u, 24000);
-	ASSERT_TRUE(update.PhaseCorrection.has_value());
-	EXPECT_TRUE(update.PhaseCorrection->IsJoin);
-	EXPECT_EQ(24000, update.PhaseCorrection->DeltaSamps);
+	ASSERT_TRUE(update.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, update.DesiredTransport->Intent);
+	EXPECT_EQ(1000u, update.DesiredTransport->RemotePhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
@@ -318,9 +329,9 @@ TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
 	// The half-interval tie (48000) is the largest legitimate join delta and must
 	// still be accepted (safety limit is seedLength/2).
 	const auto update = DriveJoin(96000u, 48000);
-	ASSERT_TRUE(update.PhaseCorrection.has_value());
-	EXPECT_TRUE(update.PhaseCorrection->IsJoin);
-	EXPECT_EQ(48000, update.PhaseCorrection->DeltaSamps);
+	ASSERT_TRUE(update.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, update.DesiredTransport->Intent);
+	EXPECT_EQ(1000u, update.DesiredTransport->RemotePhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLiveTimer)
@@ -343,13 +354,14 @@ TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLive
 
 	const auto immediate = runScenario(0u);
 	const auto delayed = runScenario(7u);
-	ASSERT_TRUE(immediate.PhaseCorrection.has_value());
-	ASSERT_TRUE(delayed.PhaseCorrection.has_value());
-	EXPECT_TRUE(immediate.PhaseCorrection->IsJoin);
-	EXPECT_TRUE(delayed.PhaseCorrection->IsJoin);
-	EXPECT_EQ(-375, immediate.PhaseCorrection->DeltaSamps);
-	EXPECT_EQ(immediate.PhaseCorrection->DeltaSamps,
-		delayed.PhaseCorrection->DeltaSamps);
+	ASSERT_TRUE(immediate.DesiredTransport.has_value());
+	ASSERT_TRUE(delayed.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, immediate.DesiredTransport->Intent);
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, delayed.DesiredTransport->Intent);
+	EXPECT_EQ(immediate.DesiredTransport->RemotePhaseSamps,
+		delayed.DesiredTransport->RemotePhaseSamps);
+	EXPECT_EQ(immediate.DesiredTransport->ObservationSample,
+		delayed.DesiredTransport->ObservationSample);
 }
 
 // ── Phase 5: tempo request state machine (§2.6/§3.5) ─────────────────────────
@@ -411,8 +423,8 @@ TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesReque
 		local, true, io::UserConfig{}, clock);
 	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
 	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
-	ASSERT_TRUE(confirmed.ClockSettings.has_value());
-	EXPECT_EQ(384000ul, confirmed.ClockSettings->SeedLengthSamps);
+	ASSERT_TRUE(confirmed.DesiredTransport.has_value());
+	EXPECT_EQ(384000ul, confirmed.DesiredTransport->IntervalLengthSamps);
 }
 
 TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSend)
@@ -430,7 +442,7 @@ TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSen
 	const auto acknowledged = coordinator.Observe(MakeTimingTempo(384000u, 2000u, 120.75f, 16u),
 		local, true, io::UserConfig{}, clock);
 	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
-	EXPECT_TRUE(acknowledged.ClockSettings.has_value());
+	EXPECT_TRUE(acknowledged.DesiredTransport.has_value());
 	EXPECT_FALSE(acknowledged.PromptForTempoChange);
 }
 
@@ -449,7 +461,7 @@ TEST(NinjamTimingCoordinator, DistantServerTempoDoesNotAcknowledgeRequest)
 	const auto update = coordinator.Observe(MakeTimingTempo(384000u, 2000u, 121.01f, 16u),
 		local, true, io::UserConfig{}, clock);
 	EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
-	EXPECT_FALSE(update.ClockSettings.has_value());
+	EXPECT_FALSE(update.DesiredTransport.has_value());
 	EXPECT_FALSE(update.PromptForTempoChange);
 }
 
@@ -597,35 +609,37 @@ TEST(NinjamTimingCoordinator, NoObservationAndInvalidTimingRecoverIdempotently)
 
 	const auto noObservation = coordinator.Tick(local, true, clock,
 		start + std::chrono::seconds(1));
-	EXPECT_TRUE(noObservation.InvalidatePendingCorrections);
+	ASSERT_TRUE(noObservation.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, noObservation.DesiredTransport->Intent);
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::ObservationDeadline, noObservation.NoSyncReason);
 	EXPECT_TRUE(noObservation.PromptForTempoChange);
 	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
 	const auto repeatedDeadline = coordinator.Tick(local, true, clock,
 		start + std::chrono::seconds(2));
-	EXPECT_FALSE(repeatedDeadline.InvalidatePendingCorrections);
+	EXPECT_FALSE(repeatedDeadline.DesiredTransport.has_value());
 	EXPECT_FALSE(repeatedDeadline.PromptForTempoChange);
 
 	auto freshAfterDeadline = MakeTimingTempo(480000u, 2000u, 90.0f, 8u);
 	freshAfterDeadline.AudioBlockStartSample = 256u;
 	auto recovered = coordinator.Observe(freshAfterDeadline, local, true, io::UserConfig{}, clock,
 		start + std::chrono::seconds(2));
-	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
+	EXPECT_TRUE(recovered.DesiredTransport.has_value());
 	EXPECT_TRUE(coordinator.IsConnected());
 
 	auto invalid = MakeTimingTempo(480000u, 3000u, 90.0f, 8u);
 	invalid.IsValid = false;
 	const auto invalidLoss = coordinator.Observe(invalid, local, true, io::UserConfig{}, clock,
 		start + std::chrono::seconds(2));
-	EXPECT_TRUE(invalidLoss.InvalidatePendingCorrections);
+	ASSERT_TRUE(invalidLoss.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, invalidLoss.DesiredTransport->Intent);
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::InvalidTiming, invalidLoss.NoSyncReason);
 	const auto repeatedInvalid = coordinator.Observe(invalid, local, true, io::UserConfig{}, clock,
 		start + std::chrono::seconds(2));
-	EXPECT_FALSE(repeatedInvalid.InvalidatePendingCorrections);
+	EXPECT_FALSE(repeatedInvalid.DesiredTransport.has_value());
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::None, repeatedInvalid.NoSyncReason);
 
 	recovered = coordinator.Observe(MakeTimingTempo(480000u, 4000u, 90.0f, 8u), local, true,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2));
-	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
+	EXPECT_TRUE(recovered.DesiredTransport.has_value());
 	EXPECT_TRUE(coordinator.IsConnected());
 }

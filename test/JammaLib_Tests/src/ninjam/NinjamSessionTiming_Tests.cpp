@@ -20,7 +20,8 @@ TEST(NinjamSessionTiming, PhysicalLossRetryCreatesOneNoSyncAndFreshEpoch)
 	ASSERT_TRUE(status.IsAvailable);
 	ASSERT_EQ(1u, status.SessionEpoch);
 	const auto connected = coordinator.ObserveSessionStatus(status, options, std::nullopt);
-	EXPECT_FALSE(connected.InvalidatePendingCorrections);
+	ASSERT_TRUE(connected.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, connected.DesiredTransport->Intent);
 	EXPECT_TRUE(coordinator.IsConnected());
 	EXPECT_EQ(1u, coordinator.SessionEpoch());
 
@@ -48,12 +49,13 @@ TEST(NinjamSessionTiming, PhysicalLossRetryCreatesOneNoSyncAndFreshEpoch)
 	EXPECT_FALSE(controller.TakePendingSnapshot().has_value());
 
 	const auto loss = coordinator.ObserveSessionStatus(status, options, std::nullopt);
-	EXPECT_TRUE(loss.InvalidatePendingCorrections);
+	ASSERT_TRUE(loss.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, loss.DesiredTransport->Intent);
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::PhysicalLoss, loss.NoSyncReason);
 	EXPECT_FALSE(coordinator.IsConnected());
 
 	const auto repeatedLoss = coordinator.ObserveSessionStatus(status, options, std::nullopt);
-	EXPECT_FALSE(repeatedLoss.InvalidatePendingCorrections);
+	EXPECT_FALSE(repeatedLoss.DesiredTransport.has_value());
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::None, repeatedLoss.NoSyncReason);
 
 	status = session->ObservePhysicalAvailability(true);
@@ -61,7 +63,8 @@ TEST(NinjamSessionTiming, PhysicalLossRetryCreatesOneNoSyncAndFreshEpoch)
 	ASSERT_TRUE(status.IsAvailable);
 	ASSERT_EQ(2u, status.SessionEpoch);
 	const auto retried = coordinator.ObserveSessionStatus(status, options, std::nullopt);
-	EXPECT_FALSE(retried.InvalidatePendingCorrections);
+	ASSERT_TRUE(retried.DesiredTransport.has_value());
+	EXPECT_EQ(2u, retried.DesiredTransport->SessionEpoch);
 	EXPECT_TRUE(coordinator.IsConnected());
 	EXPECT_EQ(2u, coordinator.SessionEpoch());
 
@@ -116,11 +119,12 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 	service.ObserveTiming(timing, std::nullopt, false, io::UserConfig{}, clock, start);
 	const auto deadline = service.ObserveTiming(timing, std::nullopt, false,
 		io::UserConfig{}, clock, start + std::chrono::seconds(1));
-	EXPECT_TRUE(deadline.InvalidatePendingCorrections);
+	ASSERT_TRUE(deadline.DesiredTransport.has_value());
+	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::NoSync, deadline.DesiredTransport->Intent);
 	EXPECT_EQ(ninjam::NinjamNoSyncReason::ObservationDeadline, deadline.NoSyncReason);
 	const auto repeated = service.ObserveTiming(timing, std::nullopt, false,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2));
-	EXPECT_FALSE(repeated.InvalidatePendingCorrections);
+	EXPECT_FALSE(repeated.DesiredTransport.has_value());
 
 	timing.AudioBlockStartSample += 256u;
 	timing.IntervalPositionSamps += 256u;
@@ -128,6 +132,6 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 	timing.LocalTransport.AbsoluteSamplePos += 256u;
 	const auto recovered = service.ObserveTiming(timing, std::nullopt, false,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2));
-	EXPECT_TRUE(recovered.InvalidatePendingCorrections || recovered.ClockSettings.has_value());
+	EXPECT_TRUE(recovered.DesiredTransport.has_value());
 	EXPECT_TRUE(service.HasConnectedTiming());
 }

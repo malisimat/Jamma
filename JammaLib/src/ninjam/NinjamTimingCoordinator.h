@@ -44,13 +44,6 @@ namespace ninjam
 		Expired
 	};
 
-	struct NinjamPhaseCorrection
-	{
-		long long DeltaSamps = 0;
-		std::uint64_t Generation = 0u;
-		bool IsJoin = false;
-	};
-
 	struct NinjamTempoChange
 	{
 		unsigned int IntervalLengthSamps = 0u;
@@ -68,24 +61,6 @@ namespace ninjam
 		unsigned int Bpi = 0u;
 	};
 
-	struct NinjamClockSettings
-	{
-		unsigned long SeedLengthSamps = 0ul;
-		unsigned int QuantiseSamps = 0u;
-		unsigned int BeatsPerInterval = 0u;
-		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
-		unsigned int PhaseSamps = 0u;
-		// Explicit generation for the timing replacement, independent of whether a
-		// nonzero phase correction is present. Prevents a valid zero-phase tempo
-		// replacement from being silently rejected by the audio generation gate.
-		std::uint64_t Generation = 0u;
-		std::uint64_t AudioBlockStartSample = 0u;
-		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::ContinuousSync;
-		float RemoteBpm = 0.0f;
-		float LocalBpm = 0.0f;
-		bool HasLocalTiming = false;
-	};
-
 	enum class NinjamNoSyncReason : std::uint8_t
 	{
 		None,
@@ -99,10 +74,9 @@ namespace ninjam
 
 	struct NinjamTimingUpdate
 	{
-		std::optional<NinjamClockSettings> ClockSettings;
-		std::optional<NinjamPhaseCorrection> PhaseCorrection;
+		std::optional<NinjamDesiredTransportState> DesiredTransport;
 		std::optional<NinjamTempoRequest> TempoRequest;
-		bool InvalidatePendingCorrections = false;
+		bool RemoteGridChanged = false;
 		bool PromptForTempoChange = false;
 		NinjamNoSyncReason NoSyncReason = NinjamNoSyncReason::None;
 	};
@@ -151,9 +125,9 @@ namespace ninjam
 	class NinjamTimingCoordinator
 	{
 	public:
-		void Connect(const NinjamTempoJoinOptions& options,
+		NinjamTimingUpdate Connect(const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
-		void Disconnect() noexcept;
+		NinjamTimingUpdate Disconnect() noexcept;
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
@@ -171,7 +145,6 @@ namespace ninjam
 		NinjamTimingUpdate ResolveTempoChange(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
-		void NotifyPhaseCorrectionConsumed() noexcept { ++_diagnostics.PhaseEventsConsumed; }
 		// Feedback from the network layer after attempting to deliver a tempo
 		// request. A failed send returns the request to Queued so the next interval
 		// boundary re-sends it; success leaves it awaiting server acknowledgement.
@@ -195,6 +168,10 @@ namespace ninjam
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
+		NinjamTimingUpdate _PublishRemoteDesired(const NinjamTempoChange& change,
+			NinjamLocalFollowPolicy policy, NinjamDesiredTimingIntent intent,
+			bool remoteGridChanged) noexcept;
+		NinjamTimingUpdate _PublishNoSync(NinjamNoSyncReason reason) noexcept;
 		void _RecordEmittedCommand(NinjamEmittedCommand kind, std::uint64_t generation) noexcept;
 		NinjamTimingUpdate _EnterNoSync(NinjamNoSyncReason reason,
 			bool clearLatestProposal = true) noexcept;
@@ -215,6 +192,8 @@ namespace ninjam
 		std::uint64_t _observationOrdinal = 0u;
 		std::uint64_t _requestSentObservationOrdinal = 0u;
 		std::uint64_t _commandGeneration = 0u;
+		std::uint64_t _desiredVersion = 0u;
+		NinjamLocalFollowPolicy _activeFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 		bool _tempoRequestSendConfirmed = false;
 		unsigned int _requestRetries = 0u;
 		bool _joinAligned = false;

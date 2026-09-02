@@ -30,24 +30,34 @@ namespace ninjam
 
 	void NinjamNetworkService::SetTempoJoinOptions(const NinjamTempoJoinOptions& options)
 	{
+		std::scoped_lock lock(_timingMutex);
 		_tempoJoinOptions = options;
 	}
 
-	void NinjamNetworkService::PrepareTempoSyncOnConnect(
-		const std::optional<engine::QuantisationTiming>& localTiming)
+	NinjamTempoJoinOptions NinjamNetworkService::TempoJoinOptions() const noexcept
 	{
-		_timingCoordinator.Connect(_tempoJoinOptions, localTiming);
+		std::scoped_lock lock(_timingMutex);
+		return _tempoJoinOptions;
 	}
 
-	void NinjamNetworkService::ResetTempoSyncOnDisconnect()
+	NinjamTimingUpdate NinjamNetworkService::PrepareTempoSyncOnConnect(
+		const std::optional<engine::QuantisationTiming>& localTiming)
 	{
-		_timingCoordinator.Disconnect();
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Connect(_tempoJoinOptions, localTiming);
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::ResetTempoSyncOnDisconnect()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Disconnect();
 	}
 
 	NinjamTimingUpdate NinjamNetworkService::ObserveSessionStatus(
 		const NinjamSessionTimingStatus& status,
 		const std::optional<engine::QuantisationTiming>& localTiming)
 	{
+		std::scoped_lock lock(_timingMutex);
 		return _timingCoordinator.ObserveSessionStatus(status, _tempoJoinOptions, localTiming);
 	}
 
@@ -157,15 +167,14 @@ namespace ninjam
 		utils::Timer& clock,
 		std::chrono::steady_clock::time_point now)
 	{
+		std::scoped_lock lock(_timingMutex);
 		auto observed = _timingCoordinator.Observe(
 			timing, localTiming, hasLocalContent, userConfig, clock, now);
 		// Advance deadline state on every job visit, including the physically
 		// available path that supplies a cached latest-value snapshot.
 		auto deadline = _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
-		if (deadline.ClockSettings.has_value()
-			|| deadline.PhaseCorrection.has_value()
+		if (deadline.DesiredTransport.has_value()
 			|| deadline.TempoRequest.has_value()
-			|| deadline.InvalidatePendingCorrections
 			|| deadline.PromptForTempoChange)
 		{
 			return deadline;
@@ -179,6 +188,7 @@ namespace ninjam
 		utils::Timer& clock,
 		std::chrono::steady_clock::time_point now)
 	{
+		std::scoped_lock lock(_timingMutex);
 		return _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
 	}
 
@@ -186,6 +196,7 @@ namespace ninjam
 		const std::optional<engine::QuantisationTiming>& localTiming,
 		utils::Timer& clock)
 	{
+		std::scoped_lock lock(_timingMutex);
 		return _timingCoordinator.ResolveTempoChange(accept, localTiming, clock);
 	}
 
@@ -195,6 +206,31 @@ namespace ninjam
 		if (auto* session = _ninjamController->Session())
 			sent = session->RequestServerTempo(request.Bpm, static_cast<int>(request.Bpi));
 		// Report delivery back so the coordinator can retry on failure (§3.5).
+		std::scoped_lock lock(_timingMutex);
 		_timingCoordinator.NotifyTempoRequestSent(sent);
+	}
+
+	std::optional<NinjamTempoChange> NinjamNetworkService::PendingRemoteTempoPrompt() const
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.PendingTempoChange();
+	}
+
+	bool NinjamNetworkService::HasConnectedTiming() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.IsConnected();
+	}
+
+	TempoRequestState NinjamNetworkService::TempoJoinRequestState() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.RequestState();
+	}
+
+	NinjamTimingDiagnostics NinjamNetworkService::TimingDiagnostics() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Diagnostics();
 	}
 }

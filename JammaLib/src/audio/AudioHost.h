@@ -21,11 +21,12 @@
 
 namespace audio
 {
-	struct NinjamTimingCommandReceipt
+	struct NinjamDesiredTimingReceipt
 	{
-		std::uint64_t Sequence = 0u;
+		std::uint64_t Version = 0u;
+		std::uint64_t SessionEpoch = 0u;
 		std::uint64_t Generation = 0u;
-		ninjam::NinjamTimingCommandType Type = ninjam::NinjamTimingCommandType::Invalidate;
+		ninjam::NinjamDesiredTimingIntent Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
 		ninjam::NinjamLocalFollowPolicy Policy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t SceneCoordinateSamps = 0u;
 		long long DeltaSamps = 0;
@@ -67,14 +68,11 @@ namespace audio
 		{
 			return _ninjamTimingMailbox.ReadLatest();
 		}
-		// Job thread publishes one coherent transport command; the audio callback
-		// consumes it once at the top of the block and applies it to the Timer and
-		// every active local take together.
-		void PublishTimingCommand(const ninjam::NinjamAudioTimingCommand& command) noexcept
-		{
-			_ninjamTimingCommandMailbox.Publish(command);
-		}
-		std::optional<NinjamTimingCommandReceipt> LastAppliedTimingCommand() const noexcept;
+		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
+		// Production callback seam, also used by production-boundary verification.
+		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
+			unsigned int sampleRate) noexcept;
+		std::optional<NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
 		{
 			_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
@@ -113,13 +111,15 @@ namespace audio
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
-		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
+		std::mutex _ninjamDesiredTimingPublishMutex;
+		ninjam::NinjamDesiredTransportStateMailbox _ninjamDesiredTimingMailbox;
 		std::atomic<std::uint64_t> _lastAppliedTimingReceiptSequence{ 0u };
-		std::atomic<std::uint64_t> _lastAppliedTimingCommandSequence{ 0u };
-		std::atomic<std::uint64_t> _lastAppliedTimingCommandGeneration{ 0u };
-		std::atomic<ninjam::NinjamTimingCommandType> _lastAppliedTimingCommandType{
-			ninjam::NinjamTimingCommandType::Invalidate };
-		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedTimingCommandPolicy{
+		std::atomic<std::uint64_t> _lastAppliedDesiredVersion{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedSessionEpoch{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedDesiredGeneration{ 0u };
+		std::atomic<ninjam::NinjamDesiredTimingIntent> _lastAppliedDesiredIntent{
+			ninjam::NinjamDesiredTimingIntent::NoSync };
+		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedDesiredPolicy{
 			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedTimingDelta{ 0 };
@@ -141,7 +141,10 @@ namespace audio
 		// Audio-thread owned phase-map geometry. The map is rebased after every
 		// accepted common correction so the next block cannot undo it.
 		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		ninjam::NinjamDesiredTransportState _appliedNinjamTiming{};
 		ninjam::SyncPhaseMap _syncPhaseMap;
+		bool _beginSyncPhaseMapAfterOffset = false;
+		bool _rebaseSyncPhaseMapAfterOffset = false;
 		TickCallback _tickCallback;
 	};
 }

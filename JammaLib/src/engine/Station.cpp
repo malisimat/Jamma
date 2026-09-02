@@ -761,6 +761,15 @@ void Station::InvalidateSceneAnchors() noexcept
 		if (auto take = weakTake.lock()) take->InvalidateSceneAnchors();
 }
 
+void Station::ResetTimingEpoch() noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (!state)
+		return;
+	for (const auto& weakTake : state->LoopTakes)
+		if (auto take = weakTake.lock()) take->ResetTimingEpoch();
+}
+
 void Station::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
 	std::int64_t sourceCoordinateAtOriginSamps) noexcept

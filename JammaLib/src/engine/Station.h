@@ -119,6 +119,7 @@ namespace engine
 			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
+		void ResetTimingEpoch() noexcept;
 		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
 			std::int64_t sourceCoordinateAtOriginSamps = 0) noexcept;
