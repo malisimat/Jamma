@@ -62,6 +62,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: follow policy, `NoSync` invalidation, per-loop phase; all remain separate.
 - Verification: include-graph check plus continuous/block/no-sync, reconnect, and invalidation tests.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
+- Phase 4 execution: characterization `3e5588b` retained green P3 and exposed P4's six audio/MIDI post-rebase assertions as a uniform `-45` failure before production movement. Implementation `8d0bc53` moves all follow-policy interpretation to AudioHost and replaces the Station/LoopTake NINJAM-aware command with neutral accepted-correction, epoch-reset, anchor-capture, and mapped-coordinate operations. Static audit finds no NINJAM policy/header dependency in Station or LoopTake. P3/P4 passed 40/40 over 20 repetitions, the exact focused filter passed 59/59, and the full native suite passed 825/826 with only the expected hardware MIDI skip. Live policy/reconnect scenarios remain Stage 21 evidence; independent B009 review is pending.
 
 ## F-006 â€” Consolidate the common sync-map owner without deleting live entity state prematurely
 
@@ -74,6 +75,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: sync map, mapped elapsed time, source/scene anchors, per-loop phase, monotonic scene coordinate; none may be collapsed.
 - Verification: unequal loop lengths, intentional offsets, rebase/wrap, reconnect, and `NoSync` invalidation.
 - Phase 2 enrichment: S08-03 shows every followed block recomputes the same 64-bit common mapped source coordinate independently in each take (`AudioHost.cpp:456`â€“`:459`; `LoopTake.cpp:640`â€“`:679`). The approved consolidation should compute it once per block, then apply per-entity anchors/modulo without collapsing per-loop phase.
+- Phase 4 execution: `8d0bc53` makes AudioHost the single common-map owner and supplies one mapped source coordinate to neutral Station/LoopTake fan-out. Engine entities retain their own audio/MIDI anchors, lengths, and modulo; restore precedes rebase and rebase does not recapture anchors. Static audit finds exactly one `SourceCoordinateAt` call in AudioHost, none in engine code, no `MapRemoteElapsedToLocal` below the owner, and no retired per-take map geometry/API. P4 now passes with `M`, `2M`, and non-divisor `777` audio/MIDI positions and unchanged anchors. The focused filter passed 59/59 and full suite passed 825/826 with one expected MIDI hardware skip. A live maximum-hierarchy profiler benchmark was unavailable; repetition is recorded only as a proxy. Independent B009 review is pending.
 - Phase 2 enrichment decision: accepted; compute the common mapped source coordinate once per block while preserving entity-specific anchors and modulo ([decision](decisions.md#findings)).
 - Phase 3 refinement: replace begin/rebase/restore geometry propagation with neutral entity operations that capture a missing anchor against, or restore from, the single AudioHost-computed source coordinate. Rebasing changes only the AudioHost ruler and must not recapture entity anchors. Estimated net production deletion: 45â€“75 lines plus five per-take map fields.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
@@ -225,6 +227,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: sync map, mapped elapsed, source/scene anchor, master phase, per-loop phase all remain distinct.
 - Verification: incremental build; sync-map, unequal-length/offset, reconnect/rebase, and `NoSync` tests.
 - Human decision: accepted as a critical single-authority cleanup ([decision](decisions.md#05---history)).
+- Phase 4 execution: `8d0bc53` removes only `SyncPhaseMap::SourcePhaseAtOrigin`, its stale explanatory comment, and its assignment. The live monotonic `SourceCoordinateAtOrigin`, derived mapping, scene coordinate, and per-entity anchors remain. Static symbol audit finds no `SourcePhaseAtOrigin`; P3/P4, the 59-test focused filter, and the 826-test full suite are green apart from the expected hardware MIDI skip. Independent B009 review is pending.
 
 ## F-019 â€” Remove the never-published `AlignmentReceipt` path
 
