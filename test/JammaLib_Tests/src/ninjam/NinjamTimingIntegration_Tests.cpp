@@ -1,7 +1,11 @@
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <atomic>
 #include <array>
+#include <chrono>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -49,8 +53,43 @@ namespace audio
 			if (stations)
 				host.RestoreMappedSourceAtScene(stations.get(), sceneCoordinateSamps);
 		}
+
+		static std::optional<std::int64_t> RestoreMappedSourceForBenchmark(
+			AudioHost& host,
+			const std::vector<std::shared_ptr<engine::Station>>* stations,
+			std::uint64_t sceneCoordinateSamps,
+			std::uint64_t& commonMapCalculationCount) noexcept
+		{
+			// RestoreMappedSourceAtScene contains the sole production SourceCoordinateAt
+			// call, before its station fan-out. Count entries to that private boundary;
+			// the static call-site audit proves one calculation per entry.
+			++commonMapCalculationCount;
+			return host.RestoreMappedSourceAtScene(stations, sceneCoordinateSamps);
+		}
+
+		static ninjam::SyncPhaseMap SyncPhaseMapForBenchmark(
+			const AudioHost& host) noexcept
+		{
+			return host._syncPhaseMap;
+		}
 	};
 }
+
+class NinjamBenchmarkLoop : public engine::Loop
+{
+public:
+	NinjamBenchmarkLoop(engine::LoopParams params,
+		audio::AudioMixerParams mixerParams) : Loop(params, mixerParams)
+	{
+	}
+
+	void SetTimingState(unsigned long length, unsigned long position) noexcept
+	{
+		_loopLength.store(length, std::memory_order_relaxed);
+		_playState.store(STATE_PLAYING, std::memory_order_relaxed);
+		SetBodyPlayIndex(position);
+	}
+};
 
 class NinjamProductionBoundaryLoopTake : public engine::LoopTake
 {
@@ -77,9 +116,62 @@ public:
 	}
 };
 
+class NinjamBenchmarkStation : public engine::Station
+{
+public:
+	NinjamBenchmarkStation(engine::StationParams params,
+		audio::AudioMixerParams mixerParams) : Station(params, mixerParams)
+	{
+	}
+
+	void RestoreMappedSourcePerTakeReference(const ninjam::SyncPhaseMap& map,
+		std::uint64_t sceneCoordinateSamps,
+		std::uint64_t& mapCalculationCount) noexcept
+	{
+		// This is a test-only reconstruction of the pre-B009 callback shape:
+		// Station traverses its published take snapshot and each take repeats the
+		// identical common-map calculation before restoring its own entities.
+		auto state = _AudioStateSnapshot();
+		if (!state)
+			return;
+		for (const auto& weakTake : state->LoopTakes)
+		{
+			if (auto take = weakTake.lock())
+			{
+				++mapCalculationCount;
+				take->RestoreMappedSourceCoordinate(
+					map.SourceCoordinateAt(sceneCoordinateSamps));
+			}
+		}
+	}
+};
+
 class NinjamProductionBoundaryFixture
 {
 public:
+	struct BenchmarkHierarchy
+	{
+		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> Stations;
+		std::vector<std::shared_ptr<NinjamBenchmarkStation>> ReferenceStations;
+		std::shared_ptr<NinjamProductionBoundaryLoopTake> ProbeTake;
+		std::shared_ptr<NinjamBenchmarkLoop> ProbeLoop;
+		std::size_t TakeCount = 0u;
+		std::size_t AudioLoopCount = 0u;
+	};
+
+	struct BenchmarkStats
+	{
+		std::uint64_t MedianNanosPerCall = 0u;
+		std::uint64_t P90NanosPerCall = 0u;
+		std::uint64_t MaximumNanosPerCall = 0u;
+	};
+
+	struct BenchmarkComparison
+	{
+		BenchmarkStats Current;
+		BenchmarkStats PerTakeReference;
+	};
+
 	static std::shared_ptr<engine::Loop> MakeLoop(unsigned long loopLength,
 		unsigned long position)
 	{
@@ -145,6 +237,117 @@ public:
 			station->AddTake(take);
 		station->CommitChanges();
 		return station;
+	}
+
+	static std::shared_ptr<NinjamBenchmarkLoop> MakeBenchmarkLoop(
+		const std::string& id, unsigned long loopLength, unsigned long position)
+	{
+		audio::WireMixBehaviourParams mixBehaviour;
+		mixBehaviour.Channels = { 0u };
+		audio::AudioMixerParams mixerParams;
+		mixerParams.Size = { 160, 80 };
+		mixerParams.Position = { 6, 6 };
+		mixerParams.Behaviour = mixBehaviour;
+
+		engine::LoopParams loopParams;
+		loopParams.Id = id;
+		loopParams.Wav = "b009-callback-benchmark";
+		loopParams.Size = { 80, 80 };
+		loopParams.Position = { 10, 22 };
+		auto loop = std::make_shared<NinjamBenchmarkLoop>(loopParams, mixerParams);
+		loop->SetTimingState(loopLength, position % loopLength);
+		return loop;
+	}
+
+	static BenchmarkHierarchy MakeBenchmarkHierarchy(unsigned int stationCount,
+		unsigned int takesPerStation, unsigned int loopsPerTake,
+		unsigned long loopLength)
+	{
+		BenchmarkHierarchy result;
+		auto stations = std::make_shared<std::vector<std::shared_ptr<engine::Station>>>();
+		stations->reserve(stationCount);
+		result.ReferenceStations.reserve(stationCount);
+		for (auto stationIndex = 0u; stationIndex < stationCount; ++stationIndex)
+		{
+			engine::StationParams stationParams;
+			stationParams.Name = "b009-benchmark-station-" + std::to_string(stationIndex);
+			stationParams.Size = { 200, 320 };
+			audio::MergeMixBehaviourParams stationMerge;
+			auto station = std::make_shared<NinjamBenchmarkStation>(stationParams,
+				engine::Station::GetMixerParams(stationParams.Size, stationMerge));
+
+			for (auto takeIndex = 0u; takeIndex < takesPerStation; ++takeIndex)
+			{
+				engine::LoopTakeParams takeParams;
+				takeParams.Id = "b009-benchmark-take-" + std::to_string(stationIndex)
+					+ "-" + std::to_string(takeIndex);
+				takeParams.Size = { 100, 100 };
+				audio::MergeMixBehaviourParams takeMerge;
+				auto take = std::make_shared<NinjamProductionBoundaryLoopTake>(takeParams,
+					engine::LoopTake::GetMixerParams(takeParams.Size, takeMerge));
+				for (auto loopIndex = 0u; loopIndex < loopsPerTake; ++loopIndex)
+				{
+					const auto position = static_cast<unsigned long>(
+						(stationIndex * 97u + takeIndex * 31u + loopIndex * 13u) % loopLength);
+					auto loop = MakeBenchmarkLoop(takeParams.Id + "-" + std::to_string(loopIndex),
+						loopLength, position);
+					if (!result.ProbeLoop)
+						result.ProbeLoop = loop;
+					take->AddLoop(loop);
+					++result.AudioLoopCount;
+				}
+				take->CommitChanges();
+				take->SetMidiTimingState((stationIndex * 53u + takeIndex * 19u) % loopLength,
+					loopLength);
+				if (!result.ProbeTake)
+					result.ProbeTake = take;
+				station->AddTake(take);
+				++result.TakeCount;
+			}
+			station->CommitChanges();
+			stations->push_back(station);
+			result.ReferenceStations.push_back(station);
+		}
+		result.Stations = stations;
+		return result;
+	}
+
+	template<std::size_t TrialCount, typename CurrentCallback, typename ReferenceCallback>
+	static BenchmarkComparison MeasureBenchmarkPair(unsigned int iterationsPerTrial,
+		CurrentCallback&& currentCallback, ReferenceCallback&& referenceCallback)
+	{
+		std::array<std::uint64_t, TrialCount> currentNanosPerCall{};
+		std::array<std::uint64_t, TrialCount> referenceNanosPerCall{};
+		auto measure = [iterationsPerTrial](auto&& callback, unsigned int trial)
+		{
+			const auto start = std::chrono::steady_clock::now();
+			for (auto iteration = 0u; iteration < iterationsPerTrial; ++iteration)
+				callback(trial, iteration);
+			const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - start).count();
+			return static_cast<std::uint64_t>(elapsed) / iterationsPerTrial;
+		};
+		for (auto trial = 0u; trial < TrialCount; ++trial)
+		{
+			if ((trial & 1u) == 0u)
+			{
+				currentNanosPerCall[trial] = measure(currentCallback, trial);
+				referenceNanosPerCall[trial] = measure(referenceCallback, trial);
+			}
+			else
+			{
+				referenceNanosPerCall[trial] = measure(referenceCallback, trial);
+				currentNanosPerCall[trial] = measure(currentCallback, trial);
+			}
+		}
+		std::sort(currentNanosPerCall.begin(), currentNanosPerCall.end());
+		std::sort(referenceNanosPerCall.begin(), referenceNanosPerCall.end());
+		auto stats = [](const auto& samples)
+		{
+			return BenchmarkStats{ samples[TrialCount / 2u],
+				samples[(TrialCount * 9u) / 10u], samples.back() };
+		};
+		return { stats(currentNanosPerCall), stats(referenceNanosPerCall) };
 	}
 
 	static unsigned long AudioPosition(const NinjamProductionBoundaryLoopTake& take)
@@ -489,4 +692,170 @@ TEST(NinjamTimingProductionBoundary, RestoreBeforeRebasePreservesEntityAnchors)
 	EXPECT_EQ(636ul, takeM->MidiTimingPosition());
 	EXPECT_EQ(836ul, take2M->MidiTimingPosition());
 	EXPECT_EQ(682ul, takeOdd->MidiTimingPosition());
+}
+
+TEST(NinjamTimingProductionBoundary, CommonMapCallbackCostIsBoundedAtSaturationCeiling)
+{
+	// Production has no station/take/loop cardinality cap. This explicit stress
+	// ceiling is therefore not described as a product maximum: it exercises 32
+	// local stations, 32 takes per station, two audio loops and one MIDI timing
+	// cursor per take. The timed work is the real private AudioHost common-map
+	// restore/fan-out and an otherwise identical test-only pre-B009 reference
+	// which repeats the common map calculation once per take.
+	constexpr auto stationCount = 32u;
+	constexpr auto takesPerStation = 32u;
+	constexpr auto audioLoopsPerTake = 2u;
+	constexpr auto midiCursorsPerTake = 1u;
+	constexpr auto blockSize = constants::DefaultBufferSizeSamps;
+	constexpr auto sampleRate = 48000u;
+	constexpr auto warmupCallsPerPath = 64u;
+	constexpr auto trialCount = 11u;
+	constexpr auto iterationsPerTrial = 64u;
+	constexpr auto sourceLength = 1000ul;
+	constexpr auto remoteLength = 1100ul;
+	constexpr auto timingNoiseMarginNanos = 50000u;
+	constexpr auto comparisonRatioNumerator = 5u;
+	constexpr auto comparisonRatioDenominator = 4u;
+#if defined(_DEBUG)
+	constexpr auto buildConfiguration = "Debug-x64";
+#else
+	constexpr auto buildConfiguration = "Release-x64";
+#endif
+
+	auto singleTake = NinjamProductionBoundaryFixture::MakeBenchmarkHierarchy(
+		1u, 1u, audioLoopsPerTake, sourceLength);
+	auto saturation = NinjamProductionBoundaryFixture::MakeBenchmarkHierarchy(
+		stationCount, takesPerStation, audioLoopsPerTake, sourceLength);
+	ASSERT_EQ(stationCount * takesPerStation, saturation.TakeCount);
+	ASSERT_EQ(stationCount * takesPerStation * audioLoopsPerTake,
+		saturation.AudioLoopCount);
+
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetSeedSourceLength(sourceLength);
+	clock->Tick(100u, 0u);
+	host.SetTimingClock(clock);
+	host.SetStations(saturation.Stations);
+	host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 1u, 1u,
+		ninjam::NinjamLocalFollowPolicy::BlockSync, remoteLength, 100u));
+	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, sampleRate));
+	audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+	const auto map = audio::NinjamAudioBoundaryTestAccess::SyncPhaseMapForBenchmark(host);
+	ASSERT_TRUE(map.IsActive());
+	ASSERT_TRUE(saturation.ProbeLoop);
+	ASSERT_TRUE(saturation.ProbeTake);
+
+	// Equal block counts at one take and 1,024 takes prove that entry to the sole
+	// common-map calculation is independent of take count. The static call-site
+	// audit remains the proof that each boundary entry performs exactly one
+	// SourceCoordinateAt before station fan-out.
+	std::uint64_t smallCommonMapCalculationCount = 0u;
+	std::uint64_t saturationWarmupCommonMapCalculationCount = 0u;
+	std::uint64_t saturationWarmupReferenceMapCalculationCount = 0u;
+	for (auto call = 0u; call < warmupCallsPerPath; ++call)
+	{
+		const auto scene = static_cast<std::uint64_t>(call + 1u) * blockSize;
+		audio::NinjamAudioBoundaryTestAccess::RestoreMappedSourceForBenchmark(host,
+			singleTake.Stations.get(), scene, smallCommonMapCalculationCount);
+		if ((call & 1u) == 0u)
+		{
+			audio::NinjamAudioBoundaryTestAccess::RestoreMappedSourceForBenchmark(host,
+				saturation.Stations.get(), scene, saturationWarmupCommonMapCalculationCount);
+			for (const auto& station : saturation.ReferenceStations)
+				station->RestoreMappedSourcePerTakeReference(map, scene,
+					saturationWarmupReferenceMapCalculationCount);
+		}
+		else
+		{
+			for (const auto& station : saturation.ReferenceStations)
+				station->RestoreMappedSourcePerTakeReference(map, scene,
+					saturationWarmupReferenceMapCalculationCount);
+			audio::NinjamAudioBoundaryTestAccess::RestoreMappedSourceForBenchmark(host,
+				saturation.Stations.get(), scene, saturationWarmupCommonMapCalculationCount);
+		}
+	}
+	EXPECT_EQ(warmupCallsPerPath, smallCommonMapCalculationCount);
+	EXPECT_EQ(warmupCallsPerPath, saturationWarmupCommonMapCalculationCount);
+	EXPECT_EQ(static_cast<std::uint64_t>(warmupCallsPerPath) * saturation.TakeCount,
+		saturationWarmupReferenceMapCalculationCount);
+
+	std::uint64_t currentMapCalculationCount = 0u;
+	std::uint64_t referenceMapCalculationCount = 0u;
+	std::uint64_t currentCoordinateChecksum = 0u;
+	const auto sceneFor = [=](unsigned int trial, unsigned int iteration)
+	{
+		const auto ordinal = static_cast<std::uint64_t>(warmupCallsPerPath) + 1u
+			+ static_cast<std::uint64_t>(trial) * iterationsPerTrial + iteration;
+		return ordinal * blockSize;
+	};
+	const auto comparison = NinjamProductionBoundaryFixture::MeasureBenchmarkPair<trialCount>(
+		iterationsPerTrial,
+		[&](unsigned int trial, unsigned int iteration)
+		{
+			const auto mapped = audio::NinjamAudioBoundaryTestAccess::RestoreMappedSourceForBenchmark(
+				host, saturation.Stations.get(), sceneFor(trial, iteration),
+				currentMapCalculationCount);
+			if (mapped.has_value())
+				currentCoordinateChecksum ^= static_cast<std::uint64_t>(mapped.value());
+		},
+		[&](unsigned int trial, unsigned int iteration)
+		{
+			const auto scene = sceneFor(trial, iteration);
+			for (const auto& station : saturation.ReferenceStations)
+				station->RestoreMappedSourcePerTakeReference(map, scene,
+					referenceMapCalculationCount);
+		});
+
+	constexpr auto measuredCallsPerPath = static_cast<std::uint64_t>(trialCount)
+		* iterationsPerTrial;
+	EXPECT_EQ(measuredCallsPerPath, currentMapCalculationCount);
+	EXPECT_EQ(measuredCallsPerPath * saturation.TakeCount, referenceMapCalculationCount);
+
+	const auto finalScene = sceneFor(trialCount - 1u, iterationsPerTrial - 1u);
+	const auto finalSource = map.SourceCoordinateAt(finalScene);
+	EXPECT_EQ(static_cast<unsigned long>(ninjam::PositiveModulo(finalSource
+		- static_cast<long long>(saturation.ProbeLoop->SceneAnchor()), sourceLength)),
+		saturation.ProbeLoop->BodyPlayIndex());
+	EXPECT_EQ(static_cast<unsigned long>(ninjam::PositiveModulo(finalSource
+		- static_cast<long long>(saturation.ProbeTake->MidiSceneAnchor()), sourceLength)),
+		saturation.ProbeTake->MidiTimingPosition());
+	EXPECT_NE(0u, currentCoordinateChecksum);
+
+	const auto callbackBudgetNanos = static_cast<std::uint64_t>(blockSize) * 1000000000ull
+		/ sampleRate;
+	const auto comparisonLimitNanos = comparison.PerTakeReference.MedianNanosPerCall
+		* comparisonRatioNumerator / comparisonRatioDenominator + timingNoiseMarginNanos;
+	const auto timingAccepted = comparison.Current.P90NanosPerCall < callbackBudgetNanos
+		&& comparison.Current.MedianNanosPerCall <= comparisonLimitNanos;
+	std::cout << std::fixed << std::setprecision(3)
+		<< "[B009 callback benchmark] scenario=private AudioHost common-map restore/fan-out"
+		<< " configuration=" << buildConfiguration
+		<< " hierarchy_policy=explicit-saturation-ceiling-no-production-cardinality-cap"
+		<< " sample_rate_hz=" << sampleRate
+		<< " block_size_samples=" << blockSize
+		<< " stations=" << stationCount
+		<< " takes_per_station=" << takesPerStation
+		<< " audio_loops_per_take=" << audioLoopsPerTake
+		<< " midi_cursors_per_take=" << midiCursorsPerTake
+		<< " total_takes=" << saturation.TakeCount
+		<< " total_audio_loops=" << saturation.AudioLoopCount
+		<< " total_timing_entities=" << saturation.TakeCount * midiCursorsPerTake
+			+ saturation.AudioLoopCount
+		<< " warmup_calls_per_path=" << warmupCallsPerPath
+		<< " trials=" << trialCount
+		<< " iterations_per_trial=" << iterationsPerTrial
+		<< " measured_calls_per_path=" << measuredCallsPerPath
+		<< " current_common_map_calculations=" << currentMapCalculationCount
+		<< " reference_per_take_map_calculations=" << referenceMapCalculationCount
+		<< " current_median_ns_per_call=" << comparison.Current.MedianNanosPerCall
+		<< " current_p90_ns_per_call=" << comparison.Current.P90NanosPerCall
+		<< " current_max_trial_ns_per_call=" << comparison.Current.MaximumNanosPerCall
+		<< " reference_median_ns_per_call=" << comparison.PerTakeReference.MedianNanosPerCall
+		<< " reference_p90_ns_per_call=" << comparison.PerTakeReference.P90NanosPerCall
+		<< " reference_max_trial_ns_per_call=" << comparison.PerTakeReference.MaximumNanosPerCall
+		<< " callback_budget_ns=" << callbackBudgetNanos
+		<< " comparison_limit_ns=reference_median*1.25+50000"
+		<< " timing_accepted=" << (timingAccepted ? "true" : "false")
+		<< " timing_gate=non-gating-host-load-sensitive"
+		<< '\n';
 }
