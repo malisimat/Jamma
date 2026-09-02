@@ -145,11 +145,13 @@
 ### B012 — Timing value, mailbox, and header ownership
 
 - **Owner / objective:** existing engine/audio/NINJAM owners move value-only local timing and local-offset publication to their rightful boundary and move non-template runtime bodies behind declarations; add no class.
-- **Owned files:** `engine/Quantiser.h/.cpp` plus one small existing timing value header; `audio/AudioHost.h/.cpp`; `ninjam/NinjamAudioTimingCommand.h/.cpp`, `NinjamTiming.h/.cpp`, `NinjamTimingObservationMailbox.h/.cpp`; affected project/filter entries and tests.
-- **Prohibited collateral:** behavior change, generic mailbox, new class, writer multiplicity, latest/zero semantic change, UI/VST/resource edit.
+- **Owned files:** `engine/Quantiser.h/.cpp` plus one small new value-only engine timing header; `audio/AudioHost.h/.cpp`; `ninjam/NinjamAudioTimingCommand.h/.cpp`, `NinjamTiming.h/.cpp`, `NinjamTimingObservationMailbox.h/.cpp`; affected project/filter entries and tests. The human-approved F-007 scope amendment also owns `ninjam/NinjamTimingCoordinator.h` and `ninjam/NinjamNetworkService.h` strictly for replacing their direct `Quantiser.h` includes with the value-only header; those two consumer headers receive no declaration or behavior change.
+- **Prohibited collateral:** behavior change, generic mailbox, new class, writer multiplicity, latest/zero semantic change, UI/VST/resource edit, or any declaration/behavior change in the two include-only NINJAM consumer headers.
 - **Prerequisite:** `TransportPhaseOffset.AbsoluteLocalOffsetIsIndependentOfNinjamGeneration` passes before file movement.
 - **Rollback:** revert value/mailbox placement separately from runtime-body moves if they become two commits; each intermediate commit must build.
 - **Verification:** prerequisite plus mailbox latest/zero tests, disconnected/`NoSync` local offset, include graph, retired include/symbol audit, incremental tests. Review: `B012.md`.
+
+**Human-approved F-007 scope amendment (2026-09-02, against clean `HEAD` `3c043b1f7fa3f365fd39718b6d3b2324dc93d1a2`):** the prior owned-file list allowed moving the values out of `Quantiser.h` but did not allow editing both direct NINJAM consumers that must stop including that aggregate, so B012 could not satisfy its literal include-graph verification. B012 may add the one small value-only engine timing header and its necessary project/filter registration and make the strictly include-only consumer edits stated above. Every existing prerequisite, prohibition, rollback point, dependency, protected timing invariant, verification requirement, independent-review requirement, no-batch residual, and downstream order remains unchanged.
 
 ### B013 — Proposal identity and authoritative BPI
 
