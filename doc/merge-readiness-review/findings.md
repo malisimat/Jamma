@@ -116,6 +116,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Phase 2 enrichment decision: accepted; make command production explicit and self-enforcing within the approved owner move ([decision](decisions.md#findings)).
 - Phase 3 refinement: remove Scene's optionals-to-event translation and separate connect/disconnect invalidation construction. The producer value contains session epoch, follow policy, full validated device-rate remote geometry, and timestamped remote master phase; no ordered queue, standalone invalidation, or phase-delta command is retained.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
+- Phase 4 execution: merged B006+B007 moves complete desired-state construction into the serialized NetworkService/Coordinator owner at corrected `da0db24`; Scene now forwards only that desired value, its producer-paired remote grid, tempo requests, and prompt presentation/decisions. P2 exercises concurrent real producer calls and validates coherent desired/grid fields, monotonic version precedence, and stale-publication rejection at AudioHost. Independent combined review is pending.
 
 ## F-010 â€” Normalize new timing aggregate acronym casing
 
@@ -301,6 +302,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Verification: production-faithful former `Invalidate -> Replace` and `Replace -> Discipline` intent sequences before one callback must resolve to one complete final desired state; test same-state idempotence, epoch/geometry/phase comparisons, Timer/map/audio/MIDI/generation coherence, both sync policies, unequal loop lengths/offsets, and valid zero observation.
 - Documentation obligation: replace claims that each event publication is consumed exactly once or that remote geometry never replaces Timer timing with the approved desired-versus-applied rule; clearly label current defects versus target behavior until implemented.
 - Human decision: accepted only in this replacement form; the ordered/delta command choice was rejected ([decision](decisions.md#09---timing-correctness)).
+- Phase 4 execution: characterization `46816af` failed to compile against the absent contract as expected; `f1e0df1` introduced one immutable complete desired state and `da0db24` corrected the audit gaps. AudioHost now compares latest desired with applied epoch/version/generation at the private audio-boundary seam: epoch changes reset NINJAM gates, geometry changes replace Timer timing, same geometry disciplines phase, duplicate/equal generations are idempotent, and complete `NoSync` clears authority without moving cursors. P1/P2/P3 plus the queued-local correction passed 4/4 and the focused filter passed 107/107; independent combined review remains pending.
 
 ## F-025 â€” Reset every timing generation gate at a reconnect boundary
 
@@ -313,6 +315,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: session authority/generation, `NoSync`, anchors, Timer geometry, and per-loop phase remain separate.
 - Verification: session 1 beyond generation 1; production-path invalidate; session 2 generation 1 accepted by Timer and real audio/MIDI takes; stale session-1 command rejected; free-run and offsets preserved.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `f1e0df1` added explicit epoch reset fan-out through Station/LoopTake; audit then caught that the reset also erased a separate queued local correction. The red correction regression in `34918aa` and fix `da0db24` now reset only NINJAM epoch/map/anchor/generation state. Corrected P3 uses real `M`/`2M`/`3M` audio and MIDI-loop state plus automation anchors, proves unchanged cursors at `NoSync`, advances each entity while disconnected, accepts epoch-2 generation 1, and rejects old-epoch plus equal/stale generations despite newer publication versions.
 
 ## F-026 â€” Anchor the initial join delta to one observation instant
 
@@ -482,6 +485,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: epoch, policy, Timer geometry, common map, entity anchors/lengths, audio phase, MIDI cursor, automation origin, and `NoSync` remain independently asserted.
 - Verification: P1â€“P4 from Stage 14: complete desired-state sequences, two real unequal-length audio/MIDI takes with intentional offsets, session-2 generation 1, stale/equal rejection, restore-before-rebase.
 - Human decision: accepted as prerequisite evidence for the protected production refactors ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: `46816af` replaced the pseudo-integration model with P1/P2/P3 at the real AudioHost/Timer/Station/LoopTake boundary. Audit correction `34918aa`/`da0db24` made the audio-boundary test seam private through a friend accessor, drove P2 through concurrently invoked NetworkService/Coordinator production calls, and made P3 construct real MIDI loops and exercise disconnected free-run. The old model and its duplicated command simulations were removed. P4 remains the B009 common-map prerequisite rather than being claimed here.
 
 ## F-039 â€” Rewrite tests that preserve rejected command and zero-anchor semantics
 
@@ -495,6 +499,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Verification: P1/P2/P6: both former command orderings, final applied epoch/geometry/phase, valid zero/explicit absent/nonzero anchors, translated pairs, delayed first-block behavior.
 - Human decision: accepted; rejected command and zero-sentinel expectations must not be retained ([decision](decisions.md#small-simplifications)).
 - Phase 4 execution: the P6 portion is corrected at `18663f3`: tests now encode explicit absent/present-zero/present-nonzero semantics and delayed first-block projection without a zero-sentinel compatibility path. The complete desired-state/command-order portion remains deliberately owned by B006 and was not pulled forward.
+- Phase 4 B006+B007 execution: `f1e0df1` removes the former `NinjamAudioTimingCommand` event/delta mailbox contract and rewrites its tests for complete latest desired-state semantics, desired/applied versioning, and explicit `NoSync`. Corrected P1/P2 at `da0db24` cover both formerly lossy publication orderings, complete producer values, and stale-version precedence without a compatibility adapter.
 
 ## F-040 â€” Make the timing-mailbox concurrency test prove overlap
 
@@ -595,6 +600,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: epoch, authority lifecycle, policy, geometry, phase, device/Timer/scene coordinates, and per-entity phase remain separate diagnostic fields.
 - Verification: table tests for each rejection reason/counter; two-session epoch correlation; geometry/discipline/`NoSync` desired-applied traces; one bounded lag warning that clears on application; manual loss/retry trace.
 - Human decision: accepted, provided correlation/diagnostics remain bounded and surgically reuse existing owners ([decision](decisions.md#small-simplifications)).
+- Phase 4 B006+B007 execution: the epoch/version portion lands in `f1e0df1`/`da0db24`: every complete desired state carries session epoch, publication version, and generation, while the audio-side coherent receipt records applied epoch/version/generation/intent/policy. P1â€“P3 verify desired-versus-applied correlation and stale/equal rejection. Rejection-reason counters, bounded anomaly/lag reporting, and manual loss/retry traces remain explicitly owned by B014/Stage 21 and are not claimed here.
 
 ## F-048 â€” Bound seed-timing policy before Windows integer conversion
 
