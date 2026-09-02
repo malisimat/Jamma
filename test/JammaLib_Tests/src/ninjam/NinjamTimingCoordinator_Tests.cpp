@@ -574,3 +574,56 @@ TEST(NinjamTimingCoordinator, TempoRequestDeadlinePromptsOnceWithLatestServerTim
 	EXPECT_FALSE(coordinator.Observe(MakeTimingTempo(480000u, 4000u, 90.0f, 8u), local, true,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2)).PromptForTempoChange);
 }
+
+TEST(NinjamTimingCoordinator, NoObservationAndInvalidTimingRecoverIdempotently)
+{
+	Timer clock;
+	clock.SetSeedSourceLength(384000ul);
+	engine::QuantisationTiming local{ 24000u, 384000u, 16u, 120.0f, 16u };
+	ninjam::NinjamTempoJoinOptions options;
+	options.PushLocalTempoOnJoin = true;
+	options.PromptBeforeApplyingRemoteTempo = true;
+	options.TempoRequestDeadline = std::chrono::seconds(1);
+	NinjamTimingCoordinator coordinator;
+	coordinator.Connect(options, local);
+	const auto start = std::chrono::steady_clock::time_point{};
+
+	coordinator.Observe(MakeTimingTempo(480000u, 400000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start);
+	auto request = coordinator.Observe(MakeTimingTempo(480000u, 1000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start);
+	ASSERT_TRUE(request.TempoRequest.has_value());
+	coordinator.NotifyTempoRequestSent(true, start);
+
+	const auto noObservation = coordinator.Tick(local, true, clock,
+		start + std::chrono::seconds(1));
+	EXPECT_TRUE(noObservation.InvalidatePendingCorrections);
+	EXPECT_EQ(ninjam::NinjamNoSyncReason::ObservationDeadline, noObservation.NoSyncReason);
+	EXPECT_TRUE(noObservation.PromptForTempoChange);
+	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
+	const auto repeatedDeadline = coordinator.Tick(local, true, clock,
+		start + std::chrono::seconds(2));
+	EXPECT_FALSE(repeatedDeadline.InvalidatePendingCorrections);
+	EXPECT_FALSE(repeatedDeadline.PromptForTempoChange);
+
+	auto recovered = coordinator.Observe(MakeTimingTempo(480000u, 2000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start + std::chrono::seconds(2));
+	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
+	EXPECT_TRUE(coordinator.IsConnected());
+
+	auto invalid = MakeTimingTempo(480000u, 3000u, 90.0f, 8u);
+	invalid.IsValid = false;
+	const auto invalidLoss = coordinator.Observe(invalid, local, true, io::UserConfig{}, clock,
+		start + std::chrono::seconds(2));
+	EXPECT_TRUE(invalidLoss.InvalidatePendingCorrections);
+	EXPECT_EQ(ninjam::NinjamNoSyncReason::InvalidTiming, invalidLoss.NoSyncReason);
+	const auto repeatedInvalid = coordinator.Observe(invalid, local, true, io::UserConfig{}, clock,
+		start + std::chrono::seconds(2));
+	EXPECT_FALSE(repeatedInvalid.InvalidatePendingCorrections);
+	EXPECT_EQ(ninjam::NinjamNoSyncReason::None, repeatedInvalid.NoSyncReason);
+
+	recovered = coordinator.Observe(MakeTimingTempo(480000u, 4000u, 90.0f, 8u), local, true,
+		io::UserConfig{}, clock, start + std::chrono::seconds(2));
+	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
+	EXPECT_TRUE(coordinator.IsConnected());
+}

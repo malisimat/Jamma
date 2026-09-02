@@ -207,6 +207,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\ninjam\NinjamTimingCoordinator_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamAudioTimingCommand_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamSessionAudio_Tests.cpp" />
+    <ClCompile Include="src\ninjam\NinjamSessionTiming_Tests.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingIntegration_Tests.cpp" />
     <ClCompile Include="src\vst\VstAudioBuffers_Tests.cpp" />
     <ClCompile Include="src\vst\Vst2Plugin_Tests.cpp" />
