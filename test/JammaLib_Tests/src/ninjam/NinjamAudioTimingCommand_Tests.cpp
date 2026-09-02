@@ -6,7 +6,6 @@
 using ninjam::NinjamDesiredTransportState;
 using ninjam::NinjamDesiredTransportStateMailbox;
 using ninjam::NinjamDesiredTimingIntent;
-using ninjam::LocalTransportOffsetLoopFracMailbox;
 using utils::Timer;
 
 namespace
@@ -87,19 +86,6 @@ TEST(NinjamDesiredTransportStateMailbox, NoSyncPublicationIsACompleteLatestValue
 	EXPECT_EQ(NinjamDesiredTimingIntent::NoSync, latest->Intent);
 	EXPECT_EQ(8u, latest->Version);
 	EXPECT_EQ(3u, latest->SessionEpoch);
-}
-
-TEST(LocalTransportOffsetLoopFracMailbox, LatestPublicationWinsAndZeroIsDeliveredOnce)
-{
-	LocalTransportOffsetLoopFracMailbox mailbox;
-	mailbox.Publish(0.005);
-	mailbox.Publish(0.010);
-	mailbox.Publish(0.0);
-
-	const auto consumed = mailbox.ConsumeLatest();
-	ASSERT_TRUE(consumed.has_value());
-	EXPECT_DOUBLE_EQ(0.0, consumed.value());
-	EXPECT_FALSE(mailbox.ConsumeLatest().has_value());
 }
 
 TEST(NinjamLoopAlignment, DistinctAnchorsRestoreExactlyAtSharedSceneCoordinates)

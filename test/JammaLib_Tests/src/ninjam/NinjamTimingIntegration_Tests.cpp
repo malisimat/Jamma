@@ -72,6 +72,17 @@ namespace audio
 		{
 			return host._syncPhaseMap;
 		}
+
+		static std::optional<double> ConsumeLocalTransportOffset(AudioHost& host) noexcept
+		{
+			return host._localTransportOffsetLoopFracMailbox.ConsumeLatest();
+		}
+
+		static void ApplyLocalTransportOffset(AudioHost& host,
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+		{
+			host.ApplyLocalTransportOffsetAtAudioBoundary(stations);
+		}
 	};
 }
 
@@ -403,6 +414,41 @@ public:
 		return timing;
 	}
 };
+
+TEST(AudioHostLocalTransportOffsetPublication, LatestPublicationWinsAndZeroIsDeliveredOnce)
+{
+	audio::AudioHost host{ io::UserConfig{} };
+	host.PublishLocalTransportOffsetLoopFrac(0.005);
+	host.PublishLocalTransportOffsetLoopFrac(0.010);
+	host.PublishLocalTransportOffsetLoopFrac(0.0);
+
+	const auto consumed = audio::NinjamAudioBoundaryTestAccess::ConsumeLocalTransportOffset(host);
+	ASSERT_TRUE(consumed.has_value());
+	EXPECT_DOUBLE_EQ(0.0, consumed.value());
+	EXPECT_FALSE(audio::NinjamAudioBoundaryTestAccess::ConsumeLocalTransportOffset(host).has_value());
+}
+
+TEST(AudioHostLocalTransportOffsetPublication, AppliesWhileDisconnectedAndNoSyncIsActive)
+{
+	constexpr unsigned long masterLength = 1000ul;
+	auto take = NinjamProductionBoundaryFixture::MakeTake("local-offset", masterLength * 2ul, 100ul);
+	auto station = NinjamProductionBoundaryFixture::MakeStation({ take });
+	const std::vector<std::shared_ptr<engine::Station>> stations{ station };
+
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetSeedSourceLength(masterLength);
+	host.SetTimingClock(clock);
+	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(stations));
+	host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 1u, 0u,
+		ninjam::NinjamLocalFollowPolicy::NoSync, 0ul, 0u));
+	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+
+	host.PublishLocalTransportOffsetLoopFrac(0.25);
+	audio::NinjamAudioBoundaryTestAccess::ApplyLocalTransportOffset(host, stations);
+	EXPECT_EQ(350ul, NinjamProductionBoundaryFixture::AudioPosition(*take));
+	EXPECT_EQ(350ul, take->MidiTimingPosition());
+}
 
 TEST(NinjamTimingProductionBoundary, CompleteDesiredStateSupersedesFormerCommandSequences)
 {

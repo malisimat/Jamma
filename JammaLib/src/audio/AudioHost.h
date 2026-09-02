@@ -72,10 +72,7 @@ namespace audio
 		}
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
 		std::optional<NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
-		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
-		{
-			_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
-		}
+		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
 		void SetTimingClock(std::shared_ptr<utils::Timer> clock) noexcept
@@ -89,8 +86,26 @@ namespace audio
 
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
+		// AudioHost exclusively owns this local-only single-writer/single-reader
+		// handoff. Publications coalesce to the latest absolute target, including zero.
+		class LocalTransportOffsetLoopFracMailbox
+		{
+		public:
+			void Publish(double normalizedLoopFrac) noexcept;
+			std::optional<double> ConsumeLatest() noexcept;
+
+		private:
+			static constexpr unsigned int _MaxReadAttempts = 4u;
+			std::atomic<std::uint64_t> _sequence{ 0u };
+			std::atomic_bool _hasPublication{ false };
+			std::atomic<double> _normalizedLoopFrac{ 0.0 };
+			std::uint64_t _consumedSequence = 0u;
+		};
+
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
+		void ApplyLocalTransportOffsetAtAudioBoundary(
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
 			const std::vector<std::shared_ptr<engine::Station>>* stations,
 			std::uint64_t sceneCoordinateSamps) noexcept;
@@ -130,7 +145,7 @@ namespace audio
 			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
 		std::atomic<long long> _lastAppliedTimingDelta{ 0 };
-		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
+		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
 		double _localTransportOffsetLoopFrac = 0.0;

@@ -11,6 +11,45 @@ using namespace utils;
 
 namespace audio
 {
+	void AudioHost::LocalTransportOffsetLoopFracMailbox::Publish(
+		double normalizedLoopFrac) noexcept
+	{
+		const auto writingSequence = _sequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
+		_normalizedLoopFrac.store(normalizedLoopFrac, std::memory_order_relaxed);
+		_sequence.store(writingSequence + 1u, std::memory_order_release);
+		_hasPublication.store(true, std::memory_order_release);
+	}
+
+	std::optional<double> AudioHost::LocalTransportOffsetLoopFracMailbox::ConsumeLatest() noexcept
+	{
+		if (!_hasPublication.load(std::memory_order_acquire))
+			return std::nullopt;
+
+		for (unsigned int attempt = 0u; attempt < _MaxReadAttempts; ++attempt)
+		{
+			const auto before = _sequence.load(std::memory_order_acquire);
+			if ((before & 1u) != 0u)
+				continue;
+			if (before == _consumedSequence)
+				return std::nullopt;
+
+			const auto normalizedLoopFrac = _normalizedLoopFrac.load(std::memory_order_relaxed);
+			const auto after = _sequence.load(std::memory_order_acquire);
+			if (before == after)
+			{
+				_consumedSequence = before;
+				return normalizedLoopFrac;
+			}
+		}
+
+		return std::nullopt;
+	}
+
+	void AudioHost::PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
+	{
+		_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
+	}
+
 	AudioHost::AudioHost(io::UserConfig userConfig) :
 		_userConfig(userConfig),
 		_tickUserConfig(_userConfig),
@@ -321,6 +360,28 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 	_captureMappedSourceAnchorsAfterOffset = false;
 }
 
+	void AudioHost::ApplyLocalTransportOffsetAtAudioBoundary(
+		const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+	{
+		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())
+			_localTransportOffsetLoopFrac = localTransportOffsetLoopFrac.value();
+
+		const auto timingClock = _timingClock.load(std::memory_order_acquire);
+		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
+		if (masterLength != _localTransportOffsetMasterLength)
+			_localTransportOffsetMasterLength = masterLength;
+		const auto localTransportOffsetTargetSamps = masterLength == 0ul ? 0 :
+			static_cast<long long>(std::llround(
+				_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
+		if (localTransportOffsetTargetSamps == _localTransportOffsetTargetSamps)
+			return;
+
+		_localTransportOffsetTargetSamps = localTransportOffsetTargetSamps;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote())
+				station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
+	}
+
 	int AudioHost::AudioCallback(void* outBuffer,
 		void* inBuffer,
 		unsigned int numSamps,
@@ -346,26 +407,10 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate);
 
-		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())
-			_localTransportOffsetLoopFrac = localTransportOffsetLoopFrac.value();
-
 		const auto timingClock = _timingClock.load(std::memory_order_acquire);
 		if (timingClock)
 			timingClock->AdvanceMusicalTransport();
-		const auto masterLength = timingClock ? timingClock->SeedSourceLength() : 0ul;
-		if (masterLength != _localTransportOffsetMasterLength)
-			_localTransportOffsetMasterLength = masterLength;
-		const auto localTransportOffsetTargetSamps = masterLength == 0ul ? 0 :
-			static_cast<long long>(std::llround(_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
-		if (localTransportOffsetTargetSamps != _localTransportOffsetTargetSamps)
-		{
-			_localTransportOffsetTargetSamps = localTransportOffsetTargetSamps;
-			for (auto& station : stations)
-			{
-				if (station && !station->IsRemote())
-					station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
-			}
-		}
+		ApplyLocalTransportOffsetAtAudioBoundary(stations);
 		// Offset is loop-local, so capture entity anchors only after every local take
 		// has applied it. This is a single post-command fan-out, rather than a
 		// speculative capture before the offset is known.
