@@ -32,17 +32,23 @@ void NinjamController::SetAudioFormat(unsigned int sampleRate,
 NinjamSessionPumpResult NinjamController::Pump()
 {
 	auto result = _session.Pump();
+	ApplySessionPumpResult(result);
+	return result;
+}
+
+void NinjamController::ApplySessionPumpResult(const NinjamSessionPumpResult& result)
+{
 	if (result.TimingStatus.Changed && !result.TimingStatus.IsAvailable)
 	{
 		std::scoped_lock lock(_pendingSnapshotMutex);
 		_pendingSnapshot.reset();
+		return;
 	}
 	if (result.Snapshot.has_value())
 	{
 		std::scoped_lock lock(_pendingSnapshotMutex);
 		_pendingSnapshot = result.Snapshot;
 	}
-	return result;
 }
 
 std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::TakePendingSnapshot()

@@ -461,29 +461,32 @@ NinjamSessionTimingStatus NinjamSession::AdvanceTimingStatus(
 	return next;
 }
 
-NinjamSessionPumpResult NinjamSession::Pump()
+NinjamSessionTimingStatus NinjamSession::ObservePhysicalAvailability(bool isAvailable) noexcept
 {
-	NinjamSessionPumpResult result;
 	if (_forceUnavailableEdge.exchange(false, std::memory_order_acq_rel))
 	{
 		_timingStatus = AdvanceTimingStatus(_timingStatus, false);
-		result.TimingStatus = _timingStatus;
 		if (_timingStatus.Changed)
-			return result;
+			return _timingStatus;
 	}
+	_timingStatus = AdvanceTimingStatus(_timingStatus, isAvailable);
+	return _timingStatus;
+}
+
+NinjamSessionPumpResult NinjamSession::Pump()
+{
+	NinjamSessionPumpResult result;
 	NinjamConnectionUse conn(*this);
 	if (!conn)
 	{
-		_timingStatus = AdvanceTimingStatus(_timingStatus, false);
-		result.TimingStatus = _timingStatus;
+		result.TimingStatus = ObservePhysicalAvailability(false);
 		return result;
 	}
 
 	conn->Pump();
-	_timingStatus = AdvanceTimingStatus(_timingStatus, conn->IsConnected());
-	result.TimingStatus = _timingStatus;
+	result.TimingStatus = ObservePhysicalAvailability(conn->IsConnected());
 
-	if (_timingStatus.IsAvailable)
+	if (result.TimingStatus.IsAvailable)
 		result.Snapshot = conn->Snapshot();
 
 	return result;

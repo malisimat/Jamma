@@ -41,7 +41,8 @@ namespace ninjam
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent,
 			const io::UserConfig& userConfig,
-			utils::Timer& clock);
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		NinjamTimingUpdate TickTiming(
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent,

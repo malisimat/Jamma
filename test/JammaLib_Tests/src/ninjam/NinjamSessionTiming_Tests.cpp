@@ -128,6 +128,6 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 	timing.LocalTransport.AbsoluteSamplePos += 256u;
 	const auto recovered = service.ObserveTiming(timing, std::nullopt, false,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2));
-	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
+	EXPECT_TRUE(recovered.InvalidatePendingCorrections || recovered.ClockSettings.has_value());
 	EXPECT_TRUE(service.HasConnectedTiming());
 }

@@ -30,8 +30,10 @@ void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	_physicalAvailable = false;
 	_timingValid = false;
 	_noSyncActive = false;
+	_lastNoSyncReason = NinjamNoSyncReason::None;
 	_sessionEpoch = 0u;
 	_lastValidObservationAt.reset();
+	_lastObservationAudioBlockStartSample.reset();
 	_diagnostics = {};
 }
 
@@ -55,7 +57,9 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	_physicalAvailable = false;
 	_timingValid = false;
 	_noSyncActive = true;
+	_lastNoSyncReason = NinjamNoSyncReason::Disconnect;
 	_lastValidObservationAt.reset();
+	_lastObservationAudioBlockStartSample.reset();
 	++_diagnostics.PhaseEventsInvalidated;
 }
 
@@ -118,11 +122,23 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	// read taken later on the job thread.
 	if (!timing.HasAudioBlockStartSample || !timing.HasLocalTransport)
 		return update;
+	const auto isFreshObservation = !_lastObservationAudioBlockStartSample.has_value()
+		|| _lastObservationAudioBlockStartSample.value() != timing.AudioBlockStartSample;
+	if (_noSyncActive && _lastNoSyncReason == NinjamNoSyncReason::ObservationDeadline
+		&& !isFreshObservation)
+	{
+		return update;
+	}
 	if (!_tracker.IsConnected())
 		_tracker.Connect();
 	_timingValid = true;
 	_noSyncActive = false;
-	_lastValidObservationAt = now;
+	_lastNoSyncReason = NinjamNoSyncReason::None;
+	if (isFreshObservation || !_lastValidObservationAt.has_value())
+	{
+		_lastObservationAudioBlockStartSample = timing.AudioBlockStartSample;
+		_lastValidObservationAt = now;
+	}
 	_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
 		timing.ObservationAgeSamps);
 	++_observationOrdinal;
@@ -358,7 +374,10 @@ NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	_joinAligned = false;
 	_timingValid = false;
 	_noSyncActive = true;
+	_lastNoSyncReason = reason;
 	_lastValidObservationAt.reset();
+	if (reason != NinjamNoSyncReason::ObservationDeadline)
+		_lastObservationAudioBlockStartSample.reset();
 	++_diagnostics.PhaseEventsInvalidated;
 
 	NinjamTimingUpdate update;

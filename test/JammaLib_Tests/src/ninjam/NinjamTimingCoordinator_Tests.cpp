@@ -606,8 +606,10 @@ TEST(NinjamTimingCoordinator, NoObservationAndInvalidTimingRecoverIdempotently)
 	EXPECT_FALSE(repeatedDeadline.InvalidatePendingCorrections);
 	EXPECT_FALSE(repeatedDeadline.PromptForTempoChange);
 
-	auto recovered = coordinator.Observe(MakeTimingTempo(480000u, 2000u, 90.0f, 8u), local, true,
-		io::UserConfig{}, clock, start + std::chrono::seconds(2));
+	auto freshAfterDeadline = MakeTimingTempo(480000u, 2000u, 90.0f, 8u);
+	freshAfterDeadline.AudioBlockStartSample = 256u;
+	auto recovered = coordinator.Observe(freshAfterDeadline, local, true, io::UserConfig{}, clock,
+		start + std::chrono::seconds(2));
 	EXPECT_TRUE(recovered.InvalidatePendingCorrections);
 	EXPECT_TRUE(coordinator.IsConnected());
 

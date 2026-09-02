@@ -106,6 +106,10 @@ namespace ninjam
 		// process-local and advance only on a physical unavailable -> available edge.
 		static NinjamSessionTimingStatus AdvanceTimingStatus(
 			const NinjamSessionTimingStatus& current, bool isAvailable) noexcept;
+		// Existing-owner lifecycle seam shared by Pump and deterministic tests.
+		// A Start-requested replacement publishes unavailable before any immediate
+		// success can advance the process-local epoch.
+		NinjamSessionTimingStatus ObservePhysicalAvailability(bool isAvailable) noexcept;
 
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,

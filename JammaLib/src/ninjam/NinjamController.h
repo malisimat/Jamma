@@ -27,6 +27,7 @@ namespace ninjam
 			unsigned int outLatencySamps = 0u);
 
 		NinjamSessionPumpResult Pump();
+		void ApplySessionPumpResult(const NinjamSessionPumpResult& result);
 		std::optional<NinjamRemoteSnapshot> TakePendingSnapshot();
 
 		void SendChat(const std::string& msg);

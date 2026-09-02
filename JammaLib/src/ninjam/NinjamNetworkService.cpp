@@ -154,9 +154,23 @@ namespace ninjam
 		const std::optional<engine::QuantisationTiming>& localTiming,
 		bool hasLocalContent,
 		const io::UserConfig& userConfig,
-		utils::Timer& clock)
+		utils::Timer& clock,
+		std::chrono::steady_clock::time_point now)
 	{
-		return _timingCoordinator.Observe(timing, localTiming, hasLocalContent, userConfig, clock);
+		auto observed = _timingCoordinator.Observe(
+			timing, localTiming, hasLocalContent, userConfig, clock, now);
+		// Advance deadline state on every job visit, including the physically
+		// available path that supplies a cached latest-value snapshot.
+		auto deadline = _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
+		if (deadline.ClockSettings.has_value()
+			|| deadline.PhaseCorrection.has_value()
+			|| deadline.TempoRequest.has_value()
+			|| deadline.InvalidatePendingCorrections
+			|| deadline.PromptForTempoChange)
+		{
+			return deadline;
+		}
+		return observed;
 	}
 
 	NinjamTimingUpdate NinjamNetworkService::TickTiming(

@@ -221,8 +221,10 @@ namespace ninjam
 		bool _physicalAvailable = false;
 		bool _timingValid = false;
 		bool _noSyncActive = false;
+		NinjamNoSyncReason _lastNoSyncReason = NinjamNoSyncReason::None;
 		std::uint64_t _sessionEpoch = 0u;
 		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
+		std::optional<std::uint64_t> _lastObservationAudioBlockStartSample;
 		NinjamTimingDiagnostics _diagnostics;
 	};
 }
