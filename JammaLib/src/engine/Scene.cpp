@@ -332,11 +332,7 @@ void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snaps
 	if (_remoteTempoDialogOpen
 		&& ((!current.has_value())
 			|| !previous.has_value()
-			|| (current->IntervalLengthSamps != previous->IntervalLengthSamps)
-			|| (current->SourceSampleRate != previous->SourceSampleRate)
-			|| (current->GrainSamps != previous->GrainSamps)
-			|| (current->Bpi != previous->Bpi)
-			|| (std::abs(current->Bpm - previous->Bpm) >= 0.01f)))
+			|| !current->HasSameProposalIdentity(previous.value())))
 	{
 		_CloseRemoteTempoPrompt();
 	}

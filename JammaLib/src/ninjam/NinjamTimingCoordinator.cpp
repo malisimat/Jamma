@@ -1,7 +1,6 @@
 #include "NinjamTimingCoordinator.h"
 #include "NinjamSession.h"
 #include "../include/Constants.h"
-#include "../io/UserConfig.h"
 
 #include <algorithm>
 #include <cmath>
@@ -117,12 +116,16 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	std::chrono::steady_clock::time_point now)
 {
 	NinjamTimingUpdate update;
+	(void)config;
 	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
 		return _timingValid ? _EnterNoSync(NinjamNoSyncReason::InvalidTiming) : update;
 	// Remote and local phase must describe the same audio boundary. An observation
 	// without either explicit anchor is deferred; never substitute a live Timer
 	// read taken later on the job thread.
 	if (!timing.HasAudioBlockStartSample || !timing.HasLocalTransport)
+		return update;
+	const auto proposal = _MakeProposal(timing);
+	if (!proposal.has_value())
 		return update;
 	const auto isFreshObservation = !_lastObservationAudioBlockStartSample.has_value()
 		|| _lastObservationAudioBlockStartSample.value() != timing.AudioBlockStartSample;
@@ -144,7 +147,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
 		timing.ObservationAgeSamps);
 	++_observationOrdinal;
-	_latestObservedTempoChange = _MakeProposal(timing, config);
+	_latestObservedTempoChange = proposal;
 
 	update = _ExpireTempoRequest(localTiming, hasLocalContent, clock, now);
 	if (update.DesiredTransport.has_value() || update.PromptForTempoChange)
@@ -164,13 +167,29 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	_diagnostics.GenerationChanges = trackerDiagnostics.GenerationChanges;
 	_diagnostics.WrapEvents = trackerDiagnostics.WrapEvents;
 	_diagnostics.JoinEvents = trackerDiagnostics.JoinEvents;
-	if (_pendingTempoChange.has_value())
+	if (!event.has_value() || event->Type != NinjamTimingEventType::GenerationChanged)
 	{
-		const auto proposal = _MakeProposal(timing, config);
-		if (proposal.has_value() && _SameTempo(_pendingTempoChange.value(), proposal.value()))
+		if (_pendingTempoChange.has_value())
 		{
-			_pendingTempoChange->IntervalPositionSamps = timing.IntervalPositionSamps;
-			_pendingTempoChange->AudioBlockStartSample = timing.AudioBlockStartSample;
+			if (_pendingTempoChange->HasSameProposalIdentity(proposal.value()))
+			{
+				_pendingTempoChange->IntervalPositionSamps = timing.IntervalPositionSamps;
+				_pendingTempoChange->AudioBlockStartSample = timing.AudioBlockStartSample;
+			}
+			else
+			{
+				_pendingTempoChange = proposal;
+				++_diagnostics.TempoProposals;
+				update.PromptForTempoChange = true;
+			}
+		}
+		else if (_ignoredTempoChange.has_value()
+			&& !_ignoredTempoChange->HasSameProposalIdentity(proposal.value()))
+		{
+			_ignoredTempoChange.reset();
+			_pendingTempoChange = proposal;
+			++_diagnostics.TempoProposals;
+			update.PromptForTempoChange = true;
 		}
 	}
 	if (_requestState == TempoRequestState::SentAwaitingOutcome && _tempoRequestSendConfirmed
@@ -183,6 +202,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		++_diagnostics.TempoAcknowledged;
 		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
 	}
+	if (update.PromptForTempoChange)
+		return update;
 
 	if (!event.has_value())
 		return update;
@@ -204,24 +225,21 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	}
 	if (event->Type == NinjamTimingEventType::GenerationChanged)
 	{
-		const auto proposal = _MakeProposal(timing, config);
-		if (proposal.has_value())
+		++_diagnostics.TempoProposals;
+		if (_requestState == TempoRequestState::Queued
+			|| _requestState == TempoRequestState::SentAwaitingOutcome)
 		{
-			++_diagnostics.TempoProposals;
-			if (_requestState == TempoRequestState::Queued
-				|| _requestState == TempoRequestState::SentAwaitingOutcome)
-			{
-				// The server's old timing remains context while a local push is plausible.
-				// Do not turn it into an apply-now proposal before the request resolves.
-			}
-			else if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
-				return _AcceptTempoChange(proposal.value(), localTiming, clock);
-			else if (!_ignoredTempoChange.has_value() || !_SameTempo(_ignoredTempoChange.value(), proposal.value()))
-			{
-				_pendingTempoChange = proposal;
-				update.PromptForTempoChange = true;
-				update.DesiredTransport = _PublishNoSync(NinjamNoSyncReason::None).DesiredTransport;
-			}
+			// The server's old timing remains context while a local push is plausible.
+			// Do not turn it into an apply-now proposal before the request resolves.
+		}
+		else if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
+			return _AcceptTempoChange(proposal.value(), localTiming, clock);
+		else if (!_ignoredTempoChange.has_value()
+			|| !_ignoredTempoChange->HasSameProposalIdentity(proposal.value()))
+		{
+			_pendingTempoChange = proposal;
+			update.PromptForTempoChange = true;
+			update.DesiredTransport = _PublishNoSync(NinjamNoSyncReason::None).DesiredTransport;
 		}
 	}
 
@@ -257,15 +275,11 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			_requestState = TempoRequestState::Expired;
 			_requestedTempo.reset();
 			++_diagnostics.TempoRequestsExpired;
-			const auto proposal = _MakeProposal(timing, config);
-			if (proposal.has_value())
-			{
-				if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
-					return _AcceptTempoChange(proposal.value(), localTiming, clock);
-				_pendingTempoChange = proposal;
-				update.PromptForTempoChange = true;
-				return update;
-			}
+			if (!_options.PromptBeforeApplyingRemoteTempo || !hasLocalContent)
+				return _AcceptTempoChange(proposal.value(), localTiming, clock);
+			_pendingTempoChange = proposal;
+			update.PromptForTempoChange = true;
+			return update;
 		}
 	}
 
@@ -403,13 +417,13 @@ NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	return update;
 }
 
-bool NinjamTimingCoordinator::_SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept
+bool NinjamTempoChange::HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept
 {
-	return lhs.IntervalLengthSamps == rhs.IntervalLengthSamps
-		&& lhs.SourceSampleRate == rhs.SourceSampleRate
-		&& lhs.GrainSamps == rhs.GrainSamps
-		&& lhs.Bpi == rhs.Bpi
-		&& std::abs(lhs.Bpm - rhs.Bpm) < 0.01f;
+	return IntervalLengthSamps == other.IntervalLengthSamps
+		&& SourceSampleRate == other.SourceSampleRate
+		&& GrainSamps == other.GrainSamps
+		&& Bpi == other.Bpi
+		&& std::abs(Bpm - other.Bpm) < 0.01f;
 }
 
 bool NinjamTimingCoordinator::_MatchesRequest(const NinjamTiming& timing,
@@ -420,23 +434,12 @@ bool NinjamTimingCoordinator::_MatchesRequest(const NinjamTiming& timing,
 		<= NinjamTempoJoinOptions::TempoRequestAcknowledgementToleranceBpm;
 }
 
-std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(const NinjamTiming& timing,
-	const io::UserConfig& config)
+std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(
+	const NinjamTiming& timing) noexcept
 {
-	if (!timing.IsValid || timing.IntervalLengthSamps == 0u || timing.DeviceSampleRate == 0u)
+	if (!timing.IsValid || timing.IntervalLengthSamps == 0u
+		|| timing.DeviceSampleRate == 0u || timing.Bpi == 0u)
 		return std::nullopt;
-	if (timing.Bpi == 0u)
-	{
-		// Older/partial observations did not carry BPI. Retain the local deduction
-		// only for that compatibility case; a supplied remote BPI is never replaced.
-		const auto derived = config.DeduceLoopTiming(timing.IntervalLengthSamps, timing.DeviceSampleRate);
-		if (!derived.has_value() || derived->GrainSamps == 0u)
-			return std::nullopt;
-		return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, derived->GrainSamps,
-			derived->Bpm, derived->Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
-	}
-	// The server BPI is authoritative. Local deduction is only for the initial
-	// local seed and must not rewrite the accepted remote grid.
 	const auto grain = static_cast<unsigned int>((static_cast<std::uint64_t>(timing.IntervalLengthSamps)
 		+ timing.Bpi / 2u) / timing.Bpi);
 	if (grain == 0u)

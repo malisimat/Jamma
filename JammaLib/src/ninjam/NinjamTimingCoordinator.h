@@ -53,6 +53,8 @@ namespace ninjam
 		unsigned int Bpi = 0u;
 		unsigned int IntervalPositionSamps = 0u;
 		std::uint64_t AudioBlockStartSample = 0u;
+
+		bool HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept;
 	};
 
 	struct NinjamTempoRequest
@@ -166,11 +168,9 @@ namespace ninjam
 			float remoteBpm) noexcept;
 
 	private:
-		static bool _SameTempo(const NinjamTempoChange& lhs, const NinjamTempoChange& rhs) noexcept;
 		static bool _MatchesRequest(const NinjamTiming& timing,
 			const engine::QuantisationTiming& request) noexcept;
-		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing,
-			const io::UserConfig& config);
+		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
