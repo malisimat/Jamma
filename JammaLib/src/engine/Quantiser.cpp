@@ -1,5 +1,4 @@
 #include "Quantiser.h"
-#include "../ninjam/NinjamTiming.h"
 
 #include <algorithm>
 #include <cmath>
