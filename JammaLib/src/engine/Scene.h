@@ -326,7 +326,9 @@ namespace engine
 		bool _HasQuantisationSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
+			const std::optional<engine::QuantisationTiming>& localTiming,
+			bool hasLocalContent);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
 		void _LogAppliedNinjamLoopAlignment();
 		void _LogNinjamTempoJoinState();
