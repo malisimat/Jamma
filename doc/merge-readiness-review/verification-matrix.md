@@ -77,9 +77,9 @@ Per the human decision, each major Phase 4 refactor must select one or two focus
 
 | ID | Contract | Planned GoogleTest name | Required before |
 | --- | --- | --- | --- |
-| P1 | Complete desired-state former `Invalidate -> Replace -> Discipline` intent sequence at the production audio boundary | `NinjamTimingProductionBoundary.CompleteDesiredStateSupersedesFormerCommandSequences` | F-024/F-025 desired-state refactor |
-| P2 | Overlapping job/UI intents publish only one coherent complete desired value and one applied version | `NinjamTimingProductionBoundary.OverlappingIntentsPublishOneCoherentDesiredVersion` | F-009 producer move |
-| P3 | Real `M`/`2M`/`3M` audio/MIDI takes with intentional offsets, session 1 generation >1, `NoSync`, then epoch-2 generation 1 | `NinjamTimingProductionBoundary.ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne` | F-005/F-006/F-025 structural work |
+| P1 | Complete desired-state former `Invalidate -> Replace -> Discipline` intent sequence at the production audio boundary | `NinjamTimingProductionBoundary.CompleteDesiredStateSupersedesFormerCommandSequences` | merged B006+B007 desired-state refactor |
+| P2 | Overlapping job/UI intents publish only one coherent complete desired value and one applied version | `NinjamTimingProductionBoundary.OverlappingIntentsPublishOneCoherentDesiredVersion` | merged B006+B007 producer move |
+| P3 | Real `M`/`2M`/`3M` audio/MIDI takes with intentional offsets, session 1 generation >1, `NoSync`, then epoch-2 generation 1 | `NinjamTimingProductionBoundary.ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne` | merged B006+B007 structural work |
 | P4 | Delayed restore-before-rebase preserves anchors and entity-relative phase | `NinjamTimingProductionBoundary.RestoreBeforeRebasePreservesEntityAnchors` | F-006 common-map consolidation |
 | P5 | Deterministic concurrent observation/local-transport publication proves nonzero overlap and no mixed tuple | `NinjamTimingObservationMailbox.ConcurrentReadProvesOverlapAndCoherence` | F-021/F-023 publication work |
 | P6 | Present-zero/absent/nonzero anchors, `UINT32_MAX` Timer crossing, and 96→48 final-source-sample conversion | `NinjamTiming.PresenceWidthAndDownsampleTailRemainDistinct` | F-026/F-029/F-030/F-031 |

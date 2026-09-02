@@ -188,6 +188,7 @@ In general follow recommendations and prior acceptance of findings and stages.  
 
 * B001 to B017 - Approved all batches.
 * Characterization-first sequencing is permitted when a named prerequisite cannot truthfully pass until its already-approved production behavior exists. Commit and record the expected pre-fix failure before production movement, keep the implementation inside the batch's existing boundary, and require the test plus all focused verification to pass before independent approval or dependent work begins. This changes ordering only, not scope, invariants, ownership, collateral prohibitions, rollback, or final evidence.
+* On 2026-09-02, against `HEAD` `9431c3f859261f6581c4e188988d987a4be3cca4`, B006 and B007 were merged into one atomic implementation and independent-review batch. This combines their ownership and ordering so the sole NINJAM integration producer and sole complete-state AudioHost consumer can land without a prohibited delta adapter or dual-authority intermediate state. P1/P2/P3, both batches' prohibited collateral, protected invariants, rollback requirements, downstream dependencies, and no-batch residuals remain mandatory.
 
 Ensure we do include addressing S05-01 (may have already done this in prior gates - confirm).
 Refer back to full list of fixes to ensure we have accounted for all accepted/approved in some way.

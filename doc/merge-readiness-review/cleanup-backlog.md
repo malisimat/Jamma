@@ -20,18 +20,17 @@
 | B003 | Bound local seed-policy conversion | F-048 | none | P13 |
 | B004 | Publish coherent remote/local observations and correct numeric domains | F-021, F-023, F-026, F-029, F-030, F-031, F-039, F-040 | B002 | P5, P6 |
 | B005 | Model physical lifecycle, loss, retry, and invalid/deadline recovery | F-027, F-028, F-041 | B004 | P7, P8 |
-| B006 | Apply one complete desired state and reset every epoch/generation gate | F-024, F-025, F-038, F-039, F-047 (epoch/version only) | B004, B005 | P1, P3 |
-| B007 | Move complete-state production to the NINJAM integration owner | F-009, F-038 | B006 | P2 |
-| B008 | Move the empty-scene reset edge off the callback | F-022 | B005–B007 | P8 (already passing from B005) |
-| B009 | Neutralize engine timing APIs and consolidate the common map | F-005, F-006, F-018, F-038 | B004, B006–B008 | P3, P4 |
+| B006+B007 | Atomically apply one complete desired state, reset every epoch/generation gate, and move production to the NINJAM integration owner | F-009, F-024, F-025, F-038, F-039, F-047 (epoch/version only) | B004, B005 | P1, P2, P3 |
+| B008 | Move the empty-scene reset edge off the callback | F-022 | B005, B006+B007 | P8 (already passing from B005) |
+| B009 | Neutralize engine timing APIs and consolidate the common map | F-005, F-006, F-018, F-038 | B004, B006+B007, B008 | P3, P4 |
 | B010 | Consolidate only equivalent direct LoopTake cursor shifts | F-035 | B009 | two named existing LoopTake tests |
 | B011 | Preserve signed local offsets for long loops | F-044, F-045 | B010 | P11 |
-| B012 | Settle timing value/header/mailbox ownership | F-007, F-008, F-012 | B004, B007, B009 | one named existing local-offset test |
-| B013 | Centralize proposal identity and require full remote BPI | F-036, F-046 | B007, B012 | two named coordinator/local-inference tests |
-| B014 | Replace callback hierarchy logs with bounded correlated diagnostics | F-019, F-034, F-047 (diagnostics only) | B006, B007 | P10 |
+| B012 | Settle timing value/header/mailbox ownership | F-007, F-008, F-012 | B004, B006+B007, B009 | one named existing local-offset test |
+| B013 | Centralize proposal identity and require full remote BPI | F-036, F-046 | B006+B007, B012 | two named coordinator/local-inference tests |
+| B014 | Replace callback hierarchy logs with bounded correlated diagnostics | F-019, F-034, F-047 (diagnostics only) | B006+B007 | P10 |
 | B015 | Apply bounded timing vocabulary and casing changes | F-010, F-011, F-013, F-014, F-015, F-016, F-017 | B009, B012–B014 | two named focused tests |
 | B016 | Make timing documentation truthful | F-042, F-043, F-045 | B011, B013–B015 | static statement/source audit |
-| B017 | Delete the obsolete uncompiled timing test | F-037 | B006, B009 | two registered replacement tests |
+| B017 | Delete the obsolete uncompiled timing test | F-037 | B006+B007, B009 | two registered replacement tests |
 
 ## Proposed batches
 
@@ -86,23 +85,15 @@
 - **Verification:** P7/P8; shipped/default and saved `.jam` start; physical loss/retry/manual disconnect; exactly one `NoSync`; fresh epoch; no stale prompt/request/remote station. Review: `B005.md`.
 - **Execution result (2026-09-01):** characterization-only prerequisite `86dbc2c1481960be224866b1713b2e8a69d49c19`; lifecycle/recovery implementation `0fcf7c4`; replacement-session epoch-edge correction `4e99584cb56a6fb588d2a3530fe83889b01ee0ed`; initial independent rejection `9e361482f08f53913e91a60587d15f4626692d4c`; review-gap characterization `ab5ea60`; production-routing/lifecycle-seam correction `789c388a1288ca637a50e3cba8b9e205736f7699`; superseding independent approval `ae5d862e553f787afcc72b5a5cea89fad992b5d3`. The initial pre-fix wrapped build failed only because P7/P8 referenced absent B005 contracts; the correction test commit separately exposed that cached observations could not expire through the production boundary and that P7 bypassed replacement/cleanup operations. Neither red state is called a passing prerequisite. At clean `789c388`, the wrapped Debug x64 build passed with zero warnings/errors; corrected P7/P8 plus the production-boundary deadline regression passed 3/3; the focused B005 filter passed 61/61; config regressions passed 3/3; B004 P5/P6 passed 20/20 and 1/1; and protected timing/NINJAM/MIDI/VST coverage passed 137/137. NetworkService now advances the coordinator deadline on cached-snapshot visits, coordinator freshness is keyed to B004's existing audio-block anchor, and recovery requires a new anchor. P7 now traverses persisted Controller start, forced replacement loss, pending-snapshot clearing, fresh epoch, and remote-station removal through production-used seams. Static audit finds no B006 desired-state/audio gate, B009 map, raw-buffer, callback, persistence, or broad Scene collateral. Live server/cable/manual retry, runtime `.jam` launch, sanitizers, and the full suite remain Stage 21 limitations. Status: corrected, focused-verified, and independently approved after initial rejection.
 
-### B006 — Complete desired state and epoch/generation gates
+### B006+B007 — Atomic complete desired state and integration producer boundary
 
-- **Owner / objective:** AudioHost compares one latest complete desired remote transport state with last applied state; epoch change clears map/anchors/all gates, geometry change replaces Timer, same geometry disciplines phase, `NoSync` moves no cursor.
-- **Owned files:** Jamma-owned desired-state value/mailbox; `JammaLib/src/audio/AudioHost.h/.cpp`; `engine/Station.h/.cpp`, `LoopTake.h/.cpp` only for epoch/gate application; production-boundary and command/timing tests/project entries; minimal epoch/version fields of F-047.
-- **Prohibited collateral:** ordered/delta commands, standalone invalidation, dual old/new authority, map consolidation, naming/docs/diagnostics formatting, cursor reduction modulo master length.
-- **Prerequisites:** P1 `NinjamTimingProductionBoundary.CompleteDesiredStateSupersedesFormerCommandSequences` and P3 `NinjamTimingProductionBoundary.ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne` pass before production edits.
-- **Rollback:** revert the complete desired type, AudioHost consumer, and gate reset together to the pre-B006 commit; no compatibility shim retains rejected command semantics.
-- **Verification:** P1/P3; empty/populated join; Continuous/Block/NoSync; same-state idempotence; stale/equal generations; reconnect generation 1; `M`/`2M`/`3M` audio/MIDI/automation offsets. Remove Stage 21's trailing EOF blank only in the owned `NinjamTimingIntegration_Tests.cpp` prerequisite edit. Review: `B006.md`.
-
-### B007 — NINJAM integration producer boundary
-
-- **Owner / objective:** existing NINJAM integration owner is the sole complete-state producer; Scene only presents prompts and forwards values.
-- **Owned files:** `JammaLib/src/ninjam/NinjamTimingCoordinator.h/.cpp` and existing integration/network-service owner; desired-state value; `JammaLib/src/engine/Scene.h/.cpp`; focused production-boundary tests.
-- **Prohibited collateral:** second producer, generic dispatcher/class, UI redesign, map/engine changes, persisted authority.
-- **Prerequisite:** P2 `NinjamTimingProductionBoundary.OverlappingIntentsPublishOneCoherentDesiredVersion` passes before producer movement.
-- **Rollback:** revert producer ownership and Scene reduction together; there must be exactly one producer before and after rollback.
-- **Verification:** P2; rapid job/UI intents; one desired/applied version; prompt behavior; Scene audit shows no transport-state construction. Review: `B007.md`.
+- **Human-approved merge amendment (approved against `HEAD` `9431c3f859261f6581c4e188988d987a4be3cca4`):** B006 and B007 execute as one atomic implementation/review batch because no complete desired state can be produced inside the former B006 file boundary without either retaining the prohibited delta adapter or moving the former B007 producer boundary. This amendment combines their owned files, prerequisites, rollback, verification, and review; it does not relax either batch's prohibited collateral, protected invariants, downstream dependencies, or no-batch residuals.
+- **Owner / objective:** the existing NINJAM integration owner is the sole complete-state producer; Scene only presents prompts and forwards values; AudioHost compares one latest complete desired remote transport state with last applied state. Epoch change clears map/anchors/all gates, geometry change replaces Timer, same geometry disciplines phase, and `NoSync` moves no cursor.
+- **Owned files:** Jamma-owned desired-state value/mailbox; `JammaLib/src/ninjam/NinjamTimingCoordinator.h/.cpp` and existing integration/network-service owner; `JammaLib/src/engine/Scene.h/.cpp` only for producer removal and forwarding; `JammaLib/src/audio/AudioHost.h/.cpp`; `engine/Station.h/.cpp`, `LoopTake.h/.cpp` only for epoch/gate application; production-boundary and command/timing tests/project entries; minimal epoch/version fields of F-047.
+- **Prohibited collateral:** ordered/delta commands, standalone invalidation, dual old/new authority, generic dispatcher/class, UI redesign, map consolidation or broader engine changes, persisted authority, naming/docs/diagnostics formatting, cursor reduction modulo master length.
+- **Prerequisites:** P1 `NinjamTimingProductionBoundary.CompleteDesiredStateSupersedesFormerCommandSequences`, P2 `NinjamTimingProductionBoundary.OverlappingIntentsPublishOneCoherentDesiredVersion`, and P3 `NinjamTimingProductionBoundary.ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne` use the global passing-first/characterization-first rule and must all be green before independent approval or dependent work.
+- **Rollback:** revert the complete desired type/mailbox, integration-owner producer, Scene forwarding reduction, AudioHost consumer, and epoch/gate reset together to the pre-B006+B007 commit. There must be exactly one producer before and after rollback; no compatibility shim may retain rejected command semantics.
+- **Verification:** P1/P2/P3; rapid job/UI intents; one desired/applied version; prompt behavior; Scene audit shows no transport-state construction; empty/populated join; Continuous/Block/NoSync; same-state idempotence; stale/equal generations; reconnect generation 1; `M`/`2M`/`3M` audio/MIDI/automation offsets. Remove Stage 21's trailing EOF blank only in the owned `NinjamTimingIntegration_Tests.cpp` prerequisite edit. One independent review writes `batch-reviews/B006-B007.md` and must approve the complete atomic range before B008.
 
 ### B008 — Empty-scene ownership edge
 
