@@ -480,6 +480,9 @@
     <ClCompile Include="src\io\IoInputSubsystem.cpp" />
     <ClCompile Include="src\vst\VstEditorWindowManager.cpp" />
     <ClCompile Include="src\ninjam\NinjamNetworkService.cpp" />
+    <ClCompile Include="src\ninjam\NinjamAudioTimingCommand.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTiming.cpp" />
+    <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox.cpp" />
     <ClCompile Include="src\ninjam\NinjamTimingCoordinator.cpp" />
     <ClCompile Include="src\io\IoSessionExporter.cpp" />
     <ClCompile Include="src\engine\Station.cpp" />

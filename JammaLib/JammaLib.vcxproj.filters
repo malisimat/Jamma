@@ -847,6 +847,15 @@
     <ClCompile Include="src\ninjam\NinjamMetronomeTiming.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamAudioTimingCommand.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTiming.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\Camera.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
