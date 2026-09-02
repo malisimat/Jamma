@@ -280,6 +280,101 @@ TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
 	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
 }
 
+TEST(TransportPhaseOffset, DirectTimingCommandPreservesGenerationAndZeroDeltaGates)
+{
+	auto take = MakePlayingTimingTake("direct-generation-gates", 1000ul, 100ul);
+	take->ApplyAcceptedTimingCorrection(-250, 0u);
+	take->ApplyAcceptedTimingCorrection(0, 1u);
+	take->ApplyAcceptedTimingCorrection(-250, 1u);
+
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(100ul, take->MidiVisualPosition());
+	EXPECT_EQ(0, take->MidiAnchorCorrection());
+	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());
+
+	take->ApplyAcceptedTimingCorrection(-250, 2u);
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(850ul, take->MidiVisualPosition());
+	EXPECT_EQ(250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandUsesEachAudioAndMidiModulo)
+{
+	auto take = MakeTimingTestLoopTake("direct-independent-modulo");
+	auto shortLoop = MakeTimingLoop(1000ul);
+	auto longLoop = MakeTimingLoop(1500ul);
+	shortLoop->ShiftPlayIndex(100);
+	longLoop->ShiftPlayIndex(1400);
+	take->AddLoop(shortLoop);
+	take->AddLoop(longLoop);
+	take->CommitChanges();
+	take->SetMidiVisualPosition(700ul, 777ul);
+
+	take->ApplyAcceptedTimingCorrection(-250, 1u);
+
+	ASSERT_EQ(2u, take->GetLoops().size());
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*take->GetLoops()[0]));
+	EXPECT_EQ(1150ul, TimingLoopBodyPosition(*take->GetLoops()[1]));
+	EXPECT_EQ(450ul, take->MidiVisualPosition());
+	EXPECT_EQ(250, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, DirectTimingCommandHandlesAudioOnlyAndEmptyTakes)
+{
+	auto audioOnly = MakeTimingTestLoopTake("direct-audio-only");
+	auto loop = MakeTimingLoop(1000ul);
+	loop->ShiftPlayIndex(100);
+	audioOnly->AddLoop(loop);
+	audioOnly->CommitChanges();
+	audioOnly->ApplyAcceptedTimingCorrection(250, 1u);
+
+	EXPECT_EQ(350ul, TimingLoopBodyPosition(*audioOnly->GetLoops().front()));
+	EXPECT_EQ(0ul, audioOnly->MidiVisualPosition());
+	EXPECT_EQ(0, audioOnly->MidiAnchorCorrection());
+	EXPECT_EQ(1u, audioOnly->ConsumedExternalPhaseCorrectionCount());
+
+	auto empty = MakeTimingTestLoopTake("direct-empty");
+	empty->ApplyAcceptedTimingCorrection(-250, 1u);
+	EXPECT_EQ(0ul, empty->MidiVisualPosition());
+	EXPECT_EQ(0, empty->MidiAnchorCorrection());
+	EXPECT_EQ(0u, empty->ConsumedExternalPhaseCorrectionCount());
+}
+
+TEST(TransportPhaseOffset, LocalOffsetHandlesAudioOnlyMidiOnlyAndEmptyTakes)
+{
+	auto audioOnly = MakeTimingTestLoopTake("local-offset-audio-only");
+	auto loop = MakeTimingLoop(1000ul);
+	loop->ShiftPlayIndex(100);
+	audioOnly->AddLoop(loop);
+	audioOnly->CommitChanges();
+	audioOnly->SetLocalTransportOffsetSamps(-250);
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*audioOnly->GetLoops().front()));
+	EXPECT_EQ(0, audioOnly->MidiAnchorCorrection());
+	audioOnly->SetLocalTransportOffsetSamps(-250);
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*audioOnly->GetLoops().front()));
+	audioOnly->SetLocalTransportOffsetSamps(0);
+	EXPECT_EQ(100ul, TimingLoopBodyPosition(*audioOnly->GetLoops().front()));
+
+	auto midiOnly = MakeTimingTestLoopTake("local-offset-midi-only");
+	midiOnly->SetMidiVisualPosition(700ul, 777ul);
+	midiOnly->SetLocalTransportOffsetSamps(-250);
+	EXPECT_EQ(450ul, midiOnly->MidiVisualPosition());
+	EXPECT_EQ(250, midiOnly->MidiAnchorCorrection());
+
+	auto empty = MakeTimingTestLoopTake("local-offset-empty");
+	empty->SetLocalTransportOffsetSamps(-250);
+	EXPECT_EQ(0ul, empty->MidiVisualPosition());
+	EXPECT_EQ(0, empty->MidiAnchorCorrection());
+	auto lateLoop = MakeTimingLoop(1000ul);
+	lateLoop->ShiftPlayIndex(100);
+	empty->AddLoop(lateLoop);
+	empty->CommitChanges();
+	empty->EndMultiPlay(0u);
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*empty->GetLoops().front()));
+}
+
 TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 {
 	auto take = MakePlayingTimingTake("direct-midi-automation", 1000ul, 100ul);
