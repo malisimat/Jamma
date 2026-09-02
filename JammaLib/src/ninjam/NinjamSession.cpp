@@ -442,18 +442,40 @@ bool NinjamSession::IsConnected() const noexcept
 	return conn && conn->IsConnected();
 }
 
-std::optional<NinjamRemoteSnapshot> NinjamSession::Pump()
+NinjamSessionTimingStatus NinjamSession::AdvanceTimingStatus(
+	const NinjamSessionTimingStatus& current, bool isAvailable) noexcept
 {
+	auto next = current;
+	next.Changed = current.IsAvailable != isAvailable;
+	next.IsAvailable = isAvailable;
+	if (next.Changed && isAvailable)
+	{
+		++next.SessionEpoch;
+		if (next.SessionEpoch == 0u)
+			++next.SessionEpoch;
+	}
+	return next;
+}
+
+NinjamSessionPumpResult NinjamSession::Pump()
+{
+	NinjamSessionPumpResult result;
 	NinjamConnectionUse conn(*this);
 	if (!conn)
-		return std::nullopt;
+	{
+		_timingStatus = AdvanceTimingStatus(_timingStatus, false);
+		result.TimingStatus = _timingStatus;
+		return result;
+	}
 
 	conn->Pump();
+	_timingStatus = AdvanceTimingStatus(_timingStatus, conn->IsConnected());
+	result.TimingStatus = _timingStatus;
 
-	if (!conn->IsConnected())
-		return std::nullopt;
+	if (_timingStatus.IsAvailable)
+		result.Snapshot = conn->Snapshot();
 
-	return conn->Snapshot();
+	return result;
 }
 
 void NinjamSession::SetAudioFormat(unsigned int sampleRate,

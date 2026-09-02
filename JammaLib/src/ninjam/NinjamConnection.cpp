@@ -301,6 +301,7 @@ void NinjamConnection::Pump()
 	if (!_client)
 		return;
 
+	const auto wasConnected = _isConnected.load(std::memory_order_acquire);
 	auto now = std::chrono::steady_clock::now();
 	{
 		std::scoped_lock lock(_connectionMutex);
@@ -380,6 +381,14 @@ void NinjamConnection::Pump()
 		}
 
 		_isConnected = false;
+		if (wasConnected)
+		{
+			// The job thread remains the sole B004 remote-timing publisher. Clear
+			// the completed tuple on the physical loss edge before retrying.
+			_PublishRemoteTiming({});
+			std::scoped_lock snapshotLock(_snapshotMutex);
+			_snapshot = {};
+		}
 		const auto isAuthFailure = status == NJClient::NJC_STATUS_INVALIDAUTH || IsAuthFailure(_lastError);
 		if (isAuthFailure)
 		{

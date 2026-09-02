@@ -44,6 +44,13 @@ namespace ninjam
 		_timingCoordinator.Disconnect();
 	}
 
+	NinjamTimingUpdate NinjamNetworkService::ObserveSessionStatus(
+		const NinjamSessionTimingStatus& status,
+		const std::optional<engine::QuantisationTiming>& localTiming)
+	{
+		return _timingCoordinator.ObserveSessionStatus(status, _tempoJoinOptions, localTiming);
+	}
+
 	bool NinjamNetworkService::UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 		std::vector<std::shared_ptr<Station>>& stations)
 	{
@@ -150,6 +157,15 @@ namespace ninjam
 		utils::Timer& clock)
 	{
 		return _timingCoordinator.Observe(timing, localTiming, hasLocalContent, userConfig, clock);
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::TickTiming(
+		const std::optional<engine::QuantisationTiming>& localTiming,
+		bool hasLocalContent,
+		utils::Timer& clock,
+		std::chrono::steady_clock::time_point now)
+	{
+		return _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
 	}
 
 	NinjamTimingUpdate NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,

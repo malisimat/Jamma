@@ -1,4 +1,5 @@
 #include "NinjamTimingCoordinator.h"
+#include "NinjamSession.h"
 #include "../include/Constants.h"
 #include "../io/UserConfig.h"
 
@@ -26,11 +27,18 @@ void NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	_tempoRequestSendConfirmed = false;
 	_requestRetries = 0u;
 	_joinAligned = false;
+	_physicalAvailable = false;
+	_timingValid = false;
+	_noSyncActive = false;
+	_sessionEpoch = 0u;
+	_lastValidObservationAt.reset();
 	_diagnostics = {};
 }
 
 void NinjamTimingCoordinator::Disconnect() noexcept
 {
+	if (!_tracker.IsConnected() && _noSyncActive)
+		return;
 	_tracker.Disconnect();
 	_pendingTempoChange.reset();
 	_ignoredTempoChange.reset();
@@ -44,7 +52,36 @@ void NinjamTimingCoordinator::Disconnect() noexcept
 	_tempoRequestSendConfirmed = false;
 	_requestRetries = 0u;
 	_joinAligned = false;
+	_physicalAvailable = false;
+	_timingValid = false;
+	_noSyncActive = true;
+	_lastValidObservationAt.reset();
 	++_diagnostics.PhaseEventsInvalidated;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::ObserveSessionStatus(
+	const NinjamSessionTimingStatus& status,
+	const NinjamTempoJoinOptions& options,
+	const std::optional<engine::QuantisationTiming>& localTiming) noexcept
+{
+	if (status.IsAvailable)
+	{
+		if (status.SessionEpoch == 0u
+			|| (_physicalAvailable && status.SessionEpoch == _sessionEpoch))
+		{
+			return {};
+		}
+		Connect(options, localTiming);
+		_physicalAvailable = true;
+		_sessionEpoch = status.SessionEpoch;
+		return {};
+	}
+
+	if (!_physicalAvailable || status.SessionEpoch != _sessionEpoch)
+		return {};
+
+	_physicalAvailable = false;
+	return _EnterNoSync(NinjamNoSyncReason::PhysicalLoss);
 }
 
 void NinjamTimingCoordinator::NotifyTempoRequestSent(bool success,
@@ -75,34 +112,25 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 {
 	NinjamTimingUpdate update;
 	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
-		return update;
+		return _timingValid ? _EnterNoSync(NinjamNoSyncReason::InvalidTiming) : update;
 	// Remote and local phase must describe the same audio boundary. An observation
 	// without either explicit anchor is deferred; never substitute a live Timer
 	// read taken later on the job thread.
 	if (!timing.HasAudioBlockStartSample || !timing.HasLocalTransport)
 		return update;
+	if (!_tracker.IsConnected())
+		_tracker.Connect();
+	_timingValid = true;
+	_noSyncActive = false;
+	_lastValidObservationAt = now;
 	_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
 		timing.ObservationAgeSamps);
 	++_observationOrdinal;
 	_latestObservedTempoChange = _MakeProposal(timing, config);
 
-	if (_requestState == TempoRequestState::SentAwaitingOutcome
-		&& _firstSuccessfulTempoRequestSend.has_value()
-		&& now - _firstSuccessfulTempoRequestSend.value() >= _options.TempoRequestDeadline)
-	{
-		const bool preservePushedLocalTransport = _requestedTempo.has_value();
-		_requestState = TempoRequestState::Expired;
-		_requestedTempo.reset();
-		++_diagnostics.TempoRequestsExpired;
-		if (_latestObservedTempoChange.has_value())
-		{
-			if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
-				return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
-			_pendingTempoChange = _latestObservedTempoChange;
-			update.PromptForTempoChange = true;
-		}
+	update = _ExpireTempoRequest(localTiming, hasLocalContent, clock, now);
+	if (update.ClockSettings.has_value() || update.PromptForTempoChange)
 		return update;
-	}
 
 	NinjamTimingObservation observation;
 	observation.IntervalLengthSamps = timing.IntervalLengthSamps;
@@ -256,6 +284,87 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_RecordEmittedCommand(isJoin ? NinjamEmittedCommand::Join : NinjamEmittedCommand::Discipline,
 			event->Generation);
 	}
+	return update;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::Tick(
+	const std::optional<engine::QuantisationTiming>& localTiming,
+	bool hasLocalContent,
+	utils::Timer& clock,
+	std::chrono::steady_clock::time_point now)
+{
+	auto update = _ExpireTempoRequest(localTiming, hasLocalContent, clock, now);
+	if (!_timingValid || !_lastValidObservationAt.has_value()
+		|| now - _lastValidObservationAt.value() < _options.TempoRequestDeadline)
+	{
+		return update;
+	}
+
+	auto noSync = _EnterNoSync(NinjamNoSyncReason::ObservationDeadline, false);
+	update.InvalidatePendingCorrections = noSync.InvalidatePendingCorrections;
+	update.NoSyncReason = noSync.NoSyncReason;
+	return update;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::_ExpireTempoRequest(
+	const std::optional<engine::QuantisationTiming>& localTiming,
+	bool hasLocalContent,
+	utils::Timer& clock,
+	std::chrono::steady_clock::time_point now)
+{
+	NinjamTimingUpdate update;
+	if (_requestState != TempoRequestState::SentAwaitingOutcome
+		|| !_firstSuccessfulTempoRequestSend.has_value()
+		|| now - _firstSuccessfulTempoRequestSend.value() < _options.TempoRequestDeadline)
+	{
+		return update;
+	}
+
+	const bool preservePushedLocalTransport = _requestedTempo.has_value();
+	_requestState = TempoRequestState::Expired;
+	_requestedTempo.reset();
+	++_diagnostics.TempoRequestsExpired;
+	if (!_latestObservedTempoChange.has_value())
+		return update;
+	if (!_options.PromptBeforeApplyingRemoteTempo && !hasLocalContent && !preservePushedLocalTransport)
+		return _AcceptTempoChange(_latestObservedTempoChange.value(), localTiming, clock);
+	_pendingTempoChange = _latestObservedTempoChange;
+	update.PromptForTempoChange = true;
+	return update;
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
+	NinjamNoSyncReason reason, bool clearLatestProposal) noexcept
+{
+	if (_noSyncActive)
+		return {};
+
+	_tracker.Disconnect();
+	_ignoredTempoChange.reset();
+	const auto preservesExpiredRequest = reason == NinjamNoSyncReason::ObservationDeadline;
+	if (!preservesExpiredRequest)
+		_pendingTempoChange.reset();
+	if (clearLatestProposal && !preservesExpiredRequest)
+		_latestObservedTempoChange.reset();
+	_requestedTempo.reset();
+	_firstSuccessfulTempoRequestSend.reset();
+	if (!preservesExpiredRequest)
+		_requestState = TempoRequestState::Idle;
+	_requestSentAtWrap = 0ul;
+	_observationOrdinal = 0u;
+	_requestSentObservationOrdinal = 0u;
+	_tempoRequestSendConfirmed = false;
+	_requestRetries = 0u;
+	_joinAligned = false;
+	_timingValid = false;
+	_noSyncActive = true;
+	_lastValidObservationAt.reset();
+	++_diagnostics.PhaseEventsInvalidated;
+
+	NinjamTimingUpdate update;
+	update.InvalidatePendingCorrections = true;
+	update.NoSyncReason = reason;
+	_RecordEmittedCommand(NinjamEmittedCommand::Invalidate, ++_commandGeneration);
 	return update;
 }
 

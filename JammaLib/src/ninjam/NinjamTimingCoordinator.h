@@ -15,6 +15,8 @@ namespace io
 
 namespace ninjam
 {
+	struct NinjamSessionTimingStatus;
+
 	struct NinjamTempoJoinOptions
 	{
 		// Servers commonly quantise a requested decimal BPM to an integer. Treat a
@@ -89,7 +91,10 @@ namespace ninjam
 		None,
 		StayLocal,
 		Reconnect,
-		Disconnect
+		Disconnect,
+		PhysicalLoss,
+		InvalidTiming,
+		ObservationDeadline
 	};
 
 	struct NinjamTimingUpdate
@@ -149,10 +154,17 @@ namespace ninjam
 		void Connect(const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		void Disconnect() noexcept;
+		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
+			const NinjamTempoJoinOptions& options,
+			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		NinjamTimingUpdate Observe(const NinjamTiming& timing,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent,
 		const io::UserConfig& config,
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+		NinjamTimingUpdate Tick(const std::optional<engine::QuantisationTiming>& localTiming,
+			bool hasLocalContent,
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		std::optional<NinjamTempoChange> PendingTempoChange() const { return _pendingTempoChange; }
@@ -167,6 +179,7 @@ namespace ninjam
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
+		std::uint64_t SessionEpoch() const noexcept { return _sessionEpoch; }
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
 		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
@@ -183,6 +196,13 @@ namespace ninjam
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
 		void _RecordEmittedCommand(NinjamEmittedCommand kind, std::uint64_t generation) noexcept;
+		NinjamTimingUpdate _EnterNoSync(NinjamNoSyncReason reason,
+			bool clearLatestProposal = true) noexcept;
+		NinjamTimingUpdate _ExpireTempoRequest(
+			const std::optional<engine::QuantisationTiming>& localTiming,
+			bool hasLocalContent,
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now);
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
 		std::optional<NinjamTempoChange> _pendingTempoChange;
@@ -198,6 +218,11 @@ namespace ninjam
 		bool _tempoRequestSendConfirmed = false;
 		unsigned int _requestRetries = 0u;
 		bool _joinAligned = false;
+		bool _physicalAvailable = false;
+		bool _timingValid = false;
+		bool _noSyncActive = false;
+		std::uint64_t _sessionEpoch = 0u;
+		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
 		NinjamTimingDiagnostics _diagnostics;
 	};
 }

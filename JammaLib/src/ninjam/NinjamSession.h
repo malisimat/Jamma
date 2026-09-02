@@ -14,6 +14,19 @@
 
 namespace ninjam
 {
+	struct NinjamSessionTimingStatus
+	{
+		bool IsAvailable = false;
+		bool Changed = false;
+		std::uint64_t SessionEpoch = 0u;
+	};
+
+	struct NinjamSessionPumpResult
+	{
+		std::optional<NinjamRemoteSnapshot> Snapshot;
+		NinjamSessionTimingStatus TimingStatus;
+	};
+
 	class NinjamSession;
 
 	class NinjamConnectionUse
@@ -86,8 +99,13 @@ namespace ninjam
 		bool IsConnected() const noexcept;
 
 		// Pump the connection on the job thread.
-		// Returns a snapshot when connected; nullopt otherwise.
-		std::optional<NinjamRemoteSnapshot> Pump();
+		// Returns the latest physical availability edge and a snapshot when connected.
+		NinjamSessionPumpResult Pump();
+
+		// Pure transition used by Pump and deterministic lifecycle tests. Epochs are
+		// process-local and advance only on a physical unavailable -> available edge.
+		static NinjamSessionTimingStatus AdvanceTimingStatus(
+			const NinjamSessionTimingStatus& current, bool isAvailable) noexcept;
 
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,
@@ -153,6 +171,7 @@ namespace ninjam
 		std::atomic_uint _audioNumOutputChannels{ 0u };
 		std::atomic_uint _audioInLatencySamps{ 0u };
 		std::atomic_uint _audioOutLatencySamps{ 0u };
+		NinjamSessionTimingStatus _timingStatus;
 	};
 
 	inline NinjamConnectionUse::NinjamConnectionUse(const NinjamSession& session) noexcept

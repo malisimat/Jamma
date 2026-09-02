@@ -661,6 +661,13 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
+	if (jamStruct.Ninjam.has_value())
+	{
+		// Persisted/default starts enter the same coordinator lifecycle as an
+		// interactive connect before the first physical snapshot can arrive.
+		scene->_networkService->PrepareTempoSyncOnConnect(
+			scene->_quantisation.CurrentTempoTiming(scene->_CurrentSampleRate()));
+	}
 	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -1384,14 +1391,29 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 
-	auto snapshot = _networkService->GetController()->Pump();
+	auto pumpResult = _networkService->GetController()->Pump();
 	{
 		// Always sync the station clock state to the scene-level quantisation.
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_sceneMutex);
-		if (snapshot.has_value())
-			_HandleRemoteTempoSnapshot(snapshot.value());
+		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+		bool hasLocalContent = false;
+		for (const auto& station : _stations)
+			hasLocalContent = hasLocalContent
+				|| (station && !station->IsRemote() && station->NumTakes() > 0u);
+		if (pumpResult.TimingStatus.Changed)
+		{
+			_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(
+				pumpResult.TimingStatus, localTiming));
+			if (!pumpResult.TimingStatus.IsAvailable)
+				_UpdateRemoteStationsFromSnapshot({});
+		}
+		if (pumpResult.Snapshot.has_value())
+			_HandleRemoteTempoSnapshot(pumpResult.Snapshot.value());
+		else if (auto clock = _quantisation.Clock())
+			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
+				localTiming, hasLocalContent, *clock));
 		_LogAppliedNinjamLoopAlignment();
 	}
 

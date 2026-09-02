@@ -31,6 +31,8 @@ namespace ninjam
 		void PrepareTempoSyncOnConnect(const std::optional<engine::QuantisationTiming>& localTiming);
 
 		void ResetTempoSyncOnDisconnect();
+		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
+			const std::optional<engine::QuantisationTiming>& localTiming);
 
 		bool UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
@@ -40,6 +42,11 @@ namespace ninjam
 			bool hasLocalContent,
 			const io::UserConfig& userConfig,
 			utils::Timer& clock);
+		NinjamTimingUpdate TickTiming(
+			const std::optional<engine::QuantisationTiming>& localTiming,
+			bool hasLocalContent,
+			utils::Timer& clock,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 		NinjamTimingUpdate ResolveRemoteTempoPromptDecision(bool accept,
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			utils::Timer& clock);
