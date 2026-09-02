@@ -93,6 +93,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: local timing, local grain, active grid, remote geometry remain separate types/fields.
 - Verification: include-graph check and coordinator/local-timing tests.
 - Human decision: accepted with the no-new-class constraint ([decision](decisions.md#02---logical-layout)).
+- Phase 4 execution: after human scope amendment `6777863`, `2473d50` moves the existing immutable quantisation timing values unchanged into registered value-only `engine/QuantisationTiming.h`; the amended Coordinator and NetworkService consumer headers replace only their direct `Quantiser.h` include. `9473d34` removes the reverse `Quantiser.cpp` -> `NinjamTiming.h` include. Static audit finds no NINJAM production header including the Quantiser/UI aggregate, while Quantiser retains the value header. The prerequisite and final focused 50/50 coverage are green and every move built independently. Status: implemented and verified; independent B012 review is pending.
 
 ## F-008 ‚Äî Move the local transport-offset mailbox out of the NINJAM command module
 
@@ -105,6 +106,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: local timing and follow policy remain independent.
 - Verification: mailbox tests plus disconnected and `NoSync` local-offset scenarios.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#findings)).
+- Phase 4 execution: `8c15044` moves the latest-wins, explicit-zero local transport-offset mailbox into private `AudioHost` ownership and relocates its publication/application bodies to `AudioHost.cpp`; the old NINJAM command-module mailbox and its isolated test are removed, and production-boundary tests exercise the AudioHost-owned handoff. Before commit, the wrapped tests build passed and `AudioHostLocalTransportOffsetPublication.*:TransportPhaseOffset.AbsoluteLocalOffsetIsIndependentOfNinjamGeneration` passed 3/3. The final exact B012 filter passed 50/50. Disconnected/`NoSync` semantics and the single-writer/latest-value contract are unchanged. Status: implemented and verified; independent B012 review is pending.
 
 ## F-009 ‚Äî Complete update-to-command materialization in the NINJAM integration layer
 
@@ -157,6 +159,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: none.
 - Verification: incremental library build and relevant NINJAM timing/mailbox tests.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#03---conventions)).
+- Phase 4 execution: `c7f668a` adds registered `.cpp` implementations for `NinjamAudioTimingCommand`, `NinjamTiming`, and `NinjamTimingObservationMailbox`, leaving their public headers with declarations and only tiny/compile-time content inline. The first incremental link exposed stale objects that still carried the former inline `SignedCircularDifference` body (`LNK2005`/`LNK1169`); touching only known dependent `.cpp` mtimes, without source-content changes, forced the required recompilation and recovered the link. The post-commit wrapped build passed, the full suite ran 834 tests with 833 passed, one expected hardware MIDI skip, and no failures, and final-hash build/focused 50/50 verification remained green after the unused reverse include was removed. Status: implemented and verified; independent B012 review is pending.
 
 ## F-013 ‚Äî Reserve ‚Äúgrain‚Äù for local audio construction, not remote grid cells
 
