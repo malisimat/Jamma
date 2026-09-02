@@ -164,7 +164,7 @@ Intentional non-real-time synchronization retained for the human gate: Scene `_s
 
 ## Task board
 
-Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Phase 3 status: **human gate accepted** in [`phase-packets/phase-3.md`](phase-packets/phase-3.md). Phase 4 execution was approved at `2e770b743d9f2466b2edafff5c92faf139d93108`; B001–B004 are independently approved and B005 is implemented/focused-verified through `4e99584cb56a6fb588d2a3530fe83889b01ee0ed` with independent review pending. Continue the approved sequential batch gate in [`phase-packets/phase-4.md`](phase-packets/phase-4.md).
+Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase 2 status: **human gate accepted with the F-024 complete-desired-state direction** in [`decisions.md`](decisions.md). Phase 3 status: **human gate accepted** in [`phase-packets/phase-3.md`](phase-packets/phase-3.md). Phase 4 execution was approved at `2e770b743d9f2466b2edafff5c92faf139d93108`; B001–B005 are independently approved through superseding B005 review `ae5d862e553f787afcc72b5a5cea89fad992b5d3`. Continue the approved sequential batch gate in [`phase-packets/phase-4.md`](phase-packets/phase-4.md).
 
 ### Phase 4 kickoff baseline
 
