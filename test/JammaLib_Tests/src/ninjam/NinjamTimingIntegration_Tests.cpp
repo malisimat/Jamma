@@ -33,6 +33,29 @@ namespace audio
 		{
 			return host.ApplyDesiredTimingAtAudioBoundary(blockStartSample, sampleRate);
 		}
+
+		static void ApplyDeferredMapTransition(AudioHost& host) noexcept
+		{
+			const auto stations = host._audioStations.load(std::memory_order_acquire);
+			if (!stations)
+				return;
+			if (host._beginSyncPhaseMapAfterOffset)
+				for (const auto& station : *stations)
+					if (station && !station->IsRemote()) station->BeginSyncPhaseMap(
+						host._syncPhaseMap.SceneOriginSamps,
+						host._syncPhaseMap.SourceLengthSamps,
+						host._syncPhaseMap.RemoteLengthSamps,
+						host._syncPhaseMap.SourceCoordinateAtOrigin);
+			else if (host._rebaseSyncPhaseMapAfterOffset)
+				for (const auto& station : *stations)
+					if (station && !station->IsRemote()) station->RebaseSyncPhaseMap(
+						host._syncPhaseMap.SceneOriginSamps,
+						host._syncPhaseMap.SourceLengthSamps,
+						host._syncPhaseMap.RemoteLengthSamps,
+						host._syncPhaseMap.SourceCoordinateAtOrigin);
+			host._beginSyncPhaseMapAfterOffset = false;
+			host._rebaseSyncPhaseMapAfterOffset = false;
+		}
 	};
 }
 
@@ -393,4 +416,67 @@ TEST(NinjamTimingProductionBoundary, ReconnectPreservesM2M3MEntityOffsetsAcrossE
 		ninjam::NinjamLocalFollowPolicy::ContinuousSync, masterLength, 950u));
 	EXPECT_FALSE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 137u, 48000u));
 	EXPECT_EQ(acceptedAudio, NinjamProductionBoundaryFixture::AudioPosition(*take2M));
+}
+
+TEST(NinjamTimingProductionBoundary, RestoreBeforeRebasePreservesEntityAnchors)
+{
+	constexpr unsigned long localMasterLength = 1000ul;
+	constexpr unsigned long remoteMasterLength = 1100ul;
+	constexpr unsigned long oddLength = 777ul;
+	auto takeM = NinjamProductionBoundaryFixture::MakeTake(
+		"restore-rebase-m", localMasterLength, 100ul);
+	auto take2M = NinjamProductionBoundaryFixture::MakeTake(
+		"restore-rebase-2m", localMasterLength * 2ul, 1300ul);
+	auto takeOdd = NinjamProductionBoundaryFixture::MakeTake(
+		"restore-rebase-odd", oddLength, 700ul);
+	const std::vector<std::shared_ptr<NinjamProductionBoundaryLoopTake>> takes{
+		takeM, take2M, takeOdd };
+	auto station = NinjamProductionBoundaryFixture::MakeStation(takes);
+
+	audio::AudioHost host{ io::UserConfig{} };
+	auto clock = std::make_shared<Timer>();
+	clock->SetSeedSourceLength(localMasterLength);
+	clock->Tick(100u, 0u);
+	host.SetTimingClock(clock);
+	host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(
+		std::vector<std::shared_ptr<engine::Station>>{ station }));
+
+	// Establish the unequal remote ruler. The production callback performs this
+	// deferred capture after any persistent local offset has been applied.
+	host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 1u, 1u,
+		ninjam::NinjamLocalFollowPolicy::BlockSync, remoteMasterLength, 100u));
+	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
+	audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+
+	// Device-rate advancement is deliberately fifty samples ahead of the mapped
+	// local ruler. The next accepted boundary must restore that residue before it
+	// rebases the common map and applies the new remote phase.
+	clock->Tick(550u, 0u);
+	for (const auto& take : takes)
+		take->EndMultiPlay(550u);
+	host.PublishDesiredTiming(NinjamProductionBoundaryFixture::Desired(1u, 2u, 2u,
+		ninjam::NinjamLocalFollowPolicy::BlockSync, remoteMasterLength, 700u, 550u,
+		ninjam::NinjamDesiredTimingIntent::PhaseDiscipline));
+	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 550u, 48000u));
+	audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+
+	EXPECT_EQ(636ul, NinjamProductionBoundaryFixture::AudioPosition(*takeM));
+	EXPECT_EQ(1836ul, NinjamProductionBoundaryFixture::AudioPosition(*take2M));
+	EXPECT_EQ(459ul, NinjamProductionBoundaryFixture::AudioPosition(*takeOdd));
+	EXPECT_EQ(636ul, takeM->MidiTimingPosition());
+	EXPECT_EQ(1836ul, take2M->MidiTimingPosition());
+	EXPECT_EQ(459ul, takeOdd->MidiTimingPosition());
+
+	// A later full remote interval maps to one local interval. Every entity keeps
+	// its original offset and wraps by its own M, 2M, or non-divisor length.
+	clock->Tick(remoteMasterLength, 0u);
+	for (const auto& take : takes)
+		take->EndMultiPlay(remoteMasterLength);
+	station->RestoreSyncPhaseMap(clock->SceneSamplePos());
+	EXPECT_EQ(636ul, NinjamProductionBoundaryFixture::AudioPosition(*takeM));
+	EXPECT_EQ(836ul, NinjamProductionBoundaryFixture::AudioPosition(*take2M));
+	EXPECT_EQ(682ul, NinjamProductionBoundaryFixture::AudioPosition(*takeOdd));
+	EXPECT_EQ(636ul, takeM->MidiTimingPosition());
+	EXPECT_EQ(836ul, take2M->MidiTimingPosition());
+	EXPECT_EQ(682ul, takeOdd->MidiTimingPosition());
 }
