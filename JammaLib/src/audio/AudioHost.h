@@ -21,6 +21,8 @@
 
 namespace audio
 {
+	class NinjamAudioBoundaryTestAccess;
+
 	struct NinjamDesiredTimingReceipt
 	{
 		std::uint64_t Version = 0u;
@@ -69,9 +71,6 @@ namespace audio
 			return _ninjamTimingMailbox.ReadLatest();
 		}
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
-		// Production callback seam, also used by production-boundary verification.
-		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
-			unsigned int sampleRate) noexcept;
 		std::optional<NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
 		{
@@ -89,6 +88,9 @@ namespace audio
 		}
 
 	private:
+		friend class NinjamAudioBoundaryTestAccess;
+		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
+			unsigned int sampleRate) noexcept;
 		static int AudioCallback(void* outBuffer,
 			void* inBuffer,
 			unsigned int numSamps,

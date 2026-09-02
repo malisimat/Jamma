@@ -405,14 +405,9 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 			for (const auto& station : _stations)
 				if (station && !station->IsRemote()) station->LogLocalLoopAlignment(event);
 		}
-		if (update.RemoteGridChanged && desired.HasRemoteTiming)
-		{
-			const auto origin = static_cast<std::int64_t>(desired.ObservationSample)
-				- static_cast<std::int64_t>(desired.RemotePhaseSamps);
-			_quantisation.SetRemoteMidiGrid({ desired.IntervalLengthSamps,
-				desired.BeatsPerInterval, desired.RemotePhaseSamps, desired.TempoBpm,
-				desired.Generation }, origin, _stations);
-		}
+		if (update.RemoteGrid.has_value())
+			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
+				update.RemoteGrid->OriginSamps, _stations);
 		if (_audioEngine)
 			_audioEngine->PublishDesiredTiming(desired);
 		if (_loggingConfig.Event == "verbose"

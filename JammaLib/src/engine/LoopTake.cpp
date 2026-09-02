@@ -629,7 +629,6 @@ void LoopTake::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
 void LoopTake::ResetTimingEpoch() noexcept
 {
 	_audioTimingGeneration = 0u;
-	InvalidateTimingCorrections();
 	InvalidateSceneAnchors();
 }
 

@@ -302,7 +302,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 				? NinjamDesiredTimingIntent::JoinAlignment
 				: NinjamDesiredTimingIntent::PhaseDiscipline, false);
 		update.DesiredTransport = desiredUpdate.DesiredTransport;
-		update.RemoteGridChanged = desiredUpdate.RemoteGridChanged;
+		update.RemoteGrid = desiredUpdate.RemoteGrid;
 		++_diagnostics.PhaseEventsQueued;
 		_RecordEmittedCommand(isJoin ? NinjamEmittedCommand::Join : NinjamEmittedCommand::Discipline,
 			event->Generation);
@@ -466,7 +466,14 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	desired.HasObservationSample = true;
 	desired.ObservationSample = change.AudioBlockStartSample;
 	update.DesiredTransport = desired;
-	update.RemoteGridChanged = remoteGridChanged;
+	if (remoteGridChanged)
+	{
+		const auto origin = static_cast<std::int64_t>(change.AudioBlockStartSample)
+			- static_cast<std::int64_t>(change.IntervalPositionSamps);
+		update.RemoteGrid = NinjamRemoteGridPublication{
+			engine::RemoteTransportGeometry{ change.IntervalLengthSamps, change.Bpi,
+				change.IntervalPositionSamps, change.Bpm, desired.Generation }, origin };
+	}
 	_activeFollowPolicy = policy;
 	return update;
 }

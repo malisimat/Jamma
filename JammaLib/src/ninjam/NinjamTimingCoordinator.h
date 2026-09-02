@@ -72,11 +72,17 @@ namespace ninjam
 		ObservationDeadline
 	};
 
+	struct NinjamRemoteGridPublication
+	{
+		engine::RemoteTransportGeometry Geometry;
+		std::int64_t OriginSamps = 0;
+	};
+
 	struct NinjamTimingUpdate
 	{
 		std::optional<NinjamDesiredTransportState> DesiredTransport;
 		std::optional<NinjamTempoRequest> TempoRequest;
-		bool RemoteGridChanged = false;
+		std::optional<NinjamRemoteGridPublication> RemoteGrid;
 		bool PromptForTempoChange = false;
 		NinjamNoSyncReason NoSyncReason = NinjamNoSyncReason::None;
 	};

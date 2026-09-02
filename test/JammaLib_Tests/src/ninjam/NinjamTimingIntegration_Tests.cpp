@@ -101,6 +101,10 @@ public:
 		audio::MergeMixBehaviourParams merge;
 		auto mixerParams = engine::LoopTake::GetMixerParams(params.Size, merge);
 		auto take = std::make_shared<NinjamProductionBoundaryLoopTake>(params, mixerParams);
+		take->Record({}, id, { 0u });
+		take->EndMultiWrite(static_cast<unsigned int>(loopLength), true,
+			base::Audible::AUDIOSOURCE_ADC);
+		take->Play(position, loopLength, 0u);
 		take->AddLoop(MakeLoop(loopLength, position));
 		take->CommitChanges();
 		take->SetMidiTimingState(position % loopLength, loopLength);
@@ -264,6 +268,21 @@ TEST(NinjamTimingProductionBoundary, OverlappingIntentsPublishOneCoherentDesired
 	ui.join();
 	ASSERT_TRUE(updates[0].DesiredTransport.has_value());
 	ASSERT_TRUE(updates[1].DesiredTransport.has_value());
+	for (std::size_t i = 0u; i < updates.size(); ++i)
+	{
+		ASSERT_TRUE(updates[i].RemoteGrid.has_value());
+		const auto& desired = updates[i].DesiredTransport.value();
+		const auto& grid = updates[i].RemoteGrid.value();
+		EXPECT_EQ(desired.IntervalLengthSamps, grid.Geometry.IntervalLengthSamps);
+		EXPECT_EQ(desired.BeatsPerInterval, grid.Geometry.BPI);
+		EXPECT_EQ(desired.RemotePhaseSamps, grid.Geometry.PhaseSamps);
+		EXPECT_EQ(desired.TempoBpm, grid.Geometry.BPM);
+		EXPECT_EQ(desired.Generation, grid.Geometry.Generation);
+		EXPECT_EQ(static_cast<std::int64_t>(desired.ObservationSample)
+			- static_cast<std::int64_t>(desired.RemotePhaseSamps), grid.OriginSamps);
+		EXPECT_FALSE(updates[i].TempoRequest.has_value());
+		EXPECT_FALSE(updates[i].PromptForTempoChange);
+	}
 	EXPECT_NE(updates[0].DesiredTransport->Version, updates[1].DesiredTransport->Version);
 	const auto firstIsNewer = updates[0].DesiredTransport->Version
 		> updates[1].DesiredTransport->Version;
@@ -301,6 +320,8 @@ TEST(NinjamTimingProductionBoundary, ReconnectPreservesM2M3MEntityOffsetsAcrossE
 	auto take3M = NinjamProductionBoundaryFixture::MakeTake("epoch-3m", masterLength * 3ul, 2600ul);
 	const std::vector<std::shared_ptr<NinjamProductionBoundaryLoopTake>> takes{
 		takeM, take2M, take3M };
+	for (const auto& take : takes)
+		ASSERT_EQ(1u, take->GetMidiLoops().size());
 	auto station = NinjamProductionBoundaryFixture::MakeStation(takes);
 
 	audio::AudioHost host{ io::UserConfig{} };
