@@ -6,7 +6,7 @@
 #include "NinjamTiming.h"
 #include "NinjamTimingTracker.h"
 #include "NinjamAudioTimingCommand.h"
-#include "../engine/Quantiser.h"
+#include "../engine/QuantisationTiming.h"
 
 namespace io
 {

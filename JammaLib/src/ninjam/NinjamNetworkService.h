@@ -8,7 +8,7 @@
 #include "../ninjam/NinjamController.h"
 #include "../engine/Station.h"
 #include "../engine/StationRemote.h"
-#include "../engine/Quantiser.h"
+#include "../engine/QuantisationTiming.h"
 #include "../io/UserConfig.h"
 #include "NinjamTimingCoordinator.h"
 

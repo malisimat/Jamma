@@ -925,5 +925,8 @@
     <ClCompile Include="src\gui\GuiRack.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClInclude Include="src\engine\QuantisationTiming.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

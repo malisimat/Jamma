@@ -226,6 +226,7 @@
     <ClInclude Include="src\graphics\LoopModel.h" />
     <ClInclude Include="src\engine\MidiRouter.h" />
     <ClInclude Include="src\engine\Quantiser.h" />
+    <ClInclude Include="src\engine\QuantisationTiming.h" />
     <ClInclude Include="src\ninjam\NinjamTimingTracker.h" />
     
     <ClInclude Include="src\graphics\QuantisationModel.h" />
