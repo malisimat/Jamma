@@ -151,6 +151,7 @@ std::optional<NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredTiming() 
 bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 	unsigned int sampleRate) noexcept
 {
+	_mappedSourceHandledAtCommandBoundary = false;
 	const auto desiredValue = _ninjamDesiredTimingMailbox.ReadLatest();
 	if (!desiredValue.has_value() || desiredValue->Version == 0u)
 		return false;
@@ -178,6 +179,7 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 				if (station && !station->IsRemote()) station->ResetTimingEpoch();
 		_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		_syncPhaseMap = {};
+		_captureMappedSourceAnchorsAfterOffset = false;
 		if (timingClock)
 		{
 			utils::Timer::Command reset;
@@ -201,9 +203,10 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		const auto hadSyncPhaseMap = _syncPhaseMap.IsActive();
 		const auto previousMasterLength = timingClock->SeedSourceLength();
 		const auto previousRemotePhase = timingClock->SampOffset();
-		if (_syncPhaseMap.IsActive() && stations)
-			for (const auto& station : *stations)
-				if (station && !station->IsRemote()) station->RestoreSyncPhaseMap(sceneCoordinate);
+		const auto mappedSourceBefore = hadSyncPhaseMap
+			? RestoreMappedSourceAtScene(stations, sceneCoordinate)
+			: std::optional<std::int64_t>{};
+		_mappedSourceHandledAtCommandBoundary = true;
 
 		const auto replacement = ninjam::ResolveBoundaryTimingReplacement(
 			timingClock->SeedSourceLength(), timingClock->SampOffset(),
@@ -226,8 +229,9 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 			const auto sourceLength = _syncPhaseMap.SourceLengthSamps;
 			if (sourceLength > 0ul)
 			{
-				const auto sourceBefore = _syncPhaseMap.IsActive()
-					? _syncPhaseMap.SourcePhaseAt(sceneCoordinate)
+				const auto sourceBefore = mappedSourceBefore.has_value()
+					? static_cast<unsigned long>(ninjam::PositiveModulo(
+						mappedSourceBefore.value(), sourceLength))
 					: static_cast<unsigned long>(previousRemotePhase) % sourceLength;
 				const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(replacement.RemotePhaseSamps,
 					sourceLength, desired.IntervalLengthSamps);
@@ -252,35 +256,30 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 			timingClock->ReanchorMusicalTransportCurrentGeometry(sceneCoordinate,
 				replacement.RemotePhaseSamps, sampleRate);
 		timingClock->ApplyCommand(timerCommand);
-		if (!geometryChanged && _syncPhaseMap.IsActive())
+		if (!geometryChanged && mappedSourceBefore.has_value())
 		{
-			const auto sourceBefore = _syncPhaseMap.SourcePhaseAt(sceneCoordinate);
+			const auto sourceBefore = static_cast<unsigned long>(ninjam::PositiveModulo(
+				mappedSourceBefore.value(), _syncPhaseMap.SourceLengthSamps));
 			const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
 				_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
 			stationDelta = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
 				static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(_syncPhaseMap.SourceLengthSamps));
 		}
 
-		const auto reason = geometryChanged
-			? engine::LoopTake::TimingCorrectionReason::TempoReplacement
-			: desired.Intent == ninjam::NinjamDesiredTimingIntent::JoinAlignment
-				? engine::LoopTake::TimingCorrectionReason::JoinAlignment
-				: engine::LoopTake::TimingCorrectionReason::PhaseDiscipline;
 		if (stations)
 			for (const auto& station : *stations)
-				if (station && !station->IsRemote()) station->ApplyTimingCommand(stationDelta,
-					desired.Generation, reason, desired.LocalFollowPolicy, sceneCoordinate);
+				if (station && !station->IsRemote()) station->ApplyAcceptedTimingCorrection(
+					stationDelta, desired.Generation);
 
 		if (geometryChanged)
 			_syncPhaseMap.RemoteLengthSamps = desired.IntervalLengthSamps;
 		const auto sourcePhase = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
 			_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
-		const auto sourceCoordinate = hadSyncPhaseMap
-			? _syncPhaseMap.SourceCoordinateAt(sceneCoordinate) + stationDelta
+		const auto sourceCoordinate = mappedSourceBefore.has_value()
+			? mappedSourceBefore.value() + stationDelta
 			: static_cast<std::int64_t>(sourcePhase);
 		_syncPhaseMap.Rebase(sceneCoordinate, sourceCoordinate);
-		_beginSyncPhaseMapAfterOffset = !hadSyncPhaseMap;
-		_rebaseSyncPhaseMapAfterOffset = hadSyncPhaseMap;
+		_captureMappedSourceAnchorsAfterOffset = !hadSyncPhaseMap;
 	}
 
 	_appliedNinjamTiming = desired;
@@ -295,6 +294,31 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	_lastAppliedTimingDelta.store(stationDelta, std::memory_order_relaxed);
 	_lastAppliedTimingReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 	return true;
+}
+
+std::optional<std::int64_t> AudioHost::RestoreMappedSourceAtScene(
+	const std::vector<std::shared_ptr<engine::Station>>* stations,
+	std::uint64_t sceneCoordinateSamps) noexcept
+{
+	if (!_syncPhaseMap.IsActive())
+		return std::nullopt;
+	const auto sourceCoordinate = _syncPhaseMap.SourceCoordinateAt(sceneCoordinateSamps);
+	if (stations)
+		for (const auto& station : *stations)
+			if (station && !station->IsRemote())
+				station->RestoreMappedSourceCoordinate(sourceCoordinate);
+	return sourceCoordinate;
+}
+
+void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
+	const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept
+{
+	if (!_captureMappedSourceAnchorsAfterOffset)
+		return;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			station->CaptureMappedSourceAnchors(_syncPhaseMap.SourceCoordinateAtOrigin);
+	_captureMappedSourceAnchorsAfterOffset = false;
 }
 
 	int AudioHost::AudioCallback(void* outBuffer,
@@ -320,8 +344,6 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
 		static const std::vector<std::shared_ptr<Station>> emptyStations;
 		const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
-		_beginSyncPhaseMapAfterOffset = false;
-		_rebaseSyncPhaseMapAfterOffset = false;
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate);
 
 		if (const auto localTransportOffsetLoopFrac = _localTransportOffsetLoopFracMailbox.ConsumeLatest())
@@ -344,19 +366,10 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 					station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
 			}
 		}
-		// Offset is loop-local, so capture the new map only after every local take
+		// Offset is loop-local, so capture entity anchors only after every local take
 		// has applied it. This is a single post-command fan-out, rather than a
-		// speculative capture followed by an offset-dependent rebase.
-		if (_beginSyncPhaseMapAfterOffset)
-			for (auto& station : stations)
-				if (station && !station->IsRemote()) station->BeginSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
-					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
-					_syncPhaseMap.SourceCoordinateAtOrigin);
-		else if (_rebaseSyncPhaseMapAfterOffset)
-			for (auto& station : stations)
-				if (station && !station->IsRemote()) station->RebaseSyncPhaseMap(_syncPhaseMap.SceneOriginSamps,
-					_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps,
-					_syncPhaseMap.SourceCoordinateAtOrigin);
+		// speculative capture before the offset is known.
+		CaptureMappedSourceAnchorsAfterOffset(stations);
 
 		if (nullptr != inBuf)
 		{
@@ -457,9 +470,8 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 			};
 
 		if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
-			&& timingClock && _syncPhaseMap.IsActive())
-			for (auto& station : stations)
-				if (station && !station->IsRemote()) station->RestoreSyncPhaseMap(timingClock->SceneSamplePos());
+			&& timingClock && !_mappedSourceHandledAtCommandBoundary)
+			RestoreMappedSourceAtScene(&stations, timingClock->SceneSamplePos());
 
 		if (nullptr != outBuf)
 		{

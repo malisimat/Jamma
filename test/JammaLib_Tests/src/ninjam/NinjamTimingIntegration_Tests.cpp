@@ -39,22 +39,15 @@ namespace audio
 			const auto stations = host._audioStations.load(std::memory_order_acquire);
 			if (!stations)
 				return;
-			if (host._beginSyncPhaseMapAfterOffset)
-				for (const auto& station : *stations)
-					if (station && !station->IsRemote()) station->BeginSyncPhaseMap(
-						host._syncPhaseMap.SceneOriginSamps,
-						host._syncPhaseMap.SourceLengthSamps,
-						host._syncPhaseMap.RemoteLengthSamps,
-						host._syncPhaseMap.SourceCoordinateAtOrigin);
-			else if (host._rebaseSyncPhaseMapAfterOffset)
-				for (const auto& station : *stations)
-					if (station && !station->IsRemote()) station->RebaseSyncPhaseMap(
-						host._syncPhaseMap.SceneOriginSamps,
-						host._syncPhaseMap.SourceLengthSamps,
-						host._syncPhaseMap.RemoteLengthSamps,
-						host._syncPhaseMap.SourceCoordinateAtOrigin);
-			host._beginSyncPhaseMapAfterOffset = false;
-			host._rebaseSyncPhaseMapAfterOffset = false;
+			host.CaptureMappedSourceAnchorsAfterOffset(*stations);
+		}
+
+		static void RestoreMappedSource(AudioHost& host,
+			std::uint64_t sceneCoordinateSamps) noexcept
+		{
+			const auto stations = host._audioStations.load(std::memory_order_acquire);
+			if (stations)
+				host.RestoreMappedSourceAtScene(stations.get(), sceneCoordinateSamps);
 		}
 	};
 }
@@ -76,6 +69,11 @@ public:
 	unsigned long MidiTimingPosition() const noexcept
 	{
 		return _midiVisualPlayIndex.load(std::memory_order_relaxed);
+	}
+
+	unsigned long MidiSceneAnchor() const noexcept
+	{
+		return _midiSceneAnchor.load(std::memory_order_relaxed);
 	}
 };
 
@@ -447,6 +445,12 @@ TEST(NinjamTimingProductionBoundary, RestoreBeforeRebasePreservesEntityAnchors)
 		ninjam::NinjamLocalFollowPolicy::BlockSync, remoteMasterLength, 100u));
 	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 0u, 48000u));
 	audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+	const std::array<unsigned long, 3u> audioAnchors{
+		takeM->GetLoops().front()->SceneAnchor(),
+		take2M->GetLoops().front()->SceneAnchor(),
+		takeOdd->GetLoops().front()->SceneAnchor() };
+	const std::array<unsigned long, 3u> midiAnchors{
+		takeM->MidiSceneAnchor(), take2M->MidiSceneAnchor(), takeOdd->MidiSceneAnchor() };
 
 	// Device-rate advancement is deliberately fifty samples ahead of the mapped
 	// local ruler. The next accepted boundary must restore that residue before it
@@ -459,6 +463,12 @@ TEST(NinjamTimingProductionBoundary, RestoreBeforeRebasePreservesEntityAnchors)
 		ninjam::NinjamDesiredTimingIntent::PhaseDiscipline));
 	ASSERT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host, 550u, 48000u));
 	audio::NinjamAudioBoundaryTestAccess::ApplyDeferredMapTransition(host);
+	EXPECT_EQ(audioAnchors[0], takeM->GetLoops().front()->SceneAnchor());
+	EXPECT_EQ(audioAnchors[1], take2M->GetLoops().front()->SceneAnchor());
+	EXPECT_EQ(audioAnchors[2], takeOdd->GetLoops().front()->SceneAnchor());
+	EXPECT_EQ(midiAnchors[0], takeM->MidiSceneAnchor());
+	EXPECT_EQ(midiAnchors[1], take2M->MidiSceneAnchor());
+	EXPECT_EQ(midiAnchors[2], takeOdd->MidiSceneAnchor());
 
 	EXPECT_EQ(636ul, NinjamProductionBoundaryFixture::AudioPosition(*takeM));
 	EXPECT_EQ(1836ul, NinjamProductionBoundaryFixture::AudioPosition(*take2M));
@@ -472,7 +482,7 @@ TEST(NinjamTimingProductionBoundary, RestoreBeforeRebasePreservesEntityAnchors)
 	clock->Tick(remoteMasterLength, 0u);
 	for (const auto& take : takes)
 		take->EndMultiPlay(remoteMasterLength);
-	station->RestoreSyncPhaseMap(clock->SceneSamplePos());
+	audio::NinjamAudioBoundaryTestAccess::RestoreMappedSource(host, clock->SceneSamplePos());
 	EXPECT_EQ(636ul, NinjamProductionBoundaryFixture::AudioPosition(*takeM));
 	EXPECT_EQ(836ul, NinjamProductionBoundaryFixture::AudioPosition(*take2M));
 	EXPECT_EQ(682ul, NinjamProductionBoundaryFixture::AudioPosition(*takeOdd));

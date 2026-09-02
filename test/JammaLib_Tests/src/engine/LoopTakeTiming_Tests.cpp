@@ -100,8 +100,7 @@ static unsigned long TimingLoopBodyPosition(const engine::Loop& loop)
 	return loop.PlayIndex() - constants::MaxLoopFadeSamps;
 }
 
-static void ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
-	ninjam::NinjamLocalFollowPolicy policy)
+static void ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases()
 {
 	constexpr unsigned long shortLength = 1000ul;
 	constexpr unsigned long longLength = shortLength * 3ul;
@@ -120,10 +119,8 @@ static void ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
 	auto shortTake = MakePlayingTimingTake("independent-short", shortLength, shortStart);
 	auto longTake = MakePlayingTimingTake("independent-long", longLength, longStart);
 	master.ApplyCommand(masterAdjustment);
-	shortTake->ApplyTimingCommand(masterDelta, 1u,
-		LoopTake::TimingCorrectionReason::PhaseDiscipline, policy);
-	longTake->ApplyTimingCommand(masterDelta, 1u,
-		LoopTake::TimingCorrectionReason::PhaseDiscipline, policy);
+	shortTake->ApplyAcceptedTimingCorrection(masterDelta, 1u);
+	longTake->ApplyAcceptedTimingCorrection(masterDelta, 1u);
 
 	for (auto sample = 0ul; sample < recurrenceSamps; ++sample)
 	{
@@ -267,7 +264,7 @@ TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
 {
 	auto take = MakeTimingTestLoopTake("midi-only");
 	take->SetMidiVisualPosition(100ul, 1000ul);
-	take->ApplyTimingCommand(-1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyAcceptedTimingCorrection(-1250, 1u);
 	EXPECT_EQ(850ul, take->MidiVisualPosition());
 	EXPECT_EQ(1250, take->MidiAnchorCorrection());
 	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
@@ -276,7 +273,7 @@ TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
 TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
 {
 	auto take = MakePlayingTimingTake("direct-audio-midi", 1000ul, 100ul);
-	take->ApplyTimingCommand(1250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyAcceptedTimingCorrection(1250, 1u);
 	EXPECT_EQ(350ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
 	EXPECT_EQ(-1250, take->MidiAnchorCorrection());
@@ -286,7 +283,7 @@ TEST(TransportPhaseOffset, DirectTimingCommandMovesAudioAndMidiOnce)
 TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 {
 	auto take = MakePlayingTimingTake("direct-midi-automation", 1000ul, 100ul);
-	take->ApplyTimingCommand(250, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyAcceptedTimingCorrection(250, 1u);
 
 	constexpr auto globalSample = 1000;
 	constexpr auto frozenAnchor = 900;
@@ -298,28 +295,29 @@ TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 
 TEST(TransportPhaseOffset, ContinuousSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
 {
-	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
-		ninjam::NinjamLocalFollowPolicy::ContinuousSync);
+	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases();
 }
 
 TEST(TransportPhaseOffset, BlockSyncMasterAdjustmentPreservesIndependentAudioAndMidiPhases)
 {
-	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases(
-		ninjam::NinjamLocalFollowPolicy::BlockSync);
+	ExpectMasterPhaseAdjustmentPreservesIndependentLoopPhases();
 }
 
 TEST(TransportPhaseOffset, SyncPhaseMapRebasesAfterTimingCorrection)
 {
 	auto take = MakePlayingTimingTake("boundary-restore", 1000ul, 100ul);
-	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
-	take->RestoreSyncPhaseMap(6100u);
+	ninjam::SyncPhaseMap map;
+	map.SourceLengthSamps = 1000ul;
+	map.RemoteLengthSamps = 1100ul;
+	map.Rebase(5000u, 0);
+	take->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
+	take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(6100u));
 	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
-	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
-		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 6100u);
+	take->ApplyAcceptedTimingCorrection(125, 1u);
 	// The source ruler moved by the same correction. Rebase it without
 	// recapturing this take's anchor.
-	take->RebaseSyncPhaseMap(6100u, 1000ul, 1100ul, 125ul);
-	take->RestoreSyncPhaseMap(7200u);
+	map.Rebase(6100u, 1125);
+	take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(7200u));
 	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(225ul, take->MidiVisualPosition());
 }
@@ -327,16 +325,19 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasesAfterTimingCorrection)
 TEST(TransportPhaseOffset, SyncPhaseMapRestoresBeforeRebasingAfterDeviceRateAdvance)
 {
 	auto take = MakePlayingTimingTake("boundary-restore-device-advance", 1000ul, 100ul);
-	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	ninjam::SyncPhaseMap map;
+	map.SourceLengthSamps = 1000ul;
+	map.RemoteLengthSamps = 1100ul;
+	map.Rebase(5000u, 0);
+	take->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
 	take->EndMultiPlay(550u);
 	EXPECT_EQ(650ul, take->MidiVisualPosition());
-	take->RestoreSyncPhaseMap(5550u);
+	take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(5550u));
 	EXPECT_EQ(600ul, take->MidiVisualPosition());
 
-	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
-		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 5550u);
-	take->RebaseSyncPhaseMap(5550u, 1000ul, 1100ul, 625ul);
-	take->RestoreSyncPhaseMap(6100u);
+	take->ApplyAcceptedTimingCorrection(125, 1u);
+	map.Rebase(5550u, 625);
+	take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(6100u));
 
 	EXPECT_EQ(225ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(225ul, take->MidiVisualPosition());
@@ -345,13 +346,16 @@ TEST(TransportPhaseOffset, SyncPhaseMapRestoresBeforeRebasingAfterDeviceRateAdva
 TEST(TransportPhaseOffset, SyncPhaseMapMapsAudioAndMidiFromTheSameRemoteMaster)
 {
 	auto take = MakePlayingTimingTake("boundary-map", 1000ul, 100ul);
-	take->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::TempoReplacement,
-		ninjam::NinjamLocalFollowPolicy::BlockSync, 5000u);
-	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	take->ApplyAcceptedTimingCorrection(125, 1u);
+	ninjam::SyncPhaseMap map;
+	map.SourceLengthSamps = 1000ul;
+	map.RemoteLengthSamps = 1100ul;
+	map.Rebase(5000u, 0);
+	take->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
 
 	for (const auto scene : { 5000u, 5550u, 6100u, 7200u })
 	{
-		take->RestoreSyncPhaseMap(scene);
+		take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(scene));
 		const auto elapsed = static_cast<std::uint64_t>(scene - 5000u);
 		const auto scaled = (elapsed * 1000u + 550u) / 1100u;
 		const auto expected = static_cast<unsigned long>((225u + scaled) % 1000u);
@@ -365,15 +369,19 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
 	auto earlyTake = MakePlayingTimingTake("early-sync-origin", 1000ul, 100ul);
 	auto lateTake = MakePlayingTimingTake("late-sync-origin", 2000ul, 1700ul);
 
-	earlyTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
-	lateTake->BeginSyncPhaseMap(5000u, 1000ul, 1100ul, 400ul);
+	ninjam::SyncPhaseMap map;
+	map.SourceLengthSamps = 1000ul;
+	map.RemoteLengthSamps = 1100ul;
+	map.Rebase(5000u, 400);
+	earlyTake->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
+	lateTake->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
 	for (const auto scene : { 5550u, 6100u, 7200u })
 	{
 		const auto elapsed = static_cast<std::uint64_t>(scene - 5000u);
 		const auto sourceCoordinate = static_cast<std::int64_t>(400u
 			+ ((elapsed * 1000u + 550u) / 1100u));
-		earlyTake->RestoreSyncPhaseMap(scene);
-		lateTake->RestoreSyncPhaseMap(scene);
+		earlyTake->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(scene));
+		lateTake->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(scene));
 		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 300, 1000ul),
 			TimingLoopBodyPosition(*earlyTake->GetLoops().front()));
 		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 700, 2000ul),
@@ -382,20 +390,17 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
 
 	// A remote phase correction changes the common source phase, never either
 	// loop's independently recorded origin.
-	earlyTake->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
-		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
-	lateTake->ApplyTimingCommand(125, 1u, LoopTake::TimingCorrectionReason::PhaseDiscipline,
-		ninjam::NinjamLocalFollowPolicy::ContinuousSync, 7200u);
-	earlyTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 2925);
-	lateTake->RebaseSyncPhaseMap(7200u, 1000ul, 1100ul, 2925);
+	earlyTake->ApplyAcceptedTimingCorrection(125, 1u);
+	lateTake->ApplyAcceptedTimingCorrection(125, 1u);
+	map.Rebase(7200u, 2925);
 
 	for (const auto scene : { 7200u, 7750u, 8300u, 9400u })
 	{
 		const auto elapsed = static_cast<std::uint64_t>(scene - 7200u);
 		const auto sourceCoordinate = static_cast<std::int64_t>(2925u
 			+ ((elapsed * 1000u + 550u) / 1100u));
-		earlyTake->RestoreSyncPhaseMap(scene);
-		lateTake->RestoreSyncPhaseMap(scene);
+		earlyTake->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(scene));
+		lateTake->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(scene));
 		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 300, 1000ul),
 			TimingLoopBodyPosition(*earlyTake->GetLoops().front()));
 		EXPECT_EQ(ninjam::PositiveModulo(sourceCoordinate - 700, 2000ul),
@@ -406,14 +411,18 @@ TEST(TransportPhaseOffset, SyncPhaseMapRebasePreservesIndependentTakeOrigins)
 TEST(TransportPhaseOffset, SyncPhaseMapPreservesLateAudioAndMidiOrigins)
 {
 	auto take = MakePlayingTimingTake("late-sync-map", 1000ul, 100ul);
-	take->BeginSyncPhaseMap(5000u, 1000ul, 1100ul);
+	ninjam::SyncPhaseMap map;
+	map.SourceLengthSamps = 1000ul;
+	map.RemoteLengthSamps = 1100ul;
+	map.Rebase(5000u, 0);
+	take->CaptureMappedSourceAnchors(map.SourceCoordinateAtOrigin);
 	auto loop = take->GetLoops().front();
 	loop->SetBodyPlayIndex(700ul);
 	loop->InvalidateSceneAnchor();
 	take->SetMidiVisualPosition(700ul, 1000ul);
 	take->InvalidateMidiSceneAnchor();
 
-	take->RestoreSyncPhaseMap(5550u);
+	take->RestoreMappedSourceCoordinate(map.SourceCoordinateAt(5550u));
 	EXPECT_EQ(700ul, TimingLoopBodyPosition(*loop));
 	EXPECT_EQ(700ul, take->MidiVisualPosition());
 }
@@ -422,7 +431,7 @@ TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
 {
 	auto take = MakeTimingTestLoopTake("midi-only-local-offset");
 	take->SetMidiVisualPosition(100ul, 1000ul);
-	take->ApplyTimingCommand(0, 7u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+	take->ApplyAcceptedTimingCorrection(0, 7u);
 	take->SetLocalTransportOffsetSamps(-1250);
 	EXPECT_EQ(850ul, take->MidiVisualPosition());
 	EXPECT_EQ(1250, take->MidiAnchorCorrection());
@@ -432,8 +441,8 @@ TEST(TransportPhaseOffset, AbsoluteLocalOffsetIsIndependentOfNinjamGeneration)
 TEST(TransportPhaseOffset, DirectTimingCommandLeavesEmptyTakeUnmoved)
 {
 	auto take = MakeTimingTestLoopTake("empty");
-	take->ApplyTimingCommand(250, 2u, LoopTake::TimingCorrectionReason::TempoReplacement);
-	take->ApplyTimingCommand(500, 1u, LoopTake::TimingCorrectionReason::TempoReplacement);
+	take->ApplyAcceptedTimingCorrection(250, 2u);
+	take->ApplyAcceptedTimingCorrection(500, 1u);
 	EXPECT_EQ(0ul, take->MidiVisualPosition());
 	EXPECT_EQ(0, take->MidiAnchorCorrection());
 	EXPECT_EQ(0u, take->ConsumedExternalPhaseCorrectionCount());

@@ -461,7 +461,7 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 
 	// Queue-based take-only phase shift (transport offset / global phase offset).
 	// NINJAM connected corrections do NOT use this path; they arrive through the
-	// unified audio-boundary command (ApplyTimingCommand) applied at the top of
+	// neutral audio-boundary correction applied at the top of
 	// the callback block alongside the Timer.
 	const auto correction = _pendingTimingCorrectionSamps.exchange(0, std::memory_order_acq_rel);
 	const auto generation = _timingCorrectionGeneration.load(std::memory_order_acquire);
@@ -515,22 +515,12 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	_TryApplyLocalTransportOffset();
 }
 
-void LoopTake::ApplyTimingCommand(long long deltaSamps,
-	std::uint64_t generation,
-	TimingCorrectionReason reason,
-	ninjam::NinjamLocalFollowPolicy policy,
-	std::uint64_t sceneCoordinateSamps) noexcept
+void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
+	std::uint64_t generation) noexcept
 {
-	if (reason == TimingCorrectionReason::Invalidation)
-	{
-		_audioTimingGeneration = 0u;
-		return;
-	}
 	if (generation == 0u || generation <= _audioTimingGeneration)
 		return;
 	_audioTimingGeneration = generation;
-	if (policy == ninjam::NinjamLocalFollowPolicy::NoSync)
-		return;
 	if (deltaSamps == 0)
 		return;
 
@@ -596,30 +586,22 @@ void LoopTake::InvalidateSceneAnchors() noexcept
 			if (auto loop = weakLoop.lock()) loop->InvalidateSceneAnchor();
 	}
 	_hasMidiSceneAnchor.store(false, std::memory_order_release);
-	_hasSyncPhaseMap = false;
 }
 
-void LoopTake::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	std::int64_t sourceCoordinateAtOriginSamps) noexcept
+void LoopTake::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
-	_hasSyncPhaseMap = localMasterLengthSamps > 0ul && remoteMasterLengthSamps > 0ul;
-	_syncPhaseMapSceneOrigin = sceneCoordinateSamps;
-	_syncPhaseMapLocalMasterLength = localMasterLengthSamps;
-	_syncPhaseMapRemoteMasterLength = remoteMasterLengthSamps;
-	_syncPhaseMapSourceCoordinateAtOrigin = sourceCoordinateAtOriginSamps;
 	auto state = _AudioStateSnapshot();
 	if (state)
 		for (const auto& weakLoop : state->Loops)
 			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
 				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
-					_syncPhaseMapSourceCoordinateAtOrigin
+					sourceCoordinateSamps
 					- static_cast<long long>(loop->BodyPlayIndex()), loop->LoopLength())));
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul)
 	{
 		_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
-			_syncPhaseMapSourceCoordinateAtOrigin
+			sourceCoordinateSamps
 			- static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
 			std::memory_order_relaxed);
 		_hasMidiSceneAnchor.store(true, std::memory_order_release);
@@ -632,26 +614,8 @@ void LoopTake::ResetTimingEpoch() noexcept
 	InvalidateSceneAnchors();
 }
 
-void LoopTake::RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	std::int64_t sourceCoordinateAtOriginSamps) noexcept
+void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
-	_hasSyncPhaseMap = localMasterLengthSamps > 0ul && remoteMasterLengthSamps > 0ul;
-	_syncPhaseMapSceneOrigin = sceneCoordinateSamps;
-	_syncPhaseMapLocalMasterLength = localMasterLengthSamps;
-	_syncPhaseMapRemoteMasterLength = remoteMasterLengthSamps;
-	_syncPhaseMapSourceCoordinateAtOrigin = sourceCoordinateAtOriginSamps;
-}
-
-void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
-{
-	if (!_hasSyncPhaseMap || sceneCoordinateSamps < _syncPhaseMapSceneOrigin)
-		return;
-	const auto elapsed = sceneCoordinateSamps - _syncPhaseMapSceneOrigin;
-	const auto scaledElapsed = ninjam::MapRemoteElapsedToLocal(elapsed,
-		_syncPhaseMapLocalMasterLength, _syncPhaseMapRemoteMasterLength);
-	const auto sourceCoordinate = _syncPhaseMapSourceCoordinateAtOrigin
-		+ static_cast<std::int64_t>(scaledElapsed);
 	auto state = _AudioStateSnapshot();
 	if (state)
 		for (const auto& weakLoop : state->Loops)
@@ -661,10 +625,10 @@ void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
 				if (!loop->HasSceneAnchor())
 				{
 					loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
-						sourceCoordinate - static_cast<long long>(loop->BodyPlayIndex()), length)));
+						sourceCoordinateSamps - static_cast<long long>(loop->BodyPlayIndex()), length)));
 				}
 				loop->SetBodyPlayIndex(static_cast<unsigned long>(ninjam::PositiveModulo(
-					sourceCoordinate - static_cast<long long>(loop->SceneAnchor()), length)));
+					sourceCoordinateSamps - static_cast<long long>(loop->SceneAnchor()), length)));
 			}
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul)
@@ -672,13 +636,13 @@ void LoopTake::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
 		if (!_hasMidiSceneAnchor.load(std::memory_order_acquire))
 		{
 			_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
-				sourceCoordinate - static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
+				sourceCoordinateSamps - static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
 				std::memory_order_relaxed);
 			_hasMidiSceneAnchor.store(true, std::memory_order_release);
 		}
 		const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
 		const auto target = static_cast<unsigned long>(ninjam::PositiveModulo(
-			sourceCoordinate
+			sourceCoordinateSamps
 			- static_cast<long long>(_midiSceneAnchor.load(std::memory_order_relaxed)), midiLoopLength));
 		_MoveMidiVisualCursor(target, static_cast<long long>(target) - static_cast<long long>(before));
 	}

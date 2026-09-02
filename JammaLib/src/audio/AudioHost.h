@@ -91,6 +91,11 @@ namespace audio
 		friend class NinjamAudioBoundaryTestAccess;
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
+		std::optional<std::int64_t> RestoreMappedSourceAtScene(
+			const std::vector<std::shared_ptr<engine::Station>>* stations,
+			std::uint64_t sceneCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchorsAfterOffset(
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		static int AudioCallback(void* outBuffer,
 			void* inBuffer,
 			unsigned int numSamps,
@@ -145,8 +150,8 @@ namespace audio
 		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		ninjam::NinjamDesiredTransportState _appliedNinjamTiming{};
 		ninjam::SyncPhaseMap _syncPhaseMap;
-		bool _beginSyncPhaseMapAfterOffset = false;
-		bool _rebaseSyncPhaseMapAfterOffset = false;
+		bool _captureMappedSourceAnchorsAfterOffset = false;
+		bool _mappedSourceHandledAtCommandBoundary = false;
 		TickCallback _tickCallback;
 	};
 }

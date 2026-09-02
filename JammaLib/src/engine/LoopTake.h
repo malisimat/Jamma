@@ -18,7 +18,6 @@
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
-#include "../ninjam/NinjamAudioTimingCommand.h"
 
 using base::Audible;
 
@@ -227,29 +226,18 @@ namespace engine
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
 		void InvalidateTimingCorrections() noexcept;
-		// Applies one unified audio-boundary transport correction directly on the
-		// audio thread, before block advancement. Shifts every playable loop and
-		// the MIDI visual/anchor position by the same signed delta. Generation
-		// filtering uses an audio-thread-only counter so stale or superseded
-		// commands never move audio or MIDI state.
-		void ApplyTimingCommand(long long deltaSamps,
-			std::uint64_t generation,
-			TimingCorrectionReason reason,
-			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::ContinuousSync,
-			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
+		// Applies one accepted audio-boundary correction. Session policy has
+		// already been interpreted by AudioHost; this engine operation only keeps
+		// its generation gate and shifts each entity by the common signed delta.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
-		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			std::int64_t sourceCoordinateAtOriginSamps = 0) noexcept;
-		// Rebase the common source ruler without recapturing any loop origin.  The
-		// anchors belong to the whole follow session, not an individual remote
-		// timing observation.
-		void RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			std::int64_t sourceCoordinateAtOriginSamps) noexcept;
-		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
+		// Capture/restore use an already-mapped common source coordinate. Entity
+		// anchors and modulo lengths remain local to the take and its loops.
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
 		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
@@ -404,11 +392,6 @@ namespace engine
 		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
 		std::atomic_bool _hasMidiSceneAnchor{ false };
 		void _MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept;
-		bool _hasSyncPhaseMap = false;
-		std::uint64_t _syncPhaseMapSceneOrigin = 0u;
-		unsigned long _syncPhaseMapLocalMasterLength = 0ul;
-		unsigned long _syncPhaseMapRemoteMasterLength = 0ul;
-		std::int64_t _syncPhaseMapSourceCoordinateAtOrigin = 0;
 		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
 		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
 		long long _appliedLocalTransportOffsetSamps = 0;

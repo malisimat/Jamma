@@ -110,23 +110,15 @@ namespace engine
 			unsigned int numSamps,
 			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		// Fans one unified audio-boundary transport correction out to every local
-		// take. Audio-thread only; called once at the top of the callback block.
-		void ApplyTimingCommand(long long deltaSamps,
-			std::uint64_t generation,
-			LoopTake::TimingCorrectionReason reason,
-			ninjam::NinjamLocalFollowPolicy policy = ninjam::NinjamLocalFollowPolicy::ContinuousSync,
-			std::uint64_t sceneCoordinateSamps = 0u) noexcept;
+		// Fans one policy-neutral accepted correction out to every local take.
+		// Audio-thread only; called once at the top of the callback block.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
-		void BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			std::int64_t sourceCoordinateAtOriginSamps = 0) noexcept;
-		void RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-			unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-			std::int64_t sourceCoordinateAtOriginSamps) noexcept;
-		void RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,

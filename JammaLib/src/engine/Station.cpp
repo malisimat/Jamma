@@ -726,19 +726,15 @@ void Station::EndMultiPlay(unsigned int numSamps)
 	}
 }
 
-void Station::ApplyTimingCommand(long long deltaSamps,
-	std::uint64_t generation,
-	LoopTake::TimingCorrectionReason reason,
-	ninjam::NinjamLocalFollowPolicy policy,
-	std::uint64_t sceneCoordinateSamps) noexcept
+void Station::ApplyAcceptedTimingCorrection(long long deltaSamps,
+	std::uint64_t generation) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
 
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->ApplyTimingCommand(deltaSamps, generation, reason,
-			policy, sceneCoordinateSamps);
+		if (auto take = weakTake.lock()) take->ApplyAcceptedTimingCorrection(deltaSamps, generation);
 }
 
 void Station::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
@@ -770,37 +766,22 @@ void Station::ResetTimingEpoch() noexcept
 		if (auto take = weakTake.lock()) take->ResetTimingEpoch();
 }
 
-void Station::BeginSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	std::int64_t sourceCoordinateAtOriginSamps) noexcept
+void Station::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->BeginSyncPhaseMap(sceneCoordinateSamps,
-			localMasterLengthSamps, remoteMasterLengthSamps, sourceCoordinateAtOriginSamps);
+		if (auto take = weakTake.lock()) take->CaptureMappedSourceAnchors(sourceCoordinateSamps);
 }
 
-void Station::RebaseSyncPhaseMap(std::uint64_t sceneCoordinateSamps,
-	unsigned long localMasterLengthSamps, unsigned long remoteMasterLengthSamps,
-	std::int64_t sourceCoordinateAtOriginSamps) noexcept
+void Station::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
 {
 	auto state = _AudioStateSnapshot();
 	if (!state)
 		return;
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->RebaseSyncPhaseMap(sceneCoordinateSamps,
-			localMasterLengthSamps, remoteMasterLengthSamps, sourceCoordinateAtOriginSamps);
-}
-
-void Station::RestoreSyncPhaseMap(std::uint64_t sceneCoordinateSamps) noexcept
-{
-	auto state = _AudioStateSnapshot();
-	if (!state)
-		return;
-	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->RestoreSyncPhaseMap(sceneCoordinateSamps);
+		if (auto take = weakTake.lock()) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps);
 }
 
 void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
