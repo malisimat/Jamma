@@ -524,6 +524,12 @@ void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
 	if (deltaSamps == 0)
 		return;
 
+	if (_ShiftDirectPlaybackCursors(deltaSamps))
+		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
+{
 	auto state = _AudioStateSnapshot();
 	bool moved = false;
 	if (state)
@@ -549,8 +555,7 @@ void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
 		_MoveMidiVisualCursor(static_cast<unsigned long>(shifted), deltaSamps);
 		moved = true;
 	}
-	if (moved)
-		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+	return moved;
 }
 
 void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
@@ -713,33 +718,7 @@ void LoopTake::_TryApplyLocalTransportOffset() noexcept
 	if (deltaSamps == 0)
 		return;
 
-	auto state = _AudioStateSnapshot();
-	bool moved = false;
-	if (state)
-	{
-		for (const auto& weakLoop : state->Loops)
-		{
-			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
-			{
-				loop->ShiftPlayIndex(deltaSamps);
-				moved = true;
-			}
-		}
-	}
-
-	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
-	if (midiLoopLength > 0ul)
-	{
-		const auto length = static_cast<long long>(midiLoopLength);
-		auto shifted = (static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
-			+ (deltaSamps % length)) % length;
-		if (shifted < 0)
-			shifted += length;
-		_MoveMidiVisualCursor(static_cast<unsigned long>(shifted), deltaSamps);
-		moved = true;
-	}
-
-	if (moved)
+	if (_ShiftDirectPlaybackCursors(deltaSamps))
 		_appliedLocalTransportOffsetSamps = targetSamps;
 }
 

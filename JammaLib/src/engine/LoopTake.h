@@ -334,6 +334,7 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		bool _ShiftDirectPlaybackCursors(long long deltaSamps) noexcept;
 		void _TryApplyLocalTransportOffset() noexcept;
 		static long long _OffsetDelta(long long targetSamps, long long appliedSamps) noexcept;
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
