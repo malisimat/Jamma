@@ -168,6 +168,8 @@ Phase 1 status: **human gate accepted** in [`decisions.md`](decisions.md). Phase
 
 The B012 pending status above is superseded by independent approval `e80dbdb717e535be23dc2ca3c8616b2a3de61f24`, which repeated the wrapped build, prerequisite, exact focused 50/50, disconnected/`NoSync`, full 834-test suite, and static/diff audits at clean canonical `a2d2689e4e4dcb399ea7de50fc0971b11ae1e863`. B013 may begin under the sequential gate.
 
+B013 characterization `3fbb0122a5b73eff2a315a5b4a6c6e65c40f8dfb` truthfully failed its three new proposal-authority tests before implementation. At `ee5e574465c697b539f120a4cb144f6c1b0206da`, the one value-level proposal identity is used by Coordinator and Scene, remote BPI is mandatory without a local-deduction fallback, and disconnected local Quantiser inference is unchanged. The prerequisite-plus-new contract passed 5/5, the exact focused timing filter passed 68/68, and the full suite passed 836/837 with only the expected hardware MIDI skip. Status: implemented and verified, pending independent `batch-reviews/B013.md`; B014 remains gated.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.

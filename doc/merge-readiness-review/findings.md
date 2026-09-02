@@ -475,6 +475,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote geometry identity remains distinct from remote phase/observation and prompt lifecycle.
 - Verification: same geometry with new phase/sample keeps the prompt; changes to interval/rate/grid/BPI/BPM replace it; disconnect/reconnect clears it; one comparison remains.
 - Human decision: accepted; implement in the existing owner without adding a class ([decision](decisions.md#small-simplifications)).
+- Phase 4 execution: B013 characterization `3fbb012` failed all three new tests as expected under the duplicate comparison/update paths. Implementation `ee5e574` places the one proposal-identity comparison on `NinjamTempoChange`; Coordinator and Scene both use it, unchanged identity refreshes only phase/sample observation fields, and every material interval/rate/grain/BPI/BPM change replaces pending or ignored proposal state. Prerequisites and the final five-test contract passed 5/5; the exact focused filter passed 68/68; and the full suite passed 836/837 with only the expected hardware MIDI skip. Static audit finds no second `_SameTempo` implementation or manual Scene field comparison and no new class. Status: implemented and verified; independent B013 review is pending.
 
 ## F-037 â€” Delete the uncompiled obsolete remote-phase test suite
 
@@ -604,6 +605,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: remote BPI/grid authority and local seed deduction remain distinct.
 - Verification: complete plausible BPI accepted; absent BPI changes no authority; retired fallback audit; supplied server BPI is never overwritten.
 - Human decision: accepted; full BPI is mandatory for remote authority, while disconnected local BPI is inferred by pure local master-length/grain calculations ([decision](decisions.md#finding-details)).
+- Phase 4 execution: B013 characterization `3fbb012` proved that the prior fallback let a BPI-zero observation create prompt/desired authority and mask a later authoritative BPI. Implementation `ee5e574` makes BPI-zero proposal creation fail before tracker, diagnostics, prompt, grid, or desired-authority mutation and deletes the coordinator's remote local-deduction fallback. A subsequent complete observation retains the supplied server BPI. `Quantiser.cpp` is unchanged and the existing disconnected local master/grain inference remains separate. The final five-test contract passed 5/5, focused timing coverage passed 68/68, and the full suite passed 836/837 with one expected hardware MIDI skip. Status: implemented and verified; independent B013 review is pending.
 
 ## F-047 â€” Correlate timing rejection, desired authority, and audio application
 
