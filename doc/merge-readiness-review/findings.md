@@ -339,6 +339,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: connection availability, remote session authority, follow policy, sync map, and generation remain distinct.
 - Verification: cable/server loss, retry failure/backoff/success, manual disconnect during retry, exactly-once invalidation, fresh epoch/generation, remote-station cleanup, and local free-run.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `0fcf7c4` publishes job-owned physical availability and a runtime-only Session epoch, routes loss through one edge-triggered coordinator `NoSync`, clears the job-owned remote tuple/snapshot and pending Controller snapshot, and forwards an empty remote-station update. Persisted/default starts now prepare the same existing coordinator lifecycle as interactive starts. `4e99584` forces an unavailable edge before replacement sessions so an immediately successful replacement cannot reuse an epoch. P7 passes the unavailable/retry/fresh-epoch contract; the focused B005 filter passes. Live cable/server retry and runtime `.jam` launch remain Stage 21 evidence.
 
 ## F-028 — Recover explicitly from invalid/absent timing and tick deadlines without observations
 
@@ -351,6 +352,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Protected timing concepts affected: request/acknowledgement, validity, follow policy, and remote authority remain distinct.
 - Verification: no-observation timeout/retry exhaustion; valid→invalid→valid; malformed/zero interval/rate/BPM/BPI; one invalidation per loss edge; reconnect recovery.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 execution: `0fcf7c4` adds an observation-independent coordinator tick, shares tempo-request expiry with the observation path, and centralizes one idempotent `NoSync` transition for physical loss, invalid timing, and observation deadline. P8 passes deadline, repeated-tick, valid→invalid→repeated-invalid→valid recovery expectations; the focused coordinator/timing suite passes. Socket-connected timing loss remains a Stage 21 live scenario.
 
 ## F-029 — Widen Timer absolute arithmetic before projecting long-session observations
 
@@ -517,6 +519,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1�
 - Verification: P7–P9: exactly-once loss invalidation/fresh epoch, no-observation deadline, repeated-invalid idempotence, controlled stop-during-consume; follow with sanitizer/page-heap/Application Verifier and manual reconnect.
 - Human decision: accepted; seams remain minimal and owned by existing session/integration classes ([decision](decisions.md#small-simplifications)).
 - Phase 4 execution: B001 registered P9 in the native test project/filter at `9b46803ea4bf37f0bb7b3488128da02f1ef4546b` without adding a raw-buffer test API. The existing scoped connection-use object supplies the deterministic borrow seam and passed alone before production movement. B001 closes the buffer-borrow portion of F-041; P7/P8 and physical lifecycle evidence remain owned by B005.
+- Phase 4 B005 execution: `86dbc2c` registers P7 in a focused Session timing test and adds P8 to the existing coordinator suite. The pure `AdvanceTimingStatus` transition is the same transition used by production Session Pump; coordinator `Tick` exercises the production recovery path. At clean `4e99584`, P7/P8 pass 2/2 and the broader B005 filter including P9 passes 60/60. No raw connection/buffer API or callback seam was added.
 
 ## F-042 — Correct the NINJAM integration guide's timing ownership and Stay-local contract
 
