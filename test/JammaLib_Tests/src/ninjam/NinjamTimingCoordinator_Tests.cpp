@@ -19,6 +19,8 @@ namespace
 		timing.SourceSampleRate = 44100u;
 		timing.IntervalLengthSamps = length;
 		timing.IntervalPositionSamps = position;
+		timing.Bpm = 120.0f;
+		timing.Bpi = 16u;
 		timing.HasAudioBlockStartSample = true;
 		timing.AudioBlockStartSample = 0u;
 		timing.HasLocalTransport = true;
@@ -159,6 +161,130 @@ TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
 	EXPECT_EQ(4u, update.DesiredTransport->BeatsPerInterval);
 	EXPECT_EQ(19746u, update.DesiredTransport->GrainSamps);
 	EXPECT_EQ(123u, update.DesiredTransport->RemotePhaseSamps);
+}
+
+TEST(NinjamTimingCoordinator, MissingBpiCannotCreateOrMutateRemoteAuthority)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	auto missingBpi = MakeTimingTempo(480000u, 100u, 90.0f, 0u);
+	missingBpi.AudioBlockStartSample = 1000u;
+
+	const auto rejected = coordinator.Observe(missingBpi, std::nullopt, true,
+		io::UserConfig{}, clock);
+	EXPECT_FALSE(rejected.DesiredTransport.has_value());
+	EXPECT_FALSE(rejected.RemoteGrid.has_value());
+	EXPECT_FALSE(rejected.TempoRequest.has_value());
+	EXPECT_FALSE(rejected.PromptForTempoChange);
+	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
+	EXPECT_EQ(0u, coordinator.Diagnostics().CommandsEmitted);
+	EXPECT_EQ(0u, coordinator.Diagnostics().TempoProposals);
+	EXPECT_EQ(0u, coordinator.Diagnostics().ObservationsAccepted);
+
+	auto complete = MakeTimingTempo(480000u, 200u, 90.0f, 8u);
+	complete.AudioBlockStartSample = 2000u;
+	const auto accepted = coordinator.Observe(complete, std::nullopt, true,
+		io::UserConfig{}, clock);
+	EXPECT_TRUE(accepted.PromptForTempoChange);
+	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+	EXPECT_EQ(8u, coordinator.PendingTempoChange()->Bpi);
+}
+
+TEST(NinjamTimingCoordinator, ProposalIdentityRefreshesObservationButReplacesEveryMaterialField)
+{
+	struct IdentityCase
+	{
+		const char* Name;
+		unsigned int IntervalLengthSamps;
+		unsigned int DeviceSampleRate;
+		float Bpm;
+		unsigned int Bpi;
+	};
+	const IdentityCase cases[] = {
+		{ "interval", 480008u, 48000u, 90.0f, 8u },
+		{ "rate", 480000u, 44100u, 90.0f, 8u },
+		{ "bpi-and-derived-grain", 480000u, 48000u, 90.0f, 6u },
+		{ "bpm-outside-tolerance", 480000u, 48000u, 90.011f, 8u },
+	};
+
+	for (const auto& identityCase : cases)
+	{
+		SCOPED_TRACE(identityCase.Name);
+		Timer clock;
+		NinjamTimingCoordinator coordinator;
+		Connect(coordinator, true, false);
+		auto original = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+		original.DeviceSampleRate = 48000u;
+		original.AudioBlockStartSample = 1000u;
+		ASSERT_TRUE(coordinator.Observe(original, std::nullopt, true,
+			io::UserConfig{}, clock).PromptForTempoChange);
+
+		auto changed = MakeTimingTempo(identityCase.IntervalLengthSamps, 200u,
+			identityCase.Bpm, identityCase.Bpi);
+		changed.DeviceSampleRate = identityCase.DeviceSampleRate;
+		changed.AudioBlockStartSample = 2000u;
+		const auto replacement = coordinator.Observe(changed, std::nullopt, true,
+			io::UserConfig{}, clock);
+		EXPECT_TRUE(replacement.PromptForTempoChange);
+		ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+		const auto pending = coordinator.PendingTempoChange().value();
+		EXPECT_EQ(identityCase.IntervalLengthSamps, pending.IntervalLengthSamps);
+		EXPECT_EQ(identityCase.DeviceSampleRate, pending.SourceSampleRate);
+		EXPECT_FLOAT_EQ(identityCase.Bpm, pending.Bpm);
+		EXPECT_EQ(identityCase.Bpi, pending.Bpi);
+		EXPECT_EQ((static_cast<std::uint64_t>(identityCase.IntervalLengthSamps)
+			+ identityCase.Bpi / 2u) / identityCase.Bpi, pending.GrainSamps);
+		EXPECT_EQ(200u, pending.IntervalPositionSamps);
+		EXPECT_EQ(2000u, pending.AudioBlockStartSample);
+	}
+
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	auto original = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+	original.DeviceSampleRate = 48000u;
+	original.AudioBlockStartSample = 1000u;
+	ASSERT_TRUE(coordinator.Observe(original, std::nullopt, true,
+		io::UserConfig{}, clock).PromptForTempoChange);
+	auto phaseOnly = MakeTimingTempo(480000u, 321u, 90.009f, 8u);
+	phaseOnly.DeviceSampleRate = 48000u;
+	phaseOnly.AudioBlockStartSample = 4321u;
+	EXPECT_FALSE(coordinator.Observe(phaseOnly, std::nullopt, true,
+		io::UserConfig{}, clock).PromptForTempoChange);
+	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+	EXPECT_FLOAT_EQ(90.0f, coordinator.PendingTempoChange()->Bpm);
+	EXPECT_EQ(321u, coordinator.PendingTempoChange()->IntervalPositionSamps);
+	EXPECT_EQ(4321u, coordinator.PendingTempoChange()->AudioBlockStartSample);
+}
+
+TEST(NinjamTimingCoordinator, ChangedIdentityReplacesIgnoredProposalWithoutIntervalChange)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, true, false);
+	auto original = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
+	original.DeviceSampleRate = 48000u;
+	ASSERT_TRUE(coordinator.Observe(original, std::nullopt, true,
+		io::UserConfig{}, clock).PromptForTempoChange);
+	ASSERT_TRUE(coordinator.ResolveTempoChange(false, std::nullopt, clock).DesiredTransport.has_value());
+
+	auto phaseOnly = MakeTimingTempo(480000u, 200u, 90.009f, 8u);
+	phaseOnly.DeviceSampleRate = 48000u;
+	phaseOnly.AudioBlockStartSample = 2000u;
+	EXPECT_FALSE(coordinator.Observe(phaseOnly, std::nullopt, true,
+		io::UserConfig{}, clock).PromptForTempoChange);
+	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
+
+	auto changedBpi = MakeTimingTempo(480000u, 300u, 90.0f, 6u);
+	changedBpi.DeviceSampleRate = 48000u;
+	changedBpi.AudioBlockStartSample = 3000u;
+	const auto replacement = coordinator.Observe(changedBpi, std::nullopt, true,
+		io::UserConfig{}, clock);
+	EXPECT_TRUE(replacement.PromptForTempoChange);
+	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
+	EXPECT_EQ(6u, coordinator.PendingTempoChange()->Bpi);
+	EXPECT_EQ(80000u, coordinator.PendingTempoChange()->GrainSamps);
 }
 
 TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)
