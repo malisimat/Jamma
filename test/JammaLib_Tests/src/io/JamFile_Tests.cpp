@@ -273,12 +273,40 @@ TEST(JamFile, MissingPhaseOffsetsDefaultToZero) {
 	EXPECT_EQ(0, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 }
 
-TEST(JamFile, NormalizesLegacyNegativeTransportOffset) {
+TEST(JamFile, PreservesLegacySignedTransportOffset) {
 	auto str = std::string("{\"name\":\"jam\",\"transportoffsetloopfrac\":-0.25,\"stations\":[]}");
 	auto parsed = JamFile::FromStream(std::stringstream(str));
 
 	ASSERT_TRUE(parsed.has_value());
-	EXPECT_DOUBLE_EQ(0.75, parsed->TransportOffsetLoopFrac);
+	EXPECT_DOUBLE_EQ(-0.25, parsed->TransportOffsetLoopFrac);
+}
+
+TEST(JamFile, SignedTransportOffsetClampsEndpointsAndDefaultsMissingToZero) {
+	for (const auto [serialized, expected] : {
+		std::pair{ "-2", -1.0 },
+		std::pair{ "-1", -1.0 },
+		std::pair{ "-0.25", -0.25 },
+		std::pair{ "0", 0.0 },
+		std::pair{ "0.25", 0.25 },
+		std::pair{ "1", 1.0 },
+		std::pair{ "2", 1.0 } })
+	{
+		auto str = std::string("{\"name\":\"jam\",\"transportoffsetloopfrac\":")
+			+ serialized + ",\"stations\":[]}";
+		auto parsed = JamFile::FromStream(std::stringstream(str));
+		ASSERT_TRUE(parsed.has_value());
+		EXPECT_DOUBLE_EQ(expected, parsed->TransportOffsetLoopFrac);
+
+		std::stringstream output;
+		ASSERT_TRUE(JamFile::ToStream(parsed.value(), output));
+		auto roundTrip = JamFile::FromStream(std::move(output));
+		ASSERT_TRUE(roundTrip.has_value());
+		EXPECT_DOUBLE_EQ(expected, roundTrip->TransportOffsetLoopFrac);
+	}
+
+	auto missing = JamFile::FromStream(std::stringstream("{\"name\":\"jam\",\"stations\":[]}"));
+	ASSERT_TRUE(missing.has_value());
+	EXPECT_DOUBLE_EQ(0.0, missing->TransportOffsetLoopFrac);
 }
 
 TEST(JamFile, MissingMidiQuantFieldsDefaultToOffDisabledQuarter) {

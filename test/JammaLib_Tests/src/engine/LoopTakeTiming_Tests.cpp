@@ -7,6 +7,7 @@
 #include "base/AudioSink.h"
 #include "engine/Loop.h"
 #include "engine/LoopTake.h"
+#include "io/JamFile.h"
 #include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
 
@@ -258,6 +259,41 @@ TEST(TransportPhaseOffset, FractionalTargetsRestoreOriginalCursorWithoutRounding
 	EXPECT_EQ(100ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 	EXPECT_EQ(100ul, take->MidiVisualPosition());
 	EXPECT_EQ(0, take->MidiAnchorCorrection());
+}
+
+TEST(JamFile, SignedTransportOffsetPreservesM2M3MEntityPhases)
+{
+	constexpr unsigned long masterLength = 1000ul;
+	auto parsed = io::JamFile::FromStream(std::stringstream(
+		"{\"name\":\"jam\",\"transportoffsetloopfrac\":-0.25,\"stations\":[]}"));
+	ASSERT_TRUE(parsed.has_value());
+	const auto targetSamps = std::llround(parsed->TransportOffsetLoopFrac
+		* static_cast<double>(masterLength));
+
+	auto take = MakeTimingTestLoopTake("signed-persisted-local-offset");
+	for (const auto length : { masterLength, 2ul * masterLength, 3ul * masterLength, 777ul })
+	{
+		auto loop = MakeTimingLoop(length);
+		loop->ShiftPlayIndex(100);
+		take->AddLoop(loop);
+	}
+	take->CommitChanges();
+	take->SetMidiVisualPosition(100ul, 2500ul);
+	take->SetLocalTransportOffsetSamps(targetSamps);
+
+	ASSERT_EQ(4u, take->GetLoops().size());
+	EXPECT_EQ(850ul, TimingLoopBodyPosition(*take->GetLoops()[0]));
+	EXPECT_EQ(1850ul, TimingLoopBodyPosition(*take->GetLoops()[1]));
+	EXPECT_EQ(2850ul, TimingLoopBodyPosition(*take->GetLoops()[2]));
+	EXPECT_EQ(627ul, TimingLoopBodyPosition(*take->GetLoops()[3]));
+	EXPECT_EQ(2350ul, take->MidiVisualPosition());
+	EXPECT_EQ(250, take->MidiAnchorCorrection());
+
+	constexpr auto globalSample = 5000;
+	constexpr auto frozenAnchor = 2400;
+	const auto automationPosition = static_cast<unsigned long>(
+		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 2500);
+	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }
 
 TEST(TransportPhaseOffset, DirectTimingCommandRebasesMidiOnlyTake)
