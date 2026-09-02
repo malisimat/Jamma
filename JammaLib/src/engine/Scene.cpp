@@ -1301,7 +1301,6 @@ void Scene::OnTick(Time curTime,
 		clock->Tick(samps, 0u);
 	}
 
-	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
@@ -1313,14 +1312,6 @@ void Scene::OnTick(Time curTime,
 			samps,
 			_userConfig,
 			streamParams);
-
-		totalNumLoops += station->NumTakes();
-	}
-
-	if ((0u == totalNumLoops) && !_isSceneReset.load(std::memory_order_relaxed))
-	{
-		_ClearTimingState(false);
-		_isSceneReset.store(true, std::memory_order_relaxed);
 	}
 }
 
@@ -1338,8 +1329,13 @@ void Scene::OnJobTick(Time curTime)
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		bool hasLocalContent = false;
 		for (const auto& station : _stations)
-			hasLocalContent = hasLocalContent
-				|| (station && !station->IsRemote() && station->NumTakes() > 0u);
+		{
+			if (!station || station->IsRemote())
+				continue;
+			hasLocalContent = !station->GetLoopTakeSnapshot().empty();
+			if (hasLocalContent)
+				break;
+		}
 		if (pumpResult.TimingStatus.Changed)
 		{
 			_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(
@@ -1353,6 +1349,7 @@ void Scene::OnJobTick(Time curTime)
 			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
 				localTiming, hasLocalContent, *clock));
 		_LogAppliedNinjamLoopAlignment();
+		_HandleAudioLocalContentState(hasLocalContent);
 	}
 
 	actions::JobAction job;
@@ -2230,19 +2227,52 @@ void Scene::_EndBackgroundDrag()
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	_quantisation.Clear(clearTapTempo, _networkService->HasConnectedTiming());
-	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+	const auto hasConnectedTiming = _networkService->HasConnectedTiming();
+	_quantisation.Clear(clearTapTempo, hasConnectedTiming);
+	if (!hasConnectedTiming)
+		_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+}
+
+void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
+{
+	if (hasLocalContent)
+		return;
+
+	// A connected empty scene still follows the accepted remote transport. Keep
+	// the edge armed so a later physical-loss visit can clear local timing once.
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+
+	if (_isSceneReset.exchange(true, std::memory_order_relaxed))
+		return;
+
+	// No local takes remain, so there is no station hierarchy to update. Keep
+	// the destructive Quantiser cleanup on this job-owned edge and off OnTick.
+	_quantisation.Clear(false);
 }
 
 void Scene::_ResetIfEmpty()
 {
 	if (_isSceneReset.load(std::memory_order_relaxed))
 		return;
-	unsigned int total = 0u;
-	for (const auto& s : _stations)
-		total += s->NumTakes();
-	if (0u == total)
-		Reset();
+	for (const auto& station : _stations)
+	{
+		if (station && !station->IsRemote()
+			&& !station->GetLoopTakeSnapshot().empty())
+		{
+			return;
+		}
+	}
+
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+	Reset();
 }
 
 void Scene::_JobLoop()
