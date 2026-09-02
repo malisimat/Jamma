@@ -382,6 +382,10 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	}
 	if (old)
 		old->Disconnect();
+	// A replacement connection is a distinct physical session even if it reaches
+	// NJC_STATUS_OK before the job thread observes an intermediate unavailable
+	// state. Publish that edge first so the next success receives a fresh epoch.
+	_forceUnavailableEdge.store(true, std::memory_order_release);
 
 	if (config.Host.empty() || config.User.empty())
 		return;
@@ -460,6 +464,13 @@ NinjamSessionTimingStatus NinjamSession::AdvanceTimingStatus(
 NinjamSessionPumpResult NinjamSession::Pump()
 {
 	NinjamSessionPumpResult result;
+	if (_forceUnavailableEdge.exchange(false, std::memory_order_acq_rel))
+	{
+		_timingStatus = AdvanceTimingStatus(_timingStatus, false);
+		result.TimingStatus = _timingStatus;
+		if (_timingStatus.Changed)
+			return result;
+	}
 	NinjamConnectionUse conn(*this);
 	if (!conn)
 	{

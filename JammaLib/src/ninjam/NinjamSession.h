@@ -171,6 +171,7 @@ namespace ninjam
 		std::atomic_uint _audioNumOutputChannels{ 0u };
 		std::atomic_uint _audioInLatencySamps{ 0u };
 		std::atomic_uint _audioOutLatencySamps{ 0u };
+		std::atomic_bool _forceUnavailableEdge{ false };
 		NinjamSessionTimingStatus _timingStatus;
 	};
 
