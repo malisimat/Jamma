@@ -170,6 +170,8 @@ The B012 pending status above is superseded by independent approval `e80dbdb717e
 
 B013 characterization `3fbb0122a5b73eff2a315a5b4a6c6e65c40f8dfb` truthfully failed its three new proposal-authority tests before implementation. At `ee5e574465c697b539f120a4cb144f6c1b0206da`, the one value-level proposal identity is used by Coordinator and Scene, remote BPI is mandatory without a local-deduction fallback, and disconnected local Quantiser inference is unchanged. The prerequisite-plus-new contract passed 5/5, the exact focused timing filter passed 68/68, and the full suite passed 836/837 with only the expected hardware MIDI skip. Status: implemented and verified, pending independent `batch-reviews/B013.md`; B014 remains gated.
 
+The B013 pending status above is superseded by independent approval `2d3836b3f5e0602ea65695043345b21e76b33b5f`, which repeated the wrapped build, prerequisites 2/2, new tests 3/3, exact focused filter 68/68, and full 837-test suite at clean canonical `46ee7e4499c37756711f5374983032ff2b419971`. B013 is implemented, verified, and independently approved; B014 may begin under the sequential gate. Live prompt/grid/local-inference traces and final Release/tooling/audit work remain Stage 21.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
