@@ -198,6 +198,22 @@ TEST(ExternalPhaseCorrection, QueuedEventsAccumulateAndConsumeExactlyOnce)
 	EXPECT_EQ(135ul, TimingLoopBodyPosition(*take->GetLoops().front()));
 }
 
+TEST(ExternalPhaseCorrection, QueuedLocalCorrectionSurvivesNinjamEpochReset)
+{
+	auto take = MakePlayingTimingTake("queued-local-across-ninjam-epoch", 1000ul, 100ul);
+	take->QueueTimingCorrection(200, 3u, LoopTake::TimingCorrectionReason::PhaseDiscipline);
+
+	// This reset belongs only to the direct NINJAM desired-state consumer. The
+	// separate queued local correction remains pending for normal block consume.
+	take->ResetTimingEpoch();
+	take->EndMultiPlay(0u);
+
+	EXPECT_EQ(300ul, TimingLoopBodyPosition(*take->GetLoops().front()));
+	EXPECT_EQ(300ul, take->MidiVisualPosition());
+	EXPECT_EQ(-200, take->MidiAnchorCorrection());
+	EXPECT_EQ(1u, take->ConsumedExternalPhaseCorrectionCount());
+}
+
 TEST(TransportPhaseOffset, AppliesOnceAndZeroingAppliesExactInverse)
 {
 	auto take = MakePlayingTimingTake("transport-offset", 1000ul, 100ul);
