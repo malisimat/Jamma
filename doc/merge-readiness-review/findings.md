@@ -456,6 +456,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: per-loop audio phase, MIDI event cursor, and automation origin remain distinct values moved by one common correction.
 - Verification: positive/negative/zero delta; unequal audio lengths; MIDI-only/audio-only/empty takes; automation correction sign; local-offset accounting; reconnect/`NoSync` no-call; queued behavior unchanged.
 - Human decision: accepted; keep the simplification surgical and leave the queued path unchanged ([decision](decisions.md#small-simplifications)).
+- Phase 4 implementation: passing-first tests `64ff124` and production extraction `9b81a23` add one private `noexcept` direct-cursor helper with exactly two call sites. The accepted timing-correction caller retains generation and consumption accounting, the local-offset caller retains target accounting, and the queued `EndMultiPlay` path is unchanged. The named prerequisites passed before edits; characterization passed 6/6; final direct/queued coverage passed 27/27; and the full native suite passed 830/831 with only the expected hardware MIDI skip. Independent B010 review is pending, so B011 remains gated.
 
 ## F-036 â€” Centralize remote-tempo proposal identity
 
