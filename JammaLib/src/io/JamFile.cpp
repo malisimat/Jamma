@@ -221,7 +221,8 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			break;
 		}
 
-		jam.TransportOffsetLoopFrac = utils::NormalizeLoopFraction(parsed);
+		jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
+			std::clamp(parsed, -1.0, 1.0) : 0.0;
 	}
 
 	std::string quantiseStr = "";
@@ -403,7 +404,9 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
 	ss << kvStr("globalmidiquantstate", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
 	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
-	ss << kvDouble("transportoffsetloopfrac", utils::NormalizeLoopFraction(jam.TransportOffsetLoopFrac)) << ",";
+	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
+		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
+	ss << kvDouble("transportoffsetloopfrac", transportOffsetLoopFrac) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
 		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";

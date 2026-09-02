@@ -1464,7 +1464,9 @@ void Station::SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) n
 
 void Station::SetTransportOffsetLoopFrac(double loopFrac) noexcept
 {
-	_transportOffsetLoopFrac.store(utils::NormalizeLoopFraction(loopFrac),
+	const auto signedLoopFrac = std::isfinite(loopFrac) ?
+		std::clamp(loopFrac, -1.0, 1.0) : 0.0;
+	_transportOffsetLoopFrac.store(signedLoopFrac,
 		std::memory_order_release);
 }
 

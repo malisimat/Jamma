@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -175,7 +176,7 @@ Scene::Scene(SceneParams params,
 		static_cast<float>(transportOffsetParams.Position.Y),
 		0.0f };
 	transportOffsetParams.Size = { 96, 64 };
-	transportOffsetParams.Min = 0.0;
+	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
 	transportOffsetParams.Step = 0.005;
 	transportOffsetParams.Decimals = 3;
@@ -2151,7 +2152,7 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 
 void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 {
-	loopFrac = utils::NormalizeLoopFraction(loopFrac);
+	loopFrac = std::isfinite(loopFrac) ? std::clamp(loopFrac, -1.0, 1.0) : 0.0;
 	const auto previousLoopFrac = _transportOffsetLoopFrac;
 	_transportOffsetLoopFrac = loopFrac;
 
