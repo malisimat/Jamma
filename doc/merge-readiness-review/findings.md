@@ -250,6 +250,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Verification: incremental build; normal/verbose logging; focused remote-join/local-loop regression.
 - Phase 2 enrichment: S08-02 separates this dead subset from live callback-reachable logging. F-034 owns removal of callback logging and off-thread bounded diagnostics; F-019 remains the narrow dead-receipt deletion.
 - Human decision: accepted with retained, configuration-gated timing logging and zero disabled-path cost ([decision](decisions.md#05---history)).
+- Phase 4 B014 execution: characterization `6312b886` failed to compile as expected against the intentionally absent API and changed no production file. Under amendment `483c5d4`, implementation `058c486` removes the unwritten LoopTake receipt and its unreachable Station branch together with the superseded hierarchy diagnostic path. The retained AudioHost applied receipt is the coherent value consumed for bounded Coordinator correlation. Five diagnostic tests and the 40-test timing regression filter pass after refreshing stale dependent test objects. Status: implemented and verified, pending independent B014 review; no live logging trace is claimed.
 
 ## F-020 â€” Remove ten unregistered coloured trigger-back textures if HUD is retained
 
@@ -450,6 +451,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: diagnostic mirrors only; operational timing authority remains unchanged.
 - Verification: static callback call-chain proving no formatter/I/O/hierarchy traversal; disabled instrumentation or disassembly proves zero work; bounded enabled capture tests capacity/overflow and epoch/version correlation; normal/verbose empty/populated join, record/overdub, `Stay local`, disconnect, reconnect, and logging-on/off phase equivalence.
 - Human decision: accepted ([decision](decisions.md#findings)).
+- Phase 4 B014 execution: `058c486` removes Scene/Station callback hierarchy logging and before-state capture. The Coordinator alone owns a fixed 32-event ledger, overflow and per-reason counters, and deduplicated desired/applied lag transitions; disabled capture returns before any diagnostic work. NetworkService contains only the two human-approved mutex-serialized forwarding operations, while Scene performs verbose-only presentation on its job path. P10 plus four added contracts pass 5/5 and the final exact timing filter passes 40/40. Static review found no callback formatter, I/O, hierarchy traversal, dead receipt, or second diagnostic owner. Full-suite and live normal/verbose trace evidence remain pending; status is implemented and verified pending independent B014 review.
 
 ## F-035 â€” Consolidate direct LoopTake audio/MIDI cursor shifting
 
@@ -621,6 +623,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Verification: table tests for each rejection reason/counter; two-session epoch correlation; geometry/discipline/`NoSync` desired-applied traces; one bounded lag warning that clears on application; manual loss/retry trace.
 - Human decision: accepted, provided correlation/diagnostics remain bounded and surgically reuse existing owners ([decision](decisions.md#small-simplifications)).
 - Phase 4 B006+B007 execution: the epoch/version portion lands in `f1e0df1`/`da0db24`: every complete desired state carries session epoch, publication version, and generation, while the audio-side coherent receipt records applied epoch/version/generation/intent/policy. P1â€“P3 verify desired-versus-applied correlation and stale/equal rejection. Rejection-reason counters, bounded anomaly/lag reporting, and manual loss/retry traces remain explicitly owned by B014/Stage 21 and are not claimed here.
+- Phase 4 B014 execution: `058c486` completes the diagnostics portion with bounded all-reason counters and a fixed 32-event record correlated by session epoch, desired version, applied epoch/version, and generation. Lag and caught-up transitions are deduplicated across two-session coverage, and safety-limit/tracker-backward rejection reasons are explicit. Automated diagnostics passed 5/5 and the broader timing filter passed 40/40 after a required stale-object Rebuild. Live loss/retry and normal/verbose traces remain Stage 21 evidence; independent B014 review is pending.
 
 ## F-048 â€” Bound seed-timing policy before Windows integer conversion
 
