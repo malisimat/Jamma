@@ -163,7 +163,7 @@ namespace audio
 		_ninjamDesiredTimingMailbox.Publish(desired);
 	}
 
-std::optional<NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredTiming() const noexcept
+std::optional<ninjam::NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredTiming() const noexcept
 {
 	for (auto attempt = 0u; attempt < 2u; ++attempt)
 	{
@@ -171,7 +171,7 @@ std::optional<NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredTiming() 
 		if (before == 0u || (before & 1u) != 0u)
 			return std::nullopt;
 
-		const NinjamDesiredTimingReceipt receipt{
+		const ninjam::NinjamDesiredTimingReceipt receipt{
 			_lastAppliedDesiredVersion.load(std::memory_order_relaxed),
 			_lastAppliedSessionEpoch.load(std::memory_order_relaxed),
 			_lastAppliedDesiredGeneration.load(std::memory_order_relaxed),

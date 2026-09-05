@@ -663,32 +663,6 @@ void LoopTake::_MoveMidiVisualCursor(unsigned long target, long long translation
 		std::memory_order_relaxed);
 }
 
-std::optional<LoopTake::AlignmentReceipt> LoopTake::LastAlignmentReceipt() const noexcept
-{
-	for (auto attempt = 0u; attempt < 2u; ++attempt)
-	{
-		const auto before = _alignmentReceiptSequence.load(std::memory_order_acquire);
-		if (before == 0u || (before & 1u) != 0u)
-			return std::nullopt;
-		const AlignmentReceipt receipt{
-			before,
-			_alignmentReceiptGeneration.load(std::memory_order_relaxed),
-			_alignmentReceiptSceneCoordinate.load(std::memory_order_relaxed),
-			_alignmentReceiptDelta.load(std::memory_order_relaxed),
-			_alignmentReceiptAudioLoopCount.load(std::memory_order_relaxed),
-			_alignmentReceiptMidiLoopCount.load(std::memory_order_relaxed),
-			_alignmentReceiptMaxResidual.load(std::memory_order_relaxed),
-			_alignmentReceiptCapturedMidiAnchor.load(std::memory_order_relaxed),
-			_alignmentReceiptRestoredMidiCursor.load(std::memory_order_relaxed),
-			_alignmentReceiptMidiEventPhaseResidual.load(std::memory_order_relaxed),
-			_alignmentReceiptMidiAutomationPhaseResidual.load(std::memory_order_relaxed)
-		};
-		if (before == _alignmentReceiptSequence.load(std::memory_order_acquire))
-			return receipt;
-	}
-	return std::nullopt;
-}
-
 void LoopTake::SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept
 {
 	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);

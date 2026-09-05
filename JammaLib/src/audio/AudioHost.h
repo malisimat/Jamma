@@ -23,17 +23,6 @@ namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
 
-	struct NinjamDesiredTimingReceipt
-	{
-		std::uint64_t Version = 0u;
-		std::uint64_t SessionEpoch = 0u;
-		std::uint64_t Generation = 0u;
-		ninjam::NinjamDesiredTimingIntent Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
-		ninjam::NinjamLocalFollowPolicy Policy = ninjam::NinjamLocalFollowPolicy::NoSync;
-		std::uint64_t SceneCoordinateSamps = 0u;
-		long long DeltaSamps = 0;
-	};
-
 	class AudioHost
 	{
 	public:
@@ -71,7 +60,7 @@ namespace audio
 			return _ninjamTimingMailbox.ReadLatest();
 		}
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
-		std::optional<NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
+		std::optional<ninjam::NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.

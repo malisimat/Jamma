@@ -228,6 +228,19 @@ namespace ninjam
 		return _timingCoordinator.RequestState();
 	}
 
+	void NinjamNetworkService::SetTimingDiagnosticsEnabled(bool enabled) noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		_timingCoordinator.SetDiagnosticsCaptureEnabled(enabled);
+	}
+
+	NinjamTimingDiagnostics NinjamNetworkService::ObserveAppliedTimingReceipt(
+		const std::optional<NinjamDesiredTimingReceipt>& receipt) noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.ObserveAppliedTimingReceipt(receipt);
+	}
+
 	NinjamTimingDiagnostics NinjamNetworkService::TimingDiagnostics() const noexcept
 	{
 		std::scoped_lock lock(_timingMutex);

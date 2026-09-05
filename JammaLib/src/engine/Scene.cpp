@@ -266,15 +266,17 @@ void Scene::ConnectNinjam(const std::string& host,
 		_CloseRemoteTempoPrompt();
 	}
 	if (_loggingConfig.Event == "verbose")
+	{
 		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=reconnect"
 			<< " join=" << _ninjamJoinGeneration << '\n';
-	std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
-		<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
-		<< " pushLocal=" << options.PushLocalTempoOnJoin;
-	if (localTiming.has_value())
-		std::cout << " bpm=" << localTiming->Bpm << " bpi=" << localTiming->SeedCount
-			<< " interval=" << localTiming->MasterLoopSamps << " grain=" << localTiming->SeedSamps;
-	std::cout << '\n';
+		std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
+			<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
+			<< " pushLocal=" << options.PushLocalTempoOnJoin;
+		if (localTiming.has_value())
+			std::cout << " bpm=" << localTiming->Bpm << " bpi=" << localTiming->SeedCount
+				<< " interval=" << localTiming->MasterLoopSamps << " grain=" << localTiming->SeedSamps;
+		std::cout << '\n';
+	}
 	_lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 	_LogNinjamTempoJoinState();
 	_networkService->Connect(host);
@@ -391,16 +393,6 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 				<< " generation=" << desired.Generation
 				<< " observationSample=" << desired.ObservationSample << '\n';
 		}
-		if (_loggingConfig.Audio == "verbose"
-			&& desired.Intent != ninjam::NinjamDesiredTimingIntent::NoSync)
-		{
-			const char* event = desired.Intent == ninjam::NinjamDesiredTimingIntent::Replacement
-				? "ninjam-before-remote-tempo"
-				: desired.Intent == ninjam::NinjamDesiredTimingIntent::JoinAlignment
-					? "ninjam-before-join-aligned" : "ninjam-before-phase-disciplined";
-			for (const auto& station : _stations)
-				if (station && !station->IsRemote()) station->LogLocalLoopAlignment(event);
-		}
 		if (update.RemoteGrid.has_value())
 			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
 				update.RemoteGrid->OriginSamps, _stations);
@@ -447,60 +439,38 @@ void Scene::_LogNinjamTempoJoinState()
 		<< " expired=" << diagnostics.TempoRequestsExpired << '\n';
 }
 
-void Scene::_LogAppliedNinjamLoopAlignment()
+void Scene::_LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics)
 {
 	if (_loggingConfig.Event != "verbose")
 		return;
-	if (!_audioEngine)
-		return;
 
-	const auto receipt = _audioEngine->LastAppliedDesiredTiming();
-	if (!receipt.has_value() || receipt->Version == _lastLoggedNinjamDesiredVersion)
-		return;
+	const auto present = [this](const ninjam::NinjamTimingDiagnosticEvent& event)
+	{
+		std::cout << "[NINJAM][TimingDiagnostic] reason="
+			<< ninjam::NinjamTimingCoordinator::DiagnosticReasonName(event.Reason)
+			<< " sessionEpoch=" << event.SessionEpoch
+			<< " appliedSessionEpoch=" << event.AppliedSessionEpoch
+			<< " desiredVersion=" << event.DesiredVersion
+			<< " appliedVersion=" << event.AppliedVersion
+			<< " generation=" << event.Generation
+			<< " value=" << event.ValueSamps
+			<< " limit=" << event.LimitSamps << '\n';
+		_lastPresentedNinjamDiagnosticSequence = event.Sequence;
+	};
 
-	_lastLoggedNinjamDesiredVersion = receipt->Version;
-	const auto policyName = ninjam::NinjamTimingCoordinator::FollowPolicyName(receipt->Policy);
-	if (receipt->Policy != _lastLoggedNinjamFollowPolicy)
+	for (auto eventIndex = 0u; eventIndex < diagnostics.CapturedEventCount; ++eventIndex)
 	{
-		std::cout << "[NINJAM][TimingPolicy] changed from="
-			<< ninjam::NinjamTimingCoordinator::FollowPolicyName(_lastLoggedNinjamFollowPolicy)
-			<< " to=" << policyName
-			<< " generation=" << receipt->Generation
-			<< " scene=" << receipt->SceneCoordinateSamps << '\n';
-		_lastLoggedNinjamFollowPolicy = receipt->Policy;
+		const auto& event = diagnostics.Events[eventIndex];
+		if (event.Sequence > _lastPresentedNinjamDiagnosticSequence)
+			present(event);
 	}
-	const char* event = nullptr;
-	switch (receipt->Intent)
+	if (diagnostics.LatestEvent.Sequence > _lastPresentedNinjamDiagnosticSequence)
+		present(diagnostics.LatestEvent);
+	if (diagnostics.EventOverflowCount > _lastPresentedNinjamDiagnosticOverflowCount)
 	{
-	case ninjam::NinjamDesiredTimingIntent::Replacement:
-		event = "ninjam-remote-tempo-applied";
-		break;
-	case ninjam::NinjamDesiredTimingIntent::JoinAlignment:
-		event = "ninjam-join-aligned";
-		break;
-	case ninjam::NinjamDesiredTimingIntent::PhaseDiscipline:
-		if (receipt->Policy != ninjam::NinjamLocalFollowPolicy::NoSync)
-			event = "ninjam-phase-disciplined";
-		break;
-	case ninjam::NinjamDesiredTimingIntent::NoSync:
-		event = "ninjam-follow-policy-cleared";
-		break;
-	default:
-		break;
-	}
-	if (!event)
-		return;
-	std::cout << "[NINJAM][TempoJoin] Local loop alignment snapshot: event=" << event
-		<< " generation=" << receipt->Generation
-		<< " desiredVersion=" << receipt->Version
-		<< " sessionEpoch=" << receipt->SessionEpoch
-		<< " policy=" << policyName
-		<< " scene=" << receipt->SceneCoordinateSamps
-		<< " delta=" << receipt->DeltaSamps << '\n';
-	for (const auto& station : _stations)
-	{
-		if (station && !station->IsRemote())
-			station->LogLocalLoopAlignment(event);
+		std::cout << "[NINJAM][TimingDiagnostic] overflow="
+			<< diagnostics.EventOverflowCount << '\n';
+		_lastPresentedNinjamDiagnosticOverflowCount = diagnostics.EventOverflowCount;
 	}
 }
 
@@ -1344,7 +1314,11 @@ void Scene::OnJobTick(Time curTime)
 		else if (auto clock = _quantisation.Clock())
 			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
 				localTiming, hasLocalContent, *clock));
-		_LogAppliedNinjamLoopAlignment();
+		if (_loggingConfig.Event == "verbose" && _audioEngine)
+		{
+			_LogNinjamTimingDiagnostics(_networkService->ObserveAppliedTimingReceipt(
+				_audioEngine->LastAppliedDesiredTiming()));
+		}
 		_HandleAudioLocalContentState(hasLocalContent);
 	}
 
@@ -1556,6 +1530,8 @@ void Scene::InitAudio()
 void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
+	if (_networkService)
+		_networkService->SetTimingDiagnosticsEnabled(_loggingConfig.Event == "verbose");
 	if (_inputSubsystem)
 		_inputSubsystem->SetLogging(_loggingConfig);
 	if (_windowSubsystem)

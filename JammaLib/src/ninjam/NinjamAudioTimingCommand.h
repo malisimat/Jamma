@@ -44,6 +44,20 @@ namespace ninjam
 		std::uint64_t ObservationSample = 0u;
 	};
 
+	// Coherent audio-boundary acknowledgement of the latest complete desired
+	// transport value. AudioHost publishes this existing receipt without logging;
+	// the job owner may correlate it with desired state off the callback.
+	struct NinjamDesiredTimingReceipt
+	{
+		std::uint64_t Version = 0u;
+		std::uint64_t SessionEpoch = 0u;
+		std::uint64_t Generation = 0u;
+		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
+		NinjamLocalFollowPolicy Policy = NinjamLocalFollowPolicy::NoSync;
+		std::uint64_t SceneCoordinateSamps = 0u;
+		long long DeltaSamps = 0;
+	};
+
 	// The integration owner is the sole writer and the audio callback is the sole
 	// reader. AudioHost compares the complete latest value with its applied value.
 	class NinjamDesiredTransportStateMailbox

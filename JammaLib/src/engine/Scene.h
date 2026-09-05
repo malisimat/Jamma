@@ -330,7 +330,7 @@ namespace engine
 			const std::optional<engine::QuantisationTiming>& localTiming,
 			bool hasLocalContent);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
-		void _LogAppliedNinjamLoopAlignment();
+		void _LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics);
 		void _LogNinjamTempoJoinState();
 		void _EnsureRemoteTempoPromptUi();
 		void _OpenRemoteTempoPromptIfNeeded();
@@ -377,8 +377,8 @@ namespace engine
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
-		std::uint64_t _lastLoggedNinjamDesiredVersion = 0u;
-		ninjam::NinjamLocalFollowPolicy _lastLoggedNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		std::uint64_t _lastPresentedNinjamDiagnosticSequence = 0u;
+		std::uint64_t _lastPresentedNinjamDiagnosticOverflowCount = 0u;
 		std::uint64_t _ninjamJoinGeneration = 0u;
 		std::uint64_t _ninjamTempoRequestId = 0u;
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;

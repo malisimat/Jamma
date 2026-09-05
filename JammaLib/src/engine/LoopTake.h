@@ -89,21 +89,6 @@ namespace engine
 			Invalidation
 		};
 
-		struct AlignmentReceipt
-		{
-			std::uint64_t Sequence = 0u;
-			std::uint64_t Generation = 0u;
-			std::uint64_t SceneCoordinateSamps = 0u;
-			long long DeltaSamps = 0;
-			std::uint64_t AudioLoopCount = 0u;
-			std::uint64_t MidiLoopCount = 0u;
-			std::uint64_t MaxResidualSamps = 0u;
-			std::uint64_t CapturedMidiAnchorSamps = 0u;
-			std::uint64_t RestoredMidiCursorSamps = 0u;
-			std::uint64_t MidiEventPhaseResidualSamps = 0u;
-			std::uint64_t MidiAutomationPhaseResidualSamps = 0u;
-		};
-
 	public:
 		LoopTake(LoopTakeParams params,
 			audio::AudioMixerParams mixerParams);
@@ -238,7 +223,6 @@ namespace engine
 		// anchors and modulo lengths remain local to the take and its loops.
 		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
 		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
-		std::optional<AlignmentReceipt> LastAlignmentReceipt() const noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
@@ -402,17 +386,6 @@ namespace engine
 		std::atomic<std::uint64_t> _timingCorrectionGeneration{ 0u };
 		std::atomic<std::uint64_t> _queuedTimingCorrectionCount{ 0u };
 		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptSequence{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptGeneration{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptSceneCoordinate{ 0u };
-		std::atomic<long long> _alignmentReceiptDelta{ 0 };
-		std::atomic<std::uint64_t> _alignmentReceiptAudioLoopCount{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptMidiLoopCount{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptMaxResidual{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptCapturedMidiAnchor{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptRestoredMidiCursor{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptMidiEventPhaseResidual{ 0u };
-		std::atomic<std::uint64_t> _alignmentReceiptMidiAutomationPhaseResidual{ 0u };
 		// Audio-thread-only generation gate for the unified audio-boundary command.
 		std::uint64_t _audioTimingGeneration{ 0u };
 		std::atomic<bool> _isPunchInActive;

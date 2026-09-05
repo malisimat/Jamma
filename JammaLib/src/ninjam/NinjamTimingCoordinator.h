@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -101,8 +102,64 @@ namespace ninjam
 		Invalidate
 	};
 
+	enum class NinjamTimingDiagnosticReason : std::uint8_t
+	{
+		ObservationDisconnected,
+		ObservationInvalid,
+		ObservationZeroInterval,
+		ObservationInvalidSampleRate,
+		ObservationInvalidTempo,
+		ObservationInvalidBpi,
+		ObservationMissingAudioBoundary,
+		ObservationMissingLocalTransport,
+		ObservationInvalidGrain,
+		TrackerImplausibleBackward,
+		SafetyLimitExceeded,
+		DesiredPublished,
+		NoSyncPublished,
+		DesiredApplied,
+		DesiredApplyLag,
+		DesiredApplyCaughtUp,
+		Count
+	};
+
+	struct NinjamTimingDiagnosticEvent
+	{
+		std::uint64_t Sequence = 0u;
+		NinjamTimingDiagnosticReason Reason = NinjamTimingDiagnosticReason::ObservationInvalid;
+		std::uint64_t SessionEpoch = 0u;
+		std::uint64_t AppliedSessionEpoch = 0u;
+		std::uint64_t DesiredVersion = 0u;
+		std::uint64_t AppliedVersion = 0u;
+		std::uint64_t Generation = 0u;
+		long long ValueSamps = 0;
+		std::uint64_t LimitSamps = 0u;
+	};
+
 	struct NinjamTimingDiagnostics
 	{
+		static constexpr std::size_t EventCapacity = 32u;
+		static constexpr std::size_t ReasonCount =
+			static_cast<std::size_t>(NinjamTimingDiagnosticReason::Count);
+
+		void SetCaptureEnabled(bool enabled) noexcept { CaptureEnabled = enabled; }
+		void Capture(NinjamTimingDiagnosticReason reason,
+			std::uint64_t sessionEpoch,
+			std::uint64_t desiredVersion,
+			std::uint64_t appliedVersion,
+			std::uint64_t generation,
+			long long valueSamps,
+			std::uint64_t limitSamps,
+			std::uint64_t appliedSessionEpoch = 0u) noexcept;
+		std::uint64_t Count(NinjamTimingDiagnosticReason reason) const noexcept;
+
+		bool CaptureEnabled = false;
+		std::uint64_t CapturedEventCount = 0u;
+		std::uint64_t EventOverflowCount = 0u;
+		std::uint64_t EventSequence = 0u;
+		std::array<std::uint64_t, ReasonCount> ReasonCounts{};
+		std::array<NinjamTimingDiagnosticEvent, EventCapacity> Events{};
+		NinjamTimingDiagnosticEvent LatestEvent{};
 		std::uint64_t ObservationsAccepted = 0u;
 		std::uint64_t ObservationsRejected = 0u;
 		std::uint64_t DuplicateObservations = 0u;
@@ -161,7 +218,11 @@ namespace ninjam
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
 		std::uint64_t SessionEpoch() const noexcept { return _sessionEpoch; }
+		void SetDiagnosticsCaptureEnabled(bool enabled) noexcept;
+		NinjamTimingDiagnostics ObserveAppliedTimingReceipt(
+			const std::optional<NinjamDesiredTimingReceipt>& receipt) noexcept;
 		NinjamTimingDiagnostics Diagnostics() const noexcept;
+		static const char* DiagnosticReasonName(NinjamTimingDiagnosticReason reason) noexcept;
 		static const char* FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept;
 		static NinjamLocalFollowPolicy SelectLocalFollowPolicy(
 			const std::optional<engine::QuantisationTiming>& localTiming,
@@ -186,6 +247,13 @@ namespace ninjam
 			bool hasLocalContent,
 			utils::Timer& clock,
 			std::chrono::steady_clock::time_point now);
+		void _CaptureDiagnostic(NinjamTimingDiagnosticReason reason,
+			std::uint64_t desiredVersion = 0u,
+			std::uint64_t appliedVersion = 0u,
+			std::uint64_t generation = 0u,
+			long long valueSamps = 0,
+			std::uint64_t limitSamps = 0u,
+			std::uint64_t appliedSessionEpoch = 0u) noexcept;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
 		std::optional<NinjamTempoChange> _pendingTempoChange;
@@ -210,6 +278,10 @@ namespace ninjam
 		std::uint64_t _sessionEpoch = 0u;
 		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
 		std::optional<std::uint64_t> _lastObservationAudioBlockStartSample;
+		std::uint64_t _lastDiagnosticAppliedSessionEpoch = 0u;
+		std::uint64_t _lastDiagnosticAppliedVersion = 0u;
+		std::uint64_t _diagnosticLagSessionEpoch = 0u;
+		std::uint64_t _diagnosticLagDesiredVersion = 0u;
 		NinjamTimingDiagnostics _diagnostics;
 	};
 }

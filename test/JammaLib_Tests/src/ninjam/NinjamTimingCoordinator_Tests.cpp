@@ -1,6 +1,10 @@
 #include "gtest/gtest.h"
+#include "ninjam/NinjamNetworkService.h"
 #include "ninjam/NinjamTimingCoordinator.h"
+#include "ninjam/NinjamSession.h"
 #include "io/UserConfig.h"
+
+#include <limits>
 
 using ninjam::NinjamTiming;
 using ninjam::NinjamTimingCoordinator;
@@ -185,6 +189,207 @@ TEST(NinjamTimingDiagnostics, DisabledIsZeroWorkAndEnabledIsBounded)
 	EXPECT_EQ(1u, diagnostics.Events.front().Sequence);
 	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
 		diagnostics.Events.back().Sequence);
+}
+
+TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
+{
+	struct RejectionCase
+	{
+		ninjam::NinjamTimingDiagnosticReason Reason;
+		NinjamTiming Timing;
+	};
+
+	auto disconnected = MakeTiming(1000u, 100u);
+	disconnected.IsConnected = false;
+	auto zeroInterval = MakeTiming(0u, 0u);
+	auto invalid = MakeTiming(1000u, 100u);
+	invalid.IsValid = false;
+	auto invalidRate = MakeTiming(1000u, 100u);
+	invalidRate.IsValid = false;
+	invalidRate.SourceSampleRate = 0u;
+	auto invalidTempo = MakeTiming(1000u, 100u);
+	invalidTempo.IsValid = false;
+	invalidTempo.Bpm = (std::numeric_limits<float>::quiet_NaN)();
+	auto invalidBpi = MakeTiming(1000u, 100u);
+	invalidBpi.IsValid = false;
+	invalidBpi.Bpi = 0u;
+	auto missingAudioBoundary = MakeTiming(1000u, 100u);
+	missingAudioBoundary.HasAudioBlockStartSample = false;
+	auto missingLocalTransport = MakeTiming(1000u, 100u);
+	missingLocalTransport.HasLocalTransport = false;
+	auto invalidGrain = MakeTiming(1u, 0u);
+	invalidGrain.Bpi = 32u;
+
+	const RejectionCase cases[] = {
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationDisconnected, disconnected },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationZeroInterval, zeroInterval },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalid, invalid },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidSampleRate, invalidRate },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidTempo, invalidTempo },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidBpi, invalidBpi },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary, missingAudioBoundary },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingLocalTransport, missingLocalTransport },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidGrain, invalidGrain },
+	};
+
+	for (const auto& rejectionCase : cases)
+	{
+		Timer clock;
+		NinjamTimingCoordinator coordinator;
+		Connect(coordinator, false, false);
+		coordinator.SetDiagnosticsCaptureEnabled(true);
+		const auto update = coordinator.Observe(rejectionCase.Timing, std::nullopt,
+			false, io::UserConfig{}, clock);
+		EXPECT_FALSE(update.DesiredTransport.has_value());
+		const auto diagnostics = coordinator.Diagnostics();
+		EXPECT_EQ(1u, diagnostics.Count(rejectionCase.Reason));
+		EXPECT_EQ(rejectionCase.Reason, diagnostics.LatestEvent.Reason);
+	}
+
+	Timer trackerClock;
+	trackerClock.SetSeedSourceLength(1000ul);
+	NinjamTimingCoordinator trackerCoordinator;
+	Connect(trackerCoordinator, false, false);
+	trackerCoordinator.SetDiagnosticsCaptureEnabled(true);
+	trackerCoordinator.Observe(MakeTiming(1000u, 800u), std::nullopt,
+		false, io::UserConfig{}, trackerClock);
+	trackerCoordinator.Observe(MakeTiming(1000u, 700u), std::nullopt,
+		false, io::UserConfig{}, trackerClock);
+	EXPECT_EQ(1u, trackerCoordinator.Diagnostics().Count(
+		ninjam::NinjamTimingDiagnosticReason::TrackerImplausibleBackward));
+
+	Timer safetyClock;
+	safetyClock.SetSeedSourceLength(10000ul);
+	NinjamTimingCoordinator safetyCoordinator;
+	Connect(safetyCoordinator, false, false);
+	safetyCoordinator.SetDiagnosticsCaptureEnabled(true);
+	safetyCoordinator.Observe(MakeTiming(10000u, 9000u), std::nullopt,
+		false, io::UserConfig{}, safetyClock);
+	safetyCoordinator.Observe(MakeTiming(10000u, 10u), std::nullopt,
+		false, io::UserConfig{}, safetyClock);
+	safetyCoordinator.Observe(MakeTiming(10000u, 9000u), std::nullopt,
+		false, io::UserConfig{}, safetyClock);
+	const auto safetyRejected = safetyCoordinator.Observe(
+		MakeTiming(10000u, 1000u, 5000u), std::nullopt,
+		false, io::UserConfig{}, safetyClock);
+	EXPECT_FALSE(safetyRejected.DesiredTransport.has_value());
+	const auto safetyDiagnostics = safetyCoordinator.Diagnostics();
+	EXPECT_EQ(1u, safetyDiagnostics.Count(
+		ninjam::NinjamTimingDiagnosticReason::SafetyLimitExceeded));
+	EXPECT_EQ(-4000, safetyDiagnostics.LatestEvent.ValueSamps);
+	EXPECT_EQ(1024u, safetyDiagnostics.LatestEvent.LimitSamps);
+}
+
+TEST(NinjamTimingDiagnostics, DesiredAppliedCorrelationIsDeduplicatedAcrossTwoSessions)
+{
+	Timer clock;
+	NinjamTimingCoordinator coordinator;
+	coordinator.SetDiagnosticsCaptureEnabled(true);
+	ninjam::NinjamTempoJoinOptions options;
+	options.PushLocalTempoOnJoin = false;
+	options.PromptBeforeApplyingRemoteTempo = false;
+
+	ninjam::NinjamSessionTimingStatus available;
+	available.IsAvailable = true;
+	available.Changed = true;
+	available.SessionEpoch = 1u;
+	const auto firstSession = coordinator.ObserveSessionStatus(available, options, std::nullopt);
+	ASSERT_TRUE(firstSession.DesiredTransport.has_value());
+	const auto firstDesired = firstSession.DesiredTransport.value();
+	coordinator.ObserveAppliedTimingReceipt(std::nullopt);
+	coordinator.ObserveAppliedTimingReceipt(std::nullopt);
+	ninjam::NinjamDesiredTimingReceipt firstReceipt;
+	firstReceipt.SessionEpoch = firstDesired.SessionEpoch;
+	firstReceipt.Version = firstDesired.Version;
+	firstReceipt.Generation = firstDesired.Generation;
+	coordinator.ObserveAppliedTimingReceipt(firstReceipt);
+	coordinator.ObserveAppliedTimingReceipt(firstReceipt);
+
+	available.SessionEpoch = 2u;
+	const auto secondSession = coordinator.ObserveSessionStatus(available, options, std::nullopt);
+	ASSERT_TRUE(secondSession.DesiredTransport.has_value());
+	const auto secondDesired = secondSession.DesiredTransport.value();
+	coordinator.ObserveAppliedTimingReceipt(firstReceipt);
+	ninjam::NinjamDesiredTimingReceipt secondReceipt;
+	secondReceipt.SessionEpoch = secondDesired.SessionEpoch;
+	secondReceipt.Version = secondDesired.Version;
+	secondReceipt.Generation = secondDesired.Generation;
+	const auto diagnostics = coordinator.ObserveAppliedTimingReceipt(secondReceipt);
+
+	EXPECT_EQ(2u, diagnostics.Count(ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag));
+	EXPECT_EQ(2u, diagnostics.Count(ninjam::NinjamTimingDiagnosticReason::DesiredApplyCaughtUp));
+	bool foundEpochOneLag = false;
+	bool foundEpochTwoLag = false;
+	bool foundStaleEpochOneReceiptAgainstEpochTwo = false;
+	for (auto eventIndex = 0u; eventIndex < diagnostics.CapturedEventCount; ++eventIndex)
+	{
+		const auto& event = diagnostics.Events[eventIndex];
+		if (event.Reason != ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag)
+			continue;
+		foundEpochOneLag = foundEpochOneLag || event.SessionEpoch == 1u;
+		foundEpochTwoLag = foundEpochTwoLag || event.SessionEpoch == 2u;
+		foundStaleEpochOneReceiptAgainstEpochTwo = foundStaleEpochOneReceiptAgainstEpochTwo
+			|| (event.SessionEpoch == 2u && event.AppliedSessionEpoch == 1u);
+	}
+	EXPECT_TRUE(foundEpochOneLag);
+	EXPECT_TRUE(foundEpochTwoLag);
+	EXPECT_TRUE(foundStaleEpochOneReceiptAgainstEpochTwo);
+	EXPECT_EQ(2u, diagnostics.LatestEvent.SessionEpoch);
+	EXPECT_EQ(2u, diagnostics.LatestEvent.AppliedSessionEpoch);
+	EXPECT_EQ(secondDesired.Version, diagnostics.LatestEvent.DesiredVersion);
+	EXPECT_EQ(secondDesired.Version, diagnostics.LatestEvent.AppliedVersion);
+}
+
+TEST(NinjamTimingDiagnostics, CaptureConfigurationDoesNotChangeDesiredPhase)
+{
+	const auto run = [](bool captureEnabled)
+	{
+		Timer clock;
+		clock.SetSeedSourceLength(1000ul);
+		NinjamTimingCoordinator coordinator;
+		Connect(coordinator, false, false);
+		coordinator.SetDiagnosticsCaptureEnabled(captureEnabled);
+		auto timing = MakeTiming(1000u, 275u, 125u);
+		timing.AudioBlockStartSample = 4000u;
+		return coordinator.Observe(timing, std::nullopt, false,
+			io::UserConfig{}, clock).DesiredTransport;
+	};
+
+	const auto disabled = run(false);
+	const auto enabled = run(true);
+	ASSERT_TRUE(disabled.has_value());
+	ASSERT_TRUE(enabled.has_value());
+	EXPECT_EQ(disabled->Version, enabled->Version);
+	EXPECT_EQ(disabled->SessionEpoch, enabled->SessionEpoch);
+	EXPECT_EQ(disabled->Generation, enabled->Generation);
+	EXPECT_EQ(disabled->Intent, enabled->Intent);
+	EXPECT_EQ(disabled->LocalFollowPolicy, enabled->LocalFollowPolicy);
+	EXPECT_EQ(disabled->IntervalLengthSamps, enabled->IntervalLengthSamps);
+	EXPECT_EQ(disabled->RemotePhaseSamps, enabled->RemotePhaseSamps);
+	EXPECT_EQ(disabled->ObservationSample, enabled->ObservationSample);
+}
+
+TEST(NinjamTimingDiagnostics, NetworkServiceSerializesConfigurationAndAppliedReceiptForwarding)
+{
+	ninjam::NinjamNetworkService service;
+	service.SetTimingDiagnosticsEnabled(true);
+	const auto connected = service.PrepareTempoSyncOnConnect(std::nullopt);
+	ASSERT_TRUE(connected.DesiredTransport.has_value());
+
+	auto diagnostics = service.ObserveAppliedTimingReceipt(std::nullopt);
+	EXPECT_EQ(1u, diagnostics.Count(ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag));
+
+	ninjam::NinjamDesiredTimingReceipt receipt;
+	receipt.SessionEpoch = connected.DesiredTransport->SessionEpoch;
+	receipt.Version = connected.DesiredTransport->Version;
+	receipt.Generation = connected.DesiredTransport->Generation;
+	diagnostics = service.ObserveAppliedTimingReceipt(receipt);
+	EXPECT_EQ(1u, diagnostics.Count(ninjam::NinjamTimingDiagnosticReason::DesiredApplyCaughtUp));
+
+	service.SetTimingDiagnosticsEnabled(false);
+	const auto sequenceBeforeDisabledForward = diagnostics.EventSequence;
+	diagnostics = service.ObserveAppliedTimingReceipt(std::nullopt);
+	EXPECT_EQ(sequenceBeforeDisabledForward, diagnostics.EventSequence);
 }
 
 TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)

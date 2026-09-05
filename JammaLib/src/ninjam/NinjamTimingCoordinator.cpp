@@ -8,6 +8,47 @@
 
 using namespace ninjam;
 
+void NinjamTimingDiagnostics::Capture(NinjamTimingDiagnosticReason reason,
+	std::uint64_t sessionEpoch, std::uint64_t desiredVersion,
+	std::uint64_t appliedVersion, std::uint64_t generation,
+	long long valueSamps, std::uint64_t limitSamps,
+	std::uint64_t appliedSessionEpoch) noexcept
+{
+	if (!CaptureEnabled)
+		return;
+
+	const auto reasonIndex = static_cast<std::size_t>(reason);
+	if (reasonIndex < ReasonCounts.size())
+		++ReasonCounts[reasonIndex];
+
+	NinjamTimingDiagnosticEvent event;
+	event.Sequence = ++EventSequence;
+	event.Reason = reason;
+	event.SessionEpoch = sessionEpoch;
+	event.AppliedSessionEpoch = appliedSessionEpoch;
+	event.DesiredVersion = desiredVersion;
+	event.AppliedVersion = appliedVersion;
+	event.Generation = generation;
+	event.ValueSamps = valueSamps;
+	event.LimitSamps = limitSamps;
+	LatestEvent = event;
+	if (CapturedEventCount < EventCapacity)
+	{
+		Events[static_cast<std::size_t>(CapturedEventCount)] = event;
+		++CapturedEventCount;
+	}
+	else
+	{
+		++EventOverflowCount;
+	}
+}
+
+std::uint64_t NinjamTimingDiagnostics::Count(NinjamTimingDiagnosticReason reason) const noexcept
+{
+	const auto reasonIndex = static_cast<std::size_t>(reason);
+	return reasonIndex < ReasonCounts.size() ? ReasonCounts[reasonIndex] : 0u;
+}
+
 NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions& options,
 	const std::optional<engine::QuantisationTiming>& localTiming) noexcept
 {
@@ -33,7 +74,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions
 	_activeFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 	_lastValidObservationAt.reset();
 	_lastObservationAudioBlockStartSample.reset();
-	_diagnostics = {};
+	_diagnosticLagSessionEpoch = 0u;
+	_diagnosticLagDesiredVersion = 0u;
 	return _PublishNoSync(NinjamNoSyncReason::Reconnect);
 }
 
@@ -117,16 +159,52 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 {
 	NinjamTimingUpdate update;
 	(void)config;
-	if (!timing.IsConnected || !timing.IsValid || timing.IntervalLengthSamps == 0u)
+	if (!timing.IsConnected)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationDisconnected);
 		return _timingValid ? _EnterNoSync(NinjamNoSyncReason::InvalidTiming) : update;
+	}
+	if (timing.IntervalLengthSamps == 0u)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationZeroInterval);
+		return _timingValid ? _EnterNoSync(NinjamNoSyncReason::InvalidTiming) : update;
+	}
+	if (!timing.IsValid)
+	{
+		const auto reason = timing.SourceSampleRate == 0u || timing.DeviceSampleRate == 0u
+			? NinjamTimingDiagnosticReason::ObservationInvalidSampleRate
+			: timing.Bpi == 0u
+				? NinjamTimingDiagnosticReason::ObservationInvalidBpi
+				: !IsValidNinjamTempo(timing.Bpm, timing.Bpi)
+					? NinjamTimingDiagnosticReason::ObservationInvalidTempo
+					: NinjamTimingDiagnosticReason::ObservationInvalid;
+		_CaptureDiagnostic(reason);
+		return _timingValid ? _EnterNoSync(NinjamNoSyncReason::InvalidTiming) : update;
+	}
 	// Remote and local phase must describe the same audio boundary. An observation
 	// without either explicit anchor is deferred; never substitute a live Timer
 	// read taken later on the job thread.
-	if (!timing.HasAudioBlockStartSample || !timing.HasLocalTransport)
+	if (!timing.HasAudioBlockStartSample)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary);
 		return update;
+	}
+	if (!timing.HasLocalTransport)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationMissingLocalTransport);
+		return update;
+	}
 	const auto proposal = _MakeProposal(timing);
 	if (!proposal.has_value())
+	{
+		const auto reason = timing.SourceSampleRate == 0u || timing.DeviceSampleRate == 0u
+			? NinjamTimingDiagnosticReason::ObservationInvalidSampleRate
+			: timing.Bpi == 0u
+				? NinjamTimingDiagnosticReason::ObservationInvalidBpi
+				: NinjamTimingDiagnosticReason::ObservationInvalidGrain;
+		_CaptureDiagnostic(reason);
 		return update;
+	}
 	const auto isFreshObservation = !_lastObservationAudioBlockStartSample.has_value()
 		|| _lastObservationAudioBlockStartSample.value() != timing.AudioBlockStartSample;
 	if (_noSyncActive && _lastNoSyncReason == NinjamNoSyncReason::ObservationDeadline
@@ -159,14 +237,26 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	// Preserve the callback-time local anchor (Timer absolute domain) so phase is
 	// compared at the observation instant rather than at job-processing time (§2.7).
 	observation.LocalSample = timing.LocalTransport.AbsoluteSamplePos;
+	const auto trackerBefore = _tracker.Diagnostics();
 	const auto event = _tracker.Observe(observation);
 	const auto trackerDiagnostics = _tracker.Diagnostics();
-	_diagnostics.ObservationsAccepted = trackerDiagnostics.ObservationsAccepted;
-	_diagnostics.ObservationsRejected = trackerDiagnostics.ObservationsRejected;
-	_diagnostics.DuplicateObservations = trackerDiagnostics.DuplicateObservations;
-	_diagnostics.GenerationChanges = trackerDiagnostics.GenerationChanges;
-	_diagnostics.WrapEvents = trackerDiagnostics.WrapEvents;
-	_diagnostics.JoinEvents = trackerDiagnostics.JoinEvents;
+	_diagnostics.ObservationsAccepted += trackerDiagnostics.ObservationsAccepted
+		- trackerBefore.ObservationsAccepted;
+	_diagnostics.ObservationsRejected += trackerDiagnostics.ObservationsRejected
+		- trackerBefore.ObservationsRejected;
+	_diagnostics.DuplicateObservations += trackerDiagnostics.DuplicateObservations
+		- trackerBefore.DuplicateObservations;
+	_diagnostics.GenerationChanges += trackerDiagnostics.GenerationChanges
+		- trackerBefore.GenerationChanges;
+	_diagnostics.WrapEvents += trackerDiagnostics.WrapEvents - trackerBefore.WrapEvents;
+	_diagnostics.JoinEvents += trackerDiagnostics.JoinEvents - trackerBefore.JoinEvents;
+	if (trackerDiagnostics.ObservationsRejected > trackerBefore.ObservationsRejected)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::TrackerImplausibleBackward,
+			_desiredVersion, _lastDiagnosticAppliedVersion, _tracker.Generation(),
+			static_cast<long long>(timing.IntervalPositionSamps),
+			timing.IntervalLengthSamps);
+	}
 	if (!event.has_value() || event->Type != NinjamTimingEventType::GenerationChanged)
 	{
 		if (_pendingTempoChange.has_value())
@@ -306,6 +396,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	if (magnitude > safetyLimit)
 	{
 		++_diagnostics.SafetyLimitRejections;
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::SafetyLimitExceeded,
+			_desiredVersion, _lastDiagnosticAppliedVersion, event->Generation,
+			delta, static_cast<std::uint64_t>(safetyLimit));
 		return update;
 	}
 	if ((delta != 0 || event->Type == NinjamTimingEventType::Wrap)
@@ -469,6 +562,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	desired.HasObservationSample = true;
 	desired.ObservationSample = change.AudioBlockStartSample;
 	update.DesiredTransport = desired;
+	_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredPublished,
+		desired.Version, _lastDiagnosticAppliedVersion, desired.Generation,
+		static_cast<long long>(desired.RemotePhaseSamps), desired.IntervalLengthSamps);
 	if (remoteGridChanged)
 	{
 		const auto origin = static_cast<std::int64_t>(change.AudioBlockStartSample)
@@ -492,6 +588,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishNoSync(NinjamNoSyncReason re
 	desired.LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 	update.DesiredTransport = desired;
 	update.NoSyncReason = reason;
+	_CaptureDiagnostic(NinjamTimingDiagnosticReason::NoSyncPublished,
+		desired.Version, _lastDiagnosticAppliedVersion, desired.Generation,
+		static_cast<long long>(reason));
 	_activeFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 	return update;
 }
@@ -535,6 +634,98 @@ NinjamTimingUpdate NinjamTimingCoordinator::ResolveTempoChange(bool accept,
 NinjamTimingDiagnostics NinjamTimingCoordinator::Diagnostics() const noexcept
 {
 	return _diagnostics;
+}
+
+void NinjamTimingCoordinator::SetDiagnosticsCaptureEnabled(bool enabled) noexcept
+{
+	_diagnostics.SetCaptureEnabled(enabled);
+	if (!enabled)
+	{
+		_diagnosticLagSessionEpoch = 0u;
+		_diagnosticLagDesiredVersion = 0u;
+	}
+}
+
+NinjamTimingDiagnostics NinjamTimingCoordinator::ObserveAppliedTimingReceipt(
+	const std::optional<NinjamDesiredTimingReceipt>& receipt) noexcept
+{
+	if (!_diagnostics.CaptureEnabled)
+		return _diagnostics;
+
+	if (receipt.has_value()
+		&& (receipt->SessionEpoch != _lastDiagnosticAppliedSessionEpoch
+			|| receipt->Version != _lastDiagnosticAppliedVersion))
+	{
+		_lastDiagnosticAppliedSessionEpoch = receipt->SessionEpoch;
+		_lastDiagnosticAppliedVersion = receipt->Version;
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredApplied,
+			_desiredVersion, receipt->Version, receipt->Generation,
+			receipt->DeltaSamps, 0u, receipt->SessionEpoch);
+	}
+
+	const auto appliedCurrentDesired = receipt.has_value()
+		&& receipt->SessionEpoch == _sessionEpoch
+		&& receipt->Version >= _desiredVersion;
+	if (_desiredVersion > 0u && !appliedCurrentDesired)
+	{
+		if (_diagnosticLagSessionEpoch != _sessionEpoch
+			|| _diagnosticLagDesiredVersion != _desiredVersion)
+		{
+			_diagnosticLagSessionEpoch = _sessionEpoch;
+			_diagnosticLagDesiredVersion = _desiredVersion;
+			_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredApplyLag,
+				_desiredVersion, receipt.has_value() ? receipt->Version : 0u,
+				_commandGeneration, 0, 0u,
+				receipt.has_value() ? receipt->SessionEpoch : 0u);
+		}
+	}
+	else if (_diagnosticLagDesiredVersion != 0u)
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredApplyCaughtUp,
+			_desiredVersion, receipt->Version, receipt->Generation,
+			receipt->DeltaSamps, 0u, receipt->SessionEpoch);
+		_diagnosticLagSessionEpoch = 0u;
+		_diagnosticLagDesiredVersion = 0u;
+	}
+
+	return _diagnostics;
+}
+
+void NinjamTimingCoordinator::_CaptureDiagnostic(NinjamTimingDiagnosticReason reason,
+	std::uint64_t desiredVersion, std::uint64_t appliedVersion,
+	std::uint64_t generation, long long valueSamps,
+	std::uint64_t limitSamps, std::uint64_t appliedSessionEpoch) noexcept
+{
+	const auto correlatedAppliedEpoch = appliedSessionEpoch != 0u
+		? appliedSessionEpoch : _lastDiagnosticAppliedSessionEpoch;
+	_diagnostics.Capture(reason, _sessionEpoch,
+		desiredVersion, appliedVersion, generation, valueSamps, limitSamps,
+		correlatedAppliedEpoch);
+}
+
+const char* NinjamTimingCoordinator::DiagnosticReasonName(
+	NinjamTimingDiagnosticReason reason) noexcept
+{
+	switch (reason)
+	{
+	case NinjamTimingDiagnosticReason::ObservationDisconnected: return "observation-disconnected";
+	case NinjamTimingDiagnosticReason::ObservationInvalid: return "observation-invalid";
+	case NinjamTimingDiagnosticReason::ObservationZeroInterval: return "observation-zero-interval";
+	case NinjamTimingDiagnosticReason::ObservationInvalidSampleRate: return "observation-invalid-sample-rate";
+	case NinjamTimingDiagnosticReason::ObservationInvalidTempo: return "observation-invalid-tempo";
+	case NinjamTimingDiagnosticReason::ObservationInvalidBpi: return "observation-invalid-bpi";
+	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary: return "observation-missing-audio-boundary";
+	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport: return "observation-missing-local-transport";
+	case NinjamTimingDiagnosticReason::ObservationInvalidGrain: return "observation-invalid-grid-step";
+	case NinjamTimingDiagnosticReason::TrackerImplausibleBackward: return "tracker-implausible-backward";
+	case NinjamTimingDiagnosticReason::SafetyLimitExceeded: return "safety-limit-exceeded";
+	case NinjamTimingDiagnosticReason::DesiredPublished: return "desired-published";
+	case NinjamTimingDiagnosticReason::NoSyncPublished: return "no-sync-published";
+	case NinjamTimingDiagnosticReason::DesiredApplied: return "desired-applied";
+	case NinjamTimingDiagnosticReason::DesiredApplyLag: return "desired-apply-lag";
+	case NinjamTimingDiagnosticReason::DesiredApplyCaughtUp: return "desired-apply-caught-up";
+	default: return "unknown";
+	}
 }
 
 const char* NinjamTimingCoordinator::FollowPolicyName(NinjamLocalFollowPolicy policy) noexcept

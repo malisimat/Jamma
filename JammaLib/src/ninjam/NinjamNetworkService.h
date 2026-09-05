@@ -57,6 +57,9 @@ namespace ninjam
 		void SendTempoRequest(const NinjamTempoRequest& request);
 		bool HasConnectedTiming() const noexcept;
 		TempoRequestState TempoJoinRequestState() const noexcept;
+		void SetTimingDiagnosticsEnabled(bool enabled) noexcept;
+		NinjamTimingDiagnostics ObserveAppliedTimingReceipt(
+			const std::optional<NinjamDesiredTimingReceipt>& receipt) noexcept;
 		NinjamTimingDiagnostics TimingDiagnostics() const noexcept;
 
 	private:

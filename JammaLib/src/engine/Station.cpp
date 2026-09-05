@@ -794,11 +794,6 @@ void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
 		if (auto take = weakTake.lock()) take->SetLocalTransportOffsetSamps(targetSamps);
 }
 
-void Station::LogLocalLoopAlignment(const char* event) const
-{
-	_LogLocalLoopAlignment(event, nullptr);
-}
-
 void Station::OnBlockWriteChannel(unsigned int channel,
 	const base::AudioWriteRequest& request,
 	int writeOffset)
@@ -1094,7 +1089,6 @@ ActionResult Station::OnAction(TriggerAction action)
 			if (loopTake.has_value())
 			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
-				_LogLocalLoopAlignment("recorded", loopTake.value());
 			}
 
 			res.IsEaten = true;
@@ -1184,7 +1178,6 @@ ActionResult Station::OnAction(TriggerAction action)
 			if (loopTake.has_value())
 			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
-				_LogLocalLoopAlignment("overdub-recorded", loopTake.value());
 			}
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
@@ -2290,7 +2283,6 @@ void Station::_WireVuSliders()
 
 void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 {
-	_LogLocalLoopAlignment("deleted", take);
 	FlushLiveHeldMidiNotes();
 
 	// Flush any held MIDI notes so the VST instrument doesn't get stuck notes.
@@ -2314,159 +2306,6 @@ void Station::_DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept
 	}
 	take->Ditch();
 	RebuildAutomationDispatch();
-}
-
-void Station::_LogLocalLoopAlignment(const char* event,
-	const std::shared_ptr<LoopTake>& focusTake) const
-{
-	if (_loggingConfig.Audio != "verbose")
-		return;
-	const std::string eventName = event ? event : "";
-	const bool isBefore = eventName.rfind("ninjam-before-", 0u) == 0u;
-	const bool isAfter = eventName == "ninjam-remote-tempo-applied"
-		|| eventName == "ninjam-join-aligned"
-		|| eventName == "ninjam-phase-disciplined";
-	if (isBefore)
-		_ninjamBeforePositions.clear();
-	const auto previousPosition = [this](const std::string& key) -> std::optional<unsigned long> {
-		for (const auto& previous : _ninjamBeforePositions)
-			if (previous.Key == key)
-				return previous.Position;
-		return std::nullopt;
-	};
-	const auto signedAdjustment = [](unsigned long before, unsigned long current,
-		unsigned long length) -> long long {
-		if (length == 0ul)
-			return static_cast<long long>(current) - static_cast<long long>(before);
-		long long adjustment = static_cast<long long>(current) - static_cast<long long>(before);
-		const auto half = static_cast<long long>(length / 2ul);
-		if (adjustment > half)
-			adjustment -= static_cast<long long>(length);
-		else if (adjustment < -half)
-			adjustment += static_cast<long long>(length);
-		return adjustment;
-	};
-	const auto masterLength = _clock ? _clock->SeedSourceLength() : 0ul;
-	const auto masterCount = _clock ? _clock->LoopCount() : 0ul;
-	const auto masterOffset = _clock ? static_cast<unsigned long>(_clock->SampOffset()) : 0ul;
-	const auto masterAbsolute = _clock ? _clock->AbsoluteSamplePos() : 0ul;
-	const auto grainSamps = _clock ? _clock->QuantiseSamps() : 0u;
-
-	std::cout << "[LocalLoopAlignment] event=" << event
-		<< " station=" << _name
-		<< " focusTake=" << (focusTake ? focusTake->Id() : "")
-		<< " masterLength=" << masterLength
-		<< " masterCycle=" << masterCount
-		<< " masterOffset=" << masterOffset
-		<< " masterAbsolute=" << masterAbsolute
-		<< " grain=" << grainSamps
-		<< " transportOffset=" << TransportOffsetSamps()
-		<< '\n';
-
-	for (const auto& take : GetLoopTakeSnapshot())
-	{
-		if (!take)
-			continue;
-		if (const auto receipt = take->LastAlignmentReceipt())
-		{
-			std::cout << "[NINJAM][TempoJoin] alignment-receipt"
-				<< " take=" << take->Id()
-				<< " sequence=" << receipt->Sequence
-				<< " generation=" << receipt->Generation
-				<< " scene=" << receipt->SceneCoordinateSamps
-				<< " delta=" << receipt->DeltaSamps
-				<< " masterAdjustment=" << receipt->DeltaSamps
-				<< " audioLoops=" << receipt->AudioLoopCount
-				<< " midiLoops=" << receipt->MidiLoopCount
-				<< " maxResidual=" << receipt->MaxResidualSamps
-				<< " midiAnchor=" << receipt->CapturedMidiAnchorSamps
-				<< " midiCursor=" << receipt->RestoredMidiCursorSamps
-				<< " midiEventResidual=" << receipt->MidiEventPhaseResidualSamps
-				<< " midiAutomationResidual=" << receipt->MidiAutomationPhaseResidualSamps << '\n';
-		}
-
-		for (const auto& loop : take->GetLoops())
-		{
-			if (!loop)
-				continue;
-
-			const auto length = loop->LoopLength();
-			if (length == 0ul)
-				continue;
-
-			const auto rawIndex = loop->PlayIndex();
-			const auto fade = static_cast<unsigned long>(constants::MaxLoopFadeSamps) % length;
-			const auto musicalIndex = (rawIndex >= constants::MaxLoopFadeSamps) ?
-				((rawIndex - constants::MaxLoopFadeSamps) % length) :
-				((rawIndex + length - fade) % length);
-			const auto masterAnchor = (masterAbsolute + length - musicalIndex) % length;
-			const auto key = take->Id() + "|audio|" + loop->Id();
-			const auto before = isAfter ? previousPosition(key) : std::nullopt;
-			if (isBefore)
-				_ninjamBeforePositions.push_back({ key, musicalIndex, length });
-
-			std::cout << "[LocalLoopAlignment] take=" << take->Id()
-				<< " loop=" << loop->Id()
-				<< " length=" << length
-				<< " rawIndex=" << rawIndex
-				<< " musicalIndex=" << musicalIndex
-				<< " masterAnchor=" << masterAnchor
-				<< " position=" << musicalIndex;
-			if (before.has_value())
-				std::cout << " before=" << before.value()
-					<< " adjustment=" << signedAdjustment(before.value(), musicalIndex, length);
-			std::cout
-				<< " localCycle=" << (masterAbsolute / length)
-				<< " grains=" << (grainSamps > 0u ? length / grainSamps : 0ul)
-				<< " grainRemainder=" << (grainSamps > 0u ? length % grainSamps : 0ul)
-				<< '\n';
-		}
-
-		const auto midiCursor = take->MidiPlayIndex();
-		const auto midiAnchorCorrection = take->MidiAnchorCorrection();
-		std::size_t midiLoopIndex = 0u;
-		for (const auto& midiLoop : take->GetMidiLoopSnapshot())
-		{
-			const auto currentMidiLoopIndex = midiLoopIndex++;
-			if (!midiLoop)
-				continue;
-
-			const auto length = midiLoop->LoopLengthSamps();
-			if (length == 0u)
-				continue;
-
-			const auto musicalIndex = midiCursor % length;
-			const auto masterAnchor = static_cast<unsigned long>(
-				(masterAbsolute + length - musicalIndex) % length);
-			const auto automationAnchor = midiLoop->LoopPhaseAnchor();
-			const auto effectiveAutomationAnchor = static_cast<std::uint32_t>(
-				automationAnchor + midiAnchorCorrection);
-			const auto key = take->Id() + "|midi|" + std::to_string(currentMidiLoopIndex);
-			const auto before = isAfter ? previousPosition(key) : std::nullopt;
-			if (isBefore)
-				_ninjamBeforePositions.push_back({ key, musicalIndex, length });
-
-			std::cout << "[LocalLoopAlignment] take=" << take->Id()
-				<< " midiLoop=1"
-				<< " length=" << length
-				<< " midiCursor=" << musicalIndex
-				<< " position=" << musicalIndex;
-			if (before.has_value())
-				std::cout << " before=" << before.value()
-					<< " adjustment=" << signedAdjustment(before.value(), musicalIndex, length);
-			std::cout
-				<< " masterAnchor=" << masterAnchor
-				<< " automationAnchor=" << automationAnchor
-				<< " automationCorrection=" << midiAnchorCorrection
-				<< " effectiveAutomationAnchor=" << effectiveAutomationAnchor
-				<< " events=" << midiLoop->EventCount()
-				<< " droppedEvents=" << midiLoop->DroppedEventCount()
-				<< " localCycle=" << (masterAbsolute / length)
-				<< " grains=" << (grainSamps > 0u ? length / grainSamps : 0u)
-				<< " grainRemainder=" << (grainSamps > 0u ? length % grainSamps : 0u)
-				<< '\n';
-		}
-	}
 }
 
 void Station::LoadVstPlugin(std::wstring path,
