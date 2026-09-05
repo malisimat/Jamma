@@ -173,11 +173,13 @@
 ### B014 — Bounded correlated diagnostics
 
 - **Owner / objective:** existing NINJAM job owner formats bounded transition/anomaly records correlated by epoch and desired/applied version; remove dead receipt and Scene/Station callback hierarchy logging.
-- **Owned files:** existing coordinator diagnostics/desired/applied values; `audio/AudioHost.h/.cpp`; `engine/Scene.h/.cpp`, `Station.h/.cpp`, `LoopTake.h/.cpp` only for diagnostic removal; focused diagnostics tests.
+- **Owned files:** existing coordinator diagnostics/desired/applied values; `audio/AudioHost.h/.cpp`; `engine/Scene.h/.cpp`, `Station.h/.cpp`, `LoopTake.h/.cpp` only for diagnostic removal; `ninjam/NinjamNetworkService.h/.cpp` only for the two human-approved mutex-serialized forwarding operations below; focused diagnostics tests.
 - **Prohibited collateral:** logging class, hierarchy walker, callback formatter/I/O/string/vector/traversal, unbounded record, authority behavior change.
 - **Prerequisite:** P10 `NinjamTimingDiagnostics.DisabledIsZeroWorkAndEnabledIsBounded` passes before production edits.
 - **Rollback:** revert retained compact signal and deletions together; F-019 dead removal may be its own first commit but cannot claim diagnostic replacement.
 - **Verification:** P10; every rejection reason; fixed capacity/overflow; two-session correlation; zero disabled callback work; logging on/off phase equivalence; bounded normal/verbose manual trace. Review: `B014.md`.
+
+**Human-approved B014 owned-file amendment (2026-09-05, against clean `HEAD` `6312b8863dd58f65d0fe62e7f339999d7d04cc72`):** B014 may add two mutex-serialized forwarding operations to `NinjamNetworkService.h/.cpp`: configure the existing coordinator diagnostics and submit/read the existing AudioHost applied receipt for off-callback correlation. This is the minimum route from the Scene job owner to the private coordinator without introducing a second diagnostic owner. NetworkService may add no diagnostic state, authority or lifecycle behavior, or formatting; the coordinator remains the sole diagnostics owner and Scene remains the off-callback presenter. Every original B014 prohibition, prerequisite, rollback point, dependency, protected timing invariant, verification requirement, independent-review requirement, no-batch residual, and downstream order remains unchanged.
 
 ### B015 — Bounded vocabulary and casing
 
