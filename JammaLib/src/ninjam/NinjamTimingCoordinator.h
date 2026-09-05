@@ -113,6 +113,7 @@ namespace ninjam
 		ObservationMissingAudioBoundary,
 		ObservationMissingLocalTransport,
 		ObservationInvalidGrain,
+		ObservationInvalidLocalMasterLength,
 		TrackerImplausibleBackward,
 		SafetyLimitExceeded,
 		DesiredPublished,
@@ -134,6 +135,8 @@ namespace ninjam
 		std::uint64_t Generation = 0u;
 		long long ValueSamps = 0;
 		std::uint64_t LimitSamps = 0u;
+		std::uint64_t OccurrenceCount = 0u;
+		std::uint64_t CumulativeSuppressedCount = 0u;
 	};
 
 	struct NinjamTimingDiagnostics
@@ -156,6 +159,7 @@ namespace ninjam
 		bool CaptureEnabled = false;
 		std::uint64_t CapturedEventCount = 0u;
 		std::uint64_t EventOverflowCount = 0u;
+		std::uint64_t EventOverflowSummaryCount = 0u;
 		std::uint64_t EventSequence = 0u;
 		std::array<std::uint64_t, ReasonCount> ReasonCounts{};
 		std::array<NinjamTimingDiagnosticEvent, EventCapacity> Events{};
@@ -184,6 +188,10 @@ namespace ninjam
 		std::uint64_t CommandsEmitted = 0u;          // Monotonic emitted-command sequence.
 		std::uint64_t LastCommandGeneration = 0u;    // Generation tag of the last emitted command.
 		NinjamEmittedCommand LastCommandType = NinjamEmittedCommand::None;
+
+	private:
+		static bool _IsRateLimitedAnomaly(NinjamTimingDiagnosticReason reason) noexcept;
+		static bool _IsPowerOfTwo(std::uint64_t value) noexcept;
 	};
 
 

@@ -454,7 +454,9 @@ void Scene::_LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& d
 			<< " appliedVersion=" << event.AppliedVersion
 			<< " generation=" << event.Generation
 			<< " value=" << event.ValueSamps
-			<< " limit=" << event.LimitSamps << '\n';
+			<< " limit=" << event.LimitSamps
+			<< " occurrences=" << event.OccurrenceCount
+			<< " cumulativeSuppressed=" << event.CumulativeSuppressedCount << '\n';
 		_lastPresentedNinjamDiagnosticSequence = event.Sequence;
 	};
 
@@ -466,11 +468,12 @@ void Scene::_LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& d
 	}
 	if (diagnostics.LatestEvent.Sequence > _lastPresentedNinjamDiagnosticSequence)
 		present(diagnostics.LatestEvent);
-	if (diagnostics.EventOverflowCount > _lastPresentedNinjamDiagnosticOverflowCount)
+	if (diagnostics.EventOverflowSummaryCount > _lastPresentedNinjamDiagnosticOverflowCount)
 	{
-		std::cout << "[NINJAM][TimingDiagnostic] overflow="
-			<< diagnostics.EventOverflowCount << '\n';
-		_lastPresentedNinjamDiagnosticOverflowCount = diagnostics.EventOverflowCount;
+		std::cout << "[NINJAM][TimingDiagnostic] overflowSummary="
+			<< diagnostics.EventOverflowSummaryCount
+			<< " overflowTotal=" << diagnostics.EventOverflowCount << '\n';
+		_lastPresentedNinjamDiagnosticOverflowCount = diagnostics.EventOverflowSummaryCount;
 	}
 }
 

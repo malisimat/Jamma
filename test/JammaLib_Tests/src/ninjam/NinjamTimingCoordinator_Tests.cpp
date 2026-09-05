@@ -162,7 +162,10 @@ TEST(NinjamTimingDiagnostics, DisabledIsZeroWorkAndEnabledIsBounded)
 
 	EXPECT_EQ(0u, diagnostics.CapturedEventCount);
 	EXPECT_EQ(0u, diagnostics.EventOverflowCount);
+	EXPECT_EQ(0u, diagnostics.EventOverflowSummaryCount);
 	EXPECT_EQ(0u, diagnostics.EventSequence);
+	EXPECT_EQ(0u, diagnostics.Count(
+		ninjam::NinjamTimingDiagnosticReason::DesiredApplyLag));
 
 	diagnostics.SetCaptureEnabled(true);
 	const auto eventTotal = ninjam::NinjamTimingDiagnostics::EventCapacity + 3u;
@@ -179,6 +182,7 @@ TEST(NinjamTimingDiagnostics, DisabledIsZeroWorkAndEnabledIsBounded)
 	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
 		diagnostics.CapturedEventCount);
 	EXPECT_EQ(3u, diagnostics.EventOverflowCount);
+	EXPECT_EQ(2u, diagnostics.EventOverflowSummaryCount);
 	EXPECT_EQ(eventTotal, diagnostics.EventSequence);
 	EXPECT_EQ(eventTotal, diagnostics.LatestEvent.Sequence);
 	EXPECT_EQ(2u, diagnostics.LatestEvent.SessionEpoch);
@@ -189,6 +193,70 @@ TEST(NinjamTimingDiagnostics, DisabledIsZeroWorkAndEnabledIsBounded)
 	EXPECT_EQ(1u, diagnostics.Events.front().Sequence);
 	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
 		diagnostics.Events.back().Sequence);
+}
+
+TEST(NinjamTimingDiagnostics, RepeatedPostCapacityAnomalyUsesPowerOfTwoSuppressionSummaries)
+{
+	ninjam::NinjamTimingDiagnostics diagnostics;
+	diagnostics.SetCaptureEnabled(true);
+	for (std::size_t eventIndex = 0u;
+		eventIndex < ninjam::NinjamTimingDiagnostics::EventCapacity; ++eventIndex)
+	{
+		diagnostics.Capture(ninjam::NinjamTimingDiagnosticReason::DesiredPublished,
+			1u, eventIndex + 1u, 0u, eventIndex + 1u, 0, 0u);
+	}
+	const std::uint64_t expectedPublishedOccurrences[] = { 1u, 2u, 3u, 5u, 9u, 17u, 33u, 65u };
+	std::size_t nextPublishedIndex = 0u;
+
+	for (std::uint64_t occurrence = 1u; occurrence <= 65u; ++occurrence)
+	{
+		const auto sequenceBefore = diagnostics.EventSequence;
+		diagnostics.Capture(ninjam::NinjamTimingDiagnosticReason::ObservationInvalid,
+			1u, 0u, 0u, 0u, static_cast<long long>(occurrence), 0u);
+		const bool shouldPublish = nextPublishedIndex < std::size(expectedPublishedOccurrences)
+			&& occurrence == expectedPublishedOccurrences[nextPublishedIndex];
+		EXPECT_EQ(shouldPublish ? sequenceBefore + 1u : sequenceBefore,
+			diagnostics.EventSequence);
+		if (shouldPublish)
+		{
+			EXPECT_EQ(occurrence, diagnostics.LatestEvent.OccurrenceCount);
+			EXPECT_EQ(occurrence - 1u,
+				diagnostics.LatestEvent.CumulativeSuppressedCount);
+			++nextPublishedIndex;
+		}
+	}
+
+	EXPECT_EQ(65u, diagnostics.Count(
+		ninjam::NinjamTimingDiagnosticReason::ObservationInvalid));
+	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity,
+		diagnostics.CapturedEventCount);
+	EXPECT_EQ(std::size(expectedPublishedOccurrences), diagnostics.EventOverflowCount);
+	EXPECT_EQ(8u, diagnostics.EventOverflowSummaryCount);
+	EXPECT_EQ(ninjam::NinjamTimingDiagnostics::EventCapacity
+		+ std::size(expectedPublishedOccurrences), diagnostics.EventSequence);
+	EXPECT_EQ(std::size(expectedPublishedOccurrences), nextPublishedIndex);
+}
+
+TEST(NinjamTimingDiagnostics, OverflowPresentationSummaryAdvancesOnlyAtPowersOfTwo)
+{
+	ninjam::NinjamTimingDiagnostics diagnostics;
+	diagnostics.SetCaptureEnabled(true);
+	for (std::size_t eventIndex = 0u;
+		eventIndex < ninjam::NinjamTimingDiagnostics::EventCapacity; ++eventIndex)
+	{
+		diagnostics.Capture(ninjam::NinjamTimingDiagnosticReason::DesiredPublished,
+			1u, eventIndex + 1u, 0u, eventIndex + 1u, 0, 0u);
+	}
+
+	const std::uint64_t expectedSummaries[] = { 1u, 2u, 2u, 4u, 4u, 4u, 4u, 8u };
+	for (std::size_t overflowIndex = 0u; overflowIndex < std::size(expectedSummaries);
+		++overflowIndex)
+	{
+		diagnostics.Capture(ninjam::NinjamTimingDiagnosticReason::DesiredPublished,
+			1u, overflowIndex + 100u, 0u, overflowIndex + 100u, 0, 0u);
+		EXPECT_EQ(overflowIndex + 1u, diagnostics.EventOverflowCount);
+		EXPECT_EQ(expectedSummaries[overflowIndex], diagnostics.EventOverflowSummaryCount);
+	}
 }
 
 TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
@@ -244,6 +312,33 @@ TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
 		const auto diagnostics = coordinator.Diagnostics();
 		EXPECT_EQ(1u, diagnostics.Count(rejectionCase.Reason));
 		EXPECT_EQ(rejectionCase.Reason, diagnostics.LatestEvent.Reason);
+	}
+
+	const std::uint64_t invalidLocalMasterLengths[] = {
+		0u,
+		static_cast<std::uint64_t>((std::numeric_limits<unsigned int>::max)()) + 1u
+	};
+	for (const auto invalidLocalMasterLength : invalidLocalMasterLengths)
+	{
+		Timer clock;
+		NinjamTimingCoordinator coordinator;
+		Connect(coordinator, false, false);
+		coordinator.SetDiagnosticsCaptureEnabled(true);
+		auto beforeWrap = MakeTiming(1000u, 900u);
+		beforeWrap.LocalTransport.MasterLengthSamps = invalidLocalMasterLength;
+		coordinator.Observe(beforeWrap, std::nullopt, false, io::UserConfig{}, clock);
+		auto afterWrap = MakeTiming(1000u, 10u);
+		afterWrap.LocalTransport.MasterLengthSamps = invalidLocalMasterLength;
+		const auto update = coordinator.Observe(afterWrap, std::nullopt,
+			false, io::UserConfig{}, clock);
+		EXPECT_FALSE(update.DesiredTransport.has_value());
+		const auto diagnostics = coordinator.Diagnostics();
+		EXPECT_EQ(1u, diagnostics.Count(
+			ninjam::NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength));
+		EXPECT_EQ(ninjam::NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength,
+			diagnostics.LatestEvent.Reason);
+		EXPECT_EQ(invalidLocalMasterLength, static_cast<std::uint64_t>(
+			diagnostics.LatestEvent.ValueSamps));
 	}
 
 	Timer trackerClock;

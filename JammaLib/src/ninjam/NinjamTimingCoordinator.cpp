@@ -18,8 +18,18 @@ void NinjamTimingDiagnostics::Capture(NinjamTimingDiagnosticReason reason,
 		return;
 
 	const auto reasonIndex = static_cast<std::size_t>(reason);
-	if (reasonIndex < ReasonCounts.size())
-		++ReasonCounts[reasonIndex];
+	if (reasonIndex >= ReasonCounts.size())
+		return;
+	const auto occurrenceCount = ++ReasonCounts[reasonIndex];
+	const auto cumulativeSuppressedCount = occurrenceCount - 1u;
+	const auto isRateLimitedAnomaly = _IsRateLimitedAnomaly(reason);
+	// Keep repeated anomalies presentable without allowing a job-tick log stream:
+	// publish the first occurrence, then cumulative summaries at 1, 2, 4, ... suppressed.
+	if (isRateLimitedAnomaly && occurrenceCount > 1u
+		&& !_IsPowerOfTwo(cumulativeSuppressedCount))
+	{
+		return;
+	}
 
 	NinjamTimingDiagnosticEvent event;
 	event.Sequence = ++EventSequence;
@@ -31,6 +41,9 @@ void NinjamTimingDiagnostics::Capture(NinjamTimingDiagnosticReason reason,
 	event.Generation = generation;
 	event.ValueSamps = valueSamps;
 	event.LimitSamps = limitSamps;
+	event.OccurrenceCount = occurrenceCount;
+	event.CumulativeSuppressedCount = isRateLimitedAnomaly
+		? cumulativeSuppressedCount : 0u;
 	LatestEvent = event;
 	if (CapturedEventCount < EventCapacity)
 	{
@@ -40,7 +53,37 @@ void NinjamTimingDiagnostics::Capture(NinjamTimingDiagnosticReason reason,
 	else
 	{
 		++EventOverflowCount;
+		if (_IsPowerOfTwo(EventOverflowCount))
+			EventOverflowSummaryCount = EventOverflowCount;
 	}
+}
+
+bool NinjamTimingDiagnostics::_IsRateLimitedAnomaly(
+	NinjamTimingDiagnosticReason reason) noexcept
+{
+	switch (reason)
+	{
+	case NinjamTimingDiagnosticReason::ObservationDisconnected:
+	case NinjamTimingDiagnosticReason::ObservationInvalid:
+	case NinjamTimingDiagnosticReason::ObservationZeroInterval:
+	case NinjamTimingDiagnosticReason::ObservationInvalidSampleRate:
+	case NinjamTimingDiagnosticReason::ObservationInvalidTempo:
+	case NinjamTimingDiagnosticReason::ObservationInvalidBpi:
+	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary:
+	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport:
+	case NinjamTimingDiagnosticReason::ObservationInvalidGrain:
+	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength:
+	case NinjamTimingDiagnosticReason::TrackerImplausibleBackward:
+	case NinjamTimingDiagnosticReason::SafetyLimitExceeded:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool NinjamTimingDiagnostics::_IsPowerOfTwo(std::uint64_t value) noexcept
+{
+	return value != 0u && (value & (value - 1u)) == 0u;
 }
 
 std::uint64_t NinjamTimingDiagnostics::Count(NinjamTimingDiagnosticReason reason) const noexcept
@@ -375,7 +418,15 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 
 	const auto seedLength = timing.LocalTransport.MasterLengthSamps;
 	if (seedLength == 0u || seedLength > (std::numeric_limits<unsigned int>::max)())
+	{
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength,
+			_desiredVersion, _lastDiagnosticAppliedVersion, event->Generation,
+			seedLength > static_cast<std::uint64_t>((std::numeric_limits<long long>::max)())
+				? (std::numeric_limits<long long>::max)()
+				: static_cast<long long>(seedLength),
+			(std::numeric_limits<unsigned int>::max)());
 		return update;
+	}
 	const auto localOffset = static_cast<unsigned int>(
 		timing.LocalTransport.MasterPhaseSamps % seedLength);
 	const auto delta = event->Type == NinjamTimingEventType::Join ? event->PhaseDeltaSamps :
@@ -717,6 +768,7 @@ const char* NinjamTimingCoordinator::DiagnosticReasonName(
 	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary: return "observation-missing-audio-boundary";
 	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport: return "observation-missing-local-transport";
 	case NinjamTimingDiagnosticReason::ObservationInvalidGrain: return "observation-invalid-grid-step";
+	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength: return "observation-invalid-local-master-length";
 	case NinjamTimingDiagnosticReason::TrackerImplausibleBackward: return "tracker-implausible-backward";
 	case NinjamTimingDiagnosticReason::SafetyLimitExceeded: return "safety-limit-exceeded";
 	case NinjamTimingDiagnosticReason::DesiredPublished: return "desired-published";
