@@ -19,7 +19,7 @@ namespace engine
 		unsigned long OriginalMasterBufferLengthSamps = 0ul;
 		unsigned long MasterLengthSamps = 0ul;
 		unsigned int GrainSamps = 0u;
-		unsigned int BPI = 0u;
+		unsigned int Bpi = 0u;
 
 		static std::optional<LocalAudioGeometry> Create(unsigned long originalLength,
 			unsigned long masterLength, unsigned int grainSamps, unsigned int bpi) noexcept
@@ -35,7 +35,7 @@ namespace engine
 
 		bool IsValid() const noexcept
 		{
-			return Create(OriginalMasterBufferLengthSamps, MasterLengthSamps, GrainSamps, BPI).has_value();
+			return Create(OriginalMasterBufferLengthSamps, MasterLengthSamps, GrainSamps, Bpi).has_value();
 		}
 	};
 
@@ -64,9 +64,9 @@ namespace engine
 	struct RemoteTransportGeometry
 	{
 		unsigned long IntervalLengthSamps = 0ul;
-		unsigned int BPI = 0u;
+		unsigned int Bpi = 0u;
 		unsigned int PhaseSamps = 0u;
-		float BPM = 0.0f;
+		float Bpm = 0.0f;
 		std::uint64_t Generation = 0u;
 	};
 

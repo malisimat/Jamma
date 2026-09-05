@@ -2475,7 +2475,7 @@ void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geom
 {
 	const auto writing = _remoteMidiGridSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
 	_remoteMidiIntervalSamps.store(static_cast<std::uint32_t>(geometry.IntervalLengthSamps), std::memory_order_relaxed);
-	_remoteMidiBpi.store(geometry.BPI, std::memory_order_relaxed);
+	_remoteMidiBpi.store(geometry.Bpi, std::memory_order_relaxed);
 	_remoteMidiOriginSamps.store(originSamps, std::memory_order_relaxed);
 	_remoteMidiGridSequence.store(writing + 1u, std::memory_order_release);
 	_midiQuantisationUpdatePending = true;

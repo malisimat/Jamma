@@ -544,9 +544,9 @@ TEST(NinjamTimingProductionBoundary, OverlappingIntentsPublishOneCoherentDesired
 		const auto& desired = updates[i].DesiredTransport.value();
 		const auto& grid = updates[i].RemoteGrid.value();
 		EXPECT_EQ(desired.IntervalLengthSamps, grid.Geometry.IntervalLengthSamps);
-		EXPECT_EQ(desired.BeatsPerInterval, grid.Geometry.BPI);
+		EXPECT_EQ(desired.BeatsPerInterval, grid.Geometry.Bpi);
 		EXPECT_EQ(desired.RemotePhaseSamps, grid.Geometry.PhaseSamps);
-		EXPECT_EQ(desired.TempoBpm, grid.Geometry.BPM);
+		EXPECT_EQ(desired.TempoBpm, grid.Geometry.Bpm);
 		EXPECT_EQ(desired.Generation, grid.Geometry.Generation);
 		EXPECT_EQ(static_cast<std::int64_t>(desired.ObservationSample)
 			- static_cast<std::int64_t>(desired.RemotePhaseSamps), grid.OriginSamps);
