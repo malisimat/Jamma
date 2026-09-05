@@ -174,6 +174,8 @@ The B013 pending status above is superseded by independent approval `2d3836b3f5e
 
 B014 characterization `6312b8863dd58f65d0fe62e7f339999d7d04cc72` changed tests only and failed its wrapped build as expected against the absent bounded API. Human amendment `483c5d4` authorized the two minimum NetworkService forwarding operations. Implementation `058c486ae2588da914703a9efd55a0cd1f811a1e` makes the Coordinator the sole fixed-capacity diagnostic owner, correlates desired/applied receipts, moves presentation wholly to the Scene job path, and removes the dead receipt plus Scene/Station hierarchy logging. The final build, diagnostic contract 5/5, and exact timing regression filter 40/40 are green after a one-time Rebuild corrected stale incremental class layouts. Full-suite and live normal/verbose traces are not claimed. Status: implemented and verified, pending independent `batch-reviews/B014.md`; B015 remains gated.
 
+Independent review `7d55c510d503b3aa287e41aaac580987f82f5b16` rejected B014 despite a green 841-pass full suite because repeated post-capacity anomalies could still print each job tick and one local-master-length guard was silent. Correction `1b98fe26cb4b3cc944aab9519624f827ea661696` adds first-occurrence/power-of-two suppression summaries and the missing zero/oversized local-master-length reason without changing NetworkService or callback code. The corrected build, diagnostics 7/7, exact B014 filter 42/42, and full suite 843 pass/one expected skip/zero fail are green. Status: corrected and verified, pending fresh independent B014 rereview; B015 remains gated and live verbose tracing remains Stage 21.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
