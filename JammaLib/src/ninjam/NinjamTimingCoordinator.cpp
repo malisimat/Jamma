@@ -71,7 +71,7 @@ bool NinjamTimingDiagnostics::_IsRateLimitedAnomaly(
 	case NinjamTimingDiagnosticReason::ObservationInvalidBpi:
 	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary:
 	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport:
-	case NinjamTimingDiagnosticReason::ObservationInvalidGrain:
+	case NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep:
 	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength:
 	case NinjamTimingDiagnosticReason::TrackerImplausibleBackward:
 	case NinjamTimingDiagnosticReason::SafetyLimitExceeded:
@@ -244,7 +244,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			? NinjamTimingDiagnosticReason::ObservationInvalidSampleRate
 			: timing.Bpi == 0u
 				? NinjamTimingDiagnosticReason::ObservationInvalidBpi
-				: NinjamTimingDiagnosticReason::ObservationInvalidGrain;
+				: NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep;
 		_CaptureDiagnostic(reason);
 		return update;
 	}
@@ -565,7 +565,7 @@ bool NinjamTempoChange::HasSameProposalIdentity(const NinjamTempoChange& other) 
 {
 	return IntervalLengthSamps == other.IntervalLengthSamps
 		&& SourceSampleRate == other.SourceSampleRate
-		&& GrainSamps == other.GrainSamps
+		&& RemoteGridStepSamps == other.RemoteGridStepSamps
 		&& Bpi == other.Bpi
 		&& std::abs(Bpm - other.Bpm) < 0.01f;
 }
@@ -605,7 +605,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	desired.LocalFollowPolicy = policy;
 	desired.HasRemoteTiming = true;
 	desired.IntervalLengthSamps = change.IntervalLengthSamps;
-	desired.GrainSamps = change.GrainSamps;
+	desired.RemoteGridStepSamps = change.RemoteGridStepSamps;
 	desired.BeatsPerInterval = change.Bpi;
 	desired.TempoBpm = change.Bpm;
 	desired.Quantisation = utils::Timer::QUANTISE_POWER;
@@ -767,7 +767,7 @@ const char* NinjamTimingCoordinator::DiagnosticReasonName(
 	case NinjamTimingDiagnosticReason::ObservationInvalidBpi: return "observation-invalid-bpi";
 	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary: return "observation-missing-audio-boundary";
 	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport: return "observation-missing-local-transport";
-	case NinjamTimingDiagnosticReason::ObservationInvalidGrain: return "observation-invalid-grid-step";
+	case NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep: return "observation-invalid-grid-step";
 	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength: return "observation-invalid-local-master-length";
 	case NinjamTimingDiagnosticReason::TrackerImplausibleBackward: return "tracker-implausible-backward";
 	case NinjamTimingDiagnosticReason::SafetyLimitExceeded: return "safety-limit-exceeded";

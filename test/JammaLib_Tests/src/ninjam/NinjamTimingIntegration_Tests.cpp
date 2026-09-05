@@ -381,7 +381,7 @@ public:
 		desired.LocalFollowPolicy = policy;
 		desired.HasRemoteTiming = policy != ninjam::NinjamLocalFollowPolicy::NoSync;
 		desired.IntervalLengthSamps = length;
-		desired.GrainSamps = length == 0ul ? 0u : static_cast<unsigned int>(length / 16ul);
+		desired.RemoteGridStepSamps = length == 0ul ? 0u : static_cast<unsigned int>(length / 16ul);
 		desired.BeatsPerInterval = 16u;
 		desired.TempoBpm = 120.0f;
 		desired.Quantisation = Timer::QUANTISE_POWER;

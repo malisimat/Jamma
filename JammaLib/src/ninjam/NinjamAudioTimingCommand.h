@@ -35,7 +35,7 @@ namespace ninjam
 		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 		bool HasRemoteTiming = false;
 		unsigned long IntervalLengthSamps = 0ul;
-		unsigned int GrainSamps = 0u;
+		unsigned int RemoteGridStepSamps = 0u;
 		unsigned int BeatsPerInterval = 0u;
 		float TempoBpm = 0.0f;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
@@ -77,7 +77,7 @@ namespace ninjam
 		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::NoSync };
 		std::atomic_bool _hasRemoteTiming{ false };
 		std::atomic<unsigned long> _intervalLengthSamps{ 0ul };
-		std::atomic<unsigned int> _grainSamps{ 0u };
+		std::atomic<unsigned int> _remoteGridStepSamps{ 0u };
 		std::atomic<unsigned int> _beatsPerInterval{ 0u };
 		std::atomic<float> _tempoBpm{ 0.0f };
 		std::atomic<utils::Timer::QuantisationType> _quantisation{ utils::Timer::QUANTISE_OFF };

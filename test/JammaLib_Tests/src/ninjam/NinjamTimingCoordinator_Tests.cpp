@@ -297,7 +297,7 @@ TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidBpi, invalidBpi },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary, missingAudioBoundary },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingLocalTransport, missingLocalTransport },
-		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidGrain, invalidGrain },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep, invalidGrain },
 	};
 
 	for (const auto& rejectionCase : cases)
@@ -497,7 +497,7 @@ TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
 	ASSERT_TRUE(update.DesiredTransport.has_value());
 	EXPECT_EQ(78985ul, update.DesiredTransport->IntervalLengthSamps);
 	EXPECT_EQ(4u, update.DesiredTransport->BeatsPerInterval);
-	EXPECT_EQ(19746u, update.DesiredTransport->GrainSamps);
+	EXPECT_EQ(19746u, update.DesiredTransport->RemoteGridStepSamps);
 	EXPECT_EQ(123u, update.DesiredTransport->RemotePhaseSamps);
 }
 
@@ -572,7 +572,7 @@ TEST(NinjamTimingCoordinator, ProposalIdentityRefreshesObservationButReplacesEve
 		EXPECT_FLOAT_EQ(identityCase.Bpm, pending.Bpm);
 		EXPECT_EQ(identityCase.Bpi, pending.Bpi);
 		EXPECT_EQ((static_cast<std::uint64_t>(identityCase.IntervalLengthSamps)
-			+ identityCase.Bpi / 2u) / identityCase.Bpi, pending.GrainSamps);
+			+ identityCase.Bpi / 2u) / identityCase.Bpi, pending.RemoteGridStepSamps);
 		EXPECT_EQ(200u, pending.IntervalPositionSamps);
 		EXPECT_EQ(2000u, pending.AudioBlockStartSample);
 	}
@@ -622,7 +622,7 @@ TEST(NinjamTimingCoordinator, ChangedIdentityReplacesIgnoredProposalWithoutInter
 	EXPECT_TRUE(replacement.PromptForTempoChange);
 	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
 	EXPECT_EQ(6u, coordinator.PendingTempoChange()->Bpi);
-	EXPECT_EQ(80000u, coordinator.PendingTempoChange()->GrainSamps);
+	EXPECT_EQ(80000u, coordinator.PendingTempoChange()->RemoteGridStepSamps);
 }
 
 TEST(NinjamTimingCoordinator, FixedOneBpmAcknowledgementIncludesBothEdges)

@@ -14,7 +14,7 @@ namespace ninjam
 		_localFollowPolicy.store(desired.LocalFollowPolicy, std::memory_order_relaxed);
 		_hasRemoteTiming.store(desired.HasRemoteTiming, std::memory_order_relaxed);
 		_intervalLengthSamps.store(desired.IntervalLengthSamps, std::memory_order_relaxed);
-		_grainSamps.store(desired.GrainSamps, std::memory_order_relaxed);
+		_remoteGridStepSamps.store(desired.RemoteGridStepSamps, std::memory_order_relaxed);
 		_beatsPerInterval.store(desired.BeatsPerInterval, std::memory_order_relaxed);
 		_tempoBpm.store(desired.TempoBpm, std::memory_order_relaxed);
 		_quantisation.store(desired.Quantisation, std::memory_order_relaxed);
@@ -44,7 +44,7 @@ namespace ninjam
 			desired.LocalFollowPolicy = _localFollowPolicy.load(std::memory_order_relaxed);
 			desired.HasRemoteTiming = _hasRemoteTiming.load(std::memory_order_relaxed);
 			desired.IntervalLengthSamps = _intervalLengthSamps.load(std::memory_order_relaxed);
-			desired.GrainSamps = _grainSamps.load(std::memory_order_relaxed);
+			desired.RemoteGridStepSamps = _remoteGridStepSamps.load(std::memory_order_relaxed);
 			desired.BeatsPerInterval = _beatsPerInterval.load(std::memory_order_relaxed);
 			desired.TempoBpm = _tempoBpm.load(std::memory_order_relaxed);
 			desired.Quantisation = _quantisation.load(std::memory_order_relaxed);

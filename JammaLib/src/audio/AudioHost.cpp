@@ -235,7 +235,7 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	{
 		const auto geometryChanged = !_appliedNinjamTiming.HasRemoteTiming
 			|| desired.IntervalLengthSamps != _appliedNinjamTiming.IntervalLengthSamps
-			|| desired.GrainSamps != _appliedNinjamTiming.GrainSamps
+			|| desired.RemoteGridStepSamps != _appliedNinjamTiming.RemoteGridStepSamps
 			|| desired.BeatsPerInterval != _appliedNinjamTiming.BeatsPerInterval
 			|| desired.TempoBpm != _appliedNinjamTiming.TempoBpm
 			|| desired.Quantisation != _appliedNinjamTiming.Quantisation;
@@ -254,7 +254,7 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		utils::Timer::Command timerCommand;
 		timerCommand.Generation = desired.Generation;
 		timerCommand.SeedLengthSamps = desired.IntervalLengthSamps;
-		timerCommand.QuantiseSamps = desired.GrainSamps;
+		timerCommand.QuantiseSamps = desired.RemoteGridStepSamps;
 		timerCommand.Quantisation = desired.Quantisation;
 		if (geometryChanged)
 		{

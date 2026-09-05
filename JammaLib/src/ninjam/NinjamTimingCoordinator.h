@@ -49,7 +49,7 @@ namespace ninjam
 	{
 		unsigned int IntervalLengthSamps = 0u;
 		unsigned int SourceSampleRate = 0u;
-		unsigned int GrainSamps = 0u;
+		unsigned int RemoteGridStepSamps = 0u;
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 		unsigned int IntervalPositionSamps = 0u;
@@ -112,7 +112,7 @@ namespace ninjam
 		ObservationInvalidBpi,
 		ObservationMissingAudioBoundary,
 		ObservationMissingLocalTransport,
-		ObservationInvalidGrain,
+		ObservationInvalidRemoteGridStep,
 		ObservationInvalidLocalMasterLength,
 		TrackerImplausibleBackward,
 		SafetyLimitExceeded,

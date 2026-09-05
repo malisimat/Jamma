@@ -23,7 +23,7 @@ namespace
 		desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::ContinuousSync;
 		desired.HasRemoteTiming = true;
 		desired.IntervalLengthSamps = seedLength;
-		desired.GrainSamps = 100u;
+		desired.RemoteGridStepSamps = 100u;
 		desired.Quantisation = Timer::QUANTISE_MULTIPLE;
 		desired.RemotePhaseSamps = absolutePhase;
 		desired.HasObservationSample = true;
