@@ -188,6 +188,8 @@ Independent review `65709c163df80551a609c74b7fa7ae7263b35065` approved B016 afte
 
 B017 commit `a7678b48399f969f3148989f32da382541f986da` deletes only the unregistered obsolete 156-line remote-phase pseudo-test after its two registered replacements passed. Post-deletion build, prerequisites 2/2, required timing filter 115/115, full suite 843 pass/one expected skip/zero fail, membership/retired-symbol/active-symbol audits, and `master...HEAD` diff-check are green. Status: implemented and verified, pending independent `batch-reviews/B017.md`.
 
+Independent review `2b76c7c4b1ca5ea930498b9075b4879d7f70e46d` approved B017 after repeating all executable and static evidence. B017 and the complete B001–B017 cleanup sequence are implemented, verified, and independently approved; Stage 21 final verification may begin.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
