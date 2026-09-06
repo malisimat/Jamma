@@ -23,7 +23,7 @@ void NinjamMetronome::Mix(float* interleavedOutput,
 	unsigned int numFrames,
 	const ninjam::NinjamMetronomeTimingResult& timing) noexcept
 {
-	if (!interleavedOutput || numOutputChannels == 0u || numFrames == 0u || !timing.valid)
+	if (!interleavedOutput || numOutputChannels == 0u || numFrames == 0u || !timing.Valid)
 		return;
 
 	unsigned int onsetIndex = 0u;
@@ -31,10 +31,10 @@ void NinjamMetronome::Mix(float* interleavedOutput,
 	{
 		bool accentAtSample = false;
 		bool normalAtSample = false;
-		while (onsetIndex < timing.onsetCount && timing.onsets[onsetIndex].offset == sample)
+		while (onsetIndex < timing.OnsetCount && timing.Onsets[onsetIndex].Offset == sample)
 		{
-			accentAtSample = accentAtSample || timing.onsets[onsetIndex].accent;
-			normalAtSample = normalAtSample || !timing.onsets[onsetIndex].accent;
+			accentAtSample = accentAtSample || timing.Onsets[onsetIndex].Accent;
+			normalAtSample = normalAtSample || !timing.Onsets[onsetIndex].Accent;
 			onsetIndex++;
 		}
 

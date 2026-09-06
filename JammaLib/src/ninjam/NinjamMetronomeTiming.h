@@ -13,38 +13,38 @@ namespace ninjam
 {
 	struct NinjamMetronomeTimingInput
 	{
-		unsigned int intervalPositionSamps = 0u;
-		unsigned int intervalLengthSamps = 0u;
-		float bpm = 0.0f;
-		unsigned int bpi = 0u;
-		unsigned int deviceSampleRate = 0u;
-		unsigned int outputLatencySamps = 0u;
-		unsigned int numFrames = 0u;
+		unsigned int IntervalPositionSamps = 0u;
+		unsigned int IntervalLengthSamps = 0u;
+		float Bpm = 0.0f;
+		unsigned int Bpi = 0u;
+		unsigned int DeviceSampleRate = 0u;
+		unsigned int OutputLatencySamps = 0u;
+		unsigned int NumFrames = 0u;
 	};
 
 	struct NinjamMetronomeOnset
 	{
-		unsigned int offset = 0u;
-		bool accent = false;
+		unsigned int Offset = 0u;
+		bool Accent = false;
 	};
 
 	struct NinjamMetronomeTimingState
 	{
-		bool primed = false;
-		unsigned int intervalLengthSamps = 0u;
-		float bpm = 0.0f;
-		unsigned int bpi = 0u;
-		unsigned int deviceSampleRate = 0u;
+		bool Primed = false;
+		unsigned int IntervalLengthSamps = 0u;
+		float Bpm = 0.0f;
+		unsigned int Bpi = 0u;
+		unsigned int DeviceSampleRate = 0u;
 	};
 
 	struct NinjamMetronomeTimingResult
 	{
 		static constexpr unsigned int MaxOnsets = 128u;
 
-		std::array<NinjamMetronomeOnset, MaxOnsets> onsets{};
-		unsigned int onsetCount = 0u;
-		bool valid = false;
-		bool generationReset = false;
+		std::array<NinjamMetronomeOnset, MaxOnsets> Onsets{};
+		unsigned int OnsetCount = 0u;
+		bool Valid = false;
+		bool GenerationReset = false;
 	};
 
 	class NinjamMetronomeTiming

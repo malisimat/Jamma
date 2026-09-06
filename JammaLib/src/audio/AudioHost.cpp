@@ -551,18 +551,18 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 				if (metronomeEnabled && liveTiming.IsValid)
 				{
 					ninjam::NinjamMetronomeTimingInput timingInput;
-					timingInput.intervalPositionSamps = liveTiming.IntervalPositionSamps;
-					timingInput.intervalLengthSamps = liveTiming.IntervalLengthSamps;
-					timingInput.bpm = liveTiming.Bpm;
-					timingInput.bpi = liveTiming.Bpi;
-					timingInput.deviceSampleRate = liveTiming.DeviceSampleRate;
-					timingInput.outputLatencySamps = audioStreamParams.OutputLatency == 0u ?
+					timingInput.IntervalPositionSamps = liveTiming.IntervalPositionSamps;
+					timingInput.IntervalLengthSamps = liveTiming.IntervalLengthSamps;
+					timingInput.Bpm = liveTiming.Bpm;
+					timingInput.Bpi = liveTiming.Bpi;
+					timingInput.DeviceSampleRate = liveTiming.DeviceSampleRate;
+					timingInput.OutputLatencySamps = audioStreamParams.OutputLatency == 0u ?
 						_userConfig.Audio.LatencyOut : audioStreamParams.OutputLatency;
-					timingInput.numFrames = numSamps;
+					timingInput.NumFrames = numSamps;
 
 					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(
 						timingInput, _ninjamMetronomeTimingState);
-					if (metronomeTiming.generationReset)
+					if (metronomeTiming.GenerationReset)
 						_ninjamMetronome.Reset();
 					_ninjamMetronome.Mix(outBuf, audioStreamParams.NumOutputChannels, numSamps, metronomeTiming);
 				}

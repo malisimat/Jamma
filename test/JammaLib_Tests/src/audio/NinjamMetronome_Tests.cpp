@@ -26,9 +26,9 @@ TEST(NinjamMetronome, MixesKnownOnsetToEveryOutputChannelOnly)
 	const auto exportBuffer = output;
 
 	ninjam::NinjamMetronomeTimingResult timing;
-	timing.valid = true;
-	timing.onsets[0] = { 2u, false };
-	timing.onsetCount = 1u;
+	timing.Valid = true;
+	timing.Onsets[0] = { 2u, false };
+	timing.OnsetCount = 1u;
 	metronome.Mix(output.data(), 2u, 8u, timing);
 
 	EXPECT_EQ(output[0], 0.0f);
