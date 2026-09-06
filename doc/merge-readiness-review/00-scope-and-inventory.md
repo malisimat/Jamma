@@ -180,6 +180,8 @@ Superseding independent review `6150f5f3604bb4a483c118ae3c53ce9dfbbca3a8` approv
 
 B015 passing-first prerequisites passed 2/2 at approved baseline `1ed040d`. Six mechanical, rollback-safe commits `e4fae40`/`7df0ee9`/`a4ef843`/`376f0b0`/`5a9facf`/`03f3d1e` apply only the approved acronym, remote-grid, clock-domain/correction, automation-origin, metronome, and export/UI vocabulary. Each wrapped incremental build and focused filter passed; final broad coverage passed 188/188 and the full suite passed 843 with one expected hardware skip and zero failures. Retired-name/UI audits are clean, local grain and protected glossary concepts remain, and no persistence or upstream file changed. Status: implemented and verified, pending independent `batch-reviews/B015.md`; B016 remains gated.
 
+Independent review `b055a20b94910c10afb19d17ed50f110455f7dea` approved B015 after repeating the wrapped build, prerequisites 2/2, expanded broad filter 227/227, full 843-pass suite, and all semantic/static audits. B015 is implemented, verified, and independently approved; B016 may proceed.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
