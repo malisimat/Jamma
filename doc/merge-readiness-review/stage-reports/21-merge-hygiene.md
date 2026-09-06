@@ -1,12 +1,12 @@
-# Stage 21 — Build, Test, and Merge Hygiene (Initial Design Only)
+# Stage 21 — Build, Test, and Merge Hygiene
 
-> **Status: design-only, pre-cleanup.** This report defines the checks and evidence contract for approved cleanup batches and the eventual final merge audit. It does not record a cleanup build, native-test run, manual scenario, batch review, or post-cleanup diff result. The execution/results section at the end is deliberately deferred until after the cleanup-batch human gate and implementation.
+> **Status: complete — READY WITH ACCEPTED RISKS.** The initial design below is retained as historical context. Its deferred execution contract has now been completed for every available automated and static check. B001-B017 are independently approved, the final builds and native suite are green, the two-range audit is clean, and remaining manual/tooling limitations are explicit. The branch now stops at the required human merge-decision gate.
 
-## Assignment
+## Initial design assignment (historical)
 
 Stage 21 owns build/test command validity, Visual Studio project membership, local-only artifacts, formatting, generated/binary assets, and final changed-file hygiene. The governing Phase 4 specification requires exact commands, evidence locations, limitations, and a final changed-file audit, and explicitly says that initial reconciliation designs these checks while post-cleanup execution updates this same report (`doc/merge-readiness-review/phase-4-reconciliation-and-merge-evidence.md:7`–`:19`).
 
-This assignment is bounded to planning and static grounding. It does not re-review production semantics, implement cleanup, execute builds/tests/manual scenarios, inspect post-cleanup output, create batch reviews, or write `merge-brief.md`. The merge-readiness plan makes investigation non-authorizing (`doc/merge-readiness-review/merge-readiness-plan.md:49`–`:63`), and the current request stops at batch approval.
+The initial assignment was bounded to planning and static grounding. It did not re-review production semantics, implement cleanup, execute builds/tests/manual scenarios, inspect post-cleanup output, create batch reviews, or write `merge-brief.md`. That restriction applied to the design pass preserved below; the final authorized execution is recorded at the end of this report.
 
 The protected timing glossary is a hard constraint on every later check. In particular, master phase is not a per-loop cursor, common mapped elapsed time is not a shared loop cursor, scene position is not wrapped Timer geometry, and follow policy is not a coordinate system (`doc/merge-readiness-review/00-scope-and-inventory.md:17`–`:41`). Build success or a clean diff cannot waive the required unequal-length, intentional-offset, reconnect, and `NoSync` evidence.
 
@@ -164,7 +164,7 @@ Every cleanup-range path must map to one approved batch owner or to the batch's 
 - Recommended disposition: remove the integration-test blank line in the approved F-038/P1–P4 test batch that owns the file; let accepted F-037 deletion consume the obsolete-test instance. Do not create a cross-repository formatting batch.
 - Protected timing concepts affected: none; test assertions and test registration must remain otherwise unchanged except as separately approved.
 - Verification: `git diff --check master...HEAD` and cleanup-range `git diff --check` return no output; affected test project builds; registered replacement tests pass.
-- Human decision: pending Phase 4 reconciliation/batch gate.
+- Human decision: accepted within the owning timing-test work; both final diff-check ranges are clean and no standalone formatting sweep was needed.
 
 No separate candidate is raised for build tooling, local tasks, project membership, or assets. F-004 already retains the wrapper/tooling contract, G3-1 leaves F-020's copied textures unchanged and outside cleanup, and F-037 owns the obsolete uncompiled test. Static design inspection found no evidence that `.vscode/tasks.json` is tracked or that the current active timing suites are missing from the native project.
 
@@ -185,22 +185,77 @@ No separate candidate is raised for build tooling, local tasks, project membersh
 - Phase 2's 821/822 run is the latest executed baseline, but accepted test additions/deletions will change the final count. Success is determined by registered intended tests and zero unexpected failure/skip, not by preserving 821 numerically.
 - Review and phase artifacts make raw `master...HEAD` larger than the 199-file production baseline. The final report must show both views and explicitly account for every review-only path.
 
+## Final post-cleanup execution and results
+
+### Immutable baselines and batch closure
+
+- Branch: `bugfix/align-remote-join`.
+- `master` and merge base: `4941b780f7ff5a46f742167d79338e3ab592a565`.
+- Human-approved Phase 4 gate: `2e770b743d9f2466b2edafff5c92faf139d93108`.
+- Verified implementation tip: `2dc6cf8d3feefdcb4a7fcdade518f05d0f9b3b6c`.
+- B001-B017 are implemented, canonically evidenced, independently approved, and finally closed. Earlier rejections remain useful history and are superseded by their recorded correction reviews. The independent closure audit found no unresolved batch blocker and mapped every cleanup-range path to an approved batch, evidence update, review, or human amendment.
+
+### Final build and native-test evidence
+
+Immediately before every build or native-test invocation, the local `.vscode/tasks.json` and `doc/build.md` were reread. All MSBuild invocations used the task-selected Visual Studio 18 executable through `.github/skills/builder/invoke-msbuild.ps1`; direct-project invocation used the absolute `SolutionDir` with exactly one trailing backslash.
+
+| Check | Time on 2026-09-05 (UTC-06:00) | Result |
+| --- | --- | --- |
+| Debug x64 solution incremental Build | 22:26:21.711-22:26:22.633 | Passed; Jamma, JammaLib, JammaLib_Tests, and LatencyMeasure produced their Debug outputs |
+| Release x64 solution incremental Build | 22:26:44.010-22:26:44.936 | Passed; all four solution projects produced their Release outputs |
+| Debug x64 JammaLib_Tests incremental Build | 22:27:10.787-22:27:11.731 | Passed with project references and canonical absolute `SolutionDir` |
+| Full Debug native suite | 22:27:27.647-22:27:57.402 | Exit 0; 844 tests from 117 suites, 843 passed, one expected hardware-dependent MIDI skip, zero failed |
+
+The sole skip was `MidiDevice.OpensPreferredDeviceWhenAvailable`; the test itself reported that `JAMMA_ENABLE_MIDI_HARDWARE_TESTS=1` is required. The inherited B009 saturation benchmark executed inside the full suite and reported `timing_accepted=true`. The authoritative local tasks contain no Release native-test execution command, so the successful Release test executable build is recorded but no Release test run is claimed.
+
+### Release dependency recovery
+
+The first Release incremental Build failed at link with `C1047`/`LNK1257`: the vendored x64 Release `njclient.lib` contained LTCG intermediate code from a different v145 compiler revision. A justified one-time Release solution Rebuild refreshed Jamma-owned objects but reproduced the failure because NJClient is a prebuilt archive rather than a solution project.
+
+Archive metadata identified the matching source repository and its `origin/feature/single-header` revision `d261c9156d151ce91ce9226b90af1757faf734cd`. Stage 21 rebuilt that exact pimpl-compatible source as an x64 Release `/MD` static library with the installed compiler and whole-program optimization disabled for the archive. Validation established:
+
+- the generated public `njclient.h` is byte-identical to Jamma's vendored header;
+- archive members are x64 and carry `RuntimeLibrary=MD_DynamicRelease` plus `MSVCRT` directives;
+- the required out-of-line NJClient API symbols, including timing and user/status getters, are present;
+- no LTCG marker remains, removing the compiler-minor lock while retaining normal Release optimization;
+- both Jamma and JammaLib_Tests link against the refreshed static archive.
+
+The compatible archive is commit `2dc6cf8`; no NJClient source or API changed in this repository. The refresh is intended to be behavior-preserving, but Release runtime execution was not performed. Its SHA-256 at verification was `28251FC342A28C0403791EAD0BB0F1C9F6F6BEBCB249A686E073B6E05B2B6BB7`.
+
+### Final static and changed-file audit
+
+At verified implementation tip `2dc6cf8`:
+
+| Range | Files | Insertions | Deletions | Added | Modified | Deleted | Renamed | Binary rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `master...2dc6cf8` | 256 | 23,827 | 1,716 | 127 | 125 | 0 | 4 | 20 |
+| `2e770b..2dc6cf8` | 95 | 7,390 | 3,625 | 22 | 72 | 1 | 0 | 1 |
+
+- `git diff --check master...HEAD` and `git diff --check 2e770b..HEAD` returned no output.
+- No conflicted path or nonignored untracked file remained. The branch was 40 commits ahead and zero behind its configured upstream at this checkpoint.
+- The full range contains 285 commits including three merges; the cleanup range contains 121 commits and no merges.
+- The four full-range renames are the approved `TimingQuantiser` to `Quantiser` pair and `GuiPopupHost` to `GuiPopupManager` pair. B017's obsolete test is the cleanup-only deletion. The cleanup-only binary is the Stage 21 NJClient compatibility refresh; the other 19 full-range binary rows are approved pre-gate HUD TGA additions.
+- Cleanup introduced no HUD/resource/shader collateral, password/work-directory persistence change, generic JSON/schema change, submodule, generated source, local task file, build output, or credential/log artifact.
+- Every cleanup-added production/test unit is registered in its `.vcxproj` and filters. B017's deleted uncompiled test has no stale project/filter entry.
+
+The project/filter audit also found inherited IDE metadata debt that predates the approval gate: physical duplicate/unused test files, stale/duplicate filter entries, and JammaLib project/filter presentation mismatches. Five compiled tests lack filter entries; three of those were branch-added before the cleanup gate (`StationVisualState_Tests.cpp`, `NinjamAudioTimingCommand_Tests.cpp`, and `NinjamTimingIntegration_Tests.cpp`). No compiled entry points to a missing source, the cleanup itself registered its new units correctly, and both final solution configurations build. These presentation discrepancies are explicitly accepted for this merge rather than expanded into a broad project/filter cleanup.
+
+### Manual and tooling evidence not executed
+
+No claim is made for the following environment-dependent checks:
+
+- live NINJAM Continuous/Block/`NoSync`/`Stay local`, prompt, disconnect, physical loss, retry, reconnect, malformed timing, or differing-rate tail scenarios;
+- a saved/default `.jam` interactive launch or older-binary resave;
+- normal-versus-verbose bounded live diagnostics traces;
+- complete live remote-grid/local-inference/MIDI/overlay behavior;
+- enabled export and physical DAC-to-ADC loopback;
+- physical MIDI hardware execution;
+- ASan, race tooling, profiler, page heap, or Application Verifier.
+
+Automated tests cover the underlying deterministic contracts, but they do not convert these unavailable manual/tooling checks into passes. The accepted residuals also remain: F-020 resource-registration debt; F-045 zero-default/no-schema downgrade behavior; F-049/F-050 password and work-directory persistence; unhardened generic JSON/upstream NJClient bounds without broad security certification; disabled export latency compensation and integer repeat/skip behavior; and the B009 saturation benchmark's explicit ceiling rather than a configured production maximum.
+
 ## Conclusion
 
-Stage 21's initial design is complete and remains non-executing. It supplies commands grounded in the local tasks and required wrapper, project/resource/local-artifact/formatting/generated-asset audit plans, evidence destinations, limitations, and a two-range final diff protocol. One small whitespace candidate should be absorbed by existing timing-test batches; no new broad hygiene batch is warranted.
+Stage 21 is complete. All approved cleanup batches are closed, current-content Debug and Release solution builds pass, the Debug native suite has no failure or unexpected skip, static/two-range audits are clean, and the merge brief exists. No technical cleanup blocker remains inside the approved scope.
 
-No build, test, cleanup verification, manual scenario, post-cleanup audit, batch review, source/project cleanup, or merge brief was performed. The protected timing distinctions and timing-only cleanup scope remain intact.
-
-## Deferred post-cleanup execution and results — not executed
-
-This section is intentionally a placeholder for the final Phase 4 execution pass after the human approves cleanup batches and all implementations have independent batch reviews. It must later record, without overwriting the design above:
-
-- approval-gate commit and final `HEAD`/merge base/master hashes;
-- per-batch prerequisite command/filter/results and linked verification/batch-review evidence;
-- final Debug and Release incremental solution build results;
-- final full native-suite count, exact failures/skips, and applicable manual scenarios;
-- project/filter/resource membership results, local-only/generated-asset audit results, and formatting results;
-- complete `master...HEAD` plus cleanup-only changed-file audit and prohibited-collateral reconciliation;
-- remaining limitations and whether they are accepted risks or reopen a batch.
-
-**Current execution status:** deferred at the cleanup-batch approval human gate; there are no cleanup verification results to report.
+Final classification: **READY WITH ACCEPTED RISKS**, subject to the human merge decision. This is intentionally not an unqualified `READY` because the accepted persistence/resource/project-metadata risks and unavailable live/manual/tooling evidence remain real and explicit.

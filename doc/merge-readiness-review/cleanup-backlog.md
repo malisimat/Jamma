@@ -1,6 +1,6 @@
 # Cleanup backlog
 
-> **Status: approved for execution.** The human approved this complete Phase 4 cleanup-batch gate at commit `2e770b743d9f2466b2edafff5c92faf139d93108`, including B001–B017, their dependency order, prerequisites, owners, prohibited collateral, rollback points, verification requirements, independent reviews, protected timing invariants, and recorded no-batch residual risks. This authorizes the one remaining execution pass to run B001–B017 sequentially. Any scope expansion, failed prerequisite that cannot be corrected within its batch, or irreconcilable batch review returns to the human gate.
+> **Status: cleanup execution complete; awaiting the human merge decision.** The human approved the complete Phase 4 cleanup-batch gate at commit `2e770b743d9f2466b2edafff5c92faf139d93108`. B001-B017 are implemented, verified, independently approved, and closed. Final Stage 21 builds, native tests, static audits, canonical reconciliation, and the merge brief are complete at implementation evidence tip `2dc6cf8d3feefdcb4a7fcdade518f05d0f9b3b6c`. The branch is classified **READY WITH ACCEPTED RISKS**, subject to the final human merge decision and the explicit manual/tooling limitations in `stage-reports/21-merge-hygiene.md` and `merge-brief.md`.
 
 ## Controlling invariants and execution contract
 
@@ -235,6 +235,17 @@
 | F-045 | No schema guard; missing field defaults zero and older-binary resave loss is accepted. B011/B016 only preserve/test/document that policy. |
 | F-049/F-050 | Rejected cleanup. Current `.jam` password and work-directory writing remain explicit accepted risks. |
 | Generic JSON/upstream NJClient limits | Accepted exclusions; no broad security certification. |
+
+## Stage 21 final closeout
+
+- All B001-B017 batch reviews are approved; no batch blocker, dependency gate, or unowned cleanup path remains.
+- Current-content Debug and Release x64 solution builds passed through the required wrapper. The Debug x64 native-test project build passed, followed by 844 tests across 117 suites: 843 passed, the expected hardware-only MIDI test skipped, and none failed.
+- The first Release link exposed a compiler-version-locked LTCG `njclient.lib`. With explicit human confirmation, Stage 21 rebuilt the existing x64 Release `/MD` static archive from the matching single-header source revision, disabled LTCG for archive portability, verified the public header and required symbols, and committed the compatible artifact at `2dc6cf8`. No NJClient source, API, or runtime mode changed in Jamma; the refresh is intended to be behavior-preserving, but Release runtime execution was not performed.
+- The cleanup-only and complete branch ranges pass `git diff --check`; there are no conflicts or nonignored untracked files. Cleanup-added production/test units are registered and B017 leaves no stale project entry.
+- Existing project/filter presentation discrepancies were present at the approval gate and do not remove any compiled source or affect either final solution build. They are accepted IDE metadata debt for this merge, including three pre-gate branch-added tests that compile but lack filter entries. No broad project/filter sweep was added to the timing cleanup.
+- Live NINJAM, audio-hardware, `.jam` downgrade, verbose-trace, enabled-export, sanitizer, race, profiler, page-heap, and Application Verifier scenarios remain explicitly unexecuted. Release native-test execution is not claimed because the authoritative local task file supplies no Release test-run command.
+
+Final disposition: **READY WITH ACCEPTED RISKS**, subject to the human merge decision. See `stage-reports/21-merge-hygiene.md` and `merge-brief.md` for full evidence and limitations.
 
 ## Human batch-approval gate
 

@@ -1,5 +1,7 @@
 # Bugfix Branch Merge-Readiness Review
 
+> **Status: execution complete; final human merge decision pending.** All four phases, B001-B017 cleanup batches, independent reviews, Stage 21 automated/static verification, canonical reconciliation, and `merge-brief.md` are complete. The final recommendation is **READY WITH ACCEPTED RISKS**; no merge to `master` has been performed.
+
 This review prepares `bugfix/align-remote-join` for a safe merge to `master`. It is a four-phase investigation and cleanup programme, not a request to rewrite the branch. The current comparison is large (the initial estimate for `master...HEAD` was roughly 14,700 insertions across 199 files), so Phase 1 must regenerate those figures rather than treating them as fixed. Independent subagents inspect bounded concerns in parallel and leave durable evidence for synthesis.
 
 The review must preserve the consolidated timing model: the distinct sync modes, the sync map's separation of phase from source/scene coordinates, and the distinction between local and remote timing are intentional. A reviewer may propose clearer names or a smaller implementation, but must not collapse those concepts merely because they are related.
@@ -91,6 +93,6 @@ At every agent dispatch, include: stage number and title, primary ownership, exp
 - Every stage has a report, every report is represented in its phase packet, and all declared exclusions are either covered by another stage or explicitly accepted.
 - Canonical artefacts have no unresolved duplicate IDs, contradictory dispositions, or cleanup work lacking an owner and dependency order.
 
-## Remaining execution after the Phase 4 batch gate
+## Final execution after the Phase 4 batch gate
 
-Once the human approves the complete proposed batch set in `cleanup-backlog.md`, one final execution pass completes the review: capture the gate commit; execute dependency-ordered prerequisite/implementation/verification/review commits for every batch; close all backlog and matrix rows; finish Stage 21's deferred results; run final builds, native tests, manual timing scenarios, and diff hygiene; write `merge-brief.md`; and stop at the final human merge decision. Do not introduce another routine planning gate between approved batches, but return to the human if scope changes or an approved batch cannot pass within its boundary.
+The approved final execution pass is complete. The literal gate was captured; B001-B017 ran in dependency order and closed with independent approval; Stage 21 completed the available final builds, native tests, and two-range hygiene audits; canonical status was reconciled; and `merge-brief.md` was created. Unavailable live/manual/tooling scenarios are recorded as explicit limitations rather than silent passes. The review has stopped at the required final human merge decision.

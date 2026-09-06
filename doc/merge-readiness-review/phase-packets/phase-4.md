@@ -1,6 +1,6 @@
 # Phase 4 packet — Reconciliation and proposed cleanup batches
 
-> **Status: cleanup-batch gate approved; final execution pass in progress.** The human approved the complete gate at commit `2e770b743d9f2466b2edafff5c92faf139d93108`. No cleanup, cleanup verification, batch review, post-cleanup Stage 21 result, or `merge-brief.md` existed when execution began.
+> **Status: complete; awaiting the human merge decision.** The human-approved gate at `2e770b743d9f2466b2edafff5c92faf139d93108` has been fully executed. B001-B017 are independently approved, final Stage 21 automated/static verification is green, canonical status is reconciled, and `../merge-brief.md` records the final **READY WITH ACCEPTED RISKS** recommendation.
 
 ## Inputs received
 
@@ -91,3 +91,15 @@ Execution must return to the human only for scope expansion, a batch failure tha
 **B012/F-007 owned-file addendum (human-approved on 2026-09-02 against clean `HEAD` `3c043b1f7fa3f365fd39718b6d3b2324dc93d1a2`):** The human authorizes B012 to add one small value-only engine timing header with necessary project/filter registration and to edit `JammaLib/src/ninjam/NinjamTimingCoordinator.h` and `JammaLib/src/ninjam/NinjamNetworkService.h` strictly to replace their direct `Quantiser.h` includes with that value header. No declarations or behavior may change in those two consumer headers. This narrow scope expansion is necessary because the prior literal owned-file list permitted extracting the F-007 values but did not permit editing both consumers whose aggregate dependency the required include-graph audit must retire. Every existing B012 prohibition, prerequisite, rollback point, dependency, protected timing invariant, verification requirement, independent-review requirement, no-batch residual, and downstream order remains unchanged.
 
 **B014 owned-file addendum (human-approved on 2026-09-05 against clean `HEAD` `6312b8863dd58f65d0fe62e7f339999d7d04cc72`):** The human authorizes B014 to add `JammaLib/src/ninjam/NinjamNetworkService.h/.cpp` to its owned files only for two mutex-serialized forwarding operations: configure the coordinator's bounded diagnostics and submit/read the existing AudioHost applied receipt for off-callback correlation. This narrow expansion lets the existing Scene job owner reach the coordinator's private diagnostics without duplicating diagnostic ownership. NetworkService may add no diagnostic state, authority or lifecycle behavior, or formatting; the coordinator remains the sole diagnostics owner and Scene remains the off-callback presenter. Every existing B014 prohibition, prerequisite, rollback point, dependency, protected timing invariant, verification requirement, independent-review requirement, no-batch residual, and downstream order remains unchanged.
+
+## Final execution outcome
+
+The final sequential pass completed on 2026-09-05. All B001-B017 implementations, corrections, canonical evidence updates, independent approvals, and closeouts are recorded in `../cleanup-backlog.md`, `../verification-matrix.md`, and `../batch-reviews/`.
+
+At implementation evidence tip `2dc6cf8d3feefdcb4a7fcdade518f05d0f9b3b6c`, both Debug and Release x64 solution builds passed, the Debug native-test project built, and the full suite ran 844 tests across 117 suites with 843 passed, the sole expected hardware-dependent MIDI test skipped, and zero failures. Both the complete `master...HEAD` and cleanup-only `2e770b..HEAD` ranges pass `git diff --check`; no conflicts, nonignored untracked files, unowned cleanup paths, or prohibited cleanup collateral remain.
+
+The Release gate required one human-confirmed Stage 21 compatibility repair: commit `2dc6cf8` refreshes the existing x64 Release `/MD` static `njclient.lib` from its matching single-header source without LTCG after the old compiler-version-locked archive failed with C1047. Jamma/NJClient source and API are unchanged, the refresh is intended to be behavior-preserving, and the final Release solution link passes; Release runtime execution was not performed.
+
+Unavailable live/manual/tooling scenarios and accepted resource, persistence/security, project/filter presentation, export, and maximum-hierarchy residuals are not silently passed. They are listed in `../stage-reports/21-merge-hygiene.md` and `../merge-brief.md`.
+
+Final Phase 4 disposition: **READY WITH ACCEPTED RISKS**. Execution stops here at the required human merge-decision gate; no merge to `master` is performed by this review.

@@ -190,6 +190,8 @@ B017 commit `a7678b48399f969f3148989f32da382541f986da` deletes only the unregist
 
 Independent review `2b76c7c4b1ca5ea930498b9075b4879d7f70e46d` approved B017 after repeating all executable and static evidence. B017 and the complete B001–B017 cleanup sequence are implemented, verified, and independently approved; Stage 21 final verification may begin.
 
+Stage 21 final verification completed at implementation evidence tip `2dc6cf8d3feefdcb4a7fcdade518f05d0f9b3b6c`. Debug and Release x64 solution builds passed, the Debug native-test target built, and the full suite ran 844 tests across 117 suites with 843 passed, one expected hardware MIDI skip, and zero failures. Both full and cleanup-only ranges pass diff-check with no conflicts, nonignored untracked files, unowned cleanup paths, or prohibited cleanup collateral. The Stage 21 report and `merge-brief.md` classify the branch **READY WITH ACCEPTED RISKS**, subject to the human merge decision and explicit unavailable live/manual/tooling evidence.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
@@ -241,4 +243,4 @@ Independent review `2b76c7c4b1ca5ea930498b9075b4879d7f70e46d` approved B017 afte
 | 18 Security and input robustness | integrated |
 | 19 Cross-review reconciliation | integrated |
 | 20 Change impact and regression surface | integrated |
-| 21 Build, test, and merge hygiene | design integrated; execution deferred |
+| 21 Build, test, and merge hygiene | complete; READY WITH ACCEPTED RISKS at human merge gate |
