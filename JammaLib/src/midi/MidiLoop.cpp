@@ -162,7 +162,7 @@ MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
 	  _sampleRate(static_cast<float>(constants::DefaultSampleRate)),
 	  _loopLengthSamps(0),
-	  _loopPhaseAnchor(0u),
+	  _automationGlobalSampleOrigin(0u),
 	  _dropped(0),
 	  _revision(0),
 	  _modelRevision(0),
@@ -255,7 +255,7 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGloba
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 
 	_loopLengthSamps = loopLengthSamps;
-	_loopPhaseAnchor = startGlobalSample;
+	_automationGlobalSampleOrigin = startGlobalSample;
 	_state = MidiLoopState::Playing;
 	_held.reset();
 	++_revision;

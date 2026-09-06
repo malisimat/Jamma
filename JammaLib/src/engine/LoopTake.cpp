@@ -1663,9 +1663,9 @@ void LoopTake::Play(unsigned long index,
 			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
 			// At global sample `index`, the play cursor is at P0, so position 0 maps to
 			// global sample (index - P0). uint32_t wraps correctly.
-			const auto phaseAnchor = static_cast<std::uint32_t>(index)
+			const auto automationGlobalSampleOrigin = static_cast<std::uint32_t>(index)
 				- static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
-			midiLoop->EndRecord(midiLoopLength, phaseAnchor);
+			midiLoop->EndRecord(midiLoopLength, automationGlobalSampleOrigin);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}

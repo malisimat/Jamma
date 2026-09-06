@@ -328,9 +328,9 @@ namespace engine
 			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
 			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
 			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
-			std::uint32_t                     loopPhaseAnchor = 0u;      // frozen at rebuild; loop-relative phase origin
+			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
 			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
-			// effectiveAnchor = loopPhaseAnchor + anchorCorrection (modular uint32)
+			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.
 		// Kept separate from AutomationDispatch so the dispatch buffers are

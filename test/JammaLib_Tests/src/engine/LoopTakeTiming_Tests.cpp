@@ -290,9 +290,9 @@ TEST(JamFile, SignedTransportOffsetPreservesM2M3MEntityPhases)
 	EXPECT_EQ(250, take->MidiAnchorCorrection());
 
 	constexpr auto globalSample = 5000;
-	constexpr auto frozenAnchor = 2400;
+	constexpr auto frozenAutomationGlobalSampleOrigin = 2400;
 	const auto automationPosition = static_cast<unsigned long>(
-		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 2500);
+		(globalSample - frozenAutomationGlobalSampleOrigin - take->MidiAnchorCorrection()) % 2500);
 	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }
 
@@ -417,9 +417,9 @@ TEST(TransportPhaseOffset, DirectTimingCommandKeepsMidiAutomationWithNoteCursor)
 	take->ApplyAcceptedTimingCorrection(250, 1u);
 
 	constexpr auto globalSample = 1000;
-	constexpr auto frozenAnchor = 900;
+	constexpr auto frozenAutomationGlobalSampleOrigin = 900;
 	const auto automationPosition = static_cast<unsigned long>(
-		(globalSample - frozenAnchor - take->MidiAnchorCorrection()) % 1000);
+		(globalSample - frozenAutomationGlobalSampleOrigin - take->MidiAnchorCorrection()) % 1000);
 	EXPECT_EQ(350ul, take->MidiVisualPosition());
 	EXPECT_EQ(take->MidiVisualPosition(), automationPosition);
 }

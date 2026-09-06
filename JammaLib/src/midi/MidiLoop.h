@@ -178,9 +178,9 @@ namespace midi
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
 		// Global sample that maps to loop-relative position 0.  Frozen at EndRecord.
 		// Use to convert a global sample counter into a loop-relative frac:
-		//   frac = (globalSample - LoopPhaseAnchor() - correction) % loopLen / loopLen
+		//   frac = (globalSample - AutomationGlobalSampleOrigin() - correction) % loopLen / loopLen
 		// where correction is the transport re-anchor delta held externally on LoopTake.
-		std::uint32_t LoopPhaseAnchor() const noexcept { return _loopPhaseAnchor; }
+		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
@@ -318,7 +318,7 @@ namespace midi
 		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
 		// playback does not yet account for this take's VST chain latency -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
-		std::uint32_t _loopPhaseAnchor;
+		std::uint32_t _automationGlobalSampleOrigin;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;
 		std::uint64_t _modelRevision;

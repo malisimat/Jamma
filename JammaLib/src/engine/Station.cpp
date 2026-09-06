@@ -568,7 +568,7 @@ void Station::RebuildAutomationDispatch()
 				entry.loop = midiLoop.get();
 				entry.laneIdx = static_cast<std::uint8_t>(laneIdx);
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
-				entry.loopPhaseAnchor = midiLoop->LoopPhaseAnchor();
+				entry.automationGlobalSampleOrigin = midiLoop->AutomationGlobalSampleOrigin();
 				entry.anchorCorrection = take->MidiAnchorCorrectionPtr();
 				++count;
 			}
@@ -687,14 +687,15 @@ void Station::_RunAutomationDispatch(std::uint32_t blockStartSample,
 			continue;
 
 		// Apply the live anchor correction from the owning LoopTake. The frozen
-		// loopPhaseAnchor was baked at dispatch rebuild; the correction accumulates
+		// automationGlobalSampleOrigin was baked at dispatch rebuild; the correction accumulates
 		// remote NINJAM wrap re-anchor deltas without requiring a rebuild.
 		const std::int32_t correction = entry.anchorCorrection
 			? entry.anchorCorrection->load(std::memory_order_relaxed) : 0;
-		const auto effectiveAnchor = entry.loopPhaseAnchor + static_cast<std::uint32_t>(correction);
+		const auto effectiveAutomationGlobalSampleOrigin = entry.automationGlobalSampleOrigin
+			+ static_cast<std::uint32_t>(correction);
 		const double frac = (entry.loopLengthSamps > 0u)
 			? std::fmod(
-				static_cast<double>(dispatchSample - effectiveAnchor),
+				static_cast<double>(dispatchSample - effectiveAutomationGlobalSampleOrigin),
 				static_cast<double>(entry.loopLengthSamps))
 					/ static_cast<double>(entry.loopLengthSamps)
 			: 0.0;
