@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio-thread local master transport: owns master geometry/position and the
+// monotonic scene coordinate, never an individual loop or MIDI cursor.
+
 #include <atomic>
 #include <chrono>
 #include <tuple>

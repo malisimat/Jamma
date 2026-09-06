@@ -1,5 +1,8 @@
 #pragma once
 
+// Complete latest-value contract from job-side timing authority to AudioHost;
+// the mailbox transports coherent state but does not become a second owner.
+
 #include <atomic>
 #include <cstdint>
 #include <optional>

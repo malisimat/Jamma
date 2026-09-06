@@ -1,3 +1,5 @@
+// Timer advances local master transport only; remote policy belongs to NINJAM and
+// per-entity phase remains below AudioHost in the engine hierarchy.
 #include "Timer.h"
 
 using namespace utils;

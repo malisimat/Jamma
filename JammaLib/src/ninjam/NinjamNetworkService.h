@@ -1,5 +1,8 @@
 #pragma once
 
+// Serialized job/UI facade over NINJAM lifecycle and coordination; it forwards
+// operations but owns no parallel timing authority, diagnostic state, or audio work.
+
 #include <memory>
 #include <mutex>
 #include <optional>

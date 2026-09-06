@@ -1,5 +1,8 @@
 #pragma once
 
+// Recorded performance layer within a Station; owns take state, MIDI material,
+// timing anchors, effects, and its Loops without owning remote follow policy.
+
 #include <array>
 #include <atomic>
 #include <cstdint>

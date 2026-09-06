@@ -1,5 +1,8 @@
 #pragma once
 
+// Job-side remote timing authority: validates observations, selects follow intent,
+// and publishes complete desired state plus bounded diagnostics; never mutates loops.
+
 #include <array>
 #include <chrono>
 #include <cstdint>

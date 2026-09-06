@@ -1,3 +1,5 @@
+// Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
+// NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
 #include <algorithm>
 #include <iostream>

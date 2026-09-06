@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio-callback boundary: applies complete published state, owns Timer/map updates,
+// and fans policy-neutral operations to entities that retain their own cursors.
+
 #include <array>
 #include <memory>
 #include <vector>

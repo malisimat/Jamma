@@ -1,5 +1,8 @@
 #pragma once
 
+// Performance/mixing channel and LoopTake owner; fans neutral operations downward
+// while each take and loop retains its own state, anchors, length, and phase.
+
 #include <atomic>
 #include <cstdint>
 #include <cstddef>

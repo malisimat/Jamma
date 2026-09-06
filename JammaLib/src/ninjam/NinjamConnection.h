@@ -1,5 +1,8 @@
 #pragma once
 
+// NJClient lifecycle/audio adapter: job work owns connection state and validated
+// observations; the audio callback is limited to AudioProc and bounded publication.
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>

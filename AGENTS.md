@@ -20,6 +20,7 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
   - ADC capture -> ChannelMixer -> latency-compensated writes into Station / LoopTake / Loop
   - DAC playback <- Station / LoopTake / Loop mix/read <- ChannelMixer
 - Keep glue code thin and explicit. Avoid cross-subsystem coupling.
+- Treat `doc/glossary.md` as authoritative for core ownership and ubiquitous language; preserve its boundaries and exact term meanings.
 
 ## Build
 

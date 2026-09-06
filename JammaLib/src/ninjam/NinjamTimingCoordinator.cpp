@@ -1,3 +1,5 @@
+// Converts validated job-side observations into complete desired timing values;
+// AudioHost alone applies them to Timer and the engine hierarchy.
 #include "NinjamTimingCoordinator.h"
 #include "NinjamSession.h"
 #include "../include/Constants.h"

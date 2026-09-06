@@ -1,4 +1,7 @@
 #pragma once
+
+// Job/UI orchestrator: presents and forwards subsystem values without taking over
+// audio-callback application, remote timing authority, or per-entity loop state.
 #include <atomic>
 #include <memory>
 #include <algorithm>

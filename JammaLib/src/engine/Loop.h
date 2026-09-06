@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio recording/playback entity within a LoopTake; owns its buffers, logical
+// length, read/write positions, fades, and loop-local phase.
+
 #include <atomic>
 #include <string>
 #include <memory>

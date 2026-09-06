@@ -1,4 +1,5 @@
-
+// Keeps NJClient lifecycle and observation authority off the audio callback;
+// callback interaction stays pinned, bounded, and free of policy decisions.
 #include "NinjamConnection.h"
 
 #include <algorithm>

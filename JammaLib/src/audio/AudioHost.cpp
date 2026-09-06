@@ -1,3 +1,5 @@
+// Sole block-boundary timing applicator; job-side policy arrives as complete values,
+// while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
 #include "AudioHost.h"
 #include "../ninjam/NinjamLoopAlignment.h"

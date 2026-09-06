@@ -1,5 +1,8 @@
 #pragma once
 
+// Owns quantisation geometry and event-boundary choices; local grain and remote
+// grid are distinct inputs, and remote follow/mapping authority lives elsewhere.
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
