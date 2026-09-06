@@ -22,12 +22,12 @@ namespace
 		desired.Intent = NinjamDesiredTimingIntent::Replacement;
 		desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::ContinuousSync;
 		desired.HasRemoteTiming = true;
-		desired.IntervalLengthSamps = seedLength;
+		desired.RemoteMasterIntervalLengthSamps = seedLength;
 		desired.RemoteGridStepSamps = 100u;
 		desired.Quantisation = Timer::QUANTISE_MULTIPLE;
-		desired.RemotePhaseSamps = absolutePhase;
-		desired.HasObservationSample = true;
-		desired.ObservationSample = 12345u;
+		desired.RemoteMasterPhaseSamps = absolutePhase;
+		desired.HasRemotePhaseDeviceSample = true;
+		desired.RemotePhaseDeviceSample = 12345u;
 		return desired;
 	}
 }
@@ -51,9 +51,9 @@ TEST(NinjamDesiredTransportStateMailbox, PublishedStateIsCompleteAndRepeatable)
 	EXPECT_EQ(7u, first->Version);
 	EXPECT_EQ(2u, first->SessionEpoch);
 	EXPECT_EQ(3u, first->Generation);
-	EXPECT_EQ(1000ul, first->IntervalLengthSamps);
-	EXPECT_EQ(250u, first->RemotePhaseSamps);
-	EXPECT_EQ(12345u, first->ObservationSample);
+	EXPECT_EQ(1000ul, first->RemoteMasterIntervalLengthSamps);
+	EXPECT_EQ(250u, first->RemoteMasterPhaseSamps);
+	EXPECT_EQ(12345u, first->RemotePhaseDeviceSample);
 	EXPECT_EQ(first->Version, mailbox.ReadLatest()->Version);
 }
 
@@ -69,8 +69,8 @@ TEST(NinjamDesiredTransportStateMailbox, LatestPublicationWinsAcrossASingleBound
 	ASSERT_TRUE(latest.has_value());
 	EXPECT_EQ(5u, latest->Version);
 	EXPECT_EQ(5u, latest->Generation);
-	EXPECT_EQ(2000ul, latest->IntervalLengthSamps);
-	EXPECT_EQ(900u, latest->RemotePhaseSamps);
+	EXPECT_EQ(2000ul, latest->RemoteMasterIntervalLengthSamps);
+	EXPECT_EQ(900u, latest->RemoteMasterPhaseSamps);
 }
 
 TEST(NinjamDesiredTransportStateMailbox, NoSyncPublicationIsACompleteLatestValue)

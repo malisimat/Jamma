@@ -380,14 +380,14 @@ public:
 			? ninjam::NinjamDesiredTimingIntent::NoSync : intent;
 		desired.LocalFollowPolicy = policy;
 		desired.HasRemoteTiming = policy != ninjam::NinjamLocalFollowPolicy::NoSync;
-		desired.IntervalLengthSamps = length;
+		desired.RemoteMasterIntervalLengthSamps = length;
 		desired.RemoteGridStepSamps = length == 0ul ? 0u : static_cast<unsigned int>(length / 16ul);
 		desired.BeatsPerInterval = 16u;
 		desired.TempoBpm = 120.0f;
 		desired.Quantisation = Timer::QUANTISE_POWER;
-		desired.RemotePhaseSamps = phase;
-		desired.HasObservationSample = true;
-		desired.ObservationSample = observationSample;
+		desired.RemoteMasterPhaseSamps = phase;
+		desired.HasRemotePhaseDeviceSample = true;
+		desired.RemotePhaseDeviceSample = observationSample;
 		return desired;
 	}
 
@@ -403,14 +403,14 @@ public:
 		timing.IntervalPositionSamps = phase;
 		timing.Bpm = bpm;
 		timing.Bpi = bpi;
-		timing.HasAudioBlockStartSample = true;
-		timing.AudioBlockStartSample = observationSample;
+		timing.HasDeviceAudioSampleAtObservation = true;
+		timing.DeviceAudioSampleAtObservation = observationSample;
 		timing.HasLocalTransport = true;
 		timing.LocalTransport.MasterLengthSamps = length;
 		timing.LocalTransport.MasterPhaseSamps = phase;
 		timing.LocalTransport.AbsoluteSamplePos = observationSample;
 		timing.LocalTransport.SceneSamplePos = observationSample;
-		timing.LocalBlockStartSample = observationSample;
+		timing.LocalMasterAbsoluteSampleAtObservation = observationSample;
 		return timing;
 	}
 };
@@ -543,13 +543,13 @@ TEST(NinjamTimingProductionBoundary, OverlappingIntentsPublishOneCoherentDesired
 		ASSERT_TRUE(updates[i].RemoteGrid.has_value());
 		const auto& desired = updates[i].DesiredTransport.value();
 		const auto& grid = updates[i].RemoteGrid.value();
-		EXPECT_EQ(desired.IntervalLengthSamps, grid.Geometry.IntervalLengthSamps);
+		EXPECT_EQ(desired.RemoteMasterIntervalLengthSamps, grid.Geometry.IntervalLengthSamps);
 		EXPECT_EQ(desired.BeatsPerInterval, grid.Geometry.Bpi);
-		EXPECT_EQ(desired.RemotePhaseSamps, grid.Geometry.PhaseSamps);
+		EXPECT_EQ(desired.RemoteMasterPhaseSamps, grid.Geometry.PhaseSamps);
 		EXPECT_EQ(desired.TempoBpm, grid.Geometry.Bpm);
 		EXPECT_EQ(desired.Generation, grid.Geometry.Generation);
-		EXPECT_EQ(static_cast<std::int64_t>(desired.ObservationSample)
-			- static_cast<std::int64_t>(desired.RemotePhaseSamps), grid.OriginSamps);
+		EXPECT_EQ(static_cast<std::int64_t>(desired.RemotePhaseDeviceSample)
+			- static_cast<std::int64_t>(desired.RemoteMasterPhaseSamps), grid.OriginSamps);
 		EXPECT_FALSE(updates[i].TempoRequest.has_value());
 		EXPECT_FALSE(updates[i].PromptForTempoChange);
 	}
@@ -561,25 +561,25 @@ TEST(NinjamTimingProductionBoundary, OverlappingIntentsPublishOneCoherentDesired
 	const auto& older = firstIsNewer ? updates[1].DesiredTransport.value()
 		: updates[0].DesiredTransport.value();
 	EXPECT_EQ(older.Version + 1u, newer.Version);
-	const auto coherentA = newer.IntervalLengthSamps == 1000ul
-		&& newer.RemotePhaseSamps == 111u && newer.BeatsPerInterval == 16u;
-	const auto coherentB = newer.IntervalLengthSamps == 2000ul
-		&& newer.RemotePhaseSamps == 777u && newer.BeatsPerInterval == 8u;
+	const auto coherentA = newer.RemoteMasterIntervalLengthSamps == 1000ul
+		&& newer.RemoteMasterPhaseSamps == 111u && newer.BeatsPerInterval == 16u;
+	const auto coherentB = newer.RemoteMasterIntervalLengthSamps == 2000ul
+		&& newer.RemoteMasterPhaseSamps == 777u && newer.BeatsPerInterval == 8u;
 	EXPECT_TRUE(coherentA || coherentB);
 
 	host.PublishDesiredTiming(newer);
 	host.PublishDesiredTiming(older);
 	EXPECT_TRUE(audio::NinjamAudioBoundaryTestAccess::Apply(host,
-		newer.ObservationSample, 48000u));
+		newer.RemotePhaseDeviceSample, 48000u));
 	const auto receipt = host.LastAppliedDesiredTiming();
 	ASSERT_TRUE(receipt.has_value());
 	EXPECT_EQ(9u, receipt->SessionEpoch);
 	EXPECT_EQ(newer.Version, receipt->Version);
 	EXPECT_EQ(newer.Generation, receipt->Generation);
-	EXPECT_EQ(newer.IntervalLengthSamps, clock->SeedSourceLength());
-	EXPECT_EQ(newer.RemotePhaseSamps, clock->SampOffset());
+	EXPECT_EQ(newer.RemoteMasterIntervalLengthSamps, clock->SeedSourceLength());
+	EXPECT_EQ(newer.RemoteMasterPhaseSamps, clock->SampOffset());
 	EXPECT_FALSE(audio::NinjamAudioBoundaryTestAccess::Apply(host,
-		newer.ObservationSample, 48000u));
+		newer.RemotePhaseDeviceSample, 48000u));
 }
 
 TEST(NinjamTimingProductionBoundary, ReconnectPreservesM2M3MEntityOffsetsAcrossEpochOne)

@@ -357,7 +357,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 	_remoteTempoDialog->SetBodyLines({
 		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
-		"Master loop: " + std::to_string(change.IntervalLengthSamps) + " samples",
+		"Master loop: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
 	_remoteTempoDialog->ResetButtonStates();
@@ -391,7 +391,7 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 				<< ninjam::NinjamTimingCoordinator::FollowPolicyName(desired.LocalFollowPolicy)
 				<< " remoteBpm=" << desired.TempoBpm
 				<< " generation=" << desired.Generation
-				<< " observationSample=" << desired.ObservationSample << '\n';
+				<< " remotePhaseDeviceSample=" << desired.RemotePhaseDeviceSample << '\n';
 		}
 		if (update.RemoteGrid.has_value())
 			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,

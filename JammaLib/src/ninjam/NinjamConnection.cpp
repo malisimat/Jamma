@@ -563,10 +563,10 @@ void NinjamConnection::_PublishRemoteTiming(const NinjamRemoteTiming& timing) no
 	_remoteTimingBpm.store(timing.Bpm, std::memory_order_relaxed);
 	_remoteTimingBpi.store(timing.Bpi, std::memory_order_relaxed);
 	_remoteTimingIsValid.store(timing.IsValid, std::memory_order_relaxed);
-	_remoteTimingHasAudioBlockStartSample.store(
-		timing.HasAudioBlockStartSample, std::memory_order_relaxed);
-	_remoteTimingAudioBlockStartSample.store(
-		timing.AudioBlockStartSample, std::memory_order_relaxed);
+	_remoteTimingHasDeviceAudioSampleAtObservation.store(
+		timing.HasDeviceAudioSampleAtObservation, std::memory_order_relaxed);
+	_remoteTimingDeviceAudioSampleAtObservation.store(
+		timing.DeviceAudioSampleAtObservation, std::memory_order_relaxed);
 	_remoteTimingSequence.store(completedSequence + 2u, std::memory_order_release);
 }
 
@@ -586,9 +586,9 @@ NinjamRemoteTiming NinjamConnection::_ReadPublishedRemoteTiming() const noexcept
 		timing.Bpm = _remoteTimingBpm.load(std::memory_order_relaxed);
 		timing.Bpi = _remoteTimingBpi.load(std::memory_order_relaxed);
 		timing.IsValid = _remoteTimingIsValid.load(std::memory_order_relaxed);
-		timing.HasAudioBlockStartSample = _remoteTimingHasAudioBlockStartSample.load(
+		timing.HasDeviceAudioSampleAtObservation = _remoteTimingHasDeviceAudioSampleAtObservation.load(
 			std::memory_order_relaxed);
-		timing.AudioBlockStartSample = _remoteTimingAudioBlockStartSample.load(
+		timing.DeviceAudioSampleAtObservation = _remoteTimingDeviceAudioSampleAtObservation.load(
 			std::memory_order_relaxed);
 
 		const auto sequenceAfter = _remoteTimingSequence.load(std::memory_order_acquire);
@@ -646,9 +646,9 @@ NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleaved
 		ExportLaneTimingInput timingInput;
 		timingInput.n = _exportTick;
 		timingInput.numFrames = numFrames;
-		timingInput.pos = deviceTiming.IsValid && deviceTiming.HasAudioBlockStartSample
+		timingInput.pos = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
 			? deviceTiming.IntervalPositionSamps : 0u;
-		timingInput.length = deviceTiming.IsValid && deviceTiming.HasAudioBlockStartSample
+		timingInput.length = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
 			? deviceTiming.IntervalLengthSamps : 0u;
 		// TODO(latency): inLatencySamps/outLatencySamps are hardware latency
 		// only. Loop-driven VST latency (Loop::CurrentVstLatencySamps()) is
@@ -979,8 +979,8 @@ void NinjamConnection::_UpdateSnapshot()
 		timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
 		timing.Bpm = _client->GetActualBPM();
 		timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
-		timing.HasAudioBlockStartSample = _hasCompletedAudioSample.load(std::memory_order_relaxed);
-		timing.AudioBlockStartSample = _completedAudioSample.load(std::memory_order_relaxed);
+		timing.HasDeviceAudioSampleAtObservation = _hasCompletedAudioSample.load(std::memory_order_relaxed);
+		timing.DeviceAudioSampleAtObservation = _completedAudioSample.load(std::memory_order_relaxed);
 		// NJClient briefly reports an implausible placeholder before the real
 		// CONFIG_CHANGE_NOTIFY arrives, so validate at the publication owner.
 		timing.IsValid = ninjam::IsValidRemoteTiming(timing.IntervalLengthSamps,

@@ -133,7 +133,7 @@ namespace audio
 		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedDesiredPolicy{
 			ninjam::NinjamLocalFollowPolicy::NoSync };
 		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
-		std::atomic<long long> _lastAppliedTimingDelta{ 0 };
+		std::atomic<long long> _lastAppliedLocalSourceCorrectionSamps{ 0 };
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;

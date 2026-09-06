@@ -69,7 +69,7 @@ bool NinjamTimingDiagnostics::_IsRateLimitedAnomaly(
 	case NinjamTimingDiagnosticReason::ObservationInvalidSampleRate:
 	case NinjamTimingDiagnosticReason::ObservationInvalidTempo:
 	case NinjamTimingDiagnosticReason::ObservationInvalidBpi:
-	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary:
+	case NinjamTimingDiagnosticReason::ObservationMissingDeviceAudioSampleAtObservation:
 	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport:
 	case NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep:
 	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength:
@@ -116,7 +116,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Connect(const NinjamTempoJoinOptions
 	_lastNoSyncReason = NinjamNoSyncReason::Reconnect;
 	_activeFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 	_lastValidObservationAt.reset();
-	_lastObservationAudioBlockStartSample.reset();
+	_lastRemotePhaseDeviceSample.reset();
 	_diagnosticLagSessionEpoch = 0u;
 	_diagnosticLagDesiredVersion = 0u;
 	return _PublishNoSync(NinjamNoSyncReason::Reconnect);
@@ -144,7 +144,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Disconnect() noexcept
 	_noSyncActive = true;
 	_lastNoSyncReason = NinjamNoSyncReason::Disconnect;
 	_lastValidObservationAt.reset();
-	_lastObservationAudioBlockStartSample.reset();
+	_lastRemotePhaseDeviceSample.reset();
 	++_diagnostics.PhaseEventsInvalidated;
 	_activeFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 	return _PublishNoSync(NinjamNoSyncReason::Disconnect);
@@ -227,9 +227,9 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	// Remote and local phase must describe the same audio boundary. An observation
 	// without either explicit anchor is deferred; never substitute a live Timer
 	// read taken later on the job thread.
-	if (!timing.HasAudioBlockStartSample)
+	if (!timing.HasDeviceAudioSampleAtObservation)
 	{
-		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary);
+		_CaptureDiagnostic(NinjamTimingDiagnosticReason::ObservationMissingDeviceAudioSampleAtObservation);
 		return update;
 	}
 	if (!timing.HasLocalTransport)
@@ -248,8 +248,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 		_CaptureDiagnostic(reason);
 		return update;
 	}
-	const auto isFreshObservation = !_lastObservationAudioBlockStartSample.has_value()
-		|| _lastObservationAudioBlockStartSample.value() != timing.AudioBlockStartSample;
+	const auto isFreshObservation = !_lastRemotePhaseDeviceSample.has_value()
+		|| _lastRemotePhaseDeviceSample.value() != timing.DeviceAudioSampleAtObservation;
 	if (_noSyncActive && _lastNoSyncReason == NinjamNoSyncReason::ObservationDeadline
 		&& !isFreshObservation)
 	{
@@ -262,7 +262,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	_lastNoSyncReason = NinjamNoSyncReason::None;
 	if (isFreshObservation || !_lastValidObservationAt.has_value())
 	{
-		_lastObservationAudioBlockStartSample = timing.AudioBlockStartSample;
+		_lastRemotePhaseDeviceSample = timing.DeviceAudioSampleAtObservation;
 		_lastValidObservationAt = now;
 	}
 	_diagnostics.MaxObservationAgeSamps = std::max(_diagnostics.MaxObservationAgeSamps,
@@ -279,7 +279,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	observation.IntervalPositionSamps = timing.IntervalPositionSamps;
 	// Preserve the callback-time local anchor (Timer absolute domain) so phase is
 	// compared at the observation instant rather than at job-processing time (§2.7).
-	observation.LocalSample = timing.LocalTransport.AbsoluteSamplePos;
+	observation.LocalMasterAbsoluteSampleAtObservation = timing.LocalTransport.AbsoluteSamplePos;
 	const auto trackerBefore = _tracker.Diagnostics();
 	const auto event = _tracker.Observe(observation);
 	const auto trackerDiagnostics = _tracker.Diagnostics();
@@ -307,7 +307,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 			if (_pendingTempoChange->HasSameProposalIdentity(proposal.value()))
 			{
 				_pendingTempoChange->IntervalPositionSamps = timing.IntervalPositionSamps;
-				_pendingTempoChange->AudioBlockStartSample = timing.AudioBlockStartSample;
+				_pendingTempoChange->RemotePhaseDeviceSample = timing.DeviceAudioSampleAtObservation;
 			}
 			else
 			{
@@ -429,7 +429,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::Observe(const NinjamTiming& timing,
 	}
 	const auto localOffset = static_cast<unsigned int>(
 		timing.LocalTransport.MasterPhaseSamps % seedLength);
-	const auto delta = event->Type == NinjamTimingEventType::Join ? event->PhaseDeltaSamps :
+	const auto delta = event->Type == NinjamTimingEventType::Join ? event->RemoteMasterPhaseCorrectionSamps :
 		SignedCircularDifference(localOffset, event->RemotePositionSamps,
 			static_cast<unsigned int>(seedLength));
 	const auto magnitude = delta < 0 ? -delta : delta;
@@ -551,7 +551,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 	_lastNoSyncReason = reason;
 	_lastValidObservationAt.reset();
 	if (reason != NinjamNoSyncReason::ObservationDeadline)
-		_lastObservationAudioBlockStartSample.reset();
+		_lastRemotePhaseDeviceSample.reset();
 	++_diagnostics.PhaseEventsInvalidated;
 
 	NinjamTimingUpdate update;
@@ -563,7 +563,7 @@ NinjamTimingUpdate NinjamTimingCoordinator::_EnterNoSync(
 
 bool NinjamTempoChange::HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept
 {
-	return IntervalLengthSamps == other.IntervalLengthSamps
+	return RemoteMasterIntervalLengthSamps == other.RemoteMasterIntervalLengthSamps
 		&& SourceSampleRate == other.SourceSampleRate
 		&& RemoteGridStepSamps == other.RemoteGridStepSamps
 		&& Bpi == other.Bpi
@@ -589,7 +589,7 @@ std::optional<NinjamTempoChange> NinjamTimingCoordinator::_MakeProposal(
 	if (grain == 0u)
 		return std::nullopt;
 	return NinjamTempoChange{ timing.IntervalLengthSamps, timing.DeviceSampleRate, grain,
-		timing.Bpm, timing.Bpi, timing.IntervalPositionSamps, timing.AudioBlockStartSample };
+		timing.Bpm, timing.Bpi, timing.IntervalPositionSamps, timing.DeviceAudioSampleAtObservation };
 }
 
 NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
@@ -604,24 +604,24 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	desired.Intent = intent;
 	desired.LocalFollowPolicy = policy;
 	desired.HasRemoteTiming = true;
-	desired.IntervalLengthSamps = change.IntervalLengthSamps;
+	desired.RemoteMasterIntervalLengthSamps = change.RemoteMasterIntervalLengthSamps;
 	desired.RemoteGridStepSamps = change.RemoteGridStepSamps;
 	desired.BeatsPerInterval = change.Bpi;
 	desired.TempoBpm = change.Bpm;
 	desired.Quantisation = utils::Timer::QUANTISE_POWER;
-	desired.RemotePhaseSamps = change.IntervalPositionSamps;
-	desired.HasObservationSample = true;
-	desired.ObservationSample = change.AudioBlockStartSample;
+	desired.RemoteMasterPhaseSamps = change.IntervalPositionSamps;
+	desired.HasRemotePhaseDeviceSample = true;
+	desired.RemotePhaseDeviceSample = change.RemotePhaseDeviceSample;
 	update.DesiredTransport = desired;
 	_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredPublished,
 		desired.Version, _lastDiagnosticAppliedVersion, desired.Generation,
-		static_cast<long long>(desired.RemotePhaseSamps), desired.IntervalLengthSamps);
+		static_cast<long long>(desired.RemoteMasterPhaseSamps), desired.RemoteMasterIntervalLengthSamps);
 	if (remoteGridChanged)
 	{
-		const auto origin = static_cast<std::int64_t>(change.AudioBlockStartSample)
+		const auto origin = static_cast<std::int64_t>(change.RemotePhaseDeviceSample)
 			- static_cast<std::int64_t>(change.IntervalPositionSamps);
 		update.RemoteGrid = NinjamRemoteGridPublication{
-			engine::RemoteTransportGeometry{ change.IntervalLengthSamps, change.Bpi,
+			engine::RemoteTransportGeometry{ change.RemoteMasterIntervalLengthSamps, change.Bpi,
 				change.IntervalPositionSamps, change.Bpm, desired.Generation }, origin };
 	}
 	_activeFollowPolicy = policy;
@@ -711,7 +711,7 @@ NinjamTimingDiagnostics NinjamTimingCoordinator::ObserveAppliedTimingReceipt(
 		_lastDiagnosticAppliedVersion = receipt->Version;
 		_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredApplied,
 			_desiredVersion, receipt->Version, receipt->Generation,
-			receipt->DeltaSamps, 0u, receipt->SessionEpoch);
+			receipt->LocalSourceCorrectionSamps, 0u, receipt->SessionEpoch);
 	}
 
 	const auto appliedCurrentDesired = receipt.has_value()
@@ -734,7 +734,7 @@ NinjamTimingDiagnostics NinjamTimingCoordinator::ObserveAppliedTimingReceipt(
 	{
 		_CaptureDiagnostic(NinjamTimingDiagnosticReason::DesiredApplyCaughtUp,
 			_desiredVersion, receipt->Version, receipt->Generation,
-			receipt->DeltaSamps, 0u, receipt->SessionEpoch);
+			receipt->LocalSourceCorrectionSamps, 0u, receipt->SessionEpoch);
 		_diagnosticLagSessionEpoch = 0u;
 		_diagnosticLagDesiredVersion = 0u;
 	}
@@ -765,7 +765,7 @@ const char* NinjamTimingCoordinator::DiagnosticReasonName(
 	case NinjamTimingDiagnosticReason::ObservationInvalidSampleRate: return "observation-invalid-sample-rate";
 	case NinjamTimingDiagnosticReason::ObservationInvalidTempo: return "observation-invalid-tempo";
 	case NinjamTimingDiagnosticReason::ObservationInvalidBpi: return "observation-invalid-bpi";
-	case NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary: return "observation-missing-audio-boundary";
+	case NinjamTimingDiagnosticReason::ObservationMissingDeviceAudioSampleAtObservation: return "observation-missing-device-audio-sample-at-observation";
 	case NinjamTimingDiagnosticReason::ObservationMissingLocalTransport: return "observation-missing-local-transport";
 	case NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep: return "observation-invalid-grid-step";
 	case NinjamTimingDiagnosticReason::ObservationInvalidLocalMasterLength: return "observation-invalid-local-master-length";

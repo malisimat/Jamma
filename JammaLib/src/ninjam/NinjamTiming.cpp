@@ -72,20 +72,20 @@ namespace ninjam
 
 	NinjamBoundaryTimingReplacement ResolveBoundaryTimingReplacement(
 		unsigned long oldMasterLengthSamps, unsigned int oldMasterPhaseSamps,
-		unsigned int newIntervalLengthSamps, unsigned int observedRemotePhaseSamps,
-		const std::optional<std::uint64_t>& observationAudioSample,
-		std::uint64_t boundaryAudioSample) noexcept
+		unsigned int newRemoteMasterIntervalLengthSamps, unsigned int observedRemoteMasterPhaseSamps,
+		const std::optional<std::uint64_t>& remotePhaseDeviceSample,
+		std::uint64_t boundaryDeviceAudioSample) noexcept
 	{
-		if (newIntervalLengthSamps == 0u)
+		if (newRemoteMasterIntervalLengthSamps == 0u)
 			return {};
 
-		const auto observedPhase = observedRemotePhaseSamps % newIntervalLengthSamps;
-		const auto elapsed = observationAudioSample.has_value()
-			&& boundaryAudioSample >= observationAudioSample.value()
-			? (boundaryAudioSample - observationAudioSample.value()) % newIntervalLengthSamps
+		const auto observedPhase = observedRemoteMasterPhaseSamps % newRemoteMasterIntervalLengthSamps;
+		const auto elapsed = remotePhaseDeviceSample.has_value()
+			&& boundaryDeviceAudioSample >= remotePhaseDeviceSample.value()
+			? (boundaryDeviceAudioSample - remotePhaseDeviceSample.value()) % newRemoteMasterIntervalLengthSamps
 			: 0u;
 		const auto remotePhase = static_cast<unsigned int>(
-			(static_cast<std::uint64_t>(observedPhase) + elapsed) % newIntervalLengthSamps);
+			(static_cast<std::uint64_t>(observedPhase) + elapsed) % newRemoteMasterIntervalLengthSamps);
 		if (oldMasterLengthSamps == 0ul)
 			return { remotePhase, 0 };
 
@@ -134,8 +134,8 @@ namespace ninjam
 		timing.Generation = generation;
 		timing.RemoteWrapCount = remoteWrapCount;
 		timing.ObservationSequence = observationSequence;
-		timing.HasAudioBlockStartSample = remote.HasAudioBlockStartSample;
-		timing.AudioBlockStartSample = remote.AudioBlockStartSample;
+		timing.HasDeviceAudioSampleAtObservation = remote.HasDeviceAudioSampleAtObservation;
+		timing.DeviceAudioSampleAtObservation = remote.DeviceAudioSampleAtObservation;
 		return timing;
 	}
 
@@ -152,23 +152,23 @@ namespace ninjam
 	}
 
 	NinjamTiming ProjectTimingToAudioSample(NinjamTiming timing,
-		std::uint64_t audioBlockStartSample) noexcept
+		std::uint64_t deviceAudioSampleAtObservation) noexcept
 	{
-		if (!timing.HasAudioBlockStartSample
+		if (!timing.HasDeviceAudioSampleAtObservation
 			|| timing.IntervalLengthSamps == 0u
-			|| audioBlockStartSample < timing.AudioBlockStartSample)
+			|| deviceAudioSampleAtObservation < timing.DeviceAudioSampleAtObservation)
 		{
-			timing.HasAudioBlockStartSample = false;
+			timing.HasDeviceAudioSampleAtObservation = false;
 			timing.ObservationAgeSamps = 0u;
 			return timing;
 		}
 
-		const auto observationAge = audioBlockStartSample - timing.AudioBlockStartSample;
+		const auto observationAge = deviceAudioSampleAtObservation - timing.DeviceAudioSampleAtObservation;
 		const auto elapsed = observationAge % timing.IntervalLengthSamps;
 		timing.IntervalPositionSamps = static_cast<unsigned int>(
 			(static_cast<std::uint64_t>(timing.IntervalPositionSamps) + elapsed)
 			% timing.IntervalLengthSamps);
-		timing.AudioBlockStartSample = audioBlockStartSample;
+		timing.DeviceAudioSampleAtObservation = deviceAudioSampleAtObservation;
 		timing.ObservationAgeSamps = observationAge;
 		return timing;
 	}

@@ -34,14 +34,14 @@ namespace ninjam
 		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
 		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
 		bool HasRemoteTiming = false;
-		unsigned long IntervalLengthSamps = 0ul;
+		unsigned long RemoteMasterIntervalLengthSamps = 0ul;
 		unsigned int RemoteGridStepSamps = 0u;
 		unsigned int BeatsPerInterval = 0u;
 		float TempoBpm = 0.0f;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
-		unsigned int RemotePhaseSamps = 0u;
-		bool HasObservationSample = false;
-		std::uint64_t ObservationSample = 0u;
+		unsigned int RemoteMasterPhaseSamps = 0u;
+		bool HasRemotePhaseDeviceSample = false;
+		std::uint64_t RemotePhaseDeviceSample = 0u;
 	};
 
 	// Coherent audio-boundary acknowledgement of the latest complete desired
@@ -55,7 +55,7 @@ namespace ninjam
 		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
 		NinjamLocalFollowPolicy Policy = NinjamLocalFollowPolicy::NoSync;
 		std::uint64_t SceneCoordinateSamps = 0u;
-		long long DeltaSamps = 0;
+		long long LocalSourceCorrectionSamps = 0;
 	};
 
 	// The integration owner is the sole writer and the audio callback is the sole
@@ -76,14 +76,14 @@ namespace ninjam
 		std::atomic<NinjamDesiredTimingIntent> _intent{ NinjamDesiredTimingIntent::NoSync };
 		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::NoSync };
 		std::atomic_bool _hasRemoteTiming{ false };
-		std::atomic<unsigned long> _intervalLengthSamps{ 0ul };
+		std::atomic<unsigned long> _remoteMasterIntervalLengthSamps{ 0ul };
 		std::atomic<unsigned int> _remoteGridStepSamps{ 0u };
 		std::atomic<unsigned int> _beatsPerInterval{ 0u };
 		std::atomic<float> _tempoBpm{ 0.0f };
 		std::atomic<utils::Timer::QuantisationType> _quantisation{ utils::Timer::QUANTISE_OFF };
-		std::atomic<unsigned int> _remotePhaseSamps{ 0u };
-		std::atomic_bool _hasObservationSample{ false };
-		std::atomic<std::uint64_t> _observationSample{ 0u };
+		std::atomic<unsigned int> _remoteMasterPhaseSamps{ 0u };
+		std::atomic_bool _hasRemotePhaseDeviceSample{ false };
+		std::atomic<std::uint64_t> _remotePhaseDeviceSample{ 0u };
 	};
 
 }

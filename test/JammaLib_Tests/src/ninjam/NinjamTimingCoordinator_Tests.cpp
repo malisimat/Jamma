@@ -25,8 +25,8 @@ namespace
 		timing.IntervalPositionSamps = position;
 		timing.Bpm = 120.0f;
 		timing.Bpi = 16u;
-		timing.HasAudioBlockStartSample = true;
-		timing.AudioBlockStartSample = 0u;
+		timing.HasDeviceAudioSampleAtObservation = true;
+		timing.DeviceAudioSampleAtObservation = 0u;
 		timing.HasLocalTransport = true;
 		timing.LocalTransport.MasterLengthSamps = localLength == 0u ? length : localLength;
 		timing.LocalTransport.MasterPhaseSamps = localPhase;
@@ -95,7 +95,7 @@ TEST(NinjamTimingCoordinator, AutoAcceptsRemoteTempoWithoutLocalContent)
 	const auto update = coordinator.Observe(MakeTiming(384000u, 100u), std::nullopt, false, io::UserConfig{}, clock);
 	ASSERT_TRUE(update.DesiredTransport.has_value());
 	EXPECT_FALSE(update.PromptForTempoChange);
-	EXPECT_EQ(384000ul, update.DesiredTransport->IntervalLengthSamps);
+	EXPECT_EQ(384000ul, update.DesiredTransport->RemoteMasterIntervalLengthSamps);
 }
 
 TEST(NinjamTimingCoordinator, PromptAcceptRejectAndChangedProposal)
@@ -125,16 +125,16 @@ TEST(NinjamTimingCoordinator, AcceptedPromptUsesLatestAnchoredObservation)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
 	auto first = MakeTiming(480000u, 100u);
-	first.AudioBlockStartSample = 1000u;
+	first.DeviceAudioSampleAtObservation = 1000u;
 	EXPECT_TRUE(coordinator.Observe(first, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
 
 	auto latest = MakeTiming(480000u, 200u);
-	latest.AudioBlockStartSample = 5000u;
+	latest.DeviceAudioSampleAtObservation = 5000u;
 	EXPECT_FALSE(coordinator.Observe(latest, std::nullopt, true, io::UserConfig{}, clock).PromptForTempoChange);
 	const auto accepted = coordinator.ResolveTempoChange(true, std::nullopt, clock);
 	ASSERT_TRUE(accepted.DesiredTransport.has_value());
-	EXPECT_EQ(200u, accepted.DesiredTransport->RemotePhaseSamps);
-	EXPECT_EQ(5000u, accepted.DesiredTransport->ObservationSample);
+	EXPECT_EQ(200u, accepted.DesiredTransport->RemoteMasterPhaseSamps);
+	EXPECT_EQ(5000u, accepted.DesiredTransport->RemotePhaseDeviceSample);
 }
 
 TEST(NinjamTimingCoordinator, RejectedDifferentTempoDoesNotEmitWrapCorrection)
@@ -282,7 +282,7 @@ TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
 	invalidBpi.IsValid = false;
 	invalidBpi.Bpi = 0u;
 	auto missingAudioBoundary = MakeTiming(1000u, 100u);
-	missingAudioBoundary.HasAudioBlockStartSample = false;
+	missingAudioBoundary.HasDeviceAudioSampleAtObservation = false;
 	auto missingLocalTransport = MakeTiming(1000u, 100u);
 	missingLocalTransport.HasLocalTransport = false;
 	auto invalidGrain = MakeTiming(1u, 0u);
@@ -295,7 +295,7 @@ TEST(NinjamTimingDiagnostics, EveryCoordinatorRejectionHasOneBoundedReason)
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidSampleRate, invalidRate },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidTempo, invalidTempo },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidBpi, invalidBpi },
-		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingAudioBoundary, missingAudioBoundary },
+		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingDeviceAudioSampleAtObservation, missingAudioBoundary },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationMissingLocalTransport, missingLocalTransport },
 		{ ninjam::NinjamTimingDiagnosticReason::ObservationInvalidRemoteGridStep, invalidGrain },
 	};
@@ -445,7 +445,7 @@ TEST(NinjamTimingDiagnostics, CaptureConfigurationDoesNotChangeDesiredPhase)
 		Connect(coordinator, false, false);
 		coordinator.SetDiagnosticsCaptureEnabled(captureEnabled);
 		auto timing = MakeTiming(1000u, 275u, 125u);
-		timing.AudioBlockStartSample = 4000u;
+		timing.DeviceAudioSampleAtObservation = 4000u;
 		return coordinator.Observe(timing, std::nullopt, false,
 			io::UserConfig{}, clock).DesiredTransport;
 	};
@@ -459,9 +459,9 @@ TEST(NinjamTimingDiagnostics, CaptureConfigurationDoesNotChangeDesiredPhase)
 	EXPECT_EQ(disabled->Generation, enabled->Generation);
 	EXPECT_EQ(disabled->Intent, enabled->Intent);
 	EXPECT_EQ(disabled->LocalFollowPolicy, enabled->LocalFollowPolicy);
-	EXPECT_EQ(disabled->IntervalLengthSamps, enabled->IntervalLengthSamps);
-	EXPECT_EQ(disabled->RemotePhaseSamps, enabled->RemotePhaseSamps);
-	EXPECT_EQ(disabled->ObservationSample, enabled->ObservationSample);
+	EXPECT_EQ(disabled->RemoteMasterIntervalLengthSamps, enabled->RemoteMasterIntervalLengthSamps);
+	EXPECT_EQ(disabled->RemoteMasterPhaseSamps, enabled->RemoteMasterPhaseSamps);
+	EXPECT_EQ(disabled->RemotePhaseDeviceSample, enabled->RemotePhaseDeviceSample);
 }
 
 TEST(NinjamTimingDiagnostics, NetworkServiceSerializesConfigurationAndAppliedReceiptForwarding)
@@ -495,10 +495,10 @@ TEST(NinjamTimingCoordinator, AcceptedRemoteGridRetainsAuthoritativeBpi)
 	const auto update = coordinator.Observe(MakeTimingTempo(78985u, 123u, 120.0f, 4u),
 		std::nullopt, false, io::UserConfig{}, clock);
 	ASSERT_TRUE(update.DesiredTransport.has_value());
-	EXPECT_EQ(78985ul, update.DesiredTransport->IntervalLengthSamps);
+	EXPECT_EQ(78985ul, update.DesiredTransport->RemoteMasterIntervalLengthSamps);
 	EXPECT_EQ(4u, update.DesiredTransport->BeatsPerInterval);
 	EXPECT_EQ(19746u, update.DesiredTransport->RemoteGridStepSamps);
-	EXPECT_EQ(123u, update.DesiredTransport->RemotePhaseSamps);
+	EXPECT_EQ(123u, update.DesiredTransport->RemoteMasterPhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, MissingBpiCannotCreateOrMutateRemoteAuthority)
@@ -507,7 +507,7 @@ TEST(NinjamTimingCoordinator, MissingBpiCannotCreateOrMutateRemoteAuthority)
 	NinjamTimingCoordinator coordinator;
 	Connect(coordinator, true, false);
 	auto missingBpi = MakeTimingTempo(480000u, 100u, 90.0f, 0u);
-	missingBpi.AudioBlockStartSample = 1000u;
+	missingBpi.DeviceAudioSampleAtObservation = 1000u;
 
 	const auto rejected = coordinator.Observe(missingBpi, std::nullopt, true,
 		io::UserConfig{}, clock);
@@ -521,7 +521,7 @@ TEST(NinjamTimingCoordinator, MissingBpiCannotCreateOrMutateRemoteAuthority)
 	EXPECT_EQ(0u, coordinator.Diagnostics().ObservationsAccepted);
 
 	auto complete = MakeTimingTempo(480000u, 200u, 90.0f, 8u);
-	complete.AudioBlockStartSample = 2000u;
+	complete.DeviceAudioSampleAtObservation = 2000u;
 	const auto accepted = coordinator.Observe(complete, std::nullopt, true,
 		io::UserConfig{}, clock);
 	EXPECT_TRUE(accepted.PromptForTempoChange);
@@ -554,27 +554,27 @@ TEST(NinjamTimingCoordinator, ProposalIdentityRefreshesObservationButReplacesEve
 		Connect(coordinator, true, false);
 		auto original = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
 		original.DeviceSampleRate = 48000u;
-		original.AudioBlockStartSample = 1000u;
+		original.DeviceAudioSampleAtObservation = 1000u;
 		ASSERT_TRUE(coordinator.Observe(original, std::nullopt, true,
 			io::UserConfig{}, clock).PromptForTempoChange);
 
 		auto changed = MakeTimingTempo(identityCase.IntervalLengthSamps, 200u,
 			identityCase.Bpm, identityCase.Bpi);
 		changed.DeviceSampleRate = identityCase.DeviceSampleRate;
-		changed.AudioBlockStartSample = 2000u;
+		changed.DeviceAudioSampleAtObservation = 2000u;
 		const auto replacement = coordinator.Observe(changed, std::nullopt, true,
 			io::UserConfig{}, clock);
 		EXPECT_TRUE(replacement.PromptForTempoChange);
 		ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
 		const auto pending = coordinator.PendingTempoChange().value();
-		EXPECT_EQ(identityCase.IntervalLengthSamps, pending.IntervalLengthSamps);
+		EXPECT_EQ(identityCase.IntervalLengthSamps, pending.RemoteMasterIntervalLengthSamps);
 		EXPECT_EQ(identityCase.DeviceSampleRate, pending.SourceSampleRate);
 		EXPECT_FLOAT_EQ(identityCase.Bpm, pending.Bpm);
 		EXPECT_EQ(identityCase.Bpi, pending.Bpi);
 		EXPECT_EQ((static_cast<std::uint64_t>(identityCase.IntervalLengthSamps)
 			+ identityCase.Bpi / 2u) / identityCase.Bpi, pending.RemoteGridStepSamps);
 		EXPECT_EQ(200u, pending.IntervalPositionSamps);
-		EXPECT_EQ(2000u, pending.AudioBlockStartSample);
+		EXPECT_EQ(2000u, pending.RemotePhaseDeviceSample);
 	}
 
 	Timer clock;
@@ -582,18 +582,18 @@ TEST(NinjamTimingCoordinator, ProposalIdentityRefreshesObservationButReplacesEve
 	Connect(coordinator, true, false);
 	auto original = MakeTimingTempo(480000u, 100u, 90.0f, 8u);
 	original.DeviceSampleRate = 48000u;
-	original.AudioBlockStartSample = 1000u;
+	original.DeviceAudioSampleAtObservation = 1000u;
 	ASSERT_TRUE(coordinator.Observe(original, std::nullopt, true,
 		io::UserConfig{}, clock).PromptForTempoChange);
 	auto phaseOnly = MakeTimingTempo(480000u, 321u, 90.009f, 8u);
 	phaseOnly.DeviceSampleRate = 48000u;
-	phaseOnly.AudioBlockStartSample = 4321u;
+	phaseOnly.DeviceAudioSampleAtObservation = 4321u;
 	EXPECT_FALSE(coordinator.Observe(phaseOnly, std::nullopt, true,
 		io::UserConfig{}, clock).PromptForTempoChange);
 	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
 	EXPECT_FLOAT_EQ(90.0f, coordinator.PendingTempoChange()->Bpm);
 	EXPECT_EQ(321u, coordinator.PendingTempoChange()->IntervalPositionSamps);
-	EXPECT_EQ(4321u, coordinator.PendingTempoChange()->AudioBlockStartSample);
+	EXPECT_EQ(4321u, coordinator.PendingTempoChange()->RemotePhaseDeviceSample);
 }
 
 TEST(NinjamTimingCoordinator, ChangedIdentityReplacesIgnoredProposalWithoutIntervalChange)
@@ -609,14 +609,14 @@ TEST(NinjamTimingCoordinator, ChangedIdentityReplacesIgnoredProposalWithoutInter
 
 	auto phaseOnly = MakeTimingTempo(480000u, 200u, 90.009f, 8u);
 	phaseOnly.DeviceSampleRate = 48000u;
-	phaseOnly.AudioBlockStartSample = 2000u;
+	phaseOnly.DeviceAudioSampleAtObservation = 2000u;
 	EXPECT_FALSE(coordinator.Observe(phaseOnly, std::nullopt, true,
 		io::UserConfig{}, clock).PromptForTempoChange);
 	EXPECT_FALSE(coordinator.PendingTempoChange().has_value());
 
 	auto changedBpi = MakeTimingTempo(480000u, 300u, 90.0f, 6u);
 	changedBpi.DeviceSampleRate = 48000u;
-	changedBpi.AudioBlockStartSample = 3000u;
+	changedBpi.DeviceAudioSampleAtObservation = 3000u;
 	const auto replacement = coordinator.Observe(changedBpi, std::nullopt, true,
 		io::UserConfig{}, clock);
 	EXPECT_TRUE(replacement.PromptForTempoChange);
@@ -728,7 +728,7 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 				auto update = coordinator.Observe(MakeTiming(length, position), std::nullopt, false, io::UserConfig{}, clock);
 				if (update.DesiredTransport.has_value())
 					maxRemotePhase = std::max(maxRemotePhase,
-						static_cast<unsigned long>(update.DesiredTransport->RemotePhaseSamps));
+						static_cast<unsigned long>(update.DesiredTransport->RemoteMasterPhaseSamps));
 			}
 			coordinator.Observe(MakeTiming(length, length - 10u), std::nullopt, false, io::UserConfig{}, clock);
 			coordinator.Observe(MakeTiming(length, 10u), std::nullopt, false, io::UserConfig{}, clock);
@@ -785,7 +785,7 @@ TEST(NinjamTimingCoordinator, QuarterIntervalJoinIsAccepted)
 	const auto update = DriveJoin(96000u, 24000);
 	ASSERT_TRUE(update.DesiredTransport.has_value());
 	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, update.DesiredTransport->Intent);
-	EXPECT_EQ(1000u, update.DesiredTransport->RemotePhaseSamps);
+	EXPECT_EQ(1000u, update.DesiredTransport->RemoteMasterPhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
@@ -795,7 +795,7 @@ TEST(NinjamTimingCoordinator, HalfIntervalJoinIsAccepted)
 	const auto update = DriveJoin(96000u, 48000);
 	ASSERT_TRUE(update.DesiredTransport.has_value());
 	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, update.DesiredTransport->Intent);
-	EXPECT_EQ(1000u, update.DesiredTransport->RemotePhaseSamps);
+	EXPECT_EQ(1000u, update.DesiredTransport->RemoteMasterPhaseSamps);
 }
 
 TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLiveTimer)
@@ -822,10 +822,10 @@ TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLive
 	ASSERT_TRUE(delayed.DesiredTransport.has_value());
 	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, immediate.DesiredTransport->Intent);
 	EXPECT_EQ(ninjam::NinjamDesiredTimingIntent::JoinAlignment, delayed.DesiredTransport->Intent);
-	EXPECT_EQ(immediate.DesiredTransport->RemotePhaseSamps,
-		delayed.DesiredTransport->RemotePhaseSamps);
-	EXPECT_EQ(immediate.DesiredTransport->ObservationSample,
-		delayed.DesiredTransport->ObservationSample);
+	EXPECT_EQ(immediate.DesiredTransport->RemoteMasterPhaseSamps,
+		delayed.DesiredTransport->RemoteMasterPhaseSamps);
+	EXPECT_EQ(immediate.DesiredTransport->RemotePhaseDeviceSample,
+		delayed.DesiredTransport->RemotePhaseDeviceSample);
 }
 
 // ── Phase 5: tempo request state machine (§2.6/§3.5) ─────────────────────────
@@ -888,7 +888,7 @@ TEST(NinjamTimingCoordinator, FreshMatchingGenerationAcknowledgesAndAppliesReque
 	EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
 	EXPECT_EQ(1u, coordinator.Diagnostics().TempoAcknowledged);
 	ASSERT_TRUE(confirmed.DesiredTransport.has_value());
-	EXPECT_EQ(384000ul, confirmed.DesiredTransport->IntervalLengthSamps);
+	EXPECT_EQ(384000ul, confirmed.DesiredTransport->RemoteMasterIntervalLengthSamps);
 }
 
 TEST(NinjamTimingCoordinator, NearLocalServerTempoAcknowledgesAfterSuccessfulSend)
@@ -1046,7 +1046,7 @@ TEST(NinjamTimingCoordinator, TempoRequestDeadlinePromptsOnceWithLatestServerTim
 	EXPECT_EQ(ninjam::TempoRequestState::Expired, coordinator.RequestState());
 	EXPECT_TRUE(expired.PromptForTempoChange);
 	ASSERT_TRUE(coordinator.PendingTempoChange().has_value());
-	EXPECT_EQ(480000u, coordinator.PendingTempoChange()->IntervalLengthSamps);
+	EXPECT_EQ(480000u, coordinator.PendingTempoChange()->RemoteMasterIntervalLengthSamps);
 	EXPECT_FALSE(coordinator.Observe(MakeTimingTempo(480000u, 4000u, 90.0f, 8u), local, true,
 		io::UserConfig{}, clock, start + std::chrono::seconds(2)).PromptForTempoChange);
 }
@@ -1084,7 +1084,7 @@ TEST(NinjamTimingCoordinator, NoObservationAndInvalidTimingRecoverIdempotently)
 	EXPECT_FALSE(repeatedDeadline.PromptForTempoChange);
 
 	auto freshAfterDeadline = MakeTimingTempo(480000u, 2000u, 90.0f, 8u);
-	freshAfterDeadline.AudioBlockStartSample = 256u;
+	freshAfterDeadline.DeviceAudioSampleAtObservation = 256u;
 	auto recovered = coordinator.Observe(freshAfterDeadline, local, true, io::UserConfig{}, clock,
 		start + std::chrono::seconds(2));
 	EXPECT_TRUE(recovered.DesiredTransport.has_value());

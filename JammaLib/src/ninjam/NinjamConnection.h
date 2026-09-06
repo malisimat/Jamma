@@ -235,8 +235,8 @@ namespace ninjam
 		std::atomic<float> _remoteTimingBpm{ 0.0f };
 		std::atomic_uint _remoteTimingBpi{ 0u };
 		std::atomic_bool _remoteTimingIsValid{ false };
-		std::atomic_bool _remoteTimingHasAudioBlockStartSample{ false };
-		std::atomic<std::uint64_t> _remoteTimingAudioBlockStartSample{ 0u };
+		std::atomic_bool _remoteTimingHasDeviceAudioSampleAtObservation{ false };
+		std::atomic<std::uint64_t> _remoteTimingDeviceAudioSampleAtObservation{ 0u };
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
 		std::vector<std::string> _lastLoggedUsers;

@@ -25,9 +25,9 @@ TEST(NinjamTimingObservationMailbox, ReadsPublishedObservationAsOneValue)
 	timing.LocalTransport.LoopCount = 14u;
 	timing.LocalTransport.AbsoluteSamplePos = 15u;
 	timing.LocalTransport.SceneSamplePos = 16u;
-	timing.HasAudioBlockStartSample = true;
-	timing.LocalBlockStartSample = 13u;
-	timing.AudioBlockStartSample = 17u;
+	timing.HasDeviceAudioSampleAtObservation = true;
+	timing.LocalMasterAbsoluteSampleAtObservation = 13u;
+	timing.DeviceAudioSampleAtObservation = 17u;
 	timing.ObservationAgeSamps = 18u;
 
 	mailbox.Publish(timing);
@@ -51,9 +51,9 @@ TEST(NinjamTimingObservationMailbox, ReadsPublishedObservationAsOneValue)
 	EXPECT_EQ(14u, observed->LocalTransport.LoopCount);
 	EXPECT_EQ(15u, observed->LocalTransport.AbsoluteSamplePos);
 	EXPECT_EQ(16u, observed->LocalTransport.SceneSamplePos);
-	EXPECT_TRUE(observed->HasAudioBlockStartSample);
-	EXPECT_EQ(13u, observed->LocalBlockStartSample);
-	EXPECT_EQ(17u, observed->AudioBlockStartSample);
+	EXPECT_TRUE(observed->HasDeviceAudioSampleAtObservation);
+	EXPECT_EQ(13u, observed->LocalMasterAbsoluteSampleAtObservation);
+	EXPECT_EQ(17u, observed->DeviceAudioSampleAtObservation);
 	EXPECT_EQ(18u, observed->ObservationAgeSamps);
 }
 
@@ -112,9 +112,9 @@ TEST(NinjamTimingObservationMailbox, ConcurrentReadProvesOverlapAndCoherence)
 			timing.LocalTransport.LoopCount = 11000u + sequence;
 			timing.LocalTransport.AbsoluteSamplePos = 12000u + sequence;
 			timing.LocalTransport.SceneSamplePos = 13000u + sequence;
-			timing.HasAudioBlockStartSample = (sequence & 8u) != 0u;
-			timing.LocalBlockStartSample = 9000u + sequence;
-			timing.AudioBlockStartSample = 14000u + sequence;
+			timing.HasDeviceAudioSampleAtObservation = (sequence & 8u) != 0u;
+			timing.LocalMasterAbsoluteSampleAtObservation = 9000u + sequence;
+			timing.DeviceAudioSampleAtObservation = 14000u + sequence;
 			timing.ObservationAgeSamps = 15000u + sequence;
 			return timing;
 		};
@@ -167,9 +167,9 @@ TEST(NinjamTimingObservationMailbox, ConcurrentReadProvesOverlapAndCoherence)
 		EXPECT_EQ(sequence + 11000u, observed->LocalTransport.LoopCount) << "sequence=" << sequence;
 		EXPECT_EQ(sequence + 12000u, observed->LocalTransport.AbsoluteSamplePos) << "sequence=" << sequence;
 		EXPECT_EQ(sequence + 13000u, observed->LocalTransport.SceneSamplePos) << "sequence=" << sequence;
-		EXPECT_EQ((sequence & 8u) != 0u, observed->HasAudioBlockStartSample) << "sequence=" << sequence;
-		EXPECT_EQ(sequence + 9000u, observed->LocalBlockStartSample) << "sequence=" << sequence;
-		EXPECT_EQ(sequence + 14000u, observed->AudioBlockStartSample) << "sequence=" << sequence;
+		EXPECT_EQ((sequence & 8u) != 0u, observed->HasDeviceAudioSampleAtObservation) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 9000u, observed->LocalMasterAbsoluteSampleAtObservation) << "sequence=" << sequence;
+		EXPECT_EQ(sequence + 14000u, observed->DeviceAudioSampleAtObservation) << "sequence=" << sequence;
 		EXPECT_EQ(sequence + 15000u, observed->ObservationAgeSamps) << "sequence=" << sequence;
 		successfulOverlappingReads.fetch_add(1u, std::memory_order_release);
 	}
@@ -186,8 +186,8 @@ TEST(NinjamTimingObservationMailbox, ConcurrentReadProvesOverlapAndCoherence)
 	EXPECT_EQ(finalSequence + 7000u, finalObservation->Generation);
 	EXPECT_EQ((finalSequence & 4u) != 0u, finalObservation->HasLocalTransport);
 	EXPECT_EQ(finalSequence + 12000u, finalObservation->LocalTransport.AbsoluteSamplePos);
-	EXPECT_EQ((finalSequence & 8u) != 0u, finalObservation->HasAudioBlockStartSample);
-	EXPECT_EQ(finalSequence + 9000u, finalObservation->LocalBlockStartSample);
-	EXPECT_EQ(finalSequence + 14000u, finalObservation->AudioBlockStartSample);
+	EXPECT_EQ((finalSequence & 8u) != 0u, finalObservation->HasDeviceAudioSampleAtObservation);
+	EXPECT_EQ(finalSequence + 9000u, finalObservation->LocalMasterAbsoluteSampleAtObservation);
+	EXPECT_EQ(finalSequence + 14000u, finalObservation->DeviceAudioSampleAtObservation);
 	EXPECT_EQ(finalSequence + 15000u, finalObservation->ObservationAgeSamps);
 }

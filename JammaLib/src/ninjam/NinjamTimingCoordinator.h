@@ -47,13 +47,13 @@ namespace ninjam
 
 	struct NinjamTempoChange
 	{
-		unsigned int IntervalLengthSamps = 0u;
+		unsigned int RemoteMasterIntervalLengthSamps = 0u;
 		unsigned int SourceSampleRate = 0u;
 		unsigned int RemoteGridStepSamps = 0u;
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 		unsigned int IntervalPositionSamps = 0u;
-		std::uint64_t AudioBlockStartSample = 0u;
+		std::uint64_t RemotePhaseDeviceSample = 0u;
 
 		bool HasSameProposalIdentity(const NinjamTempoChange& other) const noexcept;
 	};
@@ -110,7 +110,7 @@ namespace ninjam
 		ObservationInvalidSampleRate,
 		ObservationInvalidTempo,
 		ObservationInvalidBpi,
-		ObservationMissingAudioBoundary,
+		ObservationMissingDeviceAudioSampleAtObservation,
 		ObservationMissingLocalTransport,
 		ObservationInvalidRemoteGridStep,
 		ObservationInvalidLocalMasterLength,
@@ -285,7 +285,7 @@ namespace ninjam
 		NinjamNoSyncReason _lastNoSyncReason = NinjamNoSyncReason::None;
 		std::uint64_t _sessionEpoch = 0u;
 		std::optional<std::chrono::steady_clock::time_point> _lastValidObservationAt;
-		std::optional<std::uint64_t> _lastObservationAudioBlockStartSample;
+		std::optional<std::uint64_t> _lastRemotePhaseDeviceSample;
 		std::uint64_t _lastDiagnosticAppliedSessionEpoch = 0u;
 		std::uint64_t _lastDiagnosticAppliedVersion = 0u;
 		std::uint64_t _diagnosticLagSessionEpoch = 0u;

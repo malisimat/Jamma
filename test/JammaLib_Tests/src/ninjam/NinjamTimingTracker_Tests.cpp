@@ -25,7 +25,7 @@ TEST(NinjamTimingTracker, EmitsGenerationWrapAndJoinEvents)
 	auto join = tracker.Observe(Observation(1000u, 40u));
 	ASSERT_TRUE(join.has_value());
 	EXPECT_EQ(NinjamTimingEventType::Join, join->Type);
-	EXPECT_EQ(-400, join->PhaseDeltaSamps);
+	EXPECT_EQ(-400, join->RemoteMasterPhaseCorrectionSamps);
 	EXPECT_EQ(1ul, join->RemoteWrapCount);
 }
 

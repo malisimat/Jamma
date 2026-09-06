@@ -15,8 +15,8 @@ namespace ninjam
 		float Bpm = 0.0f;
 		unsigned int Bpi = 0u;
 		bool IsValid = false;
-		bool HasAudioBlockStartSample = false;
-		std::uint64_t AudioBlockStartSample = 0u;
+		bool HasDeviceAudioSampleAtObservation = false;
+		std::uint64_t DeviceAudioSampleAtObservation = 0u;
 	};
 
 	struct NinjamLocalTransportObservation
@@ -44,9 +44,9 @@ namespace ninjam
 		std::uint64_t ObservationSequence = 0u;
 		bool HasLocalTransport = false;
 		NinjamLocalTransportObservation LocalTransport;
-		bool HasAudioBlockStartSample = false;
-		std::uint64_t LocalBlockStartSample = 0u;
-		std::uint64_t AudioBlockStartSample = 0u;
+		bool HasDeviceAudioSampleAtObservation = false;
+		std::uint64_t LocalMasterAbsoluteSampleAtObservation = 0u;
+		std::uint64_t DeviceAudioSampleAtObservation = 0u;
 		std::uint64_t ObservationAgeSamps = 0u;
 	};
 
@@ -88,17 +88,17 @@ namespace ninjam
 
 	struct NinjamBoundaryTimingReplacement
 	{
-		unsigned int RemotePhaseSamps = 0u;
-		long long LocalDeltaSamps = 0;
+		unsigned int RemoteMasterPhaseSamps = 0u;
+		long long RemoteMasterPhaseCorrectionSamps = 0;
 	};
 
 	NinjamBoundaryTimingReplacement ResolveBoundaryTimingReplacement(
 		unsigned long oldMasterLengthSamps,
 		unsigned int oldMasterPhaseSamps,
-		unsigned int newIntervalLengthSamps,
-		unsigned int observedRemotePhaseSamps,
-		const std::optional<std::uint64_t>& observationAudioSample,
-		std::uint64_t boundaryAudioSample) noexcept;
+		unsigned int newRemoteMasterIntervalLengthSamps,
+		unsigned int observedRemoteMasterPhaseSamps,
+		const std::optional<std::uint64_t>& remotePhaseDeviceSample,
+		std::uint64_t boundaryDeviceAudioSample) noexcept;
 
 	unsigned int IntervalSampsFromTempo(float bpm,
 		unsigned int bpi,
@@ -121,5 +121,5 @@ namespace ninjam
 		std::uint64_t) noexcept;
 
 	NinjamTiming ProjectTimingToAudioSample(NinjamTiming timing,
-		std::uint64_t audioBlockStartSample) noexcept;
+		std::uint64_t deviceAudioSampleAtObservation) noexcept;
 }

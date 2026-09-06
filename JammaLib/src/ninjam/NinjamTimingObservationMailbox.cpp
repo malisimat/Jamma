@@ -24,9 +24,9 @@ namespace ninjam
 		_localLoopCount.store(timing.LocalTransport.LoopCount, std::memory_order_relaxed);
 		_localAbsoluteSamplePos.store(timing.LocalTransport.AbsoluteSamplePos, std::memory_order_relaxed);
 		_localSceneSamplePos.store(timing.LocalTransport.SceneSamplePos, std::memory_order_relaxed);
-		_hasAudioBlockStartSample.store(timing.HasAudioBlockStartSample, std::memory_order_relaxed);
-		_localBlockStartSample.store(timing.LocalBlockStartSample, std::memory_order_relaxed);
-		_audioBlockStartSample.store(timing.AudioBlockStartSample, std::memory_order_relaxed);
+		_hasDeviceAudioSampleAtObservation.store(timing.HasDeviceAudioSampleAtObservation, std::memory_order_relaxed);
+		_localMasterAbsoluteSampleAtObservation.store(timing.LocalMasterAbsoluteSampleAtObservation, std::memory_order_relaxed);
+		_deviceAudioSampleAtObservation.store(timing.DeviceAudioSampleAtObservation, std::memory_order_relaxed);
 		_observationAgeSamps.store(timing.ObservationAgeSamps, std::memory_order_relaxed);
 		_sequence.store(sequence + 2u, std::memory_order_release);
 		_hasPublication.store(true, std::memory_order_release);
@@ -61,9 +61,9 @@ namespace ninjam
 			timing.LocalTransport.LoopCount = _localLoopCount.load(std::memory_order_relaxed);
 			timing.LocalTransport.AbsoluteSamplePos = _localAbsoluteSamplePos.load(std::memory_order_relaxed);
 			timing.LocalTransport.SceneSamplePos = _localSceneSamplePos.load(std::memory_order_relaxed);
-			timing.HasAudioBlockStartSample = _hasAudioBlockStartSample.load(std::memory_order_relaxed);
-			timing.LocalBlockStartSample = _localBlockStartSample.load(std::memory_order_relaxed);
-			timing.AudioBlockStartSample = _audioBlockStartSample.load(std::memory_order_relaxed);
+			timing.HasDeviceAudioSampleAtObservation = _hasDeviceAudioSampleAtObservation.load(std::memory_order_relaxed);
+			timing.LocalMasterAbsoluteSampleAtObservation = _localMasterAbsoluteSampleAtObservation.load(std::memory_order_relaxed);
+			timing.DeviceAudioSampleAtObservation = _deviceAudioSampleAtObservation.load(std::memory_order_relaxed);
 			timing.ObservationAgeSamps = _observationAgeSamps.load(std::memory_order_relaxed);
 
 			const auto after = _sequence.load(std::memory_order_acquire);

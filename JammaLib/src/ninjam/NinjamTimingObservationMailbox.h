@@ -37,9 +37,9 @@ namespace ninjam
 		std::atomic<std::uint64_t> _localLoopCount{ 0u };
 		std::atomic<std::uint64_t> _localAbsoluteSamplePos{ 0u };
 		std::atomic<std::uint64_t> _localSceneSamplePos{ 0u };
-		std::atomic_bool _hasAudioBlockStartSample{ false };
-		std::atomic<std::uint64_t> _localBlockStartSample{ 0u };
-		std::atomic<std::uint64_t> _audioBlockStartSample{ 0u };
+		std::atomic_bool _hasDeviceAudioSampleAtObservation{ false };
+		std::atomic<std::uint64_t> _localMasterAbsoluteSampleAtObservation{ 0u };
+		std::atomic<std::uint64_t> _deviceAudioSampleAtObservation{ 0u };
 		std::atomic<std::uint64_t> _observationAgeSamps{ 0u };
 	};
 }

@@ -108,8 +108,8 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 	timing.IntervalPositionSamps = 1000u;
 	timing.Bpm = 96.0f;
 	timing.Bpi = 16u;
-	timing.HasAudioBlockStartSample = true;
-	timing.AudioBlockStartSample = 10000u;
+	timing.HasDeviceAudioSampleAtObservation = true;
+	timing.DeviceAudioSampleAtObservation = 10000u;
 	timing.HasLocalTransport = true;
 	timing.LocalTransport.MasterLengthSamps = 480000u;
 	timing.LocalTransport.MasterPhaseSamps = 1000u;
@@ -126,7 +126,7 @@ TEST(NinjamNetworkServiceTiming, CachedObservationDeadlineNoSyncIsIdempotentAndR
 		io::UserConfig{}, clock, start + std::chrono::seconds(2));
 	EXPECT_FALSE(repeated.DesiredTransport.has_value());
 
-	timing.AudioBlockStartSample += 256u;
+	timing.DeviceAudioSampleAtObservation += 256u;
 	timing.IntervalPositionSamps += 256u;
 	timing.LocalTransport.MasterPhaseSamps += 256u;
 	timing.LocalTransport.AbsoluteSamplePos += 256u;
