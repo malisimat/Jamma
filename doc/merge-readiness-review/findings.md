@@ -509,6 +509,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: none.
 - Verification: project-membership and retired-symbol audit; incremental native build; current circular-delta/coordinator/Timer/LoopTake tests remain registered and passing.
 - Human decision: accepted ([decision](decisions.md#small-simplifications)).
+- Phase 4 B017 execution: after replacement prerequisites passed 2/2, `a7678b4` deletes only the 156-line unregistered obsolete suite. Project/filter and retired-symbol audits are clean, active NINJAM circular difference and `PhaseDiscipline` concepts remain, the wrapped build and post-deletion prerequisites pass, the required timing filter passes 115/115, the full suite passes 843 with one expected hardware skip and zero failures, and `master...HEAD` diff-check is clean. Status: implemented and verified, pending B017 independent review.
 
 ## F-038 â€” Replace the pseudo-integration harness with a production-faithful timing boundary
 

@@ -222,6 +222,8 @@
 - **Rollback:** restore only the deleted file if replacement coverage/project audit fails.
 - **Verification:** prerequisites and full focused timing suite; file/retired-symbol/project membership audit; Stage 21 `git diff --check` confirms the deleted EOF issue is gone. Review: `B017.md`.
 
+- **Execution result (2026-09-05; pending independent review):** exact replacement prerequisites passed 2/2 at approved B016 closeout baseline `5f60cfa` from 20:43:52.7463851-06:00 through 20:43:52.9742036. Commit `a7678b48399f969f3148989f32da382541f986da` deletes only the 156-line unregistered `test/JammaLib_Tests/src/timing/RemotePhaseDiscipline_Tests.cpp`; the project and filters contained no entry and were not changed. The wrapped incremental Debug test build passed from 20:46:27.566 through 20:46:29.456; post-deletion prerequisites passed 2/2 from 20:46:46.584 through 20:46:46.923; the required broad timing filter passed 115/115 from 20:47:01.618 through 20:47:02.646; and the full suite passed 843 with one expected hardware MIDI skip and zero failures from 20:47:15.333 through 20:47:47.086. Retired Quantiser remote-phase APIs are absent while active `ninjam::SignedCircularDifference`, desired `PhaseDiscipline`, and LoopTake `PhaseDiscipline` remain. B017-range and `master...HEAD` diff checks pass; the obsolete EOF issue is gone. The unchanged wrapper required the process-local PowerShell 5.1 shim. No live/manual claim is made. Status: implemented and verified, pending independent `batch-reviews/B017.md`.
+
 ## No-batch decisions and accepted residuals
 
 | Finding/scope | Disposition at this gate |
