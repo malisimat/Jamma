@@ -462,7 +462,7 @@ void NinjamConnection::_ResizeExportDelayLines()
 
 		_exportTimingState = {};
 
-		// _exportTick ("n" in the K_dac/K_adc formula) must stay in lockstep
+		// _exportTick (the export delay write cursor) must stay in lockstep
 		// with the delay lines' own internal write cursors -- only reset it
 		// here, paired with brand-new (writeIndex==0) buffers. If the
 		// channel count is unchanged, the existing buffers' write cursors are
@@ -644,37 +644,37 @@ NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleaved
 			remoteTiming.IsConnected, sampleRate, 0u, 0ul, 0u), audioBlockStartSample);
 
 		ExportLaneTimingInput timingInput;
-		timingInput.n = _exportTick;
-		timingInput.numFrames = numFrames;
-		timingInput.pos = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
+		timingInput.DelayWriteCursorSamps = _exportTick;
+		timingInput.NumFrames = numFrames;
+		timingInput.RemoteIntervalPhaseSamps = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
 			? deviceTiming.IntervalPositionSamps : 0u;
-		timingInput.length = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
+		timingInput.RemoteIntervalLengthSamps = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
 			? deviceTiming.IntervalLengthSamps : 0u;
-		// TODO(latency): inLatencySamps/outLatencySamps are hardware latency
+		// TODO(latency): InLatencySamps/OutLatencySamps are hardware latency
 		// only. Loop-driven VST latency (Loop::CurrentVstLatencySamps()) is
-		// not yet folded into outLatencySamps here -- see
+		// not yet folded into OutLatencySamps here -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
-		timingInput.inLatencySamps = _inLatencySamps;
-		timingInput.outLatencySamps = _outLatencySamps;
+		timingInput.InLatencySamps = _inLatencySamps;
+		timingInput.OutLatencySamps = _outLatencySamps;
 
 		const auto timing = ExportLaneTiming::Compute(timingInput, _exportTimingState);
 		_exportTick += numFrames;
 
-		if (timing.generationReset)
+		if (timing.GenerationReset)
 		{
 			for (auto& buf : _dacDelayLines)
 				buf->Reset();
 			for (auto& buf : _adcDelayLines)
 				buf->Reset();
 
-			if (timing.anomalyDetected)
+			if (timing.AnomalyDetected)
 				_exportAnomalyCount.fetch_add(1u, std::memory_order_relaxed);
 		}
 
-		if (timing.valid)
+		if (timing.Valid)
 		{
-			_ReadExportDelayLine(_dacDelayLines, timing.dacDelaySamps, numFrames, _delayedDacInterleaved, _dacDelayTemp);
-			_ReadExportDelayLine(_adcDelayLines, timing.adcDelaySamps, numFrames, _delayedAdcInterleaved, _adcDelayTemp);
+			_ReadExportDelayLine(_dacDelayLines, timing.DacDelaySamps, numFrames, _delayedDacInterleaved, _dacDelayTemp);
+			_ReadExportDelayLine(_adcDelayLines, timing.AdcDelaySamps, numFrames, _delayedAdcInterleaved, _adcDelayTemp);
 			dacForPacking = _delayedDacInterleaved.data();
 			adcForPacking = _delayedAdcInterleaved.data();
 		}

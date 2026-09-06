@@ -357,7 +357,7 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 	_remoteTempoDialog->SetBodyLines({
 		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
-		"Master loop: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
+		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
 	_remoteTempoDialog->ResetButtonStates();

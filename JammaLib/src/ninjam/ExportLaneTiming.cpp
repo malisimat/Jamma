@@ -17,53 +17,60 @@ ExportLaneTimingResult ExportLaneTiming::Compute(const ExportLaneTimingInput& in
 {
 	ExportLaneTimingResult result{};
 
-	if (input.length == 0u)
+	if (input.RemoteIntervalLengthSamps == 0u)
 	{
 		// No valid NJClient timing yet (e.g. just connected). Only report a
 		// reset on the transition into this state so callers don't spam
 		// Reset() every block while waiting for timing to become available.
-		result.generationReset = state.primed;
-		state.primed = false;
+		result.GenerationReset = state.Primed;
+		state.Primed = false;
 		return result;
 	}
 
-	result.valid = true;
+	result.Valid = true;
 
-	const auto nMod = input.n % input.length;
-	const auto posMod = input.pos % input.length;
+	const auto delayWriteCursorMod = input.DelayWriteCursorSamps % input.RemoteIntervalLengthSamps;
+	const auto remoteIntervalPhaseMod = input.RemoteIntervalPhaseSamps % input.RemoteIntervalLengthSamps;
 
-	if (!state.primed || state.lastLength != input.length)
+	if (!state.Primed || state.LastRemoteIntervalLengthSamps != input.RemoteIntervalLengthSamps)
 	{
-		result.generationReset = true;
+		result.GenerationReset = true;
 	}
 	else
 	{
-		// Compare the observed pos against what last block predicted for
+		// Compare the observed remote interval phase against the prior prediction for
 		// this block (plan §3.2). An ordinary same-length wrap always
 		// matches exactly; only a genuine anomaly (seek/reconnect we didn't
 		// otherwise detect) produces a large circular distance.
-		const auto predicted = state.predictedPos % input.length;
-		const auto forwardDiff = utils::ModNeg(static_cast<int>(posMod) - static_cast<int>(predicted), input.length);
-		const auto circularDiff = std::min(forwardDiff, input.length - forwardDiff);
-		const auto tolerance = std::min(input.numFrames, input.length);
+		const auto predicted = state.PredictedRemoteIntervalPhaseSamps % input.RemoteIntervalLengthSamps;
+		const auto forwardDiff = utils::ModNeg(static_cast<int>(remoteIntervalPhaseMod)
+			- static_cast<int>(predicted), input.RemoteIntervalLengthSamps);
+		const auto circularDiff = std::min(forwardDiff, input.RemoteIntervalLengthSamps - forwardDiff);
+		const auto tolerance = std::min(input.NumFrames, input.RemoteIntervalLengthSamps);
 
 		if (circularDiff > tolerance)
 		{
-			result.generationReset = true;
-			result.anomalyDetected = true;
+			result.GenerationReset = true;
+			result.AnomalyDetected = true;
 		}
 	}
 
-	// K_dac = n + outLatency - pos (mod L); K_adc = n - inLatency - pos (mod L)
-	const auto kDac = utils::ModNeg(static_cast<int>(nMod) + static_cast<int>(input.outLatencySamps) - static_cast<int>(posMod), input.length);
-	const auto kAdc = utils::ModNeg(static_cast<int>(nMod) - static_cast<int>(input.inLatencySamps) - static_cast<int>(posMod), input.length);
+	// DAC delay = write cursor + output latency - remote phase (mod remote length);
+	// ADC delay = write cursor - input latency - remote phase (mod remote length).
+	const auto dacDelay = utils::ModNeg(static_cast<int>(delayWriteCursorMod)
+		+ static_cast<int>(input.OutLatencySamps) - static_cast<int>(remoteIntervalPhaseMod),
+		input.RemoteIntervalLengthSamps);
+	const auto adcDelay = utils::ModNeg(static_cast<int>(delayWriteCursorMod)
+		- static_cast<int>(input.InLatencySamps) - static_cast<int>(remoteIntervalPhaseMod),
+		input.RemoteIntervalLengthSamps);
 
-	result.dacDelaySamps = kDac + input.numFrames;
-	result.adcDelaySamps = kAdc + input.numFrames;
+	result.DacDelaySamps = dacDelay + input.NumFrames;
+	result.AdcDelaySamps = adcDelay + input.NumFrames;
 
-	state.primed = true;
-	state.lastLength = input.length;
-	state.predictedPos = (posMod + input.numFrames) % input.length;
+	state.Primed = true;
+	state.LastRemoteIntervalLengthSamps = input.RemoteIntervalLengthSamps;
+	state.PredictedRemoteIntervalPhaseSamps = (remoteIntervalPhaseMod + input.NumFrames)
+		% input.RemoteIntervalLengthSamps;
 
 	return result;
 }
