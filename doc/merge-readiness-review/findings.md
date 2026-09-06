@@ -137,6 +137,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: none.
 - Verification: compile affected targets and identifier audit.
 - Human decision: accepted with the documented acronym-casing constraint ([decision](decisions.md#03---conventions)).
+- Phase 4 B015 execution: `e4fae40` mechanically changes `LocalAudioGeometry::BPI` to `Bpi` and remote geometry `BPI`/`BPM` to `Bpi`/`Bpm`, preserving acronym prose and behavior. Its wrapped incremental build and focused 40/40 passed. Status: implemented and verified, pending B015 independent review.
 
 ## F-011 ‚Äî Apply the immediate NINJAM aggregate member convention consistently
 
@@ -149,6 +150,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: none.
 - Verification: focused helper/metronome tests and retired-name search.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#03---conventions)).
+- Phase 4 B015 execution: metronome aggregate casing `5a9facf` and overlapping semantic export aggregate names `03f3d1e` apply PascalCase only in the approved Jamma-owned neighborhoods. Their focused tests passed 15/15 and 8/8, followed by broad 188/188 and full-suite 843 pass/one expected skip/zero fail. Status: implemented and verified, pending B015 independent review.
 
 ## F-012 ‚Äî Move substantial non-template NINJAM runtime bodies out of public headers
 
@@ -175,6 +177,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: local grain, active/remote grid, remote timing, local timing.
 - Verification: symbol/UI audit proving remote-BPI consumers use remote-grid vocabulary and remaining grain names are local construction.
 - Human decision: accepted with `RemoteGridStepSamps` terminology ([decision](decisions.md#04---vocabulary)).
+- Phase 4 B015 execution: `7df0ee9` replaces only remote-derived `GrainSamps` with `RemoteGridStepSamps`, including the B014 diagnostic reason and UI label. Local quantisation, MIDI, config, constants, and graphics `GrainSamps` remain. The wrapped build and focused 34/34 passed; final retired/preserved-name audit is clean. Status: implemented and verified, pending B015 independent review.
 
 ## F-014 ‚Äî Make accepted remote command authority and coordinates explicit
 
@@ -187,6 +190,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: remote timing/authority, follow policy, master phase, sync map, mapped source correction, per-loop phase remain separate.
 - Verification: command/integration tests and a manual trace of replacement plus discipline coordinates.
 - Human decision: accepted with the naming preferences recorded by the human reviewer ([decision](decisions.md#04---vocabulary)).
+- Phase 4 B015 execution: `a4ef843` applies the approved remote-master length/phase/device-sample and distinct remote-master/local-source correction names through desired state, boundary, tracker, AudioHost receipt, direct consumers, and tests. The wrapped build and focused 59/59 passed. This is a vocabulary-only change; the manual replacement/discipline trace remains Stage 21. Status: implemented and verified, pending B015 independent review.
 
 ## F-015 ‚Äî Name Timer-absolute and device-audio observation anchors distinctly
 
@@ -199,6 +203,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: local master absolute position, device counter, monotonic scene coordinate, remote timing remain distinct.
 - Verification: tests with distinct sentinel values and unqualified-name audit.
 - Human decision: accepted with explicit clock-domain naming ([decision](decisions.md#04---vocabulary)).
+- Phase 4 B015 execution: the same rollback group `a4ef843` distinguishes device-audio observation samples from local-master absolute samples across observation/mailbox/coordinator/tracker boundaries and renames the matching missing-anchor diagnostic reason. Focused 59/59 passed and retired-name audit is clean. Late-observation live evidence remains Stage 21. Status: implemented and verified, pending B015 independent review.
 
 ## F-016 ‚Äî Rename the MIDI automation global-sample origin
 
@@ -211,6 +216,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: automation origin, MIDI event cursor/per-loop phase, source/scene anchor remain separate.
 - Verification: automation-use search and focused automation/timing tests.
 - Human decision: accepted for later reconciliation ([decision](decisions.md#04---vocabulary)).
+- Phase 4 B015 execution: `376f0b0` renames the MIDI accessor/member/dispatch copy to `AutomationGlobalSampleOrigin` while preserving the separate event cursor and map/entity anchors. The wrapped build and focused 64/64 passed; usage audit finds no retired name. Status: implemented and verified, pending B015 independent review.
 
 ## F-017 ‚Äî Give export-lane remote/local cursors semantic unit-bearing names
 
@@ -223,6 +229,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1‚
 - Protected timing concepts affected: remote wrapped phase/length and local delay-line/device timing remain distinct.
 - Verification: pure-helper tests and call-site initialization review.
 - Human decision: accepted only for Jamma-owned code; upstream NJClient is immutable ([decision](decisions.md#04---vocabulary)).
+- Phase 4 B015 execution: `03f3d1e` gives the retained Jamma-owned export input/state/result members semantic unit-bearing PascalCase names and changes the UI label to ‚ÄúRemote master interval‚Äù; NJClient/upstream and persistence are untouched. Focused 8/8, broad 188/188, and full-suite 843 pass/one expected skip/zero fail are green. The path remains disabled by default and no live enablement claim is made. Status: implemented and verified, pending B015 independent review.
 
 ## F-018 ‚Äî Remove duplicated stored `SyncPhaseMap::SourcePhaseAtOrigin`
 

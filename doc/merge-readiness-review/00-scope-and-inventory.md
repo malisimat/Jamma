@@ -178,6 +178,8 @@ Independent review `7d55c510d503b3aa287e41aaac580987f82f5b16` rejected B014 desp
 
 Superseding independent review `6150f5f3604bb4a483c118ae3c53ce9dfbbca3a8` approved the corrected B014 range and repeated all automated evidence successfully. B014 is implemented, corrected, verified, and independently approved; B015 may proceed. Live verbose timing traces remain Stage 21.
 
+B015 passing-first prerequisites passed 2/2 at approved baseline `1ed040d`. Six mechanical, rollback-safe commits `e4fae40`/`7df0ee9`/`a4ef843`/`376f0b0`/`5a9facf`/`03f3d1e` apply only the approved acronym, remote-grid, clock-domain/correction, automation-origin, metronome, and export/UI vocabulary. Each wrapped incremental build and focused filter passed; final broad coverage passed 188/188 and the full suite passed 843 with one expected hardware skip and zero failures. Retired-name/UI audits are clean, local grain and protected glossary concepts remain, and no persistence or upstream file changed. Status: implemented and verified, pending independent `batch-reviews/B015.md`; B016 remains gated.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
