@@ -6,18 +6,26 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst3Plugin.h"
+#include "../midi/MidiBlockTiming.h"
+#include "../midi/MidiQueue.h"
 #include "Vst2Plugin.h"
+#include "Vst3MidiMapping.h"
+#include "Vst3StateBlob.h"
+#include "VstGlContextScope.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <cwctype>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #ifdef JAMMA_VST3_ENABLED
+#include "vst3sdk/pluginterfaces/base/ibstream.h"
 #include "vst3sdk/pluginterfaces/base/ipluginbase.h"
 #include "vst3sdk/pluginterfaces/vst/ivstmessage.h"
 #include "vst3sdk/pluginterfaces/vst/ivstaudioprocessor.h"
@@ -121,7 +129,8 @@ public:
 
 	tresult PLUGIN_API beginEdit(ParamID id) override
 	{
-		(void)id;
+		if (_owner)
+			_owner->OnBeginEdit(static_cast<std::uint32_t>(id));
 		return kResultOk;
 	}
 
@@ -134,13 +143,15 @@ public:
 
 	tresult PLUGIN_API endEdit(ParamID id) override
 	{
-		(void)id;
+		if (_owner)
+			_owner->OnEndEdit(static_cast<std::uint32_t>(id));
 		return kResultOk;
 	}
 
 	tresult PLUGIN_API restartComponent(int32 flags) override
 	{
-		(void)flags;
+		if (_owner)
+			_owner->OnRestartComponent(static_cast<std::int32_t>(flags));
 		return kResultOk;
 	}
 
@@ -152,6 +163,16 @@ public:
 };
 
 IMPLEMENT_FUNKNOWN_METHODS(HostComponentHandler, IComponentHandler, IComponentHandler::iid)
+
+// Result of classifying a MIDI event's sample offset against the current
+// process block window. Shared by FixedEventList::AddMidiEvent (native VST3
+// events) and Vst3Plugin::SendMidiEvent (mapped controller parameter points)
+// so the two paths cannot drift apart.
+struct MidiBlockPlacement
+{
+	bool Accepted = false; // false => drop entirely (late arrival, non-realtime)
+	int32 SampleOffset = 0;
+};
 
 class FixedEventList final : public IEventList
 {
@@ -176,19 +197,45 @@ public:
 		_count = 0;
 	}
 
+	std::uint32_t BlockStartSample() const noexcept { return _blockStartSample; }
+	std::uint32_t BlockNumSamples() const noexcept { return _blockNumSamples; }
+
+	// Classifies midiEvent's sample offset against [blockStartSample,
+	// blockStartSample + blockNumSamples). Static so both the native-event path
+	// (below) and the mapped-parameter path in Vst3Plugin::SendMidiEvent reuse
+	// the exact same rule.
+	static MidiBlockPlacement ComputeBlockPlacement(const midi::MidiEvent& midiEvent,
+		std::uint32_t blockStartSample, std::uint32_t blockNumSamples, bool isRealtime) noexcept
+	{
+		MidiBlockPlacement placement;
+		if (blockNumSamples == 0u)
+			return placement;
+
+		const auto position = midi::ClassifyMidiSampleInBlock(midiEvent.sampleOffset,
+			blockStartSample, blockNumSamples);
+		const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
+		if (!inWindow && !isRealtime)
+			return placement;
+
+		placement.Accepted = true;
+		placement.SampleOffset = inWindow
+			? static_cast<int32>(midi::MidiSampleDelta(midiEvent.sampleOffset, blockStartSample))
+			: 0;
+		return placement;
+	}
+
 	void AddMidiEvent(const midi::MidiEvent& midiEvent, bool isRealtime) noexcept
 	{
 		if (_count >= MaxEvents || 0u == _blockNumSamples)
 			return;
 
-		const auto blockEnd = _blockStartSample + _blockNumSamples;
-		const bool inWindow = (midiEvent.sampleOffset >= _blockStartSample && midiEvent.sampleOffset < blockEnd);
-		if (!inWindow && !isRealtime)
+		const auto placement = ComputeBlockPlacement(midiEvent, _blockStartSample, _blockNumSamples, isRealtime);
+		if (!placement.Accepted)
 			return;
 
 		Event event{};
 		event.busIndex = 0;
-		event.sampleOffset = inWindow ? static_cast<int32>(midiEvent.sampleOffset - _blockStartSample) : 0;
+		event.sampleOffset = placement.SampleOffset;
 		event.ppqPosition = 0.0;
 		event.flags = isRealtime ? Event::kIsLive : 0;
 
@@ -434,6 +481,140 @@ private:
 
 IMPLEMENT_FUNKNOWN_METHODS(FixedParameterChanges, IParameterChanges, IParameterChanges::iid)
 
+// Minimal IBStream adapter over an owned std::vector<std::uint8_t>. Used for
+// both directions of Vst3Plugin::GetState/SetState: constructed empty and
+// grown by write() when capturing IComponent/IEditController state, or
+// constructed as a fixed-size view over existing bytes and read by
+// IComponent::setState / IEditController::setComponentState / ::setState
+// when restoring. Not RT-safe; only ever used from GetState/SetState, which
+// are non-RT-only entry points. Deliberately local to this translation unit
+// rather than reusing the SDK's own MemoryStream, to avoid pulling another
+// SDK implementation source into JammaLib.
+class MemoryIBStream final : public Steinberg::IBStream
+{
+public:
+	MemoryIBStream() noexcept : _data(), _position(0)
+	{
+		FUNKNOWN_CTOR
+	}
+
+	MemoryIBStream(const std::uint8_t* data, std::size_t size) : _data(), _position(0)
+	{
+		FUNKNOWN_CTOR
+		if (data && size > 0)
+			_data.assign(data, data + size);
+	}
+
+	~MemoryIBStream() noexcept { FUNKNOWN_DTOR }
+
+	MemoryIBStream(const MemoryIBStream&) = delete;
+	MemoryIBStream& operator=(const MemoryIBStream&) = delete;
+
+	const std::vector<std::uint8_t>& Data() const noexcept { return _data; }
+
+	tresult PLUGIN_API read(void* buffer, int32 numBytes, int32* numBytesRead) override
+	{
+		if (numBytesRead)
+			*numBytesRead = 0;
+
+		if (numBytes < 0 || (numBytes > 0 && !buffer) || _position < 0)
+			return kInvalidArgument;
+
+		if (numBytes == 0)
+			return kResultOk;
+
+		const auto pos = static_cast<std::size_t>(_position);
+		if (pos >= _data.size())
+			return kResultOk; // At/past EOF: zero bytes read is a valid short read.
+
+		const auto available = _data.size() - pos;
+		const auto toRead = (std::min)(static_cast<std::size_t>(numBytes), available);
+		std::memcpy(buffer, _data.data() + pos, toRead);
+		_position += static_cast<int64>(toRead);
+		if (numBytesRead)
+			*numBytesRead = static_cast<int32>(toRead);
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API write(void* buffer, int32 numBytes, int32* numBytesWritten) override
+	{
+		if (numBytesWritten)
+			*numBytesWritten = 0;
+
+		if (numBytes < 0 || (numBytes > 0 && !buffer) || _position < 0)
+			return kInvalidArgument;
+
+		if (numBytes == 0)
+			return kResultOk;
+
+		const auto pos = static_cast<std::size_t>(_position);
+		const auto count = static_cast<std::size_t>(numBytes);
+		if (pos > (std::numeric_limits<std::size_t>::max)() - count)
+			return kInvalidArgument; // Checked-add overflow guard.
+
+		const auto required = pos + count;
+		if (_data.size() < required)
+			_data.resize(required);
+
+		std::memcpy(_data.data() + pos, buffer, count);
+		_position += static_cast<int64>(count);
+		if (numBytesWritten)
+			*numBytesWritten = numBytes;
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API seek(int64 pos, int32 mode, int64* result) override
+	{
+		int64 newPos = 0;
+		switch (mode)
+		{
+		case IBStream::kIBSeekSet:
+			newPos = pos;
+			break;
+		case IBStream::kIBSeekCur:
+			if ((pos > 0 && _position > (std::numeric_limits<int64>::max)() - pos)
+				|| (pos < 0 && _position < (std::numeric_limits<int64>::min)() - pos))
+				return kInvalidArgument; // Checked-add overflow guard.
+			newPos = _position + pos;
+			break;
+		case IBStream::kIBSeekEnd:
+		{
+			const auto size = static_cast<int64>(_data.size());
+			if (pos > 0 && size > (std::numeric_limits<int64>::max)() - pos)
+				return kInvalidArgument;
+			newPos = size + pos;
+			break;
+		}
+		default:
+			return kInvalidArgument;
+		}
+
+		if (newPos < 0)
+			return kInvalidArgument;
+
+		_position = newPos;
+		if (result)
+			*result = _position;
+		return kResultOk;
+	}
+
+	tresult PLUGIN_API tell(int64* pos) override
+	{
+		if (!pos)
+			return kInvalidArgument;
+		*pos = _position;
+		return kResultOk;
+	}
+
+	DECLARE_FUNKNOWN_METHODS
+
+private:
+	std::vector<std::uint8_t> _data;
+	int64 _position;
+};
+
+IMPLEMENT_FUNKNOWN_METHODS(MemoryIBStream, IBStream, IBStream::iid)
+
 class Vst3Plugin::Impl
 {
 public:
@@ -445,6 +626,22 @@ public:
 	Steinberg::IPtr<Steinberg::Vst::IComponent> component;
 	Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor;
 	Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
+	// True only when controller was created via the separate IComponent2/
+	// legacy-CID fallback path in Load() and successfully initialize()'d —
+	// i.e. it is a distinct COM object from component that must receive its
+	// own terminate() exactly once. False when controller is the same
+	// object as component (obtained via component->queryInterface()),
+	// which must NOT be terminated a second time.
+	bool controllerIsSeparateObject = false;
+
+	// Explicit lifecycle state, tracked directly rather than guessed from
+	// non-null pointers, so failure-cleanup and normal-unload paths can
+	// never call terminate()/setActive(false)/setProcessing(false) on an
+	// object that was never successfully initialized/activated.
+	bool componentInitialized = false;
+	bool controllerInitialized = false;
+	bool componentActive = false;
+	bool processorProcessing = false;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> componentConnection;
 	Steinberg::IPtr<Steinberg::Vst::IConnectionPoint> controllerConnection;
 	bool _connectionsDone = false; // true after connect() called in OpenEditor()
@@ -519,6 +716,124 @@ public:
 		return true;
 	}
 
+	// --- Step 3: VST3 MIDI controller mapping -----------------------------
+	//
+	// midiMapping is queried from the controller once (after creation and
+	// after every state restore). midiMappingMailbox publishes a completed
+	// Vst3MidiMapping::ParameterTable to the audio thread without ever
+	// freeing memory there (see Vst3MidiMapping.h). midiMappingAdoptedSlot is
+	// audio-thread-only bookkeeping, touched only from BeginMidiBlock/
+	// SendMidiEvent. midiMapRebuildRequested / midiMapRebuildMutex serialize
+	// whichever non-RT thread(s) call RebuildMidiControllerMap() (the editor
+	// idle timer via IdleEditor(), and GetState() via
+	// PollPendingControllerChanges()).
+	Steinberg::IPtr<Steinberg::Vst::IMidiMapping> midiMapping;
+	Vst3MidiMapping::ParameterTableMailbox midiMappingMailbox;
+	int midiMappingAdoptedSlot = 0;
+	std::atomic<bool> midiMapRebuildRequested{ false };
+	std::mutex midiMapRebuildMutex;
+
+	// Rebuilds the fixed MIDI-controller-to-parameter table from scratch and
+	// publishes it. Not RT-safe; called only from Load(), SetState(), and
+	// PollPendingControllerChanges(). Returns false only when the mailbox
+	// producer slot was not yet free (previous publish not yet adopted by
+	// the audio thread) — the caller should leave the rebuild-requested flag
+	// set so it is retried on the next poll.
+	bool RebuildMidiControllerMap() noexcept
+	{
+		std::lock_guard<std::mutex> lock(midiMapRebuildMutex);
+
+		if (!midiMapping || !component)
+			return true; // Nothing to build; leave the table empty.
+
+		if (component->getBusCount(kEvent, kInput) <= 0)
+			return true; // No input event bus: nothing can ever be mapped.
+
+		auto* writeSlot = midiMappingMailbox.AcquireWriteSlot();
+		if (!writeSlot)
+			return false;
+
+		*writeSlot = Vst3MidiMapping::MakeEmptyTable();
+		for (int16 channel = 0; channel < static_cast<int16>(Vst3MidiMapping::ChannelCount); ++channel)
+		{
+			for (std::uint32_t ctrl = 0; ctrl < Vst3MidiMapping::ControllerCount; ++ctrl)
+			{
+				ParamID paramId = 0;
+				if (midiMapping->getMidiControllerAssignment(0, channel, static_cast<CtrlNumber>(ctrl), paramId) == kResultTrue)
+					(*writeSlot)[static_cast<std::size_t>(channel)][ctrl] = static_cast<std::uint32_t>(paramId);
+			}
+		}
+		midiMappingMailbox.Publish();
+		return true;
+	}
+
+	struct ControllerEdit
+	{
+		std::uint32_t paramId;
+		double value;
+	};
+
+	// The editor is the sole producer and the audio callback the sole consumer.
+	// This uses the same lock-free handoff as MIDI ingress and holds 255 edits.
+	midi::MidiQueue<256, ControllerEdit> controllerEditQueue;
+
+	void PrepareProcessBlock() noexcept
+	{
+		ControllerEdit edit;
+		while (controllerEditQueue.Pop(edit))
+		{
+			int32 queueIndex = -1;
+			auto* queue = inputParameterChanges->addParameterData(static_cast<ParamID>(edit.paramId), queueIndex);
+			if (queue)
+			{
+				int32 pointIndex = -1;
+				queue->addPoint(0, static_cast<ParamValue>(edit.value), pointIndex);
+			}
+			// Fixed-capacity queue full: drop silently, consistent with the
+			// existing fixed-capacity RT policy elsewhere in this file.
+		}
+	}
+
+	// Small fixed set of parameters currently mid-gesture (between
+	// beginEdit/endEdit). UI-thread only: the VST3 SDK guarantees
+	// beginEdit/performEdit/endEdit all come from a single UI thread, so this
+	// needs no synchronization. Advisory bookkeeping only — performEdit
+	// (OnControllerEdit) is what actually delivers and publishes values;
+	// gestures just give tests/future recording logic an explicit boundary.
+	static constexpr std::size_t MaxActiveGestures = 8;
+	std::array<ParamID, MaxActiveGestures> activeGestureParamIds{};
+	std::size_t activeGestureCount = 0;
+
+	void BeginGesture(ParamID paramId) noexcept
+	{
+		for (std::size_t i = 0; i < activeGestureCount; ++i)
+		{
+			if (activeGestureParamIds[i] == paramId)
+				return; // Already tracked (e.g. duplicate beginEdit).
+		}
+		if (activeGestureCount < MaxActiveGestures)
+			activeGestureParamIds[activeGestureCount++] = paramId;
+	}
+
+	void EndGesture(ParamID paramId) noexcept
+	{
+		for (std::size_t i = 0; i < activeGestureCount; ++i)
+		{
+			if (activeGestureParamIds[i] == paramId)
+			{
+				activeGestureParamIds[i] = activeGestureParamIds[activeGestureCount - 1];
+				--activeGestureCount;
+				return;
+			}
+		}
+	}
+
+	// Additional restartComponent() request flags (kMidiCCAssignmentChanged
+	// is handled above by midiMapRebuildRequested). Consumed on the same
+	// non-RT poll path (PollPendingControllerChanges).
+	std::atomic<bool> paramTitlesRebuildRequested{ false };
+	std::atomic<bool> paramValuesRefreshRequested{ false };
+
 	Impl() :
 		factory(nullptr),
 		moduleInitialized(false),
@@ -583,6 +898,13 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 #ifdef JAMMA_VST3_ENABLED
 	if (_moduleHandle)
 		return true; // Already pre-initialised (e.g. called twice)
+
+	// PreInit runs on Jamma's UI thread, which also owns the OpenGL render
+	// context. InitDll()/GetPluginFactory()/createInstance()/initialize() can
+	// all run arbitrary plugin module code, and some VST3 plugins (like some
+	// VST2 plugins) make their own GL context current during that bootstrap
+	// sequence. One outer scope guard covers the whole sequence below.
+	VstGlContextScope glScope;
 
 	std::wcout << L"[Vst3Plugin] PreInit (main thread): path='" << path << L"'" << std::endl;
 
@@ -717,6 +1039,7 @@ bool Vst3Plugin::PreInit(const std::wstring& path)
 		_moduleHandle = nullptr;
 		return false;
 	}
+	_impl->componentInitialized = true;
 
 	std::cout << "[Vst3Plugin] PreInit: success — factory, component, and initialize on main thread, plugin=" << _name << std::endl;
 	return true;
@@ -845,6 +1168,11 @@ bool Vst3Plugin::Load(const std::wstring& path,
 
 		// 4. Create IComponent only when PreInit() did not already do the UI-thread setup.
 		// Doing this here can bind editor-thread state to the job thread and hang attached().
+		// This path can run on the job thread when PreInit() was skipped, so
+		// guard it too: a job thread normally has no current GL context, so
+		// the scope is a harmless no-op there, but it still protects the
+		// case where a caller invokes Load() directly from the UI thread.
+		VstGlContextScope componentGlScope;
 		IComponent* rawComponent = nullptr;
 		if (factory->createInstance(componentCid, IComponent::iid, (void**)&rawComponent) != kResultOk
 			|| !rawComponent)
@@ -860,6 +1188,7 @@ bool Vst3Plugin::Load(const std::wstring& path,
 			std::cerr << "[Vst3Plugin] IComponent::initialize() failed" << std::endl;
 			return cleanupFailedLoad();
 		}
+		_impl->componentInitialized = true;
 	}
 	else
 	{
@@ -978,13 +1307,52 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	// This is safe because PreInit() already performed the UI-thread setup.
 	auto inActivateRes = (inputBusCount > 0) ? _impl->component->activateBus(kAudio, kInput, 0, true) : kResultOk;
 	auto outActivateRes = (outputBusCount > 0) ? _impl->component->activateBus(kAudio, kOutput, 0, true) : kResultOk;
+
 	auto activeRes = _impl->component->setActive(true);
-	auto processingRes = _impl->processor->setProcessing(true);
-	_isActivated.store(true, std::memory_order_release);
+	if (activeRes == kResultOk)
+		_impl->componentActive = true;
+
+	auto processingRes = static_cast<tresult>(kResultFalse);
+	if (_impl->componentActive)
+	{
+		processingRes = _impl->processor->setProcessing(true);
+		if (processingRes == kResultOk)
+			_impl->processorProcessing = true;
+	}
+
 	std::cout << "[Vst3Plugin] activateBus/setActive/setProcessing: input=" << inActivateRes
 		<< ", output=" << outActivateRes
 		<< ", setActive=" << activeRes
 		<< ", setProcessing=" << processingRes << std::endl;
+
+	if (_impl->componentActive && _impl->processorProcessing)
+	{
+		_isActivated.store(true, std::memory_order_release);
+	}
+	else
+	{
+		std::cerr << "[Vst3Plugin] Activation failed (setActive=" << activeRes
+			<< ", setProcessing=" << processingRes << "); tearing down" << std::endl;
+
+		// Reverse whichever transition succeeded, in the mandated teardown
+		// order: setProcessing(false) precedes setActive(false).
+		if (_impl->processorProcessing)
+		{
+			_impl->processor->setProcessing(false);
+			_impl->processorProcessing = false;
+		}
+		if (_impl->componentActive)
+		{
+			_impl->component->setActive(false);
+			_impl->componentActive = false;
+		}
+		if (inputBusCount > 0 && inActivateRes == kResultOk)
+			_impl->component->activateBus(kAudio, kInput, 0, false);
+		if (outputBusCount > 0 && outActivateRes == kResultOk)
+			_impl->component->activateBus(kAudio, kOutput, 0, false);
+
+		return cleanupFailedLoad();
+	}
 
 	// 9. Pre-allocate ProcessData so ProcessBlock() is heap-allocation-free
 	_impl->inputScratchStorage.assign(static_cast<size_t>(_impl->inputChannels) * constants::MaxBlockSize, 0.0f);
@@ -1024,6 +1392,9 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		&& rawController)
 	{
 		_impl->controller = IPtr<IEditController>(rawController, false);
+		// Same object as component: already initialized transitively by
+		// component->initialize() above, no separate initialize()/terminate().
+		_impl->controllerInitialized = true;
 		std::cout << "[Vst3Plugin] Controller queryInterface: ok" << std::endl;
 	}
 	else
@@ -1035,12 +1406,29 @@ bool Vst3Plugin::Load(const std::wstring& path,
 		TUID controllerCid;
 		if (_impl->component->getControllerClassId(controllerCid) == kResultOk)
 		{
+			VstGlContextScope controllerGlScope;
 			if (factory->createInstance(controllerCid, IEditController::iid, (void**)&rawController) == kResultOk
 				&& rawController)
 			{
 				_impl->controller = IPtr<IEditController>(rawController, false);
 				auto initRes = _impl->controller->initialize(_impl->hostApplication);
 				std::cout << "[Vst3Plugin] Separate controller created, initialize=" << initRes << std::endl;
+
+				if (initRes == kResultOk)
+				{
+					_impl->controllerIsSeparateObject = true;
+					_impl->controllerInitialized = true;
+				}
+				else
+				{
+					// Failed initialize: tear down and continue processor-only
+					// rather than leaving a half-initialized controller object
+					// that would later receive a spurious terminate() (or none
+					// at all — either is a lifecycle bug).
+					std::cerr << "[Vst3Plugin] Separate controller initialize() failed; continuing processor-only" << std::endl;
+					_impl->controller->terminate();
+					_impl->controller = nullptr;
+				}
 			}
 		}
 	}
@@ -1051,6 +1439,15 @@ bool Vst3Plugin::Load(const std::wstring& path,
 	{
 		_impl->BuildParameterMaps();
 		_impl->controller->setComponentHandler(_impl->componentHandler.get());
+
+		IMidiMapping* rawMidiMapping = nullptr;
+		if (_impl->controller->queryInterface(IMidiMapping::iid, (void**)&rawMidiMapping) == kResultOk
+			&& rawMidiMapping)
+		{
+			_impl->midiMapping = IPtr<IMidiMapping>(rawMidiMapping, false);
+			_impl->RebuildMidiControllerMap();
+			std::cout << "[Vst3Plugin] IMidiMapping available; controller mapping table built" << std::endl;
+		}
 	}
 
 	// Defer connect() to OpenEditor() on the main thread.
@@ -1125,11 +1522,13 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 
 	if (_isActivated.exchange(false, std::memory_order_acq_rel))
 	{
-		if (_impl->processor)
+		if (_impl->processor && _impl->processorProcessing)
 			_impl->processor->setProcessing(false);
-		if (_impl->component)
+		if (_impl->component && _impl->componentActive)
 			_impl->component->setActive(false);
 	}
+	_impl->processorProcessing = false;
+	_impl->componentActive = false;
 
 	if (_impl->componentConnection && _impl->controllerConnection)
 	{
@@ -1144,15 +1543,52 @@ void Vst3Plugin::ResetLoadedObjects(bool terminateComponent)
 	_impl->ClearParameterState();
 
 	_impl->processor = nullptr;
+
+	// A separately-initialized controller (the IComponent2/legacy fallback
+	// path in Load()) owns its own lifecycle and must receive terminate()
+	// exactly once. A controller obtained via component->queryInterface() is
+	// the same underlying object as the component and must NOT be terminated
+	// again here — component->terminate() below already covers it. Guard on
+	// controllerInitialized too so a controller whose initialize() failed
+	// (already terminated/released at the failure site in Load()) can never
+	// be terminated a second time here.
+	if (_impl->controller && _impl->controllerIsSeparateObject && _impl->controllerInitialized)
+		_impl->controller->terminate();
 	_impl->controller = nullptr;
+	_impl->controllerIsSeparateObject = false;
+	_impl->controllerInitialized = false;
+
 	_impl->componentConnection = nullptr;
 	_impl->controllerConnection = nullptr;
-	_impl->plugView = nullptr;
+
+	// Defensive: OpenEditor/CloseEditor already require setFrame(nullptr) and
+	// removed() before releasing plugView, and Unload() always runs
+	// CloseEditor() before ResetLoadedObjects(). This should already be null,
+	// but guard the invariant in case ResetLoadedObjects is ever reached with
+	// an editor still attached (e.g. a future failed-load path).
+	if (_impl->plugView)
+	{
+		_impl->plugView->setFrame(nullptr);
+		_impl->plugView->removed();
+		_impl->plugView = nullptr;
+	}
+
+	_impl->midiMapping = nullptr;
+	_impl->midiMapRebuildRequested.store(false, std::memory_order_relaxed);
+	_impl->midiMappingMailbox.Reset();
+	_impl->midiMappingAdoptedSlot = 0;
+
+	_impl->controllerEditQueue.Clear();
+	_impl->activeGestureCount = 0;
+	_impl->paramTitlesRebuildRequested.store(false, std::memory_order_relaxed);
+	_impl->paramValuesRefreshRequested.store(false, std::memory_order_relaxed);
 
 	if (terminateComponent && _impl->component)
 	{
-		_impl->component->terminate();
+		if (_impl->componentInitialized)
+			_impl->component->terminate();
 		_impl->component = nullptr;
+		_impl->componentInitialized = false;
 	}
 
 	// Null out bus buffer pointers before clearing the backing storage so that
@@ -1191,6 +1627,7 @@ void Vst3Plugin::ProcessBlock(float* monoBuf, int32_t numSamples) noexcept
 	// Update sample count (other ProcessData fields are fixed from Load())
 	_impl->processData.numSamples = numSamples;
 
+	_impl->PrepareProcessBlock();
 	_impl->processor->process(_impl->processData);
 	_impl->inputParameterChanges->BeginBlock();
 
@@ -1233,6 +1670,7 @@ void Vst3Plugin::ProcessBlockStereo(float* leftBuf, float* rightBuf, int32_t num
 	CopyMultiToInputBuffers(inputChannels, 2, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
 
 	_impl->processData.numSamples = numSamples;
+	_impl->PrepareProcessBlock();
 	_impl->processor->process(_impl->processData);
 	_impl->inputParameterChanges->BeginBlock();
 
@@ -1269,6 +1707,7 @@ void Vst3Plugin::ProcessBlockMulti(float* const* channelBufs, int32_t numChannel
 
 	CopyMultiToInputBuffers(channelBufs, numChannels, numSamples, _impl->inputChannelPtrs.data(), _impl->inputChannels);
 	_impl->processData.numSamples = numSamples;
+	_impl->PrepareProcessBlock();
 	_impl->processor->process(_impl->processData);
 	_impl->inputParameterChanges->BeginBlock();
 	CopyOutputToMulti(_impl->outputChannelPtrs.data(), _impl->outputChannels, numSamples, channelBufs, numChannels);
@@ -1325,11 +1764,23 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 		return;
 
 	_impl->hostTime = state;
-	_impl->processContext.projectTimeSamples = state.samplePos;
+	_impl->processContext.projectTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
+	_impl->processContext.continousTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
 	_impl->processContext.tempo = state.tempo;
 	_impl->processContext.timeSigNumerator = state.bpi;
 	_impl->processContext.timeSigDenominator = 4;
-	_impl->processContext.state = state.isPlaying ? 1u : 0u;
+	_impl->processContext.state = Steinberg::Vst::ProcessContext::kContTimeValid
+		| Steinberg::Vst::ProcessContext::kTempoValid
+		| Steinberg::Vst::ProcessContext::kTimeSigValid;
+	if (state.hasPpqPos)
+	{
+		_impl->processContext.projectTimeMusic = state.ppqPos;
+		// VST3 has no per-block transport-locate flag. The updated project-time,
+		// tempo, and time-signature fields are delivered atomically in this context.
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kProjectTimeMusicValid;
+	}
+	if (state.isPlaying)
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kPlaying;
 	_impl->processContext.sampleRate = state.sampleRate;
 #else
 	(void)state;
@@ -1342,14 +1793,61 @@ void Vst3Plugin::OnControllerEdit(std::uint32_t paramId, float normalizedValue) 
 	if (!_impl)
 		return;
 
+	const auto clamped = std::clamp(normalizedValue, 0.0f, 1.0f);
+
+	// Always enqueue for the processor, even if this ParamID is unknown to
+	// Jamma's host-index map (e.g. a plugin-only meta parameter) — the
+	// processor still needs the value on its next process() call.
+	_impl->controllerEditQueue.Push({ paramId, static_cast<double>(clamped) });
+
 	unsigned int hostIndex = 0u;
 	if (!_impl->TryGetHostIndexForParamId(static_cast<ParamID>(paramId), hostIndex))
-		return;
+		return; // Unknown to Jamma: enqueued above, nothing to publish.
 
-	PublishLastTouchedParameter(this, hostIndex, std::clamp(normalizedValue, 0.0f, 1.0f));
+	PublishLastTouchedParameter(this, hostIndex, clamped);
 #else
 	(void)paramId;
 	(void)normalizedValue;
+#endif
+}
+
+void Vst3Plugin::OnBeginEdit(std::uint32_t paramId) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (_impl)
+		_impl->BeginGesture(static_cast<ParamID>(paramId));
+#else
+	(void)paramId;
+#endif
+}
+
+void Vst3Plugin::OnEndEdit(std::uint32_t paramId) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (_impl)
+		_impl->EndGesture(static_cast<ParamID>(paramId));
+#else
+	(void)paramId;
+#endif
+}
+
+void Vst3Plugin::OnRestartComponent(std::int32_t flags) noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
+	// Only record what changed; the actual non-RT rebuild happens later on
+	// IdleEditor() / PollPendingControllerChanges(). This callback may run on
+	// whichever thread the plugin chooses to call it from.
+	if (flags & kMidiCCAssignmentChanged)
+		_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
+	if (flags & kParamTitlesChanged)
+		_impl->paramTitlesRebuildRequested.store(true, std::memory_order_release);
+	if (flags & kParamValuesChanged)
+		_impl->paramValuesRefreshRequested.store(true, std::memory_order_release);
+#else
+	(void)flags;
 #endif
 }
 
@@ -1357,8 +1855,14 @@ void Vst3Plugin::BeginMidiBlock(std::uint32_t blockStartSample,
 	std::uint32_t numSamples) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (_impl && _impl->inputEvents)
+	if (!_impl)
+		return;
+
+	if (_impl->inputEvents)
 		_impl->inputEvents->BeginBlock(blockStartSample, numSamples);
+
+	// Real-time safe: bounded atomic loads/stores only, no allocation.
+	_impl->midiMappingMailbox.AdoptPending(_impl->midiMappingAdoptedSlot);
 #else
 	(void)blockStartSample; (void)numSamples;
 #endif
@@ -1368,7 +1872,47 @@ void Vst3Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	bool isRealtime) noexcept
 {
 #ifdef JAMMA_VST3_ENABLED
-	if (_impl && _impl->inputEvents)
+	if (!_impl)
+		return;
+
+	// Try mapped delivery (CC / channel pressure / pitch bend with an
+	// IMidiMapping assignment) as an automation parameter point first. Reuses
+	// the exact same block-window classification as the legacy event path
+	// (FixedEventList::ComputeBlockPlacement) so the two paths cannot drift.
+	Vst3MidiMapping::ControllerValue controllerValue;
+	if (_impl->inputParameterChanges && _impl->inputEvents
+		&& Vst3MidiMapping::TryClassify(event, controllerValue))
+	{
+		std::uint32_t mappedParamId = Vst3MidiMapping::NoParamId;
+		const auto& table = _impl->midiMappingMailbox.Slot(_impl->midiMappingAdoptedSlot);
+		if (Vst3MidiMapping::TryLookup(table, event.Channel(), controllerValue.ControllerNumber, mappedParamId))
+		{
+			const auto placement = FixedEventList::ComputeBlockPlacement(event,
+				_impl->inputEvents->BlockStartSample(),
+				_impl->inputEvents->BlockNumSamples(),
+				isRealtime);
+			if (placement.Accepted)
+			{
+				int32 queueIndex = -1;
+				auto* queue = _impl->inputParameterChanges->addParameterData(static_cast<ParamID>(mappedParamId), queueIndex);
+				if (queue)
+				{
+					int32 pointIndex = -1;
+					queue->addPoint(placement.SampleOffset, static_cast<ParamValue>(controllerValue.NormalizedValue), pointIndex);
+				}
+				// If the fixed parameter queue is full, addParameterData()
+				// returns null and the point is silently dropped — consistent
+				// with the existing fixed-capacity RT policy elsewhere in this
+				// file. Either way, a mapping exists, so never also emit a
+				// duplicate legacy CC/pressure/bend event below.
+			}
+			return;
+		}
+	}
+
+	// No mapping (or not a CC/pressure/bend message): preserve the existing
+	// legacy MIDI event representation.
+	if (_impl->inputEvents)
 		_impl->inputEvents->AddMidiEvent(event, isRealtime);
 #else
 	(void)event; (void)isRealtime;
@@ -1409,31 +1953,39 @@ bool Vst3Plugin::OpenEditor(HWND parentHwnd)
 			<< ", k2c=" << k2c << std::endl;
 	}
 
-	IPlugView* rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
-	if (!rawView)
+	IPlugView* rawView = nullptr;
 	{
-		std::cout << "[Vst3Plugin] OpenEditor failed: createView returned null" << std::endl;
-		return false;
-	}
+		// createView() and attached() may create or switch a GL context
+		// (VSTGUI-based VST3 plugins commonly do). Restore ours afterwards.
+		VstGlContextScope glScope;
+		rawView = _impl->controller->createView(Steinberg::Vst::ViewType::kEditor);
+		if (!rawView)
+		{
+			std::cout << "[Vst3Plugin] OpenEditor failed: createView returned null" << std::endl;
+			return false;
+		}
 
-	_impl->plugView = IPtr<IPlugView>(rawView, false);
+		_impl->plugView = IPtr<IPlugView>(rawView, false);
 
-	if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
-	{
-		std::cout << "[Vst3Plugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
-		_impl->plugView = nullptr;
-		return false;
-	}
+		if (_impl->plugView->isPlatformTypeSupported(kPlatformTypeHWND) != kResultOk)
+		{
+			std::cout << "[Vst3Plugin] OpenEditor failed: kPlatformTypeHWND not supported" << std::endl;
+			_impl->plugView = nullptr;
+			return false;
+		}
 
-	_impl->plugFrame->SetHostWindow(parentHwnd);
-	_impl->plugView->setFrame(_impl->plugFrame.get());
+		_impl->plugFrame->SetHostWindow(parentHwnd);
+		_impl->plugView->setFrame(_impl->plugFrame.get());
 
-	const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
-	if (attachedResult != kResultOk)
-	{
-		std::cout << "[Vst3Plugin] OpenEditor failed: attached(HWND) failed" << std::endl;
-		_impl->plugView = nullptr;
-		return false;
+		const auto attachedResult = _impl->plugView->attached(reinterpret_cast<void*>(parentHwnd), kPlatformTypeHWND);
+		if (attachedResult != kResultOk)
+		{
+			std::cout << "[Vst3Plugin] OpenEditor failed: attached(HWND) failed" << std::endl;
+			// Do not leave the frame attached to a view we are about to drop.
+			_impl->plugView->setFrame(nullptr);
+			_impl->plugView = nullptr;
+			return false;
+		}
 	}
 
 	// Query preferred size
@@ -1460,6 +2012,8 @@ void Vst3Plugin::CloseEditor()
 #ifdef JAMMA_VST3_ENABLED
 	if (_impl && _impl->plugView)
 	{
+		// removed() may switch the current GL context; restore ours after.
+		VstGlContextScope glScope;
 		_impl->plugView->setFrame(nullptr);
 		_impl->plugView->removed();
 		_impl->plugView = nullptr;
@@ -1473,6 +2027,133 @@ void Vst3Plugin::CloseEditor()
 utils::Size2d Vst3Plugin::GetEditorSize() const noexcept
 {
 	return _editorSize;
+}
+
+void Vst3Plugin::IdleEditor() noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	PollPendingControllerChanges();
+#endif
+}
+
+void Vst3Plugin::PollPendingControllerChanges() const noexcept
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_impl)
+		return;
+
+	if (_impl->midiMapRebuildRequested.exchange(false, std::memory_order_acq_rel))
+	{
+		// RebuildMidiControllerMap() returns false only when the mailbox's
+		// previous publish has not yet been adopted by the audio thread;
+		// leave the flag set so the next poll retries.
+		if (!_impl->RebuildMidiControllerMap())
+			_impl->midiMapRebuildRequested.store(true, std::memory_order_release);
+	}
+
+	if (_impl->paramTitlesRebuildRequested.exchange(false, std::memory_order_acq_rel))
+	{
+		// Parameter list/titles changed (e.g. after a program change):
+		// rebuild the host-index <-> ParamID maps used by SetParameter/
+		// GetParameter/OnControllerEdit.
+		_impl->BuildParameterMaps();
+	}
+
+	if (_impl->paramValuesRefreshRequested.exchange(false, std::memory_order_acq_rel))
+	{
+		// kParamValuesChanged: the plugin changed parameter values
+		// internally (e.g. a program change). Jamma does not cache
+		// parameter values anywhere — GetParameter() always reads live from
+		// the controller — so there is nothing further to rebuild here;
+		// simply acknowledging the flag is correct.
+	}
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// State save / restore  (non-RT, job/UI thread only)
+// ---------------------------------------------------------------------------
+//
+// Blob layout: see Vst3StateBlob.h. Restore order follows the VST3 SDK's own
+// preset-file container (public.sdk/source/vst/vstpresetfile.cpp):
+//   1. IComponent::setState receives the component bytes.
+//   2. IEditController::setComponentState receives the SAME component bytes
+//      (rewound into a fresh stream — IBStream position is not reset by #1).
+//   3. IEditController::setState receives the optional controller-only bytes.
+// Callers (Loop/LoopTake/Station via JamFile load) already call SetState only
+// on a plugin instance not yet published into its live audio chain, so no
+// process() callback can observe the plugin mid-restore. That invariant is a
+// precondition here, matching Load/Unload; no lock or deactivate/reactivate
+// cycle is added.
+// ---------------------------------------------------------------------------
+
+std::vector<std::uint8_t> Vst3Plugin::GetState() const
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (!_isLoaded || !_impl || !_impl->component)
+		return {};
+
+	MemoryIBStream componentStream;
+	if (_impl->component->getState(&componentStream) != kResultOk)
+		return {};
+
+	std::vector<std::uint8_t> controllerState;
+	if (_impl->controller)
+	{
+		MemoryIBStream controllerStream;
+		// kNotImplemented (or any other failure) means "no controller blob",
+		// not a fatal error — the component state above is still valid.
+		if (_impl->controller->getState(&controllerStream) == kResultOk)
+			controllerState = controllerStream.Data();
+	}
+
+	return Vst3StateBlob::Frame(componentStream.Data(), controllerState);
+#else
+	return {};
+#endif
+}
+
+void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
+{
+#ifdef JAMMA_VST3_ENABLED
+	if (blob.empty() || !_isLoaded || !_impl || !_impl->component)
+		return;
+
+	Vst3StateBlob::ParsedState parsed;
+	if (!Vst3StateBlob::TryParse(blob, parsed))
+	{
+		std::cerr << "[Vst3Plugin] SetState: malformed or unrecognised state blob" << std::endl;
+		return;
+	}
+
+	MemoryIBStream componentStream(parsed.ComponentState.data(), parsed.ComponentState.size());
+	if (_impl->component->setState(&componentStream) != kResultOk)
+	{
+		std::cerr << "[Vst3Plugin] SetState: IComponent::setState failed" << std::endl;
+		return; // Do not touch the controller with an unrestored component.
+	}
+
+	if (_impl->controller)
+	{
+		MemoryIBStream componentStreamForController(parsed.ComponentState.data(), parsed.ComponentState.size());
+		if (_impl->controller->setComponentState(&componentStreamForController) != kResultOk)
+			std::cerr << "[Vst3Plugin] SetState: IEditController::setComponentState failed" << std::endl;
+
+		if (!parsed.ControllerState.empty())
+		{
+			MemoryIBStream controllerStream(parsed.ControllerState.data(), parsed.ControllerState.size());
+			if (_impl->controller->setState(&controllerStream) != kResultOk)
+				std::cerr << "[Vst3Plugin] SetState: IEditController::setState failed" << std::endl;
+		}
+
+		// Restored programs may change parameter IDs or MIDI-CC assignments.
+		_impl->BuildParameterMaps();
+		if (_impl->midiMapping)
+			_impl->RebuildMidiControllerMap();
+	}
+#else
+	(void)blob;
+#endif
 }
 
 namespace

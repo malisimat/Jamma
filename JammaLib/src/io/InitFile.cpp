@@ -195,13 +195,19 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 
 bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 {
-	ss << "Jam: " << utils::EncodeUtf8(ini.Jam) << std::endl;
-	ss << "JamLoadType: " << ini.JamLoadType << std::endl;
-	ss << "Rig: " << utils::EncodeUtf8(ini.Rig) << std::endl;
-	ss << "RigLoadType: " << ini.RigLoadType << std::endl;
+	Json::JsonPart root;
+	root.KeyValues["jam"] = utils::EncodeUtf8(ini.Jam);
+	root.KeyValues["jamload"] = static_cast<unsigned long>(ini.JamLoadType);
+	root.KeyValues["rig"] = utils::EncodeUtf8(ini.Rig);
+	root.KeyValues["rigload"] = static_cast<unsigned long>(ini.RigLoadType);
+	root.KeyValues["win"] = Json::JsonArray{ 4u, std::vector<long>{ ini.WinPos.X, ini.WinPos.Y, static_cast<long>(ini.WinSize.Width), static_cast<long>(ini.WinSize.Height) } };
 
-	ss << "WinPos: " << ini.WinPos.X << "," << ini.WinPos.Y << std::endl;
-	ss << "WinSize: " << ini.WinSize.Width << "," << ini.WinSize.Height << std::endl;
+	Json::JsonPart logging;
+	logging.KeyValues["midi"] = ini.Logging.Midi;
+	logging.KeyValues["audio"] = ini.Logging.Audio;
+	logging.KeyValues["event"] = ini.Logging.Event;
+	logging.KeyValues["ui"] = ini.Logging.Ui;
+	root.KeyValues["logging"] = logging;
 
-	return true;
+	return Json::ToStream(root, ss);
 }

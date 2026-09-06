@@ -21,14 +21,14 @@ namespace midi
 	// and returns false so the caller can count drops.
 	//
 	// Capacity is a compile-time power of two so head/tail can be masked instead of modded.
-	template <std::size_t Capacity>
+	template <std::size_t Capacity, typename ValueType = midi::MidiEvent>
 	class MidiQueue
 	{
 		static_assert(Capacity >= 2, "Capacity must be at least 2");
 		static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of two");
 
 	public:
-		using value_type = midi::MidiEvent;
+		using value_type = ValueType;
 		static constexpr std::size_t capacity = Capacity;
 
 		MidiQueue() noexcept
@@ -69,6 +69,18 @@ namespace midi
 
 			out = _buffer[head];
 			_head.store((head + 1) & Mask, std::memory_order_release);
+			return true;
+		}
+
+		// Consumer side. Reads the current head without advancing it.
+		bool Peek(value_type& out) const noexcept
+		{
+			const auto head = _head.load(std::memory_order_relaxed);
+			const auto tail = _tail.load(std::memory_order_acquire);
+			if (head == tail)
+				return false;
+
+			out = _buffer[head];
 			return true;
 		}
 

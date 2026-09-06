@@ -74,7 +74,9 @@ namespace io
 			// UTF-8 path to the .vst3 bundle or DLL.
 			std::string Path;
 			bool Bypass = false;
-			// Base64-encoded VST2 state blob (from IVstPlugin::GetState).
+			// Base64-encoded plugin state blob (from IVstPlugin::GetState).
+			// Self-describing per plugin type (VST2 param/chunk blob, or
+			// VST3 component/controller blob — see Vst3StateBlob.h).
 			// Empty string means no saved state for this entry.
 			std::string State;
 
@@ -136,6 +138,7 @@ namespace io
 		unsigned int QuantiseSamps;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
+		double TransportOffsetLoopFrac = 0.0;
 		utils::Timer::QuantisationType Quantisation;
 	};
 }

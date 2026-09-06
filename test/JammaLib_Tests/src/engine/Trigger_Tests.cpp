@@ -180,6 +180,37 @@ public:
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
 
+	void StopJobForTest()
+	{
+		Shutdown();
+	}
+
+	void SeedTimingForTest()
+	{
+		engine::QuantisationTiming timing;
+		timing.SeedSamps = 12000u;
+		timing.MasterLoopSamps = 48000u;
+		timing.SeedCount = 4u;
+		timing.Bpm = 120.0f;
+		timing.Bpi = 4u;
+		_quantisation.ApplyTiming(timing, "B008 test");
+	}
+
+	bool HasTimingForTest() const
+	{
+		return _quantisation.CurrentTempoTiming(48000u).has_value();
+	}
+
+	void ObserveTimingAvailabilityForTest(bool available, std::uint64_t epoch)
+	{
+		ninjam::NinjamSessionTimingStatus status;
+		status.IsAvailable = available;
+		status.Changed = true;
+		status.SessionEpoch = epoch;
+		_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(status,
+			_quantisation.CurrentTempoTiming(48000u)));
+	}
+
 	utils::Position3d CameraPositionForTest() const
 	{
 		return _camera.ModelPosition();
@@ -304,6 +335,57 @@ TEST(Trigger, DitchesLoop) {
 	action.KeyActionType = KeyAction::KEY_UP;
 	actionRes = trigger->OnAction(action);
 	ASSERT_TRUE(receiver->GetLastMatched());
+}
+
+TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	base::Action action;
+
+	auto activateDown = trigger->QueueExternalControlAction(true, true, action);
+	ASSERT_TRUE(activateDown.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, activateDown.ResultType);
+	ASSERT_TRUE(receiver->Actions().empty());
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
+	ASSERT_TRUE(trigger->IsActivateInputDown());
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+
+	auto ditchDown = trigger->QueueExternalControlAction(false, true, action);
+	ASSERT_TRUE(ditchDown.IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->IsDitchDown());
+	ASSERT_TRUE(trigger->IsDitchInputDown());
+
+	auto ditchUp = trigger->QueueExternalControlAction(false, false, action);
+	ASSERT_TRUE(ditchUp.IsEaten);
+	ASSERT_EQ(actions::ACTIONRESULT_DITCH, ditchUp.ResultType);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
+	ASSERT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+	ASSERT_FALSE(trigger->IsDitchInputDown());
+	ASSERT_FALSE(trigger->IsDitchDown());
+}
+
+TEST(Trigger, ResetClearsPublishedDitchState) {
+	auto trigger = MakeSharedDefaultTrigger();
+	base::Action action;
+
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->IsDitchDown());
+
+	trigger->Reset();
+
+	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	ASSERT_FALSE(trigger->IsActivateInputDown());
+	ASSERT_FALSE(trigger->IsDitchInputDown());
+	ASSERT_FALSE(trigger->IsDitchDown());
 }
 
 TEST(Trigger, RecordsTwoLoops) {
@@ -705,7 +787,6 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 	trigger->AddInputChannel(0u);
-	trigger->AddMidiInputChannel(3u);
 	trigger->AddMidiInputDevice("Keys");
 
 	io::UserConfig cfg;
@@ -1127,11 +1208,57 @@ TEST(SceneReset, KeyTriggerDebouncedDitch_ResetsSceneViaOnTick) {
 	EXPECT_EQ(1u, station->NumTakes());
 	EXPECT_FALSE(scene.IsSceneResetForTest());
 
-	// Simulate audio tick well past debounce window: deferred ditch fires,
-	// then scene sees zero takes and clears timing state
+	// Simulate an audio tick well past the debounce window. The callback may
+	// remove the take, but empty-scene timing cleanup belongs to the job owner.
 	scene.OnTick(OffsetTime(curTime, debounceMs * 2), 256u, std::nullopt, std::nullopt);
 
 	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+
+	// The empty edge is consumed once. Re-seeding after it has been handled
+	// must not let a repeated job visit clear timing again.
+	scene.SeedTimingForTest();
+	ASSERT_TRUE(scene.HasTimingForTest());
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+}
+
+TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.StopJobForTest();
+
+	scene.SeedTimingForTest();
+	scene.ObserveTimingAvailabilityForTest(true, 1u);
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+
+	scene.ObserveTimingAvailabilityForTest(false, 1u);
+	scene.OnJobTick(GetTime());
+	EXPECT_FALSE(scene.HasTimingForTest());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+
+	scene.SeedTimingForTest();
+	ASSERT_TRUE(scene.HasTimingForTest());
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+
+	// A fresh physical epoch while still empty preserves newly accepted timing,
+	// and its later loss forms one new clear edge.
+	scene.ObserveTimingAvailabilityForTest(true, 2u);
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+	scene.ObserveTimingAvailabilityForTest(false, 2u);
+	scene.OnJobTick(GetTime());
+	EXPECT_FALSE(scene.HasTimingForTest());
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 }
 

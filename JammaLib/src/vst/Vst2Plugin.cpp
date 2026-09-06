@@ -6,6 +6,7 @@
 ///////////////////////////////////////////////////////////
 
 #include "Vst2Plugin.h"
+#include "../midi/MidiBlockTiming.h"
 #include <algorithm>
 #include <cstring>
 #include <float.h>
@@ -13,19 +14,6 @@
 #include "../graphics/VstEditorWindow.h"
 
 using namespace vst;
-
-Vst2Plugin::GlContextScope::GlContextScope() noexcept
-	: _rc(wglGetCurrentContext()), _dc(wglGetCurrentDC())
-{
-}
-
-Vst2Plugin::GlContextScope::~GlContextScope()
-{
-	// Only restore if there was a context to begin with (non-render threads,
-	// e.g. the job-thread fallback, have none — leave them untouched).
-	if (_rc)
-		wglMakeCurrent(_dc, _rc);
-}
 
 Vst2Plugin::Vst2Plugin() :
 #ifdef JAMMA_VST2_ENABLED
@@ -113,7 +101,7 @@ bool Vst2Plugin::_InstantiateEffect(const std::wstring& path)
 	// during VSTPluginMain()/effOpen and never restore ours, which leaves our
 	// framebuffer incomplete and the whole app paints white. The scope guard
 	// snapshots our GL context now and restores it when this function returns.
-	GlContextScope glScope;
+	VstGlContextScope glScope;
 
 	// Locate and call the plugin entry-point to obtain the AEffect.
 	auto mainProc = reinterpret_cast<AEffect* (*)(audioMasterCallback)>(
@@ -545,8 +533,9 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	if (_midiEventCount >= MaxMidiEventsPerBlock || 0u == _midiBlockNumSamples)
 		return;
 
-	const auto blockEnd = _midiBlockStartSample + _midiBlockNumSamples;
-	const bool inWindow = (event.sampleOffset >= _midiBlockStartSample && event.sampleOffset < blockEnd);
+	const auto position = midi::ClassifyMidiSampleInBlock(event.sampleOffset,
+		_midiBlockStartSample, _midiBlockNumSamples);
+	const bool inWindow = position == midi::MidiBlockSamplePosition::Due;
 	if (!inWindow && !isRealtime)
 		return;
 
@@ -555,8 +544,8 @@ void Vst2Plugin::SendMidiEvent(const midi::MidiEvent& event,
 	midiEvent.type = kVstMidiType;
 	midiEvent.byteSize = sizeof(VstMidiEvent);
 	{
-		const auto sampleDelta = static_cast<int64_t>(event.sampleOffset)
-			- static_cast<int64_t>(_midiBlockStartSample);
+		const auto sampleDelta = static_cast<int64_t>(midi::MidiSampleDelta(event.sampleOffset,
+			_midiBlockStartSample));
 		const auto maxDelta = (_midiBlockNumSamples > 0u)
 			? static_cast<int64_t>(_midiBlockNumSamples - 1u)
 			: 0;
@@ -607,7 +596,7 @@ bool Vst2Plugin::OpenEditor(HWND parentHwnd)
 
 	// Restore our GL render context after the plugin builds its editor — some
 	// plugins make their own context current during effEditOpen.
-	GlContextScope glScope;
+	VstGlContextScope glScope;
 
 	_effect->dispatcher(_effect, effEditOpen, 0, 0,
 		reinterpret_cast<void*>(parentHwnd), 0.0f);
@@ -640,7 +629,7 @@ void Vst2Plugin::CloseEditor()
 		&& (_effect->flags & effFlagsHasEditor)
 		&& _isEditorOpen.exchange(false, std::memory_order_acq_rel))
 	{
-		GlContextScope glScope;
+		VstGlContextScope glScope;
 		_effect->dispatcher(_effect, effEditClose, 0, 0, nullptr, 0.0f);
 	}
 #endif
@@ -657,7 +646,7 @@ void Vst2Plugin::IdleEditor() noexcept
 	{
 		// effEditIdle fires from the UI/render thread; restore our GL context
 		// afterwards so the next frame's framebuffer stays complete.
-		GlContextScope glScope;
+		VstGlContextScope glScope;
 		_effect->dispatcher(_effect, effEditIdle, 0, 0, nullptr, 0.0f);
 	}
 #endif
@@ -719,17 +708,21 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		{
 			auto& ti = self->_timeInfo;
 			ti = {};
-			ti.samplePos  = self->_hostTime.samplePos;
+			ti.samplePos  = static_cast<double>(self->_hostTime.samplePos);
 			ti.sampleRate = self->_hostTime.sampleRate;
 			ti.tempo      = self->_hostTime.tempo;
 			ti.timeSigNumerator   = self->_hostTime.bpi;
 			ti.timeSigDenominator = 4;
-			ti.ppqPos = (ti.sampleRate > 0.0)
-				? (ti.samplePos / ti.sampleRate) * (ti.tempo / 60.0)
-				: 0.0;
-			ti.flags = kVstPpqPosValid | kVstTempoValid | kVstTimeSigValid;
+			ti.flags = kVstTempoValid | kVstTimeSigValid;
+			if (self->_hostTime.hasPpqPos)
+			{
+				ti.ppqPos = self->_hostTime.ppqPos;
+				ti.flags |= kVstPpqPosValid;
+			}
 			if (self->_hostTime.isPlaying)
 				ti.flags |= kVstTransportPlaying;
+			if (self->_hostTime.musicalPositionChanged)
+				ti.flags |= kVstTransportChanged;
 			return reinterpret_cast<VstIntPtr>(&ti);
 		}
 		return 0;

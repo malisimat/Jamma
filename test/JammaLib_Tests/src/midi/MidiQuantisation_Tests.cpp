@@ -274,6 +274,21 @@ TEST(MidiQuantisation, QuantiseOffsetRespectsNegativePhaseOffset) {
 	EXPECT_EQ(90u, QuantiseSampleOffset(90u, 100u, 1000u, -10));
 }
 
+TEST(MidiQuantisation, RemoteGridUsesDirectIntervalBoundaries)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.RemoteIntervalSamps = 78985u;
+	settings.RemoteBpi = 4u;
+	settings.RemoteOriginSamps = 100u;
+	const MidiEvent source[] = { MidiEvent::MakeNoteOn(39400u, 0u, 60u, 100u) };
+	MidiEvent result[1];
+	MidiQuantisation::BuildQuantisedPlaybackEvents(source, 1u, 80000u, settings, 0u, result);
+	// origin + round(2 * 78985 / 4); repeated rounded grain addition gives 39492.
+	EXPECT_EQ(39593u, result[0].sampleOffset);
+}
+
 TEST(MidiQuantisation, SettingsEqualityIncludesPhaseOffset) {
 	MidiQuantisationSettings a;
 	MidiQuantisationSettings b;

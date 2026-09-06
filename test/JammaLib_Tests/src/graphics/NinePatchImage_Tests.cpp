@@ -64,6 +64,18 @@ TEST(NinePatchImageTest, BuildPositions_CentreStretches)
 	EXPECT_FLOAT_EQ(92.0f, yMax);
 }
 
+TEST(NinePatchImageTest, BuildPositions_PreservesLargeCornerCoordinates)
+{
+	auto positions = NinePatchImage::BuildPositions(35, 23, { 212, 120 });
+	auto [xMin, xMax] = CellXBounds(positions, 0);
+	auto [yMin, yMax] = CellYBounds(positions, 0);
+
+	EXPECT_FLOAT_EQ(0.0f, xMin);
+	EXPECT_FLOAT_EQ(35.0f, xMax);
+	EXPECT_FLOAT_EQ(0.0f, yMin);
+	EXPECT_FLOAT_EQ(23.0f, yMax);
+}
+
 TEST(NinePatchImageTest, BuildPositions_ZeroBorderFillsWholeImage)
 {
 	auto positions = NinePatchImage::BuildPositions(0, 0, { 140, 100 });

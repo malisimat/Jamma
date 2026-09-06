@@ -1,4 +1,4 @@
-﻿#include "LoopTake.h"
+#include "LoopTake.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -7,6 +7,7 @@
 #include "../graphics/MidiModel.h"
 #include "../midi/MidiNote.h"
 #include "../midi/MidiIndexedOutputSink.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 
 namespace
 {
@@ -144,7 +145,6 @@ namespace
 }
 
 using namespace engine;
-using namespace timing;
 using base::Action;
 using base::AudioSink;
 using base::AudioSource;
@@ -459,18 +459,269 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock()) loop->EndMultiPlay(numSamps);
 
+	// Queue-based take-only phase shift (transport offset / global phase offset).
+	// NINJAM connected corrections do NOT use this path; they arrive through the
+	// neutral audio-boundary correction applied at the top of
+	// the callback block alongside the Timer.
+	const auto correction = _pendingTimingCorrectionSamps.exchange(0, std::memory_order_acq_rel);
+	const auto generation = _timingCorrectionGeneration.load(std::memory_order_acquire);
+	const auto validCorrection = generation != 0u ? correction : 0;
+	const auto hasCorrection = correction != 0;
+	const auto hasPlayableLoop = std::any_of(state->Loops.begin(), state->Loops.end(),
+		[](const std::weak_ptr<Loop>& weakLoop)
+		{
+			auto loop = weakLoop.lock();
+			return loop && loop->LoopLength() > 0ul;
+		});
+	if (hasCorrection && !hasPlayableLoop)
+	{
+		if (validCorrection != 0)
+			_pendingTimingCorrectionSamps.fetch_add(validCorrection, std::memory_order_release);
+	}
+	const auto applyCorrection = hasCorrection && hasPlayableLoop;
+	if (applyCorrection)
+	{
+		if (validCorrection != 0)
+			_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock()) loop->ShiftPlayIndex(correction);
+	}
+
 	for (auto& buffer : state->AudioBuffers)
 	{
 		buffer->EndWrite(numSamps, true);
 		buffer->EndPlay(numSamps);
 	}
 
-	if (_midiVisualLoopLength > 0ul)
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
 	{
-		_midiVisualPlayIndex += numSamps;
-		while (_midiVisualPlayIndex >= _midiVisualLoopLength)
-			_midiVisualPlayIndex -= _midiVisualLoopLength;
+		auto midiPlayIndex = _midiVisualPlayIndex.load(std::memory_order_relaxed) + numSamps;
+		while (midiPlayIndex >= midiLoopLength)
+			midiPlayIndex -= midiLoopLength;
+		if (applyCorrection)
+		{
+			const auto length = static_cast<long long>(midiLoopLength);
+			auto shifted = (static_cast<long long>(midiPlayIndex) + (correction % length)) % length;
+			if (shifted < 0)
+				shifted += length;
+			midiPlayIndex = static_cast<unsigned long>(shifted);
+			_MoveMidiVisualCursor(midiPlayIndex, correction);
+		}
+		else
+			_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	}
+
+	_TryApplyLocalTransportOffset();
+}
+
+void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
+	std::uint64_t generation) noexcept
+{
+	if (generation == 0u || generation <= _audioTimingGeneration)
+		return;
+	_audioTimingGeneration = generation;
+	if (deltaSamps == 0)
+		return;
+
+	if (_ShiftDirectPlaybackCursors(deltaSamps))
+		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+bool LoopTake::_ShiftDirectPlaybackCursors(long long deltaSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	bool moved = false;
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
+		{
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			{
+				loop->ShiftPlayIndex(deltaSamps);
+				moved = true;
+			}
+		}
+	}
+
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		const auto length = static_cast<long long>(midiLoopLength);
+		auto shifted = (static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed))
+			+ (deltaSamps % length)) % length;
+		if (shifted < 0)
+			shifted += length;
+		_MoveMidiVisualCursor(static_cast<unsigned long>(shifted), deltaSamps);
+		moved = true;
+	}
+	return moved;
+}
+
+void LoopTake::CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
+		{
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul && !loop->HasSceneAnchor())
+			{
+				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(
+					sceneCoordinateSamps, loop->BodyPlayIndex(), loop->LoopLength())));
+			}
+		}
+	}
+
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul && !_hasMidiSceneAnchor.load(std::memory_order_acquire))
+	{
+		_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::CaptureSceneAnchor(sceneCoordinateSamps,
+			_midiVisualPlayIndex.load(std::memory_order_relaxed), midiLoopLength)), std::memory_order_relaxed);
+		_hasMidiSceneAnchor.store(true, std::memory_order_release);
+	}
+}
+
+void LoopTake::InvalidateSceneAnchors() noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (state)
+	{
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock()) loop->InvalidateSceneAnchor();
+	}
+	_hasMidiSceneAnchor.store(false, std::memory_order_release);
+}
+
+void LoopTake::CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (state)
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+				loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
+					sourceCoordinateSamps
+					- static_cast<long long>(loop->BodyPlayIndex()), loop->LoopLength())));
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
+			sourceCoordinateSamps
+			- static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
+			std::memory_order_relaxed);
+		_hasMidiSceneAnchor.store(true, std::memory_order_release);
+	}
+}
+
+void LoopTake::ResetTimingEpoch() noexcept
+{
+	_audioTimingGeneration = 0u;
+	InvalidateSceneAnchors();
+}
+
+void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept
+{
+	auto state = _AudioStateSnapshot();
+	if (state)
+		for (const auto& weakLoop : state->Loops)
+			if (auto loop = weakLoop.lock(); loop && loop->LoopLength() > 0ul)
+			{
+				const auto length = loop->LoopLength();
+				if (!loop->HasSceneAnchor())
+				{
+					loop->SetSceneAnchor(static_cast<unsigned long>(ninjam::PositiveModulo(
+						sourceCoordinateSamps - static_cast<long long>(loop->BodyPlayIndex()), length)));
+				}
+				loop->SetBodyPlayIndex(static_cast<unsigned long>(ninjam::PositiveModulo(
+					sourceCoordinateSamps - static_cast<long long>(loop->SceneAnchor()), length)));
+			}
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
+	{
+		if (!_hasMidiSceneAnchor.load(std::memory_order_acquire))
+		{
+			_midiSceneAnchor.store(static_cast<unsigned long>(ninjam::PositiveModulo(
+				sourceCoordinateSamps - static_cast<long long>(_midiVisualPlayIndex.load(std::memory_order_relaxed)), midiLoopLength)),
+				std::memory_order_relaxed);
+			_hasMidiSceneAnchor.store(true, std::memory_order_release);
+		}
+		const auto before = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+		const auto target = static_cast<unsigned long>(ninjam::PositiveModulo(
+			sourceCoordinateSamps
+			- static_cast<long long>(_midiSceneAnchor.load(std::memory_order_relaxed)), midiLoopLength));
+		_MoveMidiVisualCursor(target, static_cast<long long>(target) - static_cast<long long>(before));
+	}
+}
+
+void LoopTake::_MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept
+{
+	const auto length = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (length == 0ul)
+		return;
+	_midiVisualPlayIndex.store(target % length, std::memory_order_relaxed);
+	_midiAnchorCorrection.fetch_sub(static_cast<std::int32_t>(translationSamps),
+		std::memory_order_relaxed);
+}
+
+void LoopTake::SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept
+{
+	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
+}
+
+void LoopTake::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
+{
+	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
+	_TryApplyLocalTransportOffset();
+}
+
+long long LoopTake::_OffsetDelta(long long targetSamps, long long appliedSamps) noexcept
+{
+	if (targetSamps >= 0 && appliedSamps < 0
+		&& targetSamps > (std::numeric_limits<long long>::max)() + appliedSamps)
+		return (std::numeric_limits<long long>::max)();
+	if (targetSamps < 0 && appliedSamps > 0
+		&& targetSamps < (std::numeric_limits<long long>::min)() + appliedSamps)
+		return (std::numeric_limits<long long>::min)();
+	return targetSamps - appliedSamps;
+}
+
+void LoopTake::_TryApplyLocalTransportOffset() noexcept
+{
+	const auto targetSamps = _desiredLocalTransportOffsetSamps.load(std::memory_order_acquire);
+	const auto deltaSamps = _OffsetDelta(targetSamps, _appliedLocalTransportOffsetSamps);
+	if (deltaSamps == 0)
+		return;
+
+	if (_ShiftDirectPlaybackCursors(deltaSamps))
+		_appliedLocalTransportOffsetSamps = targetSamps;
+}
+
+void LoopTake::QueueTimingCorrection(long long deltaSamps,
+	std::uint64_t generation,
+	TimingCorrectionReason reason) noexcept
+{
+	if (reason == TimingCorrectionReason::Invalidation)
+	{
+		InvalidateTimingCorrections();
+		return;
+	}
+	if (generation == 0u || deltaSamps == 0)
+		return;
+
+	const auto previousGeneration = _timingCorrectionGeneration.load(std::memory_order_relaxed);
+	if (previousGeneration != generation)
+	{
+		_pendingTimingCorrectionSamps.store(0, std::memory_order_release);
+		_timingCorrectionGeneration.store(generation, std::memory_order_release);
+	}
+	_pendingTimingCorrectionSamps.fetch_add(deltaSamps, std::memory_order_release);
+	_queuedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+}
+
+void LoopTake::InvalidateTimingCorrections() noexcept
+{
+	_pendingTimingCorrectionSamps.store(0, std::memory_order_release);
+	_timingCorrectionGeneration.store(0u, std::memory_order_release);
 }
 
 bool LoopTake::IsArmed() const
@@ -719,9 +970,17 @@ ActionResult LoopTake::OnAction(JobAction action)
 		{
 			for (size_t i = 0; i < chainSnapshot->NumPlugins(); ++i)
 			{
-				if (i == removeIndex)
-					continue;
 				auto existing = chainSnapshot->GetPlugin(i);
+				if (i == removeIndex)
+				{
+					// The old live chain is released by the audio thread after the
+					// atomic swap. Keep the removed plugin alive until the UI thread
+					// owns its final reference; otherwise its destructor can call
+					// effClose/FreeLibrary on the audio thread.
+					if (existing)
+						vst::QueueForUiThreadDestroy(std::move(existing));
+					continue;
+				}
 				if (existing)
 					newChain->AddPlugin(existing);
 			}
@@ -759,7 +1018,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 		for (auto& midiLoop : action.MidiLoops)
 		{
 			if (midiLoop)
-				midiLoop->SetQuantisation(settings);
+				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
@@ -831,7 +1090,7 @@ unsigned long LoopTake::VisualLoopLengthSamps() const noexcept
 	if (length > 0ul)
 		return length;
 
-	return _midiVisualLoopLength;
+	return _midiVisualLoopLength.load(std::memory_order_relaxed);
 }
 
 double LoopTake::LoopIndexFrac() const noexcept
@@ -857,10 +1116,11 @@ double LoopTake::LoopIndexFrac() const noexcept
 	if (representativeLoop)
 		return representativeLoop->LoopIndexFrac();
 
-	if (_midiVisualLoopLength > 0ul)
+	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
+	if (midiLoopLength > 0ul)
 	{
 		return 1.0 - std::max(0.0, std::min(1.0,
-			((double)(_midiVisualPlayIndex % _midiVisualLoopLength)) / ((double)_midiVisualLoopLength)));
+			((double)(_midiVisualPlayIndex.load(std::memory_order_relaxed) % midiLoopLength)) / ((double)midiLoopLength)));
 	}
 
 	return 0.0;
@@ -871,7 +1131,7 @@ float LoopTake::VisualRadius() const noexcept
 	return static_cast<float>(Loop::CalcDrawRadius(VisualLoopLengthSamps()));
 }
 
-std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
+std::optional<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual() const noexcept
 {
 	const auto loopLengthSamps = VisualLoopLengthSamps();
 	if (loopLengthSamps == 0ul)
@@ -879,9 +1139,10 @@ std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 
 	const auto resolvedQuantisation = ResolvedMidiQuantisation();
 	const auto grainSamps = resolvedQuantisation.GrainSamps;
-	const auto loopGrains = (grainSamps > 0u && (loopLengthSamps % grainSamps) == 0ul) ?
-		static_cast<std::uint32_t>(loopLengthSamps / grainSamps) :
-		0u;
+	// Fractional remote cells need not divide a locally recorded loop. Keep the
+	// overlay visible and let its boundary source determine the final positions.
+	const auto loopGrains = grainSamps > 0u ? static_cast<std::uint32_t>(
+		(loopLengthSamps + grainSamps - 1u) / grainSamps) : 0u;
 
 	const auto takeSize = GetSize();
 	const auto takePos = ModelPosition();
@@ -898,10 +1159,10 @@ std::optional<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisual()
 	};
 }
 
-std::vector<timing::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
+std::vector<engine::QuantisationLoopTakeVisual> LoopTake::QuantisationVisualsFor(
 	const std::vector<std::shared_ptr<LoopTake>>& takes)
 {
-	std::vector<timing::QuantisationLoopTakeVisual> visuals;
+	std::vector<engine::QuantisationLoopTakeVisual> visuals;
 	visuals.reserve(takes.size());
 
 	for (const auto& take : takes)
@@ -953,8 +1214,6 @@ void LoopTake::AddLoop(std::shared_ptr<Loop> loop)
 	auto mixer = std::make_shared<audio::AudioMixer>(mixerParams);
 	mixer->SetUnmutedLevel(1.0);
 	_backAudioMixers.push_back(mixer);
-
-	_children.push_back(loop);
 
 	Init();
 
@@ -1020,8 +1279,10 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1052,7 +1313,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1243,7 +1504,8 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 	if (IsMuted())
 		return midiLoopCount;
 
-	const auto midiBlockStart = static_cast<std::uint32_t>(_midiVisualPlayIndex);
+	const auto midiBlockStart = static_cast<std::uint32_t>(
+		_midiVisualPlayIndex.load(std::memory_order_relaxed));
 	if (!snapshot)
 		return 0u;
 
@@ -1253,7 +1515,12 @@ unsigned int LoopTake::ReadMidiBlock(std::uint32_t globalSample,
 		if (!midiLoop)
 			continue;
 
-		midi::MidiIndexedOutputSink indexedSink(sink, firstOutputIndex + i, midiBlockStart, globalSample);
+		const auto masterVelocityScale = static_cast<float>(_masterMixer->UnmutedLevel());
+		midi::MidiIndexedOutputSink indexedSink(sink,
+			firstOutputIndex + i,
+			midiBlockStart,
+			globalSample,
+			masterVelocityScale);
 		midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
 	}
 
@@ -1294,9 +1561,12 @@ void LoopTake::Play(unsigned long index,
 
 	_endRecordSampCount = 0;
 	_endRecordSamps = endRecordSamps;
-	_midiVisualLoopLength = loopLength;
+	_midiVisualLoopLength.store(loopLength, std::memory_order_relaxed);
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
 
-	_midiVisualPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
+	const auto midiPlayIndex = InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
+	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	if (_loggingConfig.Ui == "verbose")
 	{
 		const char* triggerType = (STATE_RECORDING == state) ? "record-end" : "overdub-end";
@@ -1306,7 +1576,7 @@ void LoopTake::Play(unsigned long index,
 			<< " errorSamps=" << midiQuantisationErrorSamps
 			<< " audioPlayPos=" << index
 			<< " audioEndRecordSamps=" << endRecordSamps
-			<< " midiStart=" << _midiVisualPlayIndex
+			<< " midiStart=" << midiPlayIndex
 			<< '\n';
 	}
 
@@ -1316,6 +1586,30 @@ void LoopTake::Play(unsigned long index,
 	{
 		loop->Play(index, loopLength, continueCapture);
 	}
+
+#ifndef NDEBUG
+	{
+		auto shared = 0ul;
+		bool shareLength = true;
+		for (const auto& loop : _loops)
+		{
+			if (!loop)
+				continue;
+			const auto length = loop->LoopLength();
+			if (length == 0ul)
+				continue;
+			if (shared == 0ul)
+				shared = length;
+			else if (length != shared)
+			{
+				shareLength = false;
+				break;
+			}
+		}
+		if (!shareLength)
+			std::cout << "[LoopTake] WARN: single-length invariant violated: take=" << _id << '\n';
+	}
+#endif
 
 	const auto midiLoopLength = static_cast<std::uint32_t>(loopLength);
 	if (_midiOverdubSession.Active)
@@ -1369,9 +1663,9 @@ void LoopTake::Play(unsigned long index,
 			// _midiVisualPlayIndex was just set to P0 = InitialMidiPlayIndex(...) above.
 			// At global sample `index`, the play cursor is at P0, so position 0 maps to
 			// global sample (index - P0). uint32_t wraps correctly.
-			const auto phaseAnchor = static_cast<std::uint32_t>(index)
-				- static_cast<std::uint32_t>(_midiVisualPlayIndex);
-			midiLoop->EndRecord(midiLoopLength, phaseAnchor);
+			const auto automationGlobalSampleOrigin = static_cast<std::uint32_t>(index)
+				- static_cast<std::uint32_t>(_midiVisualPlayIndex.load(std::memory_order_relaxed));
+			midiLoop->EndRecord(midiLoopLength, automationGlobalSampleOrigin);
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}
@@ -1516,8 +1810,10 @@ void LoopTake::Ditch()
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1527,6 +1823,10 @@ void LoopTake::Ditch()
 	for (auto& loop : _loops)
 	{
 		loop->Ditch();
+
+		auto child = std::find(_children.begin(), _children.end(), loop);
+		if (child != _children.end())
+			_children.erase(child);
 	}
 
 	Zero(_lastBufSize, Audible::AUDIOSOURCE_LOOPS);
@@ -1560,8 +1860,10 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_recordedSampCount = 0;
 	_endRecordSampCount = 0;
 	_endRecordSamps = 0;
-	_midiVisualPlayIndex = 0ul;
-	_midiVisualLoopLength = 0ul;
+	_midiVisualPlayIndex.store(0ul, std::memory_order_relaxed);
+	_midiVisualLoopLength.store(0ul, std::memory_order_relaxed);
+	_midiAnchorCorrection.store(0, std::memory_order_relaxed);
+	_appliedLocalTransportOffsetSamps = 0;
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
@@ -1591,7 +1893,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 			auto midiModel = std::make_shared<graphics::MidiModel>(modelParams);
 			midiLoop->AttachModel(midiModel);
 			midiLoop->StartRecord();
-			midiLoop->SetQuantisation(ResolvedMidiQuantisation());
+			midiLoop->SetQuantisation(ResolvedMidiQuantisation(), MidiQuantisationTransportStartSamps());
 			_midiLoops.push_back(midiLoop);
 			_midiLoopChannels.push_back(midiChan);
 			_midiLoopDevices.push_back(midiDevice);
@@ -1818,10 +2120,8 @@ std::vector<JobAction> LoopTake::_CommitChanges()
 		jobs.push_back(job);
 	}
 
-	if (_midiQuantisationUpdatePending)
+	if (_midiQuantisationUpdatePending.exchange(false, std::memory_order_acq_rel))
 	{
-		_midiQuantisationUpdatePending = false;
-
 		JobAction job;
 		job.JobActionType = JobAction::JOB_UPDATEMIDIQUANTISATION;
 		job.SourceId = Id();
@@ -2023,8 +2323,13 @@ void LoopTake::_UpdateMidiModels(bool force)
 	if (_midiOverdubSession.Active)
 		_RefreshMidiOverdubPreview(displayLength);
 
-	for (auto& midiLoop : _midiLoops)
+	auto snapshot = _MidiLoopSnapshotState();
+	if (!snapshot)
+		return;
+
+	for (const auto& weakLoop : *snapshot)
 	{
+		auto midiLoop = weakLoop.lock();
 		if (midiLoop)
 			midiLoop->QueueModelUpdateFromEvents(displayLength, force);
 	}
@@ -2033,9 +2338,13 @@ void LoopTake::_UpdateMidiModels(bool force)
 void LoopTake::_UpdateMidiModelRotation()
 {
 	const auto loopIndexFrac = LoopIndexFrac();
+	auto snapshot = _MidiLoopSnapshotState();
+	if (!snapshot)
+		return;
 
-	for (auto& midiLoop : _midiLoops)
+	for (const auto& weakLoop : *snapshot)
 	{
+		auto midiLoop = weakLoop.lock();
 		if (!midiLoop)
 			continue;
 
@@ -2095,7 +2404,22 @@ midi::MidiQuantisationSettings LoopTake::ResolvedMidiQuantisation() const noexce
 		break;
 	}
 
-	auto combined = static_cast<std::int64_t>(_NaturalMidiQuantisationPhaseOffset(settings))
+	for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+	{
+		const auto before = _remoteMidiGridSequence.load(std::memory_order_acquire);
+		if ((before & 1u) != 0u)
+			continue;
+		settings.RemoteIntervalSamps = _remoteMidiIntervalSamps.load(std::memory_order_relaxed);
+		settings.RemoteBpi = _remoteMidiBpi.load(std::memory_order_relaxed);
+		settings.RemoteOriginSamps = _remoteMidiOriginSamps.load(std::memory_order_relaxed);
+		if (before == _remoteMidiGridSequence.load(std::memory_order_acquire))
+			break;
+	}
+	// Recording-start translation is implicit in the absolute remote-grid
+	// conversion. Applying the legacy rounded-grain correction as well would
+	// shift user-zero takes onto a second grid.
+	const auto naturalOffset = settings.HasRemoteGrid() ? 0 : _NaturalMidiQuantisationPhaseOffset(settings);
+	auto combined = static_cast<std::int64_t>(naturalOffset)
 		+ static_cast<std::int64_t>(settings.PhaseOffsetSamps)
 		+ static_cast<std::int64_t>(_midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire));
 	settings.PhaseOffsetSamps = _ClampPhaseOffset(combined);
@@ -2144,6 +2468,17 @@ void LoopTake::SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) 
 std::uint64_t LoopTake::MidiQuantisationTransportStartSamps() const noexcept
 {
 	return _midiTransportStartSamps.load(std::memory_order_acquire);
+}
+
+void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+	std::int64_t originSamps) noexcept
+{
+	const auto writing = _remoteMidiGridSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
+	_remoteMidiIntervalSamps.store(static_cast<std::uint32_t>(geometry.IntervalLengthSamps), std::memory_order_relaxed);
+	_remoteMidiBpi.store(geometry.Bpi, std::memory_order_relaxed);
+	_remoteMidiOriginSamps.store(originSamps, std::memory_order_relaxed);
+	_remoteMidiGridSequence.store(writing + 1u, std::memory_order_release);
+	_midiQuantisationUpdatePending = true;
 }
 
 std::int32_t LoopTake::_NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept
@@ -2395,7 +2730,7 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake)
 		if (0u == state.SourceLoopLengthSamps)
 			state.SourceLoopLengthSamps = static_cast<std::uint32_t>(sourceTake->VisualLoopLengthSamps());
 		state.SourceStartSample = NormalizeMidiLoopOffset(
-			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex),
+			static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)),
 			state.SourceLoopLengthSamps);
 		
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)

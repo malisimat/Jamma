@@ -194,6 +194,9 @@
     <ClInclude Include="src\resources\ShaderResource.h">
       <Filter>src\resources</Filter>
     </ClInclude>
+    <ClInclude Include="src\resources\ResourcePaths.h">
+      <Filter>src\resources</Filter>
+    </ClInclude>
     <ClInclude Include="src\utils\FunctionUtils.h">
       <Filter>src\utils</Filter>
     </ClInclude>
@@ -257,6 +260,9 @@
     <ClInclude Include="src\audio\AudioDevice.h">
       <Filter>src\audio</Filter>
     </ClInclude>
+    <ClInclude Include="src\audio\NinjamMetronome.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
     <ClInclude Include="src\midi\MidiDevice.h">
       <Filter>src\midi</Filter>
     </ClInclude>
@@ -290,7 +296,10 @@
     <ClInclude Include="src\gui\GuiFocusManager.h">
       <Filter>src\gui</Filter>
     </ClInclude>
-    <ClInclude Include="src\gui\GuiPopupHost.h">
+    <ClInclude Include="src\gui\GuiPopupManager.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiPopup.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiTextBox.h">
@@ -303,6 +312,9 @@
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiMainPanel.h">
+      <Filter>src\gui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\gui\GuiHud.h">
       <Filter>src\gui</Filter>
     </ClInclude>
     <ClInclude Include="src\gui\GuiScrollBar.h">
@@ -449,6 +461,18 @@
     <ClInclude Include="src\ninjam\NinjamConnection.h">
       <Filter>src\ninjam</Filter>
     </ClInclude>
+    <ClInclude Include="src\ninjam\ExportLaneTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamMetronomeTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamTiming.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ninjam\NinjamTimingObservationMailbox.h">
+      <Filter>src\ninjam</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\TextReadWriter.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -553,6 +577,18 @@
     <ClCompile Include="src\vst\VstChain.cpp">
       <Filter>src\vst</Filter>
     </ClCompile>
+    <ClCompile Include="src\vst\Vst3Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst2Plugin.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3StateBlob.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vst\Vst3MidiMapping.cpp">
+      <Filter>src\vst</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\VstEditorWindow.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
@@ -593,6 +629,9 @@
       <Filter>src\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\resources\ResourceLib.cpp">
+      <Filter>src\resources</Filter>
+    </ClCompile>
+    <ClCompile Include="src\resources\ResourcePaths.cpp">
       <Filter>src\resources</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiPanel.cpp">
@@ -664,7 +703,10 @@
     <ClCompile Include="src\gui\GuiFocusManager.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
-    <ClCompile Include="src\gui\GuiPopupHost.cpp">
+    <ClCompile Include="src\gui\GuiPopupManager.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiPopup.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiTextBox.cpp">
@@ -677,6 +719,9 @@
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiMainPanel.cpp">
+      <Filter>src\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gui\GuiHud.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
     <ClCompile Include="src\gui\GuiScrollBar.cpp">
@@ -698,6 +743,9 @@
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioDevice.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\NinjamMetronome.cpp">
       <Filter>src\audio</Filter>
     </ClCompile>
     <ClCompile Include="src\midi\MidiDevice.cpp">
@@ -793,6 +841,21 @@
     <ClCompile Include="src\ninjam\NinjamConnection.cpp">
       <Filter>src\ninjam</Filter>
     </ClCompile>
+    <ClCompile Include="src\ninjam\ExportLaneTiming.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamMetronomeTiming.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamAudioTimingCommand.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTiming.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ninjam\NinjamTimingObservationMailbox.cpp">
+      <Filter>src\ninjam</Filter>
+    </ClCompile>
     <ClCompile Include="src\graphics\Camera.cpp">
       <Filter>src\graphics</Filter>
     </ClCompile>
@@ -871,5 +934,8 @@
     <ClCompile Include="src\gui\GuiRack.cpp">
       <Filter>src\gui</Filter>
     </ClCompile>
+    <ClInclude Include="src\engine\QuantisationTiming.h">
+      <Filter>src\engine</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -167,38 +167,38 @@ TEST(MidiAutomationLaneResolution, ClearThenReplayFullyReplacesPriorCurve)
 }
 
 // ============================================================================
-// Phase anchor and frac arithmetic
+// Automation global-sample origin and frac arithmetic
 // ============================================================================
 
-// After EndRecord the loop stores the phase anchor so the pump can compute
+// After EndRecord the loop stores the automation origin so the pump can compute
 // a loop-relative frac from a global sample position with:
-//   frac = (globalSample - LoopPhaseAnchor()) % LoopLengthSamps() / LoopLengthSamps()
-TEST(MidiAutomationPhaseAnchor, PhaseAnchorIsStoredByEndRecord)
+//   frac = (globalSample - AutomationGlobalSampleOrigin()) % LoopLengthSamps() / LoopLengthSamps()
+TEST(MidiAutomationGlobalSampleOrigin, OriginIsStoredByEndRecord)
 {
 	MidiLoop loop;
 	const std::uint32_t loopLen     = 48000u;  // 1 s at 48 kHz
-	const std::uint32_t phaseAnchor = 96000u;  // loop position 0 at global sample 96000
+	const std::uint32_t automationGlobalSampleOrigin = 96000u; // loop position 0 at global sample 96000
 
-	loop.EndRecord(loopLen, phaseAnchor);
+	loop.EndRecord(loopLen, automationGlobalSampleOrigin);
 
 	EXPECT_EQ(loopLen,     loop.LoopLengthSamps());
-	EXPECT_EQ(phaseAnchor, loop.LoopPhaseAnchor());
+	EXPECT_EQ(automationGlobalSampleOrigin, loop.AutomationGlobalSampleOrigin());
 }
 
 // The loop-relative frac for a given global sample must land at the correct
 // fractional position regardless of where in the global timeline the loop
 // started. This mirrors the frac math used by the playback dispatch and the
 // CC-record path.
-TEST(MidiAutomationPhaseAnchor, FracReflectsPhaseAnchor)
+TEST(MidiAutomationGlobalSampleOrigin, FracReflectsOrigin)
 {
 	const std::uint32_t loopLen     = 48000u;  // 1 s
-	const std::uint32_t phaseAnchor = 96000u;
+	const std::uint32_t automationGlobalSampleOrigin = 96000u;
 
 	// Reference calculation matching the phase-anchored frac used across the
 	// dispatch and CC-record paths.
 	auto calcFrac = [&](std::uint32_t globalSample) -> float {
 		return static_cast<float>(
-			std::fmod(static_cast<double>(globalSample - phaseAnchor),
+			std::fmod(static_cast<double>(globalSample - automationGlobalSampleOrigin),
 				static_cast<double>(loopLen))
 			/ static_cast<double>(loopLen));
 	};
@@ -210,9 +210,63 @@ TEST(MidiAutomationPhaseAnchor, FracReflectsPhaseAnchor)
 	EXPECT_NEAR(0.25f, calcFrac(108000u), 1.0e-6f);
 }
 
+// A remote NINJAM wrap re-anchors note playback by jumping the loop-relative
+// play position forward by some delta. The LoopTake accumulates this delta as
+// _midiAnchorCorrection (negative, since effective origin = frozen + correction).
+// This test verifies the frac math: shifting the effective anchor backward by D
+// advances automation frac by D/L, matching the note position jump.
+TEST(MidiAutomationGlobalSampleOrigin, ExternalCorrectionTracksForwardDelta)
+{
+	MidiLoop loop;
+	const std::uint32_t loopLen     = 48000u;
+	const std::uint32_t frozenOrigin = 96000u;
+	loop.EndRecord(loopLen, frozenOrigin);
+
+	// Anchor is frozen and never touched again.
+	EXPECT_EQ(frozenOrigin, loop.AutomationGlobalSampleOrigin());
+
+	const std::uint32_t globalSample = 120000u;  // frac = 0.5 before any correction
+
+	auto calcFrac = [&](std::int32_t correction) -> double {
+		const auto effectiveOrigin = frozenOrigin + static_cast<std::uint32_t>(correction);
+		return std::fmod(
+			static_cast<double>(globalSample - effectiveOrigin),
+			static_cast<double>(loopLen)) / static_cast<double>(loopLen);
+	};
+
+	EXPECT_NEAR(0.5, calcFrac(0), 1.0e-9);
+
+	// Notes jump forward by quarter loop; correction is -12000 (backward shift).
+	EXPECT_NEAR(0.75, calcFrac(-12000), 1.0e-9);
+
+	// Anchor stays frozen throughout — correction lives externally on LoopTake.
+	EXPECT_EQ(frozenOrigin, loop.AutomationGlobalSampleOrigin());
+}
+
+// Shifting by a full loop length leaves frac unchanged (modular identity).
+TEST(MidiAutomationGlobalSampleOrigin, ExternalCorrectionByFullLoopIsFracNoOp)
+{
+	MidiLoop loop;
+	const std::uint32_t loopLen     = 48000u;
+	const std::uint32_t frozenOrigin = 96000u;
+	loop.EndRecord(loopLen, frozenOrigin);
+
+	const std::uint32_t globalSample = 108000u;  // frac = 0.25
+
+	auto calcFrac = [&](std::int32_t correction) -> double {
+		const auto effectiveOrigin = frozenOrigin + static_cast<std::uint32_t>(correction);
+		return std::fmod(
+			static_cast<double>(globalSample - effectiveOrigin),
+			static_cast<double>(loopLen)) / static_cast<double>(loopLen);
+	};
+
+	const auto before = calcFrac(0);
+	EXPECT_NEAR(before, calcFrac(-static_cast<std::int32_t>(loopLen)), 1.0e-9);
+}
+
 // Writing the same frac twice must replace the existing point's value rather
 // than accumulate a duplicate point.
-TEST(MidiAutomationPhaseAnchor, RepeatWriteAtSameFracReplacesValue)
+TEST(MidiAutomationGlobalSampleOrigin, RepeatWriteAtSameFracReplacesValue)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x800u);
@@ -236,7 +290,7 @@ TEST(MidiAutomationPhaseAnchor, RepeatWriteAtSameFracReplacesValue)
 
 // Distinct frac positions each get their own point; rewriting those same
 // positions replaces values in place rather than appending duplicates.
-TEST(MidiAutomationPhaseAnchor, DistinctFracsFillLaneThenReplaceInPlace)
+TEST(MidiAutomationGlobalSampleOrigin, DistinctFracsFillLaneThenReplaceInPlace)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x810u);
@@ -275,7 +329,7 @@ TEST(MidiAutomationPhaseAnchor, DistinctFracsFillLaneThenReplaceInPlace)
 	EXPECT_NEAR(0.6f, points[3].second, 1.0e-5f);
 }
 
-TEST(MidiAutomationPhaseAnchor, OverflowEvictsOldestPoint)
+TEST(MidiAutomationGlobalSampleOrigin, OverflowEvictsOldestPoint)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x811u);
@@ -304,7 +358,7 @@ TEST(MidiAutomationPhaseAnchor, OverflowEvictsOldestPoint)
 		1.0e-6f);
 }
 
-TEST(MidiAutomationPhaseAnchor, OverwriteWindowReplacesTouchedFutureRange)
+TEST(MidiAutomationGlobalSampleOrigin, OverwriteWindowReplacesTouchedFutureRange)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x820u);
@@ -332,7 +386,7 @@ TEST(MidiAutomationPhaseAnchor, OverwriteWindowReplacesTouchedFutureRange)
 	EXPECT_NEAR(0.7f, points[1].second, 1.0e-6f);
 }
 
-TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
+TEST(MidiAutomationGlobalSampleOrigin, OverwriteWindowWrapsAcrossLoopBoundary)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x821u);
@@ -360,7 +414,7 @@ TEST(MidiAutomationPhaseAnchor, OverwriteWindowWrapsAcrossLoopBoundary)
 	EXPECT_NEAR(0.6f, points[1].second, 1.0e-6f);
 }
 
-TEST(MidiAutomationPhaseAnchor, ShortLoopOverwriteRemainsSortedAndBounded)
+TEST(MidiAutomationGlobalSampleOrigin, ShortLoopOverwriteRemainsSortedAndBounded)
 {
 	MidiLoop loop;
 	auto* plugin = FakePlugin(0x822u);

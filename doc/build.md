@@ -33,6 +33,8 @@ Windows builds also compile VST3 hosting support by default via the `vst3sdk` vc
 
 `Directory.Build.props` backfills `SolutionDir` and the vcpkg manifest properties when they are unset, but direct project builds should still pass `SolutionDir` explicitly so `.tlog` state stays stable.
 
+Use `.github\skills\builder\builder.ps1` for repository builds. It removes duplicate case variants of the Windows `Path` environment variable before launching MSBuild, which avoids MSBuild errors when both `PATH` and `Path` are inherited.
+
 ## Preferred PowerShell Build Snippet
 
 ```powershell
@@ -53,9 +55,9 @@ $jammaProj = Join-Path $repoRoot "Jamma\Jamma.vcxproj"
 $testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& $msbuild $jammaLibProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
-& $msbuild $jammaProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
-& $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib -Configuration Debug -Platform x64
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Jamma -Configuration Debug -Platform x64
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64
 
 # Optional: use the solution only when target selection is unclear.
 # & $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
@@ -81,7 +83,7 @@ $testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
 $testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& $msbuild $testsProj /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64
 & $testsExe
 ```
 
@@ -102,6 +104,10 @@ $testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Test
 ```
 
 ## VS Code Tasks
+
+The default F5 configuration, `Launch Jamma (Debug x64)`, runs the incremental
+`Build Solution (Debug x64)` task first. This keeps the x64 Debug `Jamma.exe`
+current with all source and library changes before debugging.
 
 `.vscode\tasks.json` is ignored by git so each developer can keep local tweaks. To bootstrap a local copy from the tracked starter:
 
@@ -141,6 +147,6 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 }
 
 $sln = Join-Path $repoRoot "Jamma.sln"
-& $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
-& $msbuild $sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=true
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Release -Platform x64
 ```

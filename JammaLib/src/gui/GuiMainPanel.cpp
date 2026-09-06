@@ -11,7 +11,7 @@ using namespace resources;
 
 GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) :
 	GuiStackPanel(params),
-	_popupHost(params.PopupHost)
+	_popupManager(params.PopupManager)
 {
 	_guiParams.TextureShader = "texture_tinted";
 	_guiParams.Texture = "rounded_but";
@@ -104,8 +104,8 @@ void GuiMainPanel::_BuildLowerSection()
 		dp.Items = { "Sine", "Square", "Saw", "Triangle", "Noise" };
 		dp.InitIndex = 0u;
 		auto dd = std::make_shared<GuiDropDown>(dp);
-		if (_popupHost != nullptr)
-			dd->SetPopupHost(_popupHost);
+		if (_popupManager != nullptr)
+			dd->SetPopupManager(_popupManager);
 		section->AddChild(dd);
 	}
 

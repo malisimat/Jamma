@@ -124,3 +124,62 @@ TEST(MidiRouterChannelOverride, UnrelatedKeysAreIgnored)
 	EXPECT_FALSE(result.IsEaten);
 	EXPECT_EQ(0u, router.ForcedChannelOverride());
 }
+
+// --- DeriveStationEvent: trigger channel isolation from the station/live override ---
+//
+// MidiRouter::DeriveStationEvent is the exact seam the RtMidi callback and PumpMidi
+// use to build the station/live-facing event copy from a raw ingress event. Trigger
+// dispatch always uses the raw event untouched; only the derived copy is rewritten.
+
+TEST(MidiRouterChannelOverride, DeriveStationEventAppliesOverrideWithoutMutatingRawEvent)
+{
+	// Physical channel 1 (channel nibble 0), as a pedal would transmit.
+	const auto rawEvent = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
+	const auto stationEvent = midi::MidiRouter::DeriveStationEvent(rawEvent, 2u);
+
+	EXPECT_EQ(0u, rawEvent.Channel());
+	EXPECT_EQ(1u, stationEvent.Channel());
+	EXPECT_EQ(midi::MidiEvent::NoteOn, stationEvent.MessageType());
+}
+
+TEST(MidiRouterChannelOverride, DeriveStationEventOmniModeIsPassThrough)
+{
+	const auto rawEvent = midi::MidiEvent::MakeNoteOn(50u, 5u, 64u, 90u);
+	const auto stationEvent = midi::MidiRouter::DeriveStationEvent(rawEvent, 0u);
+
+	EXPECT_EQ(rawEvent.status, stationEvent.status);
+	EXPECT_EQ(5u, stationEvent.Channel());
+}
+
+TEST(MidiRouterChannelOverride, DeriveStationEventLeavesSystemMessagesUnchanged)
+{
+	const midi::MidiEvent rawEvent{ 10u, 0xF8u, 0u, 0u, 0u };
+	const auto stationEvent = midi::MidiRouter::DeriveStationEvent(rawEvent, 9u);
+
+	EXPECT_EQ(0xF8u, stationEvent.status);
+}
+
+TEST(MidiRouterChannelOverride, DeriveStationEventPreservesPayloadAndSampleOffset)
+{
+	const auto rawEvent = midi::MidiEvent::MakeNoteOn(4096u, 3u, 72u, 111u);
+	const auto stationEvent = midi::MidiRouter::DeriveStationEvent(rawEvent, 8u);
+
+	EXPECT_EQ(rawEvent.sampleOffset, stationEvent.sampleOffset);
+	EXPECT_EQ(rawEvent.data1, stationEvent.data1);
+	EXPECT_EQ(rawEvent.data2, stationEvent.data2);
+	EXPECT_EQ(7u, stationEvent.Channel());
+	EXPECT_EQ(3u, rawEvent.Channel());
+}
+
+TEST(MidiRouterChannelOverride, DeriveStationEventChannelDivergesFromRawTriggerChannel)
+{
+	// Approved behavior: a pedal on physical channel 1 (raw event, channel nibble 0)
+	// must still match a trigger bound to channel 1, while the station/live copy
+	// reflects the UI override (channel 2, nibble 1).
+	const auto rawEvent = midi::MidiEvent::MakeNoteOn(0u, 0u, 36u, 127u);
+	const auto stationEvent = midi::MidiRouter::DeriveStationEvent(rawEvent, 2u);
+
+	EXPECT_EQ(0u, rawEvent.Channel());
+	EXPECT_EQ(1u, stationEvent.Channel());
+	EXPECT_NE(rawEvent.Channel(), stationEvent.Channel());
+}

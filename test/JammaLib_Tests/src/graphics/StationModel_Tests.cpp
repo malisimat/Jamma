@@ -168,3 +168,43 @@ TEST(StationModel_Geometry, BuildAllGeometry_VertCountDivisibleBy3)
 	// Each triangle is 3 verts * 3 floats = 9 floats; total must be multiple of 9.
 	EXPECT_EQ(verts.size() % 9u, 0u);
 }
+
+// -------------------------------------------------------------------------
+// State ring geometry
+// -------------------------------------------------------------------------
+
+TEST(StationModel_Rings, LathedProfilesCloseAndMatchUvCount)
+{
+	const graphics::RingProfilePoint topProfile[] = {
+		{ 9.3f, 0.0f }, { 15.8f, -3.5f }, { 14.9f, -13.5f }, { 11.2f, -16.0f }
+	};
+	const graphics::RingProfilePoint bottomProfile[] = {
+		{ 9.3f, 0.0f }, { 16.6f, 3.2f }, { 15.3f, 12.4f }, { 10.2f, 19.0f }
+	};
+	auto [topVerts, topUvs] = StationModel::BuildLathedProfileGeometry(64u, topProfile, -2.0f, false, 4.0f);
+	auto [bottomVerts, bottomUvs] = StationModel::BuildLathedProfileGeometry(64u, bottomProfile, -468.0f, true, 4.0f);
+
+	EXPECT_EQ(topVerts.size() / 3u, topUvs.size() / 2u);
+	EXPECT_EQ(bottomVerts.size() / 3u, bottomUvs.size() / 2u);
+	EXPECT_EQ(topVerts.size() / 9u, 64u * (std::size(topProfile) - 1u) * 2u);
+	EXPECT_EQ(bottomVerts.size() / 9u, 64u * (std::size(bottomProfile) - 1u) * 2u);
+	EXPECT_NE(topVerts, bottomVerts);
+
+	for (std::size_t i = 0u; i + 2u < topVerts.size(); i += 3u)
+	{
+		const auto radius = std::sqrt(topVerts[i] * topVerts[i] + topVerts[i + 2u] * topVerts[i + 2u]);
+		EXPECT_GT(radius, 0.0f);
+	}
+}
+
+TEST(StationModel_Rings, OccluderPrismHasTwoBarsAndScalesWithRadius)
+{
+	auto [verts, uvs] = StationModel::BuildOccluderPrismGeometry(45.0f, 85.0f, 5.0f);
+	auto [smallerVerts, smallerUvs] = StationModel::BuildOccluderPrismGeometry(9.0f, 17.0f, 5.0f);
+
+	EXPECT_EQ(verts.size() / 9u, 24u);
+	EXPECT_EQ(verts.size() / 3u, uvs.size() / 2u);
+	EXPECT_EQ(smallerVerts.size(), verts.size());
+	EXPECT_EQ(smallerUvs.size(), uvs.size());
+	EXPECT_NE(smallerVerts, verts);
+}

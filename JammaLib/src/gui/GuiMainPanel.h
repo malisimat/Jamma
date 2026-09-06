@@ -12,13 +12,13 @@
 #include "GuiButton.h"
 #include "GuiToggle.h"
 #include "GuiLabel.h"
-#include "GuiPopupHost.h"
+#include "GuiPopupManager.h"
 
 namespace gui
 {
 	struct GuiMainPanelParams : public GuiStackPanelParams
 	{
-		GuiPopupHost* PopupHost = nullptr;
+			GuiPopupManager* PopupManager = nullptr;
 	};
 
 	class GuiMainPanel : public GuiStackPanel
@@ -58,6 +58,6 @@ namespace gui
 		std::shared_ptr<GuiGrid> _CreateToggleGrid();
 		std::shared_ptr<GuiStackPanel> _CreateSliderStack();
 
-		GuiPopupHost* _popupHost;
+		GuiPopupManager* _popupManager;
 	};
 }

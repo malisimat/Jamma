@@ -176,10 +176,11 @@ namespace midi
 		MidiLoopState State() const noexcept { return _state; }
 		std::size_t EventCount() const noexcept { return _eventCount; }
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
-		// Global sample that maps to loop-relative position 0.  Use to convert a
-		// global sample counter into a loop-relative frac:
-		//   frac = (globalSample - LoopPhaseAnchor()) % loopLen / loopLen
-		std::uint32_t LoopPhaseAnchor() const noexcept { return _loopPhaseAnchor; }
+		// Global sample that maps to loop-relative position 0.  Frozen at EndRecord.
+		// Use to convert a global sample counter into a loop-relative frac:
+		//   frac = (globalSample - AutomationGlobalSampleOrigin() - correction) % loopLen / loopLen
+		// where correction is the transport re-anchor delta held externally on LoopTake.
+		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
@@ -260,7 +261,8 @@ namespace midi
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
-		void SetQuantisation(const MidiQuantisationSettings& settings);
+		void SetQuantisation(const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps = 0u);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
@@ -313,7 +315,10 @@ namespace midi
 		std::size_t _eventCount;
 		float _sampleRate;
 		std::uint32_t _loopLengthSamps;
-		std::uint32_t _loopPhaseAnchor;
+		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
+		// playback does not yet account for this take's VST chain latency -- see
+		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
+		std::uint32_t _automationGlobalSampleOrigin;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;
 		std::uint64_t _modelRevision;
@@ -322,6 +327,7 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;
+		std::uint64_t _quantisationTransportStartSamps = 0u;
 		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};
 }

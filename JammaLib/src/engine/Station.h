@@ -1,5 +1,8 @@
 #pragma once
 
+// Performance/mixing channel and LoopTake owner; fans neutral operations downward
+// while each take and loop retains its own state, anchors, length, and phase.
+
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -8,7 +11,7 @@
 #include <mutex>
 #include <vector>
 #include "LoopTake.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../graphics/QuantisationModel.h"
 #include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
@@ -25,6 +28,16 @@
 
 namespace engine
 {
+	enum class StationVisualState : std::uint8_t
+	{
+		STATIONSTATE_DEFAULT,
+		STATIONSTATE_RECORDING,
+		STATIONSTATE_ENDRECORDING,
+		STATIONSTATE_PLAYING,
+		STATIONSTATE_OVERDUBBING,
+		STATIONSTATE_PUNCHIN
+	};
+
 	class StationParams :
 		public base::JammableParams
 	{
@@ -100,6 +113,16 @@ namespace engine
 			unsigned int numSamps,
 			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
+		// Fans one policy-neutral accepted correction out to every local take.
+		// Audio-thread only; called once at the top of the callback block.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
+		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
+		void ResetTimingEpoch() noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
+		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;
@@ -117,9 +140,11 @@ namespace engine
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) override;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) override;
 		virtual void Reset() override;
+				StationVisualState GetVisualState() const noexcept;
+				void _SetVisualState(StationVisualState state) noexcept;
 		
 		const std::vector<std::shared_ptr<LoopTake>>& GetLoopTakes() const
 		{
@@ -136,10 +161,13 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<utils::Timer> clock);
-		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
+		void SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
+		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
+		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
+		std::int32_t TransportOffsetSamps() const noexcept;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		void SetStationPhaseOffsetSamps(std::int32_t offsetSamps) noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept { return _globalPhaseOffsetSamps; }
@@ -164,11 +192,14 @@ namespace engine
 		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
-		// For synthetic live MIDI events, like punch-in NoteOn/NoteOff pairs,
-		// without associated deviceName.
-		void EnqueueLiveMidiEvent(const midi::MidiEvent& event);
-		// For real live MIDI input, with associated deviceName.
-		void EnqueueLiveMidiEvent(const midi::MidiEvent& event, const std::string& deviceName);
+		// Called only by the live MIDI dispatcher after route and channel eligibility
+		// have been resolved.
+		bool TryEnqueueImmediateLiveMidi(const midi::MidiEvent& event) noexcept;
+		// Called only by the Scene job thread for generated transitions and releases.
+		bool TryEnqueueSyntheticLiveMidi(const midi::MidiEvent& event) noexcept;
+		// Called by the job-thread legacy MIDI path. Recording-held observation must
+		// not also enqueue audible MIDI.
+		void ObservePhysicalMidiForRecording(const midi::MidiEvent& event, const std::string& deviceName);
 		// Emit synthetic NoteOff for currently held live notes and clear held state.
 		void FlushLiveHeldMidiNotes() noexcept;
 		// Replacement semantics: one MIDI output routes to at most one plugin.
@@ -201,6 +232,11 @@ namespace engine
 		// station does not host the plugin or has no recorded MIDI loop yet.
 		// Non-audio (MIDI pump) thread only.
 		std::shared_ptr<midi::MidiLoop> ResolveEditorAutomationLoop(const vst::IVstPlugin* plugin) const;
+
+		// Resolve the MIDI anchor correction for any loop owned by this station.
+		// Finds the owning take and returns its _midiAnchorCorrection value.
+		// Non-audio thread only (iterates take snapshot).
+		std::int32_t ResolveMidiAnchorCorrectionFor(const midi::MidiLoop* loop) const noexcept;
 
 		// Called on the job thread to actually perform the load / unload.
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
@@ -272,9 +308,13 @@ namespace engine
 			unsigned int channelCount,
 			unsigned int sampsToRead,
 			std::uint32_t blockStartSample) noexcept;
+			static bool _TryEnqueueOrderedLiveMidi(midi::MidiQueue<1024>& queue,
+				bool& hasLastSample,
+				std::uint32_t& lastSample,
+				const midi::MidiEvent& event) noexcept;
 
 		// Enqueue NoteOffs for any held MIDI notes then call Ditch().
-		// Must be called from the action thread; NoteOffs are delivered via EnqueueLiveMidiEvent.
+		// Must be called from the action thread; NoteOffs use the synthetic queue.
 		void _DitchLoopTake(std::shared_ptr<LoopTake>& take) noexcept;
 
 		// --- Parameter automation dispatch ---
@@ -288,10 +328,12 @@ namespace engine
 		{
 			vst::IVstPlugin* plugin = nullptr;          // raw observer — lifetime owned by VstChain
 			unsigned int     paramIdx = 0u;
-			midi::MidiLoop*  loop = nullptr;            // raw observer — lifetime owned by LoopTake
-			std::uint8_t     laneIdx = 0u;              // which lane within loop to read
-			std::uint32_t    loopLengthSamps = 0u;      // pre-resolved; avoids per-block takes lock
-			std::uint32_t    loopPhaseAnchor = 0u;      // global sample mapping to loop position 0
+			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
+			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
+			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
+			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
+			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
+			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.
 		// Kept separate from AutomationDispatch so the dispatch buffers are
@@ -313,7 +355,6 @@ namespace engine
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.
 		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
-
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
@@ -323,6 +364,8 @@ namespace engine
 		std::shared_ptr<QuantisationModel> _quantisationModel;
 		std::shared_ptr<QuantisationDivisionModel> _quantisationDivisionModel;
 		std::shared_ptr<graphics::StationModel> _stationModel;
+				std::atomic<std::uint8_t> _publishedVisualState{
+					static_cast<std::uint8_t>(StationVisualState::STATIONSTATE_DEFAULT) };
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
 		std::shared_ptr<gui::GuiToggle> _mixerToggle;
@@ -337,7 +380,7 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
-
+		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on
 		// the non-audio thread in RebuildAutomationDispatch.
@@ -369,7 +412,12 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
-		midi::MidiQueue<1024> _liveMidiIngress;
+		midi::MidiQueue<1024> _immediateLiveMidiIngress;
+		midi::MidiQueue<1024> _syntheticLiveMidiIngress;
+		bool _hasLastImmediateLiveMidiSample = false;
+		std::uint32_t _lastImmediateLiveMidiSample = 0u;
+		bool _hasLastSyntheticLiveMidiSample = false;
+		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
 		mutable std::mutex _liveHeldMidiMutex;
 		std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> _liveHeldMidi;
 		std::vector<int> _allowedMidiChannels;
@@ -385,7 +433,7 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
+		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;

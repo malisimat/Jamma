@@ -75,6 +75,7 @@ namespace graphics
 		void SetTrackingMouse(bool resizing);
 		void Resize(utils::Size2d size);
 		void SetWindowState(WindowState state);
+		Config GetRestoreConfig() const;
 		utils::Size2d GetSize();
 		void Render();
 		void Swap();
@@ -119,6 +120,7 @@ namespace graphics
 		std::optional<utils::Position2d> _cachedCursorPosition;
 		base::Action::Modifiers _cachedCursorModifiers;
 		std::optional<utils::Size2d> _pendingResize;
+		Config _restoreConfig;
 
 		std::optional<GlDrawContext> _drawContext;
 		std::optional<GlDrawContext> _pickContext;

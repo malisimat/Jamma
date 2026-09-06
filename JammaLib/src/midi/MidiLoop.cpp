@@ -162,7 +162,7 @@ MidiLoop::MidiLoop() noexcept
 	: _eventCount(0),
 	  _sampleRate(static_cast<float>(constants::DefaultSampleRate)),
 	  _loopLengthSamps(0),
-	  _loopPhaseAnchor(0),
+	  _automationGlobalSampleOrigin(0u),
 	  _dropped(0),
 	  _revision(0),
 	  _modelRevision(0),
@@ -255,7 +255,7 @@ void MidiLoop::EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGloba
 	MidiNote::SortMidiEvents(_events.data(), _eventCount);
 
 	_loopLengthSamps = loopLengthSamps;
-	_loopPhaseAnchor = startGlobalSample;
+	_automationGlobalSampleOrigin = startGlobalSample;
 	_state = MidiLoopState::Playing;
 	_held.reset();
 	++_revision;
@@ -476,13 +476,15 @@ void MidiLoop::FlushHeldNotes(std::uint32_t atGlobalSample, IMidiSink& sink) noe
 	}
 }
 
-void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings)
+void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
+	std::uint64_t transportStartSamps)
 {
 	const auto previous = _quantisation;
 	_quantisation = settings;
+	_quantisationTransportStartSamps = transportStartSamps;
 
 	const auto step = MidiQuantisation::StepSamps(_quantisation);
-	if (step > 0u && _loopLengthSamps > 0u && _eventCount > 0u)
+	if ((step > 0u || _quantisation.HasRemoteGrid()) && _loopLengthSamps > 0u && _eventCount > 0u)
 		PublishQuantisedEvents();
 	else
 		_quantisedEvents.store(nullptr, std::memory_order_release);
@@ -494,19 +496,16 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings)
 void MidiLoop::PublishQuantisedEvents()
 {
 	const auto step = MidiQuantisation::StepSamps(_quantisation);
-	if (0u == step || 0u == _loopLengthSamps || 0u == _eventCount)
+	if ((!_quantisation.HasRemoteGrid() && 0u == step) || 0u == _loopLengthSamps || 0u == _eventCount)
 	{
 		_quantisedEvents.store(nullptr, std::memory_order_release);
 		return;
 	}
 
 	auto quantisedEvents = std::make_unique<QuantisedEventBuffer>();
-	MidiQuantisation::BuildQuantisedPlaybackEvents(_events.data(),
-		_eventCount,
-		_loopLengthSamps,
-		step,
-		quantisedEvents->Events.data(),
-		_quantisation.PhaseOffsetSamps);
+	MidiQuantisation::BuildQuantisedPlaybackEvents(_events.data(), _eventCount,
+		_loopLengthSamps, _quantisation, _quantisationTransportStartSamps,
+		quantisedEvents->Events.data());
 	const auto* snapshot = quantisedEvents.get();
 	_retainedQuantisedEvents.push_back(std::move(quantisedEvents));
 	_quantisedEvents.store(snapshot, std::memory_order_release);

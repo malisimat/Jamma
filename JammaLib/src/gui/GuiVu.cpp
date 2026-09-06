@@ -2,6 +2,8 @@
 #include "../graphics/GlDeleteQueue.h"
 #include "glm/glm.hpp"
 #include "glm/ext.hpp"
+#include <algorithm>
+#include <cmath>
 
 using namespace gui;
 using namespace utils;
@@ -11,14 +13,20 @@ using resources::ResourceLib;
 using resources::ShaderResource;
 
 GuiVu::GuiVu() :
+	GuiVu(GuiVuParams())
+{
+}
+
+GuiVu::GuiVu(GuiVuParams params) :
 	ResourceUser(),
 	_isVisible(true),
-	_position({ 0, 0 }),
-	_size({ VuWidth, 1 }),
-	_value(audio::FallingValue({ 0.00005, 0.00003, 12000u })),
+	_position(params.Position),
+	_size(params.Size),
+	_value(audio::FallingValue({ params.FallRate, params.HoldFallRate, params.HoldSamps })),
 	_peakValue(0.0f),
 	_displayValue(0.0f),
 	_displayHold(0.0f),
+	_useDecibelScale(params.UseDecibelScale),
 	_vertexArray(0),
 	_vertexBuffer{ 0, 0 },
 	_shader(std::weak_ptr<ShaderResource>())
@@ -220,10 +228,28 @@ unsigned int GuiVu::_CalcTotalLeds(unsigned int height)
 	return ((height - (unsigned int)LedHeight) / (unsigned int)LedPitch) + 1u;
 }
 
-unsigned int GuiVu::_CalcCurrentLeds(double value, unsigned int totalLeds)
+unsigned int GuiVu::_CalcCurrentLeds(double value, unsigned int totalLeds) const
 {
-	auto frac = value;
+	if (totalLeds == 0u)
+		return 0u;
+
+	auto linear = value;
+	if (linear < 0.0) linear = 0.0;
+	if (!_useDecibelScale)
+		return static_cast<unsigned int>(std::ceil(std::min(1.0, linear) * totalLeds));
+
+	// Peaks are linear amplitude (0..1), but real-world signal levels sit well
+	// below 0 dBFS (e.g. -40 to -60 dB for quiet input). A straight linear
+	// mapping leaves those levels invisible on a handful of LEDs, so map
+	// through a dB scale with a floor instead, matching how real VU meters
+	// present a wide dynamic range across a small number of segments.
+	constexpr double minLinear = 1e-5;   // ~ -100 dBFS floor, avoids log(0)
+	constexpr double floorDb   = -70.0;  // bottom of the meter's useful range
+
+	auto db = 20.0 * std::log10(std::max(linear, minLinear));
+	auto frac = (db - floorDb) / -floorDb;
 	if (frac < 0.0) frac = 0.0;
 	if (frac > 1.0) frac = 1.0;
+
 	return (unsigned int)std::ceil(frac * (double)totalLeds);
 }

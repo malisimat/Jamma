@@ -88,6 +88,10 @@ namespace midi
 		// is inactive (disabled or grain not yet known) — callers must treat 0 as
 		// a no-op signal.
 		static constexpr std::uint32_t StepSamps(const MidiQuantisationSettings& settings) noexcept;
+		static std::int64_t NearestRemoteBoundaryIndex(std::int64_t relativeSamps,
+			std::uint64_t intervalSamps, std::uint64_t divisions) noexcept;
+		static std::int64_t RemoteBoundarySampleAt(std::int64_t index,
+			std::uint64_t intervalSamps, std::uint64_t divisions) noexcept;
 
 		static MidiQuantisationSettings ApplyGesture(const MidiQuantisationSettings& current,
 			MidiQuantisationGesture gesture,
@@ -137,6 +141,13 @@ namespace midi
 			std::uint32_t stepSamps,
 			MidiEvent* dst,
 			std::int32_t phaseOffsetSamps = 0) noexcept;
+
+		static void BuildQuantisedPlaybackEvents(const MidiEvent* src,
+			std::size_t eventCount,
+			std::uint32_t loopLength,
+			const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps,
+			MidiEvent* dst) noexcept;
 	};
 
 	// Per-LoopTake / per-MidiLoop quantisation settings. Non-destructive: applied
@@ -149,6 +160,15 @@ namespace midi
 		// Take-local phase offset in samples. LoopTake composes this with inherited
 		// station/global offsets before publishing settings to MidiLoop.
 		std::int32_t PhaseOffsetSamps = 0;
+		// Live NINJAM transport snapshot. These are not persisted in Pack().
+		std::uint32_t RemoteIntervalSamps = 0u;
+		std::uint32_t RemoteBpi = 0u;
+		std::int64_t RemoteOriginSamps = 0;
+
+		constexpr bool HasRemoteGrid() const noexcept
+		{
+			return RemoteIntervalSamps > 0u && RemoteBpi > 0u;
+		}
 
 		constexpr std::uint64_t Pack() const noexcept
 		{
@@ -180,7 +200,10 @@ namespace midi
 			return Enabled == o.Enabled
 				&& Fraction == o.Fraction
 				&& GrainSamps == o.GrainSamps
-				&& PhaseOffsetSamps == o.PhaseOffsetSamps;
+				&& PhaseOffsetSamps == o.PhaseOffsetSamps
+				&& RemoteIntervalSamps == o.RemoteIntervalSamps
+				&& RemoteBpi == o.RemoteBpi
+				&& RemoteOriginSamps == o.RemoteOriginSamps;
 		}
 		constexpr bool operator!=(const MidiQuantisationSettings& o) const noexcept
 		{

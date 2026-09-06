@@ -180,3 +180,94 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	QuantiseEvents(src, eventCount, loopLength, stepSamps, dst, phaseOffsetSamps);
 	MidiNote::SortMidiEvents(dst, eventCount);
 }
+
+std::int64_t MidiQuantisation::NearestRemoteBoundaryIndex(std::int64_t relativeSamps,
+	std::uint64_t intervalSamps, std::uint64_t divisions) noexcept
+{
+	if (intervalSamps == 0u || divisions == 0u)
+		return 0;
+	const auto interval = static_cast<std::int64_t>(intervalSamps);
+	auto wholeIntervals = relativeSamps / interval;
+	auto remainder = relativeSamps % interval;
+	if (remainder < 0)
+	{
+		remainder += interval;
+		--wholeIntervals;
+	}
+	const auto cell = (static_cast<std::uint64_t>(remainder) * divisions + intervalSamps / 2u) / intervalSamps;
+	return wholeIntervals * static_cast<std::int64_t>(divisions) + static_cast<std::int64_t>(cell);
+}
+
+std::int64_t MidiQuantisation::RemoteBoundarySampleAt(std::int64_t index,
+	std::uint64_t intervalSamps, std::uint64_t divisions) noexcept
+{
+	if (intervalSamps == 0u || divisions == 0u)
+		return 0;
+	const auto denominator = static_cast<std::int64_t>(divisions);
+	const auto numerator = index * static_cast<std::int64_t>(intervalSamps) + denominator / 2;
+	auto quotient = numerator / denominator;
+	if (numerator < 0 && (numerator % denominator) != 0)
+		--quotient;
+	return quotient;
+}
+
+void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
+	std::size_t eventCount, std::uint32_t loopLength,
+	const MidiQuantisationSettings& settings, std::uint64_t transportStartSamps,
+	MidiEvent* dst) noexcept
+{
+	if (!settings.HasRemoteGrid())
+	{
+		BuildQuantisedPlaybackEvents(src, eventCount, loopLength, StepSamps(settings), dst,
+			settings.PhaseOffsetSamps);
+		return;
+	}
+	if (nullptr == src || nullptr == dst || eventCount == 0u || loopLength == 0u || !settings.Enabled)
+	{
+		if (src != nullptr && dst != nullptr && eventCount > 0u)
+			std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
+		return;
+	}
+	const auto divisions = static_cast<std::uint64_t>(settings.RemoteBpi) * Divisor(settings.Fraction);
+	const auto interval = static_cast<std::uint64_t>(settings.RemoteIntervalSamps);
+	if (divisions == 0u || interval == 0u)
+	{
+		std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
+		return;
+	}
+	// Evaluate origin + round(k * interval / divisions) directly. This is an
+	// immutable-snapshot publication path, never the audio callback.
+	std::array<std::vector<std::int64_t>, TotalNoteSlots> pendingDeltas;
+	std::array<std::size_t, TotalNoteSlots> pendingReadIndex{};
+	for (std::size_t i = 0u; i < eventCount; ++i)
+	{
+		auto event = src[i];
+		const auto slot = NoteSlot(event.Channel(), event.data1);
+		if (event.IsNoteOn() && event.sampleOffset < loopLength)
+		{
+			const auto absolute = static_cast<std::int64_t>(transportStartSamps) + event.sampleOffset;
+			const auto index = NearestRemoteBoundaryIndex(absolute - settings.RemoteOriginSamps,
+				interval, divisions);
+			const auto boundary = settings.RemoteOriginSamps + RemoteBoundarySampleAt(index, interval, divisions);
+			const auto local = boundary - static_cast<std::int64_t>(transportStartSamps) + settings.PhaseOffsetSamps;
+			const auto wrapped = ((local % static_cast<std::int64_t>(loopLength)) + loopLength) % loopLength;
+			event.sampleOffset = static_cast<std::uint32_t>(wrapped);
+			pendingDeltas[slot].push_back(static_cast<std::int64_t>(event.sampleOffset)
+				- static_cast<std::int64_t>(src[i].sampleOffset));
+		}
+		else if (event.IsNoteOff())
+		{
+			auto& deltas = pendingDeltas[slot];
+			auto& readIndex = pendingReadIndex[slot];
+			if (readIndex < deltas.size())
+			{
+				const auto shifted = static_cast<std::int64_t>(event.sampleOffset) + deltas[readIndex++];
+				const auto loopEnd = static_cast<std::int64_t>(loopLength);
+				event.sampleOffset = shifted < 0 ? 0u : static_cast<std::uint32_t>(
+					shifted >= loopEnd ? loopEnd - 1 : shifted);
+			}
+		}
+		dst[i] = event;
+	}
+	MidiNote::SortMidiEvents(dst, eventCount);
+}

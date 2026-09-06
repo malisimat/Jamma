@@ -1,6 +1,4 @@
 #include "Trigger.h"
-#include "glm/glm.hpp"
-#include "glm/ext.hpp"
 
 #include <cstdint>
 
@@ -11,11 +9,7 @@ using actions::ActionResult;
 using actions::KeyAction;
 using actions::TriggerAction;
 using actions::DelayedAction;
-using graphics::GlDrawContext;
-using graphics::Image;
-using graphics::ImageParams;
 using audio::AudioMixer;
-using resources::ResourceLib;
 
 namespace
 {
@@ -76,12 +70,10 @@ namespace
 }
 
 Trigger::Trigger(TriggerParams trigParams) :
-	GuiElement(trigParams),
 	_name(trigParams.Name),
 	_activateBindings(trigParams.Activate),
 	_ditchBindings(trigParams.Ditch),
 	_inputChannels(trigParams.InputChannels),
-	_midiInputChannels(trigParams.MidiInputChannels),
 	_midiInputDevices(trigParams.MidiInputDevices),
 	_state(TRIGSTATE_DEFAULT),
 	_debounceTimeMs(trigParams.DebounceMs),
@@ -93,10 +85,6 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_isLastActivateDownRaw(false),
 	_isLastDitchDownRaw(false),
 	_recordSampCount(0),
-	_textureRecording(ImageParams(DrawableParams{ trigParams.TextureRecording }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_textureDitchDown(ImageParams(DrawableParams{ trigParams.TextureDitchDown }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_textureOverdubbing(ImageParams(DrawableParams{ trigParams.TextureOverdubbing }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
-	_texturePunchedIn(ImageParams(DrawableParams{ trigParams.TexturePunchedIn }, SizeableParams{ trigParams.Size,trigParams.MinSize }, "texture", trigParams.Rot90, trigParams.FlipH, trigParams.FlipV)),
 	_loopTakeHistory({}),
 	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
 	_delayedActions({}),
@@ -168,9 +156,6 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 	for (auto inChan : trigStruct.InputChannels)
 		trigger->AddInputChannel(inChan);
 
-	for (auto midiChan : trigStruct.MidiInputChannels)
-		trigger->AddMidiInputChannel(midiChan);
-
 	for (const auto& midiDevice : trigStruct.MidiInputDevices)
 		trigger->AddMidiInputDevice(midiDevice);
 
@@ -213,17 +198,8 @@ audio::AudioMixerParams Trigger::GetOverdubMixerParams(std::vector<unsigned int>
 	return mixerParams;
 }
 
-utils::Position2d Trigger::Position() const
-{
-	auto pos = ModelPosition();
-	return { (int)round(pos.X), (int)round(pos.Y) };
-}
-
 ActionResult Trigger::OnAction(KeyAction action)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
 	auto keyState = KeyAction::KEY_DOWN == action.KeyActionType ? 1u : 0u;
 	return OnEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, keyState, action);
 }
@@ -267,9 +243,6 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 	const base::Action& action,
 	const std::string& device)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
 	ActionResult res;
 	res.IsEaten = false;
 	res.ResultType = actions::ACTIONRESULT_DEFAULT;
@@ -288,7 +261,7 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 		if (TryChangeState(b, false, source, value, state, action, device))
 		{
 			res.IsEaten = true;
-			res.ResultType = (TRIGSTATE_DEFAULT == _state) ?
+			res.ResultType = (TRIGSTATE_DEFAULT == GetState()) ?
 				actions::ACTIONRESULT_DITCH :
 				actions::ACTIONRESULT_DEFAULT;
 			return res;
@@ -298,11 +271,39 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 	return res;
 }
 
+ActionResult Trigger::QueueExternalControlAction(bool isActivate,
+	bool isDown,
+	const base::Action&)
+{
+	const auto tail = _externalControlActionTail.load(std::memory_order_relaxed);
+	const auto head = _externalControlActionHead.load(std::memory_order_acquire);
+	const auto nextTail = (tail + 1u) % _ExternalControlActionQueueCapacity;
+	if (nextTail == head)
+		return ActionResult::NoAction();
+
+	_externalControlActionQueue[tail] = { isActivate, isDown };
+	_externalControlActionTail.store(nextTail, std::memory_order_release);
+
+	const auto state = static_cast<TriggerState>(_publishedTriggerState.load(std::memory_order_acquire));
+	const bool ditchRelease = !isActivate && !isDown && _publishedTriggerDitchDown.load(std::memory_order_acquire);
+	return {
+		true,
+		"",
+		"",
+		isActivate && isDown ? actions::ACTIONRESULT_ACTIVATE :
+			(ditchRelease && TRIGSTATE_DEFAULT != state ? actions::ACTIONRESULT_DITCH : actions::ACTIONRESULT_DEFAULT),
+		nullptr,
+		std::weak_ptr<base::GuiElement>()
+	};
+}
+
 void Trigger::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
+	_ProcessQueuedExternalControlActions(cfg, params);
+
 	bool isRecording = (TriggerState::TRIGSTATE_RECORDING == _state) ||
 		(TriggerState::TRIGSTATE_OVERDUBBING == _state) ||
 		(TriggerState::TRIGSTATE_PUNCHEDIN == _state);
@@ -349,40 +350,35 @@ void Trigger::OnTick(Time curTime,
 	}
 }
 
-void Trigger::Draw(base::DrawContext& ctx)
+void Trigger::_ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params) noexcept
 {
-	if (TRIGSTATE_DEFAULT == _state)
-	{
-		GuiElement::Draw(ctx);
+	const auto head = _externalControlActionHead.load(std::memory_order_relaxed);
+	const auto tail = _externalControlActionTail.load(std::memory_order_acquire);
+	if (head == tail)
 		return;
+
+	const auto action = _externalControlActionQueue[head];
+	_externalControlActionHead.store((head + 1u) % _ExternalControlActionQueueCapacity, std::memory_order_release);
+	if (action.IsActivate)
+	{
+		_isLastActivateDownRaw = action.IsDown;
+		_isLastActivateDown = action.IsDown;
 	}
-
-	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	if (_isDitchDown)
-		_textureDitchDown.Draw(ctx);
 	else
 	{
-		switch (_state)
-		{
-		case TRIGSTATE_RECORDING:
-			_textureRecording.Draw(ctx);
-			break;
-		case TRIGSTATE_OVERDUBBING:
-			_textureOverdubbing.Draw(ctx);
-			break;
-		case TRIGSTATE_PUNCHEDIN:
-			_texturePunchedIn.Draw(ctx);
-			break;
-		}
+		_isLastDitchDownRaw = action.IsDown;
+		_isLastDitchDown = action.IsDown;
 	}
+	StateMachine(action.IsDown, action.IsActivate, cfg, params);
+}
 
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
+void Trigger::_PublishTriggerStateSnapshot() noexcept
+{
+	_publishedActivateInputDown.store(_isLastActivateDownRaw, std::memory_order_release);
+	_publishedDitchInputDown.store(_isLastDitchDownRaw, std::memory_order_release);
+	_publishedTriggerDitchDown.store(_isDitchDown, std::memory_order_release);
+	_publishedTriggerState.store(static_cast<std::uint8_t>(_state), std::memory_order_release);
 }
 
 void Trigger::AddBinding(DualBinding activate, DualBinding ditch)
@@ -431,11 +427,6 @@ void Trigger::ClearInputChannels()
 	_UpdateBehaviour();
 }
 
-void Trigger::AddMidiInputChannel(unsigned int chan)
-{
-	_midiInputChannels.push_back(chan);
-}
-
 void Trigger::AddMidiInputDevice(std::string device)
 {
 	if (device.empty())
@@ -447,12 +438,34 @@ void Trigger::AddMidiInputDevice(std::string device)
 
 TriggerState Trigger::GetState() const
 {
-	return _state;
+	return static_cast<TriggerState>(_publishedTriggerState.load(std::memory_order_acquire));
+}
+
+bool Trigger::IsActivateInputDown() const
+{
+	return _publishedActivateInputDown.load(std::memory_order_acquire);
+}
+
+bool Trigger::IsDitchInputDown() const
+{
+	return _publishedDitchInputDown.load(std::memory_order_acquire);
+}
+
+bool Trigger::IsDitchDown() const
+{
+	return _publishedTriggerDitchDown.load(std::memory_order_acquire);
 }
 
 void Trigger::Reset()
 {
 	_state = TRIGSTATE_DEFAULT;
+	_isDitchDown = false;
+	_isLastActivateDown = false;
+	_isLastDitchDown = false;
+	_isLastActivateDownRaw = false;
+	_isLastDitchDownRaw = false;
+	_lastActivateTime = Timer::GetZero();
+	_lastDitchTime = Timer::GetZero();
 	
 	for (auto& b : _activateBindings)
 		b.Reset();
@@ -461,6 +474,7 @@ void Trigger::Reset()
 		b.Reset();
 
 	_state = TriggerState::TRIGSTATE_DEFAULT;
+	_PublishTriggerStateSnapshot();
 	_recordSampCount = 0;
 	_loopTakeHistory.clear();
 	_delayedActions.clear();
@@ -537,8 +551,8 @@ void Trigger::DispatchTriggerAction(const TriggerAction& action)
 
 void Trigger::FlushDelayedTriggerActions(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	for (auto& action : _delayedTriggerActions)
 	{
@@ -688,8 +702,8 @@ bool Trigger::TryChangeState(DualBinding& binding,
 
 bool Trigger::StateMachine(bool isDown,
 	bool isActivate,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	bool changedState = false;
 
@@ -810,11 +824,12 @@ bool Trigger::StateMachine(bool isDown,
 		break;
 	}
 
+	_PublishTriggerStateSnapshot();
 	return changedState;
 }
 
-void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_RECORDING;
 
@@ -828,7 +843,6 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_REC_START;
 		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputChannels = _midiInputChannels;
 		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
@@ -849,8 +863,8 @@ void Trigger::StartRecording(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -877,8 +891,8 @@ void Trigger::EndRecording(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::Ditch(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -921,8 +935,8 @@ void Trigger::Ditch(std::optional<io::UserConfig> cfg,
 		_loopTakeHistory.pop_back();
 }
 
-void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
@@ -938,7 +952,6 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 		TriggerAction trigAction;
 		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputChannels = _midiInputChannels;
 		trigAction.MidiInputDevices = _midiInputDevices;
 
 		if (cfg.has_value())
@@ -951,8 +964,8 @@ void Trigger::StartOverdub(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -978,8 +991,8 @@ void Trigger::EndOverdub(std::optional<io::UserConfig> cfg,
 	}
 }
 
-void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_DEFAULT;
 
@@ -1010,8 +1023,8 @@ void Trigger::DitchOverdub(std::optional<io::UserConfig> cfg,
 		_loopTakeHistory.pop_back();
 }
 
-void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_PUNCHEDIN;
 
@@ -1027,8 +1040,9 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
-		const auto hasTargetMidi = !_midiInputChannels.empty();
+		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+			cfg.value().Audio.NumChannelsIn > 0u;
+		const auto hasTargetMidi = !_midiInputDevices.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
@@ -1056,26 +1070,22 @@ void Trigger::StartPunchIn(std::optional<io::UserConfig> cfg,
 
 		DispatchTriggerAction(sourceAction);
 
+		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
 			DispatchTriggerAction(targetMidiAction);
 
-		if (!hasTargetAudio)
-			return;
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (0u == targetDelay)
+		if (hasTargetAudio)
 		{
-			DispatchTriggerAction(targetAction);
-		}
-		else
-		{
-			QueueTriggerAction(targetAction, targetDelay);
+			if (0u == targetDelay)
+				DispatchTriggerAction(targetAction);
+			else
+				QueueTriggerAction(targetAction, targetDelay);
 		}
 	}
 }
 
-void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+void Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	_state = TRIGSTATE_OVERDUBBING;
 
@@ -1091,8 +1101,9 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 	if ((_receiver) && !_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = _midiInputChannels.empty() || !_inputChannels.empty();
-		const auto hasTargetMidi = !_midiInputChannels.empty();
+		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+			cfg.value().Audio.NumChannelsIn > 0u;
+		const auto hasTargetMidi = !_midiInputDevices.empty();
 
 		TriggerAction sourceAction;
 		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
@@ -1120,26 +1131,22 @@ void Trigger::EndPunchIn(std::optional<io::UserConfig> cfg,
 
 		DispatchTriggerAction(sourceAction);
 
+		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
 			DispatchTriggerAction(targetMidiAction);
 
-		if (!hasTargetAudio)
-			return;
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (0u == targetDelay)
+		if (hasTargetAudio)
 		{
-			DispatchTriggerAction(targetAction);
-		}
-		else
-		{
-			QueueTriggerAction(targetAction, targetDelay);
+			if (0u == targetDelay)
+				DispatchTriggerAction(targetAction);
+			else
+				QueueTriggerAction(targetAction, targetDelay);
 		}
 	}
 }
 
-unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params) const
+unsigned int Trigger::CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params) const
 {
 	if (!cfg.has_value())
 		return 0u;
@@ -1159,32 +1166,12 @@ unsigned int Trigger::CalcInputAlignedDelaySamps(std::optional<io::UserConfig> c
 	return inputLatency + readDelay;
 }
 
-unsigned int Trigger::CalcPunchStateDelaySamps(std::optional<io::UserConfig> cfg) const
+unsigned int Trigger::CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const
 {
 	if (!cfg.has_value())
 		return 0u;
 
 	return cfg.value().TriggerLoopAlignmentSamps();
-}
-
-void Trigger::_InitResources(ResourceLib& resourceLib, bool forceInit)
-{
-	_textureRecording.InitResources(resourceLib, forceInit);
-	_textureDitchDown.InitResources(resourceLib, forceInit);
-	_textureOverdubbing.InitResources(resourceLib, forceInit);
-	_texturePunchedIn.InitResources(resourceLib, forceInit);
-
-	GuiElement::_InitResources(resourceLib, forceInit);
-}
-
-void Trigger::_ReleaseResources()
-{
-	GuiElement::_ReleaseResources();
-
-	_textureRecording.ReleaseResources();
-	_textureDitchDown.ReleaseResources();
-	_textureOverdubbing.ReleaseResources();
-	_texturePunchedIn.ReleaseResources();
 }
 
 void Trigger::_UpdateBehaviour()

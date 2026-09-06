@@ -139,14 +139,6 @@ bool Image::_InitTexture(ResourceLib& resourceLib)
 
 	if (_isNinePatch)
 	{
-		const auto borderWidth = static_cast<unsigned long long>(_borderX) * 2ull;
-		const auto borderHeight = static_cast<unsigned long long>(_borderY) * 2ull;
-		if ((borderWidth > _texWidth) || (borderHeight > _texHeight))
-		{
-			_borderX = 0;
-			_borderY = 0;
-		}
-
 		_pendingWidth.store(_sizeParams.Size.Width, std::memory_order_release);
 		_pendingHeight.store(_sizeParams.Size.Height, std::memory_order_release);
 		_vertexBufferDirty.store(true, std::memory_order_release);

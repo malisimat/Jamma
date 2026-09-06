@@ -6,7 +6,7 @@
 #include <vector>
 #include "GuiElement.h"
 #include "GuiLabel.h"
-#include "GuiPopupHost.h"
+#include "GuiPopupManager.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TouchAction.h"
 
@@ -98,7 +98,7 @@ namespace gui
 		explicit GuiDropDown(GuiDropDownParams params);
 
 	public:
-		void SetPopupHost(GuiPopupHost* host);
+		void SetPopupManager(GuiPopupManager* manager);
 		int SelectedIndex() const;
 		std::string SelectedText() const;
 		void SetSelectedIndex(int index, bool notify = false);
@@ -129,7 +129,7 @@ namespace gui
 		unsigned int                       _rowHeight;
 		std::shared_ptr<GuiLabel>          _label;
 		std::shared_ptr<GuiDropDownList>   _list;
-		GuiPopupHost*                      _popupHost;
+		GuiPopupManager*                   _popupManager;
 		bool                               _open;
 		unsigned int                       _padding;
 		std::weak_ptr<base::ActionReceiver> _receiver;

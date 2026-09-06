@@ -1,5 +1,8 @@
 #pragma once
 
+// Owns quantisation geometry and event-boundary choices; local grain and remote
+// grid are distinct inputs, and remote follow/mapping authority lives elsewhere.
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -8,7 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <vector>
-#include "../include/Constants.h"
+#include "QuantisationTiming.h"
 #include "../utils/Timer.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
@@ -35,55 +38,8 @@ namespace io
 	struct UserConfig;
 }
 
-namespace ninjam
+namespace engine
 {
-	struct NinjamRemoteSnapshot;
-	class NinjamSession;
-}
-
-namespace midi
-{
-	enum class MidiQuantisationFraction : std::uint8_t;
-}
-
-namespace timing
-{
-	struct QuantisationParams
-	{
-		unsigned int SeedSamps = 0u;
-		unsigned int MasterSamps = 0u;
-	};
-
-	struct QuantisationLoopTakeVisual
-	{
-		unsigned long LoopLengthSamps = 0ul;
-		std::uint32_t GrainSamps = 0u;
-		std::uint32_t LoopGrains = 0u;
-		double LoopIndexFrac = 0.0;
-		float YCenter = 0.0f;
-		float HalfHeight = 0.0f;
-		float Radius = 0.0f;
-		midi::MidiQuantisationFraction Fraction;
-		std::int32_t PhaseOffsetSamps = 0;
-	};
-
-	struct QuantisationPolicy
-	{
-		unsigned int SeedGrainMinMs = constants::DefaultSeedGrainMinMs;
-		unsigned int SeedGrainTargetMaxMs = constants::DefaultSeedGrainTargetMaxMs;
-		unsigned int SeedBpmMin = constants::DefaultSeedBpmMin;
-		bool SeedUsesPowers = true;
-	};
-
-	struct QuantisationTiming
-	{
-		unsigned int SeedSamps = 0u;
-		unsigned int MasterLoopSamps = 0u;
-		unsigned int SeedCount = 0u;
-		float Bpm = 0.0f;
-		unsigned int Bpi = 0u;
-	};
-
 	// Accumulates tap events and maintains a running average beat-gap estimate.
 	class TapTempoTracker
 	{
@@ -115,20 +71,26 @@ namespace timing
 		std::optional<double> _estimatedGapSamps;
 	};
 
-	class TimingQuantiser
+	class Quantiser
 	{
 	public:
-		TimingQuantiser() = default;
+		Quantiser() = default;
 
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		void SetSeedUsesPowers(bool seedUsesPowers) noexcept;
 		void Set(unsigned int samps, utils::Timer::QuantisationType type);
-		void Clear(bool clearTapTempo);
+
+		void Clear(bool clearTapTempo, bool preserveTiming = false);
+		// Compatibility entry point for callers without a scene snapshot.
 		void ArmReclock();
+		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
 
 		void SetMidiGrain(unsigned int grainSamps,
 			const char* source,
+			const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
@@ -159,33 +121,27 @@ namespace timing
 		void ApplyOverlayAlpha(float alpha,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
-		void ApplyRemoteTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
-			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& cfg);
-
-		void QueueLocalTempo(unsigned int remoteSampleRate,
-			unsigned int audioDeviceSampleRate,
-			const io::UserConfig& cfg);
-
-		void SendQueuedTempo(const ninjam::NinjamRemoteSnapshot& snapshot,
-			ninjam::NinjamSession* ninjam,
-			unsigned int remoteSampleRate,
-			unsigned int audioDeviceSampleRate);
-
 		unsigned int EffectiveSamps() const noexcept;
+		unsigned int ActiveGridDivisions() const noexcept;
+		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
-		unsigned int RemoteSampleRate() const noexcept;
+		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
+
+		static void LogNinjamTempoEvent(const char* event,
+			unsigned long masterLoopLengthSamps,
+			unsigned int grainSamps,
+			unsigned int bpi,
+			float bpm,
+			unsigned int sampleRate);
+		static void LogNinjamManualTempoCommands(float bpm, unsigned int bpi);
 
 		static unsigned int MinSeedSamps(unsigned int sampleRate,
 			const QuantisationPolicy& policy);
 		static std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 			int deltaX,
 			unsigned int sampleRate) noexcept;
-		static unsigned int IntervalSampsFromTempo(float bpm,
-			unsigned int bpi,
-			unsigned int sampleRate);
 		static std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
 			unsigned long masterSamps,
 			unsigned int sampleRate);
@@ -233,65 +189,61 @@ namespace timing
 		std::shared_ptr<utils::Timer> _clock;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
+		std::atomic_ulong _masterOriginalBufferLengthSamps{ 0ul };
+		std::atomic_uint _activeGridDivisions{ 0u };
 		std::atomic_uint _effectiveQuantiseSamps{ 0u };
 		std::atomic_bool _armReclock{ false };
-		std::atomic_bool _hasPendingTempo{ false };
 		std::atomic<std::int64_t> _overlayState{ StateInactive };
 		std::mutex _tapTempoMutex;
 		TapTempoTracker _tapTempo;
-		unsigned int _remoteMasterLoopSamps = 0u;
-		unsigned int _remoteSampleRate = 0u;
-		unsigned int _lastRemoteIntervalPos = 0u;
+		// UI-thread snapshot: takes existing before the current reclock do not
+		// participate in selecting its new local master.
+		std::vector<std::string> _preReclockTakeIds;
 		bool _seedUsesPowers = true;
 		std::int32_t _globalPhaseOffsetSamps = 0;
 	};
 
 	inline unsigned int MinSeedSamps(unsigned int sampleRate, const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::MinSeedSamps(sampleRate, policy);
+		return Quantiser::MinSeedSamps(sampleRate, policy);
 	}
 
 	inline std::int32_t ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 		int deltaX,
 		unsigned int sampleRate) noexcept
 	{
-		return TimingQuantiser::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
-	}
-
-	inline unsigned int IntervalSampsFromTempo(float bpm, unsigned int bpi, unsigned int sampleRate)
-	{
-		return TimingQuantiser::IntervalSampsFromTempo(bpm, bpi, sampleRate);
+		return Quantiser::ResolvePhaseOffsetDrag(startOffsetSamps, deltaX, sampleRate);
 	}
 
 	inline std::optional<QuantisationTiming> TimingFromSeedAndMaster(unsigned int seedSamps,
 		unsigned long masterSamps,
 		unsigned int sampleRate)
 	{
-		return TimingQuantiser::TimingFromSeedAndMaster(seedSamps, masterSamps, sampleRate);
+		return Quantiser::TimingFromSeedAndMaster(seedSamps, masterSamps, sampleRate);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceSeedTiming(unsigned long masterLoopSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::DeduceSeedTiming(masterLoopSamps, sampleRate, policy);
+		return Quantiser::DeduceSeedTiming(masterLoopSamps, sampleRate, policy);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceTapSeedTiming(unsigned long requestedSeedSamps,
 		unsigned int sampleRate,
 		const QuantisationPolicy& policy)
 	{
-		return TimingQuantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
+		return Quantiser::DeduceTapSeedTiming(requestedSeedSamps, sampleRate, policy);
 	}
 
 	inline std::optional<QuantisationTiming> DeduceTapSeedTimingFromMaster(unsigned long tapGapSamps,
 		unsigned long masterLoopSamps,
 		unsigned int sampleRate)
 	{
-		return TimingQuantiser::DeduceTapSeedTimingFromMaster(tapGapSamps, masterLoopSamps, sampleRate);
+		return Quantiser::DeduceTapSeedTimingFromMaster(tapGapSamps, masterLoopSamps, sampleRate);
 	}
 
-	// ── TimingQuantiserController (merged from QuantisationInteractionController) ───
+	// ── QuantiserController (merged from QuantisationInteractionController) ───
 
 	struct QuantisationInteractionContext
 	{
@@ -302,13 +254,13 @@ namespace timing
 		std::vector<unsigned char> HoverPath3d;
 	};
 
-	class TimingQuantiserController
+	class QuantiserController
 	{
 	public:
 		using ChildResolver = std::function<std::shared_ptr<base::GuiElement>(const std::vector<unsigned char>& path)>;
 
-		TimingQuantiserController(graphics::CtrlHandleOverlay& overlay,
-			TimingQuantiser& quantisation,
+		QuantiserController(graphics::CtrlHandleOverlay& overlay,
+			Quantiser& quantisation,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void OnCtrlModifierChanged(bool held,
@@ -402,7 +354,7 @@ namespace timing
 			std::int32_t offsetSamps) noexcept;
 
 		graphics::CtrlHandleOverlay& _overlay;
-		TimingQuantiser& _quantisation;
+		Quantiser& _quantisation;
 		std::vector<std::shared_ptr<engine::Station>>& _stations;
 
 		bool _ctrlHandleHeld = false;

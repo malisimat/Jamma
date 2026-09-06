@@ -5,6 +5,7 @@
 
 #include "../../include/Constants.h"
 #include "../utils/VecUtils.h"
+#include "GlDeleteQueue.h"
 #include "GlDrawContext.h"
 #include "glm/glm.hpp"
 
@@ -20,7 +21,7 @@ namespace
 	constexpr unsigned int  DefaultNumSides    = 32u;
 	constexpr unsigned int  DefaultNumRibs     = 0u;
 	constexpr unsigned int  SideVerticalSections = 12u;
-	constexpr float         DeckRadius         = 9.6f;
+	constexpr float         DeckRadius         = 30.0f;
 	constexpr float         BevelWidth         = 2.0f;
 	constexpr float         BevelHeight        = 10.0f;
 	constexpr float         SideHeight         = 450.0f;
@@ -30,6 +31,26 @@ namespace
 	constexpr float UV_BEVEL = 1.0f;
 	constexpr float UV_SIDE  = 2.0f;
 	constexpr float UV_RIB   = 3.0f;
+	constexpr float UV_STATE_RING_BRIGHT = 4.0f;
+	constexpr float UV_STATE_RING_DARK = 5.0f;
+
+	constexpr unsigned int StateRingSides = 64u;
+	constexpr unsigned int StateRingOccluderInstances = 20u;
+	constexpr float StateRingScale = 5.0f;
+	constexpr float StateRingOccluderInnerRadius = 9.0f;
+	constexpr float StateRingOccluderOuterRadius = 17.0f;
+	constexpr float StateRingTopY = -2.0f;
+	constexpr float StateRingBottomY = -(2.0f * BevelHeight + SideHeight) + 2.0f;
+
+	constexpr RingProfilePoint StateRingProfile[] = {
+		{ 9.30f, 0.00f }, { 10.80f, -1.25f }, { 15.80f, -3.50f },
+		{ 15.80f, -9.50f }, { 14.90f, -13.50f }, { 11.20f, -16.00f }
+	};
+	constexpr RingProfilePoint StateRingBottomProfile[] = {
+		{ 9.30f, 0.00f }, { 11.60f, 1.10f }, { 16.60f, 3.20f },
+		{ 16.60f, 8.20f }, { 15.30f, 12.40f }, { 12.00f, 17.50f },
+		{ 10.20f, 19.00f }
+	};
 
 	void PushTri(std::vector<float>& verts,
 		std::vector<float>& uvs,
@@ -328,6 +349,83 @@ StationModel::BuildRibs(unsigned int numSides, float radius,
 }
 
 std::tuple<std::vector<float>, std::vector<float>>
+StationModel::BuildLathedProfileGeometry(unsigned int numSides,
+	std::span<const RingProfilePoint> profile,
+	float yOffset, bool invertY, float partKind, float profileScale)
+{
+	std::vector<float> verts;
+	std::vector<float> uvs;
+	if (numSides < 3u || profile.size() < 2u)
+		return { verts, uvs };
+
+	verts.reserve(numSides * (profile.size() - 1u) * 6u * 3u);
+	uvs.reserve(numSides * (profile.size() - 1u) * 6u * 2u);
+	const auto profileY = [yOffset, invertY, profileScale](float y) { return yOffset + (invertY ? -y : y) * profileScale; };
+
+	for (unsigned int side = 0u; side < numSides; ++side)
+	{
+		const float a0 = static_cast<float>(constants::TWOPI) * static_cast<float>(side) / static_cast<float>(numSides);
+		const float a1 = static_cast<float>(constants::TWOPI) * static_cast<float>(side + 1u) / static_cast<float>(numSides);
+		const float u0 = static_cast<float>(side) / static_cast<float>(numSides);
+		const float u1 = static_cast<float>(side + 1u) / static_cast<float>(numSides);
+		for (std::size_t profileIndex = 0u; profileIndex + 1u < profile.size(); ++profileIndex)
+		{
+			const auto& inner = profile[profileIndex];
+			const auto& outer = profile[profileIndex + 1u];
+			const glm::vec3 p00(std::cos(a0) * inner.Radius * profileScale, profileY(inner.Y), std::sin(a0) * inner.Radius * profileScale);
+			const glm::vec3 p01(std::cos(a0) * outer.Radius * profileScale, profileY(outer.Y), std::sin(a0) * outer.Radius * profileScale);
+			const glm::vec3 p11(std::cos(a1) * outer.Radius * profileScale, profileY(outer.Y), std::sin(a1) * outer.Radius * profileScale);
+			const glm::vec3 p10(std::cos(a1) * inner.Radius * profileScale, profileY(inner.Y), std::sin(a1) * inner.Radius * profileScale);
+			PushQuad(verts, uvs, p00, u0, partKind, p01, u0, partKind,
+				p11, u1, partKind, p10, u1, partKind);
+		}
+	}
+
+	return { verts, uvs };
+}
+
+std::tuple<std::vector<float>, std::vector<float>>
+StationModel::BuildOccluderPrismGeometry(float innerRadius, float outerRadius,
+	float partKind)
+{
+	std::vector<float> verts;
+	std::vector<float> uvs;
+	verts.reserve(2u * 12u * 3u * 3u);
+	uvs.reserve(2u * 12u * 3u * 2u);
+	for (unsigned int bar = 0u; bar < 2u; ++bar)
+	{
+		const auto prismVertex = [innerRadius, outerRadius](bool outer, bool high, bool next)
+		{
+			return glm::vec3(outer ? outerRadius : innerRadius,
+				high ? 1.0f : 0.0f, next ? 1.0f : 0.0f);
+		};
+		const auto pushFace = [&verts, &uvs, partKind, bar](const glm::vec3& a,
+			const glm::vec3& b, const glm::vec3& c, const glm::vec3& d)
+		{
+			const auto barKind = static_cast<float>(bar);
+			PushQuad(verts, uvs, a, barKind, partKind, b, barKind, partKind,
+				c, barKind, partKind, d, barKind, partKind);
+		};
+		const auto il = prismVertex(false, false, false);
+		const auto ol = prismVertex(true, false, false);
+		const auto ih = prismVertex(false, true, false);
+		const auto oh = prismVertex(true, true, false);
+		const auto iln = prismVertex(false, false, true);
+		const auto oln = prismVertex(true, false, true);
+		const auto ihn = prismVertex(false, true, true);
+		const auto ohn = prismVertex(true, true, true);
+		pushFace(il, ol, oh, ih);
+		pushFace(iln, ihn, ohn, oln);
+		pushFace(ol, oln, ohn, oh);
+		pushFace(il, ih, ihn, iln);
+		pushFace(ih, oh, ohn, ihn);
+		pushFace(il, iln, oln, ol);
+	}
+
+	return { verts, uvs };
+}
+
+std::tuple<std::vector<float>, std::vector<float>>
 StationModel::BuildAllGeometry(unsigned int numSides, float radius, unsigned int numRibs)
 {
 	(void)numRibs;
@@ -364,36 +462,51 @@ StationModel::StationModel() :
 	_stationSelected(false),
 	_stationPicking(false),
 	_stationLevel(0.0f),
-	_stationFallRate(0.0f)
+	_stationVisualState(0u),
+	_stationFallRate(0.0f),
+	_topRing(),
+	_bottomRing(),
+	_ringOccluder(),
+	_ringsNeedInitialising(true)
 {
-	_modelParams.ModelShaders = { "station", "picker" };
+	_modelParams.ModelShaders = { "station", "picker", "station_ring" };
 	SetVisible(false);
 
 	auto [verts, uvs] = BuildAllGeometry(DefaultNumSides, DeckRadius, DefaultNumRibs);
 	SetGeometry(std::move(verts), std::move(uvs));
+	std::tie(_topRing.Verts, _topRing.Uvs) = BuildLathedProfileGeometry(
+		StateRingSides, StateRingProfile, StateRingTopY, false, UV_STATE_RING_BRIGHT, StateRingScale);
+	std::tie(_bottomRing.Verts, _bottomRing.Uvs) = BuildLathedProfileGeometry(
+		StateRingSides, StateRingBottomProfile, StateRingBottomY, false, UV_STATE_RING_BRIGHT, StateRingScale);
+	std::tie(_ringOccluder.Verts, _ringOccluder.Uvs) = BuildOccluderPrismGeometry(
+		StateRingOccluderInnerRadius * StateRingScale,
+		StateRingOccluderOuterRadius * StateRingScale,
+		UV_STATE_RING_DARK);
 }
 
 void StationModel::SetStationState(const std::vector<unsigned int>& stationGlobalId,
 		bool selected,
 		bool picking,
-		float level)
-	{
-		_stationGlobalId = stationGlobalId;
-		_stationSelected = selected;
-		_stationPicking = picking;
-		const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
-		const auto decayRate = std::max(_stationFallRate, 0.0f);
-		_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
+		float level,
+		std::uint8_t visualState)
+{
+	_stationGlobalId = stationGlobalId;
+	_stationSelected = selected;
+	_stationPicking = picking;
+	_stationVisualState = visualState;
+	const auto targetLevel = std::clamp(level, 0.0f, 1.0f);
+	const auto decayRate = std::max(_stationFallRate, 0.0f);
+	_stationLevel = _ApplySoftDecay(_stationLevel, targetLevel, decayRate);
 }
 
 void StationModel::SetParams(float fallRate) noexcept
-	{
-		_stationFallRate = std::max(fallRate, 0.0f);
-	}
+{
+	_stationFallRate = std::max(fallRate, 0.0f);
+}
 
-	void StationModel::ResetStationLevel() noexcept
-	{
-		_stationLevel = 0.0f;
+void StationModel::ResetStationLevel() noexcept
+{
+	_stationLevel = 0.0f;
 }
 
 float StationModel::_ApplySoftDecay(float current, float target, float fallRate) noexcept
@@ -414,9 +527,100 @@ float StationModel::_ApplySoftDecay(float current, float target, float fallRate)
 	return current;
 }
 
+void StationModel::_InitResources(resources::ResourceLib& resourceLib, bool forceInit)
+{
+	GuiModel::_InitResources(resourceLib, forceInit);
+	if (!_ringsNeedInitialising || !HasCurrentGlContext())
+		return;
+
+	_InitRingMesh(_topRing);
+	_InitRingMesh(_bottomRing);
+	_InitRingMesh(_ringOccluder);
+	_ringsNeedInitialising = false;
+}
+
+void StationModel::_ReleaseResources()
+{
+	GuiModel::_ReleaseResources();
+	_ReleaseRingMesh(_topRing);
+	_ReleaseRingMesh(_bottomRing);
+	_ReleaseRingMesh(_ringOccluder);
+	_ringsNeedInitialising = true;
+}
+
+void StationModel::_InitRingMesh(RingMesh& mesh)
+{
+	if (mesh.Verts.empty() || mesh.Uvs.empty())
+		return;
+
+	_ReleaseRingMesh(mesh);
+	mesh.NumTris = static_cast<unsigned int>(mesh.Verts.size() / 9u);
+	std::vector<GLfloat> normals;
+	normals.reserve(mesh.NumTris * 9u);
+	for (unsigned int triangle = 0u; triangle < mesh.NumTris; ++triangle)
+	{
+		const auto v1 = glm::vec3(mesh.Verts[(triangle * 3u + 0u) * 3u], mesh.Verts[(triangle * 3u + 0u) * 3u + 1u], mesh.Verts[(triangle * 3u + 0u) * 3u + 2u]);
+		const auto v2 = glm::vec3(mesh.Verts[(triangle * 3u + 1u) * 3u], mesh.Verts[(triangle * 3u + 1u) * 3u + 1u], mesh.Verts[(triangle * 3u + 1u) * 3u + 2u]);
+		const auto v3 = glm::vec3(mesh.Verts[(triangle * 3u + 2u) * 3u], mesh.Verts[(triangle * 3u + 2u) * 3u + 1u], mesh.Verts[(triangle * 3u + 2u) * 3u + 2u]);
+		const auto normal = glm::normalize(glm::cross(v2 - v1, v3 - v1));
+		for (unsigned int vertex = 0u; vertex < 3u; ++vertex)
+		{
+			normals.push_back(normal.x);
+			normals.push_back(normal.y);
+			normals.push_back(normal.z);
+		}
+	}
+
+	glGenVertexArrays(1, &mesh.VertexArray);
+	glBindVertexArray(mesh.VertexArray);
+	glGenBuffers(3, mesh.VertexBuffers);
+	glBindBuffer(GL_ARRAY_BUFFER, mesh.VertexBuffers[0]);
+	glBufferData(GL_ARRAY_BUFFER, mesh.Verts.size() * sizeof(GLfloat), mesh.Verts.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindBuffer(GL_ARRAY_BUFFER, mesh.VertexBuffers[1]);
+	glBufferData(GL_ARRAY_BUFFER, mesh.Uvs.size() * sizeof(GLfloat), mesh.Uvs.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindBuffer(GL_ARRAY_BUFFER, mesh.VertexBuffers[2]);
+	glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(GLfloat), normals.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(2);
+	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindVertexArray(0);
+}
+
+void StationModel::_ReleaseRingMesh(RingMesh& mesh)
+{
+	if (!HasCurrentGlContext())
+		return;
+	graphics::GlDeleteQueue::DeleteBuffers(3, mesh.VertexBuffers);
+	mesh.VertexBuffers[0] = 0u;
+	mesh.VertexBuffers[1] = 0u;
+	mesh.VertexBuffers[2] = 0u;
+	graphics::GlDeleteQueue::DeleteVertexArrays(1, &mesh.VertexArray);
+	mesh.VertexArray = 0u;
+	mesh.NumTris = 0u;
+}
+
+void StationModel::_DrawRingMesh(const RingMesh& mesh)
+{
+	if (mesh.VertexArray == 0u || mesh.NumTris == 0u)
+		return;
+	glBindVertexArray(mesh.VertexArray);
+	glDrawArrays(GL_TRIANGLES, 0, mesh.NumTris * 3u);
+}
+
+void StationModel::_DrawRingOccluder(const RingMesh& mesh)
+{
+	if (mesh.VertexArray == 0u || mesh.NumTris == 0u)
+		return;
+	glBindVertexArray(mesh.VertexArray);
+	glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.NumTris * 3u, StateRingOccluderInstances);
+}
+
 std::weak_ptr<resources::ShaderResource> StationModel::GetShader()
 {
-	// Picker pass uses shaders[1]; scene/highlight both use shaders[0].
 	return GetShaderAt(_lastPass == base::PASS_PICKER ? 1u : 0u);
 }
 
@@ -443,6 +647,16 @@ void StationModel::Draw3d(DrawContext& ctx,
 		return;
 
 	const auto stationLevel = std::clamp(_stationLevel, 0.0f, 1.0f);
+	const glm::vec3 stationStateColors[] = {
+		{ 0.24f, 0.68f, 0.98f },
+		{ 0.94f, 0.20f, 0.22f },
+		{ 0.95f, 0.54f, 0.16f },
+		{ 0.20f, 0.96f, 0.38f },
+		{ 0.71f, 0.33f, 0.93f },
+		{ 0.95f, 0.94f, 0.07f }
+	};
+	const auto stationStateIndex = std::min<std::size_t>(_stationVisualState,
+		std::size(stationStateColors) - 1u);
 
 	// Set pass-specific uniforms before binding the program.
 	switch (pass)
@@ -450,15 +664,10 @@ void StationModel::Draw3d(DrawContext& ctx,
 	case base::PASS_PICKER:
 	{
 		auto idVec = _stationGlobalId.empty() ? GlobalId() : _stationGlobalId;
-		const auto usedSize = std::min(idVec.size(), static_cast<size_t>(3));
 		idVec.resize(3);
-		for (size_t i = 0; i < usedSize; ++i)
-			idVec[i] += 1;
+		for (auto& idPart : idVec)
+			idPart += 1;
 		const auto id = utils::VecToId(idVec);
-		// Shared picker vertex shader expects loop waveform scale uniforms.
-		// Keep station picker geometry unscaled by pinning to 1:1.
-		glCtx.SetUniform("WaveformRadius", 1.0f);
-		glCtx.SetUniform("WaveformUnitMeshRadius", 1.0f);
 		glCtx.SetUniform("ObjectId", id);
 		break;
 	}
@@ -466,12 +675,14 @@ void StationModel::Draw3d(DrawContext& ctx,
 			glCtx.SetUniform("Highlight", _stationSelected ? 1.0f : 0.0f);
 			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 			glCtx.SetUniform("StationLevel", stationLevel);
+			glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 			break;
 		case base::PASS_SCENE:
 		default:
 			glCtx.SetUniform("Highlight", _stationSelected ? 0.35f : 0.0f);
 			glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
 		glCtx.SetUniform("StationLevel", stationLevel);
+		glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
 		break;
 	}
 
@@ -480,6 +691,42 @@ void StationModel::Draw3d(DrawContext& ctx,
 
 	glBindVertexArray(_vertexArray);
 	glDrawArrays(GL_TRIANGLES, 0, _numTris * 3);
+	glBindVertexArray(0);
+	glUseProgram(0);
+
+	if (pass == base::PASS_PICKER)
+	{
+		glUseProgram(shader->GetId());
+		shader->SetUniforms(glCtx);
+		_DrawRingMesh(_topRing);
+		_DrawRingMesh(_bottomRing);
+		glBindVertexArray(0);
+		glUseProgram(0);
+		return;
+	}
+
+	auto ringShader = GetShaderAt(2u).lock();
+	if (!ringShader)
+		return;
+
+	glCtx.SetUniform("Highlight", _stationSelected ? (pass == base::PASS_HIGHLIGHT ? 1.0f : 0.35f) : 0.0f);
+	glCtx.SetUniform("StationHover", _stationPicking ? 1.0f : 0.0f);
+	glCtx.SetUniform("StationLevel", stationLevel);
+	glCtx.SetUniform("StationStateColor", stationStateColors[stationStateIndex]);
+	glCtx.SetUniform("StationVisualState", static_cast<int>(stationStateIndex));
+	glCtx.SetUniform("RingScale", StateRingScale);
+	glUseProgram(ringShader->GetId());
+	ringShader->SetUniforms(glCtx);
+	_DrawRingMesh(_topRing);
+	_DrawRingMesh(_bottomRing);
+	glCtx.SetUniform("RingCapY", StateRingTopY);
+	glCtx.SetUniform("RingDirection", 1.0f);
+	ringShader->SetUniforms(glCtx);
+	_DrawRingOccluder(_ringOccluder);
+	glCtx.SetUniform("RingCapY", StateRingBottomY);
+	glCtx.SetUniform("RingDirection", -1.0f);
+	ringShader->SetUniforms(glCtx);
+	_DrawRingOccluder(_ringOccluder);
 	glBindVertexArray(0);
 	glUseProgram(0);
 }

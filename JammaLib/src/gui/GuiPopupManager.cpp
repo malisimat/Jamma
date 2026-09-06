@@ -1,10 +1,10 @@
-#include "GuiPopupHost.h"
+#include "GuiPopupManager.h"
 
 using namespace gui;
 using namespace actions;
 using base::GuiElement;
 
-void GuiPopupHost::Open(std::shared_ptr<GuiElement> element,
+void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
 	std::shared_ptr<GuiElement> owner)
 {
 	if (!element)
@@ -13,40 +13,40 @@ void GuiPopupHost::Open(std::shared_ptr<GuiElement> element,
 	_popups.push_back({ element, owner });
 }
 
-void GuiPopupHost::Close()
+void GuiPopupManager::Close()
 {
 	if (!_popups.empty())
 		_popups.pop_back();
 }
 
-void GuiPopupHost::CloseAll()
+void GuiPopupManager::CloseAll()
 {
 	_popups.clear();
 }
 
-bool GuiPopupHost::IsOpen() const
+bool GuiPopupManager::IsOpen() const
 {
 	return !_popups.empty();
 }
 
-std::shared_ptr<GuiElement> GuiPopupHost::Top() const
+std::shared_ptr<GuiElement> GuiPopupManager::Top() const
 {
 	return _popups.empty() ? nullptr : _popups.back().Element;
 }
 
-std::shared_ptr<GuiElement> GuiPopupHost::OwnerOfTop() const
+std::shared_ptr<GuiElement> GuiPopupManager::OwnerOfTop() const
 {
 	return _popups.empty() ? nullptr : _popups.back().Owner.lock();
 }
 
-void GuiPopupHost::Draw(base::DrawContext& ctx)
+void GuiPopupManager::Draw(base::DrawContext& ctx)
 {
 	for (auto& popup : _popups)
 		if (popup.Element)
 			popup.Element->Draw(ctx);
 }
 
-ActionResult GuiPopupHost::OnAction(TouchAction action)
+ActionResult GuiPopupManager::OnAction(TouchAction action)
 {
 	if (_popups.empty())
 		return ActionResult::NoAction();
@@ -68,7 +68,7 @@ ActionResult GuiPopupHost::OnAction(TouchAction action)
 	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<GuiElement>() };
 }
 
-ActionResult GuiPopupHost::OnAction(TouchMoveAction action)
+ActionResult GuiPopupManager::OnAction(TouchMoveAction action)
 {
 	if (_popups.empty())
 		return ActionResult::NoAction();
@@ -80,7 +80,7 @@ ActionResult GuiPopupHost::OnAction(TouchMoveAction action)
 	return { true, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<GuiElement>() };
 }
 
-ActionResult GuiPopupHost::OnAction(KeyAction action)
+ActionResult GuiPopupManager::OnAction(KeyAction action)
 {
 	if (_popups.empty())
 		return ActionResult::NoAction();

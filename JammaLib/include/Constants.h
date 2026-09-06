@@ -30,4 +30,23 @@ namespace constants
 	const unsigned int DefaultSeedBpmMin = 80u;
 	const unsigned int DefaultSampleRate = 44100u;
 	const unsigned int DefaultBufferSizeSamps = 512u;
+
+	// Upper bound on a NINJAM interval length, in samples, used to size the
+	// fixed-capacity export delay lines in NinjamConnection (see
+	// doc/ninjam-live-loop-latency-sync-planC.md). Comfortably covers any
+	// realistic BPM/BPI/sample-rate combination: BPM as low as 20, BPI as
+	// high as 32, sample rate as high as 96kHz => (60/20)*32*96000 = 5,760,000
+	// samples. Rounded up with margin.
+	const unsigned int MaxNinjamIntervalSamps = 6000000u;
+
+	// Plausibility bounds for a NINJAM remote tempo reading, matching the
+	// realistic BPM/BPI assumption above. Used to reject njclient's transient
+	// pre-handshake GetActualBPM()/GetBPI() readings (observed to report
+	// nonsensical values such as bpm=2646, bpi=1 for the brief window before
+	// the server's real CONFIG_CHANGE_NOTIFY message has been parsed) so they
+	// are never mistaken for an authoritative tempo change.
+	const float MinPlausibleNinjamBpm = 20.0f;
+	const float MaxPlausibleNinjamBpm = 400.0f;
+	const int MinPlausibleNinjamBpi = 1;
+	const int MaxPlausibleNinjamBpi = 32;
 }

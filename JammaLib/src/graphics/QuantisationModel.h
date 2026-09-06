@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../gui/GuiModel.h"
 #include "Timer.h"
 
@@ -22,7 +22,7 @@ namespace engine
 
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
 		void SetTiming(unsigned int seedSamps);
-		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<timing::QuantisationLoopTakeVisual>& visuals);
+		void SetLoopTakeVisuals(unsigned int seedSamps, const std::vector<engine::QuantisationLoopTakeVisual>& visuals);
 		void SetOverlayVisible(bool visible, bool confirm);
 		void SetOverlayAlpha(float alpha) noexcept;
 		bool OverlayVisible() const noexcept;
@@ -31,7 +31,7 @@ namespace engine
 			float innerRadius,
 			float outerRadius,
 			float halfHeight);
-		static VisualCounts ResolveVisualCounts(const timing::QuantisationLoopTakeVisual& visual) noexcept;
+		static VisualCounts ResolveVisualCounts(const engine::QuantisationLoopTakeVisual& visual) noexcept;
 
 	private:
 		unsigned int _seedSamps;

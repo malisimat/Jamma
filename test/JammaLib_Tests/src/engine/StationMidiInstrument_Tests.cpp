@@ -167,6 +167,14 @@ namespace
 		return plugin;
 	}
 
+	void AllowAllMidiChannels(const std::shared_ptr<Station>& station)
+	{
+		station->SetAllowedMidiChannels({
+			1, 2, 3, 4, 5, 6, 7, 8,
+			9, 10, 11, 12, 13, 14, 15, 16
+		});
+	}
+
 	void RenderStationBlock(const std::shared_ptr<Station>& station,
 		std::uint32_t blockStart,
 		unsigned int numSamps = 128u)
@@ -192,9 +200,10 @@ TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 {
 	auto station = MakeStation("station-live");
 	auto plugin = AddPlugin(station, L"fake-live.dll");
+	AllowAllMidiChannels(station);
 
 	auto event = MidiEvent::MakeNoteOn(72u, 0u, 60u, 100u);
-	station->EnqueueLiveMidiEvent(event);
+	station->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(station, 64u);
 
@@ -213,7 +222,7 @@ TEST(StationMidiInstrument, LiveMidiAllowedChannelIsDelivered)
 	station->SetAllowedMidiChannels({ 2 });
 
 	auto event = MidiEvent::MakeNoteOn(32u, 1u, 61u, 100u);
-	station->EnqueueLiveMidiEvent(event, "Keys");
+	station->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(station, 0u);
 
@@ -222,18 +231,26 @@ TEST(StationMidiInstrument, LiveMidiAllowedChannelIsDelivered)
 	EXPECT_EQ(event.data1, plugin->Events[0].data1);
 }
 
-TEST(StationMidiInstrument, LiveMidiDisallowedChannelAndNoteOffAreIgnored)
+TEST(StationMidiInstrument, RemovingAllowedChannelFlushesHeldNoteAndIgnoresLaterExternalRelease)
 {
-	auto station = MakeStation("station-live-ignore");
-	auto plugin = AddPlugin(station, L"fake-live-ignore.dll");
+	auto station = MakeStation("station-live-disable");
+	auto plugin = AddPlugin(station, L"fake-live-disable.dll");
 	station->SetAllowedMidiChannels({ 1 });
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u), "Keys");
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOff(16u, 1u, 62u), "Keys");
-
+	const auto noteOn = MidiEvent::MakeNoteOn(0u, 0u, 62u, 100u);
+	station->TryEnqueueImmediateLiveMidi(noteOn);
+	station->ObservePhysicalMidiForRecording(noteOn, "Keys");
 	RenderStationBlock(station, 0u);
+	station->SetAllowedMidiChannels({});
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOff(16u, 0u, 62u), "Keys");
 
-	EXPECT_TRUE(plugin->Events.empty());
+	RenderStationBlock(station, 128u);
+
+	ASSERT_EQ(2u, plugin->Events.size());
+	EXPECT_TRUE(plugin->Events[0].IsNoteOn());
+	EXPECT_TRUE(plugin->Events[1].IsNoteOff());
+	EXPECT_EQ(62u, plugin->Events[0].data1);
+	EXPECT_EQ(62u, plugin->Events[1].data1);
 }
 
 TEST(StationMidiInstrument, SameLiveMidiInputCanPlayMultipleStations)
@@ -242,10 +259,12 @@ TEST(StationMidiInstrument, SameLiveMidiInputCanPlayMultipleStations)
 	auto stationB = MakeStation("station-b");
 	auto pluginA = AddPlugin(stationA, L"fake-a.dll");
 	auto pluginB = AddPlugin(stationB, L"fake-b.dll");
+	AllowAllMidiChannels(stationA);
+	AllowAllMidiChannels(stationB);
 
 	auto event = MidiEvent::MakeNoteOn(10u, 1u, 64u, 96u);
-	stationA->EnqueueLiveMidiEvent(event);
-	stationB->EnqueueLiveMidiEvent(event);
+	stationA->TryEnqueueSyntheticLiveMidi(event);
+	stationB->TryEnqueueSyntheticLiveMidi(event);
 
 	RenderStationBlock(stationA, 0u);
 	RenderStationBlock(stationB, 0u);
@@ -261,9 +280,10 @@ TEST(StationMidiInstrument, LiveMidiCanRouteToSpecificStationPlugin)
 	auto station = MakeStation("station-route-live");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
+	AllowAllMidiChannels(station);
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(16u, 0u, 36u, 120u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(16u, 0u, 36u, 120u));
 	RenderStationBlock(station, 0u);
 
 	EXPECT_TRUE(pluginA->Events.empty());
@@ -326,14 +346,14 @@ TEST(StationMidiInstrument, RegularRecordFinalizationClosesHeldNotesAtLoopEnd)
 TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 {
 	auto station = MakeStation("station-recstart-held-seed");
+	station->SetAllowedMidiChannels({ 1 });
 
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "Keys");
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 0u, 64u, 110u), "Keys");
 
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_REC_START;
 	start.InputChannels = {};
-	start.MidiInputChannels = { 0u };
 	start.MidiInputDevices = { "Keys" };
 	auto startRes = station->OnAction(start);
 
@@ -386,16 +406,61 @@ TEST(StationMidiInstrument, RecStartSeedsHeldChordIntoRecordingAndPlayback)
 	EXPECT_TRUE(foundOff[1]);
 }
 
+TEST(StationMidiInstrument, RecStartUsesStationAllowedChannels)
+{
+	auto station = MakeStation("station-recstart-station-midi-channels");
+	station->SetAllowedMidiChannels({ 2 });
+
+	station->ObservePhysicalMidiForRecording(MidiEvent::MakeNoteOn(0u, 1u, 62u, 90u), "Keys");
+
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_REC_START;
+	start.InputChannels = {};
+	start.MidiInputDevices = { "Keys" };
+	auto startRes = station->OnAction(start);
+
+	ASSERT_TRUE(startRes.IsEaten);
+	ASSERT_FALSE(startRes.TargetId.empty());
+	station->CommitChanges();
+
+	std::shared_ptr<LoopTake> take;
+	for (const auto& candidate : station->GetLoopTakes())
+	{
+		if (candidate && candidate->Id() == startRes.TargetId)
+		{
+			take = candidate;
+			break;
+		}
+	}
+
+	ASSERT_NE(nullptr, take);
+	ASSERT_EQ(1u, take->GetMidiLoops().size());
+	ASSERT_EQ(1u, take->MidiLoopChannels()[0]);
+	ASSERT_EQ("Keys", take->MidiLoopDevices()[0]);
+
+	auto midiLoop = take->GetMidiLoops()[0];
+	ASSERT_NE(nullptr, midiLoop);
+	ASSERT_EQ(1u, midiLoop->EventCount());
+
+	MidiEvent event{};
+	ASSERT_TRUE(midiLoop->TryGetEvent(0u, event));
+	EXPECT_TRUE(event.IsNoteOn());
+	EXPECT_EQ(1u, event.Channel());
+	EXPECT_EQ(62u, event.data1);
+	EXPECT_EQ(90u, event.data2);
+}
+
 TEST(StationMidiInstrument, SetMidiVstRouteReplacesPreviousRouteForOutput)
 {
 	auto station = MakeStation("station-route-replace");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
 	auto pluginC = AddPlugin(station, L"fake-c.dll");
+	AllowAllMidiChannels(station);
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 2u);
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 40u, 100u));
 
 	RenderStationBlock(station, 0u);
 
@@ -410,10 +475,11 @@ TEST(StationMidiInstrument, ClearMidiVstRoutesRestoresWholeChainDelivery)
 	auto station = MakeStation("station-route-clear");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
+	AllowAllMidiChannels(station);
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 1u);
 	station->ClearMidiVstRoutes();
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 41u, 100u));
 
 	RenderStationBlock(station, 0u);
 
@@ -428,9 +494,10 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 	auto station = MakeStation("station-route-invalid");
 	auto pluginA = AddPlugin(station, L"fake-a.dll");
 	auto pluginB = AddPlugin(station, L"fake-b.dll");
+	AllowAllMidiChannels(station);
 
 	station->SetMidiVstRoute(Station::LiveMidiOutputIndex, 99u);
-	station->EnqueueLiveMidiEvent(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
+	station->TryEnqueueSyntheticLiveMidi(MidiEvent::MakeNoteOn(8u, 0u, 42u, 100u));
 
 	RenderStationBlock(station, 0u);
 
@@ -443,6 +510,7 @@ TEST(StationMidiInstrument, InvalidRouteFallsBackToWholeChainDelivery)
 TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 {
 	auto station = MakeStation("station-overdub-source");
+	station->SetAllowedMidiChannels({ 4 });
 	auto sourceTake = MakeMidiTake("source-midi-take");
 	station->AddTake(sourceTake);
 	station->CommitChanges();
@@ -456,7 +524,6 @@ TEST(StationMidiInstrument, OverdubStartPassesSourceMidiToTargetTake)
 	TriggerAction start;
 	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
 	start.InputChannels = {};
-	start.MidiInputChannels = { 3u };
 	start.MidiInputDevices = { "Keys" };
 	auto result = station->OnAction(start);
 
@@ -503,6 +570,7 @@ TEST(StationMidiInstrument, PunchBoundariesEmitLiveMidiTransitionsForSourceAndLi
 {
 	auto station = MakeStation("station-punch-live-boundary");
 	auto plugin = AddPlugin(station, L"fake-punch-live.dll");
+	AllowAllMidiChannels(station);
 	auto sourceTake = MakeMidiTake("source-punch-live");
 	station->AddTake(sourceTake);
 	station->CommitChanges();

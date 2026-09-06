@@ -2,7 +2,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
-#include "gui/GuiPopupHost.h"
+#include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
 #include "gui/GuiNumericInput.h"
 #include "gui/GuiDropDown.h"
@@ -19,7 +19,7 @@ using gui::GuiButtonParams;
 using gui::GuiToggle;
 using gui::GuiToggleParams;
 using gui::GuiFocusManager;
-using gui::GuiPopupHost;
+using gui::GuiPopupManager;
 using gui::GuiTextBox;
 using gui::GuiTextBoxParams;
 using gui::GuiNumericInput;
@@ -141,11 +141,11 @@ TEST(GuiFocusManager, IsEditingTextTracksFocusedTextBox) {
 }
 
 // ---------------------------------------------------------------------------
-// GuiPopupHost
+// GuiPopupManager
 // ---------------------------------------------------------------------------
 
-TEST(GuiPopupHost, OpenAndCloseTrackTopmost) {
-	GuiPopupHost host;
+TEST(GuiPopupManager, OpenAndCloseTrackTopmost) {
+	GuiPopupManager host;
 	auto popup = std::make_shared<GuiButton>(MakeSizedButton({ 100, 100 }, { 50, 50 }));
 
 	EXPECT_FALSE(host.IsOpen());
@@ -157,8 +157,8 @@ TEST(GuiPopupHost, OpenAndCloseTrackTopmost) {
 	EXPECT_FALSE(host.IsOpen());
 }
 
-TEST(GuiPopupHost, OutsidePressDismissesAndConsumes) {
-	GuiPopupHost host;
+TEST(GuiPopupManager, OutsidePressDismissesAndConsumes) {
+	GuiPopupManager host;
 	auto popup = std::make_shared<GuiButton>(MakeSizedButton({ 100, 100 }, { 50, 50 }));
 	host.Open(popup);
 
@@ -168,8 +168,8 @@ TEST(GuiPopupHost, OutsidePressDismissesAndConsumes) {
 	EXPECT_FALSE(host.IsOpen());
 }
 
-TEST(GuiPopupHost, InsidePressRoutesToPopup) {
-	GuiPopupHost host;
+TEST(GuiPopupManager, InsidePressRoutesToPopup) {
+	GuiPopupManager host;
 	auto popup = std::make_shared<GuiButton>(MakeSizedButton({ 100, 100 }, { 50, 50 }));
 	host.Open(popup);
 
@@ -179,8 +179,8 @@ TEST(GuiPopupHost, InsidePressRoutesToPopup) {
 	EXPECT_TRUE(host.IsOpen());
 }
 
-TEST(GuiPopupHost, EscapeDismissesTopmost) {
-	GuiPopupHost host;
+TEST(GuiPopupManager, EscapeDismissesTopmost) {
+	GuiPopupManager host;
 	auto popup = std::make_shared<GuiButton>(MakeSizedButton({ 100, 100 }, { 50, 50 }));
 	host.Open(popup);
 
@@ -435,7 +435,7 @@ TEST(GuiNumericInput, VerticalDragAdjustsValue) {
 // ---------------------------------------------------------------------------
 
 TEST(GuiDropDown, ClickThenOpenSelectsItem) {
-	GuiPopupHost host;
+	GuiPopupManager host;
 	GuiDropDownParams dp;
 	dp.Items = { "Sine", "Square", "Saw" };
 	dp.InitIndex = 0u;
@@ -443,7 +443,7 @@ TEST(GuiDropDown, ClickThenOpenSelectsItem) {
 	dp.Size = { 120, 24 };
 	dp.MinSize = { 120, 24 };
 	auto dd = std::make_shared<GuiDropDown>(dp);
-	dd->SetPopupHost(&host);
+	dd->SetPopupManager(&host);
 
 	EXPECT_EQ(0, dd->SelectedIndex());
 

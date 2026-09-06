@@ -12,8 +12,8 @@ namespace actions
 	public:
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) override;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) override;
 
 		unsigned int SampsLeft(unsigned int samp);
 		double GetTarget() const;

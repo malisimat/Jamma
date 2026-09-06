@@ -14,6 +14,19 @@
 
 namespace ninjam
 {
+	struct NinjamSessionTimingStatus
+	{
+		bool IsAvailable = false;
+		bool Changed = false;
+		std::uint64_t SessionEpoch = 0u;
+	};
+
+	struct NinjamSessionPumpResult
+	{
+		std::optional<NinjamRemoteSnapshot> Snapshot;
+		NinjamSessionTimingStatus TimingStatus;
+	};
+
 	class NinjamSession;
 
 	class NinjamConnectionUse
@@ -86,24 +99,32 @@ namespace ninjam
 		bool IsConnected() const noexcept;
 
 		// Pump the connection on the job thread.
-		// Returns a snapshot when connected; nullopt otherwise.
-		std::optional<NinjamRemoteSnapshot> Pump();
+		// Returns the latest physical availability edge and a snapshot when connected.
+		NinjamSessionPumpResult Pump();
+
+		// Pure transition used by Pump and deterministic lifecycle tests. Epochs are
+		// process-local and advance only on a physical unavailable -> available edge.
+		static NinjamSessionTimingStatus AdvanceTimingStatus(
+			const NinjamSessionTimingStatus& current, bool isAvailable) noexcept;
+		// Existing-owner lifecycle seam shared by Pump and deterministic tests.
+		// A Start-requested replacement publishes unavailable before any immediate
+		// success can advance the process-local epoch.
+		NinjamSessionTimingStatus ObservePhysicalAvailability(bool isAvailable) noexcept;
 
 		void SetAudioFormat(unsigned int sampleRate,
 			unsigned int blockSize,
 			unsigned int numInputChannels,
-			unsigned int numOutputChannels);
+			unsigned int numOutputChannels,
+			unsigned int inLatencySamps = 0u,
+			unsigned int outLatencySamps = 0u);
 
-		// interleavedInput may be nullptr.
-		void ProcessAudioBlock(const float* interleavedInput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
+			unsigned int numDacChannels,
+			const float* interleavedAdcInput,
+			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
-
-		// Returns false if no audio is ready for this output-channel pair.
-		bool ConsumeStereoPair(unsigned int outChannelLeft,
-			const float*& left,
-			const float*& right,
-			unsigned int& numFrames) const;
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
 		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
 		// No-op if not connected.
@@ -137,6 +158,8 @@ namespace ninjam
 		static std::vector<PublicServerInfo> MergeServerLists(const std::vector<PublicServerInfo>& fetched);
 
 		// Serializes Start/Stop while keeping audio and job paths lock-free.
+		// The user count and published pointer use one sequentially consistent
+		// order so every use either pins its connection or observes retirement.
 		mutable std::mutex _lifecycleMutex;
 		std::unique_ptr<NinjamConnection> _ownedConnection;
 		std::atomic<NinjamConnection*> _connection{ nullptr };
@@ -150,6 +173,10 @@ namespace ninjam
 		std::atomic_uint _audioBlockSize{ 0u };
 		std::atomic_uint _audioNumInputChannels{ 0u };
 		std::atomic_uint _audioNumOutputChannels{ 0u };
+		std::atomic_uint _audioInLatencySamps{ 0u };
+		std::atomic_uint _audioOutLatencySamps{ 0u };
+		std::atomic_bool _forceUnavailableEdge{ false };
+		NinjamSessionTimingStatus _timingStatus;
 	};
 
 	inline NinjamConnectionUse::NinjamConnectionUse(const NinjamSession& session) noexcept

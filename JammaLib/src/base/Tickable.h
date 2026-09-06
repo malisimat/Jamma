@@ -12,7 +12,7 @@ namespace base
 	public:
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
-			std::optional<io::UserConfig> cfg,
-			std::optional<audio::AudioStreamParams> params) = 0;
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) = 0;
 	};
 }

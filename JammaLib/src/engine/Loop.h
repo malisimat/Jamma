@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio recording/playback entity within a LoopTake; owns its buffers, logical
+// length, read/write positions, fades, and loop-local phase.
+
 #include <atomic>
 #include <string>
 #include <memory>
@@ -222,6 +225,13 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
+		// Recorded storage length is an upper bound for any logical loop length.
+		// It intentionally remains distinct after first-master tail normalisation.
+		unsigned long PhysicalLoopLength() const noexcept
+		{
+			const auto length = _bufferBank.Length();
+			return length > constants::MaxLoopFadeSamps ? length - constants::MaxLoopFadeSamps : 0ul;
+		}
 		static double CalcDrawRadius(unsigned long loopLength);
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
@@ -233,6 +243,43 @@ namespace engine
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			bool continueRecording);
+		// Directly re-position the play cursor to index without altering the state
+		// machine.  Call only from a coherent reposition path (e.g. anchor re-derive
+		// at remote interval wrap); the loop must already be in a playing state.
+		void SetPlayIndex(unsigned long index) noexcept
+		{
+			const auto len = _loopLength.load(std::memory_order_relaxed);
+			if (len == 0ul) return;
+			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
+		}
+		void SetSceneAnchor(unsigned long anchor) noexcept
+		{
+			_sceneAnchor.store(anchor, std::memory_order_relaxed);
+			_hasSceneAnchor.store(true, std::memory_order_release);
+		}
+		bool HasSceneAnchor() const noexcept { return _hasSceneAnchor.load(std::memory_order_acquire); }
+		unsigned long SceneAnchor() const noexcept { return _sceneAnchor.load(std::memory_order_relaxed); }
+		void InvalidateSceneAnchor() noexcept { _hasSceneAnchor.store(false, std::memory_order_release); }
+		void ShiftPlayIndex(long long deltaSamps) noexcept;
+		unsigned long PlayIndex() const noexcept
+		{
+			return _playIndex.load(std::memory_order_relaxed);
+		}
+		unsigned long BodyPlayIndex() const noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return 0ul;
+			const auto index = _playIndex.load(std::memory_order_relaxed);
+			return (index + length - constants::MaxLoopFadeSamps) % length;
+		}
+		void SetBodyPlayIndex(unsigned long index) noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return;
+			_playIndex.store(constants::MaxLoopFadeSamps + (index % length), std::memory_order_relaxed);
+		}
 		void EndRecording();
 		void Ditch();
 		void Overdub();
@@ -255,6 +302,17 @@ namespace engine
 		// Non-RT accessor to retrieve a loaded plugin instance (or nullptr).
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
 
+		// Read-only, real-time-safe view of this loop's aggregate VST
+		// processing latency, in samples (sum across the published chain).
+		// Plumb-only for now: not yet folded into any playback-position
+		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
+		// and IVstPlugin::GetLatencySamples.
+		int CurrentVstLatencySamps() const noexcept
+		{
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->GetLatencySamples() : 0;
+		}
+
 		virtual actions::ActionResult OnAction(actions::JobAction action) override;
 
 	protected:
@@ -275,7 +333,13 @@ namespace engine
 	protected:
 		bool _visualUpdatesEnabled;
 		std::atomic<bool> _isPunchInActive;
+		// Current playback position, in samples. Advanced by ReadBlock().
+		// TODO(latency): does not yet account for this loop's VST chain latency
+		// (see CurrentVstLatencySamps()) -- see
+		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 		std::atomic<unsigned long> _playIndex;
+		std::atomic<unsigned long> _sceneAnchor{ 0ul };
+		std::atomic_bool _hasSceneAnchor{ false };
 		float _lastPeak;
 		double _pitch;
 		std::atomic<unsigned long> _loopLength;

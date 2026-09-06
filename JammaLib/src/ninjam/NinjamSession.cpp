@@ -349,11 +349,11 @@ NinjamSession::~NinjamSession()
 
 std::unique_ptr<NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
 {
-	auto* published = _connection.exchange(nullptr, std::memory_order_acq_rel);
+	auto* published = _connection.exchange(nullptr, std::memory_order_seq_cst);
 	if (!published)
 		return {};
 
-	while (_activeConnectionUsers.load(std::memory_order_acquire) != 0u)
+	while (_activeConnectionUsers.load(std::memory_order_seq_cst) != 0u)
 		std::this_thread::yield();
 
 	return std::move(_ownedConnection);
@@ -361,23 +361,16 @@ std::unique_ptr<NinjamConnection> NinjamSession::_UnpublishConnectionLocked()
 
 NinjamConnection* NinjamSession::_AcquireConnectionUse() const noexcept
 {
-	while (true)
-	{
-		auto* connection = _connection.load(std::memory_order_acquire);
-		if (!connection)
-			return nullptr;
-
-		_activeConnectionUsers.fetch_add(1u, std::memory_order_acq_rel);
-		if (connection == _connection.load(std::memory_order_acquire))
-			return connection;
-
-		_activeConnectionUsers.fetch_sub(1u, std::memory_order_acq_rel);
-	}
+	_activeConnectionUsers.fetch_add(1u, std::memory_order_seq_cst);
+	auto* connection = _connection.load(std::memory_order_seq_cst);
+	if (!connection)
+		_ReleaseConnectionUse();
+	return connection;
 }
 
 void NinjamSession::_ReleaseConnectionUse() const noexcept
 {
-	_activeConnectionUsers.fetch_sub(1u, std::memory_order_acq_rel);
+	_activeConnectionUsers.fetch_sub(1u, std::memory_order_seq_cst);
 }
 
 void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
@@ -389,6 +382,10 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 	}
 	if (old)
 		old->Disconnect();
+	// A replacement connection is a distinct physical session even if it reaches
+	// NJC_STATUS_OK before the job thread observes an intermediate unavailable
+	// state. Publish that edge first so the next success receives a fresh epoch.
+	_forceUnavailableEdge.store(true, std::memory_order_release);
 
 	if (config.Host.empty() || config.User.empty())
 		return;
@@ -400,7 +397,9 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 		_audioSampleRate.load(std::memory_order_relaxed),
 		_audioBlockSize.load(std::memory_order_relaxed),
 		_audioNumInputChannels.load(std::memory_order_relaxed),
-		_audioNumOutputChannels.load(std::memory_order_relaxed));
+		_audioNumOutputChannels.load(std::memory_order_relaxed),
+		_audioInLatencySamps.load(std::memory_order_relaxed),
+		_audioOutLatencySamps.load(std::memory_order_relaxed));
 
 	std::cout << "[NINJAM] Auto-connect enabled from JAM config" << std::endl;
 	std::cout << "[NINJAM] Type a message and press Enter to chat" << std::endl;
@@ -411,7 +410,7 @@ void NinjamSession::Start(const io::JamFile::NinjamConfig& config)
 		std::scoped_lock lifecycleLock(_lifecycleMutex);
 		auto* published = conn.get();
 		_ownedConnection = std::move(conn);
-		_connection.store(published, std::memory_order_release);
+		_connection.store(published, std::memory_order_seq_cst);
 	}
 }
 
@@ -447,54 +446,89 @@ bool NinjamSession::IsConnected() const noexcept
 	return conn && conn->IsConnected();
 }
 
-std::optional<NinjamRemoteSnapshot> NinjamSession::Pump()
+NinjamSessionTimingStatus NinjamSession::AdvanceTimingStatus(
+	const NinjamSessionTimingStatus& current, bool isAvailable) noexcept
 {
+	auto next = current;
+	next.Changed = current.IsAvailable != isAvailable;
+	next.IsAvailable = isAvailable;
+	if (next.Changed && isAvailable)
+	{
+		++next.SessionEpoch;
+		if (next.SessionEpoch == 0u)
+			++next.SessionEpoch;
+	}
+	return next;
+}
+
+NinjamSessionTimingStatus NinjamSession::ObservePhysicalAvailability(bool isAvailable) noexcept
+{
+	if (_forceUnavailableEdge.exchange(false, std::memory_order_acq_rel))
+	{
+		_timingStatus = AdvanceTimingStatus(_timingStatus, false);
+		if (_timingStatus.Changed)
+			return _timingStatus;
+	}
+	_timingStatus = AdvanceTimingStatus(_timingStatus, isAvailable);
+	return _timingStatus;
+}
+
+NinjamSessionPumpResult NinjamSession::Pump()
+{
+	NinjamSessionPumpResult result;
 	NinjamConnectionUse conn(*this);
 	if (!conn)
-		return std::nullopt;
+	{
+		result.TimingStatus = ObservePhysicalAvailability(false);
+		return result;
+	}
 
 	conn->Pump();
+	result.TimingStatus = ObservePhysicalAvailability(conn->IsConnected());
 
-	if (!conn->IsConnected())
-		return std::nullopt;
+	if (result.TimingStatus.IsAvailable)
+		result.Snapshot = conn->Snapshot();
 
-	return conn->Snapshot();
+	return result;
 }
 
 void NinjamSession::SetAudioFormat(unsigned int sampleRate,
 	unsigned int blockSize,
 	unsigned int numInputChannels,
-	unsigned int numOutputChannels)
+	unsigned int numOutputChannels,
+	unsigned int inLatencySamps,
+	unsigned int outLatencySamps)
 {
 	_audioSampleRate = sampleRate;
 	_audioBlockSize = blockSize;
 	_audioNumInputChannels = numInputChannels;
 	_audioNumOutputChannels = numOutputChannels;
+	_audioInLatencySamps = inLatencySamps;
+	_audioOutLatencySamps = outLatencySamps;
 
 	NinjamConnectionUse conn(*this);
 	if (conn)
-		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels);
+		conn->SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
 }
 
-void NinjamSession::ProcessAudioBlock(const float* interleavedInput,
+NinjamRemoteTiming NinjamSession::ProcessExportBlock(const float* interleavedDacOutput,
+	unsigned int numDacChannels,
+	const float* interleavedAdcInput,
+	unsigned int numAdcChannels,
 	unsigned int numFrames,
-	unsigned int sampleRate)
+	unsigned int sampleRate,
+	std::uint64_t audioBlockStartSample)
 {
 	NinjamConnectionUse conn(*this);
 	if (conn)
-		conn->ProcessAudioBlock(interleavedInput, numFrames, sampleRate);
-}
-
-bool NinjamSession::ConsumeStereoPair(unsigned int outChannelLeft,
-	const float*& left,
-	const float*& right,
-	unsigned int& numFrames) const
-{
-	NinjamConnectionUse conn(*this);
-	if (!conn)
-		return false;
-
-	return conn->ConsumeStereoPair(outChannelLeft, left, right, numFrames);
+		return conn->ProcessExportBlock(interleavedDacOutput,
+			numDacChannels,
+			interleavedAdcInput,
+			numAdcChannels,
+			numFrames,
+			sampleRate,
+			audioBlockStartSample);
+	return {};
 }
 
 bool NinjamSession::RequestServerTempo(float bpm, int bpi)

@@ -66,6 +66,60 @@ TEST(Timer, SetMasterLoopIndexFracClampsOutOfRangeValues) {
 	EXPECT_NEAR(1.0 / 48000.0, t.MasterLoopIndexFrac(), 1e-9);
 }
 
+TEST(Timer, AudioCommandIsConsumedBeforeTheFollowingTickExactlyOnce) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+
+	Timer::Command command;
+	command.Type = Timer::CommandType::PhaseCorrection;
+	command.Generation = 7u;
+	command.PhaseDeltaSamps = 200;
+	t.PublishCommand(command);
+
+	EXPECT_TRUE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(300u, t.SampOffset());
+	EXPECT_FALSE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(400u, t.SampOffset());
+}
+
+TEST(Timer, SceneTimelineRemainsMonotonicWhenTimingReplacementResetsMusicalEpoch) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+	t.Tick(2500u, 0u);
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(2500ul, t.AbsoluteSamplePos());
+
+	const Timer::Command replacement{
+		Timer::CommandType::ReplaceTiming, 1u, 1200ul, 120u,
+		Timer::QUANTISE_MULTIPLE, 250 };
+	ASSERT_TRUE(t.ApplyCommand(replacement));
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(250ul, t.AbsoluteSamplePos());
+	t.Tick(64u, 0u);
+	EXPECT_EQ(2564u, t.SceneSamplePos());
+}
+
+TEST(Timer, InvalidationPreventsAnOlderGenerationFromMovingTheClock) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+
+	Timer::Command correction;
+	correction.Type = Timer::CommandType::PhaseCorrection;
+	correction.Generation = 3u;
+	correction.PhaseDeltaSamps = 250;
+	t.PublishCommand(correction);
+	t.PublishCommand(Timer::Command{});
+
+	EXPECT_TRUE(t.ConsumePendingCommand());
+	t.Tick(100u, 0u);
+	EXPECT_EQ(100u, t.SampOffset());
+}
+
 // ── QUANTISE_OFF ─────────────────────────────────────────────────────────────
 
 TEST(Timer, QuantiseOff_ReturnsSampleCountAndZeroError) {

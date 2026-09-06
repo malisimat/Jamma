@@ -7,8 +7,10 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
+#include <windows.h>
 #include "../actions/ActionResult.h"
 #include "../actions/KeyAction.h"
 #include "../audio/AudioDevice.h"
@@ -16,6 +18,7 @@
 #include "../io/SerialDevice.h"
 #include "../io/SerialTriggerQueue.h"
 #include "../midi/MidiDevice.h"
+#include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
 #include "../midi/MidiQueue.h"
 
@@ -45,6 +48,25 @@ namespace midi
 	class MidiRouter
 	{
 	public:
+		struct LiveMidiIngressEvent
+		{
+			MidiEvent Event;
+			std::uint32_t RoutingGeneration = 0u;
+			std::uint32_t Sequence = 0u;
+		};
+
+		struct LiveMidiRecipient
+		{
+			std::shared_ptr<engine::Station> Station;
+			std::uint16_t AllowedChannelMask = 0u;
+		};
+
+		struct LiveMidiRoutingSnapshot
+		{
+			std::uint32_t Generation = 0u;
+			std::vector<std::vector<LiveMidiRecipient>> RecipientsByDeviceSlot;
+		};
+
 		struct TriggerDispatchSummary
 		{
 			bool Activated = false;
@@ -59,9 +81,10 @@ namespace midi
 
 		void InitMidi(const io::UserConfig& cfg,
 			const base::LoggingConfig& loggingConfig,
-			std::atomic<std::uint64_t>& audioSampleCounter,
-			std::atomic<std::int64_t>& midiAnchorMicros);
+			midi::MidiClockAnchor& midiClockAnchor);
 		void CloseMidi();
+		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
 		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
@@ -89,6 +112,11 @@ namespace midi
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::uint8_t ForcedChannelOverride() const noexcept;
 		static std::uint8_t RewriteIncomingChannel(std::uint8_t status, std::uint8_t forcedChannelOverride) noexcept;
+
+		// Keep the raw ingress event available for trigger matching while deriving
+		// the separately routed station/live event.
+		static midi::MidiEvent DeriveStationEvent(const midi::MidiEvent& rawEvent,
+			std::uint8_t forcedChannelOverride) noexcept;
 
 		static bool IsAutomationRecordHeld() noexcept;
 
@@ -119,6 +147,11 @@ namespace midi
 
 	private:
 		static constexpr std::uint8_t UnresolvedMidiDeviceSlot = 0xffu;
+		static constexpr std::size_t MaxLiveMidiEventsPerDispatchPass = 1024u;
+		static constexpr std::uint64_t LiveInputConfigChannelMask = 0xffu;
+		static constexpr std::uint64_t LiveInputConfigAffectsLiveBit = 1ull << 8u;
+		static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+			"Live MIDI ingress configuration must remain lock-free");
 
 		struct MidiInputEndpoint
 		{
@@ -126,7 +159,17 @@ namespace midi
 			std::string ConfiguredName;
 			std::unique_ptr<midi::MidiDevice> Device;
 			midi::MidiQueue<1024> Ingress;
+			midi::MidiQueue<1024, LiveMidiIngressEvent> LiveIngress;
+			MidiClockAnchorSnapshot LastClockAnchor;
+			std::uint32_t NextLiveSequence = 0u;
 			std::uint64_t LastDroppedCount = 0u;
+			std::atomic<float> PendingActivityPeak{ 0.0f };
+		};
+
+		struct LiveMidiDispatchNotification
+		{
+			std::atomic<std::uint64_t> InputConfig{ 0u };
+			HANDLE WorkEvent = nullptr;
 		};
 
 		struct MidiTriggerRoute
@@ -145,6 +188,19 @@ namespace midi
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake) const;
 		void _PublishMidiTriggerRoutes();
+		void _StartLiveMidiDispatcher();
+		void _StopLiveMidiDispatcher();
+		void _LiveMidiDispatchLoop() noexcept;
+		void _DispatchAvailableLiveMidi() noexcept;
+		void _PublishLiveMidiInputConfig(std::uint32_t generation,
+			std::uint8_t forcedChannelOverride,
+			bool channelOverrideLive) noexcept;
+		static std::uint64_t _PackLiveMidiInputConfig(std::uint32_t generation,
+			std::uint8_t forcedChannelOverride,
+			bool channelOverrideLive) noexcept;
+		static std::uint32_t _LiveMidiConfigGeneration(std::uint64_t config) noexcept;
+		static std::uint8_t _LiveMidiConfigForcedChannel(std::uint64_t config) noexcept;
+		static bool _LiveMidiConfigAffectsLive(std::uint64_t config) noexcept;
 
 		// Non-RT: poll vst::_lastTouchedParam for a fresh editor-origin parameter
 		// change and, while automation record is held, record it into the owning
@@ -156,6 +212,11 @@ namespace midi
 		void _ResetEditorTouchStates() noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
+		std::atomic<std::shared_ptr<const LiveMidiRoutingSnapshot>> _liveMidiRoutes;
+		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
+		std::thread _liveMidiDispatchThread;
+		HANDLE _liveMidiStopEvent = nullptr;
+		std::uint32_t _nextLiveMidiRoutingGeneration = 0u;
 		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
 		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
@@ -167,6 +228,8 @@ namespace midi
 		std::atomic<std::uint8_t> _learnedChannel{ LearnNothingCaptured };
 		std::atomic<std::uint8_t> _selectedLaneIndex{ 0u };
 		std::atomic<std::uint8_t> _forcedInputChannelOverride{ 0u };
+		std::atomic<bool> _channelOverrideTriggers{ false };
+		std::atomic<bool> _channelOverrideLive{ true };
 		bool _automationRecordKeyHeld = false;
 		bool _channelOverridePageUpHeld = false;
 		bool _channelOverridePageDownHeld = false;

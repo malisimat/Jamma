@@ -94,6 +94,19 @@ namespace vst
 		// Host callback entry point used by the VST3 component handler.
 		void OnControllerEdit(std::uint32_t paramId, float normalizedValue) noexcept;
 
+		// Host callback entry points used by the VST3 component handler for
+		// IComponentHandler::beginEdit/endEdit — gesture-boundary
+		// notifications only; performEdit (OnControllerEdit) remains the
+		// sole source of published values.
+		void OnBeginEdit(std::uint32_t paramId) noexcept;
+		void OnEndEdit(std::uint32_t paramId) noexcept;
+
+		// Host callback entry point used by the VST3 component handler when
+		// the plugin calls IComponentHandler::restartComponent(). Only ever
+		// records what changed (atomic flags); the actual non-RT rebuild
+		// work happens later on IdleEditor()/PollPendingControllerChanges().
+		void OnRestartComponent(std::int32_t flags) noexcept;
+
 		// Open the plugin's GUI editor as a child of parentHwnd.
 		// Must be called from the main/UI thread only.
 		// Returns true if the editor was opened successfully.
@@ -102,6 +115,14 @@ namespace vst
 		// Close the plugin's GUI editor.
 		// Must be called from the main/UI thread only.
 		void CloseEditor() override;
+
+		// Runs pending non-RT housekeeping requested by the plugin via
+		// IComponentHandler::restartComponent() — currently just the MIDI
+		// controller-mapping table rebuild (kMidiCCAssignmentChanged).
+		// Called from the editor's idle timer; safe to call at any time
+		// (a no-op when nothing is pending). Must be called from the
+		// main/UI thread only.
+		void IdleEditor() noexcept override;
 
 		// Returns the size the editor requested, or {0,0} if no editor /
 		// editor not yet opened.
@@ -119,6 +140,22 @@ namespace vst
 		{
 			return _isBypassed.load(std::memory_order_relaxed);
 		}
+
+		// Capture / restore the plugin's full state (IComponent + optional
+		// IEditController) as an opaque, self-describing byte blob framed by
+		// Vst3StateBlob. Returns {} when not loaded or state is unavailable.
+		// Not RT-safe: call only from a non-RT thread, and only while no
+		// process callback can reach this plugin concurrently (the same
+		// precondition Load/Unload already require of their callers).
+		std::vector<std::uint8_t> GetState() const override;
+		void SetState(const std::vector<std::uint8_t>& blob) override;
+
+		// Runs the same pending-rebuild housekeeping as IdleEditor() (only
+		// the MIDI controller-mapping table today). Safe to call from any
+		// non-RT thread; internally serialized against IdleEditor(). No-op
+		// if nothing is pending. GetState() calls this itself so plugins
+		// without an open editor still save a reasonably fresh mapping.
+		void PollPendingControllerChanges() const noexcept;
 
 	private:
 		class Impl;

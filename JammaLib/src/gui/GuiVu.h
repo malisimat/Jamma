@@ -4,6 +4,7 @@
 #include <gl/glew.h>
 #include <gl/gl.h>
 #include "../audio/FallingValue.h"
+#include "../base/GuiElement.h"
 #include "../base/ResourceUser.h"
 #include "../base/DrawContext.h"
 #include "../graphics/GlDrawContext.h"
@@ -13,6 +14,24 @@
 
 namespace gui
 {
+	struct GuiVuParams : public base::GuiElementParams
+	{
+		GuiVuParams() :
+			base::GuiElementParams(),
+			FallRate(0.00005),
+			HoldFallRate(0.00003),
+			HoldSamps(12000u),
+			UseDecibelScale(true)
+		{
+			Size = { 6u, 1u };
+		}
+
+		double FallRate;
+		double HoldFallRate;
+		unsigned int HoldSamps;
+		bool UseDecibelScale;
+	};
+
 	class GuiVu : public base::ResourceUser
 	{
 	public:
@@ -23,6 +42,7 @@ namespace gui
 
 	public:
 		GuiVu();
+		explicit GuiVu(GuiVuParams params);
 		~GuiVu();
 
 		// Non-copyable
@@ -51,7 +71,7 @@ namespace gui
 
 	private:
 		static unsigned int _CalcTotalLeds(unsigned int height);
-		static unsigned int _CalcCurrentLeds(double value, unsigned int totalLeds);
+		unsigned int _CalcCurrentLeds(double value, unsigned int totalLeds) const;
 
 		bool _isVisible;
 		utils::Position2d _position;
@@ -64,6 +84,7 @@ namespace gui
 		std::atomic<float> _peakValue;
 		std::atomic<float> _displayValue;
 		std::atomic<float> _displayHold;
+		bool _useDecibelScale;
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer[2];

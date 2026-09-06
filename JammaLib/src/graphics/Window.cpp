@@ -8,6 +8,7 @@
 #include "Window.h"
 #include "StringUtils.h"
 #include "GlDeleteQueue.h"
+#include "../resources/ResourcePaths.h"
 #include <thread>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
@@ -40,6 +41,7 @@ Window::Window(Scene& scene,
 	_cachedCursorPosition(std::nullopt),
 	_cachedCursorModifiers(Action::MODIFIER_NONE),
 	_pendingResize(std::nullopt),
+	_restoreConfig(),
 	_modifiers(Action::MODIFIER_NONE),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
@@ -49,6 +51,7 @@ Window::Window(Scene& scene,
 	_config.Position = { scene.Position().X, scene.Position().Y};
 	//_config.Position = { CW_USEDEFAULT, 0};
 	_config.State = WINDOWED;
+	_restoreConfig = _config;
 }
 
 Window::~Window()
@@ -75,7 +78,8 @@ void Window::ReleaseGlResources()
 void Window::LoadResources()
 {
 	std::ifstream inputFile;
-	inputFile.open("./resources/ResourceList.txt", std::ios::in);
+	const auto resourceListPath = resources::ResolveResourceListPath();
+	inputFile.open(resourceListPath, std::ios::in);
 
 	if (inputFile.good())
 	{
@@ -108,6 +112,10 @@ void Window::LoadResources()
 				}
 			}
 		}
+	}
+	else
+	{
+		std::cout << "Window::LoadResources failed to open " << resourceListPath << std::endl;
 	}
 
 	_resourceLib.LoadFonts();
@@ -415,11 +423,19 @@ void Window::Resize(Size2d size)
 		size.Height = 1;
 
 	_config.Size = size;
+	if (_config.State == WINDOWED)
+		_restoreConfig.Size = size;
 	_scene.SetSize(size);
 	_lastHoverObjectId = 0;
 	_hover3dDirty = true;
 	_forcePick = true;
 	_pendingResize = size;
+
+	if (_scene.IsUiVerbose())
+	{
+		std::cout << "[WINDOW] resize size=" << size.Width << "x" << size.Height
+			<< " state=" << _config.State << std::endl;
+	}
 }
 
 void Window::ApplyPendingResize()
@@ -449,6 +465,11 @@ void Window::ApplyPendingResize()
 void Window::SetWindowState(WindowState state)
 {
 	_config.State = state;
+}
+
+Window::Config Window::GetRestoreConfig() const
+{
+	return _restoreConfig;
 }
 
 Size2d Window::GetSize()
@@ -563,6 +584,7 @@ ActionResult Window::OnAction(WindowAction winAction)
 	switch (winAction.WindowEventType)
 	{
 	case WindowAction::SIZE:
+		SetWindowState(Window::WINDOWED);
 		Resize(winAction.Size);
 		isEaten = true;
 		break;
@@ -826,6 +848,24 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		//}
 	}
 	break;
+	case WM_MOVE:
+	{
+		RECT windowRect{};
+		if (GetWindowRect(hWindow, &windowRect))
+		{
+			const utils::Position2d position{ windowRect.left, windowRect.top };
+			window->_config.Position = position;
+			if (window->_config.State == Window::WINDOWED)
+				window->_restoreConfig.Position = position;
+
+			if (window->_scene.IsUiVerbose())
+			{
+				std::cout << "[WINDOW] move pos=" << position.X << "," << position.Y
+					<< " state=" << window->_config.State << std::endl;
+			}
+		}
+		return 0;
+	}
 	case WM_SIZING:
 		window->Render();
 		window->Swap();
@@ -1139,9 +1179,14 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (!repeatkey)
 		{
 			std::cout << "KeyDown " << wParam << "\n";
+			unsigned int keyCode = static_cast<unsigned int>(wParam);
+			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			// Normalise the physical key left of '1' (US backtick/tilde) across layouts.
+			if (0x29u == scanCode)
+				keyCode = 192u;
 
 			KeyAction keyAction;
-			keyAction.KeyChar = (unsigned int)wParam;
+			keyAction.KeyChar = keyCode;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
 			keyAction.Modifiers = window->Modifiers();
 
@@ -1153,9 +1198,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_KEYUP:
 	{
 		std::cout << "KeyUp " << wParam << "\n";
+		unsigned int keyCode = static_cast<unsigned int>(wParam);
+		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+		if (0x29u == scanCode)
+			keyCode = 192u;
 
 		KeyAction keyAction;
-		keyAction.KeyChar = (unsigned int)wParam;
+		keyAction.KeyChar = keyCode;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
 		keyAction.Modifiers = window->Modifiers();
 
@@ -1173,9 +1222,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 		if (!repeatkey)
 		{
 			std::cout << "SysKeyDown " << wParam << "\n";
+			unsigned int keyCode = static_cast<unsigned int>(wParam);
+			const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+			if (0x29u == scanCode)
+				keyCode = 192u;
 
 			KeyAction keyAction;
-			keyAction.KeyChar = (unsigned int)wParam;
+			keyAction.KeyChar = keyCode;
 			keyAction.IsSystem = true;
 			keyAction.KeyActionType = KeyAction::KEY_DOWN;
 			keyAction.Modifiers = window->Modifiers();
@@ -1187,9 +1240,13 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_SYSKEYUP:
 	{
 		std::cout << "SysKeyUp " << wParam << "\n";
+		unsigned int keyCode = static_cast<unsigned int>(wParam);
+		const unsigned int scanCode = (static_cast<unsigned int>(lParam) >> 16u) & 0xffu;
+		if (0x29u == scanCode)
+			keyCode = 192u;
 
 		KeyAction keyAction;
-		keyAction.KeyChar = (unsigned int)wParam;
+		keyAction.KeyChar = keyCode;
 		keyAction.IsSystem = true;
 		keyAction.KeyActionType = KeyAction::KEY_UP;
 		keyAction.Modifiers = window->Modifiers();

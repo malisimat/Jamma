@@ -1,10 +1,10 @@
 #include "stdafx.h"
 #include "NinjamNetworkService.h"
+#include <cmath>
 #include <set>
 #include <iostream>
 
 using namespace engine;
-using namespace timing;
 
 namespace ninjam
 {
@@ -26,6 +26,39 @@ namespace ninjam
 	void NinjamNetworkService::Disconnect()
 	{
 		_ninjamController->Disconnect();
+	}
+
+	void NinjamNetworkService::SetTempoJoinOptions(const NinjamTempoJoinOptions& options)
+	{
+		std::scoped_lock lock(_timingMutex);
+		_tempoJoinOptions = options;
+	}
+
+	NinjamTempoJoinOptions NinjamNetworkService::TempoJoinOptions() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _tempoJoinOptions;
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::PrepareTempoSyncOnConnect(
+		const std::optional<engine::QuantisationTiming>& localTiming)
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Connect(_tempoJoinOptions, localTiming);
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::ResetTempoSyncOnDisconnect()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Disconnect();
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::ObserveSessionStatus(
+		const NinjamSessionTimingStatus& status,
+		const std::optional<engine::QuantisationTiming>& localTiming)
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.ObserveSessionStatus(status, _tempoJoinOptions, localTiming);
 	}
 
 	bool NinjamNetworkService::UpdateRemoteStationsFromSnapshot(const NinjamRemoteSnapshot& snapshot,
@@ -82,19 +115,20 @@ namespace ninjam
 			remoteStation->SetRemoteChannelCount(remoteUser.ChannelCount);
 			remoteStation->SetConnectedRemote(true);
 
-			if (snapshot.IntervalLengthSamps > 0)
+			if (snapshot.Timing.IntervalLengthSamps > 0)
 			{
-				auto visualIntervalSamps = snapshot.IntervalLengthSamps;
-				if (snapshot.HasTiming)
+				auto visualIntervalSamps = snapshot.Timing.IntervalLengthSamps;
+				if (snapshot.Timing.IsValid)
 				{
-					const auto derivedInterval = TimingQuantiser::IntervalSampsFromTempo(snapshot.Bpm,
-						static_cast<unsigned int>(snapshot.Bpi),
-						snapshot.SampleRate);
+					const auto derivedInterval = IntervalSampsFromTempo(snapshot.Timing.Bpm,
+						snapshot.Timing.Bpi,
+						snapshot.Timing.SourceSampleRate);
 					if (derivedInterval > 0u)
 						visualIntervalSamps = std::max(visualIntervalSamps, derivedInterval);
 				}
 
-				remoteStation->SetRemoteInterval(snapshot.IntervalLengthSamps, snapshot.IntervalPositionSamps, visualIntervalSamps);
+				remoteStation->SetRemoteInterval(snapshot.Timing.IntervalLengthSamps,
+					snapshot.Timing.IntervalPositionSamps, visualIntervalSamps);
 			}
 
 			remoteStation->EnsureRemoteTake();
@@ -126,28 +160,90 @@ namespace ninjam
 		return stationsChanged;
 	}
 
-	void NinjamNetworkService::ApplyRemoteTempoToClock(const NinjamRemoteSnapshot& snapshot,
-		timing::TimingQuantiser& quantisation,
-		const std::vector<std::shared_ptr<Station>>& stations,
-		const io::UserConfig& userConfig)
-	{
-		quantisation.ApplyRemoteTempo(snapshot, stations, userConfig);
-	}
-
-	void NinjamNetworkService::QueueLocalTempoFromClock(timing::TimingQuantiser& quantisation,
+	NinjamTimingUpdate NinjamNetworkService::ObserveTiming(const NinjamTiming& timing,
+		const std::optional<engine::QuantisationTiming>& localTiming,
+		bool hasLocalContent,
 		const io::UserConfig& userConfig,
-		unsigned int currentSampleRate)
+		utils::Timer& clock,
+		std::chrono::steady_clock::time_point now)
 	{
-		quantisation.QueueLocalTempo(quantisation.RemoteSampleRate(), currentSampleRate, userConfig);
+		std::scoped_lock lock(_timingMutex);
+		auto observed = _timingCoordinator.Observe(
+			timing, localTiming, hasLocalContent, userConfig, clock, now);
+		// Advance deadline state on every job visit, including the physically
+		// available path that supplies a cached latest-value snapshot.
+		auto deadline = _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
+		if (deadline.DesiredTransport.has_value()
+			|| deadline.TempoRequest.has_value()
+			|| deadline.PromptForTempoChange)
+		{
+			return deadline;
+		}
+		return observed;
 	}
 
-	void NinjamNetworkService::SendQueuedTempoAtIntervalWrap(const NinjamRemoteSnapshot& snapshot,
-		timing::TimingQuantiser& quantisation,
-		unsigned int currentSampleRate)
+	NinjamTimingUpdate NinjamNetworkService::TickTiming(
+		const std::optional<engine::QuantisationTiming>& localTiming,
+		bool hasLocalContent,
+		utils::Timer& clock,
+		std::chrono::steady_clock::time_point now)
 	{
-		quantisation.SendQueuedTempo(snapshot,
-			_ninjamController->Session(),
-			quantisation.RemoteSampleRate(),
-			currentSampleRate);
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Tick(localTiming, hasLocalContent, clock, now);
+	}
+
+	NinjamTimingUpdate NinjamNetworkService::ResolveRemoteTempoPromptDecision(bool accept,
+		const std::optional<engine::QuantisationTiming>& localTiming,
+		utils::Timer& clock)
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.ResolveTempoChange(accept, localTiming, clock);
+	}
+
+	void NinjamNetworkService::SendTempoRequest(const NinjamTempoRequest& request)
+	{
+		bool sent = false;
+		if (auto* session = _ninjamController->Session())
+			sent = session->RequestServerTempo(request.Bpm, static_cast<int>(request.Bpi));
+		// Report delivery back so the coordinator can retry on failure (§3.5).
+		std::scoped_lock lock(_timingMutex);
+		_timingCoordinator.NotifyTempoRequestSent(sent);
+	}
+
+	std::optional<NinjamTempoChange> NinjamNetworkService::PendingRemoteTempoPrompt() const
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.PendingTempoChange();
+	}
+
+	bool NinjamNetworkService::HasConnectedTiming() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.IsConnected();
+	}
+
+	TempoRequestState NinjamNetworkService::TempoJoinRequestState() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.RequestState();
+	}
+
+	void NinjamNetworkService::SetTimingDiagnosticsEnabled(bool enabled) noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		_timingCoordinator.SetDiagnosticsCaptureEnabled(enabled);
+	}
+
+	NinjamTimingDiagnostics NinjamNetworkService::ObserveAppliedTimingReceipt(
+		const std::optional<NinjamDesiredTimingReceipt>& receipt) noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.ObserveAppliedTimingReceipt(receipt);
+	}
+
+	NinjamTimingDiagnostics NinjamNetworkService::TimingDiagnostics() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.Diagnostics();
 	}
 }

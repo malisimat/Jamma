@@ -460,6 +460,24 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	_vu->SetValue(newValue, numSamps);
 }
 
+void Loop::ShiftPlayIndex(long long deltaSamps) noexcept
+{
+	const auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	if (loopLength == 0ul || deltaSamps == 0)
+		return;
+
+	const auto playIndex = _playIndex.load(std::memory_order_relaxed);
+	const auto bodyIndex = (playIndex >= constants::MaxLoopFadeSamps)
+		? (playIndex - constants::MaxLoopFadeSamps) % loopLength
+		: playIndex % loopLength;
+	const auto length = static_cast<long long>(loopLength);
+	auto shifted = (static_cast<long long>(bodyIndex) + (deltaSamps % length)) % length;
+	if (shifted < 0)
+		shifted += length;
+	_playIndex.store(constants::MaxLoopFadeSamps + static_cast<unsigned long>(shifted),
+		std::memory_order_relaxed);
+}
+
 unsigned int Loop::LoopChannel() const
 {
 	return _loopParams.Channel;
@@ -641,6 +659,7 @@ void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
 {
+	InvalidateSceneAnchor();
 	auto physBufSize = _bufferBank.Length();
 
 	if (0 == physBufSize)

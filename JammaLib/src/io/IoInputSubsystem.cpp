@@ -26,11 +26,15 @@ namespace io
 		Close();
 	}
 
-	void IoInputSubsystem::Init(std::atomic<std::uint64_t>& audioSampleCounter,
-		std::atomic<std::int64_t>& midiAnchorMicros)
+	void IoInputSubsystem::Init(midi::MidiClockAnchor& midiClockAnchor)
 	{
-		_midiRouter.InitMidi(_userConfig, _loggingConfig, audioSampleCounter, midiAnchorMicros);
+		_midiRouter.InitMidi(_userConfig, _loggingConfig, midiClockAnchor);
 		_midiRouter.InitSerial(_userConfig);
+	}
+
+	void IoInputSubsystem::SetLogging(io::LoggingConfig loggingConfig) noexcept
+	{
+		_loggingConfig = std::move(loggingConfig);
 	}
 
 	void IoInputSubsystem::Close()
@@ -38,6 +42,11 @@ namespace io
 		CloseGlobalKeyCapture();
 		_midiRouter.CloseSerial();
 		_midiRouter.CloseMidi();
+	}
+
+	void IoInputSubsystem::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations)
+	{
+		_midiRouter.PublishLiveMidiRoutes(stations);
 	}
 
 	bool IoInputSubsystem::InitGlobalKeyCapture()
@@ -199,5 +208,10 @@ namespace io
 	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
 	{
 		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
+	}
+
+	float IoInputSubsystem::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
+	{
+		return _midiRouter.ConsumeMidiInputPeak(deviceName);
 	}
 }

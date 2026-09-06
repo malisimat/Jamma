@@ -1,5 +1,8 @@
 #pragma once
 
+// Recorded performance layer within a Station; owns take state, MIDI material,
+// timing anchors, effects, and its Loops without owning remote follow policy.
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -7,7 +10,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
@@ -81,6 +84,14 @@ namespace engine
 			STATE_OVERDUBBINGRECORDING
 		};
 
+		enum class TimingCorrectionReason : std::uint8_t
+		{
+			TempoReplacement,
+			JoinAlignment,
+			PhaseDiscipline,
+			Invalidation
+		};
+
 	public:
 		LoopTake(LoopTakeParams params,
 			audio::AudioMixerParams mixerParams);
@@ -134,10 +145,19 @@ namespace engine
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
+		unsigned long MidiPlayIndex() const noexcept
+			{ return _midiVisualPlayIndex.load(std::memory_order_relaxed); }
+		unsigned long MidiLoopLengthSamps() const noexcept
+			{ return _midiVisualLoopLength.load(std::memory_order_relaxed); }
+		// Accumulated signed transport correction for MIDI loop phase anchors.
+		std::int32_t MidiAnchorCorrection() const noexcept
+			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
+		const std::atomic<std::int32_t>* MidiAnchorCorrectionPtr() const noexcept
+			{ return &_midiAnchorCorrection; }
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
-		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
-		static std::vector<timing::QuantisationLoopTakeVisual> QuantisationVisualsFor(
+		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
+		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(
 			const std::vector<std::shared_ptr<LoopTake>>& takes);
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
@@ -167,6 +187,17 @@ namespace engine
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
+		// Read-only, real-time-safe view of this take's aggregate VST
+		// processing latency, in samples (sum across the published chain).
+		// Plumb-only for now: not yet folded into any playback-position
+		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
+		// and IVstPlugin::GetLatencySamples.
+		int CurrentVstLatencySamps() const noexcept
+		{
+			auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->GetLatencySamples() : 0;
+		}
+
 		void Record(std::vector<unsigned int> channels,
 			std::string stationName,
 			std::vector<unsigned int> midiChannels = {},
@@ -179,6 +210,31 @@ namespace engine
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
 			int midiQuantisationErrorSamps = 0);
+		void QueueTimingCorrection(long long deltaSamps,
+			std::uint64_t generation,
+			TimingCorrectionReason reason) noexcept;
+		void InvalidateTimingCorrections() noexcept;
+		// Applies one accepted audio-boundary correction. Session policy has
+		// already been interpreted by AudioHost; this engine operation only keeps
+		// its generation gate and shifts each entity by the common signed delta.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
+		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
+		void ResetTimingEpoch() noexcept;
+		// Capture/restore use an already-mapped common source coordinate. Entity
+		// anchors and modulo lengths remain local to the take and its loops.
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
+		// Audio-thread absolute setter. The target is persistent so an empty take
+		// can reconcile when it first becomes playable.
+		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
+		// Non-audio initialization before this take enters an audio snapshot.
+		void SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept;
+		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
+			{ return _queuedTimingCorrectionCount.load(std::memory_order_relaxed); }
+		std::uint64_t ConsumedExternalPhaseCorrectionCount() const noexcept
+			{ return _consumedTimingCorrectionCount.load(std::memory_order_relaxed); }
 		void EndRecording();
 		void Ditch();
 		void Overdub(std::vector<unsigned int> channels,
@@ -221,6 +277,8 @@ namespace engine
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
+		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -263,6 +321,9 @@ namespace engine
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
 		void _ResizeVstScratch(unsigned int channelCount);
+		bool _ShiftDirectPlaybackCursors(long long deltaSamps) noexcept;
+		void _TryApplyLocalTransportOffset() noexcept;
+		static long long _OffsetDelta(long long targetSamps, long long appliedSamps) noexcept;
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
 			midi::MidiQuantisationFraction updated,
 			const char* source) const;
@@ -312,8 +373,24 @@ namespace engine
 		std::atomic<unsigned long> _recordedSampCount;
 		unsigned int _endRecordSampCount;
 		unsigned int _endRecordSamps;
-		unsigned long _midiVisualPlayIndex;
-		unsigned long _midiVisualLoopLength;
+		// Cross-thread cursor: incremented on the audio thread and read by UI/control code.
+		std::atomic<unsigned long> _midiVisualPlayIndex;
+		std::atomic<unsigned long> _midiVisualLoopLength;
+		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
+		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
+		std::atomic_bool _hasMidiSceneAnchor{ false };
+		void _MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept;
+		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
+		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
+		long long _appliedLocalTransportOffsetSamps = 0;
+		// Job thread publishes one shared signed transport delta; the audio thread
+		// consumes it once after normal block advancement. Generation zero invalidates it.
+		std::atomic<long long> _pendingTimingCorrectionSamps{ 0 };
+		std::atomic<std::uint64_t> _timingCorrectionGeneration{ 0u };
+		std::atomic<std::uint64_t> _queuedTimingCorrectionCount{ 0u };
+		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
+		// Audio-thread-only generation gate for the unified audio-boundary command.
+		std::uint64_t _audioTimingGeneration{ 0u };
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
@@ -334,7 +411,13 @@ namespace engine
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
-		bool _midiQuantisationUpdatePending;
+		// Seqlock-style publication avoids torn remote-grid reads without placing a
+		// lock or allocation on any real-time path.
+		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };
+		std::atomic<std::int64_t> _remoteMidiOriginSamps{ 0 };
+		std::atomic_bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;

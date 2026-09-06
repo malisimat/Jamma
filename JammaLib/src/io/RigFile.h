@@ -82,7 +82,6 @@ namespace io
 			unsigned int StationType;
 			std::vector<TriggerPair> TriggerPairs;
 			std::vector<unsigned int> InputChannels;
-			std::vector<unsigned int> MidiInputChannels;
 			std::vector<std::string> MidiInputDevices;
 			std::optional<MidiTriggerBinding> MidiTrigger;
 

@@ -10,7 +10,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\JammaLib\\JammaLib.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target JammaLib -Configuration Debug -Platform x64"
       ],
       "group": "build",
       "presentation": {
@@ -28,7 +28,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\Jamma\\Jamma.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target Jamma -Configuration Debug -Platform x64"
       ],
       "group": "build",
       "presentation": {
@@ -46,7 +46,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\test\\JammaLib_Tests\\JammaLib_Tests.vcxproj\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 \"/p:SolutionDir=${workspaceFolder}\\\""
+        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target JammaLib_Tests -Configuration Debug -Platform x64"
       ],
       "group": "build",
       "presentation": {
@@ -98,7 +98,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "$msbuild = & \"$env:ProgramFiles(x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -requires Microsoft.Component.MSBuild -find \"MSBuild\\**\\Bin\\MSBuild.exe\" | Select-Object -First 1; if (-not $msbuild) { throw \"MSBuild.exe not found.\" }; & $msbuild \"${workspaceFolder}\\Jamma.sln\" /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true"
+        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target Solution -Configuration Debug -Platform x64"
       ],
       "presentation": {
         "reveal": "always",

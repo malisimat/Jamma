@@ -25,8 +25,8 @@ double DelayedAction::GetTarget() const
 
 void DelayedAction::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	if (samps >= _sampsDelayLeft)
 		_sampsDelayLeft = 0u;

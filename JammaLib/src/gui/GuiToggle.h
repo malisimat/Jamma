@@ -101,6 +101,7 @@ namespace gui
 		GuiToggleParams::ToggleState Toggle();
 		GuiToggleParams::ToggleState GetToggleState() const;
 		void SetToggleState(GuiToggleParams::ToggleState state, bool bypassUpdates);
+		void SetToggleIndex(unsigned int index) { _toggleIndex = index; }
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

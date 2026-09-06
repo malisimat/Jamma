@@ -335,3 +335,38 @@ TEST(AudioBuffer, PreservesRequestedSizeAboveMaxBlockSize)
 
     ASSERT_EQ(resizedSize, audioBuf->BufSize());
 }
+
+// planC §5 test 7: Reset() clears cursors/counts without touching buffer
+// size or storage, and Delay()/SampsRecorded() behave correctly immediately
+// afterwards (as if the buffer were freshly constructed).
+TEST(AudioBuffer, ResetClearsCursorsNotStorage)
+{
+    const auto bufSize = 64u;
+    const auto blockSize = 11u;
+
+    auto audioBuf = std::make_shared<AudioBuffer>(bufSize);
+
+    std::vector<float> sourceData(bufSize);
+    for (auto i = 0u; i < bufSize; i++)
+        sourceData[i] = ((rand() % 2000) - 1000) / 1001.0f;
+
+    WriteBlockToBuffer(audioBuf, sourceData.data(), blockSize);
+
+    ASSERT_EQ(audioBuf->SampsRecorded(), blockSize);
+    ASSERT_EQ(audioBuf->BufSize(), bufSize);
+
+    audioBuf->Reset();
+
+    EXPECT_EQ(audioBuf->SampsRecorded(), 0u);
+    EXPECT_EQ(audioBuf->PlayIndex(), 0u);
+    EXPECT_EQ(audioBuf->BufSize(), bufSize) << "Reset must not touch buffer storage/size";
+
+    // Delay() on an unprimed (SampsRecorded()==0) buffer must not read stale
+    // pre-reset history -- it special-cases back to index 0.
+    auto playIndex = audioBuf->Delay(5u);
+    EXPECT_EQ(playIndex, 0u);
+
+    // Writing again after Reset() behaves exactly like a fresh buffer.
+    WriteBlockToBuffer(audioBuf, sourceData.data(), blockSize);
+    EXPECT_EQ(audioBuf->SampsRecorded(), blockSize);
+}

@@ -1,11 +1,19 @@
 #pragma once
 
-#include <vector>
+#include <cstdint>
+#include <span>
 #include <tuple>
+#include <vector>
 #include "../gui/GuiModel.h"
 
 namespace graphics
 {
+	struct RingProfilePoint
+	{
+		float Radius;
+		float Y;
+	};
+
 	// Procedural "halo deck" geometry for a Station.
 	// Static mesh built once at construction; no per-frame work.
 	// UV layout: x = radialFrac (0..1), y = partKind (0=top,1=bevel,2=side,3=rib).
@@ -30,7 +38,8 @@ namespace graphics
 		void SetStationState(const std::vector<unsigned int>& stationGlobalId,
 			bool selected,
 			bool picking,
-			float level = 0.0f);
+			float level = 0.0f,
+			std::uint8_t visualState = 0u);
 		void SetParams(float fallRate) noexcept;
 		void ResetStationLevel() noexcept;
 
@@ -74,6 +83,20 @@ namespace graphics
 				float ribInnerRadius, float ribOuterRadius,
 				float ribHeight, float ribHalfWidth);
 
+		// Revolve a profile around the station axis. yOffset anchors the profile
+		// at a cap; invertY mirrors its local Y direction for the lower collar.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildLathedProfileGeometry(unsigned int numSides,
+				std::span<const RingProfilePoint> profile,
+				float yOffset, bool invertY, float partKind,
+				float profileScale = 1.0f);
+
+		// Build the upper and lower closed-prism templates used by every
+		// instanced state-ring occluder segment.
+		static std::tuple<std::vector<float>, std::vector<float>>
+			BuildOccluderPrismGeometry(float innerRadius, float outerRadius,
+				float partKind);
+
 		// Convenience: build all geometry and concatenate into one pair.
 		static std::tuple<std::vector<float>, std::vector<float>>
 			BuildAllGeometry(unsigned int numSides, float radius,
@@ -93,7 +116,26 @@ namespace graphics
 		bool _stationSelected;
 		bool _stationPicking;
 		float _stationLevel;
+		std::uint8_t _stationVisualState;
 		float _stationFallRate;
+		struct RingMesh
+		{
+			std::vector<float> Verts;
+			std::vector<float> Uvs;
+			GLuint VertexArray = 0u;
+			GLuint VertexBuffers[3] = { 0u, 0u, 0u };
+			unsigned int NumTris = 0u;
+		};
+		RingMesh _topRing;
+		RingMesh _bottomRing;
+		RingMesh _ringOccluder;
+		bool _ringsNeedInitialising;
+		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
+		virtual void _ReleaseResources() override;
+		static void _InitRingMesh(RingMesh& mesh);
+		static void _ReleaseRingMesh(RingMesh& mesh);
+		static void _DrawRingMesh(const RingMesh& mesh);
+		static void _DrawRingOccluder(const RingMesh& mesh);
 		static float _ApplySoftDecay(float current, float target, float fallRate) noexcept;
 	};
 }

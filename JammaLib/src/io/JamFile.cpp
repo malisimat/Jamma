@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <limits>
 #include <string>
+#include "../utils/MathUtils.h"
 #include "../utils/StringUtils.h"
 
 using namespace io;
@@ -86,6 +87,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.QuantiseSamps = 0;
 	jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 	jam.GlobalPhaseOffsetSamps = 0;
+	jam.TransportOffsetLoopFrac = 0.0;
 	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
 
@@ -198,6 +200,30 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
 	if (iter != jamParams.KeyValues.end())
 		jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
+
+	iter = jamParams.KeyValues.find("transportoffsetloopfrac");
+	if (iter != jamParams.KeyValues.end())
+	{
+		const auto& value = jamParams.KeyValues["transportoffsetloopfrac"];
+		auto parsed = 0.0;
+		switch (value.index())
+		{
+		case 1:
+			parsed = static_cast<double>(std::get<long>(value));
+			break;
+		case 2:
+			parsed = static_cast<double>(std::get<unsigned long>(value));
+			break;
+		case 3:
+			parsed = std::get<double>(value);
+			break;
+		default:
+			break;
+		}
+
+		jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
+			std::clamp(parsed, -1.0, 1.0) : 0.0;
+	}
 
 	std::string quantiseStr = "";
 	iter = jamParams.KeyValues.find("quantisation");
@@ -378,6 +404,9 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
 	ss << kvStr("globalmidiquantstate", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
 	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
+	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
+		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
+	ss << kvDouble("transportoffsetloopfrac", transportOffsetLoopFrac) << ",";
 	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
 	if (jam.Ninjam.has_value())
 		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";

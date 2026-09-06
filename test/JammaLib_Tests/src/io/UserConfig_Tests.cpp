@@ -62,7 +62,7 @@ TEST(UserConfig, ParsesMidiSettings) {
 }
 
 TEST(UserConfig, ParsesMidiDeviceList) {
-	auto str = "{\"devices\":[{\"name\":\"MPK mini\",\"enabled\":true},{\"name\":\"Launchpad X\",\"enabled\":false}]}";
+	auto str = "{\"devices\":[{\"name\":\"MPK mini\",\"enabled\":true},{\"name\":\"Launchpad X\",\"enabled\":false}],\"channelOverrideTriggers\":true,\"channelOverrideLive\":false}";
 	auto testStream = std::stringstream(str);
 	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
 	auto midi = UserConfig::MidiConfig::FromJson(json);
@@ -73,6 +73,20 @@ TEST(UserConfig, ParsesMidiDeviceList) {
 	EXPECT_TRUE(midi->Devices[0].Enabled);
 	EXPECT_EQ(0, midi->Devices[1].Name.compare("Launchpad X"));
 	EXPECT_FALSE(midi->Devices[1].Enabled);
+	EXPECT_TRUE(midi->ChannelOverrideTriggers);
+	EXPECT_FALSE(midi->ChannelOverrideLive);
+}
+
+TEST(UserConfig, MidiChannelOverrideDefaultsPreserveTriggerIsolation)
+{
+	auto str = "{\"devices\":[{\"name\":\"default\",\"enabled\":true}]}";
+	auto testStream = std::stringstream(str);
+	auto json = std::get<Json::JsonPart>(Json::FromStream(std::move(testStream)).value());
+	auto midi = UserConfig::MidiConfig::FromJson(json);
+
+	ASSERT_TRUE(midi.has_value());
+	EXPECT_FALSE(midi->ChannelOverrideTriggers);
+	EXPECT_TRUE(midi->ChannelOverrideLive);
 }
 
 TEST(UserConfig, RejectsLegacySingleMidiDeviceShape) {
@@ -206,6 +220,32 @@ TEST(InitFile, ParsesUiLoggingSetting) {
 	auto parsed = InitFile::FromStream(std::stringstream("{\"logging\":{\"midi\":\"verbose\",\"ui\":\"verbose\"}}"));
 	ASSERT_TRUE(parsed.has_value());
 	EXPECT_EQ("verbose", parsed->Logging.Midi);
+	EXPECT_EQ("verbose", parsed->Logging.Ui);
+}
+
+TEST(InitFile, ToStreamWritesJsonThatParses) {
+	InitFile ini;
+	ini.Jam = L"C:\\Users\\matto\\AppData\\Roaming\\Jamma\\session.jam";
+	ini.Rig = L"C:\\Users\\matto\\AppData\\Roaming\\Jamma\\default.rig";
+	ini.JamLoadType = InitFile::LOAD_SPECIFIC;
+	ini.RigLoadType = InitFile::LOAD_LAST;
+	ini.WinPos = { -228, 23 };
+	ini.WinSize = { 2030u, 1061u };
+	ini.Logging.Ui = "verbose";
+
+	std::stringstream ss;
+	ASSERT_TRUE(InitFile::ToStream(ini, ss));
+
+	auto parsed = InitFile::FromStream(std::stringstream(ss.str()));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(0, parsed->Jam.compare(L"C:\\Users\\matto\\AppData\\Roaming\\Jamma\\session.jam"));
+	EXPECT_EQ(0, parsed->Rig.compare(L"C:\\Users\\matto\\AppData\\Roaming\\Jamma\\default.rig"));
+	EXPECT_EQ(InitFile::LOAD_SPECIFIC, parsed->JamLoadType);
+	EXPECT_EQ(InitFile::LOAD_LAST, parsed->RigLoadType);
+	EXPECT_EQ(-228, parsed->WinPos.X);
+	EXPECT_EQ(23, parsed->WinPos.Y);
+	EXPECT_EQ(2030u, parsed->WinSize.Width);
+	EXPECT_EQ(1061u, parsed->WinSize.Height);
 	EXPECT_EQ("verbose", parsed->Logging.Ui);
 }
 

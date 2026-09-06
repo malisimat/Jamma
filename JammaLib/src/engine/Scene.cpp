@@ -1,22 +1,28 @@
+// Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
+// NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
+#include <algorithm>
 #include <iostream>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include "glm/ext.hpp"
 #include "../utils/PathUtils.h"
+#include "../utils/MathUtils.h"
 #include "../midi/MidiTimestampMapper.h"
 #include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
+using namespace engine;
 using namespace base;
 using namespace actions;
 using namespace audio;
-using namespace engine;
 using namespace gui;
 using namespace io;
 using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
-using namespace timing;
 using namespace vst;
 using namespace ninjam;
 using namespace std::placeholders;
@@ -39,8 +45,11 @@ Scene::Scene(SceneParams params,
 	_selector(nullptr),
 	_modeRadio(nullptr),
 	_midiChannelOverrideInput(nullptr),
+	_transportOffsetInput(nullptr),
+	_ninjamMetronomeToggle(nullptr),
 	_globalMidiQuantRadio(nullptr),
 	_globalMidiQuantState(io::JamFile::GlobalMidiQuantState::Off),
+	_transportOffsetLoopFrac(0.0),
 	_mainPanel(nullptr),
 	_quantisation(),
 	_loggingConfig{},
@@ -79,9 +88,17 @@ Scene::Scene(SceneParams params,
 	_label = std::make_unique<GuiLabel>(labelParams);
 
 	GuiMainPanelParams mainParams;
-	mainParams.PopupHost = &_popupHost;
+	mainParams.PopupManager = &_popupManager;
 	_mainPanel = std::make_shared<GuiMainPanel>(mainParams);
 	AddChild(_mainPanel);
+
+	GuiHudParams hudParams;
+	hudParams.Size = params.Size;
+	hudParams.MinSize = params.Size;
+	_hudPanel = std::make_shared<GuiHud>(hudParams);
+	AddChild(_hudPanel);
+
+	_EnsureRemoteTempoPromptUi();
 
 	GuiSelectorParams selectorParams;
 	selectorParams.Position = { 10, 2 };
@@ -151,6 +168,41 @@ Scene::Scene(SceneParams params,
 	_midiChannelOverrideInput = std::make_shared<GuiNumericInput>(midiChannelOverrideParams);
 	AddChild(_midiChannelOverrideInput);
 
+	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
+	transportOffsetParams.Index = TransportOffsetControlIndex;
+	transportOffsetParams.Position = {
+		midiChannelOverrideParams.Position.X + static_cast<int>(midiChannelOverrideParams.Size.Width) + 8,
+		midiChannelOverrideParams.Position.Y };
+	transportOffsetParams.ModelPosition = {
+		static_cast<float>(transportOffsetParams.Position.X),
+		static_cast<float>(transportOffsetParams.Position.Y),
+		0.0f };
+	transportOffsetParams.Size = { 96, 64 };
+	transportOffsetParams.Min = -1.0;
+	transportOffsetParams.Max = 1.0;
+	transportOffsetParams.Step = 0.005;
+	transportOffsetParams.Decimals = 3;
+	transportOffsetParams.InitValue = _transportOffsetLoopFrac;
+	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
+	AddChild(_transportOffsetInput);
+
+	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
+	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
+	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
+	metronomeToggleParams.Text = "CLICK";
+	metronomeToggleParams.Size = { 80, 64 };
+	metronomeToggleParams.MinSize = { 80, 64 };
+	metronomeToggleParams.Position = {
+		transportOffsetParams.Position.X + static_cast<int>(transportOffsetParams.Size.Width) + 8,
+		transportOffsetParams.Position.Y };
+	metronomeToggleParams.ModelPosition = {
+		static_cast<float>(metronomeToggleParams.Position.X),
+		static_cast<float>(metronomeToggleParams.Position.Y),
+		0.0f };
+	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
+	AddChild(_ninjamMetronomeToggle);
+
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
 	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(_globalMidiQuantState);
@@ -197,6 +249,246 @@ Scene::Scene(SceneParams params,
 	_jobRunner = std::thread([this]() { this->_JobLoop(); });
 }
 
+void Scene::ConnectNinjam(const std::string& host)
+{
+	ConnectNinjam(host, _networkService->TempoJoinOptions());
+}
+
+void Scene::ConnectNinjam(const std::string& host,
+	const ninjam::NinjamTempoJoinOptions& options)
+{
+	const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+	++_ninjamJoinGeneration;
+	if (options.PushLocalTempoOnJoin)
+		++_ninjamTempoRequestId;
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_networkService->SetTempoJoinOptions(options);
+		_ApplyNinjamTimingUpdate(_networkService->PrepareTempoSyncOnConnect(localTiming));
+		_CloseRemoteTempoPrompt();
+	}
+	if (_loggingConfig.Event == "verbose")
+	{
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=reconnect"
+			<< " join=" << _ninjamJoinGeneration << '\n';
+		std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
+			<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
+			<< " pushLocal=" << options.PushLocalTempoOnJoin;
+		if (localTiming.has_value())
+			std::cout << " bpm=" << localTiming->Bpm << " bpi=" << localTiming->SeedCount
+				<< " interval=" << localTiming->MasterLoopSamps << " grain=" << localTiming->SeedSamps;
+		std::cout << '\n';
+	}
+	_lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
+	_LogNinjamTempoJoinState();
+	_networkService->Connect(host);
+}
+
+void Scene::DisconnectNinjam()
+{
+	{
+		std::scoped_lock lock(_sceneMutex);
+		_CloseRemoteTempoPrompt();
+		_ApplyNinjamTimingUpdate(_networkService->ResetTempoSyncOnDisconnect());
+	}
+	if (_loggingConfig.Event == "verbose")
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=disconnect\n";
+	_networkService->Disconnect();
+}
+
+void Scene::_EnsureRemoteTempoPromptUi()
+{
+	if (_remoteTempoDialog)
+		return;
+
+	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
+	_remoteTempoDialog->SetTitle("Current server tempo");
+	_remoteTempoDialog->ConfigureButtons({
+		true,
+		false,
+		true,
+		false,
+		NinjamRemoteTempoAcceptControlIndex,
+		0u,
+		NinjamRemoteTempoRejectControlIndex,
+		0u,
+		"Follow server",
+		"Stay local",
+		"Cancel",
+		"Ok"
+	});
+	_remoteTempoDialog->Init();
+}
+
+void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
+	const std::optional<engine::QuantisationTiming>& localTiming,
+	bool hasLocalContent)
+{
+	auto previous = _networkService->PendingRemoteTempoPrompt();
+	const auto liveTiming = _audioEngine->LatestNinjamTiming();
+	NinjamTiming timing = liveTiming.value_or(ToDeviceTiming(snapshot.Timing, true,
+		_CurrentSampleRate(), 0u, 0ul, 0u, 0u, 0u));
+	if (auto clock = _quantisation.Clock())
+		_ApplyNinjamTimingUpdate(_networkService->ObserveTiming(timing,
+			localTiming, hasLocalContent, _userConfig, *clock));
+	auto current = _networkService->PendingRemoteTempoPrompt();
+
+	if (_remoteTempoDialogOpen
+		&& ((!current.has_value())
+			|| !previous.has_value()
+			|| !current->HasSameProposalIdentity(previous.value())))
+	{
+		_CloseRemoteTempoPrompt();
+	}
+}
+
+void Scene::_OpenRemoteTempoPromptIfNeeded()
+{
+	const auto pendingChange = _networkService->PendingRemoteTempoPrompt();
+	if (_remoteTempoDialogOpen || !pendingChange.has_value())
+		return;
+
+	_EnsureRemoteTempoPromptUi();
+	if (!_remoteTempoDialog)
+		return;
+
+	const auto& change = pendingChange.value();
+	std::ostringstream bpmStream;
+	bpmStream.setf(std::ios::fixed, std::ios::floatfield);
+	bpmStream << std::setprecision(1) << change.Bpm;
+
+	_remoteTempoDialog->SetBodyLines({
+		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
+		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
+		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
+	});
+	_remoteTempoDialog->ResetButtonStates();
+
+	const auto popupSize = _remoteTempoDialog->GetSize();
+	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
+	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
+	_remoteTempoDialog->SetPosition({ x, y });
+
+	_popupManager.Open(_remoteTempoDialog);
+	_remoteTempoDialogOpen = true;
+}
+
+void Scene::_HandleRemoteTempoPromptDecision(bool accept)
+{
+	std::scoped_lock lock(_sceneMutex);
+	if (auto clock = _quantisation.Clock())
+		_ApplyNinjamTimingUpdate(_networkService->ResolveRemoteTempoPromptDecision(accept,
+			_quantisation.CurrentTempoTiming(_CurrentSampleRate()), *clock));
+	_CloseRemoteTempoPrompt();
+}
+
+void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
+{
+	if (update.DesiredTransport.has_value())
+	{
+		const auto& desired = update.DesiredTransport.value();
+		if (_loggingConfig.Event == "verbose" && desired.HasRemoteTiming)
+		{
+			std::cout << "[NINJAM][TimingPolicy] determined policy="
+				<< ninjam::NinjamTimingCoordinator::FollowPolicyName(desired.LocalFollowPolicy)
+				<< " remoteBpm=" << desired.TempoBpm
+				<< " generation=" << desired.Generation
+				<< " remotePhaseDeviceSample=" << desired.RemotePhaseDeviceSample << '\n';
+		}
+		if (update.RemoteGrid.has_value())
+			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
+				update.RemoteGrid->OriginSamps, _stations);
+		if (_audioEngine)
+			_audioEngine->PublishDesiredTiming(desired);
+		if (_loggingConfig.Event == "verbose"
+			&& desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync
+			&& update.NoSyncReason == ninjam::NinjamNoSyncReason::StayLocal)
+		{
+			std::cout << "[NINJAM][TimingPolicy] determined policy=no-sync reason=stay-local\n";
+		}
+	}
+
+	if (update.TempoRequest.has_value())
+		_networkService->SendTempoRequest(update.TempoRequest.value());
+	_LogNinjamTempoJoinState();
+}
+
+void Scene::_LogNinjamTempoJoinState()
+{
+	if (_loggingConfig.Event != "verbose")
+		return;
+	const auto state = _networkService->TempoJoinRequestState();
+	if (state == _lastLoggedTempoRequestState)
+		return;
+
+	_lastLoggedTempoRequestState = state;
+	const char* name = "idle";
+	switch (state)
+	{
+	case ninjam::TempoRequestState::Queued: name = "queued"; break;
+	case ninjam::TempoRequestState::SentAwaitingOutcome: name = "awaiting-server-observation"; break;
+	case ninjam::TempoRequestState::Acknowledged: name = "acknowledged"; break;
+	case ninjam::TempoRequestState::Expired: name = "expired-unknown"; break;
+	default: break;
+	}
+	const auto diagnostics = _networkService->TimingDiagnostics();
+	std::cout << "[NINJAM][TempoJoin] state join=" << _ninjamJoinGeneration
+		<< " request=" << _ninjamTempoRequestId
+		<< " value=" << name
+		<< " sent=" << diagnostics.TempoRequestsSent
+		<< " retries=" << diagnostics.TempoRequestRetries
+		<< " acknowledged=" << diagnostics.TempoAcknowledged
+		<< " expired=" << diagnostics.TempoRequestsExpired << '\n';
+}
+
+void Scene::_LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics)
+{
+	if (_loggingConfig.Event != "verbose")
+		return;
+
+	const auto present = [this](const ninjam::NinjamTimingDiagnosticEvent& event)
+	{
+		std::cout << "[NINJAM][TimingDiagnostic] reason="
+			<< ninjam::NinjamTimingCoordinator::DiagnosticReasonName(event.Reason)
+			<< " sessionEpoch=" << event.SessionEpoch
+			<< " appliedSessionEpoch=" << event.AppliedSessionEpoch
+			<< " desiredVersion=" << event.DesiredVersion
+			<< " appliedVersion=" << event.AppliedVersion
+			<< " generation=" << event.Generation
+			<< " value=" << event.ValueSamps
+			<< " limit=" << event.LimitSamps
+			<< " occurrences=" << event.OccurrenceCount
+			<< " cumulativeSuppressed=" << event.CumulativeSuppressedCount << '\n';
+		_lastPresentedNinjamDiagnosticSequence = event.Sequence;
+	};
+
+	for (auto eventIndex = 0u; eventIndex < diagnostics.CapturedEventCount; ++eventIndex)
+	{
+		const auto& event = diagnostics.Events[eventIndex];
+		if (event.Sequence > _lastPresentedNinjamDiagnosticSequence)
+			present(event);
+	}
+	if (diagnostics.LatestEvent.Sequence > _lastPresentedNinjamDiagnosticSequence)
+		present(diagnostics.LatestEvent);
+	if (diagnostics.EventOverflowSummaryCount > _lastPresentedNinjamDiagnosticOverflowCount)
+	{
+		std::cout << "[NINJAM][TimingDiagnostic] overflowSummary="
+			<< diagnostics.EventOverflowSummaryCount
+			<< " overflowTotal=" << diagnostics.EventOverflowCount << '\n';
+		_lastPresentedNinjamDiagnosticOverflowCount = diagnostics.EventOverflowSummaryCount;
+	}
+}
+
+void Scene::_CloseRemoteTempoPrompt()
+{
+	if (_remoteTempoDialogOpen)
+	{
+		if (_popupManager.Top() == _remoteTempoDialog)
+			_popupManager.Close();
+		_remoteTempoDialogOpen = false;
+	}
+}
+
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	io::JamFile jamStruct,
 	io::RigFile rigStruct,
@@ -204,14 +496,25 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 {
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
 
+	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
+	for (const auto& triggerCfg : rigStruct.Triggers)
+	{
+		for (const auto channel : triggerCfg.InputChannels)
+			hudAudioInputCount = std::max(hudAudioInputCount, channel + 1u);
+	}
+
+	std::vector<std::string> hudMidiInputs;
+	hudMidiInputs.reserve(rigStruct.User.Midi.Devices.size());
+	for (const auto& device : rigStruct.User.Midi.Devices)
+	{
+		if (device.Enabled && !device.Name.empty())
+			hudMidiInputs.push_back(device.Name);
+	}
+
+	std::vector<std::shared_ptr<Trigger>> hudTriggers;
+	hudTriggers.reserve(rigStruct.Triggers.size());
+
 	TriggerParams trigParams;
-	trigParams.Size = { 24, 24 };
-	trigParams.Position = { 6, 6 };	
-	trigParams.Texture = "green";
-	trigParams.TextureRecording = "red";
-	trigParams.TextureDitchDown = "blue";
-	trigParams.TextureOverdubbing = "orange";
-	trigParams.TexturePunchedIn = "purple";
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
 	StationParams stationParams;
@@ -231,6 +534,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{
+			if (stationStruct.AllowedMidiChannels.empty())
+			{
+				const auto defaultChannel = static_cast<int>((stationParams.Index % 16u) + 1u);
+				station.value()->SetAllowedMidiChannels({ defaultChannel });
+			}
+
 			if (rigStruct.Triggers.size() > stationParams.Index)
 			{
 				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
@@ -242,6 +551,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					hudTriggers.push_back(trigger.value());
 				}
 			}
 
@@ -253,9 +563,20 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.ModelPosition += { 600, 0 };
 	}
 
+	if (scene->_hudPanel)
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
+
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
+	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
+	if (jamStruct.Ninjam.has_value())
+	{
+		// Persisted/default starts enter the same coordinator lifecycle as an
+		// interactive connect before the first physical snapshot can arrive.
+		scene->_ApplyNinjamTimingUpdate(scene->_networkService->PrepareTempoSyncOnConnect(
+			scene->_quantisation.CurrentTempoTiming(scene->_CurrentSampleRate())));
+	}
 	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
 	scene->InitReceivers();
 
@@ -264,6 +585,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 void Scene::Draw(DrawContext& ctx)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	glDisable(GL_DEPTH_TEST);
 
 	// Draw overlays
@@ -280,6 +603,25 @@ void Scene::Draw(DrawContext& ctx)
 
 	_label->Draw(ctx);
 
+	if (_hudPanel)
+	{
+		const auto streamParams = _audioEngine->GetStreamParams();
+		const auto numSamps = std::max(1u, streamParams.BufSize);
+		for (auto channel = 0u; channel < streamParams.NumInputChannels; ++channel)
+			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
+
+		unsigned int midiInput = 0u;
+		for (const auto& device : _userConfig.Midi.Devices)
+		{
+			if (!device.Enabled || device.Name.empty())
+				continue;
+
+			_hudPanel->SetMidiInputPeak(midiInput++,
+				_inputSubsystem->ConsumeMidiInputPeak(device.Name),
+				numSamps);
+		}
+	}
+
 	for (auto& child : _guiChildren)
 		if (child)
 			child->Draw(ctx);
@@ -292,7 +634,7 @@ void Scene::Draw(DrawContext& ctx)
 	_globalMidiQuantRadio->Draw(ctx);
 	_ctrlHandleOverlay.Draw(ctx);
 
-	_popupHost.Draw(ctx);
+	_popupManager.Draw(ctx);
 
 	glCtx.PopMvp();
 }
@@ -301,6 +643,8 @@ void Scene::Draw3d(DrawContext& ctx,
 	unsigned int numInstances,
 	base::DrawPass pass)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
@@ -308,6 +652,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto view = _View();
 	_viewProj = projection * view;
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(view));
+	_UpdateHudStationAnchors();
 
 	if (PASS_SCENE == pass)
 		glEnable(GL_DEPTH_TEST);
@@ -358,6 +703,8 @@ void Scene::Draw3d(DrawContext& ctx,
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 {
+	std::scoped_lock lock(_sceneMutex);
+
 	_skybox.InitResources(resourceLib, forceInit);
 	_label->InitResources(resourceLib, forceInit);
 	_selector->InitResources(resourceLib, forceInit);
@@ -366,6 +713,8 @@ void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	for (auto& child : _guiChildren)
 		if (child)
 			child->InitResources(resourceLib, forceInit);
+	if (_remoteTempoDialog)
+		_remoteTempoDialog->InitResources(resourceLib, forceInit);
 	_ctrlHandleOverlay.InitResources(resourceLib, forceInit);
 
 	for (auto& station : _stations)
@@ -386,6 +735,8 @@ void Scene::_ReleaseResources()
 	for (auto& child : _guiChildren)
 		if (child)
 			child->ReleaseResources();
+	if (_remoteTempoDialog)
+		_remoteTempoDialog->ReleaseResources();
 	_ctrlHandleOverlay.ReleaseResources();
 
 	for (auto& station : _stations)
@@ -405,8 +756,13 @@ ActionResult Scene::OnAction(TouchAction action)
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
 	// Popups capture all pointer input while open (routing, outside-dismiss).
-	if (_popupHost.IsOpen())
-		return _popupHost.OnAction(action);
+	if (_popupManager.IsOpen())
+	{
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
+		return popupRes;
+	}
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State)
 		&& (0 == action.Index)
@@ -562,8 +918,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
 
-	if (_popupHost.IsOpen())
-		return _popupHost.OnAction(action);
+	if (_popupManager.IsOpen())
+		return _popupManager.OnAction(action);
 
 	if (auto overlayRes = _quantisationInteraction.TryHandleTouchMove(action,
 		_CurrentSampleRate());
@@ -594,10 +950,19 @@ ActionResult Scene::OnAction(KeyAction action)
 
 	std::cout << "Key action " << action.KeyActionType << " [" << action.KeyChar << "] IsSytem:" << action.IsSystem << ", Modifiers:" << action.Modifiers << "]" << std::endl;
 
-	// 1. Open popups capture the keyboard first.
-	if (_popupHost.IsOpen())
+	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
-		auto popupRes = _popupHost.OnAction(action);
+		if (_hudPanel)
+			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		return ActionResult::NoAction();
+	}
+
+	// 1. Open popups capture the keyboard first.
+	if (_popupManager.IsOpen())
+	{
+		auto popupRes = _popupManager.OnAction(action);
+		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
+			_HandleRemoteTempoPromptDecision(false);
 		if (popupRes.IsEaten)
 			return popupRes;
 	}
@@ -696,6 +1061,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		return io::IoSessionExporter::ExportSession(_stations,
 			_quantisation,
 			_globalMidiQuantState,
+			_transportOffsetLoopFrac,
 			_userConfig,
 			_audioEngine->GetStreamParams(),
 			_audioEngine->GetDevice(),
@@ -769,7 +1135,7 @@ ActionResult Scene::OnAction(KeyAction action)
 void Scene::_HandleReclockArm()
 {
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-	_quantisation.ArmReclock();
+	_quantisation.ArmReclock(_stations);
 	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
 }
 
@@ -782,6 +1148,20 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
+	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+		&& (action.Index == NinjamRemoteTempoAcceptControlIndex))
+	{
+		_HandleRemoteTempoPromptDecision(true);
+		return ActionResult::NoAction();
+	}
+
+	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+		&& (action.Index == NinjamRemoteTempoRejectControlIndex))
+	{
+		_HandleRemoteTempoPromptDecision(false);
+		return ActionResult::NoAction();
+	}
+
 	if (GuiAction::ACTIONELEMENT_MIDIQUANTISATION == action.ElementType)
 	{
 		_ForceGlobalMidiQuantStateMixedOnLocalEdit();
@@ -811,7 +1191,13 @@ ActionResult Scene::OnAction(GuiAction action)
 		}
 	}
 
-	if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+		&& (action.Index == NinjamMetronomeControlIndex))
+	{
+		if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
+			_audioEngine->SetNinjamMetronomeEnabled(value->Value == GuiToggleParams::TOGGLE_ON);
+	}
+	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
 		&& (action.Index == MidiChannelOverrideControlIndex)
 		&& _midiChannelOverrideInput)
 	{
@@ -839,14 +1225,41 @@ ActionResult Scene::OnAction(GuiAction action)
 		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), _stations);
 		_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 	}
+	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
+		&& (action.Index == TransportOffsetControlIndex)
+		&& _transportOffsetInput)
+	{
+		double value = _transportOffsetLoopFrac;
+		if (auto str = std::get_if<GuiAction::GuiString>(&action.Data))
+		{
+			try
+			{
+				value = std::stod(str->Value);
+			}
+			catch (...)
+			{
+				value = _transportOffsetLoopFrac;
+			}
+		}
+		else if (auto numeric = std::get_if<GuiAction::GuiDouble>(&action.Data))
+		{
+			value = numeric->Value;
+		}
+		else
+		{
+			return ActionResult::NoAction();
+		}
+
+		_SetTransportOffsetLoopFrac(value);
+	}
 
 	return ActionResult::NoAction();
 }
 
 void Scene::OnTick(Time curTime,
 	unsigned int samps,
-	std::optional<io::UserConfig> cfg,
-	std::optional<audio::AudioStreamParams> params)
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params)
 {
 	if (_camera.IsBackgroundDragging())
 		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
@@ -855,27 +1268,21 @@ void Scene::OnTick(Time curTime,
 		_EndBackgroundDrag();
 
 	if (auto clock = _quantisation.Clock())
+	{
 		clock->Tick(samps, 0u);
+	}
 
-	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
 
+	const auto streamParams = _audioEngine->GetStreamParams();
 	for (auto& station : stations)
 	{
 		station->OnTick(curTime,
 			samps,
 			_userConfig,
-			_audioEngine->GetStreamParams());
-
-		totalNumLoops += station->NumTakes();
-	}
-
-	if ((0u == totalNumLoops) && !_isSceneReset.load(std::memory_order_relaxed))
-	{
-		_ClearTimingState(false);
-		_isSceneReset.store(true, std::memory_order_relaxed);
+			streamParams);
 	}
 }
 
@@ -884,18 +1291,40 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 
-	auto snapshot = _networkService->GetController()->Pump();
+	auto pumpResult = _networkService->GetController()->Pump();
 	{
 		// Always sync the station clock state to the scene-level quantisation.
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_sceneMutex);
-		_QueueLocalTempoFromClock();
-		if (snapshot.has_value())
+		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+		bool hasLocalContent = false;
+		for (const auto& station : _stations)
 		{
-			_SendQueuedTempoAtIntervalWrap(snapshot.value());
-			_ApplyRemoteTempoToClock(snapshot.value());
+			if (!station || station->IsRemote())
+				continue;
+			hasLocalContent = !station->GetLoopTakeSnapshot().empty();
+			if (hasLocalContent)
+				break;
 		}
+		if (pumpResult.TimingStatus.Changed)
+		{
+			_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(
+				pumpResult.TimingStatus, localTiming));
+			if (!pumpResult.TimingStatus.IsAvailable)
+				_UpdateRemoteStationsFromSnapshot({});
+		}
+		if (pumpResult.Snapshot.has_value())
+			_HandleRemoteTempoSnapshot(pumpResult.Snapshot.value(), localTiming, hasLocalContent);
+		else if (auto clock = _quantisation.Clock())
+			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
+				localTiming, hasLocalContent, *clock));
+		if (_loggingConfig.Event == "verbose" && _audioEngine)
+		{
+			_LogNinjamTimingDiagnostics(_networkService->ObserveAppliedTimingReceipt(
+				_audioEngine->LastAppliedDesiredTiming()));
+		}
+		_HandleAudioLocalContentState(hasLocalContent);
 	}
 
 	actions::JobAction job;
@@ -940,7 +1369,11 @@ void Scene::OnJobTick(Time curTime)
 
 void Scene::_PumpMidi()
 {
-    auto summary = _inputSubsystem->PumpMidi(_stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
+	auto stations = SnapshotStations();
+	_inputSubsystem->PublishLiveMidiRoutes(stations);
+    auto summary = _inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
+	std::scoped_lock lock(_sceneMutex);
+
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
@@ -959,6 +1392,8 @@ void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared
 void Scene::_PumpSerial()
 {
     auto summary = _inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
+	std::scoped_lock lock(_sceneMutex);
+
 	if (summary.Activated)
 	{
 		_isSceneReset.store(false, std::memory_order_relaxed);
@@ -975,7 +1410,13 @@ void Scene::InitReceivers()
 	_modeRadio->SetReceiver(ActionReceiver::shared_from_this());
 	if (_midiChannelOverrideInput)
 		_midiChannelOverrideInput->SetReceiver(ActionReceiver::shared_from_this());
+	if (_transportOffsetInput)
+		_transportOffsetInput->SetReceiver(ActionReceiver::shared_from_this());
+	if (_ninjamMetronomeToggle)
+		_ninjamMetronomeToggle->SetReceiver(ActionReceiver::shared_from_this());
 	_globalMidiQuantRadio->SetReceiver(ActionReceiver::shared_from_this());
+	if (_remoteTempoDialog)
+		_remoteTempoDialog->SetButtonReceiver(ActionReceiver::shared_from_this());
 }
 
 void Scene::AddChild(std::shared_ptr<base::GuiElement> child)
@@ -1073,9 +1514,15 @@ void Scene::InitGui()
 void Scene::InitAudio()
 {
 	// Setup audio engine which starts device
-	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps, const io::UserConfig& cfg, const audio::AudioStreamParams& params) {
+	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
+		const std::optional<io::UserConfig>& cfg,
+		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
 	});
+
+	// Share the master transport clock so the audio callback can apply unified
+	// NINJAM timing commands to the Timer and local takes at one boundary.
+	_audioEngine->SetTimingClock(_quantisation.Clock());
 
 	if (started) {
 		InitMidi();
@@ -1088,6 +1535,10 @@ void Scene::InitAudio()
 void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
+	if (_networkService)
+		_networkService->SetTimingDiagnosticsEnabled(_loggingConfig.Event == "verbose");
+	if (_inputSubsystem)
+		_inputSubsystem->SetLogging(_loggingConfig);
 	if (_windowSubsystem)
 		_windowSubsystem->SetLogging(_loggingConfig);
 	for (auto& station : _stations)
@@ -1182,6 +1633,8 @@ void Scene::CommitChanges()
 				}
 			}
 		}
+
+		_OpenRemoteTempoPromptIfNeeded();
 	}
 
 	for (auto& job : syncJobs)
@@ -1223,7 +1676,7 @@ void Scene::ApplyDeferredHoverUpdates()
 	if (!_hover2dDirty)
 		return;
 
-	if (_popupHost.IsOpen())
+	if (_popupManager.IsOpen())
 	{
 		if (!_hoverPath2d.empty())
 		{
@@ -1448,6 +1901,41 @@ void Scene::_InitSize()
 	_overlayViewProj = glm::mat4(1.0);
 	_overlayViewProj = glm::translate(_overlayViewProj, glm::vec3(-1.0f, -1.0f, -1.0f));
 	_overlayViewProj = glm::scale(_overlayViewProj, glm::vec3(hScale, vScale, 1.0f));
+
+	if (_hudPanel)
+		_hudPanel->SetSize(_sizeParams.Size);
+
+	_UpdateHudStationAnchors();
+}
+
+void Scene::_UpdateHudStationAnchors()
+{
+	if (!_hudPanel || (_sizeParams.Size.Width == 0) || (_sizeParams.Size.Height == 0))
+		return;
+
+	const float w = static_cast<float>(_sizeParams.Size.Width);
+	const float h = static_cast<float>(_sizeParams.Size.Height);
+
+	std::vector<gui::GuiHud::StationAnchor> anchors;
+	anchors.reserve(_stations.size());
+
+	for (const auto& station : _stations)
+	{
+		auto modelPos = station->ModelPosition();
+		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
+		utils::Position2d screenPos{ -9999, -9999 };
+		if (std::abs(clip.w) > 1e-6f)
+		{
+			auto ndc = glm::vec3(clip) / clip.w;
+			screenPos = {
+				static_cast<int>((ndc.x + 1.0f) * 0.5f * w),
+				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
+			};
+		}
+		anchors.push_back({ screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+	}
+
+	_hudPanel->SetStationAnchors(std::move(anchors));
 }
 
 void Scene::_UpdateSelection(ActionResultType res)
@@ -1595,6 +2083,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
 	station->SetClock(_quantisation.Clock());
+	station->SetTransportOffsetLoopFrac(_transportOffsetLoopFrac);
 	station->SetupBuffers(ChannelMixer::DefaultBufferSize);
 	station->SetNumAdcChannels(_audioEngine->GetChannelMixer()->Source()->NumOutputChannels(Audible::AUDIOSOURCE_ADC));
 	station->SetNumDacChannels(_audioEngine->GetChannelMixer()->Sink()->NumInputChannels(Audible::AUDIOSOURCE_LOOPS));
@@ -1636,6 +2125,24 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 		_globalMidiQuantRadio->SetCurrentValue(static_cast<unsigned int>(state), true);
 
 	_ApplyGlobalMidiQuantStateToAllLoopTakes();
+}
+
+void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
+{
+	loopFrac = std::isfinite(loopFrac) ? std::clamp(loopFrac, -1.0, 1.0) : 0.0;
+	const auto previousLoopFrac = _transportOffsetLoopFrac;
+	_transportOffsetLoopFrac = loopFrac;
+
+	for (auto& station : _stations)
+	{
+		if (station)
+			station->SetTransportOffsetLoopFrac(loopFrac);
+	}
+	if (_audioEngine && previousLoopFrac != loopFrac)
+		_audioEngine->PublishLocalTransportOffsetLoopFrac(loopFrac);
+
+	if (updateInput && _transportOffsetInput)
+		_transportOffsetInput->SetValue(loopFrac, false);
 }
 
 void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
@@ -1697,19 +2204,52 @@ void Scene::_EndBackgroundDrag()
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	_quantisation.Clear(clearTapTempo);
-	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+	const auto hasConnectedTiming = _networkService->HasConnectedTiming();
+	_quantisation.Clear(clearTapTempo, hasConnectedTiming);
+	if (!hasConnectedTiming)
+		_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+}
+
+void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
+{
+	if (hasLocalContent)
+		return;
+
+	// A connected empty scene still follows the accepted remote transport. Keep
+	// the edge armed so a later physical-loss visit can clear local timing once.
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+
+	if (_isSceneReset.exchange(true, std::memory_order_relaxed))
+		return;
+
+	// No local takes remain, so there is no station hierarchy to update. Keep
+	// the destructive Quantiser cleanup on this job-owned edge and off OnTick.
+	_quantisation.Clear(false);
 }
 
 void Scene::_ResetIfEmpty()
 {
 	if (_isSceneReset.load(std::memory_order_relaxed))
 		return;
-	unsigned int total = 0u;
-	for (const auto& s : _stations)
-		total += s->NumTakes();
-	if (0u == total)
-		Reset();
+	for (const auto& station : _stations)
+	{
+		if (station && !station->IsRemote()
+			&& !station->GetLoopTakeSnapshot().empty())
+		{
+			return;
+		}
+	}
+
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+	Reset();
 }
 
 void Scene::_JobLoop()
@@ -1799,14 +2339,13 @@ unsigned int Scene::_CurrentSampleRate() const
 std::uint64_t Scene::_EstimatedAudioSampleAt(Time actionTime) const
 {
 	const auto sampleRate = _CurrentSampleRate();
-	const auto anchorSample = _audioEngine->GetAudioSampleCounter();
-	const auto anchorMicros = _audioEngine->GetMidiAnchorMicros();
+	const auto anchor = midi::ReadMidiClockAnchor(_audioEngine->GetMidiClockAnchor(), {});
 	const auto actionMicros = std::chrono::duration_cast<std::chrono::microseconds>(
 		actionTime.time_since_epoch()).count();
 
 	return MapMidiTimestampToAudioSample(sampleRate,
-		anchorSample,
-		anchorMicros,
+		anchor.Sample,
+		anchor.SteadyMicros,
 		actionMicros);
 }
 

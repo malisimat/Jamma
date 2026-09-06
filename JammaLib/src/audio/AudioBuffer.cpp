@@ -99,6 +99,13 @@ void AudioBuffer::SetSize(unsigned int size)
 	_buffer.resize(size);
 }
 
+void AudioBuffer::Reset()
+{
+	_sampsRecorded = 0;
+	_playIndex = 0;
+	_SetWriteIndex(0);
+}
+
 void AudioBuffer::_SetWriteIndex(unsigned int index)
 {
 	auto bufSize = (unsigned int)_buffer.size();
