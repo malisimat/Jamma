@@ -7,28 +7,27 @@ This is Jamma's canonical short reference for core concepts, ownership, and term
 | Term | Exact meaning |
 | --- | --- |
 | Scene | The running session's job/UI orchestrator and top-level composition. It manages presentation and wiring across subsystems but should not absorb audio, loop, remote-timing, or persistence ownership. |
-| Station | A performance/mixing channel and the owner of an ordered set of LoopTakes - typically a single instrument like drums, guitar, etc. It fans  audio/timing operations to its takes and can host station-level routing and VST effects/instruments. |
-| LoopTake / take | One recorded performance layer within a Station. It owns its recording/playback state, MIDI material, effects, entity timing anchors, and one or more audio Loops. |
-| Loop | One audio recording/playback entity within a LoopTake. It owns its audio buffers, logical length, read/write positions, fades, and loop-local playback phase. |
+| Station | A performance/mixing channel and the owner of an ordered set of LoopTakes - typically a single instrument like drums, guitar, etc. It fans audio/timing operations to its takes and can host station-level routing and VST effects/instruments. |
+| LoopTake / take | One recorded performance layer within a Station. It can contain multiple loops in cases where content is multichannel, like stereo keys, drum mics, etc. It owns its recording/playback state, MIDI/audio Loop material, effects, and entity timing anchors. |
+| Loop | One audio or MIDI recording/playback entity within a LoopTake. It owns its audio buffers (or array of events in the case of MIDI Loops), logical length, read/write positions, offsets, fades, and loop-local playback phase. |
 | `Station -> LoopTake -> Loop` | The ownership and processing hierarchy. Operations flow down this hierarchy; child-specific state and geometry stay with the child rather than being collapsed into a shared cursor. |
-| Trigger | A mapped performance action source, such as keyboard, touch, MIDI, or serial input, that initiates record, play, overdub, punch, ditch, or related actions. A Trigger requests behavior; it does not own transport state. |
+| Trigger | A physical input such as keyboard, touch, MIDI, or serial input, that initiates record, play, overdub, punch, ditch, or related actions. A Trigger requests behavior; it does not own transport state. |
 | Record | Capture new audio/MIDI material into a take/loop according to the active action and latency/quantisation scheduling. |
-| Overdub | Add material while existing take/loop content continues to play. It is a recording state/action, not a new timing ruler. |
-| Punch in | Temporarily replace or add material over a bounded part of existing playback according to the take/loop state machine. |
-| Ditch | Discard or cancel the relevant current recording/performance state according to its action context. |
+| Overdub | Construct a new Loop consisting of a prior loop plus some amount of new material. It is a recording state/action and does not establish a new master interval. |
+| Punch in/out | Temporarily replace or add material over a bounded part of a Loop being Overdubbed. |
+| Ditch | Discard or cancel the relevant current recording/performance state associated with a Trigger. |
 | AudioHost | The audio-device/callback boundary and owner of block-time application of published engine state. It coordinates callback work but does not own per-loop state or job-side policy. |
-| Timer | The local master transport: interval geometry, current master position, loop count, absolute position, and monotonic scene coordinate. It does not own per-loop cursors. |
+| Timer | The shared musical clock used by the audio engine. It tracks the master interval length, position within that interval, completed interval count, and a separate continuity counter. It does not own per-loop cursors. |
 | Quantiser | The engine service that chooses quantisation geometry and event boundaries. It does not own NINJAM follow policy, transport mapping, or entity playback state. |
 | NINJAM | The remote collaborative-jamming subsystem. Its job side owns remote connection/timing authority and publishes complete desired state; audio application remains with AudioHost. |
 | Snapshot | An immutable published view used to cross an ownership/thread boundary safely. Publishing a snapshot does not transfer ownership of the underlying subsystem's decisions. |
-| Authority | The subsystem allowed to decide a value or transition. Consumers may validate, apply, display, or acknowledge it without becoming a second authority. |
 
 ## Ownership boundaries
 
 - The NINJAM job side owns connection availability, session epoch, validated remote observations, tempo requests/prompts, follow policy, remote grid, and production of one complete desired transport value. It never mutates Timer or loop cursors directly.
 - Scene is job/UI orchestration. It presents prompts and diagnostics and forwards complete values; it does not reconstruct remote timing authority or format diagnostics on the audio callback.
 - AudioHost owns the audio-block application boundary. It accepts the latest complete desired value, replaces or disciplines Timer, owns the one common remote-to-local map calculation, and sends neutral reset/correction/restore operations down the engine hierarchy.
-- Timer owns local master transport geometry and position, including the monotonic scene coordinate. It does not own any loop's cursor or remote policy.
+- Timer owns the shared musical clock and its continuity counter. It does not own any loop's cursor or remote-follow policy.
 - `Station -> LoopTake -> Loop` owns membership and each entity's length, anchor, audio phase, MIDI event cursor, and automation origin. These objects apply neutral timing operations using their own geometry; they do not own NINJAM policy or the common map.
 - Quantiser owns quantisation choices and boundary calculations. Local grain-based inference and an authoritative remote grid are distinct inputs; Quantiser does not own remote follow policy or transport mapping.
 - Cross-thread timing travels as complete coherent values through the established mailbox/snapshot patterns. Diagnostics may mirror timing identity for correlation but never become authority.
@@ -39,12 +38,15 @@ Audio-callback work must remain bounded, allocation-free, exception-free, lock-f
 
 | Term | Exact meaning |
 | --- | --- |
-| Local master transport | Timer's current interval geometry and position: master length, master phase, loop count, absolute sample position, and monotonic scene coordinate. |
-| Master interval / master ruler | The repeating transport interval used by Timer. Its length may be replaced when accepted remote geometry changes. It is not any entity's loop length. |
-| Monotonic scene coordinate | `SceneSamplePos`: an unwrapped device-sample coordinate that continues across Timer geometry replacement. It is not wrapped master phase. |
-| Absolute sample position | Loop count multiplied by master length plus master phase for the current Timer geometry. Unlike the scene coordinate, its interpretation follows that geometry. |
-| Phase | A wrapped position within a named ruler or entity length. Always qualify it as master, remote-master, audio-loop, automation, or similar when ambiguity is possible. |
-| Master phase | Position within the current master interval. It is not a per-loop cursor. |
+| Transport | A shared musical clock: it says how long the repeating master interval is, where playback is within that interval, and how many intervals have completed. Transport may be relocated or resynchronised; it is not the audio content or any individual loop's playback cursor. |
+| Master interval | The top-level repeating span used by Timer. In local-only use it is normally established from the master loop; while following NINJAM it is the accepted NINJAM interval. Other loops may be longer, shorter, or offset from it. |
+| Master length | The duration of one master interval, measured in audio samples. Changing it changes how master phase and master loop count are interpreted. |
+| Master phase | The current sample position within the master interval, from zero up to but not including the master length. It may move forward normally or jump when the user or remote synchronisation relocates the transport. It is not a per-loop cursor. |
+| Master loop count | The number of times Timer has crossed the end of the current master interval since the current timing setup began. Timing replacement may reset it, so it is not a permanent count for the whole Scene. |
+| Local master transport | The current state of Jamma's shared musical clock: master length, master phase, and master loop count. `AbsoluteSamplePos` is a value derived from those three fields; `SceneSamplePos` is a separate continuity counter rather than part of the musical position. |
+| Master absolute sample position | `AbsoluteSamplePos`: master loop count multiplied by master length, plus master phase. It is an unwrapped position on the **current master timeline**, not a count of all audio processed since the Scene began. It may jump or reset when master timing is replaced or relocated. |
+| Scene sample counter | `SceneSamplePos`: the number of audio samples processed by Timer's `Tick` calls. The current implementation only increases it and does not reset it when Timer is cleared, phase-corrected, or given new remote timing. It exists so timing maps can measure elapsed audio across those changes; it is not the musical playhead and should not be used for UI seeking or scratching. |
+| Phase | A position within one repeating interval or one entity's length. Phase wraps to zero at the end, so always name the interval or entity: master phase, remote-master phase, audio-loop phase, and so on. |
 | Per-entity phase | A cursor wrapped by that audio/MIDI/automation entity's own logical length. Different entities may intentionally have different phases and lengths. |
 | Remote timing | A validated NINJAM observation containing authoritative BPM, full BPI, interval geometry, phase, sample rate, and observation anchors. It is converted to device-rate units before application. |
 | Local timing | Device-rate transport and loop advancement owned locally, including intentionally different loop lengths and offsets. It remains distinct from remote authority. |
@@ -54,12 +56,12 @@ Audio-callback work must remain bounded, allocation-free, exception-free, lock-f
 | Quantisation | Choosing or snapping to allowed event boundaries. It controls when an action occurs; it is not transport synchronisation or phase restoration. |
 | Active quantisation grid | The current set of rounded boundaries across an interval, derived from its division count. Changing the grid does not itself move or restore loop phase. |
 | Remote grid step | A remote-authority grid spacing derived from accepted remote interval/BPI information. It is distinct from local grain. |
-| Sync phase map | The remote-master-to-local-source mapping geometry owned by AudioHost. It stores common rulers/origins, not a shared loop cursor. |
+| Sync phase map | AudioHost's conversion between elapsed NINJAM time and elapsed local-source time. It stores the two interval lengths and their starting points, not a shared loop cursor. |
 | Mapped elapsed time | Common local-source progress derived from remote elapsed time. Every entity receives the same elapsed amount and wraps it by its own length. |
 | Anchor | A captured relationship between a coordinate and an entity-specific phase/source position. Anchors preserve relative offsets and are invalidated before an independent follow session. |
 | Origin | The zero/reference point of a particular mapping or counter. Always name its domain; remote-grid origin, map origin, and automation origin are not interchangeable. |
 | Correction | A signed adjustment applied within a named domain. A master-phase correction is not automatically a loop-phase replacement. |
-| Geometry | The lengths, rates, BPI/divisions, and ruler relationships needed to interpret positions. Geometry is not current phase or policy. |
+| Timing geometry | The fixed measurements needed to interpret a position, such as interval length, sample rate, BPI, and grid divisions. It describes the scale being measured; it does not say where playback currently is or whether remote timing should be followed. |
 | Session epoch | Identity of one physical remote-authority lifetime. Disconnect/replacement prevents stale state from crossing into a new epoch. |
 | Desired version | Monotonically newer identity for complete desired transport publications within the lifecycle. It is the primary latest-value application order. |
 | Command generation | Identity of accepted replacement, join-alignment, or phase-discipline work. Per-entity generation gates reject stale/repeated application. |

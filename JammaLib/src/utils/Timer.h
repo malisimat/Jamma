@@ -1,7 +1,7 @@
 #pragma once
 
-// Audio-thread local master transport: owns master geometry/position and the
-// monotonic scene coordinate, never an individual loop or MIDI cursor.
+// Audio-thread shared musical clock: owns master interval state plus a separate
+// continuity sample counter, never an individual loop or MIDI cursor.
 
 #include <atomic>
 #include <chrono>
