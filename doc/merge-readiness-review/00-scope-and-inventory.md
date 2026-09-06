@@ -184,6 +184,8 @@ Independent review `b055a20b94910c10afb19d17ed50f110455f7dea` approved B015 afte
 
 B016 documentation-only commit `9927bdb56ba2777c3354439161e0afa5baa121cf` reconciles exactly the three owned NINJAM guides with implemented owners/contracts and explicit residual/manual status. Static source/test/link/identifier/scope/diff audits passed; no executable or manual evidence is invented. Status: implemented and statically verified, pending independent `batch-reviews/B016.md`; B017 remains gated.
 
+Independent review `65709c163df80551a609c74b7fa7ae7263b35065` approved B016 after confirming every material statement/residual, all links, exact scope, and clean diff. B016 is implemented, statically verified, and independently approved; B017 may proceed.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
