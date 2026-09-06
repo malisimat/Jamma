@@ -118,8 +118,7 @@ local loop lengths.
 
 The current visual overlay remains a residual: its payload/rendering still does
 not consume the same remote descriptor, so remote-grid overlay alignment and the
-full live MIDI scenario are not verified. The implementation record is
-[NINJAM MIDI quantisation investigation](ninjam-midi-quantisation-investigation.md).
+full live MIDI scenario are not verified.
 
 ## Bounded timing diagnostics
 
