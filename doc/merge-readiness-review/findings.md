@@ -576,6 +576,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: observation ownership, source/scene anchor, MIDI cursor, automation origin, follow policy, and `NoSync` remain distinct.
 - Verification: statement/source audit plus callback/job ownership trace and manual `Stay local`/reconnect trace.
 - Human decision: accepted under G3-4; update statements with the implementation that makes them true ([decision](decisions.md#small-simplifications)).
+- Phase 4 B016 execution: `9927bdb` corrects interval math and documents the implemented callback/job ownership, complete desired-state boundary, MIDI cursor/automation split, and explicit `Stay local`/`NoSync` behavior. Source/test links and current identifiers were audited; live `Stay local`/reconnect remains explicitly unverified. Status: implemented and statically verified, pending B016 independent review.
 
 ## F-043 â€” Reconcile the MIDI quantisation investigation with the implemented remote-grid path
 
@@ -588,6 +589,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Protected timing concepts affected: active remote grid, local grain, authoritative BPI, phase/origin, desired-state lifecycle, and epoch remain distinct.
 - Verification: statement-by-statement source/test audit; link executable residual contracts and do not mark overlay/manual cases green without evidence.
 - Human decision: accepted under G3-4; retain residual/manual cases as explicitly unverified until executed ([decision](decisions.md#small-simplifications)).
+- Phase 4 B016 execution: `9927bdb` replaces the obsolete future TDD plan with a dated implemented-state/evidence ledger. Remote MIDI event snapping is recorded as implemented; visual overlay use and the complete live scenario remain incomplete/unproven. Obsolete command/generation wording and broken links are removed. Status: implemented and statically verified, pending B016 independent review.
 
 ## F-044 â€” Decide signed transport-offset migration for unequal loop lengths
 
@@ -614,6 +616,7 @@ Canonical IDs were assigned by the Phase 1 integrator after reconciling Stage 1â
 - Verification: master file loads with zero default; current writer/current reader round trips endpoints/fractions; older-read/resave loss is documented or guarded and manually verified.
 - Human decision: accepted no-change compatibility policy; missing state defaults to zero and silent older-binary downgrade loss is an accepted residual ([decision](decisions.md#gate-3-decisions)).
 - Phase 4 execution: independently approved B011 `7e3d517`/`feca48d` adds no schema/version guard. The signed scalar coverage proves current writer/current reader round trips clamped endpoints and fractions and that a missing field defaults to zero. Silent older-binary resave loss remains accepted and must stay explicit in B016/final merge evidence; no older-binary manual resave was executed.
+- Phase 4 B016 execution: all three owned guides now state the zero default, finite signed `[-1,1]` clamp, absent schema/version guard, accepted older-binary resave loss, and lack of a manual older-binary test. No compatibility evidence is upgraded. Status: documentation implemented and statically verified, pending B016 independent review.
 
 ## F-046 â€” Make full authoritative BPI the remote-geometry compatibility boundary
 

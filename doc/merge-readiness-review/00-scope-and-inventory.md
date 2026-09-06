@@ -182,6 +182,8 @@ B015 passing-first prerequisites passed 2/2 at approved baseline `1ed040d`. Six 
 
 Independent review `b055a20b94910c10afb19d17ed50f110455f7dea` approved B015 after repeating the wrapped build, prerequisites 2/2, expanded broad filter 227/227, full 843-pass suite, and all semantic/static audits. B015 is implemented, verified, and independently approved; B016 may proceed.
 
+B016 documentation-only commit `9927bdb56ba2777c3354439161e0afa5baa121cf` reconciles exactly the three owned NINJAM guides with implemented owners/contracts and explicit residual/manual status. Static source/test/link/identifier/scope/diff audits passed; no executable or manual evidence is invented. Status: implemented and statically verified, pending independent `batch-reviews/B016.md`; B017 remains gated.
+
 ### Phase 4 kickoff baseline
 
 - Branch: `bugfix/align-remote-join`.
