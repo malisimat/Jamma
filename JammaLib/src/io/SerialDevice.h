@@ -36,6 +36,7 @@ namespace io
 		unsigned int BaudRate() const noexcept { return _baudRate; }
 
 	private:
+		static void* _AsHandle(void* handle) noexcept;
 		void _ReadLoop();
 		static std::string _NormalisePortName(const std::string& portName);
 

@@ -6,14 +6,9 @@
 
 using namespace midi;
 
-namespace
+constexpr std::size_t MidiQuantisation::NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
 {
-	static constexpr std::size_t TotalNoteSlots = 16u * 128u;
-
-	constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
-	{
-		return (static_cast<std::size_t>(channel & MidiEvent::ChannelMask) << 7) | (note & 0x7F);
-	}
+	return (static_cast<std::size_t>(channel & MidiEvent::ChannelMask) << 7) | (note & 0x7F);
 }
 
 int MidiQuantisation::DragSteps(int deltaY) noexcept

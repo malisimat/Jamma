@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <glm/vec3.hpp>
 #include "../engine/Quantiser.h"
 #include "../gui/GuiModel.h"
 #include "Timer.h"
@@ -20,6 +21,20 @@ namespace engine
 		bool OverlayVisible() const noexcept;
 
 	private:
+		static constexpr float StripOuterRadius = 180.0f;
+		static constexpr float StripHalfHeight = 138.0f;
+		static constexpr float MinVisualHalfHeight = 8.0f;
+		static constexpr float MinVisualRadius = 24.0f;
+		static constexpr unsigned int MaxVisibleDivisions = 256u;
+		static void AppendPartUvs(std::vector<float>* uvs, float partKind);
+		static void AppendQuad(std::vector<float>& verts,
+			std::vector<float>* uvs,
+			float partKind,
+			const glm::vec3& a,
+			const glm::vec3& b,
+			const glm::vec3& c,
+			const glm::vec3& d);
+		static void BuildDivisionMesh(std::vector<float>& verts, std::vector<float>& uvs);
 		bool _overlayVisible;
 		float _overlayAlpha;
 		Time _confirmedAt;

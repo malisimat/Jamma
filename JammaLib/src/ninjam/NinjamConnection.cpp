@@ -11,50 +11,44 @@
 #include "njclient.h"
 #include "../../include/Constants.h"
 
-namespace
+bool ninjam::NinjamConnection::IsAuthFailure(const std::string& err)
 {
-	constexpr unsigned int kMinimumNinjamOutputChannels = 4u;
-	constexpr unsigned int kReservedMonitorOutputChannels = 2u;
+	return err.find("invalid login/password") != std::string::npos
+		|| err.find("invalid credentials") != std::string::npos
+		|| err.find("authentication") != std::string::npos;
+}
 
-	bool IsAuthFailure(const std::string& err)
-	{
-		return err.find("invalid login/password") != std::string::npos
-			|| err.find("invalid credentials") != std::string::npos
-			|| err.find("authentication") != std::string::npos;
-	}
+bool ninjam::NinjamConnection::EqualsIgnoreCase(const std::string& lhs, const std::string& rhs)
+{
+	if (lhs.size() != rhs.size())
+		return false;
 
-	bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs)
+	for (size_t i = 0; i < lhs.size(); i++)
 	{
-		if (lhs.size() != rhs.size())
+		if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+			std::tolower(static_cast<unsigned char>(rhs[i])))
 			return false;
-
-		for (size_t i = 0; i < lhs.size(); i++)
-		{
-			if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
-				std::tolower(static_cast<unsigned char>(rhs[i])))
-				return false;
-		}
-
-		return true;
 	}
 
-	std::string DescribeStatusError(NJClient* client, int status)
-	{
-		auto err = std::string(client && client->GetErrorStr() ? client->GetErrorStr() : "");
-		if (!err.empty())
-			return err;
+	return true;
+}
 
-		switch (status)
-		{
-		case NJClient::NJC_STATUS_INVALIDAUTH:
-			return "Invalid credentials";
-		case NJClient::NJC_STATUS_CANTCONNECT:
-			return "Could not reach server";
-		case NJClient::NJC_STATUS_DISCONNECTED:
-			return "Disconnected";
-		default:
-			return "NINJAM connection error";
-		}
+std::string ninjam::NinjamConnection::DescribeStatusError(NJClient* client, int status)
+{
+	auto err = std::string(client && client->GetErrorStr() ? client->GetErrorStr() : "");
+	if (!err.empty())
+		return err;
+
+	switch (status)
+	{
+	case NJClient::NJC_STATUS_INVALIDAUTH:
+		return "Invalid credentials";
+	case NJClient::NJC_STATUS_CANTCONNECT:
+		return "Could not reach server";
+	case NJClient::NJC_STATUS_DISCONNECTED:
+		return "Disconnected";
+	default:
+		return "NINJAM connection error";
 	}
 }
 
@@ -426,7 +420,7 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	_numDacPhysicalChannels = numOutputChannels;
 	_numOutputChannels = std::max(
 		numOutputChannels > 0 ? numOutputChannels : 2u,
-		kMinimumNinjamOutputChannels);
+		MinimumOutputChannels);
 	_inLatencySamps = inLatencySamps;
 	_outLatencySamps = outLatencySamps;
 	_ResizeScratchBuffers(_blockSize, _InputScratchChannelCapacity());
@@ -1121,7 +1115,7 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 	for (const auto& pair : _userOutputChannels)
 		usedChannels.insert(pair.second);
 
-	for (auto outChannel = kReservedMonitorOutputChannels;
+	for (auto outChannel = ReservedMonitorOutputChannels;
 		(outChannel + 1u) < _numOutputChannels;
 		outChannel += 2u)
 	{
@@ -1132,8 +1126,8 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 		}
 	}
 
-	const auto fallbackChannel = (_numOutputChannels > kReservedMonitorOutputChannels + 1u) ?
-		kReservedMonitorOutputChannels :
+	const auto fallbackChannel = (_numOutputChannels > ReservedMonitorOutputChannels + 1u) ?
+		ReservedMonitorOutputChannels :
 		0u;
 	_userOutputChannels[userName] = fallbackChannel;
 	return fallbackChannel;

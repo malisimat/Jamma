@@ -10,6 +10,8 @@
 #include <string>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <vector>
 #include <windows.h>
 #include "../../include/Constants.h"
 #include "../utils/CommonTypes.h"
@@ -158,6 +160,10 @@ namespace vst
 		void PollPendingControllerChanges() const noexcept;
 
 	private:
+		friend void QueueForUiThreadDestroy(std::shared_ptr<IVstPlugin> plugin);
+		friend std::size_t DrainUiThreadDestroyQueue() noexcept;
+		static std::mutex& _UiDestroyQueueMutex() noexcept;
+		static std::vector<std::shared_ptr<IVstPlugin>>& _UiDestroyQueue();
 		class Impl;
 		void ResetLoadedObjects(bool terminateComponent);
 

@@ -37,6 +37,11 @@ namespace midi
 
 	struct MidiQuantisation
 	{
+	private:
+		static constexpr std::size_t TotalNoteSlots = 16u * 128u;
+		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept;
+
+	public:
 		static constexpr int FractionIndex(MidiQuantisationFraction fraction) noexcept
 		{
 			return static_cast<int>(fraction);

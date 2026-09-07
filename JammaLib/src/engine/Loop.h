@@ -364,5 +364,8 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+
+	private:
+		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 	};
 }

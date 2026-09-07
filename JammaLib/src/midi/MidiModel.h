@@ -55,6 +55,16 @@ namespace midi
 		std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 	private:
+		friend class MidiModelParams;
+		static constexpr unsigned int BaseArcSegments = 16u;
+		static constexpr unsigned int TimePitchAttribute = 3u;
+		static constexpr unsigned int ShapeAttribute = 4u;
+		static void AddTri(std::vector<float>& verts,
+			float x1, float y1, float z1,
+			float x2, float y2, float z2,
+			float x3, float y3, float z3);
+		static void AddUvTri(std::vector<float>& uvs,
+			float u1, float v1, float u2, float v2, float u3, float v3);
 		std::shared_ptr<ModelInstanceData> BuildInstanceData(const std::vector<MidiNote>& spans,
 			std::uint32_t loopLengthSamps) const;
 		void ApplyPendingModelUpdate();

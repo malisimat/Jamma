@@ -2,20 +2,17 @@
 #include <algorithm>
 #include <cmath>
 
-namespace
+void engine::Loop::_DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 {
-	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
+	if (!chain)
+		return;
+	for (size_t i = 0; i < chain->NumPlugins(); ++i)
 	{
-		if (!chain)
-			return;
-		for (size_t i = 0; i < chain->NumPlugins(); ++i)
-		{
-			auto plugin = chain->GetPlugin(i);
-			if (plugin)
-				vst::QueueForUiThreadDestroy(std::move(plugin));
-		}
-		chain.reset();
+		auto plugin = chain->GetPlugin(i);
+		if (plugin)
+			vst::QueueForUiThreadDestroy(std::move(plugin));
 	}
+	chain.reset();
 }
 
 using namespace base;
@@ -32,8 +29,8 @@ using actions::ActionResult;
 
 Loop::~Loop()
 {
-	DrainVstChain(_vstChain.load(std::memory_order_acquire));
-	DrainVstChain(_backVstChain);
+	_DrainVstChain(_vstChain.load(std::memory_order_acquire));
+	_DrainVstChain(_backVstChain);
 	ReleaseResources();
 }
 
@@ -608,8 +605,8 @@ void Loop::SetVisualUpdatesEnabled(bool enabled)
 void Loop::ForceUnloadAllVstPlugins()
 {
 	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
-	DrainVstChain(std::move(chain));
-	DrainVstChain(std::move(_backVstChain));
+	_DrainVstChain(std::move(chain));
+	_DrainVstChain(std::move(_backVstChain));
 	_flipVstChain.store(false, std::memory_order_release);
 	_pendingVstLoads.clear();
 	_pendingVstUnloads.clear();

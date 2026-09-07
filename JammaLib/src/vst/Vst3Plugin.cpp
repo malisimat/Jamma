@@ -2156,19 +2156,16 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 #endif
 }
 
-namespace
+std::mutex& vst::Vst3Plugin::_UiDestroyQueueMutex() noexcept
 {
-	std::mutex& UiDestroyQueueMutex() noexcept
-	{
-		static std::mutex m;
-		return m;
-	}
+	static std::mutex m;
+	return m;
+}
 
-	std::vector<std::shared_ptr<vst::IVstPlugin>>& UiDestroyQueue()
-	{
-		static std::vector<std::shared_ptr<vst::IVstPlugin>> q;
-		return q;
-	}
+std::vector<std::shared_ptr<vst::IVstPlugin>>& vst::Vst3Plugin::_UiDestroyQueue()
+{
+	static std::vector<std::shared_ptr<vst::IVstPlugin>> q;
+	return q;
 }
 
 void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
@@ -2176,16 +2173,16 @@ void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
 	if (!plugin)
 		return;
 
-	std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
-	UiDestroyQueue().push_back(std::move(plugin));
+	std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
+	Vst3Plugin::_UiDestroyQueue().push_back(std::move(plugin));
 }
 
 std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 {
 	std::vector<std::shared_ptr<vst::IVstPlugin>> drained;
 	{
-		std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
-		drained.swap(UiDestroyQueue());
+		std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
+		drained.swap(Vst3Plugin::_UiDestroyQueue());
 	}
 	const std::size_t count = drained.size();
 	// drained destructs here on the UI thread, running ~Vst3Plugin → Unload →

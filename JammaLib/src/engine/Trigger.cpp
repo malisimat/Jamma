@@ -11,62 +11,55 @@ using actions::TriggerAction;
 using actions::DelayedAction;
 using audio::AudioMixer;
 
-namespace
+unsigned int Trigger::EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
+	unsigned int channel,
+	unsigned int id)
 {
-	constexpr std::uint8_t MidiCcStatus = 0xB0u;
-	constexpr unsigned int MidiBindingKindShift = 12u;
-	constexpr unsigned int MidiBindingChannelShift = 8u;
+	return (static_cast<unsigned int>(kind) << MidiBindingKindShift) |
+		((channel & 0x0Fu) << MidiBindingChannelShift) |
+			(id & 0x7Fu);
+}
 
-	unsigned int EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
-		unsigned int channel,
-		unsigned int id)
+DualBinding Trigger::MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
+	unsigned int channel,
+	unsigned int id,
+	unsigned int state)
+{
+	DualBinding binding;
+	binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
+		EncodeMidiBindingValue(kind, channel, id),
+		state), true);
+	return binding;
+}
+
+void Trigger::AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
+	const std::function<void(const DualBinding&)>& onBinding)
+{
+	if (bindingSpec.MatchAnyChannel)
 	{
-		return (static_cast<unsigned int>(kind) << MidiBindingKindShift) |
-			((channel & 0x0Fu) << MidiBindingChannelShift) |
-				(id & 0x7Fu);
+		for (auto channel = 0u; channel < 16u; ++channel)
+			onBinding(MakeMidiBinding(bindingSpec.Kind,
+				channel,
+				bindingSpec.Id,
+				bindingSpec.State));
+		return;
 	}
 
-	DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
-		unsigned int channel,
-		unsigned int id,
-		unsigned int state)
-	{
-		DualBinding binding;
-		binding.SetDown(TriggerBinding(TriggerSource::TRIGGER_MIDI,
-			EncodeMidiBindingValue(kind, channel, id),
-			state), true);
-		return binding;
-	}
+	onBinding(MakeMidiBinding(bindingSpec.Kind,
+		bindingSpec.Channel,
+		bindingSpec.Id,
+		bindingSpec.State));
+}
 
-	void AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
-		const std::function<void(const DualBinding&)>& onBinding)
-	{
-		if (bindingSpec.MatchAnyChannel)
-		{
-			for (auto channel = 0u; channel < 16u; ++channel)
-				onBinding(MakeMidiBinding(bindingSpec.Kind,
-					channel,
-					bindingSpec.Id,
-					bindingSpec.State));
-			return;
-		}
+bool Trigger::IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec)
+{
+	if (bindingSpec.Id > 127u)
+		return false;
 
-		onBinding(MakeMidiBinding(bindingSpec.Kind,
-			bindingSpec.Channel,
-			bindingSpec.Id,
-			bindingSpec.State));
-	}
+	if (!bindingSpec.MatchAnyChannel && (bindingSpec.Channel > 15u))
+		return false;
 
-	bool IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec)
-	{
-		if (bindingSpec.Id > 127u)
-			return false;
-
-		if (!bindingSpec.MatchAnyChannel && (bindingSpec.Channel > 15u))
-			return false;
-
-		return true;
-	}
+	return true;
 }
 
 Trigger::Trigger(TriggerParams trigParams) :

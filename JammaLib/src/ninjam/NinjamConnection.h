@@ -139,6 +139,11 @@ namespace ninjam
 		unsigned int ExportAnomalyCount() const noexcept;
 
 	private:
+		static constexpr unsigned int MinimumOutputChannels = 4u;
+		static constexpr unsigned int ReservedMonitorOutputChannels = 2u;
+		static bool IsAuthFailure(const std::string& err);
+		static bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs);
+		static std::string DescribeStatusError(NJClient* client, int status);
 		NinjamLanePacking _ResolveLanePacking() const;
 		unsigned int _InputScratchChannelCapacity() const noexcept;
 		void _RefreshLanePacking();
@@ -191,7 +196,7 @@ namespace ninjam
 		unsigned int _numInputChannels = 0u;
 		unsigned int _numOutputChannels = 2u;
 		// Raw physical DAC channel count as passed to SetAudioFormat, before
-		// _numOutputChannels is clamped to kMinimumNinjamOutputChannels for
+		// _numOutputChannels is clamped to MinimumOutputChannels for
 		// NJClient's remote-playback outnch. Used to size/index the export
 		// DAC delay lines, which pack OUR physical output into NINJAM send
 		// lanes and have nothing to do with NJClient's remote-receive channel
