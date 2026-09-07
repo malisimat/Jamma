@@ -33,9 +33,7 @@ Windows builds also compile VST3 hosting support by default via the `vst3sdk` vc
 
 `Directory.Build.props` backfills `SolutionDir` and the vcpkg manifest properties when they are unset, but direct project builds should still pass `SolutionDir` explicitly so `.tlog` state stays stable.
 
-Use `.github\skills\builder\builder.ps1` for repository builds. It always launches MSBuild through `invoke-msbuild.ps1`, which creates a child environment with one canonical `Path` value. The wrapper supports both Windows PowerShell 5.1 and PowerShell 7+.
-
-When a local `.vscode\tasks.json` exists, treat its MSBuild executable as authoritative and pass it to `builder.ps1` with `-MSBuildPath`. The wrapper's discovery is only a fallback for the tracked starter tasks and harnesses without a local task definition.
+Before building, read the local `.vscode\tasks.json` and use the applicable task's explicit MSBuild executable and arguments. The file is intentionally machine-specific and authoritative; do not guess a Visual Studio installation or discover a different MSBuild from `PATH`.
 
 ## Preferred PowerShell Build Snippet
 
@@ -53,12 +51,12 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib -Configuration Debug -Platform x64 -MSBuildPath $msbuild
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Jamma -Configuration Debug -Platform x64 -MSBuildPath $msbuild
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild
+& $msbuild (Join-Path $repoRoot "JammaLib\JammaLib.vcxproj") /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& $msbuild (Join-Path $repoRoot "Jamma\Jamma.vcxproj") /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& $msbuild (Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj") /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
 
 # Optional: use the solution only when target selection is unclear.
-# & "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64 -MSBuildPath $msbuild
+# & $msbuild (Join-Path $repoRoot "Jamma.sln") /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
 
 ## Running Tests
@@ -79,7 +77,8 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild -RunTests
+& $msbuild (Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj") /m /t:Build /p:Configuration=Debug /p:Platform=x64 $solutionDirArg
+& (Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe")
 ```
 
 Run a specific test:
@@ -94,8 +93,7 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
     $repoRoot = $parent
 }
 
-$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild -RunTests -TestFilter "SuiteName.TestName"
+& (Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe") --gtest_filter="SuiteName.TestName"
 ```
 
 ## VS Code Tasks
@@ -111,11 +109,12 @@ New-Item -ItemType Directory -Force .vscode | Out-Null
 Copy-Item doc\vscode-tasks.example.json .vscode\tasks.json
 ```
 
-Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json). It assumes the workspace root is the repository root; `builder.ps1` uses `vswhere.exe` or its fallback paths when no local task supplies an explicit executable.
+Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json). Replace its `C:\path\to\MSBuild.exe` placeholders with the MSBuild executable installed on that machine.
 
 ## Troubleshooting
 
 - **Google Test missing headers/libraries**: Verify `vcpkg integrate install`, `vcpkg install`, and that `vcpkg_installed\` contains `gtest`.
+- **MSBuild reports both `PATH` and `Path`**: The launching tool supplied an invalid duplicate environment entry. Update or fix that tool; do not add a repository build wrapper.
 - **Silent test failures / crash on startup**: If the test exe exits with code `1` and no output, stale Release gtest DLLs may be sitting in the Debug output folder. Rebuild both Debug and Release to refresh the copied runtime files. You can also manually copy the debug DLLs from `vcpkg_installed`:
 
 ```powershell
@@ -142,6 +141,6 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 }
 
 $sln = Join-Path $repoRoot "Jamma.sln"
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64 -MSBuildPath $msbuild
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Release -Platform x64 -MSBuildPath $msbuild
+& $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
+& $msbuild $sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=true
 ```
