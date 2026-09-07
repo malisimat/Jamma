@@ -35,64 +35,64 @@ using actions::TouchAction;
 using actions::TouchMoveAction;
 using actions::GuiAction;
 
-	class GuiPhase3RecordingGuiReceiver : public base::ActionReceiver
+class GuiPhase3RecordingGuiReceiver : public base::ActionReceiver
+{
+public:
+	actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-	public:
-		actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			LastAction = action;
-			ActionCount++;
-			return actions::ActionResult::NoAction();
-		}
-
-		int ActionCount = 0;
-		std::optional<actions::GuiAction> LastAction;
-	};
-
-	static GuiButtonParams MakeSizedButton(utils::Position2d pos, utils::Size2d size)
-	{
-		GuiButtonParams p;
-		p.Position = pos;
-		p.Size = size;
-		p.MinSize = size;
-		return p;
+		LastAction = action;
+		ActionCount++;
+		return actions::ActionResult::NoAction();
 	}
 
-	static KeyAction MakeKey(unsigned int vk,
-		int type = KeyAction::KEY_DOWN,
-		int modifiers = 0)
-	{
-		KeyAction k;
-		k.KeyChar = vk;
-		k.KeyActionType = (decltype(k.KeyActionType))type;
-		k.Modifiers = (Action::Modifiers)modifiers;
-		return k;
-	}
+	int ActionCount = 0;
+	std::optional<actions::GuiAction> LastAction;
+};
 
-	static TouchAction MakeTouch(TouchAction::TouchState state, utils::Position2d pos)
-	{
-		TouchAction a;
-		a.Touch = TouchAction::TOUCH_MOUSE;
-		a.Position = pos;
-		a.Index = 0;
-		a.State = state;
-		return a;
-	}
+static GuiButtonParams MakeSizedButton(utils::Position2d pos, utils::Size2d size)
+{
+	GuiButtonParams p;
+	p.Position = pos;
+	p.Size = size;
+	p.MinSize = size;
+	return p;
+}
 
-	static TouchMoveAction MakeTouchMove(utils::Position2d pos)
-	{
-		TouchMoveAction a;
-		a.Touch = TouchAction::TOUCH_MOUSE;
-		a.Position = pos;
-		a.Index = 0;
-		return a;
-	}
+static KeyAction MakeKey(unsigned int vk,
+	int type = KeyAction::KEY_DOWN,
+	int modifiers = 0)
+{
+	KeyAction k;
+	k.KeyChar = vk;
+	k.KeyActionType = (decltype(k.KeyActionType))type;
+	k.Modifiers = (Action::Modifiers)modifiers;
+	return k;
+}
 
-	static void TypeChars(const std::shared_ptr<GuiTextBox>& tb, const std::string& vkeys)
-	{
-		for (char vk : vkeys)
-			tb->OnAction(MakeKey((unsigned int)(unsigned char)vk));
-	}
+static TouchAction MakeTouch(TouchAction::TouchState state, utils::Position2d pos)
+{
+	TouchAction a;
+	a.Touch = TouchAction::TOUCH_MOUSE;
+	a.Position = pos;
+	a.Index = 0;
+	a.State = state;
+	return a;
+}
+
+static TouchMoveAction MakeTouchMove(utils::Position2d pos)
+{
+	TouchMoveAction a;
+	a.Touch = TouchAction::TOUCH_MOUSE;
+	a.Position = pos;
+	a.Index = 0;
+	return a;
+}
+
+static void TypeChars(const std::shared_ptr<GuiTextBox>& tb, const std::string& vkeys)
+{
+	for (char vk : vkeys)
+		tb->OnAction(MakeKey((unsigned int)(unsigned char)vk));
+}
 
 // ---------------------------------------------------------------------------
 // GuiFocusManager

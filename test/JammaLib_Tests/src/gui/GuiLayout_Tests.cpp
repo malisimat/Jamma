@@ -28,46 +28,46 @@ using actions::TouchAction;
 // Helper factories
 // ---------------------------------------------------------------------------
 
-	static GuiButtonParams MakeButtonParams(unsigned int w = 40u, unsigned int h = 20u)
-	{
-		GuiButtonParams p;
-		p.Size    = { w, h };
-		p.MinSize = { 0u, 0u };
-		return p;
-	}
+static GuiButtonParams MakeButtonParams(unsigned int w = 40u, unsigned int h = 20u)
+{
+	GuiButtonParams p;
+	p.Size    = { w, h };
+	p.MinSize = { 0u, 0u };
+	return p;
+}
 
-	static GuiGridParams MakeGrid2x2(unsigned int totalW = 200u, unsigned int totalH = 100u)
-	{
-		GuiGridParams gp;
-		gp.Size     = { totalW, totalH };
-		gp.MinSize  = { 0u, 0u };
-		gp.PaddingH = 0u;
-		gp.PaddingV = 0u;
+static GuiGridParams MakeGrid2x2(unsigned int totalW = 200u, unsigned int totalH = 100u)
+{
+	GuiGridParams gp;
+	gp.Size     = { totalW, totalH };
+	gp.MinSize  = { 0u, 0u };
+	gp.PaddingH = 0u;
+	gp.PaddingV = 0u;
 
-		GridCellDef col;
-		col.sizing  = GridCellDef::Sizing::Fill;
-		col.spacing = 0u;
-		gp.Cols = { col, col };
+	GridCellDef col;
+	col.sizing  = GridCellDef::Sizing::Fill;
+	col.spacing = 0u;
+	gp.Cols = { col, col };
 
-		GridCellDef row;
-		row.sizing  = GridCellDef::Sizing::Fill;
-		row.spacing = 0u;
-		gp.Rows = { row, row };
+	GridCellDef row;
+	row.sizing  = GridCellDef::Sizing::Fill;
+	row.spacing = 0u;
+	gp.Rows = { row, row };
 
-		return gp;
-	}
+	return gp;
+}
 
-	static GridChildPlacement MakePlacement(unsigned int row, unsigned int col,
-	                                        LayoutHAlign ha = LayoutHAlign::Fill,
-	                                        LayoutVAlign va = LayoutVAlign::Fill)
-	{
-		GridChildPlacement p;
-		p.row    = row;
-		p.col    = col;
-		p.hAlign = ha;
-		p.vAlign = va;
-		return p;
-	}
+static GridChildPlacement MakePlacement(unsigned int row, unsigned int col,
+                                        LayoutHAlign ha = LayoutHAlign::Fill,
+                                        LayoutVAlign va = LayoutVAlign::Fill)
+{
+	GridChildPlacement p;
+	p.row    = row;
+	p.col    = col;
+	p.hAlign = ha;
+	p.vAlign = va;
+	return p;
+}
 
 TEST(GuiPanel, AddChildUsesBaseGuiElementSignature)
 {

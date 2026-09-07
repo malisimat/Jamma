@@ -16,118 +16,118 @@ using engine::Station;
 using engine::StationParams;
 using engine::StationRemote;
 
-	class StationRemoteInspectableStation :
-		public StationRemote
+class StationRemoteInspectableStation :
+	public StationRemote
+{
+public:
+	using StationRemote::StationRemote;
+
+	std::shared_ptr<gui::GuiRack> Rack() const
 	{
-	public:
-		using StationRemote::StationRemote;
+		return _guiRack;
+	}
+};
 
-		std::shared_ptr<gui::GuiRack> Rack() const
-		{
-			return _guiRack;
-		}
-	};
+class StationRemoteInspectableLoop :
+	public LoopRemote
+{
+public:
+	using LoopRemote::LoopRemote;
 
-	class StationRemoteInspectableLoop :
-		public LoopRemote
+	bool ModelDirty() const
 	{
-	public:
-		using LoopRemote::LoopRemote;
+		return _modelDirty.load();
+	}
 
-		bool ModelDirty() const
-		{
-			return _modelDirty.load();
-		}
-
-		double DrawRadiusScale() const
-		{
-			return _DrawRadiusScale();
-		}
-
-		unsigned long BufferLength() const
-		{
-			return _bufferBank.Length();
-		}
-	};
-
-	class StationRemoteCaptureSink :
-		public AudioSink
+	double DrawRadiusScale() const
 	{
-	public:
-		explicit StationRemoteCaptureSink(unsigned int numSamps) :
-			Samples(numSamps, 0.0f)
-		{
-		}
+		return _DrawRadiusScale();
+	}
 
-		virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
+	unsigned long BufferLength() const
+	{
+		return _bufferBank.Length();
+	}
+};
+
+class StationRemoteCaptureSink :
+	public AudioSink
+{
+public:
+	explicit StationRemoteCaptureSink(unsigned int numSamps) :
+		Samples(numSamps, 0.0f)
+	{
+	}
+
+	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
+	{
+		for (auto i = 0u; i < request.numSamps; i++)
 		{
-			for (auto i = 0u; i < request.numSamps; i++)
+			auto destIndex = _writeIndex + writeOffset + i;
+			if (destIndex < Samples.size())
 			{
-				auto destIndex = _writeIndex + writeOffset + i;
-				if (destIndex < Samples.size())
-				{
-					auto samp = request.samples[i * request.stride];
-					Samples[destIndex] = (request.fadeNew * samp) + (request.fadeCurrent * Samples[destIndex]);
-				}
+				auto samp = request.samples[i * request.stride];
+				Samples[destIndex] = (request.fadeNew * samp) + (request.fadeCurrent * Samples[destIndex]);
 			}
 		}
-
-		virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
-		{
-			if (updateIndex)
-				_writeIndex += numSamps;
-		}
-
-		std::vector<float> Samples;
-	};
-
-	class StationRemoteCaptureMultiSink :
-		public MultiAudioSink
-	{
-	public:
-		explicit StationRemoteCaptureMultiSink(unsigned int numSamps) :
-			_left(std::make_shared<StationRemoteCaptureSink>(numSamps)),
-			_right(std::make_shared<StationRemoteCaptureSink>(numSamps))
-		{
-		}
-
-		virtual unsigned int NumInputChannels(Audible::AudioSourceType source) const override
-		{
-			return 2;
-		}
-
-		const std::vector<float>& Left() const { return _left->Samples; }
-		const std::vector<float>& Right() const { return _right->Samples; }
-
-	protected:
-		virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
-			Audible::AudioSourceType source) override
-		{
-			if (channel == 0u)
-				return _left;
-			if (channel == 1u)
-				return _right;
-			return nullptr;
-		}
-
-	private:
-		std::shared_ptr<StationRemoteCaptureSink> _left;
-		std::shared_ptr<StationRemoteCaptureSink> _right;
-	};
-
-	static std::shared_ptr<StationRemote> MakeRemoteStation()
-	{
-		StationParams params;
-		params.Name = "remote-user";
-		params.Size = { 200, 280 };
-		audio::MergeMixBehaviourParams merge;
-		auto mixerParams = Station::GetMixerParams(params.Size, merge);
-		auto station = std::make_shared<StationRemote>(params, mixerParams);
-		station->SetNumBusChannels(2);
-		station->SetNumDacChannels(2);
-		station->EnsureRemoteTake();
-		return station;
 	}
+
+	virtual void EndWrite(unsigned int numSamps, bool updateIndex) override
+	{
+		if (updateIndex)
+			_writeIndex += numSamps;
+	}
+
+	std::vector<float> Samples;
+};
+
+class StationRemoteCaptureMultiSink :
+	public MultiAudioSink
+{
+public:
+	explicit StationRemoteCaptureMultiSink(unsigned int numSamps) :
+		_left(std::make_shared<StationRemoteCaptureSink>(numSamps)),
+		_right(std::make_shared<StationRemoteCaptureSink>(numSamps))
+	{
+	}
+
+	virtual unsigned int NumInputChannels(Audible::AudioSourceType source) const override
+	{
+		return 2;
+	}
+
+	const std::vector<float>& Left() const { return _left->Samples; }
+	const std::vector<float>& Right() const { return _right->Samples; }
+
+protected:
+	virtual const std::shared_ptr<AudioSink> _InputChannel(unsigned int channel,
+		Audible::AudioSourceType source) override
+	{
+		if (channel == 0u)
+			return _left;
+		if (channel == 1u)
+			return _right;
+		return nullptr;
+	}
+
+private:
+	std::shared_ptr<StationRemoteCaptureSink> _left;
+	std::shared_ptr<StationRemoteCaptureSink> _right;
+};
+
+static std::shared_ptr<StationRemote> MakeRemoteStation()
+{
+	StationParams params;
+	params.Name = "remote-user";
+	params.Size = { 200, 280 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	auto station = std::make_shared<StationRemote>(params, mixerParams);
+	station->SetNumBusChannels(2);
+	station->SetNumDacChannels(2);
+	station->EnsureRemoteTake();
+	return station;
+}
 
 TEST(StationRemote, IngestStereoBlockFeedsStationMixPath)
 {

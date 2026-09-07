@@ -7,13 +7,13 @@
 using midi::AutomationMapping;
 using midi::MidiLoop;
 
-	// Editor automation only ever compares plugin pointer identity, never
-	// dereferences it. Use opaque non-null sentinels so the tests stay free of any
-	// real plugin construction.
-	static vst::IVstPlugin* FakePlugin(std::uintptr_t id) noexcept
-	{
-		return reinterpret_cast<vst::IVstPlugin*>(id);
-	}
+// Editor automation only ever compares plugin pointer identity, never
+// dereferences it. Use opaque non-null sentinels so the tests stay free of any
+// real plugin construction.
+static vst::IVstPlugin* FakePlugin(std::uintptr_t id) noexcept
+{
+	return reinterpret_cast<vst::IVstPlugin*>(id);
+}
 
 TEST(MidiAutomationLaneResolution, ClaimsFirstInactiveLaneWhenUnmapped)
 {

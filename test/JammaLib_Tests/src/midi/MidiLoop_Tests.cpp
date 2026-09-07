@@ -35,116 +35,116 @@ using actions::TouchMoveAction;
 using audio::MergeMixBehaviourParams;
 using base::Audible;
 
-	class MidiLoopCapturingSink : public IMidiSink
+class MidiLoopCapturingSink : public IMidiSink
+{
+public:
+	std::vector<MidiEvent> events;
+	void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
+	void Clear() noexcept { events.clear(); }
+};
+
+class MidiLoopCapturingOutputSink : public IMidiOutputSink
+{
+public:
+	struct CapturedEvent
 	{
-	public:
-		std::vector<MidiEvent> events;
-		void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
-		void Clear() noexcept { events.clear(); }
+		unsigned int outputIndex;
+		MidiEvent event;
 	};
 
-	class MidiLoopCapturingOutputSink : public IMidiOutputSink
+	std::vector<CapturedEvent> events;
+	void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept override
 	{
-	public:
-		struct CapturedEvent
-		{
-			unsigned int outputIndex;
-			MidiEvent event;
-		};
+		events.push_back({ outputIndex, ev });
+	}
+};
 
-		std::vector<CapturedEvent> events;
-		void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept override
-		{
-			events.push_back({ outputIndex, ev });
-		}
-	};
-
-	class MidiLoopCapturingGuiReceiver : public base::ActionReceiver
+class MidiLoopCapturingGuiReceiver : public base::ActionReceiver
+{
+public:
+	actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-	public:
-		actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			Actions.push_back(action);
-			return actions::ActionResult::NoAction();
-		}
-
-		std::vector<actions::GuiAction> Actions;
-	};
-
-	static std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
-	{
-		LoopTakeParams params;
-		params.Id = id;
-		params.Size = { 100, 100 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-		return std::make_shared<LoopTake>(params, mixerParams);
+		Actions.push_back(action);
+		return actions::ActionResult::NoAction();
 	}
 
-	static std::shared_ptr<Station> MakeStation(const std::string& name = "station")
+	std::vector<actions::GuiAction> Actions;
+};
+
+static std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<LoopTake>(params, mixerParams);
+}
+
+static std::shared_ptr<Station> MakeStation(const std::string& name = "station")
+{
+	StationParams params;
+	params.Name = name;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	return std::make_shared<Station>(params, mixerParams);
+}
+
+class MidiLoopTestScene : public Scene
+{
+public:
+	MidiLoopTestScene(SceneParams params,
+		io::UserConfig user) :
+		Scene(params, user)
 	{
-		StationParams params;
-		params.Name = name;
-		params.Size = { 100, 100 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = Station::GetMixerParams(params.Size, merge);
-		return std::make_shared<Station>(params, mixerParams);
 	}
 
-	class MidiLoopTestScene : public Scene
+	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
-	public:
-		MidiLoopTestScene(SceneParams params,
-			io::UserConfig user) :
-			Scene(params, user)
-		{
-		}
-
-		void AddStationForTest(const std::shared_ptr<Station>& station)
-		{
-			_AddStation(station);
-		}
-
-		void SetSelectDepthForTest(base::SelectDepth depth)
-		{
-			_UpdateSelectDepth(static_cast<unsigned int>(depth));
-		}
-	};
-
-	static constexpr unsigned int ScenePhaseDragSampleRate = 48000u;
-
-	static io::UserConfig MakeSceneUserConfig()
-	{
-		io::UserConfig userConfig = {};
-		userConfig.Audio.SampleRate = ScenePhaseDragSampleRate;
-		return userConfig;
+		_AddStation(station);
 	}
 
-	static std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
-		const utils::Position2d& finish)
+	void SetSelectDepthForTest(base::SelectDepth depth)
 	{
-		return engine::Quantiser::ResolvePhaseOffsetDrag(0,
-			finish.X - start.X,
-			ScenePhaseDragSampleRate);
+		_UpdateSelectDepth(static_cast<unsigned int>(depth));
 	}
+};
 
-	static std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
-	{
-		std::vector<unsigned char> hoverPath;
-		for (auto idPart : element->GlobalId())
-			hoverPath.push_back(static_cast<unsigned char>(idPart + 1u));
-		hoverPath.push_back(0u);
-		return hoverPath;
-	}
+static constexpr unsigned int ScenePhaseDragSampleRate = 48000u;
 
-	static void AddRecordedLoopForVisual(std::shared_ptr<LoopTake> take,
-		const std::string& stationName,
-		std::uint64_t transportStartSamps)
-	{
-		take->Record({ 0u }, stationName, {}, {}, {}, transportStartSamps);
-		take->EndMultiWrite(1000u, true, Audible::AUDIOSOURCE_ADC);
-		take->Play(0u, 1000u, 0u);
-	}
+static io::UserConfig MakeSceneUserConfig()
+{
+	io::UserConfig userConfig = {};
+	userConfig.Audio.SampleRate = ScenePhaseDragSampleRate;
+	return userConfig;
+}
+
+static std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
+	const utils::Position2d& finish)
+{
+	return engine::Quantiser::ResolvePhaseOffsetDrag(0,
+		finish.X - start.X,
+		ScenePhaseDragSampleRate);
+}
+
+static std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
+{
+	std::vector<unsigned char> hoverPath;
+	for (auto idPart : element->GlobalId())
+		hoverPath.push_back(static_cast<unsigned char>(idPart + 1u));
+	hoverPath.push_back(0u);
+	return hoverPath;
+}
+
+static void AddRecordedLoopForVisual(std::shared_ptr<LoopTake> take,
+	const std::string& stationName,
+	std::uint64_t transportStartSamps)
+{
+	take->Record({ 0u }, stationName, {}, {}, {}, transportStartSamps);
+	take->EndMultiWrite(1000u, true, Audible::AUDIOSOURCE_ADC);
+	take->Play(0u, 1000u, 0u);
+}
 
 TEST(MidiLoop, DefaultStateIsEmpty) {
 	MidiLoop loop;

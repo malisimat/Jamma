@@ -12,95 +12,95 @@ using midi::MidiQuantisationSettings;
 using midi::MidiQuantisationGesture;
 using midi::MidiQuantisationGrainCandidates;
 
-	static constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
-	{
-		return MidiQuantisation::Divisor(fraction);
-	}
+static constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
+{
+	return MidiQuantisation::Divisor(fraction);
+}
 
-	static constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
-	{
-		return MidiQuantisation::ClampFractionIndex(index);
-	}
+static constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
+{
+	return MidiQuantisation::ClampFractionIndex(index);
+}
 
-	static constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
-	{
-		return MidiQuantisation::FractionLabel(fraction);
-	}
+static constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
+{
+	return MidiQuantisation::FractionLabel(fraction);
+}
 
-	static constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& settings) noexcept
-	{
-		return MidiQuantisation::StepSamps(settings);
-	}
+static constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& settings) noexcept
+{
+	return MidiQuantisation::StepSamps(settings);
+}
 
-	static MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
-		int deltaY) noexcept
-	{
-		return MidiQuantisation::ResolveDragFraction(startFraction, deltaY);
-	}
+static MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
+	int deltaY) noexcept
+{
+	return MidiQuantisation::ResolveDragFraction(startFraction, deltaY);
+}
 
-	static MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
-		MidiQuantisationGesture gesture,
-		MidiQuantisationFraction fraction,
-		std::uint32_t resolvedGrainSamps) noexcept
-	{
-		return MidiQuantisation::ApplyGesture(current, gesture, fraction, resolvedGrainSamps);
-	}
+static MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
+	MidiQuantisationGesture gesture,
+	MidiQuantisationFraction fraction,
+	std::uint32_t resolvedGrainSamps) noexcept
+{
+	return MidiQuantisation::ApplyGesture(current, gesture, fraction, resolvedGrainSamps);
+}
 
-	static std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
-	{
-		return MidiQuantisation::ResolveGestureGrain(candidates);
-	}
+static std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
+{
+	return MidiQuantisation::ResolveGestureGrain(candidates);
+}
 
-	static MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
-		const int* values,
-		std::size_t valueCount) noexcept
-	{
-		return MidiQuantisation::ApplyGuiPayload(current, values, valueCount);
-	}
+static MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+	const int* values,
+	std::size_t valueCount) noexcept
+{
+	return MidiQuantisation::ApplyGuiPayload(current, values, valueCount);
+}
 
-	static std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
-		std::uint32_t step,
-		std::uint32_t loopLength,
-		std::int32_t phaseOffsetSamps = 0) noexcept
-	{
-		return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength, phaseOffsetSamps);
-	}
+static std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
+	std::uint32_t step,
+	std::uint32_t loopLength,
+	std::int32_t phaseOffsetSamps = 0) noexcept
+{
+	return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength, phaseOffsetSamps);
+}
 
-	static void QuantiseEvents(const MidiEvent* src,
-		std::size_t eventCount,
-		std::uint32_t loopLength,
-		std::uint32_t stepSamps,
-		MidiEvent* dst) noexcept
-	{
-		MidiQuantisation::QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
-	}
+static void QuantiseEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
+{
+	MidiQuantisation::QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
+}
 
-	static void BuildQuantisedPlaybackEvents(const MidiEvent* src,
-		std::size_t eventCount,
-		std::uint32_t loopLength,
-		std::uint32_t stepSamps,
-		MidiEvent* dst) noexcept
-	{
-		MidiQuantisation::BuildQuantisedPlaybackEvents(src, eventCount, loopLength, stepSamps, dst);
-	}
+static void BuildQuantisedPlaybackEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
+{
+	MidiQuantisation::BuildQuantisedPlaybackEvents(src, eventCount, loopLength, stepSamps, dst);
+}
 
-	static std::vector<MidiEvent> QuantiseVec(const std::vector<MidiEvent>& src,
-		std::uint32_t loopLength,
-		std::uint32_t step)
-	{
-		std::vector<MidiEvent> dst(src.size());
-		QuantiseEvents(src.data(), src.size(), loopLength, step, dst.data());
-		return dst;
-	}
+static std::vector<MidiEvent> QuantiseVec(const std::vector<MidiEvent>& src,
+	std::uint32_t loopLength,
+	std::uint32_t step)
+{
+	std::vector<MidiEvent> dst(src.size());
+	QuantiseEvents(src.data(), src.size(), loopLength, step, dst.data());
+	return dst;
+}
 
-	static std::vector<MidiEvent> BuildPlaybackVec(const std::vector<MidiEvent>& src,
-		std::uint32_t loopLength,
-		std::uint32_t step)
-	{
-		std::vector<MidiEvent> dst(src.size());
-		BuildQuantisedPlaybackEvents(src.data(), src.size(), loopLength, step, dst.data());
-		return dst;
-	}
+static std::vector<MidiEvent> BuildPlaybackVec(const std::vector<MidiEvent>& src,
+	std::uint32_t loopLength,
+	std::uint32_t step)
+{
+	std::vector<MidiEvent> dst(src.size());
+	BuildQuantisedPlaybackEvents(src.data(), src.size(), loopLength, step, dst.data());
+	return dst;
+}
 
 TEST(MidiQuantisation, DivisorMatchesFractionName) {
 	EXPECT_EQ(1u, MidiQuantisationDivisor(MidiQuantisationFraction::Whole));

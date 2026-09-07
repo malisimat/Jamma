@@ -20,72 +20,72 @@ using actions::GuiAction;
 using actions::TouchAction;
 using actions::KeyAction;
 
-	class GuiControlsMockedGuiReceiver :
-		public ActionReceiver
+class GuiControlsMockedGuiReceiver :
+	public ActionReceiver
+{
+public:
+	GuiControlsMockedGuiReceiver() :
+		ActionReceiver(),
+		_actionCount(0),
+		_lastAction()
+	{}
+
+public:
+	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-	public:
-		GuiControlsMockedGuiReceiver() :
-			ActionReceiver(),
-			_actionCount(0),
-			_lastAction()
-		{}
-
-	public:
-		virtual actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			_lastAction = action;
-			_actionCount++;
-			return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
-		}
-
-		int ActionCount() const { return _actionCount; }
-		actions::GuiAction LastAction() const { return _lastAction; }
-
-	private:
-		int _actionCount;
-		actions::GuiAction _lastAction;
-	};
-
-	class GuiControlsThrowingGuiReceiver :
-		public ActionReceiver
-	{
-	public:
-		virtual actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			throw std::runtime_error("receiver failure");
-		}
-	};
-
-	static TouchAction MakeTouchAction(TouchAction::TouchState state, utils::Position2d position)
-	{
-		TouchAction action;
-		action.Touch = TouchAction::TOUCH_MOUSE;
-		action.Position = position;
-		action.Index = 0;
-		action.State = state;
-		return action;
+		_lastAction = action;
+		_actionCount++;
+		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	}
 
-	static GuiButtonParams MakeButtonParams(unsigned int index = 0)
-	{
-		GuiButtonParams params;
-		params.Index = index;
-		params.Position = { 0, 0 };
-		params.Size = { 20, 20 };
-		params.MinSize = { 20, 20 };
-		return params;
-	}
+	int ActionCount() const { return _actionCount; }
+	actions::GuiAction LastAction() const { return _lastAction; }
 
-	static GuiToggleParams MakeToggleParams(unsigned int index = 0, unsigned int toggleIndex = 0)
+private:
+	int _actionCount;
+	actions::GuiAction _lastAction;
+};
+
+class GuiControlsThrowingGuiReceiver :
+	public ActionReceiver
+{
+public:
+	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-		GuiToggleParams params;
-		params.Index = index;
-		params.ToggleIndex = toggleIndex;
-		params.Position = { 0, 0 };
-		params.Size = { 20, 20 };
-		params.MinSize = { 20, 20 };
-		return params;
+		throw std::runtime_error("receiver failure");
 	}
+};
+
+static TouchAction MakeTouchAction(TouchAction::TouchState state, utils::Position2d position)
+{
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Position = position;
+	action.Index = 0;
+	action.State = state;
+	return action;
+}
+
+static GuiButtonParams MakeButtonParams(unsigned int index = 0)
+{
+	GuiButtonParams params;
+	params.Index = index;
+	params.Position = { 0, 0 };
+	params.Size = { 20, 20 };
+	params.MinSize = { 20, 20 };
+	return params;
+}
+
+static GuiToggleParams MakeToggleParams(unsigned int index = 0, unsigned int toggleIndex = 0)
+{
+	GuiToggleParams params;
+	params.Index = index;
+	params.ToggleIndex = toggleIndex;
+	params.Position = { 0, 0 };
+	params.Size = { 20, 20 };
+	params.MinSize = { 20, 20 };
+	return params;
+}
 
 TEST(GuiButton, TouchInsideEatsDownAndUp) {
 	auto button = std::make_shared<GuiButton>(MakeButtonParams());

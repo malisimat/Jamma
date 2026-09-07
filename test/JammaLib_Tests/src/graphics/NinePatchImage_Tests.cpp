@@ -7,35 +7,35 @@
 
 using graphics::NinePatchImage;
 
-	static std::pair<float, float> CellXBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
+static std::pair<float, float> CellXBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
+{
+	const auto start = cellIndex * 18;
+	auto minX = positions[start + 0];
+	auto maxX = positions[start + 0];
+	for (auto i = 0; i < 6; ++i)
 	{
-		const auto start = cellIndex * 18;
-		auto minX = positions[start + 0];
-		auto maxX = positions[start + 0];
-		for (auto i = 0; i < 6; ++i)
-		{
-			const auto x = positions[start + (i * 3)];
-			minX = (std::min)(minX, x);
-			maxX = (std::max)(maxX, x);
-		}
-
-		return { minX, maxX };
+		const auto x = positions[start + (i * 3)];
+		minX = (std::min)(minX, x);
+		maxX = (std::max)(maxX, x);
 	}
 
-	static std::pair<float, float> CellYBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
-	{
-		const auto start = cellIndex * 18;
-		auto minY = positions[start + 1];
-		auto maxY = positions[start + 1];
-		for (auto i = 0; i < 6; ++i)
-		{
-			const auto y = positions[start + (i * 3) + 1];
-			minY = (std::min)(minY, y);
-			maxY = (std::max)(maxY, y);
-		}
+	return { minX, maxX };
+}
 
-		return { minY, maxY };
+static std::pair<float, float> CellYBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
+{
+	const auto start = cellIndex * 18;
+	auto minY = positions[start + 1];
+	auto maxY = positions[start + 1];
+	for (auto i = 0; i < 6; ++i)
+	{
+		const auto y = positions[start + (i * 3) + 1];
+		minY = (std::min)(minY, y);
+		maxY = (std::max)(maxY, y);
 	}
+
+	return { minY, maxY };
+}
 
 TEST(NinePatchImageTest, BuildPositions_CornersClamped)
 {

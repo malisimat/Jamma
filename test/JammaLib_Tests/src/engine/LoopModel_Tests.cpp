@@ -11,69 +11,69 @@ using engine::LoopModelParams;
 using graphics::VU;
 using graphics::VuParams;
 
-	static constexpr auto GrainVertFloatCount = 72u;
-	static constexpr auto GrainUvFloatCount = 48u;
-	static constexpr auto MeshMinHeight = 1.0f;
-	static constexpr auto MeshHeightScale = 100.0f;
+static constexpr auto GrainVertFloatCount = 72u;
+static constexpr auto GrainUvFloatCount = 48u;
+static constexpr auto MeshMinHeight = 1.0f;
+static constexpr auto MeshHeightScale = 100.0f;
 
-	class EngineTestLoopModel :
-		public LoopModel
+class EngineTestLoopModel :
+	public LoopModel
+{
+public:
+	EngineTestLoopModel() :
+		GuiModel(LoopModelParams()),
+		LoopModel(LoopModelParams())
 	{
-	public:
-		EngineTestLoopModel() :
-			GuiModel(LoopModelParams()),
-			LoopModel(LoopModelParams())
-		{
-		}
-
-		using LoopModel::CalcGrainGeometry;
-		using LoopModel::UpdateModel;
-
-		const std::vector<float>& BackVerts() const
-		{
-			return _backVerts;
-		}
-
-		const std::vector<float>& BackUvs() const
-		{
-			return _backUvs;
-		}
-
-		bool WaveformNeedsUpload() const
-		{
-			return _waveformNeedsUpload;
-		}
-
-		void SetWaveformNeedsUpload(bool needsUpload)
-		{
-			_waveformNeedsUpload = needsUpload;
-		}
-
-		static unsigned long RecordingUpdateIntervalSamps()
-		{
-			return _RecordingWaveformUpdateIntervalSamps;
-		}
-	};
-
-	class EngineTestVu :
-		public VU
-	{
-	public:
-		EngineTestVu() :
-			GuiModel(VuParams()),
-			VU(VuParams())
-		{
-		}
-
-		using VU::CalcLedGeometry;
-	};
-
-	static BufferBank MakeBuffer(unsigned long length)
-	{
-		auto buffer = BufferBank();
-		buffer.Resize(length);
-		return buffer;
 	}
+
+	using LoopModel::CalcGrainGeometry;
+	using LoopModel::UpdateModel;
+
+	const std::vector<float>& BackVerts() const
+	{
+		return _backVerts;
+	}
+
+	const std::vector<float>& BackUvs() const
+	{
+		return _backUvs;
+	}
+
+	bool WaveformNeedsUpload() const
+	{
+		return _waveformNeedsUpload;
+	}
+
+	void SetWaveformNeedsUpload(bool needsUpload)
+	{
+		_waveformNeedsUpload = needsUpload;
+	}
+
+	static unsigned long RecordingUpdateIntervalSamps()
+	{
+		return _RecordingWaveformUpdateIntervalSamps;
+	}
+};
+
+class EngineTestVu :
+	public VU
+{
+public:
+	EngineTestVu() :
+		GuiModel(VuParams()),
+		VU(VuParams())
+	{
+	}
+
+	using VU::CalcLedGeometry;
+};
+
+static BufferBank MakeBuffer(unsigned long length)
+{
+	auto buffer = BufferBank();
+	buffer.Resize(length);
+	return buffer;
+}
 
 TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 {

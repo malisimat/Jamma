@@ -17,181 +17,181 @@ using midi::MidiEvent;
 using engine::Station;
 using engine::StationParams;
 
-	class StationMidiInstrumentFakePlugin final : public vst::IVstPlugin
+class StationMidiInstrumentFakePlugin final : public vst::IVstPlugin
+{
+public:
+	bool PreInit(const std::wstring&) override { return true; }
+
+	bool Load(const std::wstring&, float, unsigned int, unsigned int,
+		vst::HostedLayoutMode = vst::HostedLayoutMode::Exact) override
 	{
-	public:
-		bool PreInit(const std::wstring&) override { return true; }
-
-		bool Load(const std::wstring&, float, unsigned int, unsigned int,
-			vst::HostedLayoutMode = vst::HostedLayoutMode::Exact) override
-		{
-			_loaded = true;
-			return true;
-		}
-
-		void Unload() override { _loaded = false; }
-		void ProcessBlock(float*, int32_t) noexcept override {}
-		void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
-
-		void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override
-		{
-			ProcessCalls++;
-		}
-
-		void BeginMidiBlock(std::uint32_t blockStartSample,
-			std::uint32_t numSamples) noexcept override
-		{
-			BlockStart = blockStartSample;
-			BlockSamples = numSamples;
-			BeginCalls++;
-		}
-
-		void SendMidiEvent(const MidiEvent& event, bool isRealtime) noexcept override
-		{
-			Events.push_back(event);
-			RealtimeFlags.push_back(isRealtime);
-		}
-
-		void SetParameter(unsigned int index, float value) noexcept override
-		{
-			ParamSetCalls++;
-			LastParamIndex = index;
-			LastParamValue = value;
-		}
-
-		float GetParameter(unsigned int index) const noexcept override
-		{
-			(void)index;
-			return LastParamValue;
-		}
-
-		bool OpenEditor(HWND) override { return false; }
-		void CloseEditor() override {}
-		utils::Size2d GetEditorSize() const noexcept override { return { 0, 0 }; }
-		bool IsLoaded() const noexcept override { return _loaded; }
-		const std::string& Name() const noexcept override { return _name; }
-		void SetBypassed(bool bypass) noexcept override { _bypassed = bypass; }
-		bool IsBypassed() const noexcept override { return _bypassed; }
-
-		std::uint32_t BlockStart = 0u;
-		std::uint32_t BlockSamples = 0u;
-		unsigned int BeginCalls = 0u;
-		unsigned int ProcessCalls = 0u;
-		unsigned int ParamSetCalls = 0u;
-		unsigned int LastParamIndex = 0u;
-		float LastParamValue = 0.0f;
-		std::vector<MidiEvent> Events;
-		std::vector<bool> RealtimeFlags;
-
-	private:
-		bool _loaded = false;
-		bool _bypassed = false;
-		std::string _name = "fake-midi-plugin";
-	};
-
-	class StationMidiInstrumentCaptureSink : public base::AudioSink
-	{
-	public:
-		explicit StationMidiInstrumentCaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
-
-		void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override
-		{
-			for (auto sampleIndex = 0u; sampleIndex < request.numSamps; ++sampleIndex)
-			{
-				auto bufferIndex = _writeIndex + writeOffset + sampleIndex;
-				if (bufferIndex < Samples.size())
-					Samples[bufferIndex] = request.samples[sampleIndex * request.stride];
-			}
-		}
-
-		void EndWrite(unsigned int numSamps, bool updateIndex) override
-		{
-			if (updateIndex)
-				_writeIndex += numSamps;
-		}
-
-		std::vector<float> Samples;
-	};
-
-	class StationMidiInstrumentCaptureMultiSink : public base::MultiAudioSink
-	{
-	public:
-		StationMidiInstrumentCaptureMultiSink(unsigned int numChannels, unsigned int bufSize)
-		{
-			for (auto channel = 0u; channel < numChannels; ++channel)
-				_sinks.push_back(std::make_shared<StationMidiInstrumentCaptureSink>(bufSize));
-		}
-
-		unsigned int NumInputChannels(base::Audible::AudioSourceType) const override
-		{
-			return static_cast<unsigned int>(_sinks.size());
-		}
-
-	protected:
-		const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
-			base::Audible::AudioSourceType) override
-		{
-			return channel < _sinks.size() ? _sinks[channel] : nullptr;
-		}
-
-	private:
-		std::vector<std::shared_ptr<StationMidiInstrumentCaptureSink>> _sinks;
-	};
-
-	static std::shared_ptr<Station> MakeStation(const std::string& name)
-	{
-		StationParams params;
-		params.Name = name;
-		params.Size = { 200, 200 };
-		audio::MergeMixBehaviourParams merge;
-		auto mixerParams = Station::GetMixerParams(params.Size, merge);
-		auto station = std::make_shared<Station>(params, mixerParams);
-		station->SetupBuffers(128u);
-		station->SetNumDacChannels(2u);
-		station->CommitChanges();
-		return station;
+		_loaded = true;
+		return true;
 	}
 
-	static std::shared_ptr<StationMidiInstrumentFakePlugin> AddPlugin(const std::shared_ptr<Station>& station,
-		const std::wstring& path)
+	void Unload() override { _loaded = false; }
+	void ProcessBlock(float*, int32_t) noexcept override {}
+	void ProcessBlockStereo(float*, float*, int32_t) noexcept override {}
+
+	void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override
 	{
-		auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
-		JobAction job;
-		job.JobActionType = JobAction::JOB_LOADVST;
-		job.VstPath = path;
-		job.PreInitPlugin = plugin;
-		station->OnAction(job);
-		station->CommitChanges();
-		return plugin;
+		ProcessCalls++;
 	}
 
-	static void AllowAllMidiChannels(const std::shared_ptr<Station>& station)
+	void BeginMidiBlock(std::uint32_t blockStartSample,
+		std::uint32_t numSamples) noexcept override
 	{
-		station->SetAllowedMidiChannels({
-			1, 2, 3, 4, 5, 6, 7, 8,
-			9, 10, 11, 12, 13, 14, 15, 16
-		});
+		BlockStart = blockStartSample;
+		BlockSamples = numSamples;
+		BeginCalls++;
 	}
 
-	static void RenderStationBlock(const std::shared_ptr<Station>& station,
-		std::uint32_t blockStart,
-		unsigned int numSamps = 128u)
+	void SendMidiEvent(const MidiEvent& event, bool isRealtime) noexcept override
 	{
-		auto sink = std::make_shared<StationMidiInstrumentCaptureMultiSink>(2u, numSamps);
-		station->Zero(numSamps, base::Audible::AUDIOSOURCE_LOOPS);
-		station->WriteBlock(sink, nullptr, 0, numSamps, blockStart);
-		station->EndMultiPlay(numSamps);
+		Events.push_back(event);
+		RealtimeFlags.push_back(isRealtime);
 	}
 
-	static std::shared_ptr<LoopTake> MakeMidiTake(const std::string& id)
+	void SetParameter(unsigned int index, float value) noexcept override
 	{
-		LoopTakeParams params;
-		params.Id = id;
-		params.Size = { 100, 100 };
-		audio::MergeMixBehaviourParams merge;
-		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-		return std::make_shared<LoopTake>(params, mixerParams);
+		ParamSetCalls++;
+		LastParamIndex = index;
+		LastParamValue = value;
 	}
+
+	float GetParameter(unsigned int index) const noexcept override
+	{
+		(void)index;
+		return LastParamValue;
+	}
+
+	bool OpenEditor(HWND) override { return false; }
+	void CloseEditor() override {}
+	utils::Size2d GetEditorSize() const noexcept override { return { 0, 0 }; }
+	bool IsLoaded() const noexcept override { return _loaded; }
+	const std::string& Name() const noexcept override { return _name; }
+	void SetBypassed(bool bypass) noexcept override { _bypassed = bypass; }
+	bool IsBypassed() const noexcept override { return _bypassed; }
+
+	std::uint32_t BlockStart = 0u;
+	std::uint32_t BlockSamples = 0u;
+	unsigned int BeginCalls = 0u;
+	unsigned int ProcessCalls = 0u;
+	unsigned int ParamSetCalls = 0u;
+	unsigned int LastParamIndex = 0u;
+	float LastParamValue = 0.0f;
+	std::vector<MidiEvent> Events;
+	std::vector<bool> RealtimeFlags;
+
+private:
+	bool _loaded = false;
+	bool _bypassed = false;
+	std::string _name = "fake-midi-plugin";
+};
+
+class StationMidiInstrumentCaptureSink : public base::AudioSink
+{
+public:
+	explicit StationMidiInstrumentCaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
+
+	void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override
+	{
+		for (auto sampleIndex = 0u; sampleIndex < request.numSamps; ++sampleIndex)
+		{
+			auto bufferIndex = _writeIndex + writeOffset + sampleIndex;
+			if (bufferIndex < Samples.size())
+				Samples[bufferIndex] = request.samples[sampleIndex * request.stride];
+		}
+	}
+
+	void EndWrite(unsigned int numSamps, bool updateIndex) override
+	{
+		if (updateIndex)
+			_writeIndex += numSamps;
+	}
+
+	std::vector<float> Samples;
+};
+
+class StationMidiInstrumentCaptureMultiSink : public base::MultiAudioSink
+{
+public:
+	StationMidiInstrumentCaptureMultiSink(unsigned int numChannels, unsigned int bufSize)
+	{
+		for (auto channel = 0u; channel < numChannels; ++channel)
+			_sinks.push_back(std::make_shared<StationMidiInstrumentCaptureSink>(bufSize));
+	}
+
+	unsigned int NumInputChannels(base::Audible::AudioSourceType) const override
+	{
+		return static_cast<unsigned int>(_sinks.size());
+	}
+
+protected:
+	const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
+		base::Audible::AudioSourceType) override
+	{
+		return channel < _sinks.size() ? _sinks[channel] : nullptr;
+	}
+
+private:
+	std::vector<std::shared_ptr<StationMidiInstrumentCaptureSink>> _sinks;
+};
+
+static std::shared_ptr<Station> MakeStation(const std::string& name)
+{
+	StationParams params;
+	params.Name = name;
+	params.Size = { 200, 200 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	auto station = std::make_shared<Station>(params, mixerParams);
+	station->SetupBuffers(128u);
+	station->SetNumDacChannels(2u);
+	station->CommitChanges();
+	return station;
+}
+
+static std::shared_ptr<StationMidiInstrumentFakePlugin> AddPlugin(const std::shared_ptr<Station>& station,
+	const std::wstring& path)
+{
+	auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+	JobAction job;
+	job.JobActionType = JobAction::JOB_LOADVST;
+	job.VstPath = path;
+	job.PreInitPlugin = plugin;
+	station->OnAction(job);
+	station->CommitChanges();
+	return plugin;
+}
+
+static void AllowAllMidiChannels(const std::shared_ptr<Station>& station)
+{
+	station->SetAllowedMidiChannels({
+		1, 2, 3, 4, 5, 6, 7, 8,
+		9, 10, 11, 12, 13, 14, 15, 16
+	});
+}
+
+static void RenderStationBlock(const std::shared_ptr<Station>& station,
+	std::uint32_t blockStart,
+	unsigned int numSamps = 128u)
+{
+	auto sink = std::make_shared<StationMidiInstrumentCaptureMultiSink>(2u, numSamps);
+	station->Zero(numSamps, base::Audible::AUDIOSOURCE_LOOPS);
+	station->WriteBlock(sink, nullptr, 0, numSamps, blockStart);
+	station->EndMultiPlay(numSamps);
+}
+
+static std::shared_ptr<LoopTake> MakeMidiTake(const std::string& id)
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<LoopTake>(params, mixerParams);
+}
 
 TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 {
