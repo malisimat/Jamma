@@ -11,25 +11,22 @@ using engine::StationVisualState;
 using engine::Trigger;
 using engine::TriggerParams;
 
-namespace
-{
-	std::shared_ptr<Station> MakeStation(const std::string& name)
+static std::shared_ptr<Station> MakeStation(const std::string& name)
 	{
-		StationParams params;
-		params.Name = name;
-		params.Size = { 100u, 100u };
-		audio::MergeMixBehaviourParams merge;
-		return std::make_shared<Station>(params, Station::GetMixerParams(params.Size, merge));
-	}
+	StationParams params;
+	params.Name = name;
+	params.Size = { 100u, 100u };
+	audio::MergeMixBehaviourParams merge;
+	return std::make_shared<Station>(params, Station::GetMixerParams(params.Size, merge));
+}
 
-	TriggerAction MakeTriggerAction(TriggerAction::TriggerActionType type,
-		unsigned long sampleCount = 0u)
-	{
-		TriggerAction action;
-		action.ActionType = type;
-		action.SampleCount = sampleCount;
-		return action;
-	}
+static TriggerAction MakeTriggerAction(TriggerAction::TriggerActionType type,
+	unsigned long sampleCount = 0u)
+{
+	TriggerAction action;
+	action.ActionType = type;
+	action.SampleCount = sampleCount;
+	return action;
 }
 
 TEST(StationVisualState, StartsDefault)

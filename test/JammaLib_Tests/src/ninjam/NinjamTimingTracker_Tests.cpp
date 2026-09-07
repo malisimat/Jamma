@@ -5,12 +5,9 @@ using ninjam::NinjamTimingEventType;
 using ninjam::NinjamTimingObservation;
 using ninjam::NinjamTimingTracker;
 
-namespace
+static NinjamTimingObservation Observation(unsigned int length, unsigned int position)
 {
-	NinjamTimingObservation Observation(unsigned int length, unsigned int position)
-	{
-		return { length, position, position };
-	}
+	return { length, position, position };
 }
 
 TEST(NinjamTimingTracker, EmitsGenerationWrapAndJoinEvents)
