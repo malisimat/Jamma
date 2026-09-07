@@ -31,12 +31,10 @@ using actions::TriggerAction;
 // Helpers
 // ---------------------------------------------------------------------------
 
-namespace {
-
-constexpr auto READBLOCK_SOURCE = Audible::AUDIOSOURCE_MIXER;
+static constexpr auto READBLOCK_SOURCE = Audible::AUDIOSOURCE_MIXER;
 
 // Creates a Station managed by shared_ptr (required for shared_from_this).
-std::shared_ptr<Station> MakeStation(unsigned int numChans)
+static std::shared_ptr<Station> MakeStation(unsigned int numChans)
 {
 	StationParams stationParams;
 	stationParams.Size = { 200, 200 };
@@ -53,7 +51,7 @@ std::shared_ptr<Station> MakeStation(unsigned int numChans)
 }
 
 // Creates a LoopTake managed by shared_ptr.
-std::shared_ptr<LoopTake> MakeTake()
+static std::shared_ptr<LoopTake> MakeTake()
 {
 	LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
@@ -65,7 +63,7 @@ std::shared_ptr<LoopTake> MakeTake()
 }
 
 // Creates a ChannelMixer with N input and output channels.
-ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
+static ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 {
 	ChannelMixerParams p;
 	p.InputBufferSize = bufSize;
@@ -77,7 +75,7 @@ ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 
 // Deterministic pseudo-random sample in the range (-1.0, 1.0).
 // Uses a simple LCG-style hash to avoid depending on rand() state.
-float TestSample(unsigned int index, unsigned int multiplier = 7)
+static float TestSample(unsigned int index, unsigned int multiplier = 7)
 {
 	const auto wrapped = static_cast<int>(((index + 1u) * multiplier) % 2000u);
 	return static_cast<float>(wrapped - 1000) / 1001.0f;
@@ -85,7 +83,7 @@ float TestSample(unsigned int index, unsigned int multiplier = 7)
 
 // Fills an interleaved buffer with deterministic non-zero test data.
 // buf must have space for numChans * numSamps floats.
-void FillTestData(float* buf, unsigned int numChans, unsigned int numSamps,
+static void FillTestData(float* buf, unsigned int numChans, unsigned int numSamps,
 	unsigned int blockIndex = 0)
 {
 	for (unsigned int s = 0; s < numSamps; s++)
@@ -99,7 +97,7 @@ void FillTestData(float* buf, unsigned int numChans, unsigned int numSamps,
 }
 
 // Write one block through the ADC -> Station pipeline.
-void WriteBlock(ChannelMixer& chanMixer,
+static void WriteBlock(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* inBuf, unsigned int numChans, unsigned int numSamps)
 {
@@ -112,7 +110,7 @@ void WriteBlock(ChannelMixer& chanMixer,
 }
 
 // Read one block from the Station -> DAC pipeline.
-void ReadBlock(ChannelMixer& chanMixer,
+static void ReadBlock(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* outBuf, unsigned int numChans, unsigned int numSamps)
 {
@@ -124,7 +122,7 @@ void ReadBlock(ChannelMixer& chanMixer,
 	station->EndMultiPlay(numSamps);
 }
 
-void SetRackLevel(base::ActionReceiver& receiver, unsigned int index, double level)
+static void SetRackLevel(base::ActionReceiver& receiver, unsigned int index, double level)
 {
 	actions::GuiAction action;
 	action.ElementType = actions::GuiAction::ACTIONELEMENT_RACK;
@@ -133,7 +131,7 @@ void SetRackLevel(base::ActionReceiver& receiver, unsigned int index, double lev
 	receiver.OnAction(action);
 }
 
-void SetRackRoutes(base::ActionReceiver& receiver,
+static void SetRackRoutes(base::ActionReceiver& receiver,
 	const std::vector<std::pair<unsigned int, unsigned int>>& connections)
 {
 	actions::GuiAction action;
@@ -143,7 +141,7 @@ void SetRackRoutes(base::ActionReceiver& receiver,
 	receiver.OnAction(action);
 }
 
-void WriteLoopSamples(const std::shared_ptr<Loop>& loop,
+static void WriteLoopSamples(const std::shared_ptr<Loop>& loop,
 	const std::vector<float>& samples)
 {
 	AudioWriteRequest writeReq;
@@ -157,7 +155,7 @@ void WriteLoopSamples(const std::shared_ptr<Loop>& loop,
 	loop->EndWrite(static_cast<unsigned int>(samples.size()), true);
 }
 
-bool HasNonZero(const float* buf, unsigned int count)
+static bool HasNonZero(const float* buf, unsigned int count)
 {
 	for (unsigned int i = 0; i < count; i++)
 	{
@@ -167,17 +165,17 @@ bool HasNonZero(const float* buf, unsigned int count)
 	return false;
 }
 
-bool IsAllZero(const float* buf, unsigned int count)
+static bool IsAllZero(const float* buf, unsigned int count)
 {
 	return !HasNonZero(buf, count);
 }
 
 // Capturing single-channel AudioSink for per-sample verification.
-class CaptureSink :
+class AudioFlowCaptureSink :
 	public base::AudioSink
 {
 public:
-	CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
+	AudioFlowCaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
 
 	virtual void OnBlockWrite(const AudioWriteRequest& request, int writeOffset) override
 	{
@@ -199,17 +197,17 @@ public:
 	std::vector<float> Samples;
 };
 
-// Capturing single-channel MultiAudioSink wrapping a CaptureSink.
-class CaptureMultiSink :
+// Capturing single-channel MultiAudioSink wrapping an AudioFlowCaptureSink.
+class AudioFlowCaptureMultiSink :
 	public base::MultiAudioSink
 {
 public:
-	CaptureMultiSink(unsigned int bufSize)
-		: _sink(std::make_shared<CaptureSink>(bufSize)) {}
+	AudioFlowCaptureMultiSink(unsigned int bufSize)
+		: _sink(std::make_shared<AudioFlowCaptureSink>(bufSize)) {}
 
 	virtual unsigned int NumInputChannels(
 		base::Audible::AudioSourceType source) const override { return 1; }
-	std::shared_ptr<CaptureSink> GetSink() const { return _sink; }
+	std::shared_ptr<AudioFlowCaptureSink> GetSink() const { return _sink; }
 
 protected:
 	virtual const std::shared_ptr<base::AudioSink> _InputChannel(
@@ -219,17 +217,17 @@ protected:
 	}
 
 private:
-	std::shared_ptr<CaptureSink> _sink;
+	std::shared_ptr<AudioFlowCaptureSink> _sink;
 };
 
-class CaptureStereoSink :
+class AudioFlowCaptureStereoSink :
 	public base::MultiAudioSink
 {
 public:
-	explicit CaptureStereoSink(unsigned int bufSize) :
+	explicit AudioFlowCaptureStereoSink(unsigned int bufSize) :
 		_sinks{
-			std::make_shared<CaptureSink>(bufSize),
-			std::make_shared<CaptureSink>(bufSize)
+			std::make_shared<AudioFlowCaptureSink>(bufSize),
+			std::make_shared<AudioFlowCaptureSink>(bufSize)
 		}
 	{}
 
@@ -238,7 +236,7 @@ public:
 		return 2u;
 	}
 
-	std::shared_ptr<CaptureSink> GetSink(unsigned int index) const
+	std::shared_ptr<AudioFlowCaptureSink> GetSink(unsigned int index) const
 	{
 		return _sinks.at(index);
 	}
@@ -251,10 +249,8 @@ protected:
 	}
 
 private:
-	std::vector<std::shared_ptr<CaptureSink>> _sinks;
+	std::vector<std::shared_ptr<AudioFlowCaptureSink>> _sinks;
 };
-
-} // anonymous namespace
 
 // ===========================================================================
 // Write-path tests
@@ -388,7 +384,7 @@ TEST(AudioFlow, TriggerBounceRoutesSourceLoopsToMatchingTargetChannels)
 	targetTake->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
 	targetTake->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
 
-	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
+	auto sink = std::make_shared<AudioFlowCaptureStereoSink>(blockSize);
 	targetTake->WriteBlock(sink, nullptr, 0, blockSize);
 	targetTake->EndMultiPlay(blockSize);
 
@@ -631,14 +627,14 @@ TEST(AudioFlow, LoopPlaybackUsesSequentialLoopSlots)
 	public:
 		explicit CaptureStereoSink(unsigned int bufSize) :
 			_sinks{
-				std::make_shared<CaptureSink>(bufSize),
-				std::make_shared<CaptureSink>(bufSize)
+				std::make_shared<AudioFlowCaptureSink>(bufSize),
+				std::make_shared<AudioFlowCaptureSink>(bufSize)
 			}
 		{}
 
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 2u; }
 
-		std::shared_ptr<CaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
+		std::shared_ptr<AudioFlowCaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
 
 	protected:
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel,
@@ -648,7 +644,7 @@ TEST(AudioFlow, LoopPlaybackUsesSequentialLoopSlots)
 		}
 
 	private:
-		std::vector<std::shared_ptr<CaptureSink>> _sinks;
+		std::vector<std::shared_ptr<AudioFlowCaptureSink>> _sinks;
 	};
 
 	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
@@ -930,7 +926,7 @@ TEST(AudioFlow, WriteToLoop_ReadBackExactValues)
 	loop.Play(constants::MaxLoopFadeSamps, loopLength, false);
 
 	// Read one block via Loop::WriteBlock into a capturing mock sink.
-	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+	auto sink = std::make_shared<AudioFlowCaptureMultiSink>(blockSize);
 	loop.WriteBlock(sink, nullptr, 0, blockSize);
 	loop.EndMultiPlay(blockSize);
 
@@ -991,7 +987,7 @@ TEST(AudioFlow, WriteViaStation_PerSampleVerification)
 
 	// Read one block directly from the loop into a capturing mock sink.
 	const unsigned int readBlock = 32;
-	auto sink = std::make_shared<CaptureMultiSink>(readBlock);
+	auto sink = std::make_shared<AudioFlowCaptureMultiSink>(readBlock);
 	loop0->WriteBlock(sink, nullptr, 0, readBlock);
 	loop0->EndMultiPlay(readBlock);
 
@@ -1114,14 +1110,14 @@ TEST(AudioFlow, LoopTakeRouterReRoutesLoopOutputs)
 	public:
 		explicit CaptureStereoSink(unsigned int bufSize) :
 			_sinks{
-				std::make_shared<CaptureSink>(bufSize),
-				std::make_shared<CaptureSink>(bufSize)
+				std::make_shared<AudioFlowCaptureSink>(bufSize),
+				std::make_shared<AudioFlowCaptureSink>(bufSize)
 			}
 		{}
 
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType) const override { return 2; }
 
-		std::shared_ptr<CaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
+		std::shared_ptr<AudioFlowCaptureSink> GetSink(unsigned int index) const { return _sinks.at(index); }
 
 	protected:
 		virtual const std::shared_ptr<base::AudioSink> _InputChannel(unsigned int channel, base::Audible::AudioSourceType) override
@@ -1130,7 +1126,7 @@ TEST(AudioFlow, LoopTakeRouterReRoutesLoopOutputs)
 		}
 
 	private:
-		std::vector<std::shared_ptr<CaptureSink>> _sinks;
+		std::vector<std::shared_ptr<AudioFlowCaptureSink>> _sinks;
 	};
 
 	auto sink = std::make_shared<CaptureStereoSink>(blockSize);
