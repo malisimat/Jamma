@@ -114,7 +114,21 @@ Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json).
 ## Troubleshooting
 
 - **Google Test missing headers/libraries**: Verify `vcpkg integrate install`, `vcpkg install`, and that `vcpkg_installed\` contains `gtest`.
-- **MSBuild reports both `PATH` and `Path`**: The launching tool supplied an invalid duplicate environment entry. Update or fix that tool; do not add a repository build wrapper.
+- **MSBuild reports both `PATH` and `Path`**: Keep `.vscode\tasks.json` unchanged and reuse its MSBuild path and arguments. Do not edit the machine environment. Instead, launch MSBuild through `System.Diagnostics.Process`:
+
+```powershell
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$startInfo.FileName = $msbuild
+$startInfo.Arguments = '"C:\Users\matto\source\repos\Jamma\test\JammaLib_Tests\JammaLib_Tests.vcxproj" /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir=C:\Users\matto\source\repos\Jamma\'
+$startInfo.WorkingDirectory = "C:\Users\matto\source\repos\Jamma"
+$startInfo.UseShellExecute = $false
+$process = [System.Diagnostics.Process]::Start($startInfo)
+$process.WaitForExit()
+exit $process.ExitCode
+```
+
+  For another task, retain its exact MSBuild executable and arguments. Do not attempt to rename or remove `Path`/`PATH`.
 - **Silent test failures / crash on startup**: If the test exe exits with code `1` and no output, stale Release gtest DLLs may be sitting in the Debug output folder. Rebuild both Debug and Release to refresh the copied runtime files. You can also manually copy the debug DLLs from `vcpkg_installed`:
 
 ```powershell
