@@ -33,7 +33,9 @@ Windows builds also compile VST3 hosting support by default via the `vst3sdk` vc
 
 `Directory.Build.props` backfills `SolutionDir` and the vcpkg manifest properties when they are unset, but direct project builds should still pass `SolutionDir` explicitly so `.tlog` state stays stable.
 
-Use `.github\skills\builder\builder.ps1` for repository builds. It removes duplicate case variants of the Windows `Path` environment variable before launching MSBuild, which avoids MSBuild errors when both `PATH` and `Path` are inherited.
+Use `.github\skills\builder\builder.ps1` for repository builds. It always launches MSBuild through `invoke-msbuild.ps1`, which creates a child environment with one canonical `Path` value. The wrapper supports both Windows PowerShell 5.1 and PowerShell 7+.
+
+When a local `.vscode\tasks.json` exists, treat its MSBuild executable as authoritative and pass it to `builder.ps1` with `-MSBuildPath`. The wrapper's discovery is only a fallback for the tracked starter tasks and harnesses without a local task definition.
 
 ## Preferred PowerShell Build Snippet
 
@@ -49,18 +51,14 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
     $repoRoot = $parent
 }
 
-$sln = Join-Path $repoRoot "Jamma.sln"
-$jammaLibProj = Join-Path $repoRoot "JammaLib\JammaLib.vcxproj"
-$jammaProj = Join-Path $repoRoot "Jamma\Jamma.vcxproj"
-$testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib -Configuration Debug -Platform x64
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Jamma -Configuration Debug -Platform x64
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib -Configuration Debug -Platform x64 -MSBuildPath $msbuild
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Jamma -Configuration Debug -Platform x64 -MSBuildPath $msbuild
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild
 
 # Optional: use the solution only when target selection is unclear.
-# & $msbuild $sln /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:VcpkgEnableManifest=true
+# & "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64 -MSBuildPath $msbuild
 ```
 
 ## Running Tests
@@ -79,12 +77,9 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
     $repoRoot = $parent
 }
 
-$testsProj = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
-$testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
 $solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
 
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64
-& $testsExe
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild -RunTests
 ```
 
 Run a specific test:
@@ -99,8 +94,8 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
     $repoRoot = $parent
 }
 
-$testsExe = Join-Path $repoRoot "test\JammaLib_Tests\bin\x64\Debug\JammaLib_Tests.exe"
-& $testsExe --gtest_filter="SuiteName.TestName"
+$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target JammaLib_Tests -Configuration Debug -Platform x64 -MSBuildPath $msbuild -RunTests -TestFilter "SuiteName.TestName"
 ```
 
 ## VS Code Tasks
@@ -116,7 +111,7 @@ New-Item -ItemType Directory -Force .vscode | Out-Null
 Copy-Item doc\vscode-tasks.example.json .vscode\tasks.json
 ```
 
-Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json). It assumes the workspace root is the repository root and uses PowerShell plus `vswhere.exe` to locate `MSBuild.exe`.
+Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json). It assumes the workspace root is the repository root; `builder.ps1` uses `vswhere.exe` or its fallback paths when no local task supplies an explicit executable.
 
 ## Troubleshooting
 
@@ -147,6 +142,6 @@ while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
 }
 
 $sln = Join-Path $repoRoot "Jamma.sln"
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64
-& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Release -Platform x64
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Debug -Platform x64 -MSBuildPath $msbuild
+& "$repoRoot\.github\skills\builder\builder.ps1" -Target Solution -Configuration Release -Platform x64 -MSBuildPath $msbuild
 ```

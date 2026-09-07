@@ -12,7 +12,7 @@ allowed-tools:
 Start with `doc/build.md`.
 
 - Trigger this skill for: build/rebuild/clean requests, target selection, or "build + run native tests" flows.
-- Prefer local VS Code tasks first (`.vscode/tasks.json`), then `.github/skills/builder/builder.ps1` for scripted builds.
+- Read local `.vscode/tasks.json` first when present. Its executable and arguments are authoritative for that machine; pass its MSBuild executable to `.github/skills/builder/builder.ps1` with `-MSBuildPath`.
 - Build the smallest valid target by default:
   - `JammaLib/src` or `JammaLib/include` -> `JammaLib`
   - `Jamma/src` -> `Jamma`
@@ -23,7 +23,8 @@ Start with `doc/build.md`.
   - Targets: `JammaLib`, `Jamma`, `JammaLib_Tests`, `Solution`
   - Actions: `Build`, `Rebuild`, `Clean`
   - Test options: `-RunTests`, optional `-TestFilter`
-- Keep paths portable: resolve repo root from current location, use repo-relative project paths, and avoid hard-coded machine-specific absolute paths.
+  - Optional executable override: `-MSBuildPath` (use the local task's path when available)
+- Keep project paths portable: resolve repo root from current location and use repo-relative project paths. Do not hard-code machine-specific executable paths in tracked scripts; local tasks provide them.
 - If engine behavior changed, build tests and run `test/JammaLib_Tests/bin/x64/Debug/JammaLib_Tests.exe`.
 
 Refs: `doc/build.md`, `.github/skills/builder/builder.ps1`, `doc/vscode-tasks.example.json`, `Directory.Build.props`
