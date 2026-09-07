@@ -212,8 +212,11 @@ TEST(UserConfig, LoopTimingHonoursConfiguredTargetMaxGrain) {
 }
 
 TEST(InitFile, DefaultJsonParsesWithoutVstDebugBlock) {
-	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Users\\tester\\AppData\\Roaming\\Jamma")));
+	const std::string roamingPath = "C:\\Users\\tester\\AppData\\Roaming\\Jamma";
+	auto parsed = InitFile::FromStream(std::stringstream(InitFile::DefaultJson(roamingPath)));
 	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(0, parsed->Jam.compare(L"C:\\Users\\tester\\AppData\\Roaming\\Jamma\\default.jam"));
+	EXPECT_EQ(0, parsed->Rig.compare(L"C:\\Users\\tester\\AppData\\Roaming\\Jamma\\default.rig"));
 }
 
 TEST(InitFile, ParsesUiLoggingSetting) {
