@@ -58,6 +58,7 @@ namespace engine
 		bool _isConnectedRemote;
 
 		std::atomic<unsigned int> _intervalLengthSamps;
+		std::atomic<unsigned int> _intervalVisualLengthSamps;
 		std::atomic<unsigned int> _intervalPositionSamps;
 
 		std::shared_ptr<LoopTake> _remoteTake;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include "Loop.h"
 
 namespace engine
@@ -8,6 +9,11 @@ namespace engine
 	// A loop that receives audio streamed in from a remote ninjam user.
 	// Audio is written into the loop's BufferBank so it can be played back
 	// and visualised through the standard Loop playback path.
+	//
+	// Visual model updates are throttled to a maximum rate to avoid excessive
+	// CPU cost when many remote users are active. The waveform is rendered via
+	// vertex-shader displacement from a 1D texture, so the per-update cost is
+	// limited to decimation + texture upload (no geometry rebuild).
 	class LoopRemote :
 		public Loop
 	{
@@ -38,5 +44,9 @@ namespace engine
 		std::atomic<unsigned int> _measureLengthSamps;
 		std::atomic<unsigned int> _measurePositionSamps;
 		std::atomic<unsigned int> _visualLengthSamps;
+
+		// Throttle: visual updates are limited to _MaxVisualUpdateHz.
+		static constexpr double _MaxVisualUpdateHz = 15.0;
+		std::chrono::steady_clock::time_point _lastVisualUpdate;
 	};
 }
