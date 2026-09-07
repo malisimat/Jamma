@@ -9,18 +9,15 @@ TEST(NinjamTempoCommand, PreservesUsefulFractionalBpmPrecision)
 	EXPECT_EQ("99.01", ninjam::NinjamConnection::FormatTempoBpm(99.01f));
 }
 
-namespace
+static ninjam::NinjamMetronomeTimingInput MakeInput()
 {
-	ninjam::NinjamMetronomeTimingInput MakeInput()
-	{
-		ninjam::NinjamMetronomeTimingInput input;
-		input.IntervalLengthSamps = 16000u;
-		input.Bpm = 120.0f;
-		input.Bpi = 8u;
-		input.DeviceSampleRate = 8000u;
-		input.NumFrames = 128u;
-		return input;
-	}
+	ninjam::NinjamMetronomeTimingInput input;
+	input.IntervalLengthSamps = 16000u;
+	input.Bpm = 120.0f;
+	input.Bpi = 8u;
+	input.DeviceSampleRate = 8000u;
+	input.NumFrames = 128u;
+	return input;
 }
 
 TEST(NinjamMetronomeTiming, FindsBeatAtBlockStart)

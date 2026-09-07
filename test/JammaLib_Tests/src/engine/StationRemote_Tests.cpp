@@ -16,9 +16,7 @@ using engine::Station;
 using engine::StationParams;
 using engine::StationRemote;
 
-namespace
-{
-	class InspectableStationRemote :
+	class StationRemoteInspectableStation :
 		public StationRemote
 	{
 	public:
@@ -30,7 +28,7 @@ namespace
 		}
 	};
 
-	class InspectableLoopRemote :
+	class StationRemoteInspectableLoop :
 		public LoopRemote
 	{
 	public:
@@ -52,11 +50,11 @@ namespace
 		}
 	};
 
-	class CaptureSink :
+	class StationRemoteCaptureSink :
 		public AudioSink
 	{
 	public:
-		explicit CaptureSink(unsigned int numSamps) :
+		explicit StationRemoteCaptureSink(unsigned int numSamps) :
 			Samples(numSamps, 0.0f)
 		{
 		}
@@ -83,13 +81,13 @@ namespace
 		std::vector<float> Samples;
 	};
 
-	class CaptureMultiSink :
+	class StationRemoteCaptureMultiSink :
 		public MultiAudioSink
 	{
 	public:
-		explicit CaptureMultiSink(unsigned int numSamps) :
-			_left(std::make_shared<CaptureSink>(numSamps)),
-			_right(std::make_shared<CaptureSink>(numSamps))
+		explicit StationRemoteCaptureMultiSink(unsigned int numSamps) :
+			_left(std::make_shared<StationRemoteCaptureSink>(numSamps)),
+			_right(std::make_shared<StationRemoteCaptureSink>(numSamps))
 		{
 		}
 
@@ -113,11 +111,11 @@ namespace
 		}
 
 	private:
-		std::shared_ptr<CaptureSink> _left;
-		std::shared_ptr<CaptureSink> _right;
+		std::shared_ptr<StationRemoteCaptureSink> _left;
+		std::shared_ptr<StationRemoteCaptureSink> _right;
 	};
 
-	std::shared_ptr<StationRemote> MakeRemoteStation()
+	static std::shared_ptr<StationRemote> MakeRemoteStation()
 	{
 		StationParams params;
 		params.Name = "remote-user";
@@ -130,13 +128,12 @@ namespace
 		station->EnsureRemoteTake();
 		return station;
 	}
-}
 
 TEST(StationRemote, IngestStereoBlockFeedsStationMixPath)
 {
 	const auto blockSize = 256u;
 	auto station = MakeRemoteStation();
-	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+	auto sink = std::make_shared<StationRemoteCaptureMultiSink>(blockSize);
 
 	std::vector<float> left(blockSize, 0.0f);
 	std::vector<float> right(blockSize, 0.0f);
@@ -165,7 +162,7 @@ TEST(StationRemote, ZeroThenIngestStereoBlockFeedsStationMixPath)
 {
 	const auto blockSize = 256u;
 	auto station = MakeRemoteStation();
-	auto sink = std::make_shared<CaptureMultiSink>(blockSize);
+	auto sink = std::make_shared<StationRemoteCaptureMultiSink>(blockSize);
 
 	std::vector<float> left(blockSize, 0.0f);
 	std::vector<float> right(blockSize, 0.0f);
@@ -213,7 +210,7 @@ TEST(StationRemote, RackStaysVisibleAcrossDepthChanges)
 	params.Size = { 200, 280 };
 	audio::MergeMixBehaviourParams merge;
 	auto mixerParams = Station::GetMixerParams(params.Size, merge);
-	auto station = std::make_shared<InspectableStationRemote>(params, mixerParams);
+	auto station = std::make_shared<StationRemoteInspectableStation>(params, mixerParams);
 	station->SetNumBusChannels(2);
 	station->SetNumDacChannels(2);
 	station->EnsureRemoteTake();
@@ -258,7 +255,7 @@ TEST(LoopRemote, ConstructorSizesDefaultMeasureBuffer)
 	params.Id = "remote-loop";
 	params.TakeId = "remote-take";
 	params.Wav = "remote-loop";
-	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+	auto loop = std::make_shared<StationRemoteInspectableLoop>(params, mixerParams);
 
 	EXPECT_EQ(constants::MaxLoopFadeSamps + constants::DefaultSampleRate, loop->BufferLength());
 	EXPECT_TRUE(loop->ModelDirty());
@@ -274,7 +271,7 @@ TEST(LoopRemote, MeasureLengthMarksModelDirtyUntilUpdateRuns)
 	params.Id = "remote-loop";
 	params.TakeId = "remote-take";
 	params.Wav = "remote-loop";
-	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+	auto loop = std::make_shared<StationRemoteInspectableLoop>(params, mixerParams);
 
 	loop->Update();
 	EXPECT_FALSE(loop->ModelDirty());
@@ -297,7 +294,7 @@ TEST(LoopRemote, IngestDoesNotMarkModelDirtyAfterInitialRefresh)
 	params.Id = "remote-loop";
 	params.TakeId = "remote-take";
 	params.Wav = "remote-loop";
-	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+	auto loop = std::make_shared<StationRemoteInspectableLoop>(params, mixerParams);
 
 	loop->Update();
 	loop->SetMeasureLength(1024);
@@ -320,7 +317,7 @@ TEST(LoopRemote, UsesHalfDrawRadiusScaleForRemoteStations)
 	params.Id = "remote-loop";
 	params.TakeId = "remote-take";
 	params.Wav = "remote-loop";
-	auto loop = std::make_shared<InspectableLoopRemote>(params, mixerParams);
+	auto loop = std::make_shared<StationRemoteInspectableLoop>(params, mixerParams);
 
 	EXPECT_DOUBLE_EQ(0.5, loop->DrawRadiusScale());
 }

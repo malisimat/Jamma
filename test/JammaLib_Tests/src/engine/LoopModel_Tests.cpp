@@ -11,18 +11,16 @@ using engine::LoopModelParams;
 using graphics::VU;
 using graphics::VuParams;
 
-namespace
-{
-	constexpr auto GrainVertFloatCount = 72u;
-	constexpr auto GrainUvFloatCount = 48u;
-	constexpr auto MeshMinHeight = 1.0f;
-	constexpr auto MeshHeightScale = 100.0f;
+	static constexpr auto GrainVertFloatCount = 72u;
+	static constexpr auto GrainUvFloatCount = 48u;
+	static constexpr auto MeshMinHeight = 1.0f;
+	static constexpr auto MeshHeightScale = 100.0f;
 
-	class TestLoopModel :
+	class EngineTestLoopModel :
 		public LoopModel
 	{
 	public:
-		TestLoopModel() :
+		EngineTestLoopModel() :
 			GuiModel(LoopModelParams()),
 			LoopModel(LoopModelParams())
 		{
@@ -57,11 +55,11 @@ namespace
 		}
 	};
 
-	class TestVu :
+	class EngineTestVu :
 		public VU
 	{
 	public:
-		TestVu() :
+		EngineTestVu() :
 			GuiModel(VuParams()),
 			VU(VuParams())
 		{
@@ -70,17 +68,16 @@ namespace
 		using VU::CalcLedGeometry;
 	};
 
-	BufferBank MakeBuffer(unsigned long length)
+	static BufferBank MakeBuffer(unsigned long length)
 	{
 		auto buffer = BufferBank();
 		buffer.Resize(length);
 		return buffer;
 	}
-}
 
 TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 {
-	auto model = TestLoopModel();
+	auto model = EngineTestLoopModel();
 	auto buffer = MakeBuffer(constants::GrainSamps * 4u);
 	buffer[0] = -0.5f;
 	buffer[1] = 0.75f;
@@ -121,7 +118,7 @@ TEST(LoopModelMesh, CalcGrainGeometryUsesExpectedRingCoordinates)
 
 TEST(LoopModelMesh, CalcGrainGeometryReflectsUvAroundZero)
 {
-	auto model = TestLoopModel();
+	auto model = EngineTestLoopModel();
 	auto buffer = MakeBuffer(constants::GrainSamps * 4u);
 
 	const auto tol = 1e-5f;
@@ -257,7 +254,7 @@ TEST(LoopModelWaveform, DecimateWaveformPreservesSinglePolarityEnvelope)
 
 TEST(VuModelMesh, CalcLedGeometryFrontFaceNormalPointsOutward)
 {
-	auto vu = TestVu();
+	auto vu = EngineTestVu();
 	auto [verts, uvs] = vu.CalcLedGeometry(100.0f, 18u, 1.0f);
 
 	ASSERT_GE(verts.size(), 9u);
@@ -312,7 +309,7 @@ TEST(LoopModelWaveform, DecimateWaveformReturnsEmptyForZeroSegments)
 
 TEST(LoopModelWaveform, UpdateModelKeepsFixedMeshGeometry)
 {
-	auto model = TestLoopModel();
+	auto model = EngineTestLoopModel();
 	auto initialVerts = model.BackVerts();
 	auto initialUvs = model.BackUvs();
 
@@ -338,7 +335,7 @@ TEST(LoopModelWaveform, UpdateModelKeepsFixedMeshGeometry)
 
 TEST(LoopModelWaveform, UpdateModelWithZeroLoopLengthKeepsFixedGeometry)
 {
-	auto model = TestLoopModel();
+	auto model = EngineTestLoopModel();
 	auto initialVerts = model.BackVerts();
 	auto initialUvs = model.BackUvs();
 
@@ -353,7 +350,7 @@ TEST(LoopModelWaveform, UpdateModelWithZeroLoopLengthKeepsFixedGeometry)
 
 TEST(LoopModelWaveform, UpdateModelCanSkipUnchangedSignature)
 {
-	auto model = TestLoopModel();
+	auto model = EngineTestLoopModel();
 	const auto offset = static_cast<unsigned long>(constants::MaxLoopFadeSamps);
 	auto displayLength = constants::GrainSamps * 2u;
 	auto totalLength = offset + displayLength;
@@ -374,8 +371,8 @@ TEST(LoopModelWaveform, UpdateModelCanSkipUnchangedSignature)
 
 TEST(LoopModelWaveform, UpdateModelThrottlesRecordingCadence)
 {
-	auto model = TestLoopModel();
-	const auto interval = TestLoopModel::RecordingUpdateIntervalSamps();
+	auto model = EngineTestLoopModel();
+	const auto interval = EngineTestLoopModel::RecordingUpdateIntervalSamps();
 	auto buffer = MakeBuffer(interval * 3ul);
 
 	model.UpdateModel(buffer, interval, interval, 0ul, 120.0f, false);

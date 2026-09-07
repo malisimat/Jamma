@@ -5,15 +5,12 @@
 using midi::MidiEvent;
 using midi::MidiQueue;
 
-namespace
-{
-	constexpr std::size_t kCap = 8; // small power-of-two for boundary tests
+	static constexpr std::size_t kCap = 8; // small power-of-two for boundary tests
 
-	MidiEvent NoteOn(std::uint32_t off, std::uint8_t note, std::uint8_t vel = 100)
+	static MidiEvent NoteOn(std::uint32_t off, std::uint8_t note, std::uint8_t vel = 100)
 	{
 		return MidiEvent::MakeNoteOn(off, 0, note, vel);
 	}
-}
 
 TEST(MidiQueue, NewQueueIsEmpty) {
 	MidiQueue<kCap> q;

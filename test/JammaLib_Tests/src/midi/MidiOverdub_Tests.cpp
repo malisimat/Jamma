@@ -9,9 +9,7 @@ using midi::MidiEvent;
 using midi::MidiOverdubRenderParams;
 using midi::MidiPunchWindow;
 
-namespace
-{
-	struct EventView
+	struct MidiOverdubEventView
 	{
 		std::uint32_t Offset;
 		std::uint8_t Status;
@@ -19,7 +17,7 @@ namespace
 		std::uint8_t Velocity;
 	};
 
-	std::vector<EventView> BuildEvents(const std::vector<MidiEvent>& sourceEvents,
+	static std::vector<MidiOverdubEventView> BuildEvents(const std::vector<MidiEvent>& sourceEvents,
 		std::uint32_t sourceLoopLength,
 		std::uint32_t targetLoopLength,
 		const std::vector<MidiPunchWindow>& punchWindows,
@@ -35,7 +33,7 @@ namespace
 		params.PunchWindowCount = punchWindows.size();
 
 		const auto eventCount = midi::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
-		std::vector<EventView> built;
+		std::vector<MidiOverdubEventView> built;
 		built.reserve(eventCount);
 		for (std::size_t i = 0u; i < eventCount; ++i)
 		{
@@ -49,7 +47,6 @@ namespace
 
 		return built;
 	}
-}
 
 TEST(MidiOverdub, CopiesSourceOutsideSinglePunchWindow)
 {

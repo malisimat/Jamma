@@ -21,12 +21,9 @@
 #include "vst/Vst2Plugin.h"
 #include "vst/IVstPlugin.h"
 
-namespace
+static void HostEchoSetParameter(AEffect*, VstInt32, float)
 {
-	void HostEchoSetParameter(AEffect*, VstInt32, float)
-	{
-		FAIL() << "audioMasterAutomate must not call setParameter on the host side";
-	}
+	FAIL() << "audioMasterAutomate must not call setParameter on the host side";
 }
 
 // -----------------------------------------------------------------------

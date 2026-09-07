@@ -10,9 +10,7 @@ using engine::Station;
 using engine::StationParams;
 using audio::MergeMixBehaviourParams;
 
-namespace
-{
-	std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
+	static std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
 	{
 		StationParams params;
 		params.Name = name;
@@ -22,16 +20,16 @@ namespace
 		return std::make_shared<Station>(params, mixerParams);
 	}
 
-	void CommitInitial(const std::shared_ptr<Station>& station)
+	static void CommitInitial(const std::shared_ptr<Station>& station)
 	{
 		station->CommitChanges();
 	}
 
-	class TestLoopTake :
+	class StationRackTestLoopTake :
 		public LoopTake
 	{
 	public:
-		TestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
+		StationRackTestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
 			LoopTake(params, mixerParams)
 		{
 		}
@@ -42,18 +40,18 @@ namespace
 		}
 	};
 
-	std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id)
+	static std::shared_ptr<StationRackTestLoopTake> MakeTestLoopTake(const std::string& id)
 	{
 		LoopTakeParams params;
 		params.Id = id;
 		params.Size = { 100, 100 };
 		MergeMixBehaviourParams merge;
 		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-		return std::make_shared<TestLoopTake>(params, mixerParams);
+		return std::make_shared<StationRackTestLoopTake>(params, mixerParams);
 	}
 
-	void OpenRouterOnTake(const std::shared_ptr<Station>& station,
-		const std::shared_ptr<TestLoopTake>& take)
+	static void OpenRouterOnTake(const std::shared_ptr<Station>& station,
+		const std::shared_ptr<StationRackTestLoopTake>& take)
 	{
 		GuiAction action;
 		action.ElementType = GuiAction::ACTIONELEMENT_RACK;
@@ -64,8 +62,8 @@ namespace
 		take->ForceRackState(gui::GuiRackParams::RACK_ROUTER);
 	}
 
-	void OpenChannelsOnTake(const std::shared_ptr<Station>& station,
-		const std::shared_ptr<TestLoopTake>& take)
+	static void OpenChannelsOnTake(const std::shared_ptr<Station>& station,
+		const std::shared_ptr<StationRackTestLoopTake>& take)
 	{
 		GuiAction action;
 		action.ElementType = GuiAction::ACTIONELEMENT_RACK;
@@ -75,7 +73,6 @@ namespace
 		station->OnAction(action);
 		take->ForceRackState(gui::GuiRackParams::RACK_CHANNELS);
 	}
-}
 
 TEST(StationRack, RouterOpenCollapsesCommittedSiblingRacksToMaster)
 {

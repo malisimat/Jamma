@@ -7,9 +7,7 @@
 
 using graphics::NinePatchImage;
 
-namespace
-{
-	std::pair<float, float> CellXBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
+	static std::pair<float, float> CellXBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
 	{
 		const auto start = cellIndex * 18;
 		auto minX = positions[start + 0];
@@ -24,7 +22,7 @@ namespace
 		return { minX, maxX };
 	}
 
-	std::pair<float, float> CellYBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
+	static std::pair<float, float> CellYBounds(const std::array<GLfloat, 162>& positions, int cellIndex)
 	{
 		const auto start = cellIndex * 18;
 		auto minY = positions[start + 1];
@@ -38,7 +36,6 @@ namespace
 
 		return { minY, maxY };
 	}
-}
 
 TEST(NinePatchImageTest, BuildPositions_CornersClamped)
 {

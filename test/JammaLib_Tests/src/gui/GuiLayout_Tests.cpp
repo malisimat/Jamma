@@ -28,8 +28,6 @@ using actions::TouchAction;
 // Helper factories
 // ---------------------------------------------------------------------------
 
-namespace
-{
 	static GuiButtonParams MakeButtonParams(unsigned int w = 40u, unsigned int h = 20u)
 	{
 		GuiButtonParams p;
@@ -70,7 +68,6 @@ namespace
 		p.vAlign = va;
 		return p;
 	}
-}
 
 TEST(GuiPanel, AddChildUsesBaseGuiElementSignature)
 {

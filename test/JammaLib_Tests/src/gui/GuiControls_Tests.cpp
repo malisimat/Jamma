@@ -20,13 +20,11 @@ using actions::GuiAction;
 using actions::TouchAction;
 using actions::KeyAction;
 
-namespace
-{
-	class MockedGuiReceiver :
+	class GuiControlsMockedGuiReceiver :
 		public ActionReceiver
 	{
 	public:
-		MockedGuiReceiver() :
+		GuiControlsMockedGuiReceiver() :
 			ActionReceiver(),
 			_actionCount(0),
 			_lastAction()
@@ -48,7 +46,7 @@ namespace
 		actions::GuiAction _lastAction;
 	};
 
-	class ThrowingGuiReceiver :
+	class GuiControlsThrowingGuiReceiver :
 		public ActionReceiver
 	{
 	public:
@@ -88,7 +86,6 @@ namespace
 		params.MinSize = { 20, 20 };
 		return params;
 	}
-}
 
 TEST(GuiButton, TouchInsideEatsDownAndUp) {
 	auto button = std::make_shared<GuiButton>(MakeButtonParams());
@@ -186,7 +183,7 @@ TEST(GuiButton, TextCreatesLabelChild) {
 
 TEST(GuiToggle, TouchUpFlipsStateAndNotifiesReceiver) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	auto downRes = toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 }));
@@ -205,7 +202,7 @@ TEST(GuiToggle, TouchUpFlipsStateAndNotifiesReceiver) {
 
 TEST(GuiToggle, TouchUpOutsideAfterTouchDownDoesNotToggle) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	auto downRes = toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 }));
@@ -219,7 +216,7 @@ TEST(GuiToggle, TouchUpOutsideAfterTouchDownDoesNotToggle) {
 
 TEST(GuiToggle, InterleavedTouchIndexesToggleDeterministically) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	TouchAction down0 = MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 });
@@ -242,7 +239,7 @@ TEST(GuiToggle, InterleavedTouchIndexesToggleDeterministically) {
 
 TEST(GuiToggle, RapidTapSequenceMaintainsConsistentParity) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	for (int i = 0; i < 9; ++i)
@@ -259,13 +256,13 @@ TEST(GuiToggle, RapidTapSequenceMaintainsConsistentParity) {
 
 TEST(GuiToggle, ReceiverExceptionPropagatesAndControlRecovers) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	toggle->SetReceiver(std::make_shared<ThrowingGuiReceiver>());
+	toggle->SetReceiver(std::make_shared<GuiControlsThrowingGuiReceiver>());
 
 	ASSERT_TRUE(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 })).IsEaten);
 	EXPECT_THROW(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_UP, { 10, 10 })), std::runtime_error);
 	ASSERT_EQ(GuiToggleParams::TOGGLE_ON, toggle->GetToggleState());
 
-	auto recoveryReceiver = std::make_shared<MockedGuiReceiver>();
+	auto recoveryReceiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(recoveryReceiver);
 
 	ASSERT_TRUE(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 })).IsEaten);
@@ -345,7 +342,7 @@ TEST(GuiRadio, ChildToggleUpdatesSelectionAndNotifiesReceiver) {
 	};
 
 	auto radio = std::make_shared<GuiRadio>(params);
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	radio->SetReceiver(receiver);
 	radio->Init();
 

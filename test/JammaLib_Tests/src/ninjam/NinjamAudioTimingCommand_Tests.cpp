@@ -8,9 +8,7 @@ using ninjam::NinjamDesiredTransportStateMailbox;
 using ninjam::NinjamDesiredTimingIntent;
 using utils::Timer;
 
-namespace
-{
-	NinjamDesiredTransportState MakeDesired(std::uint64_t version,
+static NinjamDesiredTransportState MakeDesired(std::uint64_t version,
 		std::uint64_t generation,
 		unsigned long seedLength,
 		unsigned int absolutePhase)
@@ -30,7 +28,6 @@ namespace
 		desired.RemotePhaseDeviceSample = 12345u;
 		return desired;
 	}
-}
 
 // ── Mailbox: single audio-boundary consume semantics ─────────────────────────
 

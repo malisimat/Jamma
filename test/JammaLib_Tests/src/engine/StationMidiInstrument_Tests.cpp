@@ -17,9 +17,7 @@ using midi::MidiEvent;
 using engine::Station;
 using engine::StationParams;
 
-namespace
-{
-	class FakeMidiPlugin final : public vst::IVstPlugin
+	class StationMidiInstrumentFakePlugin final : public vst::IVstPlugin
 	{
 	public:
 		bool PreInit(const std::wstring&) override { return true; }
@@ -91,10 +89,10 @@ namespace
 		std::string _name = "fake-midi-plugin";
 	};
 
-	class CaptureSink : public base::AudioSink
+	class StationMidiInstrumentCaptureSink : public base::AudioSink
 	{
 	public:
-		explicit CaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
+		explicit StationMidiInstrumentCaptureSink(unsigned int bufSize) : Samples(bufSize, 0.0f) {}
 
 		void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override
 		{
@@ -115,13 +113,13 @@ namespace
 		std::vector<float> Samples;
 	};
 
-	class CaptureMultiSink : public base::MultiAudioSink
+	class StationMidiInstrumentCaptureMultiSink : public base::MultiAudioSink
 	{
 	public:
-		CaptureMultiSink(unsigned int numChannels, unsigned int bufSize)
+		StationMidiInstrumentCaptureMultiSink(unsigned int numChannels, unsigned int bufSize)
 		{
 			for (auto channel = 0u; channel < numChannels; ++channel)
-				_sinks.push_back(std::make_shared<CaptureSink>(bufSize));
+				_sinks.push_back(std::make_shared<StationMidiInstrumentCaptureSink>(bufSize));
 		}
 
 		unsigned int NumInputChannels(base::Audible::AudioSourceType) const override
@@ -137,10 +135,10 @@ namespace
 		}
 
 	private:
-		std::vector<std::shared_ptr<CaptureSink>> _sinks;
+		std::vector<std::shared_ptr<StationMidiInstrumentCaptureSink>> _sinks;
 	};
 
-	std::shared_ptr<Station> MakeStation(const std::string& name)
+	static std::shared_ptr<Station> MakeStation(const std::string& name)
 	{
 		StationParams params;
 		params.Name = name;
@@ -154,10 +152,10 @@ namespace
 		return station;
 	}
 
-	std::shared_ptr<FakeMidiPlugin> AddPlugin(const std::shared_ptr<Station>& station,
+	static std::shared_ptr<StationMidiInstrumentFakePlugin> AddPlugin(const std::shared_ptr<Station>& station,
 		const std::wstring& path)
 	{
-		auto plugin = std::make_shared<FakeMidiPlugin>();
+		auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
 		JobAction job;
 		job.JobActionType = JobAction::JOB_LOADVST;
 		job.VstPath = path;
@@ -167,7 +165,7 @@ namespace
 		return plugin;
 	}
 
-	void AllowAllMidiChannels(const std::shared_ptr<Station>& station)
+	static void AllowAllMidiChannels(const std::shared_ptr<Station>& station)
 	{
 		station->SetAllowedMidiChannels({
 			1, 2, 3, 4, 5, 6, 7, 8,
@@ -175,17 +173,17 @@ namespace
 		});
 	}
 
-	void RenderStationBlock(const std::shared_ptr<Station>& station,
+	static void RenderStationBlock(const std::shared_ptr<Station>& station,
 		std::uint32_t blockStart,
 		unsigned int numSamps = 128u)
 	{
-		auto sink = std::make_shared<CaptureMultiSink>(2u, numSamps);
+		auto sink = std::make_shared<StationMidiInstrumentCaptureMultiSink>(2u, numSamps);
 		station->Zero(numSamps, base::Audible::AUDIOSOURCE_LOOPS);
 		station->WriteBlock(sink, nullptr, 0, numSamps, blockStart);
 		station->EndMultiPlay(numSamps);
 	}
 
-	std::shared_ptr<LoopTake> MakeMidiTake(const std::string& id)
+	static std::shared_ptr<LoopTake> MakeMidiTake(const std::string& id)
 	{
 		LoopTakeParams params;
 		params.Id = id;
@@ -194,7 +192,6 @@ namespace
 		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
 		return std::make_shared<LoopTake>(params, mixerParams);
 	}
-}
 
 TEST(StationMidiInstrument, LiveMidiIsDeliveredToStationVstPlugin)
 {

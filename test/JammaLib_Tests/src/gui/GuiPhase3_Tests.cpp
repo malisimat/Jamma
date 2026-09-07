@@ -35,9 +35,7 @@ using actions::TouchAction;
 using actions::TouchMoveAction;
 using actions::GuiAction;
 
-namespace
-{
-	class RecordingGuiReceiver : public base::ActionReceiver
+	class GuiPhase3RecordingGuiReceiver : public base::ActionReceiver
 	{
 	public:
 		actions::ActionResult OnAction(actions::GuiAction action) override
@@ -95,7 +93,6 @@ namespace
 		for (char vk : vkeys)
 			tb->OnAction(MakeKey((unsigned int)(unsigned char)vk));
 	}
-}
 
 // ---------------------------------------------------------------------------
 // GuiFocusManager
@@ -362,7 +359,7 @@ TEST(GuiTextBox, LateBoundReceiverGetsNotifications) {
 	tp.MinSize = { 80, 24 };
 	tp.Index = 17u;
 	auto tb = std::make_shared<GuiTextBox>(tp);
-	auto receiver = std::make_shared<RecordingGuiReceiver>();
+	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
 	tb->SetReceiver(receiver);
 
 	tb->SetText("23", true);
