@@ -320,6 +320,24 @@ namespace engine
 		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+
+	private:
+		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
+		static unsigned long _NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept;
+		static std::uint32_t _NormalizeMidiLoopOffset(std::uint32_t offset,
+			std::uint32_t loopLength) noexcept;
+		static unsigned long _InitialMidiPlayIndex(unsigned long loopLength,
+			int midiQuantisationErrorSamps) noexcept;
+		static bool _AppendMidiEvent(const midi::MidiEvent& event,
+			midi::MidiEvent* outEvents,
+			std::size_t outCapacity,
+			std::size_t& outCount) noexcept;
+		static std::size_t _BuildRebasedMidiOverdubSourceEvents(const midi::MidiOverdubLoopState& state,
+			midi::MidiEvent* outEvents,
+			std::size_t outCapacity) noexcept;
+		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
+
+	protected:
 		void _ResizeVstScratch(unsigned int channelCount);
 		bool _ShiftDirectPlaybackCursors(long long deltaSamps) noexcept;
 		void _TryApplyLocalTransportOffset() noexcept;

@@ -11,145 +11,131 @@
 using namespace engine;
 using namespace utils;
 
-namespace
+void QuantisationModel::AppendPartUvs(std::vector<float>* uvs, float partKind)
 {
-	constexpr float GateInnerRadius = 0.0f;
-	constexpr float GateOuterRadius = 180.0f;
-	constexpr float GateHalfHeight = 138.0f;
-	constexpr unsigned int MaxVisibleGates = 128u;
-	constexpr float FrameWidthFraction = 0.008f;
-	constexpr float FrameDepthFraction = 0.15f;
-	constexpr float MinVisualHalfHeight = 8.0f;
-	constexpr float MinVisualRadius = 24.0f;
-	constexpr float FramePart = 0.0f;
-	constexpr float BackingPart = 1.0f;
+	if (!uvs)
+		return;
 
-	void AppendPartUvs(std::vector<float>* uvs, float partKind)
+	for (auto i = 0u; i < 6u; ++i)
 	{
-		if (!uvs)
-			return;
+		uvs->push_back(partKind);
+		uvs->push_back(0.0f);
+	}
+}
 
-		for (auto i = 0u; i < 6u; ++i)
-		{
-			uvs->push_back(partKind);
-			uvs->push_back(0.0f);
-		}
+void QuantisationModel::AppendQuad(std::vector<float>& verts,
+	std::vector<float>* uvs,
+	float partKind,
+	const glm::vec3& a,
+	const glm::vec3& b,
+	const glm::vec3& c,
+	const glm::vec3& d)
+{
+	verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+	verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
+	verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
+
+	verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+	verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
+	verts.push_back(d.x); verts.push_back(d.y); verts.push_back(d.z);
+
+	AppendPartUvs(uvs, partKind);
+}
+
+glm::vec3 QuantisationModel::GatePoint(float x, float y, float z)
+{
+	return glm::vec3(x, y, z);
+}
+
+void QuantisationModel::BuildGateMesh(std::vector<float>& verts,
+	std::vector<float>* uvs,
+	float innerRadius,
+	float outerRadius,
+	float halfHeight)
+{
+	const auto radialSpan = std::max(outerRadius - innerRadius, 1.0f);
+	const auto frameWidth = std::clamp(radialSpan * FrameWidthFraction, 8.0f, halfHeight * 0.8f);
+	const auto frameDepthHalf = std::max(frameWidth * FrameDepthFraction, 4.0f) * 0.5f;
+
+	const auto yMin = -halfHeight;
+	const auto yInnerMin = yMin + frameWidth;
+	const auto yInnerMax = halfHeight - frameWidth;
+	const auto yMax = halfHeight;
+	const auto zMin = innerRadius;
+	const auto zInnerMax = outerRadius - frameWidth;
+	const auto zMax = outerRadius;
+	const auto xFront = frameDepthHalf;
+	const auto xBack = -frameDepthHalf;
+
+	verts.reserve(16u * 6u * 3u);
+	if (uvs)
+		uvs->reserve(16u * 6u * 2u);
+
+	AppendQuad(verts, uvs, BackingPart,
+		GatePoint(xFront * 0.35f, yInnerMin, zMin),
+		GatePoint(xFront * 0.35f, yInnerMax, zMin),
+		GatePoint(xFront * 0.35f, yInnerMax, zInnerMax),
+		GatePoint(xFront * 0.35f, yInnerMin, zInnerMax));
+	AppendQuad(verts, uvs, BackingPart,
+		GatePoint(xBack * 0.35f, yInnerMax, zMin),
+		GatePoint(xBack * 0.35f, yInnerMin, zMin),
+		GatePoint(xBack * 0.35f, yInnerMin, zInnerMax),
+		GatePoint(xBack * 0.35f, yInnerMax, zInnerMax));
+
+	// Front faces for the top, right, and bottom beams of the half-frame.
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xFront, yInnerMax, zMin),
+		GatePoint(xFront, yMax, zMin),
+		GatePoint(xFront, yMax, zMax),
+		GatePoint(xFront, yInnerMax, zMax));
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xFront, yInnerMin, zInnerMax),
+		GatePoint(xFront, yInnerMax, zInnerMax),
+		GatePoint(xFront, yInnerMax, zMax),
+		GatePoint(xFront, yInnerMin, zMax));
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xFront, yMin, zMin),
+		GatePoint(xFront, yInnerMin, zMin),
+		GatePoint(xFront, yInnerMin, zMax),
+		GatePoint(xFront, yMin, zMax));
+
+	// Matching back faces.
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xBack, yInnerMax, zMax),
+		GatePoint(xBack, yMax, zMax),
+		GatePoint(xBack, yMax, zMin),
+		GatePoint(xBack, yInnerMax, zMin));
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xBack, yInnerMin, zMax),
+		GatePoint(xBack, yInnerMax, zMax),
+		GatePoint(xBack, yInnerMax, zInnerMax),
+		GatePoint(xBack, yInnerMin, zInnerMax));
+	AppendQuad(verts, uvs, FramePart,
+		GatePoint(xBack, yMin, zMax),
+		GatePoint(xBack, yInnerMin, zMax),
+		GatePoint(xBack, yInnerMin, zMin),
+		GatePoint(xBack, yMin, zMin));
+
+	const std::array<std::pair<glm::vec2, glm::vec2>, 8u> boundary = {{
+		{ { yMin, zMin }, { yMin, zMax } },
+		{ { yMin, zMax }, { yMax, zMax } },
+		{ { yMax, zMax }, { yMax, zMin } },
+		{ { yMax, zMin }, { yInnerMax, zMin } },
+		{ { yInnerMax, zMin }, { yInnerMax, zInnerMax } },
+		{ { yInnerMax, zInnerMax }, { yInnerMin, zInnerMax } },
+		{ { yInnerMin, zInnerMax }, { yInnerMin, zMin } },
+		{ { yInnerMin, zMin }, { yMin, zMin } }
+	}};
+
+	for (const auto& [from, to] : boundary)
+	{
+		AppendQuad(verts, uvs, FramePart,
+			GatePoint(xFront, from.x, from.y),
+			GatePoint(xFront, to.x, to.y),
+			GatePoint(xBack, to.x, to.y),
+			GatePoint(xBack, from.x, from.y));
 	}
 
-	void AppendQuad(std::vector<float>& verts,
-		std::vector<float>* uvs,
-		float partKind,
-		const glm::vec3& a,
-		const glm::vec3& b,
-		const glm::vec3& c,
-		const glm::vec3& d)
-	{
-		verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
-		verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
-		verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
-
-		verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
-		verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
-		verts.push_back(d.x); verts.push_back(d.y); verts.push_back(d.z);
-
-		AppendPartUvs(uvs, partKind);
-	}
-
-	glm::vec3 GatePoint(float x, float y, float z)
-	{
-		return glm::vec3(x, y, z);
-	}
-
-	void BuildGateMesh(std::vector<float>& verts,
-		std::vector<float>* uvs,
-		float innerRadius,
-		float outerRadius,
-		float halfHeight)
-	{
-		const auto radialSpan = std::max(outerRadius - innerRadius, 1.0f);
-		const auto frameWidth = std::clamp(radialSpan * FrameWidthFraction, 8.0f, halfHeight * 0.8f);
-		const auto frameDepthHalf = std::max(frameWidth * FrameDepthFraction, 4.0f) * 0.5f;
-
-		const auto yMin = -halfHeight;
-		const auto yInnerMin = yMin + frameWidth;
-		const auto yInnerMax = halfHeight - frameWidth;
-		const auto yMax = halfHeight;
-		const auto zMin = innerRadius;
-		const auto zInnerMax = outerRadius - frameWidth;
-		const auto zMax = outerRadius;
-		const auto xFront = frameDepthHalf;
-		const auto xBack = -frameDepthHalf;
-
-		verts.reserve(16u * 6u * 3u);
-		if (uvs)
-			uvs->reserve(16u * 6u * 2u);
-
-		AppendQuad(verts, uvs, BackingPart,
-			GatePoint(xFront * 0.35f, yInnerMin, zMin),
-			GatePoint(xFront * 0.35f, yInnerMax, zMin),
-			GatePoint(xFront * 0.35f, yInnerMax, zInnerMax),
-			GatePoint(xFront * 0.35f, yInnerMin, zInnerMax));
-		AppendQuad(verts, uvs, BackingPart,
-			GatePoint(xBack * 0.35f, yInnerMax, zMin),
-			GatePoint(xBack * 0.35f, yInnerMin, zMin),
-			GatePoint(xBack * 0.35f, yInnerMin, zInnerMax),
-			GatePoint(xBack * 0.35f, yInnerMax, zInnerMax));
-
-		// Front faces for the top, right, and bottom beams of the half-frame.
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xFront, yInnerMax, zMin),
-			GatePoint(xFront, yMax, zMin),
-			GatePoint(xFront, yMax, zMax),
-			GatePoint(xFront, yInnerMax, zMax));
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xFront, yInnerMin, zInnerMax),
-			GatePoint(xFront, yInnerMax, zInnerMax),
-			GatePoint(xFront, yInnerMax, zMax),
-			GatePoint(xFront, yInnerMin, zMax));
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xFront, yMin, zMin),
-			GatePoint(xFront, yInnerMin, zMin),
-			GatePoint(xFront, yInnerMin, zMax),
-			GatePoint(xFront, yMin, zMax));
-
-		// Matching back faces.
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xBack, yInnerMax, zMax),
-			GatePoint(xBack, yMax, zMax),
-			GatePoint(xBack, yMax, zMin),
-			GatePoint(xBack, yInnerMax, zMin));
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xBack, yInnerMin, zMax),
-			GatePoint(xBack, yInnerMax, zMax),
-			GatePoint(xBack, yInnerMax, zInnerMax),
-			GatePoint(xBack, yInnerMin, zInnerMax));
-		AppendQuad(verts, uvs, FramePart,
-			GatePoint(xBack, yMin, zMax),
-			GatePoint(xBack, yInnerMin, zMax),
-			GatePoint(xBack, yInnerMin, zMin),
-			GatePoint(xBack, yMin, zMin));
-
-		const std::array<std::pair<glm::vec2, glm::vec2>, 8u> boundary = {{
-			{ { yMin, zMin }, { yMin, zMax } },
-			{ { yMin, zMax }, { yMax, zMax } },
-			{ { yMax, zMax }, { yMax, zMin } },
-			{ { yMax, zMin }, { yInnerMax, zMin } },
-			{ { yInnerMax, zMin }, { yInnerMax, zInnerMax } },
-			{ { yInnerMax, zInnerMax }, { yInnerMin, zInnerMax } },
-			{ { yInnerMin, zInnerMax }, { yInnerMin, zMin } },
-			{ { yInnerMin, zMin }, { yMin, zMin } }
-		}};
-
-		for (const auto& [from, to] : boundary)
-		{
-			AppendQuad(verts, uvs, FramePart,
-				GatePoint(xFront, from.x, from.y),
-				GatePoint(xFront, to.x, to.y),
-				GatePoint(xBack, to.x, to.y),
-				GatePoint(xBack, from.x, from.y));
-		}
-
-	}
 }
 
 QuantisationModel::QuantisationModel() :

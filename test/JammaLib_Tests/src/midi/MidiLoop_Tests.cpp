@@ -35,118 +35,115 @@ using actions::TouchMoveAction;
 using audio::MergeMixBehaviourParams;
 using base::Audible;
 
-namespace
+class MidiLoopCapturingSink : public IMidiSink
 {
-	class CapturingSink : public IMidiSink
+public:
+	std::vector<MidiEvent> events;
+	void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
+	void Clear() noexcept { events.clear(); }
+};
+
+class MidiLoopCapturingOutputSink : public IMidiOutputSink
+{
+public:
+	struct CapturedEvent
 	{
-	public:
-		std::vector<MidiEvent> events;
-		void OnEvent(const MidiEvent& ev) noexcept override { events.push_back(ev); }
-		void Clear() noexcept { events.clear(); }
+		unsigned int outputIndex;
+		MidiEvent event;
 	};
 
-	class CapturingOutputSink : public IMidiOutputSink
+	std::vector<CapturedEvent> events;
+	void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept override
 	{
-	public:
-		struct CapturedEvent
-		{
-			unsigned int outputIndex;
-			MidiEvent event;
-		};
+		events.push_back({ outputIndex, ev });
+	}
+};
 
-		std::vector<CapturedEvent> events;
-		void OnEvent(unsigned int outputIndex, const MidiEvent& ev) noexcept override
-		{
-			events.push_back({ outputIndex, ev });
-		}
-	};
-
-	class CapturingGuiReceiver : public base::ActionReceiver
+class MidiLoopCapturingGuiReceiver : public base::ActionReceiver
+{
+public:
+	actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-	public:
-		actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			Actions.push_back(action);
-			return actions::ActionResult::NoAction();
-		}
-
-		std::vector<actions::GuiAction> Actions;
-	};
-
-	std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
-	{
-		LoopTakeParams params;
-		params.Id = id;
-		params.Size = { 100, 100 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-		return std::make_shared<LoopTake>(params, mixerParams);
+		Actions.push_back(action);
+		return actions::ActionResult::NoAction();
 	}
 
-	std::shared_ptr<Station> MakeStation(const std::string& name = "station")
+	std::vector<actions::GuiAction> Actions;
+};
+
+static std::shared_ptr<LoopTake> MakeLoopTake(const std::string& id = "take-0")
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<LoopTake>(params, mixerParams);
+}
+
+static std::shared_ptr<Station> MakeStation(const std::string& name = "station")
+{
+	StationParams params;
+	params.Name = name;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	return std::make_shared<Station>(params, mixerParams);
+}
+
+class MidiLoopTestScene : public Scene
+{
+public:
+	MidiLoopTestScene(SceneParams params,
+		io::UserConfig user) :
+		Scene(params, user)
 	{
-		StationParams params;
-		params.Name = name;
-		params.Size = { 100, 100 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = Station::GetMixerParams(params.Size, merge);
-		return std::make_shared<Station>(params, mixerParams);
 	}
 
-	class TestScene : public Scene
+	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
-	public:
-		TestScene(SceneParams params,
-			io::UserConfig user) :
-			Scene(params, user)
-		{
-		}
-
-		void AddStationForTest(const std::shared_ptr<Station>& station)
-		{
-			_AddStation(station);
-		}
-
-		void SetSelectDepthForTest(base::SelectDepth depth)
-		{
-			_UpdateSelectDepth(static_cast<unsigned int>(depth));
-		}
-	};
-
-	constexpr unsigned int ScenePhaseDragSampleRate = 48000u;
-
-	io::UserConfig MakeSceneUserConfig()
-	{
-		io::UserConfig userConfig = {};
-		userConfig.Audio.SampleRate = ScenePhaseDragSampleRate;
-		return userConfig;
+		_AddStation(station);
 	}
 
-	std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
-		const utils::Position2d& finish)
+	void SetSelectDepthForTest(base::SelectDepth depth)
 	{
-		return engine::Quantiser::ResolvePhaseOffsetDrag(0,
-			finish.X - start.X,
-			ScenePhaseDragSampleRate);
+		_UpdateSelectDepth(static_cast<unsigned int>(depth));
 	}
+};
 
-	std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
-	{
-		std::vector<unsigned char> hoverPath;
-		for (auto idPart : element->GlobalId())
-			hoverPath.push_back(static_cast<unsigned char>(idPart + 1u));
-		hoverPath.push_back(0u);
-		return hoverPath;
-	}
+static constexpr unsigned int ScenePhaseDragSampleRate = 48000u;
 
-	void AddRecordedLoopForVisual(std::shared_ptr<LoopTake> take,
-		const std::string& stationName,
-		std::uint64_t transportStartSamps)
-	{
-		take->Record({ 0u }, stationName, {}, {}, {}, transportStartSamps);
-		take->EndMultiWrite(1000u, true, Audible::AUDIOSOURCE_ADC);
-		take->Play(0u, 1000u, 0u);
-	}
+static io::UserConfig MakeSceneUserConfig()
+{
+	io::UserConfig userConfig = {};
+	userConfig.Audio.SampleRate = ScenePhaseDragSampleRate;
+	return userConfig;
+}
+
+static std::int32_t ExpectedPhaseOffsetForDrag(const utils::Position2d& start,
+	const utils::Position2d& finish)
+{
+	return engine::Quantiser::ResolvePhaseOffsetDrag(0,
+		finish.X - start.X,
+		ScenePhaseDragSampleRate);
+}
+
+static std::vector<unsigned char> HoverPathFor(const std::shared_ptr<base::GuiElement>& element)
+{
+	std::vector<unsigned char> hoverPath;
+	for (auto idPart : element->GlobalId())
+		hoverPath.push_back(static_cast<unsigned char>(idPart + 1u));
+	hoverPath.push_back(0u);
+	return hoverPath;
+}
+
+static void AddRecordedLoopForVisual(std::shared_ptr<LoopTake> take,
+	const std::string& stationName,
+	std::uint64_t transportStartSamps)
+{
+	take->Record({ 0u }, stationName, {}, {}, {}, transportStartSamps);
+	take->EndMultiWrite(1000u, true, Audible::AUDIOSOURCE_ADC);
+	take->Play(0u, 1000u, 0u);
 }
 
 TEST(MidiLoop, DefaultStateIsEmpty) {
@@ -193,7 +190,7 @@ TEST(MidiLoop, DefaultCapacityDropsNewestEventsWhenFull) {
 
 	loop.EndRecord(static_cast<std::uint32_t>(capacity + 2u));
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, static_cast<std::uint32_t>(capacity + 2u), sink);
 	ASSERT_EQ(capacity, sink.events.size());
 	ASSERT_EQ(0u, sink.events.front().sampleOffset);
@@ -205,7 +202,7 @@ TEST(MidiLoop, EmptyLoopProducesNoEvents) {
 	loop.StartRecord();
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_TRUE(sink.events.empty());
 }
@@ -217,7 +214,7 @@ TEST(MidiLoop, PlaysBackEventsAtCorrectGlobalSamples) {
 	loop.RecordEvent(MidiEvent::MakeNoteOff(900u, 0, 60));
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	ASSERT_EQ(100u, sink.events[0].sampleOffset);
@@ -232,7 +229,7 @@ TEST(MidiLoop, EventOnBlockBoundaryEmittedExactlyOnce) {
 	loop.RecordEvent(MidiEvent::MakeNoteOn(256u, 0, 60, 100));
 	loop.EndRecord(1024u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	// First block ends at 256 exclusive — event at 256 must NOT fire here.
 	loop.ReadBlock(0u, 256u, sink);
 	ASSERT_TRUE(sink.events.empty());
@@ -254,7 +251,7 @@ TEST(MidiLoop, EventsSplitAcrossMultipleSmallBlocks) {
 	loop.RecordEvent(MidiEvent::MakeNoteOff(250u + 300u, 0, 64));
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	for (std::uint32_t s = 0; s < 1000u; s += 64u)
 		loop.ReadBlock(s, 64u, sink);
 
@@ -275,7 +272,7 @@ TEST(MidiLoop, LoopWrapRebasesGlobalTimestamps) {
 	loop.RecordEvent(MidiEvent::MakeNoteOff(200u, 0, 60));
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	// One block that wraps the loop boundary at sample 1000.
 	loop.ReadBlock(900u, 400u, sink);
 	// Expect: nothing in 900..999 (no events in that span), then events at 1100, 1200.
@@ -293,7 +290,7 @@ TEST(MidiLoop, LoopWrapEmitsForcedNoteOffForHeldNote) {
 	loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0, 60, 100));
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	// Block that spans 900..1100 — crosses the loop wrap.
 	loop.ReadBlock(900u, 200u, sink);
 
@@ -333,7 +330,7 @@ TEST(MidiLoop, HeldNoteIsFlushedWhenBlockEndsExactlyAtLoopBoundary) {
 	loop.RecordEvent(MidiEvent::MakeNoteOn(800u, 0, 60, 100));
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	// First block exactly fills one loop iteration. NoteOn is emitted; block ends
 	// at the loop boundary so no within-block wrap flush fires.
 	loop.ReadBlock(0u, 1000u, sink);
@@ -379,7 +376,7 @@ TEST(MidiLoop, HeldNotesTracksPlayedButUnreleasedNotes) {
 	// Before any ReadBlock, no notes are held.
 	EXPECT_TRUE(loop.HeldNotes().none());
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 100u, sink); // block [0,100) — plays the NoteOn at loopOffset 10.
 
 	ASSERT_EQ(1u, sink.events.size());
@@ -401,7 +398,7 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	loop.RecordEvent(MidiEvent::MakeNoteOn(1500u, 0, 64, 100)); // beyond loop length
 	loop.EndRecord(1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(1u, sink.events.size());
 	ASSERT_EQ(60u, sink.events[0].data1);
@@ -534,7 +531,7 @@ TEST(LoopTakeMidiTiming, FirstPlaybackStartsAtRecordedStartAfterAudioDelayCompen
 	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), 0u));
 	take->Play(playPos, loopLength, endRecordSamps);
 
-	CapturingOutputSink sink;
+	MidiLoopCapturingOutputSink sink;
 	const auto firstBlockStart = 12345u;
 	EXPECT_EQ(1u, take->ReadMidiBlock(firstBlockStart, 64u, sink));
 
@@ -561,7 +558,7 @@ TEST(LoopTakeMidiPlayback, MasterLevelScalesNoteVelocityOnly)
 	masterAction.Data = actions::GuiAction::GuiDouble(0.5);
 	take->OnAction(masterAction);
 
-	CapturingOutputSink sink;
+	MidiLoopCapturingOutputSink sink;
 	EXPECT_EQ(1u, take->ReadMidiBlock(0u, 32u, sink));
 	ASSERT_EQ(3u, sink.events.size());
 	for (const auto& captured : sink.events)
@@ -605,7 +602,7 @@ TEST(MidiLoop, EndRecordUsesQuantisedLengthFromTimer) {
     ASSERT_EQ(3072u, loop.LoopLengthSamps());
 
     // Playback wraps at the snapped boundary, not at the raw record end.
-    CapturingSink sink;
+    MidiLoopCapturingSink sink;
     loop.ReadBlock(0u, 3072u + 200u, sink);
     // Events: NoteOn@100, NoteOff@2000 (first pass), NoteOn@(3072+100)=3172 (second pass start).
     ASSERT_GE(sink.events.size(), 3u);
@@ -632,7 +629,7 @@ TEST(MidiLoop, EndRecordWithPowerQuantisationSnapsToPowerOfTwo) {
 
     ASSERT_EQ(2048u, loop.LoopLengthSamps());
 
-    CapturingSink sink;
+    MidiLoopCapturingSink sink;
     loop.ReadBlock(0u, 2048u, sink);
     ASSERT_EQ(2u, sink.events.size());
     ASSERT_EQ(0u, sink.events[0].sampleOffset);
@@ -655,7 +652,7 @@ TEST(MidiLoopQuantisation, EnabledShiftsEmittedEventsToSnapGrid) {
 	loop.SetQuantisation(settings);
 	ASSERT_TRUE(loop.IsQuantisationActive());
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(200u, sink.events[0].sampleOffset);
@@ -679,7 +676,7 @@ TEST(MidiLoopQuantisation, DisabledRestoresOriginalTiming) {
 	loop.SetQuantisation(off);
 	EXPECT_FALSE(loop.IsQuantisationActive());
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(140u, sink.events[0].sampleOffset);
@@ -699,7 +696,7 @@ TEST(MidiLoopQuantisation, FractionAdjustmentRetargetsSnapGrid) {
 	s.Fraction = MidiQuantisationFraction::Whole; // step 200, 70 -> 0
 	loop.SetQuantisation(s);
 
-	CapturingSink wholeSink;
+	MidiLoopCapturingSink wholeSink;
 	loop.ReadBlock(0u, 1000u, wholeSink);
 	ASSERT_EQ(2u, wholeSink.events.size());
 	EXPECT_EQ(0u, wholeSink.events[0].sampleOffset);
@@ -708,7 +705,7 @@ TEST(MidiLoopQuantisation, FractionAdjustmentRetargetsSnapGrid) {
 	s.Fraction = MidiQuantisationFraction::Half; // step 100, 70 -> 100
 	loop.SetQuantisation(s);
 
-	CapturingSink halfSink;
+	MidiLoopCapturingSink halfSink;
 	loop.ReadBlock(0u, 1000u, halfSink);
 	ASSERT_EQ(2u, halfSink.events.size());
 	EXPECT_EQ(100u, halfSink.events[0].sampleOffset);
@@ -728,7 +725,7 @@ TEST(MidiLoopQuantisation, ClampsShiftedNoteOffAtLoopBoundary) {
 	s.GrainSamps = 100u;
 	loop.SetQuantisation(s);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(600u, sink.events[0].sampleOffset);
@@ -750,7 +747,7 @@ TEST(MidiLoopQuantisation, EmitsQuantisedSameBlockEventsInCanonicalOrder) {
 	s.GrainSamps = 100u;
 	loop.SetQuantisation(s);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(4u, sink.events.size());
 	EXPECT_EQ(100u, sink.events[0].sampleOffset);
@@ -832,7 +829,7 @@ TEST(LoopTakeMidiQuantisation, GlobalStateForcesResolvedEnabledAndMixedRestoresL
 TEST(LoopTakeMidiQuantisation, LocalMidiQuantEditForwardsGuiActionToStationReceiver) {
 	auto take = MakeLoopTake("local-edit-take");
 	auto station = MakeStation("local-edit-station");
-	auto receiver = std::make_shared<CapturingGuiReceiver>();
+	auto receiver = std::make_shared<MidiLoopCapturingGuiReceiver>();
 	station->SetReceiver(receiver);
 	station->AddTake(take);
 	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
@@ -909,13 +906,13 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 	ASSERT_TRUE(shiftedTake->RecordMidiEvent(MidiEvent::MakeNoteOff(360u, 0u, 60u), 360u));
 	shiftedTake->Play(0u, 1000u, 0u);
 
-	CapturingOutputSink firstSink;
+	MidiLoopCapturingOutputSink firstSink;
 	EXPECT_EQ(1u, firstTake->ReadMidiBlock(0u, 500u, firstSink));
 	ASSERT_EQ(2u, firstSink.events.size());
 	EXPECT_EQ(300u, firstSink.events[0].event.sampleOffset);
 	EXPECT_TRUE(firstSink.events[0].event.IsNoteOn());
 
-	CapturingOutputSink shiftedSink;
+	MidiLoopCapturingOutputSink shiftedSink;
 	EXPECT_EQ(1u, shiftedTake->ReadMidiBlock(0u, 500u, shiftedSink));
 	ASSERT_EQ(2u, shiftedSink.events.size());
 	EXPECT_EQ(50u, shiftedSink.events[0].event.sampleOffset);
@@ -1010,7 +1007,7 @@ TEST(MidiLoopBuildApi, ReplaceRecordedEventsPreservesPlaybackTiming)
 
 	loop.ReplaceRecordedEvents(events.data(), events.size(), 512u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 512u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(100u, sink.events[0].sampleOffset);
@@ -1051,7 +1048,7 @@ TEST(MidiLoopBuildApi, ReplaceRecordedEventsKeepsQuantisationAndModelFlow)
 
 	loop.ReplaceRecordedEvents(events.data(), events.size(), 1000u);
 
-	CapturingSink sink;
+	MidiLoopCapturingSink sink;
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(2u, sink.events.size());
 	EXPECT_EQ(100u, sink.events[0].sampleOffset);
@@ -1348,7 +1345,7 @@ TEST(LoopTakeMidiOverdub, FirstPlaybackBlockAnchorsToTriggerTimeline)
 	target->PunchOut();
 	target->Play(0u, 100u, 0u);
 
-	CapturingOutputSink sink;
+	MidiLoopCapturingOutputSink sink;
 	const auto firstBlockStart = 5000u;
 	EXPECT_EQ(1u, target->ReadMidiBlock(firstBlockStart, 10u, sink));
 
@@ -1417,7 +1414,7 @@ TEST(LoopTakeMidiPlayback, MutedTakeDoesNotEmitMidiEvents)
 	take->Play(0u, 64u, 0u);
 	take->Mute();
 
-	CapturingOutputSink sink;
+	MidiLoopCapturingOutputSink sink;
 	EXPECT_EQ(1u, take->ReadMidiBlock(123u, 64u, sink));
 	EXPECT_TRUE(sink.events.empty());
 }

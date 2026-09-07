@@ -49,6 +49,31 @@ namespace io
 
 	private:
 		class TuiBuf;
+		// ANSI/VT escape sequences. ENABLE_VIRTUAL_TERMINAL_PROCESSING is set on
+		// stdout in Start(), so these are interpreted by the host terminal.
+		static constexpr const char* Reset = "\x1b[0m";
+		static constexpr const char* FgGray = "\x1b[90m";
+		static constexpr const char* FgGreen = "\x1b[32m";
+		static constexpr const char* FgYellow = "\x1b[33m";
+		static constexpr const char* FgMagenta = "\x1b[35m";
+		static constexpr const char* FgCyan = "\x1b[36m";
+		static constexpr const char* FgBrGreen = "\x1b[92m";
+		static constexpr const char* FgBrCyan = "\x1b[96m";
+		static constexpr const char* PromptStyle = "\x1b[1;36m";
+		// Emoji glyphs are raw UTF-8 byte sequences so this header compiles cleanly
+		// regardless of the source encoding selected by the toolchain.
+		static constexpr const char* EmojiBullet = "\xE2\x80\xA2 ";
+		static constexpr const char* EmojiOutbox = "\xF0\x9F\x93\xA4 ";
+		static constexpr const char* EmojiSpeech = "\xF0\x9F\x92\xAC ";
+		static constexpr const char* EmojiLock = "\xF0\x9F\x94\x92 ";
+		static constexpr const char* EmojiPin = "\xF0\x9F\x93\x8C ";
+		static constexpr const char* EmojiGreen = "\xF0\x9F\x9F\xA2 ";
+		static constexpr const char* EmojiRed = "\xF0\x9F\x94\xB4 ";
+		static constexpr const char* EmojiSparkle = "\xE2\x9C\xA8 ";
+		static constexpr const char* EmojiPlug = "\xF0\x9F\x94\x8C ";
+		static constexpr const char* EmojiKeys = "\xE2\x8C\xA8 ";
+		static constexpr const char* EmojiWarn = "\xE2\x9A\xA0 ";
+		static std::string _FormatLine(const std::string& line);
 
 		void _InputLoop();
 		void _RedrawInputLocked();                          // requires _renderMutex

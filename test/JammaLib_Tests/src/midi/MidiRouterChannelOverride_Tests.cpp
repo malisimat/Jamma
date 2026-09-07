@@ -3,21 +3,18 @@
 #include "actions/KeyAction.h"
 #include "midi/MidiRouter.h"
 
-namespace
-{
-	constexpr unsigned int PageUpKey = 0x21u;
-	constexpr unsigned int PageDownKey = 0x22u;
-	static const std::vector<std::shared_ptr<engine::Station>> kEmptyStations{};
-	using KeyActionType = decltype(actions::KeyAction::KEY_UP);
+static constexpr unsigned int PageUpKey = 0x21u;
+static constexpr unsigned int PageDownKey = 0x22u;
+static const std::vector<std::shared_ptr<engine::Station>> kEmptyStations{};
+using KeyActionType = decltype(actions::KeyAction::KEY_UP);
 
-	actions::KeyAction AltPageKey(unsigned int keyChar, KeyActionType keyActionType)
-	{
-		actions::KeyAction action{};
-		action.KeyChar = keyChar;
-		action.KeyActionType = keyActionType;
-		action.Modifiers = base::Action::MODIFIER_ALT;
-		return action;
-	}
+static actions::KeyAction AltPageKey(unsigned int keyChar, KeyActionType keyActionType)
+{
+	actions::KeyAction action{};
+	action.KeyChar = keyChar;
+	action.KeyActionType = keyActionType;
+	action.Modifiers = base::Action::MODIFIER_ALT;
+	return action;
 }
 
 TEST(MidiRouterChannelOverride, RewriteLeavesSystemMessagesUnchanged)

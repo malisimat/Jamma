@@ -12,6 +12,22 @@ namespace midi
 {
 	struct MidiNote
 	{
+	private:
+		struct ActiveNote
+		{
+			bool IsActive = false;
+			std::uint32_t StartSample = 0u;
+			std::uint8_t Velocity = 0u;
+		};
+
+		static void AddSpan(std::vector<MidiNote>& spans,
+			std::uint32_t startSample,
+			std::uint32_t endSample,
+			std::uint8_t channel,
+			std::uint8_t note,
+			std::uint8_t velocity);
+
+	public:
 		std::uint32_t StartSample;
 		std::uint32_t DurationSamples;
 		std::uint8_t Channel;

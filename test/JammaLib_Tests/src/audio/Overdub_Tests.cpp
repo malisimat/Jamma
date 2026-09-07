@@ -30,13 +30,11 @@ using engine::TriggerBinding;
 using engine::TriggerParams;
 using io::UserConfig;
 
-namespace {
-
-constexpr auto ActivateChar = 49u;
-constexpr auto DitchChar = 50u;
-constexpr auto OutputPathDelayBlocks = 2u;
-constexpr auto MaxExtraSettleBlocks = 3u;
-constexpr auto MinAlignedVerificationBlocks = 24u;
+static constexpr auto ActivateChar = 49u;
+static constexpr auto DitchChar = 50u;
+static constexpr auto OutputPathDelayBlocks = 2u;
+static constexpr auto MaxExtraSettleBlocks = 3u;
+static constexpr auto MinAlignedVerificationBlocks = 24u;
 
 struct OverdubTestParams
 {
@@ -53,7 +51,7 @@ struct OverdubTestParams
 	}
 };
 
-void PrintTo(const OverdubTestParams& p, std::ostream* os)
+static void PrintTo(const OverdubTestParams& p, std::ostream* os)
 {
 	auto sign = (p.EndTriggerOffsetBlocks >= 0) ? "p" : "m";
 	auto absOfs = (p.EndTriggerOffsetBlocks >= 0) ? p.EndTriggerOffsetBlocks : -p.EndTriggerOffsetBlocks;
@@ -64,7 +62,7 @@ void PrintTo(const OverdubTestParams& p, std::ostream* os)
 		<< "_ofs" << sign << absOfs;
 }
 
-std::pair<UserConfig, AudioStreamParams> MakeAudioConfig(unsigned int numChans, unsigned int blockSize)
+static std::pair<UserConfig, AudioStreamParams> MakeAudioConfig(unsigned int numChans, unsigned int blockSize)
 {
 	UserConfig cfg;
 	cfg.Audio.SampleRate = constants::DefaultSampleRate;
@@ -90,7 +88,7 @@ std::pair<UserConfig, AudioStreamParams> MakeAudioConfig(unsigned int numChans, 
 
 class Overdub : public ::testing::TestWithParam<OverdubTestParams> {};
 
-std::shared_ptr<Station> MakeStation(unsigned int numChans)
+static std::shared_ptr<Station> MakeStation(unsigned int numChans)
 {
 	StationParams stationParams;
 	stationParams.Size = { 200, 200 };
@@ -106,7 +104,7 @@ std::shared_ptr<Station> MakeStation(unsigned int numChans)
 	return station;
 }
 
-ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
+static ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 {
 	ChannelMixerParams params;
 	params.InputBufferSize = bufSize;
@@ -116,13 +114,13 @@ ChannelMixer MakeChannelMixer(unsigned int numChans, unsigned int bufSize)
 	return ChannelMixer(params);
 }
 
-float TestSample(unsigned int index, unsigned int multiplier = 17u)
+static float TestSample(unsigned int index, unsigned int multiplier = 17u)
 {
 	const auto wrapped = static_cast<int>(((index + 1u) * multiplier) % 2000u);
 	return static_cast<float>(wrapped - 1000) / 1001.0f;
 }
 
-std::vector<float> MakeSeedData(unsigned long loopSamps)
+static std::vector<float> MakeSeedData(unsigned long loopSamps)
 {
 	const auto total = constants::MaxLoopFadeSamps + loopSamps;
 	std::vector<float> data(total, 0.0f);
@@ -131,7 +129,7 @@ std::vector<float> MakeSeedData(unsigned long loopSamps)
 	return data;
 }
 
-bool HasNonZero(const float* buf, unsigned int count)
+static bool HasNonZero(const float* buf, unsigned int count)
 {
 	for (unsigned int i = 0; i < count; i++)
 	{
@@ -142,7 +140,7 @@ bool HasNonZero(const float* buf, unsigned int count)
 	return false;
 }
 
-int BestLag(const float* left,
+static int BestLag(const float* left,
 	const float* right,
 	unsigned int count,
 	int maxLag,
@@ -182,7 +180,7 @@ int BestLag(const float* left,
 	return bestLag;
 }
 
-void SetRackRoutes(base::ActionReceiver& receiver,
+static void SetRackRoutes(base::ActionReceiver& receiver,
 	const std::vector<std::pair<unsigned int, unsigned int>>& connections)
 {
 	actions::GuiAction action;
@@ -192,7 +190,7 @@ void SetRackRoutes(base::ActionReceiver& receiver,
 	receiver.OnAction(action);
 }
 
-void DrainCommitJobs(const std::shared_ptr<Station>& station)
+static void DrainCommitJobs(const std::shared_ptr<Station>& station)
 {
 	while (true)
 	{
@@ -209,7 +207,7 @@ void DrainCommitJobs(const std::shared_ptr<Station>& station)
 	}
 }
 
-std::shared_ptr<Trigger> MakeOverdubTrigger(unsigned int inputChannel)
+static std::shared_ptr<Trigger> MakeOverdubTrigger(unsigned int inputChannel)
 {
 	engine::DualBinding activate;
 	activate.SetDown(TriggerBinding(engine::TRIGGER_KEY, ActivateChar, 1), true);
@@ -228,7 +226,7 @@ std::shared_ptr<Trigger> MakeOverdubTrigger(unsigned int inputChannel)
 	return std::make_shared<Trigger>(triggerParams);
 }
 
-void SendKey(const std::shared_ptr<Station>& station,
+static void SendKey(const std::shared_ptr<Station>& station,
 	unsigned int keyChar,
 	int keyType,
 	const UserConfig& cfg,
@@ -245,7 +243,7 @@ void SendKey(const std::shared_ptr<Station>& station,
 	station->OnAction(action);
 }
 
-void StartOverdub(const std::shared_ptr<Station>& station,
+static void StartOverdub(const std::shared_ptr<Station>& station,
 	const UserConfig& cfg,
 	const AudioStreamParams& streamParams)
 {
@@ -256,7 +254,7 @@ void StartOverdub(const std::shared_ptr<Station>& station,
 	DrainCommitJobs(station);
 }
 
-void EndOverdub(const std::shared_ptr<Station>& station,
+static void EndOverdub(const std::shared_ptr<Station>& station,
 	const UserConfig& cfg,
 	const AudioStreamParams& streamParams)
 {
@@ -267,7 +265,7 @@ void EndOverdub(const std::shared_ptr<Station>& station,
 	DrainCommitJobs(station);
 }
 
-std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> MakeSeedStation(
+static std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> MakeSeedStation(
 	unsigned int numChans,
 	unsigned long loopLength,
 	unsigned long playPos,
@@ -294,7 +292,7 @@ std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> MakeSeedStation(
 	return { station, take };
 }
 
-void ReadStationOutput(ChannelMixer& chanMixer,
+static void ReadStationOutput(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* outBuf,
 	unsigned int numChans,
@@ -308,7 +306,7 @@ void ReadStationOutput(ChannelMixer& chanMixer,
 	chanMixer.Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 }
 
-void AdvancePlayback(ChannelMixer& chanMixer,
+static void AdvancePlayback(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	unsigned int numChans,
 	unsigned int blockSize,
@@ -319,7 +317,7 @@ void AdvancePlayback(ChannelMixer& chanMixer,
 		ReadStationOutput(chanMixer, station, outBuf.data(), numChans, blockSize);
 }
 
-void SimulateAudioCallback(ChannelMixer& chanMixer,
+static void SimulateAudioCallback(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	float* inBuf,
 	float* outBuf,
@@ -362,7 +360,7 @@ void SimulateAudioCallback(ChannelMixer& chanMixer,
 	DrainCommitJobs(station);
 }
 
-void SimulateRemainingRecordTail(ChannelMixer& chanMixer,
+static void SimulateRemainingRecordTail(ChannelMixer& chanMixer,
 	const std::shared_ptr<Station>& station,
 	unsigned int numChans,
 	unsigned int blockSize,
@@ -402,7 +400,7 @@ struct OverdubSession
 	unsigned long OverdubSamps = 0ul;
 };
 
-OverdubSession CreateOverdubSession(
+static OverdubSession CreateOverdubSession(
 	const OverdubTestParams& p,
 	const std::function<void(const std::shared_ptr<Station>&)>& stationSetup = {})
 {
@@ -439,7 +437,7 @@ OverdubSession CreateOverdubSession(
 	return session;
 }
 
-void AssertOverdubStarted(const OverdubSession& session)
+static void AssertOverdubStarted(const OverdubSession& session)
 {
 	ASSERT_NE(nullptr, session.Station);
 	ASSERT_NE(nullptr, session.SourceTake);
@@ -450,7 +448,7 @@ void AssertOverdubStarted(const OverdubSession& session)
 	ASSERT_EQ(1u, session.TargetTake->GetLoops().size());
 }
 
-void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
+static void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
 {
 	auto callbackMixer = MakeChannelMixer(session.Params.NumChans, constants::MaxBlockSize);
 	std::vector<float> inBuf(session.Params.NumChans * session.Params.BlockSize, 0.0f);
@@ -487,13 +485,13 @@ void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
 	ASSERT_EQ(LoopTake::STATE_PLAYING, session.TargetTake->TakeState());
 }
 
-void ExpectStandardTailLength(const OverdubSession& session)
+static void ExpectStandardTailLength(const OverdubSession& session)
 {
 	EXPECT_EQ(session.OverdubSamps + constants::MaxLoopFadeSamps,
 		session.TargetTake->NumRecordedSamps());
 }
 
-void RouteSourceAndOverdubToStereo(const OverdubSession& session)
+static void RouteSourceAndOverdubToStereo(const OverdubSession& session)
 {
 	session.SourceTake->UnMute();
 	session.TargetTake->UnMute();
@@ -510,7 +508,7 @@ struct RightChannelProbeResult
 	std::optional<unsigned int> FirstNonZeroBlock;
 };
 
-RightChannelProbeResult ProbeRightChannelForSignal(
+static RightChannelProbeResult ProbeRightChannelForSignal(
 	const OverdubSession& session,
 	unsigned int probeBlocks)
 {
@@ -560,7 +558,7 @@ struct StereoAlignmentProbeResult
 	std::optional<float> BestLagMse;
 };
 
-StereoAlignmentProbeResult ProbeStereoAlignment(
+static StereoAlignmentProbeResult ProbeStereoAlignment(
 	const OverdubSession& session,
 	unsigned int requiredAlignedBlocks,
 	unsigned int probeBlocks,
@@ -634,8 +632,6 @@ StereoAlignmentProbeResult ProbeStereoAlignment(
 
 	return result;
 }
-
-} // namespace
 
 TEST_P(Overdub, BounceProducesNonZeroAndAlignedOutput)
 {

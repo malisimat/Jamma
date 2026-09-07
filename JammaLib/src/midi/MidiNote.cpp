@@ -4,33 +4,23 @@
 
 using namespace midi;
 
-namespace
+void MidiNote::AddSpan(std::vector<MidiNote>& spans,
+	std::uint32_t startSample,
+	std::uint32_t endSample,
+	std::uint8_t channel,
+	std::uint8_t note,
+	std::uint8_t velocity)
 {
-	struct ActiveNote
-	{
-		bool IsActive = false;
-		std::uint32_t StartSample = 0;
-		std::uint8_t Velocity = 0;
-	};
+	if (endSample <= startSample)
+		return;
 
-	void AddSpan(std::vector<MidiNote>& spans,
-		std::uint32_t startSample,
-		std::uint32_t endSample,
-		std::uint8_t channel,
-		std::uint8_t note,
-		std::uint8_t velocity)
-	{
-		if (endSample <= startSample)
-			return;
-
-		spans.push_back(MidiNote{
-			startSample,
-			endSample - startSample,
-			static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask),
-			static_cast<std::uint8_t>(note & 0x7F),
-			velocity
-		});
-	}
+	spans.push_back(MidiNote{
+		startSample,
+		endSample - startSample,
+		static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask),
+		static_cast<std::uint8_t>(note & 0x7F),
+		velocity
+	});
 }
 
 std::vector<MidiNote> MidiNote::ExtractSpans(const MidiEvent* events,

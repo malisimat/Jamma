@@ -36,181 +36,175 @@ using namespace utils;
 // ---------------------------------------------------------------------------
 // Known public NINJAM servers
 // ---------------------------------------------------------------------------
-namespace
+static void PrintNinjamHelp()
 {
-	void PrintNinjamHelp()
-	{
-		auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
-		auto servers = ninjam::NinjamSession::GetReachablePublicServers();
-		std::cout << "[NINJAM] Commands:\n"
-		          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
-		          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
-		          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
-		          << "[NINJAM] Servers:\n";
-		if (snapshot.RefreshInFlight)
-			std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
+	auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+	auto servers = ninjam::NinjamSession::GetReachablePublicServers();
+	std::cout << "[NINJAM] Commands:\n"
+	          << "[NINJAM]   /  /?  /help        Show this help and server list\n"
+	          << "[NINJAM]   /c <n>  /connect <n> Connect to server by number\n"
+	          << "[NINJAM]   /d  /q  /quit        Disconnect from current server\n"
+	          << "[NINJAM] Servers:\n";
+	if (snapshot.RefreshInFlight)
+		std::cout << "[NINJAM]   Refreshing live metadata from autosong.ninjam.com...\n";
 
-		for (std::size_t i = 0; i < servers.size(); ++i)
-		{
-			std::cout << "[NINJAM]   " << (i + 1) << ". "
-			          << servers[i].Host
-			          << ninjam::NinjamSession::FormatPublicServerSummary(servers[i])
-			          << "\n";
-		}
-		std::cout << std::flush;
+	for (std::size_t i = 0; i < servers.size(); ++i)
+	{
+		std::cout << "[NINJAM]   " << (i + 1) << ". "
+		          << servers[i].Host
+		          << ninjam::NinjamSession::FormatPublicServerSummary(servers[i])
+		          << "\n";
 	}
+	std::cout << std::flush;
+}
 
-	// Returns true when the message was a slash command (consumed; should NOT
-	// be forwarded as chat). Returns false for ordinary chat text.
-	bool HandleSlashCommand(const std::string& msg, Scene* scene)
+// Returns true when the message was a slash command (consumed; should NOT
+// be forwarded as chat). Returns false for ordinary chat text.
+static bool HandleSlashCommand(const std::string& msg, Scene* scene)
+{
+	if (msg.empty() || msg[0] != '/')
+		return false;
+
+	const std::string rest = msg.substr(1);
+	const auto sp = rest.find(' ');
+	std::string verb = (sp == std::string::npos) ? rest : rest.substr(0, sp);
+	std::string args = (sp == std::string::npos) ? std::string{} : rest.substr(sp + 1);
+
+	for (auto& c : verb)
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	while (!args.empty() && args.front() == ' ')
+		args.erase(0, 1);
+
+	if (verb.empty() || verb == "?" || verb == "help")
 	{
-		if (msg.empty() || msg[0] != '/')
-			return false;
-
-		const std::string rest = msg.substr(1);
-		const auto sp = rest.find(' ');
-		std::string verb = (sp == std::string::npos) ? rest : rest.substr(0, sp);
-		std::string args = (sp == std::string::npos) ? std::string{} : rest.substr(sp + 1);
-
-		for (auto& c : verb)
-			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-		while (!args.empty() && args.front() == ' ')
-			args.erase(0, 1);
-
-		if (verb.empty() || verb == "?" || verb == "help")
+		const auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+		const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
+		if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
 		{
-			const auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
-			const bool refreshStarted = ninjam::NinjamSession::RefreshPublicServerDirectoryAsync(PrintNinjamHelp);
-			if (refreshStarted || snapshot.RefreshInFlight || !snapshot.HasLiveData)
-			{
-				std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
-			}
-			else
-			{
-				PrintNinjamHelp();
-			}
-			return true;
+			std::cout << "[NINJAM] Refreshing live metadata from autosong.ninjam.com..." << std::endl;
 		}
-
-		if (verb == "c" || verb == "connect")
+		else
 		{
-			if (args.empty())
-			{
-				std::cout << "[NINJAM] Usage: /c <number>  (type / for list)" << std::endl;
-				return true;
-			}
-			int idx = 0;
-			try { idx = std::stoi(args); }
-			catch (const std::exception&) { idx = 0; }
-
-			auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
-			auto servers = ninjam::NinjamSession::GetReachablePublicServers();
-			const auto serverCount = static_cast<int>(servers.size());
-
-			if (serverCount == 0)
-			{
-				std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
-				return true;
-			}
-
-			if (idx < 1 || idx > serverCount)
-			{
-				std::cout << "[NINJAM] Server number must be 1-" << serverCount
-				          << "  (type / for list)" << std::endl;
-				return true;
-			}
-			if (scene)
-			{
-				ninjam::NinjamTempoJoinOptions options;
-				options.PushLocalTempoOnJoin = true;
-				options.PromptBeforeApplyingRemoteTempo = true;
-				scene->ConnectNinjam(servers[idx - 1].Host, options);
-			}
-			else
-				std::cout << "[NINJAM] Not ready yet" << std::endl;
-			return true;
+			PrintNinjamHelp();
 		}
-
-		if (verb == "d" || verb == "q" || verb == "quit"
-			|| verb == "exit" || verb == "disconnect")
-		{
-			if (scene)
-				scene->DisconnectNinjam();
-			else
-				std::cout << "[NINJAM] Not connected" << std::endl;
-			return true;
-		}
-
-		std::cout << "[NINJAM] Unknown command /" << verb
-		          << "  (type / for help)" << std::endl;
 		return true;
 	}
-} // namespace
+
+	if (verb == "c" || verb == "connect")
+	{
+		if (args.empty())
+		{
+			std::cout << "[NINJAM] Usage: /c <number>  (type / for list)" << std::endl;
+			return true;
+		}
+		int idx = 0;
+		try { idx = std::stoi(args); }
+		catch (const std::exception&) { idx = 0; }
+
+		auto snapshot = ninjam::NinjamSession::GetPublicServerDirectorySnapshot();
+		auto servers = ninjam::NinjamSession::GetReachablePublicServers();
+		const auto serverCount = static_cast<int>(servers.size());
+
+		if (serverCount == 0)
+		{
+			std::cout << "[NINJAM] No reachable servers in the current list  (type / to refresh)" << std::endl;
+			return true;
+		}
+
+		if (idx < 1 || idx > serverCount)
+		{
+			std::cout << "[NINJAM] Server number must be 1-" << serverCount
+			          << "  (type / for list)" << std::endl;
+			return true;
+		}
+		if (scene)
+		{
+			ninjam::NinjamTempoJoinOptions options;
+			options.PushLocalTempoOnJoin = true;
+			options.PromptBeforeApplyingRemoteTempo = true;
+			scene->ConnectNinjam(servers[idx - 1].Host, options);
+		}
+		else
+			std::cout << "[NINJAM] Not ready yet" << std::endl;
+		return true;
+	}
+
+	if (verb == "d" || verb == "q" || verb == "quit"
+		|| verb == "exit" || verb == "disconnect")
+	{
+		if (scene)
+			scene->DisconnectNinjam();
+		else
+			std::cout << "[NINJAM] Not connected" << std::endl;
+		return true;
+	}
+
+	std::cout << "[NINJAM] Unknown command /" << verb
+	          << "  (type / for help)" << std::endl;
+	return true;
+}
 using namespace io;
 
 #define MAX_JSON_CHARS 1000000u
 
-namespace
+static std::optional<std::wstring> ReadEnvironmentVariable(const wchar_t* name)
 {
-	std::optional<std::wstring> ReadEnvironmentVariable(const wchar_t* name)
-	{
-		const auto required = GetEnvironmentVariableW(name, nullptr, 0);
-		if (required == 0)
-			return std::nullopt;
+	const auto required = GetEnvironmentVariableW(name, nullptr, 0);
+	if (required == 0)
+		return std::nullopt;
 
-		std::wstring value(required - 1, L'\0');
-		GetEnvironmentVariableW(name, value.data(), required);
-		return value;
-	}
+	std::wstring value(required - 1, L'\0');
+	GetEnvironmentVariableW(name, value.data(), required);
+	return value;
+}
 
-	std::wstring DefaultIniPath()
-	{
-		return GetPath(PATH_ROAMING) + L"\\Jamma\\defaults.json";
-	}
+static std::wstring DefaultIniPath()
+{
+	return GetPath(PATH_ROAMING) + L"\\Jamma\\defaults.json";
+}
 
-	std::wstring ResolveIniPath()
-	{
-		if (auto initPath = ReadEnvironmentVariable(L"JAMMA_DEFAULTS_PATH"); initPath.has_value() && !initPath->empty())
-			return initPath.value();
+static std::wstring ResolveIniPath()
+{
+	if (auto initPath = ReadEnvironmentVariable(L"JAMMA_DEFAULTS_PATH"); initPath.has_value() && !initPath->empty())
+		return initPath.value();
 
-		return DefaultIniPath();
-	}
+	return DefaultIniPath();
+}
 
-	bool IsWindowPlacementVisible(const utils::Position2d& position, const utils::Size2d& size)
-	{
-		RECT rect{
-			static_cast<LONG>(position.X),
-			static_cast<LONG>(position.Y),
-			static_cast<LONG>(position.X + static_cast<int>(size.Width)),
-			static_cast<LONG>(position.Y + static_cast<int>(size.Height))
-		};
+static bool IsWindowPlacementVisible(const utils::Position2d& position, const utils::Size2d& size)
+{
+	RECT rect{
+		static_cast<LONG>(position.X),
+		static_cast<LONG>(position.Y),
+		static_cast<LONG>(position.X + static_cast<int>(size.Width)),
+		static_cast<LONG>(position.Y + static_cast<int>(size.Height))
+	};
 
-		RECT workArea{};
-		if (!Window::GetMonitorWorkAreaForRect(rect, workArea))
-			return true;
-
-		return rect.right > workArea.left
-			&& rect.bottom > workArea.top
-			&& rect.left < workArea.right
-			&& rect.top < workArea.bottom;
-	}
-
-	bool UpdateIni(const std::wstring& finalPath, const std::string& data)
-	{
-		const std::wstring tempPath = finalPath + L".tmp";
-		io::TextReadWriter txtFile;
-
-		if (!txtFile.Write(tempPath, data, static_cast<unsigned int>(data.size()), 0))
-			return false;
-
-		if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-		{
-			DeleteFileW(tempPath.c_str());
-			return false;
-		}
-
+	RECT workArea{};
+	if (!Window::GetMonitorWorkAreaForRect(rect, workArea))
 		return true;
+
+	return rect.right > workArea.left
+		&& rect.bottom > workArea.top
+		&& rect.left < workArea.right
+		&& rect.top < workArea.bottom;
+}
+
+static bool UpdateIni(const std::wstring& finalPath, const std::string& data)
+{
+	const std::wstring tempPath = finalPath + L".tmp";
+	io::TextReadWriter txtFile;
+
+	if (!txtFile.Write(tempPath, data, static_cast<unsigned int>(data.size()), 0))
+		return false;
+
+	if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{
+		DeleteFileW(tempPath.c_str());
+		return false;
 	}
+
+	return true;
 }
 
 void SetupConsole()

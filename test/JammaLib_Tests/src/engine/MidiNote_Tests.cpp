@@ -9,13 +9,10 @@ using midi::MidiEvent;
 using midi::MidiLoop;
 using midi::MidiNote;
 
-namespace
+static std::vector<midi::MidiNote> Extract(const std::vector<MidiEvent>& events,
+	std::uint32_t loopLengthSamps)
 {
-	std::vector<midi::MidiNote> Extract(const std::vector<MidiEvent>& events,
-		std::uint32_t loopLengthSamps)
-	{
-		return MidiNote::ExtractSpans(events.data(), events.size(), loopLengthSamps);
-	}
+	return MidiNote::ExtractSpans(events.data(), events.size(), loopLengthSamps);
 }
 
 TEST(MidiNote, PairsNoteOnAndNoteOffIntoDurationSpan)

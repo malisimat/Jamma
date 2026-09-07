@@ -20,74 +20,71 @@ using actions::GuiAction;
 using actions::TouchAction;
 using actions::KeyAction;
 
-namespace
+class GuiControlsMockedGuiReceiver :
+	public ActionReceiver
 {
-	class MockedGuiReceiver :
-		public ActionReceiver
+public:
+	GuiControlsMockedGuiReceiver() :
+		ActionReceiver(),
+		_actionCount(0),
+		_lastAction()
+	{}
+
+public:
+	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-	public:
-		MockedGuiReceiver() :
-			ActionReceiver(),
-			_actionCount(0),
-			_lastAction()
-		{}
-
-	public:
-		virtual actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			_lastAction = action;
-			_actionCount++;
-			return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
-		}
-
-		int ActionCount() const { return _actionCount; }
-		actions::GuiAction LastAction() const { return _lastAction; }
-
-	private:
-		int _actionCount;
-		actions::GuiAction _lastAction;
-	};
-
-	class ThrowingGuiReceiver :
-		public ActionReceiver
-	{
-	public:
-		virtual actions::ActionResult OnAction(actions::GuiAction action) override
-		{
-			throw std::runtime_error("receiver failure");
-		}
-	};
-
-	static TouchAction MakeTouchAction(TouchAction::TouchState state, utils::Position2d position)
-	{
-		TouchAction action;
-		action.Touch = TouchAction::TOUCH_MOUSE;
-		action.Position = position;
-		action.Index = 0;
-		action.State = state;
-		return action;
+		_lastAction = action;
+		_actionCount++;
+		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	}
 
-	static GuiButtonParams MakeButtonParams(unsigned int index = 0)
-	{
-		GuiButtonParams params;
-		params.Index = index;
-		params.Position = { 0, 0 };
-		params.Size = { 20, 20 };
-		params.MinSize = { 20, 20 };
-		return params;
-	}
+	int ActionCount() const { return _actionCount; }
+	actions::GuiAction LastAction() const { return _lastAction; }
 
-	static GuiToggleParams MakeToggleParams(unsigned int index = 0, unsigned int toggleIndex = 0)
+private:
+	int _actionCount;
+	actions::GuiAction _lastAction;
+};
+
+class GuiControlsThrowingGuiReceiver :
+	public ActionReceiver
+{
+public:
+	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
-		GuiToggleParams params;
-		params.Index = index;
-		params.ToggleIndex = toggleIndex;
-		params.Position = { 0, 0 };
-		params.Size = { 20, 20 };
-		params.MinSize = { 20, 20 };
-		return params;
+		throw std::runtime_error("receiver failure");
 	}
+};
+
+static TouchAction MakeTouchAction(TouchAction::TouchState state, utils::Position2d position)
+{
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.Position = position;
+	action.Index = 0;
+	action.State = state;
+	return action;
+}
+
+static GuiButtonParams MakeButtonParams(unsigned int index = 0)
+{
+	GuiButtonParams params;
+	params.Index = index;
+	params.Position = { 0, 0 };
+	params.Size = { 20, 20 };
+	params.MinSize = { 20, 20 };
+	return params;
+}
+
+static GuiToggleParams MakeToggleParams(unsigned int index = 0, unsigned int toggleIndex = 0)
+{
+	GuiToggleParams params;
+	params.Index = index;
+	params.ToggleIndex = toggleIndex;
+	params.Position = { 0, 0 };
+	params.Size = { 20, 20 };
+	params.MinSize = { 20, 20 };
+	return params;
 }
 
 TEST(GuiButton, TouchInsideEatsDownAndUp) {
@@ -186,7 +183,7 @@ TEST(GuiButton, TextCreatesLabelChild) {
 
 TEST(GuiToggle, TouchUpFlipsStateAndNotifiesReceiver) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	auto downRes = toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 }));
@@ -205,7 +202,7 @@ TEST(GuiToggle, TouchUpFlipsStateAndNotifiesReceiver) {
 
 TEST(GuiToggle, TouchUpOutsideAfterTouchDownDoesNotToggle) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	auto downRes = toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 }));
@@ -219,7 +216,7 @@ TEST(GuiToggle, TouchUpOutsideAfterTouchDownDoesNotToggle) {
 
 TEST(GuiToggle, InterleavedTouchIndexesToggleDeterministically) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	TouchAction down0 = MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 });
@@ -242,7 +239,7 @@ TEST(GuiToggle, InterleavedTouchIndexesToggleDeterministically) {
 
 TEST(GuiToggle, RapidTapSequenceMaintainsConsistentParity) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(receiver);
 
 	for (int i = 0; i < 9; ++i)
@@ -259,13 +256,13 @@ TEST(GuiToggle, RapidTapSequenceMaintainsConsistentParity) {
 
 TEST(GuiToggle, ReceiverExceptionPropagatesAndControlRecovers) {
 	auto toggle = std::make_shared<GuiToggle>(MakeToggleParams(5, 7));
-	toggle->SetReceiver(std::make_shared<ThrowingGuiReceiver>());
+	toggle->SetReceiver(std::make_shared<GuiControlsThrowingGuiReceiver>());
 
 	ASSERT_TRUE(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 })).IsEaten);
 	EXPECT_THROW(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_UP, { 10, 10 })), std::runtime_error);
 	ASSERT_EQ(GuiToggleParams::TOGGLE_ON, toggle->GetToggleState());
 
-	auto recoveryReceiver = std::make_shared<MockedGuiReceiver>();
+	auto recoveryReceiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	toggle->SetReceiver(recoveryReceiver);
 
 	ASSERT_TRUE(toggle->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 })).IsEaten);
@@ -345,7 +342,7 @@ TEST(GuiRadio, ChildToggleUpdatesSelectionAndNotifiesReceiver) {
 	};
 
 	auto radio = std::make_shared<GuiRadio>(params);
-	auto receiver = std::make_shared<MockedGuiReceiver>();
+	auto receiver = std::make_shared<GuiControlsMockedGuiReceiver>();
 	radio->SetReceiver(receiver);
 	radio->Init();
 

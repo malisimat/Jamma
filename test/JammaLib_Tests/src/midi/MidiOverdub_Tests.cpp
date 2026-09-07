@@ -9,46 +9,43 @@ using midi::MidiEvent;
 using midi::MidiOverdubRenderParams;
 using midi::MidiPunchWindow;
 
-namespace
+struct MidiOverdubEventView
 {
-	struct EventView
+	std::uint32_t Offset;
+	std::uint8_t Status;
+	std::uint8_t Note;
+	std::uint8_t Velocity;
+};
+
+static std::vector<MidiOverdubEventView> BuildEvents(const std::vector<MidiEvent>& sourceEvents,
+	std::uint32_t sourceLoopLength,
+	std::uint32_t targetLoopLength,
+	const std::vector<MidiPunchWindow>& punchWindows,
+	std::size_t outCapacity = 128u)
+{
+	std::vector<MidiEvent> output(outCapacity);
+	MidiOverdubRenderParams params;
+	params.SourceEvents = sourceEvents.data();
+	params.SourceEventCount = sourceEvents.size();
+	params.SourceLoopLengthSamps = sourceLoopLength;
+	params.TargetLoopLengthSamps = targetLoopLength;
+	params.PunchWindows = punchWindows.data();
+	params.PunchWindowCount = punchWindows.size();
+
+	const auto eventCount = midi::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
+	std::vector<MidiOverdubEventView> built;
+	built.reserve(eventCount);
+	for (std::size_t i = 0u; i < eventCount; ++i)
 	{
-		std::uint32_t Offset;
-		std::uint8_t Status;
-		std::uint8_t Note;
-		std::uint8_t Velocity;
-	};
-
-	std::vector<EventView> BuildEvents(const std::vector<MidiEvent>& sourceEvents,
-		std::uint32_t sourceLoopLength,
-		std::uint32_t targetLoopLength,
-		const std::vector<MidiPunchWindow>& punchWindows,
-		std::size_t outCapacity = 128u)
-	{
-		std::vector<MidiEvent> output(outCapacity);
-		MidiOverdubRenderParams params;
-		params.SourceEvents = sourceEvents.data();
-		params.SourceEventCount = sourceEvents.size();
-		params.SourceLoopLengthSamps = sourceLoopLength;
-		params.TargetLoopLengthSamps = targetLoopLength;
-		params.PunchWindows = punchWindows.data();
-		params.PunchWindowCount = punchWindows.size();
-
-		const auto eventCount = midi::BuildMidiOverdubBaseEvents(params, output.data(), output.size());
-		std::vector<EventView> built;
-		built.reserve(eventCount);
-		for (std::size_t i = 0u; i < eventCount; ++i)
-		{
-			built.push_back({
-				output[i].sampleOffset,
-				output[i].status,
-				output[i].data1,
-				output[i].data2
-				});
-		}
-
-		return built;
+		built.push_back({
+			output[i].sampleOffset,
+			output[i].status,
+			output[i].data1,
+			output[i].data2
+			});
 	}
+
+	return built;
 }
 
 TEST(MidiOverdub, CopiesSourceOutsideSinglePunchWindow)

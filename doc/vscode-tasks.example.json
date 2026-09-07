@@ -3,14 +3,15 @@
   "tasks": [
     {
       "label": "Build JammaLib (Debug x64)",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\path\\to\\MSBuild.exe",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target JammaLib -Configuration Debug -Platform x64"
+        "${workspaceFolder}\\JammaLib\\JammaLib.vcxproj",
+        "/m",
+        "/t:Build",
+        "/p:Configuration=Debug",
+        "/p:Platform=x64",
+        "/p:SolutionDir=${workspaceFolder}\\"
       ],
       "group": "build",
       "presentation": {
@@ -21,14 +22,15 @@
     },
     {
       "label": "Build Jamma (Debug x64)",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\path\\to\\MSBuild.exe",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target Jamma -Configuration Debug -Platform x64"
+        "${workspaceFolder}\\Jamma\\Jamma.vcxproj",
+        "/m",
+        "/t:Build",
+        "/p:Configuration=Debug",
+        "/p:Platform=x64",
+        "/p:SolutionDir=${workspaceFolder}\\"
       ],
       "group": "build",
       "presentation": {
@@ -39,14 +41,15 @@
     },
     {
       "label": "Build JammaLib_Tests (Debug x64)",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\path\\to\\MSBuild.exe",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target JammaLib_Tests -Configuration Debug -Platform x64"
+        "${workspaceFolder}\\test\\JammaLib_Tests\\JammaLib_Tests.vcxproj",
+        "/m",
+        "/t:Build",
+        "/p:Configuration=Debug",
+        "/p:Platform=x64",
+        "/p:SolutionDir=${workspaceFolder}\\"
       ],
       "group": "build",
       "presentation": {
@@ -57,15 +60,8 @@
     },
     {
       "label": "Run JammaLib_Tests",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe\""
-      ],
+      "type": "process",
+      "command": "${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe",
       "dependsOn": "Build JammaLib_Tests (Debug x64)",
       "presentation": {
         "reveal": "always",
@@ -74,14 +70,10 @@
     },
     {
       "label": "Run JammaLib_Tests (filtered)",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\test\\JammaLib_Tests\\bin\\x64\\Debug\\JammaLib_Tests.exe\" --gtest_filter=\"${input:gtestFilter}\""
+        "--gtest_filter=${input:gtestFilter}"
       ],
       "dependsOn": "Build JammaLib_Tests (Debug x64)",
       "presentation": {
@@ -91,14 +83,15 @@
     },
     {
       "label": "Build Solution (Debug x64)",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\path\\to\\MSBuild.exe",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        "& \"${workspaceFolder}\\.github\\skills\\builder\\builder.ps1\" -Target Solution -Configuration Debug -Platform x64"
+        "${workspaceFolder}\\Jamma.sln",
+        "/m",
+        "/t:Build",
+        "/p:Configuration=Debug",
+        "/p:Platform=x64",
+        "/p:VcpkgEnableManifest=true"
       ],
       "presentation": {
         "reveal": "always",

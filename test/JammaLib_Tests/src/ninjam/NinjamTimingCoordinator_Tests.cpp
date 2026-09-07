@@ -11,45 +11,42 @@ using ninjam::NinjamTimingCoordinator;
 using ninjam::NinjamTimingUpdate;
 using utils::Timer;
 
-namespace
+static NinjamTiming MakeTiming(unsigned int length, unsigned int position,
+	unsigned int localPhase = 0u, unsigned int localLength = 0u)
 {
-	NinjamTiming MakeTiming(unsigned int length, unsigned int position,
-		unsigned int localPhase = 0u, unsigned int localLength = 0u)
-	{
-		NinjamTiming timing;
-		timing.IsConnected = true;
-		timing.IsValid = true;
-		timing.DeviceSampleRate = 48000u;
-		timing.SourceSampleRate = 44100u;
-		timing.IntervalLengthSamps = length;
-		timing.IntervalPositionSamps = position;
-		timing.Bpm = 120.0f;
-		timing.Bpi = 16u;
-		timing.HasDeviceAudioSampleAtObservation = true;
-		timing.DeviceAudioSampleAtObservation = 0u;
-		timing.HasLocalTransport = true;
-		timing.LocalTransport.MasterLengthSamps = localLength == 0u ? length : localLength;
-		timing.LocalTransport.MasterPhaseSamps = localPhase;
-		timing.LocalTransport.AbsoluteSamplePos = position;
-		return timing;
-	}
+	NinjamTiming timing;
+	timing.IsConnected = true;
+	timing.IsValid = true;
+	timing.DeviceSampleRate = 48000u;
+	timing.SourceSampleRate = 44100u;
+	timing.IntervalLengthSamps = length;
+	timing.IntervalPositionSamps = position;
+	timing.Bpm = 120.0f;
+	timing.Bpi = 16u;
+	timing.HasDeviceAudioSampleAtObservation = true;
+	timing.DeviceAudioSampleAtObservation = 0u;
+	timing.HasLocalTransport = true;
+	timing.LocalTransport.MasterLengthSamps = localLength == 0u ? length : localLength;
+	timing.LocalTransport.MasterPhaseSamps = localPhase;
+	timing.LocalTransport.AbsoluteSamplePos = position;
+	return timing;
+}
 
-	NinjamTiming MakeTimingTempo(unsigned int length, unsigned int position, float bpm, unsigned int bpi)
-	{
-		auto timing = MakeTiming(length, position);
-		timing.Bpm = bpm;
-		timing.Bpi = bpi;
-		return timing;
-	}
+static NinjamTiming MakeTimingTempo(unsigned int length, unsigned int position, float bpm, unsigned int bpi)
+{
+	auto timing = MakeTiming(length, position);
+	timing.Bpm = bpm;
+	timing.Bpi = bpi;
+	return timing;
+}
 
-	void Connect(NinjamTimingCoordinator& coordinator, bool prompt, bool push,
-		const std::optional<engine::QuantisationTiming>& local = std::nullopt)
-	{
-		ninjam::NinjamTempoJoinOptions options;
-		options.PromptBeforeApplyingRemoteTempo = prompt;
-		options.PushLocalTempoOnJoin = push;
-		coordinator.Connect(options, local);
-	}
+static void Connect(NinjamTimingCoordinator& coordinator, bool prompt, bool push,
+	const std::optional<engine::QuantisationTiming>& local = std::nullopt)
+{
+	ninjam::NinjamTempoJoinOptions options;
+	options.PromptBeforeApplyingRemoteTempo = prompt;
+	options.PushLocalTempoOnJoin = push;
+	coordinator.Connect(options, local);
 }
 
 TEST(NinjamTimingCoordinator, FirstGenerationInvalidatesOldCorrectionsWithoutEmittingPhaseMovement)
@@ -750,32 +747,29 @@ TEST(NinjamTimingCoordinator, LongRunningConvertedTimingSimulationStaysGeneratio
 
 // ── Phase 3: join alignment accepts full documented range (§2.2) ─────────────
 
-namespace
+// Drives the coordinator through a generation change plus a frozen join delta
+// of the requested magnitude, then triggers the wrap that emits the Join.
+// The join delta = circularDifference(localOffset, remoteAnchorPos). The anchor
+// sits in the final quarter so the following backward move is a valid wrap, and
+// localOffset is chosen so the frozen delta equals `delta`.
+static NinjamTimingUpdate DriveJoin(unsigned int length, long long delta)
 {
-	// Drives the coordinator through a generation change plus a frozen join delta
-	// of the requested magnitude, then triggers the wrap that emits the Join.
-	// The join delta = circularDifference(localOffset, remoteAnchorPos). The anchor
-	// sits in the final quarter so the following backward move is a valid wrap, and
-	// localOffset is chosen so the frozen delta equals `delta`.
-	NinjamTimingUpdate DriveJoin(unsigned int length, long long delta)
-	{
-		const auto anchorPos = length - (length / 8u);
-		const auto localOffset = static_cast<unsigned int>(
-			(static_cast<long long>(anchorPos) - delta + length) % length);
-		Timer clock;
-		clock.SetSeedSourceLength(length);
-		clock.Tick(localOffset, 0u);
-		NinjamTimingCoordinator coordinator;
-		Connect(coordinator, false, false);
+	const auto anchorPos = length - (length / 8u);
+	const auto localOffset = static_cast<unsigned int>(
+		(static_cast<long long>(anchorPos) - delta + length) % length);
+	Timer clock;
+	clock.SetSeedSourceLength(length);
+	clock.Tick(localOffset, 0u);
+	NinjamTimingCoordinator coordinator;
+	Connect(coordinator, false, false);
 
-		// Generation change: records remote anchor and freezes the join delta.
-		coordinator.Observe(MakeTiming(length, anchorPos, localOffset),
-			std::nullopt, false, io::UserConfig{}, clock);
-		// A backward move from the final quarter into the first quarter is the wrap
-		// that releases the pending Join event.
-		return coordinator.Observe(MakeTiming(length, 1000u, localOffset),
-			std::nullopt, false, io::UserConfig{}, clock);
-	}
+	// Generation change: records remote anchor and freezes the join delta.
+	coordinator.Observe(MakeTiming(length, anchorPos, localOffset),
+		std::nullopt, false, io::UserConfig{}, clock);
+	// A backward move from the final quarter into the first quarter is the wrap
+	// that releases the pending Join event.
+	return coordinator.Observe(MakeTiming(length, 1000u, localOffset),
+		std::nullopt, false, io::UserConfig{}, clock);
 }
 
 TEST(NinjamTimingCoordinator, QuarterIntervalJoinIsAccepted)
@@ -830,18 +824,15 @@ TEST(NinjamTimingCoordinator, DelayedInitialJoinUsesObservationLocalPhaseNotLive
 
 // ── Phase 5: tempo request state machine (§2.6/§3.5) ─────────────────────────
 
-namespace
+// Cycles one full interval: a forward move into the final quarter followed by
+// a backward wrap into the first quarter. Returns the wrap observation update.
+static NinjamTimingUpdate CycleWrap(NinjamTimingCoordinator& coordinator, Timer& clock,
+	unsigned int length, unsigned int wrapPos, float bpm, unsigned int bpi)
 {
-	// Cycles one full interval: a forward move into the final quarter followed by
-	// a backward wrap into the first quarter. Returns the wrap observation update.
-	NinjamTimingUpdate CycleWrap(NinjamTimingCoordinator& coordinator, Timer& clock,
-		unsigned int length, unsigned int wrapPos, float bpm, unsigned int bpi)
-	{
-		coordinator.Observe(MakeTimingTempo(length, length - (length / 8u), bpm, bpi),
-			std::nullopt, true, io::UserConfig{}, clock);
-		return coordinator.Observe(MakeTimingTempo(length, wrapPos, bpm, bpi),
-			std::nullopt, true, io::UserConfig{}, clock);
-	}
+	coordinator.Observe(MakeTimingTempo(length, length - (length / 8u), bpm, bpi),
+		std::nullopt, true, io::UserConfig{}, clock);
+	return coordinator.Observe(MakeTimingTempo(length, wrapPos, bpm, bpi),
+		std::nullopt, true, io::UserConfig{}, clock);
 }
 
 TEST(NinjamTimingCoordinator, TempoRequestAcknowledgedByMatchingTimingWithoutGenerationChange)

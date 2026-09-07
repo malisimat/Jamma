@@ -16,6 +16,17 @@ public:
 	}
 };
 
+TEST(Json, WritesEscapedControlCharacters) {
+	const std::string value{
+		'\0', '\1', '\b', '\t', '\n', '\v', '\f', '\r', static_cast<char>(0x0E), static_cast<char>(0x1F),
+		static_cast<char>(0x80)
+	};
+	std::stringstream stream;
+
+	ASSERT_TRUE(Json::ToStream(value, stream));
+	EXPECT_EQ("\"\\u0000\\u0001\\b\\t\\n\\u000B\\f\\r\\u000E\\u001F\x80\"", stream.str());
+}
+
 TEST(Json, ParsesBool) {
 	auto str = "{\"bool\":true}";
 	auto testStream = std::stringstream(str);

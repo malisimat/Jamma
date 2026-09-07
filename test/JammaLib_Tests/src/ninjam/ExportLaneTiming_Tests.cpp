@@ -4,25 +4,22 @@
 
 using ninjam::ExportLaneTiming;
 
-namespace
+// Reference (unwrapped) delay expectations, matching
+// doc/ninjam-live-loop-latency-sync-planC.md §1/§3 exactly:
+// DAC = write cursor + output latency - remote phase (mod remote length);
+// ADC = write cursor - input latency - remote phase (mod remote length).
+static unsigned int ExpectedDacDelay(unsigned int delayWriteCursorSamps, unsigned int outLatencySamps,
+	unsigned int remoteIntervalPhaseSamps, unsigned int remoteIntervalLengthSamps, unsigned int numFrames)
 {
-	// Reference (unwrapped) delay expectations, matching
-	// doc/ninjam-live-loop-latency-sync-planC.md §1/§3 exactly:
-	// DAC = write cursor + output latency - remote phase (mod remote length);
-	// ADC = write cursor - input latency - remote phase (mod remote length).
-	unsigned int ExpectedDacDelay(unsigned int delayWriteCursorSamps, unsigned int outLatencySamps,
-		unsigned int remoteIntervalPhaseSamps, unsigned int remoteIntervalLengthSamps, unsigned int numFrames)
-	{
-		return utils::ModNeg(static_cast<int>(delayWriteCursorSamps) + static_cast<int>(outLatencySamps)
-			- static_cast<int>(remoteIntervalPhaseSamps), remoteIntervalLengthSamps) + numFrames;
-	}
+	return utils::ModNeg(static_cast<int>(delayWriteCursorSamps) + static_cast<int>(outLatencySamps)
+		- static_cast<int>(remoteIntervalPhaseSamps), remoteIntervalLengthSamps) + numFrames;
+}
 
-	unsigned int ExpectedAdcDelay(unsigned int delayWriteCursorSamps, unsigned int inLatencySamps,
-		unsigned int remoteIntervalPhaseSamps, unsigned int remoteIntervalLengthSamps, unsigned int numFrames)
-	{
-		return utils::ModNeg(static_cast<int>(delayWriteCursorSamps) - static_cast<int>(inLatencySamps)
-			- static_cast<int>(remoteIntervalPhaseSamps), remoteIntervalLengthSamps) + numFrames;
-	}
+static unsigned int ExpectedAdcDelay(unsigned int delayWriteCursorSamps, unsigned int inLatencySamps,
+	unsigned int remoteIntervalPhaseSamps, unsigned int remoteIntervalLengthSamps, unsigned int numFrames)
+{
+	return utils::ModNeg(static_cast<int>(delayWriteCursorSamps) - static_cast<int>(inLatencySamps)
+		- static_cast<int>(remoteIntervalPhaseSamps), remoteIntervalLengthSamps) + numFrames;
 }
 
 // Test 1 (planC §5): absolute phase, steady state. A non-wrapping sequence of

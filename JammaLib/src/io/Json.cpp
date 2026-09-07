@@ -28,7 +28,7 @@ bool Json::ToStream(Json::JsonValue json, std::stringstream& ss)
 bool Json::WriteString(const std::string& value, std::stringstream& ss)
 {
 	ss << '"';
-	for (const char ch : value)
+	for (const unsigned char ch : value)
 	{
 		switch (ch)
 		{
@@ -39,7 +39,17 @@ bool Json::WriteString(const std::string& value, std::stringstream& ss)
 		case '\n': ss << "\\n"; break;
 		case '\r': ss << "\\r"; break;
 		case '\t': ss << "\\t"; break;
-		default: ss << ch; break;
+		default:
+			if (ch < 0x20u)
+			{
+				static constexpr char hexDigits[] = "0123456789ABCDEF";
+				ss << "\\u00" << hexDigits[ch >> 4] << hexDigits[ch & 0x0Fu];
+			}
+			else
+			{
+				ss << static_cast<char>(ch);
+			}
+			break;
 		}
 	}
 	ss << '"';

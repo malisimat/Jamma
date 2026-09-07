@@ -9,8 +9,6 @@
 *.opendb
 .vs/
 .github/*
-!.github/skills/
-!.github/skills/**
 .copilot/*
 !.copilot/plan.md
 .vscode/launch.json
