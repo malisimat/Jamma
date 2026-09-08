@@ -25,6 +25,34 @@ namespace io
 		std::mutex& sceneMutex,
 		const std::shared_ptr<ninjam::NinjamController>& ninjamController)
 	{
+		const auto exportDir = utils::PickDirectory(L"Choose export directory");
+		if (exportDir.empty())
+			return actions::ActionResult::NoAction();
+
+		ExportSessionToDirectory(stations,
+			quantisation,
+			globalMidiQuantState,
+			transportOffsetLoopFrac,
+			userConfig,
+			streamParams,
+			device,
+			sceneMutex,
+			ninjamController,
+			exportDir);
+		return actions::ActionResult::NoAction();
+	}
+
+	bool IoSessionExporter::ExportSessionToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
+		const engine::Quantiser& quantisation,
+		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
+		double transportOffsetLoopFrac,
+		const io::UserConfig& userConfig,
+		const audio::AudioStreamParams& streamParams,
+		audio::AudioDevice* device,
+		std::mutex& sceneMutex,
+		const std::shared_ptr<ninjam::NinjamController>& ninjamController,
+		const std::wstring& exportDir)
+	{
 		struct AudioPauseGuard
 		{
 			explicit AudioPauseGuard(audio::AudioDevice* deviceRef) : Device(deviceRef), WasPlaying(deviceRef && deviceRef->Pause()) {}
@@ -57,9 +85,8 @@ namespace io
 			NativeMidiSidecar::Stream Stream;
 		};
 
-		const auto exportDir = utils::PickDirectory(L"Choose export directory");
 		if (exportDir.empty())
-			return actions::ActionResult::NoAction();
+			return false;
 
 		const auto sampleRate = (streamParams.SampleRate == 0u) ? userConfig.Audio.SampleRate : streamParams.SampleRate;
 
@@ -87,7 +114,7 @@ namespace io
 			if (!clock || clock->SeedSourceLength() == 0ul)
 			{
 				std::cout << "Export: local master timer is not initialised" << std::endl;
-				return actions::ActionResult::NoAction();
+				return false;
 			}
 			jam.MasterLengthSamps = clock->SeedSourceLength();
 			jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
@@ -149,7 +176,9 @@ namespace io
 
 						LoopSnapshot snap;
 						snap.FinalPath = exportDir + L"\\" + utils::DecodeUtf8(wavFilename);
-						snap.TemporaryPath = snap.FinalPath + L".tmp";
+						// WavReadWriter validates the filename extension, so keep .wav on
+						// the staged path while still making it distinct from the final asset.
+						snap.TemporaryPath = snap.FinalPath + L".tmp.wav";
 						snap.Samples = std::move(samples);
 						loops.push_back(std::move(snap));
 					}
@@ -158,7 +187,7 @@ namespace io
 					if (!take->SnapshotMidiForExport(midiExport))
 					{
 						std::cout << "Export: could not snapshot MIDI take " << take->Id() << std::endl;
-						return actions::ActionResult::NoAction();
+						return false;
 					}
 					jamTake.MidiPlayIndex = midiExport.PlayIndex;
 					jamTake.MidiPlayLength = midiExport.LoopLengthSamps;
@@ -236,7 +265,7 @@ namespace io
 							if (!resolveAutomationTarget(exportedLane.TargetPlugin, lane))
 							{
 								std::cout << "Export: unresolved automation target in take " << take->Id() << std::endl;
-								return actions::ActionResult::NoAction();
+								return false;
 							}
 							lane.Points.reserve(exportedLane.PointCount);
 							for (std::size_t pointIndex = 0u; pointIndex < exportedLane.PointCount; ++pointIndex)
@@ -263,7 +292,7 @@ namespace io
 		if (jam.Stations.empty())
 		{
 			std::cout << "Export: nothing to export" << std::endl;
-			return actions::ActionResult::NoAction();
+			return false;
 		}
 
 		io::WavReadWriter wavWriter;
@@ -273,7 +302,7 @@ namespace io
 			if (!wavWriter.Write(loop.TemporaryPath, loop.Samples, (unsigned int)loop.Samples.size(), sampleRate))
 			{
 				std::cout << "Export: failed to write WAV sidecar " << utils::EncodeUtf8(loop.FinalPath) << std::endl;
-				return actions::ActionResult::NoAction();
+				return false;
 			}
 			++wavCount;
 		}
@@ -285,7 +314,7 @@ namespace io
 			{
 				std::cout << "Export: failed to write MIDI sidecar " << utils::EncodeUtf8(midi.FinalPath)
 					<< ": " << error << std::endl;
-				return actions::ActionResult::NoAction();
+				return false;
 			}
 		}
 
@@ -298,7 +327,7 @@ namespace io
 		{
 			std::cout << "Export: failed to write session.jam to "
 				<< utils::EncodeUtf8(jamPath) << std::endl;
-			return actions::ActionResult::NoAction();
+			return false;
 		}
 		auto replaceAtomically = [](const std::wstring& temporaryPath, const std::wstring& finalPath) noexcept
 		{
@@ -310,7 +339,7 @@ namespace io
 			if (!replaceAtomically(loop.TemporaryPath, loop.FinalPath))
 			{
 				std::cout << "Export: failed to stage WAV sidecar " << utils::EncodeUtf8(loop.FinalPath) << std::endl;
-				return actions::ActionResult::NoAction();
+				return false;
 			}
 		}
 		for (const auto& midi : midiStreams)
@@ -318,18 +347,18 @@ namespace io
 			if (!replaceAtomically(midi.TemporaryPath, midi.FinalPath))
 			{
 				std::cout << "Export: failed to stage MIDI sidecar " << utils::EncodeUtf8(midi.FinalPath) << std::endl;
-				return actions::ActionResult::NoAction();
+				return false;
 			}
 		}
 		if (!replaceAtomically(temporaryJamPath, jamPath))
 		{
 			std::cout << "Export: failed to publish session.jam to " << utils::EncodeUtf8(jamPath) << std::endl;
-			return actions::ActionResult::NoAction();
+			return false;
 		}
 
 		std::cout << "Exported " << wavCount << " loop(s) + session.jam to "
 			<< utils::EncodeUtf8(exportDir) << std::endl;
 
-		return actions::ActionResult::NoAction();
+		return true;
 	}
 }

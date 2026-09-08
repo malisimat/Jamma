@@ -8,6 +8,7 @@
 #include "Json.h"
 
 #include <exception>
+#include <cctype>
 #include <limits>
 #include <string>
 
@@ -16,7 +17,12 @@ using namespace io;
 std::optional<Json::JsonValue> Json::FromStream(std::stringstream ss)
 {
 	auto root = ParseValue(std::move(ss));
-
+	if (!root.Value.has_value())
+		return std::nullopt;
+	char trailing = 0;
+	while (root.Stream.get(trailing))
+		if (!std::isspace(static_cast<unsigned char>(trailing)))
+			return std::nullopt;
 	return root.Value;
 }
 

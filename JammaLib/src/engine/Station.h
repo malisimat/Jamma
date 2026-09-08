@@ -219,6 +219,9 @@ namespace engine
 		// normal interactive loads where no state needs to be restored.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used before Scene::InitAudio().
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {});
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 

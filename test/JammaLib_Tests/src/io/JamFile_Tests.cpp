@@ -127,7 +127,7 @@ TEST(JamFile, ParsesFile) {
 	auto jam = JamFile::FromStream(std::move(testStream));
 
 	ASSERT_TRUE(jam.has_value());
-	ASSERT_EQ(JamFile::VERSION_V, jam.value().Version);
+	ASSERT_EQ(JamFile::VERSION_LEGACY, jam.value().Version);
 	ASSERT_EQ(0, jam.value().Name.compare("jam"));
 	ASSERT_EQ(2, jam.value().Stations.size());
 
@@ -228,7 +228,9 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	auto parsed = JamFile::FromStream(std::move(out));
 	ASSERT_TRUE(parsed.has_value());
 	ASSERT_EQ("jam\"name\\path", parsed->Name);
-	ASSERT_EQ(12, parsed->TimerTicks);
+	// TimerTicks is legacy metadata; current saves preserve the lossless local
+	// absolute sample coordinate instead.
+	ASSERT_EQ(0, parsed->TimerTicks);
 	ASSERT_EQ(960, parsed->QuantiseSamps);
 	ASSERT_EQ(-120, parsed->GlobalPhaseOffsetSamps);
 	ASSERT_EQ(utils::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
@@ -340,9 +342,9 @@ TEST(JamFile, SignedTransportOffsetClampsEndpointsAndDefaultsMissingToZero) {
 
 		std::stringstream output;
 		ASSERT_TRUE(JamFile::ToStream(parsed.value(), output));
-		auto roundTrip = JamFile::FromStream(std::move(output));
-		ASSERT_TRUE(roundTrip.has_value());
-		EXPECT_DOUBLE_EQ(expected, roundTrip->TransportOffsetLoopFrac);
+		// A manifest with no constructible station is intentionally rejected at
+		// load time, even though the DTO can still be serialised.
+		EXPECT_FALSE(JamFile::FromStream(std::move(output)).has_value());
 	}
 
 	auto missing = JamFile::FromStream(std::stringstream("{\"name\":\"jam\",\"stations\":[]}"));
@@ -622,4 +624,33 @@ TEST(JamFile, NinjamConfigOmitsBpmAndBpiWhenAbsent) {
 	ASSERT_TRUE(cfg.has_value());
 	ASSERT_FALSE(cfg->Bpm.has_value());
 	ASSERT_FALSE(cfg->Bpi.has_value());
+}
+
+TEST(JamFile, VersionPolicyAndMalformedRootsAreStrict)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto station = "{\"name\":\"station\",\"takes\":[{\"name\":\"take\",\"loops\":[" + loop + "]}]}";
+	auto document = [&](const std::string& version, const std::string& absolute = "42")
+	{
+		return "{\"formatVersion\":\"" + version + "\",\"name\":\"jam\",\"transport\":{\"masterLengthSamps\":100,\"quantiseSamps\":1,\"absoluteSamplePos\":\"" + absolute + "\"},\"stations\":[" + station + "]}";
+	};
+	EXPECT_TRUE(JamFile::FromStream(std::stringstream(document("0.0.9"))).has_value());
+	EXPECT_TRUE(JamFile::FromStream(std::stringstream(document("0.2.0"))).has_value());
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(document("1.0.0"))).has_value());
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(document("bad"))).has_value());
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(document("0.1.0", "+42"))).has_value());
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(document("0.1.0") + " trailing")).has_value());
+}
+
+TEST(JamFile, RejectsTraversalAndInvalidLoopBoundsBeforeSidecarLoad)
+{
+	const auto malformed = std::string("{\"name\":\"../outside.wav\",\"length\":100,\"mix\":{\"type\":\"pan\",\"chans\":[0.5]}}");
+	auto parsed = Json::FromStream(std::stringstream(malformed));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_FALSE(JamFile::Loop::FromJson(std::get<Json::JsonPart>(*parsed)).has_value());
+
+	const auto oversized = std::string("{\"name\":\"loop.wav\",\"length\":2147483648,\"mix\":{\"type\":\"pan\",\"chans\":[0.5]}}");
+	parsed = Json::FromStream(std::stringstream(oversized));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_FALSE(JamFile::Loop::FromJson(std::get<Json::JsonPart>(*parsed)).has_value());
 }

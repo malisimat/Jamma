@@ -54,6 +54,7 @@ namespace io
 		// deliberately lexical: callers resolve the accepted path below the .jam
 		// directory and never treat VST compatibility paths as sidecar paths.
 		static bool IsSafeSidecarPath(const std::string& path) noexcept;
+		static std::optional<std::uint64_t> ParseStrictUint64(const std::string& text) noexcept;
 		static std::int32_t ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept;
 
 		struct NinjamConfig
@@ -106,6 +107,8 @@ namespace io
 		struct Loop
 		{
 			std::string Name;
+			std::string Id;
+			unsigned int Channel = 0;
 			unsigned long Length;
 			unsigned long Index;
 			unsigned long MasterLoopCount;

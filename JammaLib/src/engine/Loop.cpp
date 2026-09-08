@@ -126,6 +126,8 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		behaviour);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
+	loopParams.Id = loopStruct.Id.empty() ? loopStruct.Name : loopStruct.Id;
+	loopParams.Channel = loopStruct.Channel;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 
 	if (!loop->Load(io::WavReadWriter()) || loopStruct.Length == 0ul
@@ -140,6 +142,10 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	// fade-free, so restore it only after establishing the logical loop state.
 	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
 	loop->SetBodyPlayIndex(bodyPlayIndex);
+	loop->SetMixerLevel(loopStruct.Level);
+	loop->_pitch = loopStruct.Speed;
+	if (loopStruct.Muted)
+		loop->Mute();
 
 	return loop;
 }
@@ -553,6 +559,8 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 
 	io::JamFile::Loop loop;
 	loop.Name = wavFilename;
+	loop.Id = _loopParams.Id;
+	loop.Channel = _loopParams.Channel;
 	loop.Length = loopLength;
 	loop.Index = (playIndex >= constants::MaxLoopFadeSamps) ?
 		(playIndex - constants::MaxLoopFadeSamps) :
@@ -958,6 +966,35 @@ void Loop::LoadVstPlugin(std::wstring path,
 {
 	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
+}
+
+bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
+	const std::vector<std::uint8_t>& initialState)
+{
+	// Scene::FromFile calls this before Scene::InitAudio, so no callback can
+	// retain the old chain while this non-RT construction is in progress.
+	auto plugin = vst::MakePluginForPath(path);
+	if (!plugin->PreInit(path)
+		|| !plugin->Load(path, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
+		return false;
+
+	if (!initialState.empty())
+		plugin->SetState(initialState);
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto replacement = std::make_shared<vst::VstChain>();
+	if (chain)
+	{
+		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
+			if (auto existing = chain->GetPlugin(index))
+				replacement->AddPlugin(std::move(existing));
+	}
+	replacement->AddPlugin(std::move(plugin));
+	_vstChain.store(std::move(replacement), std::memory_order_release);
+	// Startup still has exclusive ownership; VstEntries cannot run until after
+	// this object is published to the main loop.
+	_vstPluginPaths.push_back(path);
+	return true;
 }
 
 void Loop::UnloadVstPlugin(size_t index)

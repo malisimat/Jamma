@@ -170,6 +170,9 @@ namespace engine
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used by JAM reconstruction.
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {});
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -276,6 +279,17 @@ namespace engine
 			midi::MidiQuantisationSettings Quantisation;
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
+		struct PendingAutomationBinding
+		{
+			std::size_t MidiStreamIndex = 0u;
+			std::size_t LaneIndex = 0u;
+			std::string TargetScope;
+			unsigned int TargetPluginIndex = 0u;
+			unsigned int TargetLoopIndex = 0u;
+		};
+		const std::vector<PendingAutomationBinding>& PendingAutomationBindings() const noexcept
+			{ return _pendingAutomationBindings; }
+		void ClearPendingAutomationBindings() noexcept { _pendingAutomationBindings.clear(); }
 		static constexpr std::size_t MaxMidiStreamsForRestore = io::JamFile::MaxMidiStreamsPerTake;
 		// Non-RT transfer at the exporter's already-paused, scene-locked boundary.
 		// The per-loop origin is exported with this take's anchor correction folded
@@ -474,6 +488,9 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		// Startup-only metadata. Runtime lane pointers are installed by Station only
+		// after every chain named by these references has been constructed.
+		std::vector<PendingAutomationBinding> _pendingAutomationBindings;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
 	};

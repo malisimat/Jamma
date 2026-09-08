@@ -531,19 +531,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	for (auto& stationStruct : jamStruct.Stations)
 	{
-		// VST loads are asynchronous in the current startup pipeline.  A MIDI
-		// route cannot be published safely until every referenced plugin exists,
-		// so reject that station explicitly rather than silently routing to a
-		// different chain slot or claiming a restored route.
-		if (!stationStruct.MidiRoutes.empty())
-		{
-			std::cout << "Load: skipped station " << stationStruct.Name
-				<< " because VST MIDI routing cannot be validated synchronously" << std::endl;
-			stationParams.Index++;
-			stationParams.Position += { 600, 0 };
-			stationParams.ModelPosition += { 600, 0 };
-			continue;
-		}
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{

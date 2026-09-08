@@ -141,6 +141,14 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
+	for (const auto& vstEntry : stationStruct.VstChain)
+	{
+		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+		{
+			std::cout << "Load: failed VST for station " << stationStruct.Name << std::endl;
+			return std::nullopt;
+		}
+	}
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -169,9 +177,70 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		return std::nullopt;
 	}
 
-	// Queue load jobs for any VST plugins serialised in the station's chain.
-	for (const auto& vstEntry : stationStruct.VstChain)
-		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
+	for (const auto& take : station->GetLoopTakes())
+	{
+		if (!take)
+			continue;
+
+		for (const auto& binding : take->PendingAutomationBindings())
+		{
+			auto midiLoops = take->GetMidiLoopSnapshot();
+			if (binding.MidiStreamIndex >= midiLoops.size() || binding.LaneIndex >= midi::MidiLoop::MaxAutomationLanes)
+				return std::nullopt;
+
+			std::shared_ptr<vst::IVstPlugin> plugin;
+			if (binding.TargetScope == "station")
+				plugin = station->GetVstPlugin(binding.TargetPluginIndex);
+			else if (binding.TargetScope == "take")
+				plugin = take->GetVstPlugin(binding.TargetPluginIndex);
+			else if (binding.TargetScope == "loop")
+			{
+				const auto& loops = take->GetLoops();
+				if (binding.TargetLoopIndex < loops.size() && loops[binding.TargetLoopIndex])
+					plugin = loops[binding.TargetLoopIndex]->GetVstPlugin(binding.TargetPluginIndex);
+			}
+
+			if (!plugin || !midiLoops[binding.MidiStreamIndex]
+				|| !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(binding.LaneIndex, plugin.get()))
+			{
+				std::cout << "Load: unresolved automation target in station " << stationStruct.Name << std::endl;
+				return std::nullopt;
+			}
+		}
+		take->ClearPendingAutomationBindings();
+	}
+	// Publish the completed pointer bindings as one immutable dispatch list before
+	// this startup-built station is made visible to audio.
+	station->RebuildAutomationDispatch();
+
+	if (!stationStruct.MidiRoutes.empty())
+	{
+		std::size_t outputCount = 0u;
+		for (const auto& take : station->GetLoopTakes())
+			if (take)
+				outputCount += take->GetMidiLoopSnapshot().size();
+
+		midi::MidiVstRoutingSnapshot routes;
+		routes.PluginByMidiOutput.assign(outputCount, midi::MidiVstRoutingSnapshot::NoPlugin);
+		for (const auto& route : stationStruct.MidiRoutes)
+		{
+			if (route.PluginIndex >= stationStruct.VstChain.size()
+				|| (!route.IsLive && route.OutputIndex >= outputCount))
+			{
+				std::cout << "Load: invalid MIDI VST route in station " << stationStruct.Name << std::endl;
+				return std::nullopt;
+			}
+			if (route.IsLive)
+				routes.LivePlugin = route.PluginIndex;
+			else
+				routes.PluginByMidiOutput[route.OutputIndex] = route.PluginIndex;
+		}
+		if (!station->RestoreMidiVstRoutes(routes, stationStruct.VstChain.size()))
+		{
+			std::cout << "Load: failed MIDI VST routes for station " << stationStruct.Name << std::endl;
+			return std::nullopt;
+		}
+	}
 
 	return station;
 }
@@ -2349,6 +2418,37 @@ void Station::LoadVstPlugin(std::wstring path,
 {
 	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
+}
+
+bool Station::LoadVstPluginSynchronously(const std::wstring& path,
+	const std::vector<std::uint8_t>& initialState)
+{
+	// Startup construction completes before Scene::InitAudio publishes this
+	// station, so direct replacement cannot race the callback.
+	auto plugin = vst::MakePluginForPath(path);
+	auto hostChannels = NumBusChannels();
+	if (hostChannels == 0u)
+		hostChannels = 1u;
+	if (!plugin->PreInit(path)
+		|| !plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
+		return false;
+
+	if (!initialState.empty())
+		plugin->SetState(initialState);
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto replacement = std::make_shared<vst::VstChain>();
+	if (chain)
+	{
+		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
+			if (auto existing = chain->GetPlugin(index))
+				replacement->AddPlugin(std::move(existing));
+	}
+	replacement->AddPlugin(std::move(plugin));
+	_vstChain.store(std::move(replacement), std::memory_order_release);
+	// Startup still exclusively owns this station.
+	_vstPluginPaths.push_back(path);
+	return true;
 }
 
 void Station::UnloadVstPlugin(size_t index)

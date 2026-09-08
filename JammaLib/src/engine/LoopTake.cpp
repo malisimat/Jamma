@@ -248,7 +248,13 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		if (loop.has_value())
 		{
 			for (const auto& vstEntry : loopStruct.VstChain)
-				loop.value()->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
+			{
+				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+				{
+					std::cout << "Load: failed VST for audio loop " << loopStruct.Name << std::endl;
+					return std::nullopt;
+				}
+			}
 
 			take->AddLoop(loop.value());
 			hasAudioLoop = true;
@@ -271,16 +277,6 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		{
 			std::cout << "Load: skipped MIDI sidecar " << streamStruct.SidecarPath
 				<< (error.empty() ? "" : ": " + error) << std::endl;
-			continue;
-		}
-		if (!sidecar->Lanes.empty())
-		{
-			// The startup VST loader is asynchronous, so it cannot prove the
-			// persisted owner/plugin mapping before this take would be published.
-			// Skip this stream explicitly rather than playing automation against an
-			// unresolved pointer or an accidental plugin slot.
-			std::cout << "Load: skipped MIDI sidecar with unresolved automation dependencies "
-				<< streamStruct.SidecarPath << std::endl;
 			continue;
 		}
 		if (sidecar->LogicalLength != streamStruct.LogicalLength
@@ -322,6 +318,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 			for (std::size_t pointIndex = 0u; pointIndex < lane.Points.size(); ++pointIndex)
 				restoredLane.Points[pointIndex] = { static_cast<float>(lane.Points[pointIndex].Fraction),
 					static_cast<float>(lane.Points[pointIndex].Value) };
+			take->_pendingAutomationBindings.push_back({ midiState.Streams.size(), laneIndex,
+				lane.TargetScope, lane.TargetPluginIndex, lane.TargetLoopIndex });
 		}
 		midiState.Streams.push_back(std::move(restored));
 	}
@@ -329,10 +327,17 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	{
 		std::cout << "Load: skipped MIDI state for take " << takeStruct.Name << std::endl;
 		midiState.Streams.clear();
+		take->ClearPendingAutomationBindings();
 	}
 
 	for (const auto& vstEntry : takeStruct.VstChain)
-		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
+	{
+		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+		{
+			std::cout << "Load: failed VST for take " << takeStruct.Name << std::endl;
+			return std::nullopt;
+		}
+	}
 
 	if (!hasAudioLoop && midiState.Streams.empty())
 	{
@@ -3320,6 +3325,37 @@ void LoopTake::LoadVstPlugin(std::wstring path,
 {
 	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
+}
+
+bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
+	const std::vector<std::uint8_t>& initialState)
+{
+	// This is only valid while startup owns the take and before it is published
+	// to an audio snapshot.
+	auto plugin = vst::MakePluginForPath(path);
+	auto hostChannels = NumInputChannels(Audible::AUDIOSOURCE_LOOPS);
+	if (hostChannels == 0u)
+		hostChannels = 1u;
+	if (!plugin->PreInit(path)
+		|| !plugin->Load(path, _sampleRate, _lastBufSize, hostChannels, vst::HostedLayoutMode::Exact))
+		return false;
+
+	if (!initialState.empty())
+		plugin->SetState(initialState);
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto replacement = std::make_shared<vst::VstChain>();
+	if (chain)
+	{
+		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
+			if (auto existing = chain->GetPlugin(index))
+				replacement->AddPlugin(std::move(existing));
+	}
+	replacement->AddPlugin(std::move(plugin));
+	_vstChain.store(std::move(replacement), std::memory_order_release);
+	// Startup still exclusively owns this take.
+	_vstPluginPaths.push_back(path);
+	return true;
 }
 
 void LoopTake::UnloadVstPlugin(size_t index)
