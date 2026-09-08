@@ -1992,6 +1992,36 @@ void Station::ClearMidiVstRoutes()
 	_midiVstRoutes.store(published, std::memory_order_release);
 }
 
+Station::MidiVstRoutingSnapshot Station::SnapshotMidiVstRoutesForExport() const
+{
+	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
+	return current ? *current : MidiVstRoutingSnapshot{};
+}
+
+bool Station::RestoreMidiVstRoutes(const MidiVstRoutingSnapshot& routes,
+	size_t loadedPluginCount)
+{
+	if (routes.PluginByMidiOutput.size() > MaxMidiVstRouteOutputs)
+		return false;
+
+	auto isValidPlugin = [loadedPluginCount](size_t pluginIndex) noexcept {
+		return pluginIndex == MidiVstRoutingSnapshot::NoPlugin || pluginIndex < loadedPluginCount;
+	};
+	if (!isValidPlugin(routes.LivePlugin))
+		return false;
+	for (const auto pluginIndex : routes.PluginByMidiOutput)
+		if (!isValidPlugin(pluginIndex))
+			return false;
+
+	// Copy before publishing. Retained ownership prevents the callback from
+	// observing freed route storage after the atomic pointer handoff.
+	auto restored = std::make_unique<MidiVstRoutingSnapshot>(routes);
+	const auto* published = restored.get();
+	_retainedMidiVstRoutes.push_back(std::move(restored));
+	_midiVstRoutes.store(published, std::memory_order_release);
+	return true;
+}
+
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
 {
 	if (0 == numTakes)

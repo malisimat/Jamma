@@ -1057,6 +1057,44 @@ TEST(MidiLoopBuildApi, ReplaceRecordedEventsKeepsQuantisationAndModelFlow)
 	EXPECT_EQ(1u, model->NoteInstanceCount());
 }
 
+TEST(MidiLoopPersistence, RestoreKeepsRawSimultaneousEventOrderAndAutomationOrigin)
+{
+	MidiLoop::ExportState saved;
+	saved.LoopLengthSamps = 512u;
+	saved.AutomationGlobalSampleOrigin = 0xfffffff0u;
+	saved.EventCount = 3u;
+	// The order is significant for simultaneous events.  The restore path must
+	// not apply ReplaceRecordedEvents' playback sort a second time.
+	saved.Events[0] = MidiEvent::MakeNoteOn(64u, 2u, 61u, 90u);
+	saved.Events[1] = MidiEvent{ 64u, 0xb2u, 7u, 100u, 0u };
+	saved.Events[2] = MidiEvent::MakeNoteOff(64u, 2u, 61u);
+	auto& lane = saved.AutomationLanes[0];
+	lane.MatchKey = midi::AutomationMapping::MakeMatchKey(2u, 7u);
+	lane.TargetParameterIndex = 19u;
+	lane.PointCount = 2u;
+	lane.Points[0] = { 0.25f, 0.1f };
+	lane.Points[1] = { 0.75f, 0.9f };
+
+	MidiLoop loop;
+	ASSERT_TRUE(loop.RestoreFromExport(saved));
+	MidiLoop::ExportState restored;
+	ASSERT_TRUE(loop.SnapshotForExport(restored));
+	EXPECT_EQ(saved.LoopLengthSamps, restored.LoopLengthSamps);
+	EXPECT_EQ(saved.AutomationGlobalSampleOrigin, restored.AutomationGlobalSampleOrigin);
+	ASSERT_EQ(saved.EventCount, restored.EventCount);
+	for (std::size_t i = 0u; i < saved.EventCount; ++i)
+	{
+		EXPECT_EQ(saved.Events[i].sampleOffset, restored.Events[i].sampleOffset);
+		EXPECT_EQ(saved.Events[i].status, restored.Events[i].status);
+		EXPECT_EQ(saved.Events[i].data1, restored.Events[i].data1);
+		EXPECT_EQ(saved.Events[i].data2, restored.Events[i].data2);
+	}
+	EXPECT_EQ(lane.MatchKey, restored.AutomationLanes[0].MatchKey);
+	EXPECT_EQ(lane.TargetParameterIndex, restored.AutomationLanes[0].TargetParameterIndex);
+	EXPECT_EQ(lane.PointCount, restored.AutomationLanes[0].PointCount);
+	EXPECT_EQ(lane.Points[1], restored.AutomationLanes[0].Points[1]);
+}
+
 TEST(LoopTakeMidiOverdub, OverdubCreatesMidiLoopsMatchingConfiguredChannelsAndDevices)
 {
 	auto take = MakeLoopTake("overdub-midi-setup");

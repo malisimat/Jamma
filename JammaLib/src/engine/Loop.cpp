@@ -2,6 +2,23 @@
 #include <algorithm>
 #include <cmath>
 
+namespace engine
+{
+	// JamFile gained bodyPlayIndex after legacy files had already written Index.
+	// Keep this compatibility shim here so Loop construction remains valid while
+	// both formats are accepted; no schema policy leaks into the audio path.
+	struct LoopFileBodyPlayIndex
+	{
+		template <typename LoopFile>
+		static unsigned long Value(const LoopFile& loop) noexcept
+		{
+			if constexpr (requires { loop.BodyPlayIndex; })
+				return loop.BodyPlayIndex;
+			return loop.Index;
+		}
+	};
+}
+
 void engine::Loop::_DrainVstChain(std::shared_ptr<vst::VstChain> chain)
 {
 	if (!chain)
@@ -111,8 +128,18 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 
-	loop->Load(io::WavReadWriter());
-	loop->Play(loopStruct.MasterLoopCount, loopStruct.Length, false);
+	if (!loop->Load(io::WavReadWriter()) || loopStruct.Length == 0ul
+		|| loopStruct.Length > loop->LoopLength())
+		return std::nullopt;
+
+	const auto bodyPlayIndex = LoopFileBodyPlayIndex::Value(loopStruct);
+	if (bodyPlayIndex >= loopStruct.Length)
+		return std::nullopt;
+
+	// Play consumes a fade-prefixed raw index. bodyPlayIndex is deliberately
+	// fade-free, so restore it only after establishing the logical loop state.
+	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
+	loop->SetBodyPlayIndex(bodyPlayIndex);
 
 	return loop;
 }
@@ -530,6 +557,7 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 	loop.Index = (playIndex >= constants::MaxLoopFadeSamps) ?
 		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
+	loop.BodyPlayIndex = BodyPlayIndex();
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
 	loop.Speed = _pitch;
@@ -625,15 +653,20 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 	_loopLength.store(0, std::memory_order_relaxed);
 	_bufferBank.Init();
 
-	auto length = (unsigned long)buffer.size();
-	_bufferBank.Resize(length);
+	const auto length = static_cast<unsigned long>(buffer.size());
+	if (length == 0ul || length > constants::MaxLoopBufferSize - constants::MaxLoopFadeSamps)
+		return false;
+
+	// WAV sidecars contain the fade-free logical body (ExportSamples deliberately
+	// strips the internal prefix). Recreate that private prefix before publishing
+	// a playable loop, rather than shortening the restored logical length.
+	const auto physicalLength = length + constants::MaxLoopFadeSamps;
+	_bufferBank.Resize(physicalLength);
 
 	for (auto i = 0u; i < length; i++)
-	{
-		_bufferBank[i] = buffer[i];
-	}
+		_bufferBank[constants::MaxLoopFadeSamps + i] = buffer[i];
 
-	_loopLength.store(length - constants::MaxLoopFadeSamps, std::memory_order_relaxed);
+	_loopLength.store(length, std::memory_order_relaxed);
 
 	_UpdateLoopModel();
 

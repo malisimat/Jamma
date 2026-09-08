@@ -2218,6 +2218,100 @@ std::vector<std::shared_ptr<midi::MidiLoop>> LoopTake::GetMidiLoopSnapshot() con
 	return loops;
 }
 
+bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
+{
+	if (_midiLoops.size() != _midiLoopChannels.size()
+		|| _midiLoops.size() != _midiLoopDevices.size()
+		|| _midiLoops.size() > MaxMidiStreamsForRestore)
+		return false;
+
+	MidiExportState exported;
+	exported.PlayIndex = _midiVisualPlayIndex.load(std::memory_order_acquire);
+	exported.LoopLengthSamps = _midiVisualLoopLength.load(std::memory_order_acquire);
+	exported.Quantisation = MidiQuantisation();
+	exported.QuantisationTransportStartSamps = MidiQuantisationTransportStartSamps();
+	exported.Streams.reserve(_midiLoops.size());
+	const auto anchorCorrection = _midiAnchorCorrection.load(std::memory_order_acquire);
+
+	for (std::size_t i = 0u; i < _midiLoops.size(); ++i)
+	{
+		if (!_midiLoops[i] || _midiLoopChannels[i] >= 16u)
+			return false;
+		MidiStreamExport stream;
+		stream.Channel = _midiLoopChannels[i];
+		stream.Device = _midiLoopDevices[i];
+		if (!_midiLoops[i]->SnapshotForExport(stream.Loop, anchorCorrection))
+			return false;
+		exported.Streams.push_back(std::move(stream));
+	}
+
+	state = std::move(exported);
+	return true;
+}
+
+bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
+{
+	if (state.Streams.size() > MaxMidiStreamsForRestore)
+		return false;
+	if (state.Streams.empty()
+		&& (state.LoopLengthSamps != 0ul || state.PlayIndex != 0ul))
+		return false;
+	if (!state.Streams.empty()
+		&& (state.LoopLengthSamps == 0ul || state.PlayIndex >= state.LoopLengthSamps))
+		return false;
+
+	std::vector<std::shared_ptr<midi::MidiLoop>> restoredLoops;
+	std::vector<unsigned int> restoredChannels;
+	std::vector<std::string> restoredDevices;
+	restoredLoops.reserve(state.Streams.size());
+	restoredChannels.reserve(state.Streams.size());
+	restoredDevices.reserve(state.Streams.size());
+
+	for (const auto& stream : state.Streams)
+	{
+		if (stream.Channel >= 16u
+			|| stream.Loop.LoopLengthSamps != state.LoopLengthSamps)
+			return false;
+
+		auto loop = std::make_shared<midi::MidiLoop>();
+		loop->SetSampleRate(_sampleRate);
+		if (!loop->RestoreFromExport(stream.Loop))
+			return false;
+
+		graphics::MidiModelParams modelParams;
+		modelParams.Size = { 12, 14 };
+		modelParams.ModelScale = 1.0f;
+		modelParams.ModelTextures = { "levels" };
+		modelParams.ModelShaders = { "waveform", "picker", "white" };
+		auto model = std::make_shared<graphics::MidiModel>(modelParams);
+		loop->AttachModel(model);
+		loop->QueueModelUpdateFromEvents(static_cast<std::uint32_t>(state.LoopLengthSamps), true);
+		restoredLoops.push_back(std::move(loop));
+		restoredChannels.push_back(stream.Channel);
+		restoredDevices.push_back(stream.Device);
+	}
+
+	_RemoveMidiModelChildren();
+	_midiLoops = std::move(restoredLoops);
+	_midiLoopChannels = std::move(restoredChannels);
+	_midiLoopDevices = std::move(restoredDevices);
+	_midiRecordHeld.clear();
+	_ResetMidiOverdubSession();
+	_midiVisualLoopLength.store(state.LoopLengthSamps, std::memory_order_release);
+	_midiVisualPlayIndex.store(state.PlayIndex, std::memory_order_release);
+	_midiAnchorCorrection.store(0, std::memory_order_release);
+	_midiTransportStartSamps.store(state.QuantisationTransportStartSamps, std::memory_order_release);
+	_midiQuantisationPacked.store(state.Quantisation.Pack(), std::memory_order_release);
+	for (const auto& loop : _midiLoops)
+		loop->SetQuantisation(ResolvedMidiQuantisation(), state.QuantisationTransportStartSamps);
+	for (const auto& loop : _midiLoops)
+		if (loop && loop->Model())
+			_children.push_back(loop->Model());
+	_PublishMidiLoopSnapshot();
+	_ArrangeChildren();
+	return true;
+}
+
 void LoopTake::_PublishMidiLoopSnapshot()
 {
 	auto state = std::make_shared<MidiLoopSnapshot>();

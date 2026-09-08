@@ -262,6 +262,28 @@ namespace engine
 		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
+		struct MidiStreamExport
+		{
+			unsigned int Channel = 0u;
+			std::string Device;
+			midi::MidiLoop::ExportState Loop;
+		};
+		struct MidiExportState
+		{
+			std::vector<MidiStreamExport> Streams;
+			unsigned long PlayIndex = 0ul;
+			unsigned long LoopLengthSamps = 0ul;
+			midi::MidiQuantisationSettings Quantisation;
+			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+		static constexpr std::size_t MaxMidiStreamsForRestore = io::JamFile::MaxMidiStreamsPerTake;
+		// Non-RT transfer at the exporter's already-paused, scene-locked boundary.
+		// The per-loop origin is exported with this take's anchor correction folded
+		// in, so loading can reset the live correction to zero.
+		bool SnapshotMidiForExport(MidiExportState& state) const;
+		// Non-RT construction before this take enters an audio snapshot.  Replaces
+		// the complete MIDI stream set and publishes one immutable loop snapshot.
+		bool RestoreMidiFromExport(const MidiExportState& state);
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;

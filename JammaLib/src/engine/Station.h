@@ -205,6 +205,11 @@ namespace engine
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
+		// Non-RT persistence transfer. The audio callback continues to consume only
+		// immutable, retained snapshots; these methods never mutate one in place.
+		midi::MidiVstRoutingSnapshot SnapshotMidiVstRoutesForExport() const;
+		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
+			size_t loadedPluginCount);
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -291,6 +296,7 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
+		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
 
 		// --- WriteBlock helpers (audio thread) ---
 
