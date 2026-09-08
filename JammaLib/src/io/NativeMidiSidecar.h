@@ -19,7 +19,7 @@ namespace io
 	{
 	public:
 		static constexpr std::uint16_t CurrentMajor = 0u;
-		static constexpr std::uint16_t CurrentMinor = 1u;
+		static constexpr std::uint16_t CurrentMinor = 2u;
 		static constexpr std::uint16_t CurrentPatch = 0u;
 		static constexpr std::size_t MaxEvents = 4096u;
 		static constexpr std::size_t MaxLanes = 8u;

@@ -20,6 +20,7 @@ TEST(NativeMidiSidecar, RoundTripsExactSampleOffsetsAndBytes)
 	lane.Controller = 7u;
 	lane.TargetScope = "station";
 	lane.TargetPluginIndex = 2u;
+	lane.TargetLoopIndex = 3u;
 	lane.TargetParameterIndex = 4u;
 	lane.Points = { { 0.0, 0.25 }, { 0.5, 0.75 } };
 	stream.Lanes.push_back(lane);
@@ -37,6 +38,20 @@ TEST(NativeMidiSidecar, RoundTripsExactSampleOffsetsAndBytes)
 	ASSERT_EQ(1u, parsed->Lanes.size());
 	EXPECT_EQ(2u, parsed->Lanes[0].Points.size());
 	EXPECT_DOUBLE_EQ(0.75, parsed->Lanes[0].Points[1].Value);
+	EXPECT_EQ(3u, parsed->Lanes[0].TargetLoopIndex);
+}
+
+TEST(NativeMidiSidecar, RejectsTrailingPayload)
+{
+	io::NativeMidiSidecar::Stream stream;
+	stream.LogicalLength = 8u;
+	stream.Events = { { 1u, 0x90u, 60u, 100u } };
+	std::stringstream bytes;
+	ASSERT_TRUE(io::NativeMidiSidecar::ToStream(stream, bytes));
+	bytes << 'x';
+	std::string error;
+	EXPECT_FALSE(io::NativeMidiSidecar::FromStream(bytes, &error).has_value());
+	EXPECT_FALSE(error.empty());
 }
 
 TEST(NativeMidiSidecar, RejectsTruncatedAndInvalidAssets)

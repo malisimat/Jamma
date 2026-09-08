@@ -157,7 +157,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	}
 
 	auto iter = jamParams.KeyValues.find("ninjam");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema && iter != jamParams.KeyValues.end())
 	{
 		if (jamParams.KeyValues["ninjam"].index() == 6)
 		{
@@ -194,17 +194,13 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		}
 	}
 
-	iter = jamParams.KeyValues.find("timerticks");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		if (jamParams.KeyValues["timerticks"].index() == 2)
+		iter = jamParams.KeyValues.find("timerticks");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["timerticks"].index() == 2)
 			jam.TimerTicks = std::get<unsigned long>(jamParams.KeyValues["timerticks"]);
-	}
-
-	iter = jamParams.KeyValues.find("quantisesamps");
-	if (iter != jamParams.KeyValues.end())
-	{
-		if (jamParams.KeyValues["quantisesamps"].index() == 2)
+		iter = jamParams.KeyValues.find("quantisesamps");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["quantisesamps"].index() == 2)
 			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
 	}
 
@@ -288,7 +284,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	}
 
 	iter = jamParams.KeyValues.find("globalmidiquantstate");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema && iter != jamParams.KeyValues.end())
 	{
 		const auto& value = jamParams.KeyValues["globalmidiquantstate"];
 		auto parsed = static_cast<int>(GlobalMidiQuantState::Mixed);
@@ -348,48 +344,50 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		}
 	}
 
-	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
-	if (iter != jamParams.KeyValues.end())
-		jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
-
-	iter = jamParams.KeyValues.find("transportoffsetloopfrac");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		const auto& value = jamParams.KeyValues["transportoffsetloopfrac"];
-		auto parsed = 0.0;
-		switch (value.index())
+		iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
+		if (iter != jamParams.KeyValues.end())
+			jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
+
+		iter = jamParams.KeyValues.find("transportoffsetloopfrac");
+		if (iter != jamParams.KeyValues.end())
 		{
-		case 1:
-			parsed = static_cast<double>(std::get<long>(value));
-			break;
-		case 2:
-			parsed = static_cast<double>(std::get<unsigned long>(value));
-			break;
-		case 3:
-			parsed = std::get<double>(value);
-			break;
-		default:
-			break;
+			const auto& value = jamParams.KeyValues["transportoffsetloopfrac"];
+			auto parsed = 0.0;
+			switch (value.index())
+			{
+			case 1:
+				parsed = static_cast<double>(std::get<long>(value));
+				break;
+			case 2:
+				parsed = static_cast<double>(std::get<unsigned long>(value));
+				break;
+			case 3:
+				parsed = std::get<double>(value);
+				break;
+			default:
+				break;
+			}
+
+			jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
+				std::clamp(parsed, -1.0, 1.0) : 0.0;
 		}
-
-		jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
-			std::clamp(parsed, -1.0, 1.0) : 0.0;
 	}
 
-	std::string quantiseStr = "";
-	iter = jamParams.KeyValues.find("quantisation");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		if (jamParams.KeyValues["quantisation"].index() == 4)
+		std::string quantiseStr = "";
+		iter = jamParams.KeyValues.find("quantisation");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["quantisation"].index() == 4)
 			quantiseStr = std::get<std::string>(jamParams.KeyValues["quantisation"]);
+		if (quantiseStr.compare("multiple") == 0)
+			jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+		else if (quantiseStr.compare("power") == 0)
+			jam.Quantisation = utils::Timer::QUANTISE_POWER;
+		else
+			jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	}
-
-	if (quantiseStr.compare("multiple") == 0)
-		jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
-	else if (quantiseStr.compare("power") == 0)
-		jam.Quantisation = utils::Timer::QUANTISE_POWER;
-	else
-		jam.Quantisation = utils::Timer::QUANTISE_OFF;
 
 	if (isCurrentSchema && jam.Stations.empty())
 	{
@@ -1241,7 +1239,8 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 				const auto output = Json::GetUnsigned(routeJson, "outputIndex");
 				const auto plugin = Json::GetUnsigned(routeJson, "pluginIndex");
 				auto liveIter = routeJson.KeyValues.find("live");
-				if (output && plugin && liveIter != routeJson.KeyValues.end() && liveIter->second.index() == 0)
+				if (output.has_value() && plugin.has_value()
+					&& liveIter != routeJson.KeyValues.end() && liveIter->second.index() == 0)
 					midiRoutes.push_back(MidiRoute{ *output, std::get<bool>(liveIter->second), *plugin });
 				else
 					std::cout << "JamFile: skipped invalid MIDI route" << std::endl;

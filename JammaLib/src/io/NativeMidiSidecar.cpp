@@ -47,6 +47,7 @@ bool NativeMidiSidecar::ToStream(const Stream& stream, std::ostream& out, std::s
 		if (!WriteBytes(out, &mapping, sizeof(mapping)) || !WriteBytes(out, &lane.Channel, sizeof(lane.Channel))
 			|| !WriteBytes(out, &lane.Controller, sizeof(lane.Controller)) || !WriteBytes(out, &scope, sizeof(scope))
 			|| !WriteBytes(out, &lane.TargetPluginIndex, sizeof(lane.TargetPluginIndex))
+			|| !WriteBytes(out, &lane.TargetLoopIndex, sizeof(lane.TargetLoopIndex))
 			|| !WriteBytes(out, &lane.TargetParameterIndex, sizeof(lane.TargetParameterIndex))
 			|| !WriteBytes(out, &pointCount, sizeof(pointCount)))
 		{
@@ -114,6 +115,7 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 		if (!ReadBytes(in, &mapping, sizeof(mapping), consumed) || !ReadBytes(in, &lane.Channel, sizeof(lane.Channel), consumed)
 			|| !ReadBytes(in, &lane.Controller, sizeof(lane.Controller), consumed) || !ReadBytes(in, &scope, sizeof(scope), consumed)
 			|| !ReadBytes(in, &lane.TargetPluginIndex, sizeof(lane.TargetPluginIndex), consumed)
+			|| !ReadBytes(in, &lane.TargetLoopIndex, sizeof(lane.TargetLoopIndex), consumed)
 			|| !ReadBytes(in, &lane.TargetParameterIndex, sizeof(lane.TargetParameterIndex), consumed)
 			|| !ReadBytes(in, &pointCount, sizeof(pointCount), consumed))
 		{
@@ -139,6 +141,13 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 	}
 	if (!Validate(stream, error))
 		return std::nullopt;
+	// The asset format has no padding or extension area.  Reject any tail so a
+	// malformed/oversized sidecar is never accepted as a valid prefix.
+	if (in.peek() != std::char_traits<char>::eof())
+	{
+		SetError(error, "trailing MIDI sidecar data");
+		return std::nullopt;
+	}
 	return stream;
 }
 

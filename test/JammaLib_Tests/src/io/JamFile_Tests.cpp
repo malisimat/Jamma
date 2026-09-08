@@ -281,6 +281,47 @@ TEST(JamFile, PreservesLegacySignedTransportOffset) {
 	EXPECT_DOUBLE_EQ(-0.25, parsed->TransportOffsetLoopFrac);
 }
 
+TEST(JamFile, CurrentTransportOwnsLocalStateAndIgnoresLegacyNinjamFields)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
+	const auto station = "{\"name\":\"station\",\"takes\":[" + take + "]}";
+	const auto text = "{\"formatVersion\":\"0.1.0\",\"name\":\"jam\","
+		"\"ninjam\":{\"host\":\"secret.example\",\"pass\":\"secret\"},"
+		"\"quantisesamps\":999,\"quantisation\":\"power\",\"globalphaseoffsetsamps\":999,"
+		"\"transportoffsetloopfrac\":-0.9,"
+		"\"transport\":{\"masterLengthSamps\":100,\"quantiseSamps\":10,\"quantisation\":\"multiple\","
+		"\"globalMidiQuantState\":\"all\",\"globalPhaseOffsetSamps\":-20,"
+		"\"absoluteSamplePos\":\"1234\",\"transportOffsetLoopFrac\":0.25},"
+		"\"stations\":[" + station + "]}";
+
+	auto parsed = JamFile::FromStream(std::stringstream(text));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_FALSE(parsed->Ninjam.has_value());
+	EXPECT_EQ(100ul, parsed->MasterLengthSamps);
+	EXPECT_EQ(1234ull, parsed->AbsoluteSamplePos);
+	EXPECT_EQ(10u, parsed->QuantiseSamps);
+	EXPECT_EQ(utils::Timer::QUANTISE_MULTIPLE, parsed->Quantisation);
+	EXPECT_EQ(JamFile::GlobalMidiQuantState::All, parsed->GlobalMidiQuantStateValue);
+	EXPECT_EQ(-20, parsed->GlobalPhaseOffsetSamps);
+	EXPECT_DOUBLE_EQ(0.25, parsed->TransportOffsetLoopFrac);
+}
+
+TEST(JamFile, PreservesZeroIndexedMidiRoute)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto text = "{\"name\":\"station\",\"takes\":[{\"name\":\"take\",\"loops\":[" + loop
+		+ "]}],\"midiRoutes\":[{\"outputIndex\":0,\"pluginIndex\":0,\"live\":false}]}";
+	auto root = Json::FromStream(std::stringstream(text));
+	ASSERT_TRUE(root.has_value());
+	auto station = JamFile::Station::FromJson(std::get<Json::JsonPart>(*root));
+	ASSERT_TRUE(station.has_value());
+	ASSERT_EQ(1u, station->MidiRoutes.size());
+	EXPECT_EQ(0u, station->MidiRoutes[0].OutputIndex);
+	EXPECT_EQ(0u, station->MidiRoutes[0].PluginIndex);
+	EXPECT_FALSE(station->MidiRoutes[0].IsLive);
+}
+
 TEST(JamFile, SignedTransportOffsetClampsEndpointsAndDefaultsMissingToZero) {
 	for (const auto [serialized, expected] : {
 		std::pair{ "-2", -1.0 },

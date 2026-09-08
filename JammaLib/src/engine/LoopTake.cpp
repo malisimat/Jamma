@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 
 #include "../graphics/MidiModel.h"
+#include "../io/NativeMidiSidecar.h"
 #include "../midi/MidiNote.h"
 #include "../midi/MidiIndexedOutputSink.h"
 #include "../ninjam/NinjamLoopAlignment.h"
@@ -237,6 +240,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	LoopParams loopParams;
 	loopParams.Wav = "hh";
 
+	bool hasAudioLoop = false;
 	for (auto loopStruct : takeStruct.Loops)
 	{
 		auto loop = Loop::FromFile(loopParams, loopStruct, dir);
@@ -247,12 +251,94 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 				loop.value()->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
 
 			take->AddLoop(loop.value());
+			hasAudioLoop = true;
 		}
+		else
+			std::cout << "Load: skipped audio loop " << loopStruct.Name << std::endl;
+	}
+
+	LoopTake::MidiExportState midiState;
+	midiState.Quantisation = quantisation;
+	midiState.QuantisationTransportStartSamps = takeStruct.MidiQuantTransportStart;
+	midiState.PlayIndex = takeStruct.MidiPlayIndex;
+	midiState.LoopLengthSamps = takeStruct.MidiPlayLength;
+	for (const auto& streamStruct : takeStruct.MidiStreams)
+	{
+		std::ifstream stream(std::filesystem::path(dir) / utils::DecodeUtf8(streamStruct.SidecarPath), std::ios::binary);
+		std::string error;
+		auto sidecar = stream ? io::NativeMidiSidecar::FromStream(stream, &error) : std::nullopt;
+		if (!sidecar.has_value())
+		{
+			std::cout << "Load: skipped MIDI sidecar " << streamStruct.SidecarPath
+				<< (error.empty() ? "" : ": " + error) << std::endl;
+			continue;
+		}
+		if (!sidecar->Lanes.empty())
+		{
+			// The startup VST loader is asynchronous, so it cannot prove the
+			// persisted owner/plugin mapping before this take would be published.
+			// Skip this stream explicitly rather than playing automation against an
+			// unresolved pointer or an accidental plugin slot.
+			std::cout << "Load: skipped MIDI sidecar with unresolved automation dependencies "
+				<< streamStruct.SidecarPath << std::endl;
+			continue;
+		}
+		if (sidecar->LogicalLength != streamStruct.LogicalLength
+			|| sidecar->AutomationGlobalSampleOrigin != streamStruct.AutomationGlobalSampleOrigin
+			|| sidecar->LogicalLength > io::JamFile::MaxLoopLengthSamps
+			|| (midiState.LoopLengthSamps != 0ul && midiState.LoopLengthSamps != sidecar->LogicalLength))
+		{
+			std::cout << "Load: skipped inconsistent MIDI sidecar " << streamStruct.SidecarPath << std::endl;
+			continue;
+		}
+		if (midiState.LoopLengthSamps == 0ul)
+			midiState.LoopLengthSamps = sidecar->LogicalLength;
+		if (midiState.PlayIndex >= midiState.LoopLengthSamps)
+		{
+			std::cout << "Load: skipped MIDI sidecar with invalid shared cursor " << streamStruct.SidecarPath << std::endl;
+			continue;
+		}
+
+		LoopTake::MidiStreamExport restored;
+		restored.Channel = streamStruct.Channel;
+		restored.Device = streamStruct.Device;
+		restored.Loop.LoopLengthSamps = sidecar->LogicalLength;
+		restored.Loop.AutomationGlobalSampleOrigin = static_cast<std::uint32_t>(sidecar->AutomationGlobalSampleOrigin);
+		restored.Loop.EventCount = sidecar->Events.size();
+		for (std::size_t eventIndex = 0u; eventIndex < sidecar->Events.size(); ++eventIndex)
+		{
+			const auto& event = sidecar->Events[eventIndex];
+			restored.Loop.Events[eventIndex] = { event.SampleOffset, event.Status, event.Data1, event.Data2 };
+		}
+		for (std::size_t laneIndex = 0u; laneIndex < sidecar->Lanes.size(); ++laneIndex)
+		{
+			const auto& lane = sidecar->Lanes[laneIndex];
+			auto& restoredLane = restored.Loop.AutomationLanes[laneIndex];
+			restoredLane.MatchKey = lane.Mapping == io::JamFile::AutomationLane::MappingType::Editor ?
+				midi::AutomationMapping::MakeEditorMatchKey() :
+				midi::AutomationMapping::MakeMatchKey(lane.Channel, lane.Controller);
+			restoredLane.TargetParameterIndex = lane.TargetParameterIndex;
+			restoredLane.PointCount = lane.Points.size();
+			for (std::size_t pointIndex = 0u; pointIndex < lane.Points.size(); ++pointIndex)
+				restoredLane.Points[pointIndex] = { static_cast<float>(lane.Points[pointIndex].Fraction),
+					static_cast<float>(lane.Points[pointIndex].Value) };
+		}
+		midiState.Streams.push_back(std::move(restored));
+	}
+	if (!midiState.Streams.empty() && !take->RestoreMidiFromExport(midiState))
+	{
+		std::cout << "Load: skipped MIDI state for take " << takeStruct.Name << std::endl;
+		midiState.Streams.clear();
 	}
 
 	for (const auto& vstEntry : takeStruct.VstChain)
 		take->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
 
+	if (!hasAudioLoop && midiState.Streams.empty())
+	{
+		std::cout << "Load: skipped empty take " << takeStruct.Name << std::endl;
+		return std::nullopt;
+	}
 	return take;
 }
 
@@ -2220,6 +2306,10 @@ std::vector<std::shared_ptr<midi::MidiLoop>> LoopTake::GetMidiLoopSnapshot() con
 
 bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 {
+	// The paused scene boundary excludes audio callbacks, but the MIDI ingress
+	// thread owns capture storage under this mutex.  Keep the complete transfer
+	// behind the same contract so it cannot observe a partially appended event.
+	std::scoped_lock midiLock(_midiCaptureMutex);
 	if (_midiLoops.size() != _midiLoopChannels.size()
 		|| _midiLoops.size() != _midiLoopDevices.size()
 		|| _midiLoops.size() > MaxMidiStreamsForRestore)

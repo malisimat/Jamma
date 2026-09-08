@@ -531,6 +531,19 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	for (auto& stationStruct : jamStruct.Stations)
 	{
+		// VST loads are asynchronous in the current startup pipeline.  A MIDI
+		// route cannot be published safely until every referenced plugin exists,
+		// so reject that station explicitly rather than silently routing to a
+		// different chain slot or claiming a restored route.
+		if (!stationStruct.MidiRoutes.empty())
+		{
+			std::cout << "Load: skipped station " << stationStruct.Name
+				<< " because VST MIDI routing cannot be validated synchronously" << std::endl;
+			stationParams.Index++;
+			stationParams.Position += { 600, 0 };
+			stationParams.ModelPosition += { 600, 0 };
+			continue;
+		}
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
 		if (station.has_value())
 		{
@@ -562,22 +575,36 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+	if (scene->_stations.empty())
+	{
+		std::cout << "Load: no constructible stations" << std::endl;
+		return std::nullopt;
+	}
 
 	if (scene->_hudPanel)
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	if (jamStruct.FormatMajor != 0u || jamStruct.FormatMinor != 0u || jamStruct.FormatPatch != 0u)
+	{
+		auto clock = scene->_quantisation.Clock();
+		if (!clock || jamStruct.MasterLengthSamps == 0ul)
+		{
+			std::cout << "Load: invalid local transport state" << std::endl;
+			return std::nullopt;
+		}
+		clock->SetSeedSourceLength(jamStruct.MasterLengthSamps);
+		if (!clock->InitialiseAbsoluteSamplePos(jamStruct.AbsoluteSamplePos))
+		{
+			std::cout << "Load: invalid local transport state" << std::endl;
+			return std::nullopt;
+		}
+	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
-	if (jamStruct.Ninjam.has_value())
-	{
-		// Persisted/default starts enter the same coordinator lifecycle as an
-		// interactive connect before the first physical snapshot can arrive.
-		scene->_ApplyNinjamTimingUpdate(scene->_networkService->PrepareTempoSyncOnConnect(
-			scene->_quantisation.CurrentTempoTiming(scene->_CurrentSampleRate())));
-	}
-	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
+	// Saved sessions always start locally.  NINJAM config/anchors are live
+	// connection state and are intentionally never restored from a .jam.
 	scene->InitReceivers();
 
 	return scene;

@@ -136,6 +136,7 @@ namespace io
 			std::uint8_t Controller = 0;
 			std::string TargetScope = "station";
 			unsigned int TargetPluginIndex = 0;
+			unsigned int TargetLoopIndex = 0;
 			unsigned int TargetParameterIndex = 0;
 			std::vector<AutomationPoint> Points;
 		};

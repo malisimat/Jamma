@@ -135,6 +135,9 @@ namespace midi
 			// resolves that runtime identity after its VST chain has loaded.
 			std::uint32_t MatchKey = AutomationMapping::kInactive;
 			unsigned int TargetParameterIndex = 0u;
+		// Transient identity at the export boundary. The sidecar receives an
+		// explicit owner scope and plugin index, never this raw pointer.
+			const vst::IVstPlugin* TargetPlugin = nullptr;
 			std::array<std::pair<float, float>, AutomationLane::MaxPoints> Points{};
 			std::size_t PointCount = 0u;
 		};

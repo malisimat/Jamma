@@ -163,6 +163,11 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 		takeCount++;
 	}
+	if (station->GetLoopTakes().empty())
+	{
+		std::cout << "Load: skipped empty station " << stationStruct.Name << std::endl;
+		return std::nullopt;
+	}
 
 	// Queue load jobs for any VST plugins serialised in the station's chain.
 	for (const auto& vstEntry : stationStruct.VstChain)

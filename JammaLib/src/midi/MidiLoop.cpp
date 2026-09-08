@@ -304,6 +304,7 @@ bool MidiLoop::SnapshotForExport(ExportState& state,
 				continue;
 			exported.MatchKey = lane.Mapping.MatchKey.load(std::memory_order_acquire);
 			exported.TargetParameterIndex = lane.Mapping.TargetParameterIndex;
+			exported.TargetPlugin = lane.Mapping.TargetPlugin;
 			exported.PointCount = lane.PointCount;
 			if (exported.PointCount > exported.Points.size())
 				return false;
