@@ -171,12 +171,9 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 
 		takeCount++;
 	}
-	if (station->GetLoopTakes().empty())
-	{
-		std::cout << "Load: skipped empty station " << stationStruct.Name << std::endl;
-		return std::nullopt;
-	}
-
+	// Empty stations are valid saved state: a station may contain its VST chain,
+	// routing configuration, or simply be ready for a new take. Only malformed
+	// station data should prevent the station from being reconstructed.
 	for (const auto& take : station->GetLoopTakes())
 	{
 		if (!take)
