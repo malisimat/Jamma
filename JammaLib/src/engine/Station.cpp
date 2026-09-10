@@ -143,7 +143,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 	for (const auto& vstEntry : stationStruct.VstChain)
 	{
-		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
 			std::cout << "Load: failed VST for station " << stationStruct.Name << std::endl;
 			return std::nullopt;
@@ -2418,7 +2418,8 @@ void Station::LoadVstPlugin(std::wstring path,
 }
 
 bool Station::LoadVstPluginSynchronously(const std::wstring& path,
-	const std::vector<std::uint8_t>& initialState)
+	const std::vector<std::uint8_t>& initialState,
+	bool bypass)
 {
 	// Startup construction completes before Scene::InitAudio publishes this
 	// station, so direct replacement cannot race the callback.
@@ -2432,6 +2433,7 @@ bool Station::LoadVstPluginSynchronously(const std::wstring& path,
 
 	if (!initialState.empty())
 		plugin->SetState(initialState);
+	plugin->SetBypassed(bypass);
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();

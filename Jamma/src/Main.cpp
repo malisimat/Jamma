@@ -501,33 +501,35 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 				if (!replacement.has_value())
 				{
-					std::wcerr << L"Load JAM failed; starting an empty session: " << jamPath << std::endl;
-					replacement = Scene::FromFile(sceneParams, EmptyJam(), rig, L"");
+					std::wcerr << L"Load JAM failed; keeping the current session: " << jamPath << std::endl;
+					if (paused)
+						scene.value()->ResumeAudio();
+					else
+						scene.value()->InitAudio();
 				}
-
-				if (!replacement.has_value())
-					throw std::runtime_error("Failed to create empty replacement Scene");
-
-				if (defaults.has_value())
-					replacement.value()->SetLogging(defaults.value().Logging);
-
+				else
 				{
-					// Exclude the console submit callback while its raw scene view is rebound.
-					std::scoped_lock scenePointerLock(sceneRawMutex);
-					sceneRaw.store(nullptr, std::memory_order_release);
-					// Editors, queued jobs, and plugin instances belong to the outgoing
-					// JAM. Tear them down completely before binding the window to the
-					// already-constructed replacement Scene.
-					scene.value()->CloseAllVstEditorWindows();
-					scene.value()->Shutdown();
-					window.ReplaceScene(*replacement.value());
-					scene = std::move(replacement);
-					sceneRaw.store(scene.value().get(), std::memory_order_release);
-				}
-				vst::DrainUiThreadDestroyQueue();
+					if (defaults.has_value())
+						replacement.value()->SetLogging(defaults.value().Logging);
 
-				scene.value()->InitGlobalKeyCapture();
-				scene.value()->InitAudio();
+					{
+						// Exclude the console submit callback while its raw scene view is rebound.
+						std::scoped_lock scenePointerLock(sceneRawMutex);
+						sceneRaw.store(nullptr, std::memory_order_release);
+						// Editors, queued jobs, and plugin instances belong to the outgoing
+						// JAM. Tear them down completely before binding the window to the
+						// already-constructed replacement Scene.
+						scene.value()->CloseAllVstEditorWindows();
+						scene.value()->Shutdown();
+						window.ReplaceScene(*replacement.value());
+						scene = std::move(replacement);
+						sceneRaw.store(scene.value().get(), std::memory_order_release);
+					}
+					vst::DrainUiThreadDestroyQueue();
+
+					scene.value()->InitGlobalKeyCapture();
+					scene.value()->InitAudio();
+				}
 			}
 		}
 

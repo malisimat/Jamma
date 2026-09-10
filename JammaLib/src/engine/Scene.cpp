@@ -572,7 +572,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
-	if (jamStruct.FormatMajor != 0u || jamStruct.FormatMinor != 0u || jamStruct.FormatPatch != 0u)
+	if (jamStruct.Version == io::JamFile::VERSION_V)
 	{
 		auto clock = scene->_quantisation.Clock();
 		if (!clock || jamStruct.MasterLengthSamps == 0ul)

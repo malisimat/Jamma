@@ -249,7 +249,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		{
 			for (const auto& vstEntry : loopStruct.VstChain)
 			{
-				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+				if (!loop.value()->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 				{
 					std::cout << "Load: failed VST for audio loop " << loopStruct.Name << std::endl;
 					return std::nullopt;
@@ -281,6 +281,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		}
 		if (sidecar->LogicalLength != streamStruct.LogicalLength
 			|| sidecar->AutomationGlobalSampleOrigin != streamStruct.AutomationGlobalSampleOrigin
+			|| sidecar->AutomationGlobalSampleOrigin > std::numeric_limits<std::uint32_t>::max()
 			|| sidecar->LogicalLength > io::JamFile::MaxLoopLengthSamps
 			|| (midiState.LoopLengthSamps != 0ul && midiState.LoopLengthSamps != sidecar->LogicalLength))
 		{
@@ -332,7 +333,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 
 	for (const auto& vstEntry : takeStruct.VstChain)
 	{
-		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState()))
+		if (!take->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
 			std::cout << "Load: failed VST for take " << takeStruct.Name << std::endl;
 			return std::nullopt;
@@ -3327,7 +3328,8 @@ void LoopTake::LoadVstPlugin(std::wstring path,
 }
 
 bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
-	const std::vector<std::uint8_t>& initialState)
+	const std::vector<std::uint8_t>& initialState,
+	bool bypass)
 {
 	// This is only valid while startup owns the take and before it is published
 	// to an audio snapshot.
@@ -3341,6 +3343,7 @@ bool LoopTake::LoadVstPluginSynchronously(const std::wstring& path,
 
 	if (!initialState.empty())
 		plugin->SetState(initialState);
+	plugin->SetBypassed(bypass);
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();

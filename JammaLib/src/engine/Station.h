@@ -221,7 +221,8 @@ namespace engine
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only synchronous counterpart used before Scene::InitAudio().
 		bool LoadVstPluginSynchronously(const std::wstring& path,
-			const std::vector<std::uint8_t>& initialState = {});
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 

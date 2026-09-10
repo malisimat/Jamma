@@ -152,6 +152,21 @@ std::wstring utils::PickJamFile(const std::wstring& title)
 {
 	using Microsoft::WRL::ComPtr;
 
+	struct ComInitGuard
+	{
+		bool DidInit = false;
+		ComInitGuard()
+		{
+			auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+			DidInit = SUCCEEDED(hr);
+		}
+		~ComInitGuard()
+		{
+			if (DidInit)
+				CoUninitialize();
+		}
+	} comInitGuard;
+
 	ComPtr<IFileOpenDialog> dialog;
 	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
 		IID_PPV_ARGS(&dialog))))

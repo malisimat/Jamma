@@ -969,7 +969,8 @@ void Loop::LoadVstPlugin(std::wstring path,
 }
 
 bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
-	const std::vector<std::uint8_t>& initialState)
+	const std::vector<std::uint8_t>& initialState,
+	bool bypass)
 {
 	// Scene::FromFile calls this before Scene::InitAudio, so no callback can
 	// retain the old chain while this non-RT construction is in progress.
@@ -980,6 +981,7 @@ bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 
 	if (!initialState.empty())
 		plugin->SetState(initialState);
+	plugin->SetBypassed(bypass);
 
 	auto chain = _vstChain.load(std::memory_order_acquire);
 	auto replacement = std::make_shared<vst::VstChain>();

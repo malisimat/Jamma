@@ -295,6 +295,13 @@ namespace io
 			return false;
 		}
 
+		std::stringstream jamStream;
+		if (!io::JamFile::ToStream(jam, jamStream))
+		{
+			std::cout << "Export: failed to serialize session.jam" << std::endl;
+			return false;
+		}
+
 		io::WavReadWriter wavWriter;
 		unsigned int wavCount = 0;
 		for (const auto& loop : loops)
@@ -318,8 +325,6 @@ namespace io
 			}
 		}
 
-		std::stringstream jamStream;
-		io::JamFile::ToStream(jam, jamStream);
 		const auto jamPath = exportDir + L"\\session.jam";
 		const auto temporaryJamPath = jamPath + L".tmp";
 		const auto wroteJamFile = io::TextReadWriter().Write(temporaryJamPath, jamStream.str(), 0, 0);
