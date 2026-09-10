@@ -1569,6 +1569,18 @@ void Scene::CloseAudio()
 	_audioEngine->Close();
 }
 
+bool Scene::PauseAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Pause();
+}
+
+bool Scene::ResumeAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Resume();
+}
+
 bool Scene::InitGlobalKeyCapture()
 {
 	return _inputSubsystem->InitGlobalKeyCapture();
@@ -1589,6 +1601,19 @@ void Scene::Shutdown()
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())
 		_jobRunner.join();
+
+	// No work from the outgoing session may survive a session replacement.
+	// In particular, queued VST loads retain UI-thread-created plugin objects;
+	// hand those objects back to the UI destroy queue before dropping the jobs.
+	std::list<actions::JobAction> abandonedJobs;
+	// The consumer thread is joined and Shutdown is called by the UI owner, so
+	// there can be no concurrent queue reader or producer at this point.
+	abandonedJobs.swap(_jobList);
+	for (auto& job : abandonedJobs)
+	{
+		if (job.PreInitPlugin)
+			vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+	}
 
 	ForceUnloadAllVstPlugins();
 

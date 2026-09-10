@@ -147,3 +147,42 @@ std::wstring utils::PickFile(const std::wstring& title)
 
 	return result;
 }
+
+std::wstring utils::PickJamFile(const std::wstring& title)
+{
+	using Microsoft::WRL::ComPtr;
+
+	ComPtr<IFileOpenDialog> dialog;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+		IID_PPV_ARGS(&dialog))))
+		return {};
+
+	COMDLG_FILTERSPEC filters[] =
+	{
+		{ L"Jamma sessions (*.jam)", L"*.jam" },
+		{ L"All files (*.*)", L"*.*" }
+	};
+
+	DWORD options = 0;
+	dialog->GetOptions(&options);
+	dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST);
+	dialog->SetTitle(title.c_str());
+	dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
+	dialog->SetFileTypeIndex(1);
+	dialog->SetDefaultExtension(L"jam");
+
+	if (FAILED(dialog->Show(nullptr)))
+		return {};
+
+	ComPtr<IShellItem> item;
+	if (FAILED(dialog->GetResult(&item)))
+		return {};
+
+	PWSTR path = nullptr;
+	if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+		return {};
+
+	std::wstring result(path);
+	CoTaskMemFree(path);
+	return result;
+}

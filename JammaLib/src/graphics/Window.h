@@ -80,6 +80,8 @@ namespace graphics
 		void Render();
 		void Swap();
 		void Release();
+		void ReplaceScene(engine::Scene& scene);
+		bool ConsumeJamLoadRequest() noexcept;
 
 		virtual actions::ActionResult OnAction(actions::WindowAction winAction) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction touchAction) override;
@@ -125,9 +127,10 @@ namespace graphics
 		std::optional<GlDrawContext> _drawContext;
 		std::optional<GlDrawContext> _pickContext;
 		std::optional<GlDrawContext> _textureContext;
-		engine::Scene& _scene;
+		engine::Scene* _scene;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
+		bool _jamLoadRequested;
 
 		ImageFullscreen _highlightPass;
 	};

@@ -19,6 +19,7 @@
 #include <cctype>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -262,6 +263,41 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	return JamFile::FromStream(std::move(ss));
 }
 
+std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
+{
+	io::TextReadWriter reader;
+	auto contents = reader.Read(path, MAX_JSON_CHARS);
+	if (!contents.has_value())
+		return std::nullopt;
+
+	auto [json, numChars, unused] = std::move(contents.value());
+	std::stringstream stream(std::move(json));
+	return JamFile::FromStream(std::move(stream));
+}
+
+io::JamFile EmptyJam()
+{
+	std::stringstream stream(JamFile::DefaultJson);
+	auto parsed = JamFile::FromStream(std::move(stream));
+	if (!parsed.has_value())
+		throw std::runtime_error("Built-in empty JAM manifest is invalid");
+
+	auto jam = std::move(parsed.value());
+	jam.Name = "empty";
+	jam.Ninjam.reset();
+	jam.AbsoluteSamplePos = 0u;
+	jam.GlobalPhaseOffsetSamps = 0;
+	jam.TransportOffsetLoopFrac = 0.0;
+	for (auto& station : jam.Stations)
+	{
+		station.LoopTakes.clear();
+		station.VstChain.clear();
+		station.MidiRoutes.clear();
+		station.StationPhaseOffsetSamps = 0;
+	}
+	return jam;
+}
+
 std::optional<io::RigFile> LoadRig(io::InitFile& ini)
 {
 	io::TextReadWriter txtFile;
@@ -317,12 +353,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// get the coloured/emoji treatment. The TUI's lifetime spans the entire
 	// application run and is independent of any NINJAM session.
 	//
-	// An atomic scene pointer lets the submit handler forward chat safely once
-	// the scene is wired in below; before that it prints a "not connected"
-	// notice. std::atomic<Scene*> is write-once from the main thread.
+	// The pointer and mutex let the submit handler forward chat safely while the
+	// UI thread replaces a complete Scene after an explicit JAM load.
 	auto tui = std::make_unique<io::ConsoleTui>();
 	std::atomic<Scene*> sceneRaw{ nullptr };
-	tui->Start("> ", [&sceneRaw](const std::string& msg) {
+	std::mutex sceneRawMutex;
+	tui->Start("> ", [&sceneRaw, &sceneRawMutex](const std::string& msg) {
+		std::scoped_lock lock(sceneRawMutex);
 		auto* s = sceneRaw.load(std::memory_order_acquire);
 		if (HandleSlashCommand(msg, s))
 			return;
@@ -426,6 +463,73 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		actions::KeyAction globalKeyAction;
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
 			window.OnAction(globalKeyAction);
+
+		if (window.ConsumeJamLoadRequest())
+		{
+			const bool paused = scene.value()->PauseAudio();
+			if (!paused)
+				scene.value()->CloseAudio();
+
+			const auto jamPath = utils::PickJamFile();
+			if (jamPath.empty())
+			{
+				if (paused)
+					scene.value()->ResumeAudio();
+				else
+					scene.value()->InitAudio();
+			}
+			else
+			{
+				std::optional<std::shared_ptr<Scene>> replacement;
+				try
+				{
+					auto selectedJam = LoadJamFile(jamPath);
+					if (selectedJam.has_value())
+					{
+						replacement = Scene::FromFile(sceneParams, std::move(selectedJam.value()), rig,
+							utils::GetParentDirectory(jamPath));
+					}
+				}
+				catch (const std::exception& error)
+				{
+					std::cerr << "Load JAM failed: " << error.what() << std::endl;
+				}
+				catch (...)
+				{
+					std::cerr << "Load JAM failed with an unknown error" << std::endl;
+				}
+
+				if (!replacement.has_value())
+				{
+					std::wcerr << L"Load JAM failed; starting an empty session: " << jamPath << std::endl;
+					replacement = Scene::FromFile(sceneParams, EmptyJam(), rig, L"");
+				}
+
+				if (!replacement.has_value())
+					throw std::runtime_error("Failed to create empty replacement Scene");
+
+				if (defaults.has_value())
+					replacement.value()->SetLogging(defaults.value().Logging);
+
+				{
+					// Exclude the console submit callback while its raw scene view is rebound.
+					std::scoped_lock scenePointerLock(sceneRawMutex);
+					sceneRaw.store(nullptr, std::memory_order_release);
+					// Editors, queued jobs, and plugin instances belong to the outgoing
+					// JAM. Tear them down completely before binding the window to the
+					// already-constructed replacement Scene.
+					scene.value()->CloseAllVstEditorWindows();
+					scene.value()->Shutdown();
+					window.ReplaceScene(*replacement.value());
+					scene = std::move(replacement);
+					sceneRaw.store(scene.value().get(), std::memory_order_release);
+				}
+				vst::DrainUiThreadDestroyQueue();
+
+				scene.value()->InitGlobalKeyCapture();
+				scene.value()->InitAudio();
+			}
+		}
 
 		window.Render();
 		window.Swap();
