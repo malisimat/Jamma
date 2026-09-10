@@ -241,7 +241,7 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		std::uint64_t absolute = 0u;
 		const auto absoluteIter = transport.KeyValues.find("absoluteSamplePos");
 		if (!readUnsigned(transport, "masterLengthSamps", masterLength) || !readUnsigned(transport, "quantiseSamps", quantise)
-			|| absoluteIter == transport.KeyValues.end() || absoluteIter->second.index() != 4 || masterLength == 0u || masterLength > MaxLoopLengthSamps)
+			|| absoluteIter == transport.KeyValues.end() || absoluteIter->second.index() != 4 || masterLength == 0u || masterLength > MaxLoopLengthSamps || quantise == 0u)
 		{
 			std::cout << "JamFile: invalid essential transport field" << std::endl;
 			return std::nullopt;

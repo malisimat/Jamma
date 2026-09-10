@@ -2377,7 +2377,6 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 		modelParams.Size = { 12, 14 };
 		modelParams.ModelScale = 1.0f;
 		modelParams.ModelTextures = { "levels" };
-		modelParams.ModelShaders = { "waveform", "picker", "white" };
 		auto model = std::make_shared<graphics::MidiModel>(modelParams);
 		loop->AttachModel(model);
 		loop->QueueModelUpdateFromEvents(static_cast<std::uint32_t>(state.LoopLengthSamps), true);

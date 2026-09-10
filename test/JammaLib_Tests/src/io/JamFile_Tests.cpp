@@ -307,6 +307,16 @@ TEST(JamFile, CurrentTransportOwnsLocalStateAndIgnoresLegacyNinjamFields)
 	EXPECT_EQ(JamFile::GlobalMidiQuantState::All, parsed->GlobalMidiQuantStateValue);
 	EXPECT_EQ(-20, parsed->GlobalPhaseOffsetSamps);
 	EXPECT_DOUBLE_EQ(0.25, parsed->TransportOffsetLoopFrac);
+
+	const auto missingGrain = std::string("{\"formatVersion\":\"0.1.0\",\"name\":\"jam\","
+		"\"transport\":{\"masterLengthSamps\":100,\"absoluteSamplePos\":\"1234\"},"
+		"\"stations\":[") + station + "]}";
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(missingGrain)).has_value());
+
+	const auto zeroGrain = std::string("{\"formatVersion\":\"0.1.0\",\"name\":\"jam\","
+		"\"transport\":{\"masterLengthSamps\":100,\"quantiseSamps\":0,\"absoluteSamplePos\":\"1234\"},"
+		"\"stations\":[") + station + "]}";
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(zeroGrain)).has_value());
 }
 
 TEST(JamFile, PreservesZeroIndexedMidiRoute)

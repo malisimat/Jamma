@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <sstream>
@@ -6,6 +7,7 @@
 #include "gtest/gtest.h"
 #include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
+#include "engine/Quantiser.h"
 #include "midi/MidiLoop.h"
 #include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
@@ -18,6 +20,7 @@ using midi::IMidiSink;
 using midi::IMidiOutputSink;
 using engine::LoopTake;
 using engine::LoopTakeParams;
+using engine::Quantiser;
 using midi::MidiEvent;
 using midi::MidiLoop;
 using midi::MidiLoopState;
@@ -939,6 +942,58 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 	EXPECT_EQ(300u,
 		shiftedSink.events[0].event.sampleOffset
 		+ static_cast<std::uint32_t>(shiftedTake->MidiQuantisationTransportStartSamps()));
+}
+
+TEST(LoopTakeMidiQuantisation, RestoredMidiUsesDeferredJobAfterGlobalAllGrainPropagation) {
+	constexpr std::uint32_t loopLengthSamps = 400u;
+	constexpr std::uint32_t grainSamps = 100u;
+	constexpr std::uint64_t transportStartSamps = 250u;
+	constexpr unsigned long savedPlayIndex = 20ul;
+	constexpr std::uint32_t outputBlockStart = 1000u;
+
+	LoopTake::MidiExportState state;
+	state.PlayIndex = savedPlayIndex;
+	state.LoopLengthSamps = loopLengthSamps;
+	state.Quantisation = { false, MidiQuantisationFraction::Whole, 0u, 0 };
+	state.QuantisationTransportStartSamps = transportStartSamps;
+	LoopTake::MidiStreamExport stream;
+	stream.Channel = 0u;
+	stream.Loop.LoopLengthSamps = loopLengthSamps;
+	stream.Loop.EventCount = 2u;
+	stream.Loop.Events[0] = MidiEvent::MakeNoteOn(35u, 0u, 60u, 100u);
+	stream.Loop.Events[1] = MidiEvent::MakeNoteOff(55u, 0u, 60u);
+	state.Streams.push_back(std::move(stream));
+
+	auto take = MakeLoopTake("restored-deferred-midi");
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	EXPECT_EQ(0u, take->MidiQuantisation().GrainSamps);
+	EXPECT_EQ(savedPlayIndex, take->MidiPlayIndex());
+
+	auto station = MakeStation("restored-deferred-station");
+	station->AddTake(take);
+	Quantiser quantiser;
+	quantiser.SetMidiGrain(grainSamps, "parsed local manifest", { station });
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+
+	const auto jobs = take->CommitChanges();
+	const auto job = std::find_if(jobs.begin(), jobs.end(), [](const actions::JobAction& candidate)
+		{
+			return candidate.JobActionType == actions::JobAction::JOB_UPDATEMIDIQUANTISATION;
+		});
+	ASSERT_NE(jobs.end(), job);
+	auto receiver = job->Receiver.lock();
+	ASSERT_TRUE(receiver);
+	receiver->OnAction(*job);
+
+	MidiLoopCapturingOutputSink sink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(outputBlockStart, 100u, sink));
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].event.IsNoteOn());
+	EXPECT_EQ(1030u, sink.events[0].event.sampleOffset);
+	EXPECT_EQ(300u, sink.events[0].event.sampleOffset - outputBlockStart
+		+ static_cast<std::uint32_t>(savedPlayIndex)
+		+ static_cast<std::uint32_t>(transportStartSamps));
+	EXPECT_EQ(savedPlayIndex, take->MidiPlayIndex());
 }
 
 TEST(LoopTakeMidiQuantisation, StationPhaseOffsetsComposeForExistingAndNewTakes) {

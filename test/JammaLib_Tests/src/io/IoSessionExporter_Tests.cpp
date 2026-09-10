@@ -126,9 +126,13 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	auto timer = std::make_shared<utils::Timer>();
 	Quantiser quantiser;
 	quantiser.SetClock(timer);
-	quantiser.Set(16u, utils::Timer::QUANTISE_MULTIPLE);
+	constexpr unsigned int localGrainSamps = 16u;
+	timer->SetQuantisation(localGrainSamps, utils::Timer::QUANTISE_MULTIPLE);
 	timer->SetSeedSourceLength(128u);
 	ASSERT_TRUE(timer->InitialiseAbsoluteSamplePos((9ull * 128ull) + 17ull));
+	quantiser.SetMidiGrain(localGrainSamps, "test first-loop seed", { firstStation, secondStation });
+	EXPECT_EQ(localGrainSamps, timer->QuantiseSamps());
+	EXPECT_EQ(localGrainSamps, quantiser.EffectiveSamps());
 
 	audio::AudioStreamParams stream{};
 	stream.SampleRate = 48000u;
@@ -154,6 +158,8 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	ASSERT_TRUE(jam.has_value());
 	EXPECT_EQ((9ull * 128ull) + 17ull, jam->AbsoluteSamplePos);
 	EXPECT_EQ(128ul, jam->MasterLengthSamps);
+	EXPECT_EQ(localGrainSamps, jam->QuantiseSamps);
+	EXPECT_EQ(utils::Timer::QUANTISE_MULTIPLE, jam->Quantisation);
 	EXPECT_EQ(2u, jam->Stations.size());
 	ASSERT_EQ(1u, jam->Stations[0].LoopTakes.size());
 	EXPECT_EQ(std::vector<int>({ 1, 3, 16 }), jam->Stations[0].AllowedMidiChannels);
