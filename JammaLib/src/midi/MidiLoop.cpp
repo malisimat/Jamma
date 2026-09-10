@@ -282,15 +282,23 @@ void MidiLoop::Reset() noexcept
 bool MidiLoop::SnapshotForExport(ExportState& state,
 	std::int32_t anchorCorrection) const noexcept
 {
-	state.EventCount = _eventCount;
 	state.LoopLengthSamps = _loopLengthSamps;
 	state.AutomationGlobalSampleOrigin = _automationGlobalSampleOrigin
 		+ static_cast<std::uint32_t>(anchorCorrection);
-	if (state.EventCount > state.Events.size())
+	if (_eventCount > state.Events.size())
 		return false;
 
-	for (std::size_t i = 0u; i < state.EventCount; ++i)
-		state.Events[i] = _events[i];
+	// EndRecord deliberately retains events beyond a quantised loop boundary so
+	// capture can finish without modifying its source storage. Playback ignores
+	// those events, and export must do the same: sidecars only represent the
+	// playable loop window.
+	state.EventCount = 0u;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+	{
+		if (_events[i].sampleOffset >= state.LoopLengthSamps)
+			continue;
+		state.Events[state.EventCount++] = _events[i];
+	}
 
 	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
 	{

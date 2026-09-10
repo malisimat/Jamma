@@ -404,6 +404,21 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	ASSERT_EQ(60u, sink.events[0].data1);
 }
 
+TEST(MidiLoop, SnapshotForExportSkipsEventsOutsidePlayableWindow) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0, 60, 100));
+	loop.RecordEvent(MidiEvent::MakeNoteOn(1500u, 0, 64, 100));
+	loop.EndRecord(1000u);
+
+	MidiLoop::ExportState saved;
+	ASSERT_TRUE(loop.SnapshotForExport(saved));
+	ASSERT_EQ(1000u, saved.LoopLengthSamps);
+	ASSERT_EQ(1u, saved.EventCount);
+	EXPECT_EQ(100u, saved.Events[0].sampleOffset);
+	EXPECT_EQ(60u, saved.Events[0].data1);
+}
+
 TEST(MidiLoop, AttachedModelUpdatesFromRecordedNoteSpans) {
 	MidiLoop loop;
 	auto model = std::make_shared<MidiModel>(MidiModelParams());
