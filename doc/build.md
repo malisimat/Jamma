@@ -114,31 +114,22 @@ Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json).
 ## Troubleshooting
 
 - **Google Test missing headers/libraries**: Verify `vcpkg integrate install`, `vcpkg install`, and that `vcpkg_installed\` contains `gtest`.
-- **PowerShell reports duplicate `Path`/`PATH` variables**: This is a Codex Windows tool-shell issue, not an MSBuild project error. The failure occurs before MSBuild starts when PowerShell `Start-Process` copies the inherited environment into a case-insensitive dictionary. The Windows user and machine environments normally contain only one `Path`; do not edit them. A direct foreground `& $msbuild ...` may work, but if the duplicate error occurs, use `System.Diagnostics.Process` and retain the exact executable and arguments from the applicable `.vscode\tasks.json` task:
+- **`MSB6001` says `Path` and `PATH` were both added**: The invoking process has duplicate case-insensitive environment-variable names. MSBuild may start normally, then fail while launching `CL.exe`. Run this preflight and the task's direct absolute-MSBuild command together in one PowerShell command. It changes only that process and its children; do not edit the user or machine environment, or wrap the build with `cmd.exe /c`, `Start-Process`, or an outer `ProcessStartInfo` launch:
 
 ```powershell
-$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-$repoRoot = (Get-Location).Path
-while (-not (Test-Path (Join-Path $repoRoot "Jamma.sln"))) {
-    $parent = Split-Path $repoRoot -Parent
-    if ($parent -eq $repoRoot) {
-        throw "Could not find Jamma.sln. Start in this repository or set `$repoRoot explicitly."
-    }
-    $repoRoot = $parent
+$pathKeys = @([Environment]::GetEnvironmentVariables('Process').Keys |
+    Where-Object { $_ -ieq 'PATH' })
+if ($pathKeys.Count -gt 1) {
+    $env:PATH = $null
 }
-$project = Join-Path $repoRoot "test\JammaLib_Tests\JammaLib_Tests.vcxproj"
-$solutionDirArg = "/p:SolutionDir=$($repoRoot.TrimEnd('\'))\"
-$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-$startInfo.FileName = $msbuild
-$startInfo.Arguments = '"' + $project + '" /m /t:Build /p:Configuration=Debug /p:Platform=x64 ' + $solutionDirArg
-$startInfo.WorkingDirectory = $repoRoot
-$startInfo.UseShellExecute = $false
-$process = [System.Diagnostics.Process]::Start($startInfo)
-$process.WaitForExit()
-exit $process.ExitCode
+if ((@([Environment]::GetEnvironmentVariables('Process').Keys |
+    Where-Object { $_ -ieq 'PATH' })).Count -ne 1) {
+    throw "Expected exactly one process Path variable before building."
+}
+
+# Invoke the applicable task's absolute MSBuild executable directly here.
 ```
 
-  For another task, replace only `$project` and the task-specific arguments. Do not use `Start-Process`, attempt to rename or remove `Path`/`PATH`, or hardcode a different repository path.
 - **Silent test failures / crash on startup**: If the test exe exits with code `1` and no output, stale Release gtest DLLs may be sitting in the Debug output folder. Rebuild both Debug and Release to refresh the copied runtime files. You can also manually copy the debug DLLs from `vcpkg_installed`:
 
 ```powershell
