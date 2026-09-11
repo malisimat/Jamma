@@ -193,19 +193,19 @@ namespace io
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};
 
-		Version Version;
+		Version Version = VERSION_V;
 		unsigned int FormatMajor = CurrentFormatMajor;
 		unsigned int FormatMinor = CurrentFormatMinor;
 		unsigned int FormatPatch = CurrentFormatPatch;
 		std::string Name;
 		std::optional<NinjamConfig> Ninjam;
 		std::vector<Station> Stations;
-		unsigned long TimerTicks;
-		unsigned int QuantiseSamps;
+		unsigned long TimerTicks = 0;
+		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
-		utils::Timer::QuantisationType Quantisation;
+		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		// Absolute local master sample coordinate. It is independent of TimerTicks,
 		// which remains legacy compatibility metadata only.
 		unsigned long MasterLengthSamps = 1;

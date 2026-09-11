@@ -20,7 +20,7 @@
 using namespace io;
 using audio::BehaviourParams;
 
-const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
+const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
 
 std::int32_t JamFile::ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept
 {
@@ -98,10 +98,16 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	auto root = Json::FromStream(std::move(ss));
 
 	if (!root.has_value())
+	{
+		std::cout << "JamFile: invalid JSON" << std::endl;
 		return std::nullopt;
+	}
 
 	if (root.value().index() != 6)
+	{
+		std::cout << "JamFile: root is not an object" << std::endl;
 		return std::nullopt;
+	}
 
 	auto jamParams = std::get<Json::JsonPart>(root.value());
 

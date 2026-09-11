@@ -248,10 +248,11 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	if (!res.has_value())
 	{
 		ini.Jam = GetPath(PATH_ROAMING) + L"/Jamma/default.jam";
-		txtFile.Write(ini.Jam,
+		if (!txtFile.Write(ini.Jam,
 			jamJson,
 			(unsigned int)jamJson.size(),
-			0);
+			0))
+			std::wcerr << L"[BOOT] Failed to create default JAM: " << ini.Jam << std::endl;
 	}
 	else
 	{
@@ -260,7 +261,10 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	}
 
 	std::stringstream ss(jamJson);
-	return JamFile::FromStream(std::move(ss));
+	auto parsed = JamFile::FromStream(std::move(ss));
+	if (!parsed.has_value())
+		std::wcerr << L"[BOOT] JAM is unreadable; starting with an empty session: " << ini.Jam << std::endl;
+	return parsed;
 }
 
 std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
@@ -268,11 +272,17 @@ std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
 	io::TextReadWriter reader;
 	auto contents = reader.Read(path, MAX_JSON_CHARS);
 	if (!contents.has_value())
+	{
+		std::wcerr << L"[LOAD] Could not read JAM: " << path << std::endl;
 		return std::nullopt;
+	}
 
 	auto [json, numChars, unused] = std::move(contents.value());
 	std::stringstream stream(std::move(json));
-	return JamFile::FromStream(std::move(stream));
+	auto parsed = JamFile::FromStream(std::move(stream));
+	if (!parsed.has_value())
+		std::wcerr << L"[LOAD] JAM is unreadable: " << path << std::endl;
+	return parsed;
 }
 
 io::JamFile EmptyJam()
@@ -382,7 +392,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
 		SizeableParams{ 1400, 1000 });
-	JamFile jam;
+	JamFile jam = EmptyJam();
 	RigFile rig;
 
 	if (defaults.has_value())
@@ -396,9 +406,22 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::stringstream ss;
 		InitFile::ToStream(defaults.value(), ss);
 
-		auto jamOpt = LoadJam(defaults.value());
-		if (jamOpt.has_value())
-			jam = jamOpt.value();
+		try
+		{
+			auto jamOpt = LoadJam(defaults.value());
+			if (jamOpt.has_value())
+				jam = std::move(jamOpt.value());
+			else
+				std::cout << "[BOOT] Continuing with an empty JAM. Use Load JAM to choose a compatible session." << std::endl;
+		}
+		catch (const std::exception& error)
+		{
+			std::cerr << "[BOOT] JAM restore failed; continuing with an empty session: " << error.what() << std::endl;
+		}
+		catch (...)
+		{
+			std::cerr << "[BOOT] JAM restore failed with an unknown error; continuing with an empty session." << std::endl;
+		}
 
 		JamFile::ToStream(jam, ss);
 
@@ -414,10 +437,34 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto jamDirectory = defaults.has_value() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
-	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory);
+	const auto createScene = [&](JamFile source)
+		-> std::optional<std::shared_ptr<Scene>>
+	{
+		try
+		{
+			return Scene::FromFile(sceneParams, std::move(source), rig, jamDirectory);
+		}
+		catch (const std::exception& error)
+		{
+			std::cerr << "[BOOT] Scene creation failed: " << error.what() << std::endl;
+		}
+		catch (...)
+		{
+			std::cerr << "[BOOT] Scene creation failed with an unknown error." << std::endl;
+		}
+		return std::nullopt;
+	};
+
+	auto scene = createScene(std::move(jam));
+
 	if (!scene.has_value())
 	{
-		std::cout << "Failed to create Scene... quitting" << std::endl;
+		std::cout << "[BOOT] Could not restore JAM; starting with an empty session." << std::endl;
+		scene = createScene(EmptyJam());
+	}
+	if (!scene.has_value())
+	{
+		std::cout << "Failed to create empty Scene... quitting" << std::endl;
 		return -1;
 	}
 

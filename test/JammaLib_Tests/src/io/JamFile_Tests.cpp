@@ -612,6 +612,8 @@ TEST(JamFile, DefaultJsonIncludesNinjamConnectionIdentity) {
 	ASSERT_TRUE(parsed->Ninjam.has_value());
 	ASSERT_FALSE(parsed->Ninjam->Host.empty());
 	ASSERT_FALSE(parsed->Ninjam->User.empty());
+	ASSERT_EQ(1u, parsed->Stations.size());
+	EXPECT_TRUE(parsed->Stations[0].LoopTakes.empty());
 }
 
 TEST(JamFile, NinjamConfigParsesOptionalBpmAndBpi) {
