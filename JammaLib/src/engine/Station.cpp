@@ -164,6 +164,10 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	for (auto takeStruct : stationStruct.LoopTakes)
 	{
 		takeParams.ModelPosition = { (float)gap.Width, (float)(takeCount * takeHeight + gap.Height), 0.0 };
+		// The saved take name is its persisted runtime ID. JobAction deduplication
+		// uses this ID, so omitting it would collapse independent MIDI-
+		// quantisation rebuilds into one job.
+		takeParams.Id = takeStruct.Name;
 		auto take = LoopTake::FromFile(takeParams, takeStruct, dir);
 		
 		if (take.has_value())

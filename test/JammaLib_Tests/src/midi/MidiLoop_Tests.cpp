@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -15,6 +17,7 @@
 #include "engine/Station.h"
 #include "Timer.h"
 #include "io/UserConfig.h"
+#include "io/NativeMidiSidecar.h"
 
 using midi::IMidiSink;
 using midi::IMidiOutputSink;
@@ -994,6 +997,44 @@ TEST(LoopTakeMidiQuantisation, RestoredMidiUsesDeferredJobAfterGlobalAllGrainPro
 		+ static_cast<std::uint32_t>(savedPlayIndex)
 		+ static_cast<std::uint32_t>(transportStartSamps));
 	EXPECT_EQ(savedPlayIndex, take->MidiPlayIndex());
+}
+
+TEST(LoopTakeMidiQuantisation, LoadedTakesRestoreDistinctPersistedIds) {
+	io::JamFile::Station savedStation;
+	savedStation.Name = "loaded-midi-station";
+	savedStation.LoopTakes.resize(2u);
+	const auto dir = std::filesystem::temp_directory_path() / "jamma-loaded-take-id-test";
+	std::filesystem::remove_all(dir);
+	std::filesystem::create_directory(dir);
+	for (std::size_t i = 0u; i < savedStation.LoopTakes.size(); ++i)
+	{
+		auto& savedTake = savedStation.LoopTakes[i];
+		savedTake.Name = "loaded-take-" + std::to_string(i);
+		savedTake.MidiPlayLength = 100u;
+		auto sidecarPath = "loaded-take-" + std::to_string(i) + ".jammidi";
+		savedTake.MidiStreams.push_back({ sidecarPath, 0u, "", 100u, 0u });
+		io::NativeMidiSidecar::Stream sidecar;
+		sidecar.LogicalLength = 100u;
+		sidecar.Events.push_back({ 0u, 0x90u, 60u, 100u });
+		std::ofstream stream(dir / sidecarPath, std::ios::binary);
+		ASSERT_TRUE(stream);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(sidecar, stream));
+		stream.close();
+	}
+
+	StationParams params;
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	auto restored = Station::FromFile(params, mixerParams, savedStation, dir.wstring());
+	ASSERT_TRUE(restored.has_value());
+	const auto& takes = restored.value()->GetLoopTakes();
+	ASSERT_EQ(2u, takes.size());
+	ASSERT_TRUE(takes[0]);
+	ASSERT_TRUE(takes[1]);
+	EXPECT_EQ("loaded-take-0", takes[0]->Id());
+	EXPECT_EQ("loaded-take-1", takes[1]->Id());
+	std::filesystem::remove_all(dir);
 }
 
 TEST(LoopTakeMidiQuantisation, StationPhaseOffsetsComposeForExistingAndNewTakes) {
