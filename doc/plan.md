@@ -291,6 +291,10 @@ Interaction rules:
 - `+` creates `Trigger-N` using the first unused positive suffix, with no ADC
   input, `MidiInputMode::None`, no activation binding, and an empty
   `StationTarget`. Clamp scroll after add/delete/resize and reveal the new item.
+- Generate the `+`/`x` button textures (and their `_over`/`_down` states) with
+  the `.agents/skills/tga-icon-gen` skill so they match the existing
+  rounded-rect button style, stay pixel-sharp, and avoid straight-alpha
+  fringing; draw both as plain vector glyphs, never rasterized text.
 
 ## Implementation slices
 
@@ -323,6 +327,9 @@ Each slice should compile and test before the next begins.
    - Wire HUD capture, uncaptured hover, Escape, and right-click.
 
 5. **Lifecycle and layout**
+   - Generate the `+`/`x` (and `_over`/`_down`) button textures with the
+     `.agents/skills/tga-icon-gen` skill and register them in
+     `Jamma/resources/ResourceList.txt` before wiring the controls.
    - Add fixed-footer `+`, scroll/reveal behavior, `x`, popup confirmation,
      edit lock cues, and route cleanup.
    - Connect successful candidates to the revisioned commit protocol and
