@@ -613,6 +613,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	{
 		if (station.LoopTakes.size() > MaxTakesPerStation)
 			return false;
+		if (station.TriggerHistory.size() > MaxTriggerHistoryPerStation)
+			return false;
+		for (const auto& entry : station.TriggerHistory)
+			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
+				return false;
 		for (const auto& take : station.LoopTakes)
 		{
 			if (take.Loops.size() > MaxLoopsPerTake || take.MidiStreams.size() > MaxMidiStreamsPerTake)
@@ -702,6 +707,19 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
 		if (station.HasAudioRoutes)
 			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
+		if (!station.TriggerHistory.empty())
+		{
+			ss << "," << quoted("triggerHistory") << ":[";
+			for (size_t historyIndex = 0; historyIndex < station.TriggerHistory.size(); ++historyIndex)
+			{
+				if (historyIndex > 0) ss << ",";
+				const auto& entry = station.TriggerHistory[historyIndex];
+				ss << "{" << kvUlong("sourceType", entry.SourceType) << ","
+					<< kvStr("sourceTakeId", entry.SourceTakeId) << ","
+					<< kvStr("targetTakeId", entry.TargetTakeId) << "}";
+			}
+			ss << "]";
+		}
 		if (!station.VstChain.empty())
 			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
 		ss << "}";
@@ -1251,6 +1269,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::vector<LoopTake> takes;
 	std::int32_t stationPhaseOffsetSamps = 0;
 	std::vector<int> allowedMidiChannels;
+	std::vector<TriggerHistoryEntry> triggerHistory;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -1368,6 +1387,37 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
+	iter = json.KeyValues.find("triggerHistory");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& historyArray = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = historyArray.Array.index() == 0u
+			&& std::get<std::vector<bool>>(historyArray.Array).empty();
+		if (!isEmptyArray && historyArray.Array.index() != 5)
+			return std::nullopt;
+		if (historyArray.Array.index() == 5)
+		{
+			const auto& entries = std::get<std::vector<Json::JsonPart>>(historyArray.Array);
+			if (entries.size() > MaxTriggerHistoryPerStation)
+				return std::nullopt;
+			for (const auto& entryJson : entries)
+			{
+				const auto sourceType = Json::GetUnsigned(entryJson, "sourceType");
+				auto sourceId = entryJson.KeyValues.find("sourceTakeId");
+				auto targetId = entryJson.KeyValues.find("targetTakeId");
+				if (!sourceType.has_value() || *sourceType > 2u
+					|| sourceId == entryJson.KeyValues.end() || sourceId->second.index() != 4
+					|| targetId == entryJson.KeyValues.end() || targetId->second.index() != 4
+					|| std::get<std::string>(targetId->second).empty())
+					return std::nullopt;
+				triggerHistory.push_back({ static_cast<unsigned int>(*sourceType),
+					std::get<std::string>(sourceId->second), std::get<std::string>(targetId->second) });
+			}
+		}
+	}
+
 	std::vector<std::vector<unsigned long>> audioRoutes;
 	bool hasAudioRoutes = false;
 	iter = json.KeyValues.find("audioRoutes");
@@ -1430,5 +1480,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	station.MidiRoutes = std::move(midiRoutes);
 	station.AudioRoutes = std::move(audioRoutes);
 	station.HasAudioRoutes = hasAudioRoutes;
+	station.TriggerHistory = std::move(triggerHistory);
 	return station;
 }

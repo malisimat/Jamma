@@ -136,6 +136,11 @@ namespace io
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
+				for (const auto& take : station->SnapshotTriggerHistoryForExport())
+				{
+					jamStation.TriggerHistory.push_back({ static_cast<unsigned int>(take.SourceType),
+						take.SourceTakeId, take.TargetTakeId });
+				}
 				const auto routes = station->SnapshotMidiVstRoutesForExport();
 				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
 				{

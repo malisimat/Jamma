@@ -372,6 +372,30 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	ASSERT_FALSE(trigger->IsDitchDown());
 }
 
+TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeSharedDefaultTrigger();
+	trigger->SetReceiver(receiver);
+	trigger->RestoreTakes({
+		{ engine::TriggerTake::SOURCE_ADC, "source-take", "older-take" },
+		{ engine::TriggerTake::SOURCE_LOOPTAKE, "older-take", "latest-take" }
+	});
+
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, false, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[0].ActionType);
+	EXPECT_EQ("latest-take", receiver->Actions()[0].TargetId);
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[1].ActionType);
+	EXPECT_EQ("older-take", receiver->Actions()[1].TargetId);
+	ASSERT_EQ(1u, trigger->GetTakes().size());
+	EXPECT_EQ("older-take", trigger->GetTakes()[0].TargetTakeId);
+}
+
 TEST(Trigger, ResetClearsPublishedDitchState) {
 	auto trigger = MakeSharedDefaultTrigger();
 	base::Action action;

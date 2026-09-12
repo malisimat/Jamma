@@ -218,6 +218,8 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	station.StationType = 0;
 	station.StationPhaseOffsetSamps = 30;
 	station.AllowedMidiChannels = { 1, 3, 16 };
+	station.TriggerHistory.push_back({ 0u, "prior-take", "recorded-take" });
+	station.TriggerHistory.push_back({ 1u, "recorded-take", "overdub-take" });
 	station.LoopTakes.push_back(take);
 
 	jam.Stations.push_back(station);
@@ -240,6 +242,12 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	EXPECT_EQ(1, parsed->Stations[0].AllowedMidiChannels[0]);
 	EXPECT_EQ(3, parsed->Stations[0].AllowedMidiChannels[1]);
 	EXPECT_EQ(16, parsed->Stations[0].AllowedMidiChannels[2]);
+	ASSERT_EQ(2u, parsed->Stations[0].TriggerHistory.size());
+	EXPECT_EQ(0u, parsed->Stations[0].TriggerHistory[0].SourceType);
+	EXPECT_EQ("prior-take", parsed->Stations[0].TriggerHistory[0].SourceTakeId);
+	EXPECT_EQ("recorded-take", parsed->Stations[0].TriggerHistory[0].TargetTakeId);
+	EXPECT_EQ(1u, parsed->Stations[0].TriggerHistory[1].SourceType);
+	EXPECT_EQ("overdub-take", parsed->Stations[0].TriggerHistory[1].TargetTakeId);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
 	ASSERT_EQ(45, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());

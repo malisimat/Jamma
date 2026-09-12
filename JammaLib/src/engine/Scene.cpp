@@ -551,6 +551,14 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					std::vector<TriggerTake> triggerHistory;
+					triggerHistory.reserve(stationStruct.TriggerHistory.size());
+					for (const auto& entry : stationStruct.TriggerHistory)
+					{
+						triggerHistory.push_back({ static_cast<TriggerTake::SourceType>(entry.SourceType),
+							entry.SourceTakeId, entry.TargetTakeId });
+					}
+					trigger.value()->RestoreTakes(std::move(triggerHistory));
 					hudTriggers.push_back(trigger.value());
 				}
 			}

@@ -1529,6 +1529,14 @@ void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 	_triggers.push_back(trigger);
 }
 
+std::vector<TriggerTake> Station::SnapshotTriggerHistoryForExport() const
+{
+	if (_triggers.empty() || !_triggers.front())
+		return {};
+
+	return _triggers.front()->GetTakes();
+}
+
 unsigned int Station::NumTakes() const
 {
 	return _changesMade ?

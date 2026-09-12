@@ -49,6 +49,7 @@ namespace io
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
 		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
+		static constexpr std::size_t MaxTriggerHistoryPerStation = 16384u;
 		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
 
 		// Sidecars must always be relative to the manifest directory.  This is
@@ -188,6 +189,15 @@ namespace io
 
 		struct Station
 		{
+			// The configured trigger's LIFO take stack. It is station-local because
+			// rig trigger bindings are attached to stations by index on load.
+			struct TriggerHistoryEntry
+			{
+				unsigned int SourceType = 0u;
+				std::string SourceTakeId;
+				std::string TargetTakeId;
+			};
+
 			std::string Name;
 			unsigned int StationType;
 			std::vector<LoopTake> LoopTakes;
@@ -198,6 +208,7 @@ namespace io
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;
+			std::vector<TriggerHistoryEntry> TriggerHistory;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};

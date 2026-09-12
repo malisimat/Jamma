@@ -159,6 +159,8 @@ namespace engine
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
+		// Call only while audio is paused and the scene mutex is held.
+		std::vector<TriggerTake> SnapshotTriggerHistoryForExport() const;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
