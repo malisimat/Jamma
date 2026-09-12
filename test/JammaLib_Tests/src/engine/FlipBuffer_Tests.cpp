@@ -43,6 +43,11 @@ public:
 		return _children.size();
 	}
 
+	const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const
+	{
+		return _guiRack->Routes();
+	}
+
 };
 
 static std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id = "take-0")
@@ -140,6 +145,11 @@ public:
 	{
 		_audioMixers.at(channel)->SetUnmutedLevel(level);
 		_audioMixers.at(channel)->Offset(4096);
+	}
+
+	const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const
+	{
+		return _guiRack->Routes();
 	}
 };
 
@@ -244,6 +254,54 @@ TEST(LoopTakeFlipBuffer, CommitChangesFlipsLoopsToFront)
 	take->CommitChanges();
 	// Front promoted; NumInputChannels still 1, now reading from front.
 	EXPECT_EQ(1u, take->NumInputChannels(Audible::AUDIOSOURCE_ADC));
+}
+
+TEST(LoopTakeRouting, LegacyConstructionOrderAppliesVisibleDefaultRouteToAudio)
+{
+	auto take = MakeTestLoopTake();
+	take->AddLoop(0u, "station");
+	ASSERT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ { 0u, 0u } }), take->Routes());
+
+	// Loaded loops are created before Station::AddTake supplies the bus count.
+	take->SetNumBusChannels(2u);
+	take->CommitChanges();
+
+	ASSERT_EQ((std::vector<std::vector<unsigned long>>{ { 0u } }), take->SnapshotAudioRoutesForExport());
+	EXPECT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ { 0u, 0u } }), take->Routes());
+}
+
+TEST(LoopTakeRouting, ExplicitlyEmptySavedRoutesOverrideOneToOneDefaults)
+{
+	auto take = MakeTestLoopTake();
+	take->AddLoop(0u, "station");
+	take->SetNumBusChannels(2u);
+	ASSERT_TRUE(take->RestoreAudioRoutes({}));
+	take->CommitChanges();
+
+	EXPECT_EQ((std::vector<std::vector<unsigned long>>{ {} }), take->SnapshotAudioRoutesForExport());
+	EXPECT_TRUE(take->Routes().empty());
+}
+
+TEST(StationRouting, RestoreUpdatesPendingAndActiveMixersAndGui)
+{
+	auto station = MakeTestStation();
+	station->SetNumBusChannels(2u);
+	station->SetNumDacChannels(2u);
+	ASSERT_TRUE(station->RestoreAudioRoutes({ { 1u }, {} }));
+	station->CommitChanges();
+
+	EXPECT_EQ((std::vector<std::vector<unsigned long>>{ { 1u }, {} }), station->SnapshotAudioRoutesForExport());
+	EXPECT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ { 0u, 1u } }), station->Routes());
+	auto pendingOutput = ReadStationOutput(station, { 0.25f, 1.0f });
+	EXPECT_NEAR(0.0f, pendingOutput[0], 0.01f);
+	EXPECT_NEAR(0.25f, pendingOutput[1], 0.01f);
+
+	ASSERT_TRUE(station->RestoreAudioRoutes({ {}, { 0u } }));
+	EXPECT_EQ((std::vector<std::vector<unsigned long>>{ {}, { 0u } }), station->SnapshotAudioRoutesForExport());
+	EXPECT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ { 1u, 0u } }), station->Routes());
+	auto activeOutput = ReadStationOutput(station, { 0.25f, 1.0f });
+	EXPECT_NEAR(1.0f, activeOutput[0], 0.01f);
+	EXPECT_NEAR(0.0f, activeOutput[1], 0.01f);
 }
 
 // Adding two loops on two different channels, then committing, should

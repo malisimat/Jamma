@@ -141,6 +141,14 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
+	for (const auto& vstEntry : stationStruct.VstChain)
+	{
+		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
+		{
+			std::cout << "Load: failed VST for station " << stationStruct.Name << std::endl;
+			return std::nullopt;
+		}
+	}
 
 	auto numTakes = (unsigned int)stationStruct.LoopTakes.size();
 	Size2d gap = { 4, 4 };
@@ -156,19 +164,158 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	for (auto takeStruct : stationStruct.LoopTakes)
 	{
 		takeParams.ModelPosition = { (float)gap.Width, (float)(takeCount * takeHeight + gap.Height), 0.0 };
+		// The saved take name is its persisted runtime ID. JobAction deduplication
+		// uses this ID, so omitting it would collapse independent MIDI-
+		// quantisation rebuilds into one job.
+		takeParams.Id = takeStruct.Name;
 		auto take = LoopTake::FromFile(takeParams, takeStruct, dir);
 		
 		if (take.has_value())
+		{
 			station->AddTake(take.value());
+			// AddTake establishes the station bus count. Saved routes are applied
+			// afterwards so its normal one-to-one defaults cannot overwrite them.
+			if (takeStruct.HasAudioRoutes && !take.value()->RestoreAudioRoutes(takeStruct.AudioRoutes))
+			{
+				std::cout << "Load: invalid audio routes in take " << takeStruct.Name << std::endl;
+				return std::nullopt;
+			}
+		}
 
 		takeCount++;
 	}
+	if (stationStruct.HasAudioRoutes && !station->RestoreAudioRoutes(stationStruct.AudioRoutes))
+	{
+		std::cout << "Load: invalid audio routes in station " << stationStruct.Name << std::endl;
+		return std::nullopt;
+	}
+	// Empty stations are valid saved state: a station may contain its VST chain,
+	// routing configuration, or simply be ready for a new take. Only malformed
+	// station data should prevent the station from being reconstructed.
+	for (const auto& take : station->GetLoopTakes())
+	{
+		if (!take)
+			continue;
 
-	// Queue load jobs for any VST plugins serialised in the station's chain.
-	for (const auto& vstEntry : stationStruct.VstChain)
-		station->LoadVstPlugin(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState());
+		for (const auto& binding : take->PendingAutomationBindings())
+		{
+			auto midiLoops = take->GetMidiLoopSnapshot();
+			if (binding.MidiStreamIndex >= midiLoops.size() || binding.LaneIndex >= midi::MidiLoop::MaxAutomationLanes)
+				return std::nullopt;
+
+			std::shared_ptr<vst::IVstPlugin> plugin;
+			if (binding.TargetScope == "station")
+				plugin = station->GetVstPlugin(binding.TargetPluginIndex);
+			else if (binding.TargetScope == "take")
+				plugin = take->GetVstPlugin(binding.TargetPluginIndex);
+			else if (binding.TargetScope == "loop")
+			{
+				const auto& loops = take->GetLoops();
+				if (binding.TargetLoopIndex < loops.size() && loops[binding.TargetLoopIndex])
+					plugin = loops[binding.TargetLoopIndex]->GetVstPlugin(binding.TargetPluginIndex);
+			}
+
+			if (!plugin || !midiLoops[binding.MidiStreamIndex]
+				|| !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(binding.LaneIndex, plugin.get()))
+			{
+				std::cout << "Load: unresolved automation target in station " << stationStruct.Name << std::endl;
+				return std::nullopt;
+			}
+		}
+		take->ClearPendingAutomationBindings();
+	}
+	// Publish the completed pointer bindings as one immutable dispatch list before
+	// this startup-built station is made visible to audio.
+	station->RebuildAutomationDispatch();
+
+	if (!stationStruct.MidiRoutes.empty())
+	{
+		std::size_t outputCount = 0u;
+		for (const auto& take : station->GetLoopTakes())
+			if (take)
+				outputCount += take->GetMidiLoopSnapshot().size();
+
+		midi::MidiVstRoutingSnapshot routes;
+		routes.PluginByMidiOutput.assign(outputCount, midi::MidiVstRoutingSnapshot::NoPlugin);
+		for (const auto& route : stationStruct.MidiRoutes)
+		{
+			if (route.PluginIndex >= stationStruct.VstChain.size()
+				|| (!route.IsLive && route.OutputIndex >= outputCount))
+			{
+				std::cout << "Load: invalid MIDI VST route in station " << stationStruct.Name << std::endl;
+				return std::nullopt;
+			}
+			if (route.IsLive)
+				routes.LivePlugin = route.PluginIndex;
+			else
+				routes.PluginByMidiOutput[route.OutputIndex] = route.PluginIndex;
+		}
+		if (!station->RestoreMidiVstRoutes(routes, stationStruct.VstChain.size()))
+		{
+			std::cout << "Load: failed MIDI VST routes for station " << stationStruct.Name << std::endl;
+			return std::nullopt;
+		}
+	}
 
 	return station;
+}
+
+std::vector<std::vector<unsigned long>> Station::SnapshotAudioRoutesForExport() const
+{
+	std::vector<std::vector<unsigned long>> routes;
+	for (const auto& mixer : _audioMixers)
+	{
+		std::vector<unsigned long> destinations;
+		if (mixer)
+		{
+			auto params = mixer->GetBehaviourParams();
+			if (const auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
+				for (auto channel : wire->Channels) destinations.push_back(channel);
+			else if (const auto* merge = std::get_if<audio::MergeMixBehaviourParams>(&params))
+				for (auto channel : merge->Channels) destinations.push_back(channel);
+		}
+		routes.push_back(std::move(destinations));
+	}
+	return routes;
+}
+
+bool Station::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes)
+{
+	const auto inputCount = (std::max)(_audioMixers.size(), _backAudioMixers.size());
+	if (routes.size() > inputCount)
+		return false;
+
+	unsigned long requiredOutputCount = 0u;
+	for (const auto& destinations : routes)
+		for (auto output : destinations)
+		{
+			if (output >= io::JamFile::MaxAudioRouteChannels)
+				return false;
+			requiredOutputCount = (std::max)(requiredOutputCount, output + 1u);
+		}
+	if (requiredOutputCount > _guiRack->NumOutputChannels())
+		_guiRack->SetNumOutputChannels(static_cast<unsigned int>(requiredOutputCount));
+
+	std::vector<std::vector<unsigned int>> validated(inputCount);
+	for (std::size_t input = 0u; input < routes.size(); ++input)
+		for (auto output : routes[input])
+		{
+			if (std::find(validated[input].begin(), validated[input].end(), output) != validated[input].end())
+				return false;
+			validated[input].push_back(static_cast<unsigned int>(output));
+		}
+
+	_guiRack->ClearRoutes();
+	for (std::size_t input = 0u; input < validated.size(); ++input)
+	{
+		for (auto output : validated[input])
+			_guiRack->AddRoute(static_cast<unsigned int>(input), static_cast<unsigned int>(output));
+	}
+	for (std::size_t input = 0u; input < _audioMixers.size(); ++input)
+		_audioMixers[input]->SetChannels(validated[input]);
+	for (std::size_t input = 0u; input < _backAudioMixers.size(); ++input)
+		_backAudioMixers[input]->SetChannels(validated[input]);
+	return true;
 }
 
 AudioMixerParams Station::GetMixerParams(utils::Size2d stationSize,
@@ -1382,6 +1529,14 @@ void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 	_triggers.push_back(trigger);
 }
 
+std::vector<TriggerTake> Station::SnapshotTriggerHistoryForExport() const
+{
+	if (_triggers.empty() || !_triggers.front())
+		return {};
+
+	return _triggers.front()->GetTakes();
+}
+
 unsigned int Station::NumTakes() const
 {
 	return _changesMade ?
@@ -1688,7 +1843,6 @@ void Station::SetNumBusChannels(unsigned int chans)
 		if (i < _guiRack->NumOutputChannels())
 			_guiRack->AddRoute(i, i);
 	}
-
 	_vstBlockScratch.resize(static_cast<size_t>(chans) * constants::MaxBlockSize);
 	_vstBlockPtrs.resize(chans);
 	for (unsigned int i = 0; i < chans; i++)
@@ -1990,6 +2144,36 @@ void Station::ClearMidiVstRoutes()
 	const auto* published = nextRoutes.get();
 	_retainedMidiVstRoutes.push_back(std::move(nextRoutes));
 	_midiVstRoutes.store(published, std::memory_order_release);
+}
+
+Station::MidiVstRoutingSnapshot Station::SnapshotMidiVstRoutesForExport() const
+{
+	const auto* current = _midiVstRoutes.load(std::memory_order_acquire);
+	return current ? *current : MidiVstRoutingSnapshot{};
+}
+
+bool Station::RestoreMidiVstRoutes(const MidiVstRoutingSnapshot& routes,
+	size_t loadedPluginCount)
+{
+	if (routes.PluginByMidiOutput.size() > MaxMidiVstRouteOutputs)
+		return false;
+
+	auto isValidPlugin = [loadedPluginCount](size_t pluginIndex) noexcept {
+		return pluginIndex == MidiVstRoutingSnapshot::NoPlugin || pluginIndex < loadedPluginCount;
+	};
+	if (!isValidPlugin(routes.LivePlugin))
+		return false;
+	for (const auto pluginIndex : routes.PluginByMidiOutput)
+		if (!isValidPlugin(pluginIndex))
+			return false;
+
+	// Copy before publishing. Retained ownership prevents the callback from
+	// observing freed route storage after the atomic pointer handoff.
+	auto restored = std::make_unique<MidiVstRoutingSnapshot>(routes);
+	const auto* published = restored.get();
+	_retainedMidiVstRoutes.push_back(std::move(restored));
+	_midiVstRoutes.store(published, std::memory_order_release);
+	return true;
 }
 
 unsigned int Station::_CalcTakeHeight(unsigned int stationHeight, unsigned int numTakes)
@@ -2314,6 +2498,39 @@ void Station::LoadVstPlugin(std::wstring path,
 {
 	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
+}
+
+bool Station::LoadVstPluginSynchronously(const std::wstring& path,
+	const std::vector<std::uint8_t>& initialState,
+	bool bypass)
+{
+	// Startup construction completes before Scene::InitAudio publishes this
+	// station, so direct replacement cannot race the callback.
+	auto plugin = vst::MakePluginForPath(path);
+	auto hostChannels = NumBusChannels();
+	if (hostChannels == 0u)
+		hostChannels = 1u;
+	if (!plugin->PreInit(path)
+		|| !plugin->Load(path, _sampleRate, _blockSize, hostChannels, vst::HostedLayoutMode::Exact))
+		return false;
+
+	if (!initialState.empty())
+		plugin->SetState(initialState);
+	plugin->SetBypassed(bypass);
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto replacement = std::make_shared<vst::VstChain>();
+	if (chain)
+	{
+		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
+			if (auto existing = chain->GetPlugin(index))
+				replacement->AddPlugin(std::move(existing));
+	}
+	replacement->AddPlugin(std::move(plugin));
+	_vstChain.store(std::move(replacement), std::memory_order_release);
+	// Startup still exclusively owns this station.
+	_vstPluginPaths.push_back(path);
+	return true;
 }
 
 void Station::UnloadVstPlugin(size_t index)

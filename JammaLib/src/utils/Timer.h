@@ -63,6 +63,10 @@ namespace utils
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
 		void SetSeedSourceLength(unsigned long loopLengthSamps);
+		// Non-real-time construction helper for restoring a local session.  This
+		// writes the complete absolute coordinate in one operation; callers must
+		// invoke it before the Timer is handed to the audio callback.
+		bool InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcept;
 		void SetMasterLoopIndexFrac(double loopIndexFrac) noexcept;
 		void PublishCommand(const Command& command) noexcept;
 		bool ConsumePendingCommand() noexcept;

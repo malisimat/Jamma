@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -6,6 +9,7 @@
 #include "gtest/gtest.h"
 #include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
+#include "engine/Quantiser.h"
 #include "midi/MidiLoop.h"
 #include "graphics/MidiModel.h"
 #include "midi/MidiQuantisation.h"
@@ -13,11 +17,13 @@
 #include "engine/Station.h"
 #include "Timer.h"
 #include "io/UserConfig.h"
+#include "io/NativeMidiSidecar.h"
 
 using midi::IMidiSink;
 using midi::IMidiOutputSink;
 using engine::LoopTake;
 using engine::LoopTakeParams;
+using engine::Quantiser;
 using midi::MidiEvent;
 using midi::MidiLoop;
 using midi::MidiLoopState;
@@ -402,6 +408,21 @@ TEST(MidiLoop, EventsBeyondLoopLengthAreNotPlayed) {
 	loop.ReadBlock(0u, 1000u, sink);
 	ASSERT_EQ(1u, sink.events.size());
 	ASSERT_EQ(60u, sink.events[0].data1);
+}
+
+TEST(MidiLoop, SnapshotForExportSkipsEventsOutsidePlayableWindow) {
+	MidiLoop loop;
+	loop.StartRecord();
+	loop.RecordEvent(MidiEvent::MakeNoteOn(100u, 0, 60, 100));
+	loop.RecordEvent(MidiEvent::MakeNoteOn(1500u, 0, 64, 100));
+	loop.EndRecord(1000u);
+
+	MidiLoop::ExportState saved;
+	ASSERT_TRUE(loop.SnapshotForExport(saved));
+	ASSERT_EQ(1000u, saved.LoopLengthSamps);
+	ASSERT_EQ(1u, saved.EventCount);
+	EXPECT_EQ(100u, saved.Events[0].sampleOffset);
+	EXPECT_EQ(60u, saved.Events[0].data1);
 }
 
 TEST(MidiLoop, AttachedModelUpdatesFromRecordedNoteSpans) {
@@ -926,6 +947,96 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 		+ static_cast<std::uint32_t>(shiftedTake->MidiQuantisationTransportStartSamps()));
 }
 
+TEST(LoopTakeMidiQuantisation, RestoredMidiUsesDeferredJobAfterGlobalAllGrainPropagation) {
+	constexpr std::uint32_t loopLengthSamps = 400u;
+	constexpr std::uint32_t grainSamps = 100u;
+	constexpr std::uint64_t transportStartSamps = 250u;
+	constexpr unsigned long savedPlayIndex = 20ul;
+	constexpr std::uint32_t outputBlockStart = 1000u;
+
+	LoopTake::MidiExportState state;
+	state.PlayIndex = savedPlayIndex;
+	state.LoopLengthSamps = loopLengthSamps;
+	state.Quantisation = { false, MidiQuantisationFraction::Whole, 0u, 0 };
+	state.QuantisationTransportStartSamps = transportStartSamps;
+	LoopTake::MidiStreamExport stream;
+	stream.Channel = 0u;
+	stream.Loop.LoopLengthSamps = loopLengthSamps;
+	stream.Loop.EventCount = 2u;
+	stream.Loop.Events[0] = MidiEvent::MakeNoteOn(35u, 0u, 60u, 100u);
+	stream.Loop.Events[1] = MidiEvent::MakeNoteOff(55u, 0u, 60u);
+	state.Streams.push_back(std::move(stream));
+
+	auto take = MakeLoopTake("restored-deferred-midi");
+	ASSERT_TRUE(take->RestoreMidiFromExport(state));
+	EXPECT_EQ(0u, take->MidiQuantisation().GrainSamps);
+	EXPECT_EQ(savedPlayIndex, take->MidiPlayIndex());
+
+	auto station = MakeStation("restored-deferred-station");
+	station->AddTake(take);
+	Quantiser quantiser;
+	quantiser.SetMidiGrain(grainSamps, "parsed local manifest", { station });
+	station->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::All);
+
+	const auto jobs = take->CommitChanges();
+	const auto job = std::find_if(jobs.begin(), jobs.end(), [](const actions::JobAction& candidate)
+		{
+			return candidate.JobActionType == actions::JobAction::JOB_UPDATEMIDIQUANTISATION;
+		});
+	ASSERT_NE(jobs.end(), job);
+	auto receiver = job->Receiver.lock();
+	ASSERT_TRUE(receiver);
+	receiver->OnAction(*job);
+
+	MidiLoopCapturingOutputSink sink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(outputBlockStart, 100u, sink));
+	ASSERT_EQ(2u, sink.events.size());
+	EXPECT_TRUE(sink.events[0].event.IsNoteOn());
+	EXPECT_EQ(1030u, sink.events[0].event.sampleOffset);
+	EXPECT_EQ(300u, sink.events[0].event.sampleOffset - outputBlockStart
+		+ static_cast<std::uint32_t>(savedPlayIndex)
+		+ static_cast<std::uint32_t>(transportStartSamps));
+	EXPECT_EQ(savedPlayIndex, take->MidiPlayIndex());
+}
+
+TEST(LoopTakeMidiQuantisation, LoadedTakesRestoreDistinctPersistedIds) {
+	io::JamFile::Station savedStation;
+	savedStation.Name = "loaded-midi-station";
+	savedStation.LoopTakes.resize(2u);
+	const auto dir = std::filesystem::temp_directory_path() / "jamma-loaded-take-id-test";
+	std::filesystem::remove_all(dir);
+	std::filesystem::create_directory(dir);
+	for (std::size_t i = 0u; i < savedStation.LoopTakes.size(); ++i)
+	{
+		auto& savedTake = savedStation.LoopTakes[i];
+		savedTake.Name = "loaded-take-" + std::to_string(i);
+		savedTake.MidiPlayLength = 100u;
+		auto sidecarPath = "loaded-take-" + std::to_string(i) + ".jammidi";
+		savedTake.MidiStreams.push_back({ sidecarPath, 0u, "", 100u, 0u });
+		io::NativeMidiSidecar::Stream sidecar;
+		sidecar.LogicalLength = 100u;
+		sidecar.Events.push_back({ 0u, 0x90u, 60u, 100u });
+		std::ofstream stream(dir / sidecarPath, std::ios::binary);
+		ASSERT_TRUE(stream);
+		ASSERT_TRUE(io::NativeMidiSidecar::ToStream(sidecar, stream));
+		stream.close();
+	}
+
+	StationParams params;
+	params.Size = { 100, 100 };
+	audio::MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	auto restored = Station::FromFile(params, mixerParams, savedStation, dir.wstring());
+	ASSERT_TRUE(restored.has_value());
+	const auto& takes = restored.value()->GetLoopTakes();
+	ASSERT_EQ(2u, takes.size());
+	ASSERT_TRUE(takes[0]);
+	ASSERT_TRUE(takes[1]);
+	EXPECT_EQ("loaded-take-0", takes[0]->Id());
+	EXPECT_EQ("loaded-take-1", takes[1]->Id());
+	std::filesystem::remove_all(dir);
+}
+
 TEST(LoopTakeMidiQuantisation, StationPhaseOffsetsComposeForExistingAndNewTakes) {
 	auto firstTake = MakeLoopTake("phase-take-a");
 	auto secondTake = MakeLoopTake("phase-take-b");
@@ -1055,6 +1166,44 @@ TEST(MidiLoopBuildApi, ReplaceRecordedEventsKeepsQuantisationAndModelFlow)
 	EXPECT_EQ(500u, sink.events[1].sampleOffset);
 	EXPECT_TRUE(loop.UpdateModelFromEvents(1000u, true));
 	EXPECT_EQ(1u, model->NoteInstanceCount());
+}
+
+TEST(MidiLoopPersistence, RestoreKeepsRawSimultaneousEventOrderAndAutomationOrigin)
+{
+	MidiLoop::ExportState saved;
+	saved.LoopLengthSamps = 512u;
+	saved.AutomationGlobalSampleOrigin = 0xfffffff0u;
+	saved.EventCount = 3u;
+	// The order is significant for simultaneous events.  The restore path must
+	// not apply ReplaceRecordedEvents' playback sort a second time.
+	saved.Events[0] = MidiEvent::MakeNoteOn(64u, 2u, 61u, 90u);
+	saved.Events[1] = MidiEvent{ 64u, 0xb2u, 7u, 100u, 0u };
+	saved.Events[2] = MidiEvent::MakeNoteOff(64u, 2u, 61u);
+	auto& lane = saved.AutomationLanes[0];
+	lane.MatchKey = midi::AutomationMapping::MakeMatchKey(2u, 7u);
+	lane.TargetParameterIndex = 19u;
+	lane.PointCount = 2u;
+	lane.Points[0] = { 0.25f, 0.1f };
+	lane.Points[1] = { 0.75f, 0.9f };
+
+	MidiLoop loop;
+	ASSERT_TRUE(loop.RestoreFromExport(saved));
+	MidiLoop::ExportState restored;
+	ASSERT_TRUE(loop.SnapshotForExport(restored));
+	EXPECT_EQ(saved.LoopLengthSamps, restored.LoopLengthSamps);
+	EXPECT_EQ(saved.AutomationGlobalSampleOrigin, restored.AutomationGlobalSampleOrigin);
+	ASSERT_EQ(saved.EventCount, restored.EventCount);
+	for (std::size_t i = 0u; i < saved.EventCount; ++i)
+	{
+		EXPECT_EQ(saved.Events[i].sampleOffset, restored.Events[i].sampleOffset);
+		EXPECT_EQ(saved.Events[i].status, restored.Events[i].status);
+		EXPECT_EQ(saved.Events[i].data1, restored.Events[i].data1);
+		EXPECT_EQ(saved.Events[i].data2, restored.Events[i].data2);
+	}
+	EXPECT_EQ(lane.MatchKey, restored.AutomationLanes[0].MatchKey);
+	EXPECT_EQ(lane.TargetParameterIndex, restored.AutomationLanes[0].TargetParameterIndex);
+	EXPECT_EQ(lane.PointCount, restored.AutomationLanes[0].PointCount);
+	EXPECT_EQ(lane.Points[1], restored.AutomationLanes[0].Points[1]);
 }
 
 TEST(LoopTakeMidiOverdub, OverdubCreatesMidiLoopsMatchingConfiguredChannelsAndDevices)

@@ -97,6 +97,8 @@ namespace engine
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 
 		virtual std::string ClassName() const override { return "Station"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
@@ -157,6 +159,8 @@ namespace engine
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
+		// Call only while audio is paused and the scene mutex is held.
+		std::vector<TriggerTake> SnapshotTriggerHistoryForExport() const;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
@@ -205,6 +209,11 @@ namespace engine
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
+		// Non-RT persistence transfer. The audio callback continues to consume only
+		// immutable, retained snapshots; these methods never mutate one in place.
+		midi::MidiVstRoutingSnapshot SnapshotMidiVstRoutesForExport() const;
+		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
+			size_t loadedPluginCount);
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -214,6 +223,10 @@ namespace engine
 		// normal interactive loads where no state needs to be restored.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used before Scene::InitAudio().
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 
@@ -291,6 +304,7 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
+		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
 
 		// --- WriteBlock helpers (audio thread) ---
 

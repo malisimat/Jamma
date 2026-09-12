@@ -15,6 +15,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstdint>
+#include <cstddef>
 #include "Json.h"
 #include "Timer.h"
 #include "../midi/MidiQuantisation.h"
@@ -40,6 +41,22 @@ namespace io
 		static std::optional<JamFile> FromStream(std::stringstream ss);
 		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
+		static constexpr unsigned int CurrentFormatMajor = 0u;
+		static constexpr unsigned int CurrentFormatMinor = 2u;
+		static constexpr unsigned int CurrentFormatPatch = 0u;
+		static constexpr std::size_t MaxStations = 256u;
+		static constexpr std::size_t MaxTakesPerStation = 256u;
+		static constexpr std::size_t MaxLoopsPerTake = 1024u;
+		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
+		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
+		static constexpr std::size_t MaxTriggerHistoryPerStation = 16384u;
+		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
+
+		// Sidecars must always be relative to the manifest directory.  This is
+		// deliberately lexical: callers resolve the accepted path below the .jam
+		// directory and never treat VST compatibility paths as sidecar paths.
+		static bool IsSafeSidecarPath(const std::string& path) noexcept;
+		static std::optional<std::uint64_t> ParseStrictUint64(const std::string& text) noexcept;
 		static std::int32_t ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept;
 
 		struct NinjamConfig
@@ -92,9 +109,13 @@ namespace io
 		struct Loop
 		{
 			std::string Name;
+			std::string Id;
+			unsigned int Channel = 0;
 			unsigned long Length;
 			unsigned long Index;
 			unsigned long MasterLoopCount;
+			// Current-schema body phase. Index is retained only for legacy readers.
+			unsigned long BodyPlayIndex = 0;
 			double Level;
 			double Speed;
 			unsigned int MuteGroups;
@@ -106,6 +127,45 @@ namespace io
 			static std::optional<Loop> FromJson(Json::JsonPart json);
 		};
 
+		struct AutomationPoint
+		{
+			double Fraction = 0.0;
+			double Value = 0.0;
+		};
+
+		struct AutomationLane
+		{
+			enum class MappingType : std::uint8_t { Cc, Editor };
+			MappingType Mapping = MappingType::Cc;
+			std::uint8_t Channel = 0;
+			std::uint8_t Controller = 0;
+			std::string TargetScope = "station";
+			unsigned int TargetPluginIndex = 0;
+			unsigned int TargetLoopIndex = 0;
+			unsigned int TargetParameterIndex = 0;
+			std::vector<AutomationPoint> Points;
+		};
+
+		// Metadata in the manifest for a native .jammidi sidecar. Event and lane
+		// payloads live in NativeMidiSidecar so a corrupt asset can skip this stream
+		// without invalidating other takes.
+		struct MidiStream
+		{
+			std::string SidecarPath;
+			unsigned int Channel = 0;
+			std::string Device;
+			unsigned long LogicalLength = 0;
+			std::uint64_t AutomationGlobalSampleOrigin = 0;
+		};
+
+		struct MidiRoute
+		{
+			// OutputIndex is the flattened take/stream index. Live routes use IsLive.
+			unsigned int OutputIndex = 0;
+			bool IsLive = false;
+			unsigned int PluginIndex = 0;
+		};
+
 		struct LoopTake
 		{
 			std::string Name;
@@ -114,31 +174,64 @@ namespace io
 			bool MidiQuantEnabled = false;
 			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 			std::int32_t TakePhaseOffsetSamps = 0;
+			unsigned long MidiPlayIndex = 0;
+			unsigned long MidiPlayLength = 0;
+			std::uint64_t MidiQuantTransportStart = 0;
+			std::vector<MidiStream> MidiStreams;
+			// One destination-bus list per audio input (loop) mixer.
+			std::vector<std::vector<unsigned long>> AudioRoutes;
+			// Presence is distinct from content: an explicit [] disconnects every input,
+			// while a missing field requests legacy one-to-one defaults.
+			bool HasAudioRoutes = false;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};
 
 		struct Station
 		{
+			// The configured trigger's LIFO take stack. It is station-local because
+			// rig trigger bindings are attached to stations by index on load.
+			struct TriggerHistoryEntry
+			{
+				unsigned int SourceType = 0u;
+				std::string SourceTakeId;
+				std::string TargetTakeId;
+			};
+
 			std::string Name;
 			unsigned int StationType;
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
 			std::vector<int> AllowedMidiChannels;
+			std::vector<MidiRoute> MidiRoutes;
+			// One destination-output list per station bus mixer.
+			std::vector<std::vector<unsigned long>> AudioRoutes;
+			bool HasAudioRoutes = false;
+			std::vector<TriggerHistoryEntry> TriggerHistory;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};
 
-		Version Version;
+		Version Version = VERSION_V;
+		unsigned int FormatMajor = CurrentFormatMajor;
+		unsigned int FormatMinor = CurrentFormatMinor;
+		unsigned int FormatPatch = CurrentFormatPatch;
 		std::string Name;
 		std::optional<NinjamConfig> Ninjam;
 		std::vector<Station> Stations;
-		unsigned long TimerTicks;
-		unsigned int QuantiseSamps;
+		unsigned long TimerTicks = 0;
+		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
-		utils::Timer::QuantisationType Quantisation;
+		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
+		// A loopless session has no local master geometry. Its first successful
+		// recording establishes the master length, grain, and BPI.
+		bool TransportInitialised = true;
+		// Absolute local master sample coordinate. It is independent of TimerTicks,
+		// which remains legacy compatibility metadata only.
+		unsigned long MasterLengthSamps = 1;
+		std::uint64_t AbsoluteSamplePos = 0;
 	};
 }

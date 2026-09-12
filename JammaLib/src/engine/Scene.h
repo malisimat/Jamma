@@ -209,6 +209,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		bool PauseAudio();
+		bool ResumeAudio();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;

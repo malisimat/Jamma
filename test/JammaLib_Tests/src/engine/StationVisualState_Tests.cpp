@@ -3,6 +3,7 @@
 #include "actions/TriggerAction.h"
 #include "engine/Station.h"
 #include "engine/Trigger.h"
+#include "utils/Timer.h"
 
 using actions::TriggerAction;
 using engine::Station;
@@ -55,6 +56,38 @@ TEST(StationVisualState, RecordingEndClearsOnTickWhenNoTakeIsInRecordingTail)
 
 	station->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
 	EXPECT_EQ(StationVisualState::STATIONSTATE_PLAYING, station->GetVisualState());
+}
+
+TEST(StationVisualState, FirstRecordingSeedsAnUninitialisedClock)
+{
+	auto station = MakeStation("station");
+	auto clock = std::make_shared<utils::Timer>();
+	station->SetClock(clock);
+	ASSERT_EQ(0ul, clock->SeedSourceLength());
+	ASSERT_FALSE(clock->IsQuantisable());
+
+	io::UserConfig config{};
+	audio::AudioStreamParams stream{};
+	stream.SampleRate = 48000u;
+	constexpr unsigned long recordedLength = 96000ul;
+	auto expected = config.DeduceLoopTiming(recordedLength, stream.SampleRate);
+	ASSERT_TRUE(expected.has_value());
+
+	TriggerAction start = MakeTriggerAction(TriggerAction::TRIGGER_REC_START);
+	start.SetUserConfig(config);
+	start.SetAudioParams(stream);
+	const auto startResult = station->OnAction(start);
+	ASSERT_TRUE(startResult.IsEaten);
+
+	TriggerAction end = MakeTriggerAction(TriggerAction::TRIGGER_REC_END, recordedLength);
+	end.TargetId = startResult.TargetId;
+	end.SetUserConfig(config);
+	end.SetAudioParams(stream);
+	const auto endResult = station->OnAction(end);
+	ASSERT_TRUE(endResult.IsEaten);
+	EXPECT_EQ(expected->GrainSamps, clock->QuantiseSamps());
+	EXPECT_EQ(static_cast<unsigned long>(expected->GrainSamps) * expected->LoopGrains,
+		clock->SeedSourceLength());
 }
 
 TEST(StationVisualState, OverdubAndPunchInTrackTheirOwnTransitions)

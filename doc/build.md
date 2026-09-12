@@ -114,21 +114,22 @@ Starter content lives in [vscode-tasks.example.json](vscode-tasks.example.json).
 ## Troubleshooting
 
 - **Google Test missing headers/libraries**: Verify `vcpkg integrate install`, `vcpkg install`, and that `vcpkg_installed\` contains `gtest`.
-- **MSBuild reports both `PATH` and `Path`**: Keep `.vscode\tasks.json` unchanged and reuse its MSBuild path and arguments. Do not edit the machine environment. Instead, launch MSBuild through `System.Diagnostics.Process`:
+- **`MSB6001` says `Path` and `PATH` were both added**: The invoking process has duplicate case-insensitive environment-variable names. MSBuild may start normally, then fail while launching `CL.exe`. Run this preflight and the task's direct absolute-MSBuild command together in one PowerShell command. It changes only that process and its children; do not edit the user or machine environment, or wrap the build with `cmd.exe /c`, `Start-Process`, or an outer `ProcessStartInfo` launch:
 
 ```powershell
-$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-$startInfo.FileName = $msbuild
-$startInfo.Arguments = '"C:\Users\matto\source\repos\Jamma\test\JammaLib_Tests\JammaLib_Tests.vcxproj" /m /t:Build /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir=C:\Users\matto\source\repos\Jamma\'
-$startInfo.WorkingDirectory = "C:\Users\matto\source\repos\Jamma"
-$startInfo.UseShellExecute = $false
-$process = [System.Diagnostics.Process]::Start($startInfo)
-$process.WaitForExit()
-exit $process.ExitCode
+$pathKeys = @([Environment]::GetEnvironmentVariables('Process').Keys |
+    Where-Object { $_ -ieq 'PATH' })
+if ($pathKeys.Count -gt 1) {
+    $env:PATH = $null
+}
+if ((@([Environment]::GetEnvironmentVariables('Process').Keys |
+    Where-Object { $_ -ieq 'PATH' })).Count -ne 1) {
+    throw "Expected exactly one process Path variable before building."
+}
+
+# Invoke the applicable task's absolute MSBuild executable directly here.
 ```
 
-  For another task, retain its exact MSBuild executable and arguments. Do not attempt to rename or remove `Path`/`PATH`.
 - **Silent test failures / crash on startup**: If the test exe exits with code `1` and no output, stale Release gtest DLLs may be sitting in the Debug output folder. Rebuild both Debug and Release to refresh the copied runtime files. You can also manually copy the debug DLLs from `vcpkg_installed`:
 
 ```powershell

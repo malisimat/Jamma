@@ -11,6 +11,8 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <filesystem>
+#include <regex>
 #include <string>
 #include "../utils/MathUtils.h"
 #include "../utils/StringUtils.h"
@@ -18,7 +20,7 @@
 using namespace io;
 using audio::BehaviourParams;
 
-const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"HiHat\",\"stationtype\":0,\"takes\":[{\"name\":\"Take1\",\"loops\":[{\"name\":\"Loop1.wav\",\"length\":155822,\"mix\":{\"type\":\"pan\",\"chans\":[0.5,0.5]}}]}]}],\"quantisesamps\":77911,\"quantisation\":\"multiple\"}";
+const std::string JamFile::DefaultJson = "{\"name\":\"default\",\"ninjam\":{\"host\":\"ninjam.com:2049\",\"user\":\"jamma_guest\",\"pass\":\"\",\"workdir\":\"\"},\"stations\":[{\"name\":\"Station1\",\"stationtype\":0,\"takes\":[]}],\"quantisesamps\":1,\"quantisation\":\"off\"}";
 
 std::int32_t JamFile::ParseInt32Clamped(const Json::JsonValue& value, std::int32_t fallback) noexcept
 {
@@ -63,15 +65,49 @@ std::int32_t JamFile::ParseInt32Clamped(const Json::JsonValue& value, std::int32
 	return static_cast<std::int32_t>(parsed);
 }
 
+bool JamFile::IsSafeSidecarPath(const std::string& path) noexcept
+{
+	if (path.empty() || path.size() > 1024u)
+		return false;
+	const std::filesystem::path candidate(path);
+	if (candidate.is_absolute() || candidate.has_root_name() || candidate.has_root_directory())
+		return false;
+	for (const auto& component : candidate)
+	{
+		if (component == "..")
+			return false;
+	}
+	return candidate.lexically_normal() == candidate && candidate.filename() != ".";
+}
+
+std::optional<std::uint64_t> JamFile::ParseStrictUint64(const std::string& text) noexcept
+{
+	if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+		return std::nullopt;
+	try
+	{
+		std::size_t consumed = 0u;
+		const auto value = std::stoull(text, &consumed, 10);
+		return consumed == text.size() ? std::optional<std::uint64_t>(static_cast<std::uint64_t>(value)) : std::nullopt;
+	}
+	catch (const std::exception&) { return std::nullopt; }
+}
+
 std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 {
 	auto root = Json::FromStream(std::move(ss));
 
 	if (!root.has_value())
+	{
+		std::cout << "JamFile: invalid JSON" << std::endl;
 		return std::nullopt;
+	}
 
 	if (root.value().index() != 6)
+	{
+		std::cout << "JamFile: root is not an object" << std::endl;
 		return std::nullopt;
+	}
 
 	auto jamParams = std::get<Json::JsonPart>(root.value());
 
@@ -81,8 +117,11 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	if (jamParams.KeyValues["name"].index() != 4)
 		return std::nullopt;
 
-	JamFile jam;
-	jam.Version = VERSION_V;
+	JamFile jam{};
+	jam.Version = VERSION_LEGACY;
+	jam.FormatMajor = 0u;
+	jam.FormatMinor = 0u;
+	jam.FormatPatch = 0u;
 	jam.TimerTicks = 0;
 	jam.QuantiseSamps = 0;
 	jam.GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
@@ -91,8 +130,53 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	jam.Name = std::get<std::string>(jamParams.KeyValues["name"]);
 
+	const auto versionIter = jamParams.KeyValues.find("formatVersion");
+	const auto isCurrentSchema = versionIter != jamParams.KeyValues.end();
+	if (isCurrentSchema)
+	{
+		if (versionIter->second.index() != 4)
+		{
+			std::cout << "JamFile: invalid formatVersion" << std::endl;
+			return std::nullopt;
+		}
+		const auto versionText = std::get<std::string>(versionIter->second);
+		const std::regex versionPattern("^([0-9]+)\\.([0-9]+)\\.([0-9]+)$");
+		std::smatch match;
+		if (!std::regex_match(versionText, match, versionPattern))
+		{
+			std::cout << "JamFile: malformed formatVersion '" << versionText << "'" << std::endl;
+			return std::nullopt;
+		}
+		try
+		{
+			const auto parseComponent = [](const std::ssub_match& item) -> unsigned int
+			{
+				const auto parsed = std::stoull(item.str());
+				if (parsed > (std::numeric_limits<unsigned int>::max)())
+					throw std::out_of_range("format version component");
+				return static_cast<unsigned int>(parsed);
+			};
+			jam.FormatMajor = parseComponent(match[1]);
+			jam.FormatMinor = parseComponent(match[2]);
+			jam.FormatPatch = parseComponent(match[3]);
+		}
+		catch (const std::exception&)
+		{
+			std::cout << "JamFile: invalid formatVersion '" << versionText << "'" << std::endl;
+			return std::nullopt;
+		}
+		if (jam.FormatMajor > CurrentFormatMajor)
+		{
+			std::cout << "JamFile: formatVersion '" << versionText << "' has unsupported newer major" << std::endl;
+			return std::nullopt;
+		}
+		jam.Version = VERSION_V;
+		if (jam.FormatMajor != CurrentFormatMajor || jam.FormatMinor != CurrentFormatMinor || jam.FormatPatch != CurrentFormatPatch)
+			std::cout << "JamFile: best-effort load for formatVersion '" << versionText << "'" << std::endl;
+	}
+
 	auto iter = jamParams.KeyValues.find("ninjam");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema && iter != jamParams.KeyValues.end())
 	{
 		if (jamParams.KeyValues["ninjam"].index() == 6)
 		{
@@ -112,32 +196,131 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			{
 				auto stations = std::get<std::vector<Json::JsonPart>>(stationArr.Array);
 
+				if (stations.size() > MaxStations)
+				{
+					std::cout << "JamFile: station count exceeds limit" << std::endl;
+					return std::nullopt;
+				}
 				for (auto stationJson : stations)
 				{
 					auto stationOpt = Station::FromJson(stationJson);
 					if (stationOpt.has_value())
 						jam.Stations.push_back(stationOpt.value());
+					else
+						std::cout << "JamFile: skipped invalid station" << std::endl;
 				}
 			}
 		}
 	}
 
-	iter = jamParams.KeyValues.find("timerticks");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		if (jamParams.KeyValues["timerticks"].index() == 2)
+		iter = jamParams.KeyValues.find("timerticks");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["timerticks"].index() == 2)
 			jam.TimerTicks = std::get<unsigned long>(jamParams.KeyValues["timerticks"]);
+		iter = jamParams.KeyValues.find("quantisesamps");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["quantisesamps"].index() == 2)
+			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
 	}
-
-	iter = jamParams.KeyValues.find("quantisesamps");
+	// Current manifests carry all local transport data in one object. Legacy
+	// top-level fields above are intentionally still accepted as 0.0.0 input.
+	iter = jamParams.KeyValues.find("transport");
 	if (iter != jamParams.KeyValues.end())
 	{
-		if (jamParams.KeyValues["quantisesamps"].index() == 2)
-			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
+		if (iter->second.index() != 6)
+		{
+			std::cout << "JamFile: invalid transport object" << std::endl;
+			return std::nullopt;
+		}
+		const auto& transport = std::get<Json::JsonPart>(iter->second);
+		bool transportInitialised = true;
+		const auto initialisedIter = transport.KeyValues.find("initialized");
+		if (initialisedIter != transport.KeyValues.end())
+		{
+			if (initialisedIter->second.index() != 0)
+			{
+				std::cout << "JamFile: invalid transport initialized flag" << std::endl;
+				return std::nullopt;
+			}
+			transportInitialised = std::get<bool>(initialisedIter->second);
+		}
+		jam.TransportInitialised = transportInitialised;
+		const auto readUnsigned = [](const Json::JsonPart& object, const char* key, unsigned long& out) -> bool
+		{
+			auto found = object.KeyValues.find(key);
+			if (found == object.KeyValues.end() || found->second.index() != 2)
+				return false;
+			out = std::get<unsigned long>(found->second);
+			return true;
+		};
+		unsigned long masterLength = 0u;
+		unsigned long quantise = 0u;
+		std::uint64_t absolute = 0u;
+		const auto absoluteIter = transport.KeyValues.find("absoluteSamplePos");
+		if (transportInitialised)
+		{
+			if (!readUnsigned(transport, "masterLengthSamps", masterLength) || !readUnsigned(transport, "quantiseSamps", quantise)
+				|| absoluteIter == transport.KeyValues.end() || absoluteIter->second.index() != 4 || masterLength == 0u || masterLength > MaxLoopLengthSamps || quantise == 0u)
+			{
+				std::cout << "JamFile: invalid essential transport field" << std::endl;
+				return std::nullopt;
+			}
+			const auto absoluteValue = ParseStrictUint64(std::get<std::string>(absoluteIter->second));
+			if (!absoluteValue.has_value())
+			{
+				std::cout << "JamFile: invalid absoluteSamplePos" << std::endl;
+				return std::nullopt;
+			}
+			absolute = *absoluteValue;
+			jam.MasterLengthSamps = masterLength;
+			jam.QuantiseSamps = static_cast<unsigned int>(quantise);
+			jam.AbsoluteSamplePos = absolute;
+			const auto quantisationIter = transport.KeyValues.find("quantisation");
+			if (quantisationIter != transport.KeyValues.end() && quantisationIter->second.index() == 4)
+			{
+				const auto& text = std::get<std::string>(quantisationIter->second);
+				jam.Quantisation = text == "multiple" ? utils::Timer::QUANTISE_MULTIPLE : text == "power" ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_OFF;
+			}
+		}
+		const auto midiStateIter = transport.KeyValues.find("globalMidiQuantState");
+		if (midiStateIter != transport.KeyValues.end() && midiStateIter->second.index() == 4)
+		{
+			const auto& text = std::get<std::string>(midiStateIter->second);
+			jam.GlobalMidiQuantStateValue = text == "all" ? GlobalMidiQuantState::All : text == "mixed" ? GlobalMidiQuantState::Mixed : GlobalMidiQuantState::Off;
+		}
+		const auto globalOffsetIter = transport.KeyValues.find("globalPhaseOffsetSamps");
+		if (globalOffsetIter != transport.KeyValues.end())
+			jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(globalOffsetIter->second, 0);
+		const auto offsetIter = transport.KeyValues.find("transportOffsetLoopFrac");
+		if (offsetIter != transport.KeyValues.end())
+		{
+			const auto value = offsetIter->second.index() == 3 ? std::get<double>(offsetIter->second) : 0.0;
+			if (!std::isfinite(value) || value < -1.0 || value > 1.0)
+			{
+				std::cout << "JamFile: invalid transport offset" << std::endl;
+				return std::nullopt;
+			}
+			jam.TransportOffsetLoopFrac = value;
+		}
+	}
+	else if (isCurrentSchema)
+	{
+		std::cout << "JamFile: current format requires transport" << std::endl;
+		return std::nullopt;
+	}
+	if (!jam.TransportInitialised)
+	{
+		for (const auto& station : jam.Stations)
+			for (const auto& take : station.LoopTakes)
+				if (!take.Loops.empty() || !take.MidiStreams.empty())
+				{
+					std::cout << "JamFile: uninitialised transport cannot contain recorded loops" << std::endl;
+					return std::nullopt;
+				}
 	}
 
 	iter = jamParams.KeyValues.find("globalmidiquantstate");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema && iter != jamParams.KeyValues.end())
 	{
 		const auto& value = jamParams.KeyValues["globalmidiquantstate"];
 		auto parsed = static_cast<int>(GlobalMidiQuantState::Mixed);
@@ -197,49 +380,56 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		}
 	}
 
-	iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
-	if (iter != jamParams.KeyValues.end())
-		jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
-
-	iter = jamParams.KeyValues.find("transportoffsetloopfrac");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		const auto& value = jamParams.KeyValues["transportoffsetloopfrac"];
-		auto parsed = 0.0;
-		switch (value.index())
+		iter = jamParams.KeyValues.find("globalphaseoffsetsamps");
+		if (iter != jamParams.KeyValues.end())
+			jam.GlobalPhaseOffsetSamps = ParseInt32Clamped(jamParams.KeyValues["globalphaseoffsetsamps"], 0);
+
+		iter = jamParams.KeyValues.find("transportoffsetloopfrac");
+		if (iter != jamParams.KeyValues.end())
 		{
-		case 1:
-			parsed = static_cast<double>(std::get<long>(value));
-			break;
-		case 2:
-			parsed = static_cast<double>(std::get<unsigned long>(value));
-			break;
-		case 3:
-			parsed = std::get<double>(value);
-			break;
-		default:
-			break;
+			const auto& value = jamParams.KeyValues["transportoffsetloopfrac"];
+			auto parsed = 0.0;
+			switch (value.index())
+			{
+			case 1:
+				parsed = static_cast<double>(std::get<long>(value));
+				break;
+			case 2:
+				parsed = static_cast<double>(std::get<unsigned long>(value));
+				break;
+			case 3:
+				parsed = std::get<double>(value);
+				break;
+			default:
+				break;
+			}
+
+			jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
+				std::clamp(parsed, -1.0, 1.0) : 0.0;
 		}
-
-		jam.TransportOffsetLoopFrac = std::isfinite(parsed) ?
-			std::clamp(parsed, -1.0, 1.0) : 0.0;
 	}
 
-	std::string quantiseStr = "";
-	iter = jamParams.KeyValues.find("quantisation");
-	if (iter != jamParams.KeyValues.end())
+	if (!isCurrentSchema)
 	{
-		if (jamParams.KeyValues["quantisation"].index() == 4)
+		std::string quantiseStr = "";
+		iter = jamParams.KeyValues.find("quantisation");
+		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["quantisation"].index() == 4)
 			quantiseStr = std::get<std::string>(jamParams.KeyValues["quantisation"]);
+		if (quantiseStr.compare("multiple") == 0)
+			jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+		else if (quantiseStr.compare("power") == 0)
+			jam.Quantisation = utils::Timer::QUANTISE_POWER;
+		else
+			jam.Quantisation = utils::Timer::QUANTISE_OFF;
 	}
 
-	if (quantiseStr.compare("multiple") == 0)
-		jam.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
-	else if (quantiseStr.compare("power") == 0)
-		jam.Quantisation = utils::Timer::QUANTISE_POWER;
-	else
-		jam.Quantisation = utils::Timer::QUANTISE_OFF;
-
+	if (isCurrentSchema && jam.Stations.empty())
+	{
+		std::cout << "JamFile: no constructible stations" << std::endl;
+		return std::nullopt;
+	}
 	return jam;
 }
 
@@ -397,19 +587,93 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		out += "]";
 		return out;
 	};
+	auto midiStreamsToJson = [&](const std::vector<JamFile::MidiStream>& streams) -> std::string {
+		std::string out = "[";
+		for (size_t i = 0; i < streams.size(); ++i)
+		{
+			const auto& stream = streams[i];
+			if (i > 0) out += ",";
+			out += "{" + kvStr("sidecar", stream.SidecarPath) + "," + kvUlong("channel", stream.Channel) + ","
+				+ kvStr("device", stream.Device) + "," + kvUlong("logicalLength", stream.LogicalLength) + ","
+				+ kvStr("automationGlobalSampleOrigin", std::to_string(stream.AutomationGlobalSampleOrigin)) + "}";
+		}
+		return out + "]";
+	};
+	auto midiRoutesToJson = [&](const std::vector<JamFile::MidiRoute>& routes) -> std::string {
+		std::string out = "[";
+		for (size_t i = 0; i < routes.size(); ++i)
+		{
+			if (i > 0) out += ",";
+			const auto& route = routes[i];
+			out += "{" + kvUlong("outputIndex", route.OutputIndex) + "," + kvBool("live", route.IsLive) + ","
+				+ kvUlong("pluginIndex", route.PluginIndex) + "}";
+		}
+		return out + "]";
+	};
+	auto audioRoutesToJson = [&](const std::vector<std::vector<unsigned long>>& routes) -> std::string {
+		std::string out = "[";
+		for (size_t i = 0; i < routes.size(); ++i)
+		{
+			if (i > 0) out += ",";
+			out += "{\"input\":" + std::to_string(i) + ",\"outputs\":[";
+			for (size_t j = 0; j < routes[i].size(); ++j)
+			{
+				if (j > 0) out += ",";
+				out += std::to_string(routes[i][j]);
+			}
+			out += "]}";
+		}
+		return out + "]";
+	};
 
-	ss << "{";
-	ss << kvStr("name", jam.Name) << ",";
-	ss << kvUlong("timerticks", jam.TimerTicks) << ",";
-	ss << kvUlong("quantisesamps", jam.QuantiseSamps) << ",";
-	ss << kvStr("globalmidiquantstate", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
-	ss << kvInt("globalphaseoffsetsamps", jam.GlobalPhaseOffsetSamps) << ",";
+	if (jam.TransportInitialised && (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps))
+	{
+		std::cout << "JamFile: refusing to write invalid local master length" << std::endl;
+		return false;
+	}
+	for (const auto& station : jam.Stations)
+	{
+		if (station.LoopTakes.size() > MaxTakesPerStation)
+			return false;
+		if (station.TriggerHistory.size() > MaxTriggerHistoryPerStation)
+			return false;
+		for (const auto& entry : station.TriggerHistory)
+			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
+				return false;
+		for (const auto& take : station.LoopTakes)
+		{
+			if (!jam.TransportInitialised && (!take.Loops.empty() || !take.MidiStreams.empty()))
+				return false;
+			if (take.Loops.size() > MaxLoopsPerTake || take.MidiStreams.size() > MaxMidiStreamsPerTake)
+				return false;
+			for (const auto& loop : take.Loops)
+				if (loop.Length == 0u || loop.Length > MaxLoopLengthSamps || loop.BodyPlayIndex >= loop.Length || !IsSafeSidecarPath(loop.Name))
+					return false;
+			for (const auto& stream : take.MidiStreams)
+				if (stream.LogicalLength == 0u || stream.Channel > 15u || !IsSafeSidecarPath(stream.SidecarPath))
+					return false;
+		}
+	}
 	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
 		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
-	ss << kvDouble("transportoffsetloopfrac", transportOffsetLoopFrac) << ",";
-	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
-	if (jam.Ninjam.has_value())
-		ss << quoted("ninjam") << ":" << ninjamToJson(jam.Ninjam.value()) << ",";
+
+	ss << "{";
+	ss << kvStr("formatVersion", "0.2.0") << ",";
+	ss << kvStr("name", jam.Name) << ",";
+	ss << quoted("transport") << ":{";
+	ss << kvBool("initialized", jam.TransportInitialised) << ",";
+	if (jam.TransportInitialised)
+	{
+		ss << kvUlong("masterLengthSamps", jam.MasterLengthSamps) << ",";
+		ss << kvUlong("quantiseSamps", jam.QuantiseSamps) << ",";
+		ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	}
+	ss << kvStr("globalMidiQuantState", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
+	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
+	if (jam.TransportInitialised)
+		ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
+	ss << kvDouble("transportOffsetLoopFrac", transportOffsetLoopFrac);
+	ss << "},";
 	ss << quoted("stations") << ":[";
 
 	for (size_t stationIndex = 0; stationIndex < jam.Stations.size(); ++stationIndex)
@@ -437,9 +701,11 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 				if (loopIndex > 0) ss << ",";
 				ss << "{"
 					<< kvStr("name", loop.Name) << ","
+					<< kvStr("sidecar", loop.Name) << ","
+					<< kvStr("id", loop.Id) << ","
+					<< kvUlong("channel", loop.Channel) << ","
 					<< kvUlong("length", loop.Length) << ","
-					<< kvUlong("index", loop.Index) << ","
-					<< kvUlong("masterloopcount", loop.MasterLoopCount) << ","
+					<< kvUlong("bodyPlayIndex", loop.BodyPlayIndex) << ","
 					<< kvDouble("level", loop.Level) << ","
 					<< kvDouble("speed", loop.Speed) << ","
 					<< kvUlong("mutegroups", loop.MuteGroups) << ","
@@ -452,6 +718,12 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			}
 
 			ss << "]";
+			ss << "," << kvUlong("midiPlayIndex", take.MidiPlayIndex)
+				<< "," << kvUlong("midiPlayLength", take.MidiPlayLength)
+				<< "," << kvStr("midiQuantTransportStart", std::to_string(take.MidiQuantTransportStart))
+				<< "," << quoted("midiStreams") << ":" << midiStreamsToJson(take.MidiStreams);
+			if (take.HasAudioRoutes)
+				ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(take.AudioRoutes);
 			if (!take.VstChain.empty())
 				ss << "," << quoted("vst") << ":" << vstChainToJson(take.VstChain);
 			ss << "}";
@@ -460,6 +732,23 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		ss << "]";
 		if (!station.AllowedMidiChannels.empty())
 			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
+		if (!station.MidiRoutes.empty())
+			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
+		if (station.HasAudioRoutes)
+			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
+		if (!station.TriggerHistory.empty())
+		{
+			ss << "," << quoted("triggerHistory") << ":[";
+			for (size_t historyIndex = 0; historyIndex < station.TriggerHistory.size(); ++historyIndex)
+			{
+				if (historyIndex > 0) ss << ",";
+				const auto& entry = station.TriggerHistory[historyIndex];
+				ss << "{" << kvUlong("sourceType", entry.SourceType) << ","
+					<< kvStr("sourceTakeId", entry.SourceTakeId) << ","
+					<< kvStr("targetTakeId", entry.TargetTakeId) << "}";
+			}
+			ss << "]";
+		}
 		if (!station.VstChain.empty())
 			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
 		ss << "}";
@@ -610,6 +899,7 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 	std::string name;
 	unsigned long length = 0;
 	unsigned long index = 0;
+	unsigned long bodyPlayIndex = 0;
 	unsigned long masterLoopCount = 0;
 	double level = 1.0;
 	double speed = 1.0;
@@ -632,8 +922,18 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 			length = std::get<unsigned long>(json.KeyValues["length"]);
 	}
 
-	if ((0 == length) || name.empty())
+	if ((0 == length) || length > MaxLoopLengthSamps || name.empty() || !IsSafeSidecarPath(name))
 		return std::nullopt;
+
+	iter = json.KeyValues.find("sidecar");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 4)
+			return std::nullopt;
+		name = std::get<std::string>(iter->second);
+		if (!IsSafeSidecarPath(name))
+			return std::nullopt;
+	}
 
 	iter = json.KeyValues.find("index");
 	if (iter != json.KeyValues.end())
@@ -649,18 +949,51 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 			masterLoopCount = std::get<unsigned long>(json.KeyValues["masterloopcount"]);
 	}
 
+	iter = json.KeyValues.find("bodyPlayIndex");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 2)
+			return std::nullopt;
+		bodyPlayIndex = std::get<unsigned long>(iter->second);
+		if (bodyPlayIndex >= length)
+			return std::nullopt;
+	}
+	else
+		bodyPlayIndex = index < length ? index : 0u;
+
 	iter = json.KeyValues.find("level");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["level"].index() == 3)
 			level = std::get<double>(json.KeyValues["level"]);
 	}
+	if (!std::isfinite(level))
+		return std::nullopt;
 
 	iter = json.KeyValues.find("speed");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["speed"].index() == 3)
 			speed = std::get<double>(json.KeyValues["speed"]);
+	}
+	if (!std::isfinite(speed) || speed <= 0.0)
+		return std::nullopt;
+
+	std::string id;
+	unsigned int channel = 0u;
+	iter = json.KeyValues.find("id");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 4 || std::get<std::string>(iter->second).size() > 1024u)
+			return std::nullopt;
+		id = std::get<std::string>(iter->second);
+	}
+	iter = json.KeyValues.find("channel");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 2 || std::get<unsigned long>(iter->second) >= MaxLoopsPerTake)
+			return std::nullopt;
+		channel = static_cast<unsigned int>(std::get<unsigned long>(iter->second));
 	}
 
 	iter = json.KeyValues.find("mutegroups");
@@ -716,9 +1049,12 @@ std::optional<JamFile::Loop> JamFile::Loop::FromJson(Json::JsonPart json)
 
 	Loop loop;
 	loop.Name = name;
+	loop.Id = id;
+	loop.Channel = channel;
 	loop.Length = length;
 	loop.Index = index;
 	loop.MasterLoopCount = masterLoopCount;
+	loop.BodyPlayIndex = bodyPlayIndex;
 	loop.Level = level;
 	loop.Speed = speed;
 	loop.MuteGroups = muteGroups;
@@ -755,6 +1091,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 			if (jsonArray.Array.index() == 5)
 			{
 				auto loopArray = std::get<std::vector<Json::JsonPart>>(jsonArray.Array);
+				if (loopArray.size() > MaxLoopsPerTake)
+					return std::nullopt;
 				for (auto loopJson : loopArray)
 				{
 					auto loop = Loop::FromJson(loopJson);
@@ -765,7 +1103,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 		}
 	}
 
-	if (loops.empty() || name.empty())
+	if (name.empty())
 		return std::nullopt;
 
 	iter = json.KeyValues.find("takephaseoffsetsamps");
@@ -828,6 +1166,115 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 		}
 	}
 
+	std::vector<MidiStream> midiStreams;
+	unsigned long midiPlayIndex = 0u;
+	unsigned long midiPlayLength = 0u;
+	std::uint64_t midiQuantTransportStart = 0u;
+	if ((iter = json.KeyValues.find("midiPlayIndex")) != json.KeyValues.end() && iter->second.index() == 2)
+		midiPlayIndex = std::get<unsigned long>(iter->second);
+	if ((iter = json.KeyValues.find("midiPlayLength")) != json.KeyValues.end() && iter->second.index() == 2)
+		midiPlayLength = std::get<unsigned long>(iter->second);
+	if ((iter = json.KeyValues.find("midiQuantTransportStart")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 4)
+			return std::nullopt;
+		const auto parsed = ParseStrictUint64(std::get<std::string>(iter->second));
+		if (!parsed.has_value()) return std::nullopt;
+		midiQuantTransportStart = *parsed;
+	}
+	if ((iter = json.KeyValues.find("midiStreams")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(iter->second);
+		// Json's legacy array representation has no element-type for an empty
+		// array.  An empty current-schema stream list is valid for an audio take.
+		const auto hasLegacyEmptyArray = array.Array.index() == 0u
+			&& std::get<std::vector<bool>>(array.Array).empty();
+		if (!hasLegacyEmptyArray && (array.Array.index() != 5 || std::get<std::vector<Json::JsonPart>>(array.Array).size() > MaxMidiStreamsPerTake))
+			return std::nullopt;
+		const auto* streamObjects = hasLegacyEmptyArray ? nullptr :
+			std::get_if<std::vector<Json::JsonPart>>(&array.Array);
+		if (streamObjects)
+		for (const auto& streamJson : *streamObjects)
+		{
+			const auto sidecar = Json::GetString(streamJson, "sidecar");
+			const auto device = Json::GetString(streamJson, "device");
+			const auto origin = Json::GetString(streamJson, "automationGlobalSampleOrigin");
+			const auto channel = Json::GetUnsigned(streamJson, "channel");
+			const auto length = Json::GetUnsigned(streamJson, "logicalLength");
+			if (!sidecar || !origin || !channel || !length || !IsSafeSidecarPath(*sidecar) || *channel > 15u || *length == 0u || *length > MaxLoopLengthSamps)
+			{
+				std::cout << "JamFile: skipped invalid MIDI stream" << std::endl;
+				continue;
+			}
+			const auto parsedOrigin = ParseStrictUint64(*origin);
+			if (parsedOrigin.has_value())
+			{
+				MidiStream stream;
+				stream.SidecarPath = *sidecar;
+				stream.Device = device.value_or("");
+				stream.Channel = *channel;
+				stream.LogicalLength = *length;
+				stream.AutomationGlobalSampleOrigin = *parsedOrigin;
+				midiStreams.push_back(std::move(stream));
+			}
+			else
+			{
+				std::cout << "JamFile: skipped MIDI stream with invalid origin" << std::endl;
+			}
+		}
+	}
+
+	std::vector<std::vector<unsigned long>> audioRoutes;
+	bool hasAudioRoutes = false;
+	iter = json.KeyValues.find("audioRoutes");
+	if (iter != json.KeyValues.end())
+	{
+		hasAudioRoutes = true;
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = array.Array.index() == 0u
+			&& std::get<std::vector<bool>>(array.Array).empty();
+		if (!isEmptyArray && array.Array.index() != 5)
+			return std::nullopt;
+		if (array.Array.index() == 5)
+		{
+			std::vector<bool> seenInputs(MaxLoopsPerTake, false);
+			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(array.Array))
+			{
+				const auto input = Json::GetUnsigned(routeJson, "input");
+				auto outputsIter = routeJson.KeyValues.find("outputs");
+				if (!input || *input >= MaxLoopsPerTake || outputsIter == routeJson.KeyValues.end() || outputsIter->second.index() != 5)
+					return std::nullopt;
+				if (seenInputs[*input])
+					return std::nullopt;
+				seenInputs[*input] = true;
+				const auto& outputs = std::get<Json::JsonArray>(outputsIter->second);
+				const auto isEmptyOutputs = outputs.Array.index() == 0u
+					&& std::get<std::vector<bool>>(outputs.Array).empty();
+				if (!isEmptyOutputs && outputs.Array.index() != 2)
+					return std::nullopt;
+				if (audioRoutes.size() <= *input) audioRoutes.resize(static_cast<size_t>(*input) + 1u);
+				if (!audioRoutes[*input].empty())
+					return std::nullopt;
+				if (outputs.Array.index() == 2)
+				{
+					for (auto output : std::get<std::vector<unsigned long>>(outputs.Array))
+					{
+						if (output >= MaxAudioRouteChannels
+							|| std::find(audioRoutes[*input].begin(), audioRoutes[*input].end(), output) != audioRoutes[*input].end())
+							return std::nullopt;
+						audioRoutes[*input].push_back(output);
+					}
+				}
+			}
+		}
+	}
+	if (loops.empty() && midiStreams.empty())
+		return std::nullopt;
+
 	LoopTake take;
 	take.Name = name;
 	take.Loops = loops;
@@ -835,6 +1282,12 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.MidiQuantEnabled = midiQuantEnabled;
 	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;
+	take.MidiPlayIndex = midiPlayIndex;
+	take.MidiPlayLength = midiPlayLength;
+	take.MidiQuantTransportStart = midiQuantTransportStart;
+	take.MidiStreams = std::move(midiStreams);
+	take.AudioRoutes = std::move(audioRoutes);
+	take.HasAudioRoutes = hasAudioRoutes;
 	return take;
 }
 
@@ -845,6 +1298,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::vector<LoopTake> takes;
 	std::int32_t stationPhaseOffsetSamps = 0;
 	std::vector<int> allowedMidiChannels;
+	std::vector<TriggerHistoryEntry> triggerHistory;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -870,6 +1324,8 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 			if (jsonArray.Array.index() == 5)
 			{
 				auto takeArray = std::get<std::vector<Json::JsonPart>>(jsonArray.Array);
+				if (takeArray.size() > MaxTakesPerStation)
+					return std::nullopt;
 				for (auto takeJson : takeArray)
 				{
 					auto take = LoopTake::FromJson(takeJson);
@@ -939,6 +1395,105 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
+	std::vector<MidiRoute> midiRoutes;
+	iter = json.KeyValues.find("midiRoutes");
+	if (iter != json.KeyValues.end() && iter->second.index() == 5)
+	{
+		const auto& routes = std::get<Json::JsonArray>(iter->second);
+		if (routes.Array.index() == 5)
+		{
+			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(routes.Array))
+			{
+				const auto output = Json::GetUnsigned(routeJson, "outputIndex");
+				const auto plugin = Json::GetUnsigned(routeJson, "pluginIndex");
+				auto liveIter = routeJson.KeyValues.find("live");
+				if (output.has_value() && plugin.has_value()
+					&& liveIter != routeJson.KeyValues.end() && liveIter->second.index() == 0)
+					midiRoutes.push_back(MidiRoute{ *output, std::get<bool>(liveIter->second), *plugin });
+				else
+					std::cout << "JamFile: skipped invalid MIDI route" << std::endl;
+			}
+		}
+	}
+
+	iter = json.KeyValues.find("triggerHistory");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& historyArray = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = historyArray.Array.index() == 0u
+			&& std::get<std::vector<bool>>(historyArray.Array).empty();
+		if (!isEmptyArray && historyArray.Array.index() != 5)
+			return std::nullopt;
+		if (historyArray.Array.index() == 5)
+		{
+			const auto& entries = std::get<std::vector<Json::JsonPart>>(historyArray.Array);
+			if (entries.size() > MaxTriggerHistoryPerStation)
+				return std::nullopt;
+			for (const auto& entryJson : entries)
+			{
+				const auto sourceType = Json::GetUnsigned(entryJson, "sourceType");
+				auto sourceId = entryJson.KeyValues.find("sourceTakeId");
+				auto targetId = entryJson.KeyValues.find("targetTakeId");
+				if (!sourceType.has_value() || *sourceType > 2u
+					|| sourceId == entryJson.KeyValues.end() || sourceId->second.index() != 4
+					|| targetId == entryJson.KeyValues.end() || targetId->second.index() != 4
+					|| std::get<std::string>(targetId->second).empty())
+					return std::nullopt;
+				triggerHistory.push_back({ static_cast<unsigned int>(*sourceType),
+					std::get<std::string>(sourceId->second), std::get<std::string>(targetId->second) });
+			}
+		}
+	}
+
+	std::vector<std::vector<unsigned long>> audioRoutes;
+	bool hasAudioRoutes = false;
+	iter = json.KeyValues.find("audioRoutes");
+	if (iter != json.KeyValues.end())
+	{
+		hasAudioRoutes = true;
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = array.Array.index() == 0u
+			&& std::get<std::vector<bool>>(array.Array).empty();
+		if (!isEmptyArray && array.Array.index() != 5)
+			return std::nullopt;
+		if (array.Array.index() == 5)
+		{
+			std::vector<bool> seenInputs(MaxAudioRouteChannels, false);
+			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(array.Array))
+			{
+				const auto input = Json::GetUnsigned(routeJson, "input");
+				auto outputsIter = routeJson.KeyValues.find("outputs");
+				if (!input || *input >= MaxAudioRouteChannels || outputsIter == routeJson.KeyValues.end() || outputsIter->second.index() != 5)
+					return std::nullopt;
+				if (seenInputs[*input])
+					return std::nullopt;
+				seenInputs[*input] = true;
+				const auto& outputs = std::get<Json::JsonArray>(outputsIter->second);
+				const auto isEmptyOutputs = outputs.Array.index() == 0u
+					&& std::get<std::vector<bool>>(outputs.Array).empty();
+				if (!isEmptyOutputs && outputs.Array.index() != 2)
+					return std::nullopt;
+				if (audioRoutes.size() <= *input) audioRoutes.resize(static_cast<size_t>(*input) + 1u);
+				if (!audioRoutes[*input].empty())
+					return std::nullopt;
+				if (outputs.Array.index() == 2)
+				{
+					for (auto output : std::get<std::vector<unsigned long>>(outputs.Array))
+					{
+						if (output >= MaxAudioRouteChannels
+							|| std::find(audioRoutes[*input].begin(), audioRoutes[*input].end(), output) != audioRoutes[*input].end())
+							return std::nullopt;
+						audioRoutes[*input].push_back(output);
+					}
+				}
+			}
+		}
+	}
+
 	if (name.empty())
 		return std::nullopt;
 
@@ -951,5 +1506,9 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::sort(allowedMidiChannels.begin(), allowedMidiChannels.end());
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
+	station.MidiRoutes = std::move(midiRoutes);
+	station.AudioRoutes = std::move(audioRoutes);
+	station.HasAudioRoutes = hasAudioRoutes;
+	station.TriggerHistory = std::move(triggerHistory);
 	return station;
 }

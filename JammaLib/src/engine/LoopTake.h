@@ -142,6 +142,8 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
@@ -170,6 +172,10 @@ namespace engine
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used by JAM reconstruction.
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -262,6 +268,39 @@ namespace engine
 		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
+		struct MidiStreamExport
+		{
+			unsigned int Channel = 0u;
+			std::string Device;
+			midi::MidiLoop::ExportState Loop;
+		};
+		struct MidiExportState
+		{
+			std::vector<MidiStreamExport> Streams;
+			unsigned long PlayIndex = 0ul;
+			unsigned long LoopLengthSamps = 0ul;
+			midi::MidiQuantisationSettings Quantisation;
+			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+		struct PendingAutomationBinding
+		{
+			std::size_t MidiStreamIndex = 0u;
+			std::size_t LaneIndex = 0u;
+			std::string TargetScope;
+			unsigned int TargetPluginIndex = 0u;
+			unsigned int TargetLoopIndex = 0u;
+		};
+		const std::vector<PendingAutomationBinding>& PendingAutomationBindings() const noexcept
+			{ return _pendingAutomationBindings; }
+		void ClearPendingAutomationBindings() noexcept { _pendingAutomationBindings.clear(); }
+		static constexpr std::size_t MaxMidiStreamsForRestore = io::JamFile::MaxMidiStreamsPerTake;
+		// Non-RT transfer at the exporter's already-paused, scene-locked boundary.
+		// The per-loop origin is exported with this take's anchor correction folded
+		// in, so loading can reset the live correction to zero.
+		bool SnapshotMidiForExport(MidiExportState& state) const;
+		// Non-RT construction before this take enters an audio snapshot.  Replaces
+		// the complete MIDI stream set and publishes one immutable loop snapshot.
+		bool RestoreMidiFromExport(const MidiExportState& state);
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
@@ -452,6 +491,9 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		// Startup-only metadata. Runtime lane pointers are installed by Station only
+		// after every chain named by these references has been constructed.
+		std::vector<PendingAutomationBinding> _pendingAutomationBindings;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
 	};

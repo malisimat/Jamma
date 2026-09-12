@@ -489,6 +489,11 @@ std::vector<TriggerTake> Trigger::GetTakes() const
 	return _loopTakeHistory;
 }
 
+void Trigger::RestoreTakes(std::vector<TriggerTake> takes)
+{
+	_loopTakeHistory = std::move(takes);
+}
+
 void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const float* srcBuf,
 	unsigned int numSamps,

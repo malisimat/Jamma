@@ -203,6 +203,7 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	const char* source,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
+	_effectiveQuantiseSamps.store(grainSamps, std::memory_order_release);
 	unsigned int takeCount = 0u;
 	for (const auto& station : stations)
 	{

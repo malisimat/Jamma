@@ -551,6 +551,18 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					std::vector<TriggerTake> triggerHistory;
+					triggerHistory.reserve(stationStruct.TriggerHistory.size());
+					for (const auto& entry : stationStruct.TriggerHistory)
+					{
+						auto sourceType = TriggerTake::SOURCE_ADC;
+						if (entry.SourceType == 1u)
+							sourceType = TriggerTake::SOURCE_LOOPTAKE;
+						else if (entry.SourceType == 2u)
+							sourceType = TriggerTake::SOURCE_STATION;
+						triggerHistory.push_back({ sourceType, entry.SourceTakeId, entry.TargetTakeId });
+					}
+					trigger.value()->RestoreTakes(std::move(triggerHistory));
 					hudTriggers.push_back(trigger.value());
 				}
 			}
@@ -562,22 +574,45 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+	if (scene->_stations.empty())
+	{
+		std::cout << "Load: no constructible stations" << std::endl;
+		return std::nullopt;
+	}
 
 	if (scene->_hudPanel)
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
-	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	if (!jamStruct.TransportInitialised)
+	{
+		// No local geometry was saved. The first completed recording seeds the
+		// clock from its physical length under the active user timing policy.
+		scene->_quantisation.Clear(false);
+	}
+	else
+	{
+		scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+		if (jamStruct.Version == io::JamFile::VERSION_V)
+		{
+			auto clock = scene->_quantisation.Clock();
+			if (!clock || jamStruct.MasterLengthSamps == 0ul)
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
+			clock->SetSeedSourceLength(jamStruct.MasterLengthSamps);
+			if (!clock->InitialiseAbsoluteSamplePos(jamStruct.AbsoluteSamplePos))
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
+		}
+	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
-	if (jamStruct.Ninjam.has_value())
-	{
-		// Persisted/default starts enter the same coordinator lifecycle as an
-		// interactive connect before the first physical snapshot can arrive.
-		scene->_ApplyNinjamTimingUpdate(scene->_networkService->PrepareTempoSyncOnConnect(
-			scene->_quantisation.CurrentTempoTiming(scene->_CurrentSampleRate())));
-	}
-	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
+	// Saved sessions always start locally.  NINJAM config/anchors are live
+	// connection state and are intentionally never restored from a .jam.
 	scene->InitReceivers();
 
 	return scene;
@@ -1555,6 +1590,18 @@ void Scene::CloseAudio()
 	_audioEngine->Close();
 }
 
+bool Scene::PauseAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Pause();
+}
+
+bool Scene::ResumeAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Resume();
+}
+
 bool Scene::InitGlobalKeyCapture()
 {
 	return _inputSubsystem->InitGlobalKeyCapture();
@@ -1575,6 +1622,19 @@ void Scene::Shutdown()
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())
 		_jobRunner.join();
+
+	// No work from the outgoing session may survive a session replacement.
+	// In particular, queued VST loads retain UI-thread-created plugin objects;
+	// hand those objects back to the UI destroy queue before dropping the jobs.
+	std::list<actions::JobAction> abandonedJobs;
+	// The consumer thread is joined and Shutdown is called by the UI owner, so
+	// there can be no concurrent queue reader or producer at this point.
+	abandonedJobs.swap(_jobList);
+	for (auto& job : abandonedJobs)
+	{
+		if (job.PreInitPlugin)
+			vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+	}
 
 	ForceUnloadAllVstPlugins();
 

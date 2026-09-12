@@ -278,6 +278,8 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
+		// Restore only while constructing a scene, before this trigger can tick.
+		void RestoreTakes(std::vector<TriggerTake> takes);
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,
