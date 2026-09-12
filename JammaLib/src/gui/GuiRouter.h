@@ -200,6 +200,7 @@ namespace gui
 		bool AddRoute(unsigned int inputChan, unsigned int outputChan);
 		bool RemoveRoute(unsigned int inputChan, unsigned int outputChan);
 		void ClearRoutes();
+		const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const { return _routes; }
 		void SetReceiver(std::weak_ptr<base::ActionReceiver> receiver);
 
 	protected:
