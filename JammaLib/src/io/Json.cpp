@@ -130,7 +130,7 @@ bool Json::IsAllDigits(std::string str, bool includePeriod)
 
 	for (auto ch : str)
 	{
-		if (!std::isdigit(ch))
+		if (!std::isdigit(static_cast<unsigned char>(ch)))
 		{
 			if (includePeriod)
 			{
@@ -157,7 +157,7 @@ bool Json::IsTrue(std::string str)
 {
 	std::vector<char> charBuf;
 	for (auto letter : str)
-		charBuf.push_back(std::tolower(letter));
+		charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 	charBuf.push_back('\0');
 	auto strLower = std::string(charBuf.data());
@@ -466,7 +466,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 					{
 						std::vector<char> charBuf2;
 						for (auto letter : str)
-							charBuf2.push_back(std::tolower(letter));
+							charBuf2.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 						charBuf2.push_back('\0');
 						std::string strLower(charBuf2.data());
@@ -549,7 +549,7 @@ Json::JsonArray Json::ParseJsonArray(std::vector<std::string> values)
 			{
 				std::vector<char> charBuf;
 				for (auto letter : firstValue)
-					charBuf.push_back(std::tolower(letter));
+					charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 				charBuf.push_back('\0');
 				firstValue = std::string(charBuf.data());

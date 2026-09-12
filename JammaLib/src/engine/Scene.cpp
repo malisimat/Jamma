@@ -555,8 +555,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 					triggerHistory.reserve(stationStruct.TriggerHistory.size());
 					for (const auto& entry : stationStruct.TriggerHistory)
 					{
-						triggerHistory.push_back({ static_cast<TriggerTake::SourceType>(entry.SourceType),
-							entry.SourceTakeId, entry.TargetTakeId });
+						auto sourceType = TriggerTake::SOURCE_ADC;
+						if (entry.SourceType == 1u)
+							sourceType = TriggerTake::SOURCE_LOOPTAKE;
+						else if (entry.SourceType == 2u)
+							sourceType = TriggerTake::SOURCE_STATION;
+						triggerHistory.push_back({ sourceType, entry.SourceTakeId, entry.TargetTakeId });
 					}
 					trigger.value()->RestoreTakes(std::move(triggerHistory));
 					hudTriggers.push_back(trigger.value());

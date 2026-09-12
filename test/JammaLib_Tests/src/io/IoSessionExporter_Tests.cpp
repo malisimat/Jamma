@@ -10,6 +10,7 @@
 #include "engine/LoopTake.h"
 #include "engine/Quantiser.h"
 #include "engine/Station.h"
+#include "engine/Trigger.h"
 #include "io/IoSessionExporter.h"
 #include "io/JamFile.h"
 #include "io/NativeMidiSidecar.h"
@@ -23,6 +24,8 @@ using engine::LoopTakeParams;
 using engine::Quantiser;
 using engine::Station;
 using engine::StationParams;
+using engine::Trigger;
+using engine::TriggerParams;
 using midi::MidiEvent;
 
 class IoSessionExporterTest
@@ -92,6 +95,9 @@ public:
 TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 {
 	auto firstStation = IoSessionExporterTest::MakeStation("first");
+	auto firstTrigger = std::make_shared<Trigger>(TriggerParams{});
+	firstTrigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "prior-take", "saved-take" } });
+	firstStation->AddTrigger(firstTrigger);
 	firstStation->SetAllowedMidiChannels({ 1, 3, 16 });
 	auto firstTake = IoSessionExporterTest::MakeTake("first-take");
 	firstTake->SetMidiQuantisation({ true, midi::MidiQuantisationFraction::Eighth, 0u, 7 });
@@ -163,6 +169,9 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	EXPECT_EQ(2u, jam->Stations.size());
 	ASSERT_EQ(1u, jam->Stations[0].LoopTakes.size());
 	EXPECT_EQ(std::vector<int>({ 1, 3, 16 }), jam->Stations[0].AllowedMidiChannels);
+	ASSERT_EQ(1u, jam->Stations[0].TriggerHistory.size());
+	EXPECT_EQ("prior-take", jam->Stations[0].TriggerHistory[0].SourceTakeId);
+	EXPECT_EQ("saved-take", jam->Stations[0].TriggerHistory[0].TargetTakeId);
 	const auto& savedTake = jam->Stations[0].LoopTakes[0];
 	EXPECT_TRUE(savedTake.MidiQuantEnabled);
 	EXPECT_EQ(97ul, savedTake.MidiPlayLength);
