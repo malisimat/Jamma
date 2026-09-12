@@ -142,6 +142,8 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;

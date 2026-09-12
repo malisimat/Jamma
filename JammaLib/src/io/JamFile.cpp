@@ -588,6 +588,21 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		}
 		return out + "]";
 	};
+	auto audioRoutesToJson = [&](const std::vector<std::vector<unsigned long>>& routes) -> std::string {
+		std::string out = "[";
+		for (size_t i = 0; i < routes.size(); ++i)
+		{
+			if (i > 0) out += ",";
+			out += "{\"input\":" + std::to_string(i) + ",\"outputs\":[";
+			for (size_t j = 0; j < routes[i].size(); ++j)
+			{
+				if (j > 0) out += ",";
+				out += std::to_string(routes[i][j]);
+			}
+			out += "]}";
+		}
+		return out + "]";
+	};
 
 	if (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps)
 	{
@@ -673,6 +688,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 				<< "," << kvUlong("midiPlayLength", take.MidiPlayLength)
 				<< "," << kvStr("midiQuantTransportStart", std::to_string(take.MidiQuantTransportStart))
 				<< "," << quoted("midiStreams") << ":" << midiStreamsToJson(take.MidiStreams);
+			if (take.HasAudioRoutes)
+				ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(take.AudioRoutes);
 			if (!take.VstChain.empty())
 				ss << "," << quoted("vst") << ":" << vstChainToJson(take.VstChain);
 			ss << "}";
@@ -683,6 +700,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			ss << "," << kvIntArray("allowedmidichannels", station.AllowedMidiChannels);
 		if (!station.MidiRoutes.empty())
 			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
+		if (station.HasAudioRoutes)
+			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
 		if (!station.VstChain.empty())
 			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
 		ss << "}";
@@ -1159,6 +1178,53 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 			}
 		}
 	}
+
+	std::vector<std::vector<unsigned long>> audioRoutes;
+	bool hasAudioRoutes = false;
+	iter = json.KeyValues.find("audioRoutes");
+	if (iter != json.KeyValues.end())
+	{
+		hasAudioRoutes = true;
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = array.Array.index() == 0u
+			&& std::get<std::vector<bool>>(array.Array).empty();
+		if (!isEmptyArray && array.Array.index() != 5)
+			return std::nullopt;
+		if (array.Array.index() == 5)
+		{
+			std::vector<bool> seenInputs(MaxLoopsPerTake, false);
+			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(array.Array))
+			{
+				const auto input = Json::GetUnsigned(routeJson, "input");
+				auto outputsIter = routeJson.KeyValues.find("outputs");
+				if (!input || *input >= MaxLoopsPerTake || outputsIter == routeJson.KeyValues.end() || outputsIter->second.index() != 5)
+					return std::nullopt;
+				if (seenInputs[*input])
+					return std::nullopt;
+				seenInputs[*input] = true;
+				const auto& outputs = std::get<Json::JsonArray>(outputsIter->second);
+				const auto isEmptyOutputs = outputs.Array.index() == 0u
+					&& std::get<std::vector<bool>>(outputs.Array).empty();
+				if (!isEmptyOutputs && outputs.Array.index() != 2)
+					return std::nullopt;
+				if (audioRoutes.size() <= *input) audioRoutes.resize(static_cast<size_t>(*input) + 1u);
+				if (!audioRoutes[*input].empty())
+					return std::nullopt;
+				if (outputs.Array.index() == 2)
+				{
+					for (auto output : std::get<std::vector<unsigned long>>(outputs.Array))
+					{
+						if (output >= MaxAudioRouteChannels
+							|| std::find(audioRoutes[*input].begin(), audioRoutes[*input].end(), output) != audioRoutes[*input].end())
+							return std::nullopt;
+						audioRoutes[*input].push_back(output);
+					}
+				}
+			}
+		}
+	}
 	if (loops.empty() && midiStreams.empty())
 		return std::nullopt;
 
@@ -1173,6 +1239,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.MidiPlayLength = midiPlayLength;
 	take.MidiQuantTransportStart = midiQuantTransportStart;
 	take.MidiStreams = std::move(midiStreams);
+	take.AudioRoutes = std::move(audioRoutes);
+	take.HasAudioRoutes = hasAudioRoutes;
 	return take;
 }
 
@@ -1300,6 +1368,53 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
+	std::vector<std::vector<unsigned long>> audioRoutes;
+	bool hasAudioRoutes = false;
+	iter = json.KeyValues.find("audioRoutes");
+	if (iter != json.KeyValues.end())
+	{
+		hasAudioRoutes = true;
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& array = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = array.Array.index() == 0u
+			&& std::get<std::vector<bool>>(array.Array).empty();
+		if (!isEmptyArray && array.Array.index() != 5)
+			return std::nullopt;
+		if (array.Array.index() == 5)
+		{
+			std::vector<bool> seenInputs(MaxAudioRouteChannels, false);
+			for (const auto& routeJson : std::get<std::vector<Json::JsonPart>>(array.Array))
+			{
+				const auto input = Json::GetUnsigned(routeJson, "input");
+				auto outputsIter = routeJson.KeyValues.find("outputs");
+				if (!input || *input >= MaxAudioRouteChannels || outputsIter == routeJson.KeyValues.end() || outputsIter->second.index() != 5)
+					return std::nullopt;
+				if (seenInputs[*input])
+					return std::nullopt;
+				seenInputs[*input] = true;
+				const auto& outputs = std::get<Json::JsonArray>(outputsIter->second);
+				const auto isEmptyOutputs = outputs.Array.index() == 0u
+					&& std::get<std::vector<bool>>(outputs.Array).empty();
+				if (!isEmptyOutputs && outputs.Array.index() != 2)
+					return std::nullopt;
+				if (audioRoutes.size() <= *input) audioRoutes.resize(static_cast<size_t>(*input) + 1u);
+				if (!audioRoutes[*input].empty())
+					return std::nullopt;
+				if (outputs.Array.index() == 2)
+				{
+					for (auto output : std::get<std::vector<unsigned long>>(outputs.Array))
+					{
+						if (output >= MaxAudioRouteChannels
+							|| std::find(audioRoutes[*input].begin(), audioRoutes[*input].end(), output) != audioRoutes[*input].end())
+							return std::nullopt;
+						audioRoutes[*input].push_back(output);
+					}
+				}
+			}
+		}
+	}
+
 	if (name.empty())
 		return std::nullopt;
 
@@ -1313,5 +1428,7 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	allowedMidiChannels.erase(std::unique(allowedMidiChannels.begin(), allowedMidiChannels.end()), allowedMidiChannels.end());
 	station.AllowedMidiChannels = std::move(allowedMidiChannels);
 	station.MidiRoutes = std::move(midiRoutes);
+	station.AudioRoutes = std::move(audioRoutes);
+	station.HasAudioRoutes = hasAudioRoutes;
 	return station;
 }

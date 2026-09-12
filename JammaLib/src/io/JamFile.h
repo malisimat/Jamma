@@ -48,6 +48,7 @@ namespace io
 		static constexpr std::size_t MaxTakesPerStation = 256u;
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
+		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
 		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
 
 		// Sidecars must always be relative to the manifest directory.  This is
@@ -176,6 +177,11 @@ namespace io
 			unsigned long MidiPlayLength = 0;
 			std::uint64_t MidiQuantTransportStart = 0;
 			std::vector<MidiStream> MidiStreams;
+			// One destination-bus list per audio input (loop) mixer.
+			std::vector<std::vector<unsigned long>> AudioRoutes;
+			// Presence is distinct from content: an explicit [] disconnects every input,
+			// while a missing field requests legacy one-to-one defaults.
+			bool HasAudioRoutes = false;
 
 			static std::optional<LoopTake> FromJson(Json::JsonPart json);
 		};
@@ -189,6 +195,9 @@ namespace io
 			std::int32_t StationPhaseOffsetSamps = 0;
 			std::vector<int> AllowedMidiChannels;
 			std::vector<MidiRoute> MidiRoutes;
+			// One destination-output list per station bus mixer.
+			std::vector<std::vector<unsigned long>> AudioRoutes;
+			bool HasAudioRoutes = false;
 
 			static std::optional<Station> FromJson(Json::JsonPart json);
 		};

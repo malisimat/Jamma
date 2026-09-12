@@ -1343,12 +1343,21 @@ void LoopTake::SetupBuffers(unsigned int bufSize)
 void LoopTake::SetNumBusChannels(unsigned int chans)
 {
 	for (auto& mixer : _audioMixers)
-	{
 		mixer->SetMaxChannels(chans);
-	}
+	for (auto& mixer : _backAudioMixers)
+		mixer->SetMaxChannels(chans);
 
 	_masterMixer->SetMaxChannels(chans);
+	// Resize first: GuiRouter removes routes invalidated by a shrink, while
+	// preserving one-to-one defaults staged before the bus count was known.
 	_guiRack->SetNumOutputChannels(chans);
+
+	std::vector<std::vector<unsigned long>> routes(
+		(std::max)(_audioMixers.size(), _backAudioMixers.size()));
+	for (const auto& route : _guiRack->Routes())
+		if (route.first < routes.size())
+			routes[route.first].push_back(route.second);
+	RestoreAudioRoutes(routes);
 }
 
 void LoopTake::Record(std::vector<unsigned int> channels,
@@ -2308,6 +2317,57 @@ std::vector<std::shared_ptr<midi::MidiLoop>> LoopTake::GetMidiLoopSnapshot() con
 	}
 
 	return loops;
+}
+
+std::vector<std::vector<unsigned long>> LoopTake::SnapshotAudioRoutesForExport() const
+{
+	std::vector<std::vector<unsigned long>> routes;
+	for (const auto& mixer : _audioMixers)
+	{
+		std::vector<unsigned long> destinations;
+		if (mixer)
+		{
+			auto params = mixer->GetBehaviourParams();
+			if (const auto* wire = std::get_if<WireMixBehaviourParams>(&params))
+				for (auto channel : wire->Channels) destinations.push_back(channel);
+			else if (const auto* merge = std::get_if<MergeMixBehaviourParams>(&params))
+				for (auto channel : merge->Channels) destinations.push_back(channel);
+		}
+		routes.push_back(std::move(destinations));
+	}
+	return routes;
+}
+
+bool LoopTake::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes)
+{
+	const auto inputCount = (std::max)(_audioMixers.size(), _backAudioMixers.size());
+	if (routes.size() > inputCount)
+		return false;
+
+	std::vector<std::vector<unsigned int>> validated(inputCount);
+	for (std::size_t input = 0u; input < routes.size(); ++input)
+	{
+		for (auto output : routes[input])
+		{
+			if (output >= _guiRack->NumOutputChannels()
+				|| std::find(validated[input].begin(), validated[input].end(), output) != validated[input].end())
+				return false;
+			validated[input].push_back(static_cast<unsigned int>(output));
+		}
+	}
+
+	// Validate the complete map before changing either presentation or audio.
+	_guiRack->ClearRoutes();
+	for (std::size_t input = 0u; input < validated.size(); ++input)
+	{
+		for (auto output : validated[input])
+			_guiRack->AddRoute(static_cast<unsigned int>(input), static_cast<unsigned int>(output));
+	}
+	for (std::size_t input = 0u; input < _audioMixers.size(); ++input)
+		_audioMixers[input]->SetChannels(validated[input]);
+	for (std::size_t input = 0u; input < _backAudioMixers.size(); ++input)
+		_backAudioMixers[input]->SetChannels(validated[input]);
+	return true;
 }
 
 bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const

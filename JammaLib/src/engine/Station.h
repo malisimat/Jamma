@@ -97,6 +97,8 @@ namespace engine
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 
 		virtual std::string ClassName() const override { return "Station"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }

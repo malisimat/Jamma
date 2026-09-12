@@ -134,6 +134,8 @@ namespace io
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
+				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
+				jamStation.HasAudioRoutes = true;
 				const auto routes = station->SnapshotMidiVstRoutesForExport();
 				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
 				{
@@ -156,6 +158,8 @@ namespace io
 					jamTake.MidiQuantEnabled = take->MidiQuantisation().Enabled;
 					jamTake.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(take->MidiQuantisation().Fraction);
 					jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
+					jamTake.AudioRoutes = take->SnapshotAudioRoutesForExport();
+					jamTake.HasAudioRoutes = true;
 
 					const auto audioLoops = take->GetLoops();
 					for (std::size_t loopIndex = 0u; loopIndex < audioLoops.size(); ++loopIndex)

@@ -334,6 +334,52 @@ TEST(JamFile, PreservesZeroIndexedMidiRoute)
 	EXPECT_FALSE(station->MidiRoutes[0].IsLive);
 }
 
+TEST(JamFile, RoundTripsTakeAndStationAudioRoutes)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto text = "{\"formatVersion\":\"0.1.0\",\"name\":\"jam\","
+		"\"transport\":{\"masterLengthSamps\":100,\"quantiseSamps\":1,\"absoluteSamplePos\":\"0\"},"
+		"\"stations\":[{\"name\":\"station\",\"takes\":[{\"name\":\"take\",\"loops\":[" + loop +
+		"],\"audioRoutes\":[{\"input\":0,\"outputs\":[1,0]}]}],"
+		"\"audioRoutes\":[{\"input\":0,\"outputs\":[1]}]}]}";
+	auto parsed = JamFile::FromStream(std::stringstream(text));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1u, parsed->Stations.size());
+	EXPECT_TRUE(parsed->Stations[0].HasAudioRoutes);
+	EXPECT_TRUE(parsed->Stations[0].LoopTakes[0].HasAudioRoutes);
+	ASSERT_EQ(1u, parsed->Stations[0].AudioRoutes.size());
+	ASSERT_EQ((std::vector<unsigned long>{1}), parsed->Stations[0].AudioRoutes[0]);
+	ASSERT_EQ((std::vector<unsigned long>{1, 0}), parsed->Stations[0].LoopTakes[0].AudioRoutes[0]);
+
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(parsed.value(), output));
+	auto roundTrip = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(roundTrip.has_value());
+	EXPECT_EQ(parsed->Stations[0].LoopTakes[0].AudioRoutes, roundTrip->Stations[0].LoopTakes[0].AudioRoutes);
+}
+
+TEST(JamFile, DistinguishesMissingAndExplicitlyEmptyAudioRoutes)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto take = "{\"name\":\"take\",\"loops\":[" + loop + "]}";
+	const auto missingText = std::string("{\"name\":\"jam\",\"stations\":[{\"name\":\"station\",\"takes\":[") + take + "]}]}";
+	auto missing = JamFile::FromStream(std::stringstream(missingText));
+	ASSERT_TRUE(missing.has_value());
+	ASSERT_EQ(1u, missing->Stations.size());
+	EXPECT_FALSE(missing->Stations[0].HasAudioRoutes);
+
+	const auto emptyText = std::string("{\"name\":\"jam\",\"stations\":[{\"name\":\"station\",\"takes\":[") + take + "],\"audioRoutes\":[]}]}" ;
+	auto empty = JamFile::FromStream(std::stringstream(emptyText));
+	ASSERT_TRUE(empty.has_value());
+	ASSERT_EQ(1u, empty->Stations.size());
+	EXPECT_TRUE(empty->Stations[0].HasAudioRoutes);
+	EXPECT_TRUE(empty->Stations[0].AudioRoutes.empty());
+
+	std::stringstream serialized;
+	ASSERT_TRUE(JamFile::ToStream(empty.value(), serialized));
+	EXPECT_NE(std::string::npos, serialized.str().find("\"audioRoutes\":[]"));
+}
+
 TEST(JamFile, SignedTransportOffsetClampsEndpointsAndDefaultsMissingToZero) {
 	for (const auto [serialized, expected] : {
 		std::pair{ "-2", -1.0 },

@@ -171,9 +171,23 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		auto take = LoopTake::FromFile(takeParams, takeStruct, dir);
 		
 		if (take.has_value())
+		{
 			station->AddTake(take.value());
+			// AddTake establishes the station bus count. Saved routes are applied
+			// afterwards so its normal one-to-one defaults cannot overwrite them.
+			if (takeStruct.HasAudioRoutes && !take.value()->RestoreAudioRoutes(takeStruct.AudioRoutes))
+			{
+				std::cout << "Load: invalid audio routes in take " << takeStruct.Name << std::endl;
+				return std::nullopt;
+			}
+		}
 
 		takeCount++;
+	}
+	if (stationStruct.HasAudioRoutes && !station->RestoreAudioRoutes(stationStruct.AudioRoutes))
+	{
+		std::cout << "Load: invalid audio routes in station " << stationStruct.Name << std::endl;
+		return std::nullopt;
 	}
 	// Empty stations are valid saved state: a station may contain its VST chain,
 	// routing configuration, or simply be ready for a new take. Only malformed
@@ -244,6 +258,64 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	}
 
 	return station;
+}
+
+std::vector<std::vector<unsigned long>> Station::SnapshotAudioRoutesForExport() const
+{
+	std::vector<std::vector<unsigned long>> routes;
+	for (const auto& mixer : _audioMixers)
+	{
+		std::vector<unsigned long> destinations;
+		if (mixer)
+		{
+			auto params = mixer->GetBehaviourParams();
+			if (const auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
+				for (auto channel : wire->Channels) destinations.push_back(channel);
+			else if (const auto* merge = std::get_if<audio::MergeMixBehaviourParams>(&params))
+				for (auto channel : merge->Channels) destinations.push_back(channel);
+		}
+		routes.push_back(std::move(destinations));
+	}
+	return routes;
+}
+
+bool Station::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes)
+{
+	const auto inputCount = (std::max)(_audioMixers.size(), _backAudioMixers.size());
+	if (routes.size() > inputCount)
+		return false;
+
+	unsigned long requiredOutputCount = 0u;
+	for (const auto& destinations : routes)
+		for (auto output : destinations)
+		{
+			if (output >= io::JamFile::MaxAudioRouteChannels)
+				return false;
+			requiredOutputCount = (std::max)(requiredOutputCount, output + 1u);
+		}
+	if (requiredOutputCount > _guiRack->NumOutputChannels())
+		_guiRack->SetNumOutputChannels(static_cast<unsigned int>(requiredOutputCount));
+
+	std::vector<std::vector<unsigned int>> validated(inputCount);
+	for (std::size_t input = 0u; input < routes.size(); ++input)
+		for (auto output : routes[input])
+		{
+			if (std::find(validated[input].begin(), validated[input].end(), output) != validated[input].end())
+				return false;
+			validated[input].push_back(static_cast<unsigned int>(output));
+		}
+
+	_guiRack->ClearRoutes();
+	for (std::size_t input = 0u; input < validated.size(); ++input)
+	{
+		for (auto output : validated[input])
+			_guiRack->AddRoute(static_cast<unsigned int>(input), static_cast<unsigned int>(output));
+	}
+	for (std::size_t input = 0u; input < _audioMixers.size(); ++input)
+		_audioMixers[input]->SetChannels(validated[input]);
+	for (std::size_t input = 0u; input < _backAudioMixers.size(); ++input)
+		_backAudioMixers[input]->SetChannels(validated[input]);
+	return true;
 }
 
 AudioMixerParams Station::GetMixerParams(utils::Size2d stationSize,
@@ -1763,7 +1835,6 @@ void Station::SetNumBusChannels(unsigned int chans)
 		if (i < _guiRack->NumOutputChannels())
 			_guiRack->AddRoute(i, i);
 	}
-
 	_vstBlockScratch.resize(static_cast<size_t>(chans) * constants::MaxBlockSize);
 	_vstBlockPtrs.resize(chans);
 	for (unsigned int i = 0; i < chans; i++)
