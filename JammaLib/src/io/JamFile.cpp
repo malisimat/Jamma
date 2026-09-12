@@ -222,7 +222,6 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		if (iter != jamParams.KeyValues.end() && jamParams.KeyValues["quantisesamps"].index() == 2)
 			jam.QuantiseSamps = std::get<unsigned long>(jamParams.KeyValues["quantisesamps"]);
 	}
-
 	// Current manifests carry all local transport data in one object. Legacy
 	// top-level fields above are intentionally still accepted as 0.0.0 input.
 	iter = jamParams.KeyValues.find("transport");
@@ -234,6 +233,18 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 			return std::nullopt;
 		}
 		const auto& transport = std::get<Json::JsonPart>(iter->second);
+		bool transportInitialised = true;
+		const auto initialisedIter = transport.KeyValues.find("initialized");
+		if (initialisedIter != transport.KeyValues.end())
+		{
+			if (initialisedIter->second.index() != 0)
+			{
+				std::cout << "JamFile: invalid transport initialized flag" << std::endl;
+				return std::nullopt;
+			}
+			transportInitialised = std::get<bool>(initialisedIter->second);
+		}
+		jam.TransportInitialised = transportInitialised;
 		const auto readUnsigned = [](const Json::JsonPart& object, const char* key, unsigned long& out) -> bool
 		{
 			auto found = object.KeyValues.find(key);
@@ -246,29 +257,30 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		unsigned long quantise = 0u;
 		std::uint64_t absolute = 0u;
 		const auto absoluteIter = transport.KeyValues.find("absoluteSamplePos");
-		if (!readUnsigned(transport, "masterLengthSamps", masterLength) || !readUnsigned(transport, "quantiseSamps", quantise)
-			|| absoluteIter == transport.KeyValues.end() || absoluteIter->second.index() != 4 || masterLength == 0u || masterLength > MaxLoopLengthSamps || quantise == 0u)
+		if (transportInitialised)
 		{
-			std::cout << "JamFile: invalid essential transport field" << std::endl;
-			return std::nullopt;
-		}
-		const auto absoluteValue = ParseStrictUint64(std::get<std::string>(absoluteIter->second));
-		if (!absoluteValue.has_value())
-		{
-			std::cout << "JamFile: invalid absoluteSamplePos" << std::endl;
-			return std::nullopt;
-		}
-		absolute = *absoluteValue;
-		jam.MasterLengthSamps = masterLength;
-		jam.QuantiseSamps = static_cast<unsigned int>(quantise);
-		jam.AbsoluteSamplePos = absolute;
-		if (jam.AbsoluteSamplePos % jam.MasterLengthSamps >= jam.MasterLengthSamps)
-			return std::nullopt;
-		const auto quantisationIter = transport.KeyValues.find("quantisation");
-		if (quantisationIter != transport.KeyValues.end() && quantisationIter->second.index() == 4)
-		{
-			const auto& text = std::get<std::string>(quantisationIter->second);
-			jam.Quantisation = text == "multiple" ? utils::Timer::QUANTISE_MULTIPLE : text == "power" ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_OFF;
+			if (!readUnsigned(transport, "masterLengthSamps", masterLength) || !readUnsigned(transport, "quantiseSamps", quantise)
+				|| absoluteIter == transport.KeyValues.end() || absoluteIter->second.index() != 4 || masterLength == 0u || masterLength > MaxLoopLengthSamps || quantise == 0u)
+			{
+				std::cout << "JamFile: invalid essential transport field" << std::endl;
+				return std::nullopt;
+			}
+			const auto absoluteValue = ParseStrictUint64(std::get<std::string>(absoluteIter->second));
+			if (!absoluteValue.has_value())
+			{
+				std::cout << "JamFile: invalid absoluteSamplePos" << std::endl;
+				return std::nullopt;
+			}
+			absolute = *absoluteValue;
+			jam.MasterLengthSamps = masterLength;
+			jam.QuantiseSamps = static_cast<unsigned int>(quantise);
+			jam.AbsoluteSamplePos = absolute;
+			const auto quantisationIter = transport.KeyValues.find("quantisation");
+			if (quantisationIter != transport.KeyValues.end() && quantisationIter->second.index() == 4)
+			{
+				const auto& text = std::get<std::string>(quantisationIter->second);
+				jam.Quantisation = text == "multiple" ? utils::Timer::QUANTISE_MULTIPLE : text == "power" ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_OFF;
+			}
 		}
 		const auto midiStateIter = transport.KeyValues.find("globalMidiQuantState");
 		if (midiStateIter != transport.KeyValues.end() && midiStateIter->second.index() == 4)
@@ -295,6 +307,16 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 	{
 		std::cout << "JamFile: current format requires transport" << std::endl;
 		return std::nullopt;
+	}
+	if (!jam.TransportInitialised)
+	{
+		for (const auto& station : jam.Stations)
+			for (const auto& take : station.LoopTakes)
+				if (!take.Loops.empty() || !take.MidiStreams.empty())
+				{
+					std::cout << "JamFile: uninitialised transport cannot contain recorded loops" << std::endl;
+					return std::nullopt;
+				}
 	}
 
 	iter = jamParams.KeyValues.find("globalmidiquantstate");
@@ -604,7 +626,7 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		return out + "]";
 	};
 
-	if (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps)
+	if (jam.TransportInitialised && (jam.MasterLengthSamps == 0u || jam.MasterLengthSamps > MaxLoopLengthSamps))
 	{
 		std::cout << "JamFile: refusing to write invalid local master length" << std::endl;
 		return false;
@@ -620,6 +642,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 				return false;
 		for (const auto& take : station.LoopTakes)
 		{
+			if (!jam.TransportInitialised && (!take.Loops.empty() || !take.MidiStreams.empty()))
+				return false;
 			if (take.Loops.size() > MaxLoopsPerTake || take.MidiStreams.size() > MaxMidiStreamsPerTake)
 				return false;
 			for (const auto& loop : take.Loops)
@@ -634,15 +658,20 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
 
 	ss << "{";
-	ss << kvStr("formatVersion", "0.1.0") << ",";
+	ss << kvStr("formatVersion", "0.2.0") << ",";
 	ss << kvStr("name", jam.Name) << ",";
 	ss << quoted("transport") << ":{";
-	ss << kvUlong("masterLengthSamps", jam.MasterLengthSamps) << ",";
-	ss << kvUlong("quantiseSamps", jam.QuantiseSamps) << ",";
-	ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	ss << kvBool("initialized", jam.TransportInitialised) << ",";
+	if (jam.TransportInitialised)
+	{
+		ss << kvUlong("masterLengthSamps", jam.MasterLengthSamps) << ",";
+		ss << kvUlong("quantiseSamps", jam.QuantiseSamps) << ",";
+		ss << kvStr("quantisation", quantStr(jam.Quantisation)) << ",";
+	}
 	ss << kvStr("globalMidiQuantState", midiGlobalQuantStr(jam.GlobalMidiQuantStateValue)) << ",";
 	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
-	ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
+	if (jam.TransportInitialised)
+		ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
 	ss << kvDouble("transportOffsetLoopFrac", transportOffsetLoopFrac);
 	ss << "},";
 	ss << quoted("stations") << ":[";

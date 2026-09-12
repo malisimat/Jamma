@@ -583,20 +583,29 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	if (scene->_hudPanel)
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
-	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
-	if (jamStruct.Version == io::JamFile::VERSION_V)
+	if (!jamStruct.TransportInitialised)
 	{
-		auto clock = scene->_quantisation.Clock();
-		if (!clock || jamStruct.MasterLengthSamps == 0ul)
+		// No local geometry was saved. The first completed recording seeds the
+		// clock from its physical length under the active user timing policy.
+		scene->_quantisation.Clear(false);
+	}
+	else
+	{
+		scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+		if (jamStruct.Version == io::JamFile::VERSION_V)
 		{
-			std::cout << "Load: invalid local transport state" << std::endl;
-			return std::nullopt;
-		}
-		clock->SetSeedSourceLength(jamStruct.MasterLengthSamps);
-		if (!clock->InitialiseAbsoluteSamplePos(jamStruct.AbsoluteSamplePos))
-		{
-			std::cout << "Load: invalid local transport state" << std::endl;
-			return std::nullopt;
+			auto clock = scene->_quantisation.Clock();
+			if (!clock || jamStruct.MasterLengthSamps == 0ul)
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
+			clock->SetSeedSourceLength(jamStruct.MasterLengthSamps);
+			if (!clock->InitialiseAbsoluteSamplePos(jamStruct.AbsoluteSamplePos))
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
 		}
 	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);

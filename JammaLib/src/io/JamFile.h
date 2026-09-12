@@ -42,7 +42,7 @@ namespace io
 		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
 		static constexpr unsigned int CurrentFormatMajor = 0u;
-		static constexpr unsigned int CurrentFormatMinor = 1u;
+		static constexpr unsigned int CurrentFormatMinor = 2u;
 		static constexpr unsigned int CurrentFormatPatch = 0u;
 		static constexpr std::size_t MaxStations = 256u;
 		static constexpr std::size_t MaxTakesPerStation = 256u;
@@ -226,6 +226,9 @@ namespace io
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
+		// A loopless session has no local master geometry. Its first successful
+		// recording establishes the master length, grain, and BPI.
+		bool TransportInitialised = true;
 		// Absolute local master sample coordinate. It is independent of TimerTicks,
 		// which remains legacy compatibility metadata only.
 		unsigned long MasterLengthSamps = 1;

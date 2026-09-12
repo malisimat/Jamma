@@ -327,6 +327,35 @@ TEST(JamFile, CurrentTransportOwnsLocalStateAndIgnoresLegacyNinjamFields)
 	EXPECT_FALSE(JamFile::FromStream(std::stringstream(zeroGrain)).has_value());
 }
 
+TEST(JamFile, RoundTripsUninitialisedCurrentTransport)
+{
+	JamFile jam;
+	jam.Name = "station configuration";
+	jam.TransportInitialised = false;
+	JamFile::Station station;
+	station.Name = "station";
+	station.StationType = 0u;
+	jam.Stations.push_back(std::move(station));
+
+	std::stringstream output;
+	ASSERT_TRUE(JamFile::ToStream(jam, output));
+	const auto text = output.str();
+	EXPECT_NE(std::string::npos, text.find("\"formatVersion\":\"0.2.0\""));
+	EXPECT_NE(std::string::npos, text.find("\"initialized\":false"));
+	EXPECT_EQ(std::string::npos, text.find("\"masterLengthSamps\""));
+
+	auto parsed = JamFile::FromStream(std::move(output));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_FALSE(parsed->TransportInitialised);
+	EXPECT_EQ(1u, parsed->Stations.size());
+
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "0");
+	const auto malformed = std::string("{\"formatVersion\":\"0.2.0\",\"name\":\"jam\","
+		"\"transport\":{\"initialized\":false},\"stations\":[{\"name\":\"station\","
+		"\"takes\":[{\"name\":\"take\",\"loops\":[") + loop + "]}]}]}";
+	EXPECT_FALSE(JamFile::FromStream(std::stringstream(malformed)).has_value());
+}
+
 TEST(JamFile, PreservesZeroIndexedMidiRoute)
 {
 	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");

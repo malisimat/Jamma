@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "IoSessionExporter.h"
+#include <algorithm>
 #include <sstream>
 #include <fstream>
 #include <utility>
@@ -111,14 +112,28 @@ namespace io
 			AudioPauseGuard pause(device);
 			std::scoped_lock lock(sceneMutex);
 			const auto clock = quantisation.Clock();
-			if (!clock || clock->SeedSourceLength() == 0ul)
+			const auto hasSavedLoopContent = std::any_of(stations.begin(), stations.end(),
+				[](const std::shared_ptr<Station>& station)
+				{
+					if (!station || station->IsRemote())
+						return false;
+					const auto& takes = station->GetLoopTakes();
+					return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
+						{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
+				});
+			if (clock && clock->SeedSourceLength() != 0ul)
+			{
+				jam.MasterLengthSamps = clock->SeedSourceLength();
+				jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
+				jam.Quantisation = clock->Quantisation();
+			}
+			else if (hasSavedLoopContent)
 			{
 				std::cout << "Export: local master timer is not initialised" << std::endl;
 				return false;
 			}
-			jam.MasterLengthSamps = clock->SeedSourceLength();
-			jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
-			jam.Quantisation = clock->Quantisation();
+			else
+				jam.TransportInitialised = false;
 
 			for (std::size_t stationIndex = 0u; stationIndex < stations.size(); ++stationIndex)
 			{

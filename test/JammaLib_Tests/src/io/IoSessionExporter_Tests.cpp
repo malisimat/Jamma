@@ -142,7 +142,7 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 
 	audio::AudioStreamParams stream{};
 	stream.SampleRate = 48000u;
-	io::UserConfig user;
+	io::UserConfig user{};
 	std::mutex sceneMutex;
 	const auto dir = IoSessionExporterTest::MakeDirectory();
 	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ firstStation, secondStation },
@@ -225,6 +225,36 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 		restoredTake.value()->GetLoops()[0]->BodyPlayIndex());
 
 	midiFile.close();
+	manifest.close();
+	std::filesystem::remove_all(dir);
+}
+
+TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
+{
+	auto station = IoSessionExporterTest::MakeStation("configured station");
+	station->SetAllowedMidiChannels({ 2, 9 });
+	station->CommitChanges();
+	Quantiser quantiser;
+	quantiser.SetClock(std::make_shared<utils::Timer>());
+	audio::AudioStreamParams stream{};
+	io::UserConfig user{};
+	std::mutex sceneMutex;
+	const auto dir = IoSessionExporterTest::MakeDirectory();
+
+	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, quantiser,
+		io::JamFile::GlobalMidiQuantState::Off, 0.0, user, stream, nullptr,
+		sceneMutex, nullptr, dir.wstring()));
+
+	std::ifstream manifest(dir / "session.jam");
+	ASSERT_TRUE(manifest);
+	std::stringstream contents;
+	contents << manifest.rdbuf();
+	auto jam = io::JamFile::FromStream(std::move(contents));
+	ASSERT_TRUE(jam.has_value());
+	EXPECT_FALSE(jam->TransportInitialised);
+	ASSERT_EQ(1u, jam->Stations.size());
+	EXPECT_EQ("configured station", jam->Stations[0].Name);
+
 	manifest.close();
 	std::filesystem::remove_all(dir);
 }
