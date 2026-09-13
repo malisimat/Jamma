@@ -1620,6 +1620,12 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 void Scene::Shutdown()
 {
 	_isSceneQuitting.store(true, std::memory_order_release);
+	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
+	// closing an editor or releasing a plugin: the callback can be dispatching
+	// VST processing, MIDI, or recorded parameter automation.
+	CloseAudio();
+	CloseAllVstEditorWindows();
+
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
@@ -1639,11 +1645,12 @@ void Scene::Shutdown()
 	ForceUnloadAllVstPlugins();
 
 	CloseGlobalKeyCapture();
-	CloseAudio();
 }
 
 void Scene::ForceUnloadAllVstPlugins()
 {
+	// Shutdown() stops the audio device before reaching here.  Releasing a VST
+	// while its callback may call SetParameter/ProcessBlock is not safe.
 	std::scoped_lock lock(_sceneMutex);
 	for (auto& station : _stations)
 	{

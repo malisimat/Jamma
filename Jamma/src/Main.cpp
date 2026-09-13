@@ -492,10 +492,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		{
 			if (msg.message == WM_QUIT)
 			{
-				scene.value()->CloseAllVstEditorWindows();
-				scene.value()->ForceUnloadAllVstPlugins();
+				scene.value()->Shutdown();
 				vst::DrainUiThreadDestroyQueue();
-				scene.value()->CloseAudio();
 				active = false;
 				break;
 			}
@@ -566,7 +564,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 						// Editors, queued jobs, and plugin instances belong to the outgoing
 						// JAM. Tear them down completely before binding the window to the
 						// already-constructed replacement Scene.
-						scene.value()->CloseAllVstEditorWindows();
 						scene.value()->Shutdown();
 						window.ReplaceScene(*replacement.value());
 						scene = std::move(replacement);
@@ -588,12 +585,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		vst::DrainUiThreadDestroyQueue();
 	}
 
-	// Close VST editor windows while the main thread's COM STA is still valid.
-	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
-	// undefined behaviour. scene is still alive here since it goes out of scope
-	// after the explicit CoUninitialize() call below.
+	// Shutdown stops the audio callback before it closes VST editor windows and
+	// releases their plugins, while this main thread's COM STA is still valid.
 	scene.value()->Shutdown();
-	scene.value()->CloseAllVstEditorWindows();
 
 	if (defaults.has_value())
 	{
