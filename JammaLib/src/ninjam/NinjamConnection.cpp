@@ -179,7 +179,12 @@ bool NinjamConnection::_StartConnectAttempt(std::chrono::steady_clock::time_poin
 		return false;
 	}
 
-	_EnsureWorkDir();
+	if (!_EnsureWorkDir())
+	{
+		_lastError = "NINJAM work directory is unavailable";
+		_state = ConnectionState::Failed;
+		return false;
+	}
 
 	_client->LicenseAgreementCallback = [](void*, const char*) { return 1; };
 	_client->config_savelocalaudio = -1;
@@ -846,28 +851,21 @@ bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	return true;
 }
 
-void NinjamConnection::_EnsureWorkDir()
+bool NinjamConnection::_EnsureWorkDir()
 {
-	if (_workDir.empty())
+	const auto configuredPath = std::filesystem::path(_workDir);
+	if (_workDir.empty() || configuredPath.is_relative())
 	{
-		try
-		{
-			auto path = std::filesystem::temp_directory_path() / "Jamma" / "Ninjam";
-			_workDir = path.string();
-		}
-		catch (...)
-		{
-			_workDir = ".\\ninjam-work";
-		}
+		std::error_code error;
+		auto path = std::filesystem::temp_directory_path(error) / "Jamma" / "Ninjam";
+		if (error)
+			return false;
+		_workDir = path.string();
 	}
 
-	try
-	{
-		std::filesystem::create_directories(_workDir);
-	}
-	catch (...)
-	{
-	}
+	std::error_code error;
+	std::filesystem::create_directories(_workDir, error);
+	return !error;
 }
 
 void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames,

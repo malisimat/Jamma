@@ -28,6 +28,7 @@ Treat this as a real-time audio codebase: prefer predictable, low-latency-safe b
 - Build only the affected project unless target selection is genuinely unclear.
 - For direct .vcxproj builds, pass an absolute SolutionDir with exactly one trailing backslash.
 - Before every build or native-test run, read the local `.vscode/tasks.json` when it exists. It is the authoritative machine-specific source for installed build tools, their locations, and explicit build commands; some launch environments require the command provided in `doc/build.md` to execute it successfully.
+- For Windows MSBuild environment errors, consult `Troubleshooting` section in `doc/build.md`.
 - `.vscode/tasks.json` is intentionally local-only: its commands may vary by machine and may use any valid tool location. Do not edit it unless the user explicitly asks. If it is absent or lacks an applicable command, report that limitation instead of guessing an MSBuild path.
 - Detailed setup, build, test, and task guidance live in doc/build.md.
 - .vscode/tasks.json is local-only and ignored by git; users can start from doc/vscode-tasks.example.json.

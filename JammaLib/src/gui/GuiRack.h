@@ -77,6 +77,7 @@ namespace gui
 		void SetNumOutputChannels(unsigned int channels);
 		void AddRoute(unsigned int inputChan, unsigned int outputChan);
 		void ClearRoutes();
+		const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const { return _router->Routes(); }
 		void SetAllowedMidiChannels(const std::vector<int>& channels, bool bypassUpdates);
 
 		std::shared_ptr<gui::GuiSlider> GetMasterSlider() const;
