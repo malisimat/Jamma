@@ -189,6 +189,8 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		std::cout << "Load: invalid audio routes in station " << stationStruct.Name << std::endl;
 		return std::nullopt;
 	}
+	if (!station->RestoreMixerLevels(stationStruct.MasterLevel, stationStruct.BusLevels))
+		return std::nullopt;
 	// Empty stations are valid saved state: a station may contain its VST chain,
 	// routing configuration, or simply be ready for a new take. Only malformed
 	// station data should prevent the station from being reconstructed.
@@ -277,6 +279,47 @@ std::vector<std::vector<unsigned long>> Station::SnapshotAudioRoutesForExport() 
 		routes.push_back(std::move(destinations));
 	}
 	return routes;
+}
+
+double Station::MasterLevelForExport() const
+{
+	return _masterMixer ? _masterMixer->UnmutedLevel() : AudioMixer::DefaultLevel;
+}
+
+std::vector<double> Station::BusLevelsForExport() const
+{
+	std::vector<double> levels;
+	levels.reserve(_audioMixers.size());
+	for (const auto& mixer : _audioMixers)
+		levels.push_back(mixer ? mixer->UnmutedLevel() : AudioMixer::DefaultLevel);
+	return levels;
+}
+
+bool Station::RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels)
+{
+	if (!std::isfinite(masterLevel) || std::any_of(busLevels.begin(), busLevels.end(),
+		[](double level) { return !std::isfinite(level); }))
+		return false;
+	if (busLevels.size() > (std::max)(_audioMixers.size(), _backAudioMixers.size()))
+		return false;
+	if (_masterMixer)
+		_masterMixer->SetUnmutedLevel(masterLevel);
+	if (_guiRack)
+	{
+		if (const auto slider = _guiRack->GetMasterSlider())
+			slider->SetValue(masterLevel, true);
+	}
+	for (std::size_t index = 0u; index < busLevels.size(); ++index)
+	{
+		if (index < _audioMixers.size() && _audioMixers[index]) _audioMixers[index]->SetUnmutedLevel(busLevels[index]);
+		if (index < _backAudioMixers.size() && _backAudioMixers[index]) _backAudioMixers[index]->SetUnmutedLevel(busLevels[index]);
+		if (_guiRack)
+		{
+			if (const auto slider = _guiRack->GetChannelSlider(static_cast<unsigned int>(index)))
+				slider->SetValue(busLevels[index], true);
+		}
+	}
+	return true;
 }
 
 bool Station::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes)

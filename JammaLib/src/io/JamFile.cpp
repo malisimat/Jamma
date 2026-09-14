@@ -682,6 +682,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 		if (stationIndex > 0) ss << ",";
 		ss << "{" << kvStr("name", station.Name) << ","
 			<< kvUlong("stationtype", station.StationType) << ","
+			<< kvDouble("masterLevel", station.MasterLevel) << ","
+			<< quoted("busLevels") << ":[";
+		for (size_t busIndex = 0; busIndex < station.BusLevels.size(); ++busIndex)
+		{
+			if (busIndex > 0) ss << ",";
+			ss << formatDouble(station.BusLevels[busIndex]);
+		}
+		ss << "],"
 			<< kvInt("stationphaseoffsetsamps", station.StationPhaseOffsetSamps) << ","
 			<< quoted("takes") << ":[";
 
@@ -690,6 +698,14 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			const auto& take = station.LoopTakes[takeIndex];
 			if (takeIndex > 0) ss << ",";
 			ss << "{" << kvStr("name", take.Name) << ","
+				<< kvDouble("masterLevel", take.MasterLevel) << ","
+				<< quoted("busLevels") << ":[";
+			for (size_t busIndex = 0; busIndex < take.BusLevels.size(); ++busIndex)
+			{
+				if (busIndex > 0) ss << ",";
+				ss << formatDouble(take.BusLevels[busIndex]);
+			}
+			ss << "],"
 				<< kvBool("midiquantenabled", take.MidiQuantEnabled) << ","
 				<< kvInt("midiquantfraction", static_cast<std::int32_t>(take.MidiQuantFraction)) << ","
 				<< kvInt("takephaseoffsetsamps", take.TakePhaseOffsetSamps) << ","
@@ -1073,6 +1089,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	bool midiQuantEnabled = false;
 	int midiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 	std::int32_t takePhaseOffsetSamps = 0;
+	double masterLevel = 1.0;
+	std::vector<double> busLevels;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -1105,6 +1123,29 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 
 	if (name.empty())
 		return std::nullopt;
+	if ((iter = json.KeyValues.find("masterLevel")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 3 || !std::isfinite(std::get<double>(iter->second))) return std::nullopt;
+		masterLevel = std::get<double>(iter->second);
+	}
+	if ((iter = json.KeyValues.find("busLevels")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 5) return std::nullopt;
+		const auto& values = std::get<Json::JsonArray>(iter->second);
+		if (values.Array.index() == 3)
+			for (const auto level : std::get<std::vector<double>>(values.Array))
+			{
+				if (!std::isfinite(level)) return std::nullopt;
+				busLevels.push_back(level);
+			}
+		else if (values.Array.index() == 2)
+			for (const auto level : std::get<std::vector<unsigned long>>(values.Array))
+				busLevels.push_back(static_cast<double>(level));
+		else if (values.Array.index() == 1)
+			for (const auto level : std::get<std::vector<long>>(values.Array))
+				busLevels.push_back(static_cast<double>(level));
+		else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
+	}
 
 	iter = json.KeyValues.find("takephaseoffsetsamps");
 	if (iter != json.KeyValues.end())
@@ -1277,6 +1318,8 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 
 	LoopTake take;
 	take.Name = name;
+	take.MasterLevel = masterLevel;
+	take.BusLevels = std::move(busLevels);
 	take.Loops = loops;
 	take.VstChain = vstChain;
 	take.MidiQuantEnabled = midiQuantEnabled;
@@ -1299,6 +1342,8 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::int32_t stationPhaseOffsetSamps = 0;
 	std::vector<int> allowedMidiChannels;
 	std::vector<TriggerHistoryEntry> triggerHistory;
+	double masterLevel = 1.0;
+	std::vector<double> busLevels;
 
 	auto iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
@@ -1496,10 +1541,35 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 
 	if (name.empty())
 		return std::nullopt;
+	if ((iter = json.KeyValues.find("masterLevel")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 3 || !std::isfinite(std::get<double>(iter->second))) return std::nullopt;
+		masterLevel = std::get<double>(iter->second);
+	}
+	if ((iter = json.KeyValues.find("busLevels")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 5) return std::nullopt;
+		const auto& values = std::get<Json::JsonArray>(iter->second);
+		if (values.Array.index() == 3)
+			for (const auto level : std::get<std::vector<double>>(values.Array))
+			{
+				if (!std::isfinite(level)) return std::nullopt;
+				busLevels.push_back(level);
+			}
+		else if (values.Array.index() == 2)
+			for (const auto level : std::get<std::vector<unsigned long>>(values.Array))
+				busLevels.push_back(static_cast<double>(level));
+		else if (values.Array.index() == 1)
+			for (const auto level : std::get<std::vector<long>>(values.Array))
+				busLevels.push_back(static_cast<double>(level));
+		else if (!(values.Array.index() == 0 && std::get<std::vector<bool>>(values.Array).empty())) return std::nullopt;
+	}
 
 	Station station;
 	station.Name = name;
 	station.StationType = stationType;
+	station.MasterLevel = masterLevel;
+	station.BusLevels = std::move(busLevels);
 	station.LoopTakes = takes;
 	station.VstChain = vstChain;
 	station.StationPhaseOffsetSamps = stationPhaseOffsetSamps;

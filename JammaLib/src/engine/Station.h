@@ -98,6 +98,9 @@ namespace engine
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		double MasterLevelForExport() const;
+		std::vector<double> BusLevelsForExport() const;
+		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 
 		virtual std::string ClassName() const override { return "Station"; }

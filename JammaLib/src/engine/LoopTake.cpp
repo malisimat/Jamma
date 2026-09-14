@@ -1,6 +1,7 @@
 #include "LoopTake.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -257,6 +258,11 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 			}
 
 			take->AddLoop(loop.value());
+			if (const auto slider = take->_guiRack->GetChannelSlider(
+				static_cast<unsigned int>(take->_backLoops.size() - 1u)))
+			{
+				slider->SetValue(loopStruct.Level, true);
+			}
 			hasAudioLoop = true;
 		}
 		else
@@ -345,6 +351,8 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		std::cout << "Load: skipped empty take " << takeStruct.Name << std::endl;
 		return std::nullopt;
 	}
+	if (!take->RestoreMixerLevels(takeStruct.MasterLevel, takeStruct.BusLevels))
+		return std::nullopt;
 	return take;
 }
 
@@ -2336,6 +2344,42 @@ std::vector<std::vector<unsigned long>> LoopTake::SnapshotAudioRoutesForExport()
 		routes.push_back(std::move(destinations));
 	}
 	return routes;
+}
+
+double LoopTake::MasterLevelForExport() const
+{
+	return _masterMixer ? _masterMixer->UnmutedLevel() : AudioMixer::DefaultLevel;
+}
+
+std::vector<double> LoopTake::BusLevelsForExport() const
+{
+	std::vector<double> levels;
+	levels.reserve(_audioMixers.size());
+	for (const auto& mixer : _audioMixers)
+		levels.push_back(mixer ? mixer->UnmutedLevel() : AudioMixer::DefaultLevel);
+	return levels;
+}
+
+bool LoopTake::RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels)
+{
+	if (!std::isfinite(masterLevel) || std::any_of(busLevels.begin(), busLevels.end(),
+		[](double level) { return !std::isfinite(level); }))
+		return false;
+	if (busLevels.size() > (std::max)(_audioMixers.size(), _backAudioMixers.size()))
+		return false;
+	if (_masterMixer)
+		_masterMixer->SetUnmutedLevel(masterLevel);
+	if (_guiRack)
+	{
+		if (const auto slider = _guiRack->GetMasterSlider())
+			slider->SetValue(masterLevel, true);
+	}
+	for (std::size_t index = 0u; index < busLevels.size(); ++index)
+	{
+		if (index < _audioMixers.size() && _audioMixers[index]) _audioMixers[index]->SetUnmutedLevel(busLevels[index]);
+		if (index < _backAudioMixers.size() && _backAudioMixers[index]) _backAudioMixers[index]->SetUnmutedLevel(busLevels[index]);
+	}
+	return true;
 }
 
 bool LoopTake::RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes)

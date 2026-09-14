@@ -169,6 +169,8 @@ namespace io
 		struct LoopTake
 		{
 			std::string Name;
+			double MasterLevel = 1.0;
+			std::vector<double> BusLevels;
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
 			bool MidiQuantEnabled = false;
@@ -200,6 +202,8 @@ namespace io
 
 			std::string Name;
 			unsigned int StationType;
+			double MasterLevel = 1.0;
+			std::vector<double> BusLevels;
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;

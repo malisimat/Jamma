@@ -146,6 +146,8 @@ namespace io
 				io::JamFile::Station jamStation;
 				jamStation.Name = station->Name();
 				jamStation.StationType = 0;
+				jamStation.MasterLevel = station->MasterLevelForExport();
+				jamStation.BusLevels = station->BusLevelsForExport();
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
@@ -174,6 +176,8 @@ namespace io
 						continue;
 					io::JamFile::LoopTake jamTake;
 					jamTake.Name = take->Id();
+					jamTake.MasterLevel = take->MasterLevelForExport();
+					jamTake.BusLevels = take->BusLevelsForExport();
 					jamTake.VstChain = take->VstEntries();
 					jamTake.MidiQuantEnabled = take->MidiQuantisation().Enabled;
 					jamTake.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(take->MidiQuantisation().Fraction);

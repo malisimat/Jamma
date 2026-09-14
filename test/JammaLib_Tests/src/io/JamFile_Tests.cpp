@@ -395,6 +395,31 @@ TEST(JamFile, RoundTripsTakeAndStationAudioRoutes)
 	EXPECT_EQ(parsed->Stations[0].LoopTakes[0].AudioRoutes, roundTrip->Stations[0].LoopTakes[0].AudioRoutes);
 }
 
+TEST(JamFile, RoundTripsStationAndTakeMixerLevels)
+{
+	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");
+	const auto text = "{\"formatVersion\":\"0.2.0\",\"name\":\"jam\","
+		"\"transport\":{\"masterLengthSamps\":100,\"quantiseSamps\":1,\"absoluteSamplePos\":\"0\"},"
+		"\"stations\":[{\"name\":\"station\",\"masterLevel\":0.31,\"busLevels\":[1.0,0.51],\"takes\":[{\"name\":\"take\",\"masterLevel\":0.61,\"busLevels\":[1.0,0.71],\"loops\":[" + loop + "]}]}]}";
+	auto parsed = JamFile::FromStream(std::stringstream(text));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(1u, parsed->Stations.size());
+	EXPECT_DOUBLE_EQ(0.31, parsed->Stations[0].MasterLevel);
+	EXPECT_EQ((std::vector<double>{ 1.0, 0.51 }), parsed->Stations[0].BusLevels);
+	ASSERT_EQ(1u, parsed->Stations[0].LoopTakes.size());
+	EXPECT_DOUBLE_EQ(0.61, parsed->Stations[0].LoopTakes[0].MasterLevel);
+	EXPECT_EQ((std::vector<double>{ 1.0, 0.71 }), parsed->Stations[0].LoopTakes[0].BusLevels);
+
+	std::stringstream serialized;
+	ASSERT_TRUE(JamFile::ToStream(parsed.value(), serialized));
+	auto roundTrip = JamFile::FromStream(std::move(serialized));
+	ASSERT_TRUE(roundTrip.has_value());
+	EXPECT_DOUBLE_EQ(0.31, roundTrip->Stations[0].MasterLevel);
+	EXPECT_EQ((std::vector<double>{ 1.0, 0.51 }), roundTrip->Stations[0].BusLevels);
+	EXPECT_DOUBLE_EQ(0.61, roundTrip->Stations[0].LoopTakes[0].MasterLevel);
+	EXPECT_EQ((std::vector<double>{ 1.0, 0.71 }), roundTrip->Stations[0].LoopTakes[0].BusLevels);
+}
+
 TEST(JamFile, DistinguishesMissingAndExplicitlyEmptyAudioRoutes)
 {
 	const auto loop = std::regex_replace(std::regex_replace(LoopString, std::regex("%NAME%"), "loop.wav"), std::regex("%INDEX%"), "1");

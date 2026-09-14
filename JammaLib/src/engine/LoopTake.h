@@ -143,6 +143,9 @@ namespace engine
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		double MasterLevelForExport() const;
+		std::vector<double> BusLevelsForExport() const;
+		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
 		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;

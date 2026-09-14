@@ -120,6 +120,8 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	firstTake->CommitChanges();
 	firstStation->AddTake(firstTake);
 	firstStation->CommitChanges();
+	ASSERT_TRUE(firstTake->RestoreMixerLevels(0.62, { 0.72 }));
+	ASSERT_TRUE(firstStation->RestoreMixerLevels(0.42, { 0.52, 0.82 }));
 
 	auto secondStation = IoSessionExporterTest::MakeStation("second");
 	auto secondTake = IoSessionExporterTest::MakeTake("second-take");
@@ -167,12 +169,18 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	EXPECT_EQ(localGrainSamps, jam->QuantiseSamps);
 	EXPECT_EQ(utils::Timer::QUANTISE_MULTIPLE, jam->Quantisation);
 	EXPECT_EQ(2u, jam->Stations.size());
+	EXPECT_DOUBLE_EQ(0.42, jam->Stations[0].MasterLevel);
+	ASSERT_GE(jam->Stations[0].BusLevels.size(), 2u);
+	EXPECT_DOUBLE_EQ(0.52, jam->Stations[0].BusLevels[0]);
+	EXPECT_DOUBLE_EQ(0.82, jam->Stations[0].BusLevels[1]);
 	ASSERT_EQ(1u, jam->Stations[0].LoopTakes.size());
 	EXPECT_EQ(std::vector<int>({ 1, 3, 16 }), jam->Stations[0].AllowedMidiChannels);
 	ASSERT_EQ(1u, jam->Stations[0].TriggerHistory.size());
 	EXPECT_EQ("prior-take", jam->Stations[0].TriggerHistory[0].SourceTakeId);
 	EXPECT_EQ("saved-take", jam->Stations[0].TriggerHistory[0].TargetTakeId);
 	const auto& savedTake = jam->Stations[0].LoopTakes[0];
+	EXPECT_DOUBLE_EQ(0.62, savedTake.MasterLevel);
+	EXPECT_EQ((std::vector<double>{ 0.72 }), savedTake.BusLevels);
 	EXPECT_TRUE(savedTake.MidiQuantEnabled);
 	EXPECT_EQ(97ul, savedTake.MidiPlayLength);
 	EXPECT_EQ(23ul, savedTake.MidiPlayIndex);
@@ -202,6 +210,8 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	auto restoredTake = LoopTake::FromFile(restoredParams, savedTake, dir.wstring());
 	ASSERT_TRUE(restoredTake.has_value());
 	restoredTake.value()->CommitChanges();
+	EXPECT_DOUBLE_EQ(0.62, restoredTake.value()->MasterLevelForExport());
+	EXPECT_EQ((std::vector<double>{ 0.72 }), restoredTake.value()->BusLevelsForExport());
 	EXPECT_EQ(23ul, restoredTake.value()->MidiPlayIndex());
 	EXPECT_EQ(97ul, restoredTake.value()->MidiLoopLengthSamps());
 	ASSERT_EQ(1u, restoredTake.value()->GetLoops().size());
