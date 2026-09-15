@@ -18,7 +18,9 @@ conventions section when the prompt doesn't specify something.
 Use the host harness's own tools for each step (browser/screenshot automation
 or an SVG rasterizer for rendering, shell for ImageMagick). Nothing here
 depends on a specific tool name; substitute whatever the current harness
-provides.
+provides. Create a per-run staging directory under this skill folder (for
+example, `.staging/<run-id>/`) and keep all SVG, PNG, and intermediate files
+there. Do not write generated intermediates into the skill folder root.
 
 ## Engine facts (not editable — verify, don't guess)
 
@@ -106,19 +108,37 @@ To get this:
    a headless Chrome/Chromium CLI, or an SVG rasterizer such as
    `rsvg-convert`/`resvg`). Keep the alpha channel in the output.
 3. Run `render-tga-icon.ps1` (in this skill folder) to box-filter downsample
-   and re-merge the alpha channel cleanly, then export the final TGA:
+   and re-merge the alpha channel cleanly. Write the TGA into the same staging
+   directory first:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/tga-icon-gen/render-tga-icon.ps1 -InputPng path\to\supersampled.png -OutputTga Jamma\resources\textures\trigger_add.tga -TargetSize 64x64
+   powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/tga-icon-gen/render-tga-icon.ps1 -InputPng .agents\skills\tga-icon-gen\.staging\<run-id>\trigger_add_8x.png -OutputTga .agents\skills\tga-icon-gen\.staging\<run-id>\trigger_add.tga -TargetSize 64x64
    ```
+
+   The renderer replaces an existing staged output to support iterative icon
+   rendering. Keep staged outputs separate from committed texture assets.
 
 4. Repeat per state (`_over`, `_down`, etc.) reusing the same base render
    with only the fill/border color swapped, so all states stay pixel-aligned.
-5. Add each new file as a line in `Jamma/resources/ResourceList.txt` (plain
-   `1 <name>` — these are not nine-patch backgrounds).
-6. Sanity check with `magick identify -format "%f %wx%h %[colorspace] %A\n"`
-   on the new files and compare against an existing button of the same
-   family; confirm `%A` reports `Blend` (has alpha) and dimensions match.
+5. Sanity check the staged TGAs with `magick identify -format
+   "%f %wx%h %[colorspace] %A\n"` and compare against an existing button of
+   the same family; confirm dimensions, `sRGBA` or another RGBA colorspace,
+   and an alpha channel (`%A` reports `Blend`/alpha). Inspect the source PNG
+   alpha before encoding and inspect representative opaque and edge pixels in
+   the staged result. A fully transparent pixel's RGB may be normalized to
+   black by ImageMagick during PNG/TGA encoding, so a black RGB value at a
+   transparent corner alone does not disprove the source's full-canvas RGB
+   fill. The source alpha and the rendered edge behavior are the meaningful
+   checks; do not claim that encoded transparent RGB is preserved exactly.
+6. Only after explicit final confirmation that the staged TGAs are accepted,
+   copy them into `Jamma/resources/textures/` using new, non-existing names.
+   Recheck each destination immediately before copying. Copying into the
+   required texture directory is the explicit confirmation point and may
+   replace an existing texture when iteration is intentional. Only after those
+   copies are accepted, add each new file as a line in
+   `Jamma/resources/ResourceList.txt` (plain `1 <name>`; these are not
+   nine-patch backgrounds). Staging and rendering must not mutate
+   `ResourceList.txt`.
 
 ## Notes
 

@@ -15,7 +15,8 @@
     Path to the supersampled source PNG (with alpha channel).
 
 .PARAMETER OutputTga
-    Path to write the final TGA.
+    Path to write the final TGA. Existing files are replaced to support
+    iterative icon rendering.
 
 .PARAMETER TargetSize
     ImageMagick geometry string for the final size, e.g. "64x64".
@@ -37,7 +38,6 @@ if (-not (Get-Command magick -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path $InputPng)) {
     throw "InputPng not found: $InputPng"
 }
-
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("tga-icon-gen-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
