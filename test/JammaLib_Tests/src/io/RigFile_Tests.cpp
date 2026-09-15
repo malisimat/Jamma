@@ -231,3 +231,102 @@ TEST(RigFile, ParsesFileWithMidiTriggerBinding) {
 	EXPECT_EQ(48u, rig.value().Triggers[0].MidiTrigger->Activate.Id);
 	EXPECT_EQ(49u, rig.value().Triggers[0].MidiTrigger->Ditch.Id);
 }
+
+TEST(RigFile, ParsesStationTargetAbsentEmptyAndName) {
+	auto absent = RigFile::Trigger::FromJson(std::get<Json::JsonPart>(Json::FromStream(std::stringstream("{\"name\":\"a\"}")).value()));
+	auto empty = RigFile::Trigger::FromJson(std::get<Json::JsonPart>(Json::FromStream(std::stringstream("{\"name\":\"b\",\"stationtarget\":\"\"}")).value()));
+	auto named = RigFile::Trigger::FromJson(std::get<Json::JsonPart>(Json::FromStream(std::stringstream("{\"name\":\"c\",\"stationtarget\":\"Drums\"}")).value()));
+	ASSERT_TRUE(absent.has_value()); ASSERT_FALSE(absent->StationTarget.has_value());
+	ASSERT_TRUE(empty.has_value()); ASSERT_TRUE(empty->StationTarget.has_value()); EXPECT_TRUE(empty->StationTarget->empty());
+	ASSERT_TRUE(named.has_value()); ASSERT_EQ("Drums", named->StationTarget.value());
+}
+
+TEST(RigFile, ParsesExplicitAndLegacyMidiInputModes) {
+	auto parse = [](const char* json) { return RigFile::Trigger::FromJson(std::get<Json::JsonPart>(Json::FromStream(std::stringstream(json)).value())); };
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::LegacyAny, parse("{\"name\":\"legacy\"}")->MidiInputs);
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::None, parse("{\"name\":\"none\",\"midiinputmode\":\"none\"}")->MidiInputs);
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::Any, parse("{\"name\":\"any\",\"midiinputmode\":\"any\"}")->MidiInputs);
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::Selected, parse("{\"name\":\"selected\",\"midiinputmode\":\"selected\",\"midiinputdevices\":[\"Keys\",\"Keys\",\"\"]}")->MidiInputs);
+	EXPECT_FALSE(parse("{\"name\":\"bad\",\"midiinputmode\":\"selected\",\"midiinputdevices\":[]}").has_value());
+	EXPECT_FALSE(parse("{\"name\":\"bad\",\"midiinputmode\":\"any\",\"midiinputdevices\":[\"Keys\"]}").has_value());
+}
+
+TEST(RigFile, JsonSerializerRoundTripsEveryKnownSectionAndDropsUnknownFields) {
+	auto json = std::string(RigFile::DefaultJson);
+	json.insert(json.size() - 1u, ",\"unknown\":42");
+	auto rig = RigFile::FromStream(std::stringstream(json));
+	ASSERT_TRUE(rig.has_value());
+	rig->Triggers[0].StationTarget = "Station \"A\"";
+	rig->Triggers[0].MidiInputs = RigFile::Trigger::MidiInputMode::Selected;
+	rig->Triggers[0].MidiInputDevices = { "Keys\\One" };
+	RigFile::Trigger::MidiTriggerBinding binding{};
+	binding.Device = "Pad";
+	binding.Activate = { RigFile::NOTE, 2u, 60u, 1u, false };
+	binding.Ditch = { RigFile::CC, 0u, 64u, 1u, true };
+	rig->Triggers[0].MidiTrigger = binding;
+	rig->User.Serial.Devices.push_back({ "pedal", "COM9", 57600u, true });
+	std::stringstream out;
+	ASSERT_TRUE(RigFile::ToJsonStream(rig.value(), out));
+	EXPECT_EQ(std::string::npos, out.str().find("unknown")); // Parsed models intentionally do not preserve unknown JSON fields.
+	auto reparsed = RigFile::FromStream(std::move(out));
+	ASSERT_TRUE(reparsed.has_value());
+	EXPECT_EQ(rig->Name, reparsed->Name);
+	EXPECT_EQ(rig->User.Audio.SampleRate, reparsed->User.Audio.SampleRate);
+	ASSERT_EQ(1u, reparsed->User.Serial.Devices.size());
+	EXPECT_EQ("COM9", reparsed->User.Serial.Devices[0].Port);
+	ASSERT_EQ(1u, reparsed->Triggers.size());
+	EXPECT_EQ("Station \"A\"", reparsed->Triggers[0].StationTarget.value());
+	EXPECT_EQ("Keys\\One", reparsed->Triggers[0].MidiInputDevices[0]);
+	ASSERT_TRUE(reparsed->Triggers[0].MidiTrigger.has_value());
+	EXPECT_EQ(60u, reparsed->Triggers[0].MidiTrigger->Activate.Id);
+}
+
+TEST(RigRouting, ResolvesNamesSafelyAndMigratesOnlyInRangeLegacyTargets) {
+	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
+	rig.Triggers.resize(4, rig.Triggers[0]);
+	rig.Triggers[0].Name = "legacy"; rig.Triggers[0].StationTarget.reset();
+	rig.Triggers[1].Name = "named"; rig.Triggers[1].StationTarget = "Bass";
+	rig.Triggers[2].Name = "ambiguous"; rig.Triggers[2].StationTarget = "Dup";
+	rig.Triggers[3].Name = "out"; rig.Triggers[3].StationTarget.reset();
+	std::vector<io::JamFile::Station> stations(3);
+	stations[0].Name = "Drums"; stations[1].Name = "Dup"; stations[2].Name = "Dup";
+	auto result = io::RigRouting::Resolve(rig, stations, 2u, {});
+	ASSERT_TRUE(result.RequiresSave);
+	EXPECT_EQ("Drums", result.CandidateRig.Triggers[0].StationTarget.value());
+	EXPECT_EQ(0u, result.Triggers[0].StationIndex.value());
+	EXPECT_EQ(io::RigRouting::Warning::TargetMissing, result.Triggers[1].Reason);
+	EXPECT_EQ(io::RigRouting::Warning::TargetAmbiguous, result.Triggers[2].Reason);
+	EXPECT_FALSE(result.Triggers[3].StationIndex.has_value());
+	EXPECT_FALSE(result.CandidateRig.Triggers[3].StationTarget.has_value());
+}
+
+TEST(RigRouting, SupportsManyToOneAndReportsUnavailableSources) {
+	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
+	rig.Triggers.push_back(rig.Triggers[0]);
+	for (auto& trigger : rig.Triggers) trigger.StationTarget = "One";
+	rig.Triggers[0].InputChannels = { 0u, 5u };
+	rig.Triggers[0].MidiInputs = RigFile::Trigger::MidiInputMode::Selected;
+	rig.Triggers[0].MidiInputDevices = { "Present", "Missing" };
+	std::vector<io::JamFile::Station> stations(1); stations[0].Name = "One";
+	auto result = io::RigRouting::Resolve(rig, stations, 2u, { "Present" });
+	ASSERT_EQ(0u, result.Triggers[0].StationIndex.value()); ASSERT_EQ(0u, result.Triggers[1].StationIndex.value());
+	ASSERT_EQ(4u, result.Triggers[0].Sources.size());
+	EXPECT_TRUE(result.Triggers[0].Sources[0].Available); EXPECT_FALSE(result.Triggers[0].Sources[1].Available);
+	EXPECT_TRUE(result.Triggers[0].Sources[2].Available); EXPECT_FALSE(result.Triggers[0].Sources[3].Available);
+}
+
+TEST(RigRouting, MutationHelpersArePureAndRejectDuplicateCaptureRoutes) {
+	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
+	rig.Triggers.clear();
+	auto first = io::RigRouting::AddUnboundTrigger(rig);
+	ASSERT_TRUE(rig.Triggers.empty()); ASSERT_EQ("Trigger-1", first.Triggers[0].Name);
+	first.Triggers.push_back(first.Triggers[0]); first.Triggers[1].Name = "Trigger-3";
+	auto second = io::RigRouting::AddUnboundTrigger(first);
+	EXPECT_EQ("Trigger-2", second.Triggers.back().Name);
+	auto adc = io::RigRouting::AddAdcInput(second, 0u, 7u); ASSERT_TRUE(adc.has_value());
+	EXPECT_FALSE(io::RigRouting::AddAdcInput(adc.value(), 0u, 7u).has_value());
+	auto midi = io::RigRouting::AddMidiInput(adc.value(), 0u, "Keys"); ASSERT_TRUE(midi.has_value());
+	EXPECT_FALSE(io::RigRouting::AddMidiInput(midi.value(), 0u, "Keys").has_value());
+	auto removed = io::RigRouting::RemoveMidiInput(midi.value(), 0u, "Keys"); ASSERT_TRUE(removed.has_value());
+	EXPECT_EQ(RigFile::Trigger::MidiInputMode::None, removed->Triggers[0].MidiInputs);
+}

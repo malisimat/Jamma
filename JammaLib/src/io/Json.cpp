@@ -187,7 +187,31 @@ std::string Json::NormaliseStringArrayValue(std::string value)
 	if ((value.size() >= 2u) && (value.front() == '"') && (value.back() == '"'))
 		value = value.substr(1u, value.size() - 2u);
 
-	return value;
+	std::string normalised;
+	normalised.reserve(value.size());
+	for (size_t i = 0; i < value.size(); ++i)
+	{
+		if (value[i] != '\\' || i + 1u >= value.size())
+		{
+			normalised.push_back(value[i]);
+			continue;
+		}
+
+		switch (value[++i])
+		{
+		case '"': normalised.push_back('"'); break;
+		case '\\': normalised.push_back('\\'); break;
+		case '/': normalised.push_back('/'); break;
+		case 'b': normalised.push_back('\b'); break;
+		case 'f': normalised.push_back('\f'); break;
+		case 'n': normalised.push_back('\n'); break;
+		case 'r': normalised.push_back('\r'); break;
+		case 't': normalised.push_back('\t'); break;
+		default: normalised.push_back(value[i]); break;
+		}
+	}
+
+	return normalised;
 }
 
 Json::KeyResult Json::ParseKey(std::stringstream ss)

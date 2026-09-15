@@ -492,9 +492,11 @@ void Scene::_CloseRemoteTempoPrompt()
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	io::JamFile jamStruct,
 	io::RigFile rigStruct,
-	std::wstring dir)
+	std::wstring dir,
+	std::function<bool(const io::RigFile&)> saveRig)
 {
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
+	scene->_saveRig = std::move(saveRig);
 
 	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
 	for (const auto& triggerCfg : rigStruct.Triggers)

@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string_view>
 
@@ -207,6 +208,14 @@ static bool UpdateIni(const std::wstring& finalPath, const std::string& data)
 	return true;
 }
 
+static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
+{
+	std::stringstream json;
+	if (!io::RigFile::ToJsonStream(rig, json))
+		return false;
+	return UpdateIni(finalPath, json.str());
+}
+
 void SetupConsole()
 {
 	AllocConsole();
@@ -374,10 +383,31 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::cout << ss.str() << std::endl;
 	}
 
+	std::function<bool(const io::RigFile&)> saveRig;
+	if (defaults.has_value())
+	{
+		const auto rigPath = defaults->Rig;
+		saveRig = [rigPath](const io::RigFile& candidate) { return SaveRigAtomic(rigPath, candidate); };
+		std::vector<std::string> availableMidiDevices;
+		for (const auto& device : rig.User.Midi.Devices)
+			if (device.Enabled && !device.Name.empty()) availableMidiDevices.push_back(device.Name);
+		auto resolution = io::RigRouting::Resolve(rig, jam.Stations, rig.User.Audio.NumChannelsIn, availableMidiDevices);
+		if (resolution.RequiresSave)
+		{
+			if (saveRig(resolution.CandidateRig))
+			{
+				rig = std::move(resolution.CandidateRig);
+				std::cerr << "[RIG] Migrated legacy positional station targets." << std::endl;
+			}
+			else
+				std::cerr << "[RIG] Failed to save migrated station targets; using the loaded rig." << std::endl;
+		}
+	}
+
 	const auto jamDirectory = defaults.has_value() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
-	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory);
+	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory, std::move(saveRig));
 	if (!scene.has_value())
 	{
 		std::cout << "Failed to create Scene... quitting" << std::endl;

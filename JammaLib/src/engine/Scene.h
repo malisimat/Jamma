@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -178,7 +179,8 @@ namespace engine
 		static std::optional<std::shared_ptr<Scene>> FromFile(SceneParams sceneParams,
 			io::JamFile jam,
 			io::RigFile rig,
-			std::wstring dir);
+			std::wstring dir,
+			std::function<bool(const io::RigFile&)> saveRig = {});
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
@@ -226,6 +228,7 @@ namespace engine
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
+		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
 		void ApplyDeferredHoverUpdates();
 
 		// Returns a locked snapshot of the current station list.  Always use
@@ -405,6 +408,7 @@ namespace engine
 		std::list<actions::JobAction> _jobList;
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
+		std::function<bool(const io::RigFile&)> _saveRig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
 	};
