@@ -291,10 +291,28 @@ Interaction rules:
 - `+` creates `Trigger-N` using the first unused positive suffix, with no ADC
   input, `MidiInputMode::None`, no activation binding, and an empty
   `StationTarget`. Clamp scroll after add/delete/resize and reveal the new item.
-- Generate the `+`/`x` button textures (and their `_over`/`_down` states) with
-  the `.agents/skills/tga-icon-gen` skill so they match the existing
-  rounded-rect button style, stay pixel-sharp, and avoid straight-alpha
-  fringing; draw both as plain vector glyphs, never rasterized text.
+
+### HUD icon TGA assets
+
+Use the new `.agents/skills/tga-icon-gen` skill whenever this feature needs a
+new raster HUD control asset. In particular, create the trigger `+` and close
+(`x`) button TGAs, including their `_over` and `_down` states, through that
+skill rather than hand-authoring or directly converting final textures.
+
+Follow its staged SVG/CSS-to-TGA pipeline: draw the symbolic glyphs as vector
+paths (never rasterized text), render at an integer supersample factor,
+box-downsample with `render-tga-icon.ps1`, and validate the staged alpha and
+dimensions against existing button textures. Keep shading flattened on opaque
+fills and use the full-canvas edge/fill color before applying the silhouette
+mask so the engine's straight-alpha blending cannot fringe. Keep the controls
+at or below 64x64 unless their HUD layout requires an approved exception, and
+match the existing rounded-rect family and multi-state suffix convention.
+
+After the staged TGAs are accepted, copy them to
+`Jamma/resources/textures/` under new names and add their plain `1 <name>`
+entries to `Jamma/resources/ResourceList.txt`; these controls are not
+nine-patch backgrounds. Do not register assets or alter the resource list
+during staging.
 
 ## Implementation slices
 
@@ -327,9 +345,9 @@ Each slice should compile and test before the next begins.
    - Wire HUD capture, uncaptured hover, Escape, and right-click.
 
 5. **Lifecycle and layout**
-   - Generate the `+`/`x` (and `_over`/`_down`) button textures with the
-     `.agents/skills/tga-icon-gen` skill and register them in
-     `Jamma/resources/ResourceList.txt` before wiring the controls.
+   - Use the new `.agents/skills/tga-icon-gen` skill to stage, verify, then
+     install/register the `+`/`x` (and `_over`/`_down`) button textures before
+     wiring the controls.
    - Add fixed-footer `+`, scroll/reveal behavior, `x`, popup confirmation,
      edit lock cues, and route cleanup.
    - Connect successful candidates to the revisioned commit protocol and
