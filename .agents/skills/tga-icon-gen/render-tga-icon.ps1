@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Box-filter downsample a supersampled RGBA PNG and export a pixel-sharp,
-    straight-alpha TGA matching Jamma's existing HUD button textures.
+    straight-alpha TGA matching Jamma's existing button/icon textures.
 
 .DESCRIPTION
     Splits the source PNG into RGB and alpha, downsamples each independently

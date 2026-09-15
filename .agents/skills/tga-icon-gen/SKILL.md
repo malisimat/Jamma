@@ -1,19 +1,16 @@
 ---
 name: tga-icon-gen
-description: Generate pixel-sharp, alpha-correct TGA button/icon textures for Jamma's HUD from an SVG/CSS source, then register them in ResourceList.txt. Use when adding new HUD control art such as the '+' and 'x' trigger buttons. Visual conventions live in a separate, user-editable section below.
+description: Generate pixel-sharp, alpha-correct TGA button/icon textures for Jamma from an SVG/CSS source, then register them in ResourceList.txt. Use when adding new control art.
 ---
 
 # Jamma TGA icon generation
 
-This skill is about the **approach**: how to render, downsample, and export a
-crisp alpha-correct TGA that behaves under this engine's blend mode. It is not
-prescriptive about visual style — see "Visual conventions" below for the
-current look, which is a set of editable defaults, not hard rules.
+Use [Jamma icon style guide](ICON-STYLE.md) for user-editable appearance
+defaults. A specific icon request overrides that guide.
 
-If the user's prompt for a specific icon conflicts with the conventions below
-(different border weight, no inner shadow, a different palette, a different
-size cap, etc.), the prompt wins for that icon. Only fall back to the
-conventions section when the prompt doesn't specify something.
+This skill is about the **approach**: how to render, downsample, and export a
+crisp alpha-correct TGA that behaves under this engine's blend mode. Visual
+defaults belong in the linked style guide rather than this workflow.
 
 Use the host harness's own tools for each step (browser/screenshot automation
 or an SVG rasterizer for rendering, shell for ImageMagick). Nothing here
@@ -41,26 +38,28 @@ there. Do not write generated intermediates into the skill folder root.
   magick identify -format "%f %wx%h %[colorspace] %A\n" Jamma\resources\textures\rounded_but.tga Jamma\resources\textures\trigger_ditch.tga
   ```
 
-## Visual conventions (editable — treat as current defaults, override freely)
+## Interactive icon sets
 
-> Edit this section directly as the house style evolves, or override it
-> per-icon by describing the desired look in the prompt.
+For an interactive control, generate aligned base, `_over` (mouse hover), and
+`_down` (mouse down) textures together (can also generate out and down-out states if required). When it has a persistent toggled
+state, generate the appropriate toggled base/hover/down set using the existing
+family suffix convention. Do not create toggled variants for an action-only
+control. Reuse one geometry so every state remains pixel-aligned.
 
-- Border: thick rounded-rect border is the current default weight.
-- Shading: a slight inset/inner shadow on the fill is common today, but not
-  mandatory — some icons may be flat fill only.
-- No text/glyphs for symbolic buttons (e.g. '+' / 'x'); draw shapes as plain
-  vector paths instead of rasterized letters.
-- Size cap: keep new icons at or under 64x64 unless told otherwise; existing
-  precedent: `rounded_but*.tga` 60x60, `trigger_ditch*.tga` 44x44,
-  `trigger_back.tga` 64x64, `rounded_rect.tga` 300x108 (ninepatch border
-  34x34).
-- Multi-state buttons follow a `_over` / `_down` / `_toggled` suffix
-  convention (see `rounded_but*.tga`, `stationmode*.tga`); produce the same
-  suffix set for a new interactive icon unless the prompt says otherwise.
-- Relative sizing: e.g. a '+' (create) control reads larger than an 'x'
-  (delete) control at a glance — adjust per prompt if a different hierarchy is
-  wanted.
+## Nine-patch boundary policy
+
+Use nine-patch only for textures intended to stretch. Record the exact X and Y
+coordinates where the corner radius, border, and related edge gradients end
+and the uniform centre may begin stretching. Use those coordinates as
+`borderX` and `borderY` in the resource entry:
+
+```
+1 <name> ninepatch <borderX> <borderY>
+```
+
+Keep corners, border transitions, glyphs, and gradients outside the
+stretchable centre. Fixed-size icons are not nine-patch assets and use plain
+`1 <name>` entries.
 
 ## Transparency rules (avoid straight-alpha fringing — not editable)
 
@@ -100,8 +99,8 @@ To get this:
 
 ## Pipeline
 
-1. Author the icon as SVG or CSS/HTML at the target final size, following
-   whichever conventions apply (defaults above, or the prompt's overrides).
+1. Author the icon as SVG or CSS/HTML at the target final size, following the
+   style guide or the prompt's overrides.
    Fill the whole canvas with the edge/fill color per the transparency rule.
 2. Render it to a PNG at `N` times the target size using whatever headless
    rendering capability the harness provides (browser screenshot automation,
