@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,15 +26,23 @@ namespace engine
 
 namespace gui
 {
+	class GuiPopupManager;
+
 	struct GuiHudParams : public base::GuiElementParams
 	{
 		GuiHudParams() :
 			base::GuiElementParams()
 		{}
+
+		std::function<bool(const io::RigFile&)> SubmitRigEdit;
+		std::function<bool()> EditsEnabled;
+		GuiPopupManager* PopupManager = nullptr;
 	};
 
 	class GuiButton;
 	class GuiLabel;
+	class GuiPopup;
+	class GuiScrollPanel;
 
 	class GuiHud : public GuiPanel
 	{
@@ -71,7 +80,10 @@ namespace gui
 			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
+		bool IsApplying() const { return _editsEnabled && !_editsEnabled(); }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
+		static int RevealScrollOffset(int currentOffset, int viewportHeight,
+			int contentHeight, int itemTop, int itemBottom);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -97,6 +109,8 @@ namespace gui
 		static constexpr unsigned int _RightRailSpacing = 10u;
 		static constexpr unsigned int _TriggerButtonWidth = 120u;
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
+		static constexpr unsigned int _TriggerFooterHeight = 56u;
+		static constexpr unsigned int _TriggerControlSize = 34u;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;
 		static constexpr double _MidiInputHoldFallRate = 0.003;
@@ -105,6 +119,12 @@ namespace gui
 		void _BuildPanels();
 		void _BuildTopStrip();
 		void _BuildTriggerRail();
+		void _AddTrigger();
+		void _OpenDeleteConfirmation(size_t triggerIndex);
+		void _ConfirmDelete();
+		bool _SubmitCandidate(const io::RigFile& candidate);
+		bool _CanEditTrigger(size_t triggerIndex) const;
+		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
@@ -140,9 +160,16 @@ namespace gui
 
 		std::shared_ptr<GuiStackPanel> _topStrip;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
-		std::shared_ptr<GuiStackPanel> _triggerRail;
+		std::shared_ptr<GuiPanel> _triggerRail;
+		std::shared_ptr<GuiScrollPanel> _triggerScroll;
+		std::shared_ptr<GuiStackPanel> _triggerList;
+		std::shared_ptr<GuiButton> _addTriggerButton;
+		std::shared_ptr<GuiPopup> _deletePopup;
+		std::shared_ptr<base::ActionReceiver> _deletePopupReceiver;
 		std::vector<std::shared_ptr<GuiButton>> _sourceButtons;
 		std::vector<std::shared_ptr<GuiButton>> _triggerButtons;
+		std::vector<std::shared_ptr<GuiButton>> _triggerCloseButtons;
+		std::vector<std::shared_ptr<GuiLabel>> _triggerStatusLabels;
 		std::vector<std::unique_ptr<GuiVu>> _inputVus;
 		unsigned int _audioInputCount = 0u;
 		std::vector<std::string> _midiInputNames;
@@ -153,6 +180,12 @@ namespace gui
 		io::RigFile _displayedRig;
 		std::uint64_t _displayedRevision = 0u;
 		std::optional<CableInteraction::Drag> _cableDrag;
+		std::optional<size_t> _deleteTriggerIndex;
+		std::function<bool(const io::RigFile&)> _submitRigEdit;
+		std::function<bool()> _editsEnabled;
+		GuiPopupManager* _popupManager = nullptr;
+		bool _revealNewestTrigger = false;
+		int _lastTriggerScrollOffset = 0;
 		bool _cableRevealHeld = false;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;

@@ -330,3 +330,26 @@ TEST(RigFileRouting, MutationHelpersArePureAndRejectDuplicateCaptureRoutes) {
 	auto removed = io::RigFileRouting::WithoutMidiInput(midi.value(), 0u, "Keys"); ASSERT_TRUE(removed.has_value());
 	EXPECT_EQ(RigFile::Trigger::MidiInputMode::None, removed->Triggers[0].MidiInputs);
 }
+
+TEST(RigFileRouting, LifecycleAddIsUnboundAndDeleteRemovesTheWholeTriggerRouteSet) {
+	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
+	rig.Triggers.clear();
+	auto added = io::RigFileRouting::WithUnboundTrigger(rig);
+	ASSERT_EQ(1u, added.Triggers.size());
+	EXPECT_EQ("Trigger-1", added.Triggers[0].Name);
+	EXPECT_EQ(std::optional<std::string>(""), added.Triggers[0].StationTarget);
+	EXPECT_EQ(RigFile::Trigger::MidiInputMode::None, added.Triggers[0].MidiInputs);
+	EXPECT_TRUE(added.Triggers[0].InputChannels.empty());
+	EXPECT_TRUE(added.Triggers[0].MidiInputDevices.empty());
+	EXPECT_TRUE(added.Triggers[0].TriggerPairs.empty());
+	EXPECT_FALSE(added.Triggers[0].MidiTrigger.has_value());
+
+	added.Triggers[0].StationTarget = "Station A";
+	added.Triggers[0].InputChannels = { 1u, 2u };
+	added.Triggers[0].MidiInputs = RigFile::Trigger::MidiInputMode::Selected;
+	added.Triggers[0].MidiInputDevices = { "Keys" };
+	const auto deleted = io::RigFileRouting::WithoutTrigger(added, 0u);
+	ASSERT_TRUE(deleted.has_value());
+	EXPECT_TRUE(deleted->Triggers.empty());
+	EXPECT_EQ(1u, added.Triggers.size());
+}

@@ -95,6 +95,12 @@ Scene::Scene(SceneParams params,
 	GuiHudParams hudParams;
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
+	hudParams.PopupManager = &_popupManager;
+	hudParams.EditsEnabled = [this]() { return _rigCoordinator.EditsEnabled(); };
+	hudParams.SubmitRigEdit = [this](const io::RigFile& candidate)
+	{
+		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
+	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
 	AddChild(_hudPanel);
 

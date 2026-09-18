@@ -7,6 +7,9 @@
 #include <memory>
 #include "GuiButton.h"
 #include "GuiLabel.h"
+#include "GuiPopup.h"
+#include "GuiPopupManager.h"
+#include "GuiScrollPanel.h"
 #include "GlUtils.h"
 #include "../engine/Trigger.h"
 #include "../engine/RigSnapshot.h"
@@ -23,6 +26,37 @@ using namespace resources;
 
 namespace gui
 {
+	class GuiHudActionButton : public GuiButton
+	{
+	public:
+		GuiHudActionButton(GuiButtonParams params, std::function<void()> callback) :
+			GuiButton(std::move(params)), _callback(std::move(callback)) {}
+
+		actions::ActionResult OnAction(actions::TouchAction action) override
+		{
+			auto result = GuiButton::OnAction(action);
+			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && HitTest(action.Position) && _callback)
+				_callback();
+			return result;
+		}
+
+	private:
+		std::function<void()> _callback;
+	};
+
+	class GuiHudPopupReceiver : public base::ActionReceiver
+	{
+	public:
+		explicit GuiHudPopupReceiver(std::function<void(unsigned int)> callback) : _callback(std::move(callback)) {}
+		actions::ActionResult OnAction(actions::GuiAction action) override
+		{
+			if (_callback) _callback(action.Index);
+			return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+		}
+	private:
+		std::function<void(unsigned int)> _callback;
+	};
+
 	class GuiHudTriggerBack : public GuiButton
 	{
 	public:
@@ -124,7 +158,10 @@ namespace gui
 }
 
 GuiHud::GuiHud(GuiHudParams params) :
-	GuiPanel(params)
+	GuiPanel(params),
+	_submitRigEdit(std::move(params.SubmitRigEdit)),
+	_editsEnabled(std::move(params.EditsEnabled)),
+	_popupManager(params.PopupManager)
 {
 	_guiParams.Texture = "";
 	_guiParams.OverTexture = "";
@@ -134,6 +171,22 @@ GuiHud::GuiHud(GuiHudParams params) :
 	_cableControlPoints.reserve((12u + 8u) * 4u);
 	_cableColors.reserve(12u + 8u);
 	_cableRenderColors.reserve(12u + 8u);
+	_deletePopup = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
+	GuiPopupButtonConfig deleteConfig;
+	deleteConfig.ShowYes = true;
+	deleteConfig.ShowNo = false;
+	deleteConfig.ShowCancel = true;
+	deleteConfig.ShowOk = false;
+	deleteConfig.YesIndex = 1u;
+	deleteConfig.CancelIndex = 2u;
+	deleteConfig.YesText = "Delete";
+	_deletePopup->ConfigureButtons(deleteConfig);
+	_deletePopupReceiver = std::make_shared<GuiHudPopupReceiver>([this](unsigned int index)
+	{
+		if (index == 1u) _ConfirmDelete();
+		else { _deleteTriggerIndex.reset(); if (_popupManager) _popupManager->Close(); }
+	});
+	_deletePopup->SetButtonReceiver(_deletePopupReceiver);
 	_BuildPanels();
 	SetSize(params.Size);
 }
@@ -147,8 +200,23 @@ void GuiHud::Draw(base::DrawContext& ctx)
 		_topInputRow->ComputeLayout();
 	if (_topStrip)
 		_topStrip->ComputeLayout();
-	if (_triggerRail)
-		_triggerRail->ComputeLayout();
+	if (_triggerList)
+		_triggerList->ComputeLayout();
+	if (_triggerScroll && _lastTriggerScrollOffset != _triggerScroll->ScrollOffset())
+	{
+		_lastTriggerScrollOffset = _triggerScroll->ScrollOffset();
+		_cablesDirty = true;
+	}
+	const bool applying = IsApplying();
+	if (_addTriggerButton)
+		_addTriggerButton->SetEnabled(!applying);
+	for (size_t i = 0u; i < _triggerStatusLabels.size(); ++i)
+	{
+		const bool editable = _CanEditTrigger(i);
+		_triggerStatusLabels[i]->SetString(applying ? "APPLYING" : (editable ? "EDITABLE" : "LOCKED"));
+		if (i < _triggerCloseButtons.size())
+			_triggerCloseButtons[i]->SetEnabled(editable);
+	}
 
 	for (std::size_t i = 0u; i < _inputVus.size() && i < _sourceButtons.size(); ++i)
 	{
@@ -188,6 +256,8 @@ void GuiHud::_InitResources(ResourceLib& resourceLib, bool forceInit)
 		valid = _InitCableVertexArray();
 	for (auto& vu : _inputVus)
 		vu->InitResources(resourceLib, forceInit);
+	if (_deletePopup)
+		_deletePopup->InitResources(resourceLib, forceInit);
 
 	GlUtils::CheckError("GuiHud::_InitResources()");
 }
@@ -202,6 +272,8 @@ void GuiHud::_ReleaseResources()
 
 	for (auto& vu : _inputVus)
 		vu->ReleaseResources();
+	if (_deletePopup)
+		_deletePopup->ReleaseResources();
 }
 
 void GuiHud::_BuildPanels()
@@ -217,17 +289,13 @@ void GuiHud::_BuildPanels()
 	_topStrip = std::make_shared<GuiStackPanel>(topParams);
 	AddChild(_topStrip);
 
-	GuiStackPanelParams railParams;
-	railParams.Direction = StackDirection::Vertical;
-	railParams.Spacing = _RightRailSpacing;
-	railParams.PaddingH = _RightRailPaddingH;
-	railParams.PaddingV = _RightRailPaddingV;
+	base::GuiElementParams railParams;
 	railParams.Size = { _RightRailWidth - 6u, _RightRailHeight };
 	railParams.MinSize = { _RightRailWidth - 6u, _RightRailMinHeight };
 	railParams.TextureShader = "texture_tinted";
 	railParams.Texture = "rounded_but";
 	railParams.TintColor = glm::vec3(0.17f, 0.20f, 0.24f);
-	_triggerRail = std::make_shared<GuiStackPanel>(railParams);
+	_triggerRail = std::make_shared<GuiPanel>(railParams);
 	AddChild(_triggerRail);
 
 	_BuildTopStrip();
@@ -280,31 +348,90 @@ void GuiHud::_BuildTopStrip()
 
 void GuiHud::_BuildTriggerRail()
 {
-	if (_triggerNames.empty())
-		return;
+	auto header = _MakeHeader("Triggers", _RightRailWidth, 38u);
+	header->SetPosition({ 0, 0 });
+	_triggerRail->AddChild(header);
 
-	_triggerRail->AddChild(_MakeHeader("Triggers", _RightRailWidth, 38u));
+	GuiStackPanelParams listParams;
+	listParams.Direction = StackDirection::Vertical;
+	listParams.Spacing = _RightRailSpacing;
+	listParams.PaddingH = 0u;
+	listParams.PaddingV = 0u;
+	listParams.Size = { _TriggerButtonWidth, 1u };
+	listParams.MinSize = { _TriggerButtonWidth, 1u };
+	_triggerList = std::make_shared<GuiStackPanel>(listParams);
+
 	for (std::size_t i = 0u; i < _triggerNames.size(); ++i)
 	{
 		auto button = _MakeTriggerButton(_triggerNames[i],
 			i < _triggers.size() ? _triggers[i] : std::weak_ptr<engine::Trigger>());
+		GuiButtonParams closeParams;
+		closeParams.Texture = "trigger_close";
+		closeParams.OverTexture = "trigger_close_over";
+		closeParams.DownTexture = "trigger_close_down";
+		closeParams.Size = { _TriggerControlSize, _TriggerControlSize };
+		closeParams.MinSize = closeParams.Size;
+		closeParams.Position = { static_cast<int>(_TriggerButtonWidth - _TriggerControlSize - 4u),
+			static_cast<int>(_TriggerButtonHeight - _TriggerControlSize - 4u) };
+		closeParams.TextPadding = 0u;
+		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
+		button->AddChild(close);
+		_triggerCloseButtons.push_back(close);
+		GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("EDITABLE", 0u);
+		statusParams.Position = { 4, 4 };
+		statusParams.Size = { 72u, 14u };
+		auto status = std::make_shared<GuiLabel>(statusParams);
+		button->AddChild(status);
+		_triggerStatusLabels.push_back(status);
 		_triggerButtons.push_back(button);
-		_triggerRail->AddChild(button);
+		_triggerList->AddChild(button);
 	}
+	const auto logicalHeight = _triggerNames.empty() ? 1u :
+		static_cast<unsigned int>(_triggerNames.size()) * _TriggerButtonHeight +
+		static_cast<unsigned int>(_triggerNames.size() - 1u) * _RightRailSpacing;
+	_triggerList->SetSize({ _TriggerButtonWidth, logicalHeight });
+
+	GuiScrollPanelParams scrollParams = GuiScrollPanelParams::PanelScroll(_TriggerButtonWidth, 1u);
+	scrollParams.Texture = "";
+	scrollParams.OverTexture = "";
+	scrollParams.DownTexture = "";
+	_triggerScroll = std::make_shared<GuiScrollPanel>(scrollParams);
+	_triggerScroll->SetContent(_triggerList);
+	_triggerRail->AddChild(_triggerScroll);
+
+	GuiButtonParams addParams;
+	addParams.Texture = "trigger_add";
+	addParams.OverTexture = "trigger_add_over";
+	addParams.DownTexture = "trigger_add_down";
+	addParams.Size = { _TriggerControlSize, _TriggerControlSize };
+	addParams.MinSize = addParams.Size;
+	addParams.TextPadding = 0u;
+	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
+	_triggerRail->AddChild(_addTriggerButton);
 }
 
 void GuiHud::_RebuildPanels()
 {
+	const int previousScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
+	const bool revealNewest = _revealNewestTrigger;
 	_sourceButtons.clear();
 	_triggerButtons.clear();
+	_triggerCloseButtons.clear();
+	_triggerStatusLabels.clear();
 	_inputVus.clear();
 	_topStrip.reset();
 	_topInputRow.reset();
 	_triggerRail.reset();
+	_triggerScroll.reset();
+	_triggerList.reset();
+	_addTriggerButton.reset();
 	_children.clear();
 
 	_BuildPanels();
 	_LayoutPanels();
+	if (_triggerScroll && !revealNewest)
+		_triggerScroll->SetScrollOffset(previousScrollOffset);
+	_lastTriggerScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
 	_cablesDirty = true;
 }
 
@@ -331,7 +458,12 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	const engine::RigSnapshot& routing)
 {
 	if (_displayedRevision != 0u && _displayedRevision != routing.Revision)
+	{
 		_CancelCableDrag();
+		_deleteTriggerIndex.reset();
+		if (_popupManager && _deletePopup && _popupManager->Top() == _deletePopup)
+			_popupManager->Close();
+	}
 	_displayedRevision = routing.Revision;
 	_displayedRig = routing.Rig;
 	_audioInputCount = audioInputCount;
@@ -406,6 +538,27 @@ void GuiHud::_LayoutPanels()
 	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY + 42u;
 	_triggerRail->SetPosition({ railPosX, railPosY });
 	_triggerRail->SetSize({ _RightRailWidth - 6u, railHeight - _RightRailTopInset });
+	const auto railInnerHeight = _triggerRail->GetSize().Height;
+	const unsigned int headerHeight = 34u;
+	const unsigned int scrollHeight = railInnerHeight > headerHeight + _TriggerFooterHeight
+		? railInnerHeight - headerHeight - _TriggerFooterHeight : 1u;
+	if (_triggerScroll)
+	{
+		_triggerScroll->SetPosition({ 0, static_cast<int>(_TriggerFooterHeight) });
+		_triggerScroll->SetSize({ _RightRailWidth - 6u, scrollHeight });
+	}
+	if (auto header = _triggerRail->TryGetChild(0u))
+		header->SetPosition({ 0, static_cast<int>(railInnerHeight - headerHeight) });
+	if (_addTriggerButton)
+	{
+		_addTriggerButton->SetPosition({ static_cast<int>((_RightRailWidth - 6u - _TriggerControlSize) / 2u), 10 });
+		_addTriggerButton->SetEnabled(!_editsEnabled || _editsEnabled());
+	}
+	if (_revealNewestTrigger && !_triggerNames.empty())
+	{
+		_RevealTrigger(_triggerNames.size() - 1u);
+		_revealNewestTrigger = false;
+	}
 
 	_cablesDirty = true;
 }
@@ -519,11 +672,7 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	_BuildInteractionGeometry(endpoints, cables);
-	const auto canEditTrigger = [this](size_t triggerIndex)
-	{
-		const auto trigger = triggerIndex < _triggers.size() ? _triggers[triggerIndex].lock() : nullptr;
-		return trigger && trigger->CanEditRouting();
-	};
+	const auto canEditTrigger = [this](size_t triggerIndex) { return _CanEditTrigger(triggerIndex); };
 
 	if (const auto cableIndex = CableInteraction::HitCable(cables, point, _CableHitRadius); cableIndex.has_value())
 	{
@@ -584,6 +733,82 @@ void GuiHud::_CancelCableDrag()
 	_cablesDirty = true;
 }
 
+int GuiHud::RevealScrollOffset(int currentOffset, int viewportHeight,
+	int contentHeight, int itemTop, int itemBottom)
+{
+	const auto maxOffset = std::max(0, contentHeight - viewportHeight);
+	auto offset = std::clamp(currentOffset, 0, maxOffset);
+	if (itemTop < offset)
+		offset = itemTop;
+	else if (itemBottom > offset + viewportHeight)
+		offset = itemBottom - viewportHeight;
+	return std::clamp(offset, 0, maxOffset);
+}
+
+bool GuiHud::_CanEditTrigger(size_t triggerIndex) const
+{
+	if ((_editsEnabled && !_editsEnabled()) || triggerIndex >= _triggers.size())
+		return false;
+	const auto trigger = _triggers[triggerIndex].lock();
+	return trigger && trigger->CanEditRouting();
+}
+
+bool GuiHud::_SubmitCandidate(const io::RigFile& candidate)
+{
+	if (!_submitRigEdit || (_editsEnabled && !_editsEnabled()))
+		return false;
+	_CancelCableDrag();
+	return _submitRigEdit(candidate);
+}
+
+void GuiHud::_AddTrigger()
+{
+	if (_editsEnabled && !_editsEnabled())
+		return;
+	const auto candidate = io::RigFileRouting::WithUnboundTrigger(_displayedRig);
+	_revealNewestTrigger = _SubmitCandidate(candidate);
+}
+
+void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
+{
+	if (!_CanEditTrigger(triggerIndex) || triggerIndex >= _displayedRig.Triggers.size() || !_popupManager)
+		return;
+	_CancelCableDrag();
+	_deleteTriggerIndex = triggerIndex;
+	const auto& name = _displayedRig.Triggers[triggerIndex].Name;
+	_deletePopup->SetTitle("Delete trigger?");
+	_deletePopup->SetBodyLines({ "Delete " + name + " and all of its routes?" });
+	_deletePopup->SetPosition({ std::max(0, static_cast<int>(GetSize().Width / 2u) - 230),
+		std::max(0, static_cast<int>(GetSize().Height / 2u) - 105) });
+	_deletePopup->ResetButtonStates();
+	_popupManager->Open(_deletePopup, shared_from_this());
+}
+
+void GuiHud::_ConfirmDelete()
+{
+	const auto index = _deleteTriggerIndex;
+	_deleteTriggerIndex.reset();
+	if (_popupManager) _popupManager->Close();
+	if (!index.has_value() || !_CanEditTrigger(index.value()))
+		return;
+	const auto candidate = io::RigFileRouting::WithoutTrigger(_displayedRig, index.value());
+	if (candidate.has_value())
+		_SubmitCandidate(candidate.value());
+}
+
+void GuiHud::_RevealTrigger(size_t triggerIndex)
+{
+	if (!_triggerScroll || triggerIndex >= _triggerButtons.size())
+		return;
+	const int contentHeight = _triggerList ? static_cast<int>(_triggerList->GetSize().Height) :
+		static_cast<int>((triggerIndex + 1u) * _TriggerButtonHeight + triggerIndex * _RightRailSpacing);
+	const int itemTop = contentHeight - static_cast<int>((triggerIndex + 1u) * _TriggerButtonHeight) -
+		static_cast<int>(triggerIndex * _RightRailSpacing);
+	const int itemBottom = itemTop + static_cast<int>(_TriggerButtonHeight);
+	_triggerScroll->SetScrollOffset(RevealScrollOffset(_triggerScroll->ScrollOffset(),
+		static_cast<int>(_triggerScroll->ViewportHeight()), contentHeight, itemTop, itemBottom));
+}
+
 actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 {
 	if (action.Index == 2 && action.State == actions::TouchAction::TOUCH_DOWN && _cableDrag.has_value())
@@ -603,7 +828,11 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 
 	const auto drag = _cableDrag.value();
 	if (drag.Route.Revision == _displayedRevision)
-		(void)CableInteraction::ReleaseToCandidate(drag, _displayedRig);
+	{
+		const auto release = CableInteraction::ReleaseToCandidate(drag, _displayedRig);
+		if (release.Changed && release.Candidate.has_value())
+			_SubmitCandidate(release.Candidate.value());
+	}
 	_CancelCableDrag();
 	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
 }
@@ -664,14 +893,24 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 
 	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerButtons.size());
 	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerButtons.size());
+	std::vector<bool> triggerVisible(_triggerButtons.size(), true);
+	const auto scrollPos = _triggerScroll ? _triggerScroll->GlobalPosition() : utils::Position2d{};
+	const int scrollBottom = scrollPos.Y - rootPos.Y;
+	const int scrollTop = scrollBottom + (_triggerScroll ? static_cast<int>(_triggerScroll->ViewportHeight()) : 0);
 	for (size_t i = 0u; i < _triggerButtons.size(); ++i)
 	{
 		triggerInputs[i] = { CableInteraction::EndpointKind::TriggerInput,
 			_TriggerAnchorFromTopLeft(_triggerButtons[i], 7, 24), i };
 		triggerOutputs[i] = { CableInteraction::EndpointKind::TriggerOutput,
 			_TriggerAnchorFromBottomLeft(_triggerButtons[i], 7, 12), i };
-		endpoints.push_back(triggerInputs[i]);
-		endpoints.push_back(triggerOutputs[i]);
+		const auto centreY = _TriggerAnchorFromBottomLeft(_triggerButtons[i], 0,
+			static_cast<int>(_TriggerButtonHeight / 2u)).Y;
+		triggerVisible[i] = !_triggerScroll || (centreY >= scrollBottom && centreY <= scrollTop);
+		if (triggerVisible[i])
+		{
+			endpoints.push_back(triggerInputs[i]);
+			endpoints.push_back(triggerOutputs[i]);
+		}
 	}
 
 	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
@@ -707,7 +946,7 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 
 	for (const auto& trigger : _routingGraph)
 	{
-		if (trigger.TriggerIndex >= triggerInputs.size())
+		if (trigger.TriggerIndex >= triggerInputs.size() || !triggerVisible[trigger.TriggerIndex])
 			continue;
 		const auto ys = CableInteraction::Spread(
 			_TriggerAnchorFromBottomLeft(_triggerButtons[trigger.TriggerIndex], 7, 22).Y,
@@ -784,13 +1023,14 @@ utils::Position2d GuiHud::_TriggerAnchorFromTopLeft(const std::shared_ptr<GuiBut
 	const auto rootPos = GlobalPosition();
 	const auto buttonPos = button->GlobalPosition();
 	const auto buttonSize = button->GetSize();
+	const int scrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
 	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
 	const int yFromBottom = std::clamp(static_cast<int>(buttonSize.Height) - offsetFromTopY,
 		0,
 		static_cast<int>(buttonSize.Height));
 	return {
 		buttonPos.X - rootPos.X + clampedX,
-		buttonPos.Y - rootPos.Y + yFromBottom
+		buttonPos.Y - rootPos.Y + yFromBottom - scrollOffset
 	};
 }
 
@@ -801,11 +1041,12 @@ utils::Position2d GuiHud::_TriggerAnchorFromBottomLeft(const std::shared_ptr<Gui
 	const auto rootPos = GlobalPosition();
 	const auto buttonPos = button->GlobalPosition();
 	const auto buttonSize = button->GetSize();
+	const int scrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
 	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
 	const int clampedY = std::clamp(offsetFromBottomY, 0, static_cast<int>(buttonSize.Height));
 	return {
 		buttonPos.X - rootPos.X + clampedX,
-		buttonPos.Y - rootPos.Y + clampedY
+		buttonPos.Y - rootPos.Y + clampedY - scrollOffset
 	};
 }
 

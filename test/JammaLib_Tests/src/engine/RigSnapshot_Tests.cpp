@@ -192,6 +192,15 @@ TEST_F(RigSnapshotTest, HudCableRoutesContainOnlyResolvedGraphEdges)
 	EXPECT_FALSE(routes[2].Source->Available);
 }
 
+TEST(GuiHudLayout, RevealScrollOffsetClampsAndRevealsItems)
+{
+	EXPECT_EQ(0, gui::GuiHud::RevealScrollOffset(-30, 200, 500, 10, 110));
+	EXPECT_EQ(80, gui::GuiHud::RevealScrollOffset(0, 200, 500, 180, 280));
+	EXPECT_EQ(120, gui::GuiHud::RevealScrollOffset(160, 200, 500, 120, 220));
+	EXPECT_EQ(300, gui::GuiHud::RevealScrollOffset(450, 200, 500, 450, 550));
+	EXPECT_EQ(0, gui::GuiHud::RevealScrollOffset(30, 500, 200, 0, 100));
+}
+
 TEST_F(RigSnapshotTest, ReplacesCompleteStationMembershipAndResetRetainsPublishedRig)
 {
 	auto station = RuntimeStation("Station");

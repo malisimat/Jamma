@@ -74,3 +74,9 @@
 1 trigger_ditch_down ninepatch 13 21
 1 trigger_ditch_down_out ninepatch 13 21
 1 trigger_back ninepatch 35 23
+1 trigger_add
+1 trigger_add_over
+1 trigger_add_down
+1 trigger_close
+1 trigger_close_over
+1 trigger_close_down
