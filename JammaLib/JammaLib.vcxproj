@@ -355,6 +355,7 @@
     <ClInclude Include="src\utils\StringUtils.h" />
     <ClInclude Include="src\engine\Station.h" />
     <ClInclude Include="src\engine\StationRemote.h" />
+	<ClInclude Include="src\engine\RoutingRuntime.h" />
     <ClInclude Include="src\io\JamFile.h" />
     <ClInclude Include="src\vst\Vst.h" />
     <ClInclude Include="src\vst\VstDebug.h" />
@@ -495,6 +496,7 @@
     <ClCompile Include="lib\glew\glew.c" />
     <ClCompile Include="lib\rtaudio\RtAudio.cpp" />
     <ClCompile Include="src\engine\StationRemote.cpp" />
+	<ClCompile Include="src\engine\RoutingRuntime.cpp" />
     <ClCompile Include="src\io\JamFile.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />
     <ClCompile Include="src\vst\Vst3Plugin.cpp" />

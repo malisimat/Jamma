@@ -107,6 +107,9 @@
     <ClInclude Include="src\engine\StationRemote.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+	<ClInclude Include="src\engine\RoutingRuntime.h">
+	  <Filter>src\engine</Filter>
+	</ClInclude>
     <ClInclude Include="lib\rtaudio\RtAudio.h">
       <Filter>lib\rtaudio</Filter>
     </ClInclude>
@@ -598,6 +601,9 @@
     <ClCompile Include="src\engine\StationRemote.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+	<ClCompile Include="src\engine\RoutingRuntime.cpp">
+	  <Filter>src\engine</Filter>
+	</ClCompile>
     <ClCompile Include="src\engine\Loop.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>

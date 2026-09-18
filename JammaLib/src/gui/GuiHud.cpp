@@ -9,6 +9,7 @@
 #include "GuiLabel.h"
 #include "GlUtils.h"
 #include "../engine/Trigger.h"
+#include "../engine/RoutingRuntime.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/ResourceLib.h"
@@ -243,32 +244,34 @@ void GuiHud::_BuildTopStrip()
 	inputRowParams.WrapContent = false;
 	_topInputRow = std::make_shared<GuiStackPanel>(inputRowParams);
 
-	const unsigned int totalInputs = _audioInputCount + static_cast<unsigned int>(_midiInputNames.size());
+	const unsigned int totalInputs = static_cast<unsigned int>(_sourceEndpoints.size());
 	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
 	const unsigned int totalSpacing = totalInputs > 1u ? GuiStackPanelParams::PanelRowSpacing * (totalInputs - 1u) : 0u;
 	const unsigned int widthBudget = innerWidth > totalSpacing ? innerWidth - totalSpacing : innerWidth;
 	const unsigned int sourceButtonWidth = totalInputs > 0u ? std::max(64u, widthBudget / totalInputs) : _SourceButtonWidth;
 
-	for (auto i = 0u; i < _audioInputCount; ++i)
+	for (const auto& source : _sourceEndpoints)
 	{
-		auto button = _MakeSourceButton("Audio In " + std::to_string(i + 1u), glm::vec3(0.92f, 0.52f, 0.24f), sourceButtonWidth);
+		const auto isAdc = source.Kind == io::RigRouting::SourceKind::Adc;
+		auto label = isAdc ? "Audio In " + std::to_string(source.AdcChannel + 1u) :
+			(source.MidiDevice == "*" ? "MIDI Any" : "MIDI " + source.MidiDevice);
+		if (!source.Available)
+			label += " (unavailable)";
+		auto button = _MakeSourceButton(label,
+			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
+			sourceButtonWidth);
 		_sourceButtons.push_back(button);
 		_topInputRow->AddChild(button);
 		GuiVuParams vuParams;
-		vuParams.HoldSamps = _AudioInputPeakHoldSamps;
-		_inputVus.push_back(std::make_unique<GuiVu>(vuParams));
-	}
-
-	for (const auto& midiName : _midiInputNames)
-	{
-		auto button = _MakeSourceButton("MIDI " + midiName, glm::vec3(0.22f, 0.72f, 0.66f), sourceButtonWidth);
-		_sourceButtons.push_back(button);
-		_topInputRow->AddChild(button);
-		GuiVuParams vuParams;
-		vuParams.FallRate = _MidiInputFallRate;
-		vuParams.HoldFallRate = _MidiInputHoldFallRate;
-		vuParams.HoldSamps = _MidiInputPeakHoldSamps;
-		vuParams.UseDecibelScale = false;
+		if (isAdc)
+			vuParams.HoldSamps = _AudioInputPeakHoldSamps;
+		else
+		{
+			vuParams.FallRate = _MidiInputFallRate;
+			vuParams.HoldFallRate = _MidiInputHoldFallRate;
+			vuParams.HoldSamps = _MidiInputPeakHoldSamps;
+			vuParams.UseDecibelScale = false;
+		}
 		_inputVus.push_back(std::make_unique<GuiVu>(vuParams));
 	}
 
@@ -325,7 +328,7 @@ void GuiHud::SetMidiInputPeak(unsigned int input, float peak, unsigned int numSa
 
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
-	std::vector<std::shared_ptr<engine::Trigger>> triggers)
+	const engine::RoutingRuntime& routing)
 {
 	_audioInputCount = audioInputCount;
 	_midiInputNames.clear();
@@ -333,15 +336,43 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 		if (!name.empty())
 			_midiInputNames.push_back(std::move(name));
 
-	_triggers.clear();
-	_triggerNames.clear();
-	for (const auto& trigger : triggers)
+	_routingGraph = routing.Graph.Triggers;
+	_sourceEndpoints.clear();
+	for (unsigned int channel = 0u; channel < _audioInputCount; ++channel)
+		_sourceEndpoints.push_back({ io::RigRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
+	for (const auto& name : _midiInputNames)
+		_sourceEndpoints.push_back({ io::RigRouting::SourceKind::Midi, 0u, name, true });
+	for (const auto& resolvedTrigger : _routingGraph)
 	{
-		if (trigger && !trigger->Name().empty())
+		for (const auto& source : resolvedTrigger.Sources)
 		{
-			_triggers.push_back(trigger);
-			_triggerNames.push_back(trigger->Name());
+			const auto exists = std::find_if(_sourceEndpoints.begin(), _sourceEndpoints.end(), [&source](const auto& endpoint)
+			{
+				return endpoint.Kind == source.Kind && endpoint.AdcChannel == source.AdcChannel &&
+					endpoint.MidiDevice == source.MidiDevice;
+			});
+			if (exists == _sourceEndpoints.end())
+				_sourceEndpoints.push_back(source);
 		}
+	}
+
+	_triggers.assign(_routingGraph.size(), {});
+	_triggerNames.clear();
+	for (const auto& resolvedTrigger : _routingGraph)
+	{
+		auto label = resolvedTrigger.TriggerName;
+		if (resolvedTrigger.Reason == io::RigRouting::Warning::TargetMissing)
+			label += " [target missing]";
+		else if (resolvedTrigger.Reason == io::RigRouting::Warning::TargetAmbiguous)
+			label += " [target ambiguous]";
+		else if (!resolvedTrigger.StationIndex.has_value())
+			label += " [unbound]";
+		_triggerNames.push_back(std::move(label));
+	}
+	for (const auto& runtimeTrigger : routing.Triggers)
+	{
+		if (runtimeTrigger.RigTriggerIndex < _triggers.size())
+			_triggers[runtimeTrigger.RigTriggerIndex] = runtimeTrigger.Instance;
 	}
 	_RebuildPanels();
 }
@@ -478,6 +509,19 @@ void GuiHud::SetStationAnchors(std::vector<StationAnchor> anchors)
 	_cablesDirty = true;
 }
 
+std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGraph& graph)
+{
+	std::vector<CableRoute> routes;
+	for (const auto& trigger : graph.Triggers)
+	{
+		for (const auto& source : trigger.Sources)
+			routes.push_back({ CableRoute::Kind::Capture, trigger.TriggerIndex, source, std::nullopt });
+		if (trigger.StationIndex.has_value())
+			routes.push_back({ CableRoute::Kind::Station, trigger.TriggerIndex, std::nullopt, trigger.StationIndex });
+	}
+	return routes;
+}
+
 void GuiHud::_RebuildCableVertices()
 {
 	_cableControlPoints.clear();
@@ -490,23 +534,47 @@ void GuiHud::_RebuildCableVertices()
 
 	const glm::vec4 inputToTriggerColor(0.86f, 0.24f, 0.26f, 0.90f);
 	const glm::vec4 triggerToStationColor(0.92f, 0.79f, 0.20f, 0.88f);
-	for (std::size_t sourceIndex = 0u; sourceIndex < _sourceButtons.size(); ++sourceIndex)
+	engine::RoutingGraph graph;
+	graph.Triggers = _routingGraph;
+	for (const auto& route : BuildCableRoutes(graph))
 	{
-		const auto triggerIndex = sourceIndex % _triggerButtons.size();
-		_AppendCurve(_ButtonCenter(_sourceButtons[sourceIndex]),
-			_TriggerAnchorFromTopLeft(_triggerButtons[triggerIndex], 7, 12),
-			inputToTriggerColor);
-	}
+		if (route.TriggerIndex >= _triggerButtons.size())
+			continue;
 
-	// Trigger -> station cables: one per trigger button if a station anchor exists.
-	for (std::size_t i = 0u; i < _triggerButtons.size() && i < _stationAnchors.size(); ++i)
-	{
-		const auto& anchor = _stationAnchors[i];
+		if (route.RouteKind == CableRoute::Kind::Capture && route.Source.has_value())
+		{
+			const auto& source = route.Source.value();
+			const auto sourceIt = std::find_if(_sourceEndpoints.begin(), _sourceEndpoints.end(), [&source](const auto& endpoint)
+			{
+				return endpoint.Kind == source.Kind && endpoint.AdcChannel == source.AdcChannel &&
+					endpoint.MidiDevice == source.MidiDevice;
+			});
+			if (sourceIt == _sourceEndpoints.end())
+				continue;
+			const auto sourceIndex = static_cast<size_t>(std::distance(_sourceEndpoints.begin(), sourceIt));
+			if (sourceIndex >= _sourceButtons.size())
+				continue;
+			const auto color = source.Available ? inputToTriggerColor : glm::vec4(0.55f, 0.55f, 0.55f, 0.78f);
+			_AppendCurve(_ButtonCenter(_sourceButtons[sourceIndex]),
+				_TriggerAnchorFromTopLeft(_triggerButtons[route.TriggerIndex], 7, 12),
+				color);
+			continue;
+		}
+
+		if (route.RouteKind != CableRoute::Kind::Station || !route.StationIndex.has_value())
+			continue;
+		const auto anchorIt = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&route](const auto& anchor)
+		{
+			return anchor.StationIndex == route.StationIndex.value();
+		});
+		if (anchorIt == _stationAnchors.end())
+			continue;
+		const auto& anchor = *anchorIt;
 		// Skip off-screen stations (sentinel value set when projected behind camera).
 		if (anchor.screenPos.X < -1000)
 			continue;
 		_AppendStationCurve(
-			_TriggerAnchorFromBottomLeft(_triggerButtons[i], 7, 12),
+			_TriggerAnchorFromBottomLeft(_triggerButtons[route.TriggerIndex], 7, 12),
 			anchor.screenPos,
 			triggerToStationColor);
 	}

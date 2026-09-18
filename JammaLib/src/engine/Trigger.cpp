@@ -107,6 +107,7 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 	trigParams.Name = trigStruct.Name;
 
 	auto trigger = std::make_shared<Trigger>(trigParams);
+	trigger->_midiInputMode = trigStruct.MidiInputs;
 
 	for (auto trigPair : trigStruct.TriggerPairs)
 	{

@@ -7,6 +7,7 @@
 #include "GuiPanel.h"
 #include "GuiStackPanel.h"
 #include "GuiVu.h"
+#include "../io/RigFile.h"
 
 namespace resources
 {
@@ -16,6 +17,8 @@ namespace resources
 
 namespace engine
 {
+	struct RoutingGraph;
+	struct RoutingRuntime;
 	class Trigger;
 }
 
@@ -38,8 +41,19 @@ namespace gui
 
 		struct StationAnchor
 		{
+			size_t StationIndex = 0u;
+			std::string StationName;
 			utils::Position2d screenPos;
 			glm::vec4 color;
+		};
+
+		struct CableRoute
+		{
+			enum class Kind { Capture, Station };
+			Kind RouteKind = Kind::Capture;
+			size_t TriggerIndex = 0u;
+			std::optional<io::RigRouting::Source> Source;
+			std::optional<size_t> StationIndex;
 		};
 
 	public:
@@ -50,8 +64,9 @@ namespace gui
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
-			std::vector<std::shared_ptr<engine::Trigger>> triggers);
+			const engine::RoutingRuntime& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
+		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -124,6 +139,8 @@ namespace gui
 		std::vector<std::string> _midiInputNames;
 		std::vector<std::string> _triggerNames;
 		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
+		std::vector<io::RigRouting::Source> _sourceEndpoints;
+		std::vector<io::RigRouting::TriggerResolution> _routingGraph;
 		bool _cableRevealHeld = false;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;

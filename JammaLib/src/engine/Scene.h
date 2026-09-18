@@ -54,6 +54,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "StationRemote.h"
+#include "RoutingRuntime.h"
 #include "../actions/ActionUndoHistory.h"
 
 namespace engine
@@ -286,7 +287,7 @@ namespace engine
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
 		glm::mat4 _View();
-		void _AddStation(std::shared_ptr<Station> station);
+		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
@@ -390,6 +391,7 @@ namespace engine
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
+		std::shared_ptr<const RoutingRuntime> _routingRuntime;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

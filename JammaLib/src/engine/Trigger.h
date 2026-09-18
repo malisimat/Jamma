@@ -270,6 +270,7 @@ namespace engine
 		void ClearInputChannels();
 		void AddMidiInputDevice(std::string device);
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
+		io::RigFile::Trigger::MidiInputMode MidiInputMode() const noexcept { return _midiInputMode; }
 		TriggerState GetState() const;
 		bool IsActivateInputDown() const;
 		bool IsDitchInputDown() const;
@@ -361,6 +362,7 @@ namespace engine
 		std::atomic<std::size_t> _externalControlActionTail{ 0u };
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
+		io::RigFile::Trigger::MidiInputMode _midiInputMode = io::RigFile::Trigger::MidiInputMode::LegacyAny;
 		TriggerState _state;
 		std::atomic<std::uint8_t> _publishedTriggerState{ static_cast<std::uint8_t>(TRIGSTATE_DEFAULT) };
 		std::atomic<bool> _publishedActivateInputDown{ false };

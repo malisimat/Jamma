@@ -513,9 +513,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			hudMidiInputs.push_back(device.Name);
 	}
 
-	std::vector<std::shared_ptr<Trigger>> hudTriggers;
-	hudTriggers.reserve(rigStruct.Triggers.size());
-
 	TriggerParams trigParams;
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
@@ -530,6 +527,8 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	MergeMixBehaviourParams mergeParams;
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
+	std::vector<std::shared_ptr<Station>> initialStations;
+	initialStations.reserve(jamStruct.Stations.size());
 
 	for (auto& stationStruct : jamStruct.Stations)
 	{
@@ -542,31 +541,41 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 				station.value()->SetAllowedMidiChannels({ defaultChannel });
 			}
 
-			if (rigStruct.Triggers.size() > stationParams.Index)
-			{
-				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
-
-				if (trigger.has_value())
-				{
-					if (rigStruct.Triggers[stationParams.Index].MidiTrigger.has_value())
-						scene->_RegisterMidiTriggerRoute(
-							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
-							trigger.value());
-					station.value()->AddTrigger(trigger.value());
-					hudTriggers.push_back(trigger.value());
-				}
-			}
-
-			scene->_AddStation(station.value());
+			initialStations.push_back(station.value());
 		}
 
 		stationParams.Index++;
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+	auto routingRuntime = RoutingRuntime::BuildInitial(rigStruct,
+		jamStruct.Stations,
+		rigStruct.User.Audio.NumChannelsIn,
+		hudMidiInputs,
+		trigParams);
+	for (const auto& runtimeTrigger : routingRuntime.Triggers)
+	{
+		if (!runtimeTrigger.StationIndex.has_value() ||
+			runtimeTrigger.StationIndex.value() >= initialStations.size())
+			continue;
+
+		initialStations[runtimeTrigger.StationIndex.value()]->AddTrigger(runtimeTrigger.Instance);
+	}
+	for (auto& station : initialStations)
+		scene->_AddStation(std::move(station), false);
+	for (const auto& runtimeTrigger : routingRuntime.Triggers)
+	{
+		if (!runtimeTrigger.StationIndex.has_value())
+			continue;
+		const auto& triggerConfig = routingRuntime.Rig.Triggers[runtimeTrigger.RigTriggerIndex];
+		if (triggerConfig.MidiTrigger.has_value())
+			scene->_RegisterMidiTriggerRoute(triggerConfig.MidiTrigger->Device, runtimeTrigger.Instance);
+	}
+	scene->_routingRuntime = std::make_shared<const RoutingRuntime>(std::move(routingRuntime));
+	scene->_PublishAudioStations();
 
 	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), *scene->_routingRuntime);
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
@@ -1921,8 +1930,9 @@ void Scene::_UpdateHudStationAnchors()
 	std::vector<gui::GuiHud::StationAnchor> anchors;
 	anchors.reserve(_stations.size());
 
-	for (const auto& station : _stations)
+	for (size_t stationIndex = 0u; stationIndex < _stations.size(); ++stationIndex)
 	{
+		const auto& station = _stations[stationIndex];
 		auto modelPos = station->ModelPosition();
 		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
 		utils::Position2d screenPos{ -9999, -9999 };
@@ -1934,7 +1944,7 @@ void Scene::_UpdateHudStationAnchors()
 				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
 			};
 		}
-		anchors.push_back({ screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+		anchors.push_back({ stationIndex, station->Name(), screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
 	}
 
 	_hudPanel->SetStationAnchors(std::move(anchors));
@@ -2080,7 +2090,7 @@ std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
 	return _stations;
 }
 
-void Scene::_AddStation(std::shared_ptr<Station> station)
+void Scene::_AddStation(std::shared_ptr<Station> station, bool publishAudioStations)
 {
 	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
@@ -2102,7 +2112,8 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		_stations.push_back(station);
 	}
 	station->SetGlobalMidiQuantState(_globalMidiQuantState);
-	_PublishAudioStations();
+	if (publishAudioStations)
+		_PublishAudioStations();
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)

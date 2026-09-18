@@ -1800,17 +1800,23 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	{
 		if (!trigger)
 			continue;
+		const auto mode = trigger->MidiInputMode();
+		if ((mode == io::RigFile::Trigger::MidiInputMode::Any) ||
+			(mode == io::RigFile::Trigger::MidiInputMode::LegacyAny))
+			return true;
+		if (mode == io::RigFile::Trigger::MidiInputMode::None)
+			continue;
 		const auto& devices = trigger->MidiInputDevices();
 		if (devices.empty())
-			return true;
+			continue;
 		for (const auto& d : devices)
 		{
 			if (d == deviceName)
 				return true;
 		}
 	}
-	// No trigger has a device restriction — allow all.
-	return _triggers.empty();
+	// Live MIDI requires an explicit resolved trigger capture route.
+	return false;
 }
 
 bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
