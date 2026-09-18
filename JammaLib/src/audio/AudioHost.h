@@ -22,6 +22,11 @@
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 
+namespace engine
+{
+	struct RigSnapshot;
+}
+
 namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
@@ -41,6 +46,17 @@ namespace audio
 		void Close();
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
+		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		// Call off the audio thread after a newer revision has been acknowledged.
+		void ReleaseRigSnapshotsBefore(std::uint64_t revision);
+		std::uint64_t AppliedRigRevision() const noexcept
+		{
+			return _appliedRigRevision.load(std::memory_order_acquire);
+		}
+		bool RoutingEditsEligible() const noexcept
+		{
+			return _routingEditsEligible.load(std::memory_order_acquire);
+		}
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
@@ -96,6 +112,7 @@ namespace audio
 
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
+		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
@@ -151,6 +168,15 @@ namespace audio
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
+		// Published off the audio thread and acquired once at each block boundary.
+		// The retained list prevents the callback's local snapshot reference from
+		// ever becoming the last owner; it is cleared only after audio has stopped.
+		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
+		std::mutex _retainedRigSnapshotsMutex;
+		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
+		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };
+		std::atomic<bool> _routingEditsEligible{ false };
+		std::uint64_t _audioRigRevision = 0u;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		// Audio-thread owned phase-map geometry. The map is rebased after every
 		// accepted common correction so the next block cannot undo it.

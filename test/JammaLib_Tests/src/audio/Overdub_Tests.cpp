@@ -3,6 +3,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include "../TestRigMembership.h"
 #include "gtest/gtest.h"
 #include "actions/KeyAction.h"
 #include "audio/AudioDevice.h"
@@ -422,7 +423,7 @@ static OverdubSession CreateOverdubSession(
 	session.Station = station;
 	session.SourceTake = sourceTake;
 
-	session.Station->AddTrigger(MakeOverdubTrigger(0u));
+	AddTestRigTrigger(session.Station, MakeOverdubTrigger(0u));
 	if (stationSetup)
 		stationSetup(session.Station);
 	DrainCommitJobs(session.Station);

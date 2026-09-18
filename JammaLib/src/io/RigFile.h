@@ -105,7 +105,7 @@ namespace io
 		std::vector<Trigger> Triggers;
 	};
 
-	struct RigRouting
+	struct RigFileRouting
 	{
 		enum class SourceKind { Adc, Midi };
 		enum class Warning { None, LegacyStationTargetMigrated, TargetMissing, TargetAmbiguous };
@@ -140,12 +140,12 @@ namespace io
 			unsigned int availableAdcChannels,
 			const std::vector<std::string>& availableMidiDevices);
 		static std::string NextTriggerName(const RigFile& rig);
-		static RigFile AddUnboundTrigger(const RigFile& rig);
-		static std::optional<RigFile> RemoveTrigger(const RigFile& rig, size_t triggerIndex);
-		static std::optional<RigFile> SetStationTarget(const RigFile& rig, size_t triggerIndex, std::string target);
-		static std::optional<RigFile> AddAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
-		static std::optional<RigFile> RemoveAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
-		static std::optional<RigFile> AddMidiInput(const RigFile& rig, size_t triggerIndex, std::string device);
-		static std::optional<RigFile> RemoveMidiInput(const RigFile& rig, size_t triggerIndex, const std::string& device);
+		static RigFile WithUnboundTrigger(const RigFile& rig);
+		static std::optional<RigFile> WithoutTrigger(const RigFile& rig, size_t triggerIndex);
+		static std::optional<RigFile> WithStationTarget(const RigFile& rig, size_t triggerIndex, std::string target);
+		static std::optional<RigFile> WithAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
+		static std::optional<RigFile> WithoutAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel);
+		static std::optional<RigFile> WithMidiInput(const RigFile& rig, size_t triggerIndex, std::string device);
+		static std::optional<RigFile> WithoutMidiInput(const RigFile& rig, size_t triggerIndex, const std::string& device);
 	};
 }

@@ -344,6 +344,16 @@ void Trigger::OnTick(Time curTime,
 	}
 }
 
+bool Trigger::CanEditRouting() const noexcept
+{
+	return _state == TRIGSTATE_DEFAULT &&
+		!_isLastActivateDownRaw && !_isLastDitchDownRaw && !_isDitchDown &&
+		_externalControlActionHead.load(std::memory_order_relaxed) ==
+			_externalControlActionTail.load(std::memory_order_acquire) &&
+		_delayedActions.empty() && _delayedTriggerActions.empty() &&
+		_loopTakeHistory.empty();
+}
+
 void Trigger::_ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params) noexcept
 {

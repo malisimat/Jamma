@@ -56,7 +56,7 @@
     <ClCompile Include="src\engine\Trigger_Tests.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
-	<ClCompile Include="src\engine\RoutingRuntime_Tests.cpp">
+	<ClCompile Include="src\engine\RigSnapshot_Tests.cpp">
 	  <Filter>src\engine</Filter>
 	</ClCompile>
     <ClCompile Include="src\engine\Quantisation_Tests.cpp">

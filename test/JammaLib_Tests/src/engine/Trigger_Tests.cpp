@@ -1,5 +1,6 @@
-﻿
+
 #include "gtest/gtest.h"
+#include "../TestRigMembership.h"
 #include <sstream>
 #include "resources/ResourceLib.h"
 #include "midi/MidiEvent.h"
@@ -962,12 +963,12 @@ TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 	TestScene scene(sceneParams, userConfig);
 
 	auto firstStation = MakeTestStation("station-a");
-	firstStation->AddTrigger(MakeSharedDefaultTrigger());
-	firstStation->AddTrigger(MakeSharedDefaultTrigger());
+	AddTestRigTrigger(firstStation, MakeSharedDefaultTrigger());
+	AddTestRigTrigger(firstStation, MakeSharedDefaultTrigger());
 	scene.AddStationForTest(firstStation);
 
 	auto secondStation = MakeTestStation("station-b");
-	secondStation->AddTrigger(MakeSharedDefaultTrigger());
+	AddTestRigTrigger(secondStation, MakeSharedDefaultTrigger());
 	scene.AddStationForTest(secondStation);
 
 	KeyAction action;
@@ -1133,7 +1134,7 @@ TEST(SceneReset, KeyTriggerDitchWhileRecording_ResetsScene) {
 	TestScene scene(sceneParams, userConfig);
 
 	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger());
+	AddTestRigTrigger(station, MakeSharedDefaultTrigger());
 	scene.AddStationForTest(station);
 
 	// Activate: start recording
@@ -1174,7 +1175,7 @@ TEST(SceneReset, KeyTriggerDebouncedDitch_ResetsSceneViaOnTick) {
 	TestScene scene(sceneParams, userConfig);
 
 	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger(debounceMs));
+	AddTestRigTrigger(station, MakeSharedDefaultTrigger(debounceMs));
 	scene.AddStationForTest(station);
 
 	auto curTime = GetTime();
@@ -1270,7 +1271,7 @@ TEST(SceneReset, KeyTriggerDitchInOverdub_ResetsScene) {
 	TestScene scene(sceneParams, userConfig);
 
 	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger());
+	AddTestRigTrigger(station, MakeSharedDefaultTrigger());
 	scene.AddStationForTest(station);
 
 	auto curTime = GetTime();

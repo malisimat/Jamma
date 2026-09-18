@@ -83,7 +83,7 @@ Station::Station(StationParams params,
 	_routerToggle(nullptr),
 	_router(nullptr),
 	_loopTakes(),
-	_triggers(),
+	_triggerMembership(std::make_shared<const TriggerMembership>()),
 	_backLoopTakes(),
 	_loopTakeSnapshot(nullptr),
 	_audioMixers(),
@@ -863,7 +863,8 @@ ActionResult Station::OnTriggerEvent(TriggerSource source,
 		return ActionResult::NoAction();
 
 	auto result = ActionResult::NoAction();
-	for (auto& trig : _triggers)
+	const auto membership = TriggerMembershipSnapshot();
+	for (const auto& trig : *membership)
 	{
 		auto trigResult = trig->OnEvent(source, value, state, action, device);
 		if (!trigResult.IsEaten)
@@ -1284,7 +1285,8 @@ void Station::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	for (auto& trig : _triggers)
+	const auto membership = TriggerMembershipSnapshot();
+	for (const auto& trig : *membership)
 	{
 		trig->OnTick(curTime, samps, cfg, params);
 	}
@@ -1323,7 +1325,6 @@ void Station::Reset()
 	_loopTakes.clear();
 	_PublishLoopTakeSnapshot();
 
-	_triggers.clear();
 }
 
 std::shared_ptr<LoopTake> Station::AddTake()
@@ -1375,11 +1376,16 @@ std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 	return takes;
 }
 
-void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
+void Station::PublishTriggerMembership(std::shared_ptr<const TriggerMembership> membership) noexcept
 {
-	trigger->SetReceiver(ActionReceiver::shared_from_this());
+	if (!membership)
+		return;
+	_triggerMembership.store(std::move(membership), std::memory_order_release);
+}
 
-	_triggers.push_back(trigger);
+std::shared_ptr<const Station::TriggerMembership> Station::TriggerMembershipSnapshot() const noexcept
+{
+	return _triggerMembership.load(std::memory_order_acquire);
 }
 
 unsigned int Station::NumTakes() const
@@ -1756,7 +1762,8 @@ void Station::OnBounce(unsigned int numSamps,
 	if (!state)
 		return;
 
-	for (auto& trigger : _triggers)
+	const auto membership = TriggerMembershipSnapshot();
+	for (const auto& trigger : *membership)
 	{
 		auto takes = trigger->GetTakes();
 
@@ -1796,7 +1803,8 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 
 bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept
 {
-	for (const auto& trigger : _triggers)
+	const auto membership = TriggerMembershipSnapshot();
+	for (const auto& trigger : *membership)
 	{
 		if (!trigger)
 			continue;

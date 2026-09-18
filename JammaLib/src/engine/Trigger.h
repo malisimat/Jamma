@@ -275,6 +275,8 @@ namespace engine
 		bool IsActivateInputDown() const;
 		bool IsDitchInputDown() const;
 		bool IsDitchDown() const;
+		// Audio-thread quiescence predicate used before a routing replacement.
+		bool CanEditRouting() const noexcept;
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);

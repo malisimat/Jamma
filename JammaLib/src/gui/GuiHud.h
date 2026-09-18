@@ -18,7 +18,7 @@ namespace resources
 namespace engine
 {
 	struct RoutingGraph;
-	struct RoutingRuntime;
+	struct RigSnapshot;
 	class Trigger;
 }
 
@@ -52,7 +52,7 @@ namespace gui
 			enum class Kind { Capture, Station };
 			Kind RouteKind = Kind::Capture;
 			size_t TriggerIndex = 0u;
-			std::optional<io::RigRouting::Source> Source;
+			std::optional<io::RigFileRouting::Source> Source;
 			std::optional<size_t> StationIndex;
 		};
 
@@ -64,7 +64,7 @@ namespace gui
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
 		void SetRoutingConfig(unsigned int audioInputCount,
 			std::vector<std::string> midiInputNames,
-			const engine::RoutingRuntime& routing);
+			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 
@@ -139,8 +139,8 @@ namespace gui
 		std::vector<std::string> _midiInputNames;
 		std::vector<std::string> _triggerNames;
 		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
-		std::vector<io::RigRouting::Source> _sourceEndpoints;
-		std::vector<io::RigRouting::TriggerResolution> _routingGraph;
+		std::vector<io::RigFileRouting::Source> _sourceEndpoints;
+		std::vector<io::RigFileRouting::TriggerResolution> _routingGraph;
 		bool _cableRevealHeld = false;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;

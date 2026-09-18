@@ -137,7 +137,7 @@ station target resolves.
 
 ### Immutable revision values
 
-Introduce one `RoutingRuntimeSnapshot` built entirely off the audio path. It
+Use one `engine::RigSnapshot` built entirely off the audio path. It
 contains:
 
 - monotonic `Revision`;

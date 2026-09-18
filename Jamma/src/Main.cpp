@@ -391,7 +391,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::vector<std::string> availableMidiDevices;
 		for (const auto& device : rig.User.Midi.Devices)
 			if (device.Enabled && !device.Name.empty()) availableMidiDevices.push_back(device.Name);
-		auto resolution = io::RigRouting::Resolve(rig, jam.Stations, rig.User.Audio.NumChannelsIn, availableMidiDevices);
+		auto resolution = io::RigFileRouting::Resolve(rig, jam.Stations, rig.User.Audio.NumChannelsIn, availableMidiDevices);
 		if (resolution.RequiresSave)
 		{
 			if (saveRig(resolution.CandidateRig))

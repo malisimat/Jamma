@@ -3,11 +3,11 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
-#include <set>
 #include "../base/Action.h"
 #include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../engine/Trigger.h"
+#include "../engine/RigSnapshot.h"
 #include "../io/UserConfig.h"
 #include "../vst/IVstPlugin.h"
 #include "MidiTimestampMapper.h"
@@ -437,8 +437,7 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	if (cfg.Midi.Devices.empty())
 	{
 		std::cout << "[MIDI] No MIDI devices configured." << std::endl;
-		_PublishMidiTriggerRoutes();
-		return;
+			return;
 	}
 
 	const auto sampleRate = cfg.Audio.SampleRate;
@@ -487,12 +486,13 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 				ingress.data1 = data1;
 				ingress.data2 = data2;
 				ingress._pad = 0u;
-				endpoint->Ingress.Push(ingress);
+					const auto rigRevision = notification->RigRevision.load(std::memory_order_acquire);
+					endpoint->Ingress.Push({ ingress, rigRevision });
 
 				const auto liveEvent = DeriveStationEvent(ingress,
 					_LiveMidiConfigAffectsLive(inputConfig) ? _LiveMidiConfigForcedChannel(inputConfig) : 0u);
-				endpoint->LiveIngress.Push({ liveEvent,
-					_LiveMidiConfigGeneration(inputConfig), endpoint->NextLiveSequence++ });
+					endpoint->LiveIngress.Push({ liveEvent, rigRevision,
+						_LiveMidiConfigGeneration(inputConfig), endpoint->NextLiveSequence++ });
 				SetEvent(notification->WorkEvent);
 			},
 			loggingConfig.Midi == "verbose");
@@ -508,42 +508,9 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	_midiInputs.store(midiInputs, std::memory_order_release);
 	_StartLiveMidiDispatcher();
 
-	std::set<std::string> activeMidiInputNames;
-	for (const auto& input : *midiInputs)
-	{
-		if (input)
-			activeMidiInputNames.insert(input->ConfiguredName);
-	}
-
-	for (auto& route : _midiTriggerRoutes)
-	{
-		route.DeviceSlot = UnresolvedMidiDeviceSlot;
-		for (const auto& input : *midiInputs)
-		{
-			if (input && (input->ConfiguredName == route.DeviceName))
-			{
-				route.DeviceSlot = input->DeviceSlot;
-				break;
-			}
-		}
-
-		if (route.DeviceSlot == UnresolvedMidiDeviceSlot)
-			std::cout << "[MIDI] No active MIDI input matches trigger device \"" << route.DeviceName << "\"." << std::endl;
-
-		if (route.Trigger)
-		{
-			for (const auto& midiInputDevice : route.Trigger->MidiInputDevices())
-			{
-				if (!midiInputDevice.empty() && (activeMidiInputNames.find(midiInputDevice) == activeMidiInputNames.end()))
-				{
-					std::cout << "[MIDI] No active MIDI input matches loop-record device \""
-						<< midiInputDevice << "\" for trigger \"" << route.Trigger->Name() << "\"." << std::endl;
-				}
-			}
-		}
-	}
-
-	_PublishMidiTriggerRoutes();
+	const auto published = _rigInputDispatch.load(std::memory_order_acquire);
+	if (published && published->Snapshot)
+		PublishRigInputDispatch(published->Snapshot);
 
 	if (midiInputs->empty())
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
@@ -568,10 +535,7 @@ void MidiRouter::CloseMidi()
 {
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(),
 		_channelOverrideLive.load(std::memory_order_acquire));
-	_liveMidiRoutes.store(std::make_shared<const LiveMidiRoutingSnapshot>(), std::memory_order_release);
-	for (auto& route : _midiTriggerRoutes)
-		route.DeviceSlot = UnresolvedMidiDeviceSlot;
-	_PublishMidiTriggerRoutes();
+	PublishEmptyRigInputDispatch();
 
 	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
 	if (midiInputs)
@@ -586,40 +550,74 @@ void MidiRouter::CloseMidi()
 	_StopLiveMidiDispatcher();
 }
 
-void MidiRouter::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations)
+void MidiRouter::PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot)
 {
-	auto routes = std::make_shared<LiveMidiRoutingSnapshot>();
-	routes->Generation = ++_nextLiveMidiRoutingGeneration;
+	if (!snapshot)
+	{
+		PublishEmptyRigInputDispatch();
+		return;
+	}
+	auto published = std::make_shared<PublishedRigInputDispatch>();
+	published->Revision = snapshot->Revision;
+	published->Snapshot = std::move(snapshot);
+	published->LiveMidi.Generation = ++_nextLiveMidiRoutingGeneration;
 
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
 	if (midiInputs)
 	{
-		routes->RecipientsByDeviceSlot.resize(midiInputs->size());
+		published->LiveMidi.RecipientsByDeviceSlot.resize(midiInputs->size());
+		for (const auto& route : published->Snapshot->InputDispatch.MidiTriggers)
+		{
+			MidiTriggerRoute resolved{ route.DeviceName.empty() ? "default" : route.DeviceName,
+				UnresolvedMidiDeviceSlot, route.TriggerInstance };
+			for (const auto& input : *midiInputs)
+				if (input && input->ConfiguredName == resolved.DeviceName)
+				{
+					resolved.DeviceSlot = input->DeviceSlot;
+					break;
+				}
+			published->MidiTriggers.push_back(std::move(resolved));
+		}
 		for (const auto& input : *midiInputs)
 		{
-			if (!input || input->DeviceSlot >= routes->RecipientsByDeviceSlot.size())
+			if (!input || input->DeviceSlot >= published->LiveMidi.RecipientsByDeviceSlot.size())
 				continue;
 
-			auto& recipients = routes->RecipientsByDeviceSlot[input->DeviceSlot];
-			for (const auto& station : stations)
+			auto& recipients = published->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot];
+			for (const auto& route : published->Snapshot->InputDispatch.LiveMidi)
 			{
-				if (!station || station->IsRemote() || !station->AcceptsLiveMidiFromDevice(input->ConfiguredName))
+				if ((route.DeviceName.empty() ? "default" : route.DeviceName) != input->ConfiguredName)
 					continue;
-
-				std::uint16_t channelMask = 0u;
-				for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+				for (const auto& station : route.Recipients)
 				{
-					if (station->AcceptsLiveMidiChannel(channel))
-						channelMask = static_cast<std::uint16_t>(channelMask | (1u << channel));
+					if (!station || station->IsRemote()) continue;
+					std::uint16_t channelMask = 0u;
+					for (std::uint8_t channel = 0u; channel < 16u; ++channel)
+						if (station->AcceptsLiveMidiChannel(channel))
+							channelMask = static_cast<std::uint16_t>(channelMask | (1u << channel));
+					if (channelMask != 0u) recipients.push_back({ station, channelMask });
 				}
-				if (channelMask != 0u)
-					recipients.push_back({ station, channelMask });
 			}
 		}
 	}
 
-	_liveMidiRoutes.store(routes, std::memory_order_release);
-	_PublishLiveMidiInputConfig(routes->Generation, ForcedChannelOverride(),
+	_rigInputDispatch.store(published, std::memory_order_release);
+	if (_liveMidiDispatchNotification)
+		_liveMidiDispatchNotification->RigRevision.store(published->Revision, std::memory_order_release);
+	_PublishLiveMidiInputConfig(published->LiveMidi.Generation, ForcedChannelOverride(),
+		_channelOverrideLive.load(std::memory_order_acquire));
+	if (_liveMidiDispatchNotification && _liveMidiDispatchNotification->WorkEvent)
+		SetEvent(_liveMidiDispatchNotification->WorkEvent);
+}
+
+void MidiRouter::PublishEmptyRigInputDispatch()
+{
+	auto published = std::make_shared<PublishedRigInputDispatch>();
+	published->LiveMidi.Generation = ++_nextLiveMidiRoutingGeneration;
+	_rigInputDispatch.store(published, std::memory_order_release);
+	if (_liveMidiDispatchNotification)
+		_liveMidiDispatchNotification->RigRevision.store(0u, std::memory_order_release);
+	_PublishLiveMidiInputConfig(published->LiveMidi.Generation, ForcedChannelOverride(),
 		_channelOverrideLive.load(std::memory_order_acquire));
 	if (_liveMidiDispatchNotification && _liveMidiDispatchNotification->WorkEvent)
 		SetEvent(_liveMidiDispatchNotification->WorkEvent);
@@ -665,7 +663,8 @@ void MidiRouter::InitSerial(const io::UserConfig& cfg)
 			[this](const io::SerialTriggerEvent& event)
 			{
 				std::scoped_lock lock(_serialIngressMutex);
-				_serialIngress.Push(event);
+				const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
+				_serialIngress.Push({ event, dispatch ? dispatch->Revision : 0u });
 			});
 
 		if (!opened)
@@ -692,15 +691,6 @@ void MidiRouter::CloseSerial()
 		std::scoped_lock lock(_serialIngressMutex);
 		_serialIngress.Clear();
 	}
-}
-
-void MidiRouter::RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger)
-{
-	if (!trigger)
-		return;
-
-	_midiTriggerRoutes.push_back({ deviceName.empty() ? "default" : deviceName, UnresolvedMidiDeviceSlot, trigger });
-	_PublishMidiTriggerRoutes();
 }
 
 void MidiRouter::_ConsumeEditorAutomation(const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -866,7 +856,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	const audio::AudioStreamParams& audioParams) noexcept
 {
 	TriggerDispatchSummary summary;
-	midi::MidiEvent ingress{};
+	MidiInputEndpoint::RigMidiIngressEvent queued{};
 	const auto midiInputs = _midiInputs.load(std::memory_order_acquire);
 	if (!midiInputs)
 	{
@@ -878,8 +868,12 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 		if (!input)
 			continue;
 
-		while (input->Ingress.Pop(ingress))
+		while (input->Ingress.Pop(queued))
 		{
+			const auto dispatchState = _rigInputDispatch.load(std::memory_order_acquire);
+			if (!dispatchState || queued.RigRevision != dispatchState->Revision)
+				continue;
+			const auto& ingress = queued.Event;
 			const auto triggerEvent = DeriveStationEvent(ingress,
 				_channelOverrideTriggers.load(std::memory_order_acquire)
 					? ForcedChannelOverride() : 0u);
@@ -996,12 +990,16 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 	static const std::string EmptyDevice;
 	while (true)
 	{
-		io::SerialTriggerEvent ev{};
+		SerialIngressEvent queued{};
 		{
 			std::scoped_lock lock(_serialIngressMutex);
-			if (!_serialIngress.Pop(ev))
+			if (!_serialIngress.Pop(queued))
 				break;
 		}
+		const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
+		if (!dispatch || queued.RigRevision != dispatch->Revision || !dispatch->Snapshot)
+			continue;
+		const auto& ev = queued.Event;
 
 		base::Action action;
 		action.SetActionTime(utils::Timer::GetTime());
@@ -1009,9 +1007,10 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		action.SetAudioParams(audioParams);
 		const auto& device = ev.Device ? *ev.Device : EmptyDevice;
 
-		for (const auto& station : stations)
+		for (const auto& trigger : dispatch->Snapshot->InputDispatch.SerialTriggers)
 		{
-			auto res = station->OnTriggerEvent(
+			if (!trigger) continue;
+			auto res = trigger->OnEvent(
 				engine::TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
@@ -1052,11 +1051,11 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	triggerAction.SetAudioParams(audioParams);
 	triggerAction.SetActionTime(utils::Timer::GetTime());
 
-	auto routes = _midiTriggerRoutesSnapshot.load(std::memory_order_acquire);
+	auto routes = _rigInputDispatch.load(std::memory_order_acquire);
 	if (!routes)
 		return summary;
 
-	for (const auto& route : *routes)
+	for (const auto& route : routes->MidiTriggers)
 	{
 		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
 			continue;
@@ -1078,12 +1077,6 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	}
 
 	return summary;
-}
-
-void MidiRouter::_PublishMidiTriggerRoutes()
-{
-	auto routes = std::make_shared<const std::vector<MidiTriggerRoute>>(_midiTriggerRoutes.begin(), _midiTriggerRoutes.end());
-	_midiTriggerRoutesSnapshot.store(routes, std::memory_order_release);
 }
 
 std::uint64_t MidiRouter::_PackLiveMidiInputConfig(std::uint32_t generation,
@@ -1194,14 +1187,15 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 		if (!selectedInput->LiveIngress.Pop(dispatchedEvent))
 			continue;
 
-		const auto routes = _liveMidiRoutes.load(std::memory_order_acquire);
-		if (!routes || dispatchedEvent.RoutingGeneration != routes->Generation)
+		const auto routes = _rigInputDispatch.load(std::memory_order_acquire);
+		if (!routes || dispatchedEvent.RigRevision != routes->Revision
+			|| dispatchedEvent.RoutingGeneration != routes->LiveMidi.Generation)
 			continue;
-		if (selectedInput->DeviceSlot >= routes->RecipientsByDeviceSlot.size())
+		if (selectedInput->DeviceSlot >= routes->LiveMidi.RecipientsByDeviceSlot.size())
 			continue;
 
 		const auto channelBit = static_cast<std::uint16_t>(1u << dispatchedEvent.Event.Channel());
-		for (const auto& recipient : routes->RecipientsByDeviceSlot[selectedInput->DeviceSlot])
+		for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[selectedInput->DeviceSlot])
 		{
 			if (recipient.Station && (recipient.AllowedChannelMask & channelBit) != 0u)
 				recipient.Station->TryEnqueueImmediateLiveMidi(dispatchedEvent.Event);

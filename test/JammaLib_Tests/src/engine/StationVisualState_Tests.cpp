@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include "../TestRigMembership.h"
 
 #include "actions/TriggerAction.h"
 #include "engine/Station.h"
@@ -79,7 +80,7 @@ TEST(StationVisualState, TriggerUpdatesOnlyItsReceivingStation)
 	triggerParams.Activate.emplace_back(engine::TriggerBinding(engine::TRIGGER_KEY, 'R', 1u),
 		engine::TriggerBinding(engine::TRIGGER_KEY, 'R', 0u));
 	auto trigger = std::make_shared<Trigger>(triggerParams);
-	receivingStation->AddTrigger(trigger);
+	AddTestRigTrigger(receivingStation, trigger);
 
 	base::Action action;
 	EXPECT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);

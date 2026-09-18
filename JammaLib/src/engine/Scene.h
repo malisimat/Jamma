@@ -54,7 +54,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "StationRemote.h"
-#include "RoutingRuntime.h"
+#include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
 
 namespace engine
@@ -230,6 +230,7 @@ namespace engine
 		void CloseSerial() {}
 		void CommitChanges();
 		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
+		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
 		void ApplyDeferredHoverUpdates();
 
 		// Returns a locked snapshot of the current station list.  Always use
@@ -298,7 +299,7 @@ namespace engine
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
-		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void _AdvanceRigPublication();
 		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -391,7 +392,7 @@ namespace engine
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
-		std::shared_ptr<const RoutingRuntime> _routingRuntime;
+		RigCoordinator _rigCoordinator;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

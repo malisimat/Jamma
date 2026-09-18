@@ -2,6 +2,7 @@
 // while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
 #include "AudioHost.h"
+#include "../engine/RigSnapshot.h"
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 #include <algorithm>
@@ -144,11 +145,71 @@ namespace audio
 
 		if (_audioDevice)
 			_audioDevice->Stop();
+
+		_pendingRigSnapshot.store(nullptr, std::memory_order_release);
+		{
+			std::scoped_lock retainedLock(_retainedRigSnapshotsMutex);
+			_retainedRigSnapshots.clear();
+		}
 	}
 
 	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
 	{
 		_audioStations.store(stations, std::memory_order_release);
+	}
+
+	void AudioHost::PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot)
+	{
+		if (snapshot)
+		{
+			std::scoped_lock lock(_retainedRigSnapshotsMutex);
+			_retainedRigSnapshots.push_back(snapshot);
+		}
+		_pendingRigSnapshot.store(std::move(snapshot), std::memory_order_release);
+	}
+
+	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
+	{
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_retainedRigSnapshots.erase(std::remove_if(_retainedRigSnapshots.begin(),
+			_retainedRigSnapshots.end(),
+			[revision](const std::shared_ptr<const engine::RigSnapshot>& snapshot)
+			{
+				return snapshot && snapshot->Graph.Revision < revision;
+			}), _retainedRigSnapshots.end());
+	}
+
+	void AudioHost::ApplyPendingRigSnapshotAtAudioBoundary() noexcept
+	{
+		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		if (!snapshot)
+		{
+			_routingEditsEligible.store(false, std::memory_order_release);
+			return;
+		}
+
+		bool editsEligible = snapshot->Graph.Revision == _audioRigRevision;
+		for (const auto& trigger : snapshot->Triggers)
+		{
+			if (trigger.Instance && !trigger.Instance->CanEditRouting())
+			{
+				editsEligible = false;
+				break;
+			}
+		}
+		_routingEditsEligible.store(editsEligible, std::memory_order_release);
+		if (snapshot->Graph.Revision <= _audioRigRevision)
+			return;
+
+		for (const auto& membership : snapshot->StationMemberships)
+		{
+			if (membership.Station)
+				membership.Station->PublishTriggerMembership(membership.Triggers);
+		}
+
+		_audioRigRevision = snapshot->Graph.Revision;
+		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
+		_routingEditsEligible.store(false, std::memory_order_release);
 	}
 
 	void AudioHost::PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired)
@@ -403,6 +464,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		unsigned int numSamps,
 		double streamTime)
 	{
+		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto audioStreamParams = nullptr == _audioDevice ?
 			audio::AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);

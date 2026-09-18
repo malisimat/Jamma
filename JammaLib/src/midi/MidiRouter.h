@@ -16,7 +16,6 @@
 #include "../audio/AudioDevice.h"
 #include "../base/LoggingConfig.h"
 #include "../io/SerialDevice.h"
-#include "../io/SerialTriggerQueue.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
@@ -37,6 +36,7 @@ namespace engine
 	class LoopTake;
 	class Station;
 	class Trigger;
+	struct RigSnapshot;
 }
 
 namespace midi
@@ -51,6 +51,7 @@ namespace midi
 		struct LiveMidiIngressEvent
 		{
 			MidiEvent Event;
+			std::uint64_t RigRevision = 0u;
 			std::uint32_t RoutingGeneration = 0u;
 			std::uint32_t Sequence = 0u;
 		};
@@ -83,11 +84,11 @@ namespace midi
 			const base::LoggingConfig& loggingConfig,
 			midi::MidiClockAnchor& midiClockAnchor);
 		void CloseMidi();
-		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void PublishEmptyRigInputDispatch();
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
-		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
 		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
@@ -158,7 +159,12 @@ namespace midi
 			std::uint8_t DeviceSlot = 0u;
 			std::string ConfiguredName;
 			std::unique_ptr<midi::MidiDevice> Device;
-			midi::MidiQueue<1024> Ingress;
+			struct RigMidiIngressEvent
+			{
+				MidiEvent Event;
+				std::uint64_t RigRevision = 0u;
+			};
+			midi::MidiQueue<1024, RigMidiIngressEvent> Ingress;
 			midi::MidiQueue<1024, LiveMidiIngressEvent> LiveIngress;
 			MidiClockAnchorSnapshot LastClockAnchor;
 			std::uint32_t NextLiveSequence = 0u;
@@ -169,6 +175,7 @@ namespace midi
 		struct LiveMidiDispatchNotification
 		{
 			std::atomic<std::uint64_t> InputConfig{ 0u };
+			std::atomic<std::uint64_t> RigRevision{ 0u };
 			HANDLE WorkEvent = nullptr;
 		};
 
@@ -179,6 +186,20 @@ namespace midi
 			std::shared_ptr<engine::Trigger> Trigger;
 		};
 
+		struct PublishedRigInputDispatch
+		{
+			std::uint64_t Revision = 0u;
+			std::shared_ptr<const engine::RigSnapshot> Snapshot;
+			std::vector<MidiTriggerRoute> MidiTriggers;
+			LiveMidiRoutingSnapshot LiveMidi;
+		};
+
+		struct SerialIngressEvent
+		{
+			io::SerialTriggerEvent Event;
+			std::uint64_t RigRevision = 0u;
+		};
+
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const midi::MidiEvent& event,
 			const io::UserConfig& userConfig,
@@ -187,7 +208,6 @@ namespace midi
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake) const;
-		void _PublishMidiTriggerRoutes();
 		void _StartLiveMidiDispatcher();
 		void _StopLiveMidiDispatcher();
 		void _LiveMidiDispatchLoop() noexcept;
@@ -212,15 +232,16 @@ namespace midi
 		void _ResetEditorTouchStates() noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
-		std::atomic<std::shared_ptr<const LiveMidiRoutingSnapshot>> _liveMidiRoutes;
+		// Published only on the job/input boundary; MIDI callback, live dispatcher,
+		// and job pumps are readers. Empty publication precedes worker teardown, and
+		// snapshot retirement remains coordinator-owned.
+		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;
 		std::uint32_t _nextLiveMidiRoutingGeneration = 0u;
-		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
-		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
-		io::SerialTriggerQueue<256> _serialIngress;
+		midi::MidiQueue<256, SerialIngressEvent> _serialIngress;
 		std::mutex _serialIngressMutex;
 		std::uint64_t _lastSerialDropCount = 0u;
 		std::atomic<bool> _learnMidiCCMode{ false };

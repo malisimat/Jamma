@@ -44,9 +44,14 @@ namespace io
 		_midiRouter.CloseMidi();
 	}
 
-	void IoInputSubsystem::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations)
+	void IoInputSubsystem::PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot)
 	{
-		_midiRouter.PublishLiveMidiRoutes(stations);
+		_midiRouter.PublishRigInputDispatch(std::move(snapshot));
+	}
+
+	void IoInputSubsystem::PublishEmptyRigInputDispatch()
+	{
+		_midiRouter.PublishEmptyRigInputDispatch();
 	}
 
 	bool IoInputSubsystem::InitGlobalKeyCapture()
@@ -203,11 +208,6 @@ namespace io
 	std::uint8_t IoInputSubsystem::ForcedChannelOverride() const noexcept
 	{
 		return _midiRouter.ForcedChannelOverride();
-	}
-
-	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
-	{
-		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
 	}
 
 	float IoInputSubsystem::ConsumeMidiInputPeak(const std::string& deviceName) noexcept

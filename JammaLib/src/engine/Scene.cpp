@@ -548,34 +548,25 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
-	auto routingRuntime = RoutingRuntime::BuildInitial(rigStruct,
+	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
 		jamStruct.Stations,
+		initialStations,
 		rigStruct.User.Audio.NumChannelsIn,
 		hudMidiInputs,
-		trigParams);
-	for (const auto& runtimeTrigger : routingRuntime.Triggers)
-	{
-		if (!runtimeTrigger.StationIndex.has_value() ||
-			runtimeTrigger.StationIndex.value() >= initialStations.size())
-			continue;
-
-		initialStations[runtimeTrigger.StationIndex.value()]->AddTrigger(runtimeTrigger.Instance);
-	}
+		trigParams,
+		scene->_saveRig))
+		return std::nullopt;
+	const auto acceptedRig = scene->_rigCoordinator.Accepted();
+	if (!acceptedRig)
+		return std::nullopt;
 	for (auto& station : initialStations)
 		scene->_AddStation(std::move(station), false);
-	for (const auto& runtimeTrigger : routingRuntime.Triggers)
-	{
-		if (!runtimeTrigger.StationIndex.has_value())
-			continue;
-		const auto& triggerConfig = routingRuntime.Rig.Triggers[runtimeTrigger.RigTriggerIndex];
-		if (triggerConfig.MidiTrigger.has_value())
-			scene->_RegisterMidiTriggerRoute(triggerConfig.MidiTrigger->Device, runtimeTrigger.Instance);
-	}
-	scene->_routingRuntime = std::make_shared<const RoutingRuntime>(std::move(routingRuntime));
 	scene->_PublishAudioStations();
+	scene->_audioEngine->PublishPendingRigSnapshot(acceptedRig);
+	scene->_inputSubsystem->PublishRigInputDispatch(acceptedRig);
 
 	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), *scene->_routingRuntime);
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), *acceptedRig);
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
@@ -1299,6 +1290,7 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	_AdvanceRigPublication();
 	_PumpMidi();
 	_PumpSerial();
 
@@ -1381,7 +1373,6 @@ void Scene::OnJobTick(Time curTime)
 void Scene::_PumpMidi()
 {
 	auto stations = SnapshotStations();
-	_inputSubsystem->PublishLiveMidiRoutes(stations);
     auto summary = _inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
 	std::scoped_lock lock(_sceneMutex);
 
@@ -1395,9 +1386,46 @@ void Scene::_PumpMidi()
 		_ResetIfEmpty();
 }
 
-void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+void Scene::_AdvanceRigPublication()
 {
-	_inputSubsystem->RegisterMidiTriggerRoute(deviceName, std::move(trigger));
+	const auto pending = _rigCoordinator.Pending();
+	if (!pending)
+		return;
+	const auto audioRevision = _audioEngine->AppliedRigRevision();
+	if (audioRevision != pending->Revision ||
+		!_rigCoordinator.ObserveAudioAcknowledgement(audioRevision))
+		return;
+	if (_rigCoordinator.InputAcknowledgement() != pending->Revision)
+	{
+		_inputSubsystem->PublishRigInputDispatch(pending);
+		if (!_rigCoordinator.AcknowledgeInput(pending->Revision))
+			return;
+	}
+	if (!_rigCoordinator.PromoteAcknowledged())
+		return;
+	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
+	if (_hudPanel)
+	{
+		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
+		std::vector<std::string> midiInputs;
+		for (const auto& device : pending->Rig.User.Midi.Devices)
+			if (device.Enabled && !device.Name.empty()) midiInputs.push_back(device.Name);
+		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
+	}
+}
+
+RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
+{
+	const auto accepted = _rigCoordinator.Accepted();
+	const auto result = _rigCoordinator.SubmitCandidate(candidateRig,
+		[this, accepted](std::uint64_t) {
+			return accepted && _audioEngine->RoutingEditsEligible() &&
+				(_audioEngine->AppliedRigRevision() == accepted->Revision);
+		},
+		_saveRig);
+	if (result == RigCoordinator::EditResult::Pending)
+		_audioEngine->PublishPendingRigSnapshot(_rigCoordinator.Pending());
+	return result;
 }
 
 void Scene::_PumpSerial()
@@ -1561,6 +1589,8 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 
 void Scene::CloseAudio()
 {
+	_rigCoordinator.Shutdown();
+	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseSerial();
 	CloseMidi();
 	_audioEngine->Close();
@@ -1583,14 +1613,18 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	_rigCoordinator.Shutdown();
+	_inputSubsystem->PublishEmptyRigInputDispatch();
+	CloseGlobalKeyCapture();
+	CloseSerial();
+	CloseMidi();
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())
 		_jobRunner.join();
 
 	ForceUnloadAllVstPlugins();
-
-	CloseGlobalKeyCapture();
-	CloseAudio();
+	_audioEngine->Close();
+	_rigCoordinator.ReleaseAfterReadersStopped();
 }
 
 void Scene::ForceUnloadAllVstPlugins()

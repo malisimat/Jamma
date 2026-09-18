@@ -553,7 +553,7 @@ std::optional<RigFile::Trigger::MidiTriggerBinding> RigFile::Trigger::MidiTrigge
 	return binding;
 }
 
-RigRouting::Resolution RigRouting::Resolve(const RigFile& rig,
+RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 	const std::vector<JamFile::Station>& stations,
 	unsigned int availableAdcChannels,
 	const std::vector<std::string>& availableMidiDevices)
@@ -644,7 +644,7 @@ RigRouting::Resolution RigRouting::Resolve(const RigFile& rig,
 	return result;
 }
 
-std::string RigRouting::NextTriggerName(const RigFile& rig)
+std::string RigFileRouting::NextTriggerName(const RigFile& rig)
 {
 	for (unsigned int suffix = 1u;; ++suffix)
 	{
@@ -657,7 +657,7 @@ std::string RigRouting::NextTriggerName(const RigFile& rig)
 	}
 }
 
-RigFile RigRouting::AddUnboundTrigger(const RigFile& rig)
+RigFile RigFileRouting::WithUnboundTrigger(const RigFile& rig)
 {
 	auto candidate = rig;
 	RigFile::Trigger trigger{};
@@ -668,7 +668,7 @@ RigFile RigRouting::AddUnboundTrigger(const RigFile& rig)
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::RemoveTrigger(const RigFile& rig, size_t triggerIndex)
+std::optional<RigFile> RigFileRouting::WithoutTrigger(const RigFile& rig, size_t triggerIndex)
 {
 	if (triggerIndex >= rig.Triggers.size()) return std::nullopt;
 	auto candidate = rig;
@@ -676,7 +676,7 @@ std::optional<RigFile> RigRouting::RemoveTrigger(const RigFile& rig, size_t trig
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::SetStationTarget(const RigFile& rig, size_t triggerIndex, std::string target)
+std::optional<RigFile> RigFileRouting::WithStationTarget(const RigFile& rig, size_t triggerIndex, std::string target)
 {
 	if (triggerIndex >= rig.Triggers.size()) return std::nullopt;
 	auto candidate = rig;
@@ -684,7 +684,7 @@ std::optional<RigFile> RigRouting::SetStationTarget(const RigFile& rig, size_t t
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::AddAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel)
+std::optional<RigFile> RigFileRouting::WithAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel)
 {
 	if (triggerIndex >= rig.Triggers.size()) return std::nullopt;
 	auto candidate = rig;
@@ -694,7 +694,7 @@ std::optional<RigFile> RigRouting::AddAdcInput(const RigFile& rig, size_t trigge
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::RemoveAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel)
+std::optional<RigFile> RigFileRouting::WithoutAdcInput(const RigFile& rig, size_t triggerIndex, unsigned int channel)
 {
 	if (triggerIndex >= rig.Triggers.size()) return std::nullopt;
 	auto candidate = rig;
@@ -705,7 +705,7 @@ std::optional<RigFile> RigRouting::RemoveAdcInput(const RigFile& rig, size_t tri
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::AddMidiInput(const RigFile& rig, size_t triggerIndex, std::string device)
+std::optional<RigFile> RigFileRouting::WithMidiInput(const RigFile& rig, size_t triggerIndex, std::string device)
 {
 	if (triggerIndex >= rig.Triggers.size() || device.empty()) return std::nullopt;
 	auto candidate = rig;
@@ -716,7 +716,7 @@ std::optional<RigFile> RigRouting::AddMidiInput(const RigFile& rig, size_t trigg
 	return candidate;
 }
 
-std::optional<RigFile> RigRouting::RemoveMidiInput(const RigFile& rig, size_t triggerIndex, const std::string& device)
+std::optional<RigFile> RigFileRouting::WithoutMidiInput(const RigFile& rig, size_t triggerIndex, const std::string& device)
 {
 	if (triggerIndex >= rig.Triggers.size()) return std::nullopt;
 	auto candidate = rig;

@@ -9,7 +9,7 @@
 #include "GuiLabel.h"
 #include "GlUtils.h"
 #include "../engine/Trigger.h"
-#include "../engine/RoutingRuntime.h"
+#include "../engine/RigSnapshot.h"
 #include "../graphics/GlDeleteQueue.h"
 #include "../graphics/GlDrawContext.h"
 #include "../resources/ResourceLib.h"
@@ -252,7 +252,7 @@ void GuiHud::_BuildTopStrip()
 
 	for (const auto& source : _sourceEndpoints)
 	{
-		const auto isAdc = source.Kind == io::RigRouting::SourceKind::Adc;
+		const auto isAdc = source.Kind == io::RigFileRouting::SourceKind::Adc;
 		auto label = isAdc ? "Audio In " + std::to_string(source.AdcChannel + 1u) :
 			(source.MidiDevice == "*" ? "MIDI Any" : "MIDI " + source.MidiDevice);
 		if (!source.Available)
@@ -328,7 +328,7 @@ void GuiHud::SetMidiInputPeak(unsigned int input, float peak, unsigned int numSa
 
 void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
-	const engine::RoutingRuntime& routing)
+	const engine::RigSnapshot& routing)
 {
 	_audioInputCount = audioInputCount;
 	_midiInputNames.clear();
@@ -339,9 +339,9 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	_routingGraph = routing.Graph.Triggers;
 	_sourceEndpoints.clear();
 	for (unsigned int channel = 0u; channel < _audioInputCount; ++channel)
-		_sourceEndpoints.push_back({ io::RigRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
+		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
 	for (const auto& name : _midiInputNames)
-		_sourceEndpoints.push_back({ io::RigRouting::SourceKind::Midi, 0u, name, true });
+		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, name, true });
 	for (const auto& resolvedTrigger : _routingGraph)
 	{
 		for (const auto& source : resolvedTrigger.Sources)
@@ -361,9 +361,9 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	for (const auto& resolvedTrigger : _routingGraph)
 	{
 		auto label = resolvedTrigger.TriggerName;
-		if (resolvedTrigger.Reason == io::RigRouting::Warning::TargetMissing)
+		if (resolvedTrigger.Reason == io::RigFileRouting::Warning::TargetMissing)
 			label += " [target missing]";
-		else if (resolvedTrigger.Reason == io::RigRouting::Warning::TargetAmbiguous)
+		else if (resolvedTrigger.Reason == io::RigFileRouting::Warning::TargetAmbiguous)
 			label += " [target ambiguous]";
 		else if (!resolvedTrigger.StationIndex.has_value())
 			label += " [unbound]";

@@ -156,7 +156,11 @@ namespace engine
 		virtual bool IsRemote() const noexcept { return false; }
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
-		void AddTrigger(std::shared_ptr<Trigger> trigger);
+		using TriggerMembership = std::vector<std::shared_ptr<Trigger>>;
+		// Published off the audio thread. Readers acquire one complete immutable
+		// membership and retain it for the duration of their traversal.
+		void PublishTriggerMembership(std::shared_ptr<const TriggerMembership> membership) noexcept;
+		std::shared_ptr<const TriggerMembership> TriggerMembershipSnapshot() const noexcept;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
@@ -372,7 +376,10 @@ namespace engine
 		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
-		std::vector<std::shared_ptr<Trigger>> _triggers;
+		// RigCoordinator constructs membership, AudioHost publishes it at a block
+		// boundary, and audio/input traversals acquire it once. Coordinator/AudioHost
+		// retention ensures destruction occurs off the callback.
+		std::atomic<std::shared_ptr<const TriggerMembership>> _triggerMembership;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
 		std::atomic<std::shared_ptr<const LoopTakeSnapshot>> _loopTakeSnapshot;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
