@@ -191,3 +191,11 @@ TEST(MidiRouterChannelOverride, RigTriggerInputGateIsRevisionSpecificAndReversib
 	router.UngateRigTriggerInput();
 	EXPECT_FALSE(router.IsRigTriggerInputGated(7u));
 }
+
+TEST(MidiRouterChannelOverride, StaleAndUntaggedIngressCannotCrossRoutingRevisions)
+{
+	EXPECT_TRUE(midi::MidiRouter::IsCurrentRigIngressRevision(12u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(11u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(13u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(0u, 12u));
+}

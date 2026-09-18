@@ -121,6 +121,11 @@ namespace midi
 		// the separately routed station/live event.
 		static midi::MidiEvent DeriveStationEvent(const midi::MidiEvent& rawEvent,
 			std::uint8_t forcedChannelOverride) noexcept;
+		static bool IsCurrentRigIngressRevision(std::uint64_t eventRevision,
+			std::uint64_t publishedRevision) noexcept
+		{
+			return eventRevision != 0u && eventRevision == publishedRevision;
+		}
 
 		static bool IsAutomationRecordHeld() noexcept;
 

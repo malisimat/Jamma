@@ -137,6 +137,10 @@ TEST_F(RigSnapshotTest, RetainsUnavailableSourcesAndManyToOneMembershipValues)
 	EXPECT_FALSE(runtime->Graph.Triggers[0].Sources[2].Available);
 	ASSERT_EQ(1u, runtime->Graph.Triggers[1].Sources.size());
 	EXPECT_EQ("*", runtime->Graph.Triggers[1].Sources[0].MidiDevice);
+	ASSERT_EQ(1u, runtime->InputDispatch.LiveMidi.size());
+	ASSERT_EQ("Present keyboard", runtime->InputDispatch.LiveMidi[0].DeviceName);
+	ASSERT_EQ(1u, runtime->InputDispatch.LiveMidi[0].Recipients.size());
+	EXPECT_EQ("Shared", runtime->InputDispatch.LiveMidi[0].Recipients[0]->Name());
 }
 
 TEST_F(RigSnapshotTest, PreservesExplicitMidiModesForLiveInputEligibility)
@@ -298,6 +302,63 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureR
 			[](const io::RigFile&) { return true; }));
 	EXPECT_GT(successfulRevision, persistenceRevision);
 	EXPECT_EQ(successfulRevision, coordinator.Pending()->Revision);
+}
+
+TEST_F(RigSnapshotTest, RapidSecondEditIsRejectedUntilFirstEditPromotes)
+{
+	auto station = RuntimeStation("Station");
+	io::RigFile initial{};
+	initial.Triggers = { TriggerDescriptor("accepted", "Station") };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+
+	auto first = initial;
+	first.Triggers[0].Name = "first";
+	auto second = initial;
+	second.Triggers[0].Name = "second";
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(first));
+	const auto firstRevision = coordinator.Quiescing()->Revision;
+	EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled, coordinator.SubmitCandidate(second));
+	EXPECT_EQ(firstRevision, coordinator.Quiescing()->Revision);
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+		coordinator.CompleteQuiescence(firstRevision, true, [](const io::RigFile&) { return true; }));
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(firstRevision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
+	EXPECT_EQ("first", coordinator.Accepted()->Rig.Triggers[0].Name);
+	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(second));
+}
+
+TEST_F(RigSnapshotTest, ShutdownDuringQuiescenceOrPendingCannotPublishCandidate)
+{
+	auto makeCoordinator = [this]()
+	{
+		auto coordinator = std::make_unique<engine::RigCoordinator>();
+		io::RigFile initial{};
+		initial.Triggers = { TriggerDescriptor("accepted", "Station") };
+		const auto station = RuntimeStation("Station");
+		if (!coordinator->BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
+			engine::TriggerParams(), [](const io::RigFile&) { return true; })) return coordinator;
+		coordinator->SubmitCandidate(initial);
+		return coordinator;
+	};
+
+	auto quiescing = makeCoordinator();
+	const auto quiescingRevision = quiescing->Quiescing()->Revision;
+	quiescing->Shutdown();
+	EXPECT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
+		quiescing->CompleteQuiescence(quiescingRevision, true, [](const io::RigFile&) { return true; }));
+	EXPECT_FALSE(quiescing->Pending());
+
+	auto pending = makeCoordinator();
+	const auto pendingRevision = pending->Quiescing()->Revision;
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+		pending->CompleteQuiescence(pendingRevision, true, [](const io::RigFile&) { return true; }));
+	pending->Shutdown();
+	pending->ReleaseAfterReadersStopped();
+	EXPECT_FALSE(pending->Pending());
+	EXPECT_FALSE(pending->Accepted());
 }
 
 TEST_F(RigSnapshotTest, ShutdownAndReleaseAreIdempotent)

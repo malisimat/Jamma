@@ -886,7 +886,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 		while (input->Ingress.Pop(queued))
 		{
 			const auto dispatchState = _rigInputDispatch.load(std::memory_order_acquire);
-			if (!dispatchState || queued.RigRevision != dispatchState->Revision)
+			if (!dispatchState || !IsCurrentRigIngressRevision(queued.RigRevision, dispatchState->Revision))
 				continue;
 			const auto& ingress = queued.Event;
 			const auto triggerEvent = DeriveStationEvent(ingress,
@@ -1015,7 +1015,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 				break;
 		}
 		const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
-		if (!dispatch || queued.RigRevision != dispatch->Revision || !dispatch->Snapshot)
+		if (!dispatch || !IsCurrentRigIngressRevision(queued.RigRevision, dispatch->Revision) || !dispatch->Snapshot)
 			continue;
 		if (IsRigTriggerInputGated(dispatch->Revision))
 			continue;
@@ -1208,7 +1208,7 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 			continue;
 
 		const auto routes = _rigInputDispatch.load(std::memory_order_acquire);
-		if (!routes || dispatchedEvent.RigRevision != routes->Revision
+		if (!routes || !IsCurrentRigIngressRevision(dispatchedEvent.RigRevision, routes->Revision)
 			|| dispatchedEvent.RoutingGeneration != routes->LiveMidi.Generation)
 			continue;
 		if (selectedInput->DeviceSlot >= routes->LiveMidi.RecipientsByDeviceSlot.size())
