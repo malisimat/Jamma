@@ -86,6 +86,9 @@ namespace midi
 		void CloseMidi();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
+		void GateRigTriggerInput(std::uint64_t revision) noexcept;
+		void UngateRigTriggerInput() noexcept;
+		bool IsRigTriggerInputGated(std::uint64_t revision) const noexcept;
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
@@ -203,7 +206,8 @@ namespace midi
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const midi::MidiEvent& event,
 			const io::UserConfig& userConfig,
-			const audio::AudioStreamParams& audioParams);
+			const audio::AudioStreamParams& audioParams,
+			const std::shared_ptr<const PublishedRigInputDispatch>& routes);
 		std::pair<std::shared_ptr<engine::Station>, std::shared_ptr<midi::MidiLoop>> _ResolveAutomationTarget(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
@@ -236,6 +240,7 @@ namespace midi
 		// and job pumps are readers. Empty publication precedes worker teardown, and
 		// snapshot retirement remains coordinator-owned.
 		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
+		std::atomic<std::uint64_t> _gatedRigTriggerRevision{ 0u };
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;

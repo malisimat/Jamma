@@ -312,39 +312,36 @@ void Trigger::OnTick(Time curTime,
 
 	FlushDelayedTriggerActions(curTime, samps, cfg, params);
 
-	if (0 == _debounceTimeMs)
-		return;
-
-	// Eventually flick to new state
-	// (if held long enough)
-	auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, curTime) * 1000.0;
-
-	if (_isLastActivateDownRaw != _isLastActivateDown)
+	if (0 != _debounceTimeMs)
 	{
-		if (elapsedMs > _debounceTimeMs)
+		// Eventually flick to new state (if held long enough).
+		auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, curTime) * 1000.0;
+		if (_isLastActivateDownRaw != _isLastActivateDown && elapsedMs > _debounceTimeMs)
 		{
 			_lastActivateTime = Timer::GetZero();
 			_isLastActivateDown = _isLastActivateDownRaw;
-
 			StateMachine(_isLastActivateDownRaw, true, cfg, params);
 		}
-	}
 
-	elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, curTime) * 1000.0;
-	
-	if (_isLastDitchDownRaw != _isLastDitchDown)
-	{
-		if (elapsedMs > _debounceTimeMs)
+		elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, curTime) * 1000.0;
+		if (_isLastDitchDownRaw != _isLastDitchDown && elapsedMs > _debounceTimeMs)
 		{
 			_lastDitchTime = Timer::GetZero();
 			_isLastDitchDown = _isLastDitchDownRaw;
-
 			StateMachine(_isLastDitchDownRaw, false, cfg, params);
 		}
 	}
+	_PublishTriggerStateSnapshot();
 }
 
 bool Trigger::CanEditRouting() const noexcept
+{
+	return _publishedCanEditRouting.load(std::memory_order_acquire) &&
+		_externalControlActionHead.load(std::memory_order_relaxed) ==
+			_externalControlActionTail.load(std::memory_order_acquire);
+}
+
+bool Trigger::_CanEditRoutingAtAudioBoundary() const noexcept
 {
 	return _state == TRIGSTATE_DEFAULT &&
 		!_isLastActivateDownRaw && !_isLastDitchDownRaw && !_isDitchDown &&
@@ -383,6 +380,7 @@ void Trigger::_PublishTriggerStateSnapshot() noexcept
 	_publishedDitchInputDown.store(_isLastDitchDownRaw, std::memory_order_release);
 	_publishedTriggerDitchDown.store(_isDitchDown, std::memory_order_release);
 	_publishedTriggerState.store(static_cast<std::uint8_t>(_state), std::memory_order_release);
+	_publishedCanEditRouting.store(_CanEditRoutingAtAudioBoundary(), std::memory_order_release);
 }
 
 void Trigger::AddBinding(DualBinding activate, DualBinding ditch)

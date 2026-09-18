@@ -1086,34 +1086,56 @@ ActionResult Scene::OnAction(KeyAction action)
 	bool checkReset = false;
 	auto result = ActionResult::NoAction();
 
-	for (auto& station : _stations)
+	const auto acceptedRig = _rigCoordinator.Accepted();
+	const auto triggerInputGated = acceptedRig &&
+		_inputSubsystem->IsRigTriggerInputGated(acceptedRig->Revision);
+	if (!triggerInputGated)
 	{
-		auto res = station->OnAction(action);
-
-		if (!res.IsEaten)
-			continue;
-
-		std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
-		switch (res.ResultType)
+		static const std::string EmptyDevice;
+		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
+		std::vector<std::shared_ptr<Trigger>> fallbackKeyboardTriggers;
+		if (!acceptedRig)
 		{
-		case ACTIONRESULT_ACTIVATE:
-			_isSceneReset.store(false, std::memory_order_relaxed);
-			checkReset = true;
-			// Propagate any grain the clock just acquired (e.g. from first-loop seed).
-			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
-			// do it here after every activation so all LoopTakes see the current grain.
-			if (auto clock = _quantisation.Clock())
-				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
-			break;
-		case ACTIONRESULT_DITCH:
-			checkReset = true;
-			break;
-		default:
-			break;
+			for (const auto& station : _stations)
+			{
+				if (!station)
+					continue;
+				const auto membership = station->TriggerMembershipSnapshot();
+				fallbackKeyboardTriggers.insert(fallbackKeyboardTriggers.end(),
+					membership->begin(), membership->end());
+			}
 		}
+		const auto& keyboardTriggers = acceptedRig ?
+			acceptedRig->InputDispatch.KeyboardTriggers : fallbackKeyboardTriggers;
+		for (const auto& trigger : keyboardTriggers)
+		{
+			if (!trigger)
+				continue;
+			auto res = trigger->OnEvent(TriggerSource::TRIGGER_KEY,
+				action.KeyChar, keyState, action, EmptyDevice);
 
-		if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
-			result = res;
+			if (!res.IsEaten)
+				continue;
+
+			std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
+			switch (res.ResultType)
+			{
+			case ACTIONRESULT_ACTIVATE:
+				_isSceneReset.store(false, std::memory_order_relaxed);
+				checkReset = true;
+				if (auto clock = _quantisation.Clock())
+					_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+				break;
+			case ACTIONRESULT_DITCH:
+				checkReset = true;
+				break;
+			default:
+				break;
+			}
+
+			if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
+				result = res;
+		}
 	}
 
 	if (checkReset)
@@ -1388,6 +1410,30 @@ void Scene::_PumpMidi()
 
 void Scene::_AdvanceRigPublication()
 {
+	const auto quiescing = _rigCoordinator.Quiescing();
+	if (quiescing)
+	{
+		const auto revision = quiescing->Revision;
+		if (_audioEngine->RejectedRigRevision() == revision)
+		{
+			_rigCoordinator.CompleteQuiescence(revision, false, _saveRig);
+			_audioEngine->ClearRigTriggerQuiescence();
+			_inputSubsystem->UngateRigTriggerInput();
+			return;
+		}
+		if (_audioEngine->QuiescedRigRevision() != revision)
+			return;
+		const auto result = _rigCoordinator.CompleteQuiescence(revision, true, _saveRig);
+		_audioEngine->ClearRigTriggerQuiescence();
+		if (result != RigCoordinator::EditResult::Pending)
+		{
+			_inputSubsystem->UngateRigTriggerInput();
+			return;
+		}
+		_audioEngine->PublishPendingRigSnapshot(_rigCoordinator.Pending());
+		return;
+	}
+
 	const auto pending = _rigCoordinator.Pending();
 	if (!pending)
 		return;
@@ -1404,6 +1450,8 @@ void Scene::_AdvanceRigPublication()
 	if (!_rigCoordinator.PromoteAcknowledged())
 		return;
 	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
+	_rigCoordinator.ReleaseRetired();
+	_inputSubsystem->UngateRigTriggerInput();
 	if (_hudPanel)
 	{
 		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
@@ -1417,14 +1465,19 @@ void Scene::_AdvanceRigPublication()
 RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
 {
 	const auto accepted = _rigCoordinator.Accepted();
-	const auto result = _rigCoordinator.SubmitCandidate(candidateRig,
-		[this, accepted](std::uint64_t) {
-			return accepted && _audioEngine->RoutingEditsEligible() &&
-				(_audioEngine->AppliedRigRevision() == accepted->Revision);
-		},
-		_saveRig);
+	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
 	if (result == RigCoordinator::EditResult::Pending)
-		_audioEngine->PublishPendingRigSnapshot(_rigCoordinator.Pending());
+	{
+		const auto quiescing = _rigCoordinator.Quiescing();
+		if (!accepted || !quiescing || _audioEngine->AppliedRigRevision() != accepted->Revision)
+		{
+			if (quiescing)
+				_rigCoordinator.CompleteQuiescence(quiescing->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::QuiescenceRejected;
+		}
+		_inputSubsystem->GateRigTriggerInput(accepted->Revision);
+		_audioEngine->RequestRigTriggerQuiescence(quiescing->Revision, accepted);
+	}
 	return result;
 }
 
@@ -1590,6 +1643,8 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 void Scene::CloseAudio()
 {
 	_rigCoordinator.Shutdown();
+	_audioEngine->ClearRigTriggerQuiescence();
+	_inputSubsystem->UngateRigTriggerInput();
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseSerial();
 	CloseMidi();
@@ -1614,6 +1669,8 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 void Scene::Shutdown()
 {
 	_rigCoordinator.Shutdown();
+	_audioEngine->ClearRigTriggerQuiescence();
+	_inputSubsystem->UngateRigTriggerInput();
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseGlobalKeyCapture();
 	CloseSerial();

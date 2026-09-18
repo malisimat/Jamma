@@ -180,3 +180,14 @@ TEST(MidiRouterChannelOverride, DeriveStationEventChannelDivergesFromRawTriggerC
 	EXPECT_EQ(1u, stationEvent.Channel());
 	EXPECT_NE(rawEvent.Channel(), stationEvent.Channel());
 }
+
+TEST(MidiRouterChannelOverride, RigTriggerInputGateIsRevisionSpecificAndReversible)
+{
+	midi::MidiRouter router;
+	EXPECT_FALSE(router.IsRigTriggerInputGated(7u));
+	router.GateRigTriggerInput(7u);
+	EXPECT_TRUE(router.IsRigTriggerInputGated(7u));
+	EXPECT_FALSE(router.IsRigTriggerInputGated(8u));
+	router.UngateRigTriggerInput();
+	EXPECT_FALSE(router.IsRigTriggerInputGated(7u));
+}

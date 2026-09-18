@@ -30,9 +30,11 @@ namespace engine
 namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
+	class RigAudioBoundaryTestAccess;
 
 	class AudioHost
 	{
+		friend class RigAudioBoundaryTestAccess;
 	public:
 		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps,
 			const std::optional<io::UserConfig>& cfg,
@@ -47,6 +49,17 @@ namespace audio
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
 		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
+			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot);
+		void ClearRigTriggerQuiescence() noexcept;
+		std::uint64_t QuiescedRigRevision() const noexcept
+		{
+			return _quiescedRigRevision.load(std::memory_order_acquire);
+		}
+		std::uint64_t RejectedRigRevision() const noexcept
+		{
+			return _rejectedRigRevision.load(std::memory_order_acquire);
+		}
 		// Call off the audio thread after a newer revision has been acknowledged.
 		void ReleaseRigSnapshotsBefore(std::uint64_t revision);
 		std::uint64_t AppliedRigRevision() const noexcept
@@ -113,6 +126,7 @@ namespace audio
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
+		void PublishRigTriggerQuiescenceAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
@@ -172,6 +186,10 @@ namespace audio
 		// The retained list prevents the callback's local snapshot reference from
 		// ever becoming the last owner; it is cleared only after audio has stopped.
 		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
+		std::atomic<std::uint64_t> _rigTriggerQuiescenceRequestRevision{ 0u };
+		std::atomic<std::uint64_t> _rigTriggerQuiescenceAcceptedRevision{ 0u };
+		std::atomic<std::uint64_t> _quiescedRigRevision{ 0u };
+		std::atomic<std::uint64_t> _rejectedRigRevision{ 0u };
 		std::mutex _retainedRigSnapshotsMutex;
 		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
 		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };

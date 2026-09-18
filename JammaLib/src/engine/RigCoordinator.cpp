@@ -115,32 +115,50 @@ bool RigCoordinator::BuildInitial(const io::RigFile& rig,
 	return true;
 }
 
-RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig,
-	const QuiesceInput& quiesceInput,
-	const PersistRig& persistRig)
+RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig)
 {
 	bool enabled = true;
 	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel)) return EditResult::EditsDisabled;
 	const auto revision = _AllocateRevision();
-	if (_shuttingDown.load(std::memory_order_acquire) || !quiesceInput || !quiesceInput(revision))
+	if (_shuttingDown.load(std::memory_order_acquire))
 	{
-		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
+		_editsEnabled.store(false, std::memory_order_release);
 		return EditResult::QuiescenceRejected;
 	}
 	auto snapshot = _BuildSnapshot(revision, candidateRig, _stationDescriptors, _stations,
 		_availableAdcChannels, _availableMidiDevices, _triggerParams);
 	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
-	// Persistence is deliberately the final fallible operation before publication.
-	if (!persistRig || !persistRig(candidateRig))
+	_quiescing.store(snapshot, std::memory_order_release);
+	return EditResult::Pending;
+}
+
+RigCoordinator::EditResult RigCoordinator::CompleteQuiescence(std::uint64_t revision,
+	bool acceptedAtAudioBoundary,
+	const PersistRig& persistRig)
+{
+	auto candidate = _quiescing.load(std::memory_order_acquire);
+	if (!candidate || candidate->Revision != revision)
+		return EditResult::QuiescenceRejected;
+	if (!acceptedAtAudioBoundary || _shuttingDown.load(std::memory_order_acquire))
 	{
-		_editsEnabled.store(true, std::memory_order_release);
+		_quiescing.store({}, std::memory_order_release);
+		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
+		return EditResult::QuiescenceRejected;
+	}
+	// Persistence remains the final fallible operation before pending publication.
+	if (!persistRig || !persistRig(candidate->Rig))
+	{
+		_quiescing.store({}, std::memory_order_release);
+		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::PersistenceFailed;
 	}
-	_pending.store(snapshot, std::memory_order_release);
+	_pending.store(candidate, std::memory_order_release);
+	_quiescing.store({}, std::memory_order_release);
 	return EditResult::Pending;
 }
 
 RigCoordinator::SnapshotPtr RigCoordinator::Accepted() const noexcept { return _accepted.load(std::memory_order_acquire); }
+RigCoordinator::SnapshotPtr RigCoordinator::Quiescing() const noexcept { return _quiescing.load(std::memory_order_acquire); }
 RigCoordinator::SnapshotPtr RigCoordinator::Pending() const noexcept { return _pending.load(std::memory_order_acquire); }
 bool RigCoordinator::EditsEnabled() const noexcept { return _editsEnabled.load(std::memory_order_acquire); }
 std::uint64_t RigCoordinator::AudioAcknowledgement() const noexcept { return _audioAcknowledgement.load(std::memory_order_acquire); }
@@ -188,6 +206,12 @@ bool RigCoordinator::PromoteAcknowledged()
 	return true;
 }
 
+void RigCoordinator::ReleaseRetired()
+{
+	std::scoped_lock lock(_retiringMutex);
+	_retiring.clear();
+}
+
 void RigCoordinator::Shutdown() noexcept
 {
 	_shuttingDown.store(true, std::memory_order_release);
@@ -197,6 +221,7 @@ void RigCoordinator::Shutdown() noexcept
 void RigCoordinator::ReleaseAfterReadersStopped()
 {
 	_pending.store({}, std::memory_order_release);
+	_quiescing.store({}, std::memory_order_release);
 	_accepted.store({}, std::memory_order_release);
 	std::scoped_lock lock(_retiringMutex);
 	_retiring.clear();

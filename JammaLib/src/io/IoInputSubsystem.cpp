@@ -54,6 +54,21 @@ namespace io
 		_midiRouter.PublishEmptyRigInputDispatch();
 	}
 
+	void IoInputSubsystem::GateRigTriggerInput(std::uint64_t revision) noexcept
+	{
+		_midiRouter.GateRigTriggerInput(revision);
+	}
+
+	void IoInputSubsystem::UngateRigTriggerInput() noexcept
+	{
+		_midiRouter.UngateRigTriggerInput();
+	}
+
+	bool IoInputSubsystem::IsRigTriggerInputGated(std::uint64_t revision) const noexcept
+	{
+		return _midiRouter.IsRigTriggerInputGated(revision);
+	}
+
 	bool IoInputSubsystem::InitGlobalKeyCapture()
 	{
 		if (_globalKeyHook)

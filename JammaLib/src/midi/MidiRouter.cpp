@@ -623,6 +623,21 @@ void MidiRouter::PublishEmptyRigInputDispatch()
 		SetEvent(_liveMidiDispatchNotification->WorkEvent);
 }
 
+void MidiRouter::GateRigTriggerInput(std::uint64_t revision) noexcept
+{
+	_gatedRigTriggerRevision.store(revision, std::memory_order_release);
+}
+
+void MidiRouter::UngateRigTriggerInput() noexcept
+{
+	_gatedRigTriggerRevision.store(0u, std::memory_order_release);
+}
+
+bool MidiRouter::IsRigTriggerInputGated(std::uint64_t revision) const noexcept
+{
+	return revision != 0u && _gatedRigTriggerRevision.load(std::memory_order_acquire) == revision;
+}
+
 void MidiRouter::InitSerial(const io::UserConfig& cfg)
 {
 	CloseSerial();
@@ -881,7 +896,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				_channelOverrideLive.load(std::memory_order_acquire)
 					? ForcedChannelOverride() : 0u);
 
-			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, triggerEvent, userConfig, audioParams);
+			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, triggerEvent,
+				userConfig, audioParams, dispatchState);
 			summary.Activated = summary.Activated || dispatch.Activated;
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
 
@@ -889,12 +905,14 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 			const auto msgType = ingress.MessageType();
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
 			{
-				const auto& deviceName = input->ConfiguredName;
-				for (const auto& station : stations)
+				const auto channelBit = static_cast<std::uint16_t>(1u << stationEvent.Channel());
+				if (input->DeviceSlot < dispatchState->LiveMidi.RecipientsByDeviceSlot.size())
 				{
-					if (station && !station->IsRemote() && station->AcceptsLiveMidiFromDevice(deviceName))
+					for (const auto& recipient : dispatchState->LiveMidi.RecipientsByDeviceSlot[input->DeviceSlot])
 					{
-						station->ObservePhysicalMidiForRecording(stationEvent, deviceName);
+						if (recipient.Station && (recipient.AllowedChannelMask & channelBit) != 0u)
+							recipient.Station->ObservePhysicalMidiForRecording(
+								stationEvent, input->ConfiguredName);
 					}
 				}
 			}
@@ -999,6 +1017,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
 		if (!dispatch || queued.RigRevision != dispatch->Revision || !dispatch->Snapshot)
 			continue;
+		if (IsRigTriggerInputGated(dispatch->Revision))
+			continue;
 		const auto& ev = queued.Event;
 
 		base::Action action;
@@ -1043,7 +1063,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 	const midi::MidiEvent& event,
 	const io::UserConfig& userConfig,
-	const audio::AudioStreamParams& audioParams)
+	const audio::AudioStreamParams& audioParams,
+	const std::shared_ptr<const PublishedRigInputDispatch>& routes)
 {
 	TriggerDispatchSummary summary;
 	base::Action triggerAction;
@@ -1051,8 +1072,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	triggerAction.SetAudioParams(audioParams);
 	triggerAction.SetActionTime(utils::Timer::GetTime());
 
-	auto routes = _rigInputDispatch.load(std::memory_order_acquire);
-	if (!routes)
+	if (!routes || IsRigTriggerInputGated(routes->Revision))
 		return summary;
 
 	for (const auto& route : routes->MidiTriggers)

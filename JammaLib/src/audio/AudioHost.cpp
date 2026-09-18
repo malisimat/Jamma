@@ -168,6 +168,22 @@ namespace audio
 		_pendingRigSnapshot.store(std::move(snapshot), std::memory_order_release);
 	}
 
+	void AudioHost::RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
+		std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot)
+	{
+		_quiescedRigRevision.store(0u, std::memory_order_release);
+		_rejectedRigRevision.store(0u, std::memory_order_release);
+		_rigTriggerQuiescenceAcceptedRevision.store(
+			acceptedSnapshot ? acceptedSnapshot->Revision : 0u, std::memory_order_release);
+		_rigTriggerQuiescenceRequestRevision.store(candidateRevision, std::memory_order_release);
+	}
+
+	void AudioHost::ClearRigTriggerQuiescence() noexcept
+	{
+		_rigTriggerQuiescenceRequestRevision.store(0u, std::memory_order_release);
+		_rigTriggerQuiescenceAcceptedRevision.store(0u, std::memory_order_release);
+	}
+
 	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
 	{
 		std::scoped_lock lock(_retainedRigSnapshotsMutex);
@@ -210,6 +226,27 @@ namespace audio
 		_audioRigRevision = snapshot->Graph.Revision;
 		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
 		_routingEditsEligible.store(false, std::memory_order_release);
+	}
+
+	void AudioHost::PublishRigTriggerQuiescenceAtAudioBoundary() noexcept
+	{
+		const auto candidateRevision = _rigTriggerQuiescenceRequestRevision.load(std::memory_order_acquire);
+		if (candidateRevision == 0u ||
+			_rigTriggerQuiescenceAcceptedRevision.load(std::memory_order_acquire) != _audioRigRevision)
+			return;
+		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		if (!snapshot || snapshot->Revision != _audioRigRevision)
+			return;
+
+		for (const auto& trigger : snapshot->Triggers)
+		{
+			if (trigger.Instance && !trigger.Instance->CanEditRouting())
+			{
+				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
+				return;
+			}
+		}
+		_quiescedRigRevision.store(candidateRevision, std::memory_order_release);
 	}
 
 	void AudioHost::PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired)
@@ -671,6 +708,10 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		{
 			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _tickStreamParams);
 		}
+		// Trigger::OnTick above drains accepted external actions and publishes the
+		// edit predicate. A quiescence decision made here therefore describes this
+		// completed audio boundary, not a stale UI observation.
+		PublishRigTriggerQuiescenceAtAudioBoundary();
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
 		midi::PublishMidiClockAnchor(_midiClockAnchor,

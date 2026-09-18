@@ -324,6 +324,7 @@ namespace engine
 			const std::optional<audio::AudioStreamParams>& params);
 		void _ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) noexcept;
+		bool _CanEditRoutingAtAudioBoundary() const noexcept;
 		void _PublishTriggerStateSnapshot() noexcept;
 
 		// Only call from state machine
@@ -370,6 +371,7 @@ namespace engine
 		std::atomic<bool> _publishedActivateInputDown{ false };
 		std::atomic<bool> _publishedDitchInputDown{ false };
 		std::atomic<bool> _publishedTriggerDitchDown{ false };
+		std::atomic<bool> _publishedCanEditRouting{ true };
 		std::string _overdubSourceId;
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store

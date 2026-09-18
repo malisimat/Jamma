@@ -342,9 +342,11 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 	base::Action action;
+	ASSERT_TRUE(trigger->CanEditRouting());
 
 	auto activateDown = trigger->QueueExternalControlAction(true, true, action);
 	ASSERT_TRUE(activateDown.IsEaten);
+	ASSERT_FALSE(trigger->CanEditRouting());
 	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, activateDown.ResultType);
 	ASSERT_TRUE(receiver->Actions().empty());
 	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
@@ -371,6 +373,7 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	ASSERT_FALSE(trigger->IsActivateInputDown());
 	ASSERT_FALSE(trigger->IsDitchInputDown());
 	ASSERT_FALSE(trigger->IsDitchDown());
+	ASSERT_TRUE(trigger->CanEditRouting());
 }
 
 TEST(Trigger, ResetClearsPublishedDitchState) {
