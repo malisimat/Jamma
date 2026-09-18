@@ -940,6 +940,8 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
+	if (_hudPanel)
+		return _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
 
 	return ActionResult::NoAction();
 }
@@ -957,6 +959,12 @@ ActionResult Scene::OnAction(KeyAction action)
 		if (_hudPanel)
 			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
 		return ActionResult::NoAction();
+	}
+	if (_hudPanel && _hudPanel->HasCableDrag())
+	{
+		auto hudResult = _hudPanel->OnAction(action);
+		if (hudResult.IsEaten)
+			return hudResult;
 	}
 
 	// 1. Open popups capture the keyboard first.

@@ -330,6 +330,10 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	std::vector<std::string> midiInputNames,
 	const engine::RigSnapshot& routing)
 {
+	if (_displayedRevision != 0u && _displayedRevision != routing.Revision)
+		_CancelCableDrag();
+	_displayedRevision = routing.Revision;
+	_displayedRig = routing.Rig;
 	_audioInputCount = audioInputCount;
 	_midiInputNames.clear();
 	for (auto& name : midiInputNames)
@@ -342,6 +346,7 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
 	for (const auto& name : _midiInputNames)
 		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, name, true });
+	_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, "*", true });
 	for (const auto& resolvedTrigger : _routingGraph)
 	{
 		for (const auto& source : resolvedTrigger.Sources)
@@ -509,6 +514,124 @@ void GuiHud::SetStationAnchors(std::vector<StationAnchor> anchors)
 	_cablesDirty = true;
 }
 
+actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
+{
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	_BuildInteractionGeometry(endpoints, cables);
+	const auto canEditTrigger = [this](size_t triggerIndex)
+	{
+		const auto trigger = triggerIndex < _triggers.size() ? _triggers[triggerIndex].lock() : nullptr;
+		return trigger && trigger->CanEditRouting();
+	};
+
+	if (const auto cableIndex = CableInteraction::HitCable(cables, point, _CableHitRadius); cableIndex.has_value())
+	{
+		const auto& cable = cables[cableIndex.value()];
+		if (!canEditTrigger(cable.Route.TriggerIndex))
+			return actions::ActionResult::NoAction();
+		const auto movingEnd = CableInteraction::ClosestEnd(cable, point);
+		_cableDrag = CableInteraction::Drag{ cable.Route,
+			movingEnd,
+			movingEnd == CableInteraction::End::Start ? cable.Finish : cable.Start,
+			cable.Route.Kind == CableInteraction::RouteKind::Capture ? cable.Start.Source : std::nullopt,
+			point,
+			std::nullopt };
+	}
+	else if (const auto endpointIndex = CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius); endpointIndex.has_value())
+	{
+		const auto& endpoint = endpoints[endpointIndex.value()];
+		CableInteraction::Handle handle{ _displayedRevision, endpoint.TriggerIndex.value_or(static_cast<size_t>(-1)),
+			CableInteraction::RouteKind::Capture, 0u };
+		CableInteraction::End movingEnd = CableInteraction::End::Finish;
+		if (endpoint.Kind == CableInteraction::EndpointKind::AdcSource || endpoint.Kind == CableInteraction::EndpointKind::MidiSource)
+		{
+			handle.TriggerIndex = static_cast<size_t>(-1);
+		}
+		else if (endpoint.Kind == CableInteraction::EndpointKind::TriggerInput)
+		{
+			if (!endpoint.TriggerIndex.has_value() || !canEditTrigger(endpoint.TriggerIndex.value()))
+				return actions::ActionResult::NoAction();
+			movingEnd = CableInteraction::End::Start;
+		}
+		else if (endpoint.Kind == CableInteraction::EndpointKind::TriggerOutput)
+		{
+			if (!endpoint.TriggerIndex.has_value() || !canEditTrigger(endpoint.TriggerIndex.value()))
+				return actions::ActionResult::NoAction();
+			handle.Kind = CableInteraction::RouteKind::Station;
+		}
+		else
+		{
+			if (!endpoint.TriggerIndex.has_value() || !canEditTrigger(endpoint.TriggerIndex.value()))
+				return actions::ActionResult::NoAction();
+			handle.Kind = CableInteraction::RouteKind::Station;
+			movingEnd = CableInteraction::End::Start;
+		}
+		_cableDrag = CableInteraction::Drag{ handle, movingEnd, endpoint, std::nullopt, point, std::nullopt };
+	}
+
+	if (!_cableDrag.has_value())
+		return actions::ActionResult::NoAction();
+	_cableRevealHeld = true;
+	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr,
+		std::static_pointer_cast<base::GuiElement>(shared_from_this()) };
+}
+
+void GuiHud::_CancelCableDrag()
+{
+	CableInteraction::Cancel(_cableDrag);
+	_cableRevealHeld = false;
+	_cablesDirty = true;
+}
+
+actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
+{
+	if (action.Index == 2 && action.State == actions::TouchAction::TOUCH_DOWN && _cableDrag.has_value())
+	{
+		_CancelCableDrag();
+		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	if (action.Index != 0)
+		return GuiPanel::OnAction(action);
+	if (action.State == actions::TouchAction::TOUCH_DOWN)
+	{
+		auto result = _BeginCableDrag(action.Position);
+		return result.IsEaten ? result : GuiPanel::OnAction(action);
+	}
+	if (!_cableDrag.has_value())
+		return GuiPanel::OnAction(action);
+
+	const auto drag = _cableDrag.value();
+	if (drag.Route.Revision == _displayedRevision)
+		(void)CableInteraction::ReleaseToCandidate(drag, _displayedRig);
+	_CancelCableDrag();
+	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+}
+
+actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
+{
+	if (!_cableDrag.has_value())
+		return GuiPanel::OnAction(action);
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	_BuildInteractionGeometry(endpoints, cables);
+	CableInteraction::Update(_cableDrag.value(), action.Position, endpoints, _displayedRig,
+		_SnapRadius, _SnapHysteresis);
+	_cablesDirty = true;
+	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr,
+		std::static_pointer_cast<base::GuiElement>(shared_from_this()) };
+}
+
+actions::ActionResult GuiHud::OnAction(actions::KeyAction action)
+{
+	if (_cableDrag.has_value() && action.KeyChar == VK_ESCAPE && action.KeyActionType == actions::KeyAction::KEY_DOWN)
+	{
+		_CancelCableDrag();
+		return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
+	return GuiPanel::OnAction(action);
+}
+
 std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGraph& graph)
 {
 	std::vector<CableRoute> routes;
@@ -522,61 +645,122 @@ std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGr
 	return routes;
 }
 
+void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
+	std::vector<CableInteraction::Cable>& cables) const
+{
+	endpoints.clear();
+	cables.clear();
+	const auto rootPos = GlobalPosition();
+	for (size_t i = 0u; i < _sourceButtons.size() && i < _sourceEndpoints.size(); ++i)
+	{
+		const auto buttonPos = _sourceButtons[i]->GlobalPosition();
+		const auto size = _sourceButtons[i]->GetSize();
+		const auto& source = _sourceEndpoints[i];
+		endpoints.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
+			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
+			{ buttonPos.X - rootPos.X + static_cast<int>(size.Width / 2u), buttonPos.Y - rootPos.Y },
+			std::nullopt, std::nullopt, {}, source, source.Available });
+	}
+
+	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerButtons.size());
+	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerButtons.size());
+	for (size_t i = 0u; i < _triggerButtons.size(); ++i)
+	{
+		triggerInputs[i] = { CableInteraction::EndpointKind::TriggerInput,
+			_TriggerAnchorFromTopLeft(_triggerButtons[i], 7, 24), i };
+		triggerOutputs[i] = { CableInteraction::EndpointKind::TriggerOutput,
+			_TriggerAnchorFromBottomLeft(_triggerButtons[i], 7, 12), i };
+		endpoints.push_back(triggerInputs[i]);
+		endpoints.push_back(triggerOutputs[i]);
+	}
+
+	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
+	for (const auto& trigger : _routingGraph)
+		if (trigger.StationIndex.has_value())
+		{
+			const auto anchor = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&trigger](const auto& value)
+			{
+				return value.StationIndex == trigger.StationIndex.value();
+			});
+			if (anchor != _stationAnchors.end())
+				stationTriggers[static_cast<size_t>(std::distance(_stationAnchors.begin(), anchor))].push_back(trigger.TriggerIndex);
+		}
+
+	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerButtons.size());
+	for (size_t anchorIndex = 0u; anchorIndex < _stationAnchors.size(); ++anchorIndex)
+	{
+		const auto& anchor = _stationAnchors[anchorIndex];
+		if (anchor.screenPos.X < -1000)
+			continue;
+		const auto xs = CableInteraction::Spread(anchor.screenPos.X - 36, anchor.screenPos.X + 36,
+			stationTriggers[anchorIndex].size() + 1u);
+		for (size_t i = 0u; i < stationTriggers[anchorIndex].size(); ++i)
+		{
+			CableInteraction::Endpoint endpoint{ CableInteraction::EndpointKind::Station,
+				{ xs[i], anchor.screenPos.Y }, stationTriggers[anchorIndex][i], anchor.StationIndex, anchor.StationName };
+			stationEnds[stationTriggers[anchorIndex][i]] = endpoint;
+			endpoints.push_back(endpoint);
+		}
+		endpoints.push_back({ CableInteraction::EndpointKind::Station,
+			{ xs.back(), anchor.screenPos.Y }, std::nullopt, anchor.StationIndex, anchor.StationName });
+	}
+
+	for (const auto& trigger : _routingGraph)
+	{
+		if (trigger.TriggerIndex >= triggerInputs.size())
+			continue;
+		const auto ys = CableInteraction::Spread(
+			_TriggerAnchorFromBottomLeft(_triggerButtons[trigger.TriggerIndex], 7, 22).Y,
+			_TriggerAnchorFromTopLeft(_triggerButtons[trigger.TriggerIndex], 7, 22).Y,
+			trigger.Sources.size());
+		for (size_t routeIndex = 0u; routeIndex < trigger.Sources.size(); ++routeIndex)
+		{
+			const auto& source = trigger.Sources[routeIndex];
+			const auto sourceEndpoint = std::find_if(endpoints.begin(), endpoints.end(), [&source](const auto& endpoint)
+			{
+				return endpoint.Source.has_value() && endpoint.Source->Kind == source.Kind &&
+					endpoint.Source->AdcChannel == source.AdcChannel && endpoint.Source->MidiDevice == source.MidiDevice;
+			});
+			if (sourceEndpoint == endpoints.end())
+				continue;
+			auto input = triggerInputs[trigger.TriggerIndex];
+			input.Position.Y = ys[routeIndex];
+			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
+				CableInteraction::RouteKind::Capture, routeIndex }, *sourceEndpoint, input });
+		}
+		if (trigger.TriggerIndex < stationEnds.size() && stationEnds[trigger.TriggerIndex].has_value())
+			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
+				CableInteraction::RouteKind::Station, 0u }, triggerOutputs[trigger.TriggerIndex],
+				stationEnds[trigger.TriggerIndex].value() });
+	}
+}
+
 void GuiHud::_RebuildCableVertices()
 {
 	_cableControlPoints.clear();
 	_cableColors.clear();
-	if (_sourceButtons.empty() || _triggerButtons.empty())
-	{
-		_cablesDirty = false;
-		return;
-	}
-
 	const glm::vec4 inputToTriggerColor(0.86f, 0.24f, 0.26f, 0.90f);
 	const glm::vec4 triggerToStationColor(0.92f, 0.79f, 0.20f, 0.88f);
-	engine::RoutingGraph graph;
-	graph.Triggers = _routingGraph;
-	for (const auto& route : BuildCableRoutes(graph))
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	_BuildInteractionGeometry(endpoints, cables);
+	for (const auto& cable : cables)
 	{
-		if (route.TriggerIndex >= _triggerButtons.size())
-			continue;
-
-		if (route.RouteKind == CableRoute::Kind::Capture && route.Source.has_value())
+		if (cable.Route.Kind == CableInteraction::RouteKind::Capture)
 		{
-			const auto& source = route.Source.value();
-			const auto sourceIt = std::find_if(_sourceEndpoints.begin(), _sourceEndpoints.end(), [&source](const auto& endpoint)
-			{
-				return endpoint.Kind == source.Kind && endpoint.AdcChannel == source.AdcChannel &&
-					endpoint.MidiDevice == source.MidiDevice;
-			});
-			if (sourceIt == _sourceEndpoints.end())
-				continue;
-			const auto sourceIndex = static_cast<size_t>(std::distance(_sourceEndpoints.begin(), sourceIt));
-			if (sourceIndex >= _sourceButtons.size())
-				continue;
-			const auto color = source.Available ? inputToTriggerColor : glm::vec4(0.55f, 0.55f, 0.55f, 0.78f);
-			_AppendCurve(_ButtonCenter(_sourceButtons[sourceIndex]),
-				_TriggerAnchorFromTopLeft(_triggerButtons[route.TriggerIndex], 7, 12),
-				color);
+			const auto color = cable.Start.Available ? inputToTriggerColor : glm::vec4(0.55f, 0.55f, 0.55f, 0.78f);
+			_AppendCurve(cable.Start.Position, cable.Finish.Position, color);
 			continue;
 		}
-
-		if (route.RouteKind != CableRoute::Kind::Station || !route.StationIndex.has_value())
-			continue;
-		const auto anchorIt = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&route](const auto& anchor)
-		{
-			return anchor.StationIndex == route.StationIndex.value();
-		});
-		if (anchorIt == _stationAnchors.end())
-			continue;
-		const auto& anchor = *anchorIt;
-		// Skip off-screen stations (sentinel value set when projected behind camera).
-		if (anchor.screenPos.X < -1000)
-			continue;
-		_AppendStationCurve(
-			_TriggerAnchorFromBottomLeft(_triggerButtons[route.TriggerIndex], 7, 12),
-			anchor.screenPos,
-			triggerToStationColor);
+		_AppendStationCurve(cable.Start.Position, cable.Finish.Position, triggerToStationColor);
+	}
+	if (_cableDrag.has_value())
+	{
+		const auto preview = CableInteraction::Preview(_cableDrag.value());
+		if (_cableDrag->Route.Kind == CableInteraction::RouteKind::Station)
+			_AppendStationCurve(preview.first, preview.second, glm::vec4(0.35f, 0.82f, 1.0f, 0.95f));
+		else
+			_AppendCurve(preview.first, preview.second, glm::vec4(0.35f, 0.82f, 1.0f, 0.95f));
 	}
 
 	_cablesDirty = false;

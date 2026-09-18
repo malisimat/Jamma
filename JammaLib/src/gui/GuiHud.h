@@ -7,6 +7,7 @@
 #include "GuiPanel.h"
 #include "GuiStackPanel.h"
 #include "GuiVu.h"
+#include "CableInteraction.h"
 #include "../io/RigFile.h"
 
 namespace resources
@@ -59,6 +60,9 @@ namespace gui
 	public:
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void SetSize(utils::Size2d size) override;
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
+		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
 		void SetCableRevealHeld(bool held);
 		void SetAudioInputPeak(unsigned int channel, float peak, unsigned int numSamps);
 		void SetMidiInputPeak(unsigned int input, float peak, unsigned int numSamps);
@@ -66,6 +70,7 @@ namespace gui
 			std::vector<std::string> midiInputNames,
 			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
+		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 
 	protected:
@@ -106,6 +111,10 @@ namespace gui
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
 		void _RebuildCableVertices();
+		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
+			std::vector<CableInteraction::Cable>& cables) const;
+		actions::ActionResult _BeginCableDrag(utils::Position2d point);
+		void _CancelCableDrag();
 		utils::Position2d _ButtonCenter(const std::shared_ptr<GuiButton>& button) const;
 		utils::Position2d _TriggerAnchorFromTopLeft(const std::shared_ptr<GuiButton>& button,
 			int offsetX,
@@ -141,6 +150,9 @@ namespace gui
 		std::vector<std::weak_ptr<engine::Trigger>> _triggers;
 		std::vector<io::RigFileRouting::Source> _sourceEndpoints;
 		std::vector<io::RigFileRouting::TriggerResolution> _routingGraph;
+		io::RigFile _displayedRig;
+		std::uint64_t _displayedRevision = 0u;
+		std::optional<CableInteraction::Drag> _cableDrag;
 		bool _cableRevealHeld = false;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;
@@ -152,5 +164,9 @@ namespace gui
 		bool _cablesDirty = true;
 		std::vector<StationAnchor> _stationAnchors;
 		static constexpr int _CableSegments = 24;
+		static constexpr float _SocketHitRadius = 14.0f;
+		static constexpr float _CableHitRadius = 9.0f;
+		static constexpr float _SnapRadius = 28.0f;
+		static constexpr float _SnapHysteresis = 10.0f;
 	};
 }
