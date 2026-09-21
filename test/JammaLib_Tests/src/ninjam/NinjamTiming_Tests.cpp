@@ -1,6 +1,9 @@
 #include "gtest/gtest.h"
 #include <cmath>
+#include <chrono>
+#include <filesystem>
 #include <limits>
+#include <windows.h>
 #include "./ninjam/NinjamConnection.h"
 #include "./ninjam/NinjamTiming.h"
 #include "./ninjam/NinjamLoopAlignment.h"
@@ -365,6 +368,22 @@ TEST(NinjamTimingInput, RejectsNonFiniteTempoWithoutEgress)
 	// network I/O. It cannot count sends; no-send remains a structural guarantee
 	// of RequestServerTempo's first-statement guard before formatting/locking/sends.
 	EXPECT_FALSE(disconnected.IsConnected());
+}
+
+TEST(NinjamConnection, RelativeWorkDirectoryUsesTempDefault)
+{
+	const auto relativePath = std::filesystem::path(
+		"jamma-relative-workdir-" + std::to_string(GetCurrentProcessId())
+		+ "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::error_code error;
+	std::filesystem::remove_all(relativePath, error);
+
+	ninjam::NinjamConnection connection("127.0.0.1:1", "relative-workdir-test", "", relativePath.string());
+	EXPECT_TRUE(connection.Connect());
+	EXPECT_FALSE(std::filesystem::exists(relativePath));
+
+	connection.Disconnect();
+	std::filesystem::remove_all(relativePath, error);
 }
 
 TEST(NinjamTiming, SharedValidityRejectsPlaceholderTempo)

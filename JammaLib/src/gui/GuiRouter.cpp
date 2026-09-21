@@ -607,8 +607,9 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 	glUseProgram(shader->GetId());
 
 	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
-	glCtx.SetUniform("color", glm::vec4(1.0f, 0.5f, 0.2f, 0.8f));
-	shader->SetUniforms(dynamic_cast<graphics::GlDrawContext&>(ctx));
+	shader->SetUniforms(glCtx);
+	const auto colorUniform = glGetUniformLocation(shader->GetId(), "Color");
+	glUniform4f(colorUniform, 1.0f, 0.5f, 0.2f, 0.8f);
 	
 	glUseProgram(shader->GetId());
 

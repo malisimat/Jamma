@@ -28,7 +28,7 @@ Window::Window(Scene& scene,
 	_rc(nullptr),
 	_dc(nullptr),
 	_wnd(nullptr),
-	_scene(scene),
+	_scene(&scene),
 	_resourceLib(resourceLib),
 	_style(WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN),
 	_resizing(false),
@@ -43,9 +43,10 @@ Window::Window(Scene& scene,
 	_pendingResize(std::nullopt),
 	_restoreConfig(),
 	_modifiers(Action::MODIFIER_NONE),
+	_jamLoadRequested(false),
 	_highlightPass(ImageFullscreenParams(base::DrawableParams{""}, "blur"))
 {
-	_scene.InitGui();
+	_scene->InitGui();
 
 	_config.Size = { scene.GetSize().Width, scene.GetSize().Height };
 	_config.Position = { scene.Position().X, scene.Position().Y};
@@ -63,7 +64,7 @@ void Window::ReleaseGlResources()
 {
 	GlDeleteQueue::FlushPendingDeletes();
 
-	_scene.ReleaseResources();
+	_scene->ReleaseResources();
 	_highlightPass.ReleaseResources();
 
 	_drawContext.reset();
@@ -125,7 +126,7 @@ void Window::LoadResources()
 
 void Window::InitScene()
 {
-	_scene.InitResources(_resourceLib, true);
+	_scene->InitResources(_resourceLib, true);
 	_highlightPass.InitResources(_resourceLib, true);
 	_pickContext->Initialise();
 	_textureContext->Initialise();
@@ -425,13 +426,13 @@ void Window::Resize(Size2d size)
 	_config.Size = size;
 	if (_config.State == WINDOWED)
 		_restoreConfig.Size = size;
-	_scene.SetSize(size);
+	_scene->SetSize(size);
 	_lastHoverObjectId = 0;
 	_hover3dDirty = true;
 	_forcePick = true;
 	_pendingResize = size;
 
-	if (_scene.IsUiVerbose())
+	if (_scene->IsUiVerbose())
 	{
 		std::cout << "[WINDOW] resize size=" << size.Width << "x" << size.Height
 			<< " state=" << _config.State << std::endl;
@@ -482,8 +483,8 @@ void Window::Render()
 	GlDeleteQueue::FlushPendingDeletes();
 	ApplyPendingResize();
 
-	_scene.CommitChanges();
-	_scene.InitResources(_resourceLib, false);
+	_scene->CommitChanges();
+	_scene->InitResources(_resourceLib, false);
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();
 	if (needsPick)
@@ -492,7 +493,7 @@ void Window::Render()
 
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
-		_scene.Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
+		_scene->Draw3d(*_pickContext, 1, DrawPass::PASS_PICKER);
 
 		auto pick = _pickContext->GetPixelAsync(_cachedCursorPosition.value());
 		if (!pick.HasValue && _forcePick)
@@ -506,7 +507,7 @@ void Window::Render()
 			if (pick.ObjectId != _lastHoverObjectId)
 			{
 				auto path = utils::IdToVec(pick.ObjectId);
-				_scene.SetHover3d(path, _cachedCursorModifiers);
+				_scene->SetHover3d(path, _cachedCursorModifiers);
 				_lastHoverObjectId = pick.ObjectId;
 			}
 
@@ -515,7 +516,7 @@ void Window::Render()
 		}
 	}
 
-	_scene.ApplyDeferredHoverUpdates();
+	_scene->ApplyDeferredHoverUpdates();
 
 	// Save the picker render to bmp:
 	// std::vector<unsigned char> data = _pickContext->GetTexture();
@@ -525,7 +526,7 @@ void Window::Render()
 
 	glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
-	_scene.Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
+	_scene->Draw3d(*_textureContext, 1, DrawPass::PASS_HIGHLIGHT);
 
 	_drawContext->Bind();
 
@@ -535,8 +536,8 @@ void Window::Render()
 	_highlightPass.SetTexture(_textureContext->GetTexture());
 	_highlightPass.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
 
-	_scene.Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
-	_scene.Draw(*_drawContext);
+	_scene->Draw3d(*_drawContext, 1, DrawPass::PASS_SCENE);
+	_scene->Draw(*_drawContext);
 }
 
 void Window::Swap()
@@ -632,7 +633,7 @@ ActionResult Window::OnAction(TouchAction touchAction)
 
 	touchAction.MouseButtonsDown = _buttonsDown;
 
-	return _scene.OnAction(touchAction);
+	return _scene->OnAction(touchAction);
 }
 
 ActionResult Window::OnAction(TouchMoveAction touchAction)
@@ -641,7 +642,7 @@ ActionResult Window::OnAction(TouchMoveAction touchAction)
 	_cachedCursorModifiers = touchAction.Modifiers;
 	_hover3dDirty = true;
 
-	return _scene.OnAction(touchAction);
+	return _scene->OnAction(touchAction);
 }
 
 ActionResult Window::OnAction(KeyAction keyAction)
@@ -676,8 +677,35 @@ ActionResult Window::OnAction(KeyAction keyAction)
 
 	_modifiers = (Action::Modifiers)modifiers;
 	keyAction.Modifiers = _modifiers;
+	if ((76u == keyAction.KeyChar)
+		&& (KeyAction::KEY_UP == keyAction.KeyActionType)
+		&& (Action::MODIFIER_CTRL & keyAction.Modifiers)
+		&& !(Action::MODIFIER_SHIFT & keyAction.Modifiers))
+	{
+		_jamLoadRequested = true;
+		return { true, "window", "load-jam", ACTIONRESULT_DEFAULT, nullptr, {} };
+	}
 
-	return _scene.OnAction(keyAction);
+	return _scene->OnAction(keyAction);
+}
+
+void Window::ReplaceScene(Scene& scene)
+{
+	_scene->ReleaseResources();
+	_scene = &scene;
+	_scene->InitGui();
+	_scene->SetSize(_config.Size);
+	_scene->InitResources(_resourceLib, true);
+	_hover3dDirty = true;
+	_forcePick = true;
+	_cachedCursorPosition.reset();
+}
+
+bool Window::ConsumeJamLoadRequest() noexcept
+{
+	const bool requested = _jamLoadRequested;
+	_jamLoadRequested = false;
+	return requested;
 }
 
 void APIENTRY Window::MessageCallback(GLenum source,
@@ -858,7 +886,7 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 			if (window->_config.State == Window::WINDOWED)
 				window->_restoreConfig.Position = position;
 
-			if (window->_scene.IsUiVerbose())
+			if (window->_scene->IsUiVerbose())
 			{
 				std::cout << "[WINDOW] move pos=" << position.X << "," << position.Y
 					<< " state=" << window->_config.State << std::endl;

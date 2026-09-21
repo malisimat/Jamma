@@ -1,6 +1,7 @@
 #include "MidiLoop.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "../graphics/MidiModel.h"
@@ -276,6 +277,132 @@ void MidiLoop::Reset() noexcept
 	_held.reset();
 	_quantisedEvents.store(nullptr, std::memory_order_release);
 	++_revision;
+}
+
+bool MidiLoop::SnapshotForExport(ExportState& state,
+	std::int32_t anchorCorrection) const noexcept
+{
+	state.LoopLengthSamps = _loopLengthSamps;
+	state.AutomationGlobalSampleOrigin = _automationGlobalSampleOrigin
+		+ static_cast<std::uint32_t>(anchorCorrection);
+	if (_eventCount > state.Events.size())
+		return false;
+
+	// EndRecord deliberately retains events beyond a quantised loop boundary so
+	// capture can finish without modifying its source storage. Playback ignores
+	// those events, and export must do the same: sidecars only represent the
+	// playable loop window.
+	state.EventCount = 0u;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+	{
+		if (_events[i].sampleOffset >= state.LoopLengthSamps)
+			continue;
+		state.Events[state.EventCount++] = _events[i];
+	}
+
+	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
+	{
+		const auto& lane = _lanes[laneIdx];
+		auto& exported = state.AutomationLanes[laneIdx];
+		bool copied = false;
+		for (unsigned int attempt = 0u; attempt < 8u; ++attempt)
+		{
+			const auto before = lane.Revision.load(std::memory_order_acquire);
+			if ((before & 1u) != 0u)
+				continue;
+			exported.MatchKey = lane.Mapping.MatchKey.load(std::memory_order_acquire);
+			exported.TargetParameterIndex = lane.Mapping.TargetParameterIndex;
+			exported.TargetPlugin = lane.Mapping.TargetPlugin;
+			exported.PointCount = lane.PointCount;
+			if (exported.PointCount > exported.Points.size())
+				return false;
+			for (std::size_t point = 0u; point < exported.PointCount; ++point)
+				exported.Points[point] = lane.Points[point];
+			if (before == lane.Revision.load(std::memory_order_acquire))
+			{
+				copied = true;
+				break;
+			}
+		}
+		if (!copied)
+			return false;
+	}
+
+	return true;
+}
+
+bool MidiLoop::RestoreFromExport(const ExportState& state) noexcept
+{
+	if (state.LoopLengthSamps == 0u || state.EventCount > _events.size())
+		return false;
+	for (std::size_t i = 0u; i < state.EventCount; ++i)
+	{
+		if (state.Events[i].sampleOffset >= state.LoopLengthSamps)
+			return false;
+	}
+
+	for (const auto& laneState : state.AutomationLanes)
+	{
+		if (laneState.PointCount > AutomationLane::MaxPoints)
+			return false;
+		const auto matchKey = laneState.MatchKey;
+		const auto isEditor = matchKey == AutomationMapping::MakeEditorMatchKey();
+		const auto isCc = (matchKey & (1u << 16)) != 0u
+			&& (matchKey & ~0x1ffffu) == 0u
+			&& ((matchKey >> 8) & 0xffu) < 16u
+			&& (matchKey & 0xffu) < 128u;
+		if (matchKey != AutomationMapping::kInactive && !isEditor && !isCc)
+			return false;
+		for (std::size_t point = 0u; point < laneState.PointCount; ++point)
+		{
+			const auto [frac, value] = laneState.Points[point];
+			if (!std::isfinite(frac) || !std::isfinite(value) || frac < 0.0f || frac > 1.0f)
+				return false;
+			if (point > 0u && laneState.Points[point - 1u].first > frac)
+				return false;
+		}
+	}
+
+	_eventCount = state.EventCount;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+		_events[i] = state.Events[i];
+	_loopLengthSamps = state.LoopLengthSamps;
+	_automationGlobalSampleOrigin = state.AutomationGlobalSampleOrigin;
+	_dropped = 0u;
+	_held.reset();
+	_state = MidiLoopState::Playing;
+
+	for (std::size_t laneIdx = 0u; laneIdx < MaxAutomationLanes; ++laneIdx)
+	{
+		auto& lane = _lanes[laneIdx];
+		const auto generation = lane.Revision.load(std::memory_order_relaxed);
+		lane.Revision.store(generation + 1u, std::memory_order_release);
+		const auto& imported = state.AutomationLanes[laneIdx];
+		lane.Mapping.TargetPlugin = nullptr;
+		lane.Mapping.TargetParameterIndex = imported.TargetParameterIndex;
+		lane.Mapping.MatchKey.store(imported.MatchKey, std::memory_order_relaxed);
+		lane.PointCount = imported.PointCount;
+		for (std::size_t point = 0u; point < imported.PointCount; ++point)
+			lane.Points[point] = imported.Points[point];
+		lane.Revision.store(generation + 2u, std::memory_order_release);
+	}
+
+	++_revision;
+	if (_quantisation.Enabled)
+		PublishQuantisedEvents();
+	else
+		_quantisedEvents.store(nullptr, std::memory_order_release);
+	return true;
+}
+
+bool MidiLoop::BindAutomationLaneTarget(std::size_t laneIdx,
+	vst::IVstPlugin* plugin) noexcept
+{
+	if (laneIdx >= MaxAutomationLanes || !plugin || !_lanes[laneIdx].Mapping.IsActive())
+		return false;
+
+	_lanes[laneIdx].Mapping.TargetPlugin = plugin;
+	return true;
 }
 
 bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept

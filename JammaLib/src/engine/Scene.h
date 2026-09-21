@@ -209,6 +209,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		bool PauseAudio();
+		bool ResumeAudio();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
@@ -257,7 +259,7 @@ namespace engine
 		void DisconnectNinjam();
 
 		// Force-unload all hosted VST plugins owned by stations/takes/loops.
-		// Call on the main/non-audio thread during shutdown.
+		// Call on the main thread only after CloseAudio() has stopped the callback.
 		void ForceUnloadAllVstPlugins();
 		
 	protected:

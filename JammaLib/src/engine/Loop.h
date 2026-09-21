@@ -292,6 +292,11 @@ namespace engine
 		// job thread after CommitChanges() queues the appropriate job.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only: synchronously construct and publish one plugin before this
+		// loop can enter an audio snapshot.
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }

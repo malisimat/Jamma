@@ -155,7 +155,7 @@ namespace ninjam
 		bool _HasActiveConnectAttempt() const noexcept;
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);
 		void _ScheduleRetry(std::chrono::steady_clock::time_point now);
-		void _EnsureWorkDir();
+		bool _EnsureWorkDir();
 		void _ResizeScratchBuffers(unsigned int numFrames,
 			unsigned int numInputScratchChannels);
 		void _ApplyLocalChannels();

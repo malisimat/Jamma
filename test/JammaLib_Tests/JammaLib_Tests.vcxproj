@@ -188,6 +188,9 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\gui\GuiRack_Tests.cpp" />
     <ClCompile Include="src\gui\GuiSlider_Tests.cpp" />
     <ClCompile Include="src\io\JamFile_Tests.cpp" />
+
+    <ClCompile Include="src\io\IoSessionExporter_Tests.cpp" />
+    <ClCompile Include="src\io\NativeMidiSidecar_Tests.cpp" />
     <ClCompile Include="src\io\Json_Tests.cpp" />
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
