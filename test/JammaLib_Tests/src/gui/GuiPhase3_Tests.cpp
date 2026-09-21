@@ -259,6 +259,68 @@ TEST(GuiScrollPanel, OffsetClampsToContentRange) {
 	EXPECT_EQ(0, panel->ScrollOffset());
 }
 
+TEST(GuiScrollPanel, GlobalAndLocalCoordinatesIncludeNonzeroScrollOffset) {
+	GuiScrollPanelParams p;
+	p.Position = { 30, 40 };
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80, 200 };
+	contentParams.MinSize = contentParams.Size;
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 80 }, { 40, 20 }));
+	content->AddChild(button);
+
+	panel->SetContent(content);
+	panel->SetScrollOffset(60);
+
+	const auto globalPoint = button->GlobalPosition() + utils::Position2d{ 7, 8 };
+	const auto localPoint = button->GlobalToLocal(globalPoint);
+
+	EXPECT_EQ(7, localPoint.X);
+	EXPECT_EQ(8, localPoint.Y);
+	EXPECT_EQ(globalPoint.X, button->GlobalPosition().X + localPoint.X);
+	EXPECT_EQ(globalPoint.Y, button->GlobalPosition().Y + localPoint.Y);
+	ASSERT_NE(nullptr, content->Parent());
+	EXPECT_EQ(panel.get(), content->Parent()->Parent().get());
+}
+
+TEST(GuiScrollPanel, CapturedButtonReceivesReleaseInScrolledLocalCoordinates) {
+	GuiScrollPanelParams p;
+	p.Position = { 30, 40 };
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80, 200 };
+	contentParams.MinSize = contentParams.Size;
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 80 }, { 40, 20 }));
+	content->AddChild(button);
+	panel->SetContent(content);
+	panel->SetScrollOffset(60);
+
+	const auto globalPoint = button->GlobalPosition() + utils::Position2d{ 7, 8 };
+	const auto panelPoint = globalPoint - panel->GlobalPosition();
+	auto down = panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, panelPoint));
+
+	ASSERT_TRUE(down.IsEaten);
+	auto active = down.ActiveElement.lock();
+	ASSERT_EQ(button.get(), active.get());
+
+	auto release = MakeTouch(TouchAction::TOUCH_UP, globalPoint);
+	const auto localRelease = active->GlobalToLocal(release);
+	EXPECT_EQ(7, localRelease.Position.X);
+	EXPECT_EQ(8, localRelease.Position.Y);
+
+	const auto up = active->OnAction(localRelease);
+	EXPECT_TRUE(up.IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_OVER, button->GetState());
+}
+
 TEST(GuiScrollPanel, ScrollFractionMapsToOffset) {
 	GuiScrollPanelParams p;
 	p.Size = { 100, 50 };

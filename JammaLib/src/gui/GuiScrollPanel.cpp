@@ -26,6 +26,7 @@ GuiScrollBarParams GuiScrollPanel::_MakeScrollBarParams(const GuiScrollPanelPara
 GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 	GuiPanel(params),
 	_content(nullptr),
+	_contentHost(nullptr),
 	_scrollBar(std::make_shared<GuiScrollBar>(_MakeScrollBarParams(params))),
 	_scrollBarWidth(params.ScrollBarWidth),
 	_wheelStep(params.WheelStep),
@@ -38,7 +39,19 @@ GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 void GuiScrollPanel::SetContent(std::shared_ptr<base::GuiElement> content)
 {
 	_content = std::move(content);
+	_contentHost.reset();
+	if (_content)
+	{
+		base::GuiElementParams hostParams;
+		hostParams.Size = _content->GetSize();
+		hostParams.MinSize = hostParams.Size;
+		hostParams.GuiPassThrough = true;
+		_contentHost = std::make_shared<base::GuiElement>(hostParams);
+		_contentHost->AddChild(_content);
+		_contentHost->SetParent(shared_from_this());
+	}
 	_scrollOffset = 0;
+	_UpdateContentHostPosition();
 	_UpdateMetrics();
 }
 
@@ -67,6 +80,13 @@ int GuiScrollPanel::ScrollOffset() const { return _scrollOffset; }
 void GuiScrollPanel::_ClampOffset()
 {
 	_scrollOffset = std::clamp(_scrollOffset, 0, MaxScrollOffset());
+	_UpdateContentHostPosition();
+}
+
+void GuiScrollPanel::_UpdateContentHostPosition()
+{
+	if (_contentHost)
+		_contentHost->SetPosition({ 0, -_scrollOffset });
 }
 
 void GuiScrollPanel::SetScrollOffset(int offset)
@@ -89,6 +109,8 @@ void GuiScrollPanel::SetScrollFraction(double fraction)
 void GuiScrollPanel::_UpdateMetrics()
 {
 	_scrollBar->SetMetrics((double)ViewportHeight(), (double)_ContentHeight());
+	if (_contentHost && _content)
+		_contentHost->SetSize(_content->GetSize());
 	_ClampOffset();
 }
 
@@ -103,8 +125,8 @@ void GuiScrollPanel::SetSize(Size2d size)
 void GuiScrollPanel::InitResources(ResourceLib& resourceLib, bool forceInit)
 {
 	GuiElement::InitResources(resourceLib, forceInit);
-	if (_content)
-		_content->InitResources(resourceLib, forceInit);
+	if (_contentHost)
+		_contentHost->InitResources(resourceLib, forceInit);
 	_UpdateMetrics();
 }
 
@@ -125,8 +147,7 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3((float)pos.X, (float)pos.Y, 0.f)));
 
-	// Content, shifted up by the current scroll offset.
-	if (_content)
+	if (_contentHost)
 	{
 		auto clipPos = GlobalPosition();
 		clipPos.X += (int)_ContentClipPadding;
@@ -139,9 +160,7 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 			(unsigned int)clipHeight
 		});
 
-		glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(0.f, -(float)_scrollOffset, 0.f)));
-		_content->Draw(ctx);
-		glCtx.PopMvp();
+		_contentHost->Draw(ctx);
 
 		glCtx.PopScissorRect();
 	}
@@ -179,12 +198,9 @@ ActionResult GuiScrollPanel::OnAction(TouchAction action)
 		};
 	}
 
-	// Content, with the scroll offset folded into the local coordinate.
-	if (_content)
+	if (_contentHost && _IsInViewport(action.Position))
 	{
-		auto contentAction = action;
-		contentAction.Position.Y += _scrollOffset;
-		auto res = _content->OnAction(_content->ParentToLocal(contentAction));
+		auto res = _contentHost->OnAction(_contentHost->ParentToLocal(action));
 		if (res.IsEaten)
 		{
 			if (!res.ActiveElement.lock())
@@ -201,12 +217,8 @@ ActionResult GuiScrollPanel::OnAction(TouchMoveAction action)
 	if (_draggingScrollBar)
 		return _scrollBar->OnAction(_scrollBar->ParentToLocal(action));
 
-	if (_content)
-	{
-		auto contentAction = action;
-		contentAction.Position.Y += _scrollOffset;
-		return _content->OnAction(_content->ParentToLocal(contentAction));
-	}
+	if (_contentHost && _IsInViewport(action.Position))
+		return _contentHost->OnAction(_contentHost->ParentToLocal(action));
 
 	return ActionResult::NoAction();
 }
@@ -229,12 +241,10 @@ std::shared_ptr<base::GuiElement> GuiScrollPanel::FindTopmostDescendant(Position
 	if (scrollBarHit)
 		return scrollBarHit;
 
-	if (_content && _IsInViewport(localPos))
+	if (_contentHost && _IsInViewport(localPos))
 	{
-		auto contentLocal = localPos;
-		contentLocal.Y += _scrollOffset;
-		contentLocal = _content->ParentToLocal(contentLocal);
-		auto contentHit = _content->FindTopmostDescendant(contentLocal);
+		auto contentLocal = _contentHost->ParentToLocal(localPos);
+		auto contentHit = _contentHost->FindTopmostDescendant(contentLocal);
 		if (contentHit)
 			return contentHit;
 	}

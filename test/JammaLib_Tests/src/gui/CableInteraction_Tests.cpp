@@ -128,6 +128,18 @@ TEST_F(CableInteractionTests, ReleaseSourceToTriggerCreatesCaptureRoute)
 	EXPECT_EQ((std::vector<unsigned int>{ 3u }), release.Candidate->Triggers[1].InputChannels);
 }
 
+TEST_F(CableInteractionTests, UnavailableFixedSourceCannotCreateCaptureRoute)
+{
+	auto rig = Rig();
+	CableInteraction::Drag drag{ { 4u, static_cast<size_t>(-1), CableInteraction::RouteKind::Capture, 0u },
+		CableInteraction::End::Finish, Adc(3u, 0, 0, false), {}, { 100, 0 }, Input(1u, 100, 0) };
+
+	EXPECT_FALSE(CableInteraction::Compatible(drag, Input(1u, 100, 0), rig));
+	const auto release = CableInteraction::ReleaseToCandidate(drag, rig);
+	EXPECT_FALSE(release.Candidate.has_value());
+	EXPECT_FALSE(release.Changed);
+}
+
 TEST_F(CableInteractionTests, ExplicitAnyMidiCanBeCreatedReplacedAndRemoved)
 {
 	auto rig = Rig();

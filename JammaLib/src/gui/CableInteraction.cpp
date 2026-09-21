@@ -94,7 +94,9 @@ bool CableInteraction::_SameSource(const io::RigFileRouting::Source& lhs,
 
 bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, const io::RigFile& rig)
 {
-	if (!candidate.Available)
+	if (!candidate.Available || !drag.Fixed.Available ||
+		(candidate.Source.has_value() && !candidate.Source->Available) ||
+		(drag.Fixed.Source.has_value() && !drag.Fixed.Source->Available))
 		return false;
 	if (drag.Route.Kind == RouteKind::Capture)
 	{
@@ -201,7 +203,8 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 
 	if (drag.MovingEnd == End::Finish)
 	{
-		if (!drag.Snap.has_value() || drag.Snap->Kind != EndpointKind::TriggerInput || !drag.Fixed.Source.has_value())
+		if (!drag.Fixed.Available || !drag.Fixed.Source.has_value() || !drag.Fixed.Source->Available ||
+			!drag.Snap.has_value() || !drag.Snap->Available || drag.Snap->Kind != EndpointKind::TriggerInput)
 			return {};
 		const auto triggerIndex = drag.Snap->TriggerIndex.value_or(drag.Route.TriggerIndex);
 		if (triggerIndex >= rig.Triggers.size())

@@ -32,6 +32,14 @@ GuiButton::GuiButton(GuiButtonParams params) :
 		_children.push_back(_label);
 }
 
+actions::ActionResult GuiButton::OnAction(actions::TouchAction action)
+{
+	auto result = GuiElement::OnAction(action);
+	if (result.IsEaten && action.State == actions::TouchAction::TOUCH_DOWN && !result.ActiveElement.lock())
+		result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
+	return result;
+}
+
 void GuiButton::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);

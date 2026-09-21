@@ -26,6 +26,28 @@ using namespace resources;
 
 namespace gui
 {
+	class GuiHudSocket : public base::GuiElement
+	{
+	public:
+		GuiHudSocket(utils::Position2d position, unsigned int size, const glm::vec3& tint) :
+			GuiElement(_Params(position, size, tint))
+		{
+		}
+
+	private:
+		static base::GuiElementParams _Params(utils::Position2d position, unsigned int size, const glm::vec3& tint)
+		{
+			base::GuiElementParams params;
+			params.Position = position;
+			params.Size = { size, size };
+			params.MinSize = params.Size;
+			params.Texture = "rounded_but";
+			params.TextureShader = "texture_tinted";
+			params.TintColor = tint;
+			params.GuiPassThrough = true;
+			return params;
+		}
+	};
 	class GuiHudActionButton : public GuiButton
 	{
 	public:
@@ -210,18 +232,16 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	const bool applying = IsApplying();
 	if (_addTriggerButton)
 		_addTriggerButton->SetEnabled(!applying);
-	for (size_t i = 0u; i < _triggerStatusLabels.size(); ++i)
+	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
 	{
 		const bool editable = _CanEditTrigger(i);
-		_triggerStatusLabels[i]->SetString(applying ? "APPLYING" : (editable ? "EDITABLE" : "LOCKED"));
-		if (i < _triggerCloseButtons.size())
-			_triggerCloseButtons[i]->SetEnabled(editable);
+		_triggerWidgets[i].Close->SetEnabled(editable);
 	}
 
-	for (std::size_t i = 0u; i < _inputVus.size() && i < _sourceButtons.size(); ++i)
+	for (std::size_t i = 0u; i < _inputVus.size() && i < _sourceWidgets.size(); ++i)
 	{
-		const auto buttonPos = _sourceButtons[i]->GlobalPosition();
-		const auto buttonSize = _sourceButtons[i]->GetSize();
+		const auto buttonPos = _sourceWidgets[i].Button->GlobalPosition();
+		const auto buttonSize = _sourceWidgets[i].Button->GetSize();
 		const auto rootPos = GlobalPosition();
 		_inputVus[i]->SetPosition({ buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width) - 13,
 			buttonPos.Y - rootPos.Y + 4 });
@@ -232,13 +252,27 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3((float)pos.X, (float)pos.Y, 0.0f)));
 
-	_DrawCables(ctx);
-
 	for (auto& child : _children)
 		child->Draw(ctx);
 
+	_DrawCables(ctx);
+
 	for (auto& vu : _inputVus)
 		vu->Draw(ctx);
+	for (const auto& widgets : _sourceWidgets)
+		_DrawOverlayElement(ctx, widgets.Socket);
+	if (_triggerScroll)
+	{
+		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
+			{ _triggerScroll->ViewportWidth(), _triggerScroll->ViewportHeight() });
+		for (const auto& widgets : _triggerWidgets)
+		{
+			_DrawOverlayElement(ctx, widgets.Close);
+			_DrawOverlayElement(ctx, widgets.InputSocket);
+			_DrawOverlayElement(ctx, widgets.OutputSocket);
+		}
+		glCtx.PopScissorRect();
+	}
 
 	glCtx.PopMvp();
 }
@@ -328,7 +362,14 @@ void GuiHud::_BuildTopStrip()
 		auto button = _MakeSourceButton(label,
 			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
 			sourceButtonWidth);
-		_sourceButtons.push_back(button);
+		auto socket = std::make_shared<GuiHudSocket>(
+			utils::Position2d{ static_cast<int>(sourceButtonWidth / 2u - _SocketSize / 2u), 0 },
+			_SocketSize,
+			source.Available
+			? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f))
+			: glm::vec3(0.35f));
+		button->AddChild(socket);
+		_sourceWidgets.push_back({ button, socket });
 		_topInputRow->AddChild(button);
 		GuiVuParams vuParams;
 		if (isAdc)
@@ -376,14 +417,19 @@ void GuiHud::_BuildTriggerRail()
 		closeParams.TextPadding = 0u;
 		auto close = std::make_shared<GuiHudActionButton>(closeParams, [this, i]() { _OpenDeleteConfirmation(i); });
 		button->AddChild(close);
-		_triggerCloseButtons.push_back(close);
-		GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("EDITABLE", 0u);
-		statusParams.Position = { 4, 4 };
-		statusParams.Size = { 72u, 14u };
-		auto status = std::make_shared<GuiLabel>(statusParams);
-		button->AddChild(status);
-		_triggerStatusLabels.push_back(status);
-		_triggerButtons.push_back(button);
+		auto inputSocket = std::make_shared<GuiHudSocket>(
+			utils::Position2d{ 0, static_cast<int>(_TriggerButtonHeight) -
+				_TriggerInputPinTopOffset - static_cast<int>(_SocketSize / 2u) },
+			_SocketSize,
+			glm::vec3(0.86f, 0.24f, 0.26f));
+		button->AddChild(inputSocket);
+
+		auto outputSocket = std::make_shared<GuiHudSocket>(
+			utils::Position2d{ 0, _TriggerOutputPinBottomOffset - static_cast<int>(_SocketSize / 2u) },
+			_SocketSize,
+			glm::vec3(0.92f, 0.79f, 0.20f));
+		button->AddChild(outputSocket);
+		_triggerWidgets.push_back({ button, close, inputSocket, outputSocket });
 		_triggerList->AddChild(button);
 	}
 	const auto logicalHeight = _triggerNames.empty() ? 1u :
@@ -414,10 +460,8 @@ void GuiHud::_RebuildPanels()
 {
 	const int previousScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
 	const bool revealNewest = _revealNewestTrigger;
-	_sourceButtons.clear();
-	_triggerButtons.clear();
-	_triggerCloseButtons.clear();
-	_triggerStatusLabels.clear();
+	_sourceWidgets.clear();
+	_triggerWidgets.clear();
 	_inputVus.clear();
 	_topStrip.reset();
 	_topInputRow.reset();
@@ -598,6 +642,22 @@ bool GuiHud::_InitCableVertexArray()
 	return true;
 }
 
+void GuiHud::_DrawOverlayElement(base::DrawContext& ctx,
+	const std::shared_ptr<base::GuiElement>& element) const
+{
+	if (!element)
+		return;
+	const auto parent = element->Parent();
+	if (!parent)
+		return;
+	const auto parentPosition = parent->GlobalPosition() - GlobalPosition();
+	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+	glCtx.PushMvp(glm::translate(glm::mat4(1.0f),
+		glm::vec3(static_cast<float>(parentPosition.X), static_cast<float>(parentPosition.Y), 0.0f)));
+	element->Draw(ctx);
+	glCtx.PopMvp();
+}
+
 void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
 	const float fadeInStep = 0.16f;
@@ -680,9 +740,12 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 		if (!canEditTrigger(cable.Route.TriggerIndex))
 			return actions::ActionResult::NoAction();
 		const auto movingEnd = CableInteraction::ClosestEnd(cable, point);
+		const auto& fixed = movingEnd == CableInteraction::End::Start ? cable.Finish : cable.Start;
+		if (!fixed.Available || (fixed.Source.has_value() && !fixed.Source->Available))
+			return actions::ActionResult::NoAction();
 		_cableDrag = CableInteraction::Drag{ cable.Route,
 			movingEnd,
-			movingEnd == CableInteraction::End::Start ? cable.Finish : cable.Start,
+			fixed,
 			cable.Route.Kind == CableInteraction::RouteKind::Capture ? cable.Start.Source : std::nullopt,
 			point,
 			std::nullopt };
@@ -690,6 +753,9 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 	else if (const auto endpointIndex = CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius); endpointIndex.has_value())
 	{
 		const auto& endpoint = endpoints[endpointIndex.value()];
+		if (!endpoint.Available || (endpoint.Source.has_value() && !endpoint.Source->Available))
+			return actions::ActionResult::NoAction();
+
 		CableInteraction::Handle handle{ _displayedRevision, endpoint.TriggerIndex.value_or(static_cast<size_t>(-1)),
 			CableInteraction::RouteKind::Capture, 0u };
 		CableInteraction::End movingEnd = CableInteraction::End::Finish;
@@ -798,7 +864,7 @@ void GuiHud::_ConfirmDelete()
 
 void GuiHud::_RevealTrigger(size_t triggerIndex)
 {
-	if (!_triggerScroll || triggerIndex >= _triggerButtons.size())
+	if (!_triggerScroll || triggerIndex >= _triggerWidgets.size())
 		return;
 	const int contentHeight = _triggerList ? static_cast<int>(_triggerList->GetSize().Height) :
 		static_cast<int>((triggerIndex + 1u) * _TriggerButtonHeight + triggerIndex * _RightRailSpacing);
@@ -880,37 +946,36 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 	endpoints.clear();
 	cables.clear();
 	const auto rootPos = GlobalPosition();
-	for (size_t i = 0u; i < _sourceButtons.size() && i < _sourceEndpoints.size(); ++i)
+	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
 	{
-		const auto buttonPos = _sourceButtons[i]->GlobalPosition();
-		const auto size = _sourceButtons[i]->GetSize();
 		const auto& source = _sourceEndpoints[i];
 		endpoints.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
 			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
-			{ buttonPos.X - rootPos.X + static_cast<int>(size.Width / 2u), buttonPos.Y - rootPos.Y },
+			_ElementCenter(_sourceWidgets[i].Socket),
 			std::nullopt, std::nullopt, {}, source, source.Available });
 	}
 
-	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerButtons.size());
-	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerButtons.size());
-	std::vector<bool> triggerVisible(_triggerButtons.size(), true);
+	std::vector<CableInteraction::Endpoint> triggerInputs(_triggerWidgets.size());
+	std::vector<CableInteraction::Endpoint> triggerOutputs(_triggerWidgets.size());
+	std::vector<bool> triggerInputVisible(_triggerWidgets.size(), true);
+	std::vector<bool> triggerOutputVisible(_triggerWidgets.size(), true);
 	const auto scrollPos = _triggerScroll ? _triggerScroll->GlobalPosition() : utils::Position2d{};
 	const int scrollBottom = scrollPos.Y - rootPos.Y;
 	const int scrollTop = scrollBottom + (_triggerScroll ? static_cast<int>(_triggerScroll->ViewportHeight()) : 0);
-	for (size_t i = 0u; i < _triggerButtons.size(); ++i)
+	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
 	{
 		triggerInputs[i] = { CableInteraction::EndpointKind::TriggerInput,
-			_TriggerAnchorFromTopLeft(_triggerButtons[i], 7, 24), i };
+			_ElementCenter(_triggerWidgets[i].InputSocket), i };
 		triggerOutputs[i] = { CableInteraction::EndpointKind::TriggerOutput,
-			_TriggerAnchorFromBottomLeft(_triggerButtons[i], 7, 12), i };
-		const auto centreY = _TriggerAnchorFromBottomLeft(_triggerButtons[i], 0,
-			static_cast<int>(_TriggerButtonHeight / 2u)).Y;
-		triggerVisible[i] = !_triggerScroll || (centreY >= scrollBottom && centreY <= scrollTop);
-		if (triggerVisible[i])
-		{
+			_ElementCenter(_triggerWidgets[i].OutputSocket), i };
+		triggerInputVisible[i] = !_triggerScroll ||
+			(triggerInputs[i].Position.Y >= scrollBottom && triggerInputs[i].Position.Y <= scrollTop);
+		triggerOutputVisible[i] = !_triggerScroll ||
+			(triggerOutputs[i].Position.Y >= scrollBottom && triggerOutputs[i].Position.Y <= scrollTop);
+		if (triggerInputVisible[i])
 			endpoints.push_back(triggerInputs[i]);
+		if (triggerOutputVisible[i])
 			endpoints.push_back(triggerOutputs[i]);
-		}
 	}
 
 	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
@@ -925,7 +990,7 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 				stationTriggers[static_cast<size_t>(std::distance(_stationAnchors.begin(), anchor))].push_back(trigger.TriggerIndex);
 		}
 
-	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerButtons.size());
+	std::vector<std::optional<CableInteraction::Endpoint>> stationEnds(_triggerWidgets.size());
 	for (size_t anchorIndex = 0u; anchorIndex < _stationAnchors.size(); ++anchorIndex)
 	{
 		const auto& anchor = _stationAnchors[anchorIndex];
@@ -946,28 +1011,38 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 
 	for (const auto& trigger : _routingGraph)
 	{
-		if (trigger.TriggerIndex >= triggerInputs.size() || !triggerVisible[trigger.TriggerIndex])
+		if (trigger.TriggerIndex >= triggerInputs.size())
 			continue;
-		const auto ys = CableInteraction::Spread(
-			_TriggerAnchorFromBottomLeft(_triggerButtons[trigger.TriggerIndex], 7, 22).Y,
-			_TriggerAnchorFromTopLeft(_triggerButtons[trigger.TriggerIndex], 7, 22).Y,
-			trigger.Sources.size());
-		for (size_t routeIndex = 0u; routeIndex < trigger.Sources.size(); ++routeIndex)
+		// Keep capture cables gathered around the input pin. A single cable lands
+		// precisely on it; the small fan never reaches the trigger's midpoint.
+		if (triggerInputVisible[trigger.TriggerIndex])
 		{
-			const auto& source = trigger.Sources[routeIndex];
-			const auto sourceEndpoint = std::find_if(endpoints.begin(), endpoints.end(), [&source](const auto& endpoint)
+			const auto pinY = triggerInputs[trigger.TriggerIndex].Position.Y;
+			const auto fanBottom = _triggerScroll
+				? std::max(pinY - _TriggerInputFanHalfHeight, scrollBottom)
+				: pinY - _TriggerInputFanHalfHeight;
+			const auto fanTop = _triggerScroll
+				? std::min(pinY + _TriggerInputFanHalfHeight, scrollTop)
+				: pinY + _TriggerInputFanHalfHeight;
+			const auto ys = CableInteraction::Spread(fanBottom, fanTop, trigger.Sources.size());
+			for (size_t routeIndex = 0u; routeIndex < trigger.Sources.size(); ++routeIndex)
 			{
-				return endpoint.Source.has_value() && endpoint.Source->Kind == source.Kind &&
-					endpoint.Source->AdcChannel == source.AdcChannel && endpoint.Source->MidiDevice == source.MidiDevice;
-			});
-			if (sourceEndpoint == endpoints.end())
-				continue;
-			auto input = triggerInputs[trigger.TriggerIndex];
-			input.Position.Y = ys[routeIndex];
-			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
-				CableInteraction::RouteKind::Capture, routeIndex }, *sourceEndpoint, input });
+				const auto& source = trigger.Sources[routeIndex];
+				const auto sourceEndpoint = std::find_if(endpoints.begin(), endpoints.end(), [&source](const auto& endpoint)
+				{
+					return endpoint.Source.has_value() && endpoint.Source->Kind == source.Kind &&
+						endpoint.Source->AdcChannel == source.AdcChannel && endpoint.Source->MidiDevice == source.MidiDevice;
+				});
+				if (sourceEndpoint == endpoints.end())
+					continue;
+				auto input = triggerInputs[trigger.TriggerIndex];
+				input.Position.Y = ys[routeIndex];
+				cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
+					CableInteraction::RouteKind::Capture, routeIndex }, *sourceEndpoint, input });
+			}
 		}
-		if (trigger.TriggerIndex < stationEnds.size() && stationEnds[trigger.TriggerIndex].has_value())
+		if (triggerOutputVisible[trigger.TriggerIndex] && trigger.TriggerIndex < stationEnds.size() &&
+			stationEnds[trigger.TriggerIndex].has_value())
 			cables.push_back({ { _displayedRevision, trigger.TriggerIndex,
 				CableInteraction::RouteKind::Station, 0u }, triggerOutputs[trigger.TriggerIndex],
 				stationEnds[trigger.TriggerIndex].value() });
@@ -1005,50 +1080,18 @@ void GuiHud::_RebuildCableVertices()
 	_cablesDirty = false;
 }
 
-utils::Position2d GuiHud::_ButtonCenter(const std::shared_ptr<GuiButton>& button) const
+utils::Position2d GuiHud::_ElementCenter(const std::shared_ptr<base::GuiElement>& element) const
 {
 	const auto rootPos = GlobalPosition();
-	const auto buttonPos = button->GlobalPosition();
-	const auto buttonSize = button->GetSize();
+	const auto elementPos = element->GlobalPosition();
+	const auto elementSize = element->GetSize();
 	return {
-		buttonPos.X - rootPos.X + static_cast<int>(buttonSize.Width / 2u),
-		buttonPos.Y - rootPos.Y + static_cast<int>(buttonSize.Height / 2u)
+		elementPos.X - rootPos.X + static_cast<int>(elementSize.Width / 2u),
+		elementPos.Y - rootPos.Y + static_cast<int>(elementSize.Height / 2u)
 	};
 }
 
-utils::Position2d GuiHud::_TriggerAnchorFromTopLeft(const std::shared_ptr<GuiButton>& button,
-	int offsetX,
-	int offsetFromTopY) const
-{
-	const auto rootPos = GlobalPosition();
-	const auto buttonPos = button->GlobalPosition();
-	const auto buttonSize = button->GetSize();
-	const int scrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
-	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
-	const int yFromBottom = std::clamp(static_cast<int>(buttonSize.Height) - offsetFromTopY,
-		0,
-		static_cast<int>(buttonSize.Height));
-	return {
-		buttonPos.X - rootPos.X + clampedX,
-		buttonPos.Y - rootPos.Y + yFromBottom - scrollOffset
-	};
-}
 
-utils::Position2d GuiHud::_TriggerAnchorFromBottomLeft(const std::shared_ptr<GuiButton>& button,
-	int offsetX,
-	int offsetFromBottomY) const
-{
-	const auto rootPos = GlobalPosition();
-	const auto buttonPos = button->GlobalPosition();
-	const auto buttonSize = button->GetSize();
-	const int scrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
-	const int clampedX = std::clamp(offsetX, 0, static_cast<int>(buttonSize.Width));
-	const int clampedY = std::clamp(offsetFromBottomY, 0, static_cast<int>(buttonSize.Height));
-	return {
-		buttonPos.X - rootPos.X + clampedX,
-		buttonPos.Y - rootPos.Y + clampedY - scrollOffset
-	};
-}
 
 void GuiHud::_AppendCurve(const utils::Position2d& start,
 	const utils::Position2d& end,

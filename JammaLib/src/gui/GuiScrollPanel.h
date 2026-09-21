@@ -71,11 +71,13 @@ namespace gui
 		unsigned int _ContentHeight() const;
 		void _UpdateMetrics();
 		void _ClampOffset();
+		void _UpdateContentHostPosition();
 		bool _IsInViewport(utils::Position2d localPos) const;
 
 		static GuiScrollBarParams _MakeScrollBarParams(const GuiScrollPanelParams& params);
 
 		std::shared_ptr<base::GuiElement> _content;
+		std::shared_ptr<base::GuiElement> _contentHost;
 		std::shared_ptr<GuiScrollBar>     _scrollBar;
 		static constexpr unsigned int _ContentClipPadding = 2u;
 		unsigned int _scrollBarWidth;

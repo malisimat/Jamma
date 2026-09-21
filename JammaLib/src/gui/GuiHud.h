@@ -111,6 +111,10 @@ namespace gui
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
+		static constexpr unsigned int _SocketSize = 16u;
+		static constexpr int _TriggerInputPinTopOffset = 24;
+		static constexpr int _TriggerOutputPinBottomOffset = 12;
+		static constexpr int _TriggerInputFanHalfHeight = 18;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;
 		static constexpr double _MidiInputHoldFallRate = 0.003;
@@ -130,18 +134,14 @@ namespace gui
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
+		void _DrawOverlayElement(base::DrawContext& ctx,
+			const std::shared_ptr<base::GuiElement>& element) const;
 		void _RebuildCableVertices();
 		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables) const;
 		actions::ActionResult _BeginCableDrag(utils::Position2d point);
 		void _CancelCableDrag();
-		utils::Position2d _ButtonCenter(const std::shared_ptr<GuiButton>& button) const;
-		utils::Position2d _TriggerAnchorFromTopLeft(const std::shared_ptr<GuiButton>& button,
-			int offsetX,
-			int offsetFromTopY) const;
-		utils::Position2d _TriggerAnchorFromBottomLeft(const std::shared_ptr<GuiButton>& button,
-			int offsetX,
-			int offsetFromBottomY) const;
+		utils::Position2d _ElementCenter(const std::shared_ptr<base::GuiElement>& element) const;
 		void _AppendCurve(const utils::Position2d& start,
 			const utils::Position2d& end,
 			const glm::vec4& color);
@@ -157,6 +157,20 @@ namespace gui
 			unsigned int width) const;
 		std::shared_ptr<GuiButton> _MakeTriggerButton(const std::string& text,
 			std::weak_ptr<engine::Trigger> trigger) const;
+		struct SourceWidgets
+		{
+			std::shared_ptr<GuiButton> Button;
+			std::shared_ptr<base::GuiElement> Socket;
+		};
+
+		struct TriggerWidgets
+		{
+			std::shared_ptr<GuiButton> Card;
+			std::shared_ptr<GuiButton> Close;
+			std::shared_ptr<base::GuiElement> InputSocket;
+			std::shared_ptr<base::GuiElement> OutputSocket;
+		};
+
 
 		std::shared_ptr<GuiStackPanel> _topStrip;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
@@ -166,10 +180,8 @@ namespace gui
 		std::shared_ptr<GuiButton> _addTriggerButton;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		std::shared_ptr<base::ActionReceiver> _deletePopupReceiver;
-		std::vector<std::shared_ptr<GuiButton>> _sourceButtons;
-		std::vector<std::shared_ptr<GuiButton>> _triggerButtons;
-		std::vector<std::shared_ptr<GuiButton>> _triggerCloseButtons;
-		std::vector<std::shared_ptr<GuiLabel>> _triggerStatusLabels;
+		std::vector<SourceWidgets> _sourceWidgets;
+		std::vector<TriggerWidgets> _triggerWidgets;
 		std::vector<std::unique_ptr<GuiVu>> _inputVus;
 		unsigned int _audioInputCount = 0u;
 		std::vector<std::string> _midiInputNames;

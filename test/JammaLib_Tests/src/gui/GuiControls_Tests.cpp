@@ -97,6 +97,15 @@ TEST(GuiButton, TouchInsideEatsDownAndUp) {
 	ASSERT_TRUE(upRes.IsEaten);
 }
 
+TEST(GuiButton, TouchDownCapturesButtonForReleaseRouting) {
+	auto button = std::make_shared<GuiButton>(MakeButtonParams());
+
+	auto downRes = button->OnAction(MakeTouchAction(TouchAction::TOUCH_DOWN, { 10, 10 }));
+
+	ASSERT_TRUE(downRes.IsEaten);
+	ASSERT_EQ(button.get(), downRes.ActiveElement.lock().get());
+}
+
 TEST(Font, PrefersBundledInterFontAsset) {
 	auto filename = graphics::Font::GetFontFilename();
 
