@@ -1174,6 +1174,30 @@ TEST(CameraView, TabCyclesFrontInteriorAndTopDown) {
 	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
 }
 
+TEST(CameraView, RapidTabCyclesSettleAtTheLatestViewTarget) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	for (unsigned int press = 0u; press < 6u; ++press)
+	{
+		ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+		scene.TickCameraForTest(4410u, 44100u);
+	}
+
+	scene.SettleCameraForTest();
+	const auto pose = scene.CameraPoseForTest();
+	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(420.0f, pose.Eye.Z);
+	EXPECT_FLOAT_EQ(-1.0f, pose.Forward.Z);
+	EXPECT_FLOAT_EQ(1.0f, pose.Up.Y);
+}
+
 TEST(CameraView, StationInteriorTemporarilyForcesLoopTakeSelectDepth) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),

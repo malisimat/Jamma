@@ -35,7 +35,6 @@ Scene::Scene(SceneParams params,
 	_isSceneReset(true),
 	_viewProj(glm::mat4()),
 	_overlayViewProj(glm::mat4()),
-	_viewRotOnlyProj(glm::mat4()),
 	_skyboxViewProj(glm::mat4()),
 	_skyboxStarted(false),
 	_skyboxStartTime(Timer::GetZero()),
@@ -73,6 +72,7 @@ Scene::Scene(SceneParams params,
 	_viewMode(VIEW_STATION),
 	_cameraInteriorForcedLoopTakeDepth(false),
 	_cameraInteriorSelectDepthChanged(false),
+	_cameraInteriorRestorePending(false),
 		_audioEngine(std::make_unique<audio::AudioHost>(user)),
 		_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
 		_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
@@ -588,7 +588,6 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto projection = _Projection(ar);
 	auto view = _View();
 	_viewProj = projection * view;
-	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(view));
 	_UpdateHudStationAnchors();
 
 	if (PASS_SCENE == pass)
@@ -613,7 +612,11 @@ void Scene::Draw3d(DrawContext& ctx,
 			auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
 			R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
-			_skyboxViewProj = _viewRotOnlyProj * R;
+			const auto skyboxFov = (graphics::Camera::View::TopDown == _camera.CurrentView())
+				? 100.0f
+				: 80.0f;
+			auto skyboxProjection = glm::perspective(glm::radians(skyboxFov), ar, 0.1f, 1000.0f);
+			_skyboxViewProj = skyboxProjection * glm::mat4(glm::mat3(view)) * R;
 		}
 
 		glCtx.ClearMvp();
@@ -1228,6 +1231,14 @@ void Scene::OnTick(Time curTime,
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
 
+	if (_cameraInteriorRestorePending
+		&& !_camera.IsTransitioning()
+		&& (graphics::Camera::View::TopDown == _camera.CurrentView()))
+	{
+		_LeaveStationInteriorSelectDepth();
+		_cameraInteriorRestorePending = false;
+	}
+
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
 
@@ -1838,7 +1849,6 @@ void Scene::_InitSize()
 		1.0f;
 	auto projection = _Projection(ar);
 	_viewProj = projection * _View();
-	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(_View()));
 	// _skyboxViewProj is updated in Draw3d(); do not reset it here
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
@@ -2022,13 +2032,15 @@ glm::mat4 Scene::_View()
 
 glm::mat4 Scene::_Projection(float aspectRatio) const
 {
-	if (graphics::Camera::View::TopDown != _camera.CurrentView())
+	if ((graphics::Camera::View::TopDown != _camera.CurrentView()) || _camera.IsTransitioning())
 		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, 1000.0f);
 
 	// Keep the existing wheel zoom scale while removing perspective foreshortening.
 	const auto halfFovRadians = glm::radians(40.0f);
 	const auto pose = _camera.CurrentPose();
-	const auto halfHeight = std::max(10.0f, std::abs(pose.Eye.Y) * std::tan(halfFovRadians));
+	const auto topDownTarget = _CameraPoseForView(graphics::Camera::View::TopDown);
+	const auto focalY = topDownTarget.Eye.Y - 800.0f;
+	const auto halfHeight = std::max(10.0f, std::abs(pose.Eye.Y - focalY) * std::tan(halfFovRadians));
 	return glm::ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio,
 		-halfHeight, halfHeight, 10.0f, 2000.0f);
 }
@@ -2152,7 +2164,17 @@ void Scene::_CycleCameraView()
 		break;
 	}
 	if (graphics::Camera::View::StationInterior == currentView)
+	{
+		if (graphics::Camera::View::TopDown == nextView)
+			_cameraInteriorRestorePending = true;
+		else
+			_LeaveStationInteriorSelectDepth();
+	}
+	else if (_cameraInteriorRestorePending)
+	{
 		_LeaveStationInteriorSelectDepth();
+		_cameraInteriorRestorePending = false;
+	}
 	if (graphics::Camera::View::StationInterior == nextView)
 		_EnterStationInteriorSelectDepth();
 

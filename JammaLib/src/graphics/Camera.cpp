@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <glm/gtc/quaternion.hpp>
 
 using namespace actions;
 using namespace base;
@@ -439,7 +440,8 @@ void Camera::SetViewTarget(View view, Pose target) noexcept
 {
 	if (_view != view)
 	{
-		_rememberedPoses[_ViewIndex(_view)] = _pose;
+		// An interrupted transition has a valid target pose but a transient current pose.
+		_rememberedPoses[_ViewIndex(_view)] = _transitioning ? _transitionTarget : _pose;
 		_hasRememberedPose[_ViewIndex(_view)] = true;
 	}
 	target.Forward = _Normalise(target.Forward);
@@ -463,8 +465,17 @@ void Camera::_TickTransition(unsigned int samps, unsigned int sampleRate) noexce
 	const auto easedProgress = linearProgress * linearProgress * (3.0f - (2.0f * linearProgress));
 	Pose pose;
 	pose.Eye = _Lerp(_transitionStart.Eye, _transitionTarget.Eye, easedProgress);
-	pose.Forward = _Normalise(_Lerp(_transitionStart.Forward, _transitionTarget.Forward, easedProgress));
-	pose.Up = _Normalise(_Lerp(_transitionStart.Up, _transitionTarget.Up, easedProgress));
+	const auto startOrientation = glm::quatLookAt(
+		glm::vec3(_transitionStart.Forward.X, _transitionStart.Forward.Y, _transitionStart.Forward.Z),
+		glm::vec3(_transitionStart.Up.X, _transitionStart.Up.Y, _transitionStart.Up.Z));
+	const auto targetOrientation = glm::quatLookAt(
+		glm::vec3(_transitionTarget.Forward.X, _transitionTarget.Forward.Y, _transitionTarget.Forward.Z),
+		glm::vec3(_transitionTarget.Up.X, _transitionTarget.Up.Y, _transitionTarget.Up.Z));
+	const auto rotation = glm::mat3_cast(glm::slerp(startOrientation, targetOrientation, easedProgress));
+	const auto forward = rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+	const auto up = rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+	pose.Forward = { forward.x, forward.y, forward.z };
+	pose.Up = { up.x, up.y, up.z };
 	_ApplyPose(pose);
 
 	if (_transitionElapsedSeconds >= TransitionDurationSeconds)

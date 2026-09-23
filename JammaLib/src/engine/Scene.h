@@ -352,7 +352,6 @@ namespace engine
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
-		glm::mat4 _viewRotOnlyProj;
 		glm::mat4 _skyboxViewProj;
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
@@ -403,6 +402,7 @@ namespace engine
 		ViewMode _viewMode;
 		bool _cameraInteriorForcedLoopTakeDepth;
 		bool _cameraInteriorSelectDepthChanged;
+		bool _cameraInteriorRestorePending;
 		utils::Position2d _cursorPos{};
 	};
 }
