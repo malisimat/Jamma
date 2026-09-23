@@ -15,6 +15,7 @@ Camera::Camera(CameraParams params) :
 	_backgroundDrag(),
 	_view(View::Front),
 	_pose({ params.ModelPosition, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f, 0.0f } }),
+	_stationInteriorFieldOfView(80.0f),
 	_transitionStart(_pose),
 	_transitionTarget(_pose),
 	_transitionElapsedSeconds(0.0f),
@@ -410,10 +411,20 @@ ActionResult Camera::HandleWheel(int wheelNotches)
 	if (0 == wheelNotches)
 		return ActionResult::NoAction();
 
-	if ((_transitioning) || (View::StationInterior == _view))
+	if (View::StationInterior == _view)
+	{
+		constexpr float fieldOfViewStep = 8.0f;
+		constexpr float minFieldOfView = 20.0f;
+		constexpr float maxFieldOfView = 120.0f;
+		_stationInteriorFieldOfView = std::clamp(_stationInteriorFieldOfView
+			- (static_cast<float>(wheelNotches) * fieldOfViewStep), minFieldOfView, maxFieldOfView);
+		return _BackgroundDragActionResult();
+	}
+
+	if (_transitioning)
 		return _BackgroundDragActionResult();
 
-	constexpr float wheelStep = 72.0f;
+	constexpr float wheelStep = 144.0f;
 	constexpr float frontMinZ = 80.0f;
 	constexpr float frontMaxZ = 900.0f;
 	constexpr float topDownMinY = 180.0f;
@@ -522,6 +533,11 @@ Camera::View Camera::CurrentView() const noexcept
 Camera::Pose Camera::CurrentPose() const noexcept
 {
 	return _pose;
+}
+
+float Camera::StationInteriorFieldOfView() const noexcept
+{
+	return _stationInteriorFieldOfView;
 }
 
 size_t Camera::_ViewIndex(View view) noexcept

@@ -612,9 +612,11 @@ void Scene::Draw3d(DrawContext& ctx,
 			auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
 			R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
-			const auto skyboxFov = (graphics::Camera::View::TopDown == _camera.CurrentView())
-				? 100.0f
-				: 80.0f;
+			auto skyboxFov = 80.0f;
+			if (graphics::Camera::View::StationInterior == _camera.CurrentView())
+				skyboxFov = _camera.StationInteriorFieldOfView();
+			else if (graphics::Camera::View::TopDown == _camera.CurrentView())
+				skyboxFov = 100.0f;
 			auto skyboxProjection = glm::perspective(glm::radians(skyboxFov), ar, 0.1f, 1000.0f);
 			_skyboxViewProj = skyboxProjection * glm::mat4(glm::mat3(view)) * R;
 		}
@@ -2032,7 +2034,10 @@ glm::mat4 Scene::_View()
 
 glm::mat4 Scene::_Projection(float aspectRatio) const
 {
-	if ((graphics::Camera::View::TopDown != _camera.CurrentView()) || _camera.IsTransitioning())
+	if (graphics::Camera::View::StationInterior == _camera.CurrentView())
+		return glm::perspective(glm::radians(_camera.StationInteriorFieldOfView()), aspectRatio, 10.0f, 1000.0f);
+
+	if (graphics::Camera::View::TopDown != _camera.CurrentView())
 		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, 1000.0f);
 
 	// Keep the existing wheel zoom scale while removing perspective foreshortening.

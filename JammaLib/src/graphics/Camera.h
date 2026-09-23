@@ -49,6 +49,7 @@ namespace graphics
 		bool IsTransitioning() const noexcept;
 		View CurrentView() const noexcept;
 		Pose CurrentPose() const noexcept;
+		float StationInteriorFieldOfView() const noexcept;
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
 		void SetViewTarget(View view, Pose target) noexcept;
@@ -101,6 +102,7 @@ namespace graphics
 		BackgroundDragState _backgroundDrag;
 		View _view;
 		Pose _pose;
+		float _stationInteriorFieldOfView;
 		Pose _transitionStart;
 		Pose _transitionTarget;
 		float _transitionElapsedSeconds;

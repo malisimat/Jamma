@@ -195,6 +195,16 @@ public:
 		return _camera.CurrentPose();
 	}
 
+	float StationInteriorFieldOfViewForTest() const
+	{
+		return _camera.StationInteriorFieldOfView();
+	}
+
+	glm::mat4 CameraProjectionForTest() const
+	{
+		return _Projection(1.0f);
+	}
+
 	ViewMode CameraSelectDepthForTest() const
 	{
 		return _viewMode;
@@ -1127,7 +1137,7 @@ TEST(CameraView, WheelZoomUsesNotchesInsteadOfPointerPosition) {
 	scene.SettleCameraForTest();
 
 	auto cameraPos = scene.CameraPositionForTest();
-	EXPECT_FLOAT_EQ(348.0f, cameraPos.Z);
+	EXPECT_FLOAT_EQ(276.0f, cameraPos.Z);
 	EXPECT_FLOAT_EQ(0.0f, cameraPos.X);
 	EXPECT_FLOAT_EQ(0.0f, cameraPos.Y);
 }
@@ -1147,7 +1157,65 @@ TEST(CameraView, WheelZoomPreservesFrontPanPosition) {
 	auto cameraPos = scene.CameraPositionForTest();
 	EXPECT_FLOAT_EQ(-10.0f, cameraPos.X);
 	EXPECT_FLOAT_EQ(10.0f, cameraPos.Y);
-	EXPECT_FLOAT_EQ(348.0f, cameraPos.Z);
+	EXPECT_FLOAT_EQ(276.0f, cameraPos.Z);
+}
+
+TEST(CameraView, TopDownWheelZoomKeepsOrthographicProjection) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	ASSERT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	ASSERT_FLOAT_EQ(1.0f, scene.CameraProjectionForTest()[3][3]);
+
+	scene.OnAction(MakeSceneWheel(1));
+	EXPECT_FLOAT_EQ(1.0f, scene.CameraProjectionForTest()[3][3]);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(-1.0f, scene.CameraPoseForTest().Forward.Y);
+	EXPECT_FLOAT_EQ(656.0f, scene.CameraPositionForTest().Y);
+}
+
+TEST(CameraView, StationInteriorWheelChangesAndRemembersFieldOfView) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	ASSERT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	const auto positionBeforeWheel = scene.CameraPositionForTest();
+
+	const auto wheelResult = scene.OnAction(MakeSceneWheel(1));
+	ASSERT_TRUE(wheelResult.IsEaten);
+	EXPECT_FLOAT_EQ(72.0f, scene.StationInteriorFieldOfViewForTest());
+	EXPECT_FLOAT_EQ(positionBeforeWheel.X, scene.CameraPositionForTest().X);
+	EXPECT_FLOAT_EQ(positionBeforeWheel.Y, scene.CameraPositionForTest().Y);
+	EXPECT_FLOAT_EQ(positionBeforeWheel.Z, scene.CameraPositionForTest().Z);
+	EXPECT_FLOAT_EQ(0.0f, scene.CameraProjectionForTest()[3][3]);
+
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(72.0f, scene.StationInteriorFieldOfViewForTest());
 }
 
 TEST(CameraView, TabCyclesFrontInteriorAndTopDown) {
