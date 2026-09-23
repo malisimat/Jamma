@@ -280,6 +280,7 @@ namespace engine
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
 		glm::mat4 _View();
+		glm::mat4 _Projection(float aspectRatio) const;
 		void _CycleCameraView();
 		graphics::Camera::Pose _CameraPoseForView(graphics::Camera::View view) const;
 		void _UpdateCameraStationFollow();

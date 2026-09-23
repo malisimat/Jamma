@@ -585,7 +585,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
+	auto projection = _Projection(ar);
 	auto view = _View();
 	_viewProj = projection * view;
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(view));
@@ -1836,7 +1836,7 @@ void Scene::_InitSize()
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = glm::perspective(glm::radians(80.0f), ar, 10.0f, 1000.0f);
+	auto projection = _Projection(ar);
 	_viewProj = projection * _View();
 	_viewRotOnlyProj = projection * glm::mat4(glm::mat3(_View()));
 	// _skyboxViewProj is updated in Draw3d(); do not reset it here
@@ -2018,6 +2018,19 @@ glm::mat4 Scene::_View()
 	auto forward = glm::vec3(pose.Forward.X, pose.Forward.Y, pose.Forward.Z);
 	auto up = glm::vec3(pose.Up.X, pose.Up.Y, pose.Up.Z);
 	return glm::lookAt(eye, eye + forward, up);
+}
+
+glm::mat4 Scene::_Projection(float aspectRatio) const
+{
+	if (graphics::Camera::View::TopDown != _camera.CurrentView())
+		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, 1000.0f);
+
+	// Keep the existing wheel zoom scale while removing perspective foreshortening.
+	const auto halfFovRadians = glm::radians(40.0f);
+	const auto pose = _camera.CurrentPose();
+	const auto halfHeight = std::max(10.0f, std::abs(pose.Eye.Y) * std::tan(halfFovRadians));
+	return glm::ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio,
+		-halfHeight, halfHeight, 10.0f, 2000.0f);
 }
 
 graphics::Camera::Pose Scene::_CameraPoseForView(graphics::Camera::View view) const
