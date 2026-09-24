@@ -6,6 +6,7 @@
 #include "../actions/TouchMoveAction.h"
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -71,11 +72,14 @@ namespace graphics
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
 		void SetViewTarget(View view, Pose target) noexcept;
-		void RegisterStation(size_t index, std::uint64_t revision);
-		void ObserveStation(size_t index, std::uint64_t revision, utils::Position3d position);
+		void RegisterStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision);
+		void ObserveStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision, utils::Position3d position);
+		void CompleteStationObservation(size_t stationCount, std::optional<utils::Position3d> firstStation);
 		SelectDepthChange CycleView(utils::Position3d stationCentre,
 			std::optional<utils::Position3d> hoveredStation,
 			std::optional<utils::Position3d> firstStation,
+			std::shared_ptr<const void> hoveredIdentity,
+			std::shared_ptr<const void> firstIdentity,
 			bool stationSelectDepth);
 		bool SelectDepthChanged(bool stationSelected) noexcept;
 		SelectDepthChange PendingSelectDepthChange() noexcept;
@@ -143,8 +147,15 @@ namespace graphics
 		utils::Position3d _wheelZoomStationCentre;
 		Pose _rememberedPoses[ViewCount];
 		bool _hasRememberedPose[ViewCount];
-		std::vector<std::uint64_t> _observedStationTakeRevisions;
-		std::optional<size_t> _lastChangedStationIndex;
+		struct ObservedStation
+		{
+			// Keep the station alive until the next observation detects removal.
+			std::shared_ptr<const void> Identity;
+			std::uint64_t Revision = 0u;
+		};
+		std::vector<ObservedStation> _observedStations;
+		std::shared_ptr<const void> _lastChangedStationIdentity;
+		std::shared_ptr<const void> _interiorFocusIdentity;
 		std::optional<utils::Position3d> _lastChangedStationPosition;
 		bool _interiorForcedLoopTakeDepth = false;
 		bool _interiorSelectDepthChanged = false;

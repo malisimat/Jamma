@@ -700,27 +700,57 @@ Camera::Pose Camera::RememberedPose(View view) const noexcept
 	return _rememberedPoses[_ViewIndex(view)];
 }
 
-void Camera::RegisterStation(size_t index, std::uint64_t revision)
+void Camera::RegisterStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision)
 {
-	if (_observedStationTakeRevisions.size() <= index)
-		_observedStationTakeRevisions.resize(index + 1u, 0u);
-	_observedStationTakeRevisions[index] = revision;
+	if (_observedStations.size() <= index)
+		_observedStations.resize(index + 1u);
+	_observedStations[index] = { std::move(identity), revision };
 }
 
-void Camera::ObserveStation(size_t index, std::uint64_t revision, Position3d position)
+void Camera::ObserveStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision, Position3d position)
 {
-	if (_observedStationTakeRevisions.size() <= index)
-		RegisterStation(index, 0u);
-	if (_lastChangedStationIndex == index)
+	if (_lastChangedStationIdentity == identity)
 		_lastChangedStationPosition = position;
-	if (_observedStationTakeRevisions[index] == revision)
+	if (_observedStations.size() <= index || _observedStations[index].Identity != identity)
+	{
+		// A removal shifts later stations left. Preserve this station's old
+		// revision so a simultaneous take change is still observed.
+		const auto previous = std::find_if(_observedStations.begin(), _observedStations.end(),
+			[&identity](const ObservedStation& station) { return station.Identity == identity; });
+		const auto previousRevision = previous == _observedStations.end() ? revision : previous->Revision;
+		RegisterStation(index, identity, previousRevision);
+	}
+	if (_observedStations[index].Revision == revision)
 		return;
 
-	_observedStationTakeRevisions[index] = revision;
-	_lastChangedStationIndex = index;
+	_observedStations[index].Revision = revision;
+	_lastChangedStationIdentity = std::move(identity);
 	_lastChangedStationPosition = position;
 	if (View::StationInterior == _view)
+	{
+		_interiorFocusIdentity = _lastChangedStationIdentity;
 		SetViewTarget(View::StationInterior, _PoseForView(View::StationInterior, {}, position, {}));
+	}
+}
+
+void Camera::CompleteStationObservation(size_t stationCount, std::optional<Position3d> firstStation)
+{
+	_observedStations.resize(stationCount);
+	const auto isPresent = [this](const std::shared_ptr<const void>& identity)
+	{
+		return std::any_of(_observedStations.begin(), _observedStations.end(),
+			[&identity](const ObservedStation& station) { return station.Identity == identity; });
+	};
+	if (_lastChangedStationIdentity && !isPresent(_lastChangedStationIdentity))
+	{
+		_lastChangedStationIdentity.reset();
+		_lastChangedStationPosition.reset();
+	}
+	if (_interiorFocusIdentity && !isPresent(_interiorFocusIdentity))
+	{
+		_interiorFocusIdentity = _observedStations.empty() ? nullptr : _observedStations.front().Identity;
+		SetViewTarget(View::StationInterior, _PoseForView(View::StationInterior, {}, {}, firstStation));
+	}
 }
 
 Camera::Pose Camera::_PoseForView(View view, Position3d stationCentre,
@@ -757,6 +787,8 @@ Camera::SelectDepthChange Camera::_LeaveStationInteriorSelectDepth() noexcept
 Camera::SelectDepthChange Camera::CycleView(Position3d stationCentre,
 	std::optional<Position3d> hoveredStation,
 	std::optional<Position3d> firstStation,
+	std::shared_ptr<const void> hoveredIdentity,
+	std::shared_ptr<const void> firstIdentity,
 	bool stationSelectDepth)
 {
 	const auto nextView = (View::Front == _view) ? View::StationInterior
@@ -764,6 +796,7 @@ Camera::SelectDepthChange Camera::CycleView(Position3d stationCentre,
 	auto depthChange = SelectDepthChange::None;
 	if (View::StationInterior == _view)
 	{
+		_interiorFocusIdentity.reset();
 		if (View::TopDown == nextView)
 			// Keep the interior depth until the top-down transition completes.
 			_interiorRestorePending = true;
@@ -777,6 +810,8 @@ Camera::SelectDepthChange Camera::CycleView(Position3d stationCentre,
 	}
 	if (View::StationInterior == nextView)
 	{
+		_interiorFocusIdentity = hoveredStation ? std::move(hoveredIdentity)
+			: (_lastChangedStationPosition ? _lastChangedStationIdentity : std::move(firstIdentity));
 		_interiorForcedLoopTakeDepth = stationSelectDepth;
 		_interiorSelectDepthChanged = false;
 		if (_interiorForcedLoopTakeDepth)

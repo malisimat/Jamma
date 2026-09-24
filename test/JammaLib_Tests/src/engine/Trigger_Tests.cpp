@@ -175,6 +175,12 @@ public:
 		_AddStation(station);
 	}
 
+	void RemoveStationForTest(const std::shared_ptr<Station>& station)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		std::erase(_stations, station);
+	}
+
 	bool IsSceneResetForTest() const
 	{
 		return _isSceneReset.load(std::memory_order_relaxed);
@@ -276,8 +282,7 @@ public:
 
 	void UpdateCameraStationFollowForTest()
 	{
-		for (size_t index = 0u; index < _stations.size(); ++index)
-			_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+		UpdateCamera();
 	}
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
@@ -1478,6 +1483,103 @@ TEST(CameraView, StationInteriorFollowsLoopTakeAddition) {
 	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
 	EXPECT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
 	EXPECT_FLOAT_EQ(0.0f, scene.CameraPositionForTest().Z);
+}
+
+TEST(CameraView, StationInteriorClearsFocusWhenTrackedStationIsRemoved) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->SetModelPosition({ -200.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(firstStation);
+	auto removedStation = MakeTestStation("station-b");
+	removedStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(removedStation);
+	auto shiftedStation = MakeTestStation("station-c");
+	shiftedStation->SetModelPosition({ 600.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(shiftedStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	removedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	ASSERT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+
+	scene.RemoveStationForTest(removedStation);
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(-200.0f, scene.CameraPositionForTest().X);
+
+	shiftedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(600.0f, scene.CameraPositionForTest().X);
+}
+
+TEST(CameraView, StationInteriorKeepsFocusWhenEarlierStationIsRemoved) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto removedStation = MakeTestStation("station-a");
+	scene.AddStationForTest(removedStation);
+	auto trackedStation = MakeTestStation("station-b");
+	trackedStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(trackedStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	trackedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	ASSERT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+
+	scene.RemoveStationForTest(removedStation);
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+}
+
+TEST(CameraView, StationInteriorClearsHoveredFocusWhenStationIsRemoved) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	const auto firstIdentity = std::make_shared<int>(1);
+	const auto hoveredIdentity = std::make_shared<int>(2);
+	const utils::Position3d firstPosition{ -200.0f, 0.0f, 0.0f };
+	const utils::Position3d hoveredPosition{ 300.0f, 0.0f, 0.0f };
+	camera.RegisterStation(0u, firstIdentity, 0u);
+	camera.RegisterStation(1u, hoveredIdentity, 0u);
+	camera.CycleView({}, hoveredPosition, firstPosition, hoveredIdentity, firstIdentity, true);
+
+	camera.CompleteStationObservation(1u, firstPosition);
+	for (unsigned int tick = 0u; tick < 8u; ++tick)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_FLOAT_EQ(-200.0f, camera.CurrentPose().Eye.X);
+}
+
+TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	const auto removedIdentity = std::make_shared<int>(1);
+	const auto shiftedIdentity = std::make_shared<int>(2);
+	const utils::Position3d shiftedPosition{ 300.0f, 0.0f, 0.0f };
+	camera.RegisterStation(0u, removedIdentity, 0u);
+	camera.RegisterStation(1u, shiftedIdentity, 0u);
+	camera.CycleView({}, {}, {}, {}, {}, true);
+
+	camera.ObserveStation(0u, shiftedIdentity, 1u, shiftedPosition);
+	camera.CompleteStationObservation(1u, shiftedPosition);
+	for (unsigned int tick = 0u; tick < 8u; ++tick)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_FLOAT_EQ(300.0f, camera.CurrentPose().Eye.X);
 }
 
 TEST(CameraView, StationResetUpdatesLoopTakeRevision) {

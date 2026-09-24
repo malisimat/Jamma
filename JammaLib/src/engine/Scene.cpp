@@ -682,7 +682,7 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = _camera.Projection(ar, _StationCentre());
+	auto projection = _camera.Projection(ar, _StationCentre(_stations));
 	auto view = _camera.ViewMatrix();
 	_viewProj = projection * view;
 	_UpdateHudStationAnchors();
@@ -748,7 +748,10 @@ void Scene::UpdateCamera()
 	{
 		std::scoped_lock lock(_sceneMutex);
 		for (size_t index = 0u; index < _stations.size(); ++index)
-			_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+			_camera.ObserveStation(index, _stations[index], _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+		_camera.CompleteStationObservation(_stations.size(), _stations.empty()
+			? std::optional<Position3d>{}
+			: std::optional<Position3d>{ _stations.front()->ModelPosition() });
 	}
 
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
@@ -796,7 +799,7 @@ void Scene::_ReleaseResources()
 		_remoteTempoDialog->ReleaseResources();
 	_ctrlHandleOverlay.ReleaseResources();
 
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 		station->ReleaseResources();
 
 	Drawable::_ReleaseResources();
@@ -933,7 +936,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		return res;
 	}
 
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 	{
 		res = static_cast<std::shared_ptr<base::GuiElement>>(station)->OnAction(station->ParentToLocal(action));
 
@@ -966,7 +969,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			action.Position,
 			_sizeParams.Size.Width,
 			_sizeParams.Size.Height,
-			_StationCentre());
+			_StationCentre(SnapshotStations()));
 
 	// Pressing empty background clears keyboard focus.
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
@@ -1031,7 +1034,7 @@ ActionResult Scene::OnAction(KeyAction action)
 			return popupRes;
 	}
 
-	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, _stations);
+	if (auto overrideRes = _inputSubsystem->HandleChannelOverrideKey(action, SnapshotStations());
 		overrideRes.IsEaten)
 	{
 		if (_midiChannelOverrideInput)
@@ -1124,7 +1127,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		auto hovering = _ChildFromPath(_selector->CurrentHover());
 		return _windowSubsystem->HandleVstEditorOpen(hovering,
 			_selector->CurrentSelectDepth(),
-			_stations);
+			SnapshotStations());
 	}
 
 	// Ctrl+S - export session to directory.
@@ -1148,7 +1151,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		auto hovered = _ChildFromPath(_selector->CurrentHover());
 		auto hoveredTake = std::dynamic_pointer_cast<LoopTake>(hovered);
 		auto automationRes = _inputSubsystem->HandleAutomationKey(action,
-			_stations,
+			SnapshotStations(),
 			_selector->CurrentHover(),
 			hoveredTake);
 		if (automationRes.IsEaten)
@@ -1158,7 +1161,7 @@ ActionResult Scene::OnAction(KeyAction action)
 	bool checkReset = false;
 	auto result = ActionResult::NoAction();
 
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 	{
 		auto res = station->OnAction(action);
 
@@ -1175,7 +1178,10 @@ ActionResult Scene::OnAction(KeyAction action)
 			// _SetQuantisation is not called by Station's TrySeedClockFromFirstLoop, so
 			// do it here after every activation so all LoopTakes see the current grain.
 			if (auto clock = _quantisation.Clock())
+			{
+				std::scoped_lock lock(_sceneMutex);
 				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+			}
 			break;
 		case ACTIONRESULT_DITCH:
 			checkReset = true;
@@ -1189,7 +1195,10 @@ ActionResult Scene::OnAction(KeyAction action)
 	}
 
 	if (checkReset)
+	{
+		std::scoped_lock lock(_sceneMutex);
 		_ResetIfEmpty();
+	}
 
 	if (result.IsEaten)
 		return result;
@@ -1209,8 +1218,9 @@ ActionResult Scene::OnAction(KeyAction action)
 void Scene::_HandleReclockArm()
 {
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-	_quantisation.ArmReclock(_stations);
-	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
+	const auto stations = SnapshotStations();
+	_quantisation.ArmReclock(stations);
+	_quantisation.SetMidiGrain(0u, "reclock arm", stations);
 }
 
 ActionResult Scene::_HandleUndo()
@@ -1303,7 +1313,7 @@ ActionResult Scene::OnAction(GuiAction action)
 			return ActionResult::NoAction();
 		}
 
-		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), _stations);
+		_inputSubsystem->SetForcedChannelOverride(static_cast<std::uint8_t>(clamped), SnapshotStations());
 		_midiChannelOverrideInput->SetValue(static_cast<double>(clamped), false);
 	}
 	else if ((GuiAction::ACTIONELEMENT_RACK == action.ElementType)
@@ -1888,7 +1898,7 @@ void Scene::_ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& ou
 
 	if (!leaf)
 	{
-		for (auto& station : _stations)
+		for (auto& station : SnapshotStations())
 		{
 			leaf = resolveTop(std::static_pointer_cast<base::GuiElement>(station));
 			if (leaf)
@@ -1998,7 +2008,7 @@ void Scene::_InitSize()
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = _camera.Projection(ar, _StationCentre());
+	auto projection = _camera.Projection(ar, _StationCentre(_stations));
 	_viewProj = projection * _camera.ViewMatrix();
 	// _skyboxViewProj is updated in Draw3d(); do not reset it here
 
@@ -2047,6 +2057,7 @@ void Scene::_UpdateHudStationAnchors()
 void Scene::_UpdateSelection(ActionResultType res)
 {
 	// Called when touch up + down, and when hover updated
+	const auto stations = SnapshotStations();
 	auto currentMode = _selector->CurrentMode();
 	std::shared_ptr<GuiElement> hovering = nullptr;
 	switch (res)
@@ -2056,7 +2067,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		switch (currentMode)
 		{
 		case SceneSelector::SELECT_NONE:
-			for (auto& station : _stations)
+			for (auto& station : stations)
 				station->SetPicking3d(false);
 
 			hovering = _ChildFromPath(_selector->CurrentHover());
@@ -2065,7 +2076,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 			break;
 		case SceneSelector::SELECT_NONEADD:
-			for (auto& station : _stations)
+			for (auto& station : stations)
 				station->SetPickingFromState(GuiElement::EDIT_SELECT, false);
 
 			hovering = _ChildFromPath(_selector->CurrentHover());
@@ -2107,7 +2118,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		break;
 	case ACTIONRESULT_SELECT:
 		// Only called on touch up
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
 			station->SetPicking3d(false);
@@ -2116,7 +2127,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		break;
 	case ACTIONRESULT_MUTE:
 		// Only called on touch up
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			station->SetStateFromPicking(GuiElement::EDIT_MUTE, false);
 			station->SetPicking3d(false);
@@ -2127,7 +2138,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 		break;
 	case ACTIONRESULT_UNMUTE:
 		// Only called on touch up
-		for (auto& station : _stations)
+		for (auto& station : stations)
 		{
 			station->SetStateFromPicking(GuiElement::EDIT_MUTE, true);
 			station->SetPicking3d(false);
@@ -2137,7 +2148,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	case ACTIONRESULT_INITSELECT:
-		for (auto& station : _stations)
+		for (auto& station : stations)
 			station->SetPicking3d(false);
 
 		hovering = _ChildFromPath(_selector->CurrentHover());
@@ -2146,10 +2157,10 @@ void Scene::_UpdateSelection(ActionResultType res)
 
 		break;
 	case ACTIONRESULT_CLEARSELECT:
-		for (auto& station : _stations)
+		for (auto& station : stations)
 			station->SetPicking3d(false);
 
-		for (auto& station : _stations)
+		for (auto& station : stations)
 			station->SetStateFromPicking(GuiElement::EDIT_SELECT, false);
 
 		break;
@@ -2164,7 +2175,7 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	ResourceUser::InitResources(resourceLib, forceInit);
 
 	// Stations can be added after scene resources are initialised.
-	auto stations = _stations;
+	auto stations = SnapshotStations();
 	for (auto& station : stations)
 	{
 		if (station)
@@ -2172,14 +2183,14 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
-Position3d Scene::_StationCentre() const
+Position3d Scene::_StationCentre(const std::vector<std::shared_ptr<Station>>& stations)
 {
 	Position3d stationCentre{};
-	if (!_stations.empty())
+	if (!stations.empty())
 	{
-		for (const auto& station : _stations)
+		for (const auto& station : stations)
 			stationCentre += station->ModelPosition();
-		const auto inverseCount = 1.0f / static_cast<float>(_stations.size());
+		const auto inverseCount = 1.0f / static_cast<float>(stations.size());
 		stationCentre.X *= inverseCount;
 		stationCentre.Y *= inverseCount;
 		stationCentre.Z *= inverseCount;
@@ -2198,15 +2209,21 @@ void Scene::_ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange ch
 
 void Scene::_CycleCameraView()
 {
+	const auto stations = SnapshotStations();
 	std::optional<Position3d> hoveredStation;
+	std::shared_ptr<Station> hoveredIdentity;
 	const auto hoverPath = _selector->CurrentHover();
-	if (!hoverPath.empty() && (hoverPath.front() < _stations.size()))
-		hoveredStation = _stations[hoverPath.front()]->ModelPosition();
-	const auto firstStation = _stations.empty()
+	if (!hoverPath.empty() && (hoverPath.front() < stations.size()))
+	{
+		hoveredStation = stations[hoverPath.front()]->ModelPosition();
+		hoveredIdentity = stations[hoverPath.front()];
+	}
+	const auto firstStation = stations.empty()
 		? std::optional<Position3d>{}
-		: std::optional<Position3d>{ _stations.front()->ModelPosition() };
-	_ApplyCameraSelectDepthChange(_camera.CycleView(_StationCentre(), hoveredStation,
-		firstStation, VIEW_STATION == _viewMode));
+		: std::optional<Position3d>{ stations.front()->ModelPosition() };
+	_ApplyCameraSelectDepthChange(_camera.CycleView(_StationCentre(stations), hoveredStation,
+		firstStation, hoveredIdentity, stations.empty() ? nullptr : stations.front(),
+		VIEW_STATION == _viewMode));
 }
 
 std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
@@ -2231,14 +2248,14 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		selectDepth = (unsigned int)DEPTH_LOOP;
 
 	station->SetSelectDepth((SelectDepth)selectDepth);
+	station->SetGlobalMidiQuantState(_globalMidiQuantState);
 
 	{
 		std::lock_guard<std::mutex> lock(_sceneMutex);
 		_stations.push_back(station);
-		_camera.RegisterStation(_stations.size() - 1u, station->LoopTakeRevision());
+		_camera.RegisterStation(_stations.size() - 1u, station, station->LoopTakeRevision());
+		_PublishAudioStations();
 	}
-	station->SetGlobalMidiQuantState(_globalMidiQuantState);
-	_PublishAudioStations();
 }
 
 void Scene::_SetQuantisation(unsigned int quantiseSamps, Timer::QuantisationType quantisation)
@@ -2271,7 +2288,7 @@ void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 	const auto previousLoopFrac = _transportOffsetLoopFrac;
 	_transportOffsetLoopFrac = loopFrac;
 
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 	{
 		if (station)
 			station->SetTransportOffsetLoopFrac(loopFrac);
@@ -2285,7 +2302,7 @@ void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 
 void Scene::_ApplyGlobalMidiQuantStateToAllLoopTakes()
 {
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 	{
 		if (station)
 			station->SetGlobalMidiQuantState(_globalMidiQuantState);
@@ -2410,14 +2427,15 @@ std::shared_ptr<GuiElement> Scene::_ChildFromPath(std::vector<unsigned char> pat
 	if (path.size() < 1)
 		return nullptr;
 
+	const auto stations = SnapshotStations();
 	std::shared_ptr<GuiElement> curChild;
 	std::vector<unsigned char> curPath(path);
 
 	auto stationIndex = path[0];
 
-	if (stationIndex < _stations.size())
+	if (stationIndex < stations.size())
 	{
-		curChild = _stations[stationIndex];
+		curChild = stations[stationIndex];
 
 		std::vector<unsigned char> curPath(path);
 
@@ -2443,7 +2461,7 @@ void Scene::_UpdateSelectDepth(unsigned int depth)
 	auto selectDepth = (SelectDepth)depth;
 	_selector->SetSelectDepth(selectDepth);
 
-	for (auto& station : _stations)
+	for (auto& station : SnapshotStations())
 		station->SetSelectDepth(selectDepth);
 
 	_UpdateSelection(ACTIONRESULT_DEFAULT);
@@ -2498,7 +2516,7 @@ bool Scene::_HandleTapTempo(Time actionTime)
 {
 	const auto handled = _quantisation.HandleTapTempo(_EstimatedAudioSampleAt(actionTime),
 		_CurrentSampleRate(),
-		_stations,
+		SnapshotStations(),
 		_userConfig);
 	if (handled)
 		_UpdateStationQuantisation(nullptr, _selector->CurrentSelectDepth(), false);
@@ -2563,7 +2581,7 @@ bool Scene::_TrySetMasterFromHover(bool confirm)
 {
 	return _quantisation.TrySetMasterFromHover(_ChildFromPath(_selector->CurrentHover()),
 		_selector->CurrentSelectDepth(),
-		_stations,
+		SnapshotStations(),
 		_CurrentSampleRate(),
 		_userConfig,
 		confirm);
@@ -2573,7 +2591,7 @@ void Scene::_UpdateStationQuantisation(std::shared_ptr<base::GuiElement> candida
 	base::SelectDepth depth,
 	bool confirmCandidate)
 {
-	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, _stations);
+	_quantisation.UpdateStationHints(candidate, depth, confirmCandidate, SnapshotStations());
 }
 
 void Scene::_ClearStationQuantisation()

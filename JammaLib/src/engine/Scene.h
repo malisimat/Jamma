@@ -285,7 +285,8 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
-		utils::Position3d _StationCentre() const;
+		// Pass a locked station list or a snapshot; remote updates can erase entries.
+		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
 		void _CycleCameraView();
 		void _ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change);
 		void _AddStation(std::shared_ptr<Station> station);
