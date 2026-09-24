@@ -1,7 +1,5 @@
 {
-    "gtest-adapter.debugConfig": [
-        "Run JammaLib GoogleTests (Debug x64)"
-    ],
-    "gtest-adapter.refreshAfterBuild": true,
-    "gtest-adapter.supportLocation": true
+    "testMate.cpp.test.executables": "test/**/JammaLib_Tests.exe",
+    "testMate.cpp.discovery.loadOnStartup": true,
+    "testMate.cpp.log.logpanel": true
 }
