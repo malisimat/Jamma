@@ -279,8 +279,7 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
-		glm::mat4 _View();
-		glm::mat4 _Projection(float aspectRatio) const;
+		utils::Position3d _StationCentre() const;
 		void _CycleCameraView();
 		graphics::Camera::Pose _CameraPoseForView(graphics::Camera::View view) const;
 		void _UpdateCameraStationFollow();

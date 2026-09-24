@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <glm/ext.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 using namespace actions;
@@ -20,6 +21,9 @@ Camera::Camera(CameraParams params) :
 	_transitionTarget(_pose),
 	_transitionElapsedSeconds(0.0f),
 	_transitioning(false),
+	_wheelZoomTransition(false),
+	_wheelZoomFocusPoint{},
+	_wheelZoomStationCentre{},
 	_rememberedPoses{},
 	_hasRememberedPose{}
 {
@@ -406,7 +410,87 @@ ActionResult Camera::UpdateBackgroundDrag(TouchMoveAction action)
 	return ActionResult::NoAction();
 }
 
+glm::mat4 Camera::ViewMatrix() const
+{
+	const auto eye = glm::vec3(_pose.Eye.X, _pose.Eye.Y, _pose.Eye.Z);
+	const auto forward = glm::vec3(_pose.Forward.X, _pose.Forward.Y, _pose.Forward.Z);
+	const auto up = glm::vec3(_pose.Up.X, _pose.Up.Y, _pose.Up.Z);
+	return glm::lookAt(eye, eye + forward, up);
+}
+
+glm::mat4 Camera::Projection(float aspectRatio, Position3d stationCentre) const
+{
+	if (View::StationInterior == _view)
+		return glm::perspective(glm::radians(_stationInteriorFieldOfView), aspectRatio, 10.0f, 1000.0f);
+
+	if (View::TopDown != _view)
+		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, 1000.0f);
+
+	const auto halfFovRadians = glm::radians(40.0f);
+	const auto halfHeight = std::max(10.0f, std::abs(_pose.Eye.Y - stationCentre.Y) * std::tan(halfFovRadians));
+	return glm::ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio,
+		-halfHeight, halfHeight, 10.0f, 2000.0f);
+}
+
+glm::mat4 Camera::SkyboxProjection(float aspectRatio) const
+{
+	const auto fieldOfView = (View::StationInterior == _view)
+		? _stationInteriorFieldOfView
+		: ((View::TopDown == _view) ? 100.0f : 80.0f);
+	return glm::perspective(glm::radians(fieldOfView), aspectRatio, 0.1f, 1000.0f);
+}
+
+Position3d Camera::FocusPointAtCursor(Position2d cursorPosition,
+	unsigned int viewportWidth,
+	unsigned int viewportHeight,
+	Position3d stationCentre) const
+{
+	if ((View::Front != _view) && (View::TopDown != _view))
+		return stationCentre;
+
+	const auto width = static_cast<float>(viewportWidth);
+	const auto height = static_cast<float>(viewportHeight);
+	if ((width <= 0.0f) || (height <= 0.0f))
+		return stationCentre;
+
+	const auto aspectRatio = width / height;
+	const auto ndcX = (2.0f * static_cast<float>(cursorPosition.X) / width) - 1.0f;
+	const auto ndcY = 1.0f - (2.0f * static_cast<float>(cursorPosition.Y) / height);
+	const auto inverseViewProjection = glm::inverse(Projection(aspectRatio, stationCentre) * ViewMatrix());
+	const auto nearHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+	const auto farHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+	if ((std::abs(nearHomogeneous.w) < 0.0001f) || (std::abs(farHomogeneous.w) < 0.0001f))
+		return stationCentre;
+
+	const auto rayOrigin = glm::vec3(nearHomogeneous) / nearHomogeneous.w;
+	const auto rayEnd = glm::vec3(farHomogeneous) / farHomogeneous.w;
+	const auto rayDirection = rayEnd - rayOrigin;
+	const auto planeNormal = (View::TopDown == _view)
+		? glm::vec3(0.0f, 1.0f, 0.0f)
+		: glm::vec3(0.0f, 0.0f, 1.0f);
+	const auto denominator = glm::dot(rayDirection, planeNormal);
+	if (std::abs(denominator) < 0.0001f)
+		return stationCentre;
+
+	const auto planePoint = glm::vec3(stationCentre.X, stationCentre.Y, stationCentre.Z);
+	const auto distance = glm::dot(planePoint - rayOrigin, planeNormal) / denominator;
+	if (distance < 0.0f)
+		return stationCentre;
+
+	const auto focusPoint = rayOrigin + (rayDirection * distance);
+	return { focusPoint.x, focusPoint.y, focusPoint.z };
+}
+
 ActionResult Camera::HandleWheel(int wheelNotches)
+{
+	return HandleWheel(wheelNotches, {}, 0u, 0u, {});
+}
+
+ActionResult Camera::HandleWheel(int wheelNotches,
+	Position2d cursorPosition,
+	unsigned int viewportWidth,
+	unsigned int viewportHeight,
+	Position3d stationCentre)
 {
 	if (0 == wheelNotches)
 		return ActionResult::NoAction();
@@ -424,18 +508,36 @@ ActionResult Camera::HandleWheel(int wheelNotches)
 	if (_transitioning)
 		return _BackgroundDragActionResult();
 
-	constexpr float wheelStep = 144.0f;
+	const auto focusPoint = FocusPointAtCursor(cursorPosition, viewportWidth, viewportHeight, stationCentre);
+
 	constexpr float frontMinZ = 80.0f;
 	constexpr float frontMaxZ = 900.0f;
 	constexpr float topDownMinY = 180.0f;
 	constexpr float topDownMaxY = 1200.0f;
 	auto target = _pose;
 	if (View::Front == _view)
-		target.Eye.Z = std::clamp(target.Eye.Z - (static_cast<float>(wheelNotches) * wheelStep), frontMinZ, frontMaxZ);
+	{
+		target.Eye.Z = std::clamp(target.Eye.Z - (static_cast<float>(wheelNotches) * WheelZoomStep), frontMinZ, frontMaxZ);
+		const auto oldDistance = std::abs(_pose.Eye.Z - focusPoint.Z);
+		const auto newDistance = std::abs(target.Eye.Z - focusPoint.Z);
+		const auto scaleRatio = oldDistance > 0.0001f ? newDistance / oldDistance : 1.0f;
+		target.Eye.X = focusPoint.X - (scaleRatio * (focusPoint.X - _pose.Eye.X));
+		target.Eye.Y = focusPoint.Y - (scaleRatio * (focusPoint.Y - _pose.Eye.Y));
+	}
 	else if (View::TopDown == _view)
-		target.Eye.Y = std::clamp(target.Eye.Y - (static_cast<float>(wheelNotches) * wheelStep), topDownMinY, topDownMaxY);
+	{
+		target.Eye.Y = std::clamp(target.Eye.Y - (static_cast<float>(wheelNotches) * WheelZoomStep), topDownMinY, topDownMaxY);
+		const auto oldScale = std::abs(_pose.Eye.Y - stationCentre.Y);
+		const auto newScale = std::abs(target.Eye.Y - stationCentre.Y);
+		const auto topDownScaleRatio = oldScale > 0.0001f ? newScale / oldScale : 1.0f;
+		target.Eye.X = focusPoint.X - (topDownScaleRatio * (focusPoint.X - _pose.Eye.X));
+		target.Eye.Z = focusPoint.Z - (topDownScaleRatio * (focusPoint.Z - _pose.Eye.Z));
+	}
 
 	SetViewTarget(_view, target);
+	_wheelZoomTransition = (View::Front == _view) || (View::TopDown == _view);
+	_wheelZoomFocusPoint = focusPoint;
+	_wheelZoomStationCentre = stationCentre;
 	return _BackgroundDragActionResult();
 }
 
@@ -449,6 +551,7 @@ void Camera::_ApplyPose(Pose pose) noexcept
 
 void Camera::SetViewTarget(View view, Pose target) noexcept
 {
+	_wheelZoomTransition = false;
 	if (_view != view)
 	{
 		// An interrupted transition has a valid target pose but a transient current pose.
@@ -476,6 +579,25 @@ void Camera::_TickTransition(unsigned int samps, unsigned int sampleRate) noexce
 	const auto easedProgress = linearProgress * linearProgress * (3.0f - (2.0f * linearProgress));
 	Pose pose;
 	pose.Eye = _Lerp(_transitionStart.Eye, _transitionTarget.Eye, easedProgress);
+	if (_wheelZoomTransition)
+	{
+		if (View::Front == _view)
+		{
+			const auto startDistance = std::abs(_transitionStart.Eye.Z - _wheelZoomFocusPoint.Z);
+			const auto currentDistance = std::abs(pose.Eye.Z - _wheelZoomFocusPoint.Z);
+			const auto scaleRatio = startDistance > 0.0001f ? currentDistance / startDistance : 1.0f;
+			pose.Eye.X = _wheelZoomFocusPoint.X - (scaleRatio * (_wheelZoomFocusPoint.X - _transitionStart.Eye.X));
+			pose.Eye.Y = _wheelZoomFocusPoint.Y - (scaleRatio * (_wheelZoomFocusPoint.Y - _transitionStart.Eye.Y));
+		}
+		else if (View::TopDown == _view)
+		{
+			const auto startScale = std::abs(_transitionStart.Eye.Y - _wheelZoomStationCentre.Y);
+			const auto currentScale = std::abs(pose.Eye.Y - _wheelZoomStationCentre.Y);
+			const auto scaleRatio = startScale > 0.0001f ? currentScale / startScale : 1.0f;
+			pose.Eye.X = _wheelZoomFocusPoint.X - (scaleRatio * (_wheelZoomFocusPoint.X - _transitionStart.Eye.X));
+			pose.Eye.Z = _wheelZoomFocusPoint.Z - (scaleRatio * (_wheelZoomFocusPoint.Z - _transitionStart.Eye.Z));
+		}
+	}
 	const auto startOrientation = glm::quatLookAt(
 		glm::vec3(_transitionStart.Forward.X, _transitionStart.Forward.Y, _transitionStart.Forward.Z),
 		glm::vec3(_transitionStart.Up.X, _transitionStart.Up.Y, _transitionStart.Up.Z));
@@ -493,6 +615,7 @@ void Camera::_TickTransition(unsigned int samps, unsigned int sampleRate) noexce
 	{
 		_ApplyPose(_transitionTarget);
 		_transitioning = false;
+		_wheelZoomTransition = false;
 	}
 }
 

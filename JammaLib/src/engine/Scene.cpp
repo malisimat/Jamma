@@ -585,8 +585,8 @@ void Scene::Draw3d(DrawContext& ctx,
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = _Projection(ar);
-	auto view = _View();
+	auto projection = _camera.Projection(ar, _StationCentre());
+	auto view = _camera.ViewMatrix();
 	_viewProj = projection * view;
 	_UpdateHudStationAnchors();
 
@@ -612,12 +612,7 @@ void Scene::Draw3d(DrawContext& ctx,
 			auto R = glm::rotate(glm::mat4(1.0f), yaw,   glm::vec3(0.0f, 1.0f, 0.0f));
 			R = glm::rotate(R, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			R = glm::rotate(R, roll,  glm::vec3(0.0f, 0.0f, 1.0f));
-			auto skyboxFov = 80.0f;
-			if (graphics::Camera::View::StationInterior == _camera.CurrentView())
-				skyboxFov = _camera.StationInteriorFieldOfView();
-			else if (graphics::Camera::View::TopDown == _camera.CurrentView())
-				skyboxFov = 100.0f;
-			auto skyboxProjection = glm::perspective(glm::radians(skyboxFov), ar, 0.1f, 1000.0f);
+			auto skyboxProjection = _camera.SkyboxProjection(ar);
 			_skyboxViewProj = skyboxProjection * glm::mat4(glm::mat3(view)) * R;
 		}
 
@@ -847,7 +842,11 @@ ActionResult Scene::OnAction(TouchAction action)
 	}
 
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State) && (4 == action.Index))
-		return _camera.HandleWheel(action.Value);
+		return _camera.HandleWheel(action.Value,
+			action.Position,
+			_sizeParams.Size.Width,
+			_sizeParams.Size.Height,
+			_StationCentre());
 
 	// Pressing empty background clears keyboard focus.
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
@@ -1849,8 +1848,8 @@ void Scene::_InitSize()
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
 		1.0f;
-	auto projection = _Projection(ar);
-	_viewProj = projection * _View();
+	auto projection = _camera.Projection(ar, _StationCentre());
+	_viewProj = projection * _camera.ViewMatrix();
 	// _skyboxViewProj is updated in Draw3d(); do not reset it here
 
 	auto hScale = _sizeParams.Size.Width > 0 ? 2.0f / (float)_sizeParams.Size.Width : 1.0f;
@@ -2023,31 +2022,19 @@ void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 	}
 }
 
-glm::mat4 Scene::_View()
+Position3d Scene::_StationCentre() const
 {
-	auto pose = _camera.CurrentPose();
-	auto eye = glm::vec3(pose.Eye.X, pose.Eye.Y, pose.Eye.Z);
-	auto forward = glm::vec3(pose.Forward.X, pose.Forward.Y, pose.Forward.Z);
-	auto up = glm::vec3(pose.Up.X, pose.Up.Y, pose.Up.Z);
-	return glm::lookAt(eye, eye + forward, up);
-}
-
-glm::mat4 Scene::_Projection(float aspectRatio) const
-{
-	if (graphics::Camera::View::StationInterior == _camera.CurrentView())
-		return glm::perspective(glm::radians(_camera.StationInteriorFieldOfView()), aspectRatio, 10.0f, 1000.0f);
-
-	if (graphics::Camera::View::TopDown != _camera.CurrentView())
-		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, 1000.0f);
-
-	// Keep the existing wheel zoom scale while removing perspective foreshortening.
-	const auto halfFovRadians = glm::radians(40.0f);
-	const auto pose = _camera.CurrentPose();
-	const auto topDownTarget = _CameraPoseForView(graphics::Camera::View::TopDown);
-	const auto focalY = topDownTarget.Eye.Y - 800.0f;
-	const auto halfHeight = std::max(10.0f, std::abs(pose.Eye.Y - focalY) * std::tan(halfFovRadians));
-	return glm::ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio,
-		-halfHeight, halfHeight, 10.0f, 2000.0f);
+	Position3d stationCentre{};
+	if (!_stations.empty())
+	{
+		for (const auto& station : _stations)
+			stationCentre += station->ModelPosition();
+		const auto inverseCount = 1.0f / static_cast<float>(_stations.size());
+		stationCentre.X *= inverseCount;
+		stationCentre.Y *= inverseCount;
+		stationCentre.Z *= inverseCount;
+	}
+	return stationCentre;
 }
 
 graphics::Camera::Pose Scene::_CameraPoseForView(graphics::Camera::View view) const
@@ -2078,16 +2065,7 @@ graphics::Camera::Pose Scene::_CameraPoseForView(graphics::Camera::View view) co
 	}
 	case graphics::Camera::View::TopDown:
 	{
-		utils::Position3d centre{ 0.0f, 0.0f, 0.0f };
-		if (!_stations.empty())
-		{
-			for (const auto& station : _stations)
-				centre += station->ModelPosition();
-			const auto inverseCount = 1.0f / static_cast<float>(_stations.size());
-			centre.X *= inverseCount;
-			centre.Y *= inverseCount;
-			centre.Z *= inverseCount;
-		}
+		const auto centre = _StationCentre();
 		pose.Eye = { centre.X, centre.Y + 800.0f, centre.Z };
 		pose.Forward = { 0.0f, -1.0f, 0.0f };
 		pose.Up = { 0.0f, 0.0f, -1.0f };

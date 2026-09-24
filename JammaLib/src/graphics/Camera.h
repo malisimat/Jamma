@@ -4,6 +4,7 @@
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
 #include "../actions/TouchMoveAction.h"
+#include <glm/glm.hpp>
 
 namespace graphics
 {
@@ -24,6 +25,8 @@ namespace graphics
 		public base::Moveable
 	{
 	public:
+		static constexpr float WheelZoomStep = 250.0f;
+
 		enum class View
 		{
 			Front,
@@ -43,12 +46,24 @@ namespace graphics
 		actions::ActionResult HandleBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult UpdateBackgroundDrag(actions::TouchMoveAction action);
 		actions::ActionResult HandleWheel(int wheelNotches);
+		actions::ActionResult HandleWheel(int wheelNotches,
+			utils::Position2d cursorPosition,
+			unsigned int viewportWidth,
+			unsigned int viewportHeight,
+			utils::Position3d stationCentre);
 		void TickBackgroundDrag(unsigned int samps, unsigned int sampleRate);
 		bool IsBackgroundDragging() const noexcept;
 		bool BackgroundDragWasDragged() const noexcept;
 		bool IsTransitioning() const noexcept;
-		View CurrentView() const noexcept;
-		Pose CurrentPose() const noexcept;
+	View CurrentView() const noexcept;
+	Pose CurrentPose() const noexcept;
+	glm::mat4 ViewMatrix() const;
+	glm::mat4 Projection(float aspectRatio, utils::Position3d stationCentre) const;
+	glm::mat4 SkyboxProjection(float aspectRatio) const;
+	utils::Position3d FocusPointAtCursor(utils::Position2d cursorPosition,
+		unsigned int viewportWidth,
+		unsigned int viewportHeight,
+		utils::Position3d stationCentre) const;
 		float StationInteriorFieldOfView() const noexcept;
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
@@ -107,6 +122,9 @@ namespace graphics
 		Pose _transitionTarget;
 		float _transitionElapsedSeconds;
 		bool _transitioning;
+		bool _wheelZoomTransition;
+		utils::Position3d _wheelZoomFocusPoint;
+		utils::Position3d _wheelZoomStationCentre;
 		Pose _rememberedPoses[ViewCount];
 		bool _hasRememberedPose[ViewCount];
 	};
