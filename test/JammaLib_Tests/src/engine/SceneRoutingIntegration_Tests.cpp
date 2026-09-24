@@ -114,3 +114,14 @@ TEST_F(SceneRoutingIntegrationTest, CloseAudioAndShutdownAreRepeatable)
 	EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled,
 		scene->RequestRigEdit(io::RigFile{}));
 }
+
+TEST_F(SceneRoutingIntegrationTest, RoutingEditIsRejectedWhenAudioCallbackIsInactive)
+{
+	auto scene = FreshScene({ Station("Station") }, { Trigger("trigger", "Station") });
+	ASSERT_TRUE(scene);
+	EXPECT_EQ(engine::RigCoordinator::EditResult::AudioCallbackInactive,
+		scene->RequestRigEdit(io::RigFile{}));
+	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }),
+		Memberships(scene));
+	scene->Shutdown();
+}

@@ -28,6 +28,14 @@ namespace gui
 {
 	class GuiPopupManager;
 
+	enum class RoutingEditAvailability
+	{
+		Ready,
+		Applying,
+		AudioCallbackInactive,
+		TriggerBusy
+	};
+
 	struct GuiHudParams : public base::GuiElementParams
 	{
 		GuiHudParams() :
@@ -35,7 +43,7 @@ namespace gui
 		{}
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
-		std::function<bool()> EditsEnabled;
+		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
 		GuiPopupManager* PopupManager = nullptr;
 	};
 
@@ -80,7 +88,7 @@ namespace gui
 			const engine::RigSnapshot& routing);
 		void SetStationAnchors(std::vector<StationAnchor> anchors);
 		bool HasCableDrag() const noexcept { return _cableDrag.has_value(); }
-		bool IsApplying() const { return _editsEnabled && !_editsEnabled(); }
+		bool IsApplying() const { return _RoutingEditAvailability() == RoutingEditAvailability::Applying; }
 		static std::vector<CableRoute> BuildCableRoutes(const engine::RoutingGraph& graph);
 		static int RevealScrollOffset(int currentOffset, int viewportHeight,
 			int contentHeight, int itemTop, int itemBottom);
@@ -128,6 +136,8 @@ namespace gui
 		void _ConfirmDelete();
 		bool _SubmitCandidate(const io::RigFile& candidate);
 		bool _CanEditTrigger(size_t triggerIndex) const;
+		RoutingEditAvailability _RoutingEditAvailability() const;
+		void _UpdateRoutingEditPresentation();
 		void _RevealTrigger(size_t triggerIndex);
 		void _RebuildPanels();
 		void _LayoutPanels();
@@ -178,6 +188,7 @@ namespace gui
 		std::shared_ptr<GuiScrollPanel> _triggerScroll;
 		std::shared_ptr<GuiStackPanel> _triggerList;
 		std::shared_ptr<GuiButton> _addTriggerButton;
+		std::shared_ptr<GuiLabel> _routingStatusLabel;
 		std::shared_ptr<GuiPopup> _deletePopup;
 		std::shared_ptr<base::ActionReceiver> _deletePopupReceiver;
 		std::vector<SourceWidgets> _sourceWidgets;
@@ -194,7 +205,8 @@ namespace gui
 		std::optional<CableInteraction::Drag> _cableDrag;
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
-		std::function<bool()> _editsEnabled;
+		std::function<RoutingEditAvailability()> _routingEditAvailability;
+		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;
 		GuiPopupManager* _popupManager = nullptr;
 		bool _revealNewestTrigger = false;
 		int _lastTriggerScrollOffset = 0;

@@ -300,6 +300,7 @@ namespace engine
 		void _JobLoop();
 		void _PumpMidi();
 		void _AdvanceRigPublication();
+		gui::RoutingEditAvailability _RoutingEditAvailability();
 		void _PumpSerial();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
@@ -393,6 +394,8 @@ namespace engine
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		RigCoordinator _rigCoordinator;
+		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
+		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;

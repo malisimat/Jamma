@@ -96,7 +96,7 @@ Scene::Scene(SceneParams params,
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
 	hudParams.PopupManager = &_popupManager;
-	hudParams.EditsEnabled = [this]() { return _rigCoordinator.EditsEnabled(); };
+	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
 	hudParams.SubmitRigEdit = [this](const io::RigFile& candidate)
 	{
 		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
@@ -1478,6 +1478,13 @@ void Scene::_AdvanceRigPublication()
 
 RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
 {
+	switch (_RoutingEditAvailability())
+	{
+	case gui::RoutingEditAvailability::Applying: return RigCoordinator::EditResult::EditsDisabled;
+	case gui::RoutingEditAvailability::AudioCallbackInactive: return RigCoordinator::EditResult::AudioCallbackInactive;
+	case gui::RoutingEditAvailability::TriggerBusy: return RigCoordinator::EditResult::TriggerBusy;
+	case gui::RoutingEditAvailability::Ready: break;
+	}
 	const auto accepted = _rigCoordinator.Accepted();
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
 	if (result == RigCoordinator::EditResult::Pending)
@@ -1493,6 +1500,27 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 		_audioEngine->RequestRigTriggerQuiescence(quiescing->Revision, accepted);
 	}
 	return result;
+}
+
+gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
+{
+	if (!_rigCoordinator.EditsEnabled())
+		return gui::RoutingEditAvailability::Applying;
+
+	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
+	const auto now = std::chrono::steady_clock::now();
+	if (heartbeat != _lastAudioCallbackHeartbeat)
+	{
+		_lastAudioCallbackHeartbeat = heartbeat;
+		_lastAudioCallbackHeartbeatAt = now;
+	}
+	constexpr auto heartbeatTimeout = std::chrono::milliseconds(500);
+	if (heartbeat == 0u || _lastAudioCallbackHeartbeatAt == std::chrono::steady_clock::time_point{} ||
+		now - _lastAudioCallbackHeartbeatAt > heartbeatTimeout)
+		return gui::RoutingEditAvailability::AudioCallbackInactive;
+	if (!_audioEngine->RoutingEditsEligible())
+		return gui::RoutingEditAvailability::TriggerBusy;
+	return gui::RoutingEditAvailability::Ready;
 }
 
 void Scene::_PumpSerial()

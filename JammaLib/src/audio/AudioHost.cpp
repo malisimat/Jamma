@@ -81,6 +81,7 @@ namespace audio
 		{
 			_audioDevice = std::move(dev.value());
 			_audioSampleCounter.store(0u, std::memory_order_release);
+			_audioCallbackHeartbeat.store(0u, std::memory_order_release);
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
 			_tickStreamParams = audioStreamParams;
@@ -501,6 +502,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		unsigned int numSamps,
 		double streamTime)
 	{
+		_audioCallbackHeartbeat.fetch_add(1u, std::memory_order_relaxed);
 		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto audioStreamParams = nullptr == _audioDevice ?
 			audio::AudioStreamParams() : _audioDevice->GetAudioStreamParams();

@@ -52,18 +52,49 @@ namespace gui
 	{
 	public:
 		GuiHudActionButton(GuiButtonParams params, std::function<void()> callback) :
-			GuiButton(std::move(params)), _callback(std::move(callback)) {}
+			GuiButton(_Params(std::move(params))), _callback(std::move(callback)) {}
+
+		void Draw(base::DrawContext& ctx) override
+		{
+			const auto previousTint = _guiParams.TintColor;
+			_guiParams.TintColor = IsEnabled() ? glm::vec3(1.0f) : glm::vec3(0.38f);
+			GuiButton::Draw(ctx);
+			_guiParams.TintColor = previousTint;
+		}
 
 		actions::ActionResult OnAction(actions::TouchAction action) override
 		{
+			if (!IsEnabled() || !IsVisible())
+			{
+				_pressed = false;
+				return actions::ActionResult::NoAction();
+			}
 			auto result = GuiButton::OnAction(action);
-			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && HitTest(action.Position) && _callback)
-				_callback();
+			if (action.State == actions::TouchAction::TOUCH_DOWN && result.IsEaten)
+			{
+				_pressed = true;
+				result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
+			}
+			else if (action.State == actions::TouchAction::TOUCH_UP)
+			{
+				const bool invoke = _pressed && result.IsEaten && HitTest(action.Position);
+				_pressed = false;
+				if (invoke && _callback)
+					_callback();
+			}
 			return result;
 		}
 
 	private:
+		static GuiButtonParams _Params(GuiButtonParams params)
+		{
+			params.TextureShader = "texture_tinted";
+			params.TintColor = glm::vec3(1.0f);
+			return params;
+		}
+
 		std::function<void()> _callback;
+		bool _pressed = false;
 	};
 
 	class GuiHudPopupReceiver : public base::ActionReceiver
@@ -182,7 +213,7 @@ namespace gui
 GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params),
 	_submitRigEdit(std::move(params.SubmitRigEdit)),
-	_editsEnabled(std::move(params.EditsEnabled)),
+	_routingEditAvailability(std::move(params.RoutingEditAvailabilityState)),
 	_popupManager(params.PopupManager)
 {
 	_guiParams.Texture = "";
@@ -229,14 +260,7 @@ void GuiHud::Draw(base::DrawContext& ctx)
 		_lastTriggerScrollOffset = _triggerScroll->ScrollOffset();
 		_cablesDirty = true;
 	}
-	const bool applying = IsApplying();
-	if (_addTriggerButton)
-		_addTriggerButton->SetEnabled(!applying);
-	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
-	{
-		const bool editable = _CanEditTrigger(i);
-		_triggerWidgets[i].Close->SetEnabled(editable);
-	}
+	_UpdateRoutingEditPresentation();
 
 	for (std::size_t i = 0u; i < _inputVus.size() && i < _sourceWidgets.size(); ++i)
 	{
@@ -454,6 +478,12 @@ void GuiHud::_BuildTriggerRail()
 	addParams.TextPadding = 0u;
 	_addTriggerButton = std::make_shared<GuiHudActionButton>(addParams, [this]() { _AddTrigger(); });
 	_triggerRail->AddChild(_addTriggerButton);
+
+	GuiLabelParams statusParams = GuiLabelParams::PanelScrollRow("Trigger routing ready", 0u);
+	statusParams.Size = { 300u, GuiLabelParams::RowHeight };
+	statusParams.MinSize = { 160u, GuiLabelParams::RowHeight };
+	_routingStatusLabel = std::make_shared<GuiLabel>(statusParams);
+	AddChild(_routingStatusLabel);
 }
 
 void GuiHud::_RebuildPanels()
@@ -469,6 +499,8 @@ void GuiHud::_RebuildPanels()
 	_triggerScroll.reset();
 	_triggerList.reset();
 	_addTriggerButton.reset();
+	_routingStatusLabel.reset();
+	_lastRoutingEditAvailability.reset();
 	_children.clear();
 
 	_BuildPanels();
@@ -596,8 +628,9 @@ void GuiHud::_LayoutPanels()
 	if (_addTriggerButton)
 	{
 		_addTriggerButton->SetPosition({ static_cast<int>((_RightRailWidth - 6u - _TriggerControlSize) / 2u), 10 });
-		_addTriggerButton->SetEnabled(!_editsEnabled || _editsEnabled());
 	}
+	if (_routingStatusLabel)
+		_routingStatusLabel->SetPosition({ railPosX - 310, railPosY + 14 });
 	if (_revealNewestTrigger && !_triggerNames.empty())
 	{
 		_RevealTrigger(_triggerNames.size() - 1u);
@@ -813,7 +846,7 @@ int GuiHud::RevealScrollOffset(int currentOffset, int viewportHeight,
 
 bool GuiHud::_CanEditTrigger(size_t triggerIndex) const
 {
-	if ((_editsEnabled && !_editsEnabled()) || triggerIndex >= _triggers.size())
+	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready || triggerIndex >= _triggers.size())
 		return false;
 	const auto trigger = _triggers[triggerIndex].lock();
 	return trigger && trigger->CanEditRouting();
@@ -821,7 +854,7 @@ bool GuiHud::_CanEditTrigger(size_t triggerIndex) const
 
 bool GuiHud::_SubmitCandidate(const io::RigFile& candidate)
 {
-	if (!_submitRigEdit || (_editsEnabled && !_editsEnabled()))
+	if (!_submitRigEdit || _RoutingEditAvailability() != RoutingEditAvailability::Ready)
 		return false;
 	_CancelCableDrag();
 	return _submitRigEdit(candidate);
@@ -829,10 +862,36 @@ bool GuiHud::_SubmitCandidate(const io::RigFile& candidate)
 
 void GuiHud::_AddTrigger()
 {
-	if (_editsEnabled && !_editsEnabled())
+	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready)
 		return;
 	const auto candidate = io::RigFileRouting::WithUnboundTrigger(_displayedRig);
 	_revealNewestTrigger = _SubmitCandidate(candidate);
+}
+
+RoutingEditAvailability GuiHud::_RoutingEditAvailability() const
+{
+	return _routingEditAvailability ? _routingEditAvailability() : RoutingEditAvailability::Ready;
+}
+
+void GuiHud::_UpdateRoutingEditPresentation()
+{
+	const auto availability = _RoutingEditAvailability();
+	const bool ready = availability == RoutingEditAvailability::Ready;
+	if (_addTriggerButton)
+		_addTriggerButton->SetEnabled(ready);
+	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
+		_triggerWidgets[i].Close->SetEnabled(ready && _CanEditTrigger(i));
+
+	if (!_routingStatusLabel || _lastRoutingEditAvailability == availability)
+		return;
+	_lastRoutingEditAvailability = availability;
+	switch (availability)
+	{
+	case RoutingEditAvailability::Ready: _routingStatusLabel->SetString("Trigger routing ready"); break;
+	case RoutingEditAvailability::Applying: _routingStatusLabel->SetString("Applying trigger routing..."); break;
+	case RoutingEditAvailability::AudioCallbackInactive: _routingStatusLabel->SetString("Start audio to edit trigger routing"); break;
+	case RoutingEditAvailability::TriggerBusy: _routingStatusLabel->SetString("Finish trigger action to edit routing"); break;
+	}
 }
 
 void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)

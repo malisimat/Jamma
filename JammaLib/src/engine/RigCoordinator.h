@@ -18,7 +18,7 @@ namespace engine
 	public:
 		using SnapshotPtr = std::shared_ptr<const RigSnapshot>;
 		using PersistRig = std::function<bool(const io::RigFile&)>;
-		enum class EditResult { Pending, EditsDisabled, QuiescenceRejected, ValidationFailed, PersistenceFailed };
+		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, QuiescenceRejected, ValidationFailed, PersistenceFailed };
 
 		RigCoordinator() = default;
 		RigCoordinator(const RigCoordinator&) = delete;

@@ -70,6 +70,10 @@ namespace audio
 		{
 			return _routingEditsEligible.load(std::memory_order_acquire);
 		}
+		std::uint64_t AudioCallbackHeartbeat() const noexcept
+		{
+			return _audioCallbackHeartbeat.load(std::memory_order_relaxed);
+		}
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
@@ -194,6 +198,7 @@ namespace audio
 		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
 		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };
 		std::atomic<bool> _routingEditsEligible{ false };
+		std::atomic<std::uint64_t> _audioCallbackHeartbeat{ 0u };
 		std::uint64_t _audioRigRevision = 0u;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		// Audio-thread owned phase-map geometry. The map is rebased after every
