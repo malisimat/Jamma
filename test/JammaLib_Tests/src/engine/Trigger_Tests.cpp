@@ -1425,6 +1425,13 @@ TEST(CameraView, StationInteriorFollowsLoopTakeAddition) {
 	EXPECT_FLOAT_EQ(0.0f, scene.CameraPositionForTest().Z);
 }
 
+TEST(CameraView, StationResetUpdatesLoopTakeRevision) {
+	auto station = MakeTestStation("station-reset");
+	const auto revision = station->LoopTakeRevision();
+	station->Reset();
+	EXPECT_GT(station->LoopTakeRevision(), revision);
+}
+
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
 	io::RigFile::Trigger trigStruct{};
 	trigStruct.Name = "TrigMidi";

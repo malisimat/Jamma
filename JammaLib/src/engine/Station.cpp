@@ -1267,6 +1267,7 @@ void Station::Reset()
 	}
 	_loopTakes.clear();
 	_PublishLoopTakeSnapshot();
+	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 
 	_triggers.clear();
 }
