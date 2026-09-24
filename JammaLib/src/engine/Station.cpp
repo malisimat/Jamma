@@ -1438,6 +1438,7 @@ ActionResult Station::OnAction(TriggerAction action)
 				_flipTakeBuffer = true;
 				_changesMade = true;
 				_PublishLoopTakeSnapshot();
+				_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 			}
 		}
 
@@ -1511,7 +1512,12 @@ void Station::Reset()
 			_children.erase(child);
 	}
 	_loopTakes.clear();
+	_backLoopTakes.clear();
+	// Commit the cleared take list to the audio snapshot as well.
+	_flipTakeBuffer = true;
+	_changesMade = true;
 	_PublishLoopTakeSnapshot();
+	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 
 	_triggers.clear();
 }
@@ -1546,6 +1552,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	_flipTakeBuffer = true;
 	_changesMade = true;
 	_PublishLoopTakeSnapshot();
+	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 }
 
 std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const

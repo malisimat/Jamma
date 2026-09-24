@@ -175,6 +175,12 @@ public:
 		_AddStation(station);
 	}
 
+	void RemoveStationForTest(const std::shared_ptr<Station>& station)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		std::erase(_stations, station);
+	}
+
 	bool IsSceneResetForTest() const
 	{
 		return _isSceneReset.load(std::memory_order_relaxed);
@@ -216,6 +222,80 @@ public:
 		return _camera.ModelPosition();
 	}
 
+	graphics::Camera::View CameraViewForTest() const
+	{
+		return _camera.CurrentView();
+	}
+
+	graphics::Camera::Pose CameraPoseForTest() const
+	{
+		return _camera.CurrentPose();
+	}
+
+	float StationInteriorFieldOfViewForTest() const
+	{
+		return _camera.StationInteriorFieldOfView();
+	}
+
+	glm::mat4 CameraProjectionForTest() const
+	{
+		return _camera.Projection(1.0f, {});
+	}
+
+	utils::Position3d CameraFocusAtCursorForTest(utils::Position2d cursorPosition) const
+	{
+		return _camera.FocusPointAtCursor(cursorPosition,
+			_sizeParams.Size.Width,
+			_sizeParams.Size.Height,
+			{});
+	}
+
+	glm::vec2 ProjectWorldPositionForTest(utils::Position3d position) const
+	{
+		const auto width = static_cast<float>(_sizeParams.Size.Width);
+		const auto height = static_cast<float>(_sizeParams.Size.Height);
+		const auto aspectRatio = width / height;
+		const auto clip = _camera.Projection(aspectRatio, {}) * _camera.ViewMatrix()
+			* glm::vec4(position.X, position.Y, position.Z, 1.0f);
+		const auto ndc = glm::vec3(clip) / clip.w;
+		return { ((ndc.x + 1.0f) * width) / 2.0f, ((ndc.y + 1.0f) * height) / 2.0f };
+	}
+
+	ViewMode CameraSelectDepthForTest() const
+	{
+		return _viewMode;
+	}
+
+	void SetCameraSelectDepthForTest(unsigned int value)
+	{
+		actions::GuiAction action;
+		action.ElementType = actions::GuiAction::ACTIONELEMENT_RADIO;
+		action.Index = 100u;
+		action.Data = actions::GuiAction::GuiInt(static_cast<int>(value));
+		OnAction(action);
+	}
+
+	bool IsCameraTransitioningForTest() const
+	{
+		return _camera.IsTransitioning();
+	}
+
+	void UpdateCameraStationFollowForTest()
+	{
+		UpdateCamera();
+	}
+
+	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
+	{
+		_camera.TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
+	}
+
+	void SettleCameraForTest()
+	{
+		for (unsigned int tick = 0u; tick < 8u; ++tick)
+			TickCameraForTest(2205u, 44100u);
+	}
+
 	bool IsSceneTouchingForTest() const
 	{
 		return _camera.IsBackgroundDragging();
@@ -233,6 +313,17 @@ TouchAction MakeSceneTouch(TouchAction::TouchState state,
 	action.Index = index;
 	action.Position = pos;
 	action.MouseButtonsDown = mouseButtonsDown;
+	return action;
+}
+
+TouchAction MakeSceneWheel(int value, utils::Position2d pos = { 700, 450 })
+{
+	TouchAction action;
+	action.Touch = TouchAction::TOUCH_MOUSE;
+	action.State = TouchAction::TOUCH_DOWN;
+	action.Index = 4;
+	action.Value = value;
+	action.Position = pos;
 	return action;
 }
 
@@ -1052,16 +1143,16 @@ TEST(SceneDrag, InertialDragCoastsAfterMouseStops) {
 	scene.OnAction(MakeSceneTouchMove({ 840, 500 }, RightMouseButtonMask));
 	auto cameraAfterMove = scene.CameraPositionForTest();
 
-	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	scene.TickCameraForTest(256u, 44100u);
 	auto cameraAfterCoast = scene.CameraPositionForTest();
 
 	EXPECT_LT(cameraAfterCoast.X, cameraAfterMove.X);
 
 	for (int i = 0; i < 360; ++i)
-		scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+		scene.TickCameraForTest(256u, 44100u);
 
 	auto cameraAfterSettle = scene.CameraPositionForTest();
-	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	scene.TickCameraForTest(256u, 44100u);
 	auto cameraAfterFinalTick = scene.CameraPositionForTest();
 
 	EXPECT_NEAR(cameraAfterSettle.X, cameraAfterFinalTick.X, 0.1f);
@@ -1111,6 +1202,397 @@ TEST(SceneDrag, FinalReleaseEndsBackgroundDrag) {
 
 	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 800, 500 }, 0, 0u));
 	EXPECT_FALSE(scene.IsSceneTouchingForTest());
+}
+
+TEST(CameraView, WheelZoomAtViewportCentreUsesNotches) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto wheelRes = scene.OnAction(MakeSceneWheel(1));
+	ASSERT_TRUE(wheelRes.IsEaten);
+	ASSERT_TRUE(scene.IsCameraTransitioningForTest());
+	scene.SettleCameraForTest();
+
+	auto cameraPos = scene.CameraPositionForTest();
+	const auto expectedFrontZoomStep = 150.0f
+		+ (350.0f * (420.0f - 80.0f) / (1350.0f - 80.0f));
+	EXPECT_NEAR(420.0f - expectedFrontZoomStep, cameraPos.Z, 0.001f);
+	EXPECT_FLOAT_EQ(0.0f, cameraPos.X);
+	EXPECT_FLOAT_EQ(0.0f, cameraPos.Y);
+}
+
+TEST(CameraView, FrontWheelZoomKeepsCursorFocusUnderPointer) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	const utils::Position2d cursor{ 1050, 260 };
+	const auto focus = scene.CameraFocusAtCursorForTest(cursor);
+	EXPECT_LT(focus.Y, 0.0f);
+
+	scene.OnAction(MakeSceneWheel(1, cursor));
+	scene.TickCameraForTest(4410u, 44100u);
+	const auto midTransitionFocus = scene.ProjectWorldPositionForTest(focus);
+	EXPECT_NEAR(static_cast<float>(cursor.X), midTransitionFocus.x, 0.01f);
+	EXPECT_NEAR(static_cast<float>(cursor.Y), midTransitionFocus.y, 0.01f);
+	scene.SettleCameraForTest();
+	const auto projectedFocus = scene.ProjectWorldPositionForTest(focus);
+	EXPECT_NEAR(static_cast<float>(cursor.X), projectedFocus.x, 0.01f);
+	EXPECT_NEAR(static_cast<float>(cursor.Y), projectedFocus.y, 0.01f);
+}
+
+TEST(CameraView, WheelZoomPreservesFrontPanPosition) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 810, 490 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneWheel(1));
+	scene.SettleCameraForTest();
+
+	auto cameraPos = scene.CameraPositionForTest();
+	EXPECT_FLOAT_EQ(-10.0f, cameraPos.X);
+	EXPECT_FLOAT_EQ(10.0f, cameraPos.Y);
+	const auto expectedFrontZoomStep = 150.0f
+		+ (350.0f * (420.0f - 80.0f) / (1350.0f - 80.0f));
+	EXPECT_NEAR(420.0f - expectedFrontZoomStep, cameraPos.Z, 0.001f);
+}
+
+TEST(CameraView, TopDownWheelZoomKeepsOrthographicProjection) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	ASSERT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	ASSERT_FLOAT_EQ(1.0f, scene.CameraProjectionForTest()[3][3]);
+
+	scene.OnAction(MakeSceneWheel(1));
+	EXPECT_FLOAT_EQ(1.0f, scene.CameraProjectionForTest()[3][3]);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(-1.0f, scene.CameraPoseForTest().Forward.Y);
+	const auto expectedTopDownZoomStep = 150.0f
+		+ (350.0f * (800.0f - 280.0f) / (3200.0f - 280.0f));
+	EXPECT_NEAR(800.0f - expectedTopDownZoomStep, scene.CameraPositionForTest().Y, 0.001f);
+}
+
+TEST(CameraView, TopDownWheelZoomKeepsCursorFocusUnderPointer) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	const utils::Position2d cursor{ 1020, 300 };
+	const auto focus = scene.CameraFocusAtCursorForTest(cursor);
+	EXPECT_GT(focus.Z, 0.0f);
+
+	scene.OnAction(MakeSceneWheel(1, cursor));
+	scene.TickCameraForTest(4410u, 44100u);
+	const auto midTransitionFocus = scene.ProjectWorldPositionForTest(focus);
+	EXPECT_NEAR(static_cast<float>(cursor.X), midTransitionFocus.x, 0.01f);
+	EXPECT_NEAR(static_cast<float>(cursor.Y), midTransitionFocus.y, 0.01f);
+	scene.SettleCameraForTest();
+	const auto projectedFocus = scene.ProjectWorldPositionForTest(focus);
+	EXPECT_NEAR(static_cast<float>(cursor.X), projectedFocus.x, 0.01f);
+	EXPECT_NEAR(static_cast<float>(cursor.Y), projectedFocus.y, 0.01f);
+}
+
+TEST(CameraView, StationInteriorWheelChangesAndRemembersFieldOfView) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	ASSERT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	const auto positionBeforeWheel = scene.CameraPositionForTest();
+
+	const auto wheelResult = scene.OnAction(MakeSceneWheel(1));
+	ASSERT_TRUE(wheelResult.IsEaten);
+	EXPECT_FLOAT_EQ(72.0f, scene.StationInteriorFieldOfViewForTest());
+	EXPECT_FLOAT_EQ(positionBeforeWheel.X, scene.CameraPositionForTest().X);
+	EXPECT_FLOAT_EQ(positionBeforeWheel.Y, scene.CameraPositionForTest().Y);
+	EXPECT_FLOAT_EQ(positionBeforeWheel.Z, scene.CameraPositionForTest().Z);
+	EXPECT_FLOAT_EQ(0.0f, scene.CameraProjectionForTest()[3][3]);
+
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(72.0f, scene.StationInteriorFieldOfViewForTest());
+}
+
+TEST(CameraView, TabCyclesFrontInteriorAndTopDown) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(1.0f, scene.CameraPoseForTest().Forward.Z);
+
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	scene.SettleCameraForTest();
+	EXPECT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(-1.0f, scene.CameraPoseForTest().Forward.Y);
+
+	ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
+}
+
+TEST(CameraView, RapidTabCyclesSettleAtTheLatestViewTarget) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	for (unsigned int press = 0u; press < 6u; ++press)
+	{
+		ASSERT_TRUE(scene.OnAction(tab).IsEaten);
+		scene.TickCameraForTest(4410u, 44100u);
+	}
+
+	scene.SettleCameraForTest();
+	const auto pose = scene.CameraPoseForTest();
+	EXPECT_EQ(graphics::Camera::View::Front, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(420.0f, pose.Eye.Z);
+	EXPECT_FLOAT_EQ(-1.0f, pose.Forward.Z);
+	EXPECT_FLOAT_EQ(1.0f, pose.Up.Y);
+}
+
+TEST(CameraView, StationInteriorTemporarilyForcesLoopTakeSelectDepth) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	EXPECT_EQ(Scene::VIEW_LOOPTAKE, scene.CameraSelectDepthForTest());
+
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.UpdateCamera();
+	EXPECT_EQ(Scene::VIEW_STATION, scene.CameraSelectDepthForTest());
+}
+
+TEST(CameraView, StationInteriorKeepsUserSelectedLoopDepth) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SetCameraSelectDepthForTest(Scene::VIEW_LOOP);
+	scene.OnAction(tab);
+
+	EXPECT_EQ(Scene::VIEW_LOOP, scene.CameraSelectDepthForTest());
+}
+
+TEST(CameraView, TopDownVerticalDragMovesPositiveWorldZ) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 800, 500 }, 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove({ 800, 510 }, LeftMouseButtonMask));
+	EXPECT_FLOAT_EQ(10.0f, scene.CameraPositionForTest().Z);
+}
+
+TEST(CameraView, StationInteriorFollowsLoopTakeAddition) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->SetModelPosition({ -200.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(firstStation);
+	auto secondStation = MakeTestStation("station-b");
+	secondStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(secondStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	secondStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+
+	EXPECT_EQ(graphics::Camera::View::StationInterior, scene.CameraViewForTest());
+	EXPECT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+	EXPECT_FLOAT_EQ(0.0f, scene.CameraPositionForTest().Z);
+}
+
+TEST(CameraView, StationInteriorClearsFocusWhenTrackedStationIsRemoved) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto firstStation = MakeTestStation("station-a");
+	firstStation->SetModelPosition({ -200.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(firstStation);
+	auto removedStation = MakeTestStation("station-b");
+	removedStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(removedStation);
+	auto shiftedStation = MakeTestStation("station-c");
+	shiftedStation->SetModelPosition({ 600.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(shiftedStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	removedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	ASSERT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+
+	scene.RemoveStationForTest(removedStation);
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(-200.0f, scene.CameraPositionForTest().X);
+
+	shiftedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(600.0f, scene.CameraPositionForTest().X);
+}
+
+TEST(CameraView, StationInteriorKeepsFocusWhenEarlierStationIsRemoved) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto removedStation = MakeTestStation("station-a");
+	scene.AddStationForTest(removedStation);
+	auto trackedStation = MakeTestStation("station-b");
+	trackedStation->SetModelPosition({ 300.0f, 0.0f, 0.0f });
+	scene.AddStationForTest(trackedStation);
+
+	KeyAction tab;
+	tab.KeyChar = 9u;
+	tab.KeyActionType = KeyAction::KEY_UP;
+	scene.OnAction(tab);
+	trackedStation->AddTake();
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	ASSERT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+
+	scene.RemoveStationForTest(removedStation);
+	scene.UpdateCameraStationFollowForTest();
+	scene.SettleCameraForTest();
+	EXPECT_FLOAT_EQ(300.0f, scene.CameraPositionForTest().X);
+}
+
+TEST(CameraView, StationInteriorClearsHoveredFocusWhenStationIsRemoved) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	const auto firstIdentity = std::make_shared<int>(1);
+	const auto hoveredIdentity = std::make_shared<int>(2);
+	const utils::Position3d firstPosition{ -200.0f, 0.0f, 0.0f };
+	const utils::Position3d hoveredPosition{ 300.0f, 0.0f, 0.0f };
+	camera.RegisterStation(0u, firstIdentity, 0u);
+	camera.RegisterStation(1u, hoveredIdentity, 0u);
+	camera.CycleView({}, hoveredPosition, firstPosition, hoveredIdentity, firstIdentity, true);
+
+	camera.CompleteStationObservation(1u, firstPosition);
+	for (unsigned int tick = 0u; tick < 8u; ++tick)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_FLOAT_EQ(-200.0f, camera.CurrentPose().Eye.X);
+}
+
+TEST(CameraView, StationInteriorObservesRevisionWhenStationShiftsIndex) {
+	graphics::Camera camera(graphics::CameraParams(base::MoveableParams(), 0u));
+	const auto removedIdentity = std::make_shared<int>(1);
+	const auto shiftedIdentity = std::make_shared<int>(2);
+	const utils::Position3d shiftedPosition{ 300.0f, 0.0f, 0.0f };
+	camera.RegisterStation(0u, removedIdentity, 0u);
+	camera.RegisterStation(1u, shiftedIdentity, 0u);
+	camera.CycleView({}, {}, {}, {}, {}, true);
+
+	camera.ObserveStation(0u, shiftedIdentity, 1u, shiftedPosition);
+	camera.CompleteStationObservation(1u, shiftedPosition);
+	for (unsigned int tick = 0u; tick < 8u; ++tick)
+		camera.TickBackgroundDrag(0.05f);
+	EXPECT_FLOAT_EQ(300.0f, camera.CurrentPose().Eye.X);
+}
+
+TEST(CameraView, StationResetUpdatesLoopTakeRevision) {
+	auto station = MakeTestStation("station-reset");
+	station->AddTake();
+	const auto revision = station->LoopTakeRevision();
+	station->Reset();
+	EXPECT_GT(station->LoopTakeRevision(), revision);
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	EXPECT_EQ(0u, station->NumTakes());
+	station->CommitChanges();
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	EXPECT_EQ(0u, station->NumTakes());
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {

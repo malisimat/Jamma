@@ -182,6 +182,7 @@ namespace engine
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		void UpdateCamera();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -284,7 +285,10 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
-		glm::mat4 _View();
+		// Pass a locked station list or a snapshot; remote updates can erase entries.
+		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
+		void _CycleCameraView();
+		void _ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change);
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
@@ -356,7 +360,6 @@ namespace engine
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
-		glm::mat4 _viewRotOnlyProj;
 		glm::mat4 _skyboxViewProj;
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
@@ -402,6 +405,7 @@ namespace engine
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
+		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;
