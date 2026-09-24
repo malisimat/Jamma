@@ -92,12 +92,8 @@ void GuiModel::Draw3d(DrawContext& ctx,
 	glBindVertexArray(0);
 	glUseProgram(0);
 
-	auto children = _children;
-	for (auto& child : children)
-	{
-		if (child)
-			child->Draw3d(ctx, 1, pass);
-	}
+	for (auto& child : _children)
+		child->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();

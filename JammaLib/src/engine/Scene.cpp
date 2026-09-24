@@ -1,4 +1,7 @@
+// Scene wires job/UI concerns and off-callback presentation; it does not reconstruct
+// NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
+#include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -10,17 +13,16 @@
 #include "../io/IoSessionExporter.h"
 #include "../vst/Vst3Plugin.h"
 
+using namespace engine;
 using namespace base;
 using namespace actions;
 using namespace audio;
-using namespace engine;
 using namespace gui;
 using namespace io;
 using namespace midi;
 using namespace graphics;
 using namespace resources;
 using namespace utils;
-using namespace timing;
 using namespace vst;
 using namespace ninjam;
 using namespace std::placeholders;
@@ -175,7 +177,7 @@ Scene::Scene(SceneParams params,
 		static_cast<float>(transportOffsetParams.Position.Y),
 		0.0f };
 	transportOffsetParams.Size = { 96, 64 };
-	transportOffsetParams.Min = 0.0;
+	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
 	transportOffsetParams.Step = 0.005;
 	transportOffsetParams.Decimals = 3;
@@ -254,12 +256,30 @@ void Scene::ConnectNinjam(const std::string& host)
 void Scene::ConnectNinjam(const std::string& host,
 	const ninjam::NinjamTempoJoinOptions& options)
 {
+	const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+	++_ninjamJoinGeneration;
+	if (options.PushLocalTempoOnJoin)
+		++_ninjamTempoRequestId;
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_networkService->SetTempoJoinOptions(options);
-		_networkService->PrepareTempoSyncOnConnect(_quantisation.CurrentTempoTiming(_CurrentSampleRate()));
+		_ApplyNinjamTimingUpdate(_networkService->PrepareTempoSyncOnConnect(localTiming));
 		_CloseRemoteTempoPrompt();
 	}
+	if (_loggingConfig.Event == "verbose")
+	{
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=reconnect"
+			<< " join=" << _ninjamJoinGeneration << '\n';
+		std::cout << "[NINJAM][TempoJoin] connect join=" << _ninjamJoinGeneration
+			<< " request=" << (options.PushLocalTempoOnJoin ? _ninjamTempoRequestId : 0u)
+			<< " pushLocal=" << options.PushLocalTempoOnJoin;
+		if (localTiming.has_value())
+			std::cout << " bpm=" << localTiming->Bpm << " bpi=" << localTiming->SeedCount
+				<< " interval=" << localTiming->MasterLoopSamps << " grain=" << localTiming->SeedSamps;
+		std::cout << '\n';
+	}
+	_lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
+	_LogNinjamTempoJoinState();
 	_networkService->Connect(host);
 }
 
@@ -268,17 +288,10 @@ void Scene::DisconnectNinjam()
 	{
 		std::scoped_lock lock(_sceneMutex);
 		_CloseRemoteTempoPrompt();
-		_networkService->ResetTempoSyncOnDisconnect();
-		// Publish one coherent invalidation to the shared audio-boundary command
-		// path so any Timer or take correction already published but not yet
-		// consumed cannot execute and move local-only playback after disconnect.
-		if (_audioEngine)
-		{
-			ninjam::NinjamAudioTimingCommand invalidate;
-			invalidate.Type = ninjam::NinjamTimingCommandType::Invalidate;
-			_audioEngine->PublishTimingCommand(invalidate);
-		}
+		_ApplyNinjamTimingUpdate(_networkService->ResetTempoSyncOnDisconnect());
 	}
+	if (_loggingConfig.Event == "verbose")
+		std::cout << "[NINJAM][TimingPolicy] changed policy=no-sync reason=disconnect\n";
 	_networkService->Disconnect();
 }
 
@@ -288,7 +301,7 @@ void Scene::_EnsureRemoteTempoPromptUi()
 		return;
 
 	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
-	_remoteTempoDialog->SetTitle("Remote NINJAM tempo changed");
+	_remoteTempoDialog->SetTitle("Current server tempo");
 	_remoteTempoDialog->ConfigureButtons({
 		true,
 		false,
@@ -298,36 +311,31 @@ void Scene::_EnsureRemoteTempoPromptUi()
 		0u,
 		NinjamRemoteTempoRejectControlIndex,
 		0u,
-		"Yes",
-		"No",
+		"Follow server",
+		"Stay local",
 		"Cancel",
 		"Ok"
 	});
 	_remoteTempoDialog->Init();
 }
 
-void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot)
+void Scene::_HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
+	const std::optional<engine::QuantisationTiming>& localTiming,
+	bool hasLocalContent)
 {
 	auto previous = _networkService->PendingRemoteTempoPrompt();
 	const auto liveTiming = _audioEngine->LatestNinjamTiming();
 	NinjamTiming timing = liveTiming.value_or(ToDeviceTiming(snapshot.Timing, true,
 		_CurrentSampleRate(), 0u, 0ul, 0u, 0u, 0u));
-	bool hasLocalContent = false;
-	for (const auto& station : _stations)
-		hasLocalContent = hasLocalContent || (station && !station->IsRemote() && station->NumTakes() > 0u);
 	if (auto clock = _quantisation.Clock())
 		_ApplyNinjamTimingUpdate(_networkService->ObserveTiming(timing,
-			_quantisation.CurrentTempoTiming(_CurrentSampleRate()), hasLocalContent, _userConfig, *clock));
+			localTiming, hasLocalContent, _userConfig, *clock));
 	auto current = _networkService->PendingRemoteTempoPrompt();
 
 	if (_remoteTempoDialogOpen
 		&& ((!current.has_value())
 			|| !previous.has_value()
-			|| (current->IntervalLengthSamps != previous->IntervalLengthSamps)
-			|| (current->SourceSampleRate != previous->SourceSampleRate)
-			|| (current->GrainSamps != previous->GrainSamps)
-			|| (current->Bpi != previous->Bpi)
-			|| (std::abs(current->Bpm - previous->Bpm) >= 0.01f)))
+			|| !current->HasSameProposalIdentity(previous.value())))
 	{
 		_CloseRemoteTempoPrompt();
 	}
@@ -350,8 +358,8 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 
 	_remoteTempoDialog->SetBodyLines({
 		"Tempo: " + bpmStream.str() + " BPM, " + std::to_string(change.Bpi) + " BPI",
-		"Master loop: " + std::to_string(change.IntervalLengthSamps) + " samples",
-		"Grain: " + std::to_string(change.GrainSamps) + " samples. Apply locally?"
+		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
+		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
 	_remoteTempoDialog->ResetButtonStates();
 
@@ -375,46 +383,99 @@ void Scene::_HandleRemoteTempoPromptDecision(bool accept)
 
 void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 {
-	// One coherent transport command is published to the audio callback, which
-	// consumes it once at the top of the block and applies it to the Timer and
-	// every active local take together. This removes the split-block window that
-	// separate Timer and per-take publications previously allowed.
-	ninjam::NinjamAudioTimingCommand command;
-	bool hasCommand = false;
-
-	if (update.ClockSettings.has_value())
+	if (update.DesiredTransport.has_value())
 	{
-		const auto& settings = update.ClockSettings.value();
-		command.Type = ninjam::NinjamTimingCommandType::ReplaceTiming;
-		command.Generation = settings.Generation;
-		command.SeedLengthSamps = settings.SeedLengthSamps;
-		command.QuantiseSamps = settings.QuantiseSamps;
-		command.Quantisation = settings.Quantisation;
-		command.AbsolutePhaseSamps = settings.PhaseSamps;
-		command.PhaseObservationSample = settings.AudioBlockStartSample;
-		hasCommand = true;
-		_quantisation.SetMidiGrain(settings.QuantiseSamps, "remote tempo", _stations);
+		const auto& desired = update.DesiredTransport.value();
+		if (_loggingConfig.Event == "verbose" && desired.HasRemoteTiming)
+		{
+			std::cout << "[NINJAM][TimingPolicy] determined policy="
+				<< ninjam::NinjamTimingCoordinator::FollowPolicyName(desired.LocalFollowPolicy)
+				<< " remoteBpm=" << desired.TempoBpm
+				<< " generation=" << desired.Generation
+				<< " remotePhaseDeviceSample=" << desired.RemotePhaseDeviceSample << '\n';
+		}
+		if (update.RemoteGrid.has_value())
+			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
+				update.RemoteGrid->OriginSamps, _stations);
+		if (_audioEngine)
+			_audioEngine->PublishDesiredTiming(desired);
+		if (_loggingConfig.Event == "verbose"
+			&& desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync
+			&& update.NoSyncReason == ninjam::NinjamNoSyncReason::StayLocal)
+		{
+			std::cout << "[NINJAM][TimingPolicy] determined policy=no-sync reason=stay-local\n";
+		}
 	}
-	else if (update.PhaseCorrection.has_value())
-	{
-		const auto& correction = update.PhaseCorrection.value();
-		command.Type = correction.IsJoin ? ninjam::NinjamTimingCommandType::JoinAlignment
-			: ninjam::NinjamTimingCommandType::PhaseDiscipline;
-		command.Generation = correction.Generation;
-		command.PhaseDeltaSamps = correction.DeltaSamps;
-		hasCommand = true;
-	}
-	else if (update.InvalidatePendingCorrections)
-	{
-		command.Type = ninjam::NinjamTimingCommandType::Invalidate;
-		hasCommand = true;
-	}
-
-	if (hasCommand && _audioEngine)
-		_audioEngine->PublishTimingCommand(command);
 
 	if (update.TempoRequest.has_value())
 		_networkService->SendTempoRequest(update.TempoRequest.value());
+	_LogNinjamTempoJoinState();
+}
+
+void Scene::_LogNinjamTempoJoinState()
+{
+	if (_loggingConfig.Event != "verbose")
+		return;
+	const auto state = _networkService->TempoJoinRequestState();
+	if (state == _lastLoggedTempoRequestState)
+		return;
+
+	_lastLoggedTempoRequestState = state;
+	const char* name = "idle";
+	switch (state)
+	{
+	case ninjam::TempoRequestState::Queued: name = "queued"; break;
+	case ninjam::TempoRequestState::SentAwaitingOutcome: name = "awaiting-server-observation"; break;
+	case ninjam::TempoRequestState::Acknowledged: name = "acknowledged"; break;
+	case ninjam::TempoRequestState::Expired: name = "expired-unknown"; break;
+	default: break;
+	}
+	const auto diagnostics = _networkService->TimingDiagnostics();
+	std::cout << "[NINJAM][TempoJoin] state join=" << _ninjamJoinGeneration
+		<< " request=" << _ninjamTempoRequestId
+		<< " value=" << name
+		<< " sent=" << diagnostics.TempoRequestsSent
+		<< " retries=" << diagnostics.TempoRequestRetries
+		<< " acknowledged=" << diagnostics.TempoAcknowledged
+		<< " expired=" << diagnostics.TempoRequestsExpired << '\n';
+}
+
+void Scene::_LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics)
+{
+	if (_loggingConfig.Event != "verbose")
+		return;
+
+	const auto present = [this](const ninjam::NinjamTimingDiagnosticEvent& event)
+	{
+		std::cout << "[NINJAM][TimingDiagnostic] reason="
+			<< ninjam::NinjamTimingCoordinator::DiagnosticReasonName(event.Reason)
+			<< " sessionEpoch=" << event.SessionEpoch
+			<< " appliedSessionEpoch=" << event.AppliedSessionEpoch
+			<< " desiredVersion=" << event.DesiredVersion
+			<< " appliedVersion=" << event.AppliedVersion
+			<< " generation=" << event.Generation
+			<< " value=" << event.ValueSamps
+			<< " limit=" << event.LimitSamps
+			<< " occurrences=" << event.OccurrenceCount
+			<< " cumulativeSuppressed=" << event.CumulativeSuppressedCount << '\n';
+		_lastPresentedNinjamDiagnosticSequence = event.Sequence;
+	};
+
+	for (auto eventIndex = 0u; eventIndex < diagnostics.CapturedEventCount; ++eventIndex)
+	{
+		const auto& event = diagnostics.Events[eventIndex];
+		if (event.Sequence > _lastPresentedNinjamDiagnosticSequence)
+			present(event);
+	}
+	if (diagnostics.LatestEvent.Sequence > _lastPresentedNinjamDiagnosticSequence)
+		present(diagnostics.LatestEvent);
+	if (diagnostics.EventOverflowSummaryCount > _lastPresentedNinjamDiagnosticOverflowCount)
+	{
+		std::cout << "[NINJAM][TimingDiagnostic] overflowSummary="
+			<< diagnostics.EventOverflowSummaryCount
+			<< " overflowTotal=" << diagnostics.EventOverflowCount << '\n';
+		_lastPresentedNinjamDiagnosticOverflowCount = diagnostics.EventOverflowSummaryCount;
+	}
 }
 
 void Scene::_CloseRemoteTempoPrompt()
@@ -489,6 +550,18 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
 							trigger.value());
 					station.value()->AddTrigger(trigger.value());
+					std::vector<TriggerTake> triggerHistory;
+					triggerHistory.reserve(stationStruct.TriggerHistory.size());
+					for (const auto& entry : stationStruct.TriggerHistory)
+					{
+						auto sourceType = TriggerTake::SOURCE_ADC;
+						if (entry.SourceType == 1u)
+							sourceType = TriggerTake::SOURCE_LOOPTAKE;
+						else if (entry.SourceType == 2u)
+							sourceType = TriggerTake::SOURCE_STATION;
+						triggerHistory.push_back({ sourceType, entry.SourceTakeId, entry.TargetTakeId });
+					}
+					trigger.value()->RestoreTakes(std::move(triggerHistory));
 					hudTriggers.push_back(trigger.value());
 				}
 			}
@@ -500,15 +573,45 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+	if (scene->_stations.empty())
+	{
+		std::cout << "Load: no constructible stations" << std::endl;
+		return std::nullopt;
+	}
 
 	if (scene->_hudPanel)
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
 
-	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+	if (!jamStruct.TransportInitialised)
+	{
+		// No local geometry was saved. The first completed recording seeds the
+		// clock from its physical length under the active user timing policy.
+		scene->_quantisation.Clear(false);
+	}
+	else
+	{
+		scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
+		if (jamStruct.Version == io::JamFile::VERSION_V)
+		{
+			auto clock = scene->_quantisation.Clock();
+			if (!clock || jamStruct.MasterLengthSamps == 0ul)
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
+			clock->SetSeedSourceLength(jamStruct.MasterLengthSamps);
+			if (!clock->InitialiseAbsoluteSamplePos(jamStruct.AbsoluteSamplePos))
+			{
+				std::cout << "Load: invalid local transport state" << std::endl;
+				return std::nullopt;
+			}
+		}
+	}
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
-	scene->_networkService->GetController()->LoadConfig(jamStruct.Ninjam);
+	// Saved sessions always start locally.  NINJAM config/anchors are live
+	// connection state and are intentionally never restored from a .jam.
 	scene->InitReceivers();
 
 	return scene;
@@ -1106,7 +1209,7 @@ ActionResult Scene::OnAction(KeyAction action)
 void Scene::_HandleReclockArm()
 {
 	std::cout << ">> Reclock armed (Ctrl+Shift+R) <<" << std::endl;
-	_quantisation.ArmReclock();
+	_quantisation.ArmReclock(_stations);
 	_quantisation.SetMidiGrain(0u, "reclock arm", _stations);
 }
 
@@ -1244,7 +1347,6 @@ void Scene::OnTick(Time curTime,
 		clock->Tick(samps, 0u);
 	}
 
-	unsigned int totalNumLoops = 0u;
 	const auto stationsSnapshot = _audioEngine->GetStationsSnapshot();
 	static const std::vector<std::shared_ptr<Station>> emptyStations;
 	const auto& stations = stationsSnapshot ? *stationsSnapshot : emptyStations;
@@ -1256,14 +1358,6 @@ void Scene::OnTick(Time curTime,
 			samps,
 			_userConfig,
 			streamParams);
-
-		totalNumLoops += station->NumTakes();
-	}
-
-	if ((0u == totalNumLoops) && !_isSceneReset.load(std::memory_order_relaxed))
-	{
-		_ClearTimingState(false);
-		_isSceneReset.store(true, std::memory_order_relaxed);
 	}
 }
 
@@ -1272,14 +1366,40 @@ void Scene::OnJobTick(Time curTime)
 	_PumpMidi();
 	_PumpSerial();
 
-	auto snapshot = _networkService->GetController()->Pump();
+	auto pumpResult = _networkService->GetController()->Pump();
 	{
 		// Always sync the station clock state to the scene-level quantisation.
 		// This ensures that when the first loop seeds the station clock locally
 		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
 		std::scoped_lock lock(_sceneMutex);
-		if (snapshot.has_value())
-			_HandleRemoteTempoSnapshot(snapshot.value());
+		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
+		bool hasLocalContent = false;
+		for (const auto& station : _stations)
+		{
+			if (!station || station->IsRemote())
+				continue;
+			hasLocalContent = !station->GetLoopTakeSnapshot().empty();
+			if (hasLocalContent)
+				break;
+		}
+		if (pumpResult.TimingStatus.Changed)
+		{
+			_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(
+				pumpResult.TimingStatus, localTiming));
+			if (!pumpResult.TimingStatus.IsAvailable)
+				_UpdateRemoteStationsFromSnapshot({});
+		}
+		if (pumpResult.Snapshot.has_value())
+			_HandleRemoteTempoSnapshot(pumpResult.Snapshot.value(), localTiming, hasLocalContent);
+		else if (auto clock = _quantisation.Clock())
+			_ApplyNinjamTimingUpdate(_networkService->TickTiming(
+				localTiming, hasLocalContent, *clock));
+		if (_loggingConfig.Event == "verbose" && _audioEngine)
+		{
+			_LogNinjamTimingDiagnostics(_networkService->ObserveAppliedTimingReceipt(
+				_audioEngine->LastAppliedDesiredTiming()));
+		}
+		_HandleAudioLocalContentState(hasLocalContent);
 	}
 
 	actions::JobAction job;
@@ -1490,6 +1610,8 @@ void Scene::InitAudio()
 void Scene::SetLogging(io::LoggingConfig config) noexcept
 {
 	_loggingConfig = config;
+	if (_networkService)
+		_networkService->SetTimingDiagnosticsEnabled(_loggingConfig.Event == "verbose");
 	if (_inputSubsystem)
 		_inputSubsystem->SetLogging(_loggingConfig);
 	if (_windowSubsystem)
@@ -1506,6 +1628,18 @@ void Scene::CloseAudio()
 	CloseSerial();
 	CloseMidi();
 	_audioEngine->Close();
+}
+
+bool Scene::PauseAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Pause();
+}
+
+bool Scene::ResumeAudio()
+{
+	auto* device = _audioEngine ? _audioEngine->GetDevice() : nullptr;
+	return device && device->Resume();
 }
 
 bool Scene::InitGlobalKeyCapture()
@@ -1526,17 +1660,37 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 void Scene::Shutdown()
 {
 	_isSceneQuitting.store(true, std::memory_order_release);
+	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
+	// closing an editor or releasing a plugin: the callback can be dispatching
+	// VST processing, MIDI, or recorded parameter automation.
+	CloseAudio();
+	CloseAllVstEditorWindows();
+
 	if (_jobRunner.joinable())
 		_jobRunner.join();
+
+	// No work from the outgoing session may survive a session replacement.
+	// In particular, queued VST loads retain UI-thread-created plugin objects;
+	// hand those objects back to the UI destroy queue before dropping the jobs.
+	std::list<actions::JobAction> abandonedJobs;
+	// The consumer thread is joined and Shutdown is called by the UI owner, so
+	// there can be no concurrent queue reader or producer at this point.
+	abandonedJobs.swap(_jobList);
+	for (auto& job : abandonedJobs)
+	{
+		if (job.PreInitPlugin)
+			vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
+	}
 
 	ForceUnloadAllVstPlugins();
 
 	CloseGlobalKeyCapture();
-	CloseAudio();
 }
 
 void Scene::ForceUnloadAllVstPlugins()
 {
+	// Shutdown() stops the audio device before reaching here.  Releasing a VST
+	// while its callback may call SetParameter/ProcessBlock is not safe.
 	std::scoped_lock lock(_sceneMutex);
 	for (auto& station : _stations)
 	{
@@ -2113,7 +2267,7 @@ void Scene::_SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state, bo
 
 void Scene::_SetTransportOffsetLoopFrac(double loopFrac, bool updateInput)
 {
-	loopFrac = utils::NormalizeLoopFraction(loopFrac);
+	loopFrac = std::isfinite(loopFrac) ? std::clamp(loopFrac, -1.0, 1.0) : 0.0;
 	const auto previousLoopFrac = _transportOffsetLoopFrac;
 	_transportOffsetLoopFrac = loopFrac;
 
@@ -2188,19 +2342,52 @@ void Scene::_EndBackgroundDrag()
 
 void Scene::_ClearTimingState(bool clearTapTempo)
 {
-	_quantisation.Clear(clearTapTempo, _networkService->HasConnectedTiming());
-	_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+	const auto hasConnectedTiming = _networkService->HasConnectedTiming();
+	_quantisation.Clear(clearTapTempo, hasConnectedTiming);
+	if (!hasConnectedTiming)
+		_quantisation.SetMidiGrain(0u, "timing clear", _stations);
+}
+
+void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
+{
+	if (hasLocalContent)
+		return;
+
+	// A connected empty scene still follows the accepted remote transport. Keep
+	// the edge armed so a later physical-loss visit can clear local timing once.
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+
+	if (_isSceneReset.exchange(true, std::memory_order_relaxed))
+		return;
+
+	// No local takes remain, so there is no station hierarchy to update. Keep
+	// the destructive Quantiser cleanup on this job-owned edge and off OnTick.
+	_quantisation.Clear(false);
 }
 
 void Scene::_ResetIfEmpty()
 {
 	if (_isSceneReset.load(std::memory_order_relaxed))
 		return;
-	unsigned int total = 0u;
-	for (const auto& s : _stations)
-		total += s->NumTakes();
-	if (0u == total)
-		Reset();
+	for (const auto& station : _stations)
+	{
+		if (station && !station->IsRemote()
+			&& !station->GetLoopTakeSnapshot().empty())
+		{
+			return;
+		}
+	}
+
+	if (_networkService->HasConnectedTiming())
+	{
+		_isSceneReset.store(false, std::memory_order_relaxed);
+		return;
+	}
+	Reset();
 }
 
 void Scene::_JobLoop()

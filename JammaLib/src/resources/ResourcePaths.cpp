@@ -6,21 +6,18 @@
 
 namespace resources
 {
-	namespace
+	static bool FileExists(const std::string& path)
 	{
-		bool FileExists(const std::string& path)
-		{
-			std::ifstream file(path.c_str(), std::ios::binary);
-			return file.good();
-		}
+		std::ifstream file(path.c_str(), std::ios::binary);
+		return file.good();
+	}
 
-		std::vector<std::string> BuildSearchRoots()
-		{
-			return {
-				"resources/",
-				"Jamma/resources/"
-			};
-		}
+	static std::vector<std::string> BuildSearchRoots()
+	{
+		return {
+			"resources/",
+			"Jamma/resources/"
+		};
 	}
 
 	std::string ResolveResourcePath(const std::string& relativePath)

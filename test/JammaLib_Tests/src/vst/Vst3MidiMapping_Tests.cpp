@@ -9,13 +9,10 @@ using vst::Vst3MidiMapping::PitchBendControllerNumber;
 using vst::Vst3MidiMapping::TryClassify;
 using vst::Vst3MidiMapping::TryLookup;
 
-namespace
+static midi::MidiEvent MakeEvent(std::uint8_t status, std::uint8_t channel,
+	std::uint8_t data1, std::uint8_t data2)
 {
-	midi::MidiEvent MakeEvent(std::uint8_t status, std::uint8_t channel,
-		std::uint8_t data1, std::uint8_t data2)
-	{
-		return { 0u, static_cast<std::uint8_t>(status | channel), data1, data2, 0u };
-	}
+	return { 0u, static_cast<std::uint8_t>(status | channel), data1, data2, 0u };
 }
 
 TEST(Vst3MidiMapping, ClassifiesSupportedControllers)

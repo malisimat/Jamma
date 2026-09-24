@@ -128,6 +128,31 @@ namespace midi
 	public:
 		static constexpr std::size_t DefaultCapacity = 4096;
 		static constexpr std::size_t TotalNoteSlots = 16u * 128u; // channel * note
+		static constexpr std::size_t MaxAutomationLanes = 8u;
+		struct AutomationLaneExport
+		{
+			// Deliberately contains no TargetPlugin pointer.  The owning Station
+			// resolves that runtime identity after its VST chain has loaded.
+			std::uint32_t MatchKey = AutomationMapping::kInactive;
+			unsigned int TargetParameterIndex = 0u;
+		// Transient identity at the export boundary. The sidecar receives an
+		// explicit owner scope and plugin index, never this raw pointer.
+			const vst::IVstPlugin* TargetPlugin = nullptr;
+			std::array<std::pair<float, float>, AutomationLane::MaxPoints> Points{};
+			std::size_t PointCount = 0u;
+		};
+
+		// Fixed-size transfer object for the lossless native MIDI sidecar.  It is
+		// intentionally bounded by the runtime capacities so malformed input cannot
+		// request additional event or automation storage during restoration.
+		struct ExportState
+		{
+			std::array<MidiEvent, DefaultCapacity> Events{};
+			std::size_t EventCount = 0u;
+			std::uint32_t LoopLengthSamps = 0u;
+			std::uint32_t AutomationGlobalSampleOrigin = 0u;
+			std::array<AutomationLaneExport, MaxAutomationLanes> AutomationLanes{};
+		};
 
 	private:
 		struct QuantisedEventBuffer
@@ -162,6 +187,20 @@ namespace midi
 		// used by automation dispatch to compute loop-relative fracs correctly.
 		void EndRecord(std::uint32_t loopLengthSamps, std::uint32_t startGlobalSample = 0u);
 		void Reset() noexcept;
+		// Non-RT save/load transfer. Call SnapshotForExport only at an established
+		// quiescent scene boundary: event storage has a single MIDI-writer owner.
+		// Automation points use their bounded lane seqlock and return false rather
+		// than exposing a torn lane. anchorCorrection is folded into the exported
+		// origin so restored takes can begin with correction zero.
+		bool SnapshotForExport(ExportState& state,
+			std::int32_t anchorCorrection = 0) const noexcept;
+		// Restores raw event order exactly; unlike ReplaceRecordedEvents this does
+		// not sort simultaneous events. Runtime plugin pointers are deliberately
+		// cleared and must be rebound by the Station after VST resolution.
+		bool RestoreFromExport(const ExportState& state) noexcept;
+		// Bind a resolved runtime plugin after restoring a pointer-free lane DTO.
+		bool BindAutomationLaneTarget(std::size_t laneIdx,
+			vst::IVstPlugin* plugin) noexcept;
 
 		// Play any events that fall within [globalSample, globalSample + numSamples).
 		// Time mapping: loopOffset = globalSample % LoopLengthSamps().
@@ -178,9 +217,9 @@ namespace midi
 		std::uint32_t LoopLengthSamps() const noexcept { return _loopLengthSamps; }
 		// Global sample that maps to loop-relative position 0.  Frozen at EndRecord.
 		// Use to convert a global sample counter into a loop-relative frac:
-		//   frac = (globalSample - LoopPhaseAnchor() - correction) % loopLen / loopLen
+		//   frac = (globalSample - AutomationGlobalSampleOrigin() - correction) % loopLen / loopLen
 		// where correction is the transport re-anchor delta held externally on LoopTake.
-		std::uint32_t LoopPhaseAnchor() const noexcept { return _loopPhaseAnchor; }
+		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept { return _revision; }
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
@@ -194,8 +233,6 @@ namespace midi
 		static constexpr std::size_t Capacity() noexcept { return DefaultCapacity; }
 
 		// --- Parameter automation lanes ---
-		static constexpr std::size_t MaxAutomationLanes = 8u;
-
 		AutomationLane& GetLane(std::size_t idx) noexcept { return _lanes[idx]; }
 		const AutomationLane& GetLane(std::size_t idx) const noexcept { return _lanes[idx]; }
 
@@ -261,7 +298,8 @@ namespace midi
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
 		// buffers are not overwritten or freed until this MidiLoop is destroyed, so
 		// ReadBlock never touches shared ownership or dangling storage.
-		void SetQuantisation(const MidiQuantisationSettings& settings);
+		void SetQuantisation(const MidiQuantisationSettings& settings,
+			std::uint64_t transportStartSamps = 0u);
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
 		bool IsQuantisationActive() const noexcept { return nullptr != _quantisedEvents.load(std::memory_order_acquire); }
 
@@ -317,7 +355,7 @@ namespace midi
 		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
 		// playback does not yet account for this take's VST chain latency -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
-		std::uint32_t _loopPhaseAnchor;
+		std::uint32_t _automationGlobalSampleOrigin;
 		std::uint64_t _dropped;
 		std::uint64_t _revision;
 		std::uint64_t _modelRevision;
@@ -326,6 +364,7 @@ namespace midi
 		std::bitset<TotalNoteSlots> _held;
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		MidiQuantisationSettings _quantisation;
+		std::uint64_t _quantisationTransportStartSamps = 0u;
 		std::array<AutomationLane, MaxAutomationLanes> _lanes{};
 	};
 }

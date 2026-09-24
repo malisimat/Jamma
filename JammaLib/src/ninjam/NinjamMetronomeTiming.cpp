@@ -8,7 +8,7 @@
 #include "NinjamMetronomeTiming.h"
 
 #include <algorithm>
-#include <cmath>
+#include <cstdint>
 
 using namespace ninjam;
 
@@ -17,58 +17,64 @@ NinjamMetronomeTimingResult NinjamMetronomeTiming::Compute(const NinjamMetronome
 {
 	NinjamMetronomeTimingResult result;
 
-	if (input.intervalLengthSamps == 0u || input.bpm <= 0.0f || input.bpi == 0u
-		|| input.deviceSampleRate == 0u || input.numFrames == 0u)
+	if (input.IntervalLengthSamps == 0u || input.Bpi == 0u || input.NumFrames == 0u)
 	{
-		state.primed = false;
+		state.Primed = false;
 		return result;
 	}
 
-	const auto generationChanged = !state.primed
-		|| state.intervalLengthSamps != input.intervalLengthSamps
-		|| state.bpm != input.bpm
-		|| state.bpi != input.bpi
-		|| state.deviceSampleRate != input.deviceSampleRate;
+	const auto generationChanged = !state.Primed
+		|| state.IntervalLengthSamps != input.IntervalLengthSamps
+		|| state.Bpi != input.Bpi;
 
-	state.primed = true;
-	state.intervalLengthSamps = input.intervalLengthSamps;
-	state.bpm = input.bpm;
-	state.bpi = input.bpi;
-	state.deviceSampleRate = input.deviceSampleRate;
+	state.Primed = true;
+	state.IntervalLengthSamps = input.IntervalLengthSamps;
+	state.Bpm = input.Bpm;
+	state.Bpi = input.Bpi;
+	state.DeviceSampleRate = input.DeviceSampleRate;
 
-	result.valid = true;
-	result.generationReset = generationChanged;
+	result.Valid = true;
+	result.GenerationReset = generationChanged;
 
-	const auto phaseStart = static_cast<double>(input.intervalPositionSamps)
-		+ static_cast<double>(input.outputLatencySamps);
-	const auto phaseEnd = phaseStart + static_cast<double>(input.numFrames - 1u);
-	const auto samplesPerBeat = static_cast<double>(input.deviceSampleRate) * 60.0
-		/ static_cast<double>(input.bpm);
+	// The interval is the authoritative remote timing geometry applied to local
+	// loops.  Derive every beat from it rather than from the separately reported
+	// BPM, which can briefly be stale while the server applies a tempo change.
+	const auto phaseStart = static_cast<std::uint64_t>(input.IntervalPositionSamps)
+		+ input.OutputLatencySamps;
+	const auto phaseEnd = phaseStart + input.NumFrames - 1u;
+	const auto intervalLength = static_cast<std::uint64_t>(input.IntervalLengthSamps);
+	const auto bpi = static_cast<std::uint64_t>(input.Bpi);
 
-	if (!std::isfinite(samplesPerBeat) || samplesPerBeat <= 0.0)
-	{
-		result.valid = false;
-		result.onsetCount = 0u;
-		return result;
-	}
-
-	const auto addOnsets = [&result, phaseStart, phaseEnd](double spacing, bool accent) {
-		constexpr double phaseEpsilon = 1e-9;
-		auto boundary = std::ceil((phaseStart - phaseEpsilon) / spacing) * spacing;
-		while (boundary <= phaseEnd + phaseEpsilon
-			&& result.onsetCount < NinjamMetronomeTimingResult::MaxOnsets)
+	const auto addBeatOnsets = [&result, phaseStart, phaseEnd, intervalLength, bpi]() {
+		auto beat = (phaseStart * bpi + intervalLength - 1u) / intervalLength;
+		while (result.OnsetCount < NinjamMetronomeTimingResult::MaxOnsets)
 		{
-			const auto offset = static_cast<unsigned int>(std::ceil(boundary - phaseStart));
-			result.onsets[result.onsetCount++] = { offset, accent };
-			boundary += spacing;
+			const auto boundary = (beat * intervalLength) / bpi;
+			if (boundary > phaseEnd)
+				break;
+			result.Onsets[result.OnsetCount++] = {
+				static_cast<unsigned int>(boundary - phaseStart), false };
+			++beat;
+		}
+	};
+	const auto addIntervalAccents = [&result, phaseStart, phaseEnd, intervalLength]() {
+		auto interval = (phaseStart + intervalLength - 1u) / intervalLength;
+		while (result.OnsetCount < NinjamMetronomeTimingResult::MaxOnsets)
+		{
+			const auto boundary = interval * intervalLength;
+			if (boundary > phaseEnd)
+				break;
+			result.Onsets[result.OnsetCount++] = {
+				static_cast<unsigned int>(boundary - phaseStart), true };
+			++interval;
 		}
 	};
 
-	addOnsets(samplesPerBeat, false);
-	addOnsets(static_cast<double>(input.intervalLengthSamps), true);
-	std::sort(result.onsets.begin(), result.onsets.begin() + result.onsetCount,
+	addBeatOnsets();
+	addIntervalAccents();
+	std::sort(result.Onsets.begin(), result.Onsets.begin() + result.OnsetCount,
 		[](const NinjamMetronomeOnset& left, const NinjamMetronomeOnset& right) {
-			return left.offset < right.offset;
+			return left.Offset < right.Offset;
 		});
 
 	return result;

@@ -1,9 +1,11 @@
+// Timer advances local master transport only; remote policy belongs to NINJAM and
+// per-entity phase remains below AudioHost in the engine hierarchy.
 #include "Timer.h"
 
 using namespace utils;
 
 Timer::Timer() :
-	_loopCount(0ul),
+	_loopCount(0u),
 	_sampOffset(0u),
 	_quantiseSamps(0u),
 	_seedSourceLengthSamps(0ul),
@@ -40,17 +42,19 @@ double Timer::GetElapsedSeconds(Time t1, Time t2)
 void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
 	(void)loopCountIncrement;
+	_sceneSamplePos.fetch_add(sampsIncrement, std::memory_order_relaxed);
 
 	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
 	if (0ul == loopLength)
 		return;
 
-	const auto sampleOffset = static_cast<unsigned long>(_sampOffset.load(std::memory_order_relaxed));
-	const auto totalSamps = sampleOffset + static_cast<unsigned long>(sampsIncrement);
-	const auto wraps = totalSamps / loopLength;
-	const auto next = totalSamps % loopLength;
+	const auto sampleOffset = static_cast<std::uint64_t>(_sampOffset.load(std::memory_order_relaxed));
+	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
+	const auto totalSamps = sampleOffset + static_cast<std::uint64_t>(sampsIncrement);
+	const auto wraps = totalSamps / wideLoopLength;
+	const auto next = totalSamps % wideLoopLength;
 
-	if (wraps > 0ul)
+	if (wraps > 0u)
 		_loopCount.fetch_add(wraps, std::memory_order_relaxed);
 
 	_sampOffset.store(static_cast<unsigned int>(next), std::memory_order_relaxed);
@@ -61,7 +65,7 @@ void Timer::Clear()
 	_quantiseSamps.store(0u, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);
-	_loopCount.store(0ul, std::memory_order_release);
+	_loopCount.store(0u, std::memory_order_release);
 }
 
 bool Timer::IsQuantisable() const
@@ -75,7 +79,7 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 	_quantiseSamps.store(quantiseSamps, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);
-	_loopCount.store(0ul, std::memory_order_release);
+	_loopCount.store(0u, std::memory_order_release);
 	_quantisation.store(quantisation, std::memory_order_release);
 }
 
@@ -92,6 +96,19 @@ void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
 	if (sampleOffset >= loopLengthSamps)
 		sampleOffset %= loopLengthSamps;
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
+}
+
+bool Timer::InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcept
+{
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	if (loopLength == 0ul)
+		return false;
+
+	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
+	_loopCount.store(absoluteSamplePos / wideLoopLength, std::memory_order_release);
+	_sampOffset.store(static_cast<unsigned int>(absoluteSamplePos % wideLoopLength),
+		std::memory_order_release);
+	return true;
 }
 
 void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
@@ -119,6 +136,52 @@ void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
 		sampleOffset = loopLength - 1ul;
 
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
+}
+
+MusicalPosition Timer::LocalMusicalPosition(unsigned int sampleRate) const noexcept
+{
+	const auto masterLength = SeedSourceLength();
+	const auto samplesPerBeat = QuantiseSamps();
+	if (masterLength == 0ul || samplesPerBeat == 0u || sampleRate == 0u
+		|| masterLength % samplesPerBeat != 0ul)
+		return {};
+
+	const auto beatsPerInterval = static_cast<std::int32_t>(masterLength / samplesPerBeat);
+	const auto phase = static_cast<unsigned long>(SampOffset()) % masterLength;
+	return { true, false, static_cast<double>(LoopCount()) * beatsPerInterval
+		+ static_cast<double>(phase) / samplesPerBeat,
+		60.0 * sampleRate / samplesPerBeat, beatsPerInterval };
+}
+
+MusicalPosition Timer::CurrentMusicalPosition(unsigned int sampleRate) const noexcept
+{
+	return _musicalTransport.PositionAt(SceneSamplePos(), LocalMusicalPosition(sampleRate));
+}
+
+void Timer::ReanchorMusicalTransport(std::uint64_t sceneCoordinateSamps,
+	std::uint64_t remotePhaseSamps, std::uint64_t intervalLengthSamps,
+	unsigned int beatsPerInterval, double tempo, unsigned int sampleRate) noexcept
+{
+	_musicalTransport.QueueExternal(sceneCoordinateSamps, remotePhaseSamps, intervalLengthSamps,
+		beatsPerInterval, tempo, CurrentMusicalPosition(sampleRate), QuantiseSamps());
+}
+
+void Timer::ReanchorMusicalTransportCurrentGeometry(std::uint64_t sceneCoordinateSamps,
+	std::uint64_t remotePhaseSamps, unsigned int sampleRate) noexcept
+{
+	const auto current = CurrentMusicalPosition(sampleRate);
+	_musicalTransport.QueueExternal(sceneCoordinateSamps, remotePhaseSamps, SeedSourceLength(),
+		static_cast<unsigned int>(current.BeatsPerInterval), current.Tempo, current, QuantiseSamps());
+}
+
+void Timer::AdvanceMusicalTransport() noexcept
+{
+	_musicalTransport.Advance(SceneSamplePos());
+}
+
+void Timer::ResetMusicalTransport() noexcept
+{
+	_musicalTransport.Reset();
 }
 
 void Timer::PublishCommand(const Command& command) noexcept
@@ -163,7 +226,7 @@ bool Timer::ApplyCommand(const Command& command) noexcept
 		return true;
 	}
 
-	if (command.Generation == 0u || command.Generation < _audioGeneration)
+	if (command.Generation == 0u || command.Generation <= _audioGeneration)
 		return true;
 
 	_audioGeneration = command.Generation;
@@ -175,7 +238,7 @@ bool Timer::ApplyCommand(const Command& command) noexcept
 		const auto offset = command.SeedLengthSamps == 0ul ? 0ul :
 			static_cast<unsigned long>(command.PhaseDeltaSamps) % command.SeedLengthSamps;
 		_sampOffset.store(static_cast<unsigned int>(offset), std::memory_order_relaxed);
-		_loopCount.store(0ul, std::memory_order_relaxed);
+		_loopCount.store(0u, std::memory_order_relaxed);
 		return true;
 	}
 

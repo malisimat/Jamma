@@ -29,15 +29,26 @@ void NinjamController::SetAudioFormat(unsigned int sampleRate,
 	_session.SetAudioFormat(sampleRate, blockSize, numInputChannels, numOutputChannels, inLatencySamps, outLatencySamps);
 }
 
-std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::Pump()
+NinjamSessionPumpResult NinjamController::Pump()
 {
-	auto snapshot = _session.Pump();
-	if (snapshot.has_value())
+	auto result = _session.Pump();
+	ApplySessionPumpResult(result);
+	return result;
+}
+
+void NinjamController::ApplySessionPumpResult(const NinjamSessionPumpResult& result)
+{
+	if (result.TimingStatus.Changed && !result.TimingStatus.IsAvailable)
 	{
 		std::scoped_lock lock(_pendingSnapshotMutex);
-		_pendingSnapshot = snapshot;
+		_pendingSnapshot.reset();
+		return;
 	}
-	return snapshot;
+	if (result.Snapshot.has_value())
+	{
+		std::scoped_lock lock(_pendingSnapshotMutex);
+		_pendingSnapshot = result.Snapshot;
+	}
 }
 
 std::optional<ninjam::NinjamRemoteSnapshot> NinjamController::TakePendingSnapshot()
@@ -84,30 +95,24 @@ void NinjamController::Stop()
 	_pendingSnapshot.reset();
 }
 
-void NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
+NinjamRemoteTiming NinjamController::ProcessExportBlock(const float* interleavedDacOutput,
 	unsigned int numDacChannels,
 	const float* interleavedAdcInput,
 	unsigned int numAdcChannels,
 	unsigned int numFrames,
-	unsigned int sampleRate)
+	unsigned int sampleRate,
+	std::uint64_t audioBlockStartSample)
 {
-	_session.ProcessExportBlock(interleavedDacOutput,
+	return _session.ProcessExportBlock(interleavedDacOutput,
 		numDacChannels,
 		interleavedAdcInput,
 		numAdcChannels,
 		numFrames,
-		sampleRate);
+		sampleRate,
+		audioBlockStartSample);
 }
 
-NinjamRemoteTiming NinjamController::GetLiveTiming() const noexcept
+NinjamConnectionUse NinjamController::AcquireConnectionUse() const noexcept
 {
-	return _session.GetLiveTiming();
-}
-
-bool NinjamController::ConsumeStereoPair(unsigned int outChannelLeft,
-	const float*& left,
-	const float*& right,
-	unsigned int& numFrames) const
-{
-	return _session.ConsumeStereoPair(outChannelLeft, left, right, numFrames);
+	return NinjamConnectionUse(_session);
 }

@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio-callback boundary: applies complete published state, owns Timer/map updates,
+// and fans policy-neutral operations to entities that retain their own cursors.
+
 #include <array>
 #include <memory>
 #include <vector>
@@ -16,10 +19,13 @@
 #include "../ninjam/NinjamController.h"
 #include "../ninjam/NinjamTimingObservationMailbox.h"
 #include "../ninjam/NinjamAudioTimingCommand.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 
 namespace audio
 {
+	class NinjamAudioBoundaryTestAccess;
+
 	class AudioHost
 	{
 	public:
@@ -56,17 +62,9 @@ namespace audio
 		{
 			return _ninjamTimingMailbox.ReadLatest();
 		}
-		// Job thread publishes one coherent transport command; the audio callback
-		// consumes it once at the top of the block and applies it to the Timer and
-		// every active local take together.
-		void PublishTimingCommand(const ninjam::NinjamAudioTimingCommand& command) noexcept
-		{
-			_ninjamTimingCommandMailbox.Publish(command);
-		}
-		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
-		{
-			_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
-		}
+		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
+		std::optional<ninjam::NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
+		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
 		// Shares the master transport clock so the audio callback can apply unified
 		// timing commands to it at the same boundary as the local takes.
 		void SetTimingClock(std::shared_ptr<utils::Timer> clock) noexcept
@@ -79,6 +77,32 @@ namespace audio
 		}
 
 	private:
+		friend class NinjamAudioBoundaryTestAccess;
+		// AudioHost exclusively owns this local-only single-writer/single-reader
+		// handoff. Publications coalesce to the latest absolute target, including zero.
+		class LocalTransportOffsetLoopFracMailbox
+		{
+		public:
+			void Publish(double normalizedLoopFrac) noexcept;
+			std::optional<double> ConsumeLatest() noexcept;
+
+		private:
+			static constexpr unsigned int _MaxReadAttempts = 4u;
+			std::atomic<std::uint64_t> _sequence{ 0u };
+			std::atomic_bool _hasPublication{ false };
+			std::atomic<double> _normalizedLoopFrac{ 0.0 };
+			std::uint64_t _consumedSequence = 0u;
+		};
+
+		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
+			unsigned int sampleRate) noexcept;
+		void ApplyLocalTransportOffsetAtAudioBoundary(
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
+		std::optional<std::int64_t> RestoreMappedSourceAtScene(
+			const std::vector<std::shared_ptr<engine::Station>>* stations,
+			std::uint64_t sceneCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchorsAfterOffset(
+			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		static int AudioCallback(void* outBuffer,
 			void* inBuffer,
 			unsigned int numSamps,
@@ -101,8 +125,19 @@ namespace audio
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
-		ninjam::NinjamAudioTimingCommandMailbox _ninjamTimingCommandMailbox;
-		ninjam::LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
+		std::mutex _ninjamDesiredTimingPublishMutex;
+		ninjam::NinjamDesiredTransportStateMailbox _ninjamDesiredTimingMailbox;
+		std::atomic<std::uint64_t> _lastAppliedTimingReceiptSequence{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedDesiredVersion{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedSessionEpoch{ 0u };
+		std::atomic<std::uint64_t> _lastAppliedDesiredGeneration{ 0u };
+		std::atomic<ninjam::NinjamDesiredTimingIntent> _lastAppliedDesiredIntent{
+			ninjam::NinjamDesiredTimingIntent::NoSync };
+		std::atomic<ninjam::NinjamLocalFollowPolicy> _lastAppliedDesiredPolicy{
+			ninjam::NinjamLocalFollowPolicy::NoSync };
+		std::atomic<std::uint64_t> _lastAppliedTimingSceneCoordinate{ 0u };
+		std::atomic<long long> _lastAppliedLocalSourceCorrectionSamps{ 0 };
+		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		std::atomic<std::shared_ptr<utils::Timer>> _timingClock;
 		std::uint64_t _ninjamTimingObservationSequence = 0u;
 		double _localTransportOffsetLoopFrac = 0.0;
@@ -117,6 +152,13 @@ namespace audio
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
+		// Audio-thread owned phase-map geometry. The map is rebased after every
+		// accepted common correction so the next block cannot undo it.
+		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		ninjam::NinjamDesiredTransportState _appliedNinjamTiming{};
+		ninjam::SyncPhaseMap _syncPhaseMap;
+		bool _captureMappedSourceAnchorsAfterOffset = false;
+		bool _mappedSourceHandledAtCommandBoundary = false;
 		TickCallback _tickCallback;
 	};
 }

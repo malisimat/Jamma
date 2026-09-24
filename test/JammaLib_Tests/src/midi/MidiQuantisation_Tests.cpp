@@ -12,97 +12,94 @@ using midi::MidiQuantisationSettings;
 using midi::MidiQuantisationGesture;
 using midi::MidiQuantisationGrainCandidates;
 
-namespace
+static constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
 {
-	constexpr std::uint32_t MidiQuantisationDivisor(MidiQuantisationFraction fraction) noexcept
-	{
-		return MidiQuantisation::Divisor(fraction);
-	}
+	return MidiQuantisation::Divisor(fraction);
+}
 
-	constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
-	{
-		return MidiQuantisation::ClampFractionIndex(index);
-	}
+static constexpr MidiQuantisationFraction ClampMidiQuantisationFractionIndex(int index) noexcept
+{
+	return MidiQuantisation::ClampFractionIndex(index);
+}
 
-	constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
-	{
-		return MidiQuantisation::FractionLabel(fraction);
-	}
+static constexpr const char* MidiQuantisationFractionLabel(MidiQuantisationFraction fraction) noexcept
+{
+	return MidiQuantisation::FractionLabel(fraction);
+}
 
-	constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& settings) noexcept
-	{
-		return MidiQuantisation::StepSamps(settings);
-	}
+static constexpr std::uint32_t MidiQuantisationStepSamps(const MidiQuantisationSettings& settings) noexcept
+{
+	return MidiQuantisation::StepSamps(settings);
+}
 
-	MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
-		int deltaY) noexcept
-	{
-		return MidiQuantisation::ResolveDragFraction(startFraction, deltaY);
-	}
+static MidiQuantisationFraction ResolveMidiQuantisationDragFraction(MidiQuantisationFraction startFraction,
+	int deltaY) noexcept
+{
+	return MidiQuantisation::ResolveDragFraction(startFraction, deltaY);
+}
 
-	MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
-		MidiQuantisationGesture gesture,
-		MidiQuantisationFraction fraction,
-		std::uint32_t resolvedGrainSamps) noexcept
-	{
-		return MidiQuantisation::ApplyGesture(current, gesture, fraction, resolvedGrainSamps);
-	}
+static MidiQuantisationSettings ApplyMidiQuantisationGesture(const MidiQuantisationSettings& current,
+	MidiQuantisationGesture gesture,
+	MidiQuantisationFraction fraction,
+	std::uint32_t resolvedGrainSamps) noexcept
+{
+	return MidiQuantisation::ApplyGesture(current, gesture, fraction, resolvedGrainSamps);
+}
 
-	std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
-	{
-		return MidiQuantisation::ResolveGestureGrain(candidates);
-	}
+static std::uint32_t ResolveMidiQuantisationGestureGrain(const MidiQuantisationGrainCandidates& candidates) noexcept
+{
+	return MidiQuantisation::ResolveGestureGrain(candidates);
+}
 
-	MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
-		const int* values,
-		std::size_t valueCount) noexcept
-	{
-		return MidiQuantisation::ApplyGuiPayload(current, values, valueCount);
-	}
+static MidiQuantisationSettings ApplyMidiQuantisationGuiPayload(const MidiQuantisationSettings& current,
+	const int* values,
+	std::size_t valueCount) noexcept
+{
+	return MidiQuantisation::ApplyGuiPayload(current, values, valueCount);
+}
 
-	std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
-		std::uint32_t step,
-		std::uint32_t loopLength,
-		std::int32_t phaseOffsetSamps = 0) noexcept
-	{
-		return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength, phaseOffsetSamps);
-	}
+static std::uint32_t QuantiseSampleOffset(std::uint32_t offset,
+	std::uint32_t step,
+	std::uint32_t loopLength,
+	std::int32_t phaseOffsetSamps = 0) noexcept
+{
+	return MidiQuantisation::QuantiseSampleOffset(offset, step, loopLength, phaseOffsetSamps);
+}
 
-	void QuantiseEvents(const MidiEvent* src,
-		std::size_t eventCount,
-		std::uint32_t loopLength,
-		std::uint32_t stepSamps,
-		MidiEvent* dst) noexcept
-	{
-		MidiQuantisation::QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
-	}
+static void QuantiseEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
+{
+	MidiQuantisation::QuantiseEvents(src, eventCount, loopLength, stepSamps, dst);
+}
 
-	void BuildQuantisedPlaybackEvents(const MidiEvent* src,
-		std::size_t eventCount,
-		std::uint32_t loopLength,
-		std::uint32_t stepSamps,
-		MidiEvent* dst) noexcept
-	{
-		MidiQuantisation::BuildQuantisedPlaybackEvents(src, eventCount, loopLength, stepSamps, dst);
-	}
+static void BuildQuantisedPlaybackEvents(const MidiEvent* src,
+	std::size_t eventCount,
+	std::uint32_t loopLength,
+	std::uint32_t stepSamps,
+	MidiEvent* dst) noexcept
+{
+	MidiQuantisation::BuildQuantisedPlaybackEvents(src, eventCount, loopLength, stepSamps, dst);
+}
 
-	std::vector<MidiEvent> QuantiseVec(const std::vector<MidiEvent>& src,
-		std::uint32_t loopLength,
-		std::uint32_t step)
-	{
-		std::vector<MidiEvent> dst(src.size());
-		QuantiseEvents(src.data(), src.size(), loopLength, step, dst.data());
-		return dst;
-	}
+static std::vector<MidiEvent> QuantiseVec(const std::vector<MidiEvent>& src,
+	std::uint32_t loopLength,
+	std::uint32_t step)
+{
+	std::vector<MidiEvent> dst(src.size());
+	QuantiseEvents(src.data(), src.size(), loopLength, step, dst.data());
+	return dst;
+}
 
-	std::vector<MidiEvent> BuildPlaybackVec(const std::vector<MidiEvent>& src,
-		std::uint32_t loopLength,
-		std::uint32_t step)
-	{
-		std::vector<MidiEvent> dst(src.size());
-		BuildQuantisedPlaybackEvents(src.data(), src.size(), loopLength, step, dst.data());
-		return dst;
-	}
+static std::vector<MidiEvent> BuildPlaybackVec(const std::vector<MidiEvent>& src,
+	std::uint32_t loopLength,
+	std::uint32_t step)
+{
+	std::vector<MidiEvent> dst(src.size());
+	BuildQuantisedPlaybackEvents(src.data(), src.size(), loopLength, step, dst.data());
+	return dst;
 }
 
 TEST(MidiQuantisation, DivisorMatchesFractionName) {
@@ -272,6 +269,21 @@ TEST(MidiQuantisation, QuantiseOffsetRespectsNegativePhaseOffset) {
 	EXPECT_EQ(990u, QuantiseSampleOffset(990u, 100u, 1000u, -10));
 	EXPECT_EQ(990u, QuantiseSampleOffset(39u, 100u, 1000u, -10));
 	EXPECT_EQ(90u, QuantiseSampleOffset(90u, 100u, 1000u, -10));
+}
+
+TEST(MidiQuantisation, RemoteGridUsesDirectIntervalBoundaries)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.RemoteIntervalSamps = 78985u;
+	settings.RemoteBpi = 4u;
+	settings.RemoteOriginSamps = 100u;
+	const MidiEvent source[] = { MidiEvent::MakeNoteOn(39400u, 0u, 60u, 100u) };
+	MidiEvent result[1];
+	MidiQuantisation::BuildQuantisedPlaybackEvents(source, 1u, 80000u, settings, 0u, result);
+	// origin + round(2 * 78985 / 4); repeated rounded grain addition gives 39492.
+	EXPECT_EQ(39593u, result[0].sampleOffset);
 }
 
 TEST(MidiQuantisation, SettingsEqualityIncludesPhaseOffset) {

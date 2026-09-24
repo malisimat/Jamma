@@ -7,42 +7,21 @@
 
 #include "InitFile.h"
 
-namespace
-{
-	std::string EscapeJsonString(const std::string& value)
-	{
-		std::string escaped;
-		escaped.reserve(value.size());
-
-		for (const char ch : value)
-		{
-			switch (ch)
-			{
-			case '\\':
-				escaped += "\\\\";
-				break;
-			case '"':
-				escaped += "\\\"";
-				break;
-			default:
-				escaped.push_back(ch);
-				break;
-			}
-		}
-
-		return escaped;
-	}
-}
-
 using namespace io;
 using audio::BehaviourParams;
 
 const std::string InitFile::DefaultJson(std::string roamingPath)
 {
-	const auto rigPath = EscapeJsonString(roamingPath + "\\default.rig");
-	const auto jamPath = EscapeJsonString(roamingPath + "\\default.jam");
-	return "{\"rig\":\"" + rigPath + "\",\"jam\":\"" + jamPath
-		+ "\",\"jamload\":1,\"rigload\":0,\"win\":[-0,0,1400,1000]}";
+	Json::JsonPart json;
+	json.KeyValues["rig"] = roamingPath + "\\default.rig";
+	json.KeyValues["jam"] = roamingPath + "\\default.jam";
+	json.KeyValues["jamload"] = 1l;
+	json.KeyValues["rigload"] = 0l;
+	json.KeyValues["win"] = Json::JsonArray{ 4u, std::vector<long>{ 0l, 0l, 1400l, 1000l } };
+
+	std::stringstream stream;
+	Json::ToStream(json, stream);
+	return stream.str();
 }
 
 const void InitFile::SetWinParams(InitFile& ini, const Json::JsonArray& array)

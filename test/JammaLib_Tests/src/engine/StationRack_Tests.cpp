@@ -10,71 +10,68 @@ using engine::Station;
 using engine::StationParams;
 using audio::MergeMixBehaviourParams;
 
-namespace
+static std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
 {
-	std::shared_ptr<Station> MakeStation(const std::string& name = "test-station")
+	StationParams params;
+	params.Name = name;
+	params.Size = { 200, 200 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = Station::GetMixerParams(params.Size, merge);
+	return std::make_shared<Station>(params, mixerParams);
+}
+
+static void CommitInitial(const std::shared_ptr<Station>& station)
+{
+	station->CommitChanges();
+}
+
+class StationRackTestLoopTake :
+	public LoopTake
+{
+public:
+	StationRackTestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
+		LoopTake(params, mixerParams)
 	{
-		StationParams params;
-		params.Name = name;
-		params.Size = { 200, 200 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = Station::GetMixerParams(params.Size, merge);
-		return std::make_shared<Station>(params, mixerParams);
 	}
 
-	void CommitInitial(const std::shared_ptr<Station>& station)
+	void ForceRackState(gui::GuiRackParams::RackState state)
 	{
-		station->CommitChanges();
+		_guiRack->SetRackState(state, true);
 	}
+};
 
-	class TestLoopTake :
-		public LoopTake
-	{
-	public:
-		TestLoopTake(LoopTakeParams params, audio::AudioMixerParams mixerParams) :
-			LoopTake(params, mixerParams)
-		{
-		}
+static std::shared_ptr<StationRackTestLoopTake> MakeTestLoopTake(const std::string& id)
+{
+	LoopTakeParams params;
+	params.Id = id;
+	params.Size = { 100, 100 };
+	MergeMixBehaviourParams merge;
+	auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
+	return std::make_shared<StationRackTestLoopTake>(params, mixerParams);
+}
 
-		void ForceRackState(gui::GuiRackParams::RackState state)
-		{
-			_guiRack->SetRackState(state, true);
-		}
-	};
+static void OpenRouterOnTake(const std::shared_ptr<Station>& station,
+	const std::shared_ptr<StationRackTestLoopTake>& take)
+{
+	GuiAction action;
+	action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+	action.Index = gui::GuiRack::RackStateNotificationIndex;
+	action.Data = GuiAction::GuiInt{ (int)gui::GuiRackParams::RACK_ROUTER };
 
-	std::shared_ptr<TestLoopTake> MakeTestLoopTake(const std::string& id)
-	{
-		LoopTakeParams params;
-		params.Id = id;
-		params.Size = { 100, 100 };
-		MergeMixBehaviourParams merge;
-		auto mixerParams = LoopTake::GetMixerParams(params.Size, merge);
-		return std::make_shared<TestLoopTake>(params, mixerParams);
-	}
+	station->OnAction(action);
+	take->ForceRackState(gui::GuiRackParams::RACK_ROUTER);
+}
 
-	void OpenRouterOnTake(const std::shared_ptr<Station>& station,
-		const std::shared_ptr<TestLoopTake>& take)
-	{
-		GuiAction action;
-		action.ElementType = GuiAction::ACTIONELEMENT_RACK;
-		action.Index = gui::GuiRack::RackStateNotificationIndex;
-		action.Data = GuiAction::GuiInt{ (int)gui::GuiRackParams::RACK_ROUTER };
+static void OpenChannelsOnTake(const std::shared_ptr<Station>& station,
+	const std::shared_ptr<StationRackTestLoopTake>& take)
+{
+	GuiAction action;
+	action.ElementType = GuiAction::ACTIONELEMENT_RACK;
+	action.Index = gui::GuiRack::RackStateNotificationIndex;
+	action.Data = GuiAction::GuiInt{ (int)gui::GuiRackParams::RACK_CHANNELS };
 
-		station->OnAction(action);
-		take->ForceRackState(gui::GuiRackParams::RACK_ROUTER);
-	}
-
-	void OpenChannelsOnTake(const std::shared_ptr<Station>& station,
-		const std::shared_ptr<TestLoopTake>& take)
-	{
-		GuiAction action;
-		action.ElementType = GuiAction::ACTIONELEMENT_RACK;
-		action.Index = gui::GuiRack::RackStateNotificationIndex;
-		action.Data = GuiAction::GuiInt{ (int)gui::GuiRackParams::RACK_CHANNELS };
-
-		station->OnAction(action);
-		take->ForceRackState(gui::GuiRackParams::RACK_CHANNELS);
-	}
+	station->OnAction(action);
+	take->ForceRackState(gui::GuiRackParams::RACK_CHANNELS);
 }
 
 TEST(StationRack, RouterOpenCollapsesCommittedSiblingRacksToMaster)

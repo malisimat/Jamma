@@ -8,9 +8,6 @@
 #include "Vst3StateBlob.h"
 #include <limits>
 
-#include "Vst3StateBlob.h"
-#include <limits>
-
 namespace vst::Vst3StateBlob
 {
 	static void AppendLe32(std::vector<std::uint8_t>& out, std::uint32_t value)

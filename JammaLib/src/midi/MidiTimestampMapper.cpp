@@ -4,49 +4,46 @@
 
 using namespace midi;
 
-namespace
+static constexpr std::uint64_t MicrosPerSecond = 1000000ull;
+
+static std::uint64_t SaturatingAdd(std::uint64_t lhs, std::uint64_t rhs) noexcept
 {
-	constexpr std::uint64_t MicrosPerSecond = 1000000ull;
+	const auto max = std::numeric_limits<std::uint64_t>::max();
+	if (max - lhs < rhs)
+		return max;
 
-	std::uint64_t SaturatingAdd(std::uint64_t lhs, std::uint64_t rhs) noexcept
-	{
-		const auto max = std::numeric_limits<std::uint64_t>::max();
-		if (max - lhs < rhs)
-			return max;
+	return lhs + rhs;
+}
 
-		return lhs + rhs;
-	}
+static std::uint64_t SaturatingMul(std::uint64_t lhs, std::uint64_t rhs) noexcept
+{
+	if (lhs == 0ull || rhs == 0ull)
+		return 0ull;
 
-	std::uint64_t SaturatingMul(std::uint64_t lhs, std::uint64_t rhs) noexcept
-	{
-		if (lhs == 0ull || rhs == 0ull)
-			return 0ull;
+	const auto max = std::numeric_limits<std::uint64_t>::max();
+	if (lhs > max / rhs)
+		return max;
 
-		const auto max = std::numeric_limits<std::uint64_t>::max();
-		if (lhs > max / rhs)
-			return max;
+	return lhs * rhs;
+}
 
-		return lhs * rhs;
-	}
+static std::uint64_t AbsInt64AsUint64(std::int64_t value) noexcept
+{
+	return static_cast<std::uint64_t>(-(value + 1)) + 1ull;
+}
 
-	std::uint64_t AbsInt64AsUint64(std::int64_t value) noexcept
-	{
-		return static_cast<std::uint64_t>(-(value + 1)) + 1ull;
-	}
+static std::uint64_t DeltaMicrosAfterAnchor(std::int64_t anchorMicros, std::int64_t eventMicros) noexcept
+{
+	if (eventMicros <= anchorMicros)
+		return 0ull;
 
-	std::uint64_t DeltaMicrosAfterAnchor(std::int64_t anchorMicros, std::int64_t eventMicros) noexcept
-	{
-		if (eventMicros <= anchorMicros)
-			return 0ull;
+	if (anchorMicros >= 0)
+		return static_cast<std::uint64_t>(eventMicros - anchorMicros);
 
-		if (anchorMicros >= 0)
-			return static_cast<std::uint64_t>(eventMicros - anchorMicros);
+	if (eventMicros < 0)
+		return static_cast<std::uint64_t>(eventMicros - anchorMicros);
 
-		if (eventMicros < 0)
-			return static_cast<std::uint64_t>(eventMicros - anchorMicros);
-
-		return SaturatingAdd(static_cast<std::uint64_t>(eventMicros), AbsInt64AsUint64(anchorMicros));
-	}
+	return SaturatingAdd(static_cast<std::uint64_t>(eventMicros), AbsInt64AsUint64(anchorMicros));
 }
 
 std::uint64_t midi::MapMidiTimestampToAudioSample(unsigned int sampleRate,

@@ -1,5 +1,8 @@
 #pragma once
 
+// Complete latest-value contract from job-side timing authority to AudioHost;
+// the mailbox transports coherent state but does not become a second owner.
+
 #include <atomic>
 #include <cstdint>
 #include <optional>
@@ -8,160 +11,82 @@
 
 namespace ninjam
 {
-	// Command semantics for the single audio-boundary transport fan-out.
-	//   ReplaceTiming   - coherent absolute seed length / grain / quantisation / phase replacement.
-	//   JoinAlignment   - one deliberate signed circular delta (may be up to half an interval).
-	//   PhaseDiscipline - small bounded signed delta under the steady-state safety policy.
-	//   Invalidate      - cancel prior generations without moving phase.
-	enum class NinjamTimingCommandType : std::uint8_t
+	enum class NinjamLocalFollowPolicy : std::uint8_t
 	{
-		ReplaceTiming,
+		ContinuousSync,
+		BlockSync,
+		NoSync
+	};
+
+	enum class NinjamDesiredTimingIntent : std::uint8_t
+	{
+		NoSync,
+		Replacement,
 		JoinAlignment,
-		PhaseDiscipline,
-		Invalidate
+		PhaseDiscipline
 	};
 
-	// One immutable transport command published by the job thread and consumed
-	// exactly once at the top of the audio callback, before any station playback
-	// advancement. The Timer and every active local take apply the same local
-	// copy in the same block so no job-thread publication can split consumers.
-	struct NinjamAudioTimingCommand
+	// Complete, latest-substitutable remote transport authority. Every active
+	// publication carries the full device-rate geometry and timestamped remote
+	// phase; NoSync carries the epoch/version but no remote authority.
+	struct NinjamDesiredTransportState
 	{
-		std::uint64_t Sequence = 0u;
+		std::uint64_t Version = 0u;
+		std::uint64_t SessionEpoch = 0u;
 		std::uint64_t Generation = 0u;
-		NinjamTimingCommandType Type = NinjamTimingCommandType::Invalidate;
-		unsigned long SeedLengthSamps = 0ul;
-		unsigned int QuantiseSamps = 0u;
+		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
+		NinjamLocalFollowPolicy LocalFollowPolicy = NinjamLocalFollowPolicy::NoSync;
+		bool HasRemoteTiming = false;
+		unsigned long RemoteMasterIntervalLengthSamps = 0ul;
+		unsigned int RemoteGridStepSamps = 0u;
+		unsigned int BeatsPerInterval = 0u;
+		float TempoBpm = 0.0f;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
-		unsigned int AbsolutePhaseSamps = 0u;
-		std::uint64_t PhaseObservationSample = 0u;
-		long long PhaseDeltaSamps = 0;
+		unsigned int RemoteMasterPhaseSamps = 0u;
+		bool HasRemotePhaseDeviceSample = false;
+		std::uint64_t RemotePhaseDeviceSample = 0u;
 	};
 
-	// Single-writer (job thread) / single-reader (audio thread) latest-command
-	// mailbox. A monotonically increasing even sequence brackets one coherent
-	// command; an odd sequence means the writer is mid-publication. The reader
-	// tracks the last sequence it applied, so each publication is consumed at
-	// most once with bounded, allocation-free work.
-	class NinjamAudioTimingCommandMailbox
+	// Coherent audio-boundary acknowledgement of the latest complete desired
+	// transport value. AudioHost publishes this existing receipt without logging;
+	// the job owner may correlate it with desired state off the callback.
+	struct NinjamDesiredTimingReceipt
+	{
+		std::uint64_t Version = 0u;
+		std::uint64_t SessionEpoch = 0u;
+		std::uint64_t Generation = 0u;
+		NinjamDesiredTimingIntent Intent = NinjamDesiredTimingIntent::NoSync;
+		NinjamLocalFollowPolicy Policy = NinjamLocalFollowPolicy::NoSync;
+		std::uint64_t SceneCoordinateSamps = 0u;
+		long long LocalSourceCorrectionSamps = 0;
+	};
+
+	// The integration owner is the sole writer and the audio callback is the sole
+	// reader. AudioHost compares the complete latest value with its applied value.
+	class NinjamDesiredTransportStateMailbox
 	{
 	public:
-		void Publish(const NinjamAudioTimingCommand& command) noexcept
-		{
-			const auto writingSequence = _sequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
-			_generation.store(command.Generation, std::memory_order_relaxed);
-			_type.store(command.Type, std::memory_order_relaxed);
-			_seedLengthSamps.store(command.SeedLengthSamps, std::memory_order_relaxed);
-			_quantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
-			_quantisation.store(command.Quantisation, std::memory_order_relaxed);
-			_absolutePhaseSamps.store(command.AbsolutePhaseSamps, std::memory_order_relaxed);
-			_phaseObservationSample.store(command.PhaseObservationSample, std::memory_order_relaxed);
-			_phaseDeltaSamps.store(command.PhaseDeltaSamps, std::memory_order_relaxed);
-			_sequence.store(writingSequence + 1u, std::memory_order_release);
-			_hasPublication.store(true, std::memory_order_release);
-		}
-
-		// Returns the latest command if a new one has been published since the
-		// previous Consume, otherwise std::nullopt. Audio-thread only.
-		std::optional<NinjamAudioTimingCommand> Consume() noexcept
-		{
-			if (!_hasPublication.load(std::memory_order_acquire))
-				return std::nullopt;
-
-			for (unsigned int attempt = 0u; attempt < _MaxReadAttempts; ++attempt)
-			{
-				const auto before = _sequence.load(std::memory_order_acquire);
-				if ((before & 1u) != 0u)
-					continue;
-				if (before == _consumedSequence)
-					return std::nullopt;
-
-				NinjamAudioTimingCommand command;
-				command.Sequence = before;
-				command.Generation = _generation.load(std::memory_order_relaxed);
-				command.Type = _type.load(std::memory_order_relaxed);
-				command.SeedLengthSamps = _seedLengthSamps.load(std::memory_order_relaxed);
-				command.QuantiseSamps = _quantiseSamps.load(std::memory_order_relaxed);
-				command.Quantisation = _quantisation.load(std::memory_order_relaxed);
-				command.AbsolutePhaseSamps = _absolutePhaseSamps.load(std::memory_order_relaxed);
-				command.PhaseObservationSample = _phaseObservationSample.load(std::memory_order_relaxed);
-				command.PhaseDeltaSamps = _phaseDeltaSamps.load(std::memory_order_relaxed);
-				const auto after = _sequence.load(std::memory_order_acquire);
-				if (before == after)
-				{
-					_consumedSequence = before;
-					return command;
-				}
-			}
-
-			return std::nullopt;
-		}
-
-		std::uint64_t PublishedSequence() const noexcept
-		{
-			return _sequence.load(std::memory_order_acquire);
-		}
+		void Publish(const NinjamDesiredTransportState& desired) noexcept;
+		std::optional<NinjamDesiredTransportState> ReadLatest() const noexcept;
 
 	private:
 		static constexpr unsigned int _MaxReadAttempts = 4u;
-		std::atomic<std::uint64_t> _sequence{ 0u };
+		mutable std::atomic<std::uint64_t> _sequence{ 0u };
 		std::atomic_bool _hasPublication{ false };
+		std::atomic<std::uint64_t> _version{ 0u };
+		std::atomic<std::uint64_t> _sessionEpoch{ 0u };
 		std::atomic<std::uint64_t> _generation{ 0u };
-		std::atomic<NinjamTimingCommandType> _type{ NinjamTimingCommandType::Invalidate };
-		std::atomic<unsigned long> _seedLengthSamps{ 0ul };
-		std::atomic<unsigned int> _quantiseSamps{ 0u };
+		std::atomic<NinjamDesiredTimingIntent> _intent{ NinjamDesiredTimingIntent::NoSync };
+		std::atomic<NinjamLocalFollowPolicy> _localFollowPolicy{ NinjamLocalFollowPolicy::NoSync };
+		std::atomic_bool _hasRemoteTiming{ false };
+		std::atomic<unsigned long> _remoteMasterIntervalLengthSamps{ 0ul };
+		std::atomic<unsigned int> _remoteGridStepSamps{ 0u };
+		std::atomic<unsigned int> _beatsPerInterval{ 0u };
+		std::atomic<float> _tempoBpm{ 0.0f };
 		std::atomic<utils::Timer::QuantisationType> _quantisation{ utils::Timer::QUANTISE_OFF };
-		std::atomic<unsigned int> _absolutePhaseSamps{ 0u };
-		std::atomic<std::uint64_t> _phaseObservationSample{ 0u };
-		std::atomic<long long> _phaseDeltaSamps{ 0 };
-		std::uint64_t _consumedSequence = 0u;
+		std::atomic<unsigned int> _remoteMasterPhaseSamps{ 0u };
+		std::atomic_bool _hasRemotePhaseDeviceSample{ false };
+		std::atomic<std::uint64_t> _remotePhaseDeviceSample{ 0u };
 	};
 
-	// Single-writer (UI thread) / single-reader (audio thread) latest-value
-	// mailbox for the local-only normalized transport offset. It deliberately
-	// coalesces drag events: the audio thread needs only the newest absolute
-	// target, including an explicit zero publication.
-	class LocalTransportOffsetLoopFracMailbox
-	{
-	public:
-		void Publish(double normalizedLoopFrac) noexcept
-		{
-			const auto writingSequence = _sequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
-			_normalizedLoopFrac.store(normalizedLoopFrac, std::memory_order_relaxed);
-			_sequence.store(writingSequence + 1u, std::memory_order_release);
-			_hasPublication.store(true, std::memory_order_release);
-		}
-
-		std::optional<double> ConsumeLatest() noexcept
-		{
-			if (!_hasPublication.load(std::memory_order_acquire))
-				return std::nullopt;
-
-			for (unsigned int attempt = 0u; attempt < _MaxReadAttempts; ++attempt)
-			{
-				const auto before = _sequence.load(std::memory_order_acquire);
-				if ((before & 1u) != 0u)
-					continue;
-				if (before == _consumedSequence)
-					return std::nullopt;
-
-				const auto normalizedLoopFrac = _normalizedLoopFrac.load(std::memory_order_relaxed);
-				const auto after = _sequence.load(std::memory_order_acquire);
-				if (before == after)
-				{
-					_consumedSequence = before;
-					return normalizedLoopFrac;
-				}
-			}
-
-			return std::nullopt;
-		}
-
-	private:
-		static constexpr unsigned int _MaxReadAttempts = 4u;
-		std::atomic<std::uint64_t> _sequence{ 0u };
-		std::atomic_bool _hasPublication{ false };
-		std::atomic<double> _normalizedLoopFrac{ 0.0 };
-		std::uint64_t _consumedSequence = 0u;
-	};
 }

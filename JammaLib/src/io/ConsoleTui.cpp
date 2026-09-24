@@ -8,89 +8,60 @@
 
 using namespace io;
 
-namespace
-{
-	// ANSI/VT escape sequences. ENABLE_VIRTUAL_TERMINAL_PROCESSING is set on
-	// stdout in Start(), so these are interpreted by the host terminal.
-	constexpr const char* Reset      = "\x1b[0m";
-	constexpr const char* FgGray     = "\x1b[90m";
-	constexpr const char* FgGreen    = "\x1b[32m";
-	constexpr const char* FgYellow   = "\x1b[33m";
-	constexpr const char* FgMagenta  = "\x1b[35m";
-	constexpr const char* FgCyan     = "\x1b[36m";
-	constexpr const char* FgBrGreen  = "\x1b[92m";
-	constexpr const char* FgBrCyan   = "\x1b[96m";
-	constexpr const char* PromptStyle = "\x1b[1;36m";
-
-	// Emoji glyphs as raw UTF-8 byte sequences so this file compiles cleanly
-	// regardless of the source encoding the toolchain decides to use.
-	constexpr const char* EmojiBullet  = "\xE2\x80\xA2 ";   // •
-	constexpr const char* EmojiOutbox  = "\xF0\x9F\x93\xA4 "; // 📤  (you)
-	constexpr const char* EmojiSpeech  = "\xF0\x9F\x92\xAC "; // 💬  (chat)
-	constexpr const char* EmojiLock    = "\xF0\x9F\x94\x92 "; // 🔒  (private)
-	constexpr const char* EmojiPin     = "\xF0\x9F\x93\x8C "; // 📌  (topic)
-	constexpr const char* EmojiGreen   = "\xF0\x9F\x9F\xA2 "; // 🟢  (join)
-	constexpr const char* EmojiRed     = "\xF0\x9F\x94\xB4 "; // 🔴  (part)
-	constexpr const char* EmojiSparkle = "\xE2\x9C\xA8 ";     // ✨  (sysmsg)
-	constexpr const char* EmojiPlug    = "\xF0\x9F\x94\x8C "; // 🔌  (connect)
-	constexpr const char* EmojiKeys    = "\xE2\x8C\xA8 ";     // ⌨   (hint)
-	constexpr const char* EmojiWarn    = "\xE2\x9A\xA0 ";     // ⚠   (warn)
-
 	// Returns a styled, emoji-prefixed version of `line` for known [NINJAM]
 	// log shapes. Lines without the [NINJAM] tag are returned unchanged so
 	// non-ninjam logs continue to look exactly as they did before.
-	std::string FormatLine(const std::string& line)
-	{
-		constexpr const char Tag[] = "[NINJAM]";
-		constexpr std::size_t TagLen = sizeof(Tag) - 1;
-		if (line.compare(0, TagLen, Tag) != 0)
-			return line;
+std::string ConsoleTui::_FormatLine(const std::string& line)
+{
+	constexpr const char Tag[] = "[NINJAM]";
+	constexpr std::size_t TagLen = sizeof(Tag) - 1;
+	if (line.compare(0, TagLen, Tag) != 0)
+		return line;
 
-		std::size_t pos = TagLen;
-		while (pos < line.size() && line[pos] == ' ')
-			++pos;
-		const std::string rest = line.substr(pos);
+	std::size_t pos = TagLen;
+	while (pos < line.size() && line[pos] == ' ')
+		++pos;
+	const std::string rest = line.substr(pos);
 
-		auto starts = [&](const char* p) {
-			const std::size_t n = std::strlen(p);
-			return rest.size() >= n && rest.compare(0, n, p) == 0;
-		};
+	auto starts = [&](const char* p) {
+		const std::size_t n = std::strlen(p);
+		return rest.size() >= n && rest.compare(0, n, p) == 0;
+	};
 
-		const char* emoji = EmojiBullet;
-		const char* color = FgGray;
+	const char* emoji = EmojiBullet;
+	const char* color = FgGray;
 
-		if (starts("<you>"))                      { emoji = EmojiOutbox;  color = FgBrGreen; }
-		else if (starts("<"))                     { emoji = EmojiSpeech;  color = FgBrCyan;  }
-		else if (starts("(private)"))             { emoji = EmojiLock;    color = FgMagenta; }
-		else if (starts("Topic"))                 { emoji = EmojiPin;     color = FgCyan;    }
-		else if (starts("-->"))                   { emoji = EmojiGreen;   color = FgGreen;   }
-		else if (starts("<--"))                   { emoji = EmojiRed;     color = FgYellow;  }
-		else if (starts("**"))                    { emoji = EmojiSparkle; color = FgMagenta; }
-		else if (starts("Auto-connect"))          { emoji = EmojiPlug;    color = FgCyan;    }
-		else if (starts("Type a message"))        { emoji = EmojiKeys;    color = FgGray;    }
-		else if (starts("Not connected"))         { emoji = EmojiWarn;    color = FgYellow;  }
-		else if (starts("Chat input"))            { emoji = EmojiWarn;    color = FgYellow;  }
-		else if (starts("Console TUI disabled"))  { emoji = EmojiWarn;    color = FgYellow;  }
-		else if (starts("Connecting to"))         { emoji = EmojiPlug;    color = FgCyan;    }
-		else if (starts("Disconnecting"))         { emoji = EmojiRed;     color = FgYellow;  }
-		else if (starts("Commands:"))             { emoji = EmojiKeys;    color = FgCyan;    }
-		else if (starts("Servers:"))              { emoji = EmojiBullet;  color = FgCyan;    }
-		else if (starts("Unknown command"))       { emoji = EmojiWarn;    color = FgYellow;  }
-		else if (starts("Usage:"))                { emoji = EmojiKeys;    color = FgGray;    }
-		else if (starts("Server number"))         { emoji = EmojiWarn;    color = FgYellow;  }
-		else if (starts("Not ready"))             { emoji = EmojiWarn;    color = FgYellow;  }
+	if (starts("<you>"))                      { emoji = EmojiOutbox;  color = FgBrGreen; }
+	else if (starts("<"))                     { emoji = EmojiSpeech;  color = FgBrCyan;  }
+	else if (starts("(private)"))             { emoji = EmojiLock;    color = FgMagenta; }
+	else if (starts("Topic"))                 { emoji = EmojiPin;     color = FgCyan;    }
+	else if (starts("-->"))                   { emoji = EmojiGreen;   color = FgGreen;   }
+	else if (starts("<--"))                   { emoji = EmojiRed;     color = FgYellow;  }
+	else if (starts("**"))                    { emoji = EmojiSparkle; color = FgMagenta; }
+	else if (starts("Auto-connect"))          { emoji = EmojiPlug;    color = FgCyan;    }
+	else if (starts("Type a message"))        { emoji = EmojiKeys;    color = FgGray;    }
+	else if (starts("Not connected"))         { emoji = EmojiWarn;    color = FgYellow;  }
+	else if (starts("Chat input"))            { emoji = EmojiWarn;    color = FgYellow;  }
+	else if (starts("Console TUI disabled"))  { emoji = EmojiWarn;    color = FgYellow;  }
+	else if (starts("Connecting to"))         { emoji = EmojiPlug;    color = FgCyan;    }
+	else if (starts("Disconnecting"))         { emoji = EmojiRed;     color = FgYellow;  }
+	else if (starts("Commands:"))             { emoji = EmojiKeys;    color = FgCyan;    }
+	else if (starts("Servers:"))              { emoji = EmojiBullet;  color = FgCyan;    }
+	else if (starts("Unknown command"))       { emoji = EmojiWarn;    color = FgYellow;  }
+	else if (starts("Usage:"))                { emoji = EmojiKeys;    color = FgGray;    }
+	else if (starts("Server number"))         { emoji = EmojiWarn;    color = FgYellow;  }
+	else if (starts("Not ready"))             { emoji = EmojiWarn;    color = FgYellow;  }
 
-		std::string out;
-		out.reserve(line.size() + 32);
-		out += FgGray;
-		out += "[NINJAM] ";
-		out += Reset;
-		out += emoji;
-		out += color;
-		out += rest;
-		out += Reset;
-		return out;
-	}
+	std::string out;
+	out.reserve(line.size() + 32);
+	out += FgGray;
+	out += "[NINJAM] ";
+	out += Reset;
+	out += emoji;
+	out += color;
+	out += rest;
+	out += Reset;
+	return out;
 }
 
 class ConsoleTui::TuiBuf : public std::streambuf
@@ -309,7 +280,7 @@ void ConsoleTui::_OnLogChar(char c)
 		return;
 	}
 
-	std::string formatted = FormatLine(pending);
+	std::string formatted = ConsoleTui::_FormatLine(pending);
 	pending.clear();
 
 	std::lock_guard<std::mutex> lk(_renderMutex);

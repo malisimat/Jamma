@@ -8,6 +8,7 @@
 #include "Json.h"
 
 #include <exception>
+#include <cctype>
 #include <limits>
 #include <string>
 
@@ -16,7 +17,12 @@ using namespace io;
 std::optional<Json::JsonValue> Json::FromStream(std::stringstream ss)
 {
 	auto root = ParseValue(std::move(ss));
-
+	if (!root.Value.has_value())
+		return std::nullopt;
+	char trailing = 0;
+	while (root.Stream.get(trailing))
+		if (!std::isspace(static_cast<unsigned char>(trailing)))
+			return std::nullopt;
 	return root.Value;
 }
 
@@ -28,7 +34,7 @@ bool Json::ToStream(Json::JsonValue json, std::stringstream& ss)
 bool Json::WriteString(const std::string& value, std::stringstream& ss)
 {
 	ss << '"';
-	for (const char ch : value)
+	for (const unsigned char ch : value)
 	{
 		switch (ch)
 		{
@@ -39,7 +45,17 @@ bool Json::WriteString(const std::string& value, std::stringstream& ss)
 		case '\n': ss << "\\n"; break;
 		case '\r': ss << "\\r"; break;
 		case '\t': ss << "\\t"; break;
-		default: ss << ch; break;
+		default:
+			if (ch < 0x20u)
+			{
+				static constexpr char hexDigits[] = "0123456789ABCDEF";
+				ss << "\\u00" << hexDigits[ch >> 4] << hexDigits[ch & 0x0Fu];
+			}
+			else
+			{
+				ss << static_cast<char>(ch);
+			}
+			break;
 		}
 	}
 	ss << '"';
@@ -114,7 +130,7 @@ bool Json::IsAllDigits(std::string str, bool includePeriod)
 
 	for (auto ch : str)
 	{
-		if (!std::isdigit(ch))
+		if (!std::isdigit(static_cast<unsigned char>(ch)))
 		{
 			if (includePeriod)
 			{
@@ -141,7 +157,7 @@ bool Json::IsTrue(std::string str)
 {
 	std::vector<char> charBuf;
 	for (auto letter : str)
-		charBuf.push_back(std::tolower(letter));
+		charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 	charBuf.push_back('\0');
 	auto strLower = std::string(charBuf.data());
@@ -450,7 +466,7 @@ Json::ValueResult Json::ParseValue(std::stringstream ss)
 					{
 						std::vector<char> charBuf2;
 						for (auto letter : str)
-							charBuf2.push_back(std::tolower(letter));
+							charBuf2.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 						charBuf2.push_back('\0');
 						std::string strLower(charBuf2.data());
@@ -533,7 +549,7 @@ Json::JsonArray Json::ParseJsonArray(std::vector<std::string> values)
 			{
 				std::vector<char> charBuf;
 				for (auto letter : firstValue)
-					charBuf.push_back(std::tolower(letter));
+					charBuf.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
 
 				charBuf.push_back('\0');
 				firstValue = std::string(charBuf.data());

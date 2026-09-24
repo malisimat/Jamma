@@ -5,12 +5,9 @@ using ninjam::NinjamTimingEventType;
 using ninjam::NinjamTimingObservation;
 using ninjam::NinjamTimingTracker;
 
-namespace
+static NinjamTimingObservation Observation(unsigned int length, unsigned int position)
 {
-	NinjamTimingObservation Observation(unsigned int length, unsigned int position)
-	{
-		return { length, position, position };
-	}
+	return { length, position, position };
 }
 
 TEST(NinjamTimingTracker, EmitsGenerationWrapAndJoinEvents)
@@ -25,7 +22,7 @@ TEST(NinjamTimingTracker, EmitsGenerationWrapAndJoinEvents)
 	auto join = tracker.Observe(Observation(1000u, 40u));
 	ASSERT_TRUE(join.has_value());
 	EXPECT_EQ(NinjamTimingEventType::Join, join->Type);
-	EXPECT_EQ(-400, join->PhaseDeltaSamps);
+	EXPECT_EQ(-400, join->RemoteMasterPhaseCorrectionSamps);
 	EXPECT_EQ(1ul, join->RemoteWrapCount);
 }
 

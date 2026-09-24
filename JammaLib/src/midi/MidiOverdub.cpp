@@ -7,203 +7,200 @@
 
 using namespace midi;
 
-namespace
+static constexpr std::size_t MaxPunchWindows = 128u;
+static constexpr std::size_t MaxSourceSpans = 4096u;
+
+struct MidiOverdubNormalizedWindow
 {
-	static constexpr std::size_t MaxPunchWindows = 128u;
-	static constexpr std::size_t MaxSourceSpans = 4096u;
+	std::uint32_t Start = 0u;
+	std::uint32_t End = 0u;
+};
 
-	struct NormalizedWindow
+struct MidiOverdubActiveNote
+{
+	bool IsActive = false;
+	std::uint32_t Start = 0u;
+	std::uint8_t Velocity = 0u;
+};
+
+struct MidiOverdubSourceSpan
+{
+	std::uint32_t Start = 0u;
+	std::uint32_t End = 0u;
+	std::uint8_t Channel = 0u;
+	std::uint8_t Note = 0u;
+	std::uint8_t Velocity = 0u;
+};
+
+static bool IsInsideWindow(std::uint32_t sample,
+	const MidiOverdubNormalizedWindow* windows,
+	std::size_t windowCount) noexcept
+{
+	for (std::size_t i = 0u; i < windowCount; ++i)
 	{
-		std::uint32_t Start = 0u;
-		std::uint32_t End = 0u;
-	};
-
-	struct ActiveNote
-	{
-		bool IsActive = false;
-		std::uint32_t Start = 0u;
-		std::uint8_t Velocity = 0u;
-	};
-
-	struct SourceSpan
-	{
-		std::uint32_t Start = 0u;
-		std::uint32_t End = 0u;
-		std::uint8_t Channel = 0u;
-		std::uint8_t Note = 0u;
-		std::uint8_t Velocity = 0u;
-	};
-
-	bool IsInsideWindow(std::uint32_t sample,
-		const NormalizedWindow* windows,
-		std::size_t windowCount) noexcept
-	{
-		for (std::size_t i = 0u; i < windowCount; ++i)
-		{
-			const auto& window = windows[i];
-			if (sample >= window.Start && sample < window.End)
-				return true;
-		}
-
-		return false;
+		const auto& window = windows[i];
+		if (sample >= window.Start && sample < window.End)
+			return true;
 	}
 
-	std::size_t NormalizePunchWindows(const MidiPunchWindow* windows,
-		std::size_t windowCount,
-		std::uint32_t targetLength,
-		NormalizedWindow* outWindows,
-		std::size_t outCapacity) noexcept
+	return false;
+}
+
+static std::size_t NormalizePunchWindows(const MidiPunchWindow* windows,
+	std::size_t windowCount,
+	std::uint32_t targetLength,
+	MidiOverdubNormalizedWindow* outWindows,
+	std::size_t outCapacity) noexcept
+{
+	if (!windows || !outWindows || outCapacity == 0u || targetLength == 0u)
+		return 0u;
+
+	std::size_t count = 0u;
+	for (std::size_t i = 0u; i < windowCount; ++i)
 	{
-		if (!windows || !outWindows || outCapacity == 0u || targetLength == 0u)
-			return 0u;
+		auto start = windows[i].StartSample;
+		auto end = windows[i].EndSample;
+		if (end < start)
+			std::swap(start, end);
 
-		std::size_t count = 0u;
-		for (std::size_t i = 0u; i < windowCount; ++i)
+		if (start >= targetLength)
+			continue;
+		if (end > targetLength)
+			end = targetLength;
+		if (end <= start)
+			continue;
+
+		if (count >= outCapacity)
+			break;
+
+		outWindows[count].Start = start;
+		outWindows[count].End = end;
+		++count;
+	}
+
+	if (count <= 1u)
+		return count;
+
+	for (std::size_t i = 1u; i < count; ++i)
+	{
+		const auto current = outWindows[i];
+		std::size_t j = i;
+		while (j > 0u && current.Start < outWindows[j - 1u].Start)
 		{
-			auto start = windows[i].StartSample;
-			auto end = windows[i].EndSample;
-			if (end < start)
-				std::swap(start, end);
-
-			if (start >= targetLength)
-				continue;
-			if (end > targetLength)
-				end = targetLength;
-			if (end <= start)
-				continue;
-
-			if (count >= outCapacity)
-				break;
-
-			outWindows[count].Start = start;
-			outWindows[count].End = end;
-			++count;
+			outWindows[j] = outWindows[j - 1u];
+			--j;
 		}
+		outWindows[j] = current;
+	}
 
-		if (count <= 1u)
-			return count;
-
-		for (std::size_t i = 1u; i < count; ++i)
+	std::size_t merged = 0u;
+	for (std::size_t i = 0u; i < count; ++i)
+	{
+		const auto& window = outWindows[i];
+		if (merged == 0u)
 		{
-			const auto current = outWindows[i];
-			std::size_t j = i;
-			while (j > 0u && current.Start < outWindows[j - 1u].Start)
-			{
-				outWindows[j] = outWindows[j - 1u];
-				--j;
-			}
-			outWindows[j] = current;
-		}
-
-		std::size_t merged = 0u;
-		for (std::size_t i = 0u; i < count; ++i)
-		{
-			const auto& window = outWindows[i];
-			if (merged == 0u)
-			{
-				outWindows[merged++] = window;
-				continue;
-			}
-
-			auto& prev = outWindows[merged - 1u];
-			if (window.Start <= prev.End)
-			{
-				if (window.End > prev.End)
-					prev.End = window.End;
-				continue;
-			}
-
 			outWindows[merged++] = window;
+			continue;
 		}
 
-		return merged;
+		auto& prev = outWindows[merged - 1u];
+		if (window.Start <= prev.End)
+		{
+			if (window.End > prev.End)
+				prev.End = window.End;
+			continue;
+		}
+
+		outWindows[merged++] = window;
 	}
 
-	std::size_t BuildSourceSpans(const MidiEvent* sourceEvents,
-		std::size_t sourceEventCount,
-		std::uint32_t sourceLoopLength,
-		SourceSpan* outSpans,
-		std::size_t outCapacity) noexcept
+	return merged;
+}
+
+static std::size_t BuildSourceSpans(const MidiEvent* sourceEvents,
+	std::size_t sourceEventCount,
+	std::uint32_t sourceLoopLength,
+	MidiOverdubSourceSpan* outSpans,
+	std::size_t outCapacity) noexcept
+{
+	if (!sourceEvents || !outSpans || outCapacity == 0u || sourceLoopLength == 0u)
+		return 0u;
+
+	std::array<MidiOverdubActiveNote, MidiNote::TotalNoteSlots> activeNotes{};
+	std::size_t spanCount = 0u;
+
+	const auto emitSpan = [&](std::uint32_t start,
+		std::uint32_t end,
+		std::uint8_t channel,
+		std::uint8_t note,
+		std::uint8_t velocity) noexcept
 	{
-		if (!sourceEvents || !outSpans || outCapacity == 0u || sourceLoopLength == 0u)
-			return 0u;
+		if (end <= start || spanCount >= outCapacity)
+			return;
 
-		std::array<ActiveNote, MidiNote::TotalNoteSlots> activeNotes{};
-		std::size_t spanCount = 0u;
+		outSpans[spanCount].Start = start;
+		outSpans[spanCount].End = end;
+		outSpans[spanCount].Channel = static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask);
+		outSpans[spanCount].Note = static_cast<std::uint8_t>(note & 0x7F);
+		outSpans[spanCount].Velocity = velocity;
+		++spanCount;
+	};
 
-		const auto emitSpan = [&](std::uint32_t start,
-			std::uint32_t end,
-			std::uint8_t channel,
-			std::uint8_t note,
-			std::uint8_t velocity) noexcept
+	for (std::size_t i = 0u; i < sourceEventCount; ++i)
+	{
+		const auto& event = sourceEvents[i];
+		if (event.sampleOffset >= sourceLoopLength)
+			continue;
+
+		const auto channel = event.Channel();
+		const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
+		auto& active = activeNotes[MidiNote::NoteSlot(channel, note)];
+
+		if (event.IsNoteOn())
 		{
-			if (end <= start || spanCount >= outCapacity)
-				return;
-
-			outSpans[spanCount].Start = start;
-			outSpans[spanCount].End = end;
-			outSpans[spanCount].Channel = static_cast<std::uint8_t>(channel & MidiEvent::ChannelMask);
-			outSpans[spanCount].Note = static_cast<std::uint8_t>(note & 0x7F);
-			outSpans[spanCount].Velocity = velocity;
-			++spanCount;
-		};
-
-		for (std::size_t i = 0u; i < sourceEventCount; ++i)
-		{
-			const auto& event = sourceEvents[i];
-			if (event.sampleOffset >= sourceLoopLength)
-				continue;
-
-			const auto channel = event.Channel();
-			const auto note = static_cast<std::uint8_t>(event.data1 & 0x7F);
-			auto& active = activeNotes[MidiNote::NoteSlot(channel, note)];
-
-			if (event.IsNoteOn())
-			{
-				if (active.IsActive)
-					emitSpan(active.Start, event.sampleOffset, channel, note, active.Velocity);
-
-				active.IsActive = true;
-				active.Start = event.sampleOffset;
-				active.Velocity = event.data2;
-			}
-			else if (event.IsNoteOff())
-			{
-				if (!active.IsActive)
-					continue;
-
+			if (active.IsActive)
 				emitSpan(active.Start, event.sampleOffset, channel, note, active.Velocity);
-				active.IsActive = false;
-				active.Start = 0u;
-				active.Velocity = 0u;
-			}
-		}
 
-		for (std::size_t slot = 0u; slot < activeNotes.size(); ++slot)
+			active.IsActive = true;
+			active.Start = event.sampleOffset;
+			active.Velocity = event.data2;
+		}
+		else if (event.IsNoteOff())
 		{
-			const auto& active = activeNotes[slot];
 			if (!active.IsActive)
 				continue;
 
-			const auto channel = static_cast<std::uint8_t>((slot >> 7) & MidiEvent::ChannelMask);
-			const auto note = static_cast<std::uint8_t>(slot & 0x7Fu);
-			emitSpan(active.Start, sourceLoopLength, channel, note, active.Velocity);
+			emitSpan(active.Start, event.sampleOffset, channel, note, active.Velocity);
+			active.IsActive = false;
+			active.Start = 0u;
+			active.Velocity = 0u;
 		}
-
-		return spanCount;
 	}
 
-	bool AppendEvent(const MidiEvent& event,
-		MidiEvent* outEvents,
-		std::size_t outCapacity,
-		std::size_t& outCount) noexcept
+	for (std::size_t slot = 0u; slot < activeNotes.size(); ++slot)
 	{
-		if (outCount >= outCapacity)
-			return false;
+		const auto& active = activeNotes[slot];
+		if (!active.IsActive)
+			continue;
 
-		outEvents[outCount++] = event;
-		return true;
+		const auto channel = static_cast<std::uint8_t>((slot >> 7) & MidiEvent::ChannelMask);
+		const auto note = static_cast<std::uint8_t>(slot & 0x7Fu);
+		emitSpan(active.Start, sourceLoopLength, channel, note, active.Velocity);
 	}
+
+	return spanCount;
+}
+
+static bool AppendEvent(const MidiEvent& event,
+	MidiEvent* outEvents,
+	std::size_t outCapacity,
+	std::size_t& outCount) noexcept
+{
+	if (outCount >= outCapacity)
+		return false;
+
+	outEvents[outCount++] = event;
+	return true;
 }
 
 std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& params,
@@ -217,14 +214,14 @@ std::size_t midi::BuildMidiOverdubBaseEvents(const MidiOverdubRenderParams& para
 	if (params.SourceLoopLengthSamps == 0u || params.TargetLoopLengthSamps == 0u)
 		return 0u;
 
-	std::array<NormalizedWindow, MaxPunchWindows> windows{};
+	std::array<MidiOverdubNormalizedWindow, MaxPunchWindows> windows{};
 	const auto windowCount = NormalizePunchWindows(params.PunchWindows,
 		params.PunchWindowCount,
 		params.TargetLoopLengthSamps,
 		windows.data(),
 		windows.size());
 
-	std::array<SourceSpan, MaxSourceSpans> spans{};
+	std::array<MidiOverdubSourceSpan, MaxSourceSpans> spans{};
 	const auto spanCount = BuildSourceSpans(params.SourceEvents,
 		params.SourceEventCount,
 		params.SourceLoopLengthSamps,

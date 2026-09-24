@@ -1,5 +1,8 @@
 #pragma once
 
+// Recorded performance layer within a Station; owns take state, MIDI material,
+// timing anchors, effects, and its Loops without owning remote follow policy.
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -7,7 +10,7 @@
 #include <vector>
 #include <memory>
 #include "Loop.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../midi/MidiLoop.h"
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
@@ -139,9 +142,18 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		double MasterLevelForExport() const;
+		std::vector<double> BusLevelsForExport() const;
+		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 		LoopTakeState TakeState() const;
 		unsigned long NumRecordedSamps() const;
 		unsigned long VisualLoopLengthSamps() const noexcept;
+		unsigned long MidiPlayIndex() const noexcept
+			{ return _midiVisualPlayIndex.load(std::memory_order_relaxed); }
+		unsigned long MidiLoopLengthSamps() const noexcept
+			{ return _midiVisualLoopLength.load(std::memory_order_relaxed); }
 		// Accumulated signed transport correction for MIDI loop phase anchors.
 		std::int32_t MidiAnchorCorrection() const noexcept
 			{ return _midiAnchorCorrection.load(std::memory_order_relaxed); }
@@ -149,8 +161,8 @@ namespace engine
 			{ return &_midiAnchorCorrection; }
 		double LoopIndexFrac() const noexcept;
 		float VisualRadius() const noexcept;
-		std::optional<timing::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
-		static std::vector<timing::QuantisationLoopTakeVisual> QuantisationVisualsFor(
+		std::optional<engine::QuantisationLoopTakeVisual> QuantisationVisual() const noexcept;
+		static std::vector<engine::QuantisationLoopTakeVisual> QuantisationVisualsFor(
 			const std::vector<std::shared_ptr<LoopTake>>& takes);
 		std::shared_ptr<Loop> AddLoop(unsigned int chan, std::string stationName);
 		void AddLoop(std::shared_ptr<Loop> loop);
@@ -163,6 +175,10 @@ namespace engine
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used by JAM reconstruction.
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate);
@@ -207,14 +223,18 @@ namespace engine
 			std::uint64_t generation,
 			TimingCorrectionReason reason) noexcept;
 		void InvalidateTimingCorrections() noexcept;
-		// Applies one unified audio-boundary transport correction directly on the
-		// audio thread, before block advancement. Shifts every playable loop and
-		// the MIDI visual/anchor position by the same signed delta. Generation
-		// filtering uses an audio-thread-only counter so stale or superseded
-		// commands never move audio or MIDI state.
-		void ApplyTimingCommand(long long deltaSamps,
-			std::uint64_t generation,
-			TimingCorrectionReason reason) noexcept;
+		// Applies one accepted audio-boundary correction. Session policy has
+		// already been interpreted by AudioHost; this engine operation only keeps
+		// its generation gate and shifts each entity by the common signed delta.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
+		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
+		void ResetTimingEpoch() noexcept;
+		// Capture/restore use an already-mapped common source coordinate. Entity
+		// anchors and modulo lengths remain local to the take and its loops.
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
@@ -251,6 +271,39 @@ namespace engine
 		std::vector<std::shared_ptr<midi::MidiLoop>> GetMidiLoopSnapshot() const;
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
+		struct MidiStreamExport
+		{
+			unsigned int Channel = 0u;
+			std::string Device;
+			midi::MidiLoop::ExportState Loop;
+		};
+		struct MidiExportState
+		{
+			std::vector<MidiStreamExport> Streams;
+			unsigned long PlayIndex = 0ul;
+			unsigned long LoopLengthSamps = 0ul;
+			midi::MidiQuantisationSettings Quantisation;
+			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+		struct PendingAutomationBinding
+		{
+			std::size_t MidiStreamIndex = 0u;
+			std::size_t LaneIndex = 0u;
+			std::string TargetScope;
+			unsigned int TargetPluginIndex = 0u;
+			unsigned int TargetLoopIndex = 0u;
+		};
+		const std::vector<PendingAutomationBinding>& PendingAutomationBindings() const noexcept
+			{ return _pendingAutomationBindings; }
+		void ClearPendingAutomationBindings() noexcept { _pendingAutomationBindings.clear(); }
+		static constexpr std::size_t MaxMidiStreamsForRestore = io::JamFile::MaxMidiStreamsPerTake;
+		// Non-RT transfer at the exporter's already-paused, scene-locked boundary.
+		// The per-loop origin is exported with this take's anchor correction folded
+		// in, so loading can reset the live correction to zero.
+		bool SnapshotMidiForExport(MidiExportState& state) const;
+		// Non-RT construction before this take enters an audio snapshot.  Replaces
+		// the complete MIDI stream set and publishes one immutable loop snapshot.
+		bool RestoreMidiFromExport(const MidiExportState& state);
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
@@ -266,6 +319,8 @@ namespace engine
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
+		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
+			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
 		gui::GuiRackParams::RackState GetRackState() const;
 		void CollapseRackToMaster();
@@ -307,7 +362,26 @@ namespace engine
 		std::shared_ptr<const MidiLoopSnapshot> _MidiLoopSnapshotState() const;
 		void _PublishAudioState();
 		std::shared_ptr<const AudioState> _AudioStateSnapshot() const;
+
+	private:
+		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
+		static unsigned long _NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept;
+		static std::uint32_t _NormalizeMidiLoopOffset(std::uint32_t offset,
+			std::uint32_t loopLength) noexcept;
+		static unsigned long _InitialMidiPlayIndex(unsigned long loopLength,
+			int midiQuantisationErrorSamps) noexcept;
+		static bool _AppendMidiEvent(const midi::MidiEvent& event,
+			midi::MidiEvent* outEvents,
+			std::size_t outCapacity,
+			std::size_t& outCount) noexcept;
+		static std::size_t _BuildRebasedMidiOverdubSourceEvents(const midi::MidiOverdubLoopState& state,
+			midi::MidiEvent* outEvents,
+			std::size_t outCapacity) noexcept;
+		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
+
+	protected:
 		void _ResizeVstScratch(unsigned int channelCount);
+		bool _ShiftDirectPlaybackCursors(long long deltaSamps) noexcept;
 		void _TryApplyLocalTransportOffset() noexcept;
 		static long long _OffsetDelta(long long targetSamps, long long appliedSamps) noexcept;
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
@@ -363,6 +437,9 @@ namespace engine
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		std::atomic<std::int32_t> _midiAnchorCorrection{ 0 };
+		std::atomic<unsigned long> _midiSceneAnchor{ 0ul };
+		std::atomic_bool _hasMidiSceneAnchor{ false };
+		void _MoveMidiVisualCursor(unsigned long target, long long translationSamps) noexcept;
 		// Job/UI writes occur before snapshot publication; audio reads/reconciles.
 		std::atomic<long long> _desiredLocalTransportOffsetSamps{ 0 };
 		long long _appliedLocalTransportOffsetSamps = 0;
@@ -394,7 +471,13 @@ namespace engine
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
-		bool _midiQuantisationUpdatePending;
+		// Seqlock-style publication avoids torn remote-grid reads without placing a
+		// lock or allocation on any real-time path.
+		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };
+		std::atomic<std::int64_t> _remoteMidiOriginSamps{ 0 };
+		std::atomic_bool _midiQuantisationUpdatePending;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;
 		std::vector<std::shared_ptr<audio::AudioMixer>> _backAudioMixers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
@@ -411,6 +494,9 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+		// Startup-only metadata. Runtime lane pointers are installed by Station only
+		// after every chain named by these references has been constructed.
+		std::vector<PendingAutomationBinding> _pendingAutomationBindings;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
 	};

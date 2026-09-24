@@ -26,7 +26,8 @@ namespace ninjam
 			unsigned int inLatencySamps = 0u,
 			unsigned int outLatencySamps = 0u);
 
-		std::optional<NinjamRemoteSnapshot> Pump();
+		NinjamSessionPumpResult Pump();
+		void ApplySessionPumpResult(const NinjamSessionPumpResult& result);
 		std::optional<NinjamRemoteSnapshot> TakePendingSnapshot();
 
 		void SendChat(const std::string& msg);
@@ -34,19 +35,17 @@ namespace ninjam
 		void Disconnect();
 		void Stop();
 
-		void ProcessExportBlock(const float* interleavedDacOutput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
 			const float* interleavedAdcInput,
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
-		NinjamRemoteTiming GetLiveTiming() const noexcept;
-
-		bool ConsumeStereoPair(unsigned int outChannelLeft,
-			const float*& left,
-			const float*& right,
-			unsigned int& numFrames) const;
+		// Pins the current connection; keep the guard alive while using any
+		// connection-owned storage returned through it.
+		NinjamConnectionUse AcquireConnectionUse() const noexcept;
 
 		NinjamSession* Session() noexcept { return &_session; }
 

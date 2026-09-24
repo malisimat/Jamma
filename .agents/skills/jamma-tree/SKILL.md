@@ -1,15 +1,16 @@
 ---
 name: jamma-tree
 description: Create a Jamma worktree under ../Jamma.worktrees/Jamma-<feature-slug> on a branch named feature/<feature-slug>, then copy repo-local folder contents into the new worktree without overwriting existing files.
-allowed-tools:
-  - powershell
-  - view
-  - rg
 ---
 
 # Jamma worktree bootstrap
 
 Use this skill when the user wants a new feature worktree for Jamma.
+
+Use the host harness's file inspection, search, and shell tools for the
+operations below. The command examples use PowerShell because Jamma is a
+Windows project; adapt the shell syntax only when the host does not provide
+PowerShell.
 
 - Infer a short feature slug from the user's prompt. Prefer kebab-case names such as `midi-war`, `hud-ui`, or `vst3-parity`.
 - Work from the main Jamma repository, not the new worktree.
@@ -40,7 +41,7 @@ $worktreePath = "<new-worktree-root>"
 
 $foldersToCopy = @(
     ".vscode",
-    ".github"
+    ".agents"
 )
 
 foreach ($folder in $foldersToCopy) {

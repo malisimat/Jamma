@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <glm/vec3.hpp>
 #include <span>
 #include <tuple>
 #include <vector>
@@ -109,6 +110,47 @@ namespace graphics
 		virtual std::weak_ptr<resources::ShaderResource> GetShader() override;
 
 	private:
+		static constexpr unsigned int DefaultNumSides = 32u;
+		static constexpr unsigned int DefaultNumRibs = 0u;
+		static constexpr unsigned int SideVerticalSections = 12u;
+		static constexpr float DeckRadius = 30.0f;
+		static constexpr float BevelWidth = 2.0f;
+		static constexpr float BevelHeight = 10.0f;
+		static constexpr float SideHeight = 450.0f;
+		// Part-kind UVs (y channel).
+		static constexpr float UV_TOP = 0.0f;
+		static constexpr float UV_BEVEL = 1.0f;
+		static constexpr float UV_SIDE = 2.0f;
+		static constexpr float UV_RIB = 3.0f;
+		static constexpr float UV_STATE_RING_BRIGHT = 4.0f;
+		static constexpr float UV_STATE_RING_DARK = 5.0f;
+		static constexpr unsigned int StateRingSides = 64u;
+		static constexpr unsigned int StateRingOccluderInstances = 20u;
+		static constexpr float StateRingScale = 5.0f;
+		static constexpr float StateRingOccluderInnerRadius = 9.0f;
+		static constexpr float StateRingOccluderOuterRadius = 17.0f;
+		static constexpr float StateRingTopY = -2.0f;
+		static constexpr float StateRingBottomY = -(2.0f * BevelHeight + SideHeight) + 2.0f;
+		static constexpr RingProfilePoint StateRingProfile[] = {
+			{ 9.30f, 0.00f }, { 10.80f, -1.25f }, { 15.80f, -3.50f },
+			{ 15.80f, -9.50f }, { 14.90f, -13.50f }, { 11.20f, -16.00f }
+		};
+		static constexpr RingProfilePoint StateRingBottomProfile[] = {
+			{ 9.30f, 0.00f }, { 11.60f, 1.10f }, { 16.60f, 3.20f },
+			{ 16.60f, 8.20f }, { 15.30f, 12.40f }, { 12.00f, 17.50f },
+			{ 10.20f, 19.00f }
+		};
+		static void PushTri(std::vector<float>& verts,
+			std::vector<float>& uvs,
+			const glm::vec3& a, float ua, float va,
+			const glm::vec3& b, float ub, float vb,
+			const glm::vec3& c, float uc, float vc);
+		static void PushQuad(std::vector<float>& verts,
+			std::vector<float>& uvs,
+			const glm::vec3& a, float ua, float va,
+			const glm::vec3& b, float ub, float vb,
+			const glm::vec3& c, float uc, float vc,
+			const glm::vec3& d, float ud, float vd);
 		// Index into _modelShaders for each draw pass.
 		// 0 = station (scene/highlight), 1 = picker.
 		base::DrawPass _lastPass;

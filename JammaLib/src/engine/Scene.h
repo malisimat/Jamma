@@ -1,4 +1,7 @@
 #pragma once
+
+// Job/UI orchestrator: presents and forwards subsystem values without taking over
+// audio-callback application, remote timing authority, or per-entity loop state.
 #include <atomic>
 #include <memory>
 #include <algorithm>
@@ -40,7 +43,7 @@
 #include "../midi/MidiRouter.h"
 #include "../graphics/VstEditorWindow.h"
 #include "../graphics/CtrlHandleOverlay.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "Tickable.h"
 #include "Drawable.h"
 #include "ActionReceiver.h"
@@ -207,6 +210,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		bool PauseAudio();
+		bool ResumeAudio();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
@@ -255,7 +260,7 @@ namespace engine
 		void DisconnectNinjam();
 
 		// Force-unload all hosted VST plugins owned by stations/takes/loops.
-		// Call on the main/non-audio thread during shutdown.
+		// Call on the main thread only after CloseAudio() has stopped the callback.
 		void ForceUnloadAllVstPlugins();
 		
 	protected:
@@ -300,18 +305,19 @@ namespace engine
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
 		void _UpdateRemoteStationsFromSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
-		timing::QuantisationPolicy _QuantisationPolicy() const;
+		engine::QuantisationPolicy _QuantisationPolicy() const;
 		unsigned int _CurrentSampleRate() const;
 		std::uint64_t _EstimatedAudioSampleAt(Time actionTime) const;
-		void _ApplyQuantisationTiming(const timing::QuantisationTiming& timing, const char* source);
+		void _ApplyQuantisationTiming(const engine::QuantisationTiming& timing, const char* source);
 		void _ClearTimingState(bool clearTapTempo);
+		void _HandleAudioLocalContentState(bool hasLocalContent);
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
 		void _PulseQuantisationOverlay();
 		void _SetQuantisationOverlayHeld(bool held);
 		float _QuantisationOverlayAlpha(Time now) const;
 		void _ApplyQuantisationOverlayAlpha(float alpha);
-		timing::QuantisationInteractionContext _InteractionContext() const;
+		engine::QuantisationInteractionContext _InteractionContext() const;
 		void _InvalidateHover2d();
 		void _ResolveHoverPath2d(std::vector<std::weak_ptr<base::GuiElement>>& outPath);
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
@@ -328,8 +334,12 @@ namespace engine
 		bool _HasQuantisationSelection() const;
 		bool _HasQuantisationHover() const;
 		bool _IsMidiPhaseDragModifier(base::Action::Modifiers modifiers) const noexcept;
-		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot);
+		void _HandleRemoteTempoSnapshot(const ninjam::NinjamRemoteSnapshot& snapshot,
+			const std::optional<engine::QuantisationTiming>& localTiming,
+			bool hasLocalContent);
 		void _ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update);
+		void _LogNinjamTimingDiagnostics(const ninjam::NinjamTimingDiagnostics& diagnostics);
+		void _LogNinjamTempoJoinState();
 		void _EnsureRemoteTempoPromptUi();
 		void _OpenRemoteTempoPromptIfNeeded();
 		void _HandleRemoteTempoPromptDecision(bool accept);
@@ -357,7 +367,7 @@ namespace engine
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
-		timing::TimingQuantiser _quantisation;
+		engine::Quantiser _quantisation;
 		io::LoggingConfig _loggingConfig;
 		std::shared_ptr<gui::GuiRadio> _modeRadio;
 		std::shared_ptr<gui::GuiNumericInput> _midiChannelOverrideInput;
@@ -374,6 +384,11 @@ namespace engine
 		gui::GuiFocusManager _focusManager;
 		gui::GuiPopupManager _popupManager;
 		bool _remoteTempoDialogOpen = false;
+		std::uint64_t _lastPresentedNinjamDiagnosticSequence = 0u;
+		std::uint64_t _lastPresentedNinjamDiagnosticOverflowCount = 0u;
+		std::uint64_t _ninjamJoinGeneration = 0u;
+		std::uint64_t _ninjamTempoRequestId = 0u;
+		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		actions::ActionUndoHistory _undoHistory;
@@ -387,7 +402,7 @@ namespace engine
 		bool _hover2dDirty;
 		std::vector<unsigned char> _lastLoggedHoverPath;
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
-		timing::TimingQuantiserController _quantisationInteraction;
+		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
 		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;

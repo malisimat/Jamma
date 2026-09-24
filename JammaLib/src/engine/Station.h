@@ -1,5 +1,8 @@
 #pragma once
 
+// Performance/mixing channel and LoopTake owner; fans neutral operations downward
+// while each take and loop retains its own state, anchors, length, and phase.
+
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -8,7 +11,7 @@
 #include <mutex>
 #include <vector>
 #include "LoopTake.h"
-#include "../timing/TimingQuantiser.h"
+#include "../engine/Quantiser.h"
 #include "../graphics/QuantisationModel.h"
 #include "../graphics/QuantisationDivisionModel.h"
 #include "../graphics/StationModel.h"
@@ -94,6 +97,11 @@ namespace engine
 			std::wstring dir);
 		static audio::AudioMixerParams GetMixerParams(utils::Size2d stationSize,
 			audio::BehaviourParams behaviour);
+		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
+		double MasterLevelForExport() const;
+		std::vector<double> BusLevelsForExport() const;
+		bool RestoreMixerLevels(double masterLevel, const std::vector<double>& busLevels);
+		bool RestoreAudioRoutes(const std::vector<std::vector<unsigned long>>& routes);
 
 		virtual std::string ClassName() const override { return "Station"; }
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
@@ -110,11 +118,15 @@ namespace engine
 			unsigned int numSamps,
 			std::uint32_t blockStartSample = 0u);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
-		// Fans one unified audio-boundary transport correction out to every local
-		// take. Audio-thread only; called once at the top of the callback block.
-		void ApplyTimingCommand(long long deltaSamps,
-			std::uint64_t generation,
-			LoopTake::TimingCorrectionReason reason) noexcept;
+		// Fans one policy-neutral accepted correction out to every local take.
+		// Audio-thread only; called once at the top of the callback block.
+		void ApplyAcceptedTimingCorrection(long long deltaSamps,
+			std::uint64_t generation) noexcept;
+		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
+		void InvalidateSceneAnchors() noexcept;
+		void ResetTimingEpoch() noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
 		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
@@ -154,11 +166,13 @@ namespace engine
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
 		void AddTrigger(std::shared_ptr<Trigger> trigger);
+		// Call only while audio is paused and the scene mutex is held.
+		std::vector<TriggerTake> SnapshotTriggerHistoryForExport() const;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
 		void SetClock(std::shared_ptr<utils::Timer> clock);
-		void SetQuantisationParams(std::optional<timing::QuantisationParams> params, bool confirm = false);
+		void SetQuantisationParams(std::optional<engine::QuantisationParams> params, bool confirm = false);
 		void ClearQuantisationParams();
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
@@ -202,6 +216,11 @@ namespace engine
 		// Replacement semantics: one MIDI output routes to at most one plugin.
 		void SetMidiVstRoute(unsigned int midiOutputIndex, size_t vstIndex);
 		void ClearMidiVstRoutes();
+		// Non-RT persistence transfer. The audio callback continues to consume only
+		// immutable, retained snapshots; these methods never mutate one in place.
+		midi::MidiVstRoutingSnapshot SnapshotMidiVstRoutesForExport() const;
+		bool RestoreMidiVstRoutes(const midi::MidiVstRoutingSnapshot& routes,
+			size_t loadedPluginCount);
 
 		// VST chain management (non-RT, queued through the job thread).
 		// LoadVstPlugin queues an async load; once the load completes the plugin
@@ -211,6 +230,10 @@ namespace engine
 		// normal interactive loads where no state needs to be restored.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only synchronous counterpart used before Scene::InitAudio().
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 
@@ -288,6 +311,7 @@ namespace engine
 		std::optional<std::shared_ptr<LoopTake>> _TryGetTake(std::string id);
 		void _WireVuSliders();
 		using MidiVstRoutingSnapshot = midi::MidiVstRoutingSnapshot;
+		static constexpr std::size_t MaxMidiVstRouteOutputs = 4096u;
 
 		// --- WriteBlock helpers (audio thread) ---
 
@@ -328,9 +352,9 @@ namespace engine
 			midi::MidiLoop*                   loop = nullptr;            // raw observer — lifetime owned by LoopTake
 			std::uint8_t                      laneIdx = 0u;              // which lane within loop to read
 			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
-			std::uint32_t                     loopPhaseAnchor = 0u;      // frozen at rebuild; loop-relative phase origin
+			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
 			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
-			// effectiveAnchor = loopPhaseAnchor + anchorCorrection (modular uint32)
+			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.
 		// Kept separate from AutomationDispatch so the dispatch buffers are
@@ -352,7 +376,6 @@ namespace engine
 		// Last recorded MIDI loop in a take (most recently created loop with a
 		// non-zero length), or nullptr. Non-audio thread helper.
 		static std::shared_ptr<midi::MidiLoop> _LastRecordedMidiLoop(const std::shared_ptr<LoopTake>& take);
-
 		bool _flipTakeBuffer;
 		bool _flipAudioBuffer;
 		std::string _name;
@@ -380,7 +403,6 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
-
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on
 		// the non-audio thread in RebuildAutomationDispatch.
@@ -433,7 +455,7 @@ namespace engine
 		unsigned int _blockSize = 512u;
 		std::vector<float> _vstBlockScratch;
 		std::vector<float*> _vstBlockPtrs;
-		std::optional<timing::QuantisationParams> _pendingQuantisationParams;
+		std::optional<engine::QuantisationParams> _pendingQuantisationParams;
 		bool _pendingQuantisationConfirm = false;
 		float _quantisationOverlayAlpha = 0.0f;
 		io::JamFile::GlobalMidiQuantState _globalMidiQuantState = io::JamFile::GlobalMidiQuantState::Off;

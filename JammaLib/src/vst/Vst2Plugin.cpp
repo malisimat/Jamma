@@ -708,17 +708,21 @@ VstIntPtr __cdecl Vst2Plugin::HostCallback(AEffect* effect,
 		{
 			auto& ti = self->_timeInfo;
 			ti = {};
-			ti.samplePos  = self->_hostTime.samplePos;
+			ti.samplePos  = static_cast<double>(self->_hostTime.samplePos);
 			ti.sampleRate = self->_hostTime.sampleRate;
 			ti.tempo      = self->_hostTime.tempo;
 			ti.timeSigNumerator   = self->_hostTime.bpi;
 			ti.timeSigDenominator = 4;
-			ti.ppqPos = (ti.sampleRate > 0.0)
-				? (ti.samplePos / ti.sampleRate) * (ti.tempo / 60.0)
-				: 0.0;
-			ti.flags = kVstPpqPosValid | kVstTempoValid | kVstTimeSigValid;
+			ti.flags = kVstTempoValid | kVstTimeSigValid;
+			if (self->_hostTime.hasPpqPos)
+			{
+				ti.ppqPos = self->_hostTime.ppqPos;
+				ti.flags |= kVstPpqPosValid;
+			}
 			if (self->_hostTime.isPlaying)
 				ti.flags |= kVstTransportPlaying;
+			if (self->_hostTime.musicalPositionChanged)
+				ti.flags |= kVstTransportChanged;
 			return reinterpret_cast<VstIntPtr>(&ti);
 		}
 		return 0;

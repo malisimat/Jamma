@@ -66,6 +66,23 @@ TEST(Timer, SetMasterLoopIndexFracClampsOutOfRangeValues) {
 	EXPECT_NEAR(1.0 / 48000.0, t.MasterLoopIndexFrac(), 1e-9);
 }
 
+TEST(Timer, InitialiseAbsoluteSamplePosRestoresWholeLoopsAndPhase) {
+	Timer t;
+	t.SetQuantisation(12000u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(48000ul);
+
+	ASSERT_TRUE(t.InitialiseAbsoluteSamplePos((17ull * 48000ull) + 12345ull));
+	EXPECT_EQ(17ull, t.LoopCount());
+	EXPECT_EQ(12345u, t.SampOffset());
+	EXPECT_EQ((17ull * 48000ull) + 12345ull, t.AbsoluteSamplePos());
+}
+
+TEST(Timer, InitialiseAbsoluteSamplePosRejectsUnseededTimer) {
+	Timer t;
+	EXPECT_FALSE(t.InitialiseAbsoluteSamplePos(12345u));
+	EXPECT_EQ(0u, t.AbsoluteSamplePos());
+}
+
 TEST(Timer, AudioCommandIsConsumedBeforeTheFollowingTickExactlyOnce) {
 	Timer t;
 	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
@@ -83,6 +100,24 @@ TEST(Timer, AudioCommandIsConsumedBeforeTheFollowingTickExactlyOnce) {
 	EXPECT_FALSE(t.ConsumePendingCommand());
 	t.Tick(100u, 0u);
 	EXPECT_EQ(400u, t.SampOffset());
+}
+
+TEST(Timer, SceneTimelineRemainsMonotonicWhenTimingReplacementResetsMusicalEpoch) {
+	Timer t;
+	t.SetQuantisation(100u, Timer::QUANTISE_MULTIPLE);
+	t.SetSeedSourceLength(1000ul);
+	t.Tick(2500u, 0u);
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(2500ul, t.AbsoluteSamplePos());
+
+	const Timer::Command replacement{
+		Timer::CommandType::ReplaceTiming, 1u, 1200ul, 120u,
+		Timer::QUANTISE_MULTIPLE, 250 };
+	ASSERT_TRUE(t.ApplyCommand(replacement));
+	EXPECT_EQ(2500u, t.SceneSamplePos());
+	EXPECT_EQ(250ul, t.AbsoluteSamplePos());
+	t.Tick(64u, 0u);
+	EXPECT_EQ(2564u, t.SceneSamplePos());
 }
 
 TEST(Timer, InvalidationPreventsAnOlderGenerationFromMovingTheClock) {

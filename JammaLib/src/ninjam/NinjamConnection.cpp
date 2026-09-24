@@ -1,4 +1,5 @@
-
+// Keeps NJClient lifecycle and observation authority off the audio callback;
+// callback interaction stays pinned, bounded, and free of policy decisions.
 #include "NinjamConnection.h"
 
 #include <algorithm>
@@ -10,50 +11,44 @@
 #include "njclient.h"
 #include "../../include/Constants.h"
 
-namespace
+bool ninjam::NinjamConnection::IsAuthFailure(const std::string& err)
 {
-	constexpr unsigned int kMinimumNinjamOutputChannels = 4u;
-	constexpr unsigned int kReservedMonitorOutputChannels = 2u;
+	return err.find("invalid login/password") != std::string::npos
+		|| err.find("invalid credentials") != std::string::npos
+		|| err.find("authentication") != std::string::npos;
+}
 
-	bool IsAuthFailure(const std::string& err)
-	{
-		return err.find("invalid login/password") != std::string::npos
-			|| err.find("invalid credentials") != std::string::npos
-			|| err.find("authentication") != std::string::npos;
-	}
+bool ninjam::NinjamConnection::EqualsIgnoreCase(const std::string& lhs, const std::string& rhs)
+{
+	if (lhs.size() != rhs.size())
+		return false;
 
-	bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs)
+	for (size_t i = 0; i < lhs.size(); i++)
 	{
-		if (lhs.size() != rhs.size())
+		if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+			std::tolower(static_cast<unsigned char>(rhs[i])))
 			return false;
-
-		for (size_t i = 0; i < lhs.size(); i++)
-		{
-			if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
-				std::tolower(static_cast<unsigned char>(rhs[i])))
-				return false;
-		}
-
-		return true;
 	}
 
-	std::string DescribeStatusError(NJClient* client, int status)
-	{
-		auto err = std::string(client && client->GetErrorStr() ? client->GetErrorStr() : "");
-		if (!err.empty())
-			return err;
+	return true;
+}
 
-		switch (status)
-		{
-		case NJClient::NJC_STATUS_INVALIDAUTH:
-			return "Invalid credentials";
-		case NJClient::NJC_STATUS_CANTCONNECT:
-			return "Could not reach server";
-		case NJClient::NJC_STATUS_DISCONNECTED:
-			return "Disconnected";
-		default:
-			return "NINJAM connection error";
-		}
+std::string ninjam::NinjamConnection::DescribeStatusError(NJClient* client, int status)
+{
+	auto err = std::string(client && client->GetErrorStr() ? client->GetErrorStr() : "");
+	if (!err.empty())
+		return err;
+
+	switch (status)
+	{
+	case NJClient::NJC_STATUS_INVALIDAUTH:
+		return "Invalid credentials";
+	case NJClient::NJC_STATUS_CANTCONNECT:
+		return "Could not reach server";
+	case NJClient::NJC_STATUS_DISCONNECTED:
+		return "Disconnected";
+	default:
+		return "NINJAM connection error";
 	}
 }
 
@@ -184,7 +179,12 @@ bool NinjamConnection::_StartConnectAttempt(std::chrono::steady_clock::time_poin
 		return false;
 	}
 
-	_EnsureWorkDir();
+	if (!_EnsureWorkDir())
+	{
+		_lastError = "NINJAM work directory is unavailable";
+		_state = ConnectionState::Failed;
+		return false;
+	}
 
 	_client->LicenseAgreementCallback = [](void*, const char*) { return 1; };
 	_client->config_savelocalaudio = -1;
@@ -301,6 +301,7 @@ void NinjamConnection::Pump()
 	if (!_client)
 		return;
 
+	const auto wasConnected = _isConnected.load(std::memory_order_acquire);
 	auto now = std::chrono::steady_clock::now();
 	{
 		std::scoped_lock lock(_connectionMutex);
@@ -380,6 +381,14 @@ void NinjamConnection::Pump()
 		}
 
 		_isConnected = false;
+		if (wasConnected)
+		{
+			// The job thread remains the sole B004 remote-timing publisher. Clear
+			// the completed tuple on the physical loss edge before retrying.
+			_PublishRemoteTiming({});
+			std::scoped_lock snapshotLock(_snapshotMutex);
+			_snapshot = {};
+		}
 		const auto isAuthFailure = status == NJClient::NJC_STATUS_INVALIDAUTH || IsAuthFailure(_lastError);
 		if (isAuthFailure)
 		{
@@ -416,7 +425,7 @@ void NinjamConnection::SetAudioFormat(unsigned int sampleRate,
 	_numDacPhysicalChannels = numOutputChannels;
 	_numOutputChannels = std::max(
 		numOutputChannels > 0 ? numOutputChannels : 2u,
-		kMinimumNinjamOutputChannels);
+		MinimumOutputChannels);
 	_inLatencySamps = inLatencySamps;
 	_outLatencySamps = outLatencySamps;
 	_ResizeScratchBuffers(_blockSize, _InputScratchChannelCapacity());
@@ -453,7 +462,7 @@ void NinjamConnection::_ResizeExportDelayLines()
 
 		_exportTimingState = {};
 
-		// _exportTick ("n" in the K_dac/K_adc formula) must stay in lockstep
+		// _exportTick (the export delay write cursor) must stay in lockstep
 		// with the delay lines' own internal write cursors -- only reset it
 		// here, paired with brand-new (writeIndex==0) buffers. If the
 		// channel count is unchanged, the existing buffers' write cursors are
@@ -543,15 +552,63 @@ unsigned int NinjamConnection::ExportAnomalyCount() const noexcept
 	return _exportAnomalyCount.load(std::memory_order_relaxed);
 }
 
-void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
+void NinjamConnection::_PublishRemoteTiming(const NinjamRemoteTiming& timing) noexcept
+{
+	const auto completedSequence = _remoteTimingSequence.load(std::memory_order_relaxed);
+	_remoteTimingSequence.store(completedSequence + 1u, std::memory_order_release);
+	_remoteTimingIsConnected.store(timing.IsConnected, std::memory_order_relaxed);
+	_remoteTimingIntervalLength.store(timing.IntervalLengthSamps, std::memory_order_relaxed);
+	_remoteTimingIntervalPosition.store(timing.IntervalPositionSamps, std::memory_order_relaxed);
+	_remoteTimingSourceSampleRate.store(timing.SourceSampleRate, std::memory_order_relaxed);
+	_remoteTimingBpm.store(timing.Bpm, std::memory_order_relaxed);
+	_remoteTimingBpi.store(timing.Bpi, std::memory_order_relaxed);
+	_remoteTimingIsValid.store(timing.IsValid, std::memory_order_relaxed);
+	_remoteTimingHasDeviceAudioSampleAtObservation.store(
+		timing.HasDeviceAudioSampleAtObservation, std::memory_order_relaxed);
+	_remoteTimingDeviceAudioSampleAtObservation.store(
+		timing.DeviceAudioSampleAtObservation, std::memory_order_relaxed);
+	_remoteTimingSequence.store(completedSequence + 2u, std::memory_order_release);
+}
+
+NinjamRemoteTiming NinjamConnection::_ReadPublishedRemoteTiming() const noexcept
+{
+	for (auto attempt = 0u; attempt < 2u; ++attempt)
+	{
+		const auto sequenceBefore = _remoteTimingSequence.load(std::memory_order_acquire);
+		if ((sequenceBefore & 1u) != 0u)
+			continue;
+
+		NinjamRemoteTiming timing;
+		timing.IsConnected = _remoteTimingIsConnected.load(std::memory_order_relaxed);
+		timing.IntervalLengthSamps = _remoteTimingIntervalLength.load(std::memory_order_relaxed);
+		timing.IntervalPositionSamps = _remoteTimingIntervalPosition.load(std::memory_order_relaxed);
+		timing.SourceSampleRate = _remoteTimingSourceSampleRate.load(std::memory_order_relaxed);
+		timing.Bpm = _remoteTimingBpm.load(std::memory_order_relaxed);
+		timing.Bpi = _remoteTimingBpi.load(std::memory_order_relaxed);
+		timing.IsValid = _remoteTimingIsValid.load(std::memory_order_relaxed);
+		timing.HasDeviceAudioSampleAtObservation = _remoteTimingHasDeviceAudioSampleAtObservation.load(
+			std::memory_order_relaxed);
+		timing.DeviceAudioSampleAtObservation = _remoteTimingDeviceAudioSampleAtObservation.load(
+			std::memory_order_relaxed);
+
+		const auto sequenceAfter = _remoteTimingSequence.load(std::memory_order_acquire);
+		if (sequenceBefore == sequenceAfter && (sequenceAfter & 1u) == 0u)
+			return timing;
+	}
+	return {};
+}
+
+NinjamRemoteTiming NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 	unsigned int numDacChannels,
 	const float* interleavedAdcInput,
 	unsigned int numAdcChannels,
 	unsigned int numFrames,
-	unsigned int sampleRate)
+	unsigned int sampleRate,
+	std::uint64_t audioBlockStartSample)
 {
+	const auto remoteTiming = _ReadPublishedRemoteTiming();
 	if (!_isConnected || !_client || numFrames == 0u)
-		return;
+		return remoteTiming;
 
 	if (sampleRate > 0)
 		_sampleRate = sampleRate;
@@ -562,7 +619,7 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 	if (_outScratch.size() < _numOutputChannels
 		|| (!_outScratch.empty() && numFrames > _outScratch[0].size())
 		|| (!_inScratch.empty() && numFrames > _inScratch[0].size()))
-		return;
+		return remoteTiming;
 
 	for (auto chan = 0u; chan < _numOutputChannels; chan++)
 		std::fill(_outScratch[chan].begin(), _outScratch[chan].begin() + numFrames, 0.0f);
@@ -578,47 +635,46 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 
 	if (useCompensation)
 	{
-		// Write this block's physical DAC/ADC content into the delay lines
-		// first, then read NJClient's live interval position as late as
-		// possible (immediately before AudioProc) so K is as fresh as
-		// possible — see doc/ninjam-live-loop-latency-sync-planC.md §1/§3.
+		// Write this block's physical DAC/ADC content into the delay lines, then
+		// project the last coherent job-owned timing tuple to this block boundary.
 		_WriteExportDelayLine(_dacDelayLines, interleavedDacOutput, numDacChannels, numFrames, _exportSilenceScratch);
 		_WriteExportDelayLine(_adcDelayLines, interleavedAdcInput, numAdcChannels, numFrames, _exportSilenceScratch);
 
-		int posInt = 0;
-		int lengthInt = 0;
-		_client->GetPosition(&posInt, &lengthInt);
+		const auto deviceTiming = ProjectTimingToAudioSample(ToDeviceTiming(remoteTiming,
+			remoteTiming.IsConnected, sampleRate, 0u, 0ul, 0u), audioBlockStartSample);
 
 		ExportLaneTimingInput timingInput;
-		timingInput.n = _exportTick;
-		timingInput.numFrames = numFrames;
-		timingInput.pos = posInt > 0 ? static_cast<unsigned int>(posInt) : 0u;
-		timingInput.length = lengthInt > 0 ? static_cast<unsigned int>(lengthInt) : 0u;
-		// TODO(latency): inLatencySamps/outLatencySamps are hardware latency
+		timingInput.DelayWriteCursorSamps = _exportTick;
+		timingInput.NumFrames = numFrames;
+		timingInput.RemoteIntervalPhaseSamps = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
+			? deviceTiming.IntervalPositionSamps : 0u;
+		timingInput.RemoteIntervalLengthSamps = deviceTiming.IsValid && deviceTiming.HasDeviceAudioSampleAtObservation
+			? deviceTiming.IntervalLengthSamps : 0u;
+		// TODO(latency): InLatencySamps/OutLatencySamps are hardware latency
 		// only. Loop-driven VST latency (Loop::CurrentVstLatencySamps()) is
-		// not yet folded into outLatencySamps here -- see
+		// not yet folded into OutLatencySamps here -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
-		timingInput.inLatencySamps = _inLatencySamps;
-		timingInput.outLatencySamps = _outLatencySamps;
+		timingInput.InLatencySamps = _inLatencySamps;
+		timingInput.OutLatencySamps = _outLatencySamps;
 
 		const auto timing = ExportLaneTiming::Compute(timingInput, _exportTimingState);
 		_exportTick += numFrames;
 
-		if (timing.generationReset)
+		if (timing.GenerationReset)
 		{
 			for (auto& buf : _dacDelayLines)
 				buf->Reset();
 			for (auto& buf : _adcDelayLines)
 				buf->Reset();
 
-			if (timing.anomalyDetected)
+			if (timing.AnomalyDetected)
 				_exportAnomalyCount.fetch_add(1u, std::memory_order_relaxed);
 		}
 
-		if (timing.valid)
+		if (timing.Valid)
 		{
-			_ReadExportDelayLine(_dacDelayLines, timing.dacDelaySamps, numFrames, _delayedDacInterleaved, _dacDelayTemp);
-			_ReadExportDelayLine(_adcDelayLines, timing.adcDelaySamps, numFrames, _delayedAdcInterleaved, _adcDelayTemp);
+			_ReadExportDelayLine(_dacDelayLines, timing.DacDelaySamps, numFrames, _delayedDacInterleaved, _dacDelayTemp);
+			_ReadExportDelayLine(_adcDelayLines, timing.AdcDelaySamps, numFrames, _delayedAdcInterleaved, _adcDelayTemp);
 			dacForPacking = _delayedDacInterleaved.data();
 			adcForPacking = _delayedAdcInterleaved.data();
 		}
@@ -695,6 +751,8 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 		localInputChannelCount = static_cast<int>(laneChannelCount);
 	}
 
+	const auto completedAudioProcSequence = _audioProcSequence.load(std::memory_order_relaxed);
+	_audioProcSequence.store(completedAudioProcSequence + 1u, std::memory_order_release);
 	_client->AudioProc(
 		localInputChannelCount > 0 ? _inPtrs.data() : nullptr,
 		localInputChannelCount,
@@ -702,35 +760,12 @@ void NinjamConnection::ProcessExportBlock(const float* interleavedDacOutput,
 		static_cast<int>(_numOutputChannels),
 		static_cast<int>(numFrames),
 		static_cast<int>(_sampleRate));
+	_completedAudioSample.store(audioBlockStartSample + numFrames, std::memory_order_relaxed);
+	_hasCompletedAudioSample.store(true, std::memory_order_relaxed);
+	_audioProcSequence.store(completedAudioProcSequence + 2u, std::memory_order_release);
 
 	_lastNumFrames = numFrames;
-}
-
-NinjamRemoteTiming NinjamConnection::GetLiveTiming() const noexcept
-{
-	NinjamRemoteTiming timing;
-	if (!_isConnected || !_client)
-		return timing;
-	timing.IsConnected = true;
-
-	int intervalPosition = 0;
-	int intervalLength = 0;
-	_client->GetPosition(&intervalPosition, &intervalLength);
-
-	timing.IntervalPositionSamps = intervalPosition >= 0 ? static_cast<unsigned int>(intervalPosition) : 0u;
-	timing.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
-	timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
-	timing.Bpm = _client->GetActualBPM();
-	timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
-	// Same plausibility boundary as the snapshot path: njclient briefly reports a
-	// nonsensical placeholder tempo before the server CONFIG_CHANGE_NOTIFY is
-	// parsed, and that placeholder still satisfies "> 0" (§2.9).
-	timing.IsValid = ninjam::IsValidRemoteTiming(timing.IntervalLengthSamps,
-		timing.SourceSampleRate, timing.Bpm, timing.Bpi,
-		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
-		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
-		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi));
-	return timing;
+	return remoteTiming;
 }
 
 NinjamRemoteSnapshot NinjamConnection::Snapshot() const
@@ -741,7 +776,10 @@ NinjamRemoteSnapshot NinjamConnection::Snapshot() const
 
 bool NinjamConnection::RequestServerTempo(float bpm, int bpi)
 {
-	if (bpm <= 0.0f || bpi <= 0)
+	if (!IsValidNinjamTempo(bpm, bpi,
+		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
+		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
+		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi)))
 		return false;
 
 	const auto bpmVal = FormatTempoBpm(bpm);
@@ -813,28 +851,21 @@ bool NinjamConnection::ConsumeStereoPair(unsigned int outChannelLeft,
 	return true;
 }
 
-void NinjamConnection::_EnsureWorkDir()
+bool NinjamConnection::_EnsureWorkDir()
 {
-	if (_workDir.empty())
+	const auto configuredPath = std::filesystem::path(_workDir);
+	if (_workDir.empty() || configuredPath.is_relative())
 	{
-		try
-		{
-			auto path = std::filesystem::temp_directory_path() / "Jamma" / "Ninjam";
-			_workDir = path.string();
-		}
-		catch (...)
-		{
-			_workDir = ".\\ninjam-work";
-		}
+		std::error_code error;
+		auto path = std::filesystem::temp_directory_path(error) / "Jamma" / "Ninjam";
+		if (error)
+			return false;
+		_workDir = path.string();
 	}
 
-	try
-	{
-		std::filesystem::create_directories(_workDir);
-	}
-	catch (...)
-	{
-	}
+	std::error_code error;
+	std::filesystem::create_directories(_workDir, error);
+	return !error;
 }
 
 void NinjamConnection::_ResizeScratchBuffers(unsigned int numFrames,
@@ -925,25 +956,39 @@ void NinjamConnection::_UpdateSnapshot()
 		return;
 
 	NinjamRemoteSnapshot snapshot;
+	snapshot.Timing = _ReadPublishedRemoteTiming();
+	const auto audioSequenceBefore = _audioProcSequence.load(std::memory_order_acquire);
+	if ((audioSequenceBefore & 1u) == 0u)
+	{
+		NinjamRemoteTiming timing;
+		timing.IsConnected = true;
+		int intervalPos = 0;
+		int intervalLength = 0;
+		_client->GetPosition(&intervalPos, &intervalLength);
+		timing.IntervalPositionSamps = intervalPos >= 0
+			? static_cast<unsigned int>(intervalPos) : 0u;
+		timing.IntervalLengthSamps = intervalLength > 0
+			? static_cast<unsigned int>(intervalLength) : 0u;
+		timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
+		timing.Bpm = _client->GetActualBPM();
+		timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
+		timing.HasDeviceAudioSampleAtObservation = _hasCompletedAudioSample.load(std::memory_order_relaxed);
+		timing.DeviceAudioSampleAtObservation = _completedAudioSample.load(std::memory_order_relaxed);
+		// NJClient briefly reports an implausible placeholder before the real
+		// CONFIG_CHANGE_NOTIFY arrives, so validate at the publication owner.
+		timing.IsValid = ninjam::IsValidRemoteTiming(timing.IntervalLengthSamps,
+			timing.SourceSampleRate, timing.Bpm, timing.Bpi,
+			constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
+			static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
+			static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi));
 
-	int intervalPos = 0;
-	int intervalLength = 0;
-	_client->GetPosition(&intervalPos, &intervalLength);
-	snapshot.Timing.IntervalPositionSamps = intervalPos > 0 ? static_cast<unsigned int>(intervalPos) : 0u;
-	snapshot.Timing.IntervalLengthSamps = intervalLength > 0 ? static_cast<unsigned int>(intervalLength) : 0u;
-	snapshot.Timing.SourceSampleRate = static_cast<unsigned int>(std::max(0, _client->GetSampleRate()));
-	snapshot.Timing.Bpm = _client->GetActualBPM();
-	snapshot.Timing.Bpi = static_cast<unsigned int>(std::max(0, _client->GetBPI()));
-	// Bounds-check against constants::MinPlausibleNinjamBpm/Bpi rather than a
-	// bare positivity check: njclient briefly reports a nonsensical placeholder
-	// tempo (e.g. bpm=2646, bpi=1) for the short window before the server's
-	// real CONFIG_CHANGE_NOTIFY has been parsed, and that placeholder still
-	// satisfies "> 0". Shared with the live path via IsValidRemoteTiming (§2.9).
-	snapshot.Timing.IsValid = ninjam::IsValidRemoteTiming(snapshot.Timing.IntervalLengthSamps,
-		snapshot.Timing.SourceSampleRate, snapshot.Timing.Bpm, snapshot.Timing.Bpi,
-		constants::MinPlausibleNinjamBpm, constants::MaxPlausibleNinjamBpm,
-		static_cast<unsigned int>(constants::MinPlausibleNinjamBpi),
-		static_cast<unsigned int>(constants::MaxPlausibleNinjamBpi));
+		const auto audioSequenceAfter = _audioProcSequence.load(std::memory_order_acquire);
+		if (audioSequenceBefore == audioSequenceAfter && (audioSequenceAfter & 1u) == 0u)
+		{
+			_PublishRemoteTiming(timing);
+			snapshot.Timing = timing;
+		}
+	}
 	const auto localUserName = std::string(_client->GetUser() ? _client->GetUser() : "");
 
 	std::set<std::string> activeUsers;
@@ -1068,7 +1113,7 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 	for (const auto& pair : _userOutputChannels)
 		usedChannels.insert(pair.second);
 
-	for (auto outChannel = kReservedMonitorOutputChannels;
+	for (auto outChannel = ReservedMonitorOutputChannels;
 		(outChannel + 1u) < _numOutputChannels;
 		outChannel += 2u)
 	{
@@ -1079,8 +1124,8 @@ unsigned int NinjamConnection::_AssignOutputChannel(const std::string& userName)
 		}
 	}
 
-	const auto fallbackChannel = (_numOutputChannels > kReservedMonitorOutputChannels + 1u) ?
-		kReservedMonitorOutputChannels :
+	const auto fallbackChannel = (_numOutputChannels > ReservedMonitorOutputChannels + 1u) ?
+		ReservedMonitorOutputChannels :
 		0u;
 	_userOutputChannels[userName] = fallbackChannel;
 	return fallbackChannel;

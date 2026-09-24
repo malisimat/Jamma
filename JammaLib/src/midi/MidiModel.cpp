@@ -12,28 +12,21 @@ using namespace midi;
 using base::DrawContext;
 using graphics::GlDrawContext;
 
-namespace
+void MidiModel::AddTri(std::vector<float>& verts,
+            float x1, float y1, float z1,
+            float x2, float y2, float z2,
+            float x3, float y3, float z3)
 {
-	static constexpr unsigned int BaseArcSegments = 16u;
-	static constexpr unsigned int TimePitchAttribute = 3u;
-	static constexpr unsigned int ShapeAttribute = 4u;
+	verts.push_back(x1); verts.push_back(y1); verts.push_back(z1);
+	verts.push_back(x2); verts.push_back(y2); verts.push_back(z2);
+	verts.push_back(x3); verts.push_back(y3); verts.push_back(z3);
+}
 
-	void AddTri(std::vector<float>& verts,
-	            float x1, float y1, float z1,
-	            float x2, float y2, float z2,
-	            float x3, float y3, float z3)
-	{
-		verts.push_back(x1); verts.push_back(y1); verts.push_back(z1);
-		verts.push_back(x2); verts.push_back(y2); verts.push_back(z2);
-		verts.push_back(x3); verts.push_back(y3); verts.push_back(z3);
-	}
-
-	void AddUvTri(std::vector<float>& uvs, float u1, float v1, float u2, float v2, float u3, float v3)
-	{
-		uvs.push_back(u1); uvs.push_back(v1);
-		uvs.push_back(u2); uvs.push_back(v2);
-		uvs.push_back(u3); uvs.push_back(v3);
-	}
+void MidiModel::AddUvTri(std::vector<float>& uvs, float u1, float v1, float u2, float v2, float u3, float v3)
+{
+	uvs.push_back(u1); uvs.push_back(v1);
+	uvs.push_back(u2); uvs.push_back(v2);
+	uvs.push_back(u3); uvs.push_back(v3);
 }
 
 MidiModelParams::MidiModelParams()
@@ -46,8 +39,8 @@ MidiModelParams::MidiModelParams()
 {
 	ModelTextures = { "levels" };
 	ModelShaders = { "midi_note" };
-	Verts = MidiModel::BuildBaseVerts(BaseArcSegments);
-	Uvs = MidiModel::BuildBaseUvs(BaseArcSegments);
+	Verts = MidiModel::BuildBaseVerts(MidiModel::BaseArcSegments);
+	Uvs = MidiModel::BuildBaseUvs(MidiModel::BaseArcSegments);
 }
 
 MidiModelParams::MidiModelParams(gui::GuiModelParams params)
@@ -63,9 +56,9 @@ MidiModelParams::MidiModelParams(gui::GuiModelParams params)
 	if (ModelShaders.empty())
 		ModelShaders = { "midi_note" };
 	if (Verts.empty())
-		Verts = MidiModel::BuildBaseVerts(BaseArcSegments);
+		Verts = MidiModel::BuildBaseVerts(MidiModel::BaseArcSegments);
 	if (Uvs.empty())
-		Uvs = MidiModel::BuildBaseUvs(BaseArcSegments);
+		Uvs = MidiModel::BuildBaseUvs(MidiModel::BaseArcSegments);
 }
 
 MidiModel::MidiModel(MidiModelParams params)

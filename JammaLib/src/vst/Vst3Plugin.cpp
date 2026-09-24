@@ -1764,11 +1764,23 @@ void Vst3Plugin::UpdateHostTime(const HostTimeState& state) noexcept
 		return;
 
 	_impl->hostTime = state;
-	_impl->processContext.projectTimeSamples = state.samplePos;
+	_impl->processContext.projectTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
+	_impl->processContext.continousTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePos);
 	_impl->processContext.tempo = state.tempo;
 	_impl->processContext.timeSigNumerator = state.bpi;
 	_impl->processContext.timeSigDenominator = 4;
-	_impl->processContext.state = state.isPlaying ? 1u : 0u;
+	_impl->processContext.state = Steinberg::Vst::ProcessContext::kContTimeValid
+		| Steinberg::Vst::ProcessContext::kTempoValid
+		| Steinberg::Vst::ProcessContext::kTimeSigValid;
+	if (state.hasPpqPos)
+	{
+		_impl->processContext.projectTimeMusic = state.ppqPos;
+		// VST3 has no per-block transport-locate flag. The updated project-time,
+		// tempo, and time-signature fields are delivered atomically in this context.
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kProjectTimeMusicValid;
+	}
+	if (state.isPlaying)
+		_impl->processContext.state |= Steinberg::Vst::ProcessContext::kPlaying;
 	_impl->processContext.sampleRate = state.sampleRate;
 #else
 	(void)state;
@@ -2144,19 +2156,16 @@ void Vst3Plugin::SetState(const std::vector<std::uint8_t>& blob)
 #endif
 }
 
-namespace
+std::mutex& vst::Vst3Plugin::_UiDestroyQueueMutex() noexcept
 {
-	std::mutex& UiDestroyQueueMutex() noexcept
-	{
-		static std::mutex m;
-		return m;
-	}
+	static std::mutex m;
+	return m;
+}
 
-	std::vector<std::shared_ptr<vst::IVstPlugin>>& UiDestroyQueue()
-	{
-		static std::vector<std::shared_ptr<vst::IVstPlugin>> q;
-		return q;
-	}
+std::vector<std::shared_ptr<vst::IVstPlugin>>& vst::Vst3Plugin::_UiDestroyQueue()
+{
+	static std::vector<std::shared_ptr<vst::IVstPlugin>> q;
+	return q;
 }
 
 void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
@@ -2164,16 +2173,16 @@ void vst::QueueForUiThreadDestroy(std::shared_ptr<vst::IVstPlugin> plugin)
 	if (!plugin)
 		return;
 
-	std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
-	UiDestroyQueue().push_back(std::move(plugin));
+	std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
+	Vst3Plugin::_UiDestroyQueue().push_back(std::move(plugin));
 }
 
 std::size_t vst::DrainUiThreadDestroyQueue() noexcept
 {
 	std::vector<std::shared_ptr<vst::IVstPlugin>> drained;
 	{
-		std::lock_guard<std::mutex> lock(UiDestroyQueueMutex());
-		drained.swap(UiDestroyQueue());
+		std::lock_guard<std::mutex> lock(Vst3Plugin::_UiDestroyQueueMutex());
+		drained.swap(Vst3Plugin::_UiDestroyQueue());
 	}
 	const std::size_t count = drained.size();
 	// drained destructs here on the UI thread, running ~Vst3Plugin → Unload →

@@ -7,12 +7,9 @@
 
 using namespace io;
 
-namespace
+void* SerialDevice::_AsHandle(void* handle) noexcept
 {
-	HANDLE AsHandle(void* handle)
-	{
-		return static_cast<HANDLE>(handle);
-	}
+	return static_cast<HANDLE>(handle);
 }
 
 SerialDevice::SerialDevice()
@@ -133,7 +130,7 @@ void SerialDevice::Close()
 {
 	_running.store(false, std::memory_order_release);
 
-	auto handle = AsHandle(_handle);
+	auto handle = _AsHandle(_handle);
 	if (handle != nullptr)
 		CancelIoEx(handle, nullptr);
 
@@ -157,7 +154,7 @@ void SerialDevice::Close()
 
 void SerialDevice::_ReadLoop()
 {
-	auto handle = AsHandle(_handle);
+	auto handle = _AsHandle(_handle);
 	while (_running.load(std::memory_order_acquire) && (handle != nullptr))
 	{
 		unsigned char byte = 0u;

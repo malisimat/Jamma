@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include <optional>
@@ -277,6 +278,8 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
+		// Restore only while constructing a scene, before this trigger can tick.
+		void RestoreTakes(std::vector<TriggerTake> takes);
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,
@@ -286,6 +289,19 @@ namespace engine
 		void _UpdateBehaviour();
 
 	private:
+		static constexpr std::uint8_t MidiCcStatus = 0xB0u;
+		static constexpr unsigned int MidiBindingKindShift = 12u;
+		static constexpr unsigned int MidiBindingChannelShift = 8u;
+		static unsigned int EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
+			unsigned int channel,
+			unsigned int id);
+		static DualBinding MakeMidiBinding(io::RigFile::MidiTriggerEvent kind,
+			unsigned int channel,
+			unsigned int id,
+			unsigned int state);
+		static void AddMidiBindingForChannels(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec,
+			const std::function<void(const DualBinding&)>& onBinding);
+		static bool IsValidMidiBindingSpec(const io::RigFile::Trigger::MidiTriggerBindingSpec& bindingSpec);
 		static bool TryEncodeMidiEvent(const midi::MidiEvent& event,
 			unsigned int& outValue,
 			unsigned int& outState);

@@ -2,20 +2,34 @@
 #include <algorithm>
 #include <cmath>
 
-namespace
+namespace engine
 {
-	void DrainVstChain(std::shared_ptr<vst::VstChain> chain)
+	// JamFile gained bodyPlayIndex after legacy files had already written Index.
+	// Keep this compatibility shim here so Loop construction remains valid while
+	// both formats are accepted; no schema policy leaks into the audio path.
+	struct LoopFileBodyPlayIndex
 	{
-		if (!chain)
-			return;
-		for (size_t i = 0; i < chain->NumPlugins(); ++i)
+		template <typename LoopFile>
+		static unsigned long Value(const LoopFile& loop) noexcept
 		{
-			auto plugin = chain->GetPlugin(i);
-			if (plugin)
-				vst::QueueForUiThreadDestroy(std::move(plugin));
+			if constexpr (requires { loop.BodyPlayIndex; })
+				return loop.BodyPlayIndex;
+			return loop.Index;
 		}
-		chain.reset();
+	};
+}
+
+void engine::Loop::_DrainVstChain(std::shared_ptr<vst::VstChain> chain)
+{
+	if (!chain)
+		return;
+	for (size_t i = 0; i < chain->NumPlugins(); ++i)
+	{
+		auto plugin = chain->GetPlugin(i);
+		if (plugin)
+			vst::QueueForUiThreadDestroy(std::move(plugin));
 	}
+	chain.reset();
 }
 
 using namespace base;
@@ -32,8 +46,8 @@ using actions::ActionResult;
 
 Loop::~Loop()
 {
-	DrainVstChain(_vstChain.load(std::memory_order_acquire));
-	DrainVstChain(_backVstChain);
+	_DrainVstChain(_vstChain.load(std::memory_order_acquire));
+	_DrainVstChain(_backVstChain);
 	ReleaseResources();
 }
 
@@ -112,10 +126,26 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 		behaviour);
 
 	loopParams.Wav = utils::EncodeUtf8(dir) + "/" + loopStruct.Name;
+	loopParams.Id = loopStruct.Id.empty() ? loopStruct.Name : loopStruct.Id;
+	loopParams.Channel = loopStruct.Channel;
 	auto loop = std::make_shared<Loop>(loopParams, mixerParams);
 
-	loop->Load(io::WavReadWriter());
-	loop->Play(loopStruct.MasterLoopCount, loopStruct.Length, false);
+	if (!loop->Load(io::WavReadWriter()) || loopStruct.Length == 0ul
+		|| loopStruct.Length > loop->LoopLength())
+		return std::nullopt;
+
+	const auto bodyPlayIndex = LoopFileBodyPlayIndex::Value(loopStruct);
+	if (bodyPlayIndex >= loopStruct.Length)
+		return std::nullopt;
+
+	// Play consumes a fade-prefixed raw index. bodyPlayIndex is deliberately
+	// fade-free, so restore it only after establishing the logical loop state.
+	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
+	loop->SetBodyPlayIndex(bodyPlayIndex);
+	loop->SetMixerLevel(loopStruct.Level);
+	loop->_pitch = loopStruct.Speed;
+	if (loopStruct.Muted)
+		loop->Mute();
 
 	return loop;
 }
@@ -529,10 +559,13 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 
 	io::JamFile::Loop loop;
 	loop.Name = wavFilename;
+	loop.Id = _loopParams.Id;
+	loop.Channel = _loopParams.Channel;
 	loop.Length = loopLength;
 	loop.Index = (playIndex >= constants::MaxLoopFadeSamps) ?
 		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
+	loop.BodyPlayIndex = BodyPlayIndex();
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
 	loop.Speed = _pitch;
@@ -608,8 +641,8 @@ void Loop::SetVisualUpdatesEnabled(bool enabled)
 void Loop::ForceUnloadAllVstPlugins()
 {
 	auto chain = _vstChain.exchange(nullptr, std::memory_order_acq_rel);
-	DrainVstChain(std::move(chain));
-	DrainVstChain(std::move(_backVstChain));
+	_DrainVstChain(std::move(chain));
+	_DrainVstChain(std::move(_backVstChain));
 	_flipVstChain.store(false, std::memory_order_release);
 	_pendingVstLoads.clear();
 	_pendingVstUnloads.clear();
@@ -628,15 +661,20 @@ bool Loop::Load(const io::WavReadWriter& readWriter)
 	_loopLength.store(0, std::memory_order_relaxed);
 	_bufferBank.Init();
 
-	auto length = (unsigned long)buffer.size();
-	_bufferBank.Resize(length);
+	const auto length = static_cast<unsigned long>(buffer.size());
+	if (length == 0ul || length > constants::MaxLoopBufferSize - constants::MaxLoopFadeSamps)
+		return false;
+
+	// WAV sidecars contain the fade-free logical body (ExportSamples deliberately
+	// strips the internal prefix). Recreate that private prefix before publishing
+	// a playable loop, rather than shortening the restored logical length.
+	const auto physicalLength = length + constants::MaxLoopFadeSamps;
+	_bufferBank.Resize(physicalLength);
 
 	for (auto i = 0u; i < length; i++)
-	{
-		_bufferBank[i] = buffer[i];
-	}
+		_bufferBank[constants::MaxLoopFadeSamps + i] = buffer[i];
 
-	_loopLength.store(length - constants::MaxLoopFadeSamps, std::memory_order_relaxed);
+	_loopLength.store(length, std::memory_order_relaxed);
 
 	_UpdateLoopModel();
 
@@ -659,6 +697,7 @@ void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
 {
+	InvalidateSceneAnchor();
 	auto physBufSize = _bufferBank.Length();
 
 	if (0 == physBufSize)
@@ -927,6 +966,37 @@ void Loop::LoadVstPlugin(std::wstring path,
 {
 	_pendingVstLoads.push_back({ std::move(path), std::move(initialState) });
 	_changesMade = true;
+}
+
+bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
+	const std::vector<std::uint8_t>& initialState,
+	bool bypass)
+{
+	// Scene::FromFile calls this before Scene::InitAudio, so no callback can
+	// retain the old chain while this non-RT construction is in progress.
+	auto plugin = vst::MakePluginForPath(path);
+	if (!plugin->PreInit(path)
+		|| !plugin->Load(path, _sampleRate, _blockSize, 1u, vst::HostedLayoutMode::MonoFlexible))
+		return false;
+
+	if (!initialState.empty())
+		plugin->SetState(initialState);
+	plugin->SetBypassed(bypass);
+
+	auto chain = _vstChain.load(std::memory_order_acquire);
+	auto replacement = std::make_shared<vst::VstChain>();
+	if (chain)
+	{
+		for (std::size_t index = 0u; index < chain->NumPlugins(); ++index)
+			if (auto existing = chain->GetPlugin(index))
+				replacement->AddPlugin(std::move(existing));
+	}
+	replacement->AddPlugin(std::move(plugin));
+	_vstChain.store(std::move(replacement), std::memory_order_release);
+	// Startup still has exclusive ownership; VstEntries cannot run until after
+	// this object is published to the main loop.
+	_vstPluginPaths.push_back(path);
+	return true;
 }
 
 void Loop::UnloadVstPlugin(size_t index)

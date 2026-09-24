@@ -1,95 +1,105 @@
 #include "gtest/gtest.h"
 #include "ninjam/NinjamAudioTimingCommand.h"
+#include "ninjam/NinjamLoopAlignment.h"
 #include "utils/Timer.h"
 
-using ninjam::NinjamAudioTimingCommand;
-using ninjam::NinjamAudioTimingCommandMailbox;
-using ninjam::NinjamTimingCommandType;
-using ninjam::LocalTransportOffsetLoopFracMailbox;
+using ninjam::NinjamDesiredTransportState;
+using ninjam::NinjamDesiredTransportStateMailbox;
+using ninjam::NinjamDesiredTimingIntent;
 using utils::Timer;
 
-namespace
-{
-	NinjamAudioTimingCommand MakeReplace(std::uint64_t generation,
+static NinjamDesiredTransportState MakeDesired(std::uint64_t version,
+		std::uint64_t generation,
 		unsigned long seedLength,
 		unsigned int absolutePhase)
 	{
-		NinjamAudioTimingCommand command;
-		command.Type = NinjamTimingCommandType::ReplaceTiming;
-		command.Generation = generation;
-		command.SeedLengthSamps = seedLength;
-		command.QuantiseSamps = 100u;
-		command.Quantisation = Timer::QUANTISE_MULTIPLE;
-		command.AbsolutePhaseSamps = absolutePhase;
-		command.PhaseObservationSample = 12345u;
-		return command;
+		NinjamDesiredTransportState desired;
+		desired.Version = version;
+		desired.SessionEpoch = 2u;
+		desired.Generation = generation;
+		desired.Intent = NinjamDesiredTimingIntent::Replacement;
+		desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::ContinuousSync;
+		desired.HasRemoteTiming = true;
+		desired.RemoteMasterIntervalLengthSamps = seedLength;
+		desired.RemoteGridStepSamps = 100u;
+		desired.Quantisation = Timer::QUANTISE_MULTIPLE;
+		desired.RemoteMasterPhaseSamps = absolutePhase;
+		desired.HasRemotePhaseDeviceSample = true;
+		desired.RemotePhaseDeviceSample = 12345u;
+		return desired;
 	}
-}
 
 // ── Mailbox: single audio-boundary consume semantics ─────────────────────────
 
-TEST(NinjamAudioTimingCommandMailbox, EmptyMailboxConsumesNothing)
+TEST(NinjamDesiredTransportStateMailbox, EmptyMailboxReadsNothing)
 {
-	NinjamAudioTimingCommandMailbox mailbox;
-	EXPECT_FALSE(mailbox.Consume().has_value());
+	NinjamDesiredTransportStateMailbox mailbox;
+	EXPECT_FALSE(mailbox.ReadLatest().has_value());
 }
 
-TEST(NinjamAudioTimingCommandMailbox, PublishedCommandIsConsumedExactlyOnce)
+TEST(NinjamDesiredTransportStateMailbox, PublishedStateIsCompleteAndRepeatable)
 {
-	NinjamAudioTimingCommandMailbox mailbox;
-	mailbox.Publish(MakeReplace(3u, 1000ul, 250u));
+	NinjamDesiredTransportStateMailbox mailbox;
+	mailbox.Publish(MakeDesired(7u, 3u, 1000ul, 250u));
 
-	const auto first = mailbox.Consume();
+	const auto first = mailbox.ReadLatest();
 	ASSERT_TRUE(first.has_value());
-	EXPECT_EQ(NinjamTimingCommandType::ReplaceTiming, first->Type);
+	EXPECT_EQ(NinjamDesiredTimingIntent::Replacement, first->Intent);
+	EXPECT_EQ(7u, first->Version);
+	EXPECT_EQ(2u, first->SessionEpoch);
 	EXPECT_EQ(3u, first->Generation);
-	EXPECT_EQ(1000ul, first->SeedLengthSamps);
-	EXPECT_EQ(250u, first->AbsolutePhaseSamps);
-	EXPECT_EQ(12345u, first->PhaseObservationSample);
-
-	// A second consume with no intervening publication must move nothing.
-	EXPECT_FALSE(mailbox.Consume().has_value());
+	EXPECT_EQ(1000ul, first->RemoteMasterIntervalLengthSamps);
+	EXPECT_EQ(250u, first->RemoteMasterPhaseSamps);
+	EXPECT_EQ(12345u, first->RemotePhaseDeviceSample);
+	EXPECT_EQ(first->Version, mailbox.ReadLatest()->Version);
 }
 
-TEST(NinjamAudioTimingCommandMailbox, LatestPublicationWinsAcrossASingleBoundary)
+TEST(NinjamDesiredTransportStateMailbox, LatestPublicationWinsAcrossASingleBoundary)
 {
-	NinjamAudioTimingCommandMailbox mailbox;
-	mailbox.Publish(MakeReplace(4u, 1000ul, 100u));
-	mailbox.Publish(MakeReplace(5u, 2000ul, 900u));
+	NinjamDesiredTransportStateMailbox mailbox;
+	mailbox.Publish(MakeDesired(4u, 4u, 1000ul, 100u));
+	mailbox.Publish(MakeDesired(5u, 5u, 2000ul, 900u));
 
 	// Two publications between two callback boundaries collapse to the latest so
 	// the audio thread never applies a superseded command (latest-wins).
-	const auto consumed = mailbox.Consume();
-	ASSERT_TRUE(consumed.has_value());
-	EXPECT_EQ(5u, consumed->Generation);
-	EXPECT_EQ(2000ul, consumed->SeedLengthSamps);
-	EXPECT_EQ(900u, consumed->AbsolutePhaseSamps);
-	EXPECT_FALSE(mailbox.Consume().has_value());
+	const auto latest = mailbox.ReadLatest();
+	ASSERT_TRUE(latest.has_value());
+	EXPECT_EQ(5u, latest->Version);
+	EXPECT_EQ(5u, latest->Generation);
+	EXPECT_EQ(2000ul, latest->RemoteMasterIntervalLengthSamps);
+	EXPECT_EQ(900u, latest->RemoteMasterPhaseSamps);
 }
 
-TEST(NinjamAudioTimingCommandMailbox, InvalidatePublicationIsDeliveredToConsumer)
+TEST(NinjamDesiredTransportStateMailbox, NoSyncPublicationIsACompleteLatestValue)
 {
-	NinjamAudioTimingCommandMailbox mailbox;
-	NinjamAudioTimingCommand invalidate;
-	invalidate.Type = NinjamTimingCommandType::Invalidate;
-	mailbox.Publish(invalidate);
+	NinjamDesiredTransportStateMailbox mailbox;
+	NinjamDesiredTransportState noSync;
+	noSync.Version = 8u;
+	noSync.SessionEpoch = 3u;
+	mailbox.Publish(noSync);
 
-	const auto consumed = mailbox.Consume();
-	ASSERT_TRUE(consumed.has_value());
-	EXPECT_EQ(NinjamTimingCommandType::Invalidate, consumed->Type);
+	const auto latest = mailbox.ReadLatest();
+	ASSERT_TRUE(latest.has_value());
+	EXPECT_EQ(NinjamDesiredTimingIntent::NoSync, latest->Intent);
+	EXPECT_EQ(8u, latest->Version);
+	EXPECT_EQ(3u, latest->SessionEpoch);
 }
 
-TEST(LocalTransportOffsetLoopFracMailbox, LatestPublicationWinsAndZeroIsDeliveredOnce)
+TEST(NinjamLoopAlignment, DistinctAnchorsRestoreExactlyAtSharedSceneCoordinates)
 {
-	LocalTransportOffsetLoopFracMailbox mailbox;
-	mailbox.Publish(0.005);
-	mailbox.Publish(0.010);
-	mailbox.Publish(0.0);
+	const auto audioAnchor = ninjam::CaptureSceneAnchor(1000u, 125u, 300u);
+	const auto midiAnchor = ninjam::CaptureSceneAnchor(1000u, 77u, 128u);
+	EXPECT_EQ(0u, ninjam::SceneAlignmentResidual(
+		ninjam::RestoreScenePhase(3400u, audioAnchor, 300u), 3400u, audioAnchor, 300u));
+	EXPECT_EQ(0u, ninjam::SceneAlignmentResidual(
+		ninjam::RestoreScenePhase(3400u, midiAnchor, 128u), 3400u, midiAnchor, 128u));
+}
 
-	const auto consumed = mailbox.ConsumeLatest();
-	ASSERT_TRUE(consumed.has_value());
-	EXPECT_DOUBLE_EQ(0.0, consumed.value());
-	EXPECT_FALSE(mailbox.ConsumeLatest().has_value());
+TEST(NinjamLoopAlignment, HandlesNegativeCoordinatesAndRejectsNonRecurringGrainMultiple)
+{
+	EXPECT_EQ(75u, ninjam::PositiveModulo(-25, 100u));
+	EXPECT_TRUE(ninjam::IsRemoteTimingCompatible(200u, 100u, 1000u));
+	EXPECT_FALSE(ninjam::IsRemoteTimingCompatible(300u, 100u, 1000u));
 }
 
 // ── Timer::ApplyCommand: audio-thread application and generation gating ───────
@@ -188,15 +198,35 @@ TEST(TimerApplyCommand, PhaseCorrectionWrapsCircularly)
 
 	Timer::Command forward;
 	forward.Type = Timer::CommandType::PhaseCorrection;
-	forward.Generation = 1u;
+	forward.Generation = 2u;
 	forward.PhaseDeltaSamps = 200; // 900 + 200 wraps to 100
 	ASSERT_TRUE(clock.ApplyCommand(forward));
 	EXPECT_EQ(100u, clock.SampOffset());
 
 	Timer::Command backward;
 	backward.Type = Timer::CommandType::PhaseCorrection;
-	backward.Generation = 1u;
+	backward.Generation = 3u;
 	backward.PhaseDeltaSamps = -300; // 100 - 300 wraps to 800
 	ASSERT_TRUE(clock.ApplyCommand(backward));
 	EXPECT_EQ(800u, clock.SampOffset());
+}
+
+TEST(TimerApplyCommand, EqualGenerationCommandDoesNotMovePhaseTwice)
+{
+	Timer clock;
+	Timer::Command seed;
+	seed.Type = Timer::CommandType::ReplaceTiming;
+	seed.Generation = 1u;
+	seed.SeedLengthSamps = 1000ul;
+	seed.PhaseDeltaSamps = 100;
+	ASSERT_TRUE(clock.ApplyCommand(seed));
+
+	Timer::Command correction;
+	correction.Type = Timer::CommandType::PhaseCorrection;
+	correction.Generation = 2u;
+	correction.PhaseDeltaSamps = 75;
+	ASSERT_TRUE(clock.ApplyCommand(correction));
+	ASSERT_EQ(175u, clock.SampOffset());
+	EXPECT_TRUE(clock.ApplyCommand(correction));
+	EXPECT_EQ(175u, clock.SampOffset());
 }

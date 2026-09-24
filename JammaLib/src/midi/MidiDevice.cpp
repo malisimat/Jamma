@@ -10,57 +10,54 @@
 
 using namespace midi;
 
-namespace
+std::string MidiDevice::_ToLower(std::string str)
 {
-	std::string ToLower(std::string str)
+	std::transform(str.begin(),
+	               str.end(),
+	               str.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return str;
+}
+
+void MidiDevice::_LogMidiMessageDetail(std::ostream& out, const std::vector<unsigned char>& message)
+{
+	if (message.empty())
+		return;
+
+	constexpr std::uint8_t StatusMask    = 0xF0;
+	constexpr std::uint8_t ChannelMask   = 0x0F;
+	constexpr std::uint8_t NoteOff       = 0x80;
+	constexpr std::uint8_t NoteOn        = 0x90;
+	constexpr std::uint8_t CC            = 0xB0;
+	constexpr std::uint8_t ProgramChange = 0xC0;
+
+	const auto status = static_cast<std::uint8_t>(message[0]);
+	const auto data1  = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
+	const auto data2  = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
+	const int  chan   = (status & ChannelMask) + 1;
+
+	out << "  (chan " << chan << ", ";
+
+	switch (status & StatusMask)
 	{
-		std::transform(str.begin(),
-		               str.end(),
-		               str.begin(),
-		               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return str;
+	case NoteOn:
+		out << (data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(data1);
+		break;
+	case NoteOff:
+		out << "noteoff: " << static_cast<int>(data1);
+		break;
+	case CC:
+		out << "cc " << static_cast<int>(data1) << ": " << static_cast<int>(data2);
+		break;
+	case ProgramChange:
+		out << "pc: " << static_cast<int>(data1);
+		break;
+	default:
+		out << "0x" << std::hex << std::uppercase << static_cast<int>(status) << std::dec;
+		break;
 	}
 
-	void LogMidiMessageDetail(std::ostream& out, const std::vector<unsigned char>& message)
-	{
-		if (message.empty())
-			return;
-
-		constexpr std::uint8_t StatusMask    = 0xF0;
-		constexpr std::uint8_t ChannelMask   = 0x0F;
-		constexpr std::uint8_t NoteOff       = 0x80;
-		constexpr std::uint8_t NoteOn        = 0x90;
-		constexpr std::uint8_t CC            = 0xB0;
-		constexpr std::uint8_t ProgramChange = 0xC0;
-
-		const auto status = static_cast<std::uint8_t>(message[0]);
-		const auto data1  = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
-		const auto data2  = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
-		const int  chan   = (status & ChannelMask) + 1;
-
-		out << "  (chan " << chan << ", ";
-
-		switch (status & StatusMask)
-		{
-		case NoteOn:
-			out << (data2 != 0 ? "noteon" : "noteoff") << ": " << static_cast<int>(data1);
-			break;
-		case NoteOff:
-			out << "noteoff: " << static_cast<int>(data1);
-			break;
-		case CC:
-			out << "cc " << static_cast<int>(data1) << ": " << static_cast<int>(data2);
-			break;
-		case ProgramChange:
-			out << "pc: " << static_cast<int>(data1);
-			break;
-		default:
-			out << "0x" << std::hex << std::uppercase << static_cast<int>(status) << std::dec;
-			break;
-		}
-
-		out << ")";
-	}
+	out << ")";
 }
 
 MidiDevice::MidiDevice()
@@ -140,10 +137,10 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 	auto selected = devices.front();
 	if (!preferredDeviceName.empty() && (preferredDeviceName != "default"))
 	{
-		const auto wanted = ToLower(preferredDeviceName);
+		const auto wanted = _ToLower(preferredDeviceName);
 
 		auto exact = std::find_if(devices.begin(), devices.end(), [&](const MidiInputDeviceInfo& d) {
-			return ToLower(d.Name) == wanted;
+			return _ToLower(d.Name) == wanted;
 		});
 		if (exact != devices.end())
 		{
@@ -152,7 +149,7 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
 		else
 		{
 			auto partial = std::find_if(devices.begin(), devices.end(), [&](const MidiInputDeviceInfo& d) {
-				return ToLower(d.Name).find(wanted) != std::string::npos;
+				return _ToLower(d.Name).find(wanted) != std::string::npos;
 			});
 			if (partial != devices.end())
 			{
@@ -247,7 +244,7 @@ void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message) noexcept
 			std::cout << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(message[i]);
 		}
 		std::cout << std::dec;
-		LogMidiMessageDetail(std::cout, message);
+		_LogMidiMessageDetail(std::cout, message);
 		std::cout << "\n";
 	}
 

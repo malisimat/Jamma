@@ -1,5 +1,8 @@
 #pragma once
 
+// Audio recording/playback entity within a LoopTake; owns its buffers, logical
+// length, read/write positions, fades, and loop-local phase.
+
 #include <atomic>
 #include <string>
 #include <memory>
@@ -222,6 +225,13 @@ namespace engine
 		std::string Id() const;
 		LoopPlayState PlayState() const { return _playState.load(std::memory_order_relaxed); }
 		unsigned long LoopLength() const noexcept { return _loopLength.load(std::memory_order_relaxed); }
+		// Recorded storage length is an upper bound for any logical loop length.
+		// It intentionally remains distinct after first-master tail normalisation.
+		unsigned long PhysicalLoopLength() const noexcept
+		{
+			const auto length = _bufferBank.Length();
+			return length > constants::MaxLoopFadeSamps ? length - constants::MaxLoopFadeSamps : 0ul;
+		}
 		static double CalcDrawRadius(unsigned long loopLength);
 		std::vector<float> ExportSamples() const;
 		io::JamFile::Loop ToJamFile(const std::string& wavFilename) const;
@@ -242,10 +252,33 @@ namespace engine
 			if (len == 0ul) return;
 			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
 		}
+		void SetSceneAnchor(unsigned long anchor) noexcept
+		{
+			_sceneAnchor.store(anchor, std::memory_order_relaxed);
+			_hasSceneAnchor.store(true, std::memory_order_release);
+		}
+		bool HasSceneAnchor() const noexcept { return _hasSceneAnchor.load(std::memory_order_acquire); }
+		unsigned long SceneAnchor() const noexcept { return _sceneAnchor.load(std::memory_order_relaxed); }
+		void InvalidateSceneAnchor() noexcept { _hasSceneAnchor.store(false, std::memory_order_release); }
 		void ShiftPlayIndex(long long deltaSamps) noexcept;
 		unsigned long PlayIndex() const noexcept
 		{
 			return _playIndex.load(std::memory_order_relaxed);
+		}
+		unsigned long BodyPlayIndex() const noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return 0ul;
+			const auto index = _playIndex.load(std::memory_order_relaxed);
+			return (index + length - constants::MaxLoopFadeSamps) % length;
+		}
+		void SetBodyPlayIndex(unsigned long index) noexcept
+		{
+			const auto length = _loopLength.load(std::memory_order_relaxed);
+			if (length == 0ul)
+				return;
+			_playIndex.store(constants::MaxLoopFadeSamps + (index % length), std::memory_order_relaxed);
 		}
 		void EndRecording();
 		void Ditch();
@@ -259,6 +292,11 @@ namespace engine
 		// job thread after CommitChanges() queues the appropriate job.
 		void LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
+		// Startup-only: synchronously construct and publish one plugin before this
+		// loop can enter an audio snapshot.
+		bool LoadVstPluginSynchronously(const std::wstring& path,
+			const std::vector<std::uint8_t>& initialState = {},
+			bool bypass = false);
 		void UnloadVstPlugin(size_t index);
 		void ForceUnloadAllVstPlugins();
 		void SetSampleRate(float sampleRate) { _sampleRate = sampleRate; }
@@ -305,6 +343,8 @@ namespace engine
 		// (see CurrentVstLatencySamps()) -- see
 		// doc/ninjam-live-loop-latency-sync-planC.md §2/§7.
 		std::atomic<unsigned long> _playIndex;
+		std::atomic<unsigned long> _sceneAnchor{ 0ul };
+		std::atomic_bool _hasSceneAnchor{ false };
 		float _lastPeak;
 		double _pitch;
 		std::atomic<unsigned long> _loopLength;
@@ -329,5 +369,8 @@ namespace engine
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
+
+	private:
+		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 	};
 }

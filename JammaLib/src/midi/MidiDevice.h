@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +45,9 @@ namespace midi
 		unsigned int DeviceId() const noexcept { return _deviceId; }
 
 	private:
+		static std::string _ToLower(std::string str);
+		static void _LogMidiMessageDetail(std::ostream& out,
+			const std::vector<unsigned char>& message);
 		static void _RtMidiCallback(double deltatime,
 			std::vector<unsigned char>* message,
 			void* userData);

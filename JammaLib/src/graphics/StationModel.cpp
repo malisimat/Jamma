@@ -16,69 +16,32 @@ using base::DrawPass;
 // -------------------------------------------------------------------------
 // Geometry constants
 // -------------------------------------------------------------------------
-namespace
+void StationModel::PushTri(std::vector<float>& verts,
+	std::vector<float>& uvs,
+	const glm::vec3& a, float ua, float va,
+	const glm::vec3& b, float ub, float vb,
+	const glm::vec3& c, float uc, float vc)
 {
-	constexpr unsigned int  DefaultNumSides    = 32u;
-	constexpr unsigned int  DefaultNumRibs     = 0u;
-	constexpr unsigned int  SideVerticalSections = 12u;
-	constexpr float         DeckRadius         = 30.0f;
-	constexpr float         BevelWidth         = 2.0f;
-	constexpr float         BevelHeight        = 10.0f;
-	constexpr float         SideHeight         = 450.0f;
+	verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+	verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
+	verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
 
-	// Part-kind UVs (y channel)
-	constexpr float UV_TOP   = 0.0f;
-	constexpr float UV_BEVEL = 1.0f;
-	constexpr float UV_SIDE  = 2.0f;
-	constexpr float UV_RIB   = 3.0f;
-	constexpr float UV_STATE_RING_BRIGHT = 4.0f;
-	constexpr float UV_STATE_RING_DARK = 5.0f;
+	uvs.push_back(ua); uvs.push_back(va);
+	uvs.push_back(ub); uvs.push_back(vb);
+	uvs.push_back(uc); uvs.push_back(vc);
+}
 
-	constexpr unsigned int StateRingSides = 64u;
-	constexpr unsigned int StateRingOccluderInstances = 20u;
-	constexpr float StateRingScale = 5.0f;
-	constexpr float StateRingOccluderInnerRadius = 9.0f;
-	constexpr float StateRingOccluderOuterRadius = 17.0f;
-	constexpr float StateRingTopY = -2.0f;
-	constexpr float StateRingBottomY = -(2.0f * BevelHeight + SideHeight) + 2.0f;
-
-	constexpr RingProfilePoint StateRingProfile[] = {
-		{ 9.30f, 0.00f }, { 10.80f, -1.25f }, { 15.80f, -3.50f },
-		{ 15.80f, -9.50f }, { 14.90f, -13.50f }, { 11.20f, -16.00f }
-	};
-	constexpr RingProfilePoint StateRingBottomProfile[] = {
-		{ 9.30f, 0.00f }, { 11.60f, 1.10f }, { 16.60f, 3.20f },
-		{ 16.60f, 8.20f }, { 15.30f, 12.40f }, { 12.00f, 17.50f },
-		{ 10.20f, 19.00f }
-	};
-
-	void PushTri(std::vector<float>& verts,
-		std::vector<float>& uvs,
-		const glm::vec3& a, float ua, float va,
-		const glm::vec3& b, float ub, float vb,
-		const glm::vec3& c, float uc, float vc)
-	{
-		verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
-		verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
-		verts.push_back(c.x); verts.push_back(c.y); verts.push_back(c.z);
-
-		uvs.push_back(ua); uvs.push_back(va);
-		uvs.push_back(ub); uvs.push_back(vb);
-		uvs.push_back(uc); uvs.push_back(vc);
-	}
-
-	void PushQuad(std::vector<float>& verts,
-		std::vector<float>& uvs,
-		const glm::vec3& a, float ua, float va,
-		const glm::vec3& b, float ub, float vb,
-		const glm::vec3& c, float uc, float vc,
-		const glm::vec3& d, float ud, float vd)
-	{
-		// Triangle 1: a, b, c
-		PushTri(verts, uvs, a, ua, va, b, ub, vb, c, uc, vc);
-		// Triangle 2: a, c, d
-		PushTri(verts, uvs, a, ua, va, c, uc, vc, d, ud, vd);
-	}
+void StationModel::PushQuad(std::vector<float>& verts,
+	std::vector<float>& uvs,
+	const glm::vec3& a, float ua, float va,
+	const glm::vec3& b, float ub, float vb,
+	const glm::vec3& c, float uc, float vc,
+	const glm::vec3& d, float ud, float vd)
+{
+	// Triangle 1: a, b, c
+	PushTri(verts, uvs, a, ua, va, b, ub, vb, c, uc, vc);
+	// Triangle 2: a, c, d
+	PushTri(verts, uvs, a, ua, va, c, uc, vc, d, ud, vd);
 }
 
 // -------------------------------------------------------------------------

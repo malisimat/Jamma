@@ -1,5 +1,8 @@
 #pragma once
 
+// NJClient lifecycle/audio adapter: job work owns connection state and validated
+// observations; the audio callback is limited to AudioProc and bounded publication.
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -92,14 +95,13 @@ namespace ninjam
 			unsigned int inLatencySamps = 0u,
 			unsigned int outLatencySamps = 0u);
 
-		void ProcessExportBlock(const float* interleavedDacOutput,
+		NinjamRemoteTiming ProcessExportBlock(const float* interleavedDacOutput,
 			unsigned int numDacChannels,
 			const float* interleavedAdcInput,
 			unsigned int numAdcChannels,
 			unsigned int numFrames,
-			unsigned int sampleRate);
-
-		NinjamRemoteTiming GetLiveTiming() const noexcept;
+			unsigned int sampleRate,
+			std::uint64_t audioBlockStartSample);
 
 		NinjamRemoteSnapshot Snapshot() const;
 
@@ -137,6 +139,11 @@ namespace ninjam
 		unsigned int ExportAnomalyCount() const noexcept;
 
 	private:
+		static constexpr unsigned int MinimumOutputChannels = 4u;
+		static constexpr unsigned int ReservedMonitorOutputChannels = 2u;
+		static bool IsAuthFailure(const std::string& err);
+		static bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs);
+		static std::string DescribeStatusError(NJClient* client, int status);
 		NinjamLanePacking _ResolveLanePacking() const;
 		unsigned int _InputScratchChannelCapacity() const noexcept;
 		void _RefreshLanePacking();
@@ -148,11 +155,13 @@ namespace ninjam
 		bool _HasActiveConnectAttempt() const noexcept;
 		void _ResetReconnectState(std::chrono::steady_clock::time_point now);
 		void _ScheduleRetry(std::chrono::steady_clock::time_point now);
-		void _EnsureWorkDir();
+		bool _EnsureWorkDir();
 		void _ResizeScratchBuffers(unsigned int numFrames,
 			unsigned int numInputScratchChannels);
 		void _ApplyLocalChannels();
 		void _UpdateSnapshot();
+		void _PublishRemoteTiming(const NinjamRemoteTiming& timing) noexcept;
+		NinjamRemoteTiming _ReadPublishedRemoteTiming() const noexcept;
 		unsigned int _AssignOutputChannel(const std::string& userName);
 		void _ResizeExportDelayLines();
 		static void _WriteExportDelayLine(std::vector<std::shared_ptr<audio::AudioBuffer>>& lines,
@@ -187,7 +196,7 @@ namespace ninjam
 		unsigned int _numInputChannels = 0u;
 		unsigned int _numOutputChannels = 2u;
 		// Raw physical DAC channel count as passed to SetAudioFormat, before
-		// _numOutputChannels is clamped to kMinimumNinjamOutputChannels for
+		// _numOutputChannels is clamped to MinimumOutputChannels for
 		// NJClient's remote-playback outnch. Used to size/index the export
 		// DAC delay lines, which pack OUR physical output into NINJAM send
 		// lanes and have nothing to do with NJClient's remote-receive channel
@@ -218,6 +227,24 @@ namespace ninjam
 		unsigned int _exportTick = 0u;
 		ExportLaneTimingState _exportTimingState;
 		std::atomic_uint _exportAnomalyCount{ 0u };
+		// AudioProc is bracketed odd/even so the job owner can reject timing
+		// getter samples that overlap NJClient mutation.
+		std::atomic<std::uint64_t> _audioProcSequence{ 0u };
+		std::atomic_bool _hasCompletedAudioSample{ false };
+		std::atomic<std::uint64_t> _completedAudioSample{ 0u };
+
+		// One job-thread writer publishes the accepted NJClient timing tuple;
+		// the audio callback performs a bounded coherent read.
+		std::atomic<std::uint64_t> _remoteTimingSequence{ 0u };
+		std::atomic_bool _remoteTimingIsConnected{ false };
+		std::atomic_uint _remoteTimingIntervalLength{ 0u };
+		std::atomic_uint _remoteTimingIntervalPosition{ 0u };
+		std::atomic_uint _remoteTimingSourceSampleRate{ 0u };
+		std::atomic<float> _remoteTimingBpm{ 0.0f };
+		std::atomic_uint _remoteTimingBpi{ 0u };
+		std::atomic_bool _remoteTimingIsValid{ false };
+		std::atomic_bool _remoteTimingHasDeviceAudioSampleAtObservation{ false };
+		std::atomic<std::uint64_t> _remoteTimingDeviceAudioSampleAtObservation{ 0u };
 
 		std::unordered_map<std::string, unsigned int> _userOutputChannels;
 		std::vector<std::string> _lastLoggedUsers;

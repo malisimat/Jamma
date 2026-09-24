@@ -10,7 +10,7 @@ namespace ninjam
 	{
 		unsigned int IntervalLengthSamps = 0u;
 		unsigned int IntervalPositionSamps = 0u;
-		std::uint64_t LocalSample = 0u;
+		std::uint64_t LocalMasterAbsoluteSampleAtObservation = 0u;
 	};
 
 	enum class NinjamTimingEventType
@@ -27,7 +27,7 @@ namespace ninjam
 		unsigned long RemoteWrapCount = 0ul;
 		unsigned int IntervalLengthSamps = 0u;
 		unsigned int RemotePositionSamps = 0u;
-		long long PhaseDeltaSamps = 0;
+		long long RemoteMasterPhaseCorrectionSamps = 0;
 	};
 
 	struct NinjamTimingTrackerDiagnostics
@@ -60,7 +60,7 @@ namespace ninjam
 		std::uint64_t _generation = 0u;
 		unsigned long _remoteWrapCount = 0ul;
 		bool _joinPending = false;
-		long long _joinDeltaSamps = 0;
+		long long _remoteMasterPhaseCorrectionSamps = 0;
 		std::uint64_t _joinGeneration = 0u;
 		NinjamTimingTrackerDiagnostics _diagnostics;
 	};

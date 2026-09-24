@@ -10,7 +10,7 @@ void NinjamTimingTracker::Connect() noexcept
 	_intervalLengthSamps = 0u;
 	_remoteWrapCount = 0ul;
 	_joinPending = false;
-	_joinDeltaSamps = 0;
+	_remoteMasterPhaseCorrectionSamps = 0;
 	_joinGeneration = 0u;
 	_diagnostics = {};
 }
@@ -78,7 +78,7 @@ std::optional<NinjamTimingEvent> NinjamTimingTracker::Observe(const NinjamTiming
 		_joinPending = false;
 		++_diagnostics.JoinEvents;
 		return NinjamTimingEvent{ NinjamTimingEventType::Join, _generation, _remoteWrapCount,
-			_intervalLengthSamps, position, _joinDeltaSamps };
+			_intervalLengthSamps, position, _remoteMasterPhaseCorrectionSamps };
 	}
 
 	return NinjamTimingEvent{ NinjamTimingEventType::Wrap, _generation, _remoteWrapCount,
@@ -92,7 +92,7 @@ void NinjamTimingTracker::BeginJoinAlignment(unsigned long localMasterPositionSa
 
 	_joinPending = true;
 	_joinGeneration = _generation;
-	_joinDeltaSamps = SignedCircularDifference(
+	_remoteMasterPhaseCorrectionSamps = SignedCircularDifference(
 		static_cast<unsigned int>(localMasterPositionSamps % _intervalLengthSamps),
 		_lastPositionSamps,
 		_intervalLengthSamps);

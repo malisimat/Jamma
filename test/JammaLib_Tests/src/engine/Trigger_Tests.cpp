@@ -180,6 +180,37 @@ public:
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
 
+	void StopJobForTest()
+	{
+		Shutdown();
+	}
+
+	void SeedTimingForTest()
+	{
+		engine::QuantisationTiming timing;
+		timing.SeedSamps = 12000u;
+		timing.MasterLoopSamps = 48000u;
+		timing.SeedCount = 4u;
+		timing.Bpm = 120.0f;
+		timing.Bpi = 4u;
+		_quantisation.ApplyTiming(timing, "B008 test");
+	}
+
+	bool HasTimingForTest() const
+	{
+		return _quantisation.CurrentTempoTiming(48000u).has_value();
+	}
+
+	void ObserveTimingAvailabilityForTest(bool available, std::uint64_t epoch)
+	{
+		ninjam::NinjamSessionTimingStatus status;
+		status.IsAvailable = available;
+		status.Changed = true;
+		status.SessionEpoch = epoch;
+		_ApplyNinjamTimingUpdate(_networkService->ObserveSessionStatus(status,
+			_quantisation.CurrentTempoTiming(48000u)));
+	}
+
 	utils::Position3d CameraPositionForTest() const
 	{
 		return _camera.ModelPosition();
@@ -425,6 +456,30 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	ASSERT_FALSE(trigger->IsActivateInputDown());
 	ASSERT_FALSE(trigger->IsDitchInputDown());
 	ASSERT_FALSE(trigger->IsDitchDown());
+}
+
+TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto trigger = MakeSharedDefaultTrigger();
+	trigger->SetReceiver(receiver);
+	trigger->RestoreTakes({
+		{ engine::TriggerTake::SOURCE_ADC, "source-take", "older-take" },
+		{ engine::TriggerTake::SOURCE_LOOPTAKE, "older-take", "latest-take" }
+	});
+
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, false, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[0].ActionType);
+	EXPECT_EQ("latest-take", receiver->Actions()[0].TargetId);
+	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[1].ActionType);
+	EXPECT_EQ("older-take", receiver->Actions()[1].TargetId);
+	ASSERT_EQ(1u, trigger->GetTakes().size());
+	EXPECT_EQ("older-take", trigger->GetTakes()[0].TargetTakeId);
 }
 
 TEST(Trigger, ResetClearsPublishedDitchState) {
@@ -1083,16 +1138,16 @@ TEST(SceneDrag, InertialDragCoastsAfterMouseStops) {
 	scene.OnAction(MakeSceneTouchMove({ 840, 500 }, RightMouseButtonMask));
 	auto cameraAfterMove = scene.CameraPositionForTest();
 
-	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	scene.TickCameraForTest(256u, 44100u);
 	auto cameraAfterCoast = scene.CameraPositionForTest();
 
 	EXPECT_LT(cameraAfterCoast.X, cameraAfterMove.X);
 
 	for (int i = 0; i < 360; ++i)
-		scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+		scene.TickCameraForTest(256u, 44100u);
 
 	auto cameraAfterSettle = scene.CameraPositionForTest();
-	scene.OnTick(GetTime(), 256u, std::nullopt, std::nullopt);
+	scene.TickCameraForTest(256u, 44100u);
 	auto cameraAfterFinalTick = scene.CameraPositionForTest();
 
 	EXPECT_NEAR(cameraAfterSettle.X, cameraAfterFinalTick.X, 0.1f);
@@ -1557,11 +1612,57 @@ TEST(SceneReset, KeyTriggerDebouncedDitch_ResetsSceneViaOnTick) {
 	EXPECT_EQ(1u, station->NumTakes());
 	EXPECT_FALSE(scene.IsSceneResetForTest());
 
-	// Simulate audio tick well past debounce window: deferred ditch fires,
-	// then scene sees zero takes and clears timing state
+	// Simulate an audio tick well past the debounce window. The callback may
+	// remove the take, but empty-scene timing cleanup belongs to the job owner.
 	scene.OnTick(OffsetTime(curTime, debounceMs * 2), 256u, std::nullopt, std::nullopt);
 
 	EXPECT_EQ(0u, station->NumTakes());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+
+	// The empty edge is consumed once. Re-seeding after it has been handled
+	// must not let a repeated job visit clear timing again.
+	scene.SeedTimingForTest();
+	ASSERT_TRUE(scene.HasTimingForTest());
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+}
+
+TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams() };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+	scene.StopJobForTest();
+
+	scene.SeedTimingForTest();
+	scene.ObserveTimingAvailabilityForTest(true, 1u);
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+
+	scene.ObserveTimingAvailabilityForTest(false, 1u);
+	scene.OnJobTick(GetTime());
+	EXPECT_FALSE(scene.HasTimingForTest());
+	EXPECT_TRUE(scene.IsSceneResetForTest());
+
+	scene.SeedTimingForTest();
+	ASSERT_TRUE(scene.HasTimingForTest());
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+
+	// A fresh physical epoch while still empty preserves newly accepted timing,
+	// and its later loss forms one new clear edge.
+	scene.ObserveTimingAvailabilityForTest(true, 2u);
+	scene.OnJobTick(GetTime());
+	EXPECT_TRUE(scene.HasTimingForTest());
+	EXPECT_FALSE(scene.IsSceneResetForTest());
+	scene.ObserveTimingAvailabilityForTest(false, 2u);
+	scene.OnJobTick(GetTime());
+	EXPECT_FALSE(scene.HasTimingForTest());
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 }
 
