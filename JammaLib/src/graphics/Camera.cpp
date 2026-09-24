@@ -455,7 +455,8 @@ Position3d Camera::FocusPointAtCursor(Position2d cursorPosition,
 
 	const auto aspectRatio = width / height;
 	const auto ndcX = (2.0f * static_cast<float>(cursorPosition.X) / width) - 1.0f;
-	const auto ndcY = 1.0f - (2.0f * static_cast<float>(cursorPosition.Y) / height);
+	// Window mouse positions use the same bottom-left origin as OpenGL.
+	const auto ndcY = (2.0f * static_cast<float>(cursorPosition.Y) / height) - 1.0f;
 	const auto inverseViewProjection = glm::inverse(Projection(aspectRatio, stationCentre) * ViewMatrix());
 	const auto nearHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
 	const auto farHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);

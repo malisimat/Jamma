@@ -221,7 +221,7 @@ public:
 		const auto clip = _camera.Projection(aspectRatio, {}) * _camera.ViewMatrix()
 			* glm::vec4(position.X, position.Y, position.Z, 1.0f);
 		const auto ndc = glm::vec3(clip) / clip.w;
-		return { ((ndc.x + 1.0f) * width) / 2.0f, ((1.0f - ndc.y) * height) / 2.0f };
+		return { ((ndc.x + 1.0f) * width) / 2.0f, ((ndc.y + 1.0f) * height) / 2.0f };
 	}
 
 	ViewMode CameraSelectDepthForTest() const
@@ -1170,6 +1170,7 @@ TEST(CameraView, FrontWheelZoomKeepsCursorFocusUnderPointer) {
 	TestScene scene(sceneParams, userConfig);
 	const utils::Position2d cursor{ 1050, 260 };
 	const auto focus = scene.CameraFocusAtCursorForTest(cursor);
+	EXPECT_LT(focus.Y, 0.0f);
 
 	scene.OnAction(MakeSceneWheel(1, cursor));
 	scene.TickCameraForTest(4410u, 44100u);
@@ -1241,6 +1242,7 @@ TEST(CameraView, TopDownWheelZoomKeepsCursorFocusUnderPointer) {
 	scene.SettleCameraForTest();
 	const utils::Position2d cursor{ 1020, 300 };
 	const auto focus = scene.CameraFocusAtCursorForTest(cursor);
+	EXPECT_GT(focus.Z, 0.0f);
 
 	scene.OnAction(MakeSceneWheel(1, cursor));
 	scene.TickCameraForTest(4410u, 44100u);
