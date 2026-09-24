@@ -51,8 +51,6 @@ Scene::Scene(SceneParams params,
 	_quantisation(),
 	_loggingConfig{},
 	_stations(),
-	_observedStationTakeRevisions(),
-	_lastChangedStation(),
 	_touchDownElement(std::weak_ptr<GuiElement>()),
 	_hoverElement3d(std::weak_ptr<GuiElement>()),
 	_hoverPath3d(),
@@ -70,13 +68,10 @@ Scene::Scene(SceneParams params,
 		0)),
 	_userConfig(user),
 	_viewMode(VIEW_STATION),
-	_cameraInteriorForcedLoopTakeDepth(false),
-	_cameraInteriorSelectDepthChanged(false),
-	_cameraInteriorRestorePending(false),
-		_audioEngine(std::make_unique<audio::AudioHost>(user)),
-		_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
-		_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
-		_networkService(std::make_unique<ninjam::NinjamNetworkService>())
+	_audioEngine(std::make_unique<audio::AudioHost>(user)),
+	_inputSubsystem(std::make_unique<io::IoInputSubsystem>(user, io::LoggingConfig{})),
+	_windowSubsystem(std::make_unique<vst::VstEditorWindowManager>()),
+	_networkService(std::make_unique<ninjam::NinjamNetworkService>())
 {
 	_quantisation.SetClock(std::make_shared<Timer>());
 	_quantisation.SetSeedUsesPowers(_userConfig.Loop.SeedUsesPowers);
@@ -580,7 +575,8 @@ void Scene::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	std::scoped_lock lock(_sceneMutex);
-	_UpdateCameraStationFollow();
+	for (size_t index = 0u; index < _stations.size(); ++index)
+		_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
 
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
@@ -1130,17 +1126,10 @@ ActionResult Scene::OnAction(GuiAction action)
 			{
 				auto viewMode = static_cast<unsigned int>(std::clamp(i->Value,
 					static_cast<int>(VIEW_STATION), static_cast<int>(VIEW_LOOP)));
-				if (graphics::Camera::View::StationInterior == _camera.CurrentView())
+				if (_camera.SelectDepthChanged(VIEW_STATION == viewMode))
 				{
-					if (VIEW_STATION == viewMode)
-					{
-						viewMode = VIEW_LOOPTAKE;
-						_modeRadio->SetCurrentValue(viewMode, true);
-					}
-					else
-					{
-						_cameraInteriorSelectDepthChanged = true;
-					}
+					viewMode = VIEW_LOOPTAKE;
+					_modeRadio->SetCurrentValue(viewMode, true);
 				}
 				_viewMode = static_cast<ViewMode>(viewMode);
 				_UpdateSelectDepth((unsigned int)_viewMode);
@@ -1232,13 +1221,7 @@ void Scene::OnTick(Time curTime,
 	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
 		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
 
-	if (_cameraInteriorRestorePending
-		&& !_camera.IsTransitioning()
-		&& (graphics::Camera::View::TopDown == _camera.CurrentView()))
-	{
-		_LeaveStationInteriorSelectDepth();
-		_cameraInteriorRestorePending = false;
-	}
+	_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
 
 	if (_isSceneTouching && !_camera.IsBackgroundDragging())
 		_EndBackgroundDrag();
@@ -2037,134 +2020,26 @@ Position3d Scene::_StationCentre() const
 	return stationCentre;
 }
 
-graphics::Camera::Pose Scene::_CameraPoseForView(graphics::Camera::View view) const
+void Scene::_ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change)
 {
-	graphics::Camera::Pose pose;
-	switch (view)
-	{
-	case graphics::Camera::View::Front:
-		pose.Eye = { 0.0f, 0.0f, 420.0f };
-		pose.Forward = { 0.0f, 0.0f, -1.0f };
-		pose.Up = { 0.0f, 1.0f, 0.0f };
-		break;
-	case graphics::Camera::View::StationInterior:
-	{
-		std::shared_ptr<Station> station;
-		const auto hoverPath = _selector->CurrentHover();
-		if (!hoverPath.empty() && (hoverPath.front() < _stations.size()))
-			station = _stations[hoverPath.front()];
-		if (!station)
-			station = _lastChangedStation.lock();
-		if (!station && !_stations.empty())
-			station = _stations.front();
-
-		pose.Eye = station ? station->ModelPosition() : utils::Position3d{ 0.0f, 0.0f, 0.0f };
-		pose.Forward = { 0.0f, 0.0f, 1.0f };
-		pose.Up = { 0.0f, 1.0f, 0.0f };
-		break;
-	}
-	case graphics::Camera::View::TopDown:
-	{
-		const auto centre = _StationCentre();
-		pose.Eye = { centre.X, centre.Y + 800.0f, centre.Z };
-		pose.Forward = { 0.0f, -1.0f, 0.0f };
-		pose.Up = { 0.0f, 0.0f, -1.0f };
-		break;
-	}
-	}
-	return pose;
-}
-
-void Scene::_UpdateCameraStationFollow()
-{
-	if (_observedStationTakeRevisions.size() != _stations.size())
-		_observedStationTakeRevisions.resize(_stations.size(), 0u);
-
-	std::shared_ptr<Station> lastChanged;
-	for (size_t index = 0u; index < _stations.size(); ++index)
-	{
-		const auto revision = _stations[index]->LoopTakeRevision();
-		if (revision == _observedStationTakeRevisions[index])
-			continue;
-
-		_observedStationTakeRevisions[index] = revision;
-		lastChanged = _stations[index];
-	}
-
-	if (!lastChanged)
+	if (graphics::Camera::SelectDepthChange::None == change)
 		return;
-
-	_lastChangedStation = lastChanged;
-	if (graphics::Camera::View::StationInterior != _camera.CurrentView())
-		return;
-
-	graphics::Camera::Pose pose;
-	pose.Eye = lastChanged->ModelPosition();
-	pose.Forward = { 0.0f, 0.0f, 1.0f };
-	pose.Up = { 0.0f, 1.0f, 0.0f };
-	_camera.SetViewTarget(graphics::Camera::View::StationInterior, pose);
-}
-
-void Scene::_EnterStationInteriorSelectDepth()
-{
-	_cameraInteriorForcedLoopTakeDepth = (VIEW_STATION == _viewMode);
-	_cameraInteriorSelectDepthChanged = false;
-	if (!_cameraInteriorForcedLoopTakeDepth)
-		return;
-
-	_viewMode = VIEW_LOOPTAKE;
+	_viewMode = (graphics::Camera::SelectDepthChange::Station == change) ? VIEW_STATION : VIEW_LOOPTAKE;
 	_modeRadio->SetCurrentValue(static_cast<unsigned int>(_viewMode), true);
 	_UpdateSelectDepth(static_cast<unsigned int>(_viewMode));
 }
 
-void Scene::_LeaveStationInteriorSelectDepth()
-{
-	if (_cameraInteriorForcedLoopTakeDepth && !_cameraInteriorSelectDepthChanged)
-	{
-		_viewMode = VIEW_STATION;
-		_modeRadio->SetCurrentValue(static_cast<unsigned int>(_viewMode), true);
-		_UpdateSelectDepth(static_cast<unsigned int>(_viewMode));
-	}
-
-	_cameraInteriorForcedLoopTakeDepth = false;
-	_cameraInteriorSelectDepthChanged = false;
-}
-
 void Scene::_CycleCameraView()
 {
-	const auto currentView = _camera.CurrentView();
-	auto nextView = graphics::Camera::View::Front;
-	switch (currentView)
-	{
-	case graphics::Camera::View::Front:
-		nextView = graphics::Camera::View::StationInterior;
-		break;
-	case graphics::Camera::View::StationInterior:
-		nextView = graphics::Camera::View::TopDown;
-		break;
-	case graphics::Camera::View::TopDown:
-		nextView = graphics::Camera::View::Front;
-		break;
-	}
-	if (graphics::Camera::View::StationInterior == currentView)
-	{
-		if (graphics::Camera::View::TopDown == nextView)
-			_cameraInteriorRestorePending = true;
-		else
-			_LeaveStationInteriorSelectDepth();
-	}
-	else if (_cameraInteriorRestorePending)
-	{
-		_LeaveStationInteriorSelectDepth();
-		_cameraInteriorRestorePending = false;
-	}
-	if (graphics::Camera::View::StationInterior == nextView)
-		_EnterStationInteriorSelectDepth();
-
-	auto target = _CameraPoseForView(nextView);
-	if ((graphics::Camera::View::StationInterior != nextView) && _camera.HasRememberedPose(nextView))
-		target = _camera.RememberedPose(nextView);
-	_camera.SetViewTarget(nextView, target);
+	std::optional<Position3d> hoveredStation;
+	const auto hoverPath = _selector->CurrentHover();
+	if (!hoverPath.empty() && (hoverPath.front() < _stations.size()))
+		hoveredStation = _stations[hoverPath.front()]->ModelPosition();
+	const auto firstStation = _stations.empty()
+		? std::optional<Position3d>{}
+		: std::optional<Position3d>{ _stations.front()->ModelPosition() };
+	_ApplyCameraSelectDepthChange(_camera.CycleView(_StationCentre(), hoveredStation,
+		firstStation, VIEW_STATION == _viewMode));
 }
 
 std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
@@ -2193,7 +2068,7 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 	{
 		std::lock_guard<std::mutex> lock(_sceneMutex);
 		_stations.push_back(station);
-		_observedStationTakeRevisions.push_back(station->LoopTakeRevision());
+		_camera.RegisterStation(_stations.size() - 1u, station->LoopTakeRevision());
 	}
 	station->SetGlobalMidiQuantState(_globalMidiQuantState);
 	_PublishAudioStations();

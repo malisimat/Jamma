@@ -5,6 +5,9 @@
 #include "../actions/TouchAction.h"
 #include "../actions/TouchMoveAction.h"
 #include <glm/glm.hpp>
+#include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace graphics
 {
@@ -41,6 +44,8 @@ namespace graphics
 			utils::Position3d Up{ 0.0f, 1.0f, 0.0f };
 		};
 
+		enum class SelectDepthChange { None, Station, LoopTake };
+
 		Camera(CameraParams camParams);
 
 		actions::ActionResult HandleBackgroundDrag(actions::TouchAction action);
@@ -68,6 +73,14 @@ namespace graphics
 		bool HasRememberedPose(View view) const noexcept;
 		Pose RememberedPose(View view) const noexcept;
 		void SetViewTarget(View view, Pose target) noexcept;
+		void RegisterStation(size_t index, std::uint64_t revision);
+		void ObserveStation(size_t index, std::uint64_t revision, utils::Position3d position);
+		SelectDepthChange CycleView(utils::Position3d stationCentre,
+			std::optional<utils::Position3d> hoveredStation,
+			std::optional<utils::Position3d> firstStation,
+			bool stationSelectDepth);
+		bool SelectDepthChanged(bool stationSelected) noexcept;
+		SelectDepthChange PendingSelectDepthChange() noexcept;
 
 	private:
 		static constexpr unsigned int BackgroundDragLeftButtonMask    = 1u << 0;
@@ -113,6 +126,10 @@ namespace graphics
 		void _ApplyPose(Pose pose) noexcept;
 		utils::Position3d _ConstrainDragPosition(utils::Position3d position) const noexcept;
 		static size_t _ViewIndex(View view) noexcept;
+		Pose _PoseForView(View view, utils::Position3d stationCentre,
+			std::optional<utils::Position3d> hoveredStation,
+			std::optional<utils::Position3d> firstStation) const noexcept;
+		SelectDepthChange _LeaveStationInteriorSelectDepth() noexcept;
 		unsigned int _id;
 		BackgroundDragState _backgroundDrag;
 		View _view;
@@ -127,5 +144,11 @@ namespace graphics
 		utils::Position3d _wheelZoomStationCentre;
 		Pose _rememberedPoses[ViewCount];
 		bool _hasRememberedPose[ViewCount];
+		std::vector<std::uint64_t> _observedStationTakeRevisions;
+		std::optional<size_t> _lastChangedStationIndex;
+		std::optional<utils::Position3d> _lastChangedStationPosition;
+		bool _interiorForcedLoopTakeDepth = false;
+		bool _interiorSelectDepthChanged = false;
+		bool _interiorRestorePending = false;
 	};
 }

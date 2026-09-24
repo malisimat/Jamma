@@ -677,3 +677,110 @@ Camera::Pose Camera::RememberedPose(View view) const noexcept
 {
 	return _rememberedPoses[_ViewIndex(view)];
 }
+
+void Camera::RegisterStation(size_t index, std::uint64_t revision)
+{
+	if (_observedStationTakeRevisions.size() <= index)
+		_observedStationTakeRevisions.resize(index + 1u, 0u);
+	_observedStationTakeRevisions[index] = revision;
+}
+
+void Camera::ObserveStation(size_t index, std::uint64_t revision, Position3d position)
+{
+	if (_observedStationTakeRevisions.size() <= index)
+		RegisterStation(index, 0u);
+	if (_lastChangedStationIndex == index)
+		_lastChangedStationPosition = position;
+	if (_observedStationTakeRevisions[index] == revision)
+		return;
+
+	_observedStationTakeRevisions[index] = revision;
+	_lastChangedStationIndex = index;
+	_lastChangedStationPosition = position;
+	if (View::StationInterior == _view)
+		SetViewTarget(View::StationInterior, _PoseForView(View::StationInterior, {}, position, {}));
+}
+
+Camera::Pose Camera::_PoseForView(View view, Position3d stationCentre,
+	std::optional<Position3d> hoveredStation,
+	std::optional<Position3d> firstStation) const noexcept
+{
+	Pose pose;
+	switch (view)
+	{
+	case View::Front:
+		pose.Eye = { 0.0f, 0.0f, 420.0f };
+		break;
+	case View::StationInterior:
+		pose.Eye = hoveredStation.value_or(_lastChangedStationPosition.value_or(firstStation.value_or(Position3d{})));
+		pose.Forward = { 0.0f, 0.0f, 1.0f };
+		break;
+	case View::TopDown:
+		pose.Eye = { stationCentre.X, stationCentre.Y + 800.0f, stationCentre.Z };
+		pose.Forward = { 0.0f, -1.0f, 0.0f };
+		pose.Up = { 0.0f, 0.0f, -1.0f };
+		break;
+	}
+	return pose;
+}
+
+Camera::SelectDepthChange Camera::_LeaveStationInteriorSelectDepth() noexcept
+{
+	const auto restore = _interiorForcedLoopTakeDepth && !_interiorSelectDepthChanged;
+	_interiorForcedLoopTakeDepth = false;
+	_interiorSelectDepthChanged = false;
+	return restore ? SelectDepthChange::Station : SelectDepthChange::None;
+}
+
+Camera::SelectDepthChange Camera::CycleView(Position3d stationCentre,
+	std::optional<Position3d> hoveredStation,
+	std::optional<Position3d> firstStation,
+	bool stationSelectDepth)
+{
+	const auto nextView = (View::Front == _view) ? View::StationInterior
+		: ((View::StationInterior == _view) ? View::TopDown : View::Front);
+	auto depthChange = SelectDepthChange::None;
+	if (View::StationInterior == _view)
+	{
+		if (View::TopDown == nextView)
+			// Keep the interior depth until the top-down transition completes.
+			_interiorRestorePending = true;
+		else
+			depthChange = _LeaveStationInteriorSelectDepth();
+	}
+	else if (_interiorRestorePending)
+	{
+		depthChange = _LeaveStationInteriorSelectDepth();
+		_interiorRestorePending = false;
+	}
+	if (View::StationInterior == nextView)
+	{
+		_interiorForcedLoopTakeDepth = stationSelectDepth;
+		_interiorSelectDepthChanged = false;
+		if (_interiorForcedLoopTakeDepth)
+			depthChange = SelectDepthChange::LoopTake;
+	}
+
+	auto target = _PoseForView(nextView, stationCentre, hoveredStation, firstStation);
+	if ((View::StationInterior != nextView) && HasRememberedPose(nextView))
+		target = RememberedPose(nextView);
+	SetViewTarget(nextView, target);
+	return depthChange;
+}
+
+bool Camera::SelectDepthChanged(bool stationSelected) noexcept
+{
+	if (View::StationInterior != _view)
+		return false;
+	if (!stationSelected)
+		_interiorSelectDepthChanged = true;
+	return stationSelected;
+}
+
+Camera::SelectDepthChange Camera::PendingSelectDepthChange() noexcept
+{
+	if (!_interiorRestorePending || _transitioning || (View::TopDown != _view))
+		return SelectDepthChange::None;
+	_interiorRestorePending = false;
+	return _LeaveStationInteriorSelectDepth();
+}

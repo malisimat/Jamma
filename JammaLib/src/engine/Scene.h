@@ -281,10 +281,7 @@ namespace engine
 		void _UpdateSelection(actions::ActionResultType res);
 		utils::Position3d _StationCentre() const;
 		void _CycleCameraView();
-		graphics::Camera::Pose _CameraPoseForView(graphics::Camera::View view) const;
-		void _UpdateCameraStationFollow();
-		void _EnterStationInteriorSelectDepth();
-		void _LeaveStationInteriorSelectDepth();
+		void _ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change);
 		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
@@ -378,8 +375,6 @@ namespace engine
 		bool _remoteTempoDialogOpen = false;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
-		std::vector<std::uint64_t> _observedStationTakeRevisions;
-		std::weak_ptr<Station> _lastChangedStation;
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
@@ -399,9 +394,6 @@ namespace engine
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
 		ViewMode _viewMode;
-		bool _cameraInteriorForcedLoopTakeDepth;
-		bool _cameraInteriorSelectDepthChanged;
-		bool _cameraInteriorRestorePending;
 		utils::Position2d _cursorPos{};
 	};
 }

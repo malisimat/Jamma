@@ -245,7 +245,8 @@ public:
 
 	void UpdateCameraStationFollowForTest()
 	{
-		_UpdateCameraStationFollow();
+		for (size_t index = 0u; index < _stations.size(); ++index)
+			_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
 	}
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
@@ -1347,6 +1348,8 @@ TEST(CameraView, StationInteriorTemporarilyForcesLoopTakeSelectDepth) {
 	EXPECT_EQ(Scene::VIEW_LOOPTAKE, scene.CameraSelectDepthForTest());
 
 	scene.OnAction(tab);
+	scene.SettleCameraForTest();
+	scene.OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
 	EXPECT_EQ(Scene::VIEW_STATION, scene.CameraSelectDepthForTest());
 }
 
