@@ -1152,20 +1152,19 @@ LRESULT CALLBACK Window::WindowProcedure(HWND hWindow, UINT message, WPARAM wPar
 	case WM_MOUSEWHEEL:
 	{
 		int winHeight = (int)window->GetSize().Height;
-		int x = GET_X_LPARAM(lParam);
-		int y = GET_Y_LPARAM(lParam);
 		int delta = GET_Y_LPARAM(wParam);
 
 		delta /= WHEEL_DELTA;
 
-		POINT pt = { x, y };
+		POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+		ScreenToClient(hWindow, &pt);
 
 		TouchAction touchAction;
 		touchAction.Touch = TouchAction::TOUCH_MOUSE;
 		touchAction.State = TouchAction::TOUCH_DOWN;
 		touchAction.Index = 4;
 		touchAction.Value = delta;
-		touchAction.Position = { x, winHeight - y };
+		touchAction.Position = { pt.x, winHeight - pt.y };
 		touchAction.Modifiers = window->Modifiers();
 
 		window->OnAction(touchAction);

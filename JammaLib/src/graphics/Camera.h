@@ -28,8 +28,6 @@ namespace graphics
 		public base::Moveable
 	{
 	public:
-		static constexpr float WheelZoomStep = 250.0f;
-
 		enum class View
 		{
 			Front,
@@ -87,6 +85,7 @@ namespace graphics
 		static constexpr unsigned int BackgroundDragRightButtonMask   = 1u << 2;
 		static constexpr unsigned int BackgroundDragRelativeBlendFrames = 2u;
 		static constexpr float TransitionDurationSeconds = 0.4f;
+		static constexpr float WheelZoomTransitionDurationSeconds = 0.15f;
 		static constexpr size_t ViewCount = 3u;
 
 		enum class BackgroundDragMode
