@@ -1157,7 +1157,9 @@ TEST(CameraView, WheelZoomAtViewportCentreUsesNotches) {
 	scene.SettleCameraForTest();
 
 	auto cameraPos = scene.CameraPositionForTest();
-	EXPECT_FLOAT_EQ(170.0f, cameraPos.Z);
+	const auto expectedFrontZoomStep = 150.0f
+		+ (350.0f * (420.0f - 80.0f) / (1350.0f - 80.0f));
+	EXPECT_NEAR(420.0f - expectedFrontZoomStep, cameraPos.Z, 0.001f);
 	EXPECT_FLOAT_EQ(0.0f, cameraPos.X);
 	EXPECT_FLOAT_EQ(0.0f, cameraPos.Y);
 }
@@ -1198,7 +1200,9 @@ TEST(CameraView, WheelZoomPreservesFrontPanPosition) {
 	auto cameraPos = scene.CameraPositionForTest();
 	EXPECT_FLOAT_EQ(-10.0f, cameraPos.X);
 	EXPECT_FLOAT_EQ(10.0f, cameraPos.Y);
-	EXPECT_FLOAT_EQ(170.0f, cameraPos.Z);
+	const auto expectedFrontZoomStep = 150.0f
+		+ (350.0f * (420.0f - 80.0f) / (1350.0f - 80.0f));
+	EXPECT_NEAR(420.0f - expectedFrontZoomStep, cameraPos.Z, 0.001f);
 }
 
 TEST(CameraView, TopDownWheelZoomKeepsOrthographicProjection) {
@@ -1223,7 +1227,9 @@ TEST(CameraView, TopDownWheelZoomKeepsOrthographicProjection) {
 	scene.SettleCameraForTest();
 	EXPECT_EQ(graphics::Camera::View::TopDown, scene.CameraViewForTest());
 	EXPECT_FLOAT_EQ(-1.0f, scene.CameraPoseForTest().Forward.Y);
-	EXPECT_FLOAT_EQ(550.0f, scene.CameraPositionForTest().Y);
+	const auto expectedTopDownZoomStep = 150.0f
+		+ (350.0f * (800.0f - 280.0f) / (3200.0f - 280.0f));
+	EXPECT_NEAR(800.0f - expectedTopDownZoomStep, scene.CameraPositionForTest().Y, 0.001f);
 }
 
 TEST(CameraView, TopDownWheelZoomKeepsCursorFocusUnderPointer) {
