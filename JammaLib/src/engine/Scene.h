@@ -179,6 +179,7 @@ namespace engine
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		void UpdateCamera();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -388,6 +389,7 @@ namespace engine
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		timing::TimingQuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
+		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

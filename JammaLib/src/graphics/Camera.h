@@ -54,7 +54,7 @@ namespace graphics
 			unsigned int viewportWidth,
 			unsigned int viewportHeight,
 			utils::Position3d stationCentre);
-		void TickBackgroundDrag(unsigned int samps, unsigned int sampleRate);
+		void TickBackgroundDrag(float deltaSeconds);
 		bool IsBackgroundDragging() const noexcept;
 		bool BackgroundDragWasDragged() const noexcept;
 		bool IsTransitioning() const noexcept;
@@ -118,10 +118,10 @@ namespace graphics
 		void _ApplyBackgroundDragPosition(utils::Position3d position) noexcept;
 		void _SwitchBackgroundDragMode(utils::Position2d pointerPosition, unsigned int mouseButtonsDown) noexcept;
 		void _EndBackgroundDrag() noexcept;
-		void _CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate);
+		void _CoastBackgroundDrag(float deltaSeconds);
 		static utils::Position3d _Normalise(utils::Position3d value) noexcept;
 		static utils::Position3d _Lerp(utils::Position3d from, utils::Position3d to, float amount) noexcept;
-		void _TickTransition(unsigned int samps, unsigned int sampleRate) noexcept;
+		void _TickTransition(float deltaSeconds) noexcept;
 		void _ApplyPose(Pose pose) noexcept;
 		utils::Position3d _ConstrainDragPosition(utils::Position3d position) const noexcept;
 		static size_t _ViewIndex(View view) noexcept;

@@ -251,7 +251,7 @@ public:
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
 	{
-		_camera.TickBackgroundDrag(samps, sampleRate);
+		_camera.TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
 	}
 
 	void SettleCameraForTest()
@@ -1357,7 +1357,7 @@ TEST(CameraView, StationInteriorTemporarilyForcesLoopTakeSelectDepth) {
 
 	scene.OnAction(tab);
 	scene.SettleCameraForTest();
-	scene.OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	scene.UpdateCamera();
 	EXPECT_EQ(Scene::VIEW_STATION, scene.CameraSelectDepthForTest());
 }
 

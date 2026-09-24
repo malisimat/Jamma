@@ -240,15 +240,14 @@ void Camera::_EndBackgroundDrag() noexcept
 	_backgroundDrag = BackgroundDragState{};
 }
 
-void Camera::_CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate)
+void Camera::_CoastBackgroundDrag(float deltaSeconds)
 {
-	if (0u == samps || 0u == sampleRate)
+	if (deltaSeconds <= 0.0f)
 		return;
 
 	constexpr float framesPerSecond = 60.0f;
 	constexpr float linearDragCoeff = 0.01f;
 	constexpr float quadraticDragCoeff = 0.1f;
-	const float deltaSeconds = static_cast<float>(samps) / static_cast<float>(sampleRate);
 	const float motionScale = deltaSeconds * framesPerSecond;
 	if (motionScale <= 0.0f)
 		return;
@@ -589,15 +588,14 @@ void Camera::SetViewTarget(View view, Pose target) noexcept
 	_EndBackgroundDrag();
 }
 
-void Camera::_TickTransition(unsigned int samps, unsigned int sampleRate) noexcept
+void Camera::_TickTransition(float deltaSeconds) noexcept
 {
-	if (!_transitioning || (0u == samps) || (0u == sampleRate))
+	if (!_transitioning || (deltaSeconds <= 0.0f))
 		return;
 
 	const auto transitionDurationSeconds = _wheelZoomTransition
 		? WheelZoomTransitionDurationSeconds
 		: TransitionDurationSeconds;
-	const auto deltaSeconds = static_cast<float>(samps) / static_cast<float>(sampleRate);
 	_transitionElapsedSeconds = std::min(_transitionElapsedSeconds + std::min(deltaSeconds, 0.05f), transitionDurationSeconds);
 	const auto linearProgress = _transitionElapsedSeconds / transitionDurationSeconds;
 	const auto easedProgress = linearProgress * linearProgress * (3.0f - (2.0f * linearProgress));
@@ -643,18 +641,18 @@ void Camera::_TickTransition(unsigned int samps, unsigned int sampleRate) noexce
 	}
 }
 
-void Camera::TickBackgroundDrag(unsigned int samps, unsigned int sampleRate)
+void Camera::TickBackgroundDrag(float deltaSeconds)
 {
 	if (_transitioning)
 	{
-		_TickTransition(samps, sampleRate);
+		_TickTransition(deltaSeconds);
 		return;
 	}
 
 	if (BackgroundDragMode::InertialPan != _backgroundDrag.Mode)
 		return;
 
-	_CoastBackgroundDrag(samps, sampleRate);
+	_CoastBackgroundDrag(deltaSeconds);
 }
 
 bool Camera::IsBackgroundDragging() const noexcept

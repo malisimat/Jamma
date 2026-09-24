@@ -483,6 +483,7 @@ void Window::Render()
 	ApplyPendingResize();
 
 	_scene.CommitChanges();
+	_scene.UpdateCamera();
 	_scene.InitResources(_resourceLib, false);
 
 	const bool needsPick = (_hover3dDirty || _forcePick) && _cachedCursorPosition.has_value();

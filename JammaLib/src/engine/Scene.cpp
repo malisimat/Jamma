@@ -575,8 +575,6 @@ void Scene::Draw3d(DrawContext& ctx,
 	base::DrawPass pass)
 {
 	std::scoped_lock lock(_sceneMutex);
-	for (size_t index = 0u; index < _stations.size(); ++index)
-		_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
 
 	auto ar = _sizeParams.Size.Height > 0 ?
 		(float)_sizeParams.Size.Width / (float)_sizeParams.Size.Height :
@@ -632,6 +630,29 @@ void Scene::Draw3d(DrawContext& ctx,
 		station->Draw3d(ctx, 1, pass);
 
 	glCtx.PopMvp();
+}
+
+void Scene::UpdateCamera()
+{
+	// Input, camera state, and rendering are all owned by the window thread.
+	// The audio callback never reads or advances the camera.
+	const auto now = Timer::GetTime();
+	const auto deltaSeconds = _lastCameraUpdateTime
+		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastCameraUpdateTime, now)), 0.0f, 0.05f)
+		: 0.0f;
+	_lastCameraUpdateTime = now;
+
+	{
+		std::scoped_lock lock(_sceneMutex);
+		for (size_t index = 0u; index < _stations.size(); ++index)
+			_camera.ObserveStation(index, _stations[index]->LoopTakeRevision(), _stations[index]->ModelPosition());
+	}
+
+	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
+		_camera.TickBackgroundDrag(deltaSeconds);
+	_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
+	if (_isSceneTouching && !_camera.IsBackgroundDragging())
+		_EndBackgroundDrag();
 }
 
 void Scene::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -1218,14 +1239,6 @@ void Scene::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	if (_camera.IsBackgroundDragging() || _camera.IsTransitioning())
-		_camera.TickBackgroundDrag(samps, _CurrentSampleRate());
-
-	_ApplyCameraSelectDepthChange(_camera.PendingSelectDepthChange());
-
-	if (_isSceneTouching && !_camera.IsBackgroundDragging())
-		_EndBackgroundDrag();
-
 	if (auto clock = _quantisation.Clock())
 	{
 		clock->Tick(samps, 0u);
