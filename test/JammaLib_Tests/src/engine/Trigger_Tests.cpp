@@ -1427,9 +1427,15 @@ TEST(CameraView, StationInteriorFollowsLoopTakeAddition) {
 
 TEST(CameraView, StationResetUpdatesLoopTakeRevision) {
 	auto station = MakeTestStation("station-reset");
+	station->AddTake();
 	const auto revision = station->LoopTakeRevision();
 	station->Reset();
 	EXPECT_GT(station->LoopTakeRevision(), revision);
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	EXPECT_EQ(0u, station->NumTakes());
+	station->CommitChanges();
+	EXPECT_TRUE(station->GetLoopTakeSnapshot().empty());
+	EXPECT_EQ(0u, station->NumTakes());
 }
 
 TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
