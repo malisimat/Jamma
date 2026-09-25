@@ -1021,8 +1021,7 @@ void GuiHud::_RevealTrigger(size_t triggerIndex)
 		return;
 	const int contentHeight = _triggerList ? static_cast<int>(_triggerList->GetSize().Height) :
 		static_cast<int>((triggerIndex + 1u) * _TriggerButtonHeight + triggerIndex * _RightRailSpacing);
-	const int itemTop = contentHeight - static_cast<int>((triggerIndex + 1u) * _TriggerButtonHeight) -
-		static_cast<int>(triggerIndex * _RightRailSpacing);
+	const int itemTop = static_cast<int>(triggerIndex * (_TriggerButtonHeight + _RightRailSpacing));
 	const int itemBottom = itemTop + static_cast<int>(_TriggerButtonHeight);
 	_triggerScroll->SetScrollOffset(RevealScrollOffset(_triggerScroll->ScrollOffset(),
 		static_cast<int>(_triggerScroll->ViewportHeight()), contentHeight, itemTop, itemBottom));

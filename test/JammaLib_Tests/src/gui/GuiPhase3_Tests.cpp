@@ -172,7 +172,7 @@ TEST(GuiElement, ExclusiveHoverReachesScrollPanelContent) {
 	params.Size = { 100u, 50u };
 	params.MinSize = params.Size;
 	auto panel = std::make_shared<GuiScrollPanel>(params);
-	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 5 }, { 40, 20 }));
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 75 }, { 40, 20 }));
 	base::GuiElementParams contentParams;
 	contentParams.Size = { 80u, 100u };
 	contentParams.MinSize = contentParams.Size;
@@ -180,7 +180,7 @@ TEST(GuiElement, ExclusiveHoverReachesScrollPanelContent) {
 	content->AddChild(button);
 	panel->SetContent(content);
 
-	panel->ApplyExclusiveHoverPoint({ 10, 10 });
+	panel->ApplyExclusiveHoverPoint({ 10, 30 });
 
 	EXPECT_EQ(base::GuiElement::STATE_OVER, button->GetState());
 }
@@ -314,6 +314,19 @@ TEST(GuiScrollBar, OffsetAndValueRoundTrip) {
 	EXPECT_DOUBLE_EQ(0.5, GuiScrollBar::ValueFromOffset(100, 50, offset));
 }
 
+TEST(GuiScrollBar, IsHiddenWhenContentFitsAndVisibleWhenItOverflows) {
+	GuiScrollBarParams p;
+	p.Size = { 18u, 100u };
+	p.MinSize = p.Size;
+	auto scrollBar = std::make_shared<GuiScrollBar>(p);
+
+	scrollBar->SetMetrics(100.0, 100.0);
+	EXPECT_FALSE(scrollBar->IsVisible());
+
+	scrollBar->SetMetrics(100.0, 101.0);
+	EXPECT_TRUE(scrollBar->IsVisible());
+}
+
 // GuiScrollPanel offset tests
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
@@ -344,7 +357,7 @@ TEST(GuiScrollPanel, GlobalAndLocalCoordinatesIncludeNonzeroScrollOffset) {
 	contentParams.Size = { 80, 200 };
 	contentParams.MinSize = contentParams.Size;
 	auto content = std::make_shared<base::GuiElement>(contentParams);
-	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 80 }, { 40, 20 }));
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 120 }, { 40, 20 }));
 	content->AddChild(button);
 
 	panel->SetContent(content);
@@ -372,7 +385,7 @@ TEST(GuiScrollPanel, CapturedButtonReceivesReleaseInScrolledLocalCoordinates) {
 	contentParams.Size = { 80, 200 };
 	contentParams.MinSize = contentParams.Size;
 	auto content = std::make_shared<base::GuiElement>(contentParams);
-	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 80 }, { 40, 20 }));
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 120 }, { 40, 20 }));
 	content->AddChild(button);
 	panel->SetContent(content);
 	panel->SetScrollOffset(60);
@@ -410,11 +423,42 @@ TEST(GuiScrollPanel, ViewportExcludesScrollBar) {
 	GuiScrollPanelParams p;
 	p.Size = { 100, 50 };
 	p.MinSize = { 100, 50 };
-	p.ScrollBarWidth = 12u;
+	p.ScrollBarWidth = 18u;
 	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 200 })));
 
-	EXPECT_EQ(88u, panel->ViewportWidth());
+	EXPECT_TRUE(panel->IsScrollBarVisible());
+	EXPECT_EQ(82u, panel->ViewportWidth());
 	EXPECT_EQ(50u, panel->ViewportHeight());
+}
+
+TEST(GuiScrollPanel, HidesScrollBarAndUsesFullWidthWhenContentFits) {
+	GuiScrollPanelParams p;
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 50 })));
+
+	EXPECT_FALSE(panel->IsScrollBarVisible());
+	EXPECT_EQ(100u, panel->ViewportWidth());
+}
+
+TEST(GuiScrollPanel, ContentIsTopAlignedAtTheStartOfTheScrollRange) {
+	GuiScrollPanelParams p;
+	p.Size = { 100, 100 };
+	p.MinSize = { 100, 100 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	auto content = std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 30 }));
+	panel->SetContent(content);
+
+	EXPECT_EQ(70, content->GlobalPosition().Y);
+
+	panel->SetSize({ 100, 20 });
+	EXPECT_TRUE(panel->IsScrollBarVisible());
+	EXPECT_EQ(-10, content->GlobalPosition().Y);
+
+	panel->SetScrollOffset(10);
+	EXPECT_EQ(0, content->GlobalPosition().Y);
 }
 
 // GuiTextBox editing tests

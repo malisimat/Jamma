@@ -34,6 +34,7 @@ GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 	_draggingScrollBar(false)
 {
 	_scrollBar->SetOnScroll([this](double frac) { SetScrollFraction(frac); });
+	_UpdateMetrics();
 }
 
 void GuiScrollPanel::SetContent(std::shared_ptr<base::GuiElement> content)
@@ -59,11 +60,16 @@ std::shared_ptr<base::GuiElement> GuiScrollPanel::Content() const { return _cont
 
 unsigned int GuiScrollPanel::ViewportWidth() const
 {
-	const int w = (int)GetSize().Width - (int)_scrollBarWidth;
+	const int w = (int)GetSize().Width - (IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
 	return (unsigned int)std::max(0, w);
 }
 
 unsigned int GuiScrollPanel::ViewportHeight() const { return GetSize().Height; }
+
+bool GuiScrollPanel::IsScrollBarVisible() const
+{
+	return _scrollBar && _scrollBar->IsVisible();
+}
 
 unsigned int GuiScrollPanel::_ContentHeight() const
 {
@@ -86,7 +92,12 @@ void GuiScrollPanel::_ClampOffset()
 void GuiScrollPanel::_UpdateContentHostPosition()
 {
 	if (_contentHost)
-		_contentHost->SetPosition({ 0, -_scrollOffset });
+	{
+		// GUI coordinates grow upward. Aligning the content's top to the
+		// viewport's top keeps the first item stationary as later items append.
+		const int topAlignedPosition = static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentHeight());
+		_contentHost->SetPosition({ 0, topAlignedPosition + _scrollOffset });
+	}
 }
 
 void GuiScrollPanel::SetScrollOffset(int offset)
@@ -141,6 +152,8 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 	if (!_isVisible)
 		return;
 
+	_UpdateMetrics();
+
 	GuiElement::Draw(ctx); // background
 
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -174,6 +187,8 @@ ActionResult GuiScrollPanel::OnAction(TouchAction action)
 {
 	if (!_isEnabled || !_isVisible)
 		return ActionResult::NoAction();
+
+	_UpdateMetrics();
 
 	// Mouse wheel (Window encodes wheel as TouchAction index 4, value = notches).
 	if ((TouchAction::TouchState::TOUCH_DOWN == action.State) && (4 == action.Index) && HitTest(action.Position))

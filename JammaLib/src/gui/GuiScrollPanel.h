@@ -18,7 +18,7 @@ namespace gui
 			GuiPassThrough = false;
 		}
 
-		unsigned int ScrollBarWidth = 12u;
+		unsigned int ScrollBarWidth = 18u;
 		unsigned int WheelStep      = 24u;   // pixels scrolled per wheel notch.
 		std::string  ScrollBarTexture = "rounded_but";
 		std::string  ThumbTexture      = "blue";
@@ -50,6 +50,7 @@ namespace gui
 		int MaxScrollOffset() const;
 		unsigned int ViewportWidth() const;
 		unsigned int ViewportHeight() const;
+		bool IsScrollBarVisible() const;
 
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;

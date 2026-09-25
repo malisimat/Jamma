@@ -73,6 +73,7 @@ void GuiScrollBar::SetMetrics(double viewportLength, double contentLength)
 {
 	_viewportLength = std::max(0.0, viewportLength);
 	_contentLength = std::max(0.0, contentLength);
+	SetVisible(IsScrollable());
 	_UpdateThumb();
 }
 
@@ -104,10 +105,10 @@ void GuiScrollBar::_UpdateThumb()
 {
 	const unsigned int track = GetSize().Height;
 	const unsigned int thumbLen = ThumbLength(track, _viewportLength, _contentLength, _minThumb);
-	const int offset = ThumbOffset(track, thumbLen, _value);
+	const int offsetFromTop = ThumbOffset(track, thumbLen, _value);
 
 	_thumb.SetSize({ GetSize().Width, thumbLen });
-	_thumb.SetPosition({ 0, offset });
+	_thumb.SetPosition({ 0, static_cast<int>(track - thumbLen) - offsetFromTop });
 }
 
 void GuiScrollBar::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -166,7 +167,7 @@ ActionResult GuiScrollBar::OnAction(TouchMoveAction action)
 	const unsigned int track = GetSize().Height;
 	const unsigned int thumbLen = ThumbLength(track, _viewportLength, _contentLength, _minThumb);
 	const int startOffset = ThumbOffset(track, thumbLen, _dragStartValue);
-	const int dy = action.Position.Y - _dragStartY;
+	const int dy = _dragStartY - action.Position.Y;
 
 	_value = ValueFromOffset(track, thumbLen, startOffset + dy);
 	_UpdateThumb();
