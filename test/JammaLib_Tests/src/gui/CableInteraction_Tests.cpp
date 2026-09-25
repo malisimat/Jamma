@@ -145,6 +145,22 @@ TEST_F(CableInteractionTests, ReleaseSourceToTriggerCreatesCaptureRoute)
 	EXPECT_EQ((std::vector<unsigned int>{ 3u }), release.Candidate->Triggers[1].InputChannels);
 }
 
+TEST_F(CableInteractionTests, ReleaseTriggerInputEndUnplugsOrMovesExistingCaptureRoute)
+{
+	auto rig = Rig();
+	CableInteraction::Drag drag{ { 4u, 0u, CableInteraction::RouteKind::Capture, 0u },
+		CableInteraction::End::Finish, Adc(1u, 0, 0), Adc(1u, 0, 0).Source, { 100, 0 }, {} };
+	const auto unplugged = CableInteraction::ReleaseToCandidate(drag, rig);
+	ASSERT_TRUE(unplugged.Candidate.has_value());
+	EXPECT_TRUE(unplugged.Candidate->Triggers[0].InputChannels.empty());
+
+	drag.Snap = Input(1u, 100, 0);
+	const auto moved = CableInteraction::ReleaseToCandidate(drag, rig);
+	ASSERT_TRUE(moved.Candidate.has_value());
+	EXPECT_TRUE(moved.Candidate->Triggers[0].InputChannels.empty());
+	EXPECT_EQ((std::vector<unsigned int>{ 1u }), moved.Candidate->Triggers[1].InputChannels);
+}
+
 TEST_F(CableInteractionTests, UnavailableFixedSourceCannotCreateCaptureRoute)
 {
 	auto rig = Rig();

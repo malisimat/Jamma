@@ -246,24 +246,47 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 
 	if (drag.MovingEnd == End::Finish)
 	{
-		if (!drag.Fixed.Available || !drag.Fixed.Source.has_value() || !drag.Fixed.Source->Available ||
-			!drag.Snap.has_value() || !drag.Snap->Available || drag.Snap->Kind != EndpointKind::TriggerInput)
-			return {};
-		const auto triggerIndex = drag.Snap->TriggerIndex.value_or(drag.Route.TriggerIndex);
-		if (triggerIndex >= rig.Triggers.size())
+		if (!drag.Fixed.Available || !drag.Fixed.Source.has_value() || !drag.Fixed.Source->Available)
 			return {};
 		const auto& source = drag.Fixed.Source.value();
+		std::optional<io::RigFile> candidate;
+		if (drag.OriginalSource.has_value())
+		{
+			if (drag.Route.TriggerIndex >= rig.Triggers.size())
+				return {};
+			if (source.Kind == io::RigFileRouting::SourceKind::Adc)
+				candidate = io::RigFileRouting::WithoutAdcInput(rig, drag.Route.TriggerIndex, source.AdcChannel);
+			else if (source.MidiDevice == "*")
+			{
+				candidate = rig;
+				auto& trigger = candidate->Triggers[drag.Route.TriggerIndex];
+				trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
+				trigger.MidiInputDevices.clear();
+			}
+			else
+				candidate = io::RigFileRouting::WithoutMidiInput(rig, drag.Route.TriggerIndex, source.MidiDevice);
+			if (!candidate.has_value())
+				return {};
+		}
+		if (!drag.Snap.has_value())
+			return candidate.has_value() ? Release{ std::move(candidate), true } : Release{};
+		if (!drag.Snap->Available || drag.Snap->Kind != EndpointKind::TriggerInput)
+			return {};
+		const auto triggerIndex = drag.Snap->TriggerIndex.value_or(drag.Route.TriggerIndex);
+		const auto& base = candidate.has_value() ? candidate.value() : rig;
+		if (triggerIndex >= base.Triggers.size())
+			return {};
 		if (source.Kind == io::RigFileRouting::SourceKind::Midi && source.MidiDevice == "*")
 		{
-			auto candidate = rig;
-			auto& trigger = candidate.Triggers[triggerIndex];
+			auto replacement = base;
+			auto& trigger = replacement.Triggers[triggerIndex];
 			trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::Any;
 			trigger.MidiInputDevices.clear();
-			return { std::move(candidate), true };
+			return { std::move(replacement), true };
 		}
 		if (source.Kind == io::RigFileRouting::SourceKind::Adc)
-			return { io::RigFileRouting::WithAdcInput(rig, triggerIndex, source.AdcChannel), true };
-		return { io::RigFileRouting::WithMidiInput(rig, triggerIndex, source.MidiDevice), true };
+			return { io::RigFileRouting::WithAdcInput(base, triggerIndex, source.AdcChannel), true };
+		return { io::RigFileRouting::WithMidiInput(base, triggerIndex, source.MidiDevice), true };
 	}
 	const auto original = drag.OriginalSource;
 	if (drag.Route.TriggerIndex >= rig.Triggers.size())
