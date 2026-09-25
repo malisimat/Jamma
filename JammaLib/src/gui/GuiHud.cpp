@@ -1229,7 +1229,7 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 
 	std::vector<std::vector<size_t>> stationTriggers(_stationAnchors.size());
 	for (const auto& trigger : _routingGraph)
-		if (trigger.StationIndex.has_value())
+		if (trigger.TriggerIndex < _triggerWidgets.size() && trigger.StationIndex.has_value())
 		{
 			const auto anchor = std::find_if(_stationAnchors.begin(), _stationAnchors.end(), [&trigger](const auto& value)
 			{
