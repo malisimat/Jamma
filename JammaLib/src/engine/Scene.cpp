@@ -799,7 +799,13 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		if (activeElement)
 		{
-			res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			if (_touchDownIsHud)
+			{
+				std::scoped_lock lock(_sceneMutex);
+				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			}
+			else
+				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
 
 			if (res.IsEaten)
 			{
@@ -826,6 +832,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		_UpdateSelection(res.ResultType);
 
 		_touchDownElement.reset();
+		_touchDownIsHud = false;
 
 		return ActionResult::NoAction();
 	}
@@ -835,14 +842,25 @@ ActionResult Scene::OnAction(TouchAction action)
 		if (!*it)
 			continue;
 
-		res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+		const auto& child = *it;
+		const auto isHudChild = (child == _hudPanel);
+		if (isHudChild)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			res = child->OnAction(child->ParentToLocal(action));
+		}
+		else
+			res = child->OnAction(child->ParentToLocal(action));
 		if (res.IsEaten)
 		{
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
 			if (!_touchDownElement.lock())
+			{
 				_touchDownElement = res.ActiveElement;
+				_touchDownIsHud = isHudChild;
+			}
 
 			// Focus follows the pressed control when it wants the keyboard.
 			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
@@ -866,7 +884,10 @@ ActionResult Scene::OnAction(TouchAction action)
 			_undoHistory.Add(res.Undo);
 
 		if (!_touchDownElement.lock())
+		{
 			_touchDownElement = res.ActiveElement;
+			_touchDownIsHud = false;
+		}
 
 		return res;
 	}
@@ -879,7 +900,10 @@ ActionResult Scene::OnAction(TouchAction action)
 			_undoHistory.Add(res.Undo);
 
 		if (!_touchDownElement.lock())
+		{
 			_touchDownElement = res.ActiveElement;
+			_touchDownIsHud = false;
+		}
 
 		return res;
 	}
@@ -894,7 +918,10 @@ ActionResult Scene::OnAction(TouchAction action)
 				_undoHistory.Add(res.Undo);
 
 			if (!_touchDownElement.lock())
+			{
 				_touchDownElement = res.ActiveElement;
+				_touchDownIsHud = false;
+			}
 
 			return res;
 		}
@@ -942,12 +969,24 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	auto activeElement = _touchDownElement.lock();
 
 	if (activeElement)
+	{
+		if (_touchDownIsHud)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			return activeElement->OnAction(activeElement->GlobalToLocal(action));
+		}
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
+	}
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
 	if (_hudPanel)
+	{
+		// _AdvanceRigPublication rebuilds the HUD child tree on the job thread.
+		// Keep this uncaptured UI traversal out of that mutation window.
+		std::scoped_lock lock(_sceneMutex);
 		return _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+	}
 
 	return ActionResult::NoAction();
 }
@@ -963,14 +1002,21 @@ ActionResult Scene::OnAction(KeyAction action)
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
 		if (_hudPanel)
+		{
+			std::scoped_lock lock(_sceneMutex);
 			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		}
 		return ActionResult::NoAction();
 	}
-	if (_hudPanel && _hudPanel->HasCableDrag())
+	if (_hudPanel)
 	{
-		auto hudResult = _hudPanel->OnAction(action);
-		if (hudResult.IsEaten)
-			return hudResult;
+		std::scoped_lock lock(_sceneMutex);
+		if (_hudPanel->HasCableDrag())
+		{
+			auto hudResult = _hudPanel->OnAction(action);
+			if (hudResult.IsEaten)
+				return hudResult;
+		}
 	}
 
 	// 1. Open popups capture the keyboard first.

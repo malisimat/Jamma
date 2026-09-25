@@ -188,6 +188,7 @@ namespace engine
 
 		virtual void SetSize(utils::Size2d size) override
 		{
+			std::scoped_lock lock(_sceneMutex);
 			_sizeParams.Size = size;
 			_InitSize();
 			_InvalidateHover2d();
@@ -398,6 +399,10 @@ namespace engine
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
+		// Whether the touch sequence tracked by _touchDownElement started on the HUD panel,
+		// recorded once at touch-down since HUD widgets report themselves (not _hudPanel) as
+		// ActiveElement, so later move/up dispatch can still be locked against HUD rebuilds.
+		bool _touchDownIsHud = false;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
