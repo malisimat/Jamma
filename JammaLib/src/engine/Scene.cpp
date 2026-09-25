@@ -1468,6 +1468,9 @@ void Scene::_AdvanceRigPublication()
 	_inputSubsystem->UngateRigTriggerInput();
 	if (_hudPanel)
 	{
+		// HUD routing rebuilds replace child widgets while the render thread may
+		// be drawing or initializing the same tree.
+		std::scoped_lock lock(_sceneMutex);
 		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
 		std::vector<std::string> midiInputs;
 		for (const auto& device : pending->Rig.User.Midi.Devices)
@@ -2201,6 +2204,13 @@ void Scene::_UpdateSelection(ActionResultType res)
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
+	// Rig edits rebuild the HUD after scene initialization; initialize its new
+	// controls on the render thread before drawing them.
+	{
+		std::scoped_lock lock(_sceneMutex);
+		if (_hudPanel)
+			_hudPanel->InitResources(resourceLib, false);
+	}
 
 	// Stations can be added after scene resources are initialised.
 	auto stations = _stations;

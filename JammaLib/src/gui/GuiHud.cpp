@@ -505,6 +505,8 @@ void GuiHud::_RebuildPanels()
 
 	_BuildPanels();
 	_LayoutPanels();
+	// The rebuilt controls and VU meters need GL resources on the render thread.
+	_resourcesNeedInitialising.store(true, std::memory_order_release);
 	if (_triggerScroll && !revealNewest)
 		_triggerScroll->SetScrollOffset(previousScrollOffset);
 	_lastTriggerScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
