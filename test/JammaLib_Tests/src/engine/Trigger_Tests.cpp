@@ -232,6 +232,11 @@ public:
 	{
 		_popupManager.Open(popup);
 	}
+
+	void ApplyHoverForTest()
+	{
+		ApplyDeferredHoverUpdates();
+	}
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -1031,6 +1036,39 @@ TEST(Scene, PopupTouchUpClearsAnEarlierTouchCapture) {
 	EXPECT_FALSE(scene.HasTouchCaptureForTest());
 }
 
+TEST(Scene, HoverTargetsOnlyTheTopmostOverlappingGuiElement) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	base::GuiElementParams containerParams;
+	containerParams.Position = { 800, 500 };
+	containerParams.Size = { 100u, 60u };
+	containerParams.MinSize = containerParams.Size;
+	containerParams.GuiPassThrough = true;
+	auto container = std::make_shared<base::GuiElement>(containerParams);
+	auto underneath = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 0, 0 }, { 80u, 40u }));
+	auto topmost = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 60, 0 }, { 40u, 40u }));
+	container->AddChild(underneath);
+	container->AddChild(topmost);
+	scene.AddChild(container);
+
+	scene.OnAction(MakeSceneTouchMove({ 870, 510 }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, container->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, topmost->GetState());
+
+	scene.OnAction(MakeSceneTouchMove({ 820, 510 }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(base::GuiElement::STATE_OVER, underneath->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, topmost->GetState());
+}
+
 TEST(SceneDrag, LeftDragPansCameraDirectly) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
@@ -1168,11 +1206,7 @@ TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
 
 // Regression: trigger-driven engine mutation from the job thread (MIDI/serial
 
-// ---- Scene reset tests -------------------------------------------------
-// Tests 1-3: regression (key-trigger paths that already work).
-// Tests 4-5: MIDI and serial activate paths - FAIL before the fix because
-//            _DispatchMidiTriggerEvent and _PumpSerial never set
-//            _isSceneReset = false on ACTIONRESULT_ACTIVATE.
+// ---- Scene reset tests: key, MIDI, and serial trigger paths -------------
 
 TEST(SceneReset, KeyTriggerDitchWhileRecording_ResetsScene) {
 	SceneParams sceneParams{ base::DrawableParams(),

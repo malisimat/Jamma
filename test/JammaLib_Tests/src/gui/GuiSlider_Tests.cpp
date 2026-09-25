@@ -253,4 +253,10 @@ TEST(GuiSlider, DragHandleRespondsToHover) {
 	slider->OnAction(moveAction);
 
 	ASSERT_TRUE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+
+	moveAction.Position = { 80, 10 };
+	slider->OnAction(moveAction);
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
 }

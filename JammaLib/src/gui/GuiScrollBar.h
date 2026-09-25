@@ -18,10 +18,7 @@ namespace gui
 		std::string  ThumbTexture = "blue";
 	};
 
-	// Vertical scrollbar.  Reports a normalised scroll position in [0, 1] via a
-	// callback.  The track length is the element height; the thumb length is
-	// derived from the viewport/content ratio.  Range math is exposed as static
-	// helpers so it can be unit-tested without a GL context.
+	// Vertical scrollbar with normalized position callbacks and testable range math.
 	class GuiScrollBar : public base::GuiElement
 	{
 	public:
@@ -40,6 +37,7 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+		virtual void ClearPointerState() override;
 
 		// Range math (track length and lengths in pixels).
 		static double ThumbFraction(double viewport, double content);

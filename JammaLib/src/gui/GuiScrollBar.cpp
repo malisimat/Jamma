@@ -176,3 +176,9 @@ ActionResult GuiScrollBar::OnAction(TouchMoveAction action)
 
 	return { true, std::to_string(_index), "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 }
+
+void GuiScrollBar::ClearPointerState()
+{
+	GuiElement::ClearPointerState();
+	_thumb.ClearPointerState();
+}

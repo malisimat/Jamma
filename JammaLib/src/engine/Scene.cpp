@@ -748,6 +748,14 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+	{
+		// Pressed presentation belongs exclusively to the capture target.  Clear
+		// the prior hover now rather than waiting for the next render pass.
+		std::vector<std::weak_ptr<GuiElement>> none;
+		_ApplyHoverPath2d(none);
+		_hoverPath2d.clear();
+	}
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
@@ -813,9 +821,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			_camera.HandleBackgroundDrag(action);
 			_EndBackgroundDrag();
 
-			// Clear selection only if not dragged
-			// background drag should only be active if selector mode is SELECT_NONE
-			// so try to use that instead!
+			// Clear selection after an unhandled background drag.
 			if (!wasDragged && !_camera.IsBackgroundDragging())
 				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
@@ -1062,10 +1068,8 @@ ActionResult Scene::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 	}
 
-	// Ctrl+Shift+R - arm one-shot reclock: clear quantisation so the next
-	// completed recording becomes the new master quantisation. After completion the
-	// derived BPM/BPI is queued and sent to the NINJAM server at the next
-	// interval boundary.
+	// Ctrl+Shift+R arms a one-shot reclock; the completed recording becomes the
+	// new master quantisation at the next interval boundary.
 	if ((82 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
@@ -1372,9 +1376,7 @@ void Scene::OnJobTick(Time curTime)
 
 	auto pumpResult = _networkService->GetController()->Pump();
 	{
-		// Always sync the station clock state to the scene-level quantisation.
-		// This ensures that when the first loop seeds the station clock locally
-		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
+		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		bool hasLocalContent = false;
@@ -1435,13 +1437,7 @@ void Scene::OnJobTick(Time curTime)
 	if (receiver)
 		receiver->OnAction(job);
 
-	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
-	// thread for destruction. On success the chain holds its own ref so this
-	// queued ref is a no-op; on failure (Load returned false) this is the only
-	// remaining ref, and draining it on the UI thread ensures ~Vst3Plugin →
-	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
-	// the plugin. Releasing on this job thread instead violates VST3 threading
-	// and can crash plugins or leave dangling state until window close.
+	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
 	if (job.PreInitPlugin)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
@@ -1831,11 +1827,8 @@ void Scene::CommitChanges()
 			receiver->OnAction(job);
 	}
 
-	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
-	// thread. Do this after releasing _sceneMutex so LoadLibraryW stays out of
-	// the audio lock and later attached() calls remain UI-thread bound.
-	// MakePluginForPath selects VST3 (Vst3Plugin) or VST2 (Vst2Plugin) by
-	// file extension (.dll → VST2, anything else → VST3).
+	// Pre-initialize VST DLLs on the UI thread after releasing _sceneMutex.
+	// MakePluginForPath selects VST2 for .dll and VST3 otherwise.
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
@@ -1992,13 +1985,15 @@ void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>
 	_LockHoverPath(_hoverPath2d, _hoverPath2dPrevSharedScratch);
 	_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
 
-	const auto prefix = _SharedHoverPathPrefix(_hoverPath2dPrevSharedScratch, _hoverPath2dNextSharedScratch);
+	// Only the path leaf is the pointer target; ancestors are for ownership lookup.
+	for (const auto& element : _hoverPath2dPrevSharedScratch)
+		element->ApplyHoverState(false);
 
-	for (size_t i = _hoverPath2dPrevSharedScratch.size(); i > prefix; --i)
-		_hoverPath2dPrevSharedScratch[i - 1]->ApplyHoverState(false);
-
-	for (size_t i = 0; i < _hoverPath2dNextSharedScratch.size(); ++i)
-		_hoverPath2dNextSharedScratch[i]->ApplyHoverPoint(_hoverPath2dNextSharedScratch[i]->GlobalToLocal(_cursorPos));
+	if (!_hoverPath2dNextSharedScratch.empty())
+	{
+		auto& leaf = _hoverPath2dNextSharedScratch.back();
+		leaf->ApplyHoverPoint(leaf->GlobalToLocal(_cursorPos));
+	}
 }
 
 void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
@@ -2015,18 +2010,6 @@ void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& p
 
 		outPath.push_back(std::move(locked));
 	}
-}
-
-size_t Scene::_SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
-	const std::vector<std::shared_ptr<base::GuiElement>>& rhs)
-{
-	size_t prefix = 0;
-	const auto count = std::min(lhs.size(), rhs.size());
-
-	while ((prefix < count) && (lhs[prefix].get() == rhs[prefix].get()))
-		++prefix;
-
-	return prefix;
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,

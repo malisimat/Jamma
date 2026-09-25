@@ -215,26 +215,24 @@ std::shared_ptr<GuiElement> GuiElement::FindTopmostDescendant(Position2d localPo
 	if (!RouteHitTest(localPos))
 		return nullptr;
 
-	auto local = localPos;
-	auto current = shared_from_this();
-	if (!current)
-		return nullptr;
-
-	while (current)
+	// Let composite controls route descendants through their virtual entry point.
+	for (auto child = _children.rbegin(); child != _children.rend(); ++child)
 	{
-		auto nextLocal = local;
-		auto next = current->FindTopmostImmediateChild(local, nextLocal);
-		if (!next)
-			break;
+		if (!*child)
+			continue;
 
-		current = next;
-		local = nextLocal;
+		auto childLocal = (*child)->ParentToLocal(localPos);
+		if (!(*child)->RouteHitTest(childLocal))
+			continue;
+
+		if (auto descendant = (*child)->FindTopmostDescendant(childLocal))
+			return descendant;
 	}
 
-	if (!current->_HitTest(local) || current->_guiParams.GuiPassThrough)
+	if (!_HitTest(localPos) || _guiParams.GuiPassThrough)
 		return nullptr;
 
-	return current;
+	return shared_from_this();
 }
 
 void GuiElement::ApplyHoverPoint(Position2d localPos)
@@ -251,6 +249,29 @@ void GuiElement::ApplyHoverState(bool inside)
 		_state = inside ? STATE_DOWN : STATE_OUT;
 	else
 		_state = inside ? STATE_OVER : STATE_NORMAL;
+}
+
+void GuiElement::ApplyExclusiveHoverPoint(Position2d localPos)
+{
+	ClearPointerState();
+
+	auto hovered = FindTopmostDescendant(localPos);
+	if (!hovered)
+		return;
+
+	const auto globalPoint = GlobalPosition() + localPos;
+	hovered->ApplyHoverPoint(hovered->GlobalToLocal(globalPoint));
+}
+
+void GuiElement::ClearPointerState()
+{
+	_state = STATE_NORMAL;
+
+	for (auto& child : _children)
+	{
+		if (child)
+			child->ClearPointerState();
+	}
 }
 
 std::vector<JobAction> GuiElement::CommitChanges()

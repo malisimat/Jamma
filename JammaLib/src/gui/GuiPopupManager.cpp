@@ -10,6 +10,15 @@ void GuiPopupManager::Open(std::shared_ptr<GuiElement> element,
 	if (!element)
 		return;
 
+	// Clear the owner's pointer state before the popup captures input.
+	if (owner)
+	{
+		auto root = owner;
+		while (auto parent = root->Parent())
+			root = parent;
+		root->ClearPointerState();
+	}
+
 	_popups.push_back({ element, owner });
 }
 

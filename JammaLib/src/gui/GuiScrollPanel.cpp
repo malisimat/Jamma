@@ -255,6 +255,15 @@ std::shared_ptr<base::GuiElement> GuiScrollPanel::FindTopmostDescendant(Position
 	return std::static_pointer_cast<base::GuiElement>(shared_from_this());
 }
 
+void GuiScrollPanel::ClearPointerState()
+{
+	GuiPanel::ClearPointerState();
+	if (_contentHost)
+		_contentHost->ClearPointerState();
+	if (_scrollBar)
+		_scrollBar->ClearPointerState();
+}
+
 bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
 {
 	const int minX = static_cast<int>(_ContentClipPadding);

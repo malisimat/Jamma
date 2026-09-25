@@ -34,11 +34,7 @@ namespace gui
 		}
 	};
 
-	// A vertically scrollable viewport hosting a single content element plus a
-	// scrollbar.  The content is expected to be sized to its full (logical)
-	// height; the panel shows a window of height == panel height and offsets the
-	// content vertically.  Mouse-wheel and scrollbar dragging both drive the
-	// offset.  Scroll math is testable without a GL context.
+	// Scrollable viewport for full-height content, driven by wheel or scrollbar.
 	class GuiScrollPanel : public GuiPanel
 	{
 	public:
@@ -63,6 +59,7 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual bool RouteHitTest(utils::Position2d localPos) override;
 		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
+		virtual void ClearPointerState() override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;

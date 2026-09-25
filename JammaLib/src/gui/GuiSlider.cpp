@@ -193,8 +193,16 @@ ActionResult GuiSlider::OnAction(TouchMoveAction action)
 
 void GuiSlider::ApplyHoverPoint(utils::Position2d localPos)
 {
-	GuiElement::ApplyHoverPoint(localPos);
-	_dragElement.ApplyHoverPoint(_dragElement.ParentToLocal(localPos));
+	const auto dragLocalPos = _dragElement.ParentToLocal(localPos);
+	const bool dragIsHovered = _dragElement.HitTest(dragLocalPos);
+	GuiElement::ApplyHoverState(!dragIsHovered && _HitTest(localPos));
+	_dragElement.ApplyHoverState(dragIsHovered);
+}
+
+void GuiSlider::ClearPointerState()
+{
+	GuiElement::ClearPointerState();
+	_dragElement.ClearPointerState();
 }
 
 bool GuiSlider::Undo(std::shared_ptr<ActionUndo> undo)
@@ -281,9 +289,7 @@ void GuiSlider::OnValueChange(bool bypassUpdates)
 void GuiSlider::SetMixer(std::shared_ptr<audio::AudioMixer> mixer)
 {
 	_mixer = mixer;
-	// If this slider's GL resources were already initialized before the mixer was
-	// wired, the mixer's VU VAO won't have been set up.  Mark for re-init so the
-	// next InitResources pass calls _InitResources again and loads the mixer's VAO.
+	// Reinitialize if the mixer was connected after GL resources were created.
 	if (mixer)
 		_resourcesNeedInitialising = true;
 }

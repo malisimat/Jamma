@@ -1061,7 +1061,10 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	if (!_cableDrag.has_value())
 	{
 		_UpdateCableHover(action.Position);
-		return GuiPanel::OnAction(action);
+		// Keep visual feedback immediate while still resolving exactly one leaf.
+		// The scene's deferred path repeats the same topmost selection during draw.
+		ApplyExclusiveHoverPoint(action.Position);
+		return actions::ActionResult::NoAction();
 	}
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
