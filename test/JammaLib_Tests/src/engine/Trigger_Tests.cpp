@@ -111,6 +111,28 @@ private:
 	std::vector<TriggerAction> _actions;
 };
 
+class RoutingHistoryReceiver : public ActionReceiver
+{
+public:
+	explicit RoutingHistoryReceiver(std::string name) : _name(std::move(name)) {}
+
+	actions::ActionResult OnAction(actions::TriggerAction action) override
+	{
+		_actions.push_back(action);
+		const auto id = action.ActionType == TriggerAction::TRIGGER_REC_START ?
+			_name + "-" + std::to_string(++_nextTake) : std::string();
+		return { true, "", id, actions::ACTIONRESULT_DEFAULT, nullptr,
+			std::weak_ptr<base::GuiElement>() };
+	}
+
+	const std::vector<TriggerAction>& Actions() const noexcept { return _actions; }
+
+private:
+	std::string _name;
+	unsigned int _nextTake = 0u;
+	std::vector<TriggerAction> _actions;
+};
+
 class ConfigurableTriggerReceiver :
 	public ActionReceiver
 {
@@ -400,6 +422,62 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	ASSERT_FALSE(trigger->IsDitchInputDown());
 	ASSERT_FALSE(trigger->IsDitchDown());
 	ASSERT_TRUE(trigger->CanEditRouting());
+}
+
+TEST(Trigger, CaptureEditsAndStationMovesKeepDitchHistoryInRecordingOrder)
+{
+	auto firstStation = std::make_shared<RoutingHistoryReceiver>("first");
+	auto secondStation = std::make_shared<RoutingHistoryReceiver>("second");
+	auto trigger = MakeDefaultTrigger(firstStation, 0);
+	base::Action action;
+
+	auto applyRoute = [&](std::shared_ptr<base::ActionReceiver> receiver,
+		std::vector<unsigned int> channels)
+	{
+		std::vector<std::string> midiDevices;
+		auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
+		std::unique_ptr<audio::MixBehaviour> behaviour =
+			std::make_unique<audio::BounceMixBehaviour>(Trigger::GetOverdubBehaviourParams(channels));
+		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, midiMode, behaviour);
+	};
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	};
+	auto record = [&]()
+	{
+		press(true, true);
+		press(true, false);
+		trigger->OnTick(GetTime(), 64u, std::nullopt, std::nullopt);
+		press(true, true);
+		press(true, false);
+	};
+	auto ditch = [&]() { press(false, true); press(false, false); };
+
+	applyRoute(firstStation, { 0u });
+	record();
+	applyRoute(firstStation, { 0u, 1u });
+	record();
+	applyRoute(secondStation, { 0u, 1u });
+	record();
+
+	ASSERT_EQ(4u, firstStation->Actions().size());
+	EXPECT_EQ((std::vector<unsigned int>{ 0u }), firstStation->Actions()[0].InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), firstStation->Actions()[2].InputChannels);
+	ASSERT_EQ(2u, secondStation->Actions().size());
+	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), secondStation->Actions()[0].InputChannels);
+
+	ditch();
+	ASSERT_EQ(4u, secondStation->Actions().size());
+	EXPECT_EQ("second-1", secondStation->Actions()[2].TargetId);
+	ditch();
+	ASSERT_EQ(6u, firstStation->Actions().size());
+	EXPECT_EQ("first-2", firstStation->Actions()[4].TargetId);
+	ditch();
+	ASSERT_EQ(8u, firstStation->Actions().size());
+	EXPECT_EQ("first-1", firstStation->Actions()[6].TargetId);
+	EXPECT_TRUE(trigger->GetTakes().empty());
 }
 
 TEST(Trigger, ResetClearsPublishedDitchState) {

@@ -155,18 +155,20 @@ Unchanged triggers may be reused. This avoids racing the plain
 
 ### Edit eligibility
 
-Expose one atomic display accessor such as `Trigger::CanEditRouting()`,
-published by the audio-owned state machine. It is true only when:
+Expose atomic display accessors published by the audio-owned state machine.
+`Trigger::CanEditRouting()` is true only when:
 
 - the trigger is in `TRIGSTATE_DEFAULT`;
 - neither activate nor ditch input is down;
 - its external-action queue is empty and it has no delayed/in-flight action;
 - it owns no take/history that would be stranded by replacing its receiver.
 
-Disable source edits, station moves, and deletion unless this predicate is
-true. This deliberately strengthens the original "not recording" rule:
-moving a merely playing trigger is also unsafe because its take IDs belong to
-the old station.
+Capture-source and station-route edits instead use an idle-only predicate and
+retain the existing trigger instance. At the audio boundary they exchange the
+prepared capture configuration and receiver. Each recorded take retains the
+receiver that created it, so end, punch, and ditch actions continue to reach
+the right station in LIFO order after a station move. Deletion or an edit that
+replaces a trigger still requires `CanEditRouting()`.
 
 The UI value is advisory. A release must gate input for the affected trigger
 and obtain a fresh audio-boundary quiescence acknowledgement before saving or

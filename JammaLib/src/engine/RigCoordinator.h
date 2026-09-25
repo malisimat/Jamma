@@ -51,13 +51,26 @@ namespace engine
 		void ReleaseAfterReadersStopped();
 
 	private:
+		static bool _Equivalent(const io::RigFile::TriggerPair& lhs,
+			const io::RigFile::TriggerPair& rhs) noexcept;
+		static bool _Equivalent(const io::RigFile::Trigger::MidiTriggerBindingSpec& lhs,
+			const io::RigFile::Trigger::MidiTriggerBindingSpec& rhs) noexcept;
+		static bool _Equivalent(const io::RigFile::Trigger::MidiTriggerBinding& lhs,
+			const io::RigFile::Trigger::MidiTriggerBinding& rhs) noexcept;
+		static bool _Equivalent(const io::RigFile::Trigger& lhs,
+			const io::RigFile::Trigger& rhs) noexcept;
+		static bool _EquivalentActivation(const io::RigFile::Trigger& lhs,
+			const io::RigFile::Trigger& rhs) noexcept;
+		static bool _EquivalentCaptureRouting(const io::RigFile::Trigger& lhs,
+			const io::RigFile::Trigger& rhs) noexcept;
 		static SnapshotPtr _BuildSnapshot(std::uint64_t revision,
 			const io::RigFile& rig,
 			const std::vector<io::JamFile::Station>& stationDescriptors,
 			const std::vector<std::shared_ptr<Station>>& stations,
 			unsigned int availableAdcChannels,
 			const std::vector<std::string>& availableMidiDevices,
-			const TriggerParams& triggerParams);
+			const TriggerParams& triggerParams,
+			const SnapshotPtr& acceptedSnapshot);
 		std::uint64_t _AllocateRevision() noexcept;
 
 		// Coordinator/job side is the sole writer. Audio and input readers acquire

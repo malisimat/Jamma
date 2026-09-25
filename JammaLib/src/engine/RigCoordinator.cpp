@@ -4,6 +4,59 @@
 
 using namespace engine;
 
+bool RigCoordinator::_Equivalent(const io::RigFile::TriggerPair& lhs,
+	const io::RigFile::TriggerPair& rhs) noexcept
+{
+	return lhs.ActivateDown == rhs.ActivateDown && lhs.ActivateUp == rhs.ActivateUp &&
+		lhs.DitchDown == rhs.DitchDown && lhs.DitchUp == rhs.DitchUp &&
+		lhs.Source == rhs.Source && lhs.Device == rhs.Device;
+}
+
+bool RigCoordinator::_Equivalent(const io::RigFile::Trigger::MidiTriggerBindingSpec& lhs,
+	const io::RigFile::Trigger::MidiTriggerBindingSpec& rhs) noexcept
+{
+	return lhs.Kind == rhs.Kind && lhs.Channel == rhs.Channel && lhs.Id == rhs.Id &&
+		lhs.State == rhs.State && lhs.MatchAnyChannel == rhs.MatchAnyChannel;
+}
+
+bool RigCoordinator::_Equivalent(const io::RigFile::Trigger::MidiTriggerBinding& lhs,
+	const io::RigFile::Trigger::MidiTriggerBinding& rhs) noexcept
+{
+	return lhs.Device == rhs.Device && _Equivalent(lhs.Activate, rhs.Activate) &&
+		_Equivalent(lhs.Ditch, rhs.Ditch);
+}
+
+bool RigCoordinator::_Equivalent(const io::RigFile::Trigger& lhs,
+	const io::RigFile::Trigger& rhs) noexcept
+{
+	return lhs.Name == rhs.Name && lhs.StationType == rhs.StationType &&
+		lhs.InputChannels == rhs.InputChannels && lhs.MidiInputDevices == rhs.MidiInputDevices &&
+		lhs.StationTarget == rhs.StationTarget && lhs.MidiInputs == rhs.MidiInputs &&
+		lhs.MidiTrigger.has_value() == rhs.MidiTrigger.has_value() &&
+		(!lhs.MidiTrigger.has_value() || _Equivalent(lhs.MidiTrigger.value(), rhs.MidiTrigger.value())) &&
+		lhs.TriggerPairs.size() == rhs.TriggerPairs.size() &&
+		std::equal(lhs.TriggerPairs.begin(), lhs.TriggerPairs.end(), rhs.TriggerPairs.begin(),
+			[](const auto& left, const auto& right) { return _Equivalent(left, right); });
+}
+
+bool RigCoordinator::_EquivalentActivation(const io::RigFile::Trigger& lhs,
+	const io::RigFile::Trigger& rhs) noexcept
+{
+	return lhs.Name == rhs.Name && lhs.StationType == rhs.StationType &&
+		lhs.MidiTrigger.has_value() == rhs.MidiTrigger.has_value() &&
+		(!lhs.MidiTrigger.has_value() || _Equivalent(lhs.MidiTrigger.value(), rhs.MidiTrigger.value())) &&
+		lhs.TriggerPairs.size() == rhs.TriggerPairs.size() &&
+		std::equal(lhs.TriggerPairs.begin(), lhs.TriggerPairs.end(), rhs.TriggerPairs.begin(),
+			[](const auto& left, const auto& right) { return _Equivalent(left, right); });
+}
+
+bool RigCoordinator::_EquivalentCaptureRouting(const io::RigFile::Trigger& lhs,
+	const io::RigFile::Trigger& rhs) noexcept
+{
+	return lhs.InputChannels == rhs.InputChannels && lhs.MidiInputDevices == rhs.MidiInputDevices &&
+		lhs.MidiInputs == rhs.MidiInputs;
+}
+
 std::uint64_t RigCoordinator::_AllocateRevision() noexcept
 {
 	return _nextRevision.fetch_add(1u, std::memory_order_relaxed);
@@ -15,7 +68,8 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 	const std::vector<std::shared_ptr<Station>>& stations,
 	unsigned int availableAdcChannels,
 	const std::vector<std::string>& availableMidiDevices,
-	const TriggerParams& triggerParams)
+	const TriggerParams& triggerParams,
+	const SnapshotPtr& acceptedSnapshot)
 {
 	auto resolution = io::RigFileRouting::Resolve(rig, stationDescriptors,
 		availableAdcChannels, availableMidiDevices);
@@ -36,19 +90,43 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 
 	for (size_t triggerIndex = 0u; triggerIndex < rig.Triggers.size(); ++triggerIndex)
 	{
-		auto trigger = Trigger::FromFile(triggerParams, rig.Triggers[triggerIndex]);
-		if (!trigger.has_value()) return {};
 		std::optional<size_t> stationIndex;
 		if (triggerIndex < snapshot->Graph.Triggers.size())
 			stationIndex = snapshot->Graph.Triggers[triggerIndex].StationIndex;
 		if (stationIndex.has_value() && stationIndex.value() >= stations.size()) return {};
 
-		auto instance = std::move(trigger.value());
+		// Trigger identity is positional in the persisted rig. A deletion shifts
+		// following positions, so never reuse while the candidate has fewer
+		// triggers; this prevents an imported duplicate configuration from taking
+		// over another trigger's live take history.
+		const bool canReuse = acceptedSnapshot && rig.Triggers.size() >= acceptedSnapshot->Rig.Triggers.size() &&
+			triggerIndex < acceptedSnapshot->Triggers.size() &&
+			triggerIndex < acceptedSnapshot->Rig.Triggers.size() &&
+			_EquivalentActivation(rig.Triggers[triggerIndex], acceptedSnapshot->Rig.Triggers[triggerIndex]);
+		std::shared_ptr<Trigger> instance;
+		if (canReuse)
+		{
+			instance = acceptedSnapshot->Triggers[triggerIndex].Instance;
+			if (!_EquivalentCaptureRouting(rig.Triggers[triggerIndex], acceptedSnapshot->Rig.Triggers[triggerIndex]) ||
+				stationIndex != acceptedSnapshot->Triggers[triggerIndex].StationIndex)
+				snapshot->CaptureRoutingChangeTriggerIndices.push_back(triggerIndex);
+		}
+		else
+		{
+			auto trigger = Trigger::FromFile(triggerParams, rig.Triggers[triggerIndex]);
+			if (!trigger.has_value()) return {};
+			instance = std::move(trigger.value());
+			if (acceptedSnapshot && triggerIndex < acceptedSnapshot->Triggers.size())
+				snapshot->ChangedTriggerIndices.push_back(triggerIndex);
+		}
+		std::shared_ptr<base::ActionReceiver> receiver;
 		if (stationIndex.has_value())
 		{
 			const auto& station = stations[stationIndex.value()];
 			if (!station) return {};
-			instance->SetReceiver(station);
+			receiver = station;
+			if (!canReuse)
+				instance->SetReceiver(receiver);
 			memberships[stationIndex.value()]->push_back(instance);
 			snapshot->InputDispatch.SerialTriggers.push_back(instance);
 			snapshot->InputDispatch.KeyboardTriggers.push_back(instance);
@@ -59,7 +137,14 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			const auto& name = fileTrigger.MidiTrigger->Device;
 			snapshot->InputDispatch.MidiTriggers.push_back({ name.empty() ? "default" : name, instance });
 		}
-		snapshot->Triggers.push_back({ triggerIndex, instance, stationIndex });
+		snapshot->Triggers.push_back({ triggerIndex, instance, stationIndex, std::move(receiver),
+			fileTrigger.InputChannels, fileTrigger.MidiInputDevices, fileTrigger.MidiInputs,
+			std::make_unique<audio::BounceMixBehaviour>(Trigger::GetOverdubBehaviourParams(fileTrigger.InputChannels)) });
+	}
+	if (acceptedSnapshot)
+	{
+		for (size_t triggerIndex = rig.Triggers.size(); triggerIndex < acceptedSnapshot->Triggers.size(); ++triggerIndex)
+			snapshot->ChangedTriggerIndices.push_back(triggerIndex);
 	}
 
 	for (const auto& device : availableMidiDevices)
@@ -69,13 +154,12 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 		{
 			const auto& station = stations[stationIndex];
 			if (!station || station->IsRemote()) continue;
-			const auto accepts = std::any_of(memberships[stationIndex]->begin(), memberships[stationIndex]->end(),
-				[&device](const std::shared_ptr<Trigger>& trigger) {
-					if (!trigger) return false;
-					const auto mode = trigger->MidiInputMode();
-					if (mode != io::RigFile::Trigger::MidiInputMode::Selected) return false;
-					const auto& devices = trigger->MidiInputDevices();
-					return std::find(devices.begin(), devices.end(), device) != devices.end();
+			const auto accepts = std::any_of(snapshot->Triggers.begin(), snapshot->Triggers.end(),
+				[stationIndex, &device](const RigSnapshotTrigger& trigger) {
+					return trigger.StationIndex == stationIndex &&
+						trigger.MidiInputMode == io::RigFile::Trigger::MidiInputMode::Selected &&
+						std::find(trigger.MidiInputDevices.begin(), trigger.MidiInputDevices.end(), device) !=
+							trigger.MidiInputDevices.end();
 				});
 			if (accepts) route.Recipients.push_back(station);
 		}
@@ -102,7 +186,7 @@ bool RigCoordinator::BuildInitial(const io::RigFile& rig,
 	const auto savedMigration = resolution.RequiresSave && persistMigration && persistMigration(resolution.CandidateRig);
 	const auto& acceptedRig = savedMigration ? resolution.CandidateRig : rig;
 	auto snapshot = _BuildSnapshot(_AllocateRevision(), acceptedRig, stationDescriptors, stations,
-		availableAdcChannels, availableMidiDevices, triggerParams);
+		availableAdcChannels, availableMidiDevices, triggerParams, {});
 	if (!snapshot) return false;
 	for (const auto& membership : snapshot->StationMemberships)
 		if (membership.Station) membership.Station->PublishTriggerMembership(membership.Triggers);
@@ -123,8 +207,9 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 		_editsEnabled.store(false, std::memory_order_release);
 		return EditResult::QuiescenceRejected;
 	}
+	const auto accepted = Accepted();
 	auto snapshot = _BuildSnapshot(revision, candidateRig, _stationDescriptors, _stations,
-		_availableAdcChannels, _availableMidiDevices, _triggerParams);
+		_availableAdcChannels, _availableMidiDevices, _triggerParams, accepted);
 	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
 	_quiescing.store(snapshot, std::memory_order_release);
 	return EditResult::Pending;

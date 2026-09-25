@@ -21,6 +21,13 @@ namespace engine
 		size_t RigTriggerIndex = 0u;
 		std::shared_ptr<Trigger> Instance;
 		std::optional<size_t> StationIndex;
+		// Staged data is handed to the reused trigger only at the audio boundary.
+		// It is mutable solely to exchange preallocated vectors without allocation.
+		mutable std::shared_ptr<base::ActionReceiver> Receiver;
+		mutable std::vector<unsigned int> InputChannels;
+		mutable std::vector<std::string> MidiInputDevices;
+		mutable io::RigFile::Trigger::MidiInputMode MidiInputMode = io::RigFile::Trigger::MidiInputMode::None;
+		mutable std::unique_ptr<audio::MixBehaviour> OverdubBehaviour;
 	};
 
 	struct StationTriggerMembership
@@ -59,6 +66,13 @@ namespace engine
 		io::RigFile Rig;
 		RoutingGraph Graph;
 		std::vector<RigSnapshotTrigger> Triggers;
+		// Indices of accepted-revision triggers that must be quiescent before this
+		// revision can replace them. Unchanged trigger instances are retained so a
+		// playing loop does not disable edits to unrelated routing.
+		std::vector<size_t> ChangedTriggerIndices;
+		// Reused trigger instances that receive a new capture route or station
+		// receiver. Their history is retained, but the current action must be idle.
+		std::vector<size_t> CaptureRoutingChangeTriggerIndices;
 		std::vector<StationTriggerMembership> StationMemberships;
 		RigInputDispatch InputDispatch;
 	};

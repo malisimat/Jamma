@@ -170,12 +170,14 @@ namespace audio
 	}
 
 	void AudioHost::RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
-		std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot)
+		std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
+		std::shared_ptr<const engine::RigSnapshot> candidateSnapshot)
 	{
 		_quiescedRigRevision.store(0u, std::memory_order_release);
 		_rejectedRigRevision.store(0u, std::memory_order_release);
 		_rigTriggerQuiescenceAcceptedRevision.store(
 			acceptedSnapshot ? acceptedSnapshot->Revision : 0u, std::memory_order_release);
+		_rigTriggerQuiescenceCandidate.store(std::move(candidateSnapshot), std::memory_order_release);
 		_rigTriggerQuiescenceRequestRevision.store(candidateRevision, std::memory_order_release);
 	}
 
@@ -183,6 +185,7 @@ namespace audio
 	{
 		_rigTriggerQuiescenceRequestRevision.store(0u, std::memory_order_release);
 		_rigTriggerQuiescenceAcceptedRevision.store(0u, std::memory_order_release);
+		_rigTriggerQuiescenceCandidate.store({}, std::memory_order_release);
 	}
 
 	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
@@ -218,6 +221,13 @@ namespace audio
 		if (snapshot->Graph.Revision <= _audioRigRevision)
 			return;
 
+		for (const auto& trigger : snapshot->Triggers)
+		{
+			if (trigger.Instance)
+				trigger.Instance->ApplyCaptureRouting(trigger.Receiver, trigger.InputChannels,
+					trigger.MidiInputDevices, trigger.MidiInputMode, trigger.OverdubBehaviour);
+		}
+
 		for (const auto& membership : snapshot->StationMemberships)
 		{
 			if (membership.Station)
@@ -239,9 +249,26 @@ namespace audio
 		if (!snapshot || snapshot->Revision != _audioRigRevision)
 			return;
 
-		for (const auto& trigger : snapshot->Triggers)
+		const auto candidate = _rigTriggerQuiescenceCandidate.load(std::memory_order_acquire);
+		if (!candidate || candidate->Revision != candidateRevision)
+			return;
+		for (const auto triggerIndex : candidate->ChangedTriggerIndices)
 		{
-			if (trigger.Instance && !trigger.Instance->CanEditRouting())
+			if (triggerIndex >= snapshot->Triggers.size())
+				continue;
+			const auto& trigger = snapshot->Triggers[triggerIndex].Instance;
+			if (trigger && !trigger->CanEditRouting())
+			{
+				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
+				return;
+			}
+		}
+		for (const auto triggerIndex : candidate->CaptureRoutingChangeTriggerIndices)
+		{
+			if (triggerIndex >= snapshot->Triggers.size())
+				continue;
+			const auto& trigger = snapshot->Triggers[triggerIndex].Instance;
+			if (trigger && !trigger->CanApplyCaptureRouting())
 			{
 				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
 				return;

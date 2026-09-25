@@ -163,6 +163,40 @@ TEST_F(RigSnapshotTest, LiveMidiEligibilityRequiresAnExplicitDeviceSelection)
 	EXPECT_FALSE(noRoutes->AcceptsLiveMidiFromDevice("Keys"));
 }
 
+TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatch)
+{
+	auto firstStation = RuntimeStation("First");
+	auto secondStation = RuntimeStation("Second");
+	io::RigFile initial{};
+	auto trigger = TriggerDescriptor("record", "First", io::RigFile::Trigger::MidiInputMode::Selected);
+	trigger.InputChannels = { 0u };
+	trigger.MidiInputDevices = { "Keys A" };
+	initial.Triggers = { trigger };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial,
+		{ StationDescriptor("First"), StationDescriptor("Second") },
+		{ firstStation, secondStation }, 2u, { "Keys A", "Keys B" },
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	const auto accepted = coordinator.Accepted();
+	ASSERT_TRUE(accepted);
+
+	auto candidate = initial;
+	candidate.Triggers[0].InputChannels.push_back(1u);
+	candidate.Triggers[0].MidiInputDevices = { "Keys B" };
+	candidate.Triggers[0].StationTarget = "Second";
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
+	const auto staged = coordinator.Quiescing();
+	ASSERT_TRUE(staged);
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
+	EXPECT_TRUE(staged->ChangedTriggerIndices.empty());
+	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), staged->Triggers[0].InputChannels);
+	EXPECT_EQ(secondStation, staged->Triggers[0].Receiver);
+	ASSERT_EQ(2u, staged->InputDispatch.LiveMidi.size());
+	EXPECT_TRUE(staged->InputDispatch.LiveMidi[0].Recipients.empty());
+	ASSERT_EQ(1u, staged->InputDispatch.LiveMidi[1].Recipients.size());
+	EXPECT_EQ(secondStation, staged->InputDispatch.LiveMidi[1].Recipients[0]);
+}
+
 TEST_F(RigSnapshotTest, HudCableRoutesContainOnlyResolvedGraphEdges)
 {
 	engine::RoutingGraph graph;
@@ -415,14 +449,19 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
 	audio::RigAudioBoundaryTestAccess::ApplyPending(host);
 	ASSERT_EQ(snapshot->Revision, host.AppliedRigRevision());
 
-	host.RequestRigTriggerQuiescence(41u, snapshot);
+	auto sameTriggerCandidate = std::make_shared<engine::RigSnapshot>();
+	sameTriggerCandidate->Revision = 41u;
+	host.RequestRigTriggerQuiescence(41u, snapshot, sameTriggerCandidate);
 	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
 	EXPECT_EQ(41u, host.QuiescedRigRevision());
 	EXPECT_EQ(0u, host.RejectedRigRevision());
 
 	base::Action action;
 	ASSERT_TRUE(snapshot->Triggers[0].Instance->QueueExternalControlAction(true, true, action).IsEaten);
-	host.RequestRigTriggerQuiescence(42u, snapshot);
+	auto replacement = std::make_shared<engine::RigSnapshot>();
+	replacement->Revision = 42u;
+	replacement->ChangedTriggerIndices = { 0u };
+	host.RequestRigTriggerQuiescence(42u, snapshot, replacement);
 	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
 	EXPECT_EQ(0u, host.QuiescedRigRevision());
 	EXPECT_EQ(42u, host.RejectedRigRevision());

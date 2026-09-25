@@ -33,6 +33,7 @@ namespace engine
 		SourceType SourceType;
 		std::string SourceTakeId;
 		std::string TargetTakeId;
+		std::shared_ptr<base::ActionReceiver> Receiver;
 	};
 
 	enum TriggerSource
@@ -228,6 +229,7 @@ namespace engine
 	struct DelayedTriggerAction
 	{
 		actions::TriggerAction Action;
+		std::shared_ptr<base::ActionReceiver> Receiver;
 		unsigned int SampsLeft;
 	};
 	
@@ -269,14 +271,24 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		void AddMidiInputDevice(std::string device);
+		// Called at an audio boundary. The prepared containers are exchanged, so
+		// capture-route changes do not allocate on the real-time path.
+		void ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
+			std::vector<unsigned int>& inputChannels,
+			std::vector<std::string>& midiInputDevices,
+			io::RigFile::Trigger::MidiInputMode& midiInputMode,
+			std::unique_ptr<audio::MixBehaviour>& overdubBehaviour) noexcept;
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		io::RigFile::Trigger::MidiInputMode MidiInputMode() const noexcept { return _midiInputMode; }
 		TriggerState GetState() const;
 		bool IsActivateInputDown() const;
 		bool IsDitchInputDown() const;
 		bool IsDitchDown() const;
-		// Audio-thread quiescence predicate used before a routing replacement.
+		// Audio-thread quiescence predicate used before retiring/replacing a trigger.
 		bool CanEditRouting() const noexcept;
+		// A capture route or station target update retains this trigger and its take
+		// history, so it needs only an idle input/state boundary.
+		bool CanApplyCaptureRouting() const noexcept;
 		void Reset();
 		std::string Name() const;
 		void SetName(std::string name);
@@ -325,6 +337,7 @@ namespace engine
 		void _ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) noexcept;
 		bool _CanEditRoutingAtAudioBoundary() const noexcept;
+		bool _CanApplyCaptureRoutingAtAudioBoundary() const noexcept;
 		void _PublishTriggerStateSnapshot() noexcept;
 
 		// Only call from state machine
@@ -341,8 +354,10 @@ namespace engine
 		unsigned int CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) const;
 		unsigned int CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const;
-		void QueueTriggerAction(const actions::TriggerAction& action, unsigned int sampsDelay);
-		void DispatchTriggerAction(const actions::TriggerAction& action);
+		void QueueTriggerAction(const actions::TriggerAction& action,
+			std::shared_ptr<base::ActionReceiver> receiver, unsigned int sampsDelay);
+		void DispatchTriggerAction(const actions::TriggerAction& action,
+			const std::shared_ptr<base::ActionReceiver>& receiver);
 		void FlushDelayedTriggerActions(Time curTime,
 			unsigned int samps,
 			const std::optional<io::UserConfig>& cfg,
@@ -372,6 +387,7 @@ namespace engine
 		std::atomic<bool> _publishedDitchInputDown{ false };
 		std::atomic<bool> _publishedTriggerDitchDown{ false };
 		std::atomic<bool> _publishedCanEditRouting{ true };
+		std::atomic<bool> _publishedCanApplyCaptureRouting{ true };
 		std::string _overdubSourceId;
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store

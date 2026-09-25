@@ -1536,7 +1536,7 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 			return RigCoordinator::EditResult::QuiescenceRejected;
 		}
 		_inputSubsystem->GateRigTriggerInput(accepted->Revision);
-		_audioEngine->RequestRigTriggerQuiescence(quiescing->Revision, accepted);
+		_audioEngine->RequestRigTriggerQuiescence(quiescing->Revision, accepted, quiescing);
 	}
 	return result;
 }
@@ -1557,8 +1557,6 @@ gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 	if (heartbeat == 0u || _lastAudioCallbackHeartbeatAt == std::chrono::steady_clock::time_point{} ||
 		now - _lastAudioCallbackHeartbeatAt > heartbeatTimeout)
 		return gui::RoutingEditAvailability::AudioCallbackInactive;
-	if (!_audioEngine->RoutingEditsEligible())
-		return gui::RoutingEditAvailability::TriggerBusy;
 	return gui::RoutingEditAvailability::Ready;
 }
 

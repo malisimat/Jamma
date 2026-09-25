@@ -944,7 +944,7 @@ bool GuiHud::_CanEditTrigger(size_t triggerIndex) const
 	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready || triggerIndex >= _triggers.size())
 		return false;
 	const auto trigger = _triggers[triggerIndex].lock();
-	return trigger && trigger->CanEditRouting();
+	return trigger && trigger->CanApplyCaptureRouting();
 }
 
 bool GuiHud::_SubmitCandidate(const io::RigFile& candidate)
@@ -975,7 +975,10 @@ void GuiHud::_UpdateRoutingEditPresentation()
 	if (_addTriggerButton)
 		_addTriggerButton->SetEnabled(ready);
 	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
-		_triggerWidgets[i].Close->SetEnabled(ready && _CanEditTrigger(i));
+	{
+		const auto trigger = i < _triggers.size() ? _triggers[i].lock() : nullptr;
+		_triggerWidgets[i].Close->SetEnabled(ready && trigger && trigger->CanEditRouting());
+	}
 
 	if (!_routingStatusLabel || _lastRoutingEditAvailability == availability)
 		return;
@@ -991,7 +994,9 @@ void GuiHud::_UpdateRoutingEditPresentation()
 
 void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
 {
-	if (!_CanEditTrigger(triggerIndex) || triggerIndex >= _displayedRig.Triggers.size() || !_popupManager)
+	const auto trigger = triggerIndex < _triggers.size() ? _triggers[triggerIndex].lock() : nullptr;
+	if (_RoutingEditAvailability() != RoutingEditAvailability::Ready || !trigger || !trigger->CanEditRouting() ||
+		triggerIndex >= _displayedRig.Triggers.size() || !_popupManager)
 		return;
 	_CancelCableDrag();
 	_deleteTriggerIndex = triggerIndex;
@@ -1008,7 +1013,8 @@ void GuiHud::_ConfirmDelete()
 	const auto index = _deleteTriggerIndex;
 	_deleteTriggerIndex.reset();
 	if (_popupManager) _popupManager->Close();
-	if (!index.has_value() || !_CanEditTrigger(index.value()))
+	const auto trigger = index.has_value() && index.value() < _triggers.size() ? _triggers[index.value()].lock() : nullptr;
+	if (!index.has_value() || _RoutingEditAvailability() != RoutingEditAvailability::Ready || !trigger || !trigger->CanEditRouting())
 		return;
 	const auto candidate = io::RigFileRouting::WithoutTrigger(_displayedRig, index.value());
 	if (candidate.has_value())

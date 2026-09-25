@@ -50,7 +50,8 @@ namespace audio
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
 		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
-			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot);
+			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
+			std::shared_ptr<const engine::RigSnapshot> candidateSnapshot);
 		void ClearRigTriggerQuiescence() noexcept;
 		std::uint64_t QuiescedRigRevision() const noexcept
 		{
@@ -192,6 +193,7 @@ namespace audio
 		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
 		std::atomic<std::uint64_t> _rigTriggerQuiescenceRequestRevision{ 0u };
 		std::atomic<std::uint64_t> _rigTriggerQuiescenceAcceptedRevision{ 0u };
+		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerQuiescenceCandidate;
 		std::atomic<std::uint64_t> _quiescedRigRevision{ 0u };
 		std::atomic<std::uint64_t> _rejectedRigRevision{ 0u };
 		std::mutex _retainedRigSnapshotsMutex;

@@ -341,6 +341,13 @@ bool Trigger::CanEditRouting() const noexcept
 			_externalControlActionTail.load(std::memory_order_acquire);
 }
 
+bool Trigger::CanApplyCaptureRouting() const noexcept
+{
+	return _publishedCanApplyCaptureRouting.load(std::memory_order_acquire) &&
+		_externalControlActionHead.load(std::memory_order_relaxed) ==
+			_externalControlActionTail.load(std::memory_order_acquire);
+}
+
 bool Trigger::_CanEditRoutingAtAudioBoundary() const noexcept
 {
 	return _state == TRIGSTATE_DEFAULT &&
@@ -349,6 +356,15 @@ bool Trigger::_CanEditRoutingAtAudioBoundary() const noexcept
 			_externalControlActionTail.load(std::memory_order_acquire) &&
 		_delayedActions.empty() && _delayedTriggerActions.empty() &&
 		_loopTakeHistory.empty();
+}
+
+bool Trigger::_CanApplyCaptureRoutingAtAudioBoundary() const noexcept
+{
+	return _state == TRIGSTATE_DEFAULT &&
+		!_isLastActivateDownRaw && !_isLastDitchDownRaw && !_isDitchDown &&
+		_externalControlActionHead.load(std::memory_order_relaxed) ==
+			_externalControlActionTail.load(std::memory_order_acquire) &&
+		_delayedActions.empty() && _delayedTriggerActions.empty();
 }
 
 void Trigger::_ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
@@ -381,6 +397,7 @@ void Trigger::_PublishTriggerStateSnapshot() noexcept
 	_publishedTriggerDitchDown.store(_isDitchDown, std::memory_order_release);
 	_publishedTriggerState.store(static_cast<std::uint8_t>(_state), std::memory_order_release);
 	_publishedCanEditRouting.store(_CanEditRoutingAtAudioBoundary(), std::memory_order_release);
+	_publishedCanApplyCaptureRouting.store(_CanApplyCaptureRoutingAtAudioBoundary(), std::memory_order_release);
 }
 
 void Trigger::AddBinding(DualBinding activate, DualBinding ditch)
@@ -436,6 +453,19 @@ void Trigger::AddMidiInputDevice(std::string device)
 
 	if (_midiInputDevices.end() == std::find(_midiInputDevices.begin(), _midiInputDevices.end(), device))
 		_midiInputDevices.push_back(std::move(device));
+}
+
+void Trigger::ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
+	std::vector<unsigned int>& inputChannels,
+	std::vector<std::string>& midiInputDevices,
+	io::RigFile::Trigger::MidiInputMode& midiInputMode,
+	std::unique_ptr<audio::MixBehaviour>& overdubBehaviour) noexcept
+{
+	_receiver.swap(receiver);
+	_inputChannels.swap(inputChannels);
+	_midiInputDevices.swap(midiInputDevices);
+	std::swap(_midiInputMode, midiInputMode);
+	_overdubMixer->ExchangeBehaviour(overdubBehaviour);
 }
 
 TriggerState Trigger::GetState() const
@@ -533,20 +563,22 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	_overdubMixer->Offset(numSamps);
 }
 
-void Trigger::QueueTriggerAction(const TriggerAction& action, unsigned int sampsDelay)
+void Trigger::QueueTriggerAction(const TriggerAction& action,
+	std::shared_ptr<base::ActionReceiver> receiver, unsigned int sampsDelay)
 {
-	_delayedTriggerActions.push_back({ action, sampsDelay });
+	_delayedTriggerActions.push_back({ action, std::move(receiver), sampsDelay });
 }
 
-void Trigger::DispatchTriggerAction(const TriggerAction& action)
+void Trigger::DispatchTriggerAction(const TriggerAction& action,
+	const std::shared_ptr<base::ActionReceiver>& receiver)
 {
-	if (!_receiver)
+	if (!receiver)
 		return;
 
-	auto res = _receiver->OnAction(action);
+	auto res = receiver->OnAction(action);
 	if ((TriggerAction::TRIGGER_OVERDUB_START == action.ActionType) && res.IsEaten)
 	{
-		TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
+		TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId, receiver };
 		_loopTakeHistory.push_back(newTake);
 	}
 }
@@ -568,7 +600,7 @@ void Trigger::FlushDelayedTriggerActions(Time curTime,
 		_delayedTriggerActions.end(),
 		[](const DelayedTriggerAction& action) { return action.SampsLeft > 0u; });
 	for (auto it = readyEnd; it != _delayedTriggerActions.end(); ++it)
-		DispatchTriggerAction(it->Action);
+		DispatchTriggerAction(it->Action, it->Receiver);
 	_delayedTriggerActions.erase(readyEnd, _delayedTriggerActions.end());
 }
 
@@ -859,7 +891,7 @@ void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
 
 		if (res.IsEaten)
 		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId };
+			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId, _receiver };
 			_loopTakeHistory.push_back(newTake);
 		}
 	}
@@ -872,7 +904,7 @@ void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
 
 	std::cout << "~~~~ Trigger END RECORDING" << std::endl;
 
-	if ((_receiver) && !_loopTakeHistory.empty())
+	if (!_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
 
@@ -889,7 +921,7 @@ void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
 
 		// TODO: History for undo
 
-		_receiver->OnAction(trigAction);
+		if (lastTake.Receiver) lastTake.Receiver->OnAction(trigAction);
 	}
 }
 
@@ -903,7 +935,7 @@ void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
 	_delayedActions.clear();
 	auto popBack = !_loopTakeHistory.empty();
 
-	if ((_receiver) && popBack)
+	if (popBack)
 	{
 		auto lastTake = _loopTakeHistory.back();
 
@@ -929,8 +961,11 @@ void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
 			unmuteAction.SetAudioParams(params.value());
 		}
 
-		_receiver->OnAction(ditchAction);
-		_receiver->OnAction(unmuteAction);
+		if (lastTake.Receiver)
+		{
+			lastTake.Receiver->OnAction(ditchAction);
+			lastTake.Receiver->OnAction(unmuteAction);
+		}
 	}
 
 	if (popBack)
@@ -962,7 +997,7 @@ void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
 		if (params.has_value())
 			trigAction.SetAudioParams(params.value());
 
-		DispatchTriggerAction(trigAction);
+		DispatchTriggerAction(trigAction, _receiver);
 	}
 }
 
@@ -973,7 +1008,7 @@ void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
 
 	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
 
-	if ((_receiver) && !_loopTakeHistory.empty())
+	if (!_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
 
@@ -989,7 +1024,7 @@ void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
 		if (params.has_value())
 			trigAction.SetAudioParams(params.value());
 
-		DispatchTriggerAction(trigAction);
+		DispatchTriggerAction(trigAction, lastTake.Receiver);
 	}
 }
 
@@ -1004,7 +1039,7 @@ void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
 	_delayedTriggerActions.clear();
 	auto popBack = !_loopTakeHistory.empty();
 
-	if ((_receiver) && popBack)
+	if (popBack)
 	{
 		auto lastTake = _loopTakeHistory.back();
 		TriggerAction trigAction;
@@ -1018,7 +1053,7 @@ void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
 		if (params.has_value())
 			trigAction.SetAudioParams(params.value());
 
-		_receiver->OnAction(trigAction);
+		if (lastTake.Receiver) lastTake.Receiver->OnAction(trigAction);
 	}
 
 	if (popBack)
@@ -1039,7 +1074,7 @@ void Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
 	else
 		_delayedActions.push_back(DelayedAction(sampsDelay, 0.0));
 
-	if ((_receiver) && !_loopTakeHistory.empty())
+	if (!_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
 		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
@@ -1070,18 +1105,18 @@ void Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
 		targetMidiAction.ApplyToTargetAudio = false;
 		targetMidiAction.ApplyToTargetMidi = true;
 
-		DispatchTriggerAction(sourceAction);
+		DispatchTriggerAction(sourceAction, lastTake.Receiver);
 
 		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
-			DispatchTriggerAction(targetMidiAction);
+			DispatchTriggerAction(targetMidiAction, lastTake.Receiver);
 
 		if (hasTargetAudio)
 		{
 			if (0u == targetDelay)
-				DispatchTriggerAction(targetAction);
+				DispatchTriggerAction(targetAction, lastTake.Receiver);
 			else
-				QueueTriggerAction(targetAction, targetDelay);
+				QueueTriggerAction(targetAction, lastTake.Receiver, targetDelay);
 		}
 	}
 }
@@ -1100,7 +1135,7 @@ void Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
 	else
 		_delayedActions.push_back(DelayedAction(sampsDelay, 1.0));
 
-	if ((_receiver) && !_loopTakeHistory.empty())
+	if (!_loopTakeHistory.empty())
 	{
 		auto lastTake = _loopTakeHistory.back();
 		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
@@ -1131,18 +1166,18 @@ void Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
 		targetMidiAction.ApplyToTargetAudio = false;
 		targetMidiAction.ApplyToTargetMidi = true;
 
-		DispatchTriggerAction(sourceAction);
+		DispatchTriggerAction(sourceAction, lastTake.Receiver);
 
 		auto targetDelay = CalcPunchStateDelaySamps(cfg);
 		if (hasTargetMidi)
-			DispatchTriggerAction(targetMidiAction);
+			DispatchTriggerAction(targetMidiAction, lastTake.Receiver);
 
 		if (hasTargetAudio)
 		{
 			if (0u == targetDelay)
-				DispatchTriggerAction(targetAction);
+				DispatchTriggerAction(targetAction, lastTake.Receiver);
 			else
-				QueueTriggerAction(targetAction, targetDelay);
+				QueueTriggerAction(targetAction, lastTake.Receiver, targetDelay);
 		}
 	}
 }

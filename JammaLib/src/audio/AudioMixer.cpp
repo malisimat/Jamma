@@ -150,6 +150,11 @@ void AudioMixer::SetBehaviour(std::unique_ptr<MixBehaviour> behaviour)
 	_behaviour = std::move(behaviour);
 }
 
+void AudioMixer::ExchangeBehaviour(std::unique_ptr<MixBehaviour>& behaviour) noexcept
+{
+	_behaviour.swap(behaviour);
+}
+
 void AudioMixer::SetVuVisible(bool visible)
 {
 	_vu.SetVisible(visible);
