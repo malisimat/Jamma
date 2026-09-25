@@ -8,6 +8,7 @@
 #include "engine/Scene.h"
 #include "engine/Station.h"
 #include "engine/Trigger.h"
+#include "gui/GuiButton.h"
 #include "io/UserConfig.h"
 #include "io/Json.h"
 #include "io/RigFile.h"
@@ -221,6 +222,16 @@ public:
 	{
 		return _camera.IsBackgroundDragging();
 	}
+
+	bool HasTouchCaptureForTest() const
+	{
+		return !_touchDownElement.expired();
+	}
+
+	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
+	{
+		_popupManager.Open(popup);
+	}
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -245,6 +256,16 @@ TouchMoveAction MakeSceneTouchMove(utils::Position2d pos,
 	action.Position = pos;
 	action.MouseButtonsDown = mouseButtonsDown;
 	return action;
+}
+
+gui::GuiButtonParams MakeSceneButtonParams(utils::Position2d position,
+	utils::Size2d size)
+{
+	gui::GuiButtonParams params;
+	params.Position = position;
+	params.Size = size;
+	params.MinSize = size;
+	return params;
 }
 
 std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
@@ -984,6 +1005,30 @@ TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 	ASSERT_TRUE(res.IsEaten);
 	EXPECT_EQ(2u, firstStation->NumTakes());
 	EXPECT_EQ(1u, secondStation->NumTakes());
+}
+
+TEST(Scene, PopupTouchUpClearsAnEarlierTouchCapture) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto capturedControl = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 800, 500 }, { 20u, 20u }));
+	scene.AddChild(capturedControl);
+
+	ASSERT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 810, 510 }, 0, LeftMouseButtonMask)).IsEaten);
+	ASSERT_TRUE(scene.HasTouchCaptureForTest());
+
+	auto popup = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 800, 500 }, { 20u, 20u }));
+	scene.OpenPopupForTest(popup);
+
+	EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP,
+		{ 810, 510 }, 0, 0u)).IsEaten);
+	EXPECT_FALSE(scene.HasTouchCaptureForTest());
 }
 
 TEST(SceneDrag, LeftDragPansCameraDirectly) {

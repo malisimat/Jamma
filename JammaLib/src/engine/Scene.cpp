@@ -769,6 +769,12 @@ ActionResult Scene::OnAction(TouchAction action)
 		auto popupRes = _popupManager.OnAction(action);
 		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
 			_HandleRemoteTempoPromptDecision(false);
+		if (TouchAction::TouchState::TOUCH_UP == action.State)
+		{
+			// Clear the interrupted press captured before the popup opened.
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+		}
 		return popupRes;
 	}
 
