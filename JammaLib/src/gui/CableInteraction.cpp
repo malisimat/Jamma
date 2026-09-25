@@ -86,6 +86,28 @@ std::optional<size_t> CableInteraction::HitCable(const std::vector<Cable>& cable
 	return nearest;
 }
 
+bool CableInteraction::Related(const Cable& cable, const Endpoint& endpoint)
+{
+	switch (endpoint.Kind)
+	{
+	case EndpointKind::AdcSource:
+	case EndpointKind::MidiSource:
+		return cable.Start.Source.has_value() && endpoint.Source.has_value() &&
+			_SameSource(cable.Start.Source.value(), endpoint.Source.value());
+	case EndpointKind::TriggerInput:
+		return cable.Route.Kind == RouteKind::Capture &&
+			cable.Finish.TriggerIndex == endpoint.TriggerIndex;
+	case EndpointKind::TriggerOutput:
+		return cable.Route.Kind == RouteKind::Station &&
+			cable.Start.TriggerIndex == endpoint.TriggerIndex;
+	case EndpointKind::Station:
+		return cable.Route.Kind == RouteKind::Station &&
+			cable.Finish.StationIndex == endpoint.StationIndex &&
+			(!endpoint.TriggerIndex.has_value() || cable.Route.TriggerIndex == endpoint.TriggerIndex.value());
+	}
+	return false;
+}
+
 bool CableInteraction::_SameSource(const io::RigFileRouting::Source& lhs,
 	const io::RigFileRouting::Source& rhs)
 {

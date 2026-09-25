@@ -149,6 +149,8 @@ namespace gui
 		void _RebuildCableVertices();
 		void _BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 			std::vector<CableInteraction::Cable>& cables) const;
+		void _UpdateCableHover(utils::Position2d point);
+		void _UpdateSocketHighlights();
 		actions::ActionResult _BeginCableDrag(utils::Position2d point);
 		void _CancelCableDrag();
 		utils::Position2d _ElementCenter(const std::shared_ptr<base::GuiElement>& element) const;
@@ -211,6 +213,7 @@ namespace gui
 		bool _revealNewestTrigger = false;
 		int _lastTriggerScrollOffset = 0;
 		bool _cableRevealHeld = false;
+		std::optional<CableInteraction::Endpoint> _hoveredCableEndpoint;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;

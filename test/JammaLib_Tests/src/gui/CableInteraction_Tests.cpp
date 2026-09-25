@@ -57,6 +57,23 @@ TEST_F(CableInteractionTests, CableBodyHitAndClosestEndUseScreenSpace)
 	EXPECT_EQ(CableInteraction::End::Finish, CableInteraction::ClosestEnd(cable, { 80, 0 }));
 }
 
+TEST_F(CableInteractionTests, RelatedFindsOnlyCablesAttachedToTheHoveredEndpoint)
+{
+	CableInteraction::Cable capture{ {}, Adc(1u, 0, 0), Input(0u, 100, 0) };
+	CableInteraction::Cable station{ { 0u, 0u, CableInteraction::RouteKind::Station, 0u },
+		{ CableInteraction::EndpointKind::TriggerOutput, { 0, 0 }, 0u },
+		{ CableInteraction::EndpointKind::Station, { 100, 0 }, {}, 1u, "B" } };
+
+	EXPECT_TRUE(CableInteraction::Related(capture, Adc(1u, 0, 0)));
+	EXPECT_FALSE(CableInteraction::Related(capture, Adc(2u, 0, 0)));
+	EXPECT_TRUE(CableInteraction::Related(capture, Input(0u, 100, 0)));
+	EXPECT_FALSE(CableInteraction::Related(capture, Input(1u, 100, 0)));
+	EXPECT_TRUE(CableInteraction::Related(station,
+		{ CableInteraction::EndpointKind::TriggerOutput, { 0, 0 }, 0u }));
+	EXPECT_TRUE(CableInteraction::Related(station,
+		{ CableInteraction::EndpointKind::Station, { 100, 0 }, {}, 1u, "B" }));
+}
+
 TEST_F(CableInteractionTests, CompatibilityIsDirectionalAvailableAndExcludesDuplicateCapture)
 {
 	auto rig = Rig();

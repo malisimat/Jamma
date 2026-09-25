@@ -30,8 +30,22 @@ namespace gui
 	{
 	public:
 		GuiHudSocket(utils::Position2d position, unsigned int size, const glm::vec3& tint) :
-			GuiElement(_Params(position, size, tint))
+			GuiElement(_Params(position, size, tint)), _tint(tint)
 		{
+		}
+
+		void SetHighlighted(bool highlighted)
+		{
+			_highlighted = highlighted;
+		}
+
+		void Draw(base::DrawContext& ctx) override
+		{
+			const auto previousTint = _guiParams.TintColor;
+			if (_highlighted)
+				_guiParams.TintColor = glm::min(_tint * 1.35f + glm::vec3(0.08f), glm::vec3(1.0f));
+			GuiElement::Draw(ctx);
+			_guiParams.TintColor = previousTint;
 		}
 
 	private:
@@ -47,6 +61,9 @@ namespace gui
 			params.GuiPassThrough = true;
 			return params;
 		}
+
+		glm::vec3 _tint;
+		bool _highlighted = false;
 	};
 	class GuiHudActionButton : public GuiButton
 	{
@@ -510,6 +527,7 @@ void GuiHud::_RebuildPanels()
 	if (_triggerScroll && !revealNewest)
 		_triggerScroll->SetScrollOffset(previousScrollOffset);
 	_lastTriggerScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
+	_hoveredCableEndpoint.reset();
 	_cablesDirty = true;
 }
 
@@ -697,7 +715,7 @@ void GuiHud::_DrawCables(base::DrawContext& ctx)
 {
 	const float fadeInStep = 0.16f;
 	const float fadeOutStep = 0.08f;
-	if (_cableRevealHeld)
+	if (_cableRevealHeld || _hoveredCableEndpoint.has_value() || _cableDrag.has_value())
 		_cableRevealAlpha = std::min(1.0f, _cableRevealAlpha + fadeInStep);
 	else
 		_cableRevealAlpha = std::max(0.0f, _cableRevealAlpha - fadeOutStep);
@@ -830,7 +848,6 @@ actions::ActionResult GuiHud::_BeginCableDrag(Position2d point)
 void GuiHud::_CancelCableDrag()
 {
 	CableInteraction::Cancel(_cableDrag);
-	_cableRevealHeld = false;
 	_cablesDirty = true;
 }
 
@@ -967,7 +984,10 @@ actions::ActionResult GuiHud::OnAction(actions::TouchAction action)
 actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 {
 	if (!_cableDrag.has_value())
+	{
+		_UpdateCableHover(action.Position);
 		return GuiPanel::OnAction(action);
+	}
 	std::vector<CableInteraction::Endpoint> endpoints;
 	std::vector<CableInteraction::Cable> cables;
 	_BuildInteractionGeometry(endpoints, cables);
@@ -976,6 +996,68 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	_cablesDirty = true;
 	return { true, {}, {}, actions::ACTIONRESULT_DEFAULT, nullptr,
 		std::static_pointer_cast<base::GuiElement>(shared_from_this()) };
+}
+
+void GuiHud::_UpdateCableHover(Position2d point)
+{
+	std::vector<CableInteraction::Endpoint> endpoints;
+	std::vector<CableInteraction::Cable> cables;
+	_BuildInteractionGeometry(endpoints, cables);
+	const auto endpointIndex = CableInteraction::HitEndpoint(endpoints, point, _SocketHitRadius);
+	const auto next = endpointIndex.has_value()
+		? std::optional<CableInteraction::Endpoint>(endpoints[endpointIndex.value()]) : std::nullopt;
+	const auto sameSource = [](const std::optional<io::RigFileRouting::Source>& lhs,
+		const std::optional<io::RigFileRouting::Source>& rhs)
+	{
+		return lhs.has_value() == rhs.has_value() &&
+			(!lhs.has_value() || (lhs->Kind == rhs->Kind && lhs->AdcChannel == rhs->AdcChannel &&
+				lhs->MidiDevice == rhs->MidiDevice));
+	};
+	const auto changed = _hoveredCableEndpoint.has_value() != next.has_value() ||
+		(_hoveredCableEndpoint.has_value() && next.has_value() &&
+			(_hoveredCableEndpoint->Kind != next->Kind ||
+				_hoveredCableEndpoint->TriggerIndex != next->TriggerIndex ||
+				_hoveredCableEndpoint->StationIndex != next->StationIndex ||
+				!sameSource(_hoveredCableEndpoint->Source, next->Source)));
+	if (!changed)
+		return;
+
+	_hoveredCableEndpoint = next;
+	_UpdateSocketHighlights();
+	_cablesDirty = true;
+}
+
+void GuiHud::_UpdateSocketHighlights()
+{
+	const auto isHighlighted = [this](const CableInteraction::Endpoint& endpoint)
+	{
+		if (!_hoveredCableEndpoint.has_value())
+			return false;
+		const auto& hovered = _hoveredCableEndpoint.value();
+		if (hovered.Kind != endpoint.Kind || hovered.TriggerIndex != endpoint.TriggerIndex)
+			return false;
+		return !hovered.Source.has_value() || (endpoint.Source.has_value() &&
+			hovered.Source->Kind == endpoint.Source->Kind &&
+			hovered.Source->AdcChannel == endpoint.Source->AdcChannel &&
+			hovered.Source->MidiDevice == endpoint.Source->MidiDevice);
+	};
+
+	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
+	{
+		const CableInteraction::Endpoint endpoint{ _sourceEndpoints[i].Kind == io::RigFileRouting::SourceKind::Adc
+			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,
+			{}, {}, {}, {}, _sourceEndpoints[i] };
+		if (auto socket = std::dynamic_pointer_cast<GuiHudSocket>(_sourceWidgets[i].Socket))
+			socket->SetHighlighted(isHighlighted(endpoint));
+	}
+
+	for (size_t i = 0u; i < _triggerWidgets.size(); ++i)
+	{
+		if (auto socket = std::dynamic_pointer_cast<GuiHudSocket>(_triggerWidgets[i].InputSocket))
+			socket->SetHighlighted(isHighlighted({ CableInteraction::EndpointKind::TriggerInput, {}, i }));
+		if (auto socket = std::dynamic_pointer_cast<GuiHudSocket>(_triggerWidgets[i].OutputSocket))
+			socket->SetHighlighted(isHighlighted({ CableInteraction::EndpointKind::TriggerOutput, {}, i }));
+	}
 }
 
 actions::ActionResult GuiHud::OnAction(actions::KeyAction action)
@@ -1121,6 +1203,10 @@ void GuiHud::_RebuildCableVertices()
 	_BuildInteractionGeometry(endpoints, cables);
 	for (const auto& cable : cables)
 	{
+		if (!_cableRevealHeld && !_cableDrag.has_value() &&
+			(!_hoveredCableEndpoint.has_value() ||
+				!CableInteraction::Related(cable, _hoveredCableEndpoint.value())))
+			continue;
 		if (cable.Route.Kind == CableInteraction::RouteKind::Capture)
 		{
 			const auto color = cable.Start.Available ? inputToTriggerColor : glm::vec4(0.55f, 0.55f, 0.55f, 0.78f);
