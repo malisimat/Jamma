@@ -51,6 +51,7 @@ namespace gui
 	class GuiLabel;
 	class GuiPopup;
 	class GuiScrollPanel;
+	class GuiHudSocket;
 
 	class GuiHud : public GuiPanel
 	{
@@ -119,10 +120,11 @@ namespace gui
 		static constexpr unsigned int _TriggerButtonHeight = 100u;
 		static constexpr unsigned int _TriggerFooterHeight = 56u;
 		static constexpr unsigned int _TriggerControlSize = 34u;
-		static constexpr unsigned int _SocketSize = 16u;
-		static constexpr int _TriggerInputPinTopOffset = 24;
+		static constexpr unsigned int _SocketSize = 24u;
+		static constexpr unsigned int _CableEndSize = 10u;
+		static constexpr int _TriggerInputPinTopOffset = 12;
 		static constexpr int _TriggerOutputPinBottomOffset = 12;
-		static constexpr int _TriggerInputFanHalfHeight = 18;
+		static constexpr int _TriggerInputFanHalfHeight = 7;
 		static constexpr unsigned int _AudioInputPeakHoldSamps = 3000u;
 		static constexpr double _MidiInputFallRate = 0.003;
 		static constexpr double _MidiInputHoldFallRate = 0.003;
@@ -144,6 +146,7 @@ namespace gui
 		bool _InitCableShader(resources::ResourceLib& resourceLib);
 		bool _InitCableVertexArray();
 		void _DrawCables(base::DrawContext& ctx);
+		void _DrawCableSockets(base::DrawContext& ctx);
 		void _DrawOverlayElement(base::DrawContext& ctx,
 			const std::shared_ptr<base::GuiElement>& element) const;
 		void _RebuildCableVertices();
@@ -214,6 +217,10 @@ namespace gui
 		int _lastTriggerScrollOffset = 0;
 		bool _cableRevealHeld = false;
 		std::optional<CableInteraction::Endpoint> _hoveredCableEndpoint;
+		std::optional<CableInteraction::Handle> _hoveredCableRoute;
+		std::optional<CableInteraction::End> _hoveredCableEnd;
+		std::shared_ptr<GuiHudSocket> _cableEndIcon;
+		std::shared_ptr<GuiHudSocket> _stationSocketIcon;
 		float _cableRevealAlpha = 0.0f;
 		std::vector<glm::vec4> _cableControlPoints;
 		std::vector<glm::vec4> _cableColors;

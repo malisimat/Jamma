@@ -66,6 +66,9 @@ namespace gui
 		static std::optional<size_t> HitCable(const std::vector<Cable>& cables,
 			utils::Position2d point,
 			float radius);
+		static std::optional<std::pair<size_t, End>> HitCableEnd(const std::vector<Cable>& cables,
+			utils::Position2d point,
+			float radius);
 		static bool Related(const Cable& cable, const Endpoint& endpoint);
 		static bool Compatible(const Drag& drag, const Endpoint& candidate, const io::RigFile& rig);
 		static std::optional<size_t> NearestViable(const Drag& drag,

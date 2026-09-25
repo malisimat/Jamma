@@ -86,6 +86,27 @@ std::optional<size_t> CableInteraction::HitCable(const std::vector<Cable>& cable
 	return nearest;
 }
 
+std::optional<std::pair<size_t, CableInteraction::End>> CableInteraction::HitCableEnd(
+	const std::vector<Cable>& cables, utils::Position2d point, float radius)
+{
+	std::optional<std::pair<size_t, End>> nearest;
+	float nearestDistance = radius * radius;
+	for (size_t i = 0u; i < cables.size(); ++i)
+	{
+		for (const auto end : { End::Start, End::Finish })
+		{
+			const auto distance = _DistanceSquared(
+				end == End::Start ? cables[i].Start.Position : cables[i].Finish.Position, point);
+			if (distance < nearestDistance)
+			{
+				nearest = std::make_pair(i, end);
+				nearestDistance = distance;
+			}
+		}
+	}
+	return nearest;
+}
+
 bool CableInteraction::Related(const Cable& cable, const Endpoint& endpoint)
 {
 	switch (endpoint.Kind)
