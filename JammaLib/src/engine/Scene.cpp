@@ -309,20 +309,10 @@ void Scene::_EnsureRemoteTempoPromptUi()
 
 	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
 	_remoteTempoDialog->SetTitle("Current server tempo");
-	_remoteTempoDialog->ConfigureButtons({
-		true,
-		false,
-		true,
-		false,
-		NinjamRemoteTempoAcceptControlIndex,
-		0u,
-		NinjamRemoteTempoRejectControlIndex,
-		0u,
-		"Follow server",
-		"Stay local",
-		"Cancel",
-		"Ok"
-	});
+	_remoteTempoDialog->ConfigureButtons({ {
+		{ "Cancel", NinjamRemoteTempoRejectControlIndex },
+		{ "Follow server", NinjamRemoteTempoAcceptControlIndex }
+	} });
 	_remoteTempoDialog->Init();
 }
 
@@ -368,8 +358,6 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
-	_remoteTempoDialog->ResetButtonStates();
-
 	const auto popupSize = _remoteTempoDialog->GetSize();
 	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
 	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
@@ -1238,14 +1226,14 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
-	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_BUTTON == action.ElementType)
 		&& (action.Index == NinjamRemoteTempoAcceptControlIndex))
 	{
 		_HandleRemoteTempoPromptDecision(true);
 		return ActionResult::NoAction();
 	}
 
-	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_BUTTON == action.ElementType)
 		&& (action.Index == NinjamRemoteTempoRejectControlIndex))
 	{
 		_HandleRemoteTempoPromptDecision(false);

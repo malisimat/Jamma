@@ -251,13 +251,7 @@ GuiHud::GuiHud(GuiHudParams params) :
 	_cableRenderColors.reserve(12u + 8u);
 	_deletePopup = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
 	GuiPopupButtonConfig deleteConfig;
-	deleteConfig.ShowYes = true;
-	deleteConfig.ShowNo = false;
-	deleteConfig.ShowCancel = true;
-	deleteConfig.ShowOk = false;
-	deleteConfig.YesIndex = 1u;
-	deleteConfig.CancelIndex = 2u;
-	deleteConfig.YesText = "Delete";
+	deleteConfig.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
 	_deletePopup->ConfigureButtons(deleteConfig);
 	_deletePopupReceiver = std::make_shared<GuiHudPopupReceiver>([this](unsigned int index)
 	{
@@ -1006,7 +1000,6 @@ void GuiHud::_OpenDeleteConfirmation(size_t triggerIndex)
 	_deletePopup->SetBodyLines({ "Delete " + name + " and all of its routes?" });
 	_deletePopup->SetPosition({ std::max(0, static_cast<int>(GetSize().Width / 2u) - 230),
 		std::max(0, static_cast<int>(GetSize().Height / 2u) - 105) });
-	_deletePopup->ResetButtonStates();
 	_popupManager->Open(_deletePopup, shared_from_this());
 }
 

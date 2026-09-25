@@ -2,6 +2,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
+#include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
 #include "gui/GuiNumericInput.h"
@@ -19,6 +20,8 @@ using gui::GuiButtonParams;
 using gui::GuiToggle;
 using gui::GuiToggleParams;
 using gui::GuiFocusManager;
+using gui::GuiPopup;
+using gui::GuiPopupButtonConfig;
 using gui::GuiPopupManager;
 using gui::GuiTextBox;
 using gui::GuiTextBoxParams;
@@ -185,6 +188,38 @@ TEST(GuiPopupManager, EscapeDismissesTopmost) {
 
 	EXPECT_TRUE(res.IsEaten);
 	EXPECT_FALSE(host.IsOpen());
+}
+
+TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
+	auto popup = std::make_shared<GuiPopup>();
+	GuiPopupButtonConfig config;
+	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
+	popup->ConfigureButtons(config);
+
+	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(4u));
+	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
+	ASSERT_NE(nullptr, cancelButton);
+	ASSERT_NE(nullptr, deleteButton);
+	EXPECT_EQ(nullptr, popup->TryGetChild(6u));
+	EXPECT_EQ(208, cancelButton->Position().X);
+	EXPECT_EQ(24, cancelButton->Position().Y);
+	EXPECT_EQ(316, deleteButton->Position().X);
+	EXPECT_EQ(24, deleteButton->Position().Y);
+
+	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	popup->SetButtonReceiver(receiver);
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
+	ASSERT_EQ(1, receiver->ActionCount);
+	ASSERT_TRUE(receiver->LastAction.has_value());
+	EXPECT_EQ(GuiAction::ACTIONELEMENT_BUTTON, receiver->LastAction->ElementType);
+	EXPECT_EQ(2u, receiver->LastAction->Index);
+
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 317, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 317, 25 }));
+	ASSERT_EQ(2, receiver->ActionCount);
+	ASSERT_TRUE(receiver->LastAction.has_value());
+	EXPECT_EQ(1u, receiver->LastAction->Index);
 }
 
 // ---------------------------------------------------------------------------

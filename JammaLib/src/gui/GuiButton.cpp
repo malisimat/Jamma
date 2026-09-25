@@ -20,6 +20,7 @@ GuiLabelParams GuiButton::_MakeLabelParams(const GuiButtonParams& params)
 	lp.Position = { (int)frame.PaddingX, frame.OffsetY };
 	lp.Size = { frame.ContentWidth, frame.TextHeight };
 	lp.MinSize = { 1u, frame.TextHeight };
+	lp.CenterHorizontally = true;
 	return lp;
 }
 
