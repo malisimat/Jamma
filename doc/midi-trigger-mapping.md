@@ -39,7 +39,7 @@ Rig files support multiple configured MIDI input devices. MIDI trigger activatio
 - **Enabled Devices**: Each enabled device gets its own MIDI callback endpoint and ingress queue.
 - **`trigger.device`**: Selects the input device that can activate or ditch that station trigger.
 - **MIDI Channel Selection**: Recording channels follow each station's active MIDI channel toggles (`allowedmidichannels` in jam state).
-- **`midiinputdevices`**: Selects the MIDI input devices recorded into MIDI loops. If omitted, MIDI loop recording captures from any device that reaches the station.
+- **`midiinputdevices`**: Selects the MIDI input devices recorded into MIDI loops. It is opt-in: if omitted or empty, the trigger captures no live MIDI.
 - **Device Separation**: The same MIDI channel from different devices is recorded into distinct MIDI loop streams when both devices are listed.
 - **`channel`**: Values in trigger bindings are one-based. Omitting `channel` makes the binding match any channel.
 - **Trigger `kind`**: Supports `note`, `noteoff`, and `cc`.

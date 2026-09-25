@@ -31,6 +31,12 @@ protected:
 	{
 		return { CableInteraction::EndpointKind::TriggerInput, { x, y }, trigger };
 	}
+
+	static CableInteraction::Endpoint Midi(std::string device, int x, int y, bool available = true)
+	{
+		return { CableInteraction::EndpointKind::MidiSource, { x, y }, {}, {}, {},
+			io::RigFileRouting::Source{ io::RigFileRouting::SourceKind::Midi, 0u, std::move(device), available }, available };
+	}
 };
 
 TEST_F(CableInteractionTests, SpreadPlacesSingleAtCentreAndManyAtInclusiveEnds)
@@ -173,20 +179,19 @@ TEST_F(CableInteractionTests, UnavailableFixedSourceCannotCreateCaptureRoute)
 	EXPECT_FALSE(release.Changed);
 }
 
-TEST_F(CableInteractionTests, ExplicitAnyMidiCanBeCreatedReplacedAndRemoved)
+TEST_F(CableInteractionTests, ExplicitMidiDeviceCanBeCreatedAndRemoved)
 {
 	auto rig = Rig();
-	rig.Triggers[1].MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
-	CableInteraction::Endpoint any{ CableInteraction::EndpointKind::MidiSource, { 0, 0 }, {}, {}, {},
-		io::RigFileRouting::Source{ io::RigFileRouting::SourceKind::Midi, 0u, "*", true } };
+	auto keys = Midi("Keys", 0, 0);
 	CableInteraction::Drag create{ { 4u, static_cast<size_t>(-1), CableInteraction::RouteKind::Capture, 0u },
-		CableInteraction::End::Finish, any, {}, { 100, 0 }, Input(1u, 100, 0) };
+		CableInteraction::End::Finish, keys, {}, { 100, 0 }, Input(1u, 100, 0) };
 	auto created = CableInteraction::ReleaseToCandidate(create, rig);
 	ASSERT_TRUE(created.Candidate.has_value());
-	EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::Any, created.Candidate->Triggers[1].MidiInputs);
+	EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::Selected, created.Candidate->Triggers[1].MidiInputs);
+	EXPECT_EQ((std::vector<std::string>{ "Keys" }), created.Candidate->Triggers[1].MidiInputDevices);
 
 	CableInteraction::Drag remove{ { 5u, 1u, CableInteraction::RouteKind::Capture, 0u },
-		CableInteraction::End::Start, Input(1u, 100, 0), any.Source, { 0, 0 }, {} };
+		CableInteraction::End::Start, Input(1u, 100, 0), keys.Source, { 0, 0 }, {} };
 	auto removed = CableInteraction::ReleaseToCandidate(remove, created.Candidate.value());
 	ASSERT_TRUE(removed.Candidate.has_value());
 	EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::None, removed.Candidate->Triggers[1].MidiInputs);

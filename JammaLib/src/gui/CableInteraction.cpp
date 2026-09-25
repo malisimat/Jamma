@@ -141,6 +141,11 @@ bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, c
 		(candidate.Source.has_value() && !candidate.Source->Available) ||
 		(drag.Fixed.Source.has_value() && !drag.Fixed.Source->Available))
 		return false;
+	if ((candidate.Source.has_value() && candidate.Source->Kind == io::RigFileRouting::SourceKind::Midi &&
+		candidate.Source->MidiDevice == "*") ||
+		(drag.Fixed.Source.has_value() && drag.Fixed.Source->Kind == io::RigFileRouting::SourceKind::Midi &&
+			drag.Fixed.Source->MidiDevice == "*"))
+		return false;
 	if (drag.Route.Kind == RouteKind::Capture)
 	{
 		const auto triggerIndex = drag.MovingEnd == End::Finish && candidate.TriggerIndex.has_value()
@@ -168,8 +173,6 @@ bool CableInteraction::Compatible(const Drag& drag, const Endpoint& candidate, c
 		const auto& source = drag.Fixed.Source.value();
 		if (source.Kind == io::RigFileRouting::SourceKind::Adc)
 			return std::find(trigger.InputChannels.begin(), trigger.InputChannels.end(), source.AdcChannel) == trigger.InputChannels.end();
-		if (source.MidiDevice == "*")
-			return trigger.MidiInputs != io::RigFile::Trigger::MidiInputMode::Any;
 		return std::find(trigger.MidiInputDevices.begin(), trigger.MidiInputDevices.end(), source.MidiDevice) == trigger.MidiInputDevices.end();
 	}
 	if (drag.MovingEnd == End::Start)
@@ -256,13 +259,6 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 				return {};
 			if (source.Kind == io::RigFileRouting::SourceKind::Adc)
 				candidate = io::RigFileRouting::WithoutAdcInput(rig, drag.Route.TriggerIndex, source.AdcChannel);
-			else if (source.MidiDevice == "*")
-			{
-				candidate = rig;
-				auto& trigger = candidate->Triggers[drag.Route.TriggerIndex];
-				trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
-				trigger.MidiInputDevices.clear();
-			}
 			else
 				candidate = io::RigFileRouting::WithoutMidiInput(rig, drag.Route.TriggerIndex, source.MidiDevice);
 			if (!candidate.has_value())
@@ -276,14 +272,6 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 		const auto& base = candidate.has_value() ? candidate.value() : rig;
 		if (triggerIndex >= base.Triggers.size())
 			return {};
-		if (source.Kind == io::RigFileRouting::SourceKind::Midi && source.MidiDevice == "*")
-		{
-			auto replacement = base;
-			auto& trigger = replacement.Triggers[triggerIndex];
-			trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::Any;
-			trigger.MidiInputDevices.clear();
-			return { std::move(replacement), true };
-		}
 		if (source.Kind == io::RigFileRouting::SourceKind::Adc)
 			return { io::RigFileRouting::WithAdcInput(base, triggerIndex, source.AdcChannel), true };
 		return { io::RigFileRouting::WithMidiInput(base, triggerIndex, source.MidiDevice), true };
@@ -296,14 +284,6 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 		const auto& source = drag.Snap->Source.value();
 		if (source.Kind == io::RigFileRouting::SourceKind::Adc)
 			return { io::RigFileRouting::WithAdcInput(rig, drag.Route.TriggerIndex, source.AdcChannel), true };
-		if (source.MidiDevice == "*")
-		{
-			auto candidate = rig;
-			auto& trigger = candidate.Triggers[drag.Route.TriggerIndex];
-			trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::Any;
-			trigger.MidiInputDevices.clear();
-			return { std::move(candidate), true };
-		}
 		return { io::RigFileRouting::WithMidiInput(rig, drag.Route.TriggerIndex, source.MidiDevice), true };
 	}
 	if (!original.has_value())
@@ -311,13 +291,6 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 	std::optional<io::RigFile> removed;
 	if (original->Kind == io::RigFileRouting::SourceKind::Adc)
 		removed = io::RigFileRouting::WithoutAdcInput(rig, drag.Route.TriggerIndex, original->AdcChannel);
-	else if (original->MidiDevice == "*")
-	{
-		removed = rig;
-		auto& trigger = removed->Triggers[drag.Route.TriggerIndex];
-		trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
-		trigger.MidiInputDevices.clear();
-	}
 	else
 		removed = io::RigFileRouting::WithoutMidiInput(rig, drag.Route.TriggerIndex, original->MidiDevice);
 	if (!removed.has_value())
@@ -329,13 +302,5 @@ CableInteraction::Release CableInteraction::ReleaseToCandidate(const Drag& drag,
 		return { rig, false };
 	if (replacement->Kind == io::RigFileRouting::SourceKind::Adc)
 		return { io::RigFileRouting::WithAdcInput(removed.value(), drag.Route.TriggerIndex, replacement->AdcChannel), true };
-	if (replacement->MidiDevice == "*")
-	{
-		auto candidate = removed.value();
-		auto& trigger = candidate.Triggers[drag.Route.TriggerIndex];
-		trigger.MidiInputs = io::RigFile::Trigger::MidiInputMode::Any;
-		trigger.MidiInputDevices.clear();
-		return { std::move(candidate), true };
-	}
 	return { io::RigFileRouting::WithMidiInput(removed.value(), drag.Route.TriggerIndex, replacement->MidiDevice), true };
 }

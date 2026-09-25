@@ -52,12 +52,11 @@ Extend `io::RigFile::Trigger` with:
 
 ```cpp
 std::optional<std::string> StationTarget;
-MidiInputMode MidiInputs; // LegacyAny, None, Any, or Selected
+MidiInputMode MidiInputs; // None or Selected
 ```
 
-Use JSON keys `stationtarget` and `midiinputmode`, with mode values `none`,
-`any`, and `selected`. `LegacyAny` is an internal parse result only; the writer
-emits it as explicit `any`.
+Use JSON keys `stationtarget` and `midiinputmode`, with mode values `none` and
+`selected`.
 
 `StationTarget` rules:
 
@@ -71,9 +70,8 @@ emits it as explicit `any`.
 `MidiInputDevices` vector:
 
 - when the new field is absent, a non-empty device list becomes `Selected`,
-  while an empty list becomes `LegacyAny` to preserve current behavior;
+  while an empty list becomes `None`;
 - `None` means no MIDI capture/live-input route and is used by a new trigger;
-- `Any` is an explicit wildcard route;
 - `Selected` requires at least one unique, non-empty device name.
 
 Keep `InputChannels` as the ADC capture routes. Keep `TriggerPairs` and
@@ -264,8 +262,8 @@ Interaction rules:
 - Show a visible socket plus a larger DPI-scaled hit target for each available
   source, trigger capture input, trigger output, and station target.
 - A trigger may have many distinct ADC/MIDI capture edges and one station edge.
-  Represent explicit `Any` MIDI as a labelled wildcard source. Never draw an
-  activation binding as a capture cable.
+  MIDI capture edges always name a configured device. Never draw an activation
+  binding as a capture cable.
 - Keep trigger bodies fixed height. Spread two or more input sockets evenly
   over the available vertical span; keep the output socket distinct.
 - A station may receive many triggers. Spread occupied sockets plus one
@@ -363,7 +361,7 @@ Each slice should compile and test before the next begins.
 ## Verification matrix
 
 - **Rig/resolver:** full parse/serialize round trip; target absent/empty/name;
-  `None`/`Any`/`Selected` MIDI modes; unbound trigger; unique `Trigger-N`;
+  `None`/`Selected` MIDI modes; unbound trigger; unique `Trigger-N`;
   legacy in/out-of-range; reordered/missing/ambiguous stations; many triggers
   to one station; unavailable source; duplicate capture rejection.
 - **Runtime:** only resolved triggers receive station/input dispatch; one

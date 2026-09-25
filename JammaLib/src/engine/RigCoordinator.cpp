@@ -73,8 +73,6 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 				[&device](const std::shared_ptr<Trigger>& trigger) {
 					if (!trigger) return false;
 					const auto mode = trigger->MidiInputMode();
-					if (mode == io::RigFile::Trigger::MidiInputMode::Any ||
-						mode == io::RigFile::Trigger::MidiInputMode::LegacyAny) return true;
 					if (mode != io::RigFile::Trigger::MidiInputMode::Selected) return false;
 					const auto& devices = trigger->MidiInputDevices();
 					return std::find(devices.begin(), devices.end(), device) != devices.end();

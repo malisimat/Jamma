@@ -113,13 +113,13 @@ TEST_F(RigSnapshotTest, ResolvesLegacyTargetWithoutAdoptingUnsavedMigration)
 	EXPECT_EQ(io::RigFileRouting::Warning::LegacyStationTargetMigrated, runtime->Graph.Triggers[0].Reason);
 }
 
-TEST_F(RigSnapshotTest, RetainsUnavailableSourcesAndManyToOneMembershipValues)
+TEST_F(RigSnapshotTest, RetainsUnavailableSourcesWithoutCreatingWildcardMidiRoutes)
 {
 	io::RigFile rig{};
 	auto first = TriggerDescriptor("first", "Shared", io::RigFile::Trigger::MidiInputMode::Selected);
 	first.InputChannels = { 0u, 3u };
 	first.MidiInputDevices = { "Missing keyboard" };
-	auto second = TriggerDescriptor("second", "Shared", io::RigFile::Trigger::MidiInputMode::Any);
+	auto second = TriggerDescriptor("second", "Shared");
 	rig.Triggers = { first, second };
 
 	const auto runtime = BuildSnapshot(rig,
@@ -135,26 +135,21 @@ TEST_F(RigSnapshotTest, RetainsUnavailableSourcesAndManyToOneMembershipValues)
 	EXPECT_TRUE(runtime->Graph.Triggers[0].Sources[0].Available);
 	EXPECT_FALSE(runtime->Graph.Triggers[0].Sources[1].Available);
 	EXPECT_FALSE(runtime->Graph.Triggers[0].Sources[2].Available);
-	ASSERT_EQ(1u, runtime->Graph.Triggers[1].Sources.size());
-	EXPECT_EQ("*", runtime->Graph.Triggers[1].Sources[0].MidiDevice);
+	EXPECT_TRUE(runtime->Graph.Triggers[1].Sources.empty());
 	ASSERT_EQ(1u, runtime->InputDispatch.LiveMidi.size());
 	ASSERT_EQ("Present keyboard", runtime->InputDispatch.LiveMidi[0].DeviceName);
-	ASSERT_EQ(1u, runtime->InputDispatch.LiveMidi[0].Recipients.size());
-	EXPECT_EQ("Shared", runtime->InputDispatch.LiveMidi[0].Recipients[0]->Name());
+	EXPECT_TRUE(runtime->InputDispatch.LiveMidi[0].Recipients.empty());
 }
 
-TEST_F(RigSnapshotTest, PreservesExplicitMidiModesForLiveInputEligibility)
+TEST_F(RigSnapshotTest, LiveMidiEligibilityRequiresAnExplicitDeviceSelection)
 {
 	auto noneConfig = TriggerDescriptor("none", "Station", io::RigFile::Trigger::MidiInputMode::None);
-	auto anyConfig = TriggerDescriptor("any", "Station", io::RigFile::Trigger::MidiInputMode::Any);
 	auto selectedConfig = TriggerDescriptor("selected", "Station", io::RigFile::Trigger::MidiInputMode::Selected);
 	selectedConfig.MidiInputDevices = { "Keys" };
 
 	auto none = engine::Trigger::FromFile(engine::TriggerParams(), noneConfig);
-	auto any = engine::Trigger::FromFile(engine::TriggerParams(), anyConfig);
 	auto selected = engine::Trigger::FromFile(engine::TriggerParams(), selectedConfig);
 	ASSERT_TRUE(none.has_value());
-	ASSERT_TRUE(any.has_value());
 	ASSERT_TRUE(selected.has_value());
 
 	auto station = RuntimeStation("Station");
@@ -163,8 +158,6 @@ TEST_F(RigSnapshotTest, PreservesExplicitMidiModesForLiveInputEligibility)
 	AddTestRigTrigger(station, selected.value());
 	EXPECT_TRUE(station->AcceptsLiveMidiFromDevice("Keys"));
 	EXPECT_FALSE(station->AcceptsLiveMidiFromDevice("Other"));
-	AddTestRigTrigger(station, any.value());
-	EXPECT_TRUE(station->AcceptsLiveMidiFromDevice("Other"));
 
 	auto noRoutes = RuntimeStation("No routes");
 	EXPECT_FALSE(noRoutes->AcceptsLiveMidiFromDevice("Keys"));

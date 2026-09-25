@@ -1808,11 +1808,7 @@ bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noe
 	{
 		if (!trigger)
 			continue;
-		const auto mode = trigger->MidiInputMode();
-		if ((mode == io::RigFile::Trigger::MidiInputMode::Any) ||
-			(mode == io::RigFile::Trigger::MidiInputMode::LegacyAny))
-			return true;
-		if (mode == io::RigFile::Trigger::MidiInputMode::None)
+		if (trigger->MidiInputMode() != io::RigFile::Trigger::MidiInputMode::Selected)
 			continue;
 		const auto& devices = trigger->MidiInputDevices();
 		if (devices.empty())

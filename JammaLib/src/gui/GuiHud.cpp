@@ -410,7 +410,7 @@ void GuiHud::_BuildTopStrip()
 	{
 		const auto isAdc = source.Kind == io::RigFileRouting::SourceKind::Adc;
 		auto label = isAdc ? "Audio In " + std::to_string(source.AdcChannel + 1u) :
-			(source.MidiDevice == "*" ? "MIDI Any" : "MIDI " + source.MidiDevice);
+			"MIDI " + source.MidiDevice;
 		if (!source.Available)
 			label += " (unavailable)";
 		auto button = _MakeSourceButton(label,
@@ -589,7 +589,6 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
 	for (const auto& name : _midiInputNames)
 		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, name, true });
-	_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, "*", true });
 	for (const auto& resolvedTrigger : _routingGraph)
 	{
 		for (const auto& source : resolvedTrigger.Sources)

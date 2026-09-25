@@ -62,9 +62,7 @@ namespace io
 		{
 			enum class MidiInputMode
 			{
-				LegacyAny,
 				None,
-				Any,
 				Selected
 			};
 			struct MidiTriggerBindingSpec
@@ -93,7 +91,8 @@ namespace io
 			std::vector<unsigned int> InputChannels;
 			std::vector<std::string> MidiInputDevices;
 			std::optional<std::string> StationTarget;
-			MidiInputMode MidiInputs = MidiInputMode::LegacyAny;
+			// Live MIDI capture is opt-in: an empty device list captures no MIDI.
+			MidiInputMode MidiInputs = MidiInputMode::None;
 			std::optional<MidiTriggerBinding> MidiTrigger;
 
 			static std::optional<Trigger> FromJson(Json::JsonPart json);

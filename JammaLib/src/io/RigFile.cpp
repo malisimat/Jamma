@@ -11,7 +11,7 @@
 
 using namespace io;
 
-const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}],\"channelOverrideTriggers\":false,\"channelOverrideLive\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
+const std::string RigFile::DefaultJson = "{\"name\":\"default\",\"user\":{\"audio\":{\"name\":\"default\",\"bufsize\":512,\"inlatency\":4600,\"outlatency\":6000,\"numchannelsin\":2,\"numchannelsout\":2},\"midi\":{\"devices\":[{\"name\":\"default\",\"enabled\":true}],\"channelOverrideTriggers\":false,\"channelOverrideLive\":true},\"loop\":{\"fadeSamps\":800,\"seedGrainMinMs\":400,\"seedGrainTargetMaxMs\":3000,\"seedBpmMin\":80,\"seedQuantisation\":\"power\"},\"trigger\":{\"preDelay\":400,\"debounceSamps\":280}},\"triggers\":[{\"name\":\"Trig1\",\"stationtype\":0,\"midiinputmode\":\"none\",\"midiinputdevices\":[],\"pairs\":[{\"activatedown\":49,\"activateup\":49,\"ditchdown\":50,\"ditchup\":50}],\"input\":[0,1]}]}";
 
 std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 {
@@ -147,9 +147,7 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss)
 		{
 		case Trigger::MidiInputMode::None: return "none";
 		case Trigger::MidiInputMode::Selected: return "selected";
-		case Trigger::MidiInputMode::LegacyAny:
-		case Trigger::MidiInputMode::Any:
-		default: return "any";
+		default: return "none";
 		}
 	};
 	auto midiSpec = [&](const Trigger::MidiTriggerBindingSpec& spec) {
@@ -346,7 +344,7 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	std::vector<unsigned int> inputChannels;
 	std::vector<std::string> midiInputDevices;
 	std::optional<std::string> stationTarget;
-	MidiInputMode midiInputs = MidiInputMode::LegacyAny;
+	MidiInputMode midiInputs = MidiInputMode::None;
 	std::optional<MidiTriggerBinding> midiTrigger;
 
 	auto iter = json.KeyValues.find("name");
@@ -418,6 +416,8 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 
 					if (device.empty())
 						continue;
+					if (device == "*")
+						continue;
 
 					if (midiInputDevices.end() == std::find(midiInputDevices.begin(), midiInputDevices.end(), device))
 						midiInputDevices.push_back(device);
@@ -443,7 +443,8 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		if (mode == "none")
 			midiInputs = MidiInputMode::None;
 		else if (mode == "any")
-			midiInputs = MidiInputMode::Any;
+			// Legacy wildcard routes are retained as disabled rather than broaden capture.
+			midiInputs = MidiInputMode::None;
 		else if (mode == "selected")
 			midiInputs = MidiInputMode::Selected;
 		else
@@ -576,10 +577,7 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 			candidateTrigger.InputChannels.push_back(channel);
 			resolved.Sources.push_back(Source{ SourceKind::Adc, channel, {}, channel < availableAdcChannels });
 		}
-		if (trigger.MidiInputs == RigFile::Trigger::MidiInputMode::Any ||
-			trigger.MidiInputs == RigFile::Trigger::MidiInputMode::LegacyAny)
-			resolved.Sources.push_back(Source{ SourceKind::Midi, 0u, "*", !availableMidiDevices.empty() });
-		else if (trigger.MidiInputs == RigFile::Trigger::MidiInputMode::Selected)
+		if (trigger.MidiInputs == RigFile::Trigger::MidiInputMode::Selected)
 		{
 			candidateTrigger.MidiInputDevices.clear();
 			for (const auto& device : trigger.MidiInputDevices)
@@ -707,7 +705,7 @@ std::optional<RigFile> RigFileRouting::WithoutAdcInput(const RigFile& rig, size_
 
 std::optional<RigFile> RigFileRouting::WithMidiInput(const RigFile& rig, size_t triggerIndex, std::string device)
 {
-	if (triggerIndex >= rig.Triggers.size() || device.empty()) return std::nullopt;
+	if (triggerIndex >= rig.Triggers.size() || device.empty() || device == "*") return std::nullopt;
 	auto candidate = rig;
 	auto& trigger = candidate.Triggers[triggerIndex];
 	if (std::find(trigger.MidiInputDevices.begin(), trigger.MidiInputDevices.end(), device) != trigger.MidiInputDevices.end()) return std::nullopt;

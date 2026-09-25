@@ -365,7 +365,7 @@ namespace engine
 		std::atomic<std::size_t> _externalControlActionTail{ 0u };
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
-		io::RigFile::Trigger::MidiInputMode _midiInputMode = io::RigFile::Trigger::MidiInputMode::LegacyAny;
+		io::RigFile::Trigger::MidiInputMode _midiInputMode = io::RigFile::Trigger::MidiInputMode::None;
 		TriggerState _state;
 		std::atomic<std::uint8_t> _publishedTriggerState{ static_cast<std::uint8_t>(TRIGSTATE_DEFAULT) };
 		std::atomic<bool> _publishedActivateInputDown{ false };

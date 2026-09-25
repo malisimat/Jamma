@@ -241,14 +241,14 @@ TEST(RigFile, ParsesStationTargetAbsentEmptyAndName) {
 	ASSERT_TRUE(named.has_value()); ASSERT_EQ("Drums", named->StationTarget.value());
 }
 
-TEST(RigFile, ParsesExplicitAndLegacyMidiInputModes) {
+TEST(RigFile, ParsesOnlyExplicitMidiDeviceSelections) {
 	auto parse = [](const char* json) { return RigFile::Trigger::FromJson(std::get<Json::JsonPart>(Json::FromStream(std::stringstream(json)).value())); };
-	ASSERT_EQ(RigFile::Trigger::MidiInputMode::LegacyAny, parse("{\"name\":\"legacy\"}")->MidiInputs);
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::None, parse("{\"name\":\"none\"}")->MidiInputs);
 	ASSERT_EQ(RigFile::Trigger::MidiInputMode::None, parse("{\"name\":\"none\",\"midiinputmode\":\"none\"}")->MidiInputs);
-	ASSERT_EQ(RigFile::Trigger::MidiInputMode::Any, parse("{\"name\":\"any\",\"midiinputmode\":\"any\"}")->MidiInputs);
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::None, parse("{\"name\":\"legacy\",\"midiinputmode\":\"any\"}")->MidiInputs);
 	ASSERT_EQ(RigFile::Trigger::MidiInputMode::Selected, parse("{\"name\":\"selected\",\"midiinputmode\":\"selected\",\"midiinputdevices\":[\"Keys\",\"Keys\",\"\"]}")->MidiInputs);
 	EXPECT_FALSE(parse("{\"name\":\"bad\",\"midiinputmode\":\"selected\",\"midiinputdevices\":[]}").has_value());
-	EXPECT_FALSE(parse("{\"name\":\"bad\",\"midiinputmode\":\"any\",\"midiinputdevices\":[\"Keys\"]}").has_value());
+	ASSERT_EQ(RigFile::Trigger::MidiInputMode::None, parse("{\"name\":\"legacy\",\"midiinputdevices\":[\"*\"]}")->MidiInputs);
 }
 
 TEST(RigFile, JsonSerializerRoundTripsEveryKnownSectionAndDropsUnknownFields) {
@@ -327,6 +327,7 @@ TEST(RigFileRouting, MutationHelpersArePureAndRejectDuplicateCaptureRoutes) {
 	EXPECT_FALSE(io::RigFileRouting::WithAdcInput(adc.value(), 0u, 7u).has_value());
 	auto midi = io::RigFileRouting::WithMidiInput(adc.value(), 0u, "Keys"); ASSERT_TRUE(midi.has_value());
 	EXPECT_FALSE(io::RigFileRouting::WithMidiInput(midi.value(), 0u, "Keys").has_value());
+	EXPECT_FALSE(io::RigFileRouting::WithMidiInput(midi.value(), 0u, "*").has_value());
 	auto removed = io::RigFileRouting::WithoutMidiInput(midi.value(), 0u, "Keys"); ASSERT_TRUE(removed.has_value());
 	EXPECT_EQ(RigFile::Trigger::MidiInputMode::None, removed->Triggers[0].MidiInputs);
 }
