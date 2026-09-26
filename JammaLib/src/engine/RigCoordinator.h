@@ -18,7 +18,7 @@ namespace engine
 	public:
 		using SnapshotPtr = std::shared_ptr<const RigSnapshot>;
 		using PersistRig = std::function<bool(const io::RigFile&)>;
-		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, QuiescenceRejected, ValidationFailed, PersistenceFailed };
+		enum class EditResult { Pending, EditsDisabled, AudioCallbackInactive, TriggerBusy, TransitionRejected, ValidationFailed, PersistenceFailed };
 
 		RigCoordinator() = default;
 		RigCoordinator(const RigCoordinator&) = delete;
@@ -32,12 +32,12 @@ namespace engine
 			const TriggerParams& triggerParams,
 			const PersistRig& persistMigration);
 		EditResult SubmitCandidate(const io::RigFile& candidateRig);
-		EditResult CompleteQuiescence(std::uint64_t revision,
+		EditResult CompleteTransition(std::uint64_t revision,
 			bool acceptedAtAudioBoundary,
 			const PersistRig& persistRig);
 
 		SnapshotPtr Accepted() const noexcept;
-		SnapshotPtr Quiescing() const noexcept;
+		SnapshotPtr Staged() const noexcept;
 		SnapshotPtr Pending() const noexcept;
 		bool EditsEnabled() const noexcept;
 		std::uint64_t AudioAcknowledgement() const noexcept;
@@ -78,7 +78,7 @@ namespace engine
 		// teardown after both reader domains have stopped.
 		std::atomic<std::uint64_t> _nextRevision{ 1u };
 		std::atomic<SnapshotPtr> _accepted;
-		std::atomic<SnapshotPtr> _quiescing;
+		std::atomic<SnapshotPtr> _staged;
 		std::atomic<SnapshotPtr> _pending;
 		std::atomic<std::uint64_t> _audioAcknowledgement{ 0u };
 		std::atomic<std::uint64_t> _inputAcknowledgement{ 0u };

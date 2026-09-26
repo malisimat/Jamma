@@ -950,7 +950,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 	if (!_structuralCommands.Peek(command))
 		return;
 	// The queue remains visibly non-empty until this counter is raised, closing
-	// the Peek->Pop publication gap for audio quiescence checks.
+	// the Peek->Pop publication gap for audio-boundary checks.
 	_jobStructuralActionsInFlight.fetch_add(1u, std::memory_order_acq_rel);
 	for (std::size_t consumed = 0u;
 		consumed < _StructuralQueueCapacity && _structuralCommands.Pop(command);

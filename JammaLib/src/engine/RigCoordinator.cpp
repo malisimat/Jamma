@@ -215,43 +215,43 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 	if (_shuttingDown.load(std::memory_order_acquire))
 	{
 		_editsEnabled.store(false, std::memory_order_release);
-		return EditResult::QuiescenceRejected;
+		return EditResult::TransitionRejected;
 	}
 	const auto accepted = Accepted();
 	auto snapshot = _BuildSnapshot(revision, candidateRig, _stationDescriptors, _stations,
 		_availableAdcChannels, _availableMidiDevices, _triggerParams, accepted);
 	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
-	_quiescing.store(snapshot, std::memory_order_release);
+	_staged.store(snapshot, std::memory_order_release);
 	return EditResult::Pending;
 }
 
-RigCoordinator::EditResult RigCoordinator::CompleteQuiescence(std::uint64_t revision,
+RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revision,
 	bool acceptedAtAudioBoundary,
 	const PersistRig& persistRig)
 {
-	auto candidate = _quiescing.load(std::memory_order_acquire);
+	auto candidate = _staged.load(std::memory_order_acquire);
 	if (!candidate || candidate->Revision != revision)
-		return EditResult::QuiescenceRejected;
+		return EditResult::TransitionRejected;
 	if (!acceptedAtAudioBoundary || _shuttingDown.load(std::memory_order_acquire))
 	{
-		_quiescing.store({}, std::memory_order_release);
+		_staged.store({}, std::memory_order_release);
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
-		return EditResult::QuiescenceRejected;
+		return EditResult::TransitionRejected;
 	}
 	// Persistence remains the final fallible operation before pending publication.
 	if (!persistRig || !persistRig(candidate->Rig))
 	{
-		_quiescing.store({}, std::memory_order_release);
+		_staged.store({}, std::memory_order_release);
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::PersistenceFailed;
 	}
 	_pending.store(candidate, std::memory_order_release);
-	_quiescing.store({}, std::memory_order_release);
+	_staged.store({}, std::memory_order_release);
 	return EditResult::Pending;
 }
 
 RigCoordinator::SnapshotPtr RigCoordinator::Accepted() const noexcept { return _accepted.load(std::memory_order_acquire); }
-RigCoordinator::SnapshotPtr RigCoordinator::Quiescing() const noexcept { return _quiescing.load(std::memory_order_acquire); }
+RigCoordinator::SnapshotPtr RigCoordinator::Staged() const noexcept { return _staged.load(std::memory_order_acquire); }
 RigCoordinator::SnapshotPtr RigCoordinator::Pending() const noexcept { return _pending.load(std::memory_order_acquire); }
 bool RigCoordinator::EditsEnabled() const noexcept { return _editsEnabled.load(std::memory_order_acquire); }
 std::uint64_t RigCoordinator::AudioAcknowledgement() const noexcept { return _audioAcknowledgement.load(std::memory_order_acquire); }
@@ -312,7 +312,7 @@ void RigCoordinator::Shutdown() noexcept
 void RigCoordinator::ReleaseAfterReadersStopped()
 {
 	_pending.store({}, std::memory_order_release);
-	_quiescing.store({}, std::memory_order_release);
+	_staged.store({}, std::memory_order_release);
 	_accepted.store({}, std::memory_order_release);
 	std::scoped_lock lock(_retiringMutex);
 	_retiring.clear();

@@ -13,9 +13,9 @@ namespace audio
 			host.ApplyPendingRigSnapshotAtAudioBoundary();
 		}
 
-		static void PublishQuiescence(AudioHost& host) noexcept
+		static void PublishTransition(AudioHost& host) noexcept
 		{
-			host.PublishRigTriggerQuiescenceAtAudioBoundary();
+			host.PublishRigTriggerTransitionAtAudioBoundary();
 		}
 	};
 }
@@ -181,7 +181,7 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 	candidate.Triggers[0].MidiInputDevices = { "Keys B" };
 	candidate.Triggers[0].StationTarget = "Second";
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
-	const auto staged = coordinator.Quiescing();
+	const auto staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
 	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
 	EXPECT_TRUE(staged->TriggerReplacementChecks.empty());
@@ -211,7 +211,7 @@ TEST_F(RigSnapshotTest, ReorderPreservesStableTriggerInstancesAndDisplayOrder)
 	auto candidate = accepted->Rig;
 	std::swap(candidate.Triggers[0], candidate.Triggers[1]);
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
-	const auto staged = coordinator.Quiescing();
+	const auto staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
 	EXPECT_EQ("second-id", staged->Triggers[0].Id);
 	EXPECT_EQ("first-id", staged->Triggers[1].Id);
@@ -236,19 +236,19 @@ TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 	auto deletion = accepted->Rig;
 	deletion.Triggers.erase(deletion.Triggers.begin());
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(deletion));
-	auto staged = coordinator.Quiescing();
+	auto staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
 	ASSERT_EQ(1u, staged->Triggers.size());
 	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[0].Instance);
 	ASSERT_EQ(1u, staged->TriggerReplacementChecks.size());
 	EXPECT_EQ(accepted->Triggers[0].Instance, staged->TriggerReplacementChecks[0].AcceptedInstance);
-	ASSERT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
-		coordinator.CompleteQuiescence(staged->Revision, false, [](const io::RigFile&) { return true; }));
+	ASSERT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+		coordinator.CompleteTransition(staged->Revision, false, [](const io::RigFile&) { return true; }));
 
 	auto replacement = accepted->Rig;
 	replacement.Triggers[0].Name = "changed activation";
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(replacement));
-	staged = coordinator.Quiescing();
+	staged = coordinator.Staged();
 	ASSERT_TRUE(staged);
 	EXPECT_NE(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
 	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[1].Instance);
@@ -334,10 +334,10 @@ TEST_F(RigSnapshotTest, SnapshotOwnsCompleteTriggerListIndependentOfStationReset
 	io::RigFile replacement{};
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.SubmitCandidate(replacement));
-	const auto quiescing = coordinator.Quiescing();
-	ASSERT_TRUE(quiescing);
+	const auto staged = coordinator.Staged();
+	ASSERT_TRUE(staged);
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-		coordinator.CompleteQuiescence(quiescing->Revision, true,
+		coordinator.CompleteTransition(staged->Revision, true,
 			[](const io::RigFile&) { return true; }));
 	const auto pending = coordinator.Pending();
 	ASSERT_TRUE(pending);
@@ -358,10 +358,10 @@ TEST_F(RigSnapshotTest, RequiresAudioAcknowledgementBeforeInputAndBothBeforeProm
 	candidate.Triggers = { TriggerDescriptor("replacement", "Station") };
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
 		coordinator.SubmitCandidate(candidate));
-	const auto pendingRevision = coordinator.Quiescing()->Revision;
+	const auto pendingRevision = coordinator.Staged()->Revision;
 	EXPECT_FALSE(coordinator.Pending());
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-		coordinator.CompleteQuiescence(pendingRevision, true,
+		coordinator.CompleteTransition(pendingRevision, true,
 			[](const io::RigFile&) { return true; }));
 
 	EXPECT_FALSE(coordinator.AcknowledgeInput(pendingRevision));
@@ -386,23 +386,23 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureR
 		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
 	const auto accepted = coordinator.Accepted();
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
-	const auto rejectedRevision = coordinator.Quiescing()->Revision;
-	EXPECT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
-		coordinator.CompleteQuiescence(rejectedRevision, false,
+	const auto rejectedRevision = coordinator.Staged()->Revision;
+	EXPECT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+		coordinator.CompleteTransition(rejectedRevision, false,
 			[](const io::RigFile&) { return true; }));
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
-	const auto persistenceRevision = coordinator.Quiescing()->Revision;
+	const auto persistenceRevision = coordinator.Staged()->Revision;
 	EXPECT_EQ(engine::RigCoordinator::EditResult::PersistenceFailed,
-		coordinator.CompleteQuiescence(persistenceRevision, true,
+		coordinator.CompleteTransition(persistenceRevision, true,
 			[](const io::RigFile&) { return false; }));
 	EXPECT_GT(persistenceRevision, rejectedRevision);
 	EXPECT_EQ(accepted, coordinator.Accepted());
 	EXPECT_FALSE(coordinator.Pending());
 
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
-	const auto successfulRevision = coordinator.Quiescing()->Revision;
+	const auto successfulRevision = coordinator.Staged()->Revision;
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-		coordinator.CompleteQuiescence(successfulRevision, true,
+		coordinator.CompleteTransition(successfulRevision, true,
 			[](const io::RigFile&) { return true; }));
 	EXPECT_GT(successfulRevision, persistenceRevision);
 	EXPECT_EQ(successfulRevision, coordinator.Pending()->Revision);
@@ -422,11 +422,11 @@ TEST_F(RigSnapshotTest, RapidSecondEditIsRejectedUntilFirstEditPromotes)
 	auto second = initial;
 	second.Triggers[0].Name = "second";
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(first));
-	const auto firstRevision = coordinator.Quiescing()->Revision;
+	const auto firstRevision = coordinator.Staged()->Revision;
 	EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled, coordinator.SubmitCandidate(second));
-	EXPECT_EQ(firstRevision, coordinator.Quiescing()->Revision);
+	EXPECT_EQ(firstRevision, coordinator.Staged()->Revision);
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-		coordinator.CompleteQuiescence(firstRevision, true, [](const io::RigFile&) { return true; }));
+		coordinator.CompleteTransition(firstRevision, true, [](const io::RigFile&) { return true; }));
 	coordinator.ApplyPendingAtAudioBoundary();
 	ASSERT_TRUE(coordinator.AcknowledgeInput(firstRevision));
 	ASSERT_TRUE(coordinator.PromoteAcknowledged());
@@ -434,7 +434,7 @@ TEST_F(RigSnapshotTest, RapidSecondEditIsRejectedUntilFirstEditPromotes)
 	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(second));
 }
 
-TEST_F(RigSnapshotTest, ShutdownDuringQuiescenceOrPendingCannotPublishCandidate)
+TEST_F(RigSnapshotTest, ShutdownDuringTransitionOrPendingCannotPublishCandidate)
 {
 	auto makeCoordinator = [this]()
 	{
@@ -448,17 +448,17 @@ TEST_F(RigSnapshotTest, ShutdownDuringQuiescenceOrPendingCannotPublishCandidate)
 		return coordinator;
 	};
 
-	auto quiescing = makeCoordinator();
-	const auto quiescingRevision = quiescing->Quiescing()->Revision;
-	quiescing->Shutdown();
-	EXPECT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
-		quiescing->CompleteQuiescence(quiescingRevision, true, [](const io::RigFile&) { return true; }));
-	EXPECT_FALSE(quiescing->Pending());
+	auto staged = makeCoordinator();
+	const auto stagedRevision = staged->Staged()->Revision;
+	staged->Shutdown();
+	EXPECT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+		staged->CompleteTransition(stagedRevision, true, [](const io::RigFile&) { return true; }));
+	EXPECT_FALSE(staged->Pending());
 
 	auto pending = makeCoordinator();
-	const auto pendingRevision = pending->Quiescing()->Revision;
+	const auto pendingRevision = pending->Staged()->Revision;
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-		pending->CompleteQuiescence(pendingRevision, true, [](const io::RigFile&) { return true; }));
+		pending->CompleteTransition(pendingRevision, true, [](const io::RigFile&) { return true; }));
 	pending->Shutdown();
 	pending->ReleaseAfterReadersStopped();
 	EXPECT_FALSE(pending->Pending());
@@ -485,7 +485,7 @@ TEST_F(RigSnapshotTest, ShutdownAndReleaseAreIdempotent)
 	EXPECT_FALSE(coordinator.Pending());
 }
 
-TEST_F(RigSnapshotTest, PersistenceWaitsForFreshQuiescenceAndRejectionRestoresEdits)
+TEST_F(RigSnapshotTest, PersistenceWaitsForFreshTransitionAndRejectionRestoresEdits)
 {
 	auto station = RuntimeStation("Station");
 	io::RigFile rig{};
@@ -496,24 +496,24 @@ TEST_F(RigSnapshotTest, PersistenceWaitsForFreshQuiescenceAndRejectionRestoresEd
 
 	unsigned int saves = 0u;
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(rig));
-	const auto firstRevision = coordinator.Quiescing()->Revision;
+	const auto firstRevision = coordinator.Staged()->Revision;
 	EXPECT_EQ(0u, saves);
-	EXPECT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
-		coordinator.CompleteQuiescence(firstRevision, false,
+	EXPECT_EQ(engine::RigCoordinator::EditResult::TransitionRejected,
+		coordinator.CompleteTransition(firstRevision, false,
 			[&saves](const io::RigFile&) { ++saves; return true; }));
 	EXPECT_EQ(0u, saves);
 	EXPECT_TRUE(coordinator.EditsEnabled());
 
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(rig));
-	const auto secondRevision = coordinator.Quiescing()->Revision;
+	const auto secondRevision = coordinator.Staged()->Revision;
 	EXPECT_GT(secondRevision, firstRevision);
 	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending,
-		coordinator.CompleteQuiescence(secondRevision, true,
+		coordinator.CompleteTransition(secondRevision, true,
 			[&saves](const io::RigFile&) { ++saves; return true; }));
 	EXPECT_EQ(1u, saves);
 }
 
-TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
+TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerTransition)
 {
 	io::RigFile rig{};
 	rig.Triggers = { TriggerDescriptor("accepted", "Station") };
@@ -528,9 +528,9 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
 
 	auto sameTriggerCandidate = std::make_shared<engine::RigSnapshot>();
 	sameTriggerCandidate->Revision = 41u;
-	host.RequestRigTriggerQuiescence(41u, snapshot, sameTriggerCandidate);
-	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
-	EXPECT_EQ(41u, host.QuiescedRigRevision());
+	host.RequestRigTriggerTransition(41u, snapshot, sameTriggerCandidate);
+	audio::RigAudioBoundaryTestAccess::PublishTransition(host);
+	EXPECT_EQ(41u, host.TransitionReadyRigRevision());
 	EXPECT_EQ(0u, host.RejectedRigRevision());
 
 	base::Action action;
@@ -538,9 +538,9 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
 	auto replacement = std::make_shared<engine::RigSnapshot>();
 	replacement->Revision = 42u;
 	replacement->TriggerReplacementChecks = { { snapshot->Triggers[0].Instance } };
-	host.RequestRigTriggerQuiescence(42u, snapshot, replacement);
-	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
-	EXPECT_EQ(0u, host.QuiescedRigRevision());
+	host.RequestRigTriggerTransition(42u, snapshot, replacement);
+	audio::RigAudioBoundaryTestAccess::PublishTransition(host);
+	EXPECT_EQ(0u, host.TransitionReadyRigRevision());
 	EXPECT_EQ(42u, host.RejectedRigRevision());
 }
 
@@ -586,15 +586,15 @@ TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitch
 	auto publishEdit = [&](io::RigFile candidate)
 	{
 		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
-		const auto quiescing = coordinator.Quiescing();
-		ASSERT_TRUE(quiescing);
-		host.RequestRigTriggerQuiescence(quiescing->Revision, coordinator.Accepted(), quiescing);
-		audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
-		ASSERT_EQ(quiescing->Revision, host.QuiescedRigRevision());
+		const auto staged = coordinator.Staged();
+		ASSERT_TRUE(staged);
+		host.RequestRigTriggerTransition(staged->Revision, coordinator.Accepted(), staged);
+		audio::RigAudioBoundaryTestAccess::PublishTransition(host);
+		ASSERT_EQ(staged->Revision, host.TransitionReadyRigRevision());
 		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
-			coordinator.CompleteQuiescence(quiescing->Revision, true,
+			coordinator.CompleteTransition(staged->Revision, true,
 				[](const io::RigFile&) { return true; }));
-		host.ClearRigTriggerQuiescence();
+		host.ClearRigTriggerTransition();
 		host.PublishPendingRigSnapshot(coordinator.Pending());
 		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
 		ASSERT_TRUE(coordinator.ObserveAudioAcknowledgement(host.AppliedRigRevision()));

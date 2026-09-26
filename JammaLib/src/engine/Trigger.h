@@ -353,7 +353,7 @@ namespace engine
 		bool IsActivateInputDown() const;
 		bool IsDitchInputDown() const;
 		bool IsDitchDown() const;
-		// Audio-thread quiescence predicate used before retiring/replacing a trigger.
+		// Audio-boundary predicate used before replacing a trigger.
 		bool CanEditRouting() const noexcept;
 		// A capture route or station target update retains this trigger and its take
 		// history, so it needs only an idle input/state boundary.

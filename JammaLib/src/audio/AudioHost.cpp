@@ -170,23 +170,23 @@ namespace audio
 		_pendingRigSnapshot.store(std::move(snapshot), std::memory_order_release);
 	}
 
-	void AudioHost::RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
+	void AudioHost::RequestRigTriggerTransition(std::uint64_t candidateRevision,
 		std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
 		std::shared_ptr<const engine::RigSnapshot> candidateSnapshot)
 	{
-		_quiescedRigRevision.store(0u, std::memory_order_release);
+		_transitionReadyRigRevision.store(0u, std::memory_order_release);
 		_rejectedRigRevision.store(0u, std::memory_order_release);
-		_rigTriggerQuiescenceAcceptedRevision.store(
+		_rigTriggerTransitionAcceptedRevision.store(
 			acceptedSnapshot ? acceptedSnapshot->Revision : 0u, std::memory_order_release);
-		_rigTriggerQuiescenceCandidate.store(std::move(candidateSnapshot), std::memory_order_release);
-		_rigTriggerQuiescenceRequestRevision.store(candidateRevision, std::memory_order_release);
+		_rigTriggerTransitionCandidate.store(std::move(candidateSnapshot), std::memory_order_release);
+		_rigTriggerTransitionRequestRevision.store(candidateRevision, std::memory_order_release);
 	}
 
-	void AudioHost::ClearRigTriggerQuiescence() noexcept
+	void AudioHost::ClearRigTriggerTransition() noexcept
 	{
-		_rigTriggerQuiescenceRequestRevision.store(0u, std::memory_order_release);
-		_rigTriggerQuiescenceAcceptedRevision.store(0u, std::memory_order_release);
-		_rigTriggerQuiescenceCandidate.store({}, std::memory_order_release);
+		_rigTriggerTransitionRequestRevision.store(0u, std::memory_order_release);
+		_rigTriggerTransitionAcceptedRevision.store(0u, std::memory_order_release);
+		_rigTriggerTransitionCandidate.store({}, std::memory_order_release);
 	}
 
 	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
@@ -224,17 +224,17 @@ namespace audio
 		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
 	}
 
-	void AudioHost::PublishRigTriggerQuiescenceAtAudioBoundary() noexcept
+	void AudioHost::PublishRigTriggerTransitionAtAudioBoundary() noexcept
 	{
-		const auto candidateRevision = _rigTriggerQuiescenceRequestRevision.load(std::memory_order_acquire);
+		const auto candidateRevision = _rigTriggerTransitionRequestRevision.load(std::memory_order_acquire);
 		if (candidateRevision == 0u ||
-			_rigTriggerQuiescenceAcceptedRevision.load(std::memory_order_acquire) != _audioRigRevision)
+			_rigTriggerTransitionAcceptedRevision.load(std::memory_order_acquire) != _audioRigRevision)
 			return;
 		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
 		if (!snapshot || snapshot->Revision != _audioRigRevision)
 			return;
 
-		const auto candidate = _rigTriggerQuiescenceCandidate.load(std::memory_order_acquire);
+		const auto candidate = _rigTriggerTransitionCandidate.load(std::memory_order_acquire);
 		if (!candidate || candidate->Revision != candidateRevision)
 			return;
 		for (const auto& retired : candidate->TriggerReplacementChecks)
@@ -255,7 +255,7 @@ namespace audio
 				return;
 			}
 		}
-		_quiescedRigRevision.store(candidateRevision, std::memory_order_release);
+		_transitionReadyRigRevision.store(candidateRevision, std::memory_order_release);
 	}
 
 	void AudioHost::PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired)
@@ -731,9 +731,9 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		for (const auto& station : stations)
 			if (station) station->AcknowledgeAudioBoundary();
 		// Trigger::OnTick above drains accepted external actions and publishes the
-		// edit predicate. A quiescence decision made here therefore describes this
+		// edit predicate. A transition decision made here therefore describes this
 		// completed audio boundary, not a stale UI observation.
-		PublishRigTriggerQuiescenceAtAudioBoundary();
+		PublishRigTriggerTransitionAtAudioBoundary();
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
 		midi::PublishMidiClockAnchor(_midiClockAnchor,

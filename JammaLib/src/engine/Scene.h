@@ -321,7 +321,7 @@ namespace engine
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		RigCoordinator _rigCoordinator;
-		std::uint64_t _rigQuiescenceRequestedRevision = 0u;
+		std::uint64_t _rigTransitionRequestedRevision = 0u;
 		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};

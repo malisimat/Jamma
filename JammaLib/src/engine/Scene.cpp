@@ -1459,32 +1459,32 @@ void Scene::_PumpTriggerStructuralActions()
 
 void Scene::_AdvanceRigPublication()
 {
-	const auto quiescing = _rigCoordinator.Quiescing();
-	if (quiescing)
+	const auto staged = _rigCoordinator.Staged();
+	if (staged)
 	{
-		const auto revision = quiescing->Revision;
-		if (_rigQuiescenceRequestedRevision != revision)
+		const auto revision = staged->Revision;
+		if (_rigTransitionRequestedRevision != revision)
 		{
 			const auto accepted = _rigCoordinator.Accepted();
 			if (!accepted || !_inputSubsystem->RigTriggerInputReadyForAudioBoundary(accepted->Revision))
 				return;
-			_audioEngine->RequestRigTriggerQuiescence(revision, accepted, quiescing);
-			_rigQuiescenceRequestedRevision = revision;
+			_audioEngine->RequestRigTriggerTransition(revision, accepted, staged);
+			_rigTransitionRequestedRevision = revision;
 		}
 		if (_audioEngine->RejectedRigRevision() == revision)
 		{
-			_rigCoordinator.CompleteQuiescence(revision, false, _saveRig);
-			_audioEngine->ClearRigTriggerQuiescence();
-			_rigQuiescenceRequestedRevision = 0u;
+			_rigCoordinator.CompleteTransition(revision, false, _saveRig);
+			_audioEngine->ClearRigTriggerTransition();
+			_rigTransitionRequestedRevision = 0u;
 			if (const auto accepted = _rigCoordinator.Accepted())
 				_inputSubsystem->OpenRigTriggerInput(accepted->Revision);
 			return;
 		}
-		if (_audioEngine->QuiescedRigRevision() != revision)
+		if (_audioEngine->TransitionReadyRigRevision() != revision)
 			return;
-		const auto result = _rigCoordinator.CompleteQuiescence(revision, true, _saveRig);
-		_audioEngine->ClearRigTriggerQuiescence();
-		_rigQuiescenceRequestedRevision = 0u;
+		const auto result = _rigCoordinator.CompleteTransition(revision, true, _saveRig);
+		_audioEngine->ClearRigTriggerTransition();
+		_rigTransitionRequestedRevision = 0u;
 		if (result != RigCoordinator::EditResult::Pending)
 		{
 			if (const auto accepted = _rigCoordinator.Accepted())
@@ -1539,19 +1539,19 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
 	if (result == RigCoordinator::EditResult::Pending)
 	{
-		const auto quiescing = _rigCoordinator.Quiescing();
-		if (!accepted || !quiescing || _audioEngine->AppliedRigRevision() != accepted->Revision)
+		const auto staged = _rigCoordinator.Staged();
+		if (!accepted || !staged || _audioEngine->AppliedRigRevision() != accepted->Revision)
 		{
-			if (quiescing)
-				_rigCoordinator.CompleteQuiescence(quiescing->Revision, false, _saveRig);
-			return RigCoordinator::EditResult::QuiescenceRejected;
+			if (staged)
+				_rigCoordinator.CompleteTransition(staged->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::TransitionRejected;
 		}
 		if (!_inputSubsystem->RequestCloseRigTriggerInputFromUi(accepted->Revision))
 		{
-			_rigCoordinator.CompleteQuiescence(quiescing->Revision, false, _saveRig);
-			return RigCoordinator::EditResult::QuiescenceRejected;
+			_rigCoordinator.CompleteTransition(staged->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::TransitionRejected;
 		}
-		_rigQuiescenceRequestedRevision = 0u;
+		_rigTransitionRequestedRevision = 0u;
 	}
 	return result;
 }
@@ -1786,7 +1786,7 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 void Scene::Shutdown()
 {
 	_rigCoordinator.Shutdown();
-	_audioEngine->ClearRigTriggerQuiescence();
+	_audioEngine->ClearRigTriggerTransition();
 	_inputSubsystem->CloseRigTriggerInputForever();
 	_isSceneQuitting.store(true, std::memory_order_release);
 	if (_jobRunner.joinable())

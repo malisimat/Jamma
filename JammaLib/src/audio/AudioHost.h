@@ -49,13 +49,13 @@ namespace audio
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
 		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
-		void RequestRigTriggerQuiescence(std::uint64_t candidateRevision,
+		void RequestRigTriggerTransition(std::uint64_t candidateRevision,
 			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
 			std::shared_ptr<const engine::RigSnapshot> candidateSnapshot);
-		void ClearRigTriggerQuiescence() noexcept;
-		std::uint64_t QuiescedRigRevision() const noexcept
+		void ClearRigTriggerTransition() noexcept;
+		std::uint64_t TransitionReadyRigRevision() const noexcept
 		{
-			return _quiescedRigRevision.load(std::memory_order_acquire);
+			return _transitionReadyRigRevision.load(std::memory_order_acquire);
 		}
 		std::uint64_t RejectedRigRevision() const noexcept
 		{
@@ -127,7 +127,7 @@ namespace audio
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
-		void PublishRigTriggerQuiescenceAtAudioBoundary() noexcept;
+		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
@@ -190,10 +190,10 @@ namespace audio
 		// Audio-thread-owned applied graph. Off-thread retention guarantees replacing
 		// this handle cannot release the last snapshot or Trigger owner on callback.
 		std::shared_ptr<const engine::RigSnapshot> _audioAppliedRigSnapshot;
-		std::atomic<std::uint64_t> _rigTriggerQuiescenceRequestRevision{ 0u };
-		std::atomic<std::uint64_t> _rigTriggerQuiescenceAcceptedRevision{ 0u };
-		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerQuiescenceCandidate;
-		std::atomic<std::uint64_t> _quiescedRigRevision{ 0u };
+		std::atomic<std::uint64_t> _rigTriggerTransitionRequestRevision{ 0u };
+		std::atomic<std::uint64_t> _rigTriggerTransitionAcceptedRevision{ 0u };
+		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerTransitionCandidate;
+		std::atomic<std::uint64_t> _transitionReadyRigRevision{ 0u };
 		std::atomic<std::uint64_t> _rejectedRigRevision{ 0u };
 		std::mutex _retainedRigSnapshotsMutex;
 		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
