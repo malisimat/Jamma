@@ -59,14 +59,24 @@ void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 	}
 }
 
-void AudioDevice::Start()
+bool AudioDevice::Start()
 {
-	if (_stream)
+	if (!_stream)
+		return false;
+
+	try
 	{
 		_stream->startStream();
 		_streamState = StreamState::RUNNING;
 		_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 		_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
+		return true;
+	}
+	catch (RtAudioError& err)
+	{
+		std::cout << "Error starting audio stream: " << err.getMessage() << std::endl;
+		_streamState = StreamState::STOPPED;
+		return false;
 	}
 }
 
@@ -74,13 +84,19 @@ void AudioDevice::Stop()
 {
 	if (_stream)
 	{
-		if (_stream->isStreamRunning())
-			_stream->stopStream();
-		_streamState = StreamState::STOPPED;
+		try
+		{
+			if (_stream->isStreamRunning())
+				_stream->stopStream();
+			_streamState = StreamState::STOPPED;
 
-		if (_stream->isStreamOpen())
-			_stream->closeStream();
-
+			if (_stream->isStreamOpen())
+				_stream->closeStream();
+		}
+		catch (RtAudioError& err)
+		{
+			std::cout << "Error stopping audio stream: " << err.getMessage() << std::endl;
+		}
 		_streamState = StreamState::CLOSED;
 	}
 }
@@ -155,19 +171,50 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 		return std::nullopt;
 	}
 
-	auto deviceCount = rtAudio->getDeviceCount();
-	auto inDeviceNum = rtAudio->getDefaultInputDevice();
-	auto outDeviceNum = rtAudio->getDefaultOutputDevice();
-	auto inDev = rtAudio->getDeviceInfo(inDeviceNum);
-	auto outDev = rtAudio->getDeviceInfo(outDeviceNum);
+	unsigned int deviceCount = 0u;
+	unsigned int inDeviceNum = 0u;
+	unsigned int outDeviceNum = 0u;
+	RtAudio::DeviceInfo inDev;
+	RtAudio::DeviceInfo outDev;
+	try
+	{
+		deviceCount = rtAudio->getDeviceCount();
+		if (deviceCount == 0u)
+		{
+			std::cout << "No audio devices are available" << std::endl;
+			return std::nullopt;
+		}
 
-	if ((inDev.inputChannels == 0) && (outDev.outputChannels == 0))
+		inDeviceNum = rtAudio->getDefaultInputDevice();
+		outDeviceNum = rtAudio->getDefaultOutputDevice();
+		if (inDeviceNum < deviceCount)
+			inDev = rtAudio->getDeviceInfo(inDeviceNum);
+		if (outDeviceNum < deviceCount)
+			outDev = rtAudio->getDeviceInfo(outDeviceNum);
+	}
+	catch (RtAudioError& err)
+	{
+		std::cout << "Error querying audio devices: " << err.getMessage() << std::endl;
 		return std::nullopt;
+	}
+
+	if ((!inDev.probed || inDev.inputChannels == 0u) &&
+		(!outDev.probed || outDev.outputChannels == 0u))
+	{
+		std::cout << "No default audio input or output device is available" << std::endl;
+		return std::nullopt;
+	}
 
 	// Correct the audioSettings so they work
 	audioSettings.NumChannelsIn = std::min(inDev.inputChannels, audioSettings.NumChannelsIn);
 	audioSettings.NumChannelsOut = std::min(outDev.outputChannels, audioSettings.NumChannelsOut);
-	audioSettings.SampleRate = FindClosest(inDev.sampleRates, audioSettings.SampleRate);
+	const auto& sampleRates = inDev.inputChannels > 0u ? inDev.sampleRates : outDev.sampleRates;
+	if (sampleRates.empty())
+	{
+		std::cout << "No supported sample rates are available for the default audio devices" << std::endl;
+		return std::nullopt;
+	}
+	audioSettings.SampleRate = FindClosest(sampleRates, audioSettings.SampleRate);
 
 	RtAudio::StreamParameters inParams;
 	inParams.deviceId = inDeviceNum;

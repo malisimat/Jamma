@@ -127,7 +127,11 @@ namespace audio
 					outLatency);
 			}
 
-			_audioDevice->Start();
+			if (!_audioDevice->Start())
+			{
+				_audioDevice.reset();
+				return false;
+			}
 			_audioDevice->GetAudioStreamParams().PrintParams();
 			return true;
 		}
