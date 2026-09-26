@@ -1466,7 +1466,7 @@ void Scene::_AdvanceRigPublication()
 		if (_rigQuiescenceRequestedRevision != revision)
 		{
 			const auto accepted = _rigCoordinator.Accepted();
-			if (!accepted || !_inputSubsystem->RigTriggerInputReadyForQuiescence(accepted->Revision))
+			if (!accepted || !_inputSubsystem->RigTriggerInputReadyForAudioBoundary(accepted->Revision))
 				return;
 			_audioEngine->RequestRigTriggerQuiescence(revision, accepted, quiescing);
 			_rigQuiescenceRequestedRevision = revision;

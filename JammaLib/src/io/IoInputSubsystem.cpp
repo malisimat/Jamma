@@ -69,9 +69,9 @@ namespace io
 		return _midiRouter.AcknowledgeRigTriggerInputCloseFromJob();
 	}
 
-	bool IoInputSubsystem::RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept
+	bool IoInputSubsystem::RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept
 	{
-		return _midiRouter.RigTriggerInputReadyForQuiescence(revision);
+		return _midiRouter.RigTriggerInputReadyForAudioBoundary(revision);
 	}
 
 	bool IoInputSubsystem::TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept

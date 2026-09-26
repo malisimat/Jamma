@@ -34,7 +34,7 @@ namespace io
 		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
 		bool RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept;
 		std::uint64_t AcknowledgeRigTriggerInputCloseFromJob() noexcept;
-		bool RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept;
+		bool RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept;
 		bool TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept;
 		void CloseRigTriggerInputForever() noexcept;
 		bool RigTriggerInputReadyForShutdown() const noexcept;

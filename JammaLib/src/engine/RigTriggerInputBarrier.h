@@ -11,53 +11,38 @@
 
 namespace engine
 {
-	// Coordinates the two semantic Trigger-input producer domains without
-	// involving the audio thread. The UI thread is the sole writer of open/close
-	// requests and of the UI acknowledgement. The Scene job thread is the sole
-	// writer of the job acknowledgement. Both producer domains read the open
-	// revision before publishing an input edge; the publication coordinator reads
-	// the acknowledgements before requesting audio quiescence.
+	// Stops both Trigger-input producers before a rig snapshot can replace its
+	// Trigger instances. UI and job input may otherwise enqueue an edge for an
+	// old instance while the audio thread applies the replacement snapshot.
 	//
-	// RequestCloseFromUi must be called by the UI producer after its current
-	// dispatch is complete. ObserveAndAcknowledgeClose must be called by the job
-	// producer before dispatching a new job-tick batch. Those sequencing rules
-	// make each acknowledgement a producer barrier: once acknowledged, no later
-	// edge from that producer can be accepted for the closed revision.
-	//
-	// Every close request also receives a unique monotonic token. Acknowledgements
-	// carry that token rather than the rig revision, so a delayed acknowledgement
-	// from an earlier close cannot satisfy a later close after the same revision is
-	// reopened. CloseForever is called by the UI producer after its current
-	// dispatch; teardown waits for the job producer to acknowledge its unique token
-	// before destroying queues or Triggers.
-	class RigTriggerIngressGate
+	// The UI blocks its dispatch before requesting the barrier; the job thread
+	// observes it before each batch. The coordinator waits for both acknowledgements
+	// before requesting the audio-boundary transition. A unique token keeps a late
+	// acknowledgement from an earlier request from satisfying a newer one.
+	class RigTriggerInputBarrier
 	{
 	public:
 		static constexpr std::uint64_t NoRevision = 0u;
 		static constexpr std::uint64_t CloseForeverRevision =
 			(std::numeric_limits<std::uint64_t>::max)();
 
-		RigTriggerIngressGate() noexcept = default;
-		RigTriggerIngressGate(const RigTriggerIngressGate&) = delete;
-		RigTriggerIngressGate& operator=(const RigTriggerIngressGate&) = delete;
+		RigTriggerInputBarrier() noexcept = default;
+		RigTriggerInputBarrier(const RigTriggerInputBarrier&) = delete;
+		RigTriggerInputBarrier& operator=(const RigTriggerInputBarrier&) = delete;
 
-		// Opens a newly published revision. Publication of the matching immutable
-		// input dispatch must happen-before this call.
+		// Enables input for a newly published revision.
 		bool Open(std::uint64_t revision) noexcept
 		{
 			return _Open(revision);
 		}
 
-		// Reopens the still-accepted revision after a rejected/cancelled edit.
-		// Audio cancellation acknowledgement must happen-before this call.
+		// Restores input for the accepted revision after a rejected edit.
 		bool Reopen(std::uint64_t acceptedRevision) noexcept
 		{
 			return _Open(acceptedRevision);
 		}
 
-		// UI-producer operation. The caller has completed its current dispatch, so
-		// closing the open revision and publishing the UI acknowledgement is the UI
-		// producer barrier for this request.
+		// UI producer: block this revision after its current dispatch completes.
 		bool RequestCloseFromUi(std::uint64_t revision) noexcept
 		{
 			_AssertProducer(_uiProducerThread);
@@ -101,9 +86,7 @@ namespace engine
 			return !_closedForever.load(std::memory_order_acquire);
 		}
 
-		// Job-producer test/integration seam. Separating observation from
-		// acknowledgement makes the possible cross-thread delay explicit and lets
-		// callers prove that an old observation cannot acknowledge a newer close.
+		// Job producer test seam for a delayed acknowledgement.
 		std::uint64_t ObserveCloseTokenFromJob() const noexcept
 		{
 			_AssertProducer(_jobProducerThread);
@@ -120,9 +103,7 @@ namespace engine
 			return true;
 		}
 
-		// Job-producer operation. Call once at the top of each job tick, before any
-		// MIDI/serial Trigger dispatch. Returns the observed rig revision, or
-		// NoRevision when no closure is pending.
+		// Job producer: call before each MIDI/serial dispatch batch.
 		std::uint64_t ObserveAndAcknowledgeClose() noexcept
 		{
 			const auto closeToken = ObserveCloseTokenFromJob();
@@ -154,7 +135,7 @@ namespace engine
 			return _ProducerAcknowledged(revision, _jobAcknowledgedCloseToken);
 		}
 
-		bool ReadyForAudioQuiescence(std::uint64_t revision) const noexcept
+		bool ReadyForAudioBoundary(std::uint64_t revision) const noexcept
 		{
 			if (!_IsUsableRevision(revision))
 				return false;
@@ -168,7 +149,7 @@ namespace engine
 				_requestedCloseToken.load(std::memory_order_acquire) == closeToken;
 		}
 
-		// UI-producer teardown operation. Permanent closure cannot be reopened.
+		// UI producer teardown: block input permanently.
 		void CloseForever() noexcept
 		{
 			_AssertProducer(_uiProducerThread);

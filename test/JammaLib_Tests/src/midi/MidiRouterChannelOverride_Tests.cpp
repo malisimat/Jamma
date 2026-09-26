@@ -190,7 +190,7 @@ TEST(MidiRouterChannelOverride, RigTriggerInputGateIsRevisionSpecificAndReversib
 	EXPECT_TRUE(router.RequestCloseRigTriggerInputFromUi(7u));
 	EXPECT_FALSE(router.TryAcceptUiRigTriggerInput(7u));
 	EXPECT_EQ(7u, router.AcknowledgeRigTriggerInputCloseFromJob());
-	EXPECT_TRUE(router.RigTriggerInputReadyForQuiescence(7u));
+	EXPECT_TRUE(router.RigTriggerInputReadyForAudioBoundary(7u));
 	EXPECT_TRUE(router.OpenRigTriggerInput(7u));
 	EXPECT_TRUE(router.TryAcceptUiRigTriggerInput(7u));
 }

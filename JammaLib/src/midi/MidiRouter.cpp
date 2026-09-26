@@ -625,37 +625,37 @@ void MidiRouter::PublishEmptyRigInputDispatch()
 
 bool MidiRouter::OpenRigTriggerInput(std::uint64_t revision) noexcept
 {
-	return _rigTriggerIngressGate.Open(revision);
+	return _rigTriggerInputBarrier.Open(revision);
 }
 
 bool MidiRouter::RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept
 {
-	return _rigTriggerIngressGate.RequestCloseFromUi(revision);
+	return _rigTriggerInputBarrier.RequestCloseFromUi(revision);
 }
 
 std::uint64_t MidiRouter::AcknowledgeRigTriggerInputCloseFromJob() noexcept
 {
-	return _rigTriggerIngressGate.ObserveAndAcknowledgeClose();
+	return _rigTriggerInputBarrier.ObserveAndAcknowledgeClose();
 }
 
-bool MidiRouter::RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept
+bool MidiRouter::RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept
 {
-	return _rigTriggerIngressGate.ReadyForAudioQuiescence(revision);
+	return _rigTriggerInputBarrier.ReadyForAudioBoundary(revision);
 }
 
 bool MidiRouter::TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept
 {
-	return _rigTriggerIngressGate.TryAcceptUi(revision);
+	return _rigTriggerInputBarrier.TryAcceptUi(revision);
 }
 
 void MidiRouter::CloseRigTriggerInputForever() noexcept
 {
-	_rigTriggerIngressGate.CloseForever();
+	_rigTriggerInputBarrier.CloseForever();
 }
 
 bool MidiRouter::RigTriggerInputReadyForShutdown() const noexcept
 {
-	return _rigTriggerIngressGate.ReadyForShutdown();
+	return _rigTriggerInputBarrier.ReadyForShutdown();
 }
 
 void MidiRouter::InitSerial(const io::UserConfig& cfg)
@@ -1037,7 +1037,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
 		if (!dispatch || !IsCurrentRigIngressRevision(queued.RigRevision, dispatch->Revision) || !dispatch->Snapshot)
 			continue;
-		if (!_rigTriggerIngressGate.TryAcceptJob(dispatch->Revision))
+		if (!_rigTriggerInputBarrier.TryAcceptJob(dispatch->Revision))
 			continue;
 		const auto& ev = queued.Event;
 
@@ -1093,7 +1093,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	triggerAction.SetAudioParams(audioParams);
 	triggerAction.SetActionTime(utils::Timer::GetTime());
 
-	if (!routes || !_rigTriggerIngressGate.TryAcceptJob(routes->Revision))
+	if (!routes || !_rigTriggerInputBarrier.TryAcceptJob(routes->Revision))
 		return summary;
 
 	for (const auto& route : routes->MidiTriggers)
