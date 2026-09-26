@@ -255,6 +255,7 @@ namespace midi
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;
 		std::uint32_t _nextLiveMidiRoutingGeneration = 0u;
+		bool _loggingVerbose = false;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
 		midi::MidiQueue<256, SerialIngressEvent> _serialIngress;
 		std::mutex _serialIngressMutex;

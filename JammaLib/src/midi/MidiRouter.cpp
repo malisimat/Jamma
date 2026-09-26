@@ -419,7 +419,10 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const base::LoggingConfig& loggingConfig,
 	midi::MidiClockAnchor& midiClockAnchor)
 {
+	const auto currentDispatch = _rigInputDispatch.load(std::memory_order_acquire);
+	const auto rigSnapshot = currentDispatch ? currentDispatch->Snapshot : nullptr;
 	CloseMidi();
+	_loggingVerbose = loggingConfig.Midi == "verbose";
 
 	const auto initialAnchor = midi::ReadMidiClockAnchor(midiClockAnchor, {});
 	_liveMidiDispatchNotification = std::make_shared<LiveMidiDispatchNotification>();
@@ -495,7 +498,7 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 						_LiveMidiConfigGeneration(inputConfig), endpoint->NextLiveSequence++ });
 				SetEvent(notification->WorkEvent);
 			},
-			loggingConfig.Midi == "verbose");
+			_loggingVerbose);
 
 		if (!opened)
 			continue;
@@ -506,11 +509,9 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	}
 
 	_midiInputs.store(midiInputs, std::memory_order_release);
+	if (rigSnapshot)
+		PublishRigInputDispatch(rigSnapshot);
 	_StartLiveMidiDispatcher();
-
-	const auto published = _rigInputDispatch.load(std::memory_order_acquire);
-	if (published && published->Snapshot)
-		PublishRigInputDispatch(published->Snapshot);
 
 	if (midiInputs->empty())
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
@@ -1232,15 +1233,49 @@ void MidiRouter::_DispatchAvailableLiveMidi() noexcept
 		const auto routes = _rigInputDispatch.load(std::memory_order_acquire);
 		if (!routes || !IsCurrentRigIngressRevision(dispatchedEvent.RigRevision, routes->Revision)
 			|| dispatchedEvent.RoutingGeneration != routes->LiveMidi.Generation)
+		{
+			if (_loggingVerbose)
+				std::cout << "[MIDI Live] drop stale route device=\"" << selectedInput->ConfiguredName
+					<< "\" event-revision=" << dispatchedEvent.RigRevision
+					<< " current-revision=" << (routes ? routes->Revision : 0u)
+					<< " event-generation=" << dispatchedEvent.RoutingGeneration
+					<< " current-generation=" << (routes ? routes->LiveMidi.Generation : 0u) << std::endl;
 			continue;
+		}
 		if (selectedInput->DeviceSlot >= routes->LiveMidi.RecipientsByDeviceSlot.size())
+		{
+			if (_loggingVerbose)
+				std::cout << "[MIDI Live] drop route has no device slot device=\""
+					<< selectedInput->ConfiguredName << "\" slot="
+					<< static_cast<unsigned int>(selectedInput->DeviceSlot) << std::endl;
 			continue;
+		}
 
 		const auto channelBit = static_cast<std::uint16_t>(1u << dispatchedEvent.Event.Channel());
+		bool hasRecipient = false;
 		for (const auto& recipient : routes->LiveMidi.RecipientsByDeviceSlot[selectedInput->DeviceSlot])
 		{
-			if (recipient.Station && (recipient.AllowedChannelMask & channelBit) != 0u)
-				recipient.Station->TryEnqueueImmediateLiveMidi(dispatchedEvent.Event);
+			if (!recipient.Station || (recipient.AllowedChannelMask & channelBit) == 0u)
+				continue;
+
+			hasRecipient = true;
+			const auto queued = recipient.Station->TryEnqueueImmediateLiveMidi(dispatchedEvent.Event);
+			if (_loggingVerbose)
+			{
+				std::cout << "[MIDI Live] device=\"" << selectedInput->ConfiguredName
+					<< "\" " << MidiEvent::Direction(dispatchedEvent.Event);
+				MidiEvent::LogDetail(std::cout, selectedInput->DeviceSlot, dispatchedEvent.Event);
+				std::cout << " -> station=\"" << recipient.Station->Name()
+					<< "\" queue=" << (queued ? "accepted" : "full") << std::endl;
+			}
+		}
+
+		if (_loggingVerbose && !hasRecipient)
+		{
+			std::cout << "[MIDI Live] device=\"" << selectedInput->ConfiguredName
+				<< "\" " << MidiEvent::Direction(dispatchedEvent.Event);
+			MidiEvent::LogDetail(std::cout, selectedInput->DeviceSlot, dispatchedEvent.Event);
+			std::cout << " -> no station accepts this device/channel" << std::endl;
 		}
 	}
 
