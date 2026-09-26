@@ -449,6 +449,9 @@
     <ClInclude Include="src\io\JamFile.h">
       <Filter>src\io</Filter>
     </ClInclude>
+    <ClInclude Include="src\io\NativeMidiSidecar.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\Json.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -830,6 +833,9 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\io\JamFile.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\NativeMidiSidecar.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\PathUtils.cpp">

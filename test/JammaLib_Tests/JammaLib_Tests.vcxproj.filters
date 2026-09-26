@@ -98,6 +98,12 @@
     <ClCompile Include="src\io\JamFile_Tests.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
+    <ClCompile Include="src\io\IoSessionExporter_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\NativeMidiSidecar_Tests.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
     <ClCompile Include="src\io\Json_Tests.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
