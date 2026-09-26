@@ -136,15 +136,18 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
+	std::cout << "[LOAD] Constructing station " << stationParams.Index << " '" << stationStruct.Name
+		<< "' (takes=" << stationStruct.LoopTakes.size() << ", VSTs=" << stationStruct.VstChain.size() << ")." << std::endl;
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 	for (const auto& vstEntry : stationStruct.VstChain)
 	{
+		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
 		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
-			std::cout << "Load: failed VST for station " << stationStruct.Name << std::endl;
+			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path << std::endl;
 			return std::nullopt;
 		}
 	}
@@ -257,6 +260,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			return std::nullopt;
 		}
 	}
+	std::cout << "[LOAD] Constructed station '" << stationStruct.Name << "'." << std::endl;
 
 	return station;
 }

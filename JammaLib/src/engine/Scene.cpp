@@ -493,6 +493,9 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	std::wstring dir,
 	std::function<bool(const io::RigFile&)> saveRig)
 {
+	std::cout << "[LOAD] Constructing scene for JAM '" << jamStruct.Name << "' with "
+		<< jamStruct.Stations.size() << " station descriptor(s) and " << rigStruct.Triggers.size()
+		<< " rig trigger(s)." << std::endl;
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
 	scene->_saveRig = std::move(saveRig);
 
@@ -541,11 +544,16 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 			initialStations.push_back(station.value());
 		}
+		else
+			std::cout << "[LOAD] Station descriptor " << stationParams.Index << " '" << stationStruct.Name
+				<< "' was not constructed." << std::endl;
 
 		stationParams.Index++;
 		stationParams.Position += { 600, 0 };
 		stationParams.ModelPosition += { 600, 0 };
 	}
+	std::cout << "[LOAD] Constructed " << initialStations.size() << " of " << jamStruct.Stations.size()
+		<< " station descriptor(s)." << std::endl;
 	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
 		jamStruct.Stations,
 		initialStations,
@@ -553,7 +561,10 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		hudMidiInputs,
 		trigParams,
 		scene->_saveRig))
+	{
+		std::cout << "[LOAD] Rig construction failed after station reconstruction." << std::endl;
 		return std::nullopt;
+	}
 	const auto acceptedRig = scene->_rigCoordinator.Accepted();
 	if (!acceptedRig)
 		return std::nullopt;

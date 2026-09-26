@@ -252,7 +252,7 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	io::TextReadWriter txtFile;
 
 	std::string jamJson = JamFile::DefaultJson;
-	std::wcout << "Load Jam: " << ini.Jam << std::endl;
+	std::wcout << L"[BOOT] Loading JAM from defaults path: " << ini.Jam << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	if (!res.has_value())
 	{
@@ -273,6 +273,9 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	auto parsed = JamFile::FromStream(std::move(ss));
 	if (!parsed.has_value())
 		std::wcerr << L"[BOOT] JAM is unreadable; starting with an empty session: " << ini.Jam << std::endl;
+	else
+		std::cout << "[BOOT] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(ini.Jam)
+			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
 	return parsed;
 }
 
@@ -291,6 +294,9 @@ std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
 	auto parsed = JamFile::FromStream(std::move(stream));
 	if (!parsed.has_value())
 		std::wcerr << L"[LOAD] JAM is unreadable: " << path << std::endl;
+	else
+		std::cout << "[LOAD] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(path)
+			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
 	return parsed;
 }
 
