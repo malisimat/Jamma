@@ -37,8 +37,8 @@ The editable-routing implementation now uses these boundaries:
   ticks, or queries Triggers;
 - HUD/keyboard and MIDI/serial use separate bounded SPSC lanes into audio,
   stamped with the immutable dispatch revision;
-- `RigTriggerIngressGate` closes both producer domains asynchronously before
-  audio quiescence is requested;
+- `RigTriggerInputBarrier` closes both producer domains asynchronously before
+  audio-boundary transition is requested;
 - retained route changes exchange prebuilt capture values at the audio
   boundary, while unchanged Triggers are untouched;
 - structural Station work crosses a fixed-capacity audio-to-job command/result
@@ -175,7 +175,7 @@ the right station in LIFO order after a station move. Deletion or an edit that
 replaces a trigger still requires `CanEditRouting()`.
 
 The UI value is advisory. A release must gate input for the affected trigger
-and obtain a fresh audio-boundary quiescence acknowledgement before saving or
+and obtain a fresh audio-boundary transition acknowledgement before saving or
 publishing the candidate; this closes the race where a physical event arrives
 after the UI's last state read.
 
@@ -188,7 +188,7 @@ parts of a route. Use this protocol:
    changing the current rig, then close the accepted revision's UI ingress.
 2. At the top of a job tick, stop MIDI/serial acceptance and acknowledge that
    producer. Only after both producer acknowledgements does Scene request an
-   audio-boundary quiescence decision for the affected Trigger instances.
+   audio-boundary transition decision for the affected Trigger instances.
 3. Publish the complete candidate as `pending`. Events tagged with the previous
    revision must now be dropped rather than delivered to a different route.
 4. At the start of an audio block, `AudioHost` consumes the pending revision,
@@ -334,7 +334,7 @@ Each slice should compile and test before the next begins.
      Station has no Trigger membership or reverse traversal.
    - Add the pending/audio/input acknowledgement coordinator and one complete
      input-dispatch snapshot; remove append-only MIDI trigger registration.
-   - Add trigger quiescence publication, stale-event gating, retirement, and
+   - Add trigger audio-boundary transition publication, stale-event gating, retirement, and
      shutdown tests. Run the hot-path audit before enabling editing.
 
 4. **Pure cable interaction**

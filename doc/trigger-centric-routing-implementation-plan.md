@@ -39,7 +39,7 @@ Keep these useful parts of the staged work:
 - send end, punch, overdub, and ditch actions to the recorded receiver;
 - prepare vectors and mixer behaviour off-thread and exchange only at an audio
   boundary;
-- distinguish replacement/removal quiescence from an idle capture-route edit.
+- distinguish replacement/removal audio-boundary transition from an idle capture-route edit.
 
 Correct or replace these parts:
 
@@ -127,7 +127,7 @@ Rules:
   ID, never by vector position, name, or equivalent configuration.
 - Duplicate IDs fail validation. A changed activation definition for the same
   ID creates a replacement instance and requires full replacement
-  quiescence. Capture/receiver-only changes retain the instance.
+  audio-boundary transition. Capture/receiver-only changes retain the instance.
 - Candidate order remains display order only.
 
 Add focused parse/serialize/migration/duplicate/reorder tests before relying
@@ -156,17 +156,17 @@ candidate indices. Do not assume the same numerical index after reorder or
 deletion. Prefer explicit records such as:
 
 ```cpp
-struct RetainedTriggerRouteChange {
+struct TriggerRouteUpdate {
     std::shared_ptr<Trigger> Instance;
     std::size_t CandidateIndex;
 };
 
-struct RetiredTriggerCheck {
+struct TriggerReplacementCheck {
     std::shared_ptr<Trigger> AcceptedInstance;
 };
 ```
 
-This makes quiescence and application independent of vector position.
+This makes audio-boundary transition and application independent of vector position.
 
 ### Trigger history and active action
 
@@ -237,7 +237,7 @@ Recommended placement:
    snapshot's Trigger instances and calls `Trigger::OnTick` once.
 3. Scene's tick callback continues to tick Stations for station/take visual
    tail work, but `Station::OnTick` no longer traverses Triggers.
-4. Publish Trigger quiescence only after Trigger queues and delayed work have
+4. Publish Trigger audio-boundary transition only after Trigger queues and delayed work have
    been processed for that boundary.
 
 Retain an audio-owned reference to the applied snapshot. Coordinator/AudioHost
@@ -253,7 +253,7 @@ state, and sometimes history from UI/job input paths, while `Trigger::OnTick`
 runs on audio. HUD alone uses a ring. The ring resembles SPSC, but HUD,
 keyboard, MIDI, and serial are distinct possible producers. Finally,
 `MidiRouter::GateRigTriggerInput` is only an atomic flag; a producer can pass
-its check and enqueue after audio has acknowledged quiescence.
+its check and enqueue after audio has acknowledged audio-boundary transition.
 
 ### Chosen design: reuse the existing SPSC lanes and add only the missing boundary
 
@@ -319,7 +319,7 @@ give it another SPSC queue; do not silently turn a queue into MPSC.
 
 ### Asynchronous producer acknowledgement
 
-Use a stable atomic `RigTriggerIngressGate` containing:
+Use a stable atomic `RigTriggerInputBarrier` containing:
 
 - current open revision;
 - requested closed revision;
@@ -338,11 +338,11 @@ Closing is asynchronous and never blocks a producer or audio:
    has completed, it stops accepting revision N and publishes its
    acknowledgement for N.
 3. `_AdvanceRigPublication` polls the two acknowledgement atomics on the job
-   thread. It publishes the audio quiescence request only when both equal N.
+   thread. It publishes the audio-boundary transition request only when both equal N.
 4. Until then audio continues normally; it never waits or reads producer
    acknowledgement state.
 5. Once the request is published, no producer can add another revision-N
-   edge. Audio drains both queues and evaluates quiescence normally.
+   edge. Audio drains both queues and evaluates audio-boundary transition normally.
 
 On rejection or persistence failure, reopen accepted revision N using one
 coherent gate publication. On success, publish candidate input dispatch and
@@ -402,7 +402,7 @@ Use one protocol for every edit:
    producer acknowledgements.
 3. **Acknowledge producers:** the job thread stops old-revision MIDI/serial
    dispatch and acknowledges. Only after both domain acknowledgements match
-   does Scene publish candidate/accepted handles and the quiescence request to
+   does Scene publish candidate/accepted handles and the audio-boundary transition request to
    AudioHost.
 4. **Drain and decide:** on a later audio boundary, tick the applied Triggers,
    drain old-revision edges, and check only the affected accepted instances:
@@ -415,7 +415,7 @@ Use one protocol for every edit:
    audio has acknowledged it is still using the accepted revision.
 7. **Publish pending:** publish the complete pending RigSnapshot.
 8. **Apply on audio:** at block start, apply only
-   `RetainedTriggerRouteChange` records. New/replacement Triggers were already
+   `TriggerRouteUpdate` records. New/replacement Triggers were already
    fully configured; unchanged retained Triggers are untouched. Adopt the new
    applied snapshot/revision.
 9. **Publish input:** after the audio acknowledgement, swap the complete input
@@ -444,9 +444,9 @@ repeatable `CloseAudio`/`Shutdown` behaviour.
 | Trigger operational state/history/current route/delays | Audio | Audio; UI reads published summaries only | Single writer; published scalar atomics | Snapshot retirement after producers/audio stop |
 | UI Trigger input queue | Sole UI event thread | Audio sole consumer | Fixed-storage SPSC acquire/release atomics | Close/ack UI producer, stop audio, then destroy |
 | Job Trigger input queue | Sole Scene job thread | Audio sole consumer | Fixed-storage SPSC acquire/release atomics | Close/ack job producer, stop audio, then destroy |
-| RigTriggerIngressGate | UI initiates close/open; each producer writes only its own acknowledgement | UI and job producers; Scene publication state machine | Revision/ack atomics; audio has no dependency on this gate | Permanently close and receive both acknowledgements before stopping readers |
+| RigTriggerInputBarrier | UI initiates close/open; each producer writes only its own acknowledgement | UI and job producers; Scene publication state machine | Revision/ack atomics; audio has no dependency on this gate | Permanently close and receive both acknowledgements before stopping readers |
 | Trigger UI state and outcome counters | Audio | UI/job | Release stores/acquire loads | Trigger lifetime |
-| Pending/quiescence request handles | Scene/job | Audio | Atomic `shared_ptr` and revision atomics | Clear off audio after acknowledgement/shutdown |
+| Pending/audio-boundary transition request handles | Scene/job | Audio | Atomic `shared_ptr` and revision atomics | Clear off audio after acknowledgement/shutdown |
 | Staged capture vectors/behaviour | Coordinator/job builds; audio exchanges once | Audio during apply | Candidate-owned, unpublished mutable staging with exclusive phase ownership | Old staged values destroyed through retired snapshot off audio |
 | Station LoopTake snapshot/state | Existing Station owner/audio boundary | Audio/UI according to existing APIs | Existing published immutable snapshot pattern | Existing Station shutdown order |
 
@@ -533,7 +533,7 @@ Work:
 - upgrade the existing `_externalControlActionQueue` in place as the UI edge
   queue, retain each MIDI input's existing raw ingress SPSC, and add only the
   missing per-Trigger job-to-audio SPSC;
-- introduce atomic `RigTriggerIngressGate` acknowledgements;
+- introduce atomic `RigTriggerInputBarrier` acknowledgements;
 - build immutable raw-input-to-edge dispatch routes;
 - route HUD/keyboard/MIDI/serial through `TryEnqueue` with revision;
 - make Trigger state machine and binding state audio-only;
@@ -615,7 +615,7 @@ Work:
 - make ditch pop conditional on the defined result;
 - apply capture routing only to retained route-change records;
 - remove the all-Trigger edit-eligibility scan;
-- verify delayed actions retain recorded receivers and block quiescence;
+- verify delayed actions retain recorded receivers and block audio-boundary transition;
 - verify unrelated busy/history-bearing Triggers do not block an unrelated
   edit.
 
@@ -645,7 +645,7 @@ Use real `Station`, `RigCoordinator`, AudioHost boundary test access, and input
 publication—not direct `ApplyCaptureRouting` with fake receivers:
 
 - A `{0}` record/end -> A1;
-- edit to A `{0,1}` through quiescence/persist/audio/input promotion;
+- edit to A `{0,1}` through audio-boundary transition/persist/audio/input promotion;
 - record/end -> A2 and assert two audio loops/channels as appropriate;
 - edit to B `{0}` through the full protocol;
 - record/end -> B1;
@@ -669,8 +669,8 @@ publication—not direct `ApplyCaptureRouting` with fake receivers:
 ### Input and race tests
 
 - UI and job edges published before their respective acknowledgements drain
-  before quiescence;
-- Scene cannot request audio quiescence until both producer acknowledgements
+  before audio-boundary transition;
+- Scene cannot request audio-boundary transition until both producer acknowledgements
   match the requested closed revision;
 - either producer starting after its acknowledgement is rejected;
 - old revision cannot enqueue after reopen at the new revision;
@@ -720,7 +720,7 @@ to try to hit races.
 ### Lifecycle/publication tests
 
 - persistence failure reopens the accepted revision only;
-- shutdown during quiescing and pending leaves no producer able to enqueue;
+- shutdown during staging and pending leaves no producer able to enqueue;
 - old snapshots remain alive through audio and input acknowledgements;
 - retired snapshots and old mixer behaviour are destroyed off audio;
 - repeated `CloseAudio`/`Shutdown` remains safe.
@@ -781,7 +781,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/threading-rev
 
 5. manually inspect every callback-owned function listed in
    `doc/realtime-audio.md`, especially:
-   - `AudioHost::_OnAudio` and snapshot application/quiescence;
+   - `AudioHost::_OnAudio` and snapshot application/audio-boundary transition;
    - `Scene::OnTick`;
    - `Trigger::OnTick` and queue drain;
    - `Station::OnBounce`;
@@ -804,7 +804,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/threading-rev
 - No Station Trigger membership type, snapshot, traversal, or fallback remains.
 - All Trigger mutable operational state has one audio-thread writer.
 - HUD, keyboard, MIDI, and serial use the same revisioned producer barrier.
-- Closing ingress proves no producer can publish after quiescence; stale
+- Closing ingress proves no producer can publish after audio-boundary transition; stale
   revisions are rejected defensively.
 - Only changed retained Triggers are mutated at audio publication.
 - Unrelated active/history-bearing Triggers do not block unrelated routing.
