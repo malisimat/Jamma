@@ -438,7 +438,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			std::cerr << "[BOOT] JAM restore failed with an unknown error; continuing with an empty session." << std::endl;
 		}
 
-		JamFile::ToStream(jam, ss);
+		std::stringstream jamStream;
+		JamFile::ToStream(jam, jamStream);
+		auto jamJson = jamStream.str();
+		const std::string statePrefix = "\"state\":\"";
+		for (std::size_t stateStart = jamJson.find(statePrefix);
+			stateStart != std::string::npos;
+			stateStart = jamJson.find(statePrefix, stateStart + statePrefix.size()))
+		{
+			const auto valueStart = stateStart + statePrefix.size();
+			const auto valueEnd = jamJson.find('"', valueStart);
+			if (valueEnd != std::string::npos && valueEnd - valueStart > 54u)
+				jamJson.replace(valueStart + 54u, valueEnd - valueStart - 54u, "...");
+		}
+		ss << jamJson;
 
 		auto rigOpt = LoadRig(defaults.value());
 		if (rigOpt.has_value())
