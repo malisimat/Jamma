@@ -9,6 +9,7 @@
 #include "../io/UserConfig.h"
 #include "../ninjam/NinjamController.h"
 #include "../engine/Quantiser.h"
+#include "../engine/RigSnapshot.h"
 #include "../engine/Station.h"
 
 namespace io
@@ -17,6 +18,7 @@ namespace io
 	{
 	public:
 		static actions::ActionResult ExportSession(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
 			const engine::Quantiser& quantisation,
 			io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 			double transportOffsetLoopFrac,
@@ -30,6 +32,7 @@ namespace io
 		// The manifest is published only after every sidecar has been staged.
 		// Returns true only when session.jam has been published successfully.
 		static bool ExportSessionToDirectory(const std::vector<std::shared_ptr<engine::Station>>& stations,
+			const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
 			const engine::Quantiser& quantisation,
 			io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 			double transportOffsetLoopFrac,

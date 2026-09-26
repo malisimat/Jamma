@@ -93,7 +93,8 @@ public:
 	}
 
 	static std::optional<io::JamFile> ExportManifest(
-		const std::vector<std::shared_ptr<Station>>& stations)
+		const std::vector<std::shared_ptr<Station>>& stations,
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot = {})
 	{
 		Quantiser quantiser;
 		quantiser.SetClock(std::make_shared<utils::Timer>());
@@ -101,7 +102,7 @@ public:
 		io::UserConfig user{};
 		std::mutex sceneMutex;
 		const auto dir = MakeDirectory();
-		const bool exported = io::IoSessionExporter::ExportSessionToDirectory(stations, quantiser,
+		const bool exported = io::IoSessionExporter::ExportSessionToDirectory(stations, rigSnapshot, quantiser,
 			io::JamFile::GlobalMidiQuantState::Off, 0.0, user, stream, nullptr,
 			sceneMutex, nullptr, dir.wstring());
 		std::optional<io::JamFile> jam;
@@ -118,9 +119,19 @@ public:
 		std::filesystem::remove_all(dir);
 		return jam;
 	}
+
+	static std::shared_ptr<const engine::RigSnapshot> Snapshot(
+		std::initializer_list<std::pair<std::string, std::shared_ptr<Trigger>>> triggers)
+	{
+		auto snapshot = std::make_shared<engine::RigSnapshot>();
+		for (const auto& [id, trigger] : triggers)
+			snapshot->Triggers.push_back({ id, 0u, trigger, std::nullopt, {}, {}, {},
+				io::RigFile::Trigger::MidiInputMode::None, {}, {} });
+		return snapshot;
+	}
 };
 
-TEST(IoSessionExporter, MultipleTriggersOnStationPersistFirstTriggerHistoryInOrder)
+TEST(IoSessionExporter, PersistsDistinctHistoryForEveryTrigger)
 {
 	auto station = IoSessionExporterTest::MakeStation("shared");
 	auto first = std::make_shared<Trigger>(TriggerParams{});
@@ -130,44 +141,35 @@ TEST(IoSessionExporter, MultipleTriggersOnStationPersistFirstTriggerHistoryInOrd
 	});
 	auto second = std::make_shared<Trigger>(TriggerParams{});
 	second->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "other-source", "other-target" } });
-	station->AddTrigger(first);
-	station->AddTrigger(second);
-
-	const auto jam = IoSessionExporterTest::ExportManifest({ station });
+	const auto jam = IoSessionExporterTest::ExportManifest({ station },
+		IoSessionExporterTest::Snapshot({ { "first-id", first }, { "second-id", second } }));
 	ASSERT_TRUE(jam.has_value());
 	ASSERT_EQ(1u, jam->Stations.size());
-	const auto& history = jam->Stations[0].TriggerHistory;
-	ASSERT_EQ(2u, history.size());
-	EXPECT_EQ("source-a", history[0].SourceTakeId);
-	EXPECT_EQ("target-a", history[0].TargetTakeId);
-	EXPECT_EQ("source-b", history[1].SourceTakeId);
-	EXPECT_EQ("target-b", history[1].TargetTakeId);
+	ASSERT_EQ(2u, jam->TriggerHistories.size());
+	EXPECT_EQ("first-id", jam->TriggerHistories[0].TriggerId);
+	ASSERT_EQ(2u, jam->TriggerHistories[0].Takes.size());
+	EXPECT_EQ("source-a", jam->TriggerHistories[0].Takes[0].SourceTakeId);
+	EXPECT_EQ("target-a", jam->TriggerHistories[0].Takes[0].TargetTakeId);
+	EXPECT_EQ("source-b", jam->TriggerHistories[0].Takes[1].SourceTakeId);
+	EXPECT_EQ("target-b", jam->TriggerHistories[0].Takes[1].TargetTakeId);
+	EXPECT_EQ("second-id", jam->TriggerHistories[1].TriggerId);
+	ASSERT_EQ(1u, jam->TriggerHistories[1].Takes.size());
+	EXPECT_EQ("other-target", jam->TriggerHistories[1].Takes[0].TargetTakeId);
 }
 
-TEST(IoSessionExporter, ReroutedTriggerHistoryFollowsItsCurrentStation)
+TEST(IoSessionExporter, PersistsHistoryForAnUnboundTrigger)
 {
 	auto firstStation = IoSessionExporterTest::MakeStation("first");
 	auto secondStation = IoSessionExporterTest::MakeStation("second");
 	auto trigger = std::make_shared<Trigger>(TriggerParams{});
 	trigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target" } });
-	firstStation->AddTrigger(trigger);
-
-	const auto before = IoSessionExporterTest::ExportManifest({ firstStation, secondStation });
-	ASSERT_TRUE(before.has_value());
-	ASSERT_EQ(2u, before->Stations.size());
-	ASSERT_EQ(1u, before->Stations[0].TriggerHistory.size());
-	EXPECT_TRUE(before->Stations[1].TriggerHistory.empty());
-
-	// A rig edit clears the previous station mapping before publishing the new one.
-	firstStation->AddTrigger({});
-	secondStation->AddTrigger(trigger);
-	const auto after = IoSessionExporterTest::ExportManifest({ firstStation, secondStation });
-	ASSERT_TRUE(after.has_value());
-	ASSERT_EQ(2u, after->Stations.size());
-	EXPECT_TRUE(after->Stations[0].TriggerHistory.empty());
-	ASSERT_EQ(1u, after->Stations[1].TriggerHistory.size());
-	EXPECT_EQ("source", after->Stations[1].TriggerHistory[0].SourceTakeId);
-	EXPECT_EQ("target", after->Stations[1].TriggerHistory[0].TargetTakeId);
+	const auto jam = IoSessionExporterTest::ExportManifest({ firstStation, secondStation },
+		IoSessionExporterTest::Snapshot({ { "trigger-id", trigger } }));
+	ASSERT_TRUE(jam.has_value());
+	ASSERT_EQ(1u, jam->TriggerHistories.size());
+	EXPECT_EQ("trigger-id", jam->TriggerHistories[0].TriggerId);
+	EXPECT_EQ("source", jam->TriggerHistories[0].Takes[0].SourceTakeId);
+	EXPECT_EQ("target", jam->TriggerHistories[0].Takes[0].TargetTakeId);
 }
 
 TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
@@ -175,10 +177,8 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	auto firstStation = IoSessionExporterTest::MakeStation("first");
 	auto firstTrigger = std::make_shared<Trigger>(TriggerParams{});
 	firstTrigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "prior-take", "saved-take" } });
-	firstStation->AddTrigger(firstTrigger);
 	auto secondTrigger = std::make_shared<Trigger>(TriggerParams{});
 	secondTrigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "other-source", "other-take" } });
-	firstStation->AddTrigger(secondTrigger);
 	firstStation->SetAllowedMidiChannels({ 1, 3, 16 });
 	auto firstTake = IoSessionExporterTest::MakeTake("first-take");
 	firstTake->SetMidiQuantisation({ true, midi::MidiQuantisationFraction::Eighth, 0u, 7 });
@@ -229,6 +229,7 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	std::mutex sceneMutex;
 	const auto dir = IoSessionExporterTest::MakeDirectory();
 	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ firstStation, secondStation },
+		IoSessionExporterTest::Snapshot({ { "first-id", firstTrigger }, { "second-id", secondTrigger } }),
 		quantiser,
 		io::JamFile::GlobalMidiQuantState::All,
 		0.25,
@@ -256,9 +257,9 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	EXPECT_DOUBLE_EQ(0.82, jam->Stations[0].BusLevels[1]);
 	ASSERT_EQ(1u, jam->Stations[0].LoopTakes.size());
 	EXPECT_EQ(std::vector<int>({ 1, 3, 16 }), jam->Stations[0].AllowedMidiChannels);
-	ASSERT_EQ(1u, jam->Stations[0].TriggerHistory.size());
-	EXPECT_EQ("prior-take", jam->Stations[0].TriggerHistory[0].SourceTakeId);
-	EXPECT_EQ("saved-take", jam->Stations[0].TriggerHistory[0].TargetTakeId);
+	ASSERT_EQ(2u, jam->TriggerHistories.size());
+	EXPECT_EQ("prior-take", jam->TriggerHistories[0].Takes[0].SourceTakeId);
+	EXPECT_EQ("saved-take", jam->TriggerHistories[0].Takes[0].TargetTakeId);
 	const auto& savedTake = jam->Stations[0].LoopTakes[0];
 	EXPECT_DOUBLE_EQ(0.62, savedTake.MasterLevel);
 	EXPECT_EQ((std::vector<double>{ 0.72 }), savedTake.BusLevels);
@@ -332,7 +333,7 @@ TEST(IoSessionExporter, SavesLooplessStationConfigurationWithoutTransport)
 	std::mutex sceneMutex;
 	const auto dir = IoSessionExporterTest::MakeDirectory();
 
-	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, quantiser,
+	ASSERT_TRUE(io::IoSessionExporter::ExportSessionToDirectory({ station }, nullptr, quantiser,
 		io::JamFile::GlobalMidiQuantState::Off, 0.0, user, stream, nullptr,
 		sceneMutex, nullptr, dir.wstring()));
 

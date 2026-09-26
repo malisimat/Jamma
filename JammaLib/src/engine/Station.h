@@ -163,9 +163,6 @@ namespace engine
 		virtual bool IsRemote() const noexcept { return false; }
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
-		void AddTrigger(std::shared_ptr<Trigger> trigger);
-		// Call only while audio is paused and the scene mutex is held.
-		std::vector<TriggerTake> SnapshotTriggerHistoryForExport() const;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
@@ -397,7 +394,6 @@ namespace engine
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
-		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::atomic<std::shared_ptr<const LoopTakeSnapshot>> _loopTakeSnapshot;
 		std::atomic<std::uint64_t> _loopTakeRevision{ 0u };
 		std::vector<std::shared_ptr<audio::AudioMixer>> _audioMixers;

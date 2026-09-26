@@ -42,14 +42,14 @@ namespace io
 		static bool ToStream(JamFile jam, std::stringstream& ss);
 		static const std::string DefaultJson;
 		static constexpr unsigned int CurrentFormatMajor = 0u;
-		static constexpr unsigned int CurrentFormatMinor = 2u;
+		static constexpr unsigned int CurrentFormatMinor = 3u;
 		static constexpr unsigned int CurrentFormatPatch = 0u;
 		static constexpr std::size_t MaxStations = 256u;
 		static constexpr std::size_t MaxTakesPerStation = 256u;
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
 		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
-		static constexpr std::size_t MaxTriggerHistoryPerStation = 16384u;
+		static constexpr std::size_t MaxTriggerHistoryPerTrigger = 64u;
 		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
 
 		// Sidecars must always be relative to the manifest directory.  This is
@@ -191,15 +191,6 @@ namespace io
 
 		struct Station
 		{
-			// The configured trigger's LIFO take stack. It is station-local because
-			// rig trigger bindings are attached to stations by index on load.
-			struct TriggerHistoryEntry
-			{
-				unsigned int SourceType = 0u;
-				std::string SourceTakeId;
-				std::string TargetTakeId;
-			};
-
 			std::string Name;
 			unsigned int StationType;
 			double MasterLevel = 1.0;
@@ -212,9 +203,22 @@ namespace io
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;
-			std::vector<TriggerHistoryEntry> TriggerHistory;
-
 			static std::optional<Station> FromJson(Json::JsonPart json);
+		};
+
+		struct TriggerHistoryEntry
+		{
+			unsigned int SourceType = 0u;
+			std::string SourceTakeId;
+			std::string TargetTakeId;
+		};
+
+		// History belongs to the stable trigger identity, independent of its
+		// current station route.
+		struct TriggerHistory
+		{
+			std::string TriggerId;
+			std::vector<TriggerHistoryEntry> Takes;
 		};
 
 		Version Version = VERSION_V;
@@ -224,6 +228,7 @@ namespace io
 		std::string Name;
 		std::optional<NinjamConfig> Ninjam;
 		std::vector<Station> Stations;
+		std::vector<TriggerHistory> TriggerHistories;
 		unsigned long TimerTicks = 0;
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;

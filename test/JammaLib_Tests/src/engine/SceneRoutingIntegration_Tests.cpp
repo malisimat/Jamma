@@ -23,10 +23,12 @@ protected:
 
 	static std::shared_ptr<engine::Scene> FreshScene(std::vector<io::JamFile::Station> stations,
 		std::vector<io::RigFile::Trigger> triggers,
-		std::function<bool(const io::RigFile&)> saveRig = [](const io::RigFile&) { return true; })
+		std::function<bool(const io::RigFile&)> saveRig = [](const io::RigFile&) { return true; },
+		std::vector<io::JamFile::TriggerHistory> histories = {})
 	{
 		io::JamFile jam{};
 		jam.Stations = std::move(stations);
+		jam.TriggerHistories = std::move(histories);
 		io::RigFile rig{};
 		rig.Triggers = std::move(triggers);
 		engine::SceneParams params({ "" }, {}, { 640u, 480u });
@@ -69,17 +71,18 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStat
 	additional->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, RestoresStationHistoryToFirstMappedTriggerAfterNameRouting)
+TEST_F(SceneRoutingIntegrationTest, RestoresDistinctHistoriesToTriggersWithSharedStation)
 {
 	auto bass = Station("Bass");
-	bass.TriggerHistory.push_back({ static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC),
-		"bass-source", "bass-target" });
 	auto drums = Station("Drums");
-	drums.TriggerHistory.push_back({ static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC),
-		"drums-source", "drums-target" });
+	auto drumTrigger = Trigger("drums", "Drums"); drumTrigger.Id = "drums-id";
+	auto firstBassTrigger = Trigger("bass-first", "Bass"); firstBassTrigger.Id = "bass-first-id";
+	auto secondBassTrigger = Trigger("bass-second", "Bass"); secondBassTrigger.Id = "bass-second-id";
 	// Station order differs from trigger order, and two triggers share Bass.
-	auto scene = FreshScene({ bass, drums },
-		{ Trigger("drums", "Drums"), Trigger("bass-first", "Bass"), Trigger("bass-second", "Bass") });
+	auto scene = FreshScene({ bass, drums }, { drumTrigger, firstBassTrigger, secondBassTrigger }, {}, {
+		{ "drums-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "drums-source", "drums-target" } } },
+		{ "bass-first-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "bass-source", "bass-target" } } },
+		{ "bass-second-id", { { static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC), "other-source", "other-target" } } } });
 	ASSERT_TRUE(scene);
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Bass", 2u }, { "Drums", 1u } }),
 		Memberships(scene));
@@ -94,7 +97,8 @@ TEST_F(SceneRoutingIntegrationTest, RestoresStationHistoryToFirstMappedTriggerAf
 	ASSERT_EQ(1u, rig->Triggers[1].Instance->GetTakes().size());
 	EXPECT_EQ("bass-source", rig->Triggers[1].Instance->GetTakes()[0].SourceTakeId);
 	EXPECT_EQ("bass-target", rig->Triggers[1].Instance->GetTakes()[0].TargetTakeId);
-	EXPECT_TRUE(rig->Triggers[2].Instance->GetTakes().empty());
+	ASSERT_EQ(1u, rig->Triggers[2].Instance->GetTakes().size());
+	EXPECT_EQ("other-source", rig->Triggers[2].Instance->GetTakes()[0].SourceTakeId);
 	scene->Shutdown();
 }
 

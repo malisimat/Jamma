@@ -213,6 +213,55 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 		}
 	}
 
+	iter = jamParams.KeyValues.find("triggerHistories");
+	if (iter != jamParams.KeyValues.end())
+	{
+		if (iter->second.index() != 5)
+			return std::nullopt;
+		const auto& histories = std::get<Json::JsonArray>(iter->second);
+		const auto isEmptyArray = histories.Array.index() == 0u && std::get<std::vector<bool>>(histories.Array).empty();
+		if (!isEmptyArray && histories.Array.index() != 5)
+			return std::nullopt;
+		if (histories.Array.index() == 5)
+		{
+			for (const auto& historyJson : std::get<std::vector<Json::JsonPart>>(histories.Array))
+			{
+				auto id = historyJson.KeyValues.find("triggerId");
+				auto takes = historyJson.KeyValues.find("takes");
+				if (id == historyJson.KeyValues.end() || id->second.index() != 4 || std::get<std::string>(id->second).empty() ||
+					takes == historyJson.KeyValues.end() || takes->second.index() != 5)
+					return std::nullopt;
+				if (std::any_of(jam.TriggerHistories.begin(), jam.TriggerHistories.end(), [&](const TriggerHistory& existing)
+					{ return existing.TriggerId == std::get<std::string>(id->second); }))
+					return std::nullopt;
+				const auto& takeArray = std::get<Json::JsonArray>(takes->second);
+				const auto emptyTakes = takeArray.Array.index() == 0u && std::get<std::vector<bool>>(takeArray.Array).empty();
+				if (!emptyTakes && takeArray.Array.index() != 5)
+					return std::nullopt;
+				TriggerHistory history;
+				history.TriggerId = std::get<std::string>(id->second);
+				if (takeArray.Array.index() == 5)
+				{
+					const auto& entries = std::get<std::vector<Json::JsonPart>>(takeArray.Array);
+					if (entries.size() > MaxTriggerHistoryPerTrigger)
+						return std::nullopt;
+					for (const auto& entryJson : entries)
+					{
+						const auto sourceType = Json::GetUnsigned(entryJson, "sourceType");
+						auto sourceId = entryJson.KeyValues.find("sourceTakeId");
+						auto targetId = entryJson.KeyValues.find("targetTakeId");
+						if (!sourceType.has_value() || *sourceType > 2u || sourceId == entryJson.KeyValues.end() || sourceId->second.index() != 4 ||
+							targetId == entryJson.KeyValues.end() || targetId->second.index() != 4 || std::get<std::string>(targetId->second).empty())
+							return std::nullopt;
+						history.Takes.push_back({ static_cast<unsigned int>(*sourceType), std::get<std::string>(sourceId->second),
+							std::get<std::string>(targetId->second) });
+					}
+				}
+				jam.TriggerHistories.push_back(std::move(history));
+			}
+		}
+	}
+
 	if (!isCurrentSchema)
 	{
 		iter = jamParams.KeyValues.find("timerticks");
@@ -635,11 +684,6 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 	{
 		if (station.LoopTakes.size() > MaxTakesPerStation)
 			return false;
-		if (station.TriggerHistory.size() > MaxTriggerHistoryPerStation)
-			return false;
-		for (const auto& entry : station.TriggerHistory)
-			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
-				return false;
 		for (const auto& take : station.LoopTakes)
 		{
 			if (!jam.TransportInitialised && (!take.Loops.empty() || !take.MidiStreams.empty()))
@@ -654,11 +698,21 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 					return false;
 		}
 	}
+	for (const auto& history : jam.TriggerHistories)
+	{
+		if (history.TriggerId.empty() || history.Takes.size() > MaxTriggerHistoryPerTrigger ||
+			std::count_if(jam.TriggerHistories.begin(), jam.TriggerHistories.end(), [&history](const TriggerHistory& other)
+				{ return other.TriggerId == history.TriggerId; }) != 1)
+			return false;
+		for (const auto& entry : history.Takes)
+			if (entry.SourceType > 2u || entry.TargetTakeId.empty())
+				return false;
+	}
 	const auto transportOffsetLoopFrac = std::isfinite(jam.TransportOffsetLoopFrac) ?
 		std::clamp(jam.TransportOffsetLoopFrac, -1.0, 1.0) : 0.0;
 
 	ss << "{";
-	ss << kvStr("formatVersion", "0.2.0") << ",";
+	ss << kvStr("formatVersion", "0.3.0") << ",";
 	ss << kvStr("name", jam.Name) << ",";
 	ss << quoted("transport") << ":{";
 	ss << kvBool("initialized", jam.TransportInitialised) << ",";
@@ -752,24 +806,27 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss)
 			ss << "," << quoted("midiRoutes") << ":" << midiRoutesToJson(station.MidiRoutes);
 		if (station.HasAudioRoutes)
 			ss << "," << quoted("audioRoutes") << ":" << audioRoutesToJson(station.AudioRoutes);
-		if (!station.TriggerHistory.empty())
-		{
-			ss << "," << quoted("triggerHistory") << ":[";
-			for (size_t historyIndex = 0; historyIndex < station.TriggerHistory.size(); ++historyIndex)
-			{
-				if (historyIndex > 0) ss << ",";
-				const auto& entry = station.TriggerHistory[historyIndex];
-				ss << "{" << kvUlong("sourceType", entry.SourceType) << ","
-					<< kvStr("sourceTakeId", entry.SourceTakeId) << ","
-					<< kvStr("targetTakeId", entry.TargetTakeId) << "}";
-			}
-			ss << "]";
-		}
 		if (!station.VstChain.empty())
 			ss << "," << quoted("vst") << ":" << vstChainToJson(station.VstChain);
 		ss << "}";
 	}
 
+	ss << "]," << quoted("triggerHistories") << ":[";
+	for (size_t historyIndex = 0; historyIndex < jam.TriggerHistories.size(); ++historyIndex)
+	{
+		if (historyIndex > 0) ss << ",";
+		const auto& history = jam.TriggerHistories[historyIndex];
+		ss << "{" << kvStr("triggerId", history.TriggerId) << "," << quoted("takes") << ":[";
+		for (size_t takeIndex = 0; takeIndex < history.Takes.size(); ++takeIndex)
+		{
+			if (takeIndex > 0) ss << ",";
+			const auto& take = history.Takes[takeIndex];
+			ss << "{" << kvUlong("sourceType", take.SourceType) << ","
+				<< kvStr("sourceTakeId", take.SourceTakeId) << ","
+				<< kvStr("targetTakeId", take.TargetTakeId) << "}";
+		}
+		ss << "]}";
+	}
 	ss << "]}";
 	return true;
 }
@@ -1341,7 +1398,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	std::vector<LoopTake> takes;
 	std::int32_t stationPhaseOffsetSamps = 0;
 	std::vector<int> allowedMidiChannels;
-	std::vector<TriggerHistoryEntry> triggerHistory;
 	double masterLevel = 1.0;
 	std::vector<double> busLevels;
 
@@ -1461,37 +1517,6 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 		}
 	}
 
-	iter = json.KeyValues.find("triggerHistory");
-	if (iter != json.KeyValues.end())
-	{
-		if (iter->second.index() != 5)
-			return std::nullopt;
-		const auto& historyArray = std::get<Json::JsonArray>(iter->second);
-		const auto isEmptyArray = historyArray.Array.index() == 0u
-			&& std::get<std::vector<bool>>(historyArray.Array).empty();
-		if (!isEmptyArray && historyArray.Array.index() != 5)
-			return std::nullopt;
-		if (historyArray.Array.index() == 5)
-		{
-			const auto& entries = std::get<std::vector<Json::JsonPart>>(historyArray.Array);
-			if (entries.size() > MaxTriggerHistoryPerStation)
-				return std::nullopt;
-			for (const auto& entryJson : entries)
-			{
-				const auto sourceType = Json::GetUnsigned(entryJson, "sourceType");
-				auto sourceId = entryJson.KeyValues.find("sourceTakeId");
-				auto targetId = entryJson.KeyValues.find("targetTakeId");
-				if (!sourceType.has_value() || *sourceType > 2u
-					|| sourceId == entryJson.KeyValues.end() || sourceId->second.index() != 4
-					|| targetId == entryJson.KeyValues.end() || targetId->second.index() != 4
-					|| std::get<std::string>(targetId->second).empty())
-					return std::nullopt;
-				triggerHistory.push_back({ static_cast<unsigned int>(*sourceType),
-					std::get<std::string>(sourceId->second), std::get<std::string>(targetId->second) });
-			}
-		}
-	}
-
 	std::vector<std::vector<unsigned long>> audioRoutes;
 	bool hasAudioRoutes = false;
 	iter = json.KeyValues.find("audioRoutes");
@@ -1579,6 +1604,5 @@ std::optional<JamFile::Station> JamFile::Station::FromJson(Json::JsonPart json)
 	station.MidiRoutes = std::move(midiRoutes);
 	station.AudioRoutes = std::move(audioRoutes);
 	station.HasAudioRoutes = hasAudioRoutes;
-	station.TriggerHistory = std::move(triggerHistory);
 	return station;
 }

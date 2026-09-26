@@ -562,21 +562,19 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		std::cout << "Load: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
-	std::vector<bool> restoredStationHistory(initialStations.size(), false);
 	for (const auto& runtime : acceptedRig->Triggers)
 	{
-		if (!runtime.StationIndex || *runtime.StationIndex >= initialStations.size() || !runtime.Instance)
+		if (!runtime.Instance)
 			continue;
-		const auto stationIndex = *runtime.StationIndex;
-		initialStations[stationIndex]->AddTrigger(runtime.Instance);
-		if (restoredStationHistory[stationIndex])
+		auto saved = std::find_if(jamStruct.TriggerHistories.begin(), jamStruct.TriggerHistories.end(),
+			[&runtime](const io::JamFile::TriggerHistory& history) { return history.TriggerId == runtime.Id; });
+		if (saved == jamStruct.TriggerHistories.end())
 			continue;
-		restoredStationHistory[stationIndex] = true;
-		std::vector<TriggerTake> history;
-		for (const auto& entry : jamStruct.Stations[stationIndex].TriggerHistory)
-			history.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(entry.SourceType),
-				entry.SourceTakeId, entry.TargetTakeId });
-		runtime.Instance->RestoreTakes(std::move(history));
+		std::vector<TriggerTake> takes;
+		takes.reserve(saved->Takes.size());
+		for (const auto& take : saved->Takes)
+			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
+		runtime.Instance->RestoreTakes(std::move(takes));
 	}
 	for (auto& station : initialStations)
 		scene->_AddStation(std::move(station), false);
@@ -1206,6 +1204,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
 		return io::IoSessionExporter::ExportSession(_stations,
+			AcceptedRigSnapshot(),
 			_quantisation,
 			_globalMidiQuantState,
 			_transportOffsetLoopFrac,
@@ -1602,14 +1601,6 @@ void Scene::_AdvanceRigPublication()
 	}
 	if (!_rigCoordinator.PromoteAcknowledged())
 		return;
-	{
-		std::scoped_lock lock(_sceneMutex);
-		for (const auto& station : _stations)
-			if (station) station->AddTrigger({});
-		for (const auto& runtime : pending->Triggers)
-			if (runtime.StationIndex && *runtime.StationIndex < _stations.size() && runtime.Instance)
-				_stations[*runtime.StationIndex]->AddTrigger(runtime.Instance);
-	}
 	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
 	_rigCoordinator.ReleaseRetired();
 	if (_hudPanel)

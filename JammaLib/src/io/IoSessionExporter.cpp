@@ -17,6 +17,7 @@ using namespace engine;
 namespace io
 {
 	actions::ActionResult IoSessionExporter::ExportSession(const std::vector<std::shared_ptr<Station>>& stations,
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
 		const engine::Quantiser& quantisation,
 		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 		double transportOffsetLoopFrac,
@@ -31,6 +32,7 @@ namespace io
 			return actions::ActionResult::NoAction();
 
 		ExportSessionToDirectory(stations,
+			rigSnapshot,
 			quantisation,
 			globalMidiQuantState,
 			transportOffsetLoopFrac,
@@ -44,6 +46,7 @@ namespace io
 	}
 
 	bool IoSessionExporter::ExportSessionToDirectory(const std::vector<std::shared_ptr<Station>>& stations,
+		const std::shared_ptr<const engine::RigSnapshot>& rigSnapshot,
 		const engine::Quantiser& quantisation,
 		io::JamFile::GlobalMidiQuantState globalMidiQuantState,
 		double transportOffsetLoopFrac,
@@ -153,11 +156,6 @@ namespace io
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
-				for (const auto& take : station->SnapshotTriggerHistoryForExport())
-				{
-					jamStation.TriggerHistory.push_back({ static_cast<unsigned int>(take.SourceType),
-						take.SourceTakeId, take.TargetTakeId });
-				}
 				const auto routes = station->SnapshotMidiVstRoutesForExport();
 				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
 				{
@@ -314,6 +312,20 @@ namespace io
 				}
 
 				jam.Stations.push_back(std::move(jamStation));
+			}
+			if (rigSnapshot)
+			{
+				for (const auto& runtime : rigSnapshot->Triggers)
+				{
+					if (!runtime.Instance || runtime.Id.empty())
+						continue;
+					io::JamFile::TriggerHistory history;
+					history.TriggerId = runtime.Id;
+					for (const auto& take : runtime.Instance->GetTakes())
+						history.Takes.push_back({ static_cast<unsigned int>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
+					if (!history.Takes.empty())
+						jam.TriggerHistories.push_back(std::move(history));
+				}
 			}
 		}
 
