@@ -1076,8 +1076,7 @@ actions::ActionResult GuiHud::OnAction(actions::TouchMoveAction action)
 	if (!_cableDrag.has_value())
 	{
 		_UpdateCableHover(action.Position);
-		// Keep visual feedback immediate while still resolving exactly one leaf.
-		// The scene's deferred path repeats the same topmost selection during draw.
+		// Resolve one leaf now for immediate feedback; drawing repeats the selection.
 		ApplyExclusiveHoverPoint(action.Position);
 		return actions::ActionResult::NoAction();
 	}

@@ -105,9 +105,7 @@ TEST(RigTriggerInputGate, DelayedOldAcknowledgementCannotSatisfyNewCloseOfSameRe
 	const auto oldCloseToken = gate.ObserveCloseTokenFromJob();
 	ASSERT_NE(0u, oldCloseToken);
 
-	// Rejection reopens the accepted revision. A later edit then closes that
-	// same revision with a distinct epoch while the old job acknowledgement is
-	// still delayed.
+	// Reclose the accepted revision while its previous job acknowledgement is delayed.
 	ASSERT_TRUE(gate.Reopen(27u));
 	ASSERT_TRUE(gate.RequestCloseFromUi(27u));
 	const auto newCloseToken = gate.RequestedCloseToken();

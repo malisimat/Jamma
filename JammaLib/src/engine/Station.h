@@ -107,8 +107,6 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
-		// The deck mesh is centred on the station's model position; expose its top
-		// cap for scene overlays that need to attach to the rendered cylinder.
 		utils::Position3d TopCapModelPosition() const;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
@@ -189,9 +187,7 @@ namespace engine
 		void OnBounce(unsigned int numSamps,
 			io::UserConfig config,
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
-		// AudioHost calls this once after all Station callback work for the block.
-		// It lets the UI/job owner reclaim superseded audio snapshots without the
-		// callback ever releasing the last LoopTake owner.
+		// Let the UI/job thread reclaim old snapshots after callback work, keeping LoopTake destruction off audio.
 		void AcknowledgeAudioBoundary() noexcept;
 		void ReleaseRetiredAudioStates();
 		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
@@ -287,8 +283,7 @@ namespace engine
 		struct AudioState
 		{
 			std::uint64_t Generation = 0u;
-			// Strong ownership is retired on the UI/job side after an audio-boundary
-			// acknowledgement, so LoopTake destruction cannot occur in the callback.
+			// Retire strong ownership after the boundary acknowledgement so LoopTakes cannot die in the callback.
 			std::vector<std::shared_ptr<LoopTake>> OwnedLoopTakes;
 			std::vector<std::weak_ptr<LoopTake>> LoopTakes;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;

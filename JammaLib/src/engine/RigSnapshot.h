@@ -22,8 +22,7 @@ namespace engine
 		size_t RigTriggerIndex = 0u;
 		std::shared_ptr<Trigger> Instance;
 		std::optional<size_t> StationIndex;
-		// Staged data is handed to the reused trigger only at the audio boundary.
-		// It is mutable solely to exchange preallocated vectors without allocation.
+		// Mutable only so prepared routing vectors can be swapped at the boundary without allocation.
 		mutable std::shared_ptr<base::ActionReceiver> Receiver;
 		mutable std::vector<unsigned int> InputChannels;
 		mutable std::vector<std::string> MidiInputDevices;
@@ -66,8 +65,6 @@ namespace engine
 		std::vector<std::shared_ptr<Trigger>> KeyboardTriggers;
 	};
 
-	// Complete immutable realization of one rig revision. The coordinator owns
-	// snapshots, while audio and input readers retain shared references.
 	struct RigSnapshot
 	{
 		std::uint64_t Revision = 0u;

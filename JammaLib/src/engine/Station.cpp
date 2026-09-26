@@ -147,8 +147,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
 		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
-			// A missing plug-in must not prevent the saved station, or its rig target,
-			// from being restored. The station remains usable without this processor.
+			// Restore the station and rig target even when this optional processor is missing.
 			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
 				<< "; continuing without it." << std::endl;
 		}
@@ -1158,9 +1157,7 @@ ActionResult Station::OnAction(GuiAction action)
 
 ActionResult Station::OnAction(TriggerAction action)
 {
-	// Starts respect current station availability. Once a Trigger has captured
-	// this receiver and take IDs, completion/ditch/punch work must remain valid
-	// even if the station is temporarily hidden or disabled.
+	// Allow completion and punch actions to finish after a station is hidden or disabled.
 	const auto isStart = action.ActionType == TriggerAction::TRIGGER_REC_START ||
 		action.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
 	if (isStart && (!_isEnabled || !_isVisible))

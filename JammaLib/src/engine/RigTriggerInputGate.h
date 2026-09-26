@@ -11,14 +11,9 @@
 
 namespace engine
 {
-	// Stops both Trigger-input producers before a rig snapshot can replace its
-	// Trigger instances. UI and job input may otherwise enqueue an edge for an
-	// old instance while the audio thread applies the replacement snapshot.
-	//
-	// The UI blocks its dispatch before requesting the barrier; the job thread
-	// observes it before each batch. The coordinator waits for both acknowledgements
-	// before requesting the audio-boundary transition. A unique token keeps a late
-	// acknowledgement from an earlier request from satisfying a newer one.
+	// Both UI and job producers must stop before audio replaces Trigger instances;
+	// otherwise either can enqueue an edge for an old instance. Unique tokens keep
+	// late acknowledgements from an earlier barrier from releasing a newer one.
 	class RigTriggerInputGate
 	{
 	public:

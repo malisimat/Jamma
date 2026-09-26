@@ -213,8 +213,7 @@ namespace io
 			std::string TargetTakeId;
 		};
 
-		// History belongs to the stable trigger identity, independent of its
-		// current station route.
+		// Key history by stable Trigger identity so rerouting preserves it.
 		struct TriggerHistory
 		{
 			std::string TriggerId;

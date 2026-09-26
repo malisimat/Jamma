@@ -766,8 +766,7 @@ void Scene::Draw3d(DrawContext& ctx,
 
 void Scene::UpdateCamera()
 {
-	// Input, camera state, and rendering are all owned by the window thread.
-	// The audio callback never reads or advances the camera.
+	// Keep camera state on the window thread; audio never reads or advances it.
 	const auto now = Timer::GetTime();
 	const auto deltaSeconds = _lastCameraUpdateTime
 		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastCameraUpdateTime, now)), 0.0f, 0.05f)
@@ -843,8 +842,7 @@ ActionResult Scene::OnAction(TouchAction action)
 	_InvalidateHover2d();
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
 	{
-		// Pressed presentation belongs exclusively to the capture target.  Clear
-		// the prior hover now rather than waiting for the next render pass.
+		// Clear the old hover now so only the capture target appears pressed.
 		std::vector<std::weak_ptr<GuiElement>> none;
 		_ApplyHoverPath2d(none);
 		_hoverPath2d.clear();
@@ -1082,8 +1080,7 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 		return _UpdateBackgroundDrag(action);
 	if (_hudPanel)
 	{
-		// _AdvanceRigPublication rebuilds the HUD child tree on the job thread.
-		// Keep this uncaptured UI traversal out of that mutation window.
+		// Lock the HUD tree while the job thread rebuilds it.
 		std::scoped_lock lock(_sceneMutex);
 		return _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
 	}
@@ -1178,8 +1175,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 	}
 
-	// Ctrl+Shift+R arms a one-shot reclock; the completed recording becomes the
-	// new master quantisation at the next interval boundary.
 	if ((82 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
@@ -1630,8 +1625,7 @@ void Scene::_AdvanceRigPublication()
 	_rigCoordinator.ReleaseRetired();
 	if (_hudPanel)
 	{
-		// HUD routing rebuilds replace child widgets while the render thread may
-		// be drawing or initializing the same tree.
+		// Protect the HUD tree while routing rebuilds replace widgets used by rendering.
 		std::scoped_lock lock(_sceneMutex);
 		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
 		std::vector<std::string> midiInputs;
@@ -2016,8 +2010,7 @@ void Scene::CommitChanges()
 			receiver->OnAction(job);
 	}
 
-	// Pre-initialize VST DLLs on the UI thread after releasing _sceneMutex.
-	// MakePluginForPath selects VST2 for .dll and VST3 otherwise.
+	// Initialize VSTs on the UI thread after releasing _sceneMutex.
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
@@ -2416,8 +2409,7 @@ void Scene::_UpdateSelection(ActionResultType res)
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
-	// Rig edits rebuild the HUD after scene initialization; initialize its new
-	// controls on the render thread before drawing them.
+	// Initialize controls added by rig edits on the render thread before drawing them.
 	{
 		std::scoped_lock lock(_sceneMutex);
 		if (_hudPanel)

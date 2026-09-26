@@ -183,12 +183,9 @@ namespace audio
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
-		// Published off the audio thread and acquired once at each block boundary.
-		// The retained list prevents the callback's local snapshot reference from
-		// ever becoming the last owner; it is cleared only after audio has stopped.
+		// Retain snapshots off audio so callback references cannot become the last owner.
 		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
-		// Audio-thread-owned applied graph. Off-thread retention guarantees replacing
-		// this handle cannot release the last snapshot or Trigger owner on callback.
+		// Replacing this handle must not destroy the last snapshot or Trigger on audio.
 		std::shared_ptr<const engine::RigSnapshot> _audioAppliedRigSnapshot;
 		std::atomic<std::uint64_t> _rigTriggerTransitionRequestRevision{ 0u };
 		std::atomic<std::uint64_t> _rigTriggerTransitionAcceptedRevision{ 0u };

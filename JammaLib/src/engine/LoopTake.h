@@ -258,8 +258,7 @@ namespace engine
 			std::uint64_t transportStartSamps = 0u);
 		void PunchIn(bool applyAudio = true, bool applyMidi = true);
 		void PunchOut(bool applyAudio = true, bool applyMidi = true);
-		// Allocation-free audio-boundary half of punch transitions. MIDI capture
-		// and synthetic transition events remain on the job-thread methods above.
+		// Keep MIDI capture and synthetic events on the job thread; audio transitions must stay allocation-free.
 		void TriggerPunchInAudio() noexcept override;
 		void TriggerPunchOutAudio() noexcept override;
 		void SetTriggerSourceMutedAudio(bool muted) noexcept override;

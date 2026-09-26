@@ -194,8 +194,6 @@ namespace base
 		virtual std::shared_ptr<GuiElement> FindTopmostDescendant(utils::Position2d localPos);
 		virtual void ApplyHoverPoint(utils::Position2d localPos);
 		virtual void ApplyHoverState(bool inside);
-		// Resolves one topmost interactive descendant and clears transient pointer
-		// presentation from all other elements in this visual subtree.
 		virtual void ApplyExclusiveHoverPoint(utils::Position2d localPos);
 		// Clears transient pointer presentation before popup capture.
 		virtual void ClearPointerState();

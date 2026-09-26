@@ -734,9 +734,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		}
 		for (const auto& station : stations)
 			if (station) station->AcknowledgeAudioBoundary();
-		// Trigger::OnTick above drains accepted external actions and publishes the
-		// edit predicate. A transition decision made here therefore describes this
-		// completed audio boundary, not a stale UI observation.
+		// Decide after Trigger::OnTick so this transition uses the completed boundary's state.
 		PublishRigTriggerTransitionAtAudioBoundary();
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);

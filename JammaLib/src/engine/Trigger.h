@@ -327,9 +327,7 @@ namespace engine
 		std::uint64_t StructuralCommandDropCount() const noexcept { return _structuralCommandDropCount.load(std::memory_order_acquire); }
 		std::uint64_t ActivationOutcomeCount() const noexcept { return _activationOutcomeCount.load(std::memory_order_acquire); }
 		std::uint64_t DitchOutcomeCount() const noexcept { return _ditchOutcomeCount.load(std::memory_order_acquire); }
-		// Scene job-thread consumer for fixed-size structural commands emitted by
-		// the audio-owned state machine. The caller serializes this with Station
-		// edits by holding the Scene mutex.
+		// Hold the Scene mutex while processing commands so they cannot race Station edits.
 		void ProcessStructuralActionsOnJob(
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params);
@@ -341,8 +339,7 @@ namespace engine
 		void RemoveInputChannel(unsigned int chan);
 		void ClearInputChannels();
 		void AddMidiInputDevice(std::string device);
-		// Called at an audio boundary. The prepared containers are exchanged, so
-		// capture-route changes do not allocate on the real-time path.
+		// Swap prepared containers at the boundary so routing changes never allocate in the callback.
 		void ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receiver,
 			std::vector<unsigned int>& inputChannels,
 			std::vector<std::string>& midiInputDevices,
@@ -357,8 +354,7 @@ namespace engine
 		bool IsDitchDown() const;
 		// Audio-boundary predicate used before replacing a trigger.
 		bool CanEditRouting() const noexcept;
-		// A capture route or station target update retains this trigger and its take
-		// history, so it needs only an idle input/state boundary.
+		// Route updates retain this Trigger and its history, so only input/state must be idle.
 		bool CanApplyCaptureRouting() const noexcept;
 		void Reset();
 		std::string Name() const;
@@ -588,8 +584,7 @@ namespace engine
 		unsigned long _pendingRecordSamps = 0u;
 		std::uint64_t _nextStructuralSequence = 1u;
 		std::uint64_t _nextHistoryToken = 1u;
-		// Job-thread-only variable-size metadata. Audio history uses only stable
-		// tokens and raw non-owning punch targets retained by this ledger/Station.
+		// Keep variable-size history on the job thread; audio uses stable tokens and borrowed targets.
 		std::array<TriggerTake, _HistoryCapacity> _jobTakeHistory{};
 		std::array<std::uint64_t, _HistoryCapacity> _jobTakeTokens{};
 		std::size_t _jobTakeHistorySize = 0u;

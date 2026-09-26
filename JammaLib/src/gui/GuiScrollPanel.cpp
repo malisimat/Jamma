@@ -93,8 +93,7 @@ void GuiScrollPanel::_UpdateContentHostPosition()
 {
 	if (_contentHost)
 	{
-		// GUI coordinates grow upward. Aligning the content's top to the
-		// viewport's top keeps the first item stationary as later items append.
+		// Top-align content so the first item stays put as later items append.
 		const int topAlignedPosition = static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentHeight());
 		_contentHost->SetPosition({ 0, topAlignedPosition + _scrollOffset });
 	}

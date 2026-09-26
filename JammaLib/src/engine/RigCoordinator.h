@@ -73,9 +73,7 @@ namespace engine
 			const SnapshotPtr& acceptedSnapshot);
 		std::uint64_t _AllocateRevision() noexcept;
 
-		// Coordinator/job side is the sole writer. Audio and input readers acquire
-		// immutable snapshots atomically; ReleaseAfterReadersStopped performs final
-		// teardown after both reader domains have stopped.
+		// Retire snapshots only after audio and input readers stop, to keep teardown off their threads.
 		std::atomic<std::uint64_t> _nextRevision{ 1u };
 		std::atomic<SnapshotPtr> _accepted;
 		std::atomic<SnapshotPtr> _staged;

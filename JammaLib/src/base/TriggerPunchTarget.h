@@ -2,8 +2,7 @@
 
 namespace base
 {
-	// Narrow, non-owning audio-boundary interface retained by Trigger history.
-	// Implementations must remain allocation-free, lock-free, and noexcept.
+	// Trigger history borrows punch targets, so calls must be real-time safe.
 	class TriggerPunchTarget
 	{
 	public:

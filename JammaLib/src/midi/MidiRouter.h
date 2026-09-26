@@ -246,9 +246,7 @@ namespace midi
 		void _ResetEditorTouchStates() noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
-		// Published only on the job/input boundary; MIDI callback, live dispatcher,
-		// and job pumps are readers. Empty publication precedes worker teardown, and
-		// snapshot retirement remains coordinator-owned.
+		// Publish empty before worker teardown, then retire snapshots on the coordinator side.
 		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
 		engine::RigTriggerInputGate _rigTriggerInputGate;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;

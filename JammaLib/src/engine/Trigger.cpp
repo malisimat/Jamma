@@ -644,9 +644,7 @@ void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
 		_ApplyInputEdge(edge, cfg, params);
 	}
 	input_fallbacks_consumed:
-	// A structural transition can pause this merge while other mailbox values
-	// remain pending. Only enable the queue-only fast path once every mailbox
-	// sequence observed by this consumer has actually been consumed.
+	// Keep the fast path disabled until a paused merge has consumed every observed mailbox value.
 	if (_InputFallbacksConsumed(_uiInputFallbacks, _consumedUiFallbackSequences))
 		_consumedUiFallbackPublicationCount = uiFallbackPublicationCount;
 	if (_InputFallbacksConsumed(_jobInputFallbacks, _consumedJobFallbackSequences))
@@ -1008,8 +1006,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 	StructuralCommand command;
 	if (!_structuralCommands.Peek(command))
 		return;
-	// The queue remains visibly non-empty until this counter is raised, closing
-	// the Peek->Pop publication gap for audio-boundary checks.
+	// Keep the queue non-empty through Pop so audio-boundary checks cannot see the Peek/Pop gap.
 	_jobStructuralActionsInFlight.fetch_add(1u, std::memory_order_acq_rel);
 	for (std::size_t consumed = 0u;
 		consumed < _StructuralQueueCapacity && _structuralCommands.Pop(command);

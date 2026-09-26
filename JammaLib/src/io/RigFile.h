@@ -81,8 +81,7 @@ namespace io
 				static std::optional<MidiTriggerBinding> FromJson(Json::JsonPart json);
 			};
 
-			// Stable persisted identity. Empty IDs are accepted only for legacy
-			// files and are populated during routing normalization.
+			// Routing normalization fills empty IDs from legacy files.
 			std::string Id;
 			std::string Name;
 			unsigned int StationType;
@@ -97,8 +96,7 @@ namespace io
 			static std::optional<Trigger> FromJson(Json::JsonPart json);
 		};
 
-		// Serialized as a semantic string so future readers can make compatible
-		// migrations without relying on enum ordinals.
+		// Store versions as strings so migrations do not depend on enum ordinals.
 		std::string Version = CurrentVersion;
 		std::string Name;
 		UserConfig User;

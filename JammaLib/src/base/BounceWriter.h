@@ -6,8 +6,7 @@ namespace base
 {
 	class MultiAudioSink;
 
-	// Narrow audio-thread interface used by an active overdub target to mix its
-	// source take. Lifetime is retained by the target for the complete tail.
+	// The overdub target retains this writer through its tail for safe callback access.
 	class BounceWriter
 	{
 	public:
