@@ -98,6 +98,9 @@ TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 	auto firstTrigger = std::make_shared<Trigger>(TriggerParams{});
 	firstTrigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "prior-take", "saved-take" } });
 	firstStation->AddTrigger(firstTrigger);
+	auto secondTrigger = std::make_shared<Trigger>(TriggerParams{});
+	secondTrigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "other-source", "other-take" } });
+	firstStation->AddTrigger(secondTrigger);
 	firstStation->SetAllowedMidiChannels({ 1, 3, 16 });
 	auto firstTake = IoSessionExporterTest::MakeTake("first-take");
 	firstTake->SetMidiQuantisation({ true, midi::MidiQuantisationFraction::Eighth, 0u, 7 });

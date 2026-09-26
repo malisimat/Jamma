@@ -1559,9 +1559,10 @@ std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 
 void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
 {
-	// The accepted rig owns trigger routing; keep its current instance for JAM export.
-	_triggers.clear();
-	if (trigger)
+	// The accepted rig owns routing. Keep its ordered instances for JAM export.
+	if (!trigger)
+		_triggers.clear();
+	else
 		_triggers.push_back(std::move(trigger));
 }
 

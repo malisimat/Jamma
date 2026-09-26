@@ -562,12 +562,16 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 		std::cout << "Load: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
+	std::vector<bool> restoredStationHistory(initialStations.size(), false);
 	for (const auto& runtime : acceptedRig->Triggers)
 	{
 		if (!runtime.StationIndex || *runtime.StationIndex >= initialStations.size() || !runtime.Instance)
 			continue;
 		const auto stationIndex = *runtime.StationIndex;
 		initialStations[stationIndex]->AddTrigger(runtime.Instance);
+		if (restoredStationHistory[stationIndex])
+			continue;
+		restoredStationHistory[stationIndex] = true;
 		std::vector<TriggerTake> history;
 		for (const auto& entry : jamStruct.Stations[stationIndex].TriggerHistory)
 			history.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(entry.SourceType),
