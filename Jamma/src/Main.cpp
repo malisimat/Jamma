@@ -19,6 +19,7 @@
 #include <cctype>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -256,10 +257,11 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	if (!res.has_value())
 	{
 		ini.Jam = GetPath(PATH_ROAMING) + L"/Jamma/default.jam";
-		txtFile.Write(ini.Jam,
+		if (!txtFile.Write(ini.Jam,
 			jamJson,
 			(unsigned int)jamJson.size(),
-			0);
+			0))
+			std::wcerr << L"[BOOT] Failed to create default JAM: " << ini.Jam << std::endl;
 	}
 	else
 	{
@@ -268,7 +270,51 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	}
 
 	std::stringstream ss(jamJson);
-	return JamFile::FromStream(std::move(ss));
+	auto parsed = JamFile::FromStream(std::move(ss));
+	if (!parsed.has_value())
+		std::wcerr << L"[BOOT] JAM is unreadable; starting with an empty session: " << ini.Jam << std::endl;
+	return parsed;
+}
+
+std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
+{
+	io::TextReadWriter reader;
+	auto contents = reader.Read(path, MAX_JSON_CHARS);
+	if (!contents.has_value())
+	{
+		std::wcerr << L"[LOAD] Could not read JAM: " << path << std::endl;
+		return std::nullopt;
+	}
+
+	auto [json, numChars, unused] = std::move(contents.value());
+	std::stringstream stream(std::move(json));
+	auto parsed = JamFile::FromStream(std::move(stream));
+	if (!parsed.has_value())
+		std::wcerr << L"[LOAD] JAM is unreadable: " << path << std::endl;
+	return parsed;
+}
+
+io::JamFile EmptyJam()
+{
+	std::stringstream stream(JamFile::DefaultJson);
+	auto parsed = JamFile::FromStream(std::move(stream));
+	if (!parsed.has_value())
+		throw std::runtime_error("Built-in empty JAM manifest is invalid");
+
+	auto jam = std::move(parsed.value());
+	jam.Name = "empty";
+	jam.Ninjam.reset();
+	jam.AbsoluteSamplePos = 0u;
+	jam.GlobalPhaseOffsetSamps = 0;
+	jam.TransportOffsetLoopFrac = 0.0;
+	for (auto& station : jam.Stations)
+	{
+		station.LoopTakes.clear();
+		station.VstChain.clear();
+		station.MidiRoutes.clear();
+		station.StationPhaseOffsetSamps = 0;
+	}
+	return jam;
 }
 
 std::optional<io::RigFile> LoadRig(io::InitFile& ini)
@@ -326,12 +372,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// get the coloured/emoji treatment. The TUI's lifetime spans the entire
 	// application run and is independent of any NINJAM session.
 	//
-	// An atomic scene pointer lets the submit handler forward chat safely once
-	// the scene is wired in below; before that it prints a "not connected"
-	// notice. std::atomic<Scene*> is write-once from the main thread.
+	// The pointer and mutex let the submit handler forward chat safely while the
+	// UI thread replaces a complete Scene after an explicit JAM load.
 	auto tui = std::make_unique<io::ConsoleTui>();
 	std::atomic<Scene*> sceneRaw{ nullptr };
-	tui->Start("> ", [&sceneRaw](const std::string& msg) {
+	std::mutex sceneRawMutex;
+	tui->Start("> ", [&sceneRaw, &sceneRawMutex](const std::string& msg) {
+		std::scoped_lock lock(sceneRawMutex);
 		auto* s = sceneRaw.load(std::memory_order_acquire);
 		if (HandleSlashCommand(msg, s))
 			return;
@@ -354,7 +401,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	SceneParams sceneParams(DrawableParams{ "" },
 		MoveableParams{ {0, 0}, {0, 0, 0}, 1.0 },
 		SizeableParams{ 1400, 1000 });
-	JamFile jam;
+	JamFile jam = EmptyJam();
 	RigFile rig;
 
 	if (defaults.has_value())
@@ -368,9 +415,22 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::stringstream ss;
 		InitFile::ToStream(defaults.value(), ss);
 
-		auto jamOpt = LoadJam(defaults.value());
-		if (jamOpt.has_value())
-			jam = jamOpt.value();
+		try
+		{
+			auto jamOpt = LoadJam(defaults.value());
+			if (jamOpt.has_value())
+				jam = std::move(jamOpt.value());
+			else
+				std::cout << "[BOOT] Continuing with an empty JAM. Use Load JAM to choose a compatible session." << std::endl;
+		}
+		catch (const std::exception& error)
+		{
+			std::cerr << "[BOOT] JAM restore failed; continuing with an empty session: " << error.what() << std::endl;
+		}
+		catch (...)
+		{
+			std::cerr << "[BOOT] JAM restore failed with an unknown error; continuing with an empty session." << std::endl;
+		}
 
 		JamFile::ToStream(jam, ss);
 
@@ -407,10 +467,34 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	const auto jamDirectory = defaults.has_value() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
-	auto scene = Scene::FromFile(sceneParams, jam, rig, jamDirectory, std::move(saveRig));
+	const auto createScene = [&](JamFile source)
+		-> std::optional<std::shared_ptr<Scene>>
+	{
+		try
+		{
+			return Scene::FromFile(sceneParams, std::move(source), rig, jamDirectory, saveRig);
+		}
+		catch (const std::exception& error)
+		{
+			std::cerr << "[BOOT] Scene creation failed: " << error.what() << std::endl;
+		}
+		catch (...)
+		{
+			std::cerr << "[BOOT] Scene creation failed with an unknown error." << std::endl;
+		}
+		return std::nullopt;
+	};
+
+	auto scene = createScene(std::move(jam));
+
 	if (!scene.has_value())
 	{
-		std::cout << "Failed to create Scene... quitting" << std::endl;
+		std::cout << "[BOOT] Could not restore JAM; starting with an empty session." << std::endl;
+		scene = createScene(EmptyJam());
+	}
+	if (!scene.has_value())
+	{
+		std::cout << "Failed to create empty Scene... quitting" << std::endl;
 		return -1;
 	}
 
@@ -438,10 +522,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		{
 			if (msg.message == WM_QUIT)
 			{
-				scene.value()->CloseAllVstEditorWindows();
-				scene.value()->ForceUnloadAllVstPlugins();
+				scene.value()->Shutdown();
 				vst::DrainUiThreadDestroyQueue();
-				scene.value()->CloseAudio();
 				active = false;
 				break;
 			}
@@ -457,6 +539,76 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
 			window.OnAction(globalKeyAction);
 
+		if (window.ConsumeJamLoadRequest())
+		{
+			const bool paused = scene.value()->PauseAudio();
+			if (!paused)
+				scene.value()->CloseAudio();
+
+			const auto jamPath = utils::PickJamFile();
+			if (jamPath.empty())
+			{
+				if (paused)
+					scene.value()->ResumeAudio();
+				else
+					scene.value()->InitAudio();
+			}
+			else
+			{
+				std::optional<std::shared_ptr<Scene>> replacement;
+				try
+				{
+					auto selectedJam = LoadJamFile(jamPath);
+					if (selectedJam.has_value())
+					{
+						const auto activeRig = scene.value()->AcceptedRigSnapshot();
+						replacement = Scene::FromFile(sceneParams, std::move(selectedJam.value()),
+							activeRig ? activeRig->Rig : rig,
+							utils::GetParentDirectory(jamPath), saveRig);
+					}
+				}
+				catch (const std::exception& error)
+				{
+					std::cerr << "Load JAM failed: " << error.what() << std::endl;
+				}
+				catch (...)
+				{
+					std::cerr << "Load JAM failed with an unknown error" << std::endl;
+				}
+
+				if (!replacement.has_value())
+				{
+					std::wcerr << L"Load JAM failed; keeping the current session: " << jamPath << std::endl;
+					if (paused)
+						scene.value()->ResumeAudio();
+					else
+						scene.value()->InitAudio();
+				}
+				else
+				{
+					if (defaults.has_value())
+						replacement.value()->SetLogging(defaults.value().Logging);
+
+					{
+						// Exclude the console submit callback while its raw scene view is rebound.
+						std::scoped_lock scenePointerLock(sceneRawMutex);
+						sceneRaw.store(nullptr, std::memory_order_release);
+						// Editors, queued jobs, and plugin instances belong to the outgoing
+						// JAM. Tear them down completely before binding the window to the
+						// already-constructed replacement Scene.
+						scene.value()->Shutdown();
+						window.ReplaceScene(*replacement.value());
+						scene = std::move(replacement);
+						sceneRaw.store(scene.value().get(), std::memory_order_release);
+					}
+					vst::DrainUiThreadDestroyQueue();
+
+					scene.value()->InitGlobalKeyCapture();
+					scene.value()->InitAudio();
+				}
+			}
+		}
+
 		window.Render();
 		window.Swap();
 
@@ -465,12 +617,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		vst::DrainUiThreadDestroyQueue();
 	}
 
-	// Close VST editor windows while the main thread's COM STA is still valid.
-	// IPlugView::removed() may use COM; calling it after CoUninitialize() risks
-	// undefined behaviour. scene is still alive here since it goes out of scope
-	// after the explicit CoUninitialize() call below.
+	// Shutdown stops the audio callback before it closes VST editor windows and
+	// releases their plugins, while this main thread's COM STA is still valid.
 	scene.value()->Shutdown();
-	scene.value()->CloseAllVstEditorWindows();
 
 	if (defaults.has_value())
 	{

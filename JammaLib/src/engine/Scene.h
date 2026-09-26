@@ -110,6 +110,7 @@ namespace engine
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		void UpdateCamera();
 
 		virtual void SetSize(utils::Size2d size) override
 		{
@@ -138,6 +139,8 @@ namespace engine
 		void InitGui();
 		void InitAudio();
 		void CloseAudio();
+		bool PauseAudio();
+		bool ResumeAudio();
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
 		bool PumpGlobalKeyCapture(actions::KeyAction& action) noexcept;
@@ -189,7 +192,7 @@ namespace engine
 		void DisconnectNinjam();
 
 		// Force-unload all hosted VST plugins owned by stations/takes/loops.
-		// Call on the main/non-audio thread during shutdown.
+		// Call on the main thread only after CloseAudio() has stopped the callback.
 		void ForceUnloadAllVstPlugins();
 		
 	protected:
@@ -214,8 +217,11 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
-		glm::mat4 _View();
 		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
+		// Pass a locked station list or a snapshot; remote updates can erase entries.
+		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
+		void _CycleCameraView();
+		void _ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
@@ -287,7 +293,6 @@ namespace engine
 		std::atomic_bool _isSceneReset;
 		glm::mat4 _viewProj;
 		glm::mat4 _overlayViewProj;
-		glm::mat4 _viewRotOnlyProj;
 		glm::mat4 _skyboxViewProj;
 		bool _skyboxStarted;
 		Time _skyboxStartTime;
@@ -340,6 +345,7 @@ namespace engine
 		graphics::CtrlHandleOverlay _ctrlHandleOverlay;
 		engine::QuantiserController _quantisationInteraction;
 		graphics::Camera _camera;
+		std::optional<Time> _lastCameraUpdateTime;
 		std::thread _jobRunner;
 		std::mutex _jobMutex;
 		std::list<actions::JobAction> _jobList;

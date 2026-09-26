@@ -891,6 +891,24 @@ std::vector<TriggerTake> Trigger::GetTakes() const
 	return history ? *history : std::vector<TriggerTake>();
 }
 
+void Trigger::RestoreTakes(std::vector<TriggerTake> takes)
+{
+	// Restore the most recent entries into both bounded ledgers before audio starts.
+	const auto first = takes.size() > _HistoryCapacity ? takes.size() - _HistoryCapacity : 0u;
+	for (auto index = first; index < takes.size(); ++index)
+	{
+		const auto slot = _loopTakeHistorySize++;
+		const auto token = _nextHistoryToken++;
+		_loopTakeHistory[slot].SourceType = takes[index].SourceType;
+		_loopTakeHistory[slot].Token = token;
+		takes[index].Receiver = _receiver;
+		_jobTakeHistory[slot] = std::move(takes[index]);
+		_jobTakeTokens[slot] = token;
+		++_jobTakeHistorySize;
+	}
+	_PublishJobHistory();
+}
+
 void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const float* srcBuf,
 	unsigned int numSamps,

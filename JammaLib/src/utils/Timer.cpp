@@ -98,6 +98,19 @@ void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
 	_sampOffset.store(static_cast<unsigned int>(sampleOffset), std::memory_order_release);
 }
 
+bool Timer::InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcept
+{
+	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
+	if (loopLength == 0ul)
+		return false;
+
+	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
+	_loopCount.store(absoluteSamplePos / wideLoopLength, std::memory_order_release);
+	_sampOffset.store(static_cast<unsigned int>(absoluteSamplePos % wideLoopLength),
+		std::memory_order_release);
+	return true;
+}
+
 void Timer::SetMasterLoopIndexFrac(double loopIndexFrac) noexcept
 {
 	auto clampedFrac = loopIndexFrac;

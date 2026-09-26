@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <glm/ext.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 using namespace actions;
 using namespace base;
@@ -11,7 +13,19 @@ using namespace utils;
 Camera::Camera(CameraParams params) :
 	Moveable(params),
 	_id(params.Id),
-	_backgroundDrag()
+	_backgroundDrag(),
+	_view(View::Front),
+	_pose({ params.ModelPosition, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f, 0.0f } }),
+	_stationInteriorFieldOfView(80.0f),
+	_transitionStart(_pose),
+	_transitionTarget(_pose),
+	_transitionElapsedSeconds(0.0f),
+	_transitioning(false),
+	_wheelZoomTransition(false),
+	_wheelZoomFocusPoint{},
+	_wheelZoomStationCentre{},
+	_rememberedPoses{},
+	_hasRememberedPose{}
 {
 }
 
@@ -57,14 +71,50 @@ utils::Position3d Camera::_ClampBackgroundDragVelocity(utils::Position3d velocit
 	constexpr float maxSpeed = 40.0f;
 	velocity.X = std::clamp(velocity.X, -maxSpeed, maxSpeed);
 	velocity.Y = std::clamp(velocity.Y, -maxSpeed, maxSpeed);
-	velocity.Z = 0.0f;
+	velocity.Z = std::clamp(velocity.Z, -maxSpeed, maxSpeed);
+	if (View::StationInterior == _view)
+	{
+		velocity.X = 0.0f;
+		velocity.Z = 0.0f;
+	}
+	else if (View::TopDown == _view)
+		velocity.Y = 0.0f;
+	else
+		velocity.Z = 0.0f;
 	return velocity;
+}
+
+utils::Position3d Camera::_Normalise(utils::Position3d value) noexcept
+{
+	const auto length = std::sqrt((value.X * value.X) + (value.Y * value.Y) + (value.Z * value.Z));
+	if (length <= 0.0001f)
+		return { 0.0f, 0.0f, -1.0f };
+
+	return { value.X / length, value.Y / length, value.Z / length };
+}
+
+utils::Position3d Camera::_Lerp(utils::Position3d from, utils::Position3d to, float amount) noexcept
+{
+	return {
+		from.X + ((to.X - from.X) * amount),
+		from.Y + ((to.Y - from.Y) * amount),
+		from.Z + ((to.Z - from.Z) * amount)
+	};
 }
 
 utils::Position3d Camera::_RelativeBackgroundDragPosition(utils::Position2d pointerPosition) const noexcept
 {
 	auto dPos = pointerPosition - _backgroundDrag.PointerAnchor;
-	return _backgroundDrag.CameraAnchor - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0f };
+	switch (_view)
+	{
+	case View::StationInterior:
+		return _backgroundDrag.CameraAnchor - Position3d{ 0.0f, (float)dPos.Y, 0.0f };
+	case View::TopDown:
+		return _backgroundDrag.CameraAnchor + Position3d{ -(float)dPos.X, 0.0f, (float)dPos.Y };
+	case View::Front:
+		return _backgroundDrag.CameraAnchor - Position3d{ (float)dPos.X, (float)dPos.Y, 0.0f };
+	}
+	return _backgroundDrag.CameraAnchor;
 }
 
 utils::Position3d Camera::_ApplyBackgroundDragBlend(utils::Position3d targetPosition) noexcept
@@ -89,11 +139,23 @@ utils::Position3d Camera::_UpdateInertialBackgroundDrag(utils::Position2d pointe
 	constexpr float linearDragCoeff = 0.01f;
 	constexpr float quadraticDragCoeff = 0.1f;
 	constexpr float inputDragStep = 1.0f;
-	auto inputVelocity = Position3d{ -(float)pointerDelta.X * gain, -(float)pointerDelta.Y * gain, 0.0f };
+	Position3d inputVelocity{};
+	switch (_view)
+	{
+	case View::StationInterior:
+		inputVelocity = { 0.0f, -(float)pointerDelta.Y * gain, 0.0f };
+		break;
+	case View::TopDown:
+		inputVelocity = { -(float)pointerDelta.X * gain, 0.0f, (float)pointerDelta.Y * gain };
+		break;
+	case View::Front:
+		inputVelocity = { -(float)pointerDelta.X * gain, -(float)pointerDelta.Y * gain, 0.0f };
+		break;
+	}
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
 		(_backgroundDrag.Velocity.X * carry) + inputVelocity.X,
 		(_backgroundDrag.Velocity.Y * carry) + inputVelocity.Y,
-		0.0f
+		(_backgroundDrag.Velocity.Z * carry) + inputVelocity.Z
 	});
 
 	auto applyDrag = [](float velocity, float step, float linearCoeff, float quadraticCoeff)
@@ -107,15 +169,35 @@ utils::Position3d Camera::_UpdateInertialBackgroundDrag(utils::Position2d pointe
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
 		applyDrag(_backgroundDrag.Velocity.X, inputDragStep, linearDragCoeff, quadraticDragCoeff),
 		applyDrag(_backgroundDrag.Velocity.Y, inputDragStep, linearDragCoeff, quadraticDragCoeff),
-		0.0f
+		applyDrag(_backgroundDrag.Velocity.Z, inputDragStep, linearDragCoeff, quadraticDragCoeff)
 	});
 	return _backgroundDrag.CameraPosition + _backgroundDrag.Velocity;
 }
 
 void Camera::_ApplyBackgroundDragPosition(utils::Position3d position) noexcept
 {
+	position = _ConstrainDragPosition(position);
 	_backgroundDrag.CameraPosition = position;
-	SetModelPosition(position);
+	_pose.Eye = position;
+	_transitionTarget.Eye = position;
+	SetModelPosition(_pose.Eye);
+}
+
+utils::Position3d Camera::_ConstrainDragPosition(utils::Position3d position) const noexcept
+{
+	switch (_view)
+	{
+	case View::StationInterior:
+		position.X = _transitionTarget.Eye.X;
+		position.Z = _transitionTarget.Eye.Z;
+		break;
+	case View::TopDown:
+		position.Y = _transitionTarget.Eye.Y;
+		break;
+	case View::Front:
+		break;
+	}
+	return position;
 }
 
 void Camera::_SwitchBackgroundDragMode(utils::Position2d pointerPosition, unsigned int mouseButtonsDown) noexcept
@@ -158,27 +240,26 @@ void Camera::_EndBackgroundDrag() noexcept
 	_backgroundDrag = BackgroundDragState{};
 }
 
-void Camera::_CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate)
+void Camera::_CoastBackgroundDrag(float deltaSeconds)
 {
-	if (0u == samps || 0u == sampleRate)
+	if (deltaSeconds <= 0.0f)
 		return;
 
 	constexpr float framesPerSecond = 60.0f;
 	constexpr float linearDragCoeff = 0.01f;
 	constexpr float quadraticDragCoeff = 0.1f;
-	const float deltaSeconds = static_cast<float>(samps) / static_cast<float>(sampleRate);
 	const float motionScale = deltaSeconds * framesPerSecond;
 	if (motionScale <= 0.0f)
 		return;
 
 	auto velocity = _backgroundDrag.Velocity;
-	if ((0.0f == velocity.X) && (0.0f == velocity.Y))
+	if ((0.0f == velocity.X) && (0.0f == velocity.Y) && (0.0f == velocity.Z))
 		return;
 
 	auto nextPosition = _backgroundDrag.CameraPosition + Position3d{
 		velocity.X * motionScale,
 		velocity.Y * motionScale,
-		0.0f
+		velocity.Z * motionScale
 	};
 
 	auto applyDrag = [](float velocity, float step, float linearCoeff, float quadraticCoeff)
@@ -192,23 +273,27 @@ void Camera::_CoastBackgroundDrag(unsigned int samps, unsigned int sampleRate)
 	_backgroundDrag.Velocity = _ClampBackgroundDragVelocity({
 		applyDrag(velocity.X, motionScale, linearDragCoeff, quadraticDragCoeff),
 		applyDrag(velocity.Y, motionScale, linearDragCoeff, quadraticDragCoeff),
-		0.0f
+		applyDrag(velocity.Z, motionScale, linearDragCoeff, quadraticDragCoeff)
 	});
 
 	if ((std::fabs(_backgroundDrag.Velocity.X) < 0.02f)
-		&& (std::fabs(_backgroundDrag.Velocity.Y) < 0.02f))
+		&& (std::fabs(_backgroundDrag.Velocity.Y) < 0.02f)
+		&& (std::fabs(_backgroundDrag.Velocity.Z) < 0.02f))
 	{
 		_backgroundDrag.Velocity = { 0.0f, 0.0f, 0.0f };
 	}
 
 	_ApplyBackgroundDragPosition(nextPosition);
 
-	if ((0u == _backgroundDrag.MouseButtonsDown) && (0.0f == _backgroundDrag.Velocity.X) && (0.0f == _backgroundDrag.Velocity.Y))
+	if ((0u == _backgroundDrag.MouseButtonsDown) && (0.0f == _backgroundDrag.Velocity.X) && (0.0f == _backgroundDrag.Velocity.Y) && (0.0f == _backgroundDrag.Velocity.Z))
 		_EndBackgroundDrag();
 }
 
 ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 {
+	if (_transitioning)
+		return _BackgroundDragActionResult();
+
 	auto mouseButtonsDown = _BackgroundDragMouseButtonsDown(action.MouseButtonsDown, action.Index, TouchAction::TOUCH_DOWN == action.State);
 	auto mode = _ResolveBackgroundDragMode(mouseButtonsDown);
 
@@ -252,7 +337,7 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 		{
 			if ((BackgroundDragMode::InertialPan == _backgroundDrag.Mode)
 				&& (0u != (releasedButton & BackgroundDragRightButtonMask))
-				&& ((0.0f != _backgroundDrag.Velocity.X) || (0.0f != _backgroundDrag.Velocity.Y)))
+				&& ((0.0f != _backgroundDrag.Velocity.X) || (0.0f != _backgroundDrag.Velocity.Y) || (0.0f != _backgroundDrag.Velocity.Z)))
 			{
 				_backgroundDrag.MouseButtonsDown = 0u;
 				return _BackgroundDragActionResult();
@@ -277,6 +362,9 @@ ActionResult Camera::HandleBackgroundDrag(TouchAction action)
 
 ActionResult Camera::UpdateBackgroundDrag(TouchMoveAction action)
 {
+	if (_transitioning)
+		return _BackgroundDragActionResult();
+
 	if (BackgroundDragMode::None == _backgroundDrag.Mode)
 		return ActionResult::NoAction();
 
@@ -321,12 +409,250 @@ ActionResult Camera::UpdateBackgroundDrag(TouchMoveAction action)
 	return ActionResult::NoAction();
 }
 
-void Camera::TickBackgroundDrag(unsigned int samps, unsigned int sampleRate)
+glm::mat4 Camera::ViewMatrix() const
 {
+	const auto eye = glm::vec3(_pose.Eye.X, _pose.Eye.Y, _pose.Eye.Z);
+	const auto forward = glm::vec3(_pose.Forward.X, _pose.Forward.Y, _pose.Forward.Z);
+	const auto up = glm::vec3(_pose.Up.X, _pose.Up.Y, _pose.Up.Z);
+	return glm::lookAt(eye, eye + forward, up);
+}
+
+glm::mat4 Camera::Projection(float aspectRatio, Position3d stationCentre) const
+{
+	if (View::StationInterior == _view)
+		return glm::perspective(glm::radians(_stationInteriorFieldOfView), aspectRatio, 10.0f, 1000.0f);
+
+	if (View::TopDown != _view)
+	{
+		const auto distanceFromStationCentre = std::abs(_pose.Eye.Z - stationCentre.Z);
+		const auto farPlane = std::max(1000.0f, distanceFromStationCentre + 1000.0f);
+		return glm::perspective(glm::radians(80.0f), aspectRatio, 10.0f, farPlane);
+	}
+
+	const auto halfFovRadians = glm::radians(32.0f);
+	const auto cameraDistance = std::abs(_pose.Eye.Y - stationCentre.Y);
+	const auto halfHeight = std::max(10.0f, cameraDistance * std::tan(halfFovRadians));
+	const auto farPlane = std::max(2000.0f, cameraDistance + 1000.0f);
+	return glm::ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio,
+		-halfHeight, halfHeight, 10.0f, farPlane);
+}
+
+glm::mat4 Camera::SkyboxProjection(float aspectRatio) const
+{
+	const auto fieldOfView = (View::StationInterior == _view)
+		? _stationInteriorFieldOfView
+		: ((View::TopDown == _view) ? 100.0f : 80.0f);
+	return glm::perspective(glm::radians(fieldOfView), aspectRatio, 0.1f, 1000.0f);
+}
+
+Position3d Camera::FocusPointAtCursor(Position2d cursorPosition,
+	unsigned int viewportWidth,
+	unsigned int viewportHeight,
+	Position3d stationCentre) const
+{
+	if ((View::Front != _view) && (View::TopDown != _view))
+		return stationCentre;
+
+	const auto width = static_cast<float>(viewportWidth);
+	const auto height = static_cast<float>(viewportHeight);
+	if ((width <= 0.0f) || (height <= 0.0f))
+		return stationCentre;
+
+	const auto aspectRatio = width / height;
+	const auto ndcX = (2.0f * static_cast<float>(cursorPosition.X) / width) - 1.0f;
+	// Window mouse positions use the same bottom-left origin as OpenGL.
+	const auto ndcY = (2.0f * static_cast<float>(cursorPosition.Y) / height) - 1.0f;
+	const auto inverseViewProjection = glm::inverse(Projection(aspectRatio, stationCentre) * ViewMatrix());
+	const auto nearHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+	const auto farHomogeneous = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+	if ((std::abs(nearHomogeneous.w) < 0.0001f) || (std::abs(farHomogeneous.w) < 0.0001f))
+		return stationCentre;
+
+	const auto rayOrigin = glm::vec3(nearHomogeneous) / nearHomogeneous.w;
+	const auto rayEnd = glm::vec3(farHomogeneous) / farHomogeneous.w;
+	const auto rayDirection = rayEnd - rayOrigin;
+	const auto planeNormal = (View::TopDown == _view)
+		? glm::vec3(0.0f, 1.0f, 0.0f)
+		: glm::vec3(0.0f, 0.0f, 1.0f);
+	const auto denominator = glm::dot(rayDirection, planeNormal);
+	if (std::abs(denominator) < 0.0001f)
+		return stationCentre;
+
+	const auto planePoint = glm::vec3(stationCentre.X, stationCentre.Y, stationCentre.Z);
+	const auto distance = glm::dot(planePoint - rayOrigin, planeNormal) / denominator;
+	if (distance < 0.0f)
+		return stationCentre;
+
+	const auto focusPoint = rayOrigin + (rayDirection * distance);
+	return { focusPoint.x, focusPoint.y, focusPoint.z };
+}
+
+ActionResult Camera::HandleWheel(int wheelNotches)
+{
+	return HandleWheel(wheelNotches, {}, 0u, 0u, {});
+}
+
+ActionResult Camera::HandleWheel(int wheelNotches,
+	Position2d cursorPosition,
+	unsigned int viewportWidth,
+	unsigned int viewportHeight,
+	Position3d stationCentre)
+{
+	if (0 == wheelNotches)
+		return ActionResult::NoAction();
+
+	if (View::StationInterior == _view)
+	{
+		constexpr float fieldOfViewStep = 8.0f;
+		constexpr float minFieldOfView = 20.0f;
+		constexpr float maxFieldOfView = 120.0f;
+		_stationInteriorFieldOfView = std::clamp(_stationInteriorFieldOfView
+			- (static_cast<float>(wheelNotches) * fieldOfViewStep), minFieldOfView, maxFieldOfView);
+		return _BackgroundDragActionResult();
+	}
+
+	const auto continueTopDownWheelZoom = _transitioning
+		&& _wheelZoomTransition
+		&& (View::TopDown == _view);
+	if (_transitioning && !continueTopDownWheelZoom)
+		return _BackgroundDragActionResult();
+
+	const auto focusPoint = FocusPointAtCursor(cursorPosition, viewportWidth, viewportHeight, stationCentre);
+
+	constexpr float frontMinZ = 80.0f;
+	constexpr float frontMaxZ = 1350.0f;
+	constexpr float topDownMinY = 280.0f;
+	constexpr float topDownMaxY = 3200.0f;
+	constexpr float nearWheelZoomStep = 150.0f;
+	constexpr float farWheelZoomStep = 500.0f;
+	const auto wheelZoomStepAtDistance = [nearWheelZoomStep, farWheelZoomStep](float distance, float nearDistance, float farDistance)
+	{
+		const auto progress = std::clamp((distance - nearDistance) / (farDistance - nearDistance), 0.0f, 1.0f);
+		return nearWheelZoomStep + ((farWheelZoomStep - nearWheelZoomStep) * progress);
+	};
+	auto target = continueTopDownWheelZoom ? _transitionTarget : _pose;
+	if (View::Front == _view)
+	{
+		const auto cameraDistance = std::abs(_pose.Eye.Z - stationCentre.Z);
+		const auto wheelZoomStep = wheelZoomStepAtDistance(cameraDistance, frontMinZ, frontMaxZ);
+		target.Eye.Z = std::clamp(target.Eye.Z - (static_cast<float>(wheelNotches) * wheelZoomStep), frontMinZ, frontMaxZ);
+		const auto oldDistance = std::abs(_pose.Eye.Z - focusPoint.Z);
+		const auto newDistance = std::abs(target.Eye.Z - focusPoint.Z);
+		const auto scaleRatio = oldDistance > 0.0001f ? newDistance / oldDistance : 1.0f;
+		target.Eye.X = focusPoint.X - (scaleRatio * (focusPoint.X - _pose.Eye.X));
+		target.Eye.Y = focusPoint.Y - (scaleRatio * (focusPoint.Y - _pose.Eye.Y));
+	}
+	else if (View::TopDown == _view)
+	{
+		const auto cameraDistance = std::abs(target.Eye.Y - stationCentre.Y);
+		const auto wheelZoomStep = wheelZoomStepAtDistance(cameraDistance, topDownMinY, topDownMaxY);
+		target.Eye.Y = std::clamp(target.Eye.Y - (static_cast<float>(wheelNotches) * wheelZoomStep), topDownMinY, topDownMaxY);
+		const auto oldScale = cameraDistance;
+		const auto newScale = std::abs(target.Eye.Y - stationCentre.Y);
+		const auto topDownScaleRatio = oldScale > 0.0001f ? newScale / oldScale : 1.0f;
+		target.Eye.X = focusPoint.X - (topDownScaleRatio * (focusPoint.X - target.Eye.X));
+		target.Eye.Z = focusPoint.Z - (topDownScaleRatio * (focusPoint.Z - target.Eye.Z));
+	}
+
+	SetViewTarget(_view, target);
+	_wheelZoomTransition = (View::Front == _view) || (View::TopDown == _view);
+	_wheelZoomFocusPoint = focusPoint;
+	_wheelZoomStationCentre = stationCentre;
+	return _BackgroundDragActionResult();
+}
+
+void Camera::_ApplyPose(Pose pose) noexcept
+{
+	pose.Forward = _Normalise(pose.Forward);
+	pose.Up = _Normalise(pose.Up);
+	_pose = pose;
+	SetModelPosition(_pose.Eye);
+}
+
+void Camera::SetViewTarget(View view, Pose target) noexcept
+{
+	_wheelZoomTransition = false;
+	if (_view != view)
+	{
+		// An interrupted transition has a valid target pose but a transient current pose.
+		_rememberedPoses[_ViewIndex(_view)] = _transitioning ? _transitionTarget : _pose;
+		_hasRememberedPose[_ViewIndex(_view)] = true;
+	}
+	target.Forward = _Normalise(target.Forward);
+	target.Up = _Normalise(target.Up);
+	_view = view;
+	_transitionStart = _pose;
+	_transitionTarget = target;
+	_transitionElapsedSeconds = 0.0f;
+	_transitioning = true;
+	_EndBackgroundDrag();
+}
+
+void Camera::_TickTransition(float deltaSeconds) noexcept
+{
+	if (!_transitioning || (deltaSeconds <= 0.0f))
+		return;
+
+	const auto transitionDurationSeconds = _wheelZoomTransition
+		? WheelZoomTransitionDurationSeconds
+		: TransitionDurationSeconds;
+	_transitionElapsedSeconds = std::min(_transitionElapsedSeconds + std::min(deltaSeconds, 0.05f), transitionDurationSeconds);
+	const auto linearProgress = _transitionElapsedSeconds / transitionDurationSeconds;
+	const auto easedProgress = linearProgress * linearProgress * (3.0f - (2.0f * linearProgress));
+	Pose pose;
+	pose.Eye = _Lerp(_transitionStart.Eye, _transitionTarget.Eye, easedProgress);
+	if (_wheelZoomTransition)
+	{
+		if (View::Front == _view)
+		{
+			const auto startDistance = std::abs(_transitionStart.Eye.Z - _wheelZoomFocusPoint.Z);
+			const auto currentDistance = std::abs(pose.Eye.Z - _wheelZoomFocusPoint.Z);
+			const auto scaleRatio = startDistance > 0.0001f ? currentDistance / startDistance : 1.0f;
+			pose.Eye.X = _wheelZoomFocusPoint.X - (scaleRatio * (_wheelZoomFocusPoint.X - _transitionStart.Eye.X));
+			pose.Eye.Y = _wheelZoomFocusPoint.Y - (scaleRatio * (_wheelZoomFocusPoint.Y - _transitionStart.Eye.Y));
+		}
+		else if (View::TopDown == _view)
+		{
+			const auto startScale = std::abs(_transitionStart.Eye.Y - _wheelZoomStationCentre.Y);
+			const auto currentScale = std::abs(pose.Eye.Y - _wheelZoomStationCentre.Y);
+			const auto scaleRatio = startScale > 0.0001f ? currentScale / startScale : 1.0f;
+			pose.Eye.X = _wheelZoomFocusPoint.X - (scaleRatio * (_wheelZoomFocusPoint.X - _transitionStart.Eye.X));
+			pose.Eye.Z = _wheelZoomFocusPoint.Z - (scaleRatio * (_wheelZoomFocusPoint.Z - _transitionStart.Eye.Z));
+		}
+	}
+	const auto startOrientation = glm::quatLookAt(
+		glm::vec3(_transitionStart.Forward.X, _transitionStart.Forward.Y, _transitionStart.Forward.Z),
+		glm::vec3(_transitionStart.Up.X, _transitionStart.Up.Y, _transitionStart.Up.Z));
+	const auto targetOrientation = glm::quatLookAt(
+		glm::vec3(_transitionTarget.Forward.X, _transitionTarget.Forward.Y, _transitionTarget.Forward.Z),
+		glm::vec3(_transitionTarget.Up.X, _transitionTarget.Up.Y, _transitionTarget.Up.Z));
+	const auto rotation = glm::mat3_cast(glm::slerp(startOrientation, targetOrientation, easedProgress));
+	const auto forward = rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+	const auto up = rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+	pose.Forward = { forward.x, forward.y, forward.z };
+	pose.Up = { up.x, up.y, up.z };
+	_ApplyPose(pose);
+
+	if (_transitionElapsedSeconds >= transitionDurationSeconds)
+	{
+		_ApplyPose(_transitionTarget);
+		_transitioning = false;
+		_wheelZoomTransition = false;
+	}
+}
+
+void Camera::TickBackgroundDrag(float deltaSeconds)
+{
+	if (_transitioning)
+	{
+		_TickTransition(deltaSeconds);
+		return;
+	}
+
 	if (BackgroundDragMode::InertialPan != _backgroundDrag.Mode)
 		return;
 
-	_CoastBackgroundDrag(samps, sampleRate);
+	_CoastBackgroundDrag(deltaSeconds);
 }
 
 bool Camera::IsBackgroundDragging() const noexcept
@@ -337,4 +663,181 @@ bool Camera::IsBackgroundDragging() const noexcept
 bool Camera::BackgroundDragWasDragged() const noexcept
 {
 	return _backgroundDrag.Dragged;
+}
+
+bool Camera::IsTransitioning() const noexcept
+{
+	return _transitioning;
+}
+
+Camera::View Camera::CurrentView() const noexcept
+{
+	return _view;
+}
+
+Camera::Pose Camera::CurrentPose() const noexcept
+{
+	return _pose;
+}
+
+float Camera::StationInteriorFieldOfView() const noexcept
+{
+	return _stationInteriorFieldOfView;
+}
+
+size_t Camera::_ViewIndex(View view) noexcept
+{
+	return static_cast<size_t>(view);
+}
+
+bool Camera::HasRememberedPose(View view) const noexcept
+{
+	return _hasRememberedPose[_ViewIndex(view)];
+}
+
+Camera::Pose Camera::RememberedPose(View view) const noexcept
+{
+	return _rememberedPoses[_ViewIndex(view)];
+}
+
+void Camera::RegisterStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision)
+{
+	if (_observedStations.size() <= index)
+		_observedStations.resize(index + 1u);
+	_observedStations[index] = { std::move(identity), revision };
+}
+
+void Camera::ObserveStation(size_t index, std::shared_ptr<const void> identity, std::uint64_t revision, Position3d position)
+{
+	if (_lastChangedStationIdentity == identity)
+		_lastChangedStationPosition = position;
+	if (_observedStations.size() <= index || _observedStations[index].Identity != identity)
+	{
+		// A removal shifts later stations left. Preserve this station's old
+		// revision so a simultaneous take change is still observed.
+		const auto previous = std::find_if(_observedStations.begin(), _observedStations.end(),
+			[&identity](const ObservedStation& station) { return station.Identity == identity; });
+		const auto previousRevision = previous == _observedStations.end() ? revision : previous->Revision;
+		RegisterStation(index, identity, previousRevision);
+	}
+	if (_observedStations[index].Revision == revision)
+		return;
+
+	_observedStations[index].Revision = revision;
+	_lastChangedStationIdentity = std::move(identity);
+	_lastChangedStationPosition = position;
+	if (View::StationInterior == _view)
+	{
+		_interiorFocusIdentity = _lastChangedStationIdentity;
+		SetViewTarget(View::StationInterior, _PoseForView(View::StationInterior, {}, position, {}));
+	}
+}
+
+void Camera::CompleteStationObservation(size_t stationCount, std::optional<Position3d> firstStation)
+{
+	_observedStations.resize(stationCount);
+	const auto isPresent = [this](const std::shared_ptr<const void>& identity)
+	{
+		return std::any_of(_observedStations.begin(), _observedStations.end(),
+			[&identity](const ObservedStation& station) { return station.Identity == identity; });
+	};
+	if (_lastChangedStationIdentity && !isPresent(_lastChangedStationIdentity))
+	{
+		_lastChangedStationIdentity.reset();
+		_lastChangedStationPosition.reset();
+	}
+	if (_interiorFocusIdentity && !isPresent(_interiorFocusIdentity))
+	{
+		_interiorFocusIdentity = _observedStations.empty() ? nullptr : _observedStations.front().Identity;
+		SetViewTarget(View::StationInterior, _PoseForView(View::StationInterior, {}, {}, firstStation));
+	}
+}
+
+Camera::Pose Camera::_PoseForView(View view, Position3d stationCentre,
+	std::optional<Position3d> hoveredStation,
+	std::optional<Position3d> firstStation) const noexcept
+{
+	Pose pose;
+	switch (view)
+	{
+	case View::Front:
+		pose.Eye = { 0.0f, 0.0f, 420.0f };
+		break;
+	case View::StationInterior:
+		pose.Eye = hoveredStation.value_or(_lastChangedStationPosition.value_or(firstStation.value_or(Position3d{})));
+		pose.Forward = { 0.0f, 0.0f, 1.0f };
+		break;
+	case View::TopDown:
+		pose.Eye = { stationCentre.X, stationCentre.Y + 800.0f, stationCentre.Z };
+		pose.Forward = { 0.0f, -1.0f, 0.0f };
+		pose.Up = { 0.0f, 0.0f, -1.0f };
+		break;
+	}
+	return pose;
+}
+
+Camera::SelectDepthChange Camera::_LeaveStationInteriorSelectDepth() noexcept
+{
+	const auto restore = _interiorForcedLoopTakeDepth && !_interiorSelectDepthChanged;
+	_interiorForcedLoopTakeDepth = false;
+	_interiorSelectDepthChanged = false;
+	return restore ? SelectDepthChange::Station : SelectDepthChange::None;
+}
+
+Camera::SelectDepthChange Camera::CycleView(Position3d stationCentre,
+	std::optional<Position3d> hoveredStation,
+	std::optional<Position3d> firstStation,
+	std::shared_ptr<const void> hoveredIdentity,
+	std::shared_ptr<const void> firstIdentity,
+	bool stationSelectDepth)
+{
+	const auto nextView = (View::Front == _view) ? View::StationInterior
+		: ((View::StationInterior == _view) ? View::TopDown : View::Front);
+	auto depthChange = SelectDepthChange::None;
+	if (View::StationInterior == _view)
+	{
+		_interiorFocusIdentity.reset();
+		if (View::TopDown == nextView)
+			// Keep the interior depth until the top-down transition completes.
+			_interiorRestorePending = true;
+		else
+			depthChange = _LeaveStationInteriorSelectDepth();
+	}
+	else if (_interiorRestorePending)
+	{
+		depthChange = _LeaveStationInteriorSelectDepth();
+		_interiorRestorePending = false;
+	}
+	if (View::StationInterior == nextView)
+	{
+		_interiorFocusIdentity = hoveredStation ? std::move(hoveredIdentity)
+			: (_lastChangedStationPosition ? _lastChangedStationIdentity : std::move(firstIdentity));
+		_interiorForcedLoopTakeDepth = stationSelectDepth;
+		_interiorSelectDepthChanged = false;
+		if (_interiorForcedLoopTakeDepth)
+			depthChange = SelectDepthChange::LoopTake;
+	}
+
+	auto target = _PoseForView(nextView, stationCentre, hoveredStation, firstStation);
+	if ((View::StationInterior != nextView) && HasRememberedPose(nextView))
+		target = RememberedPose(nextView);
+	SetViewTarget(nextView, target);
+	return depthChange;
+}
+
+bool Camera::SelectDepthChanged(bool stationSelected) noexcept
+{
+	if (View::StationInterior != _view)
+		return false;
+	if (!stationSelected)
+		_interiorSelectDepthChanged = true;
+	return stationSelected;
+}
+
+Camera::SelectDepthChange Camera::PendingSelectDepthChange() noexcept
+{
+	if (!_interiorRestorePending || _transitioning || (View::TopDown != _view))
+		return SelectDepthChange::None;
+	_interiorRestorePending = false;
+	return _LeaveStationInteriorSelectDepth();
 }

@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <functional>
+#include <vector>
 #include "../base/AudioSource.h"
 #include "../io/UserConfig.h"
 #include "rtaudio/RtAudio.h"
@@ -65,6 +66,15 @@ namespace audio
 			void* AudioSink);
 
 	private:
+		struct AsioDeviceCandidate
+		{
+			unsigned int Id;
+			RtAudio::DeviceInfo Info;
+		};
+
+		static std::vector<AsioDeviceCandidate> ResolveAsioDeviceCandidates(
+			RtAudio& rtAudio,
+			const io::UserConfig::AudioSettings& audioSettings);
 		static unsigned int FindClosest(const std::vector<unsigned int>& vec, unsigned int target);
 	};
 }

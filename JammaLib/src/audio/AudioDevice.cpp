@@ -159,11 +159,10 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 	io::UserConfig::AudioSettings audioSettings,
 	void* AudioSink)
 {
-	std::unique_ptr<RtAudio> rtAudio;
-
+	std::unique_ptr<RtAudio> discoveryAudio;
 	try
 	{
-		rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
+		discoveryAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
 	}
 	catch (RtAudioError& err)
 	{
@@ -171,104 +170,187 @@ std::optional<std::unique_ptr<AudioDevice>> AudioDevice::Open(
 		return std::nullopt;
 	}
 
-	unsigned int deviceCount = 0u;
-	unsigned int inDeviceNum = 0u;
-	unsigned int outDeviceNum = 0u;
-	RtAudio::DeviceInfo inDev;
-	RtAudio::DeviceInfo outDev;
-	try
+	auto candidates = ResolveAsioDeviceCandidates(*discoveryAudio, audioSettings);
+	if (candidates.empty())
 	{
-		deviceCount = rtAudio->getDeviceCount();
-		if (deviceCount == 0u)
+		std::cout << "No usable ASIO devices were found." << std::endl;
+		return std::nullopt;
+	}
+
+	for (const auto& candidate : candidates)
+	{
+		// An ASIO duplex stream must use one driver for both directions.
+		const auto inputChannels = std::min(audioSettings.NumChannelsIn,
+			candidate.Info.inputChannels);
+		const auto outputChannels = std::min(audioSettings.NumChannelsOut,
+			candidate.Info.outputChannels);
+		if ((inputChannels == 0u) && (outputChannels == 0u))
 		{
-			std::cout << "No audio devices are available" << std::endl;
-			return std::nullopt;
+			std::cout << "Skipping ASIO device " << candidate.Id << " ("
+				<< candidate.Info.name << "): no requested channels are available." << std::endl;
+			continue;
 		}
 
-		inDeviceNum = rtAudio->getDefaultInputDevice();
-		outDeviceNum = rtAudio->getDefaultOutputDevice();
-		if (inDeviceNum < deviceCount)
-			inDev = rtAudio->getDeviceInfo(inDeviceNum);
-		if (outDeviceNum < deviceCount)
-			outDev = rtAudio->getDeviceInfo(outDeviceNum);
+		if (candidate.Info.sampleRates.empty())
+		{
+			std::cout << "Skipping ASIO device " << candidate.Id << " ("
+				<< candidate.Info.name << "): no supported sample rates were reported." << std::endl;
+			continue;
+		}
+
+		io::UserConfig::AudioSettings candidateSettings = audioSettings;
+		candidateSettings.NumChannelsIn = inputChannels;
+		candidateSettings.NumChannelsOut = outputChannels;
+		candidateSettings.SampleRate = FindClosest(candidate.Info.sampleRates,
+			candidateSettings.SampleRate);
+
+		RtAudio::StreamParameters inParams;
+		inParams.deviceId = candidate.Id;
+		inParams.firstChannel = 0;
+		inParams.nChannels = inputChannels;
+
+		RtAudio::StreamParameters outParams;
+		outParams.deviceId = candidate.Id;
+		outParams.firstChannel = 0;
+		outParams.nChannels = outputChannels;
+
+		RtAudio::StreamOptions streamOptions;
+		streamOptions.numberOfBuffers = candidateSettings.NumBuffers;
+
+		std::cout << "Opening ASIO device " << candidate.Id << " ("
+			<< candidate.Info.name << ")" << std::endl;
+		std::cout << "[Input] " << inParams.nChannels << "ch" << std::endl;
+		std::cout << "[Output] " << outParams.nChannels << "ch" << std::endl;
+
+		try
+		{
+			// A fresh RtAudio instance prevents a failed ASIO driver open from
+			// contaminating the next fallback attempt.
+			auto rtAudio = std::make_unique<RtAudio>(RtAudio::WINDOWS_ASIO);
+			rtAudio->openStream(outputChannels > 0u ? &outParams : nullptr,
+				inputChannels > 0u ? &inParams : nullptr,
+				RTAUDIO_FLOAT32,
+				candidateSettings.SampleRate,
+				&candidateSettings.BufSize,
+				*onAudio.target<RtAudioCallback>(),
+				AudioSink,
+				&streamOptions,
+				nullptr);
+				//*onError.target<RtAudioErrorCallback>());
+
+			if (!rtAudio->isStreamOpen())
+			{
+				std::cout << "ASIO device " << candidate.Id << " did not open a stream." << std::endl;
+				continue;
+			}
+
+			AudioStreamParams audioStreamParams;
+			audioStreamParams.Name = candidate.Info.name;
+			audioStreamParams.SampleRate = candidateSettings.SampleRate;
+			audioStreamParams.BufSize = candidateSettings.BufSize;
+			audioStreamParams.NumBuffers = streamOptions.numberOfBuffers;
+			audioStreamParams.InputLatency = (unsigned int)rtAudio->getInputStreamLatency();
+			audioStreamParams.OutputLatency = (unsigned int)rtAudio->getOutputStreamLatency();
+			audioStreamParams.NumInputChannels = inputChannels;
+			audioStreamParams.NumOutputChannels = outputChannels;
+
+			return std::make_unique<AudioDevice>(audioStreamParams, std::move(rtAudio));
+		}
+		catch (RtAudioError& err)
+		{
+			std::cout << "Error opening ASIO device " << candidate.Id << " ("
+				<< candidate.Info.name << "): " << err.getMessage() << std::endl;
+		}
+	}
+
+	std::cout << "Unable to open any available ASIO device." << std::endl;
+	return std::nullopt;
+}
+
+std::vector<AudioDevice::AsioDeviceCandidate> AudioDevice::ResolveAsioDeviceCandidates(
+	RtAudio& rtAudio,
+	const io::UserConfig::AudioSettings& audioSettings)
+{
+	std::vector<AsioDeviceCandidate> devices;
+	try
+	{
+		const auto deviceCount = rtAudio.getDeviceCount();
+		for (auto deviceId = 0u; deviceId < deviceCount; deviceId++)
+		{
+			try
+			{
+				auto info = rtAudio.getDeviceInfo(deviceId);
+				if (info.probed)
+					devices.push_back({ deviceId, std::move(info) });
+				else
+					std::cout << "Skipping unprobed ASIO device " << deviceId << std::endl;
+			}
+			catch (RtAudioError& err)
+			{
+				std::cout << "Unable to probe ASIO device " << deviceId << ": "
+					<< err.getMessage() << std::endl;
+			}
+		}
 	}
 	catch (RtAudioError& err)
 	{
-		std::cout << "Error querying audio devices: " << err.getMessage() << std::endl;
-		return std::nullopt;
+		std::cout << "Unable to enumerate ASIO devices: " << err.getMessage() << std::endl;
+		return {};
 	}
 
-	if ((!inDev.probed || inDev.inputChannels == 0u) &&
-		(!outDev.probed || outDev.outputChannels == 0u))
+	std::vector<AsioDeviceCandidate> candidates;
+	auto appendCandidate = [&candidates, &devices](unsigned int deviceId)
 	{
-		std::cout << "No default audio input or output device is available" << std::endl;
-		return std::nullopt;
-	}
+		const auto device = std::find_if(devices.begin(), devices.end(),
+			[deviceId](const AsioDeviceCandidate& candidate) { return candidate.Id == deviceId; });
+		const auto alreadyAdded = std::any_of(candidates.begin(), candidates.end(),
+			[deviceId](const AsioDeviceCandidate& candidate) { return candidate.Id == deviceId; });
+		if ((device != devices.end()) && !alreadyAdded)
+			candidates.push_back(*device);
+	};
 
-	// Correct the audioSettings so they work
-	audioSettings.NumChannelsIn = std::min(inDev.inputChannels, audioSettings.NumChannelsIn);
-	audioSettings.NumChannelsOut = std::min(outDev.outputChannels, audioSettings.NumChannelsOut);
-	const auto& sampleRates = inDev.inputChannels > 0u ? inDev.sampleRates : outDev.sampleRates;
-	if (sampleRates.empty())
+	if (!audioSettings.Name.empty())
 	{
-		std::cout << "No supported sample rates are available for the default audio devices" << std::endl;
-		return std::nullopt;
+		for (const auto& device : devices)
+		{
+			if (device.Info.name == audioSettings.Name)
+				appendCandidate(device.Id);
+		}
 	}
-	audioSettings.SampleRate = FindClosest(sampleRates, audioSettings.SampleRate);
-
-	RtAudio::StreamParameters inParams;
-	inParams.deviceId = inDeviceNum;
-	inParams.firstChannel = 0;
-	inParams.nChannels = audioSettings.NumChannelsIn;
-
-	RtAudio::StreamParameters outParams;
-	outParams.deviceId = outDeviceNum;
-	outParams.firstChannel = 0;
-	outParams.nChannels = audioSettings.NumChannelsOut;
-
-	RtAudio::StreamOptions streamOptions;
-	streamOptions.numberOfBuffers = audioSettings.NumBuffers;
-	//streamOptions.flags = RTAUDIO_MINIMIZE_LATENCY;
-
-	AudioStreamParams audioStreamParams;
-
-	std::cout << "Opening audio stream" << std::endl;
-	std::cout << "[Input Device] " << inParams.deviceId << " : " << inParams.nChannels << "ch" << std::endl;
-	std::cout << "[Output Device] " << outParams.deviceId << " : " << outParams.nChannels << "ch" << std::endl;
 
 	try
 	{
-		rtAudio->openStream(outParams.nChannels > 0 ? &outParams : nullptr,
-			inParams.nChannels > 0 ? &inParams : nullptr,
-			RTAUDIO_FLOAT32,
-			audioSettings.SampleRate,
-			&audioSettings.BufSize,
-			*onAudio.target<RtAudioCallback>(),
-			(void*)AudioSink,
-			&streamOptions,
-			nullptr);
-			//*onError.target<RtAudioErrorCallback>());
+		const auto defaultInput = rtAudio.getDefaultInputDevice();
+		const auto defaultOutput = rtAudio.getDefaultOutputDevice();
+		if (audioSettings.NumChannelsOut > 0u)
+		{
+			appendCandidate(defaultOutput);
+			appendCandidate(defaultInput);
+		}
+		else
+		{
+			appendCandidate(defaultInput);
+			appendCandidate(defaultOutput);
+		}
 	}
 	catch (RtAudioError& err)
 	{
-		std::cout << "Error opening audio stream: " << err.getMessage() << std::endl;
-		return std::nullopt;
+		std::cout << "Unable to resolve default ASIO device: " << err.getMessage() << std::endl;
 	}
-	
-	if (!rtAudio->isStreamOpen())
-		return std::nullopt;
 
-	audioSettings.NumBuffers = streamOptions.numberOfBuffers;
-	audioStreamParams.Name = streamOptions.streamName;
-	audioStreamParams.SampleRate = audioSettings.SampleRate;
-	audioStreamParams.BufSize = audioSettings.BufSize;
-	audioStreamParams.NumBuffers = streamOptions.numberOfBuffers;
-	audioStreamParams.InputLatency = (unsigned int)rtAudio->getInputStreamLatency();
-	audioStreamParams.OutputLatency = (unsigned int) rtAudio->getOutputStreamLatency();
-	audioStreamParams.NumInputChannels = inParams.nChannels;
-	audioStreamParams.NumOutputChannels = outParams.nChannels;
+	for (const auto& device : devices)
+	{
+		const auto supportsRequestedDirections =
+			((audioSettings.NumChannelsIn == 0u) || (device.Info.inputChannels > 0u)) &&
+			((audioSettings.NumChannelsOut == 0u) || (device.Info.outputChannels > 0u));
+		if (supportsRequestedDirections)
+			appendCandidate(device.Id);
+	}
 
-	return std::make_unique<AudioDevice>(audioStreamParams, std::move(rtAudio));
+	for (const auto& device : devices)
+		appendCandidate(device.Id);
+
+	return candidates;
 }
 
 unsigned int AudioDevice::FindClosest(const std::vector<unsigned int>& vec,

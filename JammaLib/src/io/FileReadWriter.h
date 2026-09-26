@@ -17,6 +17,8 @@ namespace io
 		static void CreateDirectory(const std::wstring& fileName)
 		{
 			auto dir = utils::GetParentDirectory(fileName);
+			if (dir.empty())
+				return;
 			std::filesystem::create_directories(dir);
 		}
 
