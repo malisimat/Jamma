@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include <algorithm>
 #include "engine/Scene.h"
 
 class SceneRoutingIntegrationTest : public testing::Test
@@ -36,10 +37,16 @@ protected:
 	static std::vector<std::pair<std::string, std::size_t>> Memberships(const std::shared_ptr<engine::Scene>& scene)
 	{
 		std::vector<std::pair<std::string, std::size_t>> result;
-		for (const auto& station : scene->SnapshotStations())
+		const auto stations = scene->SnapshotStations();
+		const auto rig = scene->AcceptedRigSnapshot();
+		for (std::size_t stationIndex = 0u; stationIndex < stations.size(); ++stationIndex)
 		{
-			const auto membership = station->TriggerMembershipSnapshot();
-			result.emplace_back(station->Name(), membership ? membership->size() : 0u);
+			const auto count = rig ? static_cast<std::size_t>(std::count_if(rig->Triggers.begin(),
+				rig->Triggers.end(), [stationIndex](const engine::RigSnapshotTrigger& trigger)
+				{
+					return trigger.StationIndex == stationIndex;
+				})) : 0u;
+			result.emplace_back(stations[stationIndex]->Name(), count);
 		}
 		return result;
 	}

@@ -85,6 +85,9 @@ namespace io
 				static std::optional<MidiTriggerBinding> FromJson(Json::JsonPart json);
 			};
 
+			// Stable persisted identity. Empty IDs are accepted only for legacy
+			// files and are populated during routing normalization.
+			std::string Id;
 			std::string Name;
 			unsigned int StationType;
 			std::vector<TriggerPair> TriggerPairs;
@@ -132,6 +135,7 @@ namespace io
 			RigFile CandidateRig;
 			std::vector<TriggerResolution> Triggers;
 			bool RequiresSave = false;
+			bool IsValid = true;
 		};
 
 		static Resolution Resolve(const RigFile& rig,

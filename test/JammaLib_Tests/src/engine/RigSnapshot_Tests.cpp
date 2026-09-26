@@ -1,6 +1,5 @@
 #include "engine/RigCoordinator.h"
 #include "audio/AudioHost.h"
-#include "../TestRigMembership.h"
 #include "engine/Station.h"
 #include "gui/GuiHud.h"
 
@@ -36,6 +35,7 @@ protected:
 		io::RigFile::Trigger::MidiInputMode midiMode = io::RigFile::Trigger::MidiInputMode::None)
 	{
 		io::RigFile::Trigger trigger{};
+		trigger.Id = name + "-id";
 		trigger.Name = std::move(name);
 		trigger.StationTarget = std::move(target);
 		trigger.MidiInputs = midiMode;
@@ -96,7 +96,7 @@ TEST_F(RigSnapshotTest, BuildsEveryTriggerAndResolvesTargetsByName)
 	EXPECT_EQ(io::RigFileRouting::Warning::None, runtime->Graph.Triggers[3].Reason);
 }
 
-TEST_F(RigSnapshotTest, ResolvesLegacyTargetWithoutAdoptingUnsavedMigration)
+TEST_F(RigSnapshotTest, ResolvesLegacyTargetAndKeepsNormalizedRuntimeIdentity)
 {
 	io::RigFile rig{};
 	rig.Triggers = { TriggerDescriptor("legacy", std::nullopt) };
@@ -109,7 +109,8 @@ TEST_F(RigSnapshotTest, ResolvesLegacyTargetWithoutAdoptingUnsavedMigration)
 	ASSERT_TRUE(runtime);
 	ASSERT_EQ(1u, runtime->Triggers.size());
 	EXPECT_EQ(0u, runtime->Triggers[0].StationIndex.value());
-	EXPECT_FALSE(runtime->Rig.Triggers[0].StationTarget.has_value());
+	EXPECT_EQ("Station", runtime->Rig.Triggers[0].StationTarget.value());
+	EXPECT_FALSE(runtime->Rig.Triggers[0].Id.empty());
 	EXPECT_EQ(io::RigFileRouting::Warning::LegacyStationTargetMigrated, runtime->Graph.Triggers[0].Reason);
 }
 
@@ -147,20 +148,15 @@ TEST_F(RigSnapshotTest, LiveMidiEligibilityRequiresAnExplicitDeviceSelection)
 	auto selectedConfig = TriggerDescriptor("selected", "Station", io::RigFile::Trigger::MidiInputMode::Selected);
 	selectedConfig.MidiInputDevices = { "Keys" };
 
-	auto none = engine::Trigger::FromFile(engine::TriggerParams(), noneConfig);
-	auto selected = engine::Trigger::FromFile(engine::TriggerParams(), selectedConfig);
-	ASSERT_TRUE(none.has_value());
-	ASSERT_TRUE(selected.has_value());
-
-	auto station = RuntimeStation("Station");
-	AddTestRigTrigger(station, none.value());
-	EXPECT_FALSE(station->AcceptsLiveMidiFromDevice("Keys"));
-	AddTestRigTrigger(station, selected.value());
-	EXPECT_TRUE(station->AcceptsLiveMidiFromDevice("Keys"));
-	EXPECT_FALSE(station->AcceptsLiveMidiFromDevice("Other"));
-
-	auto noRoutes = RuntimeStation("No routes");
-	EXPECT_FALSE(noRoutes->AcceptsLiveMidiFromDevice("Keys"));
+	io::RigFile rig{};
+	rig.Triggers = { noneConfig, selectedConfig };
+	const auto snapshot = BuildSnapshot(rig, { StationDescriptor("Station") }, 0u,
+		{ "Keys", "Other" });
+	ASSERT_TRUE(snapshot);
+	ASSERT_EQ(2u, snapshot->InputDispatch.LiveMidi.size());
+	ASSERT_EQ(1u, snapshot->InputDispatch.LiveMidi[0].Recipients.size());
+	EXPECT_EQ("Station", snapshot->InputDispatch.LiveMidi[0].Recipients[0]->Name());
+	EXPECT_TRUE(snapshot->InputDispatch.LiveMidi[1].Recipients.empty());
 }
 
 TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatch)
@@ -188,13 +184,99 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 	const auto staged = coordinator.Quiescing();
 	ASSERT_TRUE(staged);
 	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
-	EXPECT_TRUE(staged->ChangedTriggerIndices.empty());
+	EXPECT_TRUE(staged->RetiredTriggerChecks.empty());
+	ASSERT_EQ(1u, staged->RetainedTriggerRouteChanges.size());
+	EXPECT_EQ(0u, staged->RetainedTriggerRouteChanges[0].CandidateIndex);
 	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), staged->Triggers[0].InputChannels);
 	EXPECT_EQ(secondStation, staged->Triggers[0].Receiver);
 	ASSERT_EQ(2u, staged->InputDispatch.LiveMidi.size());
 	EXPECT_TRUE(staged->InputDispatch.LiveMidi[0].Recipients.empty());
 	ASSERT_EQ(1u, staged->InputDispatch.LiveMidi[1].Recipients.size());
 	EXPECT_EQ(secondStation, staged->InputDispatch.LiveMidi[1].Recipients[0]);
+}
+
+TEST_F(RigSnapshotTest, ReorderPreservesStableTriggerInstancesAndDisplayOrder)
+{
+	io::RigFile initial{};
+	initial.Triggers = {
+		TriggerDescriptor("first", "Station"),
+		TriggerDescriptor("second", "Station")
+	};
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	const auto accepted = coordinator.Accepted();
+
+	auto candidate = accepted->Rig;
+	std::swap(candidate.Triggers[0], candidate.Triggers[1]);
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
+	const auto staged = coordinator.Quiescing();
+	ASSERT_TRUE(staged);
+	EXPECT_EQ("second-id", staged->Triggers[0].Id);
+	EXPECT_EQ("first-id", staged->Triggers[1].Id);
+	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[0].Instance);
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[1].Instance);
+	EXPECT_TRUE(staged->RetiredTriggerChecks.empty());
+}
+
+TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
+{
+	io::RigFile initial{};
+	initial.Triggers = {
+		TriggerDescriptor("first", "Station"),
+		TriggerDescriptor("second", "Station")
+	};
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	const auto accepted = coordinator.Accepted();
+
+	auto deletion = accepted->Rig;
+	deletion.Triggers.erase(deletion.Triggers.begin());
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(deletion));
+	auto staged = coordinator.Quiescing();
+	ASSERT_TRUE(staged);
+	ASSERT_EQ(1u, staged->Triggers.size());
+	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[0].Instance);
+	ASSERT_EQ(1u, staged->RetiredTriggerChecks.size());
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->RetiredTriggerChecks[0].AcceptedInstance);
+	ASSERT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
+		coordinator.CompleteQuiescence(staged->Revision, false, [](const io::RigFile&) { return true; }));
+
+	auto replacement = accepted->Rig;
+	replacement.Triggers[0].Name = "changed activation";
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(replacement));
+	staged = coordinator.Quiescing();
+	ASSERT_TRUE(staged);
+	EXPECT_NE(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
+	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[1].Instance);
+	ASSERT_EQ(1u, staged->RetiredTriggerChecks.size());
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->RetiredTriggerChecks[0].AcceptedInstance);
+}
+
+TEST_F(RigSnapshotTest, DuplicateTriggerIdsFailInitialAndCandidateValidation)
+{
+	io::RigFile duplicate{};
+	duplicate.Triggers = {
+		TriggerDescriptor("first", "Station"),
+		TriggerDescriptor("second", "Station")
+	};
+	duplicate.Triggers[1].Id = duplicate.Triggers[0].Id;
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator invalid;
+	EXPECT_FALSE(invalid.BuildInitial(duplicate, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+
+	io::RigFile valid{};
+	valid.Triggers = { TriggerDescriptor("first", "Station") };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(valid, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	duplicate = coordinator.Accepted()->Rig;
+	duplicate.Triggers.push_back(duplicate.Triggers[0]);
+	EXPECT_EQ(engine::RigCoordinator::EditResult::ValidationFailed, coordinator.SubmitCandidate(duplicate));
 }
 
 TEST_F(RigSnapshotTest, HudCableRoutesContainOnlyResolvedGraphEdges)
@@ -232,7 +314,7 @@ TEST(GuiHudLayout, RevealScrollOffsetClampsAndRevealsItems)
 	EXPECT_EQ(0, gui::GuiHud::RevealScrollOffset(30, 500, 200, 0, 100));
 }
 
-TEST_F(RigSnapshotTest, ReplacesCompleteStationMembershipAndResetRetainsPublishedRig)
+TEST_F(RigSnapshotTest, SnapshotOwnsCompleteTriggerListIndependentOfStationReset)
 {
 	auto station = RuntimeStation("Station");
 	const auto descriptor = StationDescriptor("Station");
@@ -242,13 +324,12 @@ TEST_F(RigSnapshotTest, ReplacesCompleteStationMembershipAndResetRetainsPublishe
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { descriptor }, { station }, 0u, {},
 		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
 
-	auto membership = station->TriggerMembershipSnapshot();
-	ASSERT_TRUE(membership);
-	ASSERT_EQ(1u, membership->size());
+	const auto accepted = coordinator.Accepted();
+	ASSERT_TRUE(accepted);
+	ASSERT_EQ(1u, accepted->Triggers.size());
+	const auto retainedTrigger = accepted->Triggers[0].Instance;
 	station->Reset();
-	membership = station->TriggerMembershipSnapshot();
-	ASSERT_TRUE(membership);
-	EXPECT_EQ(1u, membership->size());
+	EXPECT_EQ(retainedTrigger, accepted->Triggers[0].Instance);
 
 	io::RigFile replacement{};
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
@@ -261,9 +342,7 @@ TEST_F(RigSnapshotTest, ReplacesCompleteStationMembershipAndResetRetainsPublishe
 	const auto pending = coordinator.Pending();
 	ASSERT_TRUE(pending);
 	coordinator.ApplyPendingAtAudioBoundary();
-	membership = station->TriggerMembershipSnapshot();
-	ASSERT_TRUE(membership);
-	EXPECT_TRUE(membership->empty());
+	EXPECT_TRUE(pending->Triggers.empty());
 }
 
 TEST_F(RigSnapshotTest, RequiresAudioAcknowledgementBeforeInputAndBothBeforePromotion)
@@ -306,7 +385,6 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureR
 	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
 		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
 	const auto accepted = coordinator.Accepted();
-	const auto originalMembership = station->TriggerMembershipSnapshot();
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
 	const auto rejectedRevision = coordinator.Quiescing()->Revision;
 	EXPECT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
@@ -320,7 +398,6 @@ TEST_F(RigSnapshotTest, RejectedCandidatesConsumeRevisionsAndPersistenceFailureR
 	EXPECT_GT(persistenceRevision, rejectedRevision);
 	EXPECT_EQ(accepted, coordinator.Accepted());
 	EXPECT_FALSE(coordinator.Pending());
-	EXPECT_EQ(originalMembership, station->TriggerMembershipSnapshot());
 
 	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial));
 	const auto successfulRevision = coordinator.Quiescing()->Revision;
@@ -460,9 +537,109 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
 	ASSERT_TRUE(snapshot->Triggers[0].Instance->QueueExternalControlAction(true, true, action).IsEaten);
 	auto replacement = std::make_shared<engine::RigSnapshot>();
 	replacement->Revision = 42u;
-	replacement->ChangedTriggerIndices = { 0u };
+	replacement->RetiredTriggerChecks = { { snapshot->Triggers[0].Instance } };
 	host.RequestRigTriggerQuiescence(42u, snapshot, replacement);
 	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
 	EXPECT_EQ(0u, host.QuiescedRigRevision());
 	EXPECT_EQ(42u, host.RejectedRigRevision());
+}
+
+TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitchesLifo)
+{
+	auto stationA = RuntimeStation("A");
+	auto stationB = RuntimeStation("B");
+	const std::vector<io::JamFile::Station> stationFiles{
+		StationDescriptor("A"), StationDescriptor("B") };
+	auto descriptor = TriggerDescriptor("record", "A");
+	descriptor.InputChannels = { 0u };
+	io::RigFile initial{};
+	initial.Triggers = { descriptor };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial, stationFiles, { stationA, stationB },
+		2u, {}, engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	audio::AudioHost host(io::UserConfig{});
+	host.PublishPendingRigSnapshot(coordinator.Accepted());
+	audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+
+	auto trigger = coordinator.Accepted()->Triggers[0].Instance;
+	ASSERT_TRUE(trigger);
+	base::Action action;
+	io::UserConfig cfg{};
+	cfg.Audio.NumChannelsIn = 2u;
+	auto edge = [&](bool activate, bool down, std::uint64_t revision)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action, revision).IsEaten);
+		trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+		trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+		trigger->OnTick(utils::Timer::GetTime(), 0u, cfg, std::nullopt, revision);
+	};
+	auto record = [&](std::uint64_t revision)
+	{
+		edge(true, true, revision);
+		edge(true, false, revision);
+		trigger->OnTick(utils::Timer::GetTime(), 64u, cfg, std::nullopt, revision);
+		edge(true, true, revision);
+		edge(true, false, revision);
+		stationA->CommitChanges();
+		stationB->CommitChanges();
+	};
+	auto publishEdit = [&](io::RigFile candidate)
+	{
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(candidate));
+		const auto quiescing = coordinator.Quiescing();
+		ASSERT_TRUE(quiescing);
+		host.RequestRigTriggerQuiescence(quiescing->Revision, coordinator.Accepted(), quiescing);
+		audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
+		ASSERT_EQ(quiescing->Revision, host.QuiescedRigRevision());
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+			coordinator.CompleteQuiescence(quiescing->Revision, true,
+				[](const io::RigFile&) { return true; }));
+		host.ClearRigTriggerQuiescence();
+		host.PublishPendingRigSnapshot(coordinator.Pending());
+		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+		ASSERT_TRUE(coordinator.ObserveAudioAcknowledgement(host.AppliedRigRevision()));
+		ASSERT_TRUE(coordinator.AcknowledgeInput(host.AppliedRigRevision()));
+		ASSERT_TRUE(coordinator.PromoteAcknowledged());
+		EXPECT_EQ(trigger, coordinator.Accepted()->Triggers[0].Instance);
+	};
+
+	record(coordinator.Accepted()->Revision);
+	ASSERT_EQ(1u, stationA->NumTakes());
+	ASSERT_EQ(1u, stationA->GetLoopTakes()[0]->GetLoops().size());
+	auto candidate = coordinator.Accepted()->Rig;
+	candidate.Triggers[0].InputChannels = { 0u, 1u };
+	publishEdit(candidate);
+	record(coordinator.Accepted()->Revision);
+	ASSERT_EQ(2u, stationA->NumTakes());
+	ASSERT_EQ(2u, stationA->GetLoopTakes()[1]->GetLoops().size());
+	candidate = coordinator.Accepted()->Rig;
+	candidate.Triggers[0].InputChannels = { 0u };
+	candidate.Triggers[0].StationTarget = "B";
+	publishEdit(candidate);
+	record(coordinator.Accepted()->Revision);
+	ASSERT_EQ(1u, stationB->NumTakes());
+
+	const auto history = trigger->GetTakes();
+	ASSERT_EQ(3u, history.size());
+	EXPECT_NE(history[0].TargetTakeId, history[1].TargetTakeId);
+	EXPECT_NE(history[1].TargetTakeId, history[2].TargetTakeId);
+	auto ditch = [&]()
+	{
+		const auto revision = coordinator.Accepted()->Revision;
+		edge(false, true, revision);
+		edge(false, false, revision);
+		stationA->CommitChanges();
+		stationB->CommitChanges();
+	};
+	ditch();
+	EXPECT_EQ(0u, stationB->NumTakes());
+	EXPECT_EQ(2u, stationA->NumTakes());
+	ditch();
+	EXPECT_EQ(1u, stationA->NumTakes());
+	ditch();
+	EXPECT_EQ(0u, stationA->NumTakes());
+	EXPECT_TRUE(trigger->GetTakes().empty());
+	ditch();
+	EXPECT_EQ(0u, stationA->NumTakes());
+	EXPECT_EQ(0u, stationB->NumTakes());
 }

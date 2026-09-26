@@ -3,7 +3,6 @@
 #include <functional>
 #include <limits>
 #include <optional>
-#include "../TestRigMembership.h"
 #include "gtest/gtest.h"
 #include "actions/KeyAction.h"
 #include "audio/AudioDevice.h"
@@ -227,7 +226,7 @@ static std::shared_ptr<Trigger> MakeOverdubTrigger(unsigned int inputChannel)
 	return std::make_shared<Trigger>(triggerParams);
 }
 
-static void SendKey(const std::shared_ptr<Station>& station,
+static void SendKey(const std::shared_ptr<Trigger>& trigger,
 	unsigned int keyChar,
 	int keyType,
 	const UserConfig& cfg,
@@ -241,29 +240,27 @@ static void SendKey(const std::shared_ptr<Station>& station,
 	action.SetActionTime(utils::Timer::GetTime());
 	action.SetUserConfig(cfg);
 	action.SetAudioParams(streamParams);
-	station->OnAction(action);
+	trigger->OnAction(action);
 }
 
-static void StartOverdub(const std::shared_ptr<Station>& station,
+static void StartOverdub(const std::shared_ptr<Trigger>& trigger,
 	const UserConfig& cfg,
 	const AudioStreamParams& streamParams)
 {
-	SendKey(station, DitchChar, KeyAction::KEY_DOWN, cfg, streamParams);
-	SendKey(station, ActivateChar, KeyAction::KEY_DOWN, cfg, streamParams);
-	SendKey(station, ActivateChar, KeyAction::KEY_UP, cfg, streamParams);
-	SendKey(station, DitchChar, KeyAction::KEY_UP, cfg, streamParams);
-	DrainCommitJobs(station);
+	SendKey(trigger, DitchChar, KeyAction::KEY_DOWN, cfg, streamParams);
+	SendKey(trigger, ActivateChar, KeyAction::KEY_DOWN, cfg, streamParams);
+	SendKey(trigger, ActivateChar, KeyAction::KEY_UP, cfg, streamParams);
+	SendKey(trigger, DitchChar, KeyAction::KEY_UP, cfg, streamParams);
 }
 
-static void EndOverdub(const std::shared_ptr<Station>& station,
+static void EndOverdub(const std::shared_ptr<Trigger>& trigger,
 	const UserConfig& cfg,
 	const AudioStreamParams& streamParams)
 {
-	SendKey(station, DitchChar, KeyAction::KEY_DOWN, cfg, streamParams);
-	SendKey(station, ActivateChar, KeyAction::KEY_DOWN, cfg, streamParams);
-	SendKey(station, ActivateChar, KeyAction::KEY_UP, cfg, streamParams);
-	SendKey(station, DitchChar, KeyAction::KEY_UP, cfg, streamParams);
-	DrainCommitJobs(station);
+	SendKey(trigger, DitchChar, KeyAction::KEY_DOWN, cfg, streamParams);
+	SendKey(trigger, ActivateChar, KeyAction::KEY_DOWN, cfg, streamParams);
+	SendKey(trigger, ActivateChar, KeyAction::KEY_UP, cfg, streamParams);
+	SendKey(trigger, DitchChar, KeyAction::KEY_UP, cfg, streamParams);
 }
 
 static std::pair<std::shared_ptr<Station>, std::shared_ptr<LoopTake>> MakeSeedStation(
@@ -394,6 +391,7 @@ struct OverdubSession
 	UserConfig Cfg{};
 	AudioStreamParams StreamParams{};
 	std::shared_ptr<Station> Station;
+	std::shared_ptr<Trigger> TriggerInstance;
 	std::shared_ptr<LoopTake> SourceTake;
 	std::shared_ptr<LoopTake> TargetTake;
 	unsigned int OverdubBlocks = 0u;
@@ -423,7 +421,8 @@ static OverdubSession CreateOverdubSession(
 	session.Station = station;
 	session.SourceTake = sourceTake;
 
-	AddTestRigTrigger(session.Station, MakeOverdubTrigger(0u));
+	session.TriggerInstance = MakeOverdubTrigger(0u);
+	session.TriggerInstance->SetReceiver(session.Station);
 	if (stationSetup)
 		stationSetup(session.Station);
 	DrainCommitJobs(session.Station);
@@ -431,7 +430,8 @@ static OverdubSession CreateOverdubSession(
 	auto preMixer = MakeChannelMixer(p.NumChans, constants::MaxBlockSize);
 	AdvancePlayback(preMixer, session.Station, p.NumChans, p.BlockSize, p.PreStartBlocks);
 
-	StartOverdub(session.Station, session.Cfg, session.StreamParams);
+	StartOverdub(session.TriggerInstance, session.Cfg, session.StreamParams);
+	DrainCommitJobs(session.Station);
 	if (session.Station->NumTakes() >= 2u)
 		session.TargetTake = session.Station->GetLoopTakes().back();
 
@@ -465,12 +465,15 @@ static void RunOverdubAndTail(OverdubSession& session, unsigned int tailSamps)
 			session.Params.BlockSize,
 			session.Cfg,
 			session.StreamParams);
+		session.TriggerInstance->OnTick(utils::Timer::GetTime(),
+			session.Params.BlockSize, session.Cfg, session.StreamParams);
 	}
 
 	ASSERT_EQ(session.OverdubSamps, session.TargetTake->NumRecordedSamps());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBING, session.TargetTake->TakeState());
 
-	EndOverdub(session.Station, session.Cfg, session.StreamParams);
+	EndOverdub(session.TriggerInstance, session.Cfg, session.StreamParams);
+	DrainCommitJobs(session.Station);
 	ASSERT_TRUE(session.SourceTake->IsMuted());
 	ASSERT_EQ(LoopTake::STATE_OVERDUBBINGRECORDING, session.TargetTake->TakeState());
 	ASSERT_EQ(session.OverdubSamps, session.TargetTake->NumRecordedSamps());

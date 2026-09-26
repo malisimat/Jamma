@@ -2,6 +2,7 @@
 // NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
 #include <algorithm>
+#include <cassert>
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -97,6 +98,10 @@ Scene::Scene(SceneParams params,
 	hudParams.MinSize = params.Size;
 	hudParams.PopupManager = &_popupManager;
 	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
+	hudParams.AcceptTriggerInput = [this](std::uint64_t revision)
+	{
+		return _inputSubsystem && _inputSubsystem->TryAcceptUiRigTriggerInput(revision);
+	};
 	hudParams.SubmitRigEdit = [this](const io::RigFile& candidate)
 	{
 		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
@@ -561,6 +566,7 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	if (scene->_hudPanel)
 		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), *acceptedRig);
+	scene->_inputSubsystem->OpenRigTriggerInput(acceptedRig->Revision);
 
 	scene->_SetQuantisation(jamStruct.QuantiseSamps, jamStruct.Quantisation);
 	scene->_quantisation.SetGlobalPhaseOffsetSamps(jamStruct.GlobalPhaseOffsetSamps, scene->_stations);
@@ -1145,31 +1151,17 @@ ActionResult Scene::OnAction(KeyAction action)
 	auto result = ActionResult::NoAction();
 
 	const auto acceptedRig = _rigCoordinator.Accepted();
-	const auto triggerInputGated = acceptedRig &&
-		_inputSubsystem->IsRigTriggerInputGated(acceptedRig->Revision);
-	if (!triggerInputGated)
+	if (acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
 	{
 		static const std::string EmptyDevice;
 		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-		std::vector<std::shared_ptr<Trigger>> fallbackKeyboardTriggers;
-		if (!acceptedRig)
-		{
-			for (const auto& station : _stations)
-			{
-				if (!station)
-					continue;
-				const auto membership = station->TriggerMembershipSnapshot();
-				fallbackKeyboardTriggers.insert(fallbackKeyboardTriggers.end(),
-					membership->begin(), membership->end());
-			}
-		}
-		const auto& keyboardTriggers = acceptedRig ?
-			acceptedRig->InputDispatch.KeyboardTriggers : fallbackKeyboardTriggers;
+		const auto& keyboardTriggers = acceptedRig->InputDispatch.KeyboardTriggers;
 		for (const auto& trigger : keyboardTriggers)
 		{
 			if (!trigger)
 				continue;
-			auto res = trigger->OnEvent(TriggerSource::TRIGGER_KEY,
+			auto res = trigger->QueueInputEvent(TriggerInputDomain::Ui,
+				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
 				action.KeyChar, keyState, action, EmptyDevice);
 
 			if (!res.IsEaten)
@@ -1370,9 +1362,13 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	if (!_isSceneQuitting.load(std::memory_order_acquire))
+		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
+	_PumpTriggerStructuralActions();
 	_AdvanceRigPublication();
 	_PumpMidi();
 	_PumpSerial();
+	_ConsumeTriggerOutcomes();
 
 	auto pumpResult = _networkService->GetController()->Pump();
 	{
@@ -1445,17 +1441,20 @@ void Scene::OnJobTick(Time curTime)
 void Scene::_PumpMidi()
 {
 	auto stations = SnapshotStations();
-    auto summary = _inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
-	std::scoped_lock lock(_sceneMutex);
+	_inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(),
+		_audioEngine->GetStreamParams(), _sceneMutex);
+}
 
-	if (summary.Activated)
-	{
-		_isSceneReset.store(false, std::memory_order_relaxed);
-		if (auto clock = _quantisation.Clock())
-			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
-	}
-	if (summary.Ditched)
-		_ResetIfEmpty();
+void Scene::_PumpTriggerStructuralActions()
+{
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+		return;
+	const auto streamParams = _audioEngine->GetStreamParams();
+	std::scoped_lock lock(_sceneMutex);
+	for (const auto& runtime : accepted->Triggers)
+		if (runtime.Instance)
+			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
 }
 
 void Scene::_AdvanceRigPublication()
@@ -1464,20 +1463,32 @@ void Scene::_AdvanceRigPublication()
 	if (quiescing)
 	{
 		const auto revision = quiescing->Revision;
+		if (_rigQuiescenceRequestedRevision != revision)
+		{
+			const auto accepted = _rigCoordinator.Accepted();
+			if (!accepted || !_inputSubsystem->RigTriggerInputReadyForQuiescence(accepted->Revision))
+				return;
+			_audioEngine->RequestRigTriggerQuiescence(revision, accepted, quiescing);
+			_rigQuiescenceRequestedRevision = revision;
+		}
 		if (_audioEngine->RejectedRigRevision() == revision)
 		{
 			_rigCoordinator.CompleteQuiescence(revision, false, _saveRig);
 			_audioEngine->ClearRigTriggerQuiescence();
-			_inputSubsystem->UngateRigTriggerInput();
+			_rigQuiescenceRequestedRevision = 0u;
+			if (const auto accepted = _rigCoordinator.Accepted())
+				_inputSubsystem->OpenRigTriggerInput(accepted->Revision);
 			return;
 		}
 		if (_audioEngine->QuiescedRigRevision() != revision)
 			return;
 		const auto result = _rigCoordinator.CompleteQuiescence(revision, true, _saveRig);
 		_audioEngine->ClearRigTriggerQuiescence();
+		_rigQuiescenceRequestedRevision = 0u;
 		if (result != RigCoordinator::EditResult::Pending)
 		{
-			_inputSubsystem->UngateRigTriggerInput();
+			if (const auto accepted = _rigCoordinator.Accepted())
+				_inputSubsystem->OpenRigTriggerInput(accepted->Revision);
 			return;
 		}
 		_audioEngine->PublishPendingRigSnapshot(_rigCoordinator.Pending());
@@ -1501,7 +1512,6 @@ void Scene::_AdvanceRigPublication()
 		return;
 	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
 	_rigCoordinator.ReleaseRetired();
-	_inputSubsystem->UngateRigTriggerInput();
 	if (_hudPanel)
 	{
 		// HUD routing rebuilds replace child widgets while the render thread may
@@ -1513,6 +1523,7 @@ void Scene::_AdvanceRigPublication()
 			if (device.Enabled && !device.Name.empty()) midiInputs.push_back(device.Name);
 		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
 	}
+	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
 
 RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
@@ -1535,8 +1546,12 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 				_rigCoordinator.CompleteQuiescence(quiescing->Revision, false, _saveRig);
 			return RigCoordinator::EditResult::QuiescenceRejected;
 		}
-		_inputSubsystem->GateRigTriggerInput(accepted->Revision);
-		_audioEngine->RequestRigTriggerQuiescence(quiescing->Revision, accepted, quiescing);
+		if (!_inputSubsystem->RequestCloseRigTriggerInputFromUi(accepted->Revision))
+		{
+			_rigCoordinator.CompleteQuiescence(quiescing->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::QuiescenceRejected;
+		}
+		_rigQuiescenceRequestedRevision = 0u;
 	}
 	return result;
 }
@@ -1544,6 +1559,9 @@ RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig
 gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 {
 	if (!_rigCoordinator.EditsEnabled())
+		return gui::RoutingEditAvailability::Applying;
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted || !_inputSubsystem->TryAcceptUiRigTriggerInput(accepted->Revision))
 		return gui::RoutingEditAvailability::Applying;
 
 	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
@@ -1562,17 +1580,43 @@ gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 
 void Scene::_PumpSerial()
 {
-    auto summary = _inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
-	std::scoped_lock lock(_sceneMutex);
+	_inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
+}
 
-	if (summary.Activated)
+void Scene::_ConsumeTriggerOutcomes()
+{
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+		return;
+	for (auto observed = _triggerOutcomeCounts.begin(); observed != _triggerOutcomeCounts.end();)
 	{
-		_isSceneReset.store(false, std::memory_order_relaxed);
-		if (auto clock = _quantisation.Clock())
-			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+		const auto stillPublished = std::any_of(accepted->Triggers.begin(), accepted->Triggers.end(),
+			[instance = observed->first](const RigSnapshotTrigger& runtime)
+			{
+				return runtime.Instance.get() == instance;
+			});
+		if (!stillPublished)
+			observed = _triggerOutcomeCounts.erase(observed);
+		else
+			++observed;
 	}
-	if (summary.Ditched)
-		_ResetIfEmpty();
+	for (const auto& runtime : accepted->Triggers)
+	{
+		if (!runtime.Instance)
+			continue;
+		const auto activation = runtime.Instance->ActivationOutcomeCount();
+		const auto ditch = runtime.Instance->DitchOutcomeCount();
+		auto& observed = _triggerOutcomeCounts[runtime.Instance.get()];
+		if (activation > observed.first)
+		{
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			if (auto clock = _quantisation.Clock())
+				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+		}
+		if (ditch > observed.second)
+			_ResetIfEmpty();
+		observed = { activation, ditch };
+	}
 }
 
 void Scene::InitReceivers()
@@ -1721,13 +1765,7 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 
 void Scene::CloseAudio()
 {
-	_rigCoordinator.Shutdown();
-	_audioEngine->ClearRigTriggerQuiescence();
-	_inputSubsystem->UngateRigTriggerInput();
-	_inputSubsystem->PublishEmptyRigInputDispatch();
-	CloseSerial();
-	CloseMidi();
-	_audioEngine->Close();
+	Shutdown();
 }
 
 bool Scene::InitGlobalKeyCapture()
@@ -1749,14 +1787,15 @@ void Scene::Shutdown()
 {
 	_rigCoordinator.Shutdown();
 	_audioEngine->ClearRigTriggerQuiescence();
-	_inputSubsystem->UngateRigTriggerInput();
+	_inputSubsystem->CloseRigTriggerInputForever();
+	_isSceneQuitting.store(true, std::memory_order_release);
+	if (_jobRunner.joinable())
+		_jobRunner.join();
+	assert(_inputSubsystem->RigTriggerInputReadyForShutdown());
 	_inputSubsystem->PublishEmptyRigInputDispatch();
 	CloseGlobalKeyCapture();
 	CloseSerial();
 	CloseMidi();
-	_isSceneQuitting.store(true, std::memory_order_release);
-	if (_jobRunner.joinable())
-		_jobRunner.join();
 
 	ForceUnloadAllVstPlugins();
 	_audioEngine->Close();
@@ -1795,6 +1834,7 @@ void Scene::CommitChanges()
 
 		for (auto& station : _stations)
 		{
+			station->ReleaseRetiredAudioStates();
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 			{
@@ -2436,6 +2476,8 @@ void Scene::_JobLoop()
 		OnJobTick(Timer::GetTime());
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+	// Final job-producer barrier for permanent ingress closure.
+	_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 }
 
 void Scene::_PublishAudioStations()

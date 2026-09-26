@@ -369,7 +369,7 @@ void LoopTake::Zero(unsigned int numSamps,
 
 // Only called when outputting to DAC
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
-	const std::shared_ptr<Trigger> trigger,
+	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
 	unsigned int numSamps)
 {
@@ -380,7 +380,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 		return;
 
 	auto ptr = Sharable::shared_from_this();
-	auto loopDest = trigger == nullptr ?
+	auto loopDest = bounceWriter == nullptr ?
 		std::dynamic_pointer_cast<MultiAudioSink>(ptr) :
 		dest;
 	auto state = _AudioStateSnapshot();
@@ -389,9 +389,9 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	for (const auto& weakLoop : state->Loops)
 		if (auto loop = weakLoop.lock())
-			loop->WriteBlock(loopDest, trigger, indexOffset, numSamps);
+			loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps);
 
-	if (nullptr != trigger)
+	if (nullptr != bounceWriter)
 		return;
 
 	auto sampsToRead = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
@@ -445,6 +445,32 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 	_masterMixer->UpdateVu(masterPeak, sampsToRead);
 	_masterMixer->Offset(sampsToRead);
+}
+
+void LoopTake::SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
+	std::shared_ptr<base::BounceWriter> writer) noexcept
+{
+	_activeBounceSource = std::move(sourceTake);
+	_activeBounceWriter = std::move(writer);
+}
+
+void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
+{
+	if (!_activeBounceWriter)
+		return;
+
+	const auto state = _state.load(std::memory_order_relaxed);
+	if ((STATE_OVERDUBBING != state) &&
+		(STATE_PUNCHEDIN != state) &&
+		(STATE_OVERDUBBINGRECORDING != state))
+		return;
+
+	auto sourceTake = _activeBounceSource.lock();
+	if (!sourceTake)
+		return;
+
+	auto target = MultiAudioSink::shared_from_this();
+	sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -1816,7 +1842,6 @@ void LoopTake::Ditch()
 	_midiRecordHeld.clear();
 	_midiTransportStartSamps.store(0u, std::memory_order_release);
 	_ResetMidiOverdubSession();
-
 	for (auto& loop : _loops)
 	{
 		loop->Ditch();
@@ -1981,6 +2006,52 @@ void LoopTake::PunchOut(bool applyAudio, bool applyMidi)
 		(_endRecordSampCount >= _endRecordSamps);
 	if (canFinishRecording)
 		_endRecordingCompleted = true;
+}
+
+void LoopTake::TriggerPunchInAudio() noexcept
+{
+	const auto state = _state.load(std::memory_order_relaxed);
+	if ((STATE_OVERDUBBING != state) &&
+		(STATE_OVERDUBBINGRECORDING != state) &&
+		(STATE_PLAYING != state))
+		return;
+	_isPunchInActive.store(true, std::memory_order_release);
+	if (STATE_OVERDUBBING == state)
+		_state.store(STATE_PUNCHEDIN, std::memory_order_release);
+	const auto audioState = _AudioStateSnapshot();
+	if (audioState)
+		for (const auto& weakLoop : audioState->Loops)
+			if (const auto loop = weakLoop.lock()) loop->PunchIn();
+}
+
+void LoopTake::TriggerPunchOutAudio() noexcept
+{
+	const auto state = _state.load(std::memory_order_relaxed);
+	if (!_isPunchInActive.load(std::memory_order_relaxed) && STATE_PUNCHEDIN != state)
+		return;
+	_isPunchInActive.store(false, std::memory_order_release);
+	if (STATE_PUNCHEDIN == state)
+		_state.store(STATE_OVERDUBBING, std::memory_order_release);
+	const auto audioState = _AudioStateSnapshot();
+	if (audioState)
+		for (const auto& weakLoop : audioState->Loops)
+			if (const auto loop = weakLoop.lock()) loop->PunchOut();
+}
+
+void LoopTake::SetTriggerSourceMutedAudio(bool muted) noexcept
+{
+	if (muted)
+		Tweakable::Mute();
+	else
+		Tweakable::UnMute();
+	const auto audioState = _AudioStateSnapshot();
+	if (audioState)
+		for (const auto& weakLoop : audioState->Loops)
+			if (const auto loop = weakLoop.lock())
+			{
+				if (muted) loop->Mute();
+				else loop->UnMute();
+			}
 }
 
 void LoopTake::SetRackVisibility(bool visible)

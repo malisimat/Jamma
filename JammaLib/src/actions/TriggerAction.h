@@ -3,6 +3,7 @@
 #include <vector>
 #include "Action.h"
 #include "CommonTypes.h"
+#include "../base/BounceWriter.h"
 
 namespace actions
 {
@@ -34,6 +35,7 @@ namespace actions
 		unsigned long SampleCount;
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
+		std::shared_ptr<base::BounceWriter> OverdubWriter;
 		bool ApplyToTargetTake;
 		bool ApplyToSourceTake;
 		bool ApplyToTargetAudio;

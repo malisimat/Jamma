@@ -18,6 +18,7 @@ namespace engine
 
 	struct RigSnapshotTrigger
 	{
+		std::string Id;
 		size_t RigTriggerIndex = 0u;
 		std::shared_ptr<Trigger> Instance;
 		std::optional<size_t> StationIndex;
@@ -27,14 +28,19 @@ namespace engine
 		mutable std::vector<unsigned int> InputChannels;
 		mutable std::vector<std::string> MidiInputDevices;
 		mutable io::RigFile::Trigger::MidiInputMode MidiInputMode = io::RigFile::Trigger::MidiInputMode::None;
-		mutable std::unique_ptr<audio::MixBehaviour> OverdubBehaviour;
+		mutable std::shared_ptr<audio::AudioMixer> OverdubMixer;
+		mutable std::shared_ptr<base::BounceWriter> OverdubWriter;
 	};
 
-	struct StationTriggerMembership
+	struct RetainedTriggerRouteChange
 	{
-		using StationPtr = std::shared_ptr<engine::Station>;
-		StationPtr Station;
-		std::shared_ptr<const Station::TriggerMembership> Triggers;
+		std::shared_ptr<Trigger> Instance;
+		size_t CandidateIndex = 0u;
+	};
+
+	struct RetiredTriggerCheck
+	{
+		std::shared_ptr<Trigger> AcceptedInstance;
 	};
 
 	struct MidiTriggerDispatch
@@ -69,11 +75,10 @@ namespace engine
 		// Indices of accepted-revision triggers that must be quiescent before this
 		// revision can replace them. Unchanged trigger instances are retained so a
 		// playing loop does not disable edits to unrelated routing.
-		std::vector<size_t> ChangedTriggerIndices;
+		std::vector<RetiredTriggerCheck> RetiredTriggerChecks;
 		// Reused trigger instances that receive a new capture route or station
 		// receiver. Their history is retained, but the current action must be idle.
-		std::vector<size_t> CaptureRoutingChangeTriggerIndices;
-		std::vector<StationTriggerMembership> StationMemberships;
+		std::vector<RetainedTriggerRouteChange> RetainedTriggerRouteChanges;
 		RigInputDispatch InputDispatch;
 	};
 }

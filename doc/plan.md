@@ -23,28 +23,32 @@ currently constructs one `Scene`, and `Window` owns it by reference. Validate
 name-based resolution by constructing scenes from reordered/renamed JAM data;
 do not add scene swapping to this change.
 
-## Existing-code constraints
+## Implemented architecture
 
-The implementation must account for these current facts:
+The editable-routing implementation now uses these boundaries:
 
-- `Scene::FromFile` attaches rig trigger `i` to JAM station `i`.
-- `GuiHud::_RebuildCableVertices` draws source `i % triggerCount` and trigger
-  `i -> station i`; neither vector is routing authority.
-- `Station::_triggers` is a mutable vector read by `OnTriggerEvent`, `OnTick`,
-  `OnBounce`, and `AcceptsLiveMidiFromDevice`. `OnTick` and `OnBounce` are on
-  the audio callback path.
-- `Trigger::_receiver`, `_inputChannels`, and `_midiInputDevices` are mutable.
-  Never rewrite them on a live trigger from the UI thread.
-- `MidiRouter` separately publishes trigger routes and live-MIDI recipients.
-  Adding a revision number to those separate publications would not make them
-  coherent.
+- persisted Trigger GUIDs, rather than vector positions or names, identify a
+  Trigger across reorder and route edits;
+- `RigSnapshot` is the only complete routing/dispatch authority;
+- Trigger owns its operational state and current capture route on audio. Its
+  fixed audio history holds stable tokens plus narrow punch targets, while a
+  job-owned ledger holds immutable IDs and strong receiver ownership;
+- Station owns only `Station -> LoopTake -> Loop` state and never retains,
+  ticks, or queries Triggers;
+- HUD/keyboard and MIDI/serial use separate bounded SPSC lanes into audio,
+  stamped with the immutable dispatch revision;
+- `RigTriggerIngressGate` closes both producer domains asynchronously before
+  audio quiescence is requested;
+- retained route changes exchange prebuilt capture values at the audio
+  boundary, while unchanged Triggers are untouched;
+- structural Station work crosses a fixed-capacity audio-to-job command/result
+  handoff, so the callback never invokes Station mutation directly;
+- active overdub source/writer linkage is owned by the target LoopTake;
 - `AudioHost::_audioStations` is the useful precedent: a complete immutable
   value is built off-thread and acquired once by the callback.
-- `RigFile::ToStream` is diagnostic output, not JSON serialization, and the
-  app has no rig-save command. Persistence therefore needs an explicit app
-  callback and serializer; there is no existing "normal rig-save path" to use.
-- `RigFile::Trigger::FromJson` rejects a name-only trigger today; that must be
-  relaxed for the `+` workflow.
+- `RigFile::ToStream` remains diagnostic output; persistence uses the explicit
+  JSON serializer and app save callback.
+- `RigFile::Trigger::FromJson` accepts a name-only trigger for the `+` workflow.
 
 ## Persisted model
 
@@ -140,18 +144,18 @@ contains:
 
 - monotonic `Revision`;
 - the resolved/unresolved value graph used by the HUD;
-- runtime trigger objects and their immutable station receivers;
-- each local station's complete immutable trigger list;
+- the complete ordered runtime Trigger list, including stable IDs;
+- explicit retained-route-change and retired-instance records;
 - one complete input-dispatch value covering MIDI-trigger activation routes,
   live-MIDI recipients, and serial/keyboard traversal policy.
 
 The candidate must own every `shared_ptr` needed by its readers. HUD drag state
 stores only the value handles described above.
 
-An edit never mutates a published `Trigger`. For a changed trigger, construct a
-replacement from the candidate rig and assign its receiver before publication.
-Unchanged triggers may be reused. This avoids racing the plain
-`ActionSender::_receiver` or the trigger's mutable input vectors.
+Activation-definition changes construct replacement Triggers. Capture-source
+or station-target edits reuse the stable Trigger instance so its history is
+preserved; the candidate owns prebuilt route values which audio exchanges at
+the publication boundary. Unchanged Triggers are not mutated.
 
 ### Edit eligibility
 
@@ -180,26 +184,22 @@ after the UI's last state read.
 UI, input/job, and audio readers must never observe independently assembled
 parts of a route. Use this protocol:
 
-1. On pointer release, build and validate the desired model mutation without
-   changing the current rig. Gate new HUD/keyboard/hardware trigger actions for
-   the affected trigger. MIDI/serial ingress may continue queueing with the old
-   revision tag.
-2. At the next audio boundary, drain already accepted trigger actions and
-   acknowledge quiescence only if the edit predicate is still true. On
-   rejection, remove the gate and leave the old revision unchanged. On success,
-   construct all replacement runtime objects off-thread and persist the
-   candidate rig; any failure likewise removes the gate without publication.
+1. On pointer release, build and validate the complete candidate without
+   changing the current rig, then close the accepted revision's UI ingress.
+2. At the top of a job tick, stop MIDI/serial acceptance and acknowledge that
+   producer. Only after both producer acknowledgements does Scene request an
+   audio-boundary quiescence decision for the affected Trigger instances.
 3. Publish the complete candidate as `pending`. Events tagged with the previous
    revision must now be dropped rather than delivered to a different route.
 4. At the start of an audio block, `AudioHost` consumes the pending revision,
-   publishes each complete station trigger snapshot, then records
-   `audioAppliedRevision`. Do all stores before processing any station in that
-   block.
+   applies only explicit retained-route changes, adopts the applied snapshot,
+   then records `audioAppliedRevision`.
 5. The job/input boundary observes the audio acknowledgement, atomically swaps
    one complete input-dispatch snapshot, stamps/accepts events only for that
    revision, and records `inputAppliedRevision`.
-6. The UI promotes the graph and rig to `displayed/current` only after both
-   acknowledgements equal the candidate revision, then removes the gate.
+6. The job/UI coordinator promotes the graph and rig only after both
+   acknowledgements equal the candidate revision, rebuilds the HUD, and opens
+   the candidate revision last.
 
 Keep the previous runtime snapshot strongly owned by the coordinator until
 both acknowledgements advance. Retire it on the UI/job side so the audio
@@ -207,11 +207,9 @@ callback cannot perform last-reference destruction. Coalesce pending edits to
 the latest complete candidate only when no confirmation dialog or drag depends
 on the superseded revision; otherwise disable further edits while applying.
 
-`Station` trigger membership becomes an
-`atomic<shared_ptr<const vector<shared_ptr<Trigger>>>>`. Every existing
-traversal loads one snapshot once and iterates that local value. `Reset()` must
-stop clearing rig trigger membership; only the routing coordinator changes or
-empties that snapshot.
+Audio ticks every Trigger exactly once from its applied `RigSnapshot`.
+Station tick remains responsible only for Station/LoopTake tail and visual
+state. There is no Station Trigger membership or reverse Trigger traversal.
 No callback-owned function may allocate, lock, log, wait, resolve names, or
 rebuild routes.
 
@@ -332,7 +330,8 @@ Each slice should compile and test before the next begins.
    - Make `GuiHud` render this graph without editing; remove synthetic cables.
 
 3. **Thread-safe runtime publication**
-   - Add station trigger snapshots and convert all four traversals.
+   - Publish complete immutable RigSnapshot Trigger and input-dispatch values;
+     Station has no Trigger membership or reverse traversal.
    - Add the pending/audio/input acknowledgement coordinator and one complete
      input-dispatch snapshot; remove append-only MIDI trigger registration.
    - Add trigger quiescence publication, stale-event gating, retirement, and
@@ -391,7 +390,7 @@ loops for new locks, waits, allocation, formatting, or mutable-container reads.
 
 - HUD fixed cables exactly match the current persisted rig revision; unresolved
   and unavailable endpoints are deliberate and diagnosable.
-- A valid release is all-or-nothing across persisted rig, audio membership,
+- A valid release is all-or-nothing across persisted rig, audio routing,
   input dispatch, and displayed graph; cancel/failure preserves the old route.
 - No route edit mutates a published trigger or strands its take history.
 - No index/type fallback occurs except the documented one-time absent-target

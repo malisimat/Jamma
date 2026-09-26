@@ -360,7 +360,7 @@ TEST(BlockApi, LoopBlockWriteAndRead) {
 	// Read data using WriteBlock
 	auto dest = std::make_shared<MockedMultiSink>(1, blockSize);
 	dest->Zero(blockSize, base::Audible::AUDIOSOURCE_MIXER);
-	loop.WriteBlock(dest, std::shared_ptr<engine::Trigger>(), 0u, blockSize);
+	loop.WriteBlock(dest, std::shared_ptr<base::BounceWriter>(), 0u, blockSize);
 	loop.EndMultiPlay(blockSize);
 	dest->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_MIXER);
 

@@ -83,7 +83,6 @@ Station::Station(StationParams params,
 	_routerToggle(nullptr),
 	_router(nullptr),
 	_loopTakes(),
-	_triggerMembership(std::make_shared<const TriggerMembership>()),
 	_backLoopTakes(),
 	_loopTakeSnapshot(nullptr),
 	_audioMixers(),
@@ -846,35 +845,7 @@ void Station::SetSelectDepth(base::SelectDepth depth)
 
 ActionResult Station::OnAction(KeyAction action)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
-	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-	return OnTriggerEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
-}
-
-ActionResult Station::OnTriggerEvent(TriggerSource source,
-	unsigned int value,
-	unsigned int state,
-	const base::Action& action,
-	const std::string& device)
-{
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
-	auto result = ActionResult::NoAction();
-	const auto membership = TriggerMembershipSnapshot();
-	for (const auto& trig : *membership)
-	{
-		auto trigResult = trig->OnEvent(source, value, state, action, device);
-		if (!trigResult.IsEaten)
-			continue;
-
-		if (!result.IsEaten || (trigResult.ResultType != actions::ACTIONRESULT_DEFAULT))
-			result = trigResult;
-	}
-
-	return result;
+	return ActionResult::NoAction();
 }
 
 ActionResult Station::OnAction(GuiAction action)
@@ -984,7 +955,12 @@ ActionResult Station::OnAction(GuiAction action)
 
 ActionResult Station::OnAction(TriggerAction action)
 {
-	if (!_isEnabled || !_isVisible)
+	// Starts respect current station availability. Once a Trigger has captured
+	// this receiver and take IDs, completion/ditch/punch work must remain valid
+	// even if the station is temporarily hidden or disabled.
+	const auto isStart = action.ActionType == TriggerAction::TRIGGER_REC_START ||
+		action.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
+	if (isStart && (!_isEnabled || !_isVisible))
 		return ActionResult::NoAction();
 
 	auto resolveMidiRecordChannels = [this]() {
@@ -1030,6 +1006,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
+		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
@@ -1112,9 +1089,12 @@ ActionResult Station::OnAction(TriggerAction action)
 			action.MidiInputDevices,
 			sourceLoopTake,
 			transportStartSamps);
+		newLoopTake->SetActiveBounce(sourceLoopTake, action.OverdubWriter);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
+		res.TriggerSourceTake = sourceLoopTake;
+		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
@@ -1250,7 +1230,10 @@ ActionResult Station::OnAction(TriggerAction action)
 				_changesMade = true;
 				_PublishLoopTakeSnapshot();
 			}
+			res.DitchResult = actions::DitchDisposition::Removed;
 		}
+		else
+			res.DitchResult = actions::DitchDisposition::AlreadyAbsent;
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -1285,12 +1268,6 @@ void Station::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	const auto membership = TriggerMembershipSnapshot();
-	for (const auto& trig : *membership)
-	{
-		trig->OnTick(curTime, samps, cfg, params);
-	}
-
 	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
 	{
 		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
@@ -1374,18 +1351,6 @@ std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 	}
 
 	return takes;
-}
-
-void Station::PublishTriggerMembership(std::shared_ptr<const TriggerMembership> membership) noexcept
-{
-	if (!membership)
-		return;
-	_triggerMembership.store(std::move(membership), std::memory_order_release);
-}
-
-std::shared_ptr<const Station::TriggerMembership> Station::TriggerMembershipSnapshot() const noexcept
-{
-	return _triggerMembership.load(std::memory_order_acquire);
 }
 
 unsigned int Station::NumTakes() const
@@ -1762,30 +1727,10 @@ void Station::OnBounce(unsigned int numSamps,
 	if (!state)
 		return;
 
-	const auto membership = TriggerMembershipSnapshot();
-	for (const auto& trigger : *membership)
+	for (const auto& weakTake : state->LoopTakes)
 	{
-		auto takes = trigger->GetTakes();
-
-		for (auto& take : takes)
-		{
-			std::string sourceId = take.SourceTakeId;
-			std::string targetId = take.TargetTakeId;
-			auto sourceMatch = std::find_if(state->LoopTakes.begin(),
-				state->LoopTakes.end(),
-				[&sourceId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == sourceId; });
-			auto targetMatch = std::find_if(state->LoopTakes.begin(),
-				state->LoopTakes.end(),
-				[&targetId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == targetId; });
-
-			if ((state->LoopTakes.end() != sourceMatch) && (state->LoopTakes.end() != targetMatch))
-			{
-				auto sourceTake = sourceMatch->lock();
-				auto targetTake = targetMatch->lock();
-				if (sourceTake && targetTake)
-					sourceTake->WriteBlock(targetTake, trigger, sourceOffset, numSamps);
-			}
-		}
+		if (auto take = weakTake.lock())
+			take->ProcessActiveBounce(sourceOffset, numSamps);
 	}
 }
 
@@ -1799,28 +1744,6 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 	{
 		take->SetRackVisibility(showLoopTakeRacks);
 	}
-}
-
-bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept
-{
-	const auto membership = TriggerMembershipSnapshot();
-	for (const auto& trigger : *membership)
-	{
-		if (!trigger)
-			continue;
-		if (trigger->MidiInputMode() != io::RigFile::Trigger::MidiInputMode::Selected)
-			continue;
-		const auto& devices = trigger->MidiInputDevices();
-		if (devices.empty())
-			continue;
-		for (const auto& d : devices)
-		{
-			if (d == deviceName)
-				return true;
-		}
-	}
-	// Live MIDI requires an explicit resolved trigger capture route.
-	return false;
 }
 
 bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
@@ -2050,6 +1973,7 @@ void Station::_ReleaseResources()
 
 std::vector<JobAction> Station::_CommitChanges()
 {
+	ReleaseRetiredAudioStates();
 	bool audioStateChanged = false;
 	if (_flipTakeBuffer)
 	{
@@ -2193,6 +2117,8 @@ void Station::_PublishLoopTakeSnapshot()
 void Station::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
+	state->Generation = _nextAudioStateGeneration++;
+	state->OwnedLoopTakes = _loopTakes;
 	state->LoopTakes.reserve(_loopTakes.size());
 	for (const auto& take : _loopTakes)
 		state->LoopTakes.push_back(take);
@@ -2202,7 +2128,27 @@ void Station::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
-	_audioState.store(state, std::memory_order_release);
+	auto retired = _audioState.exchange(state, std::memory_order_acq_rel);
+	if (retired)
+		_retiredAudioStates.push_back({ state->Generation, std::move(retired) });
+}
+
+void Station::AcknowledgeAudioBoundary() noexcept
+{
+	const auto state = _audioState.load(std::memory_order_acquire);
+	if (state)
+		_audioCompletedStateGeneration.store(state->Generation, std::memory_order_release);
+}
+
+void Station::ReleaseRetiredAudioStates()
+{
+	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
+	auto keep = std::remove_if(_retiredAudioStates.begin(), _retiredAudioStates.end(),
+		[completed](const RetiredAudioState& retired)
+		{
+			return retired.State && retired.ReleaseAfterGeneration <= completed;
+		});
+	_retiredAudioStates.erase(keep, _retiredAudioStates.end());
 }
 
 void Station::_ArrangeChildren()
@@ -2247,6 +2193,11 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 {
 	for (auto& take : _loopTakes)
+	{
+		if (take->Id() == id)
+			return take;
+	}
+	for (auto& take : _backLoopTakes)
 	{
 		if (take->Id() == id)
 			return take;

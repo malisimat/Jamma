@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 #include <optional>
@@ -13,11 +14,14 @@
 #include "Tickable.h"
 #include "../utils/Timer.h"
 #include "../midi/MidiEvent.h"
+#include "../midi/MidiQueue.h"
 #include "../actions/KeyAction.h"
 #include "../actions/TriggerAction.h"
 #include "../actions/ActionResult.h"
 #include "../actions/DelayedAction.h"
 #include "../audio/AudioMixer.h"
+#include "../base/BounceWriter.h"
+#include "../base/TriggerPunchTarget.h"
 #include "../io/RigFile.h"
 
 namespace engine
@@ -42,6 +46,19 @@ namespace engine
 		TRIGGER_KEY,
 		TRIGGER_MIDI,
 		TRIGGER_SERIAL
+	};
+
+	enum class TriggerInputDomain : std::uint8_t { Ui, Job };
+	enum class TriggerControl : std::uint8_t { Activate, Ditch };
+	enum class TriggerEdge : std::uint8_t { Down, Up };
+
+	struct TriggerInputEdge
+	{
+		std::uint64_t RigRevision = 0u;
+		std::uint16_t BindingIndex = 0u;
+		TriggerControl Control = TriggerControl::Activate;
+		TriggerEdge Edge = TriggerEdge::Up;
+		std::int64_t EventTimeUsec = 0;
 	};
 
 	class TriggerBinding
@@ -70,7 +87,7 @@ namespace engine
 		bool Test(TriggerSource source,
 			unsigned int value,
 			unsigned int state,
-			const std::string& device = "")
+			const std::string& device = "") const
 		{
 			if ((TRIGGER_NOTSET != TriggerSource) &&
 				(source == TriggerSource) &&
@@ -186,6 +203,33 @@ namespace engine
 			return MATCH_NONE;
 		}
 
+		TestResult Match(TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			const std::string& device = "") const
+		{
+			if (_triggerDown.Test(source, value, state, device))
+				return MATCH_DOWN;
+			if (_triggerRelease.has_value() && _triggerRelease->Test(source, value, state, device))
+				return MATCH_RELEASE;
+			return MATCH_NONE;
+		}
+
+		TestResult ApplyResolved(TestResult edge)
+		{
+			if (edge == MATCH_DOWN && !_isDown)
+			{
+				if (_triggerRelease.has_value()) _isDown = true;
+				return MATCH_DOWN;
+			}
+			if (edge == MATCH_RELEASE && _isDown)
+			{
+				_isDown = false;
+				return MATCH_RELEASE;
+			}
+			return MATCH_NONE;
+		}
+
 		void Reset() { _isDown = false;	}
 
 		bool operator==(const DualBinding& other) {
@@ -226,18 +270,13 @@ namespace engine
 		TRIGSTATE_PUNCHEDIN
 	};
 
-	struct DelayedTriggerAction
-	{
-		actions::TriggerAction Action;
-		std::shared_ptr<base::ActionReceiver> Receiver;
-		unsigned int SampsLeft;
-	};
-	
 	class Trigger :
 		public base::Tickable,
-		public base::ActionSender
+		public base::ActionSender,
+		public base::BounceWriter
 	{
 	public:
+		static constexpr std::size_t MaxBindingCount = 64u;
 		Trigger(TriggerParams trigParams);
 		~Trigger();
 
@@ -246,6 +285,8 @@ namespace engine
 			io::RigFile::Trigger trigStruct);
 		static audio::BounceMixBehaviourParams GetOverdubBehaviourParams(std::vector<unsigned int> channels);
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
+		static std::shared_ptr<base::BounceWriter> CreateBounceWriter(
+			const std::shared_ptr<audio::AudioMixer>& mixer);
 		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
 		actions::ActionResult OnAction(actions::KeyAction action);
@@ -258,13 +299,41 @@ namespace engine
 			const std::string& device = "");
 		actions::ActionResult QueueExternalControlAction(bool isActivate,
 			bool isDown,
+			const base::Action& action,
+			std::uint64_t rigRevision = 0u);
+		actions::ActionResult QueueInputEvent(TriggerInputDomain domain,
+			std::uint64_t rigRevision,
+			TriggerSource source,
+			unsigned int value,
+			unsigned int state,
+			const base::Action& action,
+			const std::string& device = "");
+		actions::ActionResult QueueMidiInputEvent(TriggerInputDomain domain,
+			std::uint64_t rigRevision,
+			const midi::MidiEvent& event,
 			const base::Action& action);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) override;
+		void OnTick(Time curTime,
+			unsigned int samps,
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params,
+			std::uint64_t rigRevision);
+		std::uint64_t UiInputDropCount() const noexcept { return _uiInputQueue.DroppedCount(); }
+		std::uint64_t JobInputDropCount() const noexcept { return _jobInputQueue.DroppedCount(); }
+		std::uint64_t StructuralCommandDropCount() const noexcept { return _structuralCommandDropCount.load(std::memory_order_acquire); }
+		std::uint64_t ActivationOutcomeCount() const noexcept { return _activationOutcomeCount.load(std::memory_order_acquire); }
+		std::uint64_t DitchOutcomeCount() const noexcept { return _ditchOutcomeCount.load(std::memory_order_acquire); }
+		// Scene job-thread consumer for fixed-size structural commands emitted by
+		// the audio-owned state machine. The caller serializes this with Station
+		// edits by holding the Scene mutex.
+		void ProcessStructuralActionsOnJob(
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params);
 
-		void AddBinding(DualBinding activate, DualBinding ditch);
+		bool AddBinding(DualBinding activate, DualBinding ditch);
 		void RemoveBinding(DualBinding activate, DualBinding ditch);
 		void ClearBindings();
 		void AddInputChannel(unsigned int chan);
@@ -277,7 +346,8 @@ namespace engine
 			std::vector<unsigned int>& inputChannels,
 			std::vector<std::string>& midiInputDevices,
 			io::RigFile::Trigger::MidiInputMode& midiInputMode,
-			std::unique_ptr<audio::MixBehaviour>& overdubBehaviour) noexcept;
+			std::shared_ptr<audio::AudioMixer>& overdubMixer,
+			std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept;
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		io::RigFile::Trigger::MidiInputMode MidiInputMode() const noexcept { return _midiInputMode; }
 		TriggerState GetState() const;
@@ -293,10 +363,10 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
-		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+		virtual void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,
-			unsigned int destChannel);
+			unsigned int destChannel) override;
 
 	protected:
 		void _UpdateBehaviour();
@@ -334,7 +404,11 @@ namespace engine
 			bool isActivate,
 			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params);
-		void _ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
+		void _ProcessQueuedInputActions(std::uint64_t rigRevision,
+			const std::optional<io::UserConfig>& cfg,
+			const std::optional<audio::AudioStreamParams>& params) noexcept;
+		bool _ApplyInputEdge(const TriggerInputEdge& edge,
+			const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) noexcept;
 		bool _CanEditRoutingAtAudioBoundary() const noexcept;
 		bool _CanApplyCaptureRoutingAtAudioBoundary() const noexcept;
@@ -349,35 +423,121 @@ namespace engine
 		void StartOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
 		void EndOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
 		void DitchOverdub(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
-		void StartPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
-		void EndPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		bool StartPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
+		bool EndPunchIn(const std::optional<io::UserConfig>& cfg, const std::optional<audio::AudioStreamParams>& params);
 		unsigned int CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) const;
 		unsigned int CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const;
-		void QueueTriggerAction(const actions::TriggerAction& action,
-			std::shared_ptr<base::ActionReceiver> receiver, unsigned int sampsDelay);
-		void DispatchTriggerAction(const actions::TriggerAction& action,
-			const std::shared_ptr<base::ActionReceiver>& receiver);
-		void FlushDelayedTriggerActions(Time curTime,
-			unsigned int samps,
-			const std::optional<io::UserConfig>& cfg,
-			const std::optional<audio::AudioStreamParams>& params);
+		enum class StructuralCompletion : std::uint8_t
+		{
+			None,
+			StartRecording,
+			EndRecording,
+			Ditch,
+			StartOverdub,
+			EndOverdub,
+			DitchOverdub
+		};
+		struct StructuralCommand
+		{
+			std::uint64_t Sequence = 0u;
+			actions::TriggerAction::TriggerActionType ActionType = actions::TriggerAction::TRIGGER_REC_START;
+			StructuralCompletion Completion = StructuralCompletion::None;
+			std::uint64_t HistoryToken = 0u;
+			unsigned long SampleCount = 0u;
+			bool ApplyToTargetTake = true;
+			bool ApplyToSourceTake = true;
+			bool ApplyToTargetAudio = true;
+			bool ApplyToTargetMidi = true;
+		};
+		struct StructuralResult
+		{
+			std::uint64_t Sequence = 0u;
+			StructuralCompletion Completion = StructuralCompletion::None;
+			bool IsEaten = false;
+			actions::DitchDisposition DitchResult = actions::DitchDisposition::NotApplicable;
+			std::uint64_t HistoryToken = 0u;
+			base::TriggerPunchTarget* SourceTake = nullptr;
+			base::TriggerPunchTarget* TargetTake = nullptr;
+		};
+		struct RuntimeTriggerTake
+		{
+			decltype(TriggerTake{}.SourceType) SourceType = TriggerTake::SOURCE_ADC;
+			std::uint64_t Token = 0u;
+			base::TriggerPunchTarget* SourceTake = nullptr;
+			base::TriggerPunchTarget* TargetTake = nullptr;
+		};
+		struct DelayedMixerAction
+		{
+			unsigned int SampsLeft = 0u;
+			double Target = 0.0;
+		};
+		struct DelayedPunchAction
+		{
+			base::TriggerPunchTarget* TargetTake = nullptr;
+			unsigned int SampsLeft = 0u;
+			bool IsPunchIn = false;
+		};
+		bool _QueueStructuralCommand(actions::TriggerAction::TriggerActionType actionType,
+			StructuralCompletion completion,
+			std::uint64_t historyToken,
+			unsigned long sampleCount,
+			bool applyToTargetTake = true,
+			bool applyToSourceTake = true,
+			bool applyToTargetAudio = true,
+			bool applyToTargetMidi = true) noexcept;
+		void _FlushDelayedPunchActions(unsigned int samps) noexcept;
+		void _ProcessStructuralResults() noexcept;
+		void _ApplyStructuralResult(const StructuralResult& result) noexcept;
+		void _EraseHistory(std::size_t index) noexcept;
+		std::optional<std::size_t> _FindJobHistory(std::uint64_t token) const noexcept;
+		void _PublishJobHistory();
 
 	private:
 		std::string _name;
 		double _debounceTimeMs;
 		std::vector<DualBinding> _activateBindings;
 		std::vector<DualBinding> _ditchBindings;
-		// External control thread produces edges; the audio thread consumes them.
-		struct ExternalControlAction
+		static constexpr std::uint16_t _DirectBindingIndex = (std::numeric_limits<std::uint16_t>::max)();
+		static constexpr std::size_t _InputQueueCapacity = 64u;
+		static constexpr std::size_t _InputFallbackBindingCapacity = MaxBindingCount;
+		static constexpr std::size_t _InputFallbackBindingsPerControl = _InputFallbackBindingCapacity + 1u;
+		static constexpr std::size_t _InputFallbackCount = _InputFallbackBindingsPerControl * 2u;
+		static constexpr std::size_t _HistoryCapacity = 64u;
+		static constexpr std::size_t _DelayedActionCapacity = 64u;
+		static constexpr std::size_t _StructuralQueueCapacity = 64u;
+		struct InputFallback
 		{
-			bool IsActivate;
-			bool IsDown;
+			void Publish(const TriggerInputEdge& edge) noexcept;
+			bool ReadLatest(std::uint64_t consumedSequence,
+				TriggerInputEdge& edge,
+				std::uint64_t& observedSequence) const noexcept;
+			std::atomic<std::uint64_t> Sequence{ 0u };
+			std::atomic<std::uint64_t> RigRevision{ 0u };
+			std::atomic<std::uint16_t> BindingIndex{ 0u };
+			std::atomic<std::uint8_t> Control{ 0u };
+			std::atomic<std::uint8_t> Edge{ 0u };
+			std::atomic<std::int64_t> EventTimeUsec{ 0 };
 		};
-		static constexpr std::size_t _ExternalControlActionQueueCapacity = 64u;
-		std::array<ExternalControlAction, _ExternalControlActionQueueCapacity> _externalControlActionQueue{};
-		std::atomic<std::size_t> _externalControlActionHead{ 0u };
-		std::atomic<std::size_t> _externalControlActionTail{ 0u };
+		static std::size_t _InputFallbackIndex(const TriggerInputEdge& edge) noexcept;
+		void _PublishInputFallback(TriggerInputDomain domain, const TriggerInputEdge& edge) noexcept;
+		bool _InputFallbacksConsumed(const std::array<InputFallback, _InputFallbackCount>& fallbacks,
+			const std::array<std::uint64_t, _InputFallbackCount>& consumedSequences) const noexcept;
+		static_assert(std::atomic<std::uint64_t>::is_always_lock_free &&
+			std::atomic<std::int64_t>::is_always_lock_free &&
+			std::atomic<std::uint16_t>::is_always_lock_free &&
+			std::atomic<std::uint8_t>::is_always_lock_free,
+			"Trigger ingress fallback must remain lock-free on the audio path");
+		midi::MidiQueue<_InputQueueCapacity, TriggerInputEdge> _uiInputQueue;
+		midi::MidiQueue<_InputQueueCapacity, TriggerInputEdge> _jobInputQueue;
+		std::array<InputFallback, _InputFallbackCount> _uiInputFallbacks{};
+		std::array<InputFallback, _InputFallbackCount> _jobInputFallbacks{};
+		std::atomic<std::uint64_t> _uiFallbackPublicationCount{ 0u };
+		std::atomic<std::uint64_t> _jobFallbackPublicationCount{ 0u };
+		std::array<std::uint64_t, _InputFallbackCount> _consumedUiFallbackSequences{};
+		std::array<std::uint64_t, _InputFallbackCount> _consumedJobFallbackSequences{};
+		std::uint64_t _consumedUiFallbackPublicationCount = 0u;
+		std::uint64_t _consumedJobFallbackPublicationCount = 0u;
 		std::vector<unsigned int> _inputChannels;
 		std::vector<std::string> _midiInputDevices;
 		io::RigFile::Trigger::MidiInputMode _midiInputMode = io::RigFile::Trigger::MidiInputMode::None;
@@ -388,6 +548,8 @@ namespace engine
 		std::atomic<bool> _publishedTriggerDitchDown{ false };
 		std::atomic<bool> _publishedCanEditRouting{ true };
 		std::atomic<bool> _publishedCanApplyCaptureRouting{ true };
+		std::atomic<std::uint64_t> _activationOutcomeCount{ 0u };
+		std::atomic<std::uint64_t> _ditchOutcomeCount{ 0u };
 		std::string _overdubSourceId;
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
@@ -400,9 +562,36 @@ namespace engine
 		bool _isLastDitchDown;
 		bool _isLastActivateDownRaw;
 		bool _isLastDitchDownRaw;
-		std::vector<TriggerTake> _loopTakeHistory;
-		std::vector<actions::DelayedAction> _delayedActions;
-		std::vector<DelayedTriggerAction> _delayedTriggerActions;
+		std::array<RuntimeTriggerTake, _HistoryCapacity> _loopTakeHistory{};
+		std::size_t _loopTakeHistorySize = 0u;
+		std::optional<std::size_t> _activeHistoryIndex;
+		std::array<DelayedMixerAction, _DelayedActionCapacity> _delayedActions{};
+		std::size_t _delayedActionCount = 0u;
+		std::array<DelayedPunchAction, _DelayedActionCapacity> _delayedPunchActions{};
+		std::size_t _delayedPunchActionCount = 0u;
+		std::array<DelayedMixerAction, _DelayedActionCapacity> _pendingDitchDelayedActions{};
+		std::size_t _pendingDitchDelayedActionCount = 0u;
+		std::array<DelayedPunchAction, _DelayedActionCapacity> _pendingDitchDelayedPunchActions{};
+		std::size_t _pendingDitchDelayedPunchActionCount = 0u;
+		midi::MidiQueue<_StructuralQueueCapacity, StructuralCommand> _structuralCommands;
+		midi::MidiQueue<_StructuralQueueCapacity, StructuralResult> _structuralResults;
+		std::atomic<std::uint32_t> _jobStructuralActionsInFlight{ 0u };
+		std::atomic<std::uint64_t> _structuralCommandDropCount{ 0u };
+		StructuralCompletion _pendingCompletion = StructuralCompletion::None;
+		std::uint64_t _pendingSequence = 0u;
+		std::uint64_t _pendingHistoryToken = 0u;
+		TriggerState _pendingPriorState = TRIGSTATE_DEFAULT;
+		std::optional<std::size_t> _pendingPriorActiveIndex;
+		unsigned long _pendingRecordSamps = 0u;
+		std::uint64_t _nextStructuralSequence = 1u;
+		std::uint64_t _nextHistoryToken = 1u;
+		// Job-thread-only variable-size metadata. Audio history uses only stable
+		// tokens and raw non-owning punch targets retained by this ledger/Station.
+		std::array<TriggerTake, _HistoryCapacity> _jobTakeHistory{};
+		std::array<std::uint64_t, _HistoryCapacity> _jobTakeTokens{};
+		std::size_t _jobTakeHistorySize = 0u;
+		std::atomic<std::shared_ptr<const std::vector<TriggerTake>>> _publishedTakeHistory;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
+		std::shared_ptr<base::BounceWriter> _overdubWriter;
 	};
 }

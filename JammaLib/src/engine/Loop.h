@@ -7,8 +7,8 @@
 #include <string>
 #include <memory>
 #include <mutex>
-#include "Trigger.h"
 #include "ActionReceiver.h"
+#include "../base/BounceWriter.h"
 #include "Tweakable.h"
 #include "ResourceUser.h"
 #include "GlUtils.h"
@@ -205,7 +205,7 @@ namespace engine
 		// Reads source data via ReadBlock, then routes to destination
 		// via mixer->WriteBlock → behaviour->ApplyBlock → dest->OnBlockWriteChannel.
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<Trigger> trigger,
+			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int sampOffset,
 			unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;

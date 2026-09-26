@@ -184,12 +184,15 @@ TEST(MidiRouterChannelOverride, DeriveStationEventChannelDivergesFromRawTriggerC
 TEST(MidiRouterChannelOverride, RigTriggerInputGateIsRevisionSpecificAndReversible)
 {
 	midi::MidiRouter router;
-	EXPECT_FALSE(router.IsRigTriggerInputGated(7u));
-	router.GateRigTriggerInput(7u);
-	EXPECT_TRUE(router.IsRigTriggerInputGated(7u));
-	EXPECT_FALSE(router.IsRigTriggerInputGated(8u));
-	router.UngateRigTriggerInput();
-	EXPECT_FALSE(router.IsRigTriggerInputGated(7u));
+	EXPECT_TRUE(router.OpenRigTriggerInput(7u));
+	EXPECT_TRUE(router.TryAcceptUiRigTriggerInput(7u));
+	EXPECT_FALSE(router.TryAcceptUiRigTriggerInput(8u));
+	EXPECT_TRUE(router.RequestCloseRigTriggerInputFromUi(7u));
+	EXPECT_FALSE(router.TryAcceptUiRigTriggerInput(7u));
+	EXPECT_EQ(7u, router.AcknowledgeRigTriggerInputCloseFromJob());
+	EXPECT_TRUE(router.RigTriggerInputReadyForQuiescence(7u));
+	EXPECT_TRUE(router.OpenRigTriggerInput(7u));
+	EXPECT_TRUE(router.TryAcceptUiRigTriggerInput(7u));
 }
 
 TEST(MidiRouterChannelOverride, StaleAndUntaggedIngressCannotCrossRoutingRevisions)

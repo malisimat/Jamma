@@ -31,9 +31,13 @@ namespace io
 		void Close();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
-		void GateRigTriggerInput(std::uint64_t revision) noexcept;
-		void UngateRigTriggerInput() noexcept;
-		bool IsRigTriggerInputGated(std::uint64_t revision) const noexcept;
+		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
+		bool RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept;
+		std::uint64_t AcknowledgeRigTriggerInputCloseFromJob() noexcept;
+		bool RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept;
+		bool TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept;
+		void CloseRigTriggerInputForever() noexcept;
+		bool RigTriggerInputReadyForShutdown() const noexcept;
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();

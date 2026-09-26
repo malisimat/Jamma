@@ -176,10 +176,14 @@ namespace gui
 	public:
 		GuiHudTriggerPedal(base::GuiElementParams params,
 			std::weak_ptr<engine::Trigger> trigger,
-			bool isActivate) :
+			bool isActivate,
+			std::uint64_t rigRevision,
+			std::function<bool(std::uint64_t)> acceptInput) :
 			GuiElement(params),
 			_trigger(std::move(trigger)),
-			_isActivate(isActivate)
+			_isActivate(isActivate),
+			_rigRevision(rigRevision),
+			_acceptInput(std::move(acceptInput))
 		{
 		}
 
@@ -216,11 +220,14 @@ namespace gui
 	private:
 		actions::ActionResult _Dispatch(const actions::TouchAction& action)
 		{
+			if (!_acceptInput || !_acceptInput(_rigRevision))
+				return actions::ActionResult::NoAction();
 			if (auto trigger = _trigger.lock())
 			{
 				auto result = trigger->QueueExternalControlAction(_isActivate,
 					actions::TouchAction::TOUCH_DOWN == action.State,
-					action);
+					action,
+					_rigRevision);
 				result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
 				return result;
 			}
@@ -230,6 +237,8 @@ namespace gui
 
 		std::weak_ptr<engine::Trigger> _trigger;
 		bool _isActivate;
+		std::uint64_t _rigRevision;
+		std::function<bool(std::uint64_t)> _acceptInput;
 	};
 }
 
@@ -237,6 +246,7 @@ GuiHud::GuiHud(GuiHudParams params) :
 	GuiPanel(params),
 	_submitRigEdit(std::move(params.SubmitRigEdit)),
 	_routingEditAvailability(std::move(params.RoutingEditAvailabilityState)),
+	_acceptTriggerInput(std::move(params.AcceptTriggerInput)),
 	_popupManager(params.PopupManager)
 {
 	_cableEndIcon = std::make_shared<GuiHudSocket>(utils::Position2d{}, _CableEndSize, glm::vec3(1.0f));
@@ -1505,7 +1515,8 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	activateParams.DownTexture = "trigger_activate_down";
 	activateParams.OutTexture = "trigger_activate_down_out";
 	activateParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true));
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(activateParams, trigger, true,
+		_displayedRevision, _acceptTriggerInput));
 
 	base::GuiElementParams ditchParams;
 	ditchParams.Position = { pedalPosX + pedalSizeW + socketPadding, pedalPosY };
@@ -1516,7 +1527,8 @@ std::shared_ptr<GuiButton> GuiHud::_MakeTriggerButton(const std::string& text,
 	ditchParams.DownTexture = "trigger_ditch_down";
 	ditchParams.OutTexture = "trigger_ditch_down_out";
 	ditchParams.GuiPassThrough = false;
-	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false));
+	button->AddChild(std::make_shared<GuiHudTriggerPedal>(ditchParams, std::move(trigger), false,
+		_displayedRevision, _acceptTriggerInput));
 
 	GuiLabelParams labelParams = GuiLabelParams::PanelScrollRow(text, 12u);
 	const int approxCharWidth = 8;

@@ -16,6 +16,7 @@
 #include "../audio/AudioDevice.h"
 #include "../base/LoggingConfig.h"
 #include "../io/SerialDevice.h"
+#include "../engine/RigTriggerIngressGate.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
@@ -86,9 +87,13 @@ namespace midi
 		void CloseMidi();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();
-		void GateRigTriggerInput(std::uint64_t revision) noexcept;
-		void UngateRigTriggerInput() noexcept;
-		bool IsRigTriggerInputGated(std::uint64_t revision) const noexcept;
+		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
+		bool RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept;
+		std::uint64_t AcknowledgeRigTriggerInputCloseFromJob() noexcept;
+		bool RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept;
+		bool TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept;
+		void CloseRigTriggerInputForever() noexcept;
+		bool RigTriggerInputReadyForShutdown() const noexcept;
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
@@ -245,7 +250,7 @@ namespace midi
 		// and job pumps are readers. Empty publication precedes worker teardown, and
 		// snapshot retirement remains coordinator-owned.
 		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
-		std::atomic<std::uint64_t> _gatedRigTriggerRevision{ 0u };
+		engine::RigTriggerIngressGate _rigTriggerIngressGate;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;

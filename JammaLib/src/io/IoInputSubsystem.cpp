@@ -54,19 +54,39 @@ namespace io
 		_midiRouter.PublishEmptyRigInputDispatch();
 	}
 
-	void IoInputSubsystem::GateRigTriggerInput(std::uint64_t revision) noexcept
+	bool IoInputSubsystem::OpenRigTriggerInput(std::uint64_t revision) noexcept
 	{
-		_midiRouter.GateRigTriggerInput(revision);
+		return _midiRouter.OpenRigTriggerInput(revision);
 	}
 
-	void IoInputSubsystem::UngateRigTriggerInput() noexcept
+	bool IoInputSubsystem::RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept
 	{
-		_midiRouter.UngateRigTriggerInput();
+		return _midiRouter.RequestCloseRigTriggerInputFromUi(revision);
 	}
 
-	bool IoInputSubsystem::IsRigTriggerInputGated(std::uint64_t revision) const noexcept
+	std::uint64_t IoInputSubsystem::AcknowledgeRigTriggerInputCloseFromJob() noexcept
 	{
-		return _midiRouter.IsRigTriggerInputGated(revision);
+		return _midiRouter.AcknowledgeRigTriggerInputCloseFromJob();
+	}
+
+	bool IoInputSubsystem::RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept
+	{
+		return _midiRouter.RigTriggerInputReadyForQuiescence(revision);
+	}
+
+	bool IoInputSubsystem::TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept
+	{
+		return _midiRouter.TryAcceptUiRigTriggerInput(revision);
+	}
+
+	void IoInputSubsystem::CloseRigTriggerInputForever() noexcept
+	{
+		_midiRouter.CloseRigTriggerInputForever();
+	}
+
+	bool IoInputSubsystem::RigTriggerInputReadyForShutdown() const noexcept
+	{
+		return _midiRouter.RigTriggerInputReadyForShutdown();
 	}
 
 	bool IoInputSubsystem::InitGlobalKeyCapture()

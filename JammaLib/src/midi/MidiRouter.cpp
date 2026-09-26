@@ -623,19 +623,39 @@ void MidiRouter::PublishEmptyRigInputDispatch()
 		SetEvent(_liveMidiDispatchNotification->WorkEvent);
 }
 
-void MidiRouter::GateRigTriggerInput(std::uint64_t revision) noexcept
+bool MidiRouter::OpenRigTriggerInput(std::uint64_t revision) noexcept
 {
-	_gatedRigTriggerRevision.store(revision, std::memory_order_release);
+	return _rigTriggerIngressGate.Open(revision);
 }
 
-void MidiRouter::UngateRigTriggerInput() noexcept
+bool MidiRouter::RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept
 {
-	_gatedRigTriggerRevision.store(0u, std::memory_order_release);
+	return _rigTriggerIngressGate.RequestCloseFromUi(revision);
 }
 
-bool MidiRouter::IsRigTriggerInputGated(std::uint64_t revision) const noexcept
+std::uint64_t MidiRouter::AcknowledgeRigTriggerInputCloseFromJob() noexcept
 {
-	return revision != 0u && _gatedRigTriggerRevision.load(std::memory_order_acquire) == revision;
+	return _rigTriggerIngressGate.ObserveAndAcknowledgeClose();
+}
+
+bool MidiRouter::RigTriggerInputReadyForQuiescence(std::uint64_t revision) const noexcept
+{
+	return _rigTriggerIngressGate.ReadyForAudioQuiescence(revision);
+}
+
+bool MidiRouter::TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept
+{
+	return _rigTriggerIngressGate.TryAcceptUi(revision);
+}
+
+void MidiRouter::CloseRigTriggerInputForever() noexcept
+{
+	_rigTriggerIngressGate.CloseForever();
+}
+
+bool MidiRouter::RigTriggerInputReadyForShutdown() const noexcept
+{
+	return _rigTriggerIngressGate.ReadyForShutdown();
 }
 
 void MidiRouter::InitSerial(const io::UserConfig& cfg)
@@ -1017,7 +1037,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		const auto dispatch = _rigInputDispatch.load(std::memory_order_acquire);
 		if (!dispatch || !IsCurrentRigIngressRevision(queued.RigRevision, dispatch->Revision) || !dispatch->Snapshot)
 			continue;
-		if (IsRigTriggerInputGated(dispatch->Revision))
+		if (!_rigTriggerIngressGate.TryAcceptJob(dispatch->Revision))
 			continue;
 		const auto& ev = queued.Event;
 
@@ -1030,7 +1050,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		for (const auto& trigger : dispatch->Snapshot->InputDispatch.SerialTriggers)
 		{
 			if (!trigger) continue;
-			auto res = trigger->OnEvent(
+			auto res = trigger->QueueInputEvent(engine::TriggerInputDomain::Job,
+				dispatch->Revision,
 				engine::TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
 				ev.IsPressed ? 1u : 0u,
@@ -1072,7 +1093,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 	triggerAction.SetAudioParams(audioParams);
 	triggerAction.SetActionTime(utils::Timer::GetTime());
 
-	if (!routes || IsRigTriggerInputGated(routes->Revision))
+	if (!routes || !_rigTriggerIngressGate.TryAcceptJob(routes->Revision))
 		return summary;
 
 	for (const auto& route : routes->MidiTriggers)
@@ -1080,7 +1101,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
 			continue;
 
-		auto res = route.Trigger->OnEvent(event, triggerAction);
+		auto res = route.Trigger->QueueMidiInputEvent(engine::TriggerInputDomain::Job,
+			routes->Revision, event, triggerAction);
 		if (!res.IsEaten)
 			continue;
 

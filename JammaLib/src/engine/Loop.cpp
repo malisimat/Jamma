@@ -389,7 +389,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 // Only called when outputting to DAC
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
-	const std::shared_ptr<Trigger> trigger,
+	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int sampOffset,
 	unsigned int numSamps)
 {
@@ -415,10 +415,10 @@ void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 
 		// Route to destination via mixer or trigger
 		// (both ultimately call dest->OnBlockWriteChannel)
-		if (nullptr == trigger)
+		if (nullptr == bounceWriter)
 			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
 		else
-			trigger->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
+			bounceWriter->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
 	}
 }
 

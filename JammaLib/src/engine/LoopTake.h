@@ -15,12 +15,12 @@
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
-#include "Trigger.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../base/TriggerPunchTarget.h"
 
 using base::Audible;
 
@@ -63,7 +63,8 @@ namespace engine
 
 	class LoopTake :
 		public base::Jammable,
-		public base::MultiAudioSink
+		public base::MultiAudioSink,
+		public base::TriggerPunchTarget
 	{
 	public:
 		enum LoopTakeSource
@@ -117,9 +118,12 @@ namespace engine
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<Trigger> trigger,
+			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
 			unsigned int numSamps);
+		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
+			std::shared_ptr<base::BounceWriter> writer) noexcept;
+		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
@@ -245,6 +249,11 @@ namespace engine
 			std::uint64_t transportStartSamps = 0u);
 		void PunchIn(bool applyAudio = true, bool applyMidi = true);
 		void PunchOut(bool applyAudio = true, bool applyMidi = true);
+		// Allocation-free audio-boundary half of punch transitions. MIDI capture
+		// and synthetic transition events remain on the job-thread methods above.
+		void TriggerPunchInAudio() noexcept override;
+		void TriggerPunchOutAudio() noexcept override;
+		void SetTriggerSourceMutedAudio(bool muted) noexcept override;
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const midi::MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
@@ -383,6 +392,8 @@ namespace engine
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
 		std::atomic<LoopTakeState> _state;
+		std::weak_ptr<LoopTake> _activeBounceSource;
+		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
 		std::string _id;
 		std::string _sourceId;
 		unsigned int _lastBufSize;

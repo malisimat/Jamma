@@ -67,10 +67,6 @@ namespace audio
 		{
 			return _appliedRigRevision.load(std::memory_order_acquire);
 		}
-		bool RoutingEditsEligible() const noexcept
-		{
-			return _routingEditsEligible.load(std::memory_order_acquire);
-		}
 		std::uint64_t AudioCallbackHeartbeat() const noexcept
 		{
 			return _audioCallbackHeartbeat.load(std::memory_order_relaxed);
@@ -191,6 +187,9 @@ namespace audio
 		// The retained list prevents the callback's local snapshot reference from
 		// ever becoming the last owner; it is cleared only after audio has stopped.
 		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
+		// Audio-thread-owned applied graph. Off-thread retention guarantees replacing
+		// this handle cannot release the last snapshot or Trigger owner on callback.
+		std::shared_ptr<const engine::RigSnapshot> _audioAppliedRigSnapshot;
 		std::atomic<std::uint64_t> _rigTriggerQuiescenceRequestRevision{ 0u };
 		std::atomic<std::uint64_t> _rigTriggerQuiescenceAcceptedRevision{ 0u };
 		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerQuiescenceCandidate;
@@ -199,7 +198,6 @@ namespace audio
 		std::mutex _retainedRigSnapshotsMutex;
 		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
 		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };
-		std::atomic<bool> _routingEditsEligible{ false };
 		std::atomic<std::uint64_t> _audioCallbackHeartbeat{ 0u };
 		std::uint64_t _audioRigRevision = 0u;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;

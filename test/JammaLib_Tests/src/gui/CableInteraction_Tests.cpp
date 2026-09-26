@@ -10,12 +10,14 @@ protected:
 	{
 		io::RigFile rig;
 		rig.Triggers.resize(2u);
+		rig.Triggers[0].Id = "trigger-1-id";
 		rig.Triggers[0].Name = "Trigger-1";
 		rig.Triggers[0].InputChannels = { 1u };
 		rig.Triggers[0].MidiInputs = io::RigFile::Trigger::MidiInputMode::Selected;
 		rig.Triggers[0].MidiInputDevices = { "Keys" };
 		rig.Triggers[0].StationTarget = "A";
 		rig.Triggers[1].Name = "Trigger-2";
+		rig.Triggers[1].Id = "trigger-2-id";
 		rig.Triggers[1].MidiInputs = io::RigFile::Trigger::MidiInputMode::None;
 		rig.Triggers[1].StationTarget = "";
 		return rig;
@@ -135,10 +137,12 @@ TEST_F(CableInteractionTests, ReleaseEmptySpaceRemovesCaptureAndSnapReplacesIt)
 	auto removed = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(removed.Candidate.has_value());
 	EXPECT_TRUE(removed.Candidate->Triggers[0].InputChannels.empty());
+	EXPECT_EQ("trigger-1-id", removed.Candidate->Triggers[0].Id);
 	drag.Snap = Adc(2u, 0, 0);
 	auto replaced = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(replaced.Candidate.has_value());
 	EXPECT_EQ((std::vector<unsigned int>{ 2u }), replaced.Candidate->Triggers[0].InputChannels);
+	EXPECT_EQ("trigger-1-id", replaced.Candidate->Triggers[0].Id);
 }
 
 TEST_F(CableInteractionTests, ReleaseSourceToTriggerCreatesCaptureRoute)
@@ -165,6 +169,8 @@ TEST_F(CableInteractionTests, ReleaseTriggerInputEndUnplugsOrMovesExistingCaptur
 	ASSERT_TRUE(moved.Candidate.has_value());
 	EXPECT_TRUE(moved.Candidate->Triggers[0].InputChannels.empty());
 	EXPECT_EQ((std::vector<unsigned int>{ 1u }), moved.Candidate->Triggers[1].InputChannels);
+	EXPECT_EQ("trigger-1-id", moved.Candidate->Triggers[0].Id);
+	EXPECT_EQ("trigger-2-id", moved.Candidate->Triggers[1].Id);
 }
 
 TEST_F(CableInteractionTests, UnavailableFixedSourceCannotCreateCaptureRoute)
@@ -225,4 +231,5 @@ TEST_F(CableInteractionTests, StationReleaseMovesOrUnplugsSingleTarget)
 	auto moved = CableInteraction::ReleaseToCandidate(drag, rig);
 	ASSERT_TRUE(moved.Candidate.has_value());
 	EXPECT_EQ("B", moved.Candidate->Triggers[0].StationTarget.value());
+	EXPECT_EQ("trigger-1-id", moved.Candidate->Triggers[0].Id);
 }

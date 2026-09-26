@@ -1,6 +1,8 @@
 #include "Trigger.h"
 
+#include <cassert>
 #include <cstdint>
+#include <stdexcept>
 
 using namespace base;
 using namespace engine;
@@ -8,8 +10,40 @@ using namespace utils;
 using actions::ActionResult;
 using actions::KeyAction;
 using actions::TriggerAction;
-using actions::DelayedAction;
 using audio::AudioMixer;
+
+namespace engine
+{
+	class PreparedTriggerBounceWriter final : public base::BounceWriter
+	{
+	public:
+		explicit PreparedTriggerBounceWriter(std::shared_ptr<AudioMixer> mixer) :
+			_mixer(std::move(mixer))
+		{
+		}
+
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+			const float* srcBuf,
+			unsigned int numSamps,
+			unsigned int destChannel) override
+		{
+			if (!dest || !srcBuf || !_mixer)
+				return;
+			base::AudioWriteRequest request;
+			request.samples = srcBuf;
+			request.numSamps = numSamps;
+			request.stride = 1;
+			request.fadeCurrent = 1.0f - static_cast<float>(_mixer->Level());
+			request.fadeNew = static_cast<float>(_mixer->Level());
+			request.source = base::Audible::AUDIOSOURCE_BOUNCE;
+			dest->OnBlockWriteChannel(destChannel, request, 0);
+			_mixer->Offset(numSamps);
+		}
+
+	private:
+		std::shared_ptr<AudioMixer> _mixer;
+	};
+}
 
 unsigned int Trigger::EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
 	unsigned int channel,
@@ -78,13 +112,18 @@ Trigger::Trigger(TriggerParams trigParams) :
 	_isLastActivateDownRaw(false),
 	_isLastDitchDownRaw(false),
 	_recordSampCount(0),
-	_loopTakeHistory({}),
-	_overdubMixer(std::shared_ptr<audio::AudioMixer>()),
-	_delayedActions({}),
-	_delayedTriggerActions({})
+	_overdubMixer(std::shared_ptr<audio::AudioMixer>())
 {
+	// Binding indices are part of the fixed-size audio ingress protocol. Keep
+	// every accepted binding representable by its dedicated overflow mailbox.
+	if (_activateBindings.size() > _InputFallbackBindingCapacity ||
+		_ditchBindings.size() > _InputFallbackBindingCapacity)
+		throw std::invalid_argument("Trigger binding count exceeds fixed ingress capacity");
 	_overdubMixer = std::make_shared<AudioMixer>(
 		GetOverdubMixerParams(trigParams.InputChannels));
+	_overdubWriter = CreateBounceWriter(_overdubMixer);
+	_publishedTakeHistory.store(std::make_shared<const std::vector<TriggerTake>>(),
+		std::memory_order_release);
 }
 
 Trigger::~Trigger()
@@ -105,6 +144,19 @@ Trigger::~Trigger()
 std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
 {
 	trigParams.Name = trigStruct.Name;
+	if (trigStruct.MidiTrigger.has_value() &&
+		(!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Activate) ||
+		 !IsValidMidiBindingSpec(trigStruct.MidiTrigger->Ditch)))
+		return std::nullopt;
+	const auto midiActivateBindingCount = trigStruct.MidiTrigger.has_value() ?
+		(trigStruct.MidiTrigger->Activate.MatchAnyChannel ? 16u : 1u) : 0u;
+	const auto midiDitchBindingCount = trigStruct.MidiTrigger.has_value() ?
+		(trigStruct.MidiTrigger->Ditch.MatchAnyChannel ? 16u : 1u) : 0u;
+	const auto addedBindingCount = trigStruct.TriggerPairs.size() +
+		midiActivateBindingCount + midiDitchBindingCount;
+	if (std::max(trigParams.Activate.size(), trigParams.Ditch.size()) +
+		addedBindingCount > _InputFallbackBindingCapacity)
+		return std::nullopt;
 
 	auto trigger = std::make_shared<Trigger>(trigParams);
 	trigger->_midiInputMode = trigStruct.MidiInputs;
@@ -144,7 +196,7 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 				device
 			});
 
-		trigger->AddBinding(activate, ditch);
+		if (!trigger->AddBinding(activate, ditch)) return std::nullopt;
 	}
 
 	for (auto inChan : trigStruct.InputChannels)
@@ -155,22 +207,18 @@ std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigPara
 
 	if (trigStruct.MidiTrigger.has_value())
 	{
-		// Rig parsing already enforces these bounds. Keep the extra guard here so
-		// direct struct construction cannot encode impossible MIDI data bytes.
-		if (!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Activate) ||
-			!IsValidMidiBindingSpec(trigStruct.MidiTrigger->Ditch))
-			return std::nullopt;
-
+		bool addedAllBindings = true;
 		AddMidiBindingForChannels(trigStruct.MidiTrigger->Activate,
-			[&trigger](const DualBinding& binding)
+			[&trigger, &addedAllBindings](const DualBinding& binding)
 			{
-				trigger->AddBinding(binding, DualBinding());
+				addedAllBindings = trigger->AddBinding(binding, DualBinding()) && addedAllBindings;
 			});
 		AddMidiBindingForChannels(trigStruct.MidiTrigger->Ditch,
-			[&trigger](const DualBinding& binding)
+			[&trigger, &addedAllBindings](const DualBinding& binding)
 			{
-				trigger->AddBinding(DualBinding(), binding);
+				addedAllBindings = trigger->AddBinding(DualBinding(), binding) && addedAllBindings;
 			});
+		if (!addedAllBindings) return std::nullopt;
 	}
 
 	return trigger;
@@ -245,6 +293,8 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 	{
 		if (TryChangeState(b, true, source, value, state, action, device))
 		{
+			ProcessStructuralActionsOnJob(action.GetUserConfig(), action.GetAudioParams());
+			_ProcessStructuralResults();
 			res.IsEaten = true;
 			res.ResultType = actions::ACTIONRESULT_ACTIVATE;
 			return res;
@@ -254,6 +304,8 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 	{
 		if (TryChangeState(b, false, source, value, state, action, device))
 		{
+			ProcessStructuralActionsOnJob(action.GetUserConfig(), action.GetAudioParams());
+			_ProcessStructuralResults();
 			res.IsEaten = true;
 			res.ResultType = (TRIGSTATE_DEFAULT == GetState()) ?
 				actions::ACTIONRESULT_DITCH :
@@ -267,28 +319,75 @@ ActionResult Trigger::OnEvent(TriggerSource source,
 
 ActionResult Trigger::QueueExternalControlAction(bool isActivate,
 	bool isDown,
-	const base::Action&)
+	const base::Action& action,
+	std::uint64_t rigRevision)
 {
-	const auto tail = _externalControlActionTail.load(std::memory_order_relaxed);
-	const auto head = _externalControlActionHead.load(std::memory_order_acquire);
-	const auto nextTail = (tail + 1u) % _ExternalControlActionQueueCapacity;
-	if (nextTail == head)
-		return ActionResult::NoAction();
+	const auto eventTimeUsec = std::chrono::duration_cast<std::chrono::microseconds>(
+		action.GetActionTime().time_since_epoch()).count();
+	const TriggerInputEdge edge{ rigRevision, _DirectBindingIndex,
+		isActivate ? TriggerControl::Activate : TriggerControl::Ditch,
+		isDown ? TriggerEdge::Down : TriggerEdge::Up, eventTimeUsec };
+	if (!_uiInputQueue.Push(edge))
+		_PublishInputFallback(TriggerInputDomain::Ui, edge);
 
-	_externalControlActionQueue[tail] = { isActivate, isDown };
-	_externalControlActionTail.store(nextTail, std::memory_order_release);
-
-	const auto state = static_cast<TriggerState>(_publishedTriggerState.load(std::memory_order_acquire));
-	const bool ditchRelease = !isActivate && !isDown && _publishedTriggerDitchDown.load(std::memory_order_acquire);
 	return {
 		true,
 		"",
 		"",
-		isActivate && isDown ? actions::ACTIONRESULT_ACTIVATE :
-			(ditchRelease && TRIGSTATE_DEFAULT != state ? actions::ACTIONRESULT_DITCH : actions::ACTIONRESULT_DEFAULT),
+		actions::ACTIONRESULT_DEFAULT,
 		nullptr,
 		std::weak_ptr<base::GuiElement>()
 	};
+}
+
+ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
+	std::uint64_t rigRevision,
+	TriggerSource source,
+	unsigned int value,
+	unsigned int state,
+	const base::Action& action,
+	const std::string& device)
+{
+	auto enqueue = [&](TriggerControl control, std::uint16_t bindingIndex,
+		DualBinding::TestResult match)
+	{
+		const auto eventTimeUsec = std::chrono::duration_cast<std::chrono::microseconds>(
+			action.GetActionTime().time_since_epoch()).count();
+		const TriggerInputEdge edge{ rigRevision, bindingIndex, control,
+			match == DualBinding::MATCH_DOWN ? TriggerEdge::Down : TriggerEdge::Up,
+			eventTimeUsec };
+		auto& queue = domain == TriggerInputDomain::Ui ? _uiInputQueue : _jobInputQueue;
+		if (!queue.Push(edge))
+			_PublishInputFallback(domain, edge);
+		return ActionResult{ true, "", "",
+			actions::ACTIONRESULT_DEFAULT,
+			nullptr, std::weak_ptr<base::GuiElement>() };
+	};
+
+	for (std::size_t i = 0u; i < _activateBindings.size() && i < _DirectBindingIndex; ++i)
+	{
+		const auto match = _activateBindings[i].Match(source, value, state, device);
+		if (match != DualBinding::MATCH_NONE)
+			return enqueue(TriggerControl::Activate, static_cast<std::uint16_t>(i), match);
+	}
+	for (std::size_t i = 0u; i < _ditchBindings.size() && i < _DirectBindingIndex; ++i)
+	{
+		const auto match = _ditchBindings[i].Match(source, value, state, device);
+		if (match != DualBinding::MATCH_NONE)
+			return enqueue(TriggerControl::Ditch, static_cast<std::uint16_t>(i), match);
+	}
+	return ActionResult::NoAction();
+}
+
+ActionResult Trigger::QueueMidiInputEvent(TriggerInputDomain domain,
+	std::uint64_t rigRevision,
+	const midi::MidiEvent& event,
+	const base::Action& action)
+{
+	unsigned int value = 0u, state = 0u;
+	if (!TryEncodeMidiEvent(event, value, state))
+		return ActionResult::NoAction();
+	return QueueInputEvent(domain, rigRevision, TRIGGER_MIDI, value, state, action);
 }
 
 void Trigger::OnTick(Time curTime,
@@ -296,23 +395,41 @@ void Trigger::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_ProcessQueuedExternalControlActions(cfg, params);
+	OnTick(curTime, samps, cfg, params, 0u);
+}
+
+void Trigger::OnTick(Time curTime,
+	unsigned int samps,
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params,
+	std::uint64_t rigRevision)
+{
+	_ProcessStructuralResults();
+	_ProcessQueuedInputActions(rigRevision, cfg, params);
 
 	bool isRecording = (TriggerState::TRIGSTATE_RECORDING == _state) ||
 		(TriggerState::TRIGSTATE_OVERDUBBING == _state) ||
 		(TriggerState::TRIGSTATE_PUNCHEDIN == _state);
-
 	if (isRecording)
-		_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
-
-	for (auto& action : _delayedActions)
 	{
-		action.OnTick(curTime, samps, cfg, params);
+		if (_pendingCompletion == StructuralCompletion::EndRecording ||
+			_pendingCompletion == StructuralCompletion::EndOverdub ||
+			_pendingCompletion == StructuralCompletion::Ditch ||
+			_pendingCompletion == StructuralCompletion::DitchOverdub)
+			_pendingRecordSamps += samps;
+		else
+			_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
 	}
 
-	FlushDelayedTriggerActions(curTime, samps, cfg, params);
+	for (std::size_t i = 0u; i < _delayedActionCount; ++i)
+	{
+		auto& action = _delayedActions[i];
+		action.SampsLeft = samps >= action.SampsLeft ? 0u : action.SampsLeft - samps;
+	}
 
-	if (0 != _debounceTimeMs)
+	_FlushDelayedPunchActions(samps);
+
+	if (0 != _debounceTimeMs && _pendingCompletion == StructuralCompletion::None)
 	{
 		// Eventually flick to new state (if held long enough).
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, curTime) * 1000.0;
@@ -337,57 +454,260 @@ void Trigger::OnTick(Time curTime,
 bool Trigger::CanEditRouting() const noexcept
 {
 	return _publishedCanEditRouting.load(std::memory_order_acquire) &&
-		_externalControlActionHead.load(std::memory_order_relaxed) ==
-			_externalControlActionTail.load(std::memory_order_acquire);
+		_uiInputQueue.Empty() && _jobInputQueue.Empty();
+}
+
+std::shared_ptr<base::BounceWriter> Trigger::CreateBounceWriter(
+	const std::shared_ptr<audio::AudioMixer>& mixer)
+{
+	return std::make_shared<PreparedTriggerBounceWriter>(mixer);
 }
 
 bool Trigger::CanApplyCaptureRouting() const noexcept
 {
 	return _publishedCanApplyCaptureRouting.load(std::memory_order_acquire) &&
-		_externalControlActionHead.load(std::memory_order_relaxed) ==
-			_externalControlActionTail.load(std::memory_order_acquire);
+		_uiInputQueue.Empty() && _jobInputQueue.Empty();
 }
 
 bool Trigger::_CanEditRoutingAtAudioBoundary() const noexcept
 {
 	return _state == TRIGSTATE_DEFAULT &&
 		!_isLastActivateDownRaw && !_isLastDitchDownRaw && !_isDitchDown &&
-		_externalControlActionHead.load(std::memory_order_relaxed) ==
-			_externalControlActionTail.load(std::memory_order_acquire) &&
-		_delayedActions.empty() && _delayedTriggerActions.empty() &&
-		_loopTakeHistory.empty();
+		_uiInputQueue.Empty() && _jobInputQueue.Empty() &&
+		_uiFallbackPublicationCount.load(std::memory_order_acquire) == _consumedUiFallbackPublicationCount &&
+		_jobFallbackPublicationCount.load(std::memory_order_acquire) == _consumedJobFallbackPublicationCount &&
+		_delayedActionCount == 0u &&
+		_delayedPunchActionCount == 0u &&
+		_pendingCompletion == StructuralCompletion::None &&
+		_structuralCommands.Empty() && _structuralResults.Empty() &&
+		_jobStructuralActionsInFlight.load(std::memory_order_acquire) == 0u &&
+		_loopTakeHistorySize == 0u;
 }
 
 bool Trigger::_CanApplyCaptureRoutingAtAudioBoundary() const noexcept
 {
 	return _state == TRIGSTATE_DEFAULT &&
 		!_isLastActivateDownRaw && !_isLastDitchDownRaw && !_isDitchDown &&
-		_externalControlActionHead.load(std::memory_order_relaxed) ==
-			_externalControlActionTail.load(std::memory_order_acquire) &&
-		_delayedActions.empty() && _delayedTriggerActions.empty();
+		_uiInputQueue.Empty() && _jobInputQueue.Empty() &&
+		_uiFallbackPublicationCount.load(std::memory_order_acquire) == _consumedUiFallbackPublicationCount &&
+		_jobFallbackPublicationCount.load(std::memory_order_acquire) == _consumedJobFallbackPublicationCount &&
+		_delayedActionCount == 0u &&
+		_delayedPunchActionCount == 0u &&
+		_pendingCompletion == StructuralCompletion::None &&
+		_structuralCommands.Empty() && _structuralResults.Empty() &&
+		_jobStructuralActionsInFlight.load(std::memory_order_acquire) == 0u;
 }
 
-void Trigger::_ProcessQueuedExternalControlActions(const std::optional<io::UserConfig>& cfg,
+bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
+	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params) noexcept
 {
-	const auto head = _externalControlActionHead.load(std::memory_order_relaxed);
-	const auto tail = _externalControlActionTail.load(std::memory_order_acquire);
-	if (head == tail)
-		return;
+	const bool isActivate = edge.Control == TriggerControl::Activate;
+	const bool isDown = edge.Edge == TriggerEdge::Down;
+	auto applyStateMachine = [&]()
+	{
+		const auto priorState = _state;
+		const auto changed = StateMachine(isDown, isActivate, cfg, params);
+		if (changed && isActivate && isDown && priorState != _state &&
+			_pendingCompletion == StructuralCompletion::None)
+			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
+		return changed;
+	};
+	if (edge.BindingIndex == _DirectBindingIndex)
+	{
+		if (isActivate)
+		{
+			_isLastActivateDownRaw = isDown;
+			_isLastActivateDown = isDown;
+		}
+		else
+		{
+			_isLastDitchDownRaw = isDown;
+			_isLastDitchDown = isDown;
+		}
+		return applyStateMachine();
+	}
 
-	const auto action = _externalControlActionQueue[head];
-	_externalControlActionHead.store((head + 1u) % _ExternalControlActionQueueCapacity, std::memory_order_release);
-	if (action.IsActivate)
+	auto& bindings = isActivate ? _activateBindings : _ditchBindings;
+	if (edge.BindingIndex >= bindings.size()) return false;
+	const auto match = bindings[edge.BindingIndex].ApplyResolved(
+		isDown ? DualBinding::MATCH_DOWN : DualBinding::MATCH_RELEASE);
+	if (match == DualBinding::MATCH_NONE || !IgnoreRepeats(isActivate, match)) return false;
+	const auto eventDuration = std::chrono::duration_cast<Time::duration>(
+		std::chrono::microseconds(edge.EventTimeUsec));
+	if (!Debounce(isActivate, match, Time(eventDuration))) return false;
+	return applyStateMachine();
+}
+
+void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
+	const std::optional<io::UserConfig>& cfg,
+	const std::optional<audio::AudioStreamParams>& params) noexcept
+{
+	const auto uiFallbackPublicationCount =
+		_uiFallbackPublicationCount.load(std::memory_order_acquire);
+	const auto jobFallbackPublicationCount =
+		_jobFallbackPublicationCount.load(std::memory_order_acquire);
+	if (uiFallbackPublicationCount == _consumedUiFallbackPublicationCount &&
+		jobFallbackPublicationCount == _consumedJobFallbackPublicationCount)
 	{
-		_isLastActivateDownRaw = action.IsDown;
-		_isLastActivateDown = action.IsDown;
+		for (std::size_t consumed = 0u; consumed < (_InputQueueCapacity * 2u); ++consumed)
+		{
+			if (_pendingCompletion != StructuralCompletion::None)
+				return;
+			TriggerInputEdge uiEdge, jobEdge, edge;
+			const bool hasUi = _uiInputQueue.Peek(uiEdge);
+			const bool hasJob = _jobInputQueue.Peek(jobEdge);
+			if (!hasUi && !hasJob)
+				return;
+			if (hasUi && (!hasJob || uiEdge.EventTimeUsec <= jobEdge.EventTimeUsec))
+				_uiInputQueue.Pop(edge);
+			else
+				_jobInputQueue.Pop(edge);
+			if (edge.RigRevision == rigRevision)
+				_ApplyInputEdge(edge, cfg, params);
+		}
+		return;
 	}
-	else
+
+	std::array<TriggerInputEdge, _InputFallbackCount> uiFallbackEdges{};
+	std::array<TriggerInputEdge, _InputFallbackCount> jobFallbackEdges{};
+	std::array<std::uint64_t, _InputFallbackCount> uiFallbackSequences{};
+	std::array<std::uint64_t, _InputFallbackCount> jobFallbackSequences{};
+	std::array<bool, _InputFallbackCount> hasUiFallback{};
+	std::array<bool, _InputFallbackCount> hasJobFallback{};
+	for (std::size_t index = 0u; index < _InputFallbackCount; ++index)
 	{
-		_isLastDitchDownRaw = action.IsDown;
-		_isLastDitchDown = action.IsDown;
+		hasUiFallback[index] = _uiInputFallbacks[index].ReadLatest(
+			_consumedUiFallbackSequences[index], uiFallbackEdges[index], uiFallbackSequences[index]);
+		hasJobFallback[index] = _jobInputFallbacks[index].ReadLatest(
+			_consumedJobFallbackSequences[index], jobFallbackEdges[index], jobFallbackSequences[index]);
 	}
-	StateMachine(action.IsDown, action.IsActivate, cfg, params);
+
+	constexpr auto maxActions = (_InputQueueCapacity * 2u) + (_InputFallbackCount * 2u);
+	for (std::size_t consumed = 0u; consumed < maxActions; ++consumed)
+	{
+		if (_pendingCompletion != StructuralCompletion::None)
+			break;
+		TriggerInputEdge uiEdge, jobEdge;
+		const bool hasUi = _uiInputQueue.Peek(uiEdge);
+		const bool hasJob = _jobInputQueue.Peek(jobEdge);
+		int selectedDomain = -1;
+		std::size_t selectedFallback = _InputFallbackCount;
+		std::int64_t selectedTime = (std::numeric_limits<std::int64_t>::max)();
+		auto consider = [&](int domain, std::size_t fallbackIndex, bool available,
+			const TriggerInputEdge& candidate)
+		{
+			if (available && (candidate.EventTimeUsec < selectedTime ||
+				(candidate.EventTimeUsec == selectedTime &&
+					(selectedDomain < 0 || domain < selectedDomain ||
+						(domain == selectedDomain && fallbackIndex < selectedFallback)))))
+			{
+				selectedDomain = domain;
+				selectedFallback = fallbackIndex;
+				selectedTime = candidate.EventTimeUsec;
+			}
+		};
+		// Stable equal-time priority: UI queue, UI mailboxes, job queue, job mailboxes.
+		consider(0, 0u, hasUi, uiEdge);
+		for (std::size_t index = 0u; index < _InputFallbackCount; ++index)
+			consider(1, index, hasUiFallback[index], uiFallbackEdges[index]);
+		consider(2, 0u, hasJob, jobEdge);
+		for (std::size_t index = 0u; index < _InputFallbackCount; ++index)
+			consider(3, index, hasJobFallback[index], jobFallbackEdges[index]);
+		TriggerInputEdge edge;
+		switch (selectedDomain)
+		{
+		case 0: _uiInputQueue.Pop(edge); break;
+		case 1:
+			edge = uiFallbackEdges[selectedFallback];
+			hasUiFallback[selectedFallback] = false;
+			_consumedUiFallbackSequences[selectedFallback] = uiFallbackSequences[selectedFallback];
+			break;
+		case 2: _jobInputQueue.Pop(edge); break;
+		case 3:
+			edge = jobFallbackEdges[selectedFallback];
+			hasJobFallback[selectedFallback] = false;
+			_consumedJobFallbackSequences[selectedFallback] = jobFallbackSequences[selectedFallback];
+			break;
+		default: goto input_fallbacks_consumed;
+		}
+		if (edge.RigRevision != rigRevision) continue;
+		_ApplyInputEdge(edge, cfg, params);
+	}
+	input_fallbacks_consumed:
+	// A structural transition can pause this merge while other mailbox values
+	// remain pending. Only enable the queue-only fast path once every mailbox
+	// sequence observed by this consumer has actually been consumed.
+	if (_InputFallbacksConsumed(_uiInputFallbacks, _consumedUiFallbackSequences))
+		_consumedUiFallbackPublicationCount = uiFallbackPublicationCount;
+	if (_InputFallbacksConsumed(_jobInputFallbacks, _consumedJobFallbackSequences))
+		_consumedJobFallbackPublicationCount = jobFallbackPublicationCount;
+}
+
+std::size_t Trigger::_InputFallbackIndex(const TriggerInputEdge& edge) noexcept
+{
+	const auto bindingIndex = edge.BindingIndex == _DirectBindingIndex ?
+		_InputFallbackBindingCapacity : static_cast<std::size_t>(edge.BindingIndex);
+	if (bindingIndex >= _InputFallbackBindingsPerControl)
+		return _InputFallbackCount;
+	const auto controlOffset = edge.Control == TriggerControl::Activate ?
+		0u : _InputFallbackBindingsPerControl;
+	return controlOffset + bindingIndex;
+}
+
+void Trigger::_PublishInputFallback(TriggerInputDomain domain,
+	const TriggerInputEdge& edge) noexcept
+{
+	const auto index = _InputFallbackIndex(edge);
+	if (index >= _InputFallbackCount)
+		return;
+	auto& fallbacks = domain == TriggerInputDomain::Ui ? _uiInputFallbacks : _jobInputFallbacks;
+	fallbacks[index].Publish(edge);
+	auto& publicationCount = domain == TriggerInputDomain::Ui ?
+		_uiFallbackPublicationCount : _jobFallbackPublicationCount;
+	publicationCount.fetch_add(1u, std::memory_order_release);
+}
+
+bool Trigger::_InputFallbacksConsumed(
+	const std::array<InputFallback, _InputFallbackCount>& fallbacks,
+	const std::array<std::uint64_t, _InputFallbackCount>& consumedSequences) const noexcept
+{
+	for (std::size_t index = 0u; index < _InputFallbackCount; ++index)
+	{
+		if (fallbacks[index].Sequence.load(std::memory_order_acquire) != consumedSequences[index])
+			return false;
+	}
+	return true;
+}
+
+void Trigger::InputFallback::Publish(const TriggerInputEdge& edge) noexcept
+{
+	Sequence.fetch_add(1u, std::memory_order_acq_rel);
+	RigRevision.store(edge.RigRevision, std::memory_order_relaxed);
+	BindingIndex.store(edge.BindingIndex, std::memory_order_relaxed);
+	Control.store(static_cast<std::uint8_t>(edge.Control), std::memory_order_relaxed);
+	Edge.store(static_cast<std::uint8_t>(edge.Edge), std::memory_order_relaxed);
+	EventTimeUsec.store(edge.EventTimeUsec, std::memory_order_relaxed);
+	Sequence.fetch_add(1u, std::memory_order_release);
+}
+
+bool Trigger::InputFallback::ReadLatest(std::uint64_t consumedSequence,
+	TriggerInputEdge& edge,
+	std::uint64_t& observedSequence) const noexcept
+{
+	const auto before = Sequence.load(std::memory_order_acquire);
+	if (before == 0u || before == consumedSequence || (before & 1u) != 0u)
+		return false;
+	edge.RigRevision = RigRevision.load(std::memory_order_relaxed);
+	edge.BindingIndex = BindingIndex.load(std::memory_order_relaxed);
+	edge.Control = static_cast<TriggerControl>(Control.load(std::memory_order_relaxed));
+	edge.Edge = static_cast<TriggerEdge>(Edge.load(std::memory_order_relaxed));
+	edge.EventTimeUsec = EventTimeUsec.load(std::memory_order_relaxed);
+	const auto after = Sequence.load(std::memory_order_acquire);
+	if (before != after || (after & 1u) != 0u)
+		return false;
+	observedSequence = after;
+	return true;
 }
 
 void Trigger::_PublishTriggerStateSnapshot() noexcept
@@ -400,10 +720,14 @@ void Trigger::_PublishTriggerStateSnapshot() noexcept
 	_publishedCanApplyCaptureRouting.store(_CanApplyCaptureRoutingAtAudioBoundary(), std::memory_order_release);
 }
 
-void Trigger::AddBinding(DualBinding activate, DualBinding ditch)
+bool Trigger::AddBinding(DualBinding activate, DualBinding ditch)
 {
+	if (_activateBindings.size() >= _InputFallbackBindingCapacity ||
+		_ditchBindings.size() >= _InputFallbackBindingCapacity)
+		return false;
 	_activateBindings.push_back(activate);
 	_ditchBindings.push_back(ditch);
+	return true;
 }
 
 void Trigger::RemoveBinding(DualBinding activate, DualBinding ditch)
@@ -459,13 +783,15 @@ void Trigger::ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receive
 	std::vector<unsigned int>& inputChannels,
 	std::vector<std::string>& midiInputDevices,
 	io::RigFile::Trigger::MidiInputMode& midiInputMode,
-	std::unique_ptr<audio::MixBehaviour>& overdubBehaviour) noexcept
+	std::shared_ptr<audio::AudioMixer>& overdubMixer,
+	std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept
 {
 	_receiver.swap(receiver);
 	_inputChannels.swap(inputChannels);
 	_midiInputDevices.swap(midiInputDevices);
 	std::swap(_midiInputMode, midiInputMode);
-	_overdubMixer->ExchangeBehaviour(overdubBehaviour);
+	_overdubMixer.swap(overdubMixer);
+	_overdubWriter.swap(overdubWriter);
 }
 
 TriggerState Trigger::GetState() const
@@ -508,9 +834,36 @@ void Trigger::Reset()
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_PublishTriggerStateSnapshot();
 	_recordSampCount = 0;
-	_loopTakeHistory.clear();
-	_delayedActions.clear();
-	_delayedTriggerActions.clear();
+	_loopTakeHistorySize = 0u;
+	_activeHistoryIndex.reset();
+	_delayedActionCount = 0u;
+	_delayedPunchActionCount = 0u;
+	_pendingCompletion = StructuralCompletion::None;
+	_pendingSequence = 0u;
+	_pendingHistoryToken = 0u;
+	_pendingDitchDelayedActionCount = 0u;
+	_pendingDitchDelayedPunchActionCount = 0u;
+	_structuralCommands.Clear();
+	_structuralResults.Clear();
+	for (std::size_t i = 0u; i < _jobTakeHistorySize; ++i)
+	{
+		_jobTakeHistory[i] = TriggerTake{};
+		_jobTakeTokens[i] = 0u;
+	}
+	_jobTakeHistorySize = 0u;
+	_PublishJobHistory();
+	_uiInputQueue.Clear();
+	_jobInputQueue.Clear();
+	for (auto& fallback : _uiInputFallbacks)
+		fallback.Sequence.store(0u, std::memory_order_release);
+	for (auto& fallback : _jobInputFallbacks)
+		fallback.Sequence.store(0u, std::memory_order_release);
+	_uiFallbackPublicationCount.store(0u, std::memory_order_release);
+	_jobFallbackPublicationCount.store(0u, std::memory_order_release);
+	_consumedUiFallbackSequences.fill(0u);
+	_consumedJobFallbackSequences.fill(0u);
+	_consumedUiFallbackPublicationCount = 0u;
+	_consumedJobFallbackPublicationCount = 0u;
 }
 
 std::string Trigger::Name() const
@@ -525,7 +878,8 @@ void Trigger::SetName(std::string name)
 
 std::vector<TriggerTake> Trigger::GetTakes() const
 {
-	return _loopTakeHistory;
+	const auto history = _publishedTakeHistory.load(std::memory_order_acquire);
+	return history ? *history : std::vector<TriggerTake>();
 }
 
 void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
@@ -533,75 +887,318 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	unsigned int numSamps,
 	unsigned int destChannel)
 {
-	for (auto& action : _delayedActions)
+	std::size_t write = 0u;
+	for (std::size_t i = 0u; i < _delayedActionCount; ++i)
 	{
-		if (action.SampsLeft(0) == 0)
+		const auto action = _delayedActions[i];
+		if (action.SampsLeft == 0u)
+			_overdubMixer->SetUnmutedLevel(action.Target);
+		else
+			_delayedActions[write++] = action;
+	}
+	_delayedActionCount = write;
+
+	if (_overdubWriter)
+		_overdubWriter->WriteBlock(dest, srcBuf, numSamps, destChannel);
+}
+
+std::optional<std::size_t> Trigger::_FindJobHistory(std::uint64_t token) const noexcept
+{
+	for (std::size_t i = 0u; i < _jobTakeHistorySize; ++i)
+		if (_jobTakeTokens[i] == token) return i;
+	return std::nullopt;
+}
+
+void Trigger::_PublishJobHistory()
+{
+	auto history = std::make_shared<const std::vector<TriggerTake>>(
+		_jobTakeHistory.begin(), _jobTakeHistory.begin() + _jobTakeHistorySize);
+	_publishedTakeHistory.store(std::move(history), std::memory_order_release);
+}
+
+bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionType,
+	StructuralCompletion completion,
+	std::uint64_t historyToken,
+	unsigned long sampleCount,
+	bool applyToTargetTake,
+	bool applyToSourceTake,
+	bool applyToTargetAudio,
+	bool applyToTargetMidi) noexcept
+{
+	StructuralCommand command;
+	command.Sequence = _nextStructuralSequence++;
+	command.ActionType = actionType;
+	command.Completion = completion;
+	command.HistoryToken = historyToken;
+	command.SampleCount = sampleCount;
+	command.ApplyToTargetTake = applyToTargetTake;
+	command.ApplyToSourceTake = applyToSourceTake;
+	command.ApplyToTargetAudio = applyToTargetAudio;
+	command.ApplyToTargetMidi = applyToTargetMidi;
+	if (!_structuralCommands.Push(command))
+	{
+		_structuralCommandDropCount.fetch_add(1u, std::memory_order_relaxed);
+		return false;
+	}
+	if (completion != StructuralCompletion::None)
+	{
+		_pendingPriorState = _state;
+		_pendingPriorActiveIndex = _activeHistoryIndex;
+		_pendingCompletion = completion;
+		_pendingSequence = command.Sequence;
+		_pendingHistoryToken = historyToken;
+		_pendingRecordSamps = 0u;
+		_pendingDitchDelayedActionCount = 0u;
+		_pendingDitchDelayedPunchActionCount = 0u;
+	}
+	return true;
+}
+
+void Trigger::_FlushDelayedPunchActions(unsigned int samps) noexcept
+{
+	std::size_t write = 0u;
+	for (std::size_t i = 0u; i < _delayedPunchActionCount; ++i)
+	{
+		auto delayed = _delayedPunchActions[i];
+		delayed.SampsLeft = samps >= delayed.SampsLeft ? 0u : delayed.SampsLeft - samps;
+		if (delayed.SampsLeft == 0u)
 		{
-			auto val = action.GetTarget();
-			_overdubMixer->SetUnmutedLevel(val);
+			if (delayed.TargetTake)
+			{
+				if (delayed.IsPunchIn) delayed.TargetTake->TriggerPunchInAudio();
+				else delayed.TargetTake->TriggerPunchOutAudio();
+			}
 		}
+		else
+			_delayedPunchActions[write++] = delayed;
 	}
-
-	// Erase expired actions in-place (no heap allocation)
-	_delayedActions.erase(
-		std::remove_if(_delayedActions.begin(), _delayedActions.end(),
-			[](DelayedAction& action) { return action.SampsLeft(0) == 0; }),
-		_delayedActions.end());
-
-	if ((nullptr == dest) || (nullptr == srcBuf) || !_overdubMixer)
-		return;
-
-	base::AudioWriteRequest request;
-	request.samples = srcBuf;
-	request.numSamps = numSamps;
-	request.stride = 1;
-	request.fadeCurrent = 1.0f - static_cast<float>(_overdubMixer->Level());
-	request.fadeNew = static_cast<float>(_overdubMixer->Level());
-	request.source = base::Audible::AUDIOSOURCE_BOUNCE;
-
-	dest->OnBlockWriteChannel(destChannel, request, 0);
-	_overdubMixer->Offset(numSamps);
+	_delayedPunchActionCount = write;
 }
 
-void Trigger::QueueTriggerAction(const TriggerAction& action,
-	std::shared_ptr<base::ActionReceiver> receiver, unsigned int sampsDelay)
-{
-	_delayedTriggerActions.push_back({ action, std::move(receiver), sampsDelay });
-}
-
-void Trigger::DispatchTriggerAction(const TriggerAction& action,
-	const std::shared_ptr<base::ActionReceiver>& receiver)
-{
-	if (!receiver)
-		return;
-
-	auto res = receiver->OnAction(action);
-	if ((TriggerAction::TRIGGER_OVERDUB_START == action.ActionType) && res.IsEaten)
-	{
-		TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId, receiver };
-		_loopTakeHistory.push_back(newTake);
-	}
-}
-
-void Trigger::FlushDelayedTriggerActions(Time curTime,
-	unsigned int samps,
+void Trigger::ProcessStructuralActionsOnJob(
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	for (auto& action : _delayedTriggerActions)
+	StructuralCommand command;
+	if (!_structuralCommands.Peek(command))
+		return;
+	// The queue remains visibly non-empty until this counter is raised, closing
+	// the Peek->Pop publication gap for audio quiescence checks.
+	_jobStructuralActionsInFlight.fetch_add(1u, std::memory_order_acq_rel);
+	for (std::size_t consumed = 0u;
+		consumed < _StructuralQueueCapacity && _structuralCommands.Pop(command);
+		++consumed)
 	{
-		if (samps >= action.SampsLeft)
-			action.SampsLeft = 0u;
-		else
-			action.SampsLeft -= samps;
-	}
+		std::shared_ptr<base::ActionReceiver> receiver;
+		const TriggerTake* take = nullptr;
+		std::optional<std::size_t> jobHistoryIndex;
+		const bool isStart = command.ActionType == TriggerAction::TRIGGER_REC_START ||
+			command.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
+		if (isStart)
+			receiver = _receiver;
+		else if ((jobHistoryIndex = _FindJobHistory(command.HistoryToken)))
+		{
+			take = &_jobTakeHistory[*jobHistoryIndex];
+			receiver = take->Receiver;
+		}
 
-	auto readyEnd = std::stable_partition(_delayedTriggerActions.begin(),
-		_delayedTriggerActions.end(),
-		[](const DelayedTriggerAction& action) { return action.SampsLeft > 0u; });
-	for (auto it = readyEnd; it != _delayedTriggerActions.end(); ++it)
-		DispatchTriggerAction(it->Action, it->Receiver);
-	_delayedTriggerActions.erase(readyEnd, _delayedTriggerActions.end());
+		ActionResult actionResult = ActionResult::NoAction();
+		if (receiver)
+		{
+			TriggerAction action;
+			action.ActionType = command.ActionType;
+			action.SampleCount = command.SampleCount;
+			action.ApplyToTargetTake = command.ApplyToTargetTake;
+			action.ApplyToSourceTake = command.ApplyToSourceTake;
+			action.ApplyToTargetAudio = command.ApplyToTargetAudio;
+			action.ApplyToTargetMidi = command.ApplyToTargetMidi;
+			if (take)
+			{
+				action.SourceId = take->SourceTakeId;
+				action.TargetId = take->TargetTakeId;
+			}
+			if (isStart)
+			{
+				action.InputChannels = _inputChannels;
+				action.MidiInputDevices = _midiInputDevices;
+				if (command.ActionType == TriggerAction::TRIGGER_OVERDUB_START)
+					action.OverdubWriter = _overdubWriter;
+			}
+			if (cfg) action.SetUserConfig(*cfg);
+			if (params) action.SetAudioParams(*params);
+			actionResult = receiver->OnAction(action);
+			if (isStart && actionResult.IsEaten)
+			{
+				if (_jobTakeHistorySize < _HistoryCapacity)
+				{
+					_jobTakeTokens[_jobTakeHistorySize] = command.HistoryToken;
+					_jobTakeHistory[_jobTakeHistorySize++] = {
+						TriggerTake::SOURCE_ADC, actionResult.SourceId,
+						actionResult.TargetId, receiver };
+					_PublishJobHistory();
+				}
+				else
+					actionResult.IsEaten = false;
+			}
+
+			if (command.ActionType == TriggerAction::TRIGGER_DITCH &&
+				(actionResult.DitchResult == actions::DitchDisposition::Removed ||
+				 actionResult.DitchResult == actions::DitchDisposition::AlreadyAbsent) && take)
+			{
+				TriggerAction unmute;
+				unmute.ActionType = TriggerAction::TRIGGER_DITCH_UNMUTE;
+				unmute.TargetId = take->SourceTakeId;
+				unmute.SampleCount = command.SampleCount;
+				if (cfg) unmute.SetUserConfig(*cfg);
+				if (params) unmute.SetAudioParams(*params);
+				receiver->OnAction(unmute);
+			}
+			if ((command.ActionType == TriggerAction::TRIGGER_DITCH ||
+				command.ActionType == TriggerAction::TRIGGER_OVERDUB_DITCH) &&
+				(actionResult.DitchResult == actions::DitchDisposition::Removed ||
+				 actionResult.DitchResult == actions::DitchDisposition::AlreadyAbsent) &&
+				jobHistoryIndex)
+			{
+				for (auto i = *jobHistoryIndex + 1u; i < _jobTakeHistorySize; ++i)
+				{
+					_jobTakeHistory[i - 1u] = std::move(_jobTakeHistory[i]);
+					_jobTakeTokens[i - 1u] = _jobTakeTokens[i];
+				}
+				--_jobTakeHistorySize;
+				_jobTakeHistory[_jobTakeHistorySize] = TriggerTake{};
+				_jobTakeTokens[_jobTakeHistorySize] = 0u;
+				_PublishJobHistory();
+			}
+		}
+
+		if (command.Completion != StructuralCompletion::None)
+		{
+			StructuralResult result;
+			result.Sequence = command.Sequence;
+			result.Completion = command.Completion;
+			result.IsEaten = actionResult.IsEaten;
+			result.DitchResult = actionResult.DitchResult;
+			result.HistoryToken = command.HistoryToken;
+			if (const auto sourceTake = actionResult.TriggerSourceTake.lock())
+				result.SourceTake = sourceTake.get();
+			if (const auto targetTake = actionResult.TriggerTargetTake.lock())
+				result.TargetTake = targetTake.get();
+			const auto pushed = _structuralResults.Push(result);
+			assert(pushed && "one pending structural transition must always have result capacity");
+			(void)pushed;
+		}
+	}
+	_jobStructuralActionsInFlight.fetch_sub(1u, std::memory_order_release);
+}
+
+void Trigger::_EraseHistory(std::size_t index) noexcept
+{
+	if (index >= _loopTakeHistorySize)
+		return;
+	for (auto i = index + 1u; i < _loopTakeHistorySize; ++i)
+		_loopTakeHistory[i - 1u] = std::move(_loopTakeHistory[i]);
+	--_loopTakeHistorySize;
+	_loopTakeHistory[_loopTakeHistorySize] = RuntimeTriggerTake{};
+}
+
+void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
+{
+	if (result.Completion == StructuralCompletion::None ||
+		result.Sequence != _pendingSequence || result.Completion != _pendingCompletion)
+		return;
+
+	switch (result.Completion)
+	{
+	case StructuralCompletion::StartRecording:
+	case StructuralCompletion::StartOverdub:
+		if (result.IsEaten && _loopTakeHistorySize < _HistoryCapacity)
+		{
+			auto& take = _loopTakeHistory[_loopTakeHistorySize];
+			take.SourceType = TriggerTake::SOURCE_ADC;
+			take.Token = result.HistoryToken;
+			take.SourceTake = result.SourceTake;
+			take.TargetTake = result.TargetTake;
+			_activeHistoryIndex = _loopTakeHistorySize++;
+			_state = result.Completion == StructuralCompletion::StartRecording ?
+				TRIGSTATE_RECORDING : TRIGSTATE_OVERDUBBING;
+			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
+		}
+		else
+		{
+			_state = TRIGSTATE_DEFAULT;
+			_activeHistoryIndex.reset();
+		}
+		break;
+	case StructuralCompletion::EndRecording:
+	case StructuralCompletion::EndOverdub:
+		if (result.IsEaten)
+		{
+			_state = TRIGSTATE_DEFAULT;
+			_activeHistoryIndex.reset();
+			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
+		}
+		else
+		{
+			_state = _pendingPriorState;
+			_activeHistoryIndex = _pendingPriorActiveIndex;
+			_recordSampCount.fetch_add(_pendingRecordSamps, std::memory_order_relaxed);
+		}
+		break;
+	case StructuralCompletion::Ditch:
+	case StructuralCompletion::DitchOverdub:
+		if (result.DitchResult == actions::DitchDisposition::Removed ||
+			result.DitchResult == actions::DitchDisposition::AlreadyAbsent)
+		{
+			std::size_t historyIndex = _HistoryCapacity;
+			for (std::size_t i = 0u; i < _loopTakeHistorySize; ++i)
+				if (_loopTakeHistory[i].Token == _pendingHistoryToken) { historyIndex = i; break; }
+			if (historyIndex < _loopTakeHistorySize)
+				_EraseHistory(historyIndex);
+			_ditchOutcomeCount.fetch_add(1u, std::memory_order_release);
+		}
+		if (result.DitchResult == actions::DitchDisposition::Removed ||
+			result.DitchResult == actions::DitchDisposition::AlreadyAbsent)
+		{
+			_state = TRIGSTATE_DEFAULT;
+			_activeHistoryIndex.reset();
+			_pendingDitchDelayedActionCount = 0u;
+			_pendingDitchDelayedPunchActionCount = 0u;
+		}
+		else
+		{
+			_state = _pendingPriorState;
+			_activeHistoryIndex = _pendingPriorActiveIndex;
+			_recordSampCount.fetch_add(_pendingRecordSamps, std::memory_order_relaxed);
+			_delayedActionCount = _pendingDitchDelayedActionCount;
+			for (std::size_t i = 0u; i < _delayedActionCount; ++i)
+			{
+				_delayedActions[i] = _pendingDitchDelayedActions[i];
+				_delayedActions[i].SampsLeft = _pendingRecordSamps >= _delayedActions[i].SampsLeft ?
+					0u : _delayedActions[i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
+			}
+			_delayedPunchActionCount = _pendingDitchDelayedPunchActionCount;
+			for (std::size_t i = 0u; i < _delayedPunchActionCount; ++i)
+			{
+				_delayedPunchActions[i] = _pendingDitchDelayedPunchActions[i];
+				_delayedPunchActions[i].SampsLeft = _pendingRecordSamps >= _delayedPunchActions[i].SampsLeft ?
+					0u : _delayedPunchActions[i].SampsLeft - static_cast<unsigned int>(_pendingRecordSamps);
+			}
+		}
+		break;
+	default:
+		break;
+	}
+	_pendingCompletion = StructuralCompletion::None;
+	_pendingSequence = 0u;
+	_pendingHistoryToken = 0u;
+	_pendingRecordSamps = 0u;
+}
+
+void Trigger::_ProcessStructuralResults() noexcept
+{
+	StructuralResult result;
+	while (_structuralResults.Pop(result))
+		_ApplyStructuralResult(result);
 }
 
 bool Trigger::IgnoreRepeats(bool isActivate, DualBinding::TestResult trigResult)
@@ -818,8 +1415,7 @@ bool Trigger::StateMachine(bool isDown,
 				}
 				else
 				{
-					StartPunchIn(cfg, params);
-					changedState = true;
+					changedState = StartPunchIn(cfg, params);
 				}
 			}
 		}
@@ -843,8 +1439,7 @@ bool Trigger::StateMachine(bool isDown,
 			if (!isDown)
 			{
 				// End punch-in but maintain overdub mode (release)
-				EndPunchIn(cfg, params);
-				changedState = true;
+				changedState = EndPunchIn(cfg, params);
 			}
 		}
 		else
@@ -865,321 +1460,189 @@ bool Trigger::StateMachine(bool isDown,
 void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_RECORDING;
-
-	std::cout << "~~~~ Trigger RECORDING" << std::endl;
-
+	(void)cfg;
+	(void)params;
 	_recordSampCount = 0;
-	_delayedActions.clear();
+	_delayedActionCount = 0u;
+	_activeHistoryIndex.reset();
 
-	if (_receiver)
+	if (_receiver && _loopTakeHistorySize < _HistoryCapacity)
 	{
-		TriggerAction trigAction;
-		trigAction.ActionType = TriggerAction::TRIGGER_REC_START;
-		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputDevices = _midiInputDevices;
-
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
-
-		auto res = _receiver->OnAction(trigAction);
-
-		// TODO: History for undo
-
-		if (res.IsEaten)
-		{
-			TriggerTake newTake = { TriggerTake::SOURCE_ADC, res.SourceId, res.TargetId, _receiver };
-			_loopTakeHistory.push_back(newTake);
-		}
+		auto historyToken = _nextHistoryToken++;
+		if (historyToken == 0u) historyToken = _nextHistoryToken++;
+		_QueueStructuralCommand(TriggerAction::TRIGGER_REC_START,
+			StructuralCompletion::StartRecording, historyToken, 0u);
 	}
 }
 
 void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_DEFAULT;
-
-	std::cout << "~~~~ Trigger END RECORDING" << std::endl;
-
-	if (!_loopTakeHistory.empty())
-	{
-		auto lastTake = _loopTakeHistory.back();
-
-		TriggerAction trigAction;
-		trigAction.ActionType = TriggerAction::TRIGGER_REC_END;
-		trigAction.TargetId = lastTake.TargetTakeId;
-		trigAction.SampleCount = _recordSampCount;
-
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
-
-		// TODO: History for undo
-
-		if (lastTake.Receiver) lastTake.Receiver->OnAction(trigAction);
-	}
+	(void)cfg;
+	(void)params;
+	if (_activeHistoryIndex && *_activeHistoryIndex < _loopTakeHistorySize)
+		_QueueStructuralCommand(TriggerAction::TRIGGER_REC_END,
+			StructuralCompletion::EndRecording,
+			_loopTakeHistory[*_activeHistoryIndex].Token, _recordSampCount);
 }
 
 void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_DEFAULT;
+	(void)cfg;
+	(void)params;
+	const auto historyIndex = _activeHistoryIndex ? _activeHistoryIndex :
+		(_loopTakeHistorySize == 0u ? std::optional<std::size_t>() :
+			std::optional<std::size_t>(_loopTakeHistorySize - 1u));
 
-	std::cout << "~~~~ Trigger DITCH" << std::endl;
-
-	_delayedActions.clear();
-	auto popBack = !_loopTakeHistory.empty();
-
-	if (popBack)
+	if (historyIndex && *historyIndex < _loopTakeHistorySize &&
+		_QueueStructuralCommand(TriggerAction::TRIGGER_DITCH,
+			StructuralCompletion::Ditch,
+			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
-		auto lastTake = _loopTakeHistory.back();
-
-		TriggerAction ditchAction;
-		ditchAction.ActionType = TriggerAction::TRIGGER_DITCH;
-		ditchAction.TargetId = lastTake.TargetTakeId;
-		ditchAction.SampleCount = _recordSampCount;
-
-		TriggerAction unmuteAction;
-		unmuteAction.ActionType = TriggerAction::TRIGGER_DITCH_UNMUTE;
-		unmuteAction.TargetId = lastTake.SourceTakeId;
-		unmuteAction.SampleCount = _recordSampCount;
-
-		if (cfg.has_value())
-		{
-			ditchAction.SetUserConfig(cfg.value());
-			unmuteAction.SetUserConfig(cfg.value());
-		}
-
-		if (params.has_value())
-		{
-			ditchAction.SetAudioParams(params.value());
-			unmuteAction.SetAudioParams(params.value());
-		}
-
-		if (lastTake.Receiver)
-		{
-			lastTake.Receiver->OnAction(ditchAction);
-			lastTake.Receiver->OnAction(unmuteAction);
-		}
+		_pendingDitchDelayedActionCount = _delayedActionCount;
+		std::copy_n(_delayedActions.begin(), _delayedActionCount,
+			_pendingDitchDelayedActions.begin());
+		_pendingDitchDelayedPunchActionCount = _delayedPunchActionCount;
+		std::copy_n(_delayedPunchActions.begin(), _delayedPunchActionCount,
+			_pendingDitchDelayedPunchActions.begin());
+		_delayedActionCount = 0u;
+		_delayedPunchActionCount = 0u;
 	}
-
-	if (popBack)
-		_loopTakeHistory.pop_back();
 }
 
 void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_OVERDUBBING;
-
-	std::cout << "~~~~ Trigger START OVERDUB" << std::endl;
-
+	(void)cfg;
+	(void)params;
 	_recordSampCount = 0;
-	_delayedActions.clear();
-	_delayedTriggerActions.clear();
+	_delayedActionCount = 0u;
+	_delayedPunchActionCount = 0u;
+	_activeHistoryIndex.reset();
 	_overdubMixer->SetUnmutedLevel(1.0);
 
-	if (_receiver)
+	if (_receiver && _loopTakeHistorySize < _HistoryCapacity)
 	{
-		TriggerAction trigAction;
-		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
-		trigAction.InputChannels = _inputChannels;
-		trigAction.MidiInputDevices = _midiInputDevices;
-
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
-
-		DispatchTriggerAction(trigAction, _receiver);
+		auto historyToken = _nextHistoryToken++;
+		if (historyToken == 0u) historyToken = _nextHistoryToken++;
+		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_START,
+			StructuralCompletion::StartOverdub, historyToken, 0u);
 	}
 }
 
 void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_DEFAULT;
-
-	std::cout << "~~~~ Trigger END OVERDUB" << std::endl;
-
-	if (!_loopTakeHistory.empty())
-	{
-		auto lastTake = _loopTakeHistory.back();
-
-		TriggerAction trigAction;
-		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_END;
-		trigAction.SourceId = lastTake.SourceTakeId;
-		trigAction.TargetId = lastTake.TargetTakeId;
-		trigAction.SampleCount = _recordSampCount;
-
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
-
-		DispatchTriggerAction(trigAction, lastTake.Receiver);
-	}
+	(void)cfg;
+	(void)params;
+	if (_activeHistoryIndex && *_activeHistoryIndex < _loopTakeHistorySize)
+		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_END,
+			StructuralCompletion::EndOverdub,
+			_loopTakeHistory[*_activeHistoryIndex].Token, _recordSampCount);
 }
 
 void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	_state = TRIGSTATE_DEFAULT;
+	(void)cfg;
+	(void)params;
+	const auto historyIndex = _activeHistoryIndex;
 
-	std::cout << "~~~~ Trigger DITCH OVERDUB" << std::endl;
-
-	_delayedActions.clear();
-	_delayedTriggerActions.clear();
-	auto popBack = !_loopTakeHistory.empty();
-
-	if (popBack)
+	if (historyIndex && *historyIndex < _loopTakeHistorySize &&
+		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_DITCH,
+			StructuralCompletion::DitchOverdub,
+			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
-		auto lastTake = _loopTakeHistory.back();
-		TriggerAction trigAction;
-		trigAction.ActionType = TriggerAction::TRIGGER_OVERDUB_DITCH;
-		trigAction.TargetId = lastTake.TargetTakeId;
-		trigAction.SampleCount = _recordSampCount;
-
-		if (cfg.has_value())
-			trigAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			trigAction.SetAudioParams(params.value());
-
-		if (lastTake.Receiver) lastTake.Receiver->OnAction(trigAction);
+		_pendingDitchDelayedActionCount = _delayedActionCount;
+		std::copy_n(_delayedActions.begin(), _delayedActionCount,
+			_pendingDitchDelayedActions.begin());
+		_pendingDitchDelayedPunchActionCount = _delayedPunchActionCount;
+		std::copy_n(_delayedPunchActions.begin(), _delayedPunchActionCount,
+			_pendingDitchDelayedPunchActions.begin());
+		_delayedActionCount = 0u;
+		_delayedPunchActionCount = 0u;
 	}
-
-	if (popBack)
-		_loopTakeHistory.pop_back();
 }
 
-void Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
+bool Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
+	if (!_activeHistoryIndex || *_activeHistoryIndex >= _loopTakeHistorySize)
+		return false;
+	const auto& history = _loopTakeHistory[*_activeHistoryIndex];
+	const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+		cfg.value().Audio.NumChannelsIn > 0u;
+	const auto hasTargetMidi = !_midiInputDevices.empty();
+	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_START,
+		StructuralCompletion::None, history.Token, _recordSampCount,
+		hasTargetMidi, false, false, hasTargetMidi))
+		return false;
+
 	_state = TRIGSTATE_PUNCHEDIN;
-
-	std::cout << "~~~~ Trigger START PUNCHIN" << std::endl;
-
 	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
 	// Mute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
 		_overdubMixer->SetUnmutedLevel(0.0);
+	else if (_delayedActionCount < _DelayedActionCapacity)
+		_delayedActions[_delayedActionCount++] = { sampsDelay, 0.0 };
 	else
-		_delayedActions.push_back(DelayedAction(sampsDelay, 0.0));
+		_overdubMixer->SetUnmutedLevel(0.0);
 
-	if (!_loopTakeHistory.empty())
+	if (history.SourceTake) history.SourceTake->SetTriggerSourceMutedAudio(true);
+
+	auto targetDelay = CalcPunchStateDelaySamps(cfg);
+	if (hasTargetAudio && history.TargetTake)
 	{
-		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
-			cfg.value().Audio.NumChannelsIn > 0u;
-		const auto hasTargetMidi = !_midiInputDevices.empty();
-
-		TriggerAction sourceAction;
-		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_START;
-		sourceAction.SourceId = lastTake.SourceTakeId;
-		sourceAction.TargetId = lastTake.TargetTakeId;
-		sourceAction.SampleCount = _recordSampCount;
-		sourceAction.ApplyToTargetTake = false;
-		sourceAction.ApplyToSourceTake = true;
-
-		if (cfg.has_value())
-			sourceAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			sourceAction.SetAudioParams(params.value());
-
-		auto targetAction = sourceAction;
-		targetAction.ApplyToTargetTake = true;
-		targetAction.ApplyToSourceTake = false;
-		targetAction.ApplyToTargetAudio = true;
-		targetAction.ApplyToTargetMidi = false;
-
-		auto targetMidiAction = targetAction;
-		targetMidiAction.ApplyToTargetAudio = false;
-		targetMidiAction.ApplyToTargetMidi = true;
-
-		DispatchTriggerAction(sourceAction, lastTake.Receiver);
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (hasTargetMidi)
-			DispatchTriggerAction(targetMidiAction, lastTake.Receiver);
-
-		if (hasTargetAudio)
-		{
-			if (0u == targetDelay)
-				DispatchTriggerAction(targetAction, lastTake.Receiver);
-			else
-				QueueTriggerAction(targetAction, lastTake.Receiver, targetDelay);
-		}
+		if (0u == targetDelay)
+			history.TargetTake->TriggerPunchInAudio();
+		else if (_delayedPunchActionCount < _DelayedActionCapacity)
+			_delayedPunchActions[_delayedPunchActionCount++] = {
+				history.TargetTake, targetDelay, true };
+		else
+			history.TargetTake->TriggerPunchInAudio();
 	}
+	return true;
 }
 
-void Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
+bool Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
+	if (!_activeHistoryIndex || *_activeHistoryIndex >= _loopTakeHistorySize)
+		return false;
+	const auto& history = _loopTakeHistory[*_activeHistoryIndex];
+	const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
+		cfg.value().Audio.NumChannelsIn > 0u;
+	const auto hasTargetMidi = !_midiInputDevices.empty();
+	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_END,
+		StructuralCompletion::None, history.Token, _recordSampCount,
+		hasTargetMidi, false, false, hasTargetMidi))
+		return false;
+
 	_state = TRIGSTATE_OVERDUBBING;
-
-	std::cout << "~~~~ Trigger END PUNCHIN" << std::endl;
-
 	auto sampsDelay = CalcInputAlignedDelaySamps(cfg, params);
 	// Unmute overdub input immediately; latency compensation applies only to mixer fade
 	if (sampsDelay == 0u)
 		_overdubMixer->SetUnmutedLevel(1.0);
+	else if (_delayedActionCount < _DelayedActionCapacity)
+		_delayedActions[_delayedActionCount++] = { sampsDelay, 1.0 };
 	else
-		_delayedActions.push_back(DelayedAction(sampsDelay, 1.0));
+		_overdubMixer->SetUnmutedLevel(1.0);
 
-	if (!_loopTakeHistory.empty())
+	if (history.SourceTake) history.SourceTake->SetTriggerSourceMutedAudio(false);
+
+	auto targetDelay = CalcPunchStateDelaySamps(cfg);
+	if (hasTargetAudio && history.TargetTake)
 	{
-		auto lastTake = _loopTakeHistory.back();
-		const auto hasTargetAudio = !_inputChannels.empty() || !cfg.has_value() ||
-			cfg.value().Audio.NumChannelsIn > 0u;
-		const auto hasTargetMidi = !_midiInputDevices.empty();
-
-		TriggerAction sourceAction;
-		sourceAction.ActionType = TriggerAction::TRIGGER_PUNCHIN_END;
-		sourceAction.SourceId = lastTake.SourceTakeId;
-		sourceAction.TargetId = lastTake.TargetTakeId;
-		sourceAction.SampleCount = _recordSampCount;
-		sourceAction.ApplyToTargetTake = false;
-		sourceAction.ApplyToSourceTake = true;
-
-		if (cfg.has_value())
-			sourceAction.SetUserConfig(cfg.value());
-
-		if (params.has_value())
-			sourceAction.SetAudioParams(params.value());
-
-		auto targetAction = sourceAction;
-		targetAction.ApplyToTargetTake = true;
-		targetAction.ApplyToSourceTake = false;
-		targetAction.ApplyToTargetAudio = true;
-		targetAction.ApplyToTargetMidi = false;
-
-		auto targetMidiAction = targetAction;
-		targetMidiAction.ApplyToTargetAudio = false;
-		targetMidiAction.ApplyToTargetMidi = true;
-
-		DispatchTriggerAction(sourceAction, lastTake.Receiver);
-
-		auto targetDelay = CalcPunchStateDelaySamps(cfg);
-		if (hasTargetMidi)
-			DispatchTriggerAction(targetMidiAction, lastTake.Receiver);
-
-		if (hasTargetAudio)
-		{
-			if (0u == targetDelay)
-				DispatchTriggerAction(targetAction, lastTake.Receiver);
-			else
-				QueueTriggerAction(targetAction, lastTake.Receiver, targetDelay);
-		}
+		if (0u == targetDelay)
+			history.TargetTake->TriggerPunchOutAudio();
+		else if (_delayedPunchActionCount < _DelayedActionCapacity)
+			_delayedPunchActions[_delayedPunchActionCount++] = {
+				history.TargetTake, targetDelay, false };
+		else
+			history.TargetTake->TriggerPunchOutAudio();
 	}
+	return true;
 }
 
 unsigned int Trigger::CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,

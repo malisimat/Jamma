@@ -44,6 +44,7 @@ namespace gui
 
 		std::function<bool(const io::RigFile&)> SubmitRigEdit;
 		std::function<RoutingEditAvailability()> RoutingEditAvailabilityState;
+		std::function<bool(std::uint64_t)> AcceptTriggerInput;
 		GuiPopupManager* PopupManager = nullptr;
 	};
 
@@ -211,6 +212,7 @@ namespace gui
 		std::optional<size_t> _deleteTriggerIndex;
 		std::function<bool(const io::RigFile&)> _submitRigEdit;
 		std::function<RoutingEditAvailability()> _routingEditAvailability;
+		std::function<bool(std::uint64_t)> _acceptTriggerInput;
 		std::optional<RoutingEditAvailability> _lastRoutingEditAvailability;
 		GuiPopupManager* _popupManager = nullptr;
 		bool _revealNewestTrigger = false;

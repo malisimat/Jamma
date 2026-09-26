@@ -1,7 +1,7 @@
 #include "gtest/gtest.h"
-#include "../TestRigMembership.h"
 
 #include "actions/TriggerAction.h"
+#include "engine/LoopTake.h"
 #include "engine/Station.h"
 #include "engine/Trigger.h"
 
@@ -80,13 +80,38 @@ TEST(StationVisualState, TriggerUpdatesOnlyItsReceivingStation)
 	triggerParams.Activate.emplace_back(engine::TriggerBinding(engine::TRIGGER_KEY, 'R', 1u),
 		engine::TriggerBinding(engine::TRIGGER_KEY, 'R', 0u));
 	auto trigger = std::make_shared<Trigger>(triggerParams);
-	AddTestRigTrigger(receivingStation, trigger);
+	trigger->SetReceiver(receivingStation);
 
 	base::Action action;
 	EXPECT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);
+	trigger->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
 	trigger->OnTick(utils::Timer::GetTime(), 0u, std::nullopt, std::nullopt);
 
 	EXPECT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
 	EXPECT_EQ(StationVisualState::STATIONSTATE_RECORDING, receivingStation->GetVisualState());
 	EXPECT_EQ(StationVisualState::STATIONSTATE_DEFAULT, unrelatedStation->GetVisualState());
+}
+
+TEST(StationVisualState, RetiresRemovedTakeAfterReplacementAudioBoundary)
+{
+	auto station = MakeStation("station");
+	auto take = station->AddTake();
+	const auto takeId = take->Id();
+	std::weak_ptr<engine::LoopTake> retiredTake = take;
+	station->CommitChanges();
+	station->AcknowledgeAudioBoundary();
+	station->CommitChanges();
+
+	auto ditch = MakeTriggerAction(TriggerAction::TRIGGER_DITCH);
+	ditch.TargetId = takeId;
+	station->OnAction(ditch);
+	take.reset();
+	station->CommitChanges();
+	EXPECT_FALSE(retiredTake.expired());
+	EXPECT_EQ(1u, station->RetiredAudioStateCount());
+
+	station->AcknowledgeAudioBoundary();
+	station->ReleaseRetiredAudioStates();
+	EXPECT_EQ(0u, station->RetiredAudioStateCount());
 }

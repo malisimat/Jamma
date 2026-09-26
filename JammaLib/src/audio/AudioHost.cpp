@@ -148,6 +148,7 @@ namespace audio
 			_audioDevice->Stop();
 
 		_pendingRigSnapshot.store(nullptr, std::memory_order_release);
+		_audioAppliedRigSnapshot.reset();
 		{
 			std::scoped_lock retainedLock(_retainedRigSnapshotsMutex);
 			_retainedRigSnapshots.clear();
@@ -203,40 +204,24 @@ namespace audio
 	{
 		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
 		if (!snapshot)
-		{
-			_routingEditsEligible.store(false, std::memory_order_release);
 			return;
-		}
-
-		bool editsEligible = snapshot->Graph.Revision == _audioRigRevision;
-		for (const auto& trigger : snapshot->Triggers)
-		{
-			if (trigger.Instance && !trigger.Instance->CanEditRouting())
-			{
-				editsEligible = false;
-				break;
-			}
-		}
-		_routingEditsEligible.store(editsEligible, std::memory_order_release);
 		if (snapshot->Graph.Revision <= _audioRigRevision)
 			return;
 
-		for (const auto& trigger : snapshot->Triggers)
+		for (const auto& routeChange : snapshot->RetainedTriggerRouteChanges)
 		{
-			if (trigger.Instance)
+			if (routeChange.CandidateIndex < snapshot->Triggers.size())
+			{
+				auto& trigger = snapshot->Triggers[routeChange.CandidateIndex];
 				trigger.Instance->ApplyCaptureRouting(trigger.Receiver, trigger.InputChannels,
-					trigger.MidiInputDevices, trigger.MidiInputMode, trigger.OverdubBehaviour);
-		}
-
-		for (const auto& membership : snapshot->StationMemberships)
-		{
-			if (membership.Station)
-				membership.Station->PublishTriggerMembership(membership.Triggers);
+					trigger.MidiInputDevices, trigger.MidiInputMode,
+					trigger.OverdubMixer, trigger.OverdubWriter);
+			}
 		}
 
 		_audioRigRevision = snapshot->Graph.Revision;
+		_audioAppliedRigSnapshot = snapshot;
 		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
-		_routingEditsEligible.store(false, std::memory_order_release);
 	}
 
 	void AudioHost::PublishRigTriggerQuiescenceAtAudioBoundary() noexcept
@@ -252,22 +237,18 @@ namespace audio
 		const auto candidate = _rigTriggerQuiescenceCandidate.load(std::memory_order_acquire);
 		if (!candidate || candidate->Revision != candidateRevision)
 			return;
-		for (const auto triggerIndex : candidate->ChangedTriggerIndices)
+		for (const auto& retired : candidate->RetiredTriggerChecks)
 		{
-			if (triggerIndex >= snapshot->Triggers.size())
-				continue;
-			const auto& trigger = snapshot->Triggers[triggerIndex].Instance;
+			const auto& trigger = retired.AcceptedInstance;
 			if (trigger && !trigger->CanEditRouting())
 			{
 				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
 				return;
 			}
 		}
-		for (const auto triggerIndex : candidate->CaptureRoutingChangeTriggerIndices)
+		for (const auto& routeChange : candidate->RetainedTriggerRouteChanges)
 		{
-			if (triggerIndex >= snapshot->Triggers.size())
-				continue;
-			const auto& trigger = snapshot->Triggers[triggerIndex].Instance;
+			const auto& trigger = routeChange.Instance;
 			if (trigger && !trigger->CanApplyCaptureRouting())
 			{
 				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
@@ -733,10 +714,22 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 
 		_channelMixer->Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 
+		if (_audioAppliedRigSnapshot)
+		{
+			for (const auto& trigger : _audioAppliedRigSnapshot->Triggers)
+			{
+				if (trigger.Instance)
+					trigger.Instance->OnTick(Timer::GetTime(), numSamps,
+						_tickUserConfig, _tickStreamParams, _audioRigRevision);
+			}
+		}
+
 		if (_tickCallback)
 		{
 			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _tickStreamParams);
 		}
+		for (const auto& station : stations)
+			if (station) station->AcknowledgeAudioBoundary();
 		// Trigger::OnTick above drains accepted external actions and publishes the
 		// edit predicate. A quiescence decision made here therefore describes this
 		// completed audio boundary, not a stale UI observation.

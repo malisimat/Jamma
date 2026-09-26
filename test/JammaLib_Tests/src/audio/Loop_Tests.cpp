@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
+#include "engine/Trigger.h"
 
 using resources::ResourceLib;
 using engine::Loop;

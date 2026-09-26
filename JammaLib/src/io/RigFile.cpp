@@ -6,8 +6,10 @@
 ///////////////////////////////////////////////////////////
 
 #include "RigFile.h"
+#include "../utils/StringUtils.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 using namespace io;
 
@@ -198,7 +200,8 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss)
 	{
 		if (i) ss << ",";
 		const auto& trigger = rig.Triggers[i];
-		ss << "{" << key("name") << string(trigger.Name)
+		ss << "{" << key("id") << string(trigger.Id)
+			<< "," << key("name") << string(trigger.Name)
 			<< "," << key("stationtype") << trigger.StationType;
 		if (trigger.StationTarget.has_value())
 			ss << "," << key("stationtarget") << string(trigger.StationTarget.value());
@@ -338,6 +341,7 @@ std::optional<RigFile::TriggerPair> RigFile::TriggerPair::FromJson(Json::JsonPar
 
 std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 {
+	std::string id;
 	std::string name;
 	unsigned int stationType = 0;
 	std::vector<TriggerPair> pairs;
@@ -347,7 +351,15 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 	MidiInputMode midiInputs = MidiInputMode::None;
 	std::optional<MidiTriggerBinding> midiTrigger;
 
-	auto iter = json.KeyValues.find("name");
+	auto iter = json.KeyValues.find("id");
+	if (iter != json.KeyValues.end())
+	{
+		if (iter->second.index() != 4)
+			return std::nullopt;
+		id = std::get<std::string>(iter->second);
+	}
+
+	iter = json.KeyValues.find("name");
 	if (iter != json.KeyValues.end())
 	{
 		if (json.KeyValues["name"].index() == 4)
@@ -473,6 +485,7 @@ std::optional<RigFile::Trigger> RigFile::Trigger::FromJson(Json::JsonPart json)
 		return std::nullopt;
 
 	Trigger trigger;
+	trigger.Id = id;
 	trigger.Name = name;
 	trigger.StationType = stationType;
 	trigger.TriggerPairs = pairs;
@@ -560,6 +573,16 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 	const std::vector<std::string>& availableMidiDevices)
 {
 	Resolution result{ rig };
+	std::unordered_set<std::string> triggerIds;
+	triggerIds.reserve(rig.Triggers.size());
+	for (const auto& trigger : rig.Triggers)
+	{
+		if (!trigger.Id.empty() && !triggerIds.insert(trigger.Id).second)
+		{
+			result.IsValid = false;
+			return result;
+		}
+	}
 	result.Triggers.reserve(rig.Triggers.size());
 	for (size_t triggerIndex = 0; triggerIndex < rig.Triggers.size(); ++triggerIndex)
 	{
@@ -569,6 +592,12 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 		resolved.TriggerName = trigger.Name;
 
 		auto& candidateTrigger = result.CandidateRig.Triggers[triggerIndex];
+		if (candidateTrigger.Id.empty())
+		{
+			do candidateTrigger.Id = utils::GetGuid();
+			while (candidateTrigger.Id.empty() || !triggerIds.insert(candidateTrigger.Id).second);
+			result.RequiresSave = true;
+		}
 		candidateTrigger.InputChannels.clear();
 		for (const auto channel : trigger.InputChannels)
 		{
@@ -659,6 +688,10 @@ RigFile RigFileRouting::WithUnboundTrigger(const RigFile& rig)
 {
 	auto candidate = rig;
 	RigFile::Trigger trigger{};
+	do trigger.Id = utils::GetGuid();
+	while (trigger.Id.empty() || std::any_of(rig.Triggers.begin(), rig.Triggers.end(), [&](const RigFile::Trigger& existing) {
+		return existing.Id == trigger.Id;
+	}));
 	trigger.Name = NextTriggerName(rig);
 	trigger.StationTarget = std::string();
 	trigger.MidiInputs = RigFile::Trigger::MidiInputMode::None;

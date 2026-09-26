@@ -12,6 +12,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
@@ -156,6 +157,10 @@ namespace engine
 		void CommitChanges();
 		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
 		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
+		std::shared_ptr<const RigSnapshot> AcceptedRigSnapshot() const noexcept
+		{
+			return _rigCoordinator.Accepted();
+		}
 		void ApplyDeferredHoverUpdates();
 
 		// Returns a locked station snapshot safe to use outside render/tick threads.
@@ -221,9 +226,11 @@ namespace engine
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
+		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
 		gui::RoutingEditAvailability _RoutingEditAvailability();
 		void _PumpSerial();
+		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
@@ -314,6 +321,8 @@ namespace engine
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
 		RigCoordinator _rigCoordinator;
+		std::uint64_t _rigQuiescenceRequestedRevision = 0u;
+		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
 		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
 		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
