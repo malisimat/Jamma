@@ -1,10 +1,10 @@
-#include "engine/RigTriggerInputBarrier.h"
+#include "engine/RigTriggerInputGate.h"
 
 #include <gtest/gtest.h>
 #include <atomic>
 #include <thread>
 
-using engine::RigTriggerInputBarrier;
+using engine::RigTriggerInputGate;
 
 #if defined(JAMMA_STANDALONE_GATE_TEST)
 int main(int argc, char** argv)
@@ -14,32 +14,32 @@ int main(int argc, char** argv)
 }
 #endif
 
-TEST(RigTriggerInputBarrier, StartsBlockedAndRejectsReservedRevisions)
+TEST(RigTriggerInputGate, StartsBlockedAndRejectsReservedRevisions)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 
-	EXPECT_EQ(RigTriggerInputBarrier::NoRevision, gate.OpenRevision());
+	EXPECT_EQ(RigTriggerInputGate::NoRevision, gate.OpenRevision());
 	EXPECT_FALSE(gate.TryAcceptUi(1u));
 	EXPECT_FALSE(gate.TryAcceptJob(1u));
-	EXPECT_FALSE(gate.Open(RigTriggerInputBarrier::NoRevision));
-	EXPECT_FALSE(gate.Open(RigTriggerInputBarrier::CloseForeverRevision));
+	EXPECT_FALSE(gate.Open(RigTriggerInputGate::NoRevision));
+	EXPECT_FALSE(gate.Open(RigTriggerInputGate::CloseForeverRevision));
 }
 
-TEST(RigTriggerInputBarrier, OpenAcceptsOnlyThePublishedRevision)
+TEST(RigTriggerInputGate, OpenAcceptsOnlyThePublishedRevision)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 
 	ASSERT_TRUE(gate.Open(7u));
 	EXPECT_TRUE(gate.TryAcceptUi(7u));
 	EXPECT_TRUE(gate.TryAcceptJob(7u));
 	EXPECT_FALSE(gate.TryAcceptUi(6u));
 	EXPECT_FALSE(gate.TryAcceptJob(8u));
-	EXPECT_EQ(RigTriggerInputBarrier::NoRevision, gate.ObserveAndAcknowledgeClose());
+	EXPECT_EQ(RigTriggerInputGate::NoRevision, gate.ObserveAndAcknowledgeClose());
 }
 
-TEST(RigTriggerInputBarrier, UiCloseAndJobObservationFormTwoProducerBarrier)
+TEST(RigTriggerInputGate, UiCloseAndJobObservationFormTwoProducerBarrier)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(11u));
 
 	ASSERT_TRUE(gate.RequestCloseFromUi(11u));
@@ -55,21 +55,21 @@ TEST(RigTriggerInputBarrier, UiCloseAndJobObservationFormTwoProducerBarrier)
 	EXPECT_FALSE(gate.TryAcceptJob(11u));
 }
 
-TEST(RigTriggerInputBarrier, WrongRevisionCannotCloseCurrentInput)
+TEST(RigTriggerInputGate, WrongRevisionCannotCloseCurrentInput)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(13u));
 
 	EXPECT_FALSE(gate.RequestCloseFromUi(12u));
 	EXPECT_TRUE(gate.TryAcceptUi(13u));
 	EXPECT_TRUE(gate.TryAcceptJob(13u));
 	EXPECT_FALSE(gate.UiAcknowledged(12u));
-	EXPECT_EQ(RigTriggerInputBarrier::NoRevision, gate.RequestedClosedRevision());
+	EXPECT_EQ(RigTriggerInputGate::NoRevision, gate.RequestedClosedRevision());
 }
 
-TEST(RigTriggerInputBarrier, ReopenClearsOldBarrierAndRejectsOldRevision)
+TEST(RigTriggerInputGate, ReopenClearsOldBarrierAndRejectsOldRevision)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(17u));
 	ASSERT_TRUE(gate.RequestCloseFromUi(17u));
 	ASSERT_EQ(17u, gate.ObserveAndAcknowledgeClose());
@@ -84,9 +84,9 @@ TEST(RigTriggerInputBarrier, ReopenClearsOldBarrierAndRejectsOldRevision)
 	EXPECT_FALSE(gate.ReadyForAudioBoundary(17u));
 }
 
-TEST(RigTriggerInputBarrier, RepeatedUiCloseIsIdempotentBeforeJobAcknowledgement)
+TEST(RigTriggerInputGate, RepeatedUiCloseIsIdempotentBeforeJobAcknowledgement)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(23u));
 
 	EXPECT_TRUE(gate.RequestCloseFromUi(23u));
@@ -97,9 +97,9 @@ TEST(RigTriggerInputBarrier, RepeatedUiCloseIsIdempotentBeforeJobAcknowledgement
 	EXPECT_TRUE(gate.ReadyForAudioBoundary(23u));
 }
 
-TEST(RigTriggerInputBarrier, DelayedOldAcknowledgementCannotSatisfyNewCloseOfSameRevision)
+TEST(RigTriggerInputGate, DelayedOldAcknowledgementCannotSatisfyNewCloseOfSameRevision)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(27u));
 	ASSERT_TRUE(gate.RequestCloseFromUi(27u));
 	const auto oldCloseToken = gate.ObserveCloseTokenFromJob();
@@ -122,9 +122,9 @@ TEST(RigTriggerInputBarrier, DelayedOldAcknowledgementCannotSatisfyNewCloseOfSam
 	EXPECT_TRUE(gate.ReadyForAudioBoundary(27u));
 }
 
-TEST(RigTriggerInputBarrier, CloseForeverRequiresFreshJobAcknowledgementAndCannotReopen)
+TEST(RigTriggerInputGate, CloseForeverRequiresFreshJobAcknowledgementAndCannotReopen)
 {
-	RigTriggerInputBarrier gate;
+	RigTriggerInputGate gate;
 	ASSERT_TRUE(gate.Open(29u));
 	ASSERT_TRUE(gate.RequestCloseFromUi(29u));
 	ASSERT_EQ(29u, gate.ObserveAndAcknowledgeClose());
@@ -141,7 +141,7 @@ TEST(RigTriggerInputBarrier, CloseForeverRequiresFreshJobAcknowledgementAndCanno
 	EXPECT_FALSE(gate.TryAcceptUi(29u));
 	EXPECT_FALSE(gate.TryAcceptJob(29u));
 
-	EXPECT_EQ(RigTriggerInputBarrier::CloseForeverRevision,
+	EXPECT_EQ(RigTriggerInputGate::CloseForeverRevision,
 		gate.ObserveAndAcknowledgeClose());
 	EXPECT_TRUE(gate.JobAcknowledgedCloseForever());
 	EXPECT_TRUE(gate.ReadyForShutdown());
@@ -150,11 +150,11 @@ TEST(RigTriggerInputBarrier, CloseForeverRequiresFreshJobAcknowledgementAndCanno
 	EXPECT_FALSE(gate.RequestCloseFromUi(29u));
 }
 
-TEST(RigTriggerInputBarrier, ConcurrentOpenCannotErasePermanentClose)
+TEST(RigTriggerInputGate, ConcurrentOpenCannotErasePermanentClose)
 {
 	for (auto iteration = 0u; iteration < 200u; ++iteration)
 	{
-		RigTriggerInputBarrier gate;
+		RigTriggerInputGate gate;
 		ASSERT_TRUE(gate.Open(31u));
 		std::atomic<bool> start{ false };
 		std::thread opener([&]()
@@ -167,11 +167,11 @@ TEST(RigTriggerInputBarrier, ConcurrentOpenCannotErasePermanentClose)
 		opener.join();
 
 		EXPECT_TRUE(gate.IsClosedForever());
-		EXPECT_EQ(RigTriggerInputBarrier::NoRevision, gate.OpenRevision());
-		EXPECT_EQ(RigTriggerInputBarrier::CloseForeverRevision,
+		EXPECT_EQ(RigTriggerInputGate::NoRevision, gate.OpenRevision());
+		EXPECT_EQ(RigTriggerInputGate::CloseForeverRevision,
 			gate.RequestedClosedRevision());
 		EXPECT_NE(0u, gate.RequestedCloseToken());
-		EXPECT_EQ(RigTriggerInputBarrier::CloseForeverRevision,
+		EXPECT_EQ(RigTriggerInputGate::CloseForeverRevision,
 			gate.ObserveAndAcknowledgeClose());
 		EXPECT_TRUE(gate.ReadyForShutdown());
 	}

@@ -16,7 +16,7 @@
 #include "../audio/AudioDevice.h"
 #include "../base/LoggingConfig.h"
 #include "../io/SerialDevice.h"
-#include "../engine/RigTriggerInputBarrier.h"
+#include "../engine/RigTriggerInputGate.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
@@ -250,7 +250,7 @@ namespace midi
 		// and job pumps are readers. Empty publication precedes worker teardown, and
 		// snapshot retirement remains coordinator-owned.
 		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
-		engine::RigTriggerInputBarrier _rigTriggerInputBarrier;
+		engine::RigTriggerInputGate _rigTriggerInputGate;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;

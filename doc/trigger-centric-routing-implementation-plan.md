@@ -319,7 +319,7 @@ give it another SPSC queue; do not silently turn a queue into MPSC.
 
 ### Asynchronous producer acknowledgement
 
-Use a stable atomic `RigTriggerInputBarrier` containing:
+Use a stable atomic `RigTriggerInputGate` containing:
 
 - current open revision;
 - requested closed revision;
@@ -444,7 +444,7 @@ repeatable `CloseAudio`/`Shutdown` behaviour.
 | Trigger operational state/history/current route/delays | Audio | Audio; UI reads published summaries only | Single writer; published scalar atomics | Snapshot retirement after producers/audio stop |
 | UI Trigger input queue | Sole UI event thread | Audio sole consumer | Fixed-storage SPSC acquire/release atomics | Close/ack UI producer, stop audio, then destroy |
 | Job Trigger input queue | Sole Scene job thread | Audio sole consumer | Fixed-storage SPSC acquire/release atomics | Close/ack job producer, stop audio, then destroy |
-| RigTriggerInputBarrier | UI initiates close/open; each producer writes only its own acknowledgement | UI and job producers; Scene publication state machine | Revision/ack atomics; audio has no dependency on this gate | Permanently close and receive both acknowledgements before stopping readers |
+| RigTriggerInputGate | UI initiates close/open; each producer writes only its own acknowledgement | UI and job producers; Scene publication state machine | Revision/ack atomics; audio has no dependency on this gate | Permanently close and receive both acknowledgements before stopping readers |
 | Trigger UI state and outcome counters | Audio | UI/job | Release stores/acquire loads | Trigger lifetime |
 | Pending/audio-boundary transition request handles | Scene/job | Audio | Atomic `shared_ptr` and revision atomics | Clear off audio after acknowledgement/shutdown |
 | Staged capture vectors/behaviour | Coordinator/job builds; audio exchanges once | Audio during apply | Candidate-owned, unpublished mutable staging with exclusive phase ownership | Old staged values destroyed through retired snapshot off audio |
@@ -533,7 +533,7 @@ Work:
 - upgrade the existing `_externalControlActionQueue` in place as the UI edge
   queue, retain each MIDI input's existing raw ingress SPSC, and add only the
   missing per-Trigger job-to-audio SPSC;
-- introduce atomic `RigTriggerInputBarrier` acknowledgements;
+- introduce atomic `RigTriggerInputGate` acknowledgements;
 - build immutable raw-input-to-edge dispatch routes;
 - route HUD/keyboard/MIDI/serial through `TryEnqueue` with revision;
 - make Trigger state machine and binding state audio-only;

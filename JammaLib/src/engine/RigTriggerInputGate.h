@@ -19,16 +19,16 @@ namespace engine
 	// observes it before each batch. The coordinator waits for both acknowledgements
 	// before requesting the audio-boundary transition. A unique token keeps a late
 	// acknowledgement from an earlier request from satisfying a newer one.
-	class RigTriggerInputBarrier
+	class RigTriggerInputGate
 	{
 	public:
 		static constexpr std::uint64_t NoRevision = 0u;
 		static constexpr std::uint64_t CloseForeverRevision =
 			(std::numeric_limits<std::uint64_t>::max)();
 
-		RigTriggerInputBarrier() noexcept = default;
-		RigTriggerInputBarrier(const RigTriggerInputBarrier&) = delete;
-		RigTriggerInputBarrier& operator=(const RigTriggerInputBarrier&) = delete;
+		RigTriggerInputGate() noexcept = default;
+		RigTriggerInputGate(const RigTriggerInputGate&) = delete;
+		RigTriggerInputGate& operator=(const RigTriggerInputGate&) = delete;
 
 		// Enables input for a newly published revision.
 		bool Open(std::uint64_t revision) noexcept

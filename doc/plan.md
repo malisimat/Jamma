@@ -37,7 +37,7 @@ The editable-routing implementation now uses these boundaries:
   ticks, or queries Triggers;
 - HUD/keyboard and MIDI/serial use separate bounded SPSC lanes into audio,
   stamped with the immutable dispatch revision;
-- `RigTriggerInputBarrier` closes both producer domains asynchronously before
+- `RigTriggerInputGate` closes both producer domains asynchronously before
   audio-boundary transition is requested;
 - retained route changes exchange prebuilt capture values at the audio
   boundary, while unchanged Triggers are untouched;
