@@ -29,7 +29,6 @@ namespace engine
 		mutable std::vector<std::string> MidiInputDevices;
 		mutable io::RigFile::Trigger::MidiInputMode MidiInputMode = io::RigFile::Trigger::MidiInputMode::None;
 		mutable std::shared_ptr<audio::AudioMixer> OverdubMixer;
-		mutable std::shared_ptr<base::BounceWriter> OverdubWriter;
 	};
 
 	struct RetainedTriggerRouteChange

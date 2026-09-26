@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 #include <optional>
@@ -273,7 +274,8 @@ namespace engine
 	class Trigger :
 		public base::Tickable,
 		public base::ActionSender,
-		public base::BounceWriter
+		public base::BounceWriter,
+		public std::enable_shared_from_this<Trigger>
 	{
 	public:
 		static constexpr std::size_t MaxBindingCount = 64u;
@@ -285,8 +287,6 @@ namespace engine
 			io::RigFile::Trigger trigStruct);
 		static audio::BounceMixBehaviourParams GetOverdubBehaviourParams(std::vector<unsigned int> channels);
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
-		static std::shared_ptr<base::BounceWriter> CreateBounceWriter(
-			const std::shared_ptr<audio::AudioMixer>& mixer);
 		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
 		actions::ActionResult OnAction(actions::KeyAction action);
@@ -346,8 +346,7 @@ namespace engine
 			std::vector<unsigned int>& inputChannels,
 			std::vector<std::string>& midiInputDevices,
 			io::RigFile::Trigger::MidiInputMode& midiInputMode,
-			std::shared_ptr<audio::AudioMixer>& overdubMixer,
-			std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept;
+			std::shared_ptr<audio::AudioMixer>& overdubMixer) noexcept;
 		const std::vector<std::string>& MidiInputDevices() const noexcept { return _midiInputDevices; }
 		io::RigFile::Trigger::MidiInputMode MidiInputMode() const noexcept { return _midiInputMode; }
 		TriggerState GetState() const;
@@ -363,7 +362,7 @@ namespace engine
 		std::string Name() const;
 		void SetName(std::string name);
 		std::vector<TriggerTake> GetTakes() const;
-		virtual void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const float* srcBuf,
 			unsigned int numSamps,
 			unsigned int destChannel) override;
@@ -592,6 +591,5 @@ namespace engine
 		std::size_t _jobTakeHistorySize = 0u;
 		std::atomic<std::shared_ptr<const std::vector<TriggerTake>>> _publishedTakeHistory;
 		std::shared_ptr<audio::AudioMixer> _overdubMixer;
-		std::shared_ptr<base::BounceWriter> _overdubWriter;
 	};
 }

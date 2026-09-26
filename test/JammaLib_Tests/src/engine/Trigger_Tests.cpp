@@ -499,8 +499,7 @@ TEST(Trigger, CaptureEditsAndStationMovesKeepDitchHistoryInRecordingOrder)
 		std::vector<std::string> midiDevices;
 		auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
 		auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
-		auto writer = Trigger::CreateBounceWriter(mixer);
-		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, midiMode, mixer, writer);
+		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, midiMode, mixer);
 	};
 	auto press = [&](bool activate, bool down)
 	{
@@ -562,8 +561,7 @@ TEST(Trigger, RejectedStartDoesNotEndAnOlderHistoryEntry)
 	std::vector<std::string> midiDevices;
 	auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
 	auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
-	auto writer = Trigger::CreateBounceWriter(mixer);
-	trigger->ApplyCaptureRouting(route, channels, midiDevices, midiMode, mixer, writer);
+	trigger->ApplyCaptureRouting(route, channels, midiDevices, midiMode, mixer);
 	press(true); press(false); press(true); press(false);
 
 	EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());

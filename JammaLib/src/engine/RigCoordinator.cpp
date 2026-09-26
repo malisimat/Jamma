@@ -145,10 +145,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 		}
 		auto overdubMixer = std::make_shared<audio::AudioMixer>(
 			Trigger::GetOverdubMixerParams(fileTrigger.InputChannels));
-		auto overdubWriter = Trigger::CreateBounceWriter(overdubMixer);
 		snapshot->Triggers.push_back({ fileTrigger.Id, triggerIndex, instance, stationIndex, std::move(receiver),
 			fileTrigger.InputChannels, fileTrigger.MidiInputDevices, fileTrigger.MidiInputs,
-			std::move(overdubMixer), std::move(overdubWriter) });
+			std::move(overdubMixer) });
 	}
 	if (acceptedSnapshot)
 	{
