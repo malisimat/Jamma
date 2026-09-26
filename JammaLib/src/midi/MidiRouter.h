@@ -226,6 +226,9 @@ namespace midi
 		void _StopLiveMidiDispatcher();
 		void _LiveMidiDispatchLoop() noexcept;
 		void _DispatchAvailableLiveMidi() noexcept;
+		void _CloseMidi();
+		void _PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void _PublishEmptyRigInputDispatch();
 		void _PublishLiveMidiInputConfig(std::uint32_t generation,
 			std::uint8_t forcedChannelOverride,
 			bool channelOverrideLive) noexcept;
@@ -248,6 +251,9 @@ namespace midi
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
 		// Publish empty before worker teardown, then retire snapshots on the coordinator side.
 		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
+		// UI device lifecycle and job rig publication share this off-callback lock.
+		std::mutex _rigInputPublicationMutex;
+		std::shared_ptr<const engine::RigSnapshot> _retainedRigInputSnapshot;
 		engine::RigTriggerInputGate _rigTriggerInputGate;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;

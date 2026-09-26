@@ -419,9 +419,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const base::LoggingConfig& loggingConfig,
 	midi::MidiClockAnchor& midiClockAnchor)
 {
-	const auto currentDispatch = _rigInputDispatch.load(std::memory_order_acquire);
-	const auto rigSnapshot = currentDispatch ? currentDispatch->Snapshot : nullptr;
-	CloseMidi();
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	_CloseMidi();
 	_loggingVerbose = loggingConfig.Midi == "verbose";
 
 	const auto initialAnchor = midi::ReadMidiClockAnchor(midiClockAnchor, {});
@@ -432,7 +431,7 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	_liveMidiStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 	if (!_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
 	{
-		CloseMidi();
+		_CloseMidi();
 		return;
 	}
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(), cfg.Midi.ChannelOverrideLive);
@@ -509,8 +508,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	}
 
 	_midiInputs.store(midiInputs, std::memory_order_release);
-	if (rigSnapshot)
-		PublishRigInputDispatch(rigSnapshot);
+	if (_retainedRigInputSnapshot)
+		_PublishRigInputDispatch(_retainedRigInputSnapshot);
 	_StartLiveMidiDispatcher();
 
 	if (midiInputs->empty())
@@ -534,9 +533,15 @@ float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
 
 void MidiRouter::CloseMidi()
 {
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	_CloseMidi();
+}
+
+void MidiRouter::_CloseMidi()
+{
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(),
 		_channelOverrideLive.load(std::memory_order_acquire));
-	PublishEmptyRigInputDispatch();
+	_PublishEmptyRigInputDispatch();
 
 	auto midiInputs = _midiInputs.exchange(std::make_shared<const std::vector<std::shared_ptr<MidiInputEndpoint>>>(), std::memory_order_acq_rel);
 	if (midiInputs)
@@ -553,11 +558,19 @@ void MidiRouter::CloseMidi()
 
 void MidiRouter::PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot)
 {
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	_PublishRigInputDispatch(std::move(snapshot));
+}
+
+void MidiRouter::_PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot)
+{
 	if (!snapshot)
 	{
-		PublishEmptyRigInputDispatch();
+		_retainedRigInputSnapshot.reset();
+		_PublishEmptyRigInputDispatch();
 		return;
 	}
+	_retainedRigInputSnapshot = snapshot;
 	auto published = std::make_shared<PublishedRigInputDispatch>();
 	published->Revision = snapshot->Revision;
 	published->Snapshot = std::move(snapshot);
@@ -612,6 +625,13 @@ void MidiRouter::PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapsh
 }
 
 void MidiRouter::PublishEmptyRigInputDispatch()
+{
+	std::scoped_lock lock(_rigInputPublicationMutex);
+	_retainedRigInputSnapshot.reset();
+	_PublishEmptyRigInputDispatch();
+}
+
+void MidiRouter::_PublishEmptyRigInputDispatch()
 {
 	auto published = std::make_shared<PublishedRigInputDispatch>();
 	published->LiveMidi.Generation = ++_nextLiveMidiRoutingGeneration;
