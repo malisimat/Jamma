@@ -69,6 +69,35 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesResolveReorderedAndAdditionalStat
 	additional->Shutdown();
 }
 
+TEST_F(SceneRoutingIntegrationTest, RestoresStationHistoryToFirstMappedTriggerAfterNameRouting)
+{
+	auto bass = Station("Bass");
+	bass.TriggerHistory.push_back({ static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC),
+		"bass-source", "bass-target" });
+	auto drums = Station("Drums");
+	drums.TriggerHistory.push_back({ static_cast<unsigned int>(engine::TriggerTake::SOURCE_ADC),
+		"drums-source", "drums-target" });
+	// Station order differs from trigger order, and two triggers share Bass.
+	auto scene = FreshScene({ bass, drums },
+		{ Trigger("drums", "Drums"), Trigger("bass-first", "Bass"), Trigger("bass-second", "Bass") });
+	ASSERT_TRUE(scene);
+	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Bass", 2u }, { "Drums", 1u } }),
+		Memberships(scene));
+	const auto rig = scene->AcceptedRigSnapshot();
+	ASSERT_TRUE(rig);
+	ASSERT_EQ(3u, rig->Triggers.size());
+	ASSERT_TRUE(rig->Triggers[0].Instance);
+	ASSERT_TRUE(rig->Triggers[1].Instance);
+	ASSERT_TRUE(rig->Triggers[2].Instance);
+	ASSERT_EQ(1u, rig->Triggers[0].Instance->GetTakes().size());
+	EXPECT_EQ("drums-source", rig->Triggers[0].Instance->GetTakes()[0].SourceTakeId);
+	ASSERT_EQ(1u, rig->Triggers[1].Instance->GetTakes().size());
+	EXPECT_EQ("bass-source", rig->Triggers[1].Instance->GetTakes()[0].SourceTakeId);
+	EXPECT_EQ("bass-target", rig->Triggers[1].Instance->GetTakes()[0].TargetTakeId);
+	EXPECT_TRUE(rig->Triggers[2].Instance->GetTakes().empty());
+	scene->Shutdown();
+}
+
 TEST_F(SceneRoutingIntegrationTest, FreshScenesLeaveRenamedMissingAmbiguousAndFewerTargetsUnbound)
 {
 	auto renamed = FreshScene({ Station("Renamed") }, { Trigger("old", "Original") });

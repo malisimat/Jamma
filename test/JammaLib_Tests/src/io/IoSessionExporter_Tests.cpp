@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 
 #include "base/AudioSink.h"
@@ -90,7 +91,84 @@ public:
 		std::filesystem::create_directory(dir);
 		return dir;
 	}
+
+	static std::optional<io::JamFile> ExportManifest(
+		const std::vector<std::shared_ptr<Station>>& stations)
+	{
+		Quantiser quantiser;
+		quantiser.SetClock(std::make_shared<utils::Timer>());
+		audio::AudioStreamParams stream{};
+		io::UserConfig user{};
+		std::mutex sceneMutex;
+		const auto dir = MakeDirectory();
+		const bool exported = io::IoSessionExporter::ExportSessionToDirectory(stations, quantiser,
+			io::JamFile::GlobalMidiQuantState::Off, 0.0, user, stream, nullptr,
+			sceneMutex, nullptr, dir.wstring());
+		std::optional<io::JamFile> jam;
+		if (exported)
+		{
+			std::ifstream manifest(dir / "session.jam");
+			if (manifest)
+			{
+				std::stringstream contents;
+				contents << manifest.rdbuf();
+				jam = io::JamFile::FromStream(std::move(contents));
+			}
+		}
+		std::filesystem::remove_all(dir);
+		return jam;
+	}
 };
+
+TEST(IoSessionExporter, MultipleTriggersOnStationPersistFirstTriggerHistoryInOrder)
+{
+	auto station = IoSessionExporterTest::MakeStation("shared");
+	auto first = std::make_shared<Trigger>(TriggerParams{});
+	first->RestoreTakes({
+		{ engine::TriggerTake::SOURCE_ADC, "source-a", "target-a" },
+		{ engine::TriggerTake::SOURCE_ADC, "source-b", "target-b" }
+	});
+	auto second = std::make_shared<Trigger>(TriggerParams{});
+	second->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "other-source", "other-target" } });
+	station->AddTrigger(first);
+	station->AddTrigger(second);
+
+	const auto jam = IoSessionExporterTest::ExportManifest({ station });
+	ASSERT_TRUE(jam.has_value());
+	ASSERT_EQ(1u, jam->Stations.size());
+	const auto& history = jam->Stations[0].TriggerHistory;
+	ASSERT_EQ(2u, history.size());
+	EXPECT_EQ("source-a", history[0].SourceTakeId);
+	EXPECT_EQ("target-a", history[0].TargetTakeId);
+	EXPECT_EQ("source-b", history[1].SourceTakeId);
+	EXPECT_EQ("target-b", history[1].TargetTakeId);
+}
+
+TEST(IoSessionExporter, ReroutedTriggerHistoryFollowsItsCurrentStation)
+{
+	auto firstStation = IoSessionExporterTest::MakeStation("first");
+	auto secondStation = IoSessionExporterTest::MakeStation("second");
+	auto trigger = std::make_shared<Trigger>(TriggerParams{});
+	trigger->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target" } });
+	firstStation->AddTrigger(trigger);
+
+	const auto before = IoSessionExporterTest::ExportManifest({ firstStation, secondStation });
+	ASSERT_TRUE(before.has_value());
+	ASSERT_EQ(2u, before->Stations.size());
+	ASSERT_EQ(1u, before->Stations[0].TriggerHistory.size());
+	EXPECT_TRUE(before->Stations[1].TriggerHistory.empty());
+
+	// A rig edit clears the previous station mapping before publishing the new one.
+	firstStation->AddTrigger({});
+	secondStation->AddTrigger(trigger);
+	const auto after = IoSessionExporterTest::ExportManifest({ firstStation, secondStation });
+	ASSERT_TRUE(after.has_value());
+	ASSERT_EQ(2u, after->Stations.size());
+	EXPECT_TRUE(after->Stations[0].TriggerHistory.empty());
+	ASSERT_EQ(1u, after->Stations[1].TriggerHistory.size());
+	EXPECT_EQ("source", after->Stations[1].TriggerHistory[0].SourceTakeId);
+	EXPECT_EQ("target", after->Stations[1].TriggerHistory[0].TargetTakeId);
+}
 
 TEST(IoSessionExporter, ExplicitDirectoryRoundTripsLocalManifestAndSidecars)
 {
