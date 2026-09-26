@@ -1861,7 +1861,9 @@ void Scene::SetLogging(io::LoggingConfig config) noexcept
 
 void Scene::CloseAudio()
 {
-	Shutdown();
+	CloseSerial();
+	CloseMidi();
+	_audioEngine->Close();
 }
 
 bool Scene::PauseAudio()
