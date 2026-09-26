@@ -1231,6 +1231,41 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
 }
 
+TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
+{
+	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto trigger = MakeTriggerFromRigJson(json, 20u);
+	ASSERT_NE(nullptr, trigger);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+
+	const auto start = GetTime();
+	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		start.time_since_epoch()).count();
+	base::Action action;
+	action.SetActionTime(start);
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+	trigger->OnTick(OffsetTime(start, 1u), 0u, std::nullopt, std::nullopt);
+	EXPECT_TRUE(trigger->IsActivateInputDown());
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	// Pump delay exceeds debounce, but the driver's note-off is only 5 ms later.
+	action.SetActionTime(OffsetTime(start, 100u));
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), action, eventMicros + 5000).IsEaten);
+	trigger->OnTick(OffsetTime(start, 6u), 0u, std::nullopt, std::nullopt);
+
+	// A second press still falls within 20 ms of the driver-timed release.
+	action.SetActionTime(OffsetTime(start, 200u));
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros + 10000).IsEaten);
+	trigger->OnTick(OffsetTime(start, 11u), 0u, std::nullopt, std::nullopt);
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
+	EXPECT_EQ(1u, receiver->Actions().size());
+}
+
 TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";

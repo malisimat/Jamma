@@ -308,11 +308,13 @@ namespace engine
 			unsigned int value,
 			unsigned int state,
 			const base::Action& action,
-			const std::string& device = "");
+			const std::string& device = "",
+			std::optional<std::int64_t> eventTimeUsec = std::nullopt);
 		actions::ActionResult QueueMidiInputEvent(TriggerInputDomain domain,
 			std::uint64_t rigRevision,
 			const midi::MidiEvent& event,
-			const base::Action& action);
+			const base::Action& action,
+			std::int64_t eventTimeUsec);
 		virtual void OnTick(Time curTime,
 			unsigned int samps,
 			const std::optional<io::UserConfig>& cfg,

@@ -21,6 +21,7 @@
 #include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
 #include "../midi/MidiQueue.h"
+#include "../midi/MidiTimestampMapper.h"
 
 namespace io
 {
@@ -176,10 +177,16 @@ namespace midi
 			{
 				MidiEvent Event;
 				std::uint64_t RigRevision = 0u;
+				std::int64_t EventSteadyMicros = 0;
+				std::int64_t CallbackArrivalMicros = 0;
+				double DriverDeltaSeconds = 0.0;
+				MidiTimestampSource TimestampSource = MidiTimestampSource::InitialArrival;
 			};
 			midi::MidiQueue<1024, RigMidiIngressEvent> Ingress;
 			midi::MidiQueue<1024, LiveMidiIngressEvent> LiveIngress;
 			MidiClockAnchorSnapshot LastClockAnchor;
+			MidiDriverTimestampMapper TimestampMapper;
+			std::uint64_t LastMappedSample = 0u;
 			std::uint32_t NextLiveSequence = 0u;
 			std::uint64_t LastDroppedCount = 0u;
 			std::atomic<float> PendingActivityPeak{ 0.0f };
@@ -215,6 +222,7 @@ namespace midi
 
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const midi::MidiEvent& event,
+			std::int64_t eventSteadyMicros,
 			const io::UserConfig& userConfig,
 			const audio::AudioStreamParams& audioParams,
 			const std::shared_ptr<const PublishedRigInputDispatch>& routes);

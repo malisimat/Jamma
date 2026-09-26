@@ -443,6 +443,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	}
 
 	const auto sampleRate = cfg.Audio.SampleRate;
+	std::cout << "[MIDI Timing] RtMidi WinMM deltas have 1 ms resolution; first event per device uses callback arrival."
+		<< std::endl;
 	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
 	std::uint8_t nextSlot = 0u;
 
@@ -463,25 +465,27 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 		auto endpoint = std::make_shared<MidiInputEndpoint>();
 		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
 		endpoint->Device = std::make_unique<midi::MidiDevice>();
+		endpoint->LastClockAnchor = initialAnchor;
 
 		auto opened = endpoint->Device->Open(
 			endpoint->ConfiguredName,
-			[endpoint, sampleRate, midiClockAnchor = &midiClockAnchor, notification = _liveMidiDispatchNotification](std::uint8_t status, std::uint8_t data1, std::uint8_t data2)
+			[endpoint, sampleRate, midiClockAnchor = &midiClockAnchor, notification = _liveMidiDispatchNotification](std::uint8_t status, std::uint8_t data1, std::uint8_t data2,
+				double deltaSeconds, std::int64_t callbackArrivalMicros)
 			{
 				const auto activityPeak = std::max(0.15f, static_cast<float>(data2) / 127.0f);
 				endpoint->PendingActivityPeak.store(activityPeak, std::memory_order_relaxed);
 
 				midi::MidiEvent ingress{};
-				const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now().time_since_epoch()).count();
+				const auto timestamp = endpoint->TimestampMapper.Map(deltaSeconds, callbackArrivalMicros);
 				const auto anchor = midi::ReadMidiClockAnchor(*midiClockAnchor, endpoint->LastClockAnchor);
 				endpoint->LastClockAnchor = anchor;
-				const auto mappedSample = midi::MapMidiTimestampToAudioSample(sampleRate,
-					anchor.Sample,
-					anchor.SteadyMicros,
-					nowMicros);
+				const auto mappedSample = anchor.SteadyMicros > 0
+					? midi::MapMidiTimestampToAudioSample(sampleRate,
+						anchor.Sample, anchor.SteadyMicros, timestamp.EventMicros)
+					: anchor.Sample;
+				endpoint->LastMappedSample = std::max(endpoint->LastMappedSample, mappedSample);
 
-				ingress.sampleOffset = static_cast<std::uint32_t>(mappedSample);
+				ingress.sampleOffset = static_cast<std::uint32_t>(endpoint->LastMappedSample);
 				const auto inputConfig = notification->InputConfig.load(std::memory_order_acquire);
 				// Keep trigger matching on the physical channel; derive the station copy below.
 				ingress.status = status;
@@ -489,7 +493,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 				ingress.data2 = data2;
 				ingress._pad = 0u;
 					const auto rigRevision = notification->RigRevision.load(std::memory_order_acquire);
-					endpoint->Ingress.Push({ ingress, rigRevision });
+					endpoint->Ingress.Push({ ingress, rigRevision, timestamp.EventMicros,
+						callbackArrivalMicros, deltaSeconds, timestamp.Source });
 
 				const auto liveEvent = DeriveStationEvent(ingress,
 					_LiveMidiConfigAffectsLive(inputConfig) ? _LiveMidiConfigForcedChannel(inputConfig) : 0u);
@@ -502,7 +507,6 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 		if (!opened)
 			continue;
 
-		endpoint->LastClockAnchor = initialAnchor;
 		endpoint->DeviceSlot = nextSlot++;
 		midiInputs->push_back(endpoint);
 	}
@@ -923,6 +927,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 	{
 		if (!input)
 			continue;
+		input->Device->DrainVerbosePackets(input->ConfiguredName);
 
 		while (input->Ingress.Pop(queued))
 		{
@@ -938,9 +943,34 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 					? ForcedChannelOverride() : 0u);
 
 			auto dispatch = _DispatchMidiTriggerEvent(input->DeviceSlot, triggerEvent,
+				queued.EventSteadyMicros,
 				userConfig, audioParams, dispatchState);
 			summary.Activated = summary.Activated || dispatch.Activated;
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
+			if (dispatch.Activated || dispatch.Ditched
+				|| queued.TimestampSource == MidiTimestampSource::InvalidDeltaFallback
+				|| queued.TimestampSource == MidiTimestampSource::DiscontinuityFallback)
+			{
+				const char* source = "driver-delta";
+				switch (queued.TimestampSource)
+				{
+				case MidiTimestampSource::InitialArrival: source = "initial-arrival"; break;
+				case MidiTimestampSource::InvalidDeltaFallback: source = "invalid-delta-fallback"; break;
+				case MidiTimestampSource::DiscontinuityFallback: source = "discontinuity-fallback"; break;
+				case MidiTimestampSource::DriverDelta: break;
+				}
+				const auto pumpAgeSamples = static_cast<std::int32_t>(
+					static_cast<std::uint32_t>(globalSampleNow) - ingress.sampleOffset);
+				std::cout << "[MIDI Timing] device=\"" << input->ConfiguredName
+					<< "\" source=" << source
+					<< " deltaSeconds=" << queued.DriverDeltaSeconds
+					<< " eventSteadyMicros=" << queued.EventSteadyMicros
+					<< " callbackArrivalMicros=" << queued.CallbackArrivalMicros
+					<< " callbackLagMicros=" << (queued.CallbackArrivalMicros - queued.EventSteadyMicros)
+					<< " eventSample=" << ingress.sampleOffset
+					<< " pumpSample=" << globalSampleNow
+					<< " pumpAgeSamples=" << pumpAgeSamples << '\n';
+			}
 
 			// Derive trigger and station events independently from the raw ingress event.
 			const auto msgType = ingress.MessageType();
@@ -1104,6 +1134,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 
 MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 	const midi::MidiEvent& event,
+	std::int64_t eventSteadyMicros,
 	const io::UserConfig& userConfig,
 	const audio::AudioStreamParams& audioParams,
 	const std::shared_ptr<const PublishedRigInputDispatch>& routes)
@@ -1123,7 +1154,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 			continue;
 
 		auto res = route.Trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB,
-			routes->Revision, event, triggerAction);
+			routes->Revision, event, triggerAction, eventSteadyMicros);
 		if (!res.IsEaten)
 			continue;
 

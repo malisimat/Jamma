@@ -355,16 +355,18 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 	unsigned int value,
 	unsigned int state,
 	const base::Action& action,
-	const std::string& device)
+	const std::string& device,
+	std::optional<std::int64_t> eventTimeUsec)
 {
 	auto enqueue = [&](TriggerControl control, std::uint16_t bindingIndex,
 		DualBinding::TestResult match)
 	{
-		const auto eventTimeUsec = std::chrono::duration_cast<std::chrono::microseconds>(
-			action.GetActionTime().time_since_epoch()).count();
+		const auto edgeTimeUsec = eventTimeUsec ? *eventTimeUsec
+			: std::chrono::duration_cast<std::chrono::microseconds>(
+				action.GetActionTime().time_since_epoch()).count();
 		const TriggerInputEdge edge{ rigRevision, bindingIndex, control,
 			match == DualBinding::MATCH_DOWN ? TRIGGER_EDGE_DOWN : TRIGGER_EDGE_UP,
-			eventTimeUsec };
+			edgeTimeUsec };
 		auto& queue = domain == TRIGGER_INPUT_UI ? _uiInputQueue : _jobInputQueue;
 		if (!queue.Push(edge))
 			_PublishInputFallback(domain, edge);
@@ -391,12 +393,14 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 ActionResult Trigger::QueueMidiInputEvent(TriggerInputDomain domain,
 	std::uint64_t rigRevision,
 	const midi::MidiEvent& event,
-	const base::Action& action)
+	const base::Action& action,
+	std::int64_t eventTimeUsec)
 {
 	unsigned int value = 0u, state = 0u;
 	if (!TryEncodeMidiEvent(event, value, state))
 		return ActionResult::NoAction();
-	return QueueInputEvent(domain, rigRevision, TRIGGER_MIDI, value, state, action);
+	return QueueInputEvent(domain, rigRevision, TRIGGER_MIDI, value, state, action,
+		"", eventTimeUsec);
 }
 
 void Trigger::OnTick(Time curTime,
