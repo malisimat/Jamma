@@ -208,7 +208,7 @@ namespace audio
 		if (snapshot->Graph.Revision <= _audioRigRevision)
 			return;
 
-		for (const auto& routeChange : snapshot->RetainedTriggerRouteChanges)
+		for (const auto& routeChange : snapshot->TriggerRouteUpdates)
 		{
 			if (routeChange.CandidateIndex < snapshot->Triggers.size())
 			{
@@ -237,7 +237,7 @@ namespace audio
 		const auto candidate = _rigTriggerQuiescenceCandidate.load(std::memory_order_acquire);
 		if (!candidate || candidate->Revision != candidateRevision)
 			return;
-		for (const auto& retired : candidate->RetiredTriggerChecks)
+		for (const auto& retired : candidate->TriggerReplacementChecks)
 		{
 			const auto& trigger = retired.AcceptedInstance;
 			if (trigger && !trigger->CanEditRouting())
@@ -246,7 +246,7 @@ namespace audio
 				return;
 			}
 		}
-		for (const auto& routeChange : candidate->RetainedTriggerRouteChanges)
+		for (const auto& routeChange : candidate->TriggerRouteUpdates)
 		{
 			const auto& trigger = routeChange.Instance;
 			if (trigger && !trigger->CanApplyCaptureRouting())

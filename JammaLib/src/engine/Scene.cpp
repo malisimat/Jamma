@@ -1160,7 +1160,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		{
 			if (!trigger)
 				continue;
-			auto res = trigger->QueueInputEvent(TriggerInputDomain::Ui,
+			auto res = trigger->QueueInputEvent(TRIGGER_INPUT_UI,
 				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
 				action.KeyChar, keyState, action, EmptyDevice);
 

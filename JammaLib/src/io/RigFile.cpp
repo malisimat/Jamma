@@ -34,7 +34,16 @@ std::optional<RigFile> RigFile::FromStream(std::stringstream ss)
 		return std::nullopt;
 
 	RigFile rig;
-	rig.Version = VERSION_V;
+	rig.Version = CurrentVersion;
+	auto version = rigParams.KeyValues.find("version");
+	if (version != rigParams.KeyValues.end())
+	{
+		if (version->second.index() != 4)
+			return std::nullopt;
+		rig.Version = std::get<std::string>(version->second);
+		if (rig.Version.empty())
+			return std::nullopt;
+	}
 	rig.Name = std::get<std::string>(rigParams.KeyValues["name"]);
 
 	auto gotUser = false;
@@ -161,7 +170,7 @@ bool RigFile::ToJsonStream(const RigFile& rig, std::stringstream& ss)
 		return out;
 	};
 
-	ss << "{" << key("name") << string(rig.Name) << "," << key("user") << "{";
+	ss << "{" << key("version") << string(rig.Version) << "," << key("name") << string(rig.Name) << "," << key("user") << "{";
 	const auto& user = rig.User;
 	ss << key("audio") << "{" << key("name") << string(user.Audio.Name)
 		<< "," << key("samplerate") << user.Audio.SampleRate

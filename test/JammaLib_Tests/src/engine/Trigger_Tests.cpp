@@ -1243,13 +1243,13 @@ TEST(Trigger, FullUiQueueKeepsLatestStateForEachActivateBinding)
 		ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action, 1u).IsEaten);
 	}
 	action.SetActionTime(OffsetTime(start, 62u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TriggerInputDomain::Ui, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
 		engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 63u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TriggerInputDomain::Ui, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
 		engine::TRIGGER_KEY, 70u, 0u, action).IsEaten);
 	action.SetActionTime(OffsetTime(start, 64u));
-	ASSERT_TRUE(trigger->QueueInputEvent(engine::TriggerInputDomain::Ui, 0u,
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
 		engine::TRIGGER_KEY, 71u, 1u, action).IsEaten);
 	ASSERT_EQ(2u, trigger->UiInputDropCount());
 

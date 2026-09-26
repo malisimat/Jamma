@@ -113,7 +113,7 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			retainedAcceptedIds.insert(fileTrigger.Id);
 			if (!_EquivalentCaptureRouting(fileTrigger, acceptedSnapshot->Rig.Triggers[acceptedIndex]) ||
 				stationIndex != acceptedSnapshot->Triggers[acceptedIndex].StationIndex)
-				snapshot->RetainedTriggerRouteChanges.push_back({ instance, triggerIndex });
+				snapshot->TriggerRouteUpdates.push_back({ instance, triggerIndex });
 		}
 		else
 		{
@@ -123,7 +123,7 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			if (hasAcceptedIdentity)
 			{
 				retainedAcceptedIds.insert(fileTrigger.Id);
-				snapshot->RetiredTriggerChecks.push_back(
+				snapshot->TriggerReplacementChecks.push_back(
 					{ acceptedSnapshot->Triggers[acceptedIndex].Instance });
 			}
 		}
@@ -154,7 +154,7 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 		for (const auto& acceptedTrigger : acceptedSnapshot->Triggers)
 		{
 			if (!retainedAcceptedIds.contains(acceptedTrigger.Id))
-				snapshot->RetiredTriggerChecks.push_back({ acceptedTrigger.Instance });
+				snapshot->TriggerReplacementChecks.push_back({ acceptedTrigger.Instance });
 		}
 	}
 

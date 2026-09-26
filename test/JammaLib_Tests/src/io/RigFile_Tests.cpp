@@ -196,7 +196,7 @@ TEST(RigFile, ParsesFile) {
 	auto rig = RigFile::FromStream(std::move(testStream));
 
 	ASSERT_TRUE(rig.has_value());
-	ASSERT_EQ(RigFile::VERSION_V, rig.value().Version);
+	ASSERT_EQ(RigFile::CurrentVersion, rig.value().Version);
 	ASSERT_EQ(0, rig.value().Name.compare("rig"));
 	
 	ASSERT_EQ(0, rig.value().User.Audio.Name.compare("HDMI"));

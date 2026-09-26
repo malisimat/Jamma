@@ -31,13 +31,15 @@ namespace engine
 		mutable std::shared_ptr<audio::AudioMixer> OverdubMixer;
 	};
 
-	struct RetainedTriggerRouteChange
+	// A reused Trigger that receives a capture-route update at the audio boundary.
+	struct TriggerRouteUpdate
 	{
 		std::shared_ptr<Trigger> Instance;
 		size_t CandidateIndex = 0u;
 	};
 
-	struct RetiredTriggerCheck
+	// An outgoing Trigger instance that must be idle before replacement.
+	struct TriggerReplacementCheck
 	{
 		std::shared_ptr<Trigger> AcceptedInstance;
 	};
@@ -71,13 +73,8 @@ namespace engine
 		io::RigFile Rig;
 		RoutingGraph Graph;
 		std::vector<RigSnapshotTrigger> Triggers;
-		// Indices of accepted-revision triggers that must be quiescent before this
-		// revision can replace them. Unchanged trigger instances are retained so a
-		// playing loop does not disable edits to unrelated routing.
-		std::vector<RetiredTriggerCheck> RetiredTriggerChecks;
-		// Reused trigger instances that receive a new capture route or station
-		// receiver. Their history is retained, but the current action must be idle.
-		std::vector<RetainedTriggerRouteChange> RetainedTriggerRouteChanges;
+		std::vector<TriggerReplacementCheck> TriggerReplacementChecks;
+		std::vector<TriggerRouteUpdate> TriggerRouteUpdates;
 		RigInputDispatch InputDispatch;
 	};
 }

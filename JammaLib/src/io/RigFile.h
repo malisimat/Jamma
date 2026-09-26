@@ -22,11 +22,7 @@ namespace io
 {
 	struct RigFile
 	{
-		enum Version
-		{
-			VERSION_V,
-			VERSION_LEGACY
-		};
+		static constexpr const char* CurrentVersion = "1.0";
 
 		enum MidiTriggerEvent
 		{
@@ -101,7 +97,9 @@ namespace io
 			static std::optional<Trigger> FromJson(Json::JsonPart json);
 		};
 
-		Version Version;
+		// Serialized as a semantic string so future readers can make compatible
+		// migrations without relying on enum ordinals.
+		std::string Version = CurrentVersion;
 		std::string Name;
 		UserConfig User;
 		std::vector<Trigger> Triggers;

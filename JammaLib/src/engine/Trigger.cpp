@@ -291,10 +291,10 @@ ActionResult Trigger::QueueExternalControlAction(bool isActivate,
 	const auto eventTimeUsec = std::chrono::duration_cast<std::chrono::microseconds>(
 		action.GetActionTime().time_since_epoch()).count();
 	const TriggerInputEdge edge{ rigRevision, _DirectBindingIndex,
-		isActivate ? TriggerControl::Activate : TriggerControl::Ditch,
-		isDown ? TriggerEdge::Down : TriggerEdge::Up, eventTimeUsec };
+		isActivate ? TRIGGER_CONTROL_ACTIVATE : TRIGGER_CONTROL_DITCH,
+		isDown ? TRIGGER_EDGE_DOWN : TRIGGER_EDGE_UP, eventTimeUsec };
 	if (!_uiInputQueue.Push(edge))
-		_PublishInputFallback(TriggerInputDomain::Ui, edge);
+		_PublishInputFallback(TRIGGER_INPUT_UI, edge);
 
 	return {
 		true,
@@ -320,9 +320,9 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 		const auto eventTimeUsec = std::chrono::duration_cast<std::chrono::microseconds>(
 			action.GetActionTime().time_since_epoch()).count();
 		const TriggerInputEdge edge{ rigRevision, bindingIndex, control,
-			match == DualBinding::MATCH_DOWN ? TriggerEdge::Down : TriggerEdge::Up,
+			match == DualBinding::MATCH_DOWN ? TRIGGER_EDGE_DOWN : TRIGGER_EDGE_UP,
 			eventTimeUsec };
-		auto& queue = domain == TriggerInputDomain::Ui ? _uiInputQueue : _jobInputQueue;
+		auto& queue = domain == TRIGGER_INPUT_UI ? _uiInputQueue : _jobInputQueue;
 		if (!queue.Push(edge))
 			_PublishInputFallback(domain, edge);
 		return ActionResult{ true, "", "",
@@ -334,13 +334,13 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 	{
 		const auto match = _activateBindings[i].Match(source, value, state, device);
 		if (match != DualBinding::MATCH_NONE)
-			return enqueue(TriggerControl::Activate, static_cast<std::uint16_t>(i), match);
+			return enqueue(TRIGGER_CONTROL_ACTIVATE, static_cast<std::uint16_t>(i), match);
 	}
 	for (std::size_t i = 0u; i < _ditchBindings.size() && i < _DirectBindingIndex; ++i)
 	{
 		const auto match = _ditchBindings[i].Match(source, value, state, device);
 		if (match != DualBinding::MATCH_NONE)
-			return enqueue(TriggerControl::Ditch, static_cast<std::uint16_t>(i), match);
+			return enqueue(TRIGGER_CONTROL_DITCH, static_cast<std::uint16_t>(i), match);
 	}
 	return ActionResult::NoAction();
 }
@@ -378,10 +378,10 @@ void Trigger::OnTick(Time curTime,
 		(TriggerState::TRIGSTATE_PUNCHEDIN == _state);
 	if (isRecording)
 	{
-		if (_pendingCompletion == StructuralCompletion::EndRecording ||
-			_pendingCompletion == StructuralCompletion::EndOverdub ||
-			_pendingCompletion == StructuralCompletion::Ditch ||
-			_pendingCompletion == StructuralCompletion::DitchOverdub)
+		if (_pendingCompletion == STRUCTURAL_END_RECORDING ||
+			_pendingCompletion == STRUCTURAL_END_OVERDUB ||
+			_pendingCompletion == STRUCTURAL_DITCH ||
+			_pendingCompletion == STRUCTURAL_DITCH_OVERDUB)
 			_pendingRecordSamps += samps;
 		else
 			_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
@@ -395,7 +395,7 @@ void Trigger::OnTick(Time curTime,
 
 	_FlushDelayedPunchActions(samps);
 
-	if (0 != _debounceTimeMs && _pendingCompletion == StructuralCompletion::None)
+	if (0 != _debounceTimeMs && _pendingCompletion == STRUCTURAL_NONE)
 	{
 		// Eventually flick to new state (if held long enough).
 		auto elapsedMs = Timer::GetElapsedSeconds(_lastActivateTime, curTime) * 1000.0;
@@ -438,7 +438,7 @@ bool Trigger::_CanEditRoutingAtAudioBoundary() const noexcept
 		_jobFallbackPublicationCount.load(std::memory_order_acquire) == _consumedJobFallbackPublicationCount &&
 		_delayedActionCount == 0u &&
 		_delayedPunchActionCount == 0u &&
-		_pendingCompletion == StructuralCompletion::None &&
+		_pendingCompletion == STRUCTURAL_NONE &&
 		_structuralCommands.Empty() && _structuralResults.Empty() &&
 		_jobStructuralActionsInFlight.load(std::memory_order_acquire) == 0u &&
 		_loopTakeHistorySize == 0u;
@@ -453,7 +453,7 @@ bool Trigger::_CanApplyCaptureRoutingAtAudioBoundary() const noexcept
 		_jobFallbackPublicationCount.load(std::memory_order_acquire) == _consumedJobFallbackPublicationCount &&
 		_delayedActionCount == 0u &&
 		_delayedPunchActionCount == 0u &&
-		_pendingCompletion == StructuralCompletion::None &&
+		_pendingCompletion == STRUCTURAL_NONE &&
 		_structuralCommands.Empty() && _structuralResults.Empty() &&
 		_jobStructuralActionsInFlight.load(std::memory_order_acquire) == 0u;
 }
@@ -462,14 +462,14 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params) noexcept
 {
-	const bool isActivate = edge.Control == TriggerControl::Activate;
-	const bool isDown = edge.Edge == TriggerEdge::Down;
+	const bool isActivate = edge.Control == TRIGGER_CONTROL_ACTIVATE;
+	const bool isDown = edge.Edge == TRIGGER_EDGE_DOWN;
 	auto applyStateMachine = [&]()
 	{
 		const auto priorState = _state;
 		const auto changed = StateMachine(isDown, isActivate, cfg, params);
 		if (changed && isActivate && isDown && priorState != _state &&
-			_pendingCompletion == StructuralCompletion::None)
+			_pendingCompletion == STRUCTURAL_NONE)
 			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
 		return changed;
 	};
@@ -512,7 +512,7 @@ void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
 	{
 		for (std::size_t consumed = 0u; consumed < (_InputQueueCapacity * 2u); ++consumed)
 		{
-			if (_pendingCompletion != StructuralCompletion::None)
+			if (_pendingCompletion != STRUCTURAL_NONE)
 				return;
 			TriggerInputEdge uiEdge, jobEdge, edge;
 			const bool hasUi = _uiInputQueue.Peek(uiEdge);
@@ -546,7 +546,7 @@ void Trigger::_ProcessQueuedInputActions(std::uint64_t rigRevision,
 	constexpr auto maxActions = (_InputQueueCapacity * 2u) + (_InputFallbackCount * 2u);
 	for (std::size_t consumed = 0u; consumed < maxActions; ++consumed)
 	{
-		if (_pendingCompletion != StructuralCompletion::None)
+		if (_pendingCompletion != STRUCTURAL_NONE)
 			break;
 		TriggerInputEdge uiEdge, jobEdge;
 		const bool hasUi = _uiInputQueue.Peek(uiEdge);
@@ -610,7 +610,7 @@ std::size_t Trigger::_InputFallbackIndex(const TriggerInputEdge& edge) noexcept
 		_InputFallbackBindingCapacity : static_cast<std::size_t>(edge.BindingIndex);
 	if (bindingIndex >= _InputFallbackBindingsPerControl)
 		return _InputFallbackCount;
-	const auto controlOffset = edge.Control == TriggerControl::Activate ?
+	const auto controlOffset = edge.Control == TRIGGER_CONTROL_ACTIVATE ?
 		0u : _InputFallbackBindingsPerControl;
 	return controlOffset + bindingIndex;
 }
@@ -621,9 +621,9 @@ void Trigger::_PublishInputFallback(TriggerInputDomain domain,
 	const auto index = _InputFallbackIndex(edge);
 	if (index >= _InputFallbackCount)
 		return;
-	auto& fallbacks = domain == TriggerInputDomain::Ui ? _uiInputFallbacks : _jobInputFallbacks;
+	auto& fallbacks = domain == TRIGGER_INPUT_UI ? _uiInputFallbacks : _jobInputFallbacks;
 	fallbacks[index].Publish(edge);
-	auto& publicationCount = domain == TriggerInputDomain::Ui ?
+	auto& publicationCount = domain == TRIGGER_INPUT_UI ?
 		_uiFallbackPublicationCount : _jobFallbackPublicationCount;
 	publicationCount.fetch_add(1u, std::memory_order_release);
 }
@@ -796,7 +796,7 @@ void Trigger::Reset()
 	_activeHistoryIndex.reset();
 	_delayedActionCount = 0u;
 	_delayedPunchActionCount = 0u;
-	_pendingCompletion = StructuralCompletion::None;
+	_pendingCompletion = STRUCTURAL_NONE;
 	_pendingSequence = 0u;
 	_pendingHistoryToken = 0u;
 	_pendingDitchDelayedActionCount = 0u;
@@ -907,7 +907,7 @@ bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionTyp
 		_structuralCommandDropCount.fetch_add(1u, std::memory_order_relaxed);
 		return false;
 	}
-	if (completion != StructuralCompletion::None)
+	if (completion != STRUCTURAL_NONE)
 	{
 		_pendingPriorState = _state;
 		_pendingPriorActiveIndex = _activeHistoryIndex;
@@ -1038,7 +1038,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 			}
 		}
 
-		if (command.Completion != StructuralCompletion::None)
+		if (command.Completion != STRUCTURAL_NONE)
 		{
 			StructuralResult result;
 			result.Sequence = command.Sequence;
@@ -1070,14 +1070,14 @@ void Trigger::_EraseHistory(std::size_t index) noexcept
 
 void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 {
-	if (result.Completion == StructuralCompletion::None ||
+	if (result.Completion == STRUCTURAL_NONE ||
 		result.Sequence != _pendingSequence || result.Completion != _pendingCompletion)
 		return;
 
 	switch (result.Completion)
 	{
-	case StructuralCompletion::StartRecording:
-	case StructuralCompletion::StartOverdub:
+	case STRUCTURAL_START_RECORDING:
+	case STRUCTURAL_START_OVERDUB:
 		if (result.IsEaten && _loopTakeHistorySize < _HistoryCapacity)
 		{
 			auto& take = _loopTakeHistory[_loopTakeHistorySize];
@@ -1086,7 +1086,7 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			take.SourceTake = result.SourceTake;
 			take.TargetTake = result.TargetTake;
 			_activeHistoryIndex = _loopTakeHistorySize++;
-			_state = result.Completion == StructuralCompletion::StartRecording ?
+			_state = result.Completion == STRUCTURAL_START_RECORDING ?
 				TRIGSTATE_RECORDING : TRIGSTATE_OVERDUBBING;
 			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
 		}
@@ -1096,8 +1096,8 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			_activeHistoryIndex.reset();
 		}
 		break;
-	case StructuralCompletion::EndRecording:
-	case StructuralCompletion::EndOverdub:
+	case STRUCTURAL_END_RECORDING:
+	case STRUCTURAL_END_OVERDUB:
 		if (result.IsEaten)
 		{
 			_state = TRIGSTATE_DEFAULT;
@@ -1111,8 +1111,8 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 			_recordSampCount.fetch_add(_pendingRecordSamps, std::memory_order_relaxed);
 		}
 		break;
-	case StructuralCompletion::Ditch:
-	case StructuralCompletion::DitchOverdub:
+	case STRUCTURAL_DITCH:
+	case STRUCTURAL_DITCH_OVERDUB:
 		if (result.DitchResult == actions::DitchDisposition::Removed ||
 			result.DitchResult == actions::DitchDisposition::AlreadyAbsent)
 		{
@@ -1155,7 +1155,7 @@ void Trigger::_ApplyStructuralResult(const StructuralResult& result) noexcept
 	default:
 		break;
 	}
-	_pendingCompletion = StructuralCompletion::None;
+	_pendingCompletion = STRUCTURAL_NONE;
 	_pendingSequence = 0u;
 	_pendingHistoryToken = 0u;
 	_pendingRecordSamps = 0u;
@@ -1438,7 +1438,7 @@ void Trigger::StartRecording(const std::optional<io::UserConfig>& cfg,
 		auto historyToken = _nextHistoryToken++;
 		if (historyToken == 0u) historyToken = _nextHistoryToken++;
 		_QueueStructuralCommand(TriggerAction::TRIGGER_REC_START,
-			StructuralCompletion::StartRecording, historyToken, 0u);
+			STRUCTURAL_START_RECORDING, historyToken, 0u);
 	}
 }
 
@@ -1449,7 +1449,7 @@ void Trigger::EndRecording(const std::optional<io::UserConfig>& cfg,
 	(void)params;
 	if (_activeHistoryIndex && *_activeHistoryIndex < _loopTakeHistorySize)
 		_QueueStructuralCommand(TriggerAction::TRIGGER_REC_END,
-			StructuralCompletion::EndRecording,
+			STRUCTURAL_END_RECORDING,
 			_loopTakeHistory[*_activeHistoryIndex].Token, _recordSampCount);
 }
 
@@ -1464,7 +1464,7 @@ void Trigger::Ditch(const std::optional<io::UserConfig>& cfg,
 
 	if (historyIndex && *historyIndex < _loopTakeHistorySize &&
 		_QueueStructuralCommand(TriggerAction::TRIGGER_DITCH,
-			StructuralCompletion::Ditch,
+			STRUCTURAL_DITCH,
 			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
 		_pendingDitchDelayedActionCount = _delayedActionCount;
@@ -1494,7 +1494,7 @@ void Trigger::StartOverdub(const std::optional<io::UserConfig>& cfg,
 		auto historyToken = _nextHistoryToken++;
 		if (historyToken == 0u) historyToken = _nextHistoryToken++;
 		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_START,
-			StructuralCompletion::StartOverdub, historyToken, 0u);
+			STRUCTURAL_START_OVERDUB, historyToken, 0u);
 	}
 }
 
@@ -1505,7 +1505,7 @@ void Trigger::EndOverdub(const std::optional<io::UserConfig>& cfg,
 	(void)params;
 	if (_activeHistoryIndex && *_activeHistoryIndex < _loopTakeHistorySize)
 		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_END,
-			StructuralCompletion::EndOverdub,
+			STRUCTURAL_END_OVERDUB,
 			_loopTakeHistory[*_activeHistoryIndex].Token, _recordSampCount);
 }
 
@@ -1518,7 +1518,7 @@ void Trigger::DitchOverdub(const std::optional<io::UserConfig>& cfg,
 
 	if (historyIndex && *historyIndex < _loopTakeHistorySize &&
 		_QueueStructuralCommand(TriggerAction::TRIGGER_OVERDUB_DITCH,
-			StructuralCompletion::DitchOverdub,
+			STRUCTURAL_DITCH_OVERDUB,
 			_loopTakeHistory[*historyIndex].Token, _recordSampCount))
 	{
 		_pendingDitchDelayedActionCount = _delayedActionCount;
@@ -1542,7 +1542,7 @@ bool Trigger::StartPunchIn(const std::optional<io::UserConfig>& cfg,
 		cfg.value().Audio.NumChannelsIn > 0u;
 	const auto hasTargetMidi = !_midiInputDevices.empty();
 	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_START,
-		StructuralCompletion::None, history.Token, _recordSampCount,
+		STRUCTURAL_NONE, history.Token, _recordSampCount,
 		hasTargetMidi, false, false, hasTargetMidi))
 		return false;
 
@@ -1582,7 +1582,7 @@ bool Trigger::EndPunchIn(const std::optional<io::UserConfig>& cfg,
 		cfg.value().Audio.NumChannelsIn > 0u;
 	const auto hasTargetMidi = !_midiInputDevices.empty();
 	if (!_QueueStructuralCommand(TriggerAction::TRIGGER_PUNCHIN_END,
-		StructuralCompletion::None, history.Token, _recordSampCount,
+		STRUCTURAL_NONE, history.Token, _recordSampCount,
 		hasTargetMidi, false, false, hasTargetMidi))
 		return false;
 

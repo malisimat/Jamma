@@ -184,9 +184,9 @@ TEST_F(RigSnapshotTest, CaptureAndStationEditsReuseTriggerAndStageNewMidiDispatc
 	const auto staged = coordinator.Quiescing();
 	ASSERT_TRUE(staged);
 	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
-	EXPECT_TRUE(staged->RetiredTriggerChecks.empty());
-	ASSERT_EQ(1u, staged->RetainedTriggerRouteChanges.size());
-	EXPECT_EQ(0u, staged->RetainedTriggerRouteChanges[0].CandidateIndex);
+	EXPECT_TRUE(staged->TriggerReplacementChecks.empty());
+	ASSERT_EQ(1u, staged->TriggerRouteUpdates.size());
+	EXPECT_EQ(0u, staged->TriggerRouteUpdates[0].CandidateIndex);
 	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), staged->Triggers[0].InputChannels);
 	EXPECT_EQ(secondStation, staged->Triggers[0].Receiver);
 	ASSERT_EQ(2u, staged->InputDispatch.LiveMidi.size());
@@ -217,7 +217,7 @@ TEST_F(RigSnapshotTest, ReorderPreservesStableTriggerInstancesAndDisplayOrder)
 	EXPECT_EQ("first-id", staged->Triggers[1].Id);
 	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[0].Instance);
 	EXPECT_EQ(accepted->Triggers[0].Instance, staged->Triggers[1].Instance);
-	EXPECT_TRUE(staged->RetiredTriggerChecks.empty());
+	EXPECT_TRUE(staged->TriggerReplacementChecks.empty());
 }
 
 TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
@@ -240,8 +240,8 @@ TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 	ASSERT_TRUE(staged);
 	ASSERT_EQ(1u, staged->Triggers.size());
 	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[0].Instance);
-	ASSERT_EQ(1u, staged->RetiredTriggerChecks.size());
-	EXPECT_EQ(accepted->Triggers[0].Instance, staged->RetiredTriggerChecks[0].AcceptedInstance);
+	ASSERT_EQ(1u, staged->TriggerReplacementChecks.size());
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->TriggerReplacementChecks[0].AcceptedInstance);
 	ASSERT_EQ(engine::RigCoordinator::EditResult::QuiescenceRejected,
 		coordinator.CompleteQuiescence(staged->Revision, false, [](const io::RigFile&) { return true; }));
 
@@ -252,8 +252,8 @@ TEST_F(RigSnapshotTest, DeletionAndActivationReplacementAreClassifiedByStableId)
 	ASSERT_TRUE(staged);
 	EXPECT_NE(accepted->Triggers[0].Instance, staged->Triggers[0].Instance);
 	EXPECT_EQ(accepted->Triggers[1].Instance, staged->Triggers[1].Instance);
-	ASSERT_EQ(1u, staged->RetiredTriggerChecks.size());
-	EXPECT_EQ(accepted->Triggers[0].Instance, staged->RetiredTriggerChecks[0].AcceptedInstance);
+	ASSERT_EQ(1u, staged->TriggerReplacementChecks.size());
+	EXPECT_EQ(accepted->Triggers[0].Instance, staged->TriggerReplacementChecks[0].AcceptedInstance);
 }
 
 TEST_F(RigSnapshotTest, DuplicateTriggerIdsFailInitialAndCandidateValidation)
@@ -537,7 +537,7 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerQuiescence)
 	ASSERT_TRUE(snapshot->Triggers[0].Instance->QueueExternalControlAction(true, true, action).IsEaten);
 	auto replacement = std::make_shared<engine::RigSnapshot>();
 	replacement->Revision = 42u;
-	replacement->RetiredTriggerChecks = { { snapshot->Triggers[0].Instance } };
+	replacement->TriggerReplacementChecks = { { snapshot->Triggers[0].Instance } };
 	host.RequestRigTriggerQuiescence(42u, snapshot, replacement);
 	audio::RigAudioBoundaryTestAccess::PublishQuiescence(host);
 	EXPECT_EQ(0u, host.QuiescedRigRevision());

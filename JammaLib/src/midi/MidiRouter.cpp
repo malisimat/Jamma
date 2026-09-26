@@ -1050,7 +1050,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpSerial(const std::vector<std:
 		for (const auto& trigger : dispatch->Snapshot->InputDispatch.SerialTriggers)
 		{
 			if (!trigger) continue;
-			auto res = trigger->QueueInputEvent(engine::TriggerInputDomain::Job,
+			auto res = trigger->QueueInputEvent(engine::TRIGGER_INPUT_JOB,
 				dispatch->Revision,
 				engine::TriggerSource::TRIGGER_SERIAL,
 				ev.ButtonIndex,
@@ -1101,7 +1101,7 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 		if ((route.DeviceSlot != deviceSlot) || !route.Trigger)
 			continue;
 
-		auto res = route.Trigger->QueueMidiInputEvent(engine::TriggerInputDomain::Job,
+		auto res = route.Trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB,
 			routes->Revision, event, triggerAction);
 		if (!res.IsEaten)
 			continue;

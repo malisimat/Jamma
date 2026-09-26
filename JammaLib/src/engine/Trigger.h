@@ -49,16 +49,16 @@ namespace engine
 		TRIGGER_SERIAL
 	};
 
-	enum class TriggerInputDomain : std::uint8_t { Ui, Job };
-	enum class TriggerControl : std::uint8_t { Activate, Ditch };
-	enum class TriggerEdge : std::uint8_t { Down, Up };
+	enum TriggerInputDomain : std::uint8_t { TRIGGER_INPUT_UI, TRIGGER_INPUT_JOB };
+	enum TriggerControl : std::uint8_t { TRIGGER_CONTROL_ACTIVATE, TRIGGER_CONTROL_DITCH };
+	enum TriggerEdge : std::uint8_t { TRIGGER_EDGE_DOWN, TRIGGER_EDGE_UP };
 
 	struct TriggerInputEdge
 	{
 		std::uint64_t RigRevision = 0u;
 		std::uint16_t BindingIndex = 0u;
-		TriggerControl Control = TriggerControl::Activate;
-		TriggerEdge Edge = TriggerEdge::Up;
+		TriggerControl Control = TRIGGER_CONTROL_ACTIVATE;
+		TriggerEdge Edge = TRIGGER_EDGE_UP;
 		std::int64_t EventTimeUsec = 0;
 	};
 
@@ -427,21 +427,21 @@ namespace engine
 		unsigned int CalcInputAlignedDelaySamps(const std::optional<io::UserConfig>& cfg,
 			const std::optional<audio::AudioStreamParams>& params) const;
 		unsigned int CalcPunchStateDelaySamps(const std::optional<io::UserConfig>& cfg) const;
-		enum class StructuralCompletion : std::uint8_t
+		enum StructuralCompletion : std::uint8_t
 		{
-			None,
-			StartRecording,
-			EndRecording,
-			Ditch,
-			StartOverdub,
-			EndOverdub,
-			DitchOverdub
+			STRUCTURAL_NONE,
+			STRUCTURAL_START_RECORDING,
+			STRUCTURAL_END_RECORDING,
+			STRUCTURAL_DITCH,
+			STRUCTURAL_START_OVERDUB,
+			STRUCTURAL_END_OVERDUB,
+			STRUCTURAL_DITCH_OVERDUB
 		};
 		struct StructuralCommand
 		{
 			std::uint64_t Sequence = 0u;
 			actions::TriggerAction::TriggerActionType ActionType = actions::TriggerAction::TRIGGER_REC_START;
-			StructuralCompletion Completion = StructuralCompletion::None;
+			StructuralCompletion Completion = STRUCTURAL_NONE;
 			std::uint64_t HistoryToken = 0u;
 			unsigned long SampleCount = 0u;
 			bool ApplyToTargetTake = true;
@@ -452,7 +452,7 @@ namespace engine
 		struct StructuralResult
 		{
 			std::uint64_t Sequence = 0u;
-			StructuralCompletion Completion = StructuralCompletion::None;
+			StructuralCompletion Completion = STRUCTURAL_NONE;
 			bool IsEaten = false;
 			actions::DitchDisposition DitchResult = actions::DitchDisposition::NotApplicable;
 			std::uint64_t HistoryToken = 0u;
@@ -576,7 +576,7 @@ namespace engine
 		midi::MidiQueue<_StructuralQueueCapacity, StructuralResult> _structuralResults;
 		std::atomic<std::uint32_t> _jobStructuralActionsInFlight{ 0u };
 		std::atomic<std::uint64_t> _structuralCommandDropCount{ 0u };
-		StructuralCompletion _pendingCompletion = StructuralCompletion::None;
+		StructuralCompletion _pendingCompletion = STRUCTURAL_NONE;
 		std::uint64_t _pendingSequence = 0u;
 		std::uint64_t _pendingHistoryToken = 0u;
 		TriggerState _pendingPriorState = TRIGSTATE_DEFAULT;
