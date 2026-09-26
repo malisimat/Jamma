@@ -1,5 +1,8 @@
 {
     "testMate.cpp.test.executables": "test/**/JammaLib_Tests.exe",
     "testMate.cpp.discovery.loadOnStartup": true,
-    "testMate.cpp.log.logpanel": true
+    "testMate.cpp.log.logpanel": true,
+    "gtest-adapter.debugConfig": [
+        "Launch Jamma (Debug x64)"
+    ]
 }
