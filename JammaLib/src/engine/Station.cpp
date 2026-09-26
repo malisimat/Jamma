@@ -147,8 +147,10 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
 		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
-			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path << std::endl;
-			return std::nullopt;
+			// A missing plug-in must not prevent the saved station, or its rig target,
+			// from being restored. The station remains usable without this processor.
+			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
+				<< "; continuing without it." << std::endl;
 		}
 	}
 
@@ -222,8 +224,8 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			if (!plugin || !midiLoops[binding.MidiStreamIndex]
 				|| !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(binding.LaneIndex, plugin.get()))
 			{
-				std::cout << "Load: unresolved automation target in station " << stationStruct.Name << std::endl;
-				return std::nullopt;
+				std::cout << "[LOAD] Station '" << stationStruct.Name
+					<< "': skipping unresolved automation target." << std::endl;
 			}
 		}
 		take->ClearPendingAutomationBindings();

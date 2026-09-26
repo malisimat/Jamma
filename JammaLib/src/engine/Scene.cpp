@@ -530,7 +530,10 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
 	std::vector<std::shared_ptr<Station>> initialStations;
 	initialStations.reserve(jamStruct.Stations.size());
+	std::vector<io::JamFile::Station> initialStationDescriptors;
+	initialStationDescriptors.reserve(jamStruct.Stations.size());
 
+	size_t stationDescriptorIndex = 0u;
 	for (auto& stationStruct : jamStruct.Stations)
 	{
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
@@ -543,19 +546,20 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			}
 
 			initialStations.push_back(station.value());
+			initialStationDescriptors.push_back(stationStruct);
+			stationParams.Index++;
+			stationParams.Position += { 600, 0 };
+			stationParams.ModelPosition += { 600, 0 };
 		}
 		else
-			std::cout << "[LOAD] Station descriptor " << stationParams.Index << " '" << stationStruct.Name
-				<< "' was not constructed." << std::endl;
-
-		stationParams.Index++;
-		stationParams.Position += { 600, 0 };
-		stationParams.ModelPosition += { 600, 0 };
+			std::cout << "[LOAD] Station descriptor " << stationDescriptorIndex << " '" << stationStruct.Name
+				<< "' was not constructed; continuing with the remaining stations." << std::endl;
+		stationDescriptorIndex++;
 	}
 	std::cout << "[LOAD] Constructed " << initialStations.size() << " of " << jamStruct.Stations.size()
 		<< " station descriptor(s)." << std::endl;
 	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
-		jamStruct.Stations,
+		initialStationDescriptors,
 		initialStations,
 		rigStruct.User.Audio.NumChannelsIn,
 		hudMidiInputs,
@@ -568,6 +572,16 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	const auto acceptedRig = scene->_rigCoordinator.Accepted();
 	if (!acceptedRig)
 		return std::nullopt;
+	for (const auto& trigger : acceptedRig->Graph.Triggers)
+	{
+		const auto target = trigger.TargetName.value_or("<legacy target>");
+		if (trigger.Reason == io::RigFileRouting::Warning::TargetMissing)
+			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
+				<< "' was not found; leaving it unconnected." << std::endl;
+		else if (trigger.Reason == io::RigFileRouting::Warning::TargetAmbiguous)
+			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
+				<< "' is ambiguous; leaving it unconnected." << std::endl;
+	}
 	if (initialStations.empty())
 	{
 		std::cout << "Load: no constructible stations" << std::endl;
