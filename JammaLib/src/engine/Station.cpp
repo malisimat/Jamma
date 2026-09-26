@@ -256,6 +256,13 @@ void Station::Draw3d(base::DrawContext& ctx,
 	glCtx.PopMvp();
 }
 
+utils::Position3d Station::TopCapModelPosition() const
+{
+	auto position = ModelPosition();
+	position.Y += static_cast<float>(ModelScale() * _StationModelYOffset);
+	return position;
+}
+
 utils::Position2d Station::Position() const
 {
 	return _modelScreenPos;

@@ -12,6 +12,48 @@ using actions::KeyAction;
 using actions::TriggerAction;
 using audio::AudioMixer;
 
+namespace engine
+{
+	class PreparedTriggerBounceWriter final : public base::BounceWriter
+	{
+	public:
+		explicit PreparedTriggerBounceWriter(std::shared_ptr<AudioMixer> mixer) :
+			_mixer(std::move(mixer))
+		{
+		}
+
+		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
+			const float* srcBuf,
+			unsigned int numSamps,
+			unsigned int destChannel) override
+		{
+			Write(_mixer, dest, srcBuf, numSamps, destChannel);
+		}
+
+		static void Write(const std::shared_ptr<AudioMixer>& mixer,
+			const std::shared_ptr<base::MultiAudioSink>& dest,
+			const float* srcBuf,
+			unsigned int numSamps,
+			unsigned int destChannel)
+		{
+			if (!dest || !srcBuf || !mixer)
+				return;
+			base::AudioWriteRequest request;
+			request.samples = srcBuf;
+			request.numSamps = numSamps;
+			request.stride = 1;
+			request.fadeCurrent = 1.0f - static_cast<float>(mixer->Level());
+			request.fadeNew = static_cast<float>(mixer->Level());
+			request.source = base::Audible::AUDIOSOURCE_BOUNCE;
+			dest->OnBlockWriteChannel(destChannel, request, 0);
+			mixer->Offset(numSamps);
+		}
+
+	private:
+		std::shared_ptr<AudioMixer> _mixer;
+	};
+}
+
 unsigned int Trigger::EncodeMidiBindingValue(io::RigFile::MidiTriggerEvent kind,
 	unsigned int channel,
 	unsigned int id)
@@ -88,6 +130,7 @@ Trigger::Trigger(TriggerParams trigParams) :
 		throw std::invalid_argument("Trigger binding count exceeds fixed ingress capacity");
 	_overdubMixer = std::make_shared<AudioMixer>(
 		GetOverdubMixerParams(trigParams.InputChannels));
+	_overdubWriter = CreateBounceWriter(_overdubMixer);
 	_publishedTakeHistory.store(std::make_shared<const std::vector<TriggerTake>>(),
 		std::memory_order_release);
 }
@@ -423,6 +466,12 @@ bool Trigger::CanEditRouting() const noexcept
 		_uiInputQueue.Empty() && _jobInputQueue.Empty();
 }
 
+std::shared_ptr<base::BounceWriter> Trigger::CreateBounceWriter(
+	const std::shared_ptr<audio::AudioMixer>& mixer)
+{
+	return std::make_shared<PreparedTriggerBounceWriter>(mixer);
+}
+
 bool Trigger::CanApplyCaptureRouting() const noexcept
 {
 	return _publishedCanApplyCaptureRouting.load(std::memory_order_acquire) &&
@@ -743,13 +792,15 @@ void Trigger::ApplyCaptureRouting(std::shared_ptr<base::ActionReceiver>& receive
 	std::vector<unsigned int>& inputChannels,
 	std::vector<std::string>& midiInputDevices,
 	io::RigFile::Trigger::MidiInputMode& midiInputMode,
-	std::shared_ptr<audio::AudioMixer>& overdubMixer) noexcept
+	std::shared_ptr<audio::AudioMixer>& overdubMixer,
+	std::shared_ptr<base::BounceWriter>& overdubWriter) noexcept
 {
 	_receiver.swap(receiver);
 	_inputChannels.swap(inputChannels);
 	_midiInputDevices.swap(midiInputDevices);
 	std::swap(_midiInputMode, midiInputMode);
 	_overdubMixer.swap(overdubMixer);
+	_overdubWriter.swap(overdubWriter);
 }
 
 TriggerState Trigger::GetState() const
@@ -856,17 +907,7 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	}
 	_delayedActionCount = write;
 
-	if (!dest || !srcBuf || !_overdubMixer)
-		return;
-	base::AudioWriteRequest request;
-	request.samples = srcBuf;
-	request.numSamps = numSamps;
-	request.stride = 1;
-	request.fadeCurrent = 1.0f - static_cast<float>(_overdubMixer->Level());
-	request.fadeNew = static_cast<float>(_overdubMixer->Level());
-	request.source = base::Audible::AUDIOSOURCE_BOUNCE;
-	dest->OnBlockWriteChannel(destChannel, request, 0);
-	_overdubMixer->Offset(numSamps);
+	PreparedTriggerBounceWriter::Write(_overdubMixer, dest, srcBuf, numSamps, destChannel);
 }
 
 std::optional<std::size_t> Trigger::_FindJobHistory(std::uint64_t token) const noexcept
@@ -989,7 +1030,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 				action.InputChannels = _inputChannels;
 				action.MidiInputDevices = _midiInputDevices;
 				if (command.ActionType == TriggerAction::TRIGGER_OVERDUB_START)
-					action.OverdubWriter = std::static_pointer_cast<base::BounceWriter>(shared_from_this());
+					action.OverdubWriter = _overdubWriter;
 			}
 			if (cfg) action.SetUserConfig(*cfg);
 			if (params) action.SetAudioParams(*params);

@@ -215,7 +215,7 @@ namespace audio
 				auto& trigger = snapshot->Triggers[routeChange.CandidateIndex];
 				trigger.Instance->ApplyCaptureRouting(trigger.Receiver, trigger.InputChannels,
 					trigger.MidiInputDevices, trigger.MidiInputMode,
-					trigger.OverdubMixer);
+					trigger.OverdubMixer, trigger.OverdubWriter);
 			}
 		}
 

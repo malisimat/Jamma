@@ -2130,7 +2130,7 @@ void Scene::_UpdateHudStationAnchors()
 	for (size_t stationIndex = 0u; stationIndex < _stations.size(); ++stationIndex)
 	{
 		const auto& station = _stations[stationIndex];
-		auto modelPos = station->ModelPosition();
+		const auto modelPos = station->TopCapModelPosition();
 		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
 		utils::Position2d screenPos{ -9999, -9999 };
 		if (std::abs(clip.w) > 1e-6f)

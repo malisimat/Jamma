@@ -102,6 +102,9 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		// The deck mesh is centred on the station's model position; expose its top
+		// cap for scene overlays that need to attach to the rendered cylinder.
+		utils::Position3d TopCapModelPosition() const;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
