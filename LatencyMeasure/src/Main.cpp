@@ -8,7 +8,7 @@
 // the roundtrip hardware latency.
 //
 // Usage: LatencyMeasure.exe [bufferSize]
-//   bufferSize  ASIO buffer size in samples (default 512)
+//   bufferSize  overrides APPDATA/Jamma/default.rig; default is 512
 //
 // Setup: patch output channel 0 to input channel 0 on the
 //        interface with a physical cable before running.
@@ -17,6 +17,9 @@
 
 #include <iostream>
 #include <iomanip>
+#include <fstream>
+#include <cstdlib>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -29,6 +32,32 @@
 #include <chrono>
 
 #include "rtaudio/RtAudio.h"
+#include "../../JammaLib/src/io/Json.h"
+
+static std::optional<unsigned int> TryReadRigBufferSize()
+{
+    char* appData = nullptr;
+    size_t appDataSize = 0u;
+    if (_dupenv_s(&appData, &appDataSize, "APPDATA") || !appData)
+    {
+        std::free(appData);
+        return std::nullopt;
+    }
+    const auto rigPath = std::string(appData) + "\\Jamma\\default.rig";
+    std::free(appData);
+    std::ifstream file(rigPath);
+    std::stringstream json; json << file.rdbuf();
+    auto root = io::Json::FromStream(std::move(json));
+    const auto rootPart = root ? std::get_if<io::Json::JsonPart>(&*root) : nullptr;
+    const auto findPart = [](const io::Json::JsonPart* part, const char* key) -> const io::Json::JsonPart* {
+        if (!part) return nullptr;
+        auto item = part->KeyValues.find(key);
+        return item == part->KeyValues.end() ? nullptr : std::get_if<io::Json::JsonPart>(&item->second);
+    };
+    const auto audioPart = findPart(findPart(rootPart, "user"), "audio");
+    auto size = audioPart ? io::Json::GetUnsigned(*audioPart, "bufsize") : std::nullopt;
+    return size && *size > 0u ? size : std::nullopt;
+}
 
 // ============================================================
 // MLS configuration
@@ -206,7 +235,7 @@ static CorrResult CrossCorrelate(
 // ============================================================
 int main(int argc, char* argv[])
 {
-    unsigned int bufSize = 512;
+    unsigned int bufSize = TryReadRigBufferSize().value_or(512u);
     if (argc >= 2)
     {
         try { bufSize = (unsigned int)std::stoul(argv[1]); }
