@@ -26,7 +26,9 @@ namespace io
 		IoInputSubsystem(io::UserConfig userConfig, io::LoggingConfig loggingConfig);
 		~IoInputSubsystem();
 
-		void Init(midi::MidiClockAnchor& midiClockAnchor);
+		midi::MidiConnectionResult Init(midi::MidiClockAnchor& midiClockAnchor,
+			unsigned int actualSampleRate, const midi::MidiInputInventory* inventory = nullptr,
+			bool generatedRig = false);
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);

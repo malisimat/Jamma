@@ -19,6 +19,27 @@ namespace midi
 		unsigned int DeviceId = 0u;
 		std::string Name;
 	};
+	struct MidiInputInventory
+	{
+		std::vector<MidiInputDeviceInfo> Devices;
+		std::string Error;
+	};
+	enum class MidiConnectionStatus { Disabled, Missing, Ambiguous, Failed, Connected };
+	struct MidiConnectionAttempt
+	{
+		std::string RequestedName;
+		std::string ConnectedName;
+		unsigned int DeviceId = 0u;
+		MidiConnectionStatus Status = MidiConnectionStatus::Missing;
+		bool DuplicateName = false;
+		std::string Error;
+	};
+	struct MidiConnectionResult
+	{
+		MidiInputInventory Inventory;
+		std::vector<MidiConnectionAttempt> Attempts;
+		std::vector<MidiInputDeviceInfo> Connected;
+	};
 
 	class MidiDevice
 	{
@@ -36,9 +57,20 @@ namespace midi
 		MidiDevice& operator=(const MidiDevice&) = delete;
 
 		static std::vector<MidiInputDeviceInfo> EnumerateInputDevices();
+		static MidiInputInventory InventoryInputDevices();
+		static const MidiInputDeviceInfo* FindExactInput(const std::vector<MidiInputDeviceInfo>& devices,
+			const std::string& name) noexcept;
+		static const MidiInputDeviceInfo* SelectUnclaimedExactInput(
+			const std::vector<MidiInputDeviceInfo>& devices, const std::string& name,
+			const std::vector<unsigned int>& claimedIds, bool& ambiguous) noexcept;
+		static const MidiInputDeviceInfo* SelectStartupInput(
+			const std::vector<MidiInputDeviceInfo>& devices, const std::string& name,
+			const std::vector<unsigned int>& claimedIds, size_t requestIndex,
+			bool generatedRig, bool& ambiguous) noexcept;
+		bool OpenPort(const MidiInputDeviceInfo& port, MidiMessageCallback callback,
+			std::string& error, bool loggingVerbose = false);
 
-		// Opens and starts a MIDI input stream. If preferredDeviceName is empty, or
-		// no exact/substring match is found, the first discovered input is used.
+		// Opens an exact named input; empty and missing names never fall back.
 		// loggingVerbose: capture bounded packet details for the MIDI pump to print.
 		bool Open(const std::string& preferredDeviceName,
 			MidiMessageCallback callback,
@@ -52,7 +84,6 @@ namespace midi
 		unsigned int DeviceId() const noexcept { return _deviceId; }
 
 	private:
-		static std::string _ToLower(std::string str);
 		static void _LogMidiMessageDetail(std::ostream& out,
 			const unsigned char* message, std::size_t size);
 		static void _RtMidiCallback(double deltatime,

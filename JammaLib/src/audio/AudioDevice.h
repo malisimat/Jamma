@@ -28,6 +28,55 @@ namespace audio
 		void PrintParams();
 	};
 
+	struct AsioDeviceInfo
+	{
+		unsigned int Id = 0;
+		std::string Name;
+		bool Probed = false;
+		std::string ProbeError;
+		unsigned int InputChannels = 0;
+		unsigned int OutputChannels = 0;
+		std::vector<unsigned int> SampleRates;
+		unsigned int PreferredSampleRate = 0;
+		bool DefaultInput = false;
+		bool DefaultOutput = false;
+	};
+
+	struct AsioInventory
+	{
+		std::vector<AsioDeviceInfo> Devices;
+		std::optional<unsigned int> DefaultInputId;
+		std::optional<unsigned int> DefaultOutputId;
+		std::string EnumerationError;
+	};
+
+	struct AsioAttempt
+	{
+		unsigned int DeviceId = 0;
+		std::string Name;
+		unsigned int InputChannels = 0;
+		unsigned int OutputChannels = 0;
+		unsigned int SampleRate = 0;
+		unsigned int BufferSize = 0;
+		unsigned int NumBuffers = 0;
+		bool Opened = false;
+		bool Started = false;
+		std::string Error;
+	};
+
+	struct AsioOpenReport
+	{
+		std::vector<AsioAttempt> Attempts;
+		std::optional<AudioStreamParams> StartedParams;
+	};
+
+	struct AsioConfiguration
+	{
+		unsigned int InputChannels;
+		unsigned int OutputChannels;
+		unsigned int SampleRate;
+	};
+
 	class AudioDevice
 	{
 	private:
@@ -63,18 +112,21 @@ namespace audio
 			std::function<int(void*, void*, unsigned int, double, RtAudioStreamStatus, void*)> onAudio,
 			std::function<void(RtAudioError::Type, const std::string&)> onError,
 			io::UserConfig::AudioSettings audioSettings,
-			void* AudioSink);
+			void* AudioSink,
+			bool generatedRig = false,
+			const AsioInventory* inventory = nullptr,
+			AsioOpenReport* report = nullptr,
+			const std::function<void(const AudioStreamParams&)>& prepareForStart = {});
+		static AsioInventory DiscoverAsio();
+		static std::vector<unsigned int> OrderedCandidateIds(const AsioInventory& inventory,
+			const io::UserConfig::AudioSettings& settings, bool generatedRig);
+		static std::vector<unsigned int> OrderedRates(const std::vector<unsigned int>& rates, unsigned int preferred);
+		static std::vector<std::pair<unsigned int, unsigned int>> GeneratedChannelPairs(
+			unsigned int inputChannels, unsigned int outputChannels);
+		static std::vector<AsioConfiguration> GeneratedAttemptPlan(
+			unsigned int inputChannels, unsigned int outputChannels,
+			const std::vector<unsigned int>& rates, bool stereoPass,
+			std::size_t maxAttempts = 2048u);
 
-	private:
-		struct AsioDeviceCandidate
-		{
-			unsigned int Id;
-			RtAudio::DeviceInfo Info;
-		};
-
-		static std::vector<AsioDeviceCandidate> ResolveAsioDeviceCandidates(
-			RtAudio& rtAudio,
-			const io::UserConfig::AudioSettings& audioSettings);
-		static unsigned int FindClosest(const std::vector<unsigned int>& vec, unsigned int target);
 	};
 }

@@ -674,13 +674,10 @@ void Scene::Draw(DrawContext& ctx)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
 
 		unsigned int midiInput = 0u;
-		for (const auto& device : _userConfig.Midi.Devices)
+		for (const auto& deviceName : _connectedMidiNames)
 		{
-			if (!device.Enabled || device.Name.empty())
-				continue;
-
 			_hudPanel->SetMidiInputPeak(midiInput++,
-				_inputSubsystem->ConsumeMidiInputPeak(device.Name),
+				_inputSubsystem->ConsumeMidiInputPeak(deviceName),
 				numSamps);
 		}
 	}
@@ -1627,10 +1624,11 @@ void Scene::_AdvanceRigPublication()
 	{
 		// Protect the HUD tree while routing rebuilds replace widgets used by rendering.
 		std::scoped_lock lock(_sceneMutex);
-		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
+		unsigned int audioInputs = _audioEngine->GetStreamParams().NumInputChannels;
 		std::vector<std::string> midiInputs;
-		for (const auto& device : pending->Rig.User.Midi.Devices)
-			if (device.Enabled && !device.Name.empty()) midiInputs.push_back(device.Name);
+		for (const auto& device : _midiConnectionResult.Connected)
+			if (!device.Name.empty() && std::find(midiInputs.begin(), midiInputs.end(), device.Name) == midiInputs.end())
+				midiInputs.push_back(device.Name);
 		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
 	}
 	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
@@ -1836,22 +1834,40 @@ void Scene::InitGui()
 	_selector->Init();
 }
 
-void Scene::InitAudio()
+void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 {
 	// Setup audio engine which starts device
 	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
 		const std::optional<io::UserConfig>& cfg,
 		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
-	});
+	}, generatedRig, inventory);
 
 	// Share the master transport clock so the audio callback can apply unified
 	// NINJAM timing commands to the Timer and local takes at one boundary.
 	_audioEngine->SetTimingClock(_quantisation.Clock());
 
 	if (started) {
-		InitMidi();
+		InitMidi(generatedRig);
 		InitSerial();
+	}
+	else
+	{
+		CloseMidi();
+		_midiConnectionResult = {};
+		_connectedMidiNames.clear();
+	}
+	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, _connectedMidiNames))
+	{
+		_audioEngine->PublishPendingRigSnapshot(runtime);
+		_inputSubsystem->PublishRigInputDispatch(runtime);
+		_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
+		if (_hudPanel)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			_hudPanel->SetRoutingConfig(actualInputs, _connectedMidiNames, *runtime);
+		}
 	}
 
 	CommitChanges();

@@ -1,8 +1,10 @@
 
 #include "gtest/gtest.h"
+#include <algorithm>
 #include <regex>
 #include "resources/ResourceLib.h"
 #include "io/InitFile.h"
+#include "io/StartupConfig.h"
 #include "io/Json.h"
 #include "io/UserConfig.h"
 
@@ -250,6 +252,142 @@ TEST(InitFile, ToStreamWritesJsonThatParses) {
 	EXPECT_EQ(2030u, parsed->WinSize.Width);
 	EXPECT_EQ(1061u, parsed->WinSize.Height);
 	EXPECT_EQ("verbose", parsed->Logging.Ui);
+}
+
+TEST(InitFile, GeneratedOriginRoundTripsButLegacyDefaultsRemainUnmarked) {
+	auto legacy = InitFile::FromStream(std::stringstream(InitFile::DefaultJson("C:\\Jamma")));
+	ASSERT_TRUE(legacy.has_value());
+	EXPECT_TRUE(legacy->RigOrigin.empty());
+	EXPECT_TRUE(legacy->JamOrigin.empty());
+	legacy->RigOrigin = std::string(io::StartupConfig::GeneratedOrigin);
+	std::stringstream serialized;
+	ASSERT_TRUE(InitFile::ToStream(*legacy, serialized));
+	auto parsed = InitFile::FromStream(std::move(serialized));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_EQ(io::StartupConfig::GeneratedOrigin, parsed->RigOrigin);
+	EXPECT_TRUE(parsed->JamOrigin.empty());
+}
+
+TEST(StartupConfig, RigAndJamRecoveryDecisionsAreIndependent) {
+	using Startup = io::StartupConfig;
+	const auto rig = Startup::Decide(Startup::Classify(true, true, true), "");
+	const auto jam = Startup::Decide(Startup::Classify(true, true, false), "");
+	EXPECT_TRUE(rig.UseExisting);
+	EXPECT_FALSE(rig.Generate);
+	EXPECT_FALSE(rig.PublishedGenerated); // A legacy bootstrap file is still selected.
+	EXPECT_FALSE(jam.UseExisting);
+	EXPECT_TRUE(jam.Generate);
+	EXPECT_TRUE(jam.Recovery);
+	EXPECT_EQ(Startup::FileState::Missing, Startup::Classify(false, false, false));
+	EXPECT_EQ(Startup::FileState::Unreadable, Startup::Classify(true, false, false));
+	const auto generated = Startup::Decide(Startup::FileState::Valid, Startup::GeneratedOrigin);
+	EXPECT_TRUE(generated.PublishedGenerated);
+}
+
+TEST(StartupConfig, RejectsUnusableAudioAndDuplicateTriggerIdentity) {
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	ASSERT_TRUE(rig.has_value());
+	EXPECT_TRUE(io::StartupConfig::ValidateRig(*rig));
+	rig->User.Audio.NumChannelsOut = 0u;
+	EXPECT_FALSE(io::StartupConfig::ValidateRig(*rig));
+	rig->User.Audio.NumChannelsOut = 2u;
+	rig->Triggers[0].Id = "shared";
+	rig->Triggers.push_back(rig->Triggers[0]);
+	rig->Triggers.back().Name = "other";
+	EXPECT_FALSE(io::StartupConfig::ValidateRig(*rig));
+}
+
+TEST(StartupConfig, RequiresDistinctNamedStations) {
+	auto jam = io::JamFile::FromStream(std::stringstream(io::JamFile::DefaultJson));
+	ASSERT_TRUE(jam.has_value());
+	EXPECT_TRUE(io::StartupConfig::ValidateJam(*jam));
+	jam->Stations.push_back(jam->Stations[0]);
+	EXPECT_FALSE(io::StartupConfig::ValidateJam(*jam));
+}
+
+TEST(StartupConfig, SelectedRigRequiresExplicitTargetsInSelectedJam) {
+	auto rig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	auto jam = io::JamFile::FromStream(std::stringstream(io::JamFile::DefaultJson));
+	ASSERT_TRUE(rig.has_value());
+	ASSERT_TRUE(jam.has_value());
+	rig->Triggers[0].StationTarget = "Station1";
+	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+	rig->Triggers[0].StationTarget = "Missing";
+	EXPECT_FALSE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+	rig->Triggers[0].StationTarget = std::string();
+	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+	rig->Triggers[0].StationTarget.reset();
+	EXPECT_TRUE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+	jam->Stations.push_back(jam->Stations[0]);
+	EXPECT_FALSE(io::StartupConfig::ValidateRigForJam(*rig, *jam));
+}
+
+TEST(StartupConfig, GeneratedRigUsesOpenedInputsAndFirstConnectedMidiWithoutCapture) {
+	auto templateRig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	ASSERT_TRUE(templateRig.has_value());
+	for (const unsigned int channels : { 0u, 1u, 2u, 8u }) {
+		const auto rig = io::StartupConfig::GeneratedRig(*templateRig, channels,
+			{ "Failed port skipped", "Second port" });
+		ASSERT_EQ(1u, rig.Triggers.size());
+		const auto& trigger = rig.Triggers.front();
+		EXPECT_EQ("first-run-trigger-1", trigger.Id);
+		ASSERT_TRUE(trigger.StationTarget.has_value());
+		EXPECT_EQ("Station1", *trigger.StationTarget);
+		EXPECT_EQ(std::min(channels, 2u), trigger.InputChannels.size());
+		for (unsigned int index = 0; index < trigger.InputChannels.size(); ++index)
+			EXPECT_EQ(index, trigger.InputChannels[index]);
+		EXPECT_EQ(io::RigFile::Trigger::MidiInputMode::None, trigger.MidiInputs);
+		EXPECT_TRUE(trigger.MidiInputDevices.empty());
+		ASSERT_TRUE(trigger.MidiTrigger.has_value());
+		EXPECT_EQ("Failed port skipped", trigger.MidiTrigger->Device);
+		EXPECT_EQ(io::RigFile::NOTE, trigger.MidiTrigger->Activate.Kind);
+		EXPECT_EQ(0u, trigger.MidiTrigger->Activate.Channel);
+		EXPECT_EQ(1u, trigger.MidiTrigger->Activate.Id);
+		EXPECT_EQ(1u, trigger.MidiTrigger->Activate.State);
+		EXPECT_FALSE(trigger.MidiTrigger->Activate.MatchAnyChannel);
+		EXPECT_EQ(2u, trigger.MidiTrigger->Ditch.Id);
+		std::stringstream stream;
+		ASSERT_TRUE(io::RigFile::ToJsonStream(rig, stream));
+		auto parsed = io::RigFile::FromStream(std::stringstream(stream.str()));
+		ASSERT_TRUE(parsed.has_value());
+		EXPECT_TRUE(io::StartupConfig::ValidateRig(*parsed));
+		EXPECT_EQ(trigger.InputChannels, parsed->Triggers.front().InputChannels);
+		EXPECT_EQ(trigger.MidiTrigger->Device, parsed->Triggers.front().MidiTrigger->Device);
+	}
+	const auto noMidi = io::StartupConfig::GeneratedRig(*templateRig, 0u, {});
+	EXPECT_TRUE(noMidi.User.Midi.Devices.empty());
+	EXPECT_FALSE(noMidi.Triggers.front().MidiTrigger.has_value());
+}
+
+TEST(StartupConfig, GeneratedRigTargetsAnExistingSelectedJamStation) {
+	auto templateRig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	ASSERT_TRUE(templateRig.has_value());
+	const auto rig = io::StartupConfig::GeneratedRig(*templateRig, 2u, {}, "Guitar");
+	ASSERT_EQ(1u, rig.Triggers.size());
+	ASSERT_TRUE(rig.Triggers.front().StationTarget.has_value());
+	EXPECT_EQ("Guitar", *rig.Triggers.front().StationTarget);
+	std::stringstream serialized;
+	ASSERT_TRUE(io::RigFile::ToJsonStream(rig, serialized));
+	const auto parsed = io::RigFile::FromStream(std::stringstream(serialized.str()));
+	ASSERT_TRUE(parsed.has_value()) << serialized.str();
+	EXPECT_EQ("Guitar", *parsed->Triggers.front().StationTarget);
+}
+
+TEST(StartupConfig, EmptyJamRoundTripsAsAUsableStationWithoutNinjamCredentials) {
+	auto jam = io::JamFile::FromStream(std::stringstream(io::JamFile::DefaultJson));
+	ASSERT_TRUE(jam.has_value());
+	jam->Name = "First-run jam";
+	jam->Ninjam.reset();
+	jam->Stations.front().LoopTakes.clear();
+	std::stringstream stream;
+	ASSERT_TRUE(io::JamFile::ToStream(*jam, stream));
+	auto parsed = io::JamFile::FromStream(std::stringstream(stream.str()));
+	ASSERT_TRUE(parsed.has_value());
+	EXPECT_TRUE(io::StartupConfig::ValidateJam(*parsed));
+	ASSERT_EQ(1u, parsed->Stations.size());
+	EXPECT_EQ("Station1", parsed->Stations.front().Name);
+	EXPECT_TRUE(parsed->Stations.front().LoopTakes.empty());
+	EXPECT_FALSE(parsed->Ninjam.has_value());
 }
 
 TEST(UserConfig, OverdubTimingHelpersIncludeAndExcludeOutputLatencyAtRightPoints) {

@@ -10,6 +10,7 @@
 #include <limits>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <thread>
 #include <unordered_map>
@@ -137,7 +138,16 @@ namespace engine
 		unsigned int Height() const { return _sizeParams.Size.Height; }
 		void Reset();
 		void InitGui();
-		void InitAudio();
+		void InitAudio(bool generatedRig = false,
+			const audio::AsioInventory* inventory = nullptr);
+		const audio::AsioOpenReport& GetAsioOpenReport() const noexcept
+		{
+			return _audioEngine->GetAsioOpenReport();
+		}
+		audio::AudioStreamParams GetAudioStreamParams() const
+		{
+			return _audioEngine->GetStreamParams();
+		}
 		void CloseAudio();
 		bool PauseAudio();
 		bool ResumeAudio();
@@ -147,9 +157,25 @@ namespace engine
 		void Shutdown();
 		void SetLogging(io::LoggingConfig config) noexcept;
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
-		void InitMidi()
+		void InitMidi(bool generatedRig = false)
 		{
-			_inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref());
+			_midiConnectionResult = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
+				_audioEngine->GetStreamParams().SampleRate,
+				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
+			std::vector<std::string> connectedNames;
+			connectedNames.reserve(_midiConnectionResult.Connected.size());
+			for (const auto& endpoint : _midiConnectionResult.Connected)
+				if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
+					connectedNames.push_back(endpoint.Name);
+			_connectedMidiNames = connectedNames;
+		}
+		void SetMidiInputInventory(midi::MidiInputInventory inventory)
+		{
+			_midiInputInventory = std::move(inventory);
+		}
+		const midi::MidiConnectionResult& GetMidiConnectionResult() const noexcept
+		{
+			return _midiConnectionResult;
 		}
 		void CloseMidi()
 		{
@@ -299,6 +325,9 @@ namespace engine
 		graphics::Skybox _skybox;
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
+		std::optional<midi::MidiInputInventory> _midiInputInventory;
+		midi::MidiConnectionResult _midiConnectionResult;
+		std::vector<std::string> _connectedMidiNames;
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;

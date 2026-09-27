@@ -17,6 +17,7 @@ const std::string InitFile::DefaultJson(std::string roamingPath)
 	json.KeyValues["jam"] = roamingPath + "\\default.jam";
 	json.KeyValues["jamload"] = 1l;
 	json.KeyValues["rigload"] = 0l;
+	// Fresh defaults describe candidate paths, not published generated files.
 	json.KeyValues["win"] = Json::JsonArray{ 4u, std::vector<long>{ 0l, 0l, 1400l, 1000l } };
 
 	std::stringstream stream;
@@ -122,6 +123,14 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 		}
 	}
 
+	iter = iniParams.KeyValues.find("rigorigin");
+	if (iter != iniParams.KeyValues.end() && iter->second.index() == 4)
+		ini.RigOrigin = std::get<std::string>(iter->second);
+
+	iter = iniParams.KeyValues.find("jamorigin");
+	if (iter != iniParams.KeyValues.end() && iter->second.index() == 4)
+		ini.JamOrigin = std::get<std::string>(iter->second);
+
 	iter = iniParams.KeyValues.find("win");
 	if (iter != iniParams.KeyValues.end())
 	{
@@ -179,6 +188,10 @@ bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 	root.KeyValues["jamload"] = static_cast<unsigned long>(ini.JamLoadType);
 	root.KeyValues["rig"] = utils::EncodeUtf8(ini.Rig);
 	root.KeyValues["rigload"] = static_cast<unsigned long>(ini.RigLoadType);
+	if (!ini.RigOrigin.empty())
+		root.KeyValues["rigorigin"] = ini.RigOrigin;
+	if (!ini.JamOrigin.empty())
+		root.KeyValues["jamorigin"] = ini.JamOrigin;
 	root.KeyValues["win"] = Json::JsonArray{ 4u, std::vector<long>{ ini.WinPos.X, ini.WinPos.Y, static_cast<long>(ini.WinSize.Width), static_cast<long>(ini.WinSize.Height) } };
 
 	Json::JsonPart logging;

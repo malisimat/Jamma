@@ -41,9 +41,13 @@ namespace io
 		std::wstring Rig;
 		LoadType JamLoadType;
 		LoadType RigLoadType;
+		// Written only after the corresponding generated file is published.
+		// Absent in legacy defaults, whose existing files remain user selected.
+		std::string RigOrigin;
+		std::string JamOrigin;
 
-		utils::Position2d WinPos;
-		utils::Size2d WinSize;
+		utils::Position2d WinPos{ 0, 0 };
+		utils::Size2d WinSize{ 1400u, 1000u };
 		LoggingConfig Logging;
 	};
 }

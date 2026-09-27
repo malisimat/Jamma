@@ -19,14 +19,47 @@ TEST(MidiDevice, CloseOnUnopenedDeviceIsSafe) {
 	ASSERT_FALSE(device.IsOpen());
 }
 
-// When a name has no match, Open() falls back to the first available device (returns true)
-// or returns false if no devices exist at all. Either way, the return value must match IsOpen().
 TEST(MidiDevice, OpenWithUnknownNameIsConsistent) {
 	MidiDevice device;
 	auto result = device.Open("__jamma_bogus_device_xyzzy_12345__",
 		[](std::uint8_t, std::uint8_t, std::uint8_t, double, std::int64_t) {});
-	ASSERT_EQ(result, device.IsOpen());
+	ASSERT_FALSE(result);
+	ASSERT_FALSE(device.IsOpen());
 	device.Close();
+}
+
+TEST(MidiDevice, SelectsExactUnclaimedPortAndReportsDuplicateNames) {
+	const std::vector<midi::MidiInputDeviceInfo> ports{ { 2u, "Pad" }, { 5u, "Pad" }, { 7u, "Keys" } };
+	bool ambiguous = false;
+	const auto* first = MidiDevice::SelectUnclaimedExactInput(ports, "Pad", {}, ambiguous);
+	ASSERT_NE(nullptr, first);
+	EXPECT_EQ(2u, first->DeviceId);
+	EXPECT_TRUE(ambiguous);
+	const auto* second = MidiDevice::SelectUnclaimedExactInput(ports, "Pad", { 2u }, ambiguous);
+	ASSERT_NE(nullptr, second);
+	EXPECT_EQ(5u, second->DeviceId);
+	EXPECT_TRUE(ambiguous);
+	EXPECT_EQ(nullptr, MidiDevice::SelectUnclaimedExactInput(ports, "Pad", { 2u, 5u }, ambiguous));
+	EXPECT_EQ(nullptr, MidiDevice::SelectUnclaimedExactInput(ports, "pad", {}, ambiguous));
+	EXPECT_FALSE(ambiguous);
+}
+
+TEST(MidiDevice, GeneratedStartupSelectsEveryPhysicalPortWithDuplicateNames) {
+	const std::vector<midi::MidiInputDeviceInfo> ports{ { 2u, "Pad" }, { 5u, "Pad" }, { 7u, "Keys" } };
+	bool ambiguous = false;
+	const auto* first = MidiDevice::SelectStartupInput(ports, "Pad", {}, 0u, true, ambiguous);
+	ASSERT_NE(nullptr, first);
+	EXPECT_EQ(2u, first->DeviceId);
+	EXPECT_TRUE(ambiguous);
+	const auto* second = MidiDevice::SelectStartupInput(ports, "Pad", { 2u }, 1u, true, ambiguous);
+	ASSERT_NE(nullptr, second);
+	EXPECT_EQ(5u, second->DeviceId);
+	EXPECT_TRUE(ambiguous);
+	const auto* named = MidiDevice::SelectStartupInput(ports, "Keys", { 2u, 5u }, 2u, true, ambiguous);
+	ASSERT_NE(nullptr, named);
+	EXPECT_EQ(7u, named->DeviceId);
+	EXPECT_FALSE(ambiguous);
+	EXPECT_EQ(nullptr, MidiDevice::SelectStartupInput(ports, "Pad", {}, 3u, true, ambiguous));
 }
 
 TEST(MidiDevice, EnumeratesInputDevices) {

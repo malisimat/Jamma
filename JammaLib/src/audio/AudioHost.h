@@ -43,8 +43,10 @@ namespace audio
 		AudioHost(io::UserConfig userConfig);
 		~AudioHost();
 
-		bool Init(std::shared_ptr<ninjam::NinjamController> ninjamController, 
-				  TickCallback tickCallback);
+		bool Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
+			TickCallback tickCallback, bool generatedRig = false,
+			const AsioInventory* inventory = nullptr);
+		const AsioOpenReport& GetAsioOpenReport() const noexcept { return _asioOpenReport; }
 		void Close();
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
@@ -150,9 +152,12 @@ namespace audio
 	private:
 		io::UserConfig _userConfig;
 		std::optional<io::UserConfig> _tickUserConfig;
-		std::optional<AudioStreamParams> _tickStreamParams;
+		// Prepared before startStream; each failed stream is closed before the next write.
+		// The callback only reads this stable storage while its stream is running.
+		std::optional<AudioStreamParams> _preparedStreamParams;
 		std::mutex _audioMutex;
 		std::unique_ptr<AudioDevice> _audioDevice;
+		AsioOpenReport _asioOpenReport;
 		std::shared_ptr<ChannelMixer> _channelMixer;
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;

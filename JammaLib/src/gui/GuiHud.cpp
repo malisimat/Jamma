@@ -590,7 +590,7 @@ void GuiHud::SetRoutingConfig(unsigned int audioInputCount,
 	_routingGraph = routing.Graph.Triggers;
 	_sourceEndpoints.clear();
 	for (unsigned int channel = 0u; channel < _audioInputCount; ++channel)
-		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, channel < routing.Rig.User.Audio.NumChannelsIn });
+		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Adc, channel, {}, true });
 	for (const auto& name : _midiInputNames)
 		_sourceEndpoints.push_back({ io::RigFileRouting::SourceKind::Midi, 0u, name, true });
 	for (const auto& resolvedTrigger : _routingGraph)

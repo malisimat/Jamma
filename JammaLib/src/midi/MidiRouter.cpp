@@ -415,10 +415,21 @@ void MidiRouter::RefreshAutomationSuppression(const vst::IVstPlugin* plugin,
 	slot.ExpirySample.store(expirySample, std::memory_order_release);
 }
 
-void MidiRouter::InitMidi(const io::UserConfig& cfg,
+MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 	const base::LoggingConfig& loggingConfig,
-	midi::MidiClockAnchor& midiClockAnchor)
+	midi::MidiClockAnchor& midiClockAnchor,
+	unsigned int actualSampleRate,
+	const MidiInputInventory* inventory,
+	bool generatedRig)
 {
+	MidiConnectionResult result;
+	result.Inventory = inventory ? *inventory : MidiDevice::InventoryInputDevices();
+	if (!result.Inventory.Error.empty())
+		std::cout << "[MIDI] Inventory failed: " << result.Inventory.Error << std::endl;
+	std::cout << "[MIDI] Inventory: " << result.Inventory.Devices.size() << " input port(s)" << std::endl;
+	for (const auto& device : result.Inventory.Devices)
+		std::cout << "[MIDI]   #" << device.DeviceId << " \"" << device.Name << "\"" << std::endl;
+
 	std::scoped_lock lock(_rigInputPublicationMutex);
 	_CloseMidi();
 	_loggingVerbose = loggingConfig.Midi == "verbose";
@@ -432,41 +443,80 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	if (!_liveMidiDispatchNotification->WorkEvent || !_liveMidiStopEvent)
 	{
 		_CloseMidi();
-		return;
+		return result;
 	}
 	_PublishLiveMidiInputConfig(++_nextLiveMidiRoutingGeneration, ForcedChannelOverride(), cfg.Midi.ChannelOverrideLive);
 
-	if (cfg.Midi.Devices.empty())
+	if (!generatedRig && cfg.Midi.Devices.empty())
 	{
 		std::cout << "[MIDI] No MIDI devices configured." << std::endl;
-			return;
+		std::cout << "[MIDI] Active distinct endpoints: 0" << std::endl;
+		return result;
 	}
 
-	const auto sampleRate = cfg.Audio.SampleRate;
+	const auto sampleRate = actualSampleRate;
 	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
 	std::uint8_t nextSlot = 0u;
-
-	for (const auto& midiConfig : cfg.Midi.Devices)
+	std::vector<unsigned int> claimedIds;
+	// Generated startup uses the enumerated physical identities. Names alone can
+	// collapse distinct ports when a driver exposes duplicate display names.
+	std::vector<io::UserConfig::MidiSettings> requestedDevices = cfg.Midi.Devices;
+	if (generatedRig)
 	{
+		requestedDevices.clear();
+		for (const auto& port : result.Inventory.Devices)
+			requestedDevices.push_back({ port.Name, true });
+	}
+
+	for (size_t requestIndex = 0u; requestIndex < requestedDevices.size(); ++requestIndex)
+	{
+		const auto& midiConfig = requestedDevices[requestIndex];
+		MidiConnectionAttempt attempt;
+		attempt.RequestedName = midiConfig.Name;
 		if (!midiConfig.Enabled)
 		{
 			std::cout << "[MIDI] Device \"" << midiConfig.Name << "\" disabled by rig settings." << std::endl;
+			attempt.Status = MidiConnectionStatus::Disabled;
+			result.Attempts.push_back(std::move(attempt));
 			continue;
 		}
 
 		if (nextSlot == UnresolvedMidiDeviceSlot)
 		{
 			std::cout << "[MIDI] Too many enabled MIDI input devices; remaining devices ignored." << std::endl;
-			break;
+			attempt.Status = MidiConnectionStatus::Failed;
+			attempt.Error = "Too many active MIDI inputs";
+			result.Attempts.push_back(std::move(attempt));
+			continue;
 		}
+		const auto* selected = MidiDevice::SelectStartupInput(result.Inventory.Devices,
+			midiConfig.Name, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
+		if (!selected)
+		{
+			attempt.Status = MidiConnectionStatus::Missing;
+			attempt.Error = "No unclaimed exact-name port";
+			std::cout << "[MIDI] Missing input \"" << midiConfig.Name << "\": " << attempt.Error << std::endl;
+			result.Attempts.push_back(std::move(attempt));
+			continue;
+		}
+		attempt.DeviceId = selected->DeviceId;
+		attempt.ConnectedName = selected->Name;
+		if (attempt.DuplicateName)
+			std::cout << "[MIDI] Ambiguous exact name \"" << midiConfig.Name
+				<< "\"; trying port #" << selected->DeviceId
+				<< (generatedRig ? " from this inventory" : " in current inventory order") << std::endl;
+		// Claim even a failed attempt, so a repeated configured name never retries
+		// the same physical port while another matching port is available.
+		claimedIds.push_back(selected->DeviceId);
 
 		auto endpoint = std::make_shared<MidiInputEndpoint>();
-		endpoint->ConfiguredName = midiConfig.Name.empty() ? "default" : midiConfig.Name;
+		endpoint->ConfiguredName = selected->Name;
 		endpoint->Device = std::make_unique<midi::MidiDevice>();
 		endpoint->LastClockAnchor = initialAnchor;
 
-		auto opened = endpoint->Device->Open(
-			endpoint->ConfiguredName,
+		std::string openError;
+		auto opened = endpoint->Device->OpenPort(
+			*selected,
 			[endpoint, sampleRate, midiClockAnchor = &midiClockAnchor, notification = _liveMidiDispatchNotification](std::uint8_t status, std::uint8_t data1, std::uint8_t data2,
 				double deltaSeconds, std::int64_t callbackArrivalMicros)
 			{
@@ -500,13 +550,23 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 						_LiveMidiConfigGeneration(inputConfig), endpoint->NextLiveSequence++ });
 				SetEvent(notification->WorkEvent);
 			},
-			_loggingVerbose);
+			openError, _loggingVerbose);
 
 		if (!opened)
+		{
+			attempt.Status = MidiConnectionStatus::Failed;
+			attempt.Error = openError;
+			std::cout << "[MIDI] Failed input #" << selected->DeviceId << " \""
+				<< selected->Name << "\": " << openError << std::endl;
+			result.Attempts.push_back(std::move(attempt));
 			continue;
+		}
 
 		endpoint->DeviceSlot = nextSlot++;
 		midiInputs->push_back(endpoint);
+		attempt.Status = attempt.DuplicateName ? MidiConnectionStatus::Ambiguous : MidiConnectionStatus::Connected;
+		result.Connected.push_back(*selected);
+		result.Attempts.push_back(std::move(attempt));
 	}
 
 	_midiInputs.store(midiInputs, std::memory_order_release);
@@ -516,6 +576,8 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 
 	if (midiInputs->empty())
 		std::cout << "[MIDI] No active MIDI input connection." << std::endl;
+	std::cout << "[MIDI] Active distinct endpoints: " << result.Connected.size() << std::endl;
+	return result;
 }
 
 float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
@@ -524,13 +586,14 @@ float MidiRouter::ConsumeMidiInputPeak(const std::string& deviceName) noexcept
 	if (!midiInputs)
 		return 0.0f;
 
+	float peak = 0.0f;
 	for (const auto& input : *midiInputs)
 	{
 		if (input && input->ConfiguredName == deviceName)
-			return input->PendingActivityPeak.exchange(0.0f, std::memory_order_relaxed);
+			peak = std::max(peak, input->PendingActivityPeak.exchange(0.0f, std::memory_order_relaxed));
 	}
 
-	return 0.0f;
+	return peak;
 }
 
 void MidiRouter::CloseMidi()

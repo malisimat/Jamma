@@ -279,7 +279,12 @@ std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::Jso
 		return std::nullopt;
 
 	auto devicesArray = std::get<Json::JsonArray>(iter->second);
-	if (devicesArray.Array.index() != 5)
+	// The JSON parser represents an empty scalar array as one empty token with
+	// its default variant. A machine without MIDI inputs is still valid.
+	const bool emptyDevices = devicesArray.Length == 0u ||
+		(devicesArray.Length == 1u && devicesArray.Array.index() == 0 &&
+			std::get<std::vector<bool>>(devicesArray.Array).empty());
+	if (!emptyDevices && devicesArray.Array.index() != 5)
 		return std::nullopt;
 
 	MidiConfig midi;
@@ -291,6 +296,8 @@ std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::Jso
 	if (iter != json.KeyValues.end() && iter->second.index() == 0)
 		midi.ChannelOverrideLive = std::get<bool>(iter->second);
 
+	if (emptyDevices)
+		return midi;
 	auto devices = std::get<std::vector<Json::JsonPart>>(devicesArray.Array);
 	for (const auto& deviceJson : devices)
 	{
