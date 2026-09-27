@@ -410,7 +410,6 @@ namespace engine
 		void _LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction previous,
 			midi::MidiQuantisationFraction updated,
 			const char* source) const;
-		void _LogMidiNoteTiming(const char* stage) const;
 		void _ResetMidiOverdubSession() noexcept;
 		void _InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake);
 		std::size_t _BuildMidiOverdubMergedEvents(std::size_t loopIndex,

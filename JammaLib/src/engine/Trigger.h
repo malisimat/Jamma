@@ -289,7 +289,6 @@ namespace engine
 		static audio::AudioMixerParams GetOverdubMixerParams(std::vector<unsigned int> channels);
 		static std::shared_ptr<base::BounceWriter> CreateBounceWriter(
 			const std::shared_ptr<audio::AudioMixer>& mixer);
-		static const char* ActionLabel(actions::ActionResultType rt) noexcept;
 
 		actions::ActionResult OnAction(actions::KeyAction action);
 		actions::ActionResult OnEvent(const midi::MidiEvent& event,

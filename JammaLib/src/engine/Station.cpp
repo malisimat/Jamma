@@ -57,11 +57,6 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
-		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
-			<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
-			<< " loopGrains=" << timing->LoopGrains
-			<< " bpm=" << timing->Bpm
-			<< " bpi=" << timing->Bpi << std::endl;
 	}
 }
 
@@ -1196,8 +1191,12 @@ ActionResult Station::OnAction(TriggerAction action)
 
 	ActionResult res;
 	res.IsEaten = false;
+	unsigned long completedLength = 0ul;
+	long long completedErrorSamps = 0;
 
 	auto loopTake = _TryGetTake(action.TargetId);
+	const auto priorAudioLoops = loopTake ? loopTake.value()->GetLoops().size() : 0u;
+	const auto priorMidiLoops = loopTake ? loopTake.value()->GetMidiLoops().size() : 0u;
 	const auto transportStart = static_cast<std::int64_t>(_clock ? _clock->AbsoluteSamplePos() : 0ul)
 		+ static_cast<std::int64_t>(TransportOffsetSamps());
 	const auto transportStartSamps = transportStart < 0 ? 0ull : static_cast<std::uint64_t>(transportStart);
@@ -1225,17 +1224,6 @@ ActionResult Station::OnAction(TriggerAction action)
 			std::move(heldSnapshot),
 			transportStartSamps,
 			midiRecordStart);
-		if (!newLoopTake->GetMidiLoops().empty())
-		{
-			std::cout << "MIDI record start: take=" << newLoopTake->Id()
-				<< " scene=" << (_clock ? _clock->SceneSamplePos() : 0u)
-				<< " clockLength=" << (_clock ? _clock->SeedSourceLength() : 0ul)
-				<< " transportStart=" << transportStartSamps
-				<< " midiTriggerStart=" << (midiRecordStart ? std::to_string(*midiRecordStart) : "none")
-				<< " sampleRate=" << (action.GetAudioParams() ? action.GetAudioParams()->SampleRate : 0u)
-				<< " preDelay=" << (action.GetUserConfig() ? action.GetUserConfig()->Trigger.PreDelay : 0u)
-				<< '\n';
-		}
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -1264,6 +1252,7 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 		}
 
+		const auto requestedLength = loopLength;
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
@@ -1286,7 +1275,6 @@ ActionResult Station::OnAction(TriggerAction action)
 					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
-					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
 				}
 				else
 				{
@@ -1306,17 +1294,6 @@ ActionResult Station::OnAction(TriggerAction action)
 					}
 				}
 			}
-			auto outLatency = streamParams.has_value() ?
-				streamParams.value().OutputLatency :
-				0u;
-
-			if (0u == outLatency)
-			{
-				outLatency = cfg.has_value() ?
-					cfg.value().Audio.LatencyOut :
-					0u;
-			}
-
 			auto playPos = cfg.has_value() ?
 				cfg.value().OverdubPlayPos(errorSamps, loopLength) :
 				0;
@@ -1324,55 +1301,14 @@ ActionResult Station::OnAction(TriggerAction action)
 				cfg.value().EndRecordingSamps(errorSamps) :
 				0;
 
-			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
 			if (loopTake.has_value())
 			{
-				const auto recordedSamps = loopTake.value()->NumRecordedSamps();
-				if (_loggingConfig.Ui == "verbose" && !loopTake.value()->GetMidiLoops().empty())
-				{
-					std::cout << "MIDI grid trace: take=" << loopTake.value()->Id()
-						<< " start=" << loopTake.value()->MidiQuantisationTransportStartSamps()
-						<< " end=" << transportStartSamps
-						<< " recorded=" << loopTake.value()->NumRecordedSamps()
-						<< " length=" << loopLength
-						<< " lengthError=" << errorSamps << '\n';
-				}
 				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
 					? static_cast<int>(_clock->SampOffset()) : errorSamps;
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
-				if (!loopTake.value()->GetMidiLoops().empty())
-				{
-					const auto midiSettings = loopTake.value()->ResolvedMidiQuantisation();
-					std::cout << "MIDI record end: take=" << loopTake.value()->Id()
-						<< " triggerSamps=" << action.SampleCount
-						<< " midiTriggerStart=" << (loopTake.value()->MidiRecordStartSample()
-							? std::to_string(*loopTake.value()->MidiRecordStartSample()) : "none")
-						<< " midiTriggerEnd=" << (action.MidiSample ? std::to_string(*action.MidiSample) : "none")
-						<< " midiStopAge=" << (midiStopAgeSamps
-							? std::to_string(*midiStopAgeSamps) : "none")
-						<< " recordedSamps=" << recordedSamps
-						<< " loopLength=" << loopLength
-						<< " midiStart=" << loopTake.value()->MidiQuantisationTransportStartSamps()
-						<< " firstRecordScene=" << loopTake.value()->FirstRecordBlockSceneSamps()
-						<< " midiCursor=" << loopTake.value()->MidiPlayIndex()
-						<< " audioLoops=" << loopTake.value()->GetLoops().size()
-						<< " audioPlayPos=" << playPos
-						<< " grain=" << midiSettings.GrainSamps
-						<< " quantEnabled=" << midiSettings.Enabled
-						<< " scene=" << (_clock ? _clock->SceneSamplePos() : 0u)
-						<< " clockLength=" << (_clock ? _clock->SeedSourceLength() : 0ul)
-						<< " clockPhase=" << (_clock ? _clock->SampOffset() : 0u)
-						<< " inputLatencyReported=" << (streamParams ? streamParams->InputLatency : 0u)
-						<< " inputLatencyRig=" << (cfg ? cfg->Audio.LatencyIn : 0u)
-						<< " outputLatencyReported=" << (streamParams ? streamParams->OutputLatency : 0u)
-						<< " outputLatencyRig=" << (cfg ? cfg->Audio.LatencyOut : 0u)
-						<< " outputLatencyUsed=" << outLatency;
-					if (!loopTake.value()->GetLoops().empty())
-						std::cout << " audioBodyCursor=" << loopTake.value()->GetLoops().front()->BodyPlayIndex();
-					std::cout << '\n';
-				}
 			}
+			completedLength = loopLength;
+			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
@@ -1407,6 +1343,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_OVERDUB_END:
 	{
 		auto loopLength = action.SampleCount;
+		const auto requestedLength = loopLength;
 
 		if (0 == loopLength)
 		{
@@ -1429,7 +1366,6 @@ ActionResult Station::OnAction(TriggerAction action)
 					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
-					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
 				}
 				else
 				{
@@ -1459,12 +1395,12 @@ ActionResult Station::OnAction(TriggerAction action)
 				cfg.value().EndRecordingSamps(errorSamps) :
 				0;
 
-			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
 			if (loopTake.has_value())
 			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
 			}
+			completedLength = loopLength;
+			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
 			if (sourceLoopTake.has_value())
@@ -1553,6 +1489,73 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
+	}
+	if (res.IsEaten)
+	{
+		const char* actionLabel = nullptr;
+		switch (action.ActionType)
+		{
+		case TriggerAction::TRIGGER_REC_START: actionLabel = "record-start"; break;
+		case TriggerAction::TRIGGER_REC_END: actionLabel = "record-end"; break;
+		case TriggerAction::TRIGGER_OVERDUB_START: actionLabel = "overdub-start"; break;
+		case TriggerAction::TRIGGER_OVERDUB_END: actionLabel = "overdub-end"; break;
+		case TriggerAction::TRIGGER_PUNCHIN_START: actionLabel = "punch-in"; break;
+		case TriggerAction::TRIGGER_PUNCHIN_END: actionLabel = "punch-out"; break;
+		case TriggerAction::TRIGGER_DITCH: actionLabel = "ditch"; break;
+		case TriggerAction::TRIGGER_OVERDUB_DITCH: actionLabel = "overdub-ditch"; break;
+		case TriggerAction::TRIGGER_DITCH_UNMUTE: break; // Internal restoration action; intentionally not logged.
+		default: break;
+		}
+		if (actionLabel)
+		{
+			auto target = loopTake ? *loopTake : std::shared_ptr<LoopTake>();
+			if (!target && !res.TargetId.empty())
+			{
+				if (auto created = _TryGetTake(res.TargetId); created)
+					target = *created;
+			}
+			const auto state = GetVisualState();
+			const char* stateLabel = "idle";
+			switch (state)
+			{
+			case StationVisualState::STATIONSTATE_RECORDING: stateLabel = "recording"; break;
+			case StationVisualState::STATIONSTATE_ENDRECORDING: stateLabel = "ending-recording"; break;
+			case StationVisualState::STATIONSTATE_PLAYING: stateLabel = "playing"; break;
+			case StationVisualState::STATIONSTATE_OVERDUBBING: stateLabel = "overdubbing"; break;
+			case StationVisualState::STATIONSTATE_PUNCHIN: stateLabel = "punch-in"; break;
+			default: break;
+			}
+			const bool isPlay = completedLength > 0ul && loopTake.has_value();
+			std::cout << (isPlay ? "[Loop Play] station=\"" : "[Station] station=\"")
+				<< Name() << "\" action=" << actionLabel
+				<< " state=" << stateLabel
+				<< " take=" << (target ? target->Id() : action.TargetId)
+				<< " length=" << completedLength;
+			if (isPlay)
+			{
+				const auto grainSamps = _clock ? _clock->QuantiseSamps() : 0u;
+				std::cout << " errorSamps=" << completedErrorSamps
+					<< " grainSamps=" << grainSamps;
+				if (grainSamps > 0u && completedLength % grainSamps == 0ul)
+					std::cout << " grains=" << completedLength / grainSamps;
+				if (_clock)
+				{
+					const auto bpm = _clock->CurrentMusicalPosition(
+						_ResolveSampleRate(action.GetUserConfig(), action.GetAudioParams()));
+					if (bpm.IsValid)
+						std::cout << " bpm=" << bpm.Tempo;
+				}
+			}
+			if (target)
+			{
+				const bool ditched = res.ResultType == actions::ACTIONRESULT_DITCH;
+				std::cout << " audioLoops=" << (ditched ? priorAudioLoops : target->GetLoops().size())
+					<< " midiLoops=" << (ditched ? priorMidiLoops : target->GetMidiLoops().size());
+			}
+			if (!res.SourceId.empty() || !action.SourceId.empty())
+				std::cout << " source=" << (res.SourceId.empty() ? action.SourceId : res.SourceId);
+			std::cout << '\n';
+		}
 	}
 
 	return res;

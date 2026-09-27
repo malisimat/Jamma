@@ -1143,7 +1143,6 @@ ActionResult LoopTake::OnAction(JobAction action)
 			if (midiLoop)
 				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
-		_LogMidiNoteTiming("grid-update");
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		for (auto& midiLoop : action.MidiLoops)
@@ -1163,7 +1162,6 @@ ActionResult LoopTake::OnAction(JobAction action)
 		EndRecording();
 		_UpdateLoops();
 		_UpdateMidiModels(true);
-		std::cout << "Ended recording" << std::endl;
 
 		ActionResult res;
 		res.IsEaten = true;
@@ -1576,17 +1574,6 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 		}
 		if (!_midiLoops[i]->RecordEvent(stamped))
 			continue;
-		if (ev.IsNoteOn() && _midiLoops[i]->EventCount() <= 8u)
-		{
-			std::cout << "MIDI record note: take=" << _id
-				<< " loop=" << i
-				<< " note=" << static_cast<unsigned int>(ev.data1)
-				<< " eventGlobal=" << ev.sampleOffset
-				<< " pumpGlobal=" << globalSampleNow
-				<< " recordedNow=" << recordedNow
-				<< " stored=" << stamped.sampleOffset
-				<< " transportStart=" << MidiQuantisationTransportStartSamps() << '\n';
-		}
 
 		// Drive visual updates directly from MIDI ingress so note rendering does
 		// not depend on audio-loop update cadence.
@@ -1735,37 +1722,6 @@ void LoopTake::Play(unsigned long index,
 		: _InitialMidiPlayIndex(loopLength, midiQuantisationErrorSamps);
 	_midiVisualPlayIndex.store(midiPlayIndex, std::memory_order_relaxed);
 	_appliedLocalTransportOffsetSamps = 0;
-	if (_loggingConfig.Ui == "verbose" && !_midiLoops.empty())
-	{
-		const auto user = MidiQuantisation();
-		const auto resolved = ResolvedMidiQuantisation();
-		std::cout << "MIDI grid trace: take=" << _id
-			<< " start=" << MidiQuantisationTransportStartSamps()
-			<< " cursor=" << midiPlayIndex
-			<< " enabled=" << resolved.Enabled
-			<< " grain=" << resolved.GrainSamps
-			<< " fraction=" << midi::MidiQuantisation::FractionLabel(resolved.Fraction)
-			<< " step=" << midi::MidiQuantisation::StepSamps(resolved)
-			<< " userOffset=" << user.PhaseOffsetSamps
-			<< " inheritedOffset=" << _midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire)
-			<< " resolvedOffset=" << resolved.PhaseOffsetSamps
-			<< " remoteInterval=" << resolved.RemoteIntervalSamps
-			<< " remoteBpi=" << resolved.RemoteBpi
-			<< " remoteOrigin=" << resolved.RemoteOriginSamps << '\n';
-	}
-	if (_loggingConfig.Ui == "verbose")
-	{
-		const char* triggerType = (STATE_RECORDING == state) ? "record-end" : "overdub-end";
-		std::cout << "MIDI first-play timing: take=" << _id
-			<< " trigger=" << triggerType
-			<< " loopLength=" << loopLength
-			<< " errorSamps=" << midiQuantisationErrorSamps
-			<< " audioPlayPos=" << index
-			<< " audioEndRecordSamps=" << endRecordSamps
-			<< " midiStart=" << midiPlayIndex
-			<< '\n';
-	}
-
 	auto continueCapture = (endRecordSamps > 0) || _isPunchInActive.load(std::memory_order_relaxed);
 
 	for (auto& loop : _loops)
@@ -1858,7 +1814,6 @@ void LoopTake::Play(unsigned long index,
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}
-	_LogMidiNoteTiming("record-end");
 
 	_midiRecordHeld.clear();
 
@@ -3492,53 +3447,6 @@ void LoopTake::_LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction
 		<< " source=" << source
 		<< " " << midi::MidiQuantisation::FractionLabel(previous)
 		<< " -> " << midi::MidiQuantisation::FractionLabel(updated) << '\n';
-}
-
-void LoopTake::_LogMidiNoteTiming(const char* stage) const
-{
-	for (std::size_t loopIndex = 0u; loopIndex < _midiLoops.size(); ++loopIndex)
-	{
-		const auto& loop = _midiLoops[loopIndex];
-		if (!loop || loop->State() == midi::MidiLoopState::Recording)
-			continue;
-
-		const auto settings = loop->Quantisation();
-		const auto length = loop->LoopLengthSamps();
-		std::size_t outside = 0u;
-		std::size_t rawShown = 0u;
-		std::size_t playbackShown = 0u;
-		std::cout << "MIDI note timing: take=" << _id
-			<< " stage=" << stage
-			<< " loop=" << loopIndex
-			<< " events=" << loop->EventCount()
-			<< " length=" << length
-			<< " quantActive=" << loop->IsQuantisationActive()
-			<< " grain=" << settings.GrainSamps
-			<< " fraction=" << midi::MidiQuantisation::FractionLabel(settings.Fraction)
-			<< " phaseOffset=" << settings.PhaseOffsetSamps
-			<< " remoteOrigin=" << settings.RemoteOriginSamps
-			<< " rawNotes=";
-		for (std::size_t eventIndex = 0u; eventIndex < loop->EventCount(); ++eventIndex)
-		{
-			midi::MidiEvent raw;
-			if (!loop->TryGetEvent(eventIndex, raw))
-				break;
-			if (raw.sampleOffset >= length)
-				++outside;
-			if (raw.IsNoteOn() && raw.sampleOffset < length && rawShown++ < 8u)
-				std::cout << static_cast<unsigned int>(raw.data1) << '@' << raw.sampleOffset << ',';
-		}
-		std::cout << " playbackNotes=";
-		for (std::size_t eventIndex = 0u; eventIndex < loop->EventCount(); ++eventIndex)
-		{
-			midi::MidiEvent playback;
-			if (!loop->TryGetPlaybackEvent(eventIndex, playback))
-				break;
-			if (playback.IsNoteOn() && playback.sampleOffset < length && playbackShown++ < 8u)
-				std::cout << static_cast<unsigned int>(playback.data1) << '@' << playback.sampleOffset << ',';
-		}
-		std::cout << " outside=" << outside << '\n';
-	}
 }
 
 void LoopTake::_RemoveMidiModelChildren()

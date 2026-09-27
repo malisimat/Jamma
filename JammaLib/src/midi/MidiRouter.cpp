@@ -443,8 +443,6 @@ void MidiRouter::InitMidi(const io::UserConfig& cfg,
 	}
 
 	const auto sampleRate = cfg.Audio.SampleRate;
-	std::cout << "[MIDI Timing] RtMidi WinMM deltas have 1 ms resolution; first event per device uses callback arrival."
-		<< std::endl;
 	auto midiInputs = std::make_shared<std::vector<std::shared_ptr<MidiInputEndpoint>>>();
 	std::uint8_t nextSlot = 0u;
 
@@ -947,31 +945,6 @@ MidiRouter::TriggerDispatchSummary MidiRouter::PumpMidi(const std::vector<std::s
 				userConfig, audioParams, dispatchState);
 			summary.Activated = summary.Activated || dispatch.Activated;
 			summary.Ditched = summary.Ditched || dispatch.Ditched;
-			if (dispatch.Activated || dispatch.Ditched
-				|| queued.TimestampSource == MidiTimestampSource::InvalidDeltaFallback
-				|| queued.TimestampSource == MidiTimestampSource::DiscontinuityFallback)
-			{
-				const char* source = "driver-delta";
-				switch (queued.TimestampSource)
-				{
-				case MidiTimestampSource::InitialArrival: source = "initial-arrival"; break;
-				case MidiTimestampSource::InvalidDeltaFallback: source = "invalid-delta-fallback"; break;
-				case MidiTimestampSource::DiscontinuityFallback: source = "discontinuity-fallback"; break;
-				case MidiTimestampSource::DriverDelta: break;
-				}
-				const auto pumpAgeSamples = static_cast<std::int32_t>(
-					static_cast<std::uint32_t>(globalSampleNow) - ingress.sampleOffset);
-				std::cout << "[MIDI Timing] device=\"" << input->ConfiguredName
-					<< "\" source=" << source
-					<< " deltaSeconds=" << queued.DriverDeltaSeconds
-					<< " eventSteadyMicros=" << queued.EventSteadyMicros
-					<< " callbackArrivalMicros=" << queued.CallbackArrivalMicros
-					<< " callbackLagMicros=" << (queued.CallbackArrivalMicros - queued.EventSteadyMicros)
-					<< " eventSample=" << ingress.sampleOffset
-					<< " pumpSample=" << globalSampleNow
-					<< " pumpAgeSamples=" << pumpAgeSamples << '\n';
-			}
-
 			// Derive trigger and station events independently from the raw ingress event.
 			const auto msgType = ingress.MessageType();
 			if ((msgType >= 0x80u) && (msgType <= 0xE0u))
@@ -1163,12 +1136,6 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 		else if (res.ResultType == actions::ACTIONRESULT_DITCH)
 			summary.Ditched = true;
 
-		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
-			<< "\" " << engine::Trigger::ActionLabel(res.ResultType)
-			<< midi::MidiEvent::Direction(event)
-			<< " sample=" << event.sampleOffset << " (";
-		midi::MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
-		std::cout << ")\n";
 	}
 
 	return summary;

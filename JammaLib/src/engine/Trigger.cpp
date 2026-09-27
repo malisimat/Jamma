@@ -139,17 +139,6 @@ Trigger::~Trigger()
 {
 }
 
-/*static*/ const char* Trigger::ActionLabel(actions::ActionResultType rt) noexcept
-{
-	switch (rt)
-	{
-	case actions::ACTIONRESULT_ACTIVATE: return "Activate";
-	case actions::ACTIONRESULT_DITCH:    return "Ditch";
-	case actions::ACTIONRESULT_TOGGLE:   return "Toggle";
-	default:                             return "Action";
-	}
-}
-
 std::optional<std::shared_ptr<Trigger>> Trigger::FromFile(TriggerParams trigParams, io::RigFile::Trigger trigStruct)
 {
 	trigParams.Name = trigStruct.Name;
@@ -371,6 +360,21 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 		auto& queue = domain == TRIGGER_INPUT_UI ? _uiInputQueue : _jobInputQueue;
 		if (!queue.Push(edge))
 			_PublishInputFallback(domain, edge);
+		if (source == TRIGGER_MIDI)
+		{
+			const char* stateLabel = "idle";
+			switch (GetState())
+			{
+			case TRIGSTATE_RECORDING: stateLabel = "recording"; break;
+			case TRIGSTATE_OVERDUBBING: stateLabel = "overdubbing"; break;
+			case TRIGSTATE_PUNCHEDIN: stateLabel = "punch-in"; break;
+			default: break;
+			}
+			std::cout << "[MIDI Trigger] trigger=\"" << Name()
+				<< "\" control=" << (control == TRIGGER_CONTROL_ACTIVATE ? "activate" : "ditch")
+				<< " edge=" << (edge.Edge == TRIGGER_EDGE_DOWN ? "down" : "up")
+				<< " stateAtQueue=" << stateLabel << '\n';
+		}
 		return ActionResult{ true, "", "",
 			actions::ACTIONRESULT_DEFAULT,
 			nullptr, std::weak_ptr<base::GuiElement>() };
