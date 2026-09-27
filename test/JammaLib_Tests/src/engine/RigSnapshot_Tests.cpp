@@ -544,6 +544,36 @@ TEST_F(RigSnapshotTest, AudioBoundaryPublishesFreshTriggerTransition)
 	EXPECT_EQ(42u, host.RejectedRigRevision());
 }
 
+TEST_F(RigSnapshotTest, ReplacementKeepsLatestHistoryForTheSameTriggerId)
+{
+	auto station = RuntimeStation("Station");
+	io::RigFile initial{};
+	initial.Triggers = { TriggerDescriptor("original", "Station") };
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [](const io::RigFile&) { return true; }));
+	const auto original = coordinator.Accepted()->Triggers[0].Instance;
+	auto edited = initial;
+	edited.Triggers[0].Name = "renamed";
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(edited));
+	const auto staged = coordinator.Staged();
+	ASSERT_TRUE(staged);
+	const auto replacement = staged->Triggers[0].Instance;
+	ASSERT_NE(original, replacement);
+	EXPECT_TRUE(replacement->GetTakes().empty());
+
+	// History can change after staging, up to the accepted audio boundary.
+	original->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target" } });
+	ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+		coordinator.CompleteTransition(staged->Revision, true,
+			[](const io::RigFile&) { return true; }));
+	const auto history = replacement->GetTakes();
+	ASSERT_EQ(1u, history.size());
+	EXPECT_EQ("source", history[0].SourceTakeId);
+	EXPECT_EQ("target", history[0].TargetTakeId);
+	EXPECT_EQ(station, history[0].Receiver);
+}
+
 TEST_F(RigSnapshotTest, RetainedTriggerRecordsAcrossRealRoutePublicationAndDitchesLifo)
 {
 	auto stationA = RuntimeStation("A");

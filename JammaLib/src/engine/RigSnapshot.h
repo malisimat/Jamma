@@ -38,10 +38,11 @@ namespace engine
 		size_t CandidateIndex = 0u;
 	};
 
-	// An outgoing Trigger instance that must be idle before replacement.
+	// An outgoing Trigger that must be idle; a matching replacement inherits its history.
 	struct TriggerReplacementCheck
 	{
 		std::shared_ptr<Trigger> AcceptedInstance;
+		std::shared_ptr<Trigger> ReplacementInstance;
 	};
 
 	struct MidiTriggerDispatch

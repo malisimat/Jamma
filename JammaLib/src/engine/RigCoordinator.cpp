@@ -124,7 +124,7 @@ RigCoordinator::SnapshotPtr RigCoordinator::_BuildSnapshot(std::uint64_t revisio
 			{
 				retainedAcceptedIds.insert(fileTrigger.Id);
 				snapshot->TriggerReplacementChecks.push_back(
-					{ acceptedSnapshot->Triggers[acceptedIndex].Instance });
+					{ acceptedSnapshot->Triggers[acceptedIndex].Instance, instance });
 			}
 		}
 		std::shared_ptr<base::ActionReceiver> receiver;
@@ -246,6 +246,11 @@ RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revi
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::PersistenceFailed;
 	}
+	// The old trigger is idle at the accepted audio boundary. Restore its latest
+	// published history before the replacement can be exposed to audio or input.
+	for (const auto& replacement : candidate->TriggerReplacementChecks)
+		if (replacement.ReplacementInstance)
+			replacement.ReplacementInstance->RestoreTakes(replacement.AcceptedInstance->GetTakes());
 	_pending.store(candidate, std::memory_order_release);
 	_staged.store({}, std::memory_order_release);
 	return EditResult::Pending;
