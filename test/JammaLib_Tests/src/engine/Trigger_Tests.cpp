@@ -164,6 +164,17 @@ public:
 	unsigned int PunchOutCount = 0u;
 };
 
+class BounceLevelSink : public base::MultiAudioSink
+{
+public:
+	void OnBlockWriteChannel(unsigned int, const base::AudioWriteRequest& request, int) override
+	{
+		LastBounceLevel = request.fadeNew;
+	}
+
+	float LastBounceLevel = -1.0f;
+};
+
 class RoutingHistoryReceiver : public ActionReceiver
 {
 public:
@@ -1046,6 +1057,57 @@ TEST(Trigger, DebounceSimpleTest) {
 	action.SetActionTime(curTime);
 	actionRes = trigger->OnAction(action);
 	ASSERT_EQ(2, receiver->GetNumTimesCalled());
+}
+
+TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(
+		std::make_shared<TestTriggerPunchTarget>(),
+		std::make_shared<TestTriggerPunchTarget>());
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Loop = { 0 };
+	cfg.Trigger = { 64, 0 };
+	auto action = KeyAction();
+	action.SetUserConfig(cfg);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+	action.KeyChar = ActivateChar;
+	trigger->OnAction(action);
+
+	ASSERT_FALSE(receiver->Actions().empty());
+	auto writer = receiver->Actions().front().OverdubWriter;
+	ASSERT_NE(nullptr, writer);
+	auto sink = std::make_shared<BounceLevelSink>();
+	float samples[64]{};
+	writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
+
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+	ASSERT_GE(receiver->Actions().size(), 2u);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	const auto punchDelay = cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps;
+	trigger->OnTick(GetTime(), punchDelay - 1u, cfg, std::nullopt);
+	writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
+	trigger->OnTick(GetTime(), 1u, cfg, std::nullopt);
+	for (int i = 0; i < 200; ++i)
+		writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_LT(sink->LastBounceLevel, 0.1f);
+
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+	ASSERT_GE(receiver->Actions().size(), 3u);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, receiver->Actions()[2].ActionType);
+	trigger->OnTick(GetTime(), punchDelay, cfg, std::nullopt);
+	for (int i = 0; i < 200; ++i)
+		writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_GT(sink->LastBounceLevel, 0.9f);
 }
 
 TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {

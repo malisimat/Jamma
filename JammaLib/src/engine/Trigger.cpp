@@ -435,11 +435,18 @@ void Trigger::OnTick(Time curTime,
 			_recordSampCount.fetch_add(samps, std::memory_order_relaxed);
 	}
 
+	// BounceWriter bypasses Trigger::WriteBlock, so apply fades at the audio tick.
+	std::size_t pendingMixerActions = 0u;
 	for (std::size_t i = 0u; i < _delayedActionCount; ++i)
 	{
-		auto& action = _delayedActions[i];
+		auto action = _delayedActions[i];
 		action.SampsLeft = samps >= action.SampsLeft ? 0u : action.SampsLeft - samps;
+		if (action.SampsLeft == 0u)
+			_overdubMixer->SetUnmutedLevel(action.Target);
+		else
+			_delayedActions[pendingMixerActions++] = action;
 	}
+	_delayedActionCount = pendingMixerActions;
 
 	_FlushDelayedPunchActions(samps);
 
@@ -934,17 +941,6 @@ void Trigger::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	unsigned int numSamps,
 	unsigned int destChannel)
 {
-	std::size_t write = 0u;
-	for (std::size_t i = 0u; i < _delayedActionCount; ++i)
-	{
-		const auto action = _delayedActions[i];
-		if (action.SampsLeft == 0u)
-			_overdubMixer->SetUnmutedLevel(action.Target);
-		else
-			_delayedActions[write++] = action;
-	}
-	_delayedActionCount = write;
-
 	PreparedTriggerBounceWriter::Write(_overdubMixer, dest, srcBuf, numSamps, destChannel);
 }
 
