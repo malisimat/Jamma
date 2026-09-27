@@ -327,6 +327,17 @@ TEST(GuiScrollBar, IsHiddenWhenContentFitsAndVisibleWhenItOverflows) {
 	EXPECT_TRUE(scrollBar->IsVisible());
 }
 
+TEST(GuiScrollBar, ClearingPointerCancelsDrag) {
+	GuiScrollBarParams p;
+	p.Size = { 18u, 100u };
+	auto scrollBar = std::make_shared<GuiScrollBar>(p);
+	scrollBar->SetMetrics(50.0, 200.0);
+	ASSERT_TRUE(scrollBar->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 9, 80 })).IsEaten);
+	scrollBar->ClearPointerState();
+	EXPECT_FALSE(scrollBar->OnAction(MakeTouchMove({ 9, 30 })).IsEaten);
+	EXPECT_DOUBLE_EQ(0.0, scrollBar->Value());
+}
+
 // GuiScrollPanel offset tests
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
@@ -430,6 +441,18 @@ TEST(GuiScrollPanel, ViewportExcludesScrollBar) {
 	EXPECT_TRUE(panel->IsScrollBarVisible());
 	EXPECT_EQ(82u, panel->ViewportWidth());
 	EXPECT_EQ(50u, panel->ViewportHeight());
+}
+
+TEST(GuiScrollPanel, ClearingPointerRestoresContentMoveRouting) {
+	GuiScrollPanelParams p;
+	p.Size = { 100u, 50u };
+	p.ScrollBarWidth = 12u;
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 200 })));
+	ASSERT_TRUE(panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 94, 30 })).IsEaten);
+	panel->ClearPointerState();
+	EXPECT_FALSE(panel->OnAction(MakeTouchMove({ 94, 0 })).IsEaten);
+	EXPECT_EQ(0, panel->ScrollOffset());
 }
 
 TEST(GuiScrollPanel, HidesScrollBarAndUsesFullWidthWhenContentFits) {

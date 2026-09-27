@@ -272,6 +272,7 @@ std::shared_ptr<base::GuiElement> GuiScrollPanel::FindTopmostDescendant(Position
 void GuiScrollPanel::ClearPointerState()
 {
 	GuiPanel::ClearPointerState();
+	_draggingScrollBar = false;
 	if (_contentHost)
 		_contentHost->ClearPointerState();
 	if (_scrollBar)

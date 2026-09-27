@@ -182,4 +182,5 @@ void GuiScrollBar::ClearPointerState()
 {
 	GuiElement::ClearPointerState();
 	_thumb.ClearPointerState();
+	_dragging = false;
 }
