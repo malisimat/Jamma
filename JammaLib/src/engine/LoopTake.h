@@ -362,6 +362,7 @@ namespace engine
 		{
 			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
 			std::vector<std::weak_ptr<Loop>> Loops;
+			std::vector<unsigned int> RecordInputChannels;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
@@ -482,6 +483,7 @@ namespace engine
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<unsigned int> _recordInputChannels;
 		std::vector<std::shared_ptr<midi::MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;

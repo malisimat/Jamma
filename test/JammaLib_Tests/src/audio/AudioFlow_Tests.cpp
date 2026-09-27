@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Station.h"
@@ -395,6 +396,62 @@ TEST(AudioFlow, TriggerBounceRoutesSourceLoopsToMatchingTargetChannels)
 	}
 }
 
+TEST(AudioFlow, OverdubPreservesSourceSlotsAfterInputRouteShrinks)
+{
+	const unsigned int blockSize = 16u;
+	const unsigned long loopLength = 64ul;
+	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
+
+	auto sourceTake = MakeTake();
+	sourceTake->Record({}, "test");
+	auto sourceLoop0 = sourceTake->AddLoop(0u, "test");
+	auto sourceLoop1 = sourceTake->AddLoop(1u, "test");
+	sourceLoop0->Record();
+	sourceLoop1->Record();
+	sourceTake->CommitChanges();
+	std::vector<float> sourceData0(totalRecord, 0.0f);
+	std::vector<float> sourceData1(totalRecord, 0.0f);
+	std::fill(sourceData0.begin() + constants::MaxLoopFadeSamps, sourceData0.end(), 0.25f);
+	std::fill(sourceData1.begin() + constants::MaxLoopFadeSamps, sourceData1.end(), 0.5f);
+	WriteLoopSamples(sourceLoop0, sourceData0);
+	WriteLoopSamples(sourceLoop1, sourceData1);
+	sourceTake->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+
+	auto targetTake = MakeTake();
+	targetTake->Overdub({ 4u }, "test", {}, {}, sourceTake);
+	targetTake->CommitChanges();
+	ASSERT_EQ(2u, targetTake->GetLoops().size());
+	targetTake->EndMultiWrite(constants::MaxLoopFadeSamps, true, Audible::AUDIOSOURCE_BOUNCE);
+	auto trigger = std::make_shared<Trigger>(TriggerParams{});
+	sourceTake->WriteBlock(targetTake, trigger, 0, blockSize);
+	targetTake->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
+
+	targetTake->TriggerPunchInAudio();
+	std::vector<float> adcSamples(blockSize, 0.75f);
+	AudioWriteRequest adcRequest;
+	adcRequest.samples = adcSamples.data();
+	adcRequest.numSamps = blockSize;
+	adcRequest.stride = 1u;
+	adcRequest.fadeNew = 1.0f;
+	adcRequest.source = Audible::AUDIOSOURCE_ADC;
+	targetTake->OnBlockWriteChannel(0u, adcRequest, 0);
+	targetTake->OnBlockWriteChannel(4u, adcRequest, 0);
+	targetTake->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_ADC);
+	targetTake->Play(constants::MaxLoopFadeSamps, loopLength, 0u);
+
+	const auto firstSlot = targetTake->GetLoops()[0]->ExportSamples();
+	const auto secondSlot = targetTake->GetLoops()[1]->ExportSamples();
+	ASSERT_EQ(loopLength, firstSlot.size());
+	ASSERT_EQ(loopLength, secondSlot.size());
+	for (auto sample = 0u; sample < blockSize; ++sample)
+	{
+		EXPECT_FLOAT_EQ(0.25f, firstSlot[sample]);
+		EXPECT_FLOAT_EQ(0.5f, secondSlot[sample]);
+		EXPECT_FLOAT_EQ(0.75f, firstSlot[blockSize + sample]);
+		EXPECT_FLOAT_EQ(0.0f, secondSlot[blockSize + sample]);
+	}
+}
+
 // 3. Two channels: write to both channels, verify both loops record.
 TEST(AudioFlow, TwoChannel_WriteReachesBothLoops)
 {
@@ -420,21 +477,22 @@ TEST(AudioFlow, TwoChannel_WriteReachesBothLoops)
 
 TEST(AudioFlow, SparseInputConfig_RecordUsesSequentialLoopSlots)
 {
-	const unsigned int numChans = 2;
+	const unsigned int numInputChans = 5;
+	const unsigned int numLoopChans = 2;
 	const unsigned int blockSize = 512;
 	const unsigned long loopLength = 2048ul;
 	const unsigned long totalRecord = constants::MaxLoopFadeSamps + loopLength;
 	const unsigned int totalBlocks =
 		static_cast<unsigned int>((totalRecord + blockSize - 1) / blockSize);
 
-	auto station = MakeStation(numChans);
+	auto station = MakeStation(numLoopChans);
 	auto take = MakeTake();
 	station->AddTake(take);
 	take->Record({ 2u, 4u }, "test");
 	station->CommitChanges();
 
-	auto chanMixer = MakeChannelMixer(numChans, constants::MaxBlockSize);
-	std::vector<float> inBuf(numChans * blockSize);
+	auto chanMixer = MakeChannelMixer(numInputChans, constants::MaxBlockSize);
+	std::vector<float> inBuf(numInputChans * blockSize);
 	std::vector<float> writtenCh0;
 	std::vector<float> writtenCh1;
 	writtenCh0.reserve(totalBlocks * blockSize);
@@ -442,13 +500,13 @@ TEST(AudioFlow, SparseInputConfig_RecordUsesSequentialLoopSlots)
 
 	for (unsigned int block = 0; block < totalBlocks; ++block)
 	{
-		FillTestData(inBuf.data(), numChans, blockSize, block);
-		WriteBlock(chanMixer, station, inBuf.data(), numChans, blockSize);
+		FillTestData(inBuf.data(), numInputChans, blockSize, block);
+		WriteBlock(chanMixer, station, inBuf.data(), numInputChans, blockSize);
 
 		for (unsigned int sample = 0; sample < blockSize; ++sample)
 		{
-			writtenCh0.push_back(inBuf[sample * numChans + 0u]);
-			writtenCh1.push_back(inBuf[sample * numChans + 1u]);
+			writtenCh0.push_back(inBuf[sample * numInputChans + 2u]);
+			writtenCh1.push_back(inBuf[sample * numInputChans + 4u]);
 		}
 	}
 

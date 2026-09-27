@@ -1431,6 +1431,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
 	_backLoops.clear();
+	_recordInputChannels = channels;
 	_RemoveMidiModelChildren();
 	_ResetMidiOverdubSession();
 
@@ -2059,11 +2060,18 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	_isMidiPunchInActive.store(false, std::memory_order_relaxed);
 	_midiRecordHeld.clear();
 	_backLoops.clear();
+	_recordInputChannels = channels;
 	_RemoveMidiModelChildren();
 
-	for (auto chan : channels)
+	// Bounce addresses source loop slots. Preserve those slots when the current
+	// capture route has fewer inputs than the source take.
+	const auto sourceAudioState = sourceTake ? sourceTake->_AudioStateSnapshot() : nullptr;
+	const auto sourceLoopCount = sourceAudioState ? sourceAudioState->Loops.size() : 0u;
+	const auto targetLoopCount = (std::max)(channels.size(), sourceLoopCount);
+	_recordInputChannels.resize(targetLoopCount, (std::numeric_limits<unsigned int>::max)());
+	for (size_t loopSlot = 0u; loopSlot < targetLoopCount; ++loopSlot)
 	{
-		auto loop = AddLoop(chan, stationName);
+		auto loop = AddLoop(static_cast<unsigned int>(loopSlot), stationName);
 		loop->Overdub();
 	}
 
@@ -2410,6 +2418,17 @@ const std::shared_ptr<AudioSink> LoopTake::_InputChannel(unsigned int channel,
 	{
 	case Audible::AUDIOSOURCE_ADC:
 	case Audible::AUDIOSOURCE_MONITOR:
+		if (!state->RecordInputChannels.empty())
+		{
+			for (size_t loopIndex = 0u; loopIndex < state->RecordInputChannels.size(); ++loopIndex)
+				if ((state->RecordInputChannels[loopIndex] == channel) && (loopIndex < loops.size()))
+					return loops[loopIndex].lock();
+			return nullptr;
+		}
+		if (channel < loops.size())
+			return loops[channel].lock();
+
+		break;
 	case Audible::AUDIOSOURCE_BOUNCE:
 		if (channel < loops.size())
 			return loops[channel].lock();
@@ -2656,6 +2675,7 @@ void LoopTake::_PublishAudioState()
 	state->Loops.reserve(_loops.size());
 	for (const auto& loop : _loops)
 		state->Loops.push_back(loop);
+	state->RecordInputChannels = _recordInputChannels;
 	state->AudioMixers = _audioMixers;
 	state->AudioBuffers = _audioBuffers;
 	state->VstBlockScratch.resize(state->AudioBuffers.size() * constants::MaxBlockSize);
