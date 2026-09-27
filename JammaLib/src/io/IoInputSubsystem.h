@@ -10,6 +10,7 @@
 #include "../midi/MidiRouter.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../engine/Station.h"
+#include "../engine/RigSnapshot.h"
 
 namespace io
 {
@@ -28,7 +29,15 @@ namespace io
 		void Init(midi::MidiClockAnchor& midiClockAnchor);
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
-		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void PublishEmptyRigInputDispatch();
+		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
+		bool RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept;
+		std::uint64_t AcknowledgeRigTriggerInputCloseFromJob() noexcept;
+		bool RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept;
+		bool TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept;
+		void CloseRigTriggerInputForever() noexcept;
+		bool RigTriggerInputReadyForShutdown() const noexcept;
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		bool InitGlobalKeyCapture();
 		void CloseGlobalKeyCapture();
@@ -52,8 +61,6 @@ namespace io
 		void SetForcedChannelOverride(std::uint8_t forcedChannelOverride,
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::uint8_t ForcedChannelOverride() const noexcept;
-
-		void RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
 	private:
 		static LRESULT CALLBACK _LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) noexcept;

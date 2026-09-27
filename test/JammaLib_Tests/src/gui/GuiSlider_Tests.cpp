@@ -253,4 +253,35 @@ TEST(GuiSlider, DragHandleRespondsToHover) {
 	slider->OnAction(moveAction);
 
 	ASSERT_TRUE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, slider->GetState());
+
+	moveAction.Position = { 80, 10 };
+	slider->OnAction(moveAction);
+	EXPECT_FALSE(slider->DragHandleIsOverForTest());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, slider->GetState());
+}
+
+TEST(GuiSlider, ClearingPointerCancelsDragAndDiscardsOffset) {
+	GuiSliderParams params;
+	params.Size = { 120u, 20u };
+	params.DragControlSize = { 20u, 20u };
+	params.Orientation = GuiSliderParams::SLIDER_HORIZONTAL;
+	auto slider = std::make_shared<GuiSlider>(params);
+	auto receiver = std::make_shared<MockedSliderReceiver>(0.0);
+	slider->SetReceiver(receiver);
+	auto down = TouchAction();
+	down.Touch = TouchAction::TOUCH_MOUSE;
+	down.Position = { 10, 10 };
+	down.State = TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(slider->OnAction(down).IsEaten);
+	auto move = TouchMoveAction();
+	move.Touch = TouchAction::TOUCH_MOUSE;
+	move.Position = { 60, 10 };
+	slider->OnAction(move);
+	ASSERT_GT(slider->Value(), 0.0);
+	slider->ClearPointerState();
+	EXPECT_DOUBLE_EQ(0.0, slider->Value());
+	EXPECT_TRUE(receiver->IsExpected());
+	EXPECT_FALSE(slider->OnAction(move).IsEaten);
+	EXPECT_DOUBLE_EQ(0.0, slider->Value());
 }

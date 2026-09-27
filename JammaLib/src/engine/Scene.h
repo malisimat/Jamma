@@ -8,9 +8,11 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include "../resources/ResourceLib.h"
 #include "../actions/JobAction.h"
@@ -53,6 +55,7 @@
 #include "GuiElement.h"
 #include "Station.h"
 #include "StationRemote.h"
+#include "RigCoordinator.h"
 #include "../actions/ActionUndoHistory.h"
 
 namespace engine
@@ -99,86 +102,11 @@ namespace engine
 		// Copy
 		Scene(const Scene&) = delete;
 		Scene& operator=(const Scene&) = delete;
-		/*
-		// Move
-		Scene(Scene&& other) :
-			base::Tickable(std::move(other)),
-			base::Drawable(std::move(other)),
-			base::Sizeable(std::move(other)),
-			_viewProj(other._viewProj),
-			_overlayViewProj(other._overlayViewProj),
-			_channelMixer(std::move(other._channelMixer)),
-			_audioDevice(std::move(other._audioDevice)),
-			_label(std::move(other._label)),
-			_selector(std::move(other._selector)),
-			_undoHistory(std::move(other._undoHistory)),
-			_stations(std::move(other._stations)),
-			_touchDownElement(other._touchDownElement),
-			_hoverElement3d(other._hoverElement3d),
-			_touchDownElement3d(other._touchDownElement3d),
-			_masterLoop(other._masterLoop)
-		{
-			other._stations = std::vector<std::shared_ptr<Station>>();
-			other._viewProj = glm::mat4();
-			other._overlayViewProj = glm::mat4();
-			other._channelMixer = std::make_unique<audio::ChannelMixer>();
-			other._audioDevice = std::make_unique<audio::AudioDevice>();
-			other._label = std::make_unique<gui::GuiLabel>(
-				gui::GuiLabelParams(
-					base::GuiElementParams(
-						base::DrawableParams{ "" },
-						base::MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-						base::SizeableParams{ 1,1 },
-						"",
-						"",
-						"",
-						{}),
-					""));
-			other._selector = std::make_unique<gui::SceneSelector>(
-				gui::GuiSelectorParams(
-					base::GuiElementParams(
-						base::DrawableParams{ "" },
-						base::MoveableParams(utils::Position2d{ 0, 0 }, utils::Position3d{ 0, 0, 0 }, 1.0),
-						base::SizeableParams{ 1,1 },
-						"",
-						"",
-						"",
-						{}),
-					""));
-			_undoHistory = UndoHistory();
-			other._masterLoop = std::make_shared<Loop>(LoopParams());
-		}
-
-		Scene& operator=(Scene&& other)
-		{
-			if (this != &other)
-			{
-				ReleaseResources();
-
-				std::swap(_viewProj, other._viewProj);
-				std::swap(_overlayViewProj, other._overlayViewProj);
-				_channelMixer.swap(other._channelMixer);
-				_audioDevice.swap(other._audioDevice);
-				_label.swap(other._label);
-				_selector.swap(other._selector);
-				_stations.swap(other._stations);
-				_undoHistory.swap(other._undoHistory);
-				std::swap(_touchDownElement, other._touchDownElement),
-				std::swap(_hoverElement3d, other._hoverElement3d),
-				std::swap(_touchDownElement3d, other._touchDownElement3d),
-				_masterLoop.swap(other._masterLoop);
-				std::swap(_drawParams, other._drawParams);
-				std::swap(_sizeParams, other._sizeParams);
-				std::swap(_texture, other._texture);
-			}
-
-			return *this;
-		}*/
-
 		static std::optional<std::shared_ptr<Scene>> FromFile(SceneParams sceneParams,
 			io::JamFile jam,
 			io::RigFile rig,
-			std::wstring dir);
+			std::wstring dir,
+			std::function<bool(const io::RigFile&)> saveRig = {});
 		
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
@@ -186,6 +114,7 @@ namespace engine
 
 		virtual void SetSize(utils::Size2d size) override
 		{
+			std::scoped_lock lock(_sceneMutex);
 			_sizeParams.Size = size;
 			_InitSize();
 			_InvalidateHover2d();
@@ -229,12 +158,15 @@ namespace engine
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
+		bool SaveRig(const io::RigFile& rig) const { return _saveRig && _saveRig(rig); }
+		RigCoordinator::EditResult RequestRigEdit(const io::RigFile& candidateRig);
+		std::shared_ptr<const RigSnapshot> AcceptedRigSnapshot() const noexcept
+		{
+			return _rigCoordinator.Accepted();
+		}
 		void ApplyDeferredHoverUpdates();
 
-		// Returns a locked snapshot of the current station list.  Always use
-		// this when reading _stations from outside the render/tick thread (e.g.
-		// exporters, network handlers, tests).  Holding the snapshot keeps the
-		// shared_ptrs alive even if _stations is mutated on another thread.
+		// Returns a locked station snapshot safe to use outside render/tick threads.
 		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
 
 		// Send a chat message on the active ninjam session (no-op if none).
@@ -285,11 +217,11 @@ namespace engine
 		void _InitSize();
 		void _UpdateHudStationAnchors();
 		void _UpdateSelection(actions::ActionResultType res);
+		void _AddStation(std::shared_ptr<Station> station, bool publishAudioStations = true);
 		// Pass a locked station list or a snapshot; remote updates can erase entries.
 		static utils::Position3d _StationCentre(const std::vector<std::shared_ptr<Station>>& stations);
 		void _CycleCameraView();
 		void _ApplyCameraSelectDepthChange(graphics::Camera::SelectDepthChange change);
-		void _AddStation(std::shared_ptr<Station> station);
 		void _HandleReclockArm();
 		actions::ActionResult _HandleUndo();
 		void _SetQuantisation(unsigned int quantiseSamps, utils::Timer::QuantisationType quantisation);
@@ -300,8 +232,11 @@ namespace engine
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
-		void _RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger);
+		void _PumpTriggerStructuralActions();
+		void _AdvanceRigPublication();
+		gui::RoutingEditAvailability _RoutingEditAvailability();
 		void _PumpSerial();
+		void _ConsumeTriggerOutcomes();
 		void _PublishAudioStations();
 		std::shared_ptr<base::GuiElement> _ChildFromPath(std::vector<unsigned char> path);
 		void _UpdateSelectDepth(unsigned int depth);
@@ -324,8 +259,6 @@ namespace engine
 		void _ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>& nextPath);
 		void _LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
 			std::vector<std::shared_ptr<base::GuiElement>>& outPath) const;
-		static size_t _SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
-			const std::vector<std::shared_ptr<base::GuiElement>>& rhs);
 		actions::ActionResult _BeginBackgroundDrag(actions::TouchAction action);
 		actions::ActionResult _UpdateBackgroundDrag(actions::TouchMoveAction action);
 		void _EndBackgroundDrag();
@@ -392,8 +325,15 @@ namespace engine
 		ninjam::TempoRequestState _lastLoggedTempoRequestState = ninjam::TempoRequestState::Idle;
 		std::shared_ptr<gui::GuiPopup> _remoteTempoDialog;
 		std::vector<std::shared_ptr<Station>> _stations;
+		RigCoordinator _rigCoordinator;
+		std::uint64_t _rigTransitionRequestedRevision = 0u;
+		std::unordered_map<const Trigger*, std::pair<std::uint64_t, std::uint64_t>> _triggerOutcomeCounts;
+		std::uint64_t _lastAudioCallbackHeartbeat = 0u;
+		std::chrono::steady_clock::time_point _lastAudioCallbackHeartbeatAt{};
 		actions::ActionUndoHistory _undoHistory;
 		std::weak_ptr<base::GuiElement> _touchDownElement;
+		// Whether the touch sequence started on the HUD panel, recorded at touch-down.
+		bool _touchDownIsHud = false;
 		std::weak_ptr<base::GuiElement> _hoverElement3d;
 		std::vector<unsigned char> _hoverPath3d;
 		std::vector<std::weak_ptr<base::GuiElement>> _hoverPath2d;
@@ -411,6 +351,7 @@ namespace engine
 		std::list<actions::JobAction> _jobList;
 		mutable std::mutex _sceneMutex;
 		io::UserConfig _userConfig;
+		std::function<bool(const io::RigFile&)> _saveRig;
 		ViewMode _viewMode;
 		utils::Position2d _cursorPos{};
 	};

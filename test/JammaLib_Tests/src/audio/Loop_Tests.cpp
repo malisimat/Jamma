@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
+#include "engine/Trigger.h"
 
 using resources::ResourceLib;
 using engine::Loop;
@@ -218,7 +219,7 @@ static void PlayOneBlock(Loop& loop,
     unsigned int blockSize)
 {
     sink->Zero(blockSize, base::Audible::AUDIOSOURCE_ADC);
-    loop.WriteBlock(sink, std::shared_ptr<engine::Trigger>(), 0, blockSize);
+    loop.WriteBlock(sink, std::shared_ptr<base::BounceWriter>(), 0, blockSize);
     loop.EndMultiPlay(blockSize);
     sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 }
@@ -823,7 +824,7 @@ TEST(Loop, WrapXfade_ConstantInputNoGainBump) {
     loop.Play(startIndex, loopLength, false);
 
     auto sink = std::make_shared<MockMultiSink>(blockSize);
-    loop.WriteBlock(sink, std::shared_ptr<engine::Trigger>(), 0, blockSize);
+    loop.WriteBlock(sink, std::shared_ptr<base::BounceWriter>(), 0, blockSize);
     loop.EndMultiPlay(blockSize);
     sink->EndMultiWrite(blockSize, true, base::Audible::AUDIOSOURCE_ADC);
 

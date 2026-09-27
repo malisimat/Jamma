@@ -713,8 +713,7 @@ void Camera::ObserveStation(size_t index, std::shared_ptr<const void> identity, 
 		_lastChangedStationPosition = position;
 	if (_observedStations.size() <= index || _observedStations[index].Identity != identity)
 	{
-		// A removal shifts later stations left. Preserve this station's old
-		// revision so a simultaneous take change is still observed.
+		// Preserve the old revision when removal shifts indices, so same-frame take changes remain visible.
 		const auto previous = std::find_if(_observedStations.begin(), _observedStations.end(),
 			[&identity](const ObservedStation& station) { return station.Identity == identity; });
 		const auto previousRevision = previous == _observedStations.end() ? revision : previous->Revision;

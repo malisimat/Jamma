@@ -2,6 +2,7 @@
 
 #include <memory>
 #include "../base/ActionUndo.h"
+#include "../base/TriggerPunchTarget.h"
 
 namespace base { class GuiElement; };
 
@@ -25,6 +26,14 @@ namespace actions
 		ACTIONRESULT_ROUTEROUTPUT
 	};
 
+	enum class DitchDisposition
+	{
+		NotApplicable,
+		Removed,
+		AlreadyAbsent,
+		Failed
+	};
+
 	struct ActionResult
 	{
 		bool IsEaten;
@@ -33,6 +42,9 @@ namespace actions
 		ActionResultType ResultType;
 		std::shared_ptr<base::ActionUndo> Undo;
 		std::weak_ptr<base::GuiElement> ActiveElement;
+		DitchDisposition DitchResult = DitchDisposition::NotApplicable;
+		std::weak_ptr<base::TriggerPunchTarget> TriggerSourceTake;
+		std::weak_ptr<base::TriggerPunchTarget> TriggerTargetTake;
 
 		static ActionResult NoAction() {
 			return { false, "", "", ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };

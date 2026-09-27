@@ -71,6 +71,11 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
   </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
     <OutDir>bin\$(Platform)\$(Configuration)\</OutDir>
@@ -159,6 +164,7 @@
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>include\stdafx.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
@@ -301,6 +307,7 @@
     <ClInclude Include="src\gui\GuiDropDown.h" />
     <ClInclude Include="src\gui\GuiMainPanel.h" />
     <ClInclude Include="src\gui\GuiHud.h" />
+	<ClInclude Include="src\gui\CableInteraction.h" />
     <ClInclude Include="src\gui\GuiScrollBar.h" />
     <ClInclude Include="src\gui\GuiScrollPanel.h" />
     <ClInclude Include="src\base\GuiElement.h" />
@@ -355,6 +362,8 @@
     <ClInclude Include="src\utils\StringUtils.h" />
     <ClInclude Include="src\engine\Station.h" />
     <ClInclude Include="src\engine\StationRemote.h" />
+	<ClInclude Include="src\engine\RigSnapshot.h" />
+	<ClInclude Include="src\engine\RigCoordinator.h" />
     <ClInclude Include="src\io\JamFile.h" />
 
     <ClInclude Include="src\io\NativeMidiSidecar.h" />
@@ -454,6 +463,7 @@
     <ClCompile Include="src\gui\GuiDropDown.cpp" />
     <ClCompile Include="src\gui\GuiMainPanel.cpp" />
     <ClCompile Include="src\gui\GuiHud.cpp" />
+	<ClCompile Include="src\gui\CableInteraction.cpp" />
     <ClCompile Include="src\gui\GuiScrollBar.cpp" />
     <ClCompile Include="src\gui\GuiScrollPanel.cpp" />
     <ClCompile Include="src\gui\GuiLabel.cpp" />
@@ -497,6 +507,8 @@
     <ClCompile Include="lib\glew\glew.c" />
     <ClCompile Include="lib\rtaudio\RtAudio.cpp" />
     <ClCompile Include="src\engine\StationRemote.cpp" />
+	<ClCompile Include="src\engine\RigSnapshot.cpp" />
+	<ClCompile Include="src\engine\RigCoordinator.cpp" />
     <ClCompile Include="src\io\JamFile.cpp" />
     <ClCompile Include="src\io\NativeMidiSidecar.cpp" />
     <ClCompile Include="src\vst\Vst.cpp" />

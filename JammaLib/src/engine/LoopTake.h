@@ -15,12 +15,12 @@
 #include "../midi/MidiOverdub.h"
 #include "Jammable.h"
 #include "ActionUndo.h"
-#include "Trigger.h"
 #include "../audio/AudioMixer.h"
 #include "../audio/AudioBuffer.h"
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../base/TriggerPunchTarget.h"
 
 using base::Audible;
 
@@ -63,7 +63,8 @@ namespace engine
 
 	class LoopTake :
 		public base::Jammable,
-		public base::MultiAudioSink
+		public base::MultiAudioSink,
+		public base::TriggerPunchTarget
 	{
 	public:
 		enum LoopTakeSource
@@ -117,9 +118,12 @@ namespace engine
 		virtual void Zero(unsigned int numSamps,
 			Audible::AudioSourceType source) override;
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
-			const std::shared_ptr<Trigger> trigger,
+			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
 			unsigned int numSamps);
+		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
+			std::shared_ptr<base::BounceWriter> writer) noexcept;
+		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
 		virtual bool IsArmed() const override;
 		virtual void EndMultiWrite(unsigned int numSamps,
@@ -214,7 +218,12 @@ namespace engine
 			// Snapshot of currently held live MIDI, keyed by device name.
 			// Empty device name means "device-agnostic / any source".
 			std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart = {},
-			std::uint64_t transportStartSamps = 0u);
+			std::uint64_t transportStartSamps = 0u,
+			std::optional<std::uint32_t> midiRecordStartSample = std::nullopt);
+		std::optional<std::uint32_t> MidiRecordStartSample() const noexcept
+		{
+			return _midiRecordStartSample;
+		}
 		void Play(unsigned long index,
 			unsigned long loopLength,
 			unsigned int endRecordSamps,
@@ -254,6 +263,10 @@ namespace engine
 			std::uint64_t transportStartSamps = 0u);
 		void PunchIn(bool applyAudio = true, bool applyMidi = true);
 		void PunchOut(bool applyAudio = true, bool applyMidi = true);
+		// Keep MIDI capture and synthetic events on the job thread; audio transitions must stay allocation-free.
+		void TriggerPunchInAudio() noexcept override;
+		void TriggerPunchOutAudio() noexcept override;
+		void SetTriggerSourceMutedAudio(bool muted) noexcept override;
 		bool IsPunchInActive() const noexcept { return _isPunchInActive.load(std::memory_order_relaxed); }
 
 		bool RecordMidiEvent(const midi::MidiEvent& ev, std::uint32_t globalSampleNow) noexcept;
@@ -307,6 +320,9 @@ namespace engine
 		static std::uint32_t ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 			std::uint32_t globalSampleNow,
 			std::uint32_t recordedSampleCount) noexcept;
+		static std::uint32_t ResolveMidiRecordSampleFromTrigger(
+			std::uint32_t eventGlobalSample,
+			std::uint32_t triggerSample) noexcept;
 
 		// Per-LoopTake non-destructive MIDI start-time quantisation. Propagated to
 		// every owned midi::MidiLoop. Underlying recorded events are never modified;
@@ -318,7 +334,12 @@ namespace engine
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
+		// Called at the first captured audio block so MIDI's local sample zero has
+		// the same transport origin as the recorded sample counter.
+		void CaptureMidiTransportStartAtAudioBoundary(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
+		void CaptureFirstRecordBlockSceneAtAudioBoundary(std::uint64_t sceneSamps) noexcept;
+		std::uint64_t FirstRecordBlockSceneSamps() const noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps) noexcept;
 		void SetRackVisibility(bool visible);
@@ -341,6 +362,7 @@ namespace engine
 		{
 			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
 			std::vector<std::weak_ptr<Loop>> Loops;
+			std::vector<unsigned int> RecordInputChannels;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
 			std::vector<float> VstBlockScratch;
@@ -356,6 +378,7 @@ namespace engine
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
+		double _MidiLoopIndexFrac() const noexcept;
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
 		void _PublishMidiLoopSnapshot();
@@ -400,7 +423,6 @@ namespace engine
 		void _ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gesture,
 			midi::MidiQuantisationFraction fraction,
 			const char* source) noexcept;
-		std::int32_t _NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept;
 		midi::MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
 		midi::MidiNoteSnapshot _SnapshotSourceMidiAtSample(std::size_t loopIndex, std::uint32_t targetSample) const noexcept;
 		midi::MidiNoteSnapshot _SnapshotLiveMidiState(std::size_t loopIndex) const noexcept;
@@ -425,6 +447,8 @@ namespace engine
 		bool _loopsNeedUpdating;
 		bool _endRecordingCompleted;
 		std::atomic<LoopTakeState> _state;
+		std::weak_ptr<LoopTake> _activeBounceSource;
+		std::shared_ptr<base::BounceWriter> _activeBounceWriter;
 		std::string _id;
 		std::string _sourceId;
 		unsigned int _lastBufSize;
@@ -458,10 +482,13 @@ namespace engine
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+		std::vector<unsigned int> _recordInputChannels;
 		std::vector<std::shared_ptr<midi::MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
 		std::vector<std::string> _midiLoopDevices;
 		std::vector<midi::MidiNoteSnapshot> _midiRecordHeld;
+		// Job-thread-owned sample origin for an unseeded first MIDI take.
+		std::optional<std::uint32_t> _midiRecordStartSample;
 		midi::MidiOverdubSession _midiOverdubSession;
 		mutable std::mutex _midiCaptureMutex;
 		std::atomic<std::shared_ptr<const MidiLoopSnapshot>> _midiLoopSnapshot;
@@ -471,6 +498,9 @@ namespace engine
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
+		std::atomic<std::uint64_t> _firstRecordBlockSceneSamps{ 0u };
+		// Audio callback publishes the captured start; the record-end job reads it.
+		std::atomic_bool _midiTransportStartFromAudio{ false };
 		// Seqlock-style publication avoids torn remote-grid reads without placing a
 		// lock or allocation on any real-time path.
 		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };

@@ -20,6 +20,7 @@ GuiLabelParams GuiButton::_MakeLabelParams(const GuiButtonParams& params)
 	lp.Position = { (int)frame.PaddingX, frame.OffsetY };
 	lp.Size = { frame.ContentWidth, frame.TextHeight };
 	lp.MinSize = { 1u, frame.TextHeight };
+	lp.CenterHorizontally = true;
 	return lp;
 }
 
@@ -30,6 +31,14 @@ GuiButton::GuiButton(GuiButtonParams params) :
 {
 	if (_label)
 		_children.push_back(_label);
+}
+
+actions::ActionResult GuiButton::OnAction(actions::TouchAction action)
+{
+	auto result = GuiElement::OnAction(action);
+	if (result.IsEaten && action.State == actions::TouchAction::TOUCH_DOWN && !result.ActiveElement.lock())
+		result.ActiveElement = std::static_pointer_cast<base::GuiElement>(shared_from_this());
+	return result;
 }
 
 void GuiButton::SetSize(Size2d size)

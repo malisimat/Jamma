@@ -18,7 +18,7 @@ namespace gui
 			GuiPassThrough = false;
 		}
 
-		unsigned int ScrollBarWidth = 12u;
+		unsigned int ScrollBarWidth = 18u;
 		unsigned int WheelStep      = 24u;   // pixels scrolled per wheel notch.
 		std::string  ScrollBarTexture = "rounded_but";
 		std::string  ThumbTexture      = "blue";
@@ -34,11 +34,7 @@ namespace gui
 		}
 	};
 
-	// A vertically scrollable viewport hosting a single content element plus a
-	// scrollbar.  The content is expected to be sized to its full (logical)
-	// height; the panel shows a window of height == panel height and offsets the
-	// content vertically.  Mouse-wheel and scrollbar dragging both drive the
-	// offset.  Scroll math is testable without a GL context.
+	// Scrollable viewport for full-height content, driven by wheel or scrollbar.
 	class GuiScrollPanel : public GuiPanel
 	{
 	public:
@@ -54,6 +50,7 @@ namespace gui
 		int MaxScrollOffset() const;
 		unsigned int ViewportWidth() const;
 		unsigned int ViewportHeight() const;
+		bool IsScrollBarVisible() const;
 
 		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;
@@ -63,6 +60,7 @@ namespace gui
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
 		virtual bool RouteHitTest(utils::Position2d localPos) override;
 		virtual std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
+		virtual void ClearPointerState() override;
 
 	protected:
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
@@ -71,11 +69,13 @@ namespace gui
 		unsigned int _ContentHeight() const;
 		void _UpdateMetrics();
 		void _ClampOffset();
+		void _UpdateContentHostPosition();
 		bool _IsInViewport(utils::Position2d localPos) const;
 
 		static GuiScrollBarParams _MakeScrollBarParams(const GuiScrollPanelParams& params);
 
 		std::shared_ptr<base::GuiElement> _content;
+		std::shared_ptr<base::GuiElement> _contentHost;
 		std::shared_ptr<GuiScrollBar>     _scrollBar;
 		static constexpr unsigned int _ContentClipPadding = 2u;
 		unsigned int _scrollBarWidth;

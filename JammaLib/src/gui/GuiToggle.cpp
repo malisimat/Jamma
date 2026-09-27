@@ -31,6 +31,9 @@ void GuiToggle::SetSize(Size2d size)
 
 void GuiToggle::Draw(DrawContext& ctx)
 {
+	if (!_isVisible)
+		return;
+
 	auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
 	_ApplyTextureTint(glCtx);
 

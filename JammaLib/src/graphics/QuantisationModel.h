@@ -33,6 +33,9 @@ namespace engine
 			float outerRadius,
 			float halfHeight);
 		static VisualCounts ResolveVisualCounts(const engine::QuantisationLoopTakeVisual& visual) noexcept;
+		static std::uint32_t VisualBoundaryOffsetSamps(
+			const engine::QuantisationLoopTakeVisual& visual,
+			std::uint32_t boundaryIndex, std::uint32_t divisionsPerGrain) noexcept;
 
 	private:
 		static constexpr float GateInnerRadius = 0.0f;

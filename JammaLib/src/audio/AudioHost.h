@@ -22,12 +22,19 @@
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 
+namespace engine
+{
+	struct RigSnapshot;
+}
+
 namespace audio
 {
 	class NinjamAudioBoundaryTestAccess;
+	class RigAudioBoundaryTestAccess;
 
 	class AudioHost
 	{
+		friend class RigAudioBoundaryTestAccess;
 	public:
 		using TickCallback = std::function<void(Time streamTime, unsigned int numSamps,
 			const std::optional<io::UserConfig>& cfg,
@@ -41,6 +48,29 @@ namespace audio
 		void Close();
 
 		void SetStations(std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> stations);
+		void PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void RequestRigTriggerTransition(std::uint64_t candidateRevision,
+			std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
+			std::shared_ptr<const engine::RigSnapshot> candidateSnapshot);
+		void ClearRigTriggerTransition() noexcept;
+		std::uint64_t TransitionReadyRigRevision() const noexcept
+		{
+			return _transitionReadyRigRevision.load(std::memory_order_acquire);
+		}
+		std::uint64_t RejectedRigRevision() const noexcept
+		{
+			return _rejectedRigRevision.load(std::memory_order_acquire);
+		}
+		// Call off the audio thread after a newer revision has been acknowledged.
+		void ReleaseRigSnapshotsBefore(std::uint64_t revision);
+		std::uint64_t AppliedRigRevision() const noexcept
+		{
+			return _appliedRigRevision.load(std::memory_order_acquire);
+		}
+		std::uint64_t AudioCallbackHeartbeat() const noexcept
+		{
+			return _audioCallbackHeartbeat.load(std::memory_order_relaxed);
+		}
 
 		std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>> GetStationsSnapshot() const { return _audioStations.load(std::memory_order_acquire); }
 		std::uint64_t GetAudioSampleCounter() const { return _audioSampleCounter.load(std::memory_order_relaxed); }
@@ -96,6 +126,8 @@ namespace audio
 
 		bool ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept;
+		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
+		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations) noexcept;
 		std::optional<std::int64_t> RestoreMappedSourceAtScene(
@@ -151,6 +183,20 @@ namespace audio
 		std::array<std::atomic<float>, _AdcPeakChannels> _adcPeaks{};
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<engine::Station>>>> _audioStations;
+		// Retain snapshots off audio so callback references cannot become the last owner.
+		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _pendingRigSnapshot;
+		// Replacing this handle must not destroy the last snapshot or Trigger on audio.
+		std::shared_ptr<const engine::RigSnapshot> _audioAppliedRigSnapshot;
+		std::atomic<std::uint64_t> _rigTriggerTransitionRequestRevision{ 0u };
+		std::atomic<std::uint64_t> _rigTriggerTransitionAcceptedRevision{ 0u };
+		std::atomic<std::shared_ptr<const engine::RigSnapshot>> _rigTriggerTransitionCandidate;
+		std::atomic<std::uint64_t> _transitionReadyRigRevision{ 0u };
+		std::atomic<std::uint64_t> _rejectedRigRevision{ 0u };
+		std::mutex _retainedRigSnapshotsMutex;
+		std::vector<std::shared_ptr<const engine::RigSnapshot>> _retainedRigSnapshots;
+		std::atomic<std::uint64_t> _appliedRigRevision{ 0u };
+		std::atomic<std::uint64_t> _audioCallbackHeartbeat{ 0u };
+		std::uint64_t _audioRigRevision = 0u;
 		std::shared_ptr<ninjam::NinjamController> _ninjamController;
 		// Audio-thread owned phase-map geometry. The map is rebased after every
 		// accepted common correction so the next block cannot undo it.

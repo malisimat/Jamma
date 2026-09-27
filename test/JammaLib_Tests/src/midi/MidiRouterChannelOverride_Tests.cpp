@@ -180,3 +180,25 @@ TEST(MidiRouterChannelOverride, DeriveStationEventChannelDivergesFromRawTriggerC
 	EXPECT_EQ(1u, stationEvent.Channel());
 	EXPECT_NE(rawEvent.Channel(), stationEvent.Channel());
 }
+
+TEST(MidiRouterChannelOverride, RigTriggerInputGateIsRevisionSpecificAndReversible)
+{
+	midi::MidiRouter router;
+	EXPECT_TRUE(router.OpenRigTriggerInput(7u));
+	EXPECT_TRUE(router.TryAcceptUiRigTriggerInput(7u));
+	EXPECT_FALSE(router.TryAcceptUiRigTriggerInput(8u));
+	EXPECT_TRUE(router.RequestCloseRigTriggerInputFromUi(7u));
+	EXPECT_FALSE(router.TryAcceptUiRigTriggerInput(7u));
+	EXPECT_EQ(7u, router.AcknowledgeRigTriggerInputCloseFromJob());
+	EXPECT_TRUE(router.RigTriggerInputReadyForAudioBoundary(7u));
+	EXPECT_TRUE(router.OpenRigTriggerInput(7u));
+	EXPECT_TRUE(router.TryAcceptUiRigTriggerInput(7u));
+}
+
+TEST(MidiRouterChannelOverride, StaleAndUntaggedIngressCannotCrossRoutingRevisions)
+{
+	EXPECT_TRUE(midi::MidiRouter::IsCurrentRigIngressRevision(12u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(11u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(13u, 12u));
+	EXPECT_FALSE(midi::MidiRouter::IsCurrentRigIngressRevision(0u, 12u));
+}

@@ -2,6 +2,7 @@
 #include "gui/GuiButton.h"
 #include "gui/GuiToggle.h"
 #include "gui/GuiFocusManager.h"
+#include "gui/GuiPopup.h"
 #include "gui/GuiPopupManager.h"
 #include "gui/GuiTextBox.h"
 #include "gui/GuiNumericInput.h"
@@ -19,6 +20,8 @@ using gui::GuiButtonParams;
 using gui::GuiToggle;
 using gui::GuiToggleParams;
 using gui::GuiFocusManager;
+using gui::GuiPopup;
+using gui::GuiPopupButtonConfig;
 using gui::GuiPopupManager;
 using gui::GuiTextBox;
 using gui::GuiTextBoxParams;
@@ -94,9 +97,7 @@ static void TypeChars(const std::shared_ptr<GuiTextBox>& tb, const std::string& 
 		tb->OnAction(MakeKey((unsigned int)(unsigned char)vk));
 }
 
-// ---------------------------------------------------------------------------
-// GuiFocusManager
-// ---------------------------------------------------------------------------
+// GuiFocusManager tests
 
 TEST(GuiFocusManager, RequestFocusIsSingleOwner) {
 	GuiFocusManager fm;
@@ -137,9 +138,7 @@ TEST(GuiFocusManager, IsEditingTextTracksFocusedTextBox) {
 	EXPECT_FALSE(fm.IsEditingText());
 }
 
-// ---------------------------------------------------------------------------
-// GuiPopupManager
-// ---------------------------------------------------------------------------
+// GuiPopupManager tests
 
 TEST(GuiPopupManager, OpenAndCloseTrackTopmost) {
 	GuiPopupManager host;
@@ -152,6 +151,38 @@ TEST(GuiPopupManager, OpenAndCloseTrackTopmost) {
 
 	host.Close();
 	EXPECT_FALSE(host.IsOpen());
+}
+
+TEST(GuiElement, ExclusiveHoverSelectsOnlyTheTopmostOverlap) {
+	auto root = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	root->SetSize({ 40u, 20u });
+	auto underneath = std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 30, 20 }));
+	auto topmost = std::make_shared<GuiButton>(MakeSizedButton({ 20, 0 }, { 20, 20 }));
+	root->AddChild(underneath);
+	root->AddChild(topmost);
+
+	root->ApplyExclusiveHoverPoint({ 25, 10 });
+
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, topmost->GetState());
+}
+
+TEST(GuiElement, ExclusiveHoverReachesScrollPanelContent) {
+	GuiScrollPanelParams params;
+	params.Size = { 100u, 50u };
+	params.MinSize = params.Size;
+	auto panel = std::make_shared<GuiScrollPanel>(params);
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 75 }, { 40, 20 }));
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80u, 100u };
+	contentParams.MinSize = contentParams.Size;
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	content->AddChild(button);
+	panel->SetContent(content);
+
+	panel->ApplyExclusiveHoverPoint({ 10, 30 });
+
+	EXPECT_EQ(base::GuiElement::STATE_OVER, button->GetState());
 }
 
 TEST(GuiPopupManager, OutsidePressDismissesAndConsumes) {
@@ -187,9 +218,56 @@ TEST(GuiPopupManager, EscapeDismissesTopmost) {
 	EXPECT_FALSE(host.IsOpen());
 }
 
-// ---------------------------------------------------------------------------
-// GuiToggle keyboard support
-// ---------------------------------------------------------------------------
+TEST(GuiPopupManager, OpenClearsOwnerPointerPresentation) {
+	GuiPopupManager host;
+	auto owner = std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 40, 20 }));
+	auto sibling = std::make_shared<GuiButton>(MakeSizedButton({ 20, 0 }, { 20, 20 }));
+	auto root = std::make_shared<base::GuiElement>(base::GuiElementParams{});
+	root->SetSize({ 40u, 20u });
+	root->AddChild(owner);
+	root->AddChild(sibling);
+
+	owner->ApplyHoverState(true);
+	sibling->ApplyHoverState(true);
+	host.Open(std::make_shared<GuiButton>(MakeSizedButton({ 100, 100 }, { 50, 50 })), owner);
+
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, owner->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, sibling->GetState());
+}
+
+TEST(GuiPopup, ConfirmationButtonsArePackedAtTheLowerRightAndDispatch) {
+	auto popup = std::make_shared<GuiPopup>();
+	GuiPopupButtonConfig config;
+	config.Actions = { { "Cancel", 2u }, { "Delete", 1u } };
+	popup->ConfigureButtons(config);
+
+	auto cancelButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(4u));
+	auto deleteButton = std::dynamic_pointer_cast<GuiButton>(popup->TryGetChild(5u));
+	ASSERT_NE(nullptr, cancelButton);
+	ASSERT_NE(nullptr, deleteButton);
+	EXPECT_EQ(nullptr, popup->TryGetChild(6u));
+	EXPECT_EQ(208, cancelButton->Position().X);
+	EXPECT_EQ(24, cancelButton->Position().Y);
+	EXPECT_EQ(316, deleteButton->Position().X);
+	EXPECT_EQ(24, deleteButton->Position().Y);
+
+	auto receiver = std::make_shared<GuiPhase3RecordingGuiReceiver>();
+	popup->SetButtonReceiver(receiver);
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 209, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 209, 25 }));
+	ASSERT_EQ(1, receiver->ActionCount);
+	ASSERT_TRUE(receiver->LastAction.has_value());
+	EXPECT_EQ(GuiAction::ACTIONELEMENT_BUTTON, receiver->LastAction->ElementType);
+	EXPECT_EQ(2u, receiver->LastAction->Index);
+
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 317, 25 }));
+	popup->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 317, 25 }));
+	ASSERT_EQ(2, receiver->ActionCount);
+	ASSERT_TRUE(receiver->LastAction.has_value());
+	EXPECT_EQ(1u, receiver->LastAction->Index);
+}
+
+// GuiToggle keyboard tests
 
 TEST(GuiToggle, KeyboardActivatesWhenFocused) {
 	GuiToggleParams p;
@@ -215,9 +293,7 @@ TEST(GuiToggle, KeyboardIgnoredWithoutFocus) {
 	EXPECT_FALSE(res.IsEaten);
 }
 
-// ---------------------------------------------------------------------------
-// GuiScrollBar range math (static helpers)
-// ---------------------------------------------------------------------------
+// GuiScrollBar range tests
 
 TEST(GuiScrollBar, ThumbFractionClampsToOneWhenContentFits) {
 	EXPECT_DOUBLE_EQ(1.0, GuiScrollBar::ThumbFraction(100, 100));
@@ -238,9 +314,31 @@ TEST(GuiScrollBar, OffsetAndValueRoundTrip) {
 	EXPECT_DOUBLE_EQ(0.5, GuiScrollBar::ValueFromOffset(100, 50, offset));
 }
 
-// ---------------------------------------------------------------------------
-// GuiScrollPanel offset behaviour
-// ---------------------------------------------------------------------------
+TEST(GuiScrollBar, IsHiddenWhenContentFitsAndVisibleWhenItOverflows) {
+	GuiScrollBarParams p;
+	p.Size = { 18u, 100u };
+	p.MinSize = p.Size;
+	auto scrollBar = std::make_shared<GuiScrollBar>(p);
+
+	scrollBar->SetMetrics(100.0, 100.0);
+	EXPECT_FALSE(scrollBar->IsVisible());
+
+	scrollBar->SetMetrics(100.0, 101.0);
+	EXPECT_TRUE(scrollBar->IsVisible());
+}
+
+TEST(GuiScrollBar, ClearingPointerCancelsDrag) {
+	GuiScrollBarParams p;
+	p.Size = { 18u, 100u };
+	auto scrollBar = std::make_shared<GuiScrollBar>(p);
+	scrollBar->SetMetrics(50.0, 200.0);
+	ASSERT_TRUE(scrollBar->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 9, 80 })).IsEaten);
+	scrollBar->ClearPointerState();
+	EXPECT_FALSE(scrollBar->OnAction(MakeTouchMove({ 9, 30 })).IsEaten);
+	EXPECT_DOUBLE_EQ(0.0, scrollBar->Value());
+}
+
+// GuiScrollPanel offset tests
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
 	GuiScrollPanelParams p;
@@ -259,6 +357,68 @@ TEST(GuiScrollPanel, OffsetClampsToContentRange) {
 	EXPECT_EQ(0, panel->ScrollOffset());
 }
 
+TEST(GuiScrollPanel, GlobalAndLocalCoordinatesIncludeNonzeroScrollOffset) {
+	GuiScrollPanelParams p;
+	p.Position = { 30, 40 };
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80, 200 };
+	contentParams.MinSize = contentParams.Size;
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 120 }, { 40, 20 }));
+	content->AddChild(button);
+
+	panel->SetContent(content);
+	panel->SetScrollOffset(60);
+
+	const auto globalPoint = button->GlobalPosition() + utils::Position2d{ 7, 8 };
+	const auto localPoint = button->GlobalToLocal(globalPoint);
+
+	EXPECT_EQ(7, localPoint.X);
+	EXPECT_EQ(8, localPoint.Y);
+	EXPECT_EQ(globalPoint.X, button->GlobalPosition().X + localPoint.X);
+	EXPECT_EQ(globalPoint.Y, button->GlobalPosition().Y + localPoint.Y);
+	ASSERT_NE(nullptr, content->Parent());
+	EXPECT_EQ(panel.get(), content->Parent()->Parent().get());
+}
+
+TEST(GuiScrollPanel, CapturedButtonReceivesReleaseInScrolledLocalCoordinates) {
+	GuiScrollPanelParams p;
+	p.Position = { 30, 40 };
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+
+	base::GuiElementParams contentParams;
+	contentParams.Size = { 80, 200 };
+	contentParams.MinSize = contentParams.Size;
+	auto content = std::make_shared<base::GuiElement>(contentParams);
+	auto button = std::make_shared<GuiButton>(MakeSizedButton({ 5, 120 }, { 40, 20 }));
+	content->AddChild(button);
+	panel->SetContent(content);
+	panel->SetScrollOffset(60);
+
+	const auto globalPoint = button->GlobalPosition() + utils::Position2d{ 7, 8 };
+	const auto panelPoint = globalPoint - panel->GlobalPosition();
+	auto down = panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, panelPoint));
+
+	ASSERT_TRUE(down.IsEaten);
+	auto active = down.ActiveElement.lock();
+	ASSERT_EQ(button.get(), active.get());
+
+	auto release = MakeTouch(TouchAction::TOUCH_UP, globalPoint);
+	const auto localRelease = active->GlobalToLocal(release);
+	EXPECT_EQ(7, localRelease.Position.X);
+	EXPECT_EQ(8, localRelease.Position.Y);
+
+	const auto up = active->OnAction(localRelease);
+	EXPECT_TRUE(up.IsEaten);
+	EXPECT_EQ(base::GuiElement::STATE_OVER, button->GetState());
+}
+
 TEST(GuiScrollPanel, ScrollFractionMapsToOffset) {
 	GuiScrollPanelParams p;
 	p.Size = { 100, 50 };
@@ -274,16 +434,57 @@ TEST(GuiScrollPanel, ViewportExcludesScrollBar) {
 	GuiScrollPanelParams p;
 	p.Size = { 100, 50 };
 	p.MinSize = { 100, 50 };
-	p.ScrollBarWidth = 12u;
+	p.ScrollBarWidth = 18u;
 	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 200 })));
 
-	EXPECT_EQ(88u, panel->ViewportWidth());
+	EXPECT_TRUE(panel->IsScrollBarVisible());
+	EXPECT_EQ(82u, panel->ViewportWidth());
 	EXPECT_EQ(50u, panel->ViewportHeight());
 }
 
-// ---------------------------------------------------------------------------
-// GuiTextBox editing
-// ---------------------------------------------------------------------------
+TEST(GuiScrollPanel, ClearingPointerRestoresContentMoveRouting) {
+	GuiScrollPanelParams p;
+	p.Size = { 100u, 50u };
+	p.ScrollBarWidth = 12u;
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 200 })));
+	ASSERT_TRUE(panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 94, 30 })).IsEaten);
+	panel->ClearPointerState();
+	EXPECT_FALSE(panel->OnAction(MakeTouchMove({ 94, 0 })).IsEaten);
+	EXPECT_EQ(0, panel->ScrollOffset());
+}
+
+TEST(GuiScrollPanel, HidesScrollBarAndUsesFullWidthWhenContentFits) {
+	GuiScrollPanelParams p;
+	p.Size = { 100, 50 };
+	p.MinSize = { 100, 50 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 50 })));
+
+	EXPECT_FALSE(panel->IsScrollBarVisible());
+	EXPECT_EQ(100u, panel->ViewportWidth());
+}
+
+TEST(GuiScrollPanel, ContentIsTopAlignedAtTheStartOfTheScrollRange) {
+	GuiScrollPanelParams p;
+	p.Size = { 100, 100 };
+	p.MinSize = { 100, 100 };
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	auto content = std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80, 30 }));
+	panel->SetContent(content);
+
+	EXPECT_EQ(70, content->GlobalPosition().Y);
+
+	panel->SetSize({ 100, 20 });
+	EXPECT_TRUE(panel->IsScrollBarVisible());
+	EXPECT_EQ(-10, content->GlobalPosition().Y);
+
+	panel->SetScrollOffset(10);
+	EXPECT_EQ(0, content->GlobalPosition().Y);
+}
+
+// GuiTextBox editing tests
 
 TEST(GuiTextBox, VkToCharMapping) {
 	EXPECT_EQ('a', GuiTextBox::VkToChar('A', false).value());
@@ -371,9 +572,7 @@ TEST(GuiTextBox, LateBoundReceiverGetsNotifications) {
 	EXPECT_EQ("23", std::get<GuiAction::GuiString>(receiver->LastAction->Data).Value);
 }
 
-// ---------------------------------------------------------------------------
-// GuiNumericInput
-// ---------------------------------------------------------------------------
+// GuiNumericInput tests
 
 TEST(GuiNumericInput, SeedsFormattedInitialValue) {
 	GuiNumericInputParams np;
@@ -427,9 +626,7 @@ TEST(GuiNumericInput, VerticalDragAdjustsValue) {
 	EXPECT_DOUBLE_EQ(60.0, ni->Value());
 }
 
-// ---------------------------------------------------------------------------
-// GuiDropDown selection
-// ---------------------------------------------------------------------------
+// GuiDropDown selection tests
 
 TEST(GuiDropDown, ClickThenOpenSelectsItem) {
 	GuiPopupManager host;

@@ -65,6 +65,8 @@
 1 rounded_but_on ninepatch 12 12
 1 rounded_but_on_over ninepatch 12 12
 1 rounded_but_on_down ninepatch 12 12
+1 hud_socket_fat
+1 hud_socket_cable
 1 trigger_activate ninepatch 13 21
 1 trigger_activate_over ninepatch 13 21
 1 trigger_activate_down ninepatch 13 21
@@ -74,3 +76,9 @@
 1 trigger_ditch_down ninepatch 13 21
 1 trigger_ditch_down_out ninepatch 13 21
 1 trigger_back ninepatch 35 23
+1 trigger_add
+1 trigger_add_over
+1 trigger_add_down
+1 trigger_close
+1 trigger_close_over
+1 trigger_close_down

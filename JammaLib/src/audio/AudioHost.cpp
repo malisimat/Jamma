@@ -2,6 +2,7 @@
 // while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
 #include "AudioHost.h"
+#include "../engine/RigSnapshot.h"
 #include "../ninjam/NinjamLoopAlignment.h"
 #include "../utils/Timer.h"
 #include <algorithm>
@@ -80,6 +81,7 @@ namespace audio
 		{
 			_audioDevice = std::move(dev.value());
 			_audioSampleCounter.store(0u, std::memory_order_release);
+			_audioCallbackHeartbeat.store(0u, std::memory_order_release);
 
 			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
 			_tickStreamParams = audioStreamParams;
@@ -125,7 +127,11 @@ namespace audio
 					outLatency);
 			}
 
-			_audioDevice->Start();
+			if (!_audioDevice->Start())
+			{
+				_audioDevice.reset();
+				return false;
+			}
 			_audioDevice->GetAudioStreamParams().PrintParams();
 			return true;
 		}
@@ -144,11 +150,116 @@ namespace audio
 
 		if (_audioDevice)
 			_audioDevice->Stop();
+
+		_pendingRigSnapshot.store(nullptr, std::memory_order_release);
+		_audioAppliedRigSnapshot.reset();
+		{
+			std::scoped_lock retainedLock(_retainedRigSnapshotsMutex);
+			_retainedRigSnapshots.clear();
+		}
 	}
 
 	void AudioHost::SetStations(std::shared_ptr<const std::vector<std::shared_ptr<Station>>> stations)
 	{
 		_audioStations.store(stations, std::memory_order_release);
+	}
+
+	void AudioHost::PublishPendingRigSnapshot(std::shared_ptr<const engine::RigSnapshot> snapshot)
+	{
+		if (snapshot)
+		{
+			std::scoped_lock lock(_retainedRigSnapshotsMutex);
+			_retainedRigSnapshots.push_back(snapshot);
+		}
+		_pendingRigSnapshot.store(std::move(snapshot), std::memory_order_release);
+	}
+
+	void AudioHost::RequestRigTriggerTransition(std::uint64_t candidateRevision,
+		std::shared_ptr<const engine::RigSnapshot> acceptedSnapshot,
+		std::shared_ptr<const engine::RigSnapshot> candidateSnapshot)
+	{
+		_transitionReadyRigRevision.store(0u, std::memory_order_release);
+		_rejectedRigRevision.store(0u, std::memory_order_release);
+		_rigTriggerTransitionAcceptedRevision.store(
+			acceptedSnapshot ? acceptedSnapshot->Revision : 0u, std::memory_order_release);
+		_rigTriggerTransitionCandidate.store(std::move(candidateSnapshot), std::memory_order_release);
+		_rigTriggerTransitionRequestRevision.store(candidateRevision, std::memory_order_release);
+	}
+
+	void AudioHost::ClearRigTriggerTransition() noexcept
+	{
+		_rigTriggerTransitionRequestRevision.store(0u, std::memory_order_release);
+		_rigTriggerTransitionAcceptedRevision.store(0u, std::memory_order_release);
+		_rigTriggerTransitionCandidate.store({}, std::memory_order_release);
+	}
+
+	void AudioHost::ReleaseRigSnapshotsBefore(std::uint64_t revision)
+	{
+		std::scoped_lock lock(_retainedRigSnapshotsMutex);
+		_retainedRigSnapshots.erase(std::remove_if(_retainedRigSnapshots.begin(),
+			_retainedRigSnapshots.end(),
+			[revision](const std::shared_ptr<const engine::RigSnapshot>& snapshot)
+			{
+				return snapshot && snapshot->Graph.Revision < revision;
+			}), _retainedRigSnapshots.end());
+	}
+
+	void AudioHost::ApplyPendingRigSnapshotAtAudioBoundary() noexcept
+	{
+		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		if (!snapshot)
+			return;
+		if (snapshot->Graph.Revision <= _audioRigRevision)
+			return;
+
+		for (const auto& routeChange : snapshot->TriggerRouteUpdates)
+		{
+			if (routeChange.CandidateIndex < snapshot->Triggers.size())
+			{
+				auto& trigger = snapshot->Triggers[routeChange.CandidateIndex];
+				trigger.Instance->ApplyCaptureRouting(trigger.Receiver, trigger.InputChannels,
+					trigger.MidiInputDevices, trigger.MidiInputMode,
+					trigger.OverdubMixer, trigger.OverdubWriter);
+			}
+		}
+
+		_audioRigRevision = snapshot->Graph.Revision;
+		_audioAppliedRigSnapshot = snapshot;
+		_appliedRigRevision.store(_audioRigRevision, std::memory_order_release);
+	}
+
+	void AudioHost::PublishRigTriggerTransitionAtAudioBoundary() noexcept
+	{
+		const auto candidateRevision = _rigTriggerTransitionRequestRevision.load(std::memory_order_acquire);
+		if (candidateRevision == 0u ||
+			_rigTriggerTransitionAcceptedRevision.load(std::memory_order_acquire) != _audioRigRevision)
+			return;
+		const auto snapshot = _pendingRigSnapshot.load(std::memory_order_acquire);
+		if (!snapshot || snapshot->Revision != _audioRigRevision)
+			return;
+
+		const auto candidate = _rigTriggerTransitionCandidate.load(std::memory_order_acquire);
+		if (!candidate || candidate->Revision != candidateRevision)
+			return;
+		for (const auto& retired : candidate->TriggerReplacementChecks)
+		{
+			const auto& trigger = retired.AcceptedInstance;
+			if (trigger && !trigger->CanEditRouting())
+			{
+				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
+				return;
+			}
+		}
+		for (const auto& routeChange : candidate->TriggerRouteUpdates)
+		{
+			const auto& trigger = routeChange.Instance;
+			if (trigger && !trigger->CanApplyCaptureRouting())
+			{
+				_rejectedRigRevision.store(candidateRevision, std::memory_order_release);
+				return;
+			}
+		}
+		_transitionReadyRigRevision.store(candidateRevision, std::memory_order_release);
 	}
 
 	void AudioHost::PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired)
@@ -403,6 +514,8 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		unsigned int numSamps,
 		double streamTime)
 	{
+		_audioCallbackHeartbeat.fetch_add(1u, std::memory_order_relaxed);
+		ApplyPendingRigSnapshotAtAudioBoundary();
 		const auto audioStreamParams = nullptr == _audioDevice ?
 			audio::AudioStreamParams() : _audioDevice->GetAudioStreamParams();
 		const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
@@ -605,10 +718,24 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 
 		_channelMixer->Sink()->EndMultiWrite(numSamps, true, Audible::AUDIOSOURCE_LOOPS);
 
+		if (_audioAppliedRigSnapshot)
+		{
+			for (const auto& trigger : _audioAppliedRigSnapshot->Triggers)
+			{
+				if (trigger.Instance)
+					trigger.Instance->OnTick(Timer::GetTime(), numSamps,
+						_tickUserConfig, _tickStreamParams, _audioRigRevision);
+			}
+		}
+
 		if (_tickCallback)
 		{
 			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _tickStreamParams);
 		}
+		for (const auto& station : stations)
+			if (station) station->AcknowledgeAudioBoundary();
+		// Decide after Trigger::OnTick so this transition uses the completed boundary's state.
+		PublishRigTriggerTransitionAtAudioBoundary();
 
 		_audioSampleCounter.store(blockStartSample + numSamps, std::memory_order_release);
 		midi::PublishMidiClockAnchor(_midiClockAnchor,

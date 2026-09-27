@@ -44,9 +44,49 @@ namespace io
 		_midiRouter.CloseMidi();
 	}
 
-	void IoInputSubsystem::PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations)
+	void IoInputSubsystem::PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot)
 	{
-		_midiRouter.PublishLiveMidiRoutes(stations);
+		_midiRouter.PublishRigInputDispatch(std::move(snapshot));
+	}
+
+	void IoInputSubsystem::PublishEmptyRigInputDispatch()
+	{
+		_midiRouter.PublishEmptyRigInputDispatch();
+	}
+
+	bool IoInputSubsystem::OpenRigTriggerInput(std::uint64_t revision) noexcept
+	{
+		return _midiRouter.OpenRigTriggerInput(revision);
+	}
+
+	bool IoInputSubsystem::RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept
+	{
+		return _midiRouter.RequestCloseRigTriggerInputFromUi(revision);
+	}
+
+	std::uint64_t IoInputSubsystem::AcknowledgeRigTriggerInputCloseFromJob() noexcept
+	{
+		return _midiRouter.AcknowledgeRigTriggerInputCloseFromJob();
+	}
+
+	bool IoInputSubsystem::RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept
+	{
+		return _midiRouter.RigTriggerInputReadyForAudioBoundary(revision);
+	}
+
+	bool IoInputSubsystem::TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept
+	{
+		return _midiRouter.TryAcceptUiRigTriggerInput(revision);
+	}
+
+	void IoInputSubsystem::CloseRigTriggerInputForever() noexcept
+	{
+		_midiRouter.CloseRigTriggerInputForever();
+	}
+
+	bool IoInputSubsystem::RigTriggerInputReadyForShutdown() const noexcept
+	{
+		return _midiRouter.RigTriggerInputReadyForShutdown();
 	}
 
 	bool IoInputSubsystem::InitGlobalKeyCapture()
@@ -203,11 +243,6 @@ namespace io
 	std::uint8_t IoInputSubsystem::ForcedChannelOverride() const noexcept
 	{
 		return _midiRouter.ForcedChannelOverride();
-	}
-
-	void IoInputSubsystem::RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
-	{
-		_midiRouter.RegisterTrigger(deviceName, std::move(trigger));
 	}
 
 	float IoInputSubsystem::ConsumeMidiInputPeak(const std::string& deviceName) noexcept

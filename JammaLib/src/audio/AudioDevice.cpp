@@ -59,14 +59,24 @@ void AudioDevice::SetDevice(std::unique_ptr<RtAudio> device)
 	}
 }
 
-void AudioDevice::Start()
+bool AudioDevice::Start()
 {
-	if (_stream)
+	if (!_stream)
+		return false;
+
+	try
 	{
 		_stream->startStream();
 		_streamState = StreamState::RUNNING;
 		_audioStreamParams.InputLatency = (unsigned int)_stream->getInputStreamLatency();
 		_audioStreamParams.OutputLatency = (unsigned int)_stream->getOutputStreamLatency();
+		return true;
+	}
+	catch (RtAudioError& err)
+	{
+		std::cout << "Error starting audio stream: " << err.getMessage() << std::endl;
+		_streamState = StreamState::STOPPED;
+		return false;
 	}
 }
 
@@ -74,13 +84,19 @@ void AudioDevice::Stop()
 {
 	if (_stream)
 	{
-		if (_stream->isStreamRunning())
-			_stream->stopStream();
-		_streamState = StreamState::STOPPED;
+		try
+		{
+			if (_stream->isStreamRunning())
+				_stream->stopStream();
+			_streamState = StreamState::STOPPED;
 
-		if (_stream->isStreamOpen())
-			_stream->closeStream();
-
+			if (_stream->isStreamOpen())
+				_stream->closeStream();
+		}
+		catch (RtAudioError& err)
+		{
+			std::cout << "Error stopping audio stream: " << err.getMessage() << std::endl;
+		}
 		_streamState = StreamState::CLOSED;
 	}
 }

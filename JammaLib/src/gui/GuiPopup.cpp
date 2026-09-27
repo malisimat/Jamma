@@ -4,6 +4,36 @@
 
 using namespace gui;
 
+namespace gui
+{
+	class GuiPopupActionButton : public GuiButton
+	{
+	public:
+		GuiPopupActionButton(GuiButtonParams params, unsigned int actionIndex) :
+			GuiButton(params),
+			_actionIndex(actionIndex)
+		{
+		}
+
+		actions::ActionResult OnAction(actions::TouchAction action) override
+		{
+			auto result = GuiButton::OnAction(action);
+			if (result.IsEaten && action.State == actions::TouchAction::TOUCH_UP && _receiver)
+			{
+				actions::GuiAction buttonAction;
+				buttonAction.ElementType = actions::GuiAction::ACTIONELEMENT_BUTTON;
+				buttonAction.Index = _actionIndex;
+				buttonAction.Data = actions::GuiAction::GuiInt{ 1 };
+				_receiver->OnAction(buttonAction);
+			}
+			return result;
+		}
+
+	private:
+		unsigned int _actionIndex;
+	};
+}
+
 GuiPopupParams GuiPopupParams::PanelDefault()
 {
 	GuiPopupParams params;
@@ -26,6 +56,7 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 	titleParams.Size = { TitleWidth, TitleHeight };
 	titleParams.MinSize = { 100u, TitleHeight };
 	titleParams.Position = { 20, 170 };
+	titleParams.CenterHorizontally = true;
 	_titleLabel = std::make_shared<GuiLabel>(titleParams);
 	AddChild(_titleLabel);
 
@@ -36,32 +67,12 @@ GuiPopup::GuiPopup(const GuiPopupParams& params) :
 		lineParams.Size = { LineWidth, LineHeight };
 		lineParams.MinSize = { 80u, LineHeight };
 		lineParams.Position = { 20, 136 - static_cast<int>(i) * 28 };
+		lineParams.CenterHorizontally = true;
 		_lineLabels[i] = std::make_shared<GuiLabel>(lineParams);
 		_lineLabels[i]->SetVisible(false);
 		AddChild(_lineLabels[i]);
 	}
 
-	auto makeButton = [](const std::string& text, unsigned int index) {
-		GuiToggleParams params = GuiToggleParams::PanelPrimary();
-		params.Text = text;
-		params.Position = { 0, ButtonY };
-		params.Size = { ButtonWidth, ButtonHeight };
-		params.MinSize = { ButtonMinWidth, ButtonHeight };
-		params.ToggleIndex = index;
-		return std::make_shared<GuiToggle>(params);
-	};
-
-	_yesButton = makeButton("Yes", 0u);
-	_noButton = makeButton("No", 0u);
-	_cancelButton = makeButton("Cancel", 0u);
-	_okButton = makeButton("Ok", 0u);
-
-	AddChild(_yesButton);
-	AddChild(_noButton);
-	AddChild(_cancelButton);
-	AddChild(_okButton);
-
-	ConfigureButtons(GuiPopupButtonConfig{});
 }
 
 void GuiPopup::SetTitle(const std::string& text)
@@ -95,87 +106,51 @@ void GuiPopup::SetBodyLines(const std::vector<std::string>& lines)
 
 void GuiPopup::ConfigureButtons(const GuiPopupButtonConfig& config)
 {
-	if (_yesButton)
-	{
-		_yesButton->SetVisible(config.ShowYes);
-		_yesButton->SetToggleIndex(config.YesIndex);
-		_yesButton->SetText(config.YesText);
-	}
+	for (const auto& button : _buttons)
+		RemoveChild(button);
+	_buttons.clear();
 
-	if (_noButton)
+	for (const auto& action : config.Actions)
 	{
-		_noButton->SetVisible(config.ShowNo);
-		_noButton->SetToggleIndex(config.NoIndex);
-		_noButton->SetText(config.NoText);
-	}
+		if (_buttons.size() == 3u)
+			break;
+		if (action.Text.empty())
+			continue;
 
-	if (_cancelButton)
-	{
-		_cancelButton->SetVisible(config.ShowCancel);
-		_cancelButton->SetToggleIndex(config.CancelIndex);
-		_cancelButton->SetText(config.CancelText);
-	}
-
-	if (_okButton)
-	{
-		_okButton->SetVisible(config.ShowOk);
-		_okButton->SetToggleIndex(config.OkIndex);
-		_okButton->SetText(config.OkText);
+		GuiButtonParams params = GuiButtonParams::PanelButton(ButtonWidth);
+		params.Text = action.Text;
+		params.Position = { 0, ButtonY };
+		params.Size = { ButtonWidth, ButtonHeight };
+		params.MinSize = { ButtonMinWidth, ButtonHeight };
+		params.Index = action.Index;
+		auto button = std::make_shared<GuiPopupActionButton>(params, action.Index);
+		button->SetReceiver(_buttonReceiver);
+		AddChild(button);
+		_buttons.push_back(button);
 	}
 
 	_LayoutButtons();
-	ResetButtonStates();
 }
 
 void GuiPopup::SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver)
 {
-	if (_yesButton)
-		_yesButton->SetReceiver(receiver);
-	if (_noButton)
-		_noButton->SetReceiver(receiver);
-	if (_cancelButton)
-		_cancelButton->SetReceiver(receiver);
-	if (_okButton)
-		_okButton->SetReceiver(receiver);
-}
-
-void GuiPopup::ResetButtonStates()
-{
-	auto reset = [](const std::shared_ptr<GuiToggle>& button) {
-		if (button)
-			button->SetToggleState(gui::GuiToggleParams::TOGGLE_OFF, true);
-	};
-
-	reset(_yesButton);
-	reset(_noButton);
-	reset(_cancelButton);
-	reset(_okButton);
+	_buttonReceiver = std::move(receiver);
+	for (const auto& button : _buttons)
+		button->SetReceiver(_buttonReceiver);
 }
 
 void GuiPopup::_LayoutButtons()
 {
-	std::vector<std::shared_ptr<GuiToggle>> visibleButtons;
-	visibleButtons.reserve(4);
-
-	if (_yesButton && _yesButton->IsVisible())
-		visibleButtons.push_back(_yesButton);
-	if (_noButton && _noButton->IsVisible())
-		visibleButtons.push_back(_noButton);
-	if (_cancelButton && _cancelButton->IsVisible())
-		visibleButtons.push_back(_cancelButton);
-	if (_okButton && _okButton->IsVisible())
-		visibleButtons.push_back(_okButton);
-
-	if (visibleButtons.empty())
+	if (_buttons.empty())
 		return;
 
 	const int popupWidth = static_cast<int>(GetSize().Width);
 	const int buttonWidth = static_cast<int>(ButtonWidth);
-	const int totalWidth = static_cast<int>(visibleButtons.size()) * buttonWidth
-		+ static_cast<int>(visibleButtons.size() - 1u) * ButtonSpacing;
-	int x = std::max(0, (popupWidth - totalWidth) / 2);
+	const int totalWidth = static_cast<int>(_buttons.size()) * buttonWidth
+		+ static_cast<int>(_buttons.size() - 1u) * ButtonSpacing;
+	int x = std::max(0, popupWidth - ButtonRightInset - totalWidth);
 
-	for (auto& button : visibleButtons)
+	for (auto& button : _buttons)
 	{
 		button->SetPosition({ x, ButtonY });
 		x += buttonWidth + ButtonSpacing;

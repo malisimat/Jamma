@@ -5,6 +5,7 @@
 #include "glm/ext.hpp"
 #include "GlDrawContext.h"
 #include "QuantisationModel.h"
+#include "../midi/MidiQuantisation.h"
 #include "../../include/Constants.h"
 
 using namespace engine;
@@ -165,6 +166,7 @@ void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<engine::Qua
 		if (0u == divisionCount)
 			continue;
 
+		const auto totalDivisionCount = divisionCount;
 		divisionCount = std::clamp(divisionCount, 1u, MaxVisibleDivisions);
 
 		const auto angleStep = static_cast<float>(constants::TWOPI) / static_cast<float>(divisionCount);
@@ -185,9 +187,17 @@ void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<engine::Qua
 
 		for (auto division = 0u; division < divisionCount; ++division)
 		{
+			const auto boundaryIndex = static_cast<std::uint32_t>(
+				static_cast<std::uint64_t>(division) * totalDivisionCount / divisionCount);
 			// Align strip edges to the actual quant-grid lines: each strip starts at
 			// a division boundary and extends halfway toward the next boundary.
-			transforms.push_back(phaseOffset + (angleStep * static_cast<float>(division)) + centerAngleOffset);
+			const auto boundaryAngle = visual.UseAbsoluteLocalGrid
+				? loopIndexAngle + static_cast<float>(constants::TWOPI)
+					* static_cast<float>(QuantisationModel::VisualBoundaryOffsetSamps(
+						visual, boundaryIndex, midi::MidiQuantisation::Divisor(visual.Fraction)))
+					/ static_cast<float>(visual.LoopLengthSamps)
+				: phaseOffset + (angleStep * static_cast<float>(division));
+			transforms.push_back(boundaryAngle + centerAngleOffset);
 			transforms.push_back(visual.YCenter);
 			transforms.push_back(heightScale);
 			transforms.push_back(radiusScale);

@@ -24,7 +24,7 @@ TEST(MidiDevice, CloseOnUnopenedDeviceIsSafe) {
 TEST(MidiDevice, OpenWithUnknownNameIsConsistent) {
 	MidiDevice device;
 	auto result = device.Open("__jamma_bogus_device_xyzzy_12345__",
-		[](std::uint8_t, std::uint8_t, std::uint8_t) {});
+		[](std::uint8_t, std::uint8_t, std::uint8_t, double, std::int64_t) {});
 	ASSERT_EQ(result, device.IsOpen());
 	device.Close();
 }
@@ -57,7 +57,7 @@ TEST(MidiDevice, OpensPreferredDeviceWhenAvailable) {
 	std::atomic<unsigned int> callbackCount{ 0u };
 
 	auto opened = device.Open(devices.front().Name,
-		[&callbackCount](std::uint8_t, std::uint8_t, std::uint8_t)
+		[&callbackCount](std::uint8_t, std::uint8_t, std::uint8_t, double, std::int64_t)
 		{
 			callbackCount.fetch_add(1u);
 		});

@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string_view>
 
@@ -208,6 +209,14 @@ static bool UpdateIni(const std::wstring& finalPath, const std::string& data)
 	return true;
 }
 
+static bool SaveRigAtomic(const std::wstring& finalPath, const io::RigFile& rig)
+{
+	std::stringstream json;
+	if (!io::RigFile::ToJsonStream(rig, json))
+		return false;
+	return UpdateIni(finalPath, json.str());
+}
+
 void SetupConsole()
 {
 	AllocConsole();
@@ -243,7 +252,7 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	io::TextReadWriter txtFile;
 
 	std::string jamJson = JamFile::DefaultJson;
-	std::wcout << "Load Jam: " << ini.Jam << std::endl;
+	std::wcout << L"[BOOT] Loading JAM from defaults path: " << ini.Jam << std::endl;
 	auto res = txtFile.Read(ini.Jam, MAX_JSON_CHARS);
 	if (!res.has_value())
 	{
@@ -264,6 +273,9 @@ std::optional<io::JamFile> LoadJam(io::InitFile& ini)
 	auto parsed = JamFile::FromStream(std::move(ss));
 	if (!parsed.has_value())
 		std::wcerr << L"[BOOT] JAM is unreadable; starting with an empty session: " << ini.Jam << std::endl;
+	else
+		std::cout << "[BOOT] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(ini.Jam)
+			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
 	return parsed;
 }
 
@@ -282,6 +294,9 @@ std::optional<io::JamFile> LoadJamFile(const std::wstring& path)
 	auto parsed = JamFile::FromStream(std::move(stream));
 	if (!parsed.has_value())
 		std::wcerr << L"[LOAD] JAM is unreadable: " << path << std::endl;
+	else
+		std::cout << "[LOAD] Parsed JAM '" << parsed->Name << "' from " << EncodeUtf8(path)
+			<< " with " << parsed->Stations.size() << " station descriptor(s)." << std::endl;
 	return parsed;
 }
 
@@ -423,7 +438,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 			std::cerr << "[BOOT] JAM restore failed with an unknown error; continuing with an empty session." << std::endl;
 		}
 
-		JamFile::ToStream(jam, ss);
+		std::stringstream jamStream;
+		JamFile::ToStream(jam, jamStream);
+		auto jamJson = jamStream.str();
+		const std::string statePrefix = "\"state\":\"";
+		for (std::size_t stateStart = jamJson.find(statePrefix);
+			stateStart != std::string::npos;
+			stateStart = jamJson.find(statePrefix, stateStart + statePrefix.size()))
+		{
+			const auto valueStart = stateStart + statePrefix.size();
+			const auto valueEnd = jamJson.find('"', valueStart);
+			if (valueEnd != std::string::npos && valueEnd - valueStart > 54u)
+				jamJson.replace(valueStart + 54u, valueEnd - valueStart - 54u, "...");
+		}
+		ss << jamJson;
 
 		auto rigOpt = LoadRig(defaults.value());
 		if (rigOpt.has_value())
@@ -434,6 +462,27 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::cout << ss.str() << std::endl;
 	}
 
+	std::function<bool(const io::RigFile&)> saveRig;
+	if (defaults.has_value())
+	{
+		const auto rigPath = defaults->Rig;
+		saveRig = [rigPath](const io::RigFile& candidate) { return SaveRigAtomic(rigPath, candidate); };
+		std::vector<std::string> availableMidiDevices;
+		for (const auto& device : rig.User.Midi.Devices)
+			if (device.Enabled && !device.Name.empty()) availableMidiDevices.push_back(device.Name);
+		auto resolution = io::RigFileRouting::Resolve(rig, jam.Stations, rig.User.Audio.NumChannelsIn, availableMidiDevices);
+		if (resolution.RequiresSave)
+		{
+			if (saveRig(resolution.CandidateRig))
+			{
+				rig = std::move(resolution.CandidateRig);
+				std::cerr << "[RIG] Migrated legacy positional station targets." << std::endl;
+			}
+			else
+				std::cerr << "[RIG] Failed to save migrated station targets; using the loaded rig." << std::endl;
+		}
+	}
+
 	const auto jamDirectory = defaults.has_value() ?
 		utils::GetParentDirectory(defaults->Jam) :
 		utils::GetParentDirectory(initPath);
@@ -442,7 +491,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		try
 		{
-			return Scene::FromFile(sceneParams, std::move(source), rig, jamDirectory);
+			return Scene::FromFile(sceneParams, std::move(source), rig, jamDirectory, saveRig);
 		}
 		catch (const std::exception& error)
 		{
@@ -531,8 +580,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 					auto selectedJam = LoadJamFile(jamPath);
 					if (selectedJam.has_value())
 					{
-						replacement = Scene::FromFile(sceneParams, std::move(selectedJam.value()), rig,
-							utils::GetParentDirectory(jamPath));
+						const auto activeRig = scene.value()->AcceptedRigSnapshot();
+						replacement = Scene::FromFile(sceneParams, std::move(selectedJam.value()),
+							activeRig ? activeRig->Rig : rig,
+							utils::GetParentDirectory(jamPath), saveRig);
 					}
 				}
 				catch (const std::exception& error)

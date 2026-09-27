@@ -47,7 +47,7 @@ namespace audio
 
 	public:
 		void SetDevice(std::unique_ptr<RtAudio> device);
-		void Start();
+		bool Start();
 		void Stop();
 		bool Pause();
 		bool Resume();

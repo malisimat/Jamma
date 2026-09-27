@@ -226,6 +226,8 @@ namespace midi
 		// Used by the ditch path to flush stuck notes before the loop is discarded.
 		const std::bitset<TotalNoteSlots>& HeldNotes() const noexcept { return _held; }
 		bool TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept;
+		// Job-side diagnostics: read the event currently published for playback.
+		bool TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
 		std::shared_ptr<MidiModel> Model() const noexcept;
 		bool UpdateModelFromEvents(std::uint32_t displayLengthSamps = 0u, bool force = false);

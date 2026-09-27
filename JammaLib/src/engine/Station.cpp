@@ -57,11 +57,6 @@ void Station::_TrySeedClockFromFirstLoop(const std::shared_ptr<utils::Timer>& cl
 		const auto quantisation = policyCfg.Loop.SeedUsesPowers ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_MULTIPLE;
 		clock->SetQuantisation(timing->GrainSamps, quantisation);
 		clock->SetSeedSourceLength(static_cast<unsigned long>(timing->GrainSamps) * timing->LoopGrains);
-		std::cout << "Seeded clock from first loop: grain=" << timing->GrainSamps
-			<< " mode=" << (policyCfg.Loop.SeedUsesPowers ? "power" : "multiple")
-			<< " loopGrains=" << timing->LoopGrains
-			<< " bpm=" << timing->Bpm
-			<< " bpi=" << timing->Bpi << std::endl;
 	}
 }
 
@@ -83,7 +78,6 @@ Station::Station(StationParams params,
 	_routerToggle(nullptr),
 	_router(nullptr),
 	_loopTakes(),
-	_triggers(),
 	_backLoopTakes(),
 	_loopTakeSnapshot(nullptr),
 	_audioMixers(),
@@ -137,16 +131,20 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 	io::JamFile::Station stationStruct,
 	std::wstring dir)
 {
+	std::cout << "[LOAD] Constructing station " << stationParams.Index << " '" << stationStruct.Name
+		<< "' (takes=" << stationStruct.LoopTakes.size() << ", VSTs=" << stationStruct.VstChain.size() << ")." << std::endl;
 	stationParams.Name = stationStruct.Name;
 	auto station = std::make_shared<Station>(stationParams, mixerParams);
 	station->SetStationPhaseOffsetSamps(stationStruct.StationPhaseOffsetSamps);
 	station->SetAllowedMidiChannels(stationStruct.AllowedMidiChannels);
 	for (const auto& vstEntry : stationStruct.VstChain)
 	{
+		std::cout << "[LOAD] Station '" << stationStruct.Name << "': loading VST " << vstEntry.Path << std::endl;
 		if (!station->LoadVstPluginSynchronously(utils::DecodeUtf8(vstEntry.Path), vstEntry.DecodeState(), vstEntry.Bypass))
 		{
-			std::cout << "Load: failed VST for station " << stationStruct.Name << std::endl;
-			return std::nullopt;
+			// Restore the station and rig target even when this optional processor is missing.
+			std::cout << "[LOAD] Station '" << stationStruct.Name << "': failed VST " << vstEntry.Path
+				<< "; continuing without it." << std::endl;
 		}
 	}
 
@@ -220,8 +218,8 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			if (!plugin || !midiLoops[binding.MidiStreamIndex]
 				|| !midiLoops[binding.MidiStreamIndex]->BindAutomationLaneTarget(binding.LaneIndex, plugin.get()))
 			{
-				std::cout << "Load: unresolved automation target in station " << stationStruct.Name << std::endl;
-				return std::nullopt;
+				std::cout << "[LOAD] Station '" << stationStruct.Name
+					<< "': skipping unresolved automation target." << std::endl;
 			}
 		}
 		take->ClearPendingAutomationBindings();
@@ -258,6 +256,7 @@ std::optional<std::shared_ptr<Station>> Station::FromFile(StationParams stationP
 			return std::nullopt;
 		}
 	}
+	std::cout << "[LOAD] Constructed station '" << stationStruct.Name << "'." << std::endl;
 
 	return station;
 }
@@ -445,6 +444,13 @@ void Station::Draw3d(base::DrawContext& ctx,
 
 	glCtx.PopMvp();
 	glCtx.PopMvp();
+}
+
+utils::Position3d Station::TopCapModelPosition() const
+{
+	auto position = ModelPosition();
+	position.Y += static_cast<float>(ModelScale() * _StationModelYOffset);
+	return position;
 }
 
 utils::Position2d Station::Position() const
@@ -1021,7 +1027,24 @@ void Station::EndMultiWrite(unsigned int numSamps,
 		return;
 
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->EndMultiWrite(numSamps, updateIndex, source);
+	{
+		if (auto take = weakTake.lock())
+		{
+			if (take->IsArmed() && take->NumRecordedSamps() == 0ul)
+			{
+				take->CaptureFirstRecordBlockSceneAtAudioBoundary(
+					_clock ? _clock->SceneSamplePos() : 0u);
+				if (_clock && _clock->SeedSourceLength() > 0ul)
+				{
+					const auto start = static_cast<std::int64_t>(_clock->AbsoluteSamplePos())
+						+ static_cast<std::int64_t>(TransportOffsetSamps());
+					take->CaptureMidiTransportStartAtAudioBoundary(
+						start < 0 ? 0ull : static_cast<std::uint64_t>(start));
+				}
+			}
+			take->EndMultiWrite(numSamps, updateIndex, source);
+		}
+	}
 }
 
 void Station::SetSelectDepth(base::SelectDepth depth)
@@ -1036,34 +1059,7 @@ void Station::SetSelectDepth(base::SelectDepth depth)
 
 ActionResult Station::OnAction(KeyAction action)
 {
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
-	auto state = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
-	return OnTriggerEvent(TriggerSource::TRIGGER_KEY, action.KeyChar, state, action);
-}
-
-ActionResult Station::OnTriggerEvent(TriggerSource source,
-	unsigned int value,
-	unsigned int state,
-	const base::Action& action,
-	const std::string& device)
-{
-	if (!_isEnabled || !_isVisible)
-		return ActionResult::NoAction();
-
-	auto result = ActionResult::NoAction();
-	for (auto& trig : _triggers)
-	{
-		auto trigResult = trig->OnEvent(source, value, state, action, device);
-		if (!trigResult.IsEaten)
-			continue;
-
-		if (!result.IsEaten || (trigResult.ResultType != actions::ACTIONRESULT_DEFAULT))
-			result = trigResult;
-	}
-
-	return result;
+	return ActionResult::NoAction();
 }
 
 ActionResult Station::OnAction(GuiAction action)
@@ -1173,7 +1169,10 @@ ActionResult Station::OnAction(GuiAction action)
 
 ActionResult Station::OnAction(TriggerAction action)
 {
-	if (!_isEnabled || !_isVisible)
+	// Allow completion and punch actions to finish after a station is hidden or disabled.
+	const auto isStart = action.ActionType == TriggerAction::TRIGGER_REC_START ||
+		action.ActionType == TriggerAction::TRIGGER_OVERDUB_START;
+	if (isStart && (!_isEnabled || !_isVisible))
 		return ActionResult::NoAction();
 
 	auto resolveMidiRecordChannels = [this]() {
@@ -1192,8 +1191,12 @@ ActionResult Station::OnAction(TriggerAction action)
 
 	ActionResult res;
 	res.IsEaten = false;
+	unsigned long completedLength = 0ul;
+	long long completedErrorSamps = 0;
 
 	auto loopTake = _TryGetTake(action.TargetId);
+	const auto priorAudioLoops = loopTake ? loopTake.value()->GetLoops().size() : 0u;
+	const auto priorMidiLoops = loopTake ? loopTake.value()->GetMidiLoops().size() : 0u;
 	const auto transportStart = static_cast<std::int64_t>(_clock ? _clock->AbsoluteSamplePos() : 0ul)
 		+ static_cast<std::int64_t>(TransportOffsetSamps());
 	const auto transportStartSamps = transportStart < 0 ? 0ull : static_cast<std::uint64_t>(transportStart);
@@ -1210,15 +1213,21 @@ ActionResult Station::OnAction(TriggerAction action)
 			heldSnapshot = _liveHeldMidi;
 		}
 		auto newLoopTake = AddTake();
+		// Before a master clock exists, MIDI timestamps provide the actual press
+		// origin. The take may reach the audio snapshot much later.
+		const auto midiRecordStart = _clock && _clock->SeedSourceLength() == 0ul
+			? action.MidiSample : std::nullopt;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
 			midiInputChannels,
 			action.MidiInputDevices,
 			std::move(heldSnapshot),
-			transportStartSamps);
+			transportStartSamps,
+			midiRecordStart);
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
+		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetVisualState(StationVisualState::STATIONSTATE_RECORDING);
@@ -1227,7 +1236,23 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_END:
 	{
 		auto loopLength = action.SampleCount;
+		std::optional<std::uint32_t> midiOnlyStopSample;
+		// MIDI-only first takes must use the same two press timestamps as their
+		// note positions. Trigger::SampleCount starts on a later audio tick.
+		if (loopTake && loopTake.value()->GetLoops().empty()
+			&& _clock && !_clock->IsQuantisable()
+			&& loopTake.value()->MidiRecordStartSample() && action.MidiSample)
+		{
+			const auto midiElapsed = static_cast<std::int32_t>(
+				*action.MidiSample - *loopTake.value()->MidiRecordStartSample());
+			if (midiElapsed > 0)
+			{
+				loopLength = static_cast<unsigned long>(midiElapsed);
+				midiOnlyStopSample = action.MidiSample;
+			}
+		}
 
+		const auto requestedLength = loopLength;
 		if (0 == loopLength)
 		{
 			if (loopTake.has_value())
@@ -1239,6 +1264,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			std::optional<std::uint32_t> midiStopAgeSamps;
 			auto cfg = action.GetUserConfig();
 			auto streamParams = action.GetAudioParams();
 
@@ -1249,25 +1275,25 @@ ActionResult Station::OnAction(TriggerAction action)
 					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
-					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
 				}
 				else
 				{
-						_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
-						loopLength = _clock->SeedSourceLength();
+					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams);
+					loopLength = _clock->SeedSourceLength();
+					if (midiOnlyStopSample && loopLength > 0ul)
+					{
+						const auto age = static_cast<std::int32_t>(
+							static_cast<std::uint32_t>(_clock->SceneSamplePos()) - *midiOnlyStopSample);
+						if (age >= 0)
+						{
+							midiStopAgeSamps = static_cast<std::uint32_t>(age);
+							const auto phaseSamps = static_cast<unsigned long>(age) % loopLength;
+							_clock->SetMasterLoopIndexFrac(1.0 -
+								static_cast<double>(phaseSamps) / static_cast<double>(loopLength));
+						}
+					}
 				}
 			}
-			auto outLatency = streamParams.has_value() ?
-				streamParams.value().OutputLatency :
-				0u;
-
-			if (0u == outLatency)
-			{
-				outLatency = cfg.has_value() ?
-					cfg.value().Audio.LatencyOut :
-					0u;
-			}
-
 			auto playPos = cfg.has_value() ?
 				cfg.value().OverdubPlayPos(errorSamps, loopLength) :
 				0;
@@ -1275,12 +1301,14 @@ ActionResult Station::OnAction(TriggerAction action)
 				cfg.value().EndRecordingSamps(errorSamps) :
 				0;
 
-			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
 			if (loopTake.has_value())
 			{
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
+				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
+					? static_cast<int>(_clock->SampOffset()) : errorSamps;
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
 			}
+			completedLength = loopLength;
+			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
 
 			res.IsEaten = true;
 			res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
@@ -1301,9 +1329,12 @@ ActionResult Station::OnAction(TriggerAction action)
 			action.MidiInputDevices,
 			sourceLoopTake,
 			transportStartSamps);
+		newLoopTake->SetActiveBounce(sourceLoopTake, action.OverdubWriter);
 
 		res.SourceId = sourceId;
 		res.TargetId = newLoopTake->Id();
+		res.TriggerSourceTake = sourceLoopTake;
+		res.TriggerTargetTake = newLoopTake;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_ACTIVATE;
 		res.IsEaten = true;
 		_SetVisualState(StationVisualState::STATIONSTATE_OVERDUBBING);
@@ -1312,6 +1343,7 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_OVERDUB_END:
 	{
 		auto loopLength = action.SampleCount;
+		const auto requestedLength = loopLength;
 
 		if (0 == loopLength)
 		{
@@ -1334,7 +1366,6 @@ ActionResult Station::OnAction(TriggerAction action)
 					auto [quantisedLength, err] = _clock->QuantiseLength(action.SampleCount);
 					loopLength = quantisedLength;
 					errorSamps = err;
-					std::cout << "Quantised loop to " << loopLength << " with error " << errorSamps << std::endl;
 				}
 				else
 				{
@@ -1364,12 +1395,12 @@ ActionResult Station::OnAction(TriggerAction action)
 				cfg.value().EndRecordingSamps(errorSamps) :
 				0;
 
-			std::cout << "Playing loop from " << playPos << " with loop length " << loopLength << " (out latency = " << outLatency << ")" << std::endl;
-
 			if (loopTake.has_value())
 			{
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
 			}
+			completedLength = loopLength;
+			completedErrorSamps = static_cast<long long>(requestedLength) - static_cast<long long>(loopLength);
 
 			auto sourceLoopTake = _TryGetTake(action.SourceId);
 			if (sourceLoopTake.has_value())
@@ -1440,7 +1471,10 @@ ActionResult Station::OnAction(TriggerAction action)
 				_PublishLoopTakeSnapshot();
 				_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 			}
+			res.DitchResult = actions::DitchDisposition::Removed;
 		}
+		else
+			res.DitchResult = actions::DitchDisposition::AlreadyAbsent;
 
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DITCH;
@@ -1455,6 +1489,73 @@ ActionResult Station::OnAction(TriggerAction action)
 		res.IsEaten = true;
 		res.ResultType = actions::ActionResultType::ACTIONRESULT_DEFAULT;
 		break;
+	}
+	if (res.IsEaten)
+	{
+		const char* actionLabel = nullptr;
+		switch (action.ActionType)
+		{
+		case TriggerAction::TRIGGER_REC_START: actionLabel = "record-start"; break;
+		case TriggerAction::TRIGGER_REC_END: actionLabel = "record-end"; break;
+		case TriggerAction::TRIGGER_OVERDUB_START: actionLabel = "overdub-start"; break;
+		case TriggerAction::TRIGGER_OVERDUB_END: actionLabel = "overdub-end"; break;
+		case TriggerAction::TRIGGER_PUNCHIN_START: actionLabel = "punch-in"; break;
+		case TriggerAction::TRIGGER_PUNCHIN_END: actionLabel = "punch-out"; break;
+		case TriggerAction::TRIGGER_DITCH: actionLabel = "ditch"; break;
+		case TriggerAction::TRIGGER_OVERDUB_DITCH: actionLabel = "overdub-ditch"; break;
+		case TriggerAction::TRIGGER_DITCH_UNMUTE: break; // Internal restoration action; intentionally not logged.
+		default: break;
+		}
+		if (actionLabel)
+		{
+			auto target = loopTake ? *loopTake : std::shared_ptr<LoopTake>();
+			if (!target && !res.TargetId.empty())
+			{
+				if (auto created = _TryGetTake(res.TargetId); created)
+					target = *created;
+			}
+			const auto state = GetVisualState();
+			const char* stateLabel = "idle";
+			switch (state)
+			{
+			case StationVisualState::STATIONSTATE_RECORDING: stateLabel = "recording"; break;
+			case StationVisualState::STATIONSTATE_ENDRECORDING: stateLabel = "ending-recording"; break;
+			case StationVisualState::STATIONSTATE_PLAYING: stateLabel = "playing"; break;
+			case StationVisualState::STATIONSTATE_OVERDUBBING: stateLabel = "overdubbing"; break;
+			case StationVisualState::STATIONSTATE_PUNCHIN: stateLabel = "punch-in"; break;
+			default: break;
+			}
+			const bool isPlay = completedLength > 0ul && loopTake.has_value();
+			std::cout << (isPlay ? "[Loop Play] station=\"" : "[Station] station=\"")
+				<< Name() << "\" action=" << actionLabel
+				<< " state=" << stateLabel
+				<< " take=" << (target ? target->Id() : action.TargetId)
+				<< " length=" << completedLength;
+			if (isPlay)
+			{
+				const auto grainSamps = _clock ? _clock->QuantiseSamps() : 0u;
+				std::cout << " errorSamps=" << completedErrorSamps
+					<< " grainSamps=" << grainSamps;
+				if (grainSamps > 0u && completedLength % grainSamps == 0ul)
+					std::cout << " grains=" << completedLength / grainSamps;
+				if (_clock)
+				{
+					const auto bpm = _clock->CurrentMusicalPosition(
+						_ResolveSampleRate(action.GetUserConfig(), action.GetAudioParams()));
+					if (bpm.IsValid)
+						std::cout << " bpm=" << bpm.Tempo;
+				}
+			}
+			if (target)
+			{
+				const bool ditched = res.ResultType == actions::ACTIONRESULT_DITCH;
+				std::cout << " audioLoops=" << (ditched ? priorAudioLoops : target->GetLoops().size())
+					<< " midiLoops=" << (ditched ? priorMidiLoops : target->GetMidiLoops().size());
+			}
+			if (!res.SourceId.empty() || !action.SourceId.empty())
+				std::cout << " source=" << (res.SourceId.empty() ? action.SourceId : res.SourceId);
+			std::cout << '\n';
+		}
 	}
 
 	return res;
@@ -1475,11 +1576,6 @@ void Station::OnTick(Time curTime,
 	const std::optional<io::UserConfig>& cfg,
 	const std::optional<audio::AudioStreamParams>& params)
 {
-	for (auto& trig : _triggers)
-	{
-		trig->OnTick(curTime, samps, cfg, params);
-	}
-
 	if (GetVisualState() == StationVisualState::STATIONSTATE_ENDRECORDING)
 	{
 		const auto isEndingRecording = std::any_of(_loopTakes.begin(), _loopTakes.end(),
@@ -1519,7 +1615,6 @@ void Station::Reset()
 	_PublishLoopTakeSnapshot();
 	_loopTakeRevision.fetch_add(1u, std::memory_order_release);
 
-	_triggers.clear();
 }
 
 std::shared_ptr<LoopTake> Station::AddTake()
@@ -1570,21 +1665,6 @@ std::vector<std::shared_ptr<LoopTake>> Station::GetLoopTakeSnapshot() const
 	}
 
 	return takes;
-}
-
-void Station::AddTrigger(std::shared_ptr<Trigger> trigger)
-{
-	trigger->SetReceiver(ActionReceiver::shared_from_this());
-
-	_triggers.push_back(trigger);
-}
-
-std::vector<TriggerTake> Station::SnapshotTriggerHistoryForExport() const
-{
-	if (_triggers.empty() || !_triggers.front())
-		return {};
-
-	return _triggers.front()->GetTakes();
 }
 
 unsigned int Station::NumTakes() const
@@ -1960,29 +2040,10 @@ void Station::OnBounce(unsigned int numSamps,
 	if (!state)
 		return;
 
-	for (auto& trigger : _triggers)
+	for (const auto& weakTake : state->LoopTakes)
 	{
-		auto takes = trigger->GetTakes();
-
-		for (auto& take : takes)
-		{
-			std::string sourceId = take.SourceTakeId;
-			std::string targetId = take.TargetTakeId;
-			auto sourceMatch = std::find_if(state->LoopTakes.begin(),
-				state->LoopTakes.end(),
-				[&sourceId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == sourceId; });
-			auto targetMatch = std::find_if(state->LoopTakes.begin(),
-				state->LoopTakes.end(),
-				[&targetId](const std::weak_ptr<LoopTake>& arg) { auto t = arg.lock(); return t && t->Id() == targetId; });
-
-			if ((state->LoopTakes.end() != sourceMatch) && (state->LoopTakes.end() != targetMatch))
-			{
-				auto sourceTake = sourceMatch->lock();
-				auto targetTake = targetMatch->lock();
-				if (sourceTake && targetTake)
-					sourceTake->WriteBlock(targetTake, trigger, sourceOffset, numSamps);
-			}
-		}
+		if (auto take = weakTake.lock())
+			take->ProcessActiveBounce(sourceOffset, numSamps);
 	}
 }
 
@@ -1996,25 +2057,6 @@ void Station::SetRackVisibility(bool showStationRack, bool showLoopTakeRacks)
 	{
 		take->SetRackVisibility(showLoopTakeRacks);
 	}
-}
-
-bool Station::AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept
-{
-	for (const auto& trigger : _triggers)
-	{
-		if (!trigger)
-			continue;
-		const auto& devices = trigger->MidiInputDevices();
-		if (devices.empty())
-			return true;
-		for (const auto& d : devices)
-		{
-			if (d == deviceName)
-				return true;
-		}
-	}
-	// No trigger has a device restriction — allow all.
-	return _triggers.empty();
 }
 
 bool Station::AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept
@@ -2274,6 +2316,7 @@ void Station::_ReleaseResources()
 
 std::vector<JobAction> Station::_CommitChanges()
 {
+	ReleaseRetiredAudioStates();
 	bool audioStateChanged = false;
 	if (_flipTakeBuffer)
 	{
@@ -2417,6 +2460,8 @@ void Station::_PublishLoopTakeSnapshot()
 void Station::_PublishAudioState()
 {
 	auto state = std::make_shared<AudioState>();
+	state->Generation = _nextAudioStateGeneration++;
+	state->OwnedLoopTakes = _loopTakes;
 	state->LoopTakes.reserve(_loopTakes.size());
 	for (const auto& take : _loopTakes)
 		state->LoopTakes.push_back(take);
@@ -2426,7 +2471,27 @@ void Station::_PublishAudioState()
 	state->VstBlockPtrs.resize(state->AudioBuffers.size(), nullptr);
 	for (auto i = 0u; i < state->AudioBuffers.size(); i++)
 		state->VstBlockPtrs[i] = state->VstBlockScratch.data() + (static_cast<size_t>(i) * constants::MaxBlockSize);
-	_audioState.store(state, std::memory_order_release);
+	auto retired = _audioState.exchange(state, std::memory_order_acq_rel);
+	if (retired)
+		_retiredAudioStates.push_back({ state->Generation, std::move(retired) });
+}
+
+void Station::AcknowledgeAudioBoundary() noexcept
+{
+	const auto state = _audioState.load(std::memory_order_acquire);
+	if (state)
+		_audioCompletedStateGeneration.store(state->Generation, std::memory_order_release);
+}
+
+void Station::ReleaseRetiredAudioStates()
+{
+	const auto completed = _audioCompletedStateGeneration.load(std::memory_order_acquire);
+	auto keep = std::remove_if(_retiredAudioStates.begin(), _retiredAudioStates.end(),
+		[completed](const RetiredAudioState& retired)
+		{
+			return retired.State && retired.ReleaseAfterGeneration <= completed;
+		});
+	_retiredAudioStates.erase(keep, _retiredAudioStates.end());
 }
 
 void Station::_ArrangeChildren()
@@ -2471,6 +2536,11 @@ GuiRackParams Station::_GetRackParams(utils::Size2d size)
 std::optional<std::shared_ptr<LoopTake>> Station::_TryGetTake(std::string id)
 {
 	for (auto& take : _loopTakes)
+	{
+		if (take->Id() == id)
+			return take;
+	}
+	for (auto& take : _backLoopTakes)
 	{
 		if (take->Id() == id)
 			return take;

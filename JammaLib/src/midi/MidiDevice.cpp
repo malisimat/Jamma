@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -19,9 +20,10 @@ std::string MidiDevice::_ToLower(std::string str)
 	return str;
 }
 
-void MidiDevice::_LogMidiMessageDetail(std::ostream& out, const std::vector<unsigned char>& message)
+void MidiDevice::_LogMidiMessageDetail(std::ostream& out,
+	const unsigned char* message, std::size_t size)
 {
-	if (message.empty())
+	if (size == 0u)
 		return;
 
 	constexpr std::uint8_t StatusMask    = 0xF0;
@@ -32,8 +34,8 @@ void MidiDevice::_LogMidiMessageDetail(std::ostream& out, const std::vector<unsi
 	constexpr std::uint8_t ProgramChange = 0xC0;
 
 	const auto status = static_cast<std::uint8_t>(message[0]);
-	const auto data1  = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
-	const auto data2  = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
+	const auto data1  = static_cast<std::uint8_t>(size > 1 ? message[1] : 0u);
+	const auto data2  = static_cast<std::uint8_t>(size > 2 ? message[2] : 0u);
 	const int  chan   = (status & ChannelMask) + 1;
 
 	out << "  (chan " << chan << ", ";
@@ -104,9 +106,11 @@ bool MidiDevice::Open(const std::string& preferredDeviceName,
                       MidiMessageCallback callback,
                       bool loggingVerbose)
 {
+	Close();
+	_verbosePackets.Clear();
+	_lastVerboseDroppedCount = 0u;
 	_callback = std::move(callback);
 	_loggingVerbose = loggingVerbose;
-	Close();
 
 	try
 	{
@@ -218,38 +222,66 @@ void MidiDevice::Close()
 	_deviceId = 0u;
 }
 
-void MidiDevice::_RtMidiCallback(double,
+void MidiDevice::_RtMidiCallback(double deltaSeconds,
                                  std::vector<unsigned char>* message,
                                  void* userData)
 {
+	const auto callbackArrivalMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
 	if ((nullptr == userData) || (nullptr == message))
 		return;
 
 	auto self = reinterpret_cast<MidiDevice*>(userData);
-	self->_OnMidiData(*message);
+	self->_OnMidiData(*message, deltaSeconds, callbackArrivalMicros);
 }
 
-void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message) noexcept
+void MidiDevice::DrainVerbosePackets(const std::string& configuredName)
+{
+	VerbosePacket packet;
+	while (_verbosePackets.Pop(packet))
+	{
+		std::cout << "[MIDI] Device \"" << configuredName << "\" packet: ";
+		for (std::size_t i = 0; i < packet.Size; ++i)
+		{
+			if (i > 0u) std::cout << ' ';
+			std::cout << std::hex << std::setfill('0') << std::setw(2)
+				<< static_cast<unsigned int>(packet.Bytes[i]);
+		}
+		std::cout << std::dec;
+		if (packet.Truncated)
+			std::cout << " ... (truncated)";
+		_LogMidiMessageDetail(std::cout, packet.Bytes.data(), packet.Size);
+		std::cout << '\n';
+	}
+	const auto dropped = _verbosePackets.DroppedCount();
+	if (dropped != _lastVerboseDroppedCount)
+	{
+		std::cout << "[MIDI] Verbose packet queue dropped "
+			<< (dropped - _lastVerboseDroppedCount) << " packets for device \""
+			<< configuredName << "\"\n";
+		_lastVerboseDroppedCount = dropped;
+	}
+}
+
+void MidiDevice::_OnMidiData(const std::vector<unsigned char>& message,
+	double deltaSeconds,
+	std::int64_t callbackArrivalMicros) noexcept
 {
 	if (!_callback)
 		return;
 	if (message.empty())
 		return;
 
-	if (_loggingVerbose)
-	{
-		std::cout << "[MIDI] Device #" << _deviceId << " (" << _deviceName << ") packet: ";
-		for (size_t i = 0; i < message.size(); ++i) {
-			if (i > 0) std::cout << " ";
-			std::cout << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(message[i]);
-		}
-		std::cout << std::dec;
-		_LogMidiMessageDetail(std::cout, message);
-		std::cout << "\n";
-	}
-
 	const auto status = static_cast<std::uint8_t>(message[0]);
 	const auto data1 = static_cast<std::uint8_t>(message.size() > 1 ? message[1] : 0u);
 	const auto data2 = static_cast<std::uint8_t>(message.size() > 2 ? message[2] : 0u);
-	_callback(status, data1, data2);
+	_callback(status, data1, data2, deltaSeconds, callbackArrivalMicros);
+	if (_loggingVerbose)
+	{
+		VerbosePacket packet;
+		packet.Size = std::min(message.size(), packet.Bytes.size());
+		packet.Truncated = message.size() > packet.Size;
+		std::copy_n(message.begin(), packet.Size, packet.Bytes.begin());
+		_verbosePackets.Push(packet);
+	}
 }

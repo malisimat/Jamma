@@ -414,6 +414,16 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 	return true;
 }
 
+bool MidiLoop::TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept
+{
+	if (index >= _eventCount)
+		return false;
+
+	const auto* quantised = _quantisedEvents.load(std::memory_order_acquire);
+	ev = quantised ? quantised->Events[index] : _events[index];
+	return true;
+}
+
 void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
 {
 	auto publishedModel = std::move(model);
@@ -610,8 +620,9 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
 	_quantisation = settings;
 	_quantisationTransportStartSamps = transportStartSamps;
 
-	const auto step = MidiQuantisation::StepSamps(_quantisation);
-	if ((step > 0u || _quantisation.HasRemoteGrid()) && _loopLengthSamps > 0u && _eventCount > 0u)
+	const auto hasGrid = _quantisation.Enabled
+		&& (_quantisation.GrainSamps > 0u || _quantisation.HasRemoteGrid());
+	if (hasGrid && _loopLengthSamps > 0u && _eventCount > 0u)
 		PublishQuantisedEvents();
 	else
 		_quantisedEvents.store(nullptr, std::memory_order_release);
@@ -622,8 +633,9 @@ void MidiLoop::SetQuantisation(const MidiQuantisationSettings& settings,
 
 void MidiLoop::PublishQuantisedEvents()
 {
-	const auto step = MidiQuantisation::StepSamps(_quantisation);
-	if ((!_quantisation.HasRemoteGrid() && 0u == step) || 0u == _loopLengthSamps || 0u == _eventCount)
+	const auto hasGrid = _quantisation.Enabled
+		&& (_quantisation.GrainSamps > 0u || _quantisation.HasRemoteGrid());
+	if (!hasGrid || 0u == _loopLengthSamps || 0u == _eventCount)
 	{
 		_quantisedEvents.store(nullptr, std::memory_order_release);
 		return;

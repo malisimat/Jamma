@@ -1,12 +1,14 @@
-﻿
+
 #include "gtest/gtest.h"
 #include <sstream>
+#include <stdexcept>
 #include "resources/ResourceLib.h"
 #include "midi/MidiEvent.h"
 #include "engine/LoopTake.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
 #include "engine/Trigger.h"
+#include "gui/GuiButton.h"
 #include "io/UserConfig.h"
 #include "io/Json.h"
 #include "io/RigFile.h"
@@ -41,6 +43,25 @@ Time GetTime()
 Time OffsetTime(const Time t, unsigned int ms)
 {
 	return t + std::chrono::milliseconds(ms);
+}
+
+template <typename TriggerPointer>
+static void CompleteQueuedStructuralAction(const TriggerPointer& trigger,
+	const std::optional<io::UserConfig>& cfg = std::nullopt,
+	std::uint64_t revision = 0u)
+{
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
+	trigger->OnTick(GetTime(), 0u, cfg, std::nullopt, revision);
+}
+
+template <typename TriggerPointer>
+static void TickAndComplete(const TriggerPointer& trigger,
+	unsigned int samps = 0u,
+	const std::optional<io::UserConfig>& cfg = std::nullopt,
+	std::uint64_t revision = 0u)
+{
+	trigger->OnTick(GetTime(), samps, cfg, std::nullopt, revision);
+	CompleteQueuedStructuralAction(trigger, cfg, revision);
 }
 
 static void SendMidiEvent(const std::shared_ptr<Trigger>& trigger, const midi::MidiEvent& event, Time t)
@@ -86,11 +107,17 @@ class SequenceTriggerReceiver :
 	public ActionReceiver
 {
 public:
+	SequenceTriggerReceiver() = default;
+	SequenceTriggerReceiver(std::shared_ptr<base::TriggerPunchTarget> sourceTake,
+		std::shared_ptr<base::TriggerPunchTarget> targetTake) :
+		_sourceTake(std::move(sourceTake)),
+		_targetTake(std::move(targetTake)) {}
+
 	virtual actions::ActionResult OnAction(actions::TriggerAction action)
 	{
 		_actions.push_back(action);
 
-		return {
+		actions::ActionResult result{
 			true,
 			"source-loop-take",
 			"target-loop-take",
@@ -98,6 +125,15 @@ public:
 			nullptr,
 			std::weak_ptr<base::GuiElement>()
 		};
+		if (action.ActionType == TriggerAction::TRIGGER_DITCH)
+			result.DitchResult = actions::DitchDisposition::Removed;
+		if (action.ActionType == TriggerAction::TRIGGER_REC_START ||
+			action.ActionType == TriggerAction::TRIGGER_OVERDUB_START)
+		{
+			result.TriggerSourceTake = _sourceTake;
+			result.TriggerTargetTake = _targetTake;
+		}
+		return result;
 	}
 
 	const std::vector<TriggerAction>& Actions() const
@@ -107,21 +143,78 @@ public:
 
 private:
 	std::vector<TriggerAction> _actions;
+	std::shared_ptr<base::TriggerPunchTarget> _sourceTake;
+	std::shared_ptr<base::TriggerPunchTarget> _targetTake;
+};
+
+class TestTriggerPunchTarget : public base::TriggerPunchTarget
+{
+public:
+	void SetTriggerSourceMutedAudio(bool muted) noexcept override
+	{
+		if (muted) ++MuteCount;
+		else ++UnmuteCount;
+	}
+	void TriggerPunchInAudio() noexcept override { ++PunchInCount; }
+	void TriggerPunchOutAudio() noexcept override { ++PunchOutCount; }
+
+	unsigned int MuteCount = 0u;
+	unsigned int UnmuteCount = 0u;
+	unsigned int PunchInCount = 0u;
+	unsigned int PunchOutCount = 0u;
+};
+
+class BounceLevelSink : public base::MultiAudioSink
+{
+public:
+	void OnBlockWriteChannel(unsigned int, const base::AudioWriteRequest& request, int) override
+	{
+		LastBounceLevel = request.fadeNew;
+	}
+
+	float LastBounceLevel = -1.0f;
+};
+
+class RoutingHistoryReceiver : public ActionReceiver
+{
+public:
+	explicit RoutingHistoryReceiver(std::string name) : _name(std::move(name)) {}
+
+	actions::ActionResult OnAction(actions::TriggerAction action) override
+	{
+		_actions.push_back(action);
+		const auto id = action.ActionType == TriggerAction::TRIGGER_REC_START ?
+			_name + "-" + std::to_string(++_nextTake) : std::string();
+		actions::ActionResult result{ true, "", id, actions::ACTIONRESULT_DEFAULT, nullptr,
+			std::weak_ptr<base::GuiElement>() };
+		if (action.ActionType == TriggerAction::TRIGGER_DITCH)
+			result.DitchResult = actions::DitchDisposition::Removed;
+		return result;
+	}
+
+	const std::vector<TriggerAction>& Actions() const noexcept { return _actions; }
+
+private:
+	std::string _name;
+	unsigned int _nextTake = 0u;
+	std::vector<TriggerAction> _actions;
 };
 
 class ConfigurableTriggerReceiver :
 	public ActionReceiver
 {
 public:
-	explicit ConfigurableTriggerReceiver(bool eat = true) :
-		_eat(eat)
+	explicit ConfigurableTriggerReceiver(bool eat = true,
+		actions::DitchDisposition ditchResult = actions::DitchDisposition::Removed) :
+		_eat(eat),
+		_ditchResult(ditchResult)
 	{
 	}
 
 	virtual actions::ActionResult OnAction(actions::TriggerAction action)
 	{
 		_actions.push_back(action);
-		return {
+		actions::ActionResult result{
 			_eat,
 			"source-loop-take",
 			"target-loop-take",
@@ -129,6 +222,9 @@ public:
 			nullptr,
 			std::weak_ptr<base::GuiElement>()
 		};
+		if (_eat && action.ActionType == TriggerAction::TRIGGER_DITCH)
+			result.DitchResult = _ditchResult;
+		return result;
 	}
 
 	const std::vector<TriggerAction>& Actions() const
@@ -138,6 +234,7 @@ public:
 
 private:
 	bool _eat;
+	actions::DitchDisposition _ditchResult;
 	std::vector<TriggerAction> _actions;
 };
 
@@ -300,6 +397,21 @@ public:
 	{
 		return _camera.IsBackgroundDragging();
 	}
+
+	bool HasTouchCaptureForTest() const
+	{
+		return !_touchDownElement.expired();
+	}
+
+	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
+	{
+		_popupManager.Open(popup);
+	}
+
+	void ApplyHoverForTest()
+	{
+		ApplyDeferredHoverUpdates();
+	}
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -335,6 +447,16 @@ TouchMoveAction MakeSceneTouchMove(utils::Position2d pos,
 	action.Position = pos;
 	action.MouseButtonsDown = mouseButtonsDown;
 	return action;
+}
+
+gui::GuiButtonParams MakeSceneButtonParams(utils::Position2d position,
+	utils::Size2d size)
+{
+	gui::GuiButtonParams params;
+	params.Position = position;
+	params.Size = size;
+	params.MinSize = size;
+	return params;
 }
 
 std::shared_ptr<Station> MakeTestStation(const std::string& name = "station")
@@ -432,35 +554,150 @@ TEST(Trigger, ExternalControlActionsDriveTheExistingStateMachine) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 	base::Action action;
+	ASSERT_TRUE(trigger->CanEditRouting());
 
 	auto activateDown = trigger->QueueExternalControlAction(true, true, action);
 	ASSERT_TRUE(activateDown.IsEaten);
-	ASSERT_EQ(actions::ACTIONRESULT_ACTIVATE, activateDown.ResultType);
+	ASSERT_FALSE(trigger->CanEditRouting());
+	ASSERT_EQ(actions::ACTIONRESULT_DEFAULT, activateDown.ResultType);
 	ASSERT_TRUE(receiver->Actions().empty());
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	TickAndComplete(trigger);
 	ASSERT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
 	ASSERT_EQ(engine::TRIGSTATE_RECORDING, trigger->GetState());
 	ASSERT_TRUE(trigger->IsActivateInputDown());
 	ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action).IsEaten);
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	TickAndComplete(trigger);
 	ASSERT_FALSE(trigger->IsActivateInputDown());
 
 	auto ditchDown = trigger->QueueExternalControlAction(false, true, action);
 	ASSERT_TRUE(ditchDown.IsEaten);
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	TickAndComplete(trigger);
 	ASSERT_TRUE(trigger->IsDitchDown());
 	ASSERT_TRUE(trigger->IsDitchInputDown());
 
 	auto ditchUp = trigger->QueueExternalControlAction(false, false, action);
 	ASSERT_TRUE(ditchUp.IsEaten);
-	ASSERT_EQ(actions::ACTIONRESULT_DITCH, ditchUp.ResultType);
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_EQ(actions::ACTIONRESULT_DEFAULT, ditchUp.ResultType);
+	TickAndComplete(trigger);
 	ASSERT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	ASSERT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
 	ASSERT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
 	ASSERT_FALSE(trigger->IsActivateInputDown());
 	ASSERT_FALSE(trigger->IsDitchInputDown());
 	ASSERT_FALSE(trigger->IsDitchDown());
+	ASSERT_TRUE(trigger->CanEditRouting());
+}
+
+TEST(Trigger, CaptureEditsAndStationMovesKeepDitchHistoryInRecordingOrder)
+{
+	auto firstStation = std::make_shared<RoutingHistoryReceiver>("first");
+	auto secondStation = std::make_shared<RoutingHistoryReceiver>("second");
+	auto trigger = MakeDefaultTrigger(firstStation, 0);
+	base::Action action;
+
+	auto applyRoute = [&](std::shared_ptr<base::ActionReceiver> receiver,
+		std::vector<unsigned int> channels)
+	{
+		std::vector<std::string> midiDevices;
+		auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
+		auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
+		auto writer = Trigger::CreateBounceWriter(mixer);
+		trigger->ApplyCaptureRouting(receiver, channels, midiDevices, midiMode, mixer, writer);
+	};
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger);
+	};
+	auto record = [&]()
+	{
+		press(true, true);
+		press(true, false);
+		trigger->OnTick(GetTime(), 64u, std::nullopt, std::nullopt);
+		press(true, true);
+		press(true, false);
+	};
+	auto ditch = [&]() { press(false, true); press(false, false); };
+
+	applyRoute(firstStation, { 0u });
+	record();
+	applyRoute(firstStation, { 0u, 1u });
+	record();
+	applyRoute(secondStation, { 0u, 1u });
+	record();
+
+	ASSERT_EQ(4u, firstStation->Actions().size());
+	EXPECT_EQ((std::vector<unsigned int>{ 0u }), firstStation->Actions()[0].InputChannels);
+	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), firstStation->Actions()[2].InputChannels);
+	ASSERT_EQ(2u, secondStation->Actions().size());
+	EXPECT_EQ((std::vector<unsigned int>{ 0u, 1u }), secondStation->Actions()[0].InputChannels);
+
+	ditch();
+	ASSERT_EQ(4u, secondStation->Actions().size());
+	EXPECT_EQ("second-1", secondStation->Actions()[2].TargetId);
+	ditch();
+	ASSERT_EQ(6u, firstStation->Actions().size());
+	EXPECT_EQ("first-2", firstStation->Actions()[4].TargetId);
+	ditch();
+	ASSERT_EQ(8u, firstStation->Actions().size());
+	EXPECT_EQ("first-1", firstStation->Actions()[6].TargetId);
+	EXPECT_TRUE(trigger->GetTakes().empty());
+}
+
+TEST(Trigger, RejectedStartDoesNotEndAnOlderHistoryEntry)
+{
+	auto acceptedReceiver = std::make_shared<ConfigurableTriggerReceiver>(true);
+	auto rejectedReceiver = std::make_shared<ConfigurableTriggerReceiver>(false);
+	auto trigger = MakeDefaultTrigger(acceptedReceiver, 0u);
+	base::Action action;
+	auto press = [&](bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(true, down, action).IsEaten);
+		TickAndComplete(trigger, down ? 64u : 0u);
+	};
+	press(true); press(false); press(true); press(false);
+	ASSERT_EQ(1u, trigger->GetTakes().size());
+	ASSERT_EQ(2u, acceptedReceiver->Actions().size());
+
+	std::shared_ptr<base::ActionReceiver> route = rejectedReceiver;
+	std::vector<unsigned int> channels{ 0u };
+	std::vector<std::string> midiDevices;
+	auto midiMode = io::RigFile::Trigger::MidiInputMode::None;
+	auto mixer = std::make_shared<audio::AudioMixer>(Trigger::GetOverdubMixerParams(channels));
+	auto writer = Trigger::CreateBounceWriter(mixer);
+	trigger->ApplyCaptureRouting(route, channels, midiDevices, midiMode, mixer, writer);
+	press(true); press(false); press(true); press(false);
+
+	EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
+	EXPECT_EQ(1u, trigger->GetTakes().size());
+	EXPECT_EQ(2u, acceptedReceiver->Actions().size());
+	ASSERT_EQ(2u, rejectedReceiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, rejectedReceiver->Actions()[0].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, rejectedReceiver->Actions()[1].ActionType);
+}
+
+TEST(Trigger, DitchPopsOnlyRemovedOrAlreadyAbsentHistory)
+{
+	for (const auto disposition : { actions::DitchDisposition::Removed,
+		actions::DitchDisposition::AlreadyAbsent,
+		actions::DitchDisposition::Failed })
+	{
+		auto receiver = std::make_shared<ConfigurableTriggerReceiver>(true, disposition);
+		auto trigger = MakeDefaultTrigger(receiver, 0u);
+		base::Action action;
+		auto press = [&](bool activate, bool down)
+		{
+			ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+			TickAndComplete(trigger, down ? 64u : 0u);
+		};
+		press(true, true); press(true, false); press(true, true); press(true, false);
+		ASSERT_EQ(1u, trigger->GetTakes().size());
+		press(false, true); press(false, false);
+		if (disposition == actions::DitchDisposition::Failed)
+			EXPECT_EQ(1u, trigger->GetTakes().size());
+		else
+			EXPECT_TRUE(trigger->GetTakes().empty());
+	}
 }
 
 TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
@@ -474,9 +711,9 @@ TEST(Trigger, RestoredHistoryDitchesItsMostRecentTake) {
 
 	base::Action action;
 	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	TickAndComplete(trigger);
 	ASSERT_TRUE(trigger->QueueExternalControlAction(false, false, action).IsEaten);
-	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	TickAndComplete(trigger);
 
 	ASSERT_EQ(2u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[0].ActionType);
@@ -624,36 +861,36 @@ TEST(Trigger, OverDubReleasingActivateFirst) {
 	action.KeyActionType = KeyAction::KEY_DOWN;
 	actionRes = trigger->OnAction(action);
 	ASSERT_TRUE(receiver->GetLastMatched());
-	ASSERT_EQ(3, receiver->GetNumTimesCalled());
+	ASSERT_EQ(2, receiver->GetNumTimesCalled());
 
 	receiver->SetExpected(TriggerAction::TRIGGER_PUNCHIN_END);
 	action.KeyChar = ActivateChar;
 	action.KeyActionType = KeyAction::KEY_UP;
 	actionRes = trigger->OnAction(action);
 	ASSERT_TRUE(receiver->GetLastMatched());
-	ASSERT_EQ(5, receiver->GetNumTimesCalled());
+	ASSERT_EQ(3, receiver->GetNumTimesCalled());
 
 	action.KeyChar = DitchChar;
 	action.KeyActionType = KeyAction::KEY_DOWN;
 	actionRes = trigger->OnAction(action);
-	ASSERT_EQ(5, receiver->GetNumTimesCalled());
+	ASSERT_EQ(3, receiver->GetNumTimesCalled());
 
 	receiver->SetExpected(TriggerAction::TRIGGER_OVERDUB_END);
 	action.KeyChar = ActivateChar;
 	action.KeyActionType = KeyAction::KEY_DOWN;
 	actionRes = trigger->OnAction(action);
 	ASSERT_TRUE(receiver->GetLastMatched());
-	ASSERT_EQ(6, receiver->GetNumTimesCalled());
+	ASSERT_EQ(4, receiver->GetNumTimesCalled());
 
 	action.KeyChar = ActivateChar;
 	action.KeyActionType = KeyAction::KEY_UP;
 	actionRes = trigger->OnAction(action);
-	ASSERT_EQ(6, receiver->GetNumTimesCalled());
+	ASSERT_EQ(4, receiver->GetNumTimesCalled());
 
 	action.KeyChar = DitchChar;
 	action.KeyActionType = KeyAction::KEY_UP;
 	actionRes = trigger->OnAction(action);
-	ASSERT_EQ(6, receiver->GetNumTimesCalled());
+	ASSERT_EQ(4, receiver->GetNumTimesCalled());
 }
 
 TEST(Trigger, OverDubReleasingDitchFirst) {
@@ -822,8 +1059,61 @@ TEST(Trigger, DebounceSimpleTest) {
 	ASSERT_EQ(2, receiver->GetNumTimesCalled());
 }
 
+TEST(Trigger, BounceWriterFollowsDelayedPunchMixerChanges) {
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(
+		std::make_shared<TestTriggerPunchTarget>(),
+		std::make_shared<TestTriggerPunchTarget>());
+	auto trigger = MakeDefaultTrigger(receiver, 0);
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Loop = { 0 };
+	cfg.Trigger = { 64, 0 };
+	auto action = KeyAction();
+	action.SetUserConfig(cfg);
+	action.KeyChar = DitchChar;
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+	action.KeyChar = ActivateChar;
+	trigger->OnAction(action);
+
+	ASSERT_FALSE(receiver->Actions().empty());
+	auto writer = receiver->Actions().front().OverdubWriter;
+	ASSERT_NE(nullptr, writer);
+	auto sink = std::make_shared<BounceLevelSink>();
+	float samples[64]{};
+	writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
+
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+	action.KeyActionType = KeyAction::KEY_DOWN;
+	trigger->OnAction(action);
+	ASSERT_GE(receiver->Actions().size(), 2u);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	const auto punchDelay = cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps;
+	trigger->OnTick(GetTime(), punchDelay - 1u, cfg, std::nullopt);
+	writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_FLOAT_EQ(1.0f, sink->LastBounceLevel);
+	trigger->OnTick(GetTime(), 1u, cfg, std::nullopt);
+	for (int i = 0; i < 200; ++i)
+		writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_LT(sink->LastBounceLevel, 0.1f);
+
+	action.KeyActionType = KeyAction::KEY_UP;
+	trigger->OnAction(action);
+	ASSERT_GE(receiver->Actions().size(), 3u);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, receiver->Actions()[2].ActionType);
+	trigger->OnTick(GetTime(), punchDelay, cfg, std::nullopt);
+	for (int i = 0; i < 200; ++i)
+		writer->WriteBlock(sink, samples, 64u, 0u);
+	EXPECT_GT(sink->LastBounceLevel, 0.9f);
+}
+
 TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
-	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto sourceTake = std::make_shared<TestTriggerPunchTarget>();
+	auto targetTake = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(sourceTake, targetTake);
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 
 	io::UserConfig cfg;
@@ -879,27 +1169,30 @@ TEST(Trigger, EndOverdubPreservesDelayedPunchActions) {
 	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[1].ActionType);
 	EXPECT_FALSE(actionsBeforeTick[1].ApplyToTargetTake);
-	EXPECT_TRUE(actionsBeforeTick[1].ApplyToSourceTake);
+	EXPECT_FALSE(actionsBeforeTick[1].ApplyToSourceTake);
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[2].ActionType);
 	EXPECT_FALSE(actionsBeforeTick[2].ApplyToTargetTake);
-	EXPECT_TRUE(actionsBeforeTick[2].ApplyToSourceTake);
+	EXPECT_FALSE(actionsBeforeTick[2].ApplyToSourceTake);
 	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_END, actionsBeforeTick[3].ActionType);
+	EXPECT_EQ(1u, sourceTake->MuteCount);
+	EXPECT_EQ(1u, sourceTake->UnmuteCount);
+	EXPECT_EQ(0u, targetTake->PunchInCount);
+	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
-	// Flush delayed queues; target-side punch actions should still be emitted after overdub ends.
+	// Flush delayed audio work; it remains valid after the job-side overdub end.
 	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
-	ASSERT_EQ(6u, actionsAfterTick.size());
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsAfterTick[4].ActionType);
-	EXPECT_TRUE(actionsAfterTick[4].ApplyToTargetTake);
-	EXPECT_FALSE(actionsAfterTick[4].ApplyToSourceTake);
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[5].ActionType);
-	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetTake);
-	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
+	ASSERT_EQ(4u, actionsAfterTick.size());
+	EXPECT_EQ(1u, targetTake->PunchInCount);
+	EXPECT_EQ(1u, targetTake->PunchOutCount);
 }
 
 TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
-	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	auto sourceTake = std::make_shared<TestTriggerPunchTarget>();
+	auto targetTake = std::make_shared<TestTriggerPunchTarget>();
+	auto receiver = std::make_shared<SequenceTriggerReceiver>(sourceTake, targetTake);
 	auto trigger = MakeDefaultTrigger(receiver, 0);
 	trigger->AddInputChannel(0u);
 	trigger->AddMidiInputDevice("Keys");
@@ -942,39 +1235,30 @@ TEST(Trigger, MixedAudioMidiPunchDelaysAudioTargetButNotMidiTarget) {
 	trigger->OnAction(action);
 
 	auto actionsBeforeTick = receiver->Actions();
-	ASSERT_EQ(5u, actionsBeforeTick.size());
+	ASSERT_EQ(3u, actionsBeforeTick.size());
 	EXPECT_EQ(TriggerAction::TRIGGER_OVERDUB_START, actionsBeforeTick[0].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[1].ActionType);
-	EXPECT_FALSE(actionsBeforeTick[1].ApplyToTargetTake);
-	EXPECT_TRUE(actionsBeforeTick[1].ApplyToSourceTake);
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsBeforeTick[2].ActionType);
+	EXPECT_TRUE(actionsBeforeTick[1].ApplyToTargetTake);
+	EXPECT_FALSE(actionsBeforeTick[1].ApplyToSourceTake);
+	EXPECT_FALSE(actionsBeforeTick[1].ApplyToTargetAudio);
+	EXPECT_TRUE(actionsBeforeTick[1].ApplyToTargetMidi);
+	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[2].ActionType);
 	EXPECT_TRUE(actionsBeforeTick[2].ApplyToTargetTake);
 	EXPECT_FALSE(actionsBeforeTick[2].ApplyToSourceTake);
 	EXPECT_FALSE(actionsBeforeTick[2].ApplyToTargetAudio);
 	EXPECT_TRUE(actionsBeforeTick[2].ApplyToTargetMidi);
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[3].ActionType);
-	EXPECT_FALSE(actionsBeforeTick[3].ApplyToTargetTake);
-	EXPECT_TRUE(actionsBeforeTick[3].ApplyToSourceTake);
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsBeforeTick[4].ActionType);
-	EXPECT_TRUE(actionsBeforeTick[4].ApplyToTargetTake);
-	EXPECT_FALSE(actionsBeforeTick[4].ApplyToSourceTake);
-	EXPECT_FALSE(actionsBeforeTick[4].ApplyToTargetAudio);
-	EXPECT_TRUE(actionsBeforeTick[4].ApplyToTargetMidi);
+	EXPECT_EQ(1u, sourceTake->MuteCount);
+	EXPECT_EQ(1u, sourceTake->UnmuteCount);
+	EXPECT_EQ(0u, targetTake->PunchInCount);
+	EXPECT_EQ(0u, targetTake->PunchOutCount);
 
 	trigger->OnTick(GetTime(), cfg.Trigger.PreDelay + constants::MaxLoopFadeSamps, cfg, std::nullopt);
+	trigger->ProcessStructuralActionsOnJob(cfg, std::nullopt);
 
 	auto actionsAfterTick = receiver->Actions();
-	ASSERT_EQ(7u, actionsAfterTick.size());
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_START, actionsAfterTick[5].ActionType);
-	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetTake);
-	EXPECT_FALSE(actionsAfterTick[5].ApplyToSourceTake);
-	EXPECT_TRUE(actionsAfterTick[5].ApplyToTargetAudio);
-	EXPECT_FALSE(actionsAfterTick[5].ApplyToTargetMidi);
-	EXPECT_EQ(TriggerAction::TRIGGER_PUNCHIN_END, actionsAfterTick[6].ActionType);
-	EXPECT_TRUE(actionsAfterTick[6].ApplyToTargetTake);
-	EXPECT_FALSE(actionsAfterTick[6].ApplyToSourceTake);
-	EXPECT_TRUE(actionsAfterTick[6].ApplyToTargetAudio);
-	EXPECT_FALSE(actionsAfterTick[6].ApplyToTargetMidi);
+	ASSERT_EQ(3u, actionsAfterTick.size());
+	EXPECT_EQ(1u, targetTake->PunchInCount);
+	EXPECT_EQ(1u, targetTake->PunchOutCount);
 }
 
 TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
@@ -1007,6 +1291,68 @@ TEST(Trigger, MidiBindingsDriveRecordAndDitchActions) {
 	ASSERT_EQ(3u, receiver->Actions().size());
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH, receiver->Actions()[1].ActionType);
 	EXPECT_EQ(TriggerAction::TRIGGER_DITCH_UNMUTE, receiver->Actions()[2].ActionType);
+}
+
+TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
+{
+	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto trigger = MakeTriggerFromRigJson(json, 20u);
+	ASSERT_NE(nullptr, trigger);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+
+	const auto start = GetTime();
+	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		start.time_since_epoch()).count();
+	base::Action action;
+	action.SetActionTime(start);
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+	trigger->OnTick(OffsetTime(start, 1u), 0u, std::nullopt, std::nullopt);
+	EXPECT_TRUE(trigger->IsActivateInputDown());
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_EQ(1u, receiver->Actions().size());
+
+	// Pump delay exceeds debounce, but the driver's note-off is only 5 ms later.
+	action.SetActionTime(OffsetTime(start, 100u));
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOff(0u, 0u, 60u), action, eventMicros + 5000).IsEaten);
+	trigger->OnTick(OffsetTime(start, 6u), 0u, std::nullopt, std::nullopt);
+
+	// A second press still falls within 20 ms of the driver-timed release.
+	action.SetActionTime(OffsetTime(start, 200u));
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), action, eventMicros + 10000).IsEaten);
+	trigger->OnTick(OffsetTime(start, 11u), 0u, std::nullopt, std::nullopt);
+	trigger->ProcessStructuralActionsOnJob(std::nullopt, std::nullopt);
+	EXPECT_EQ(1u, receiver->Actions().size());
+}
+
+TEST(Trigger, QueuedMidiPressSampleReachesRecordStartAndEnd)
+{
+	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto trigger = MakeTriggerFromRigJson(json, 0u);
+	ASSERT_NE(nullptr, trigger);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+	base::Action action;
+	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		GetTime().time_since_epoch()).count();
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(1000u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(1000u, receiver->Actions()[0].MidiSample);
+
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOff(1100u, 0u, 60u), action, eventMicros + 1000).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(4000u, 0u, 60u, 100u), action, eventMicros + 2000).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(4000u, receiver->Actions()[1].MidiSample);
 }
 
 TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
@@ -1069,7 +1415,7 @@ TEST(Trigger, NoteOffMidiDitchBindingCompletesOnNextNoteOn) {
 }
 
 
-TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
+TEST(Trigger, SceneWithoutPublishedRigDoesNotUseStationTriggerFallback) {
 	SceneParams sceneParams{ base::DrawableParams(),
 		base::MoveableParams(),
 		base::SizeableParams() };
@@ -1077,12 +1423,9 @@ TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 	TestScene scene(sceneParams, userConfig);
 
 	auto firstStation = MakeTestStation("station-a");
-	firstStation->AddTrigger(MakeSharedDefaultTrigger());
-	firstStation->AddTrigger(MakeSharedDefaultTrigger());
 	scene.AddStationForTest(firstStation);
 
 	auto secondStation = MakeTestStation("station-b");
-	secondStation->AddTrigger(MakeSharedDefaultTrigger());
 	scene.AddStationForTest(secondStation);
 
 	KeyAction action;
@@ -1092,9 +1435,149 @@ TEST(Trigger, KeySceneActionHitsAllMatchingTriggers) {
 
 	auto res = scene.OnAction(action);
 
-	ASSERT_TRUE(res.IsEaten);
-	EXPECT_EQ(2u, firstStation->NumTakes());
-	EXPECT_EQ(1u, secondStation->NumTakes());
+	EXPECT_FALSE(res.IsEaten);
+	EXPECT_EQ(0u, firstStation->NumTakes());
+	EXPECT_EQ(0u, secondStation->NumTakes());
+}
+
+TEST(Trigger, FullUiQueueKeepsDroppedActivateReleaseWhenDitchStateArrivesLater)
+{
+	auto trigger = MakeSharedDefaultTrigger();
+	base::Action action;
+	const auto start = GetTime();
+	for (std::size_t index = 0u; index < 63u; ++index)
+	{
+		action.SetActionTime(OffsetTime(start, static_cast<unsigned int>(index)));
+		ASSERT_TRUE(trigger->QueueExternalControlAction(true, (index % 2u) == 0u, action).IsEaten);
+	}
+	action.SetActionTime(OffsetTime(start, 64u));
+	EXPECT_TRUE(trigger->QueueExternalControlAction(true, false, action).IsEaten);
+	action.SetActionTime(OffsetTime(start, 65u));
+	EXPECT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	action.SetActionTime(OffsetTime(start, 66u));
+	EXPECT_TRUE(trigger->QueueExternalControlAction(false, false, action).IsEaten);
+	EXPECT_EQ(3u, trigger->UiInputDropCount());
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	EXPECT_FALSE(trigger->IsActivateInputDown());
+	EXPECT_FALSE(trigger->IsDitchInputDown());
+}
+
+TEST(Trigger, FullUiQueueKeepsLatestStateForEachActivateBinding)
+{
+	auto first = engine::DualBinding(
+		engine::TriggerBinding(engine::TRIGGER_KEY, 70u, 1u),
+		engine::TriggerBinding(engine::TRIGGER_KEY, 70u, 0u));
+	auto second = engine::DualBinding(
+		engine::TriggerBinding(engine::TRIGGER_KEY, 71u, 1u),
+		engine::TriggerBinding(engine::TRIGGER_KEY, 71u, 0u));
+	TriggerParams params;
+	params.Activate = { first, second };
+	auto trigger = std::make_shared<Trigger>(params);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+
+	base::Action action;
+	const auto start = GetTime();
+	for (std::size_t index = 0u; index < 62u; ++index)
+	{
+		action.SetActionTime(OffsetTime(start, static_cast<unsigned int>(index)));
+		ASSERT_TRUE(trigger->QueueExternalControlAction(true, false, action, 1u).IsEaten);
+	}
+	action.SetActionTime(OffsetTime(start, 62u));
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+		engine::TRIGGER_KEY, 70u, 1u, action).IsEaten);
+	action.SetActionTime(OffsetTime(start, 63u));
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+		engine::TRIGGER_KEY, 70u, 0u, action).IsEaten);
+	action.SetActionTime(OffsetTime(start, 64u));
+	ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, 0u,
+		engine::TRIGGER_KEY, 71u, 1u, action).IsEaten);
+	ASSERT_EQ(2u, trigger->UiInputDropCount());
+
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt, 0u);
+	CompleteQueuedStructuralAction(trigger);
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_START, receiver->Actions()[0].ActionType);
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
+}
+
+TEST(Trigger, RejectsBindingsBeyondFixedIngressCapacity)
+{
+	TriggerParams oversized;
+	oversized.Activate.resize(Trigger::MaxBindingCount + 1u);
+	oversized.Ditch.resize(Trigger::MaxBindingCount + 1u);
+	EXPECT_THROW({ Trigger trigger(oversized); }, std::invalid_argument);
+
+	io::RigFile::Trigger fileTrigger;
+	fileTrigger.Name = "oversized";
+	EXPECT_FALSE(Trigger::FromFile(oversized, fileTrigger).has_value());
+}
+
+TEST(Trigger, AddBindingReportsFixedIngressCapacity)
+{
+	TriggerParams params;
+	params.Activate.resize(Trigger::MaxBindingCount);
+	params.Ditch.resize(Trigger::MaxBindingCount);
+	Trigger trigger(params);
+	EXPECT_FALSE(trigger.AddBinding(engine::DualBinding(), engine::DualBinding()));
+}
+
+TEST(Scene, PopupTouchUpClearsAnEarlierTouchCapture) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	auto capturedControl = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 800, 500 }, { 20u, 20u }));
+	scene.AddChild(capturedControl);
+
+	ASSERT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN,
+		{ 810, 510 }, 0, LeftMouseButtonMask)).IsEaten);
+	ASSERT_TRUE(scene.HasTouchCaptureForTest());
+
+	auto popup = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 800, 500 }, { 20u, 20u }));
+	scene.OpenPopupForTest(popup);
+
+	EXPECT_TRUE(scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP,
+		{ 810, 510 }, 0, 0u)).IsEaten);
+	EXPECT_FALSE(scene.HasTouchCaptureForTest());
+}
+
+TEST(Scene, HoverTargetsOnlyTheTopmostOverlappingGuiElement) {
+	SceneParams sceneParams{ base::DrawableParams(),
+		base::MoveableParams(),
+		base::SizeableParams({ 1400u, 900u }) };
+	io::UserConfig userConfig = {};
+	TestScene scene(sceneParams, userConfig);
+
+	base::GuiElementParams containerParams;
+	containerParams.Position = { 800, 500 };
+	containerParams.Size = { 100u, 60u };
+	containerParams.MinSize = containerParams.Size;
+	containerParams.GuiPassThrough = true;
+	auto container = std::make_shared<base::GuiElement>(containerParams);
+	auto underneath = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 0, 0 }, { 80u, 40u }));
+	auto topmost = std::make_shared<gui::GuiButton>(
+		MakeSceneButtonParams({ 60, 0 }, { 40u, 40u }));
+	container->AddChild(underneath);
+	container->AddChild(topmost);
+	scene.AddChild(container);
+
+	scene.OnAction(MakeSceneTouchMove({ 870, 510 }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, container->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, underneath->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_OVER, topmost->GetState());
+
+	scene.OnAction(MakeSceneTouchMove({ 820, 510 }, 0u));
+	scene.ApplyHoverForTest();
+	EXPECT_EQ(base::GuiElement::STATE_OVER, underneath->GetState());
+	EXPECT_EQ(base::GuiElement::STATE_NORMAL, topmost->GetState());
 }
 
 TEST(SceneDrag, LeftDragPansCameraDirectly) {
@@ -1625,112 +2108,7 @@ TEST(Trigger, TriggerFromFileRejectsInvalidMidiBindingSpecsFromNonJsonCallers) {
 
 // Regression: trigger-driven engine mutation from the job thread (MIDI/serial
 
-// ---- Scene reset tests -------------------------------------------------
-// Tests 1-3: regression (key-trigger paths that already work).
-// Tests 4-5: MIDI and serial activate paths - FAIL before the fix because
-//            _DispatchMidiTriggerEvent and _PumpSerial never set
-//            _isSceneReset = false on ACTIONRESULT_ACTIVATE.
-
-TEST(SceneReset, KeyTriggerDitchWhileRecording_ResetsScene) {
-	SceneParams sceneParams{ base::DrawableParams(),
-		base::MoveableParams(),
-		base::SizeableParams() };
-	io::UserConfig userConfig = {};
-	TestScene scene(sceneParams, userConfig);
-
-	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger());
-	scene.AddStationForTest(station);
-
-	// Activate: start recording
-	KeyAction action;
-	action.SetActionTime(GetTime());
-	action.KeyChar = ActivateChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	EXPECT_FALSE(scene.IsSceneResetForTest());
-	EXPECT_EQ(1u, station->NumTakes());
-
-	// Commit so _TryGetTake can find the take by ID in _loopTakes
-	station->CommitChanges();
-
-	// Ditch key down then up: fires Ditch(), removes take
-	action.SetActionTime(GetTime());
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	action.SetActionTime(GetTime());
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_UP;
-	scene.OnAction(action);
-
-	EXPECT_EQ(0u, station->NumTakes());
-	EXPECT_TRUE(scene.IsSceneResetForTest());
-}
-
-TEST(SceneReset, KeyTriggerDebouncedDitch_ResetsSceneViaOnTick) {
-	constexpr unsigned int debounceMs = 100u;
-
-	SceneParams sceneParams{ base::DrawableParams(),
-		base::MoveableParams(),
-		base::SizeableParams() };
-	io::UserConfig userConfig = {};
-	TestScene scene(sceneParams, userConfig);
-
-	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger(debounceMs));
-	scene.AddStationForTest(station);
-
-	auto curTime = GetTime();
-
-	// Activate
-	KeyAction action;
-	action.SetActionTime(curTime);
-	action.KeyChar = ActivateChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	EXPECT_FALSE(scene.IsSceneResetForTest());
-	EXPECT_EQ(1u, station->NumTakes());
-
-	// Commit so _TryGetTake can find the take by ID in _loopTakes
-	station->CommitChanges();
-
-	// Ditch DOWN: first ditch is debounce-bypassed, sets _isDitchDown
-	action.SetActionTime(curTime);
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	// Ditch UP immediately (same timestamp): within debounce window, deferred
-	action.SetActionTime(curTime);
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_UP;
-	scene.OnAction(action);
-
-	// Take still present: deferred ditch has not fired yet
-	EXPECT_EQ(1u, station->NumTakes());
-	EXPECT_FALSE(scene.IsSceneResetForTest());
-
-	// Simulate an audio tick well past the debounce window. The callback may
-	// remove the take, but empty-scene timing cleanup belongs to the job owner.
-	scene.OnTick(OffsetTime(curTime, debounceMs * 2), 256u, std::nullopt, std::nullopt);
-
-	EXPECT_EQ(0u, station->NumTakes());
-	EXPECT_FALSE(scene.IsSceneResetForTest());
-
-	scene.OnJobTick(GetTime());
-	EXPECT_TRUE(scene.IsSceneResetForTest());
-
-	// The empty edge is consumed once. Re-seeding after it has been handled
-	// must not let a repeated job visit clear timing again.
-	scene.SeedTimingForTest();
-	ASSERT_TRUE(scene.HasTimingForTest());
-	scene.OnJobTick(GetTime());
-	EXPECT_TRUE(scene.HasTimingForTest());
-}
+// ---- Scene reset tests: key, MIDI, and serial trigger paths -------------
 
 TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 	SceneParams sceneParams{ base::DrawableParams(),
@@ -1765,55 +2143,6 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 	scene.ObserveTimingAvailabilityForTest(false, 2u);
 	scene.OnJobTick(GetTime());
 	EXPECT_FALSE(scene.HasTimingForTest());
-	EXPECT_TRUE(scene.IsSceneResetForTest());
-}
-
-TEST(SceneReset, KeyTriggerDitchInOverdub_ResetsScene) {
-	SceneParams sceneParams{ base::DrawableParams(),
-		base::MoveableParams(),
-		base::SizeableParams() };
-	io::UserConfig userConfig = {};
-	TestScene scene(sceneParams, userConfig);
-
-	auto station = MakeTestStation();
-	station->AddTrigger(MakeSharedDefaultTrigger());
-	scene.AddStationForTest(station);
-
-	auto curTime = GetTime();
-	KeyAction action;
-
-	// Hold ditch, then press activate: starts overdub from DEFAULT state (no
-	// prior recording), adding the very first take via TRIGGER_OVERDUB_START
-	action.SetActionTime(curTime);
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	action.SetActionTime(curTime);
-	action.KeyChar = ActivateChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	// The overdub start returns ACTIONRESULT_ACTIVATE, so _isSceneReset = false
-	EXPECT_FALSE(scene.IsSceneResetForTest());
-	EXPECT_EQ(1u, station->NumTakes());
-
-	// Commit so _TryGetTake can find the take by ID in _loopTakes
-	station->CommitChanges();
-
-	// While in OVERDUBBING state, press ditch again then release: calls Ditch(),
-	// removing the only take and triggering scene reset
-	action.SetActionTime(curTime);
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_DOWN;
-	scene.OnAction(action);
-
-	action.SetActionTime(curTime);
-	action.KeyChar = DitchChar;
-	action.KeyActionType = KeyAction::KEY_UP;
-	scene.OnAction(action);
-
-	EXPECT_EQ(0u, station->NumTakes());
 	EXPECT_TRUE(scene.IsSceneResetForTest());
 }
 

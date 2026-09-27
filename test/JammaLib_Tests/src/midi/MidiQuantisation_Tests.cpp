@@ -286,6 +286,32 @@ TEST(MidiQuantisation, RemoteGridUsesDirectIntervalBoundaries)
 	EXPECT_EQ(39593u, result[0].sampleOffset);
 }
 
+TEST(MidiQuantisation, LocalFractionalBoundariesShareOriginAcrossTakesAndRepeats)
+{
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Quarter;
+	settings.GrainSamps = 101u;
+	const MidiEvent firstSource[] = { MidiEvent::MakeNoteOn(25u, 0u, 60u, 100u) };
+	const MidiEvent secondSource[] = { MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u) };
+	MidiEvent firstResult[1];
+	MidiEvent secondResult[1];
+	MidiQuantisation::BuildQuantisedPlaybackEvents(firstSource, 1u, 404u, settings, 39u, firstResult);
+	MidiQuantisation::BuildQuantisedPlaybackEvents(secondSource, 1u, 404u, settings, 64u, secondResult);
+
+	// Both events occurred at transport sample 64. The rounded 1/4-grain
+	// boundary is 76, and the 404-sample loop repeats it at boundary 480.
+	EXPECT_EQ(37u, firstResult[0].sampleOffset);
+	EXPECT_EQ(12u, secondResult[0].sampleOffset);
+	EXPECT_EQ(76u, 39u + firstResult[0].sampleOffset);
+	EXPECT_EQ(76u, 64u + secondResult[0].sampleOffset);
+	EXPECT_EQ(480u, 39u + firstResult[0].sampleOffset + 404u);
+
+	settings.PhaseOffsetSamps = 7;
+	MidiQuantisation::BuildQuantisedPlaybackEvents(firstSource, 1u, 404u, settings, 39u, firstResult);
+	EXPECT_EQ(44u, firstResult[0].sampleOffset);
+}
+
 TEST(MidiQuantisation, SettingsEqualityIncludesPhaseOffset) {
 	MidiQuantisationSettings a;
 	MidiQuantisationSettings b;

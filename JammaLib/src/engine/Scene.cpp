@@ -2,6 +2,7 @@
 // NINJAM timing authority or mutate Timer/loop timing at the audio boundary.
 #include "Scene.h"
 #include <algorithm>
+#include <cassert>
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -94,6 +95,16 @@ Scene::Scene(SceneParams params,
 	GuiHudParams hudParams;
 	hudParams.Size = params.Size;
 	hudParams.MinSize = params.Size;
+	hudParams.PopupManager = &_popupManager;
+	hudParams.RoutingEditAvailabilityState = [this]() { return _RoutingEditAvailability(); };
+	hudParams.AcceptTriggerInput = [this](std::uint64_t revision)
+	{
+		return _inputSubsystem && _inputSubsystem->TryAcceptUiRigTriggerInput(revision);
+	};
+	hudParams.SubmitRigEdit = [this](const io::RigFile& candidate)
+	{
+		return RequestRigEdit(candidate) == RigCoordinator::EditResult::Pending;
+	};
 	_hudPanel = std::make_shared<GuiHud>(hudParams);
 	AddChild(_hudPanel);
 
@@ -302,20 +313,10 @@ void Scene::_EnsureRemoteTempoPromptUi()
 
 	_remoteTempoDialog = std::make_shared<GuiPopup>(GuiPopupParams::PanelDefault());
 	_remoteTempoDialog->SetTitle("Current server tempo");
-	_remoteTempoDialog->ConfigureButtons({
-		true,
-		false,
-		true,
-		false,
-		NinjamRemoteTempoAcceptControlIndex,
-		0u,
-		NinjamRemoteTempoRejectControlIndex,
-		0u,
-		"Follow server",
-		"Stay local",
-		"Cancel",
-		"Ok"
-	});
+	_remoteTempoDialog->ConfigureButtons({ {
+		{ "Cancel", NinjamRemoteTempoRejectControlIndex },
+		{ "Follow server", NinjamRemoteTempoAcceptControlIndex }
+	} });
 	_remoteTempoDialog->Init();
 }
 
@@ -361,8 +362,6 @@ void Scene::_OpenRemoteTempoPromptIfNeeded()
 		"Remote master interval: " + std::to_string(change.RemoteMasterIntervalLengthSamps) + " samples",
 		"Remote grid step: " + std::to_string(change.RemoteGridStepSamps) + " samples. Apply locally?"
 	});
-	_remoteTempoDialog->ResetButtonStates();
-
 	const auto popupSize = _remoteTempoDialog->GetSize();
 	const int x = std::max(0, (static_cast<int>(_sizeParams.Size.Width) - static_cast<int>(popupSize.Width)) / 2);
 	const int y = std::max(0, (static_cast<int>(_sizeParams.Size.Height) - static_cast<int>(popupSize.Height)) / 2);
@@ -491,9 +490,14 @@ void Scene::_CloseRemoteTempoPrompt()
 std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 	io::JamFile jamStruct,
 	io::RigFile rigStruct,
-	std::wstring dir)
+	std::wstring dir,
+	std::function<bool(const io::RigFile&)> saveRig)
 {
+	std::cout << "[LOAD] Constructing scene for JAM '" << jamStruct.Name << "' with "
+		<< jamStruct.Stations.size() << " station descriptor(s) and " << rigStruct.Triggers.size()
+		<< " rig trigger(s)." << std::endl;
 	auto scene = std::make_shared<Scene>(sceneParams, rigStruct.User);
+	scene->_saveRig = std::move(saveRig);
 
 	unsigned int hudAudioInputCount = std::max(1u, rigStruct.User.Audio.NumChannelsIn);
 	for (const auto& triggerCfg : rigStruct.Triggers)
@@ -510,9 +514,6 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			hudMidiInputs.push_back(device.Name);
 	}
 
-	std::vector<std::shared_ptr<Trigger>> hudTriggers;
-	hudTriggers.reserve(rigStruct.Triggers.size());
-
 	TriggerParams trigParams;
 	trigParams.DebounceMs = rigStruct.User.Trigger.DebounceSamps;
 
@@ -527,7 +528,12 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 
 	MergeMixBehaviourParams mergeParams;
 	AudioMixerParams mixerParams = Station::GetMixerParams(stationParams.Size, mergeParams);
+	std::vector<std::shared_ptr<Station>> initialStations;
+	initialStations.reserve(jamStruct.Stations.size());
+	std::vector<io::JamFile::Station> initialStationDescriptors;
+	initialStationDescriptors.reserve(jamStruct.Stations.size());
 
+	size_t stationDescriptorIndex = 0u;
 	for (auto& stationStruct : jamStruct.Stations)
 	{
 		auto station = Station::FromFile(stationParams, mixerParams, stationStruct, dir);
@@ -539,48 +545,71 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 				station.value()->SetAllowedMidiChannels({ defaultChannel });
 			}
 
-			if (rigStruct.Triggers.size() > stationParams.Index)
-			{
-				auto trigger = Trigger::FromFile(trigParams, rigStruct.Triggers[stationParams.Index]);
-
-				if (trigger.has_value())
-				{
-					if (rigStruct.Triggers[stationParams.Index].MidiTrigger.has_value())
-						scene->_RegisterMidiTriggerRoute(
-							rigStruct.Triggers[stationParams.Index].MidiTrigger->Device,
-							trigger.value());
-					station.value()->AddTrigger(trigger.value());
-					std::vector<TriggerTake> triggerHistory;
-					triggerHistory.reserve(stationStruct.TriggerHistory.size());
-					for (const auto& entry : stationStruct.TriggerHistory)
-					{
-						auto sourceType = TriggerTake::SOURCE_ADC;
-						if (entry.SourceType == 1u)
-							sourceType = TriggerTake::SOURCE_LOOPTAKE;
-						else if (entry.SourceType == 2u)
-							sourceType = TriggerTake::SOURCE_STATION;
-						triggerHistory.push_back({ sourceType, entry.SourceTakeId, entry.TargetTakeId });
-					}
-					trigger.value()->RestoreTakes(std::move(triggerHistory));
-					hudTriggers.push_back(trigger.value());
-				}
-			}
-
-			scene->_AddStation(station.value());
+			initialStations.push_back(station.value());
+			initialStationDescriptors.push_back(stationStruct);
+			stationParams.Index++;
+			stationParams.Position += { 600, 0 };
+			stationParams.ModelPosition += { 600, 0 };
 		}
-
-		stationParams.Index++;
-		stationParams.Position += { 600, 0 };
-		stationParams.ModelPosition += { 600, 0 };
+		else
+			std::cout << "[LOAD] Station descriptor " << stationDescriptorIndex << " '" << stationStruct.Name
+				<< "' was not constructed; continuing with the remaining stations." << std::endl;
+		stationDescriptorIndex++;
 	}
-	if (scene->_stations.empty())
+	std::cout << "[LOAD] Constructed " << initialStations.size() << " of " << jamStruct.Stations.size()
+		<< " station descriptor(s)." << std::endl;
+	if (!scene->_rigCoordinator.BuildInitial(rigStruct,
+		initialStationDescriptors,
+		initialStations,
+		rigStruct.User.Audio.NumChannelsIn,
+		hudMidiInputs,
+		trigParams,
+		scene->_saveRig))
+	{
+		std::cout << "[LOAD] Rig construction failed after station reconstruction." << std::endl;
+		return std::nullopt;
+	}
+	const auto acceptedRig = scene->_rigCoordinator.Accepted();
+	if (!acceptedRig)
+		return std::nullopt;
+	for (const auto& trigger : acceptedRig->Graph.Triggers)
+	{
+		const auto target = trigger.TargetName.value_or("<legacy target>");
+		if (trigger.Reason == io::RigFileRouting::Warning::TargetMissing)
+			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
+				<< "' was not found; leaving it unconnected." << std::endl;
+		else if (trigger.Reason == io::RigFileRouting::Warning::TargetAmbiguous)
+			std::cout << "[LOAD] Warning: trigger '" << trigger.TriggerName << "' target '" << target
+				<< "' is ambiguous; leaving it unconnected." << std::endl;
+	}
+	if (initialStations.empty())
 	{
 		std::cout << "Load: no constructible stations" << std::endl;
 		return std::nullopt;
 	}
+	for (const auto& runtime : acceptedRig->Triggers)
+	{
+		if (!runtime.Instance)
+			continue;
+		auto saved = std::find_if(jamStruct.TriggerHistories.begin(), jamStruct.TriggerHistories.end(),
+			[&runtime](const io::JamFile::TriggerHistory& history) { return history.TriggerId == runtime.Id; });
+		if (saved == jamStruct.TriggerHistories.end())
+			continue;
+		std::vector<TriggerTake> takes;
+		takes.reserve(saved->Takes.size());
+		for (const auto& take : saved->Takes)
+			takes.push_back({ static_cast<decltype(TriggerTake{}.SourceType)>(take.SourceType), take.SourceTakeId, take.TargetTakeId });
+		runtime.Instance->RestoreTakes(std::move(takes));
+	}
+	for (auto& station : initialStations)
+		scene->_AddStation(std::move(station), false);
+	scene->_PublishAudioStations();
+	scene->_audioEngine->PublishPendingRigSnapshot(acceptedRig);
+	scene->_inputSubsystem->PublishRigInputDispatch(acceptedRig);
 
 	if (scene->_hudPanel)
-		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), std::move(hudTriggers));
+		scene->_hudPanel->SetRoutingConfig(hudAudioInputCount, std::move(hudMidiInputs), *acceptedRig);
+	scene->_inputSubsystem->OpenRigTriggerInput(acceptedRig->Revision);
 
 	if (!jamStruct.TransportInitialised)
 	{
@@ -737,8 +766,7 @@ void Scene::Draw3d(DrawContext& ctx,
 
 void Scene::UpdateCamera()
 {
-	// Input, camera state, and rendering are all owned by the window thread.
-	// The audio callback never reads or advances the camera.
+	// Keep camera state on the window thread; audio never reads or advances it.
 	const auto now = Timer::GetTime();
 	const auto deltaSeconds = _lastCameraUpdateTime
 		? std::clamp(static_cast<float>(Timer::GetElapsedSeconds(*_lastCameraUpdateTime, now)), 0.0f, 0.05f)
@@ -812,6 +840,13 @@ ActionResult Scene::OnAction(TouchAction action)
 	action.SetUserConfig(_userConfig);
 	_cursorPos = action.Position;
 	_InvalidateHover2d();
+	if (TouchAction::TouchState::TOUCH_DOWN == action.State)
+	{
+		// Clear the old hover now so only the capture target appears pressed.
+		std::vector<std::weak_ptr<GuiElement>> none;
+		_ApplyHoverPath2d(none);
+		_hoverPath2d.clear();
+	}
 
 	std::cout << "Touch action " << action.Touch << " [State " << action.State << "] Index " << action.Index << "(Modifiers " << action.Modifiers << ")" << std::endl;
 
@@ -821,6 +856,12 @@ ActionResult Scene::OnAction(TouchAction action)
 		auto popupRes = _popupManager.OnAction(action);
 		if (_remoteTempoDialogOpen && !_popupManager.IsOpen())
 			_HandleRemoteTempoPromptDecision(false);
+		if (TouchAction::TouchState::TOUCH_UP == action.State)
+		{
+			// Clear the interrupted press captured before the popup opened.
+			_touchDownElement.reset();
+			_touchDownIsHud = false;
+		}
 		return popupRes;
 	}
 
@@ -851,7 +892,13 @@ ActionResult Scene::OnAction(TouchAction action)
 
 		if (activeElement)
 		{
-			res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			if (_touchDownIsHud)
+			{
+				std::scoped_lock lock(_sceneMutex);
+				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
+			}
+			else
+				res = activeElement->OnAction(activeElement->GlobalToLocal(action));
 
 			if (res.IsEaten)
 			{
@@ -865,9 +912,7 @@ ActionResult Scene::OnAction(TouchAction action)
 			_camera.HandleBackgroundDrag(action);
 			_EndBackgroundDrag();
 
-			// Clear selection only if not dragged
-			// background drag should only be active if selector mode is SELECT_NONE
-			// so try to use that instead!
+			// Clear selection after an unhandled background drag.
 			if (!wasDragged && !_camera.IsBackgroundDragging())
 				_UpdateSelection(ACTIONRESULT_CLEARSELECT);
 		}
@@ -878,6 +923,7 @@ ActionResult Scene::OnAction(TouchAction action)
 		_UpdateSelection(res.ResultType);
 
 		_touchDownElement.reset();
+		_touchDownIsHud = false;
 
 		return ActionResult::NoAction();
 	}
@@ -887,14 +933,25 @@ ActionResult Scene::OnAction(TouchAction action)
 		if (!*it)
 			continue;
 
-		res = static_cast<std::shared_ptr<base::GuiElement>>(*it)->OnAction((*it)->ParentToLocal(action));
+		const auto& child = *it;
+		const auto isHudChild = (child == _hudPanel);
+		if (isHudChild)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			res = child->OnAction(child->ParentToLocal(action));
+		}
+		else
+			res = child->OnAction(child->ParentToLocal(action));
 		if (res.IsEaten)
 		{
 			if (nullptr != res.Undo)
 				_undoHistory.Add(res.Undo);
 
 			if (!_touchDownElement.lock())
+			{
 				_touchDownElement = res.ActiveElement;
+				_touchDownIsHud = isHudChild;
+			}
 
 			// Focus follows the pressed control when it wants the keyboard.
 			if (TouchAction::TouchState::TOUCH_DOWN == action.State)
@@ -918,7 +975,10 @@ ActionResult Scene::OnAction(TouchAction action)
 			_undoHistory.Add(res.Undo);
 
 		if (!_touchDownElement.lock())
+		{
 			_touchDownElement = res.ActiveElement;
+			_touchDownIsHud = false;
+		}
 
 		return res;
 	}
@@ -931,7 +991,10 @@ ActionResult Scene::OnAction(TouchAction action)
 			_undoHistory.Add(res.Undo);
 
 		if (!_touchDownElement.lock())
+		{
 			_touchDownElement = res.ActiveElement;
+			_touchDownIsHud = false;
+		}
 
 		return res;
 	}
@@ -946,7 +1009,10 @@ ActionResult Scene::OnAction(TouchAction action)
 				_undoHistory.Add(res.Undo);
 
 			if (!_touchDownElement.lock())
+			{
 				_touchDownElement = res.ActiveElement;
+				_touchDownIsHud = false;
+			}
 
 			return res;
 		}
@@ -1001,10 +1067,23 @@ ActionResult Scene::OnAction(TouchMoveAction action)
 	auto activeElement = _touchDownElement.lock();
 
 	if (activeElement)
+	{
+		if (_touchDownIsHud)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			return activeElement->OnAction(activeElement->GlobalToLocal(action));
+		}
 		return activeElement->OnAction(activeElement->GlobalToLocal(action));
+	}
 
 	if (_isSceneTouching)
 		return _UpdateBackgroundDrag(action);
+	if (_hudPanel)
+	{
+		// Lock the HUD tree while the job thread rebuilds it.
+		std::scoped_lock lock(_sceneMutex);
+		return _hudPanel->OnAction(_hudPanel->GlobalToLocal(action));
+	}
 
 	return ActionResult::NoAction();
 }
@@ -1020,8 +1099,21 @@ ActionResult Scene::OnAction(KeyAction action)
 	if ((192u == action.KeyChar) || (96u == action.KeyChar))
 	{
 		if (_hudPanel)
+		{
+			std::scoped_lock lock(_sceneMutex);
 			_hudPanel->SetCableRevealHeld(actions::KeyAction::KEY_DOWN == action.KeyActionType);
+		}
 		return ActionResult::NoAction();
+	}
+	if (_hudPanel)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		if (_hudPanel->HasCableDrag())
+		{
+			auto hudResult = _hudPanel->OnAction(action);
+			if (hudResult.IsEaten)
+				return hudResult;
+		}
 	}
 
 	// 1. Open popups capture the keyboard first.
@@ -1083,10 +1175,6 @@ ActionResult Scene::OnAction(KeyAction action)
 		return ActionResult::NoAction();
 	}
 
-	// Ctrl+Shift+R - arm one-shot reclock: clear quantisation so the next
-	// completed recording becomes the new master quantisation. After completion the
-	// derived BPM/BPI is queued and sent to the NINJAM server at the next
-	// interval boundary.
 	if ((82 == action.KeyChar)
 		&& (actions::KeyAction::KEY_UP == action.KeyActionType)
 		&& (Action::MODIFIER_CTRL & action.Modifiers)
@@ -1136,6 +1224,7 @@ ActionResult Scene::OnAction(KeyAction action)
 		&& (Action::MODIFIER_CTRL & action.Modifiers))
 	{
 		return io::IoSessionExporter::ExportSession(_stations,
+			AcceptedRigSnapshot(),
 			_quantisation,
 			_globalMidiQuantState,
 			_transportOffsetLoopFrac,
@@ -1161,12 +1250,22 @@ ActionResult Scene::OnAction(KeyAction action)
 	bool checkReset = false;
 	auto result = ActionResult::NoAction();
 
-	for (auto& station : SnapshotStations())
+	const auto acceptedRig = _rigCoordinator.Accepted();
+	if (acceptedRig && _inputSubsystem->TryAcceptUiRigTriggerInput(acceptedRig->Revision))
 	{
-		auto res = station->OnAction(action);
+		static const std::string EmptyDevice;
+		const auto keyState = action.KeyActionType == KeyAction::KEY_DOWN ? 1u : 0u;
+		const auto& keyboardTriggers = acceptedRig->InputDispatch.KeyboardTriggers;
+		for (const auto& trigger : keyboardTriggers)
+		{
+			if (!trigger)
+				continue;
+			auto res = trigger->QueueInputEvent(TRIGGER_INPUT_UI,
+				acceptedRig->Revision, TriggerSource::TRIGGER_KEY,
+				action.KeyChar, keyState, action, EmptyDevice);
 
-		if (!res.IsEaten)
-			continue;
+			if (!res.IsEaten)
+				continue;
 
 		std::cout << "KeyAction eaten: " << res.SourceId << ", " << res.TargetId << ", " << res.ResultType << std::endl;
 		switch (res.ResultType)
@@ -1190,8 +1289,9 @@ ActionResult Scene::OnAction(KeyAction action)
 			break;
 		}
 
-		if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
-			result = res;
+			if (!result.IsEaten || (res.ResultType != ACTIONRESULT_DEFAULT))
+				result = res;
+		}
 	}
 
 	if (checkReset)
@@ -1232,14 +1332,14 @@ ActionResult Scene::_HandleUndo()
 
 ActionResult Scene::OnAction(GuiAction action)
 {
-	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_BUTTON == action.ElementType)
 		&& (action.Index == NinjamRemoteTempoAcceptControlIndex))
 	{
 		_HandleRemoteTempoPromptDecision(true);
 		return ActionResult::NoAction();
 	}
 
-	if ((GuiAction::ACTIONELEMENT_TOGGLE == action.ElementType)
+	if ((GuiAction::ACTIONELEMENT_BUTTON == action.ElementType)
 		&& (action.Index == NinjamRemoteTempoRejectControlIndex))
 	{
 		_HandleRemoteTempoPromptDecision(false);
@@ -1373,14 +1473,17 @@ void Scene::OnTick(Time curTime,
 
 void Scene::OnJobTick(Time curTime)
 {
+	if (!_isSceneQuitting.load(std::memory_order_acquire))
+		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
+	_PumpTriggerStructuralActions();
+	_AdvanceRigPublication();
 	_PumpMidi();
 	_PumpSerial();
+	_ConsumeTriggerOutcomes();
 
 	auto pumpResult = _networkService->GetController()->Pump();
 	{
-		// Always sync the station clock state to the scene-level quantisation.
-		// This ensures that when the first loop seeds the station clock locally
-		// (without a NINJAM session), _effectiveQuantiseSamps is updated promptly.
+		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
 		const auto localTiming = _quantisation.CurrentTempoTiming(_CurrentSampleRate());
 		bool hasLocalContent = false;
@@ -1441,13 +1544,7 @@ void Scene::OnJobTick(Time curTime)
 	if (receiver)
 		receiver->OnAction(job);
 
-	// Hand any PreInit'd VST plugin (created on the UI thread) back to the UI
-	// thread for destruction. On success the chain holds its own ref so this
-	// queued ref is a no-op; on failure (Load returned false) this is the only
-	// remaining ref, and draining it on the UI thread ensures ~Vst3Plugin →
-	// IComponent::terminate() / FreeLibrary run on the thread that PreInit'd
-	// the plugin. Releasing on this job thread instead violates VST3 threading
-	// and can crash plugins or leave dangling state until window close.
+	// Destroy PreInit'd VST plugins on the UI thread that initialized them.
 	if (job.PreInitPlugin)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
@@ -1455,38 +1552,181 @@ void Scene::OnJobTick(Time curTime)
 void Scene::_PumpMidi()
 {
 	auto stations = SnapshotStations();
-	_inputSubsystem->PublishLiveMidiRoutes(stations);
-    auto summary = _inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(), _audioEngine->GetStreamParams(), _sceneMutex);
-	std::scoped_lock lock(_sceneMutex);
-
-	if (summary.Activated)
-	{
-		_isSceneReset.store(false, std::memory_order_relaxed);
-		if (auto clock = _quantisation.Clock())
-			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
-	}
-	if (summary.Ditched)
-		_ResetIfEmpty();
+	_inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(),
+		_audioEngine->GetStreamParams(), _sceneMutex);
 }
 
-void Scene::_RegisterMidiTriggerRoute(const std::string& deviceName, std::shared_ptr<Trigger> trigger)
+void Scene::_PumpTriggerStructuralActions()
 {
-	_inputSubsystem->RegisterMidiTriggerRoute(deviceName, std::move(trigger));
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+		return;
+	const auto streamParams = _audioEngine->GetStreamParams();
+	std::scoped_lock lock(_sceneMutex);
+	for (const auto& runtime : accepted->Triggers)
+		if (runtime.Instance)
+			runtime.Instance->ProcessStructuralActionsOnJob(_userConfig, streamParams);
+}
+
+void Scene::_AdvanceRigPublication()
+{
+	const auto staged = _rigCoordinator.Staged();
+	if (staged)
+	{
+		const auto revision = staged->Revision;
+		if (_rigTransitionRequestedRevision != revision)
+		{
+			const auto accepted = _rigCoordinator.Accepted();
+			if (!accepted || !_inputSubsystem->RigTriggerInputReadyForAudioBoundary(accepted->Revision))
+				return;
+			_audioEngine->RequestRigTriggerTransition(revision, accepted, staged);
+			_rigTransitionRequestedRevision = revision;
+		}
+		if (_audioEngine->RejectedRigRevision() == revision)
+		{
+			_rigCoordinator.CompleteTransition(revision, false, _saveRig);
+			_audioEngine->ClearRigTriggerTransition();
+			_rigTransitionRequestedRevision = 0u;
+			if (const auto accepted = _rigCoordinator.Accepted())
+				_inputSubsystem->OpenRigTriggerInput(accepted->Revision);
+			return;
+		}
+		if (_audioEngine->TransitionReadyRigRevision() != revision)
+			return;
+		const auto result = _rigCoordinator.CompleteTransition(revision, true, _saveRig);
+		_audioEngine->ClearRigTriggerTransition();
+		_rigTransitionRequestedRevision = 0u;
+		if (result != RigCoordinator::EditResult::Pending)
+		{
+			if (const auto accepted = _rigCoordinator.Accepted())
+				_inputSubsystem->OpenRigTriggerInput(accepted->Revision);
+			return;
+		}
+		_audioEngine->PublishPendingRigSnapshot(_rigCoordinator.Pending());
+		return;
+	}
+
+	const auto pending = _rigCoordinator.Pending();
+	if (!pending)
+		return;
+	const auto audioRevision = _audioEngine->AppliedRigRevision();
+	if (audioRevision != pending->Revision ||
+		!_rigCoordinator.ObserveAudioAcknowledgement(audioRevision))
+		return;
+	if (_rigCoordinator.InputAcknowledgement() != pending->Revision)
+	{
+		_inputSubsystem->PublishRigInputDispatch(pending);
+		if (!_rigCoordinator.AcknowledgeInput(pending->Revision))
+			return;
+	}
+	if (!_rigCoordinator.PromoteAcknowledged())
+		return;
+	_audioEngine->ReleaseRigSnapshotsBefore(pending->Revision);
+	_rigCoordinator.ReleaseRetired();
+	if (_hudPanel)
+	{
+		// Protect the HUD tree while routing rebuilds replace widgets used by rendering.
+		std::scoped_lock lock(_sceneMutex);
+		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
+		std::vector<std::string> midiInputs;
+		for (const auto& device : pending->Rig.User.Midi.Devices)
+			if (device.Enabled && !device.Name.empty()) midiInputs.push_back(device.Name);
+		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
+	}
+	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
+}
+
+RigCoordinator::EditResult Scene::RequestRigEdit(const io::RigFile& candidateRig)
+{
+	switch (_RoutingEditAvailability())
+	{
+	case gui::RoutingEditAvailability::Applying: return RigCoordinator::EditResult::EditsDisabled;
+	case gui::RoutingEditAvailability::AudioCallbackInactive: return RigCoordinator::EditResult::AudioCallbackInactive;
+	case gui::RoutingEditAvailability::TriggerBusy: return RigCoordinator::EditResult::TriggerBusy;
+	case gui::RoutingEditAvailability::Ready: break;
+	}
+	const auto accepted = _rigCoordinator.Accepted();
+	const auto result = _rigCoordinator.SubmitCandidate(candidateRig);
+	if (result == RigCoordinator::EditResult::Pending)
+	{
+		const auto staged = _rigCoordinator.Staged();
+		if (!accepted || !staged || _audioEngine->AppliedRigRevision() != accepted->Revision)
+		{
+			if (staged)
+				_rigCoordinator.CompleteTransition(staged->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::TransitionRejected;
+		}
+		if (!_inputSubsystem->RequestCloseRigTriggerInputFromUi(accepted->Revision))
+		{
+			_rigCoordinator.CompleteTransition(staged->Revision, false, _saveRig);
+			return RigCoordinator::EditResult::TransitionRejected;
+		}
+		_rigTransitionRequestedRevision = 0u;
+	}
+	return result;
+}
+
+gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
+{
+	if (!_rigCoordinator.EditsEnabled())
+		return gui::RoutingEditAvailability::Applying;
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted || !_inputSubsystem->TryAcceptUiRigTriggerInput(accepted->Revision))
+		return gui::RoutingEditAvailability::Applying;
+
+	const auto heartbeat = _audioEngine->AudioCallbackHeartbeat();
+	const auto now = std::chrono::steady_clock::now();
+	if (heartbeat != _lastAudioCallbackHeartbeat)
+	{
+		_lastAudioCallbackHeartbeat = heartbeat;
+		_lastAudioCallbackHeartbeatAt = now;
+	}
+	constexpr auto heartbeatTimeout = std::chrono::milliseconds(500);
+	if (heartbeat == 0u || _lastAudioCallbackHeartbeatAt == std::chrono::steady_clock::time_point{} ||
+		now - _lastAudioCallbackHeartbeatAt > heartbeatTimeout)
+		return gui::RoutingEditAvailability::AudioCallbackInactive;
+	return gui::RoutingEditAvailability::Ready;
 }
 
 void Scene::_PumpSerial()
 {
-    auto summary = _inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
-	std::scoped_lock lock(_sceneMutex);
+	_inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
+}
 
-	if (summary.Activated)
+void Scene::_ConsumeTriggerOutcomes()
+{
+	const auto accepted = _rigCoordinator.Accepted();
+	if (!accepted)
+		return;
+	for (auto observed = _triggerOutcomeCounts.begin(); observed != _triggerOutcomeCounts.end();)
 	{
-		_isSceneReset.store(false, std::memory_order_relaxed);
-		if (auto clock = _quantisation.Clock())
-			_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+		const auto stillPublished = std::any_of(accepted->Triggers.begin(), accepted->Triggers.end(),
+			[instance = observed->first](const RigSnapshotTrigger& runtime)
+			{
+				return runtime.Instance.get() == instance;
+			});
+		if (!stillPublished)
+			observed = _triggerOutcomeCounts.erase(observed);
+		else
+			++observed;
 	}
-	if (summary.Ditched)
-		_ResetIfEmpty();
+	for (const auto& runtime : accepted->Triggers)
+	{
+		if (!runtime.Instance)
+			continue;
+		const auto activation = runtime.Instance->ActivationOutcomeCount();
+		const auto ditch = runtime.Instance->DitchOutcomeCount();
+		auto& observed = _triggerOutcomeCounts[runtime.Instance.get()];
+		if (activation > observed.first)
+		{
+			_isSceneReset.store(false, std::memory_order_relaxed);
+			if (auto clock = _quantisation.Clock())
+				_SetMidiQuantisationGrain(clock->QuantiseSamps(), "loop activated");
+		}
+		if (ditch > observed.second)
+			_ResetIfEmpty();
+		observed = { activation, ditch };
+	}
 }
 
 void Scene::InitReceivers()
@@ -1669,6 +1909,9 @@ bool Scene::PumpGlobalKeyCapture(actions::KeyAction& action) noexcept
 
 void Scene::Shutdown()
 {
+	_rigCoordinator.Shutdown();
+	_audioEngine->ClearRigTriggerTransition();
+	_inputSubsystem->CloseRigTriggerInputForever();
 	_isSceneQuitting.store(true, std::memory_order_release);
 	// RtAudio::Stop() waits for an in-flight callback to return.  Do this before
 	// closing an editor or releasing a plugin: the callback can be dispatching
@@ -1678,6 +1921,11 @@ void Scene::Shutdown()
 
 	if (_jobRunner.joinable())
 		_jobRunner.join();
+	assert(_inputSubsystem->RigTriggerInputReadyForShutdown());
+	_inputSubsystem->PublishEmptyRigInputDispatch();
+	CloseGlobalKeyCapture();
+	CloseSerial();
+	CloseMidi();
 
 	// No work from the outgoing session may survive a session replacement.
 	// In particular, queued VST loads retain UI-thread-created plugin objects;
@@ -1693,8 +1941,8 @@ void Scene::Shutdown()
 	}
 
 	ForceUnloadAllVstPlugins();
-
-	CloseGlobalKeyCapture();
+	_audioEngine->Close();
+	_rigCoordinator.ReleaseAfterReadersStopped();
 }
 
 void Scene::ForceUnloadAllVstPlugins()
@@ -1731,6 +1979,7 @@ void Scene::CommitChanges()
 
 		for (auto& station : _stations)
 		{
+			station->ReleaseRetiredAudioStates();
 			auto jobs = station->CommitChanges();
 			if (!jobs.empty())
 			{
@@ -1761,11 +2010,7 @@ void Scene::CommitChanges()
 			receiver->OnAction(job);
 	}
 
-	// Pre-initialise VST DLLs on the UI thread before handing jobs to the job
-	// thread. Do this after releasing _sceneMutex so LoadLibraryW stays out of
-	// the audio lock and later attached() calls remain UI-thread bound.
-	// MakePluginForPath selects VST3 (Vst3Plugin) or VST2 (Vst2Plugin) by
-	// file extension (.dll → VST2, anything else → VST3).
+	// Initialize VSTs on the UI thread after releasing _sceneMutex.
 	for (auto& job : jobList)
 	{
 		if (job.JobActionType == JobAction::JOB_LOADVST)
@@ -1922,13 +2167,15 @@ void Scene::_ApplyHoverPath2d(const std::vector<std::weak_ptr<base::GuiElement>>
 	_LockHoverPath(_hoverPath2d, _hoverPath2dPrevSharedScratch);
 	_LockHoverPath(nextPath, _hoverPath2dNextSharedScratch);
 
-	const auto prefix = _SharedHoverPathPrefix(_hoverPath2dPrevSharedScratch, _hoverPath2dNextSharedScratch);
+	// Only the path leaf is the pointer target; ancestors are for ownership lookup.
+	for (const auto& element : _hoverPath2dPrevSharedScratch)
+		element->ApplyHoverState(false);
 
-	for (size_t i = _hoverPath2dPrevSharedScratch.size(); i > prefix; --i)
-		_hoverPath2dPrevSharedScratch[i - 1]->ApplyHoverState(false);
-
-	for (size_t i = 0; i < _hoverPath2dNextSharedScratch.size(); ++i)
-		_hoverPath2dNextSharedScratch[i]->ApplyHoverPoint(_hoverPath2dNextSharedScratch[i]->GlobalToLocal(_cursorPos));
+	if (!_hoverPath2dNextSharedScratch.empty())
+	{
+		auto& leaf = _hoverPath2dNextSharedScratch.back();
+		leaf->ApplyHoverPoint(leaf->GlobalToLocal(_cursorPos));
+	}
 }
 
 void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& path,
@@ -1945,18 +2192,6 @@ void Scene::_LockHoverPath(const std::vector<std::weak_ptr<base::GuiElement>>& p
 
 		outPath.push_back(std::move(locked));
 	}
-}
-
-size_t Scene::_SharedHoverPathPrefix(const std::vector<std::shared_ptr<base::GuiElement>>& lhs,
-	const std::vector<std::shared_ptr<base::GuiElement>>& rhs)
-{
-	size_t prefix = 0;
-	const auto count = std::min(lhs.size(), rhs.size());
-
-	while ((prefix < count) && (lhs[prefix].get() == rhs[prefix].get()))
-		++prefix;
-
-	return prefix;
 }
 
 std::shared_ptr<StationRemote> Scene::FindRemoteStation(const std::vector<std::shared_ptr<Station>>& stations,
@@ -2035,9 +2270,10 @@ void Scene::_UpdateHudStationAnchors()
 	std::vector<gui::GuiHud::StationAnchor> anchors;
 	anchors.reserve(_stations.size());
 
-	for (const auto& station : _stations)
+	for (size_t stationIndex = 0u; stationIndex < _stations.size(); ++stationIndex)
 	{
-		auto modelPos = station->ModelPosition();
+		const auto& station = _stations[stationIndex];
+		const auto modelPos = station->TopCapModelPosition();
 		auto clip = _viewProj * glm::vec4(modelPos.X, modelPos.Y, 0.0f, 1.0f);
 		utils::Position2d screenPos{ -9999, -9999 };
 		if (std::abs(clip.w) > 1e-6f)
@@ -2048,7 +2284,7 @@ void Scene::_UpdateHudStationAnchors()
 				static_cast<int>((ndc.y + 1.0f) * 0.5f * h)
 			};
 		}
-		anchors.push_back({ screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
+		anchors.push_back({ stationIndex, station->Name(), screenPos, glm::vec4(0.85f, 0.90f, 0.95f, 0.45f) });
 	}
 
 	_hudPanel->SetStationAnchors(std::move(anchors));
@@ -2173,6 +2409,12 @@ void Scene::_UpdateSelection(ActionResultType res)
 void Scene::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	ResourceUser::InitResources(resourceLib, forceInit);
+	// Initialize controls added by rig edits on the render thread before drawing them.
+	{
+		std::scoped_lock lock(_sceneMutex);
+		if (_hudPanel)
+			_hudPanel->InitResources(resourceLib, false);
+	}
 
 	// Stations can be added after scene resources are initialised.
 	auto stations = SnapshotStations();
@@ -2232,7 +2474,7 @@ std::vector<std::shared_ptr<Station>> Scene::SnapshotStations() const
 	return _stations;
 }
 
-void Scene::_AddStation(std::shared_ptr<Station> station)
+void Scene::_AddStation(std::shared_ptr<Station> station, bool publishAudioStations)
 {
 	station->SetReceiver(ActionReceiver::shared_from_this());
 	station->SetLogging(_loggingConfig);
@@ -2254,7 +2496,8 @@ void Scene::_AddStation(std::shared_ptr<Station> station)
 		std::lock_guard<std::mutex> lock(_sceneMutex);
 		_stations.push_back(station);
 		_camera.RegisterStation(_stations.size() - 1u, station, station->LoopTakeRevision());
-		_PublishAudioStations();
+		if (publishAudioStations)
+			_PublishAudioStations();
 	}
 }
 
@@ -2383,6 +2626,9 @@ void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
 
 	// No local takes remain, so there is no station hierarchy to update. Keep
 	// the destructive Quantiser cleanup on this job-owned edge and off OnTick.
+	if (auto clock = _quantisation.Clock())
+		std::cout << "MIDI timing reset: reason=empty-local clockLength="
+			<< clock->SeedSourceLength() << " scene=" << clock->SceneSamplePos() << '\n';
 	_quantisation.Clear(false);
 }
 
@@ -2414,6 +2660,8 @@ void Scene::_JobLoop()
 		OnJobTick(Timer::GetTime());
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+	// Final job-producer barrier for permanent ingress closure.
+	_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
 }
 
 void Scene::_PublishAudioStations()

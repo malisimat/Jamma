@@ -56,7 +56,9 @@ namespace gui
 	{
 	public:
 		GuiButton(GuiButtonParams guiParams);
+		using base::GuiElement::OnAction;
 		virtual void SetSize(utils::Size2d size) override;
+		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		void SetText(const std::string& text);
 
 	private:

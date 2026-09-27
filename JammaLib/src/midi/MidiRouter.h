@@ -16,11 +16,12 @@
 #include "../audio/AudioDevice.h"
 #include "../base/LoggingConfig.h"
 #include "../io/SerialDevice.h"
-#include "../io/SerialTriggerQueue.h"
+#include "../engine/RigTriggerInputGate.h"
 #include "../midi/MidiDevice.h"
 #include "../midi/MidiClockAnchor.h"
 #include "../midi/MidiEvent.h"
 #include "../midi/MidiQueue.h"
+#include "../midi/MidiTimestampMapper.h"
 
 namespace io
 {
@@ -37,6 +38,7 @@ namespace engine
 	class LoopTake;
 	class Station;
 	class Trigger;
+	struct RigSnapshot;
 }
 
 namespace midi
@@ -51,6 +53,7 @@ namespace midi
 		struct LiveMidiIngressEvent
 		{
 			MidiEvent Event;
+			std::uint64_t RigRevision = 0u;
 			std::uint32_t RoutingGeneration = 0u;
 			std::uint32_t Sequence = 0u;
 		};
@@ -83,11 +86,18 @@ namespace midi
 			const base::LoggingConfig& loggingConfig,
 			midi::MidiClockAnchor& midiClockAnchor);
 		void CloseMidi();
-		void PublishLiveMidiRoutes(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void PublishEmptyRigInputDispatch();
+		bool OpenRigTriggerInput(std::uint64_t revision) noexcept;
+		bool RequestCloseRigTriggerInputFromUi(std::uint64_t revision) noexcept;
+		std::uint64_t AcknowledgeRigTriggerInputCloseFromJob() noexcept;
+		bool RigTriggerInputReadyForAudioBoundary(std::uint64_t revision) const noexcept;
+		bool TryAcceptUiRigTriggerInput(std::uint64_t revision) const noexcept;
+		void CloseRigTriggerInputForever() noexcept;
+		bool RigTriggerInputReadyForShutdown() const noexcept;
 		float ConsumeMidiInputPeak(const std::string& deviceName) noexcept;
 		void InitSerial(const io::UserConfig& cfg);
 		void CloseSerial();
-		void RegisterTrigger(const std::string& deviceName, std::shared_ptr<engine::Trigger> trigger);
 
 		TriggerDispatchSummary PumpMidi(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			std::uint64_t globalSampleNow,
@@ -117,6 +127,11 @@ namespace midi
 		// the separately routed station/live event.
 		static midi::MidiEvent DeriveStationEvent(const midi::MidiEvent& rawEvent,
 			std::uint8_t forcedChannelOverride) noexcept;
+		static bool IsCurrentRigIngressRevision(std::uint64_t eventRevision,
+			std::uint64_t publishedRevision) noexcept
+		{
+			return eventRevision != 0u && eventRevision == publishedRevision;
+		}
 
 		static bool IsAutomationRecordHeld() noexcept;
 
@@ -158,9 +173,20 @@ namespace midi
 			std::uint8_t DeviceSlot = 0u;
 			std::string ConfiguredName;
 			std::unique_ptr<midi::MidiDevice> Device;
-			midi::MidiQueue<1024> Ingress;
+			struct RigMidiIngressEvent
+			{
+				MidiEvent Event;
+				std::uint64_t RigRevision = 0u;
+				std::int64_t EventSteadyMicros = 0;
+				std::int64_t CallbackArrivalMicros = 0;
+				double DriverDeltaSeconds = 0.0;
+				MidiTimestampSource TimestampSource = MidiTimestampSource::InitialArrival;
+			};
+			midi::MidiQueue<1024, RigMidiIngressEvent> Ingress;
 			midi::MidiQueue<1024, LiveMidiIngressEvent> LiveIngress;
 			MidiClockAnchorSnapshot LastClockAnchor;
+			MidiDriverTimestampMapper TimestampMapper;
+			std::uint64_t LastMappedSample = 0u;
 			std::uint32_t NextLiveSequence = 0u;
 			std::uint64_t LastDroppedCount = 0u;
 			std::atomic<float> PendingActivityPeak{ 0.0f };
@@ -169,6 +195,7 @@ namespace midi
 		struct LiveMidiDispatchNotification
 		{
 			std::atomic<std::uint64_t> InputConfig{ 0u };
+			std::atomic<std::uint64_t> RigRevision{ 0u };
 			HANDLE WorkEvent = nullptr;
 		};
 
@@ -179,19 +206,37 @@ namespace midi
 			std::shared_ptr<engine::Trigger> Trigger;
 		};
 
+		struct PublishedRigInputDispatch
+		{
+			std::uint64_t Revision = 0u;
+			std::shared_ptr<const engine::RigSnapshot> Snapshot;
+			std::vector<MidiTriggerRoute> MidiTriggers;
+			LiveMidiRoutingSnapshot LiveMidi;
+		};
+
+		struct SerialIngressEvent
+		{
+			io::SerialTriggerEvent Event;
+			std::uint64_t RigRevision = 0u;
+		};
+
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,
 			const midi::MidiEvent& event,
+			std::int64_t eventSteadyMicros,
 			const io::UserConfig& userConfig,
-			const audio::AudioStreamParams& audioParams);
+			const audio::AudioStreamParams& audioParams,
+			const std::shared_ptr<const PublishedRigInputDispatch>& routes);
 		std::pair<std::shared_ptr<engine::Station>, std::shared_ptr<midi::MidiLoop>> _ResolveAutomationTarget(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const std::vector<unsigned char>& hoverPath,
 			const std::shared_ptr<engine::LoopTake>& hoveredTake) const;
-		void _PublishMidiTriggerRoutes();
 		void _StartLiveMidiDispatcher();
 		void _StopLiveMidiDispatcher();
 		void _LiveMidiDispatchLoop() noexcept;
 		void _DispatchAvailableLiveMidi() noexcept;
+		void _CloseMidi();
+		void _PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
+		void _PublishEmptyRigInputDispatch();
 		void _PublishLiveMidiInputConfig(std::uint32_t generation,
 			std::uint8_t forcedChannelOverride,
 			bool channelOverrideLive) noexcept;
@@ -212,15 +257,19 @@ namespace midi
 		void _ResetEditorTouchStates() noexcept;
 
 		std::atomic<std::shared_ptr<const std::vector<std::shared_ptr<MidiInputEndpoint>>>> _midiInputs;
-		std::atomic<std::shared_ptr<const LiveMidiRoutingSnapshot>> _liveMidiRoutes;
+		// Publish empty before worker teardown, then retire snapshots on the coordinator side.
+		std::atomic<std::shared_ptr<const PublishedRigInputDispatch>> _rigInputDispatch;
+		// UI device lifecycle and job rig publication share this off-callback lock.
+		std::mutex _rigInputPublicationMutex;
+		std::shared_ptr<const engine::RigSnapshot> _retainedRigInputSnapshot;
+		engine::RigTriggerInputGate _rigTriggerInputGate;
 		std::shared_ptr<LiveMidiDispatchNotification> _liveMidiDispatchNotification;
 		std::thread _liveMidiDispatchThread;
 		HANDLE _liveMidiStopEvent = nullptr;
 		std::uint32_t _nextLiveMidiRoutingGeneration = 0u;
-		std::vector<MidiTriggerRoute> _midiTriggerRoutes;
-		std::atomic<std::shared_ptr<const std::vector<MidiTriggerRoute>>> _midiTriggerRoutesSnapshot;
+		bool _loggingVerbose = false;
 		std::vector<std::unique_ptr<io::SerialDevice>> _serialDevices;
-		io::SerialTriggerQueue<256> _serialIngress;
+		midi::MidiQueue<256, SerialIngressEvent> _serialIngress;
 		std::mutex _serialIngressMutex;
 		std::uint64_t _lastSerialDropCount = 0u;
 		std::atomic<bool> _learnMidiCCMode{ false };

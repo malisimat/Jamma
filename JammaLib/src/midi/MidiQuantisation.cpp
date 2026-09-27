@@ -176,7 +176,7 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	MidiNote::SortMidiEvents(dst, eventCount);
 }
 
-std::int64_t MidiQuantisation::NearestRemoteBoundaryIndex(std::int64_t relativeSamps,
+std::int64_t MidiQuantisation::NearestBoundaryIndex(std::int64_t relativeSamps,
 	std::uint64_t intervalSamps, std::uint64_t divisions) noexcept
 {
 	if (intervalSamps == 0u || divisions == 0u)
@@ -193,7 +193,7 @@ std::int64_t MidiQuantisation::NearestRemoteBoundaryIndex(std::int64_t relativeS
 	return wholeIntervals * static_cast<std::int64_t>(divisions) + static_cast<std::int64_t>(cell);
 }
 
-std::int64_t MidiQuantisation::RemoteBoundarySampleAt(std::int64_t index,
+std::int64_t MidiQuantisation::BoundarySampleAt(std::int64_t index,
 	std::uint64_t intervalSamps, std::uint64_t divisions) noexcept
 {
 	if (intervalSamps == 0u || divisions == 0u)
@@ -211,27 +211,26 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 	const MidiQuantisationSettings& settings, std::uint64_t transportStartSamps,
 	MidiEvent* dst) noexcept
 {
-	if (!settings.HasRemoteGrid())
-	{
-		BuildQuantisedPlaybackEvents(src, eventCount, loopLength, StepSamps(settings), dst,
-			settings.PhaseOffsetSamps);
-		return;
-	}
 	if (nullptr == src || nullptr == dst || eventCount == 0u || loopLength == 0u || !settings.Enabled)
 	{
 		if (src != nullptr && dst != nullptr && eventCount > 0u)
 			std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
 		return;
 	}
-	const auto divisions = static_cast<std::uint64_t>(settings.RemoteBpi) * Divisor(settings.Fraction);
-	const auto interval = static_cast<std::uint64_t>(settings.RemoteIntervalSamps);
+	const auto remote = settings.HasRemoteGrid();
+	const auto divisions = static_cast<std::uint64_t>(remote ? settings.RemoteBpi : 1u)
+		* Divisor(settings.Fraction);
+	const auto interval = static_cast<std::uint64_t>(remote
+		? settings.RemoteIntervalSamps : settings.GrainSamps);
+	const auto origin = remote ? settings.RemoteOriginSamps : 0ll;
 	if (divisions == 0u || interval == 0u)
 	{
 		std::memcpy(dst, src, eventCount * sizeof(MidiEvent));
 		return;
 	}
-	// Evaluate origin + round(k * interval / divisions) directly. This is an
-	// immutable-snapshot publication path, never the audio callback.
+	// Both local and remote grids use one absolute origin and rounded rational
+	// boundaries. A loop whose length is a whole number of intervals repeats on
+	// exactly the same boundaries, even when interval/divisions is fractional.
 	std::array<std::vector<std::int64_t>, TotalNoteSlots> pendingDeltas;
 	std::array<std::size_t, TotalNoteSlots> pendingReadIndex{};
 	for (std::size_t i = 0u; i < eventCount; ++i)
@@ -241,9 +240,9 @@ void MidiQuantisation::BuildQuantisedPlaybackEvents(const MidiEvent* src,
 		if (event.IsNoteOn() && event.sampleOffset < loopLength)
 		{
 			const auto absolute = static_cast<std::int64_t>(transportStartSamps) + event.sampleOffset;
-			const auto index = NearestRemoteBoundaryIndex(absolute - settings.RemoteOriginSamps,
+			const auto index = NearestBoundaryIndex(absolute - origin,
 				interval, divisions);
-			const auto boundary = settings.RemoteOriginSamps + RemoteBoundarySampleAt(index, interval, divisions);
+			const auto boundary = origin + BoundarySampleAt(index, interval, divisions);
 			const auto local = boundary - static_cast<std::int64_t>(transportStartSamps) + settings.PhaseOffsetSamps;
 			const auto wrapped = ((local % static_cast<std::int64_t>(loopLength)) + loopLength) % loopLength;
 			event.sampleOffset = static_cast<std::uint32_t>(wrapped);

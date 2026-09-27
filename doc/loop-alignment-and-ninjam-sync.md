@@ -227,6 +227,13 @@ MIDI event snapping.
 Local `GrainSamps` is an exact audio construction unit. It is not the remote grid
 step. For local physical recording length `R`, valid local geometry satisfies
 `M = GrainSamps * Bpi` and `M <= R`; the physical buffer may retain a short tail.
+Local MIDI note-on boundaries use the same absolute transport origin for every
+take: `round(k * GrainSamps / MidiQuantisation::Divisor(fraction))`. A take maps
+its recorded sample position through the transport position of its first
+captured audio block, then maps the chosen boundary back into its own loop.
+Loop lengths rounded to whole grains repeat on these boundaries even when the
+fractional grid spacing is not an integer number of samples. User, station, and
+global phase offsets are added after snapping.
 Record, overdub, and punch scheduling remains action/latency based rather than
 remote-grid quantised.
 

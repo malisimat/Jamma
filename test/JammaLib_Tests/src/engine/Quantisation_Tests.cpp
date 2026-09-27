@@ -164,6 +164,49 @@ TEST(Quantisation, VisualCounts_FourGrainsQuarterProducesSixteenDivisions)
 	EXPECT_EQ(16u, counts.FractionDivisionCount);
 }
 
+TEST(Quantisation, VisualCounts_FractionalSampleStepRetainsAllDivisions)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 404u;
+	visual.GrainSamps = 101u;
+	visual.LoopGrains = 4u;
+	visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+	visual.UseAbsoluteLocalGrid = true;
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(4u, counts.GrainFrameCount);
+	EXPECT_EQ(16u, counts.FractionDivisionCount);
+}
+
+TEST(Quantisation, RemoteNonDividingGridKeepsLegacyVisualCounts)
+{
+	engine::QuantisationLoopTakeVisual visual{};
+	visual.LoopLengthSamps = 1000u;
+	visual.GrainSamps = 400u;
+	visual.LoopGrains = 2u;
+	visual.Fraction = midi::MidiQuantisationFraction::Quarter;
+	const auto counts = engine::QuantisationModel::ResolveVisualCounts(visual);
+	EXPECT_EQ(2u, counts.GrainFrameCount);
+	EXPECT_EQ(10u, counts.FractionDivisionCount);
+}
+
+TEST(Quantisation, VisualBoundariesUseRecordedTakeStartAndRoundedGrid)
+{
+	engine::QuantisationLoopTakeVisual first{};
+	first.LoopLengthSamps = 404u;
+	first.GrainSamps = 101u;
+	first.TransportStartSamps = 39u;
+	first.UseAbsoluteLocalGrid = true;
+	auto second = first;
+	second.TransportStartSamps = 64u;
+
+	const auto firstBoundary = engine::QuantisationModel::VisualBoundaryOffsetSamps(first, 1u, 4u);
+	const auto secondBoundary = engine::QuantisationModel::VisualBoundaryOffsetSamps(second, 0u, 4u);
+	EXPECT_EQ(37u, firstBoundary);
+	EXPECT_EQ(12u, secondBoundary);
+	EXPECT_EQ(76u, first.TransportStartSamps + firstBoundary);
+	EXPECT_EQ(76u, second.TransportStartSamps + secondBoundary);
+}
+
 TEST(Quantisation, VisualCounts_FourGrainsEighthProducesThirtyTwoDivisions)
 {
 	engine::QuantisationLoopTakeVisual visual{};

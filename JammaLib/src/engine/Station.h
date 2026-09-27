@@ -107,6 +107,7 @@ namespace engine
 		virtual MultiAudioPlugType MultiAudioPlug() const override { return MULTIAUDIOPLUG_BOTH; }
 		virtual void SetSize(utils::Size2d size) override;
 		virtual void Draw3d(base::DrawContext& ctx, unsigned int numInstances, base::DrawPass pass) override;
+		utils::Position3d TopCapModelPosition() const;
 		virtual	utils::Position2d Position() const override;
 		virtual unsigned int NumInputChannels(base::Audible::AudioSourceType source) const override;
 		virtual unsigned int NumOutputChannels(base::Audible::AudioSourceType source) const override;
@@ -136,11 +137,6 @@ namespace engine
 			Audible::AudioSourceType source) override;
 		virtual void SetSelectDepth(base::SelectDepth depth) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
-		actions::ActionResult OnTriggerEvent(TriggerSource source,
-			unsigned int value,
-			unsigned int state,
-			const base::Action& action,
-			const std::string& device = "");
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
 		virtual actions::ActionResult OnAction(actions::TriggerAction action) override;
 		virtual void OnTick(Time curTime,
@@ -165,9 +161,6 @@ namespace engine
 		virtual bool IsRemote() const noexcept { return false; }
 		std::shared_ptr<LoopTake> AddTake();
 		void AddTake(std::shared_ptr<LoopTake> take);
-		void AddTrigger(std::shared_ptr<Trigger> trigger);
-		// Call only while audio is paused and the scene mutex is held.
-		std::vector<TriggerTake> SnapshotTriggerHistoryForExport() const;
 		unsigned int NumTakes() const;
 		std::string Name() const;
 		void SetName(std::string name);
@@ -194,12 +187,12 @@ namespace engine
 		void OnBounce(unsigned int numSamps,
 			io::UserConfig config,
 			std::optional<audio::AudioStreamParams> params = std::nullopt);
+		// Let the UI/job thread reclaim old snapshots after callback work, keeping LoopTake destruction off audio.
+		void AcknowledgeAudioBoundary() noexcept;
+		void ReleaseRetiredAudioStates();
+		std::size_t RetiredAudioStateCount() const noexcept { return _retiredAudioStates.size(); }
 		void SetRackVisibility(bool showStationRack, bool showLoopTakeRacks);
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
-		// Returns true if the named device is allowed to drive this station's live
-		// VST playback. Any unrestricted trigger keeps the station open to all
-		// devices; otherwise the device must match a trigger's MidiInputDevices list.
-		bool AcceptsLiveMidiFromDevice(const std::string& deviceName) const noexcept;
 		bool AcceptsLiveMidiChannel(std::uint8_t channel) const noexcept;
 		void SetAllowedMidiChannels(const std::vector<int>& channels);
 		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
@@ -289,7 +282,9 @@ namespace engine
 
 		struct AudioState
 		{
-			// weak_ptr: AudioState destruction on any thread won't trigger GL destructors
+			std::uint64_t Generation = 0u;
+			// Retire strong ownership after the boundary acknowledgement so LoopTakes cannot die in the callback.
+			std::vector<std::shared_ptr<LoopTake>> OwnedLoopTakes;
 			std::vector<std::weak_ptr<LoopTake>> LoopTakes;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
@@ -393,7 +388,6 @@ namespace engine
 		std::shared_ptr<gui::GuiToggle> _routerToggle;
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::vector<std::shared_ptr<LoopTake>> _loopTakes;
-		std::vector<std::shared_ptr<Trigger>> _triggers;
 		std::vector<std::shared_ptr<LoopTake>> _backLoopTakes;
 		std::atomic<std::shared_ptr<const LoopTakeSnapshot>> _loopTakeSnapshot;
 		std::atomic<std::uint64_t> _loopTakeRevision{ 0u };
@@ -402,6 +396,14 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		std::atomic<std::shared_ptr<const AudioState>> _audioState;
+		struct RetiredAudioState
+		{
+			std::uint64_t ReleaseAfterGeneration = 0u;
+			std::shared_ptr<const AudioState> State;
+		};
+		std::vector<RetiredAudioState> _retiredAudioStates;
+		std::uint64_t _nextAudioStateGeneration = 1u;
+		std::atomic<std::uint64_t> _audioCompletedStateGeneration{ 0u };
 		std::atomic<double> _transportOffsetLoopFrac{ 0.0 };
 		// Flat automation dispatch list, double-buffered and published with an
 		// atomic-swap release store (audio thread reads with acquire). Built only on

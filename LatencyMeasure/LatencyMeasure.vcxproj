@@ -164,6 +164,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\src\io\Json.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\RtAudio.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\asio.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\JammaLib\lib\rtaudio\include\asiodrivers.cpp" />

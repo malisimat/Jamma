@@ -92,8 +92,9 @@ namespace gui
 
 	public:
 		std::string String;
-			int TextInsetX = 0;
-			int TextInsetY = 0;
+		int TextInsetX = 0;
+		int TextInsetY = 0;
+		bool CenterHorizontally = false;
 	};
 
 	class GuiLabel :
@@ -121,6 +122,7 @@ namespace gui
 		std::string _str;
 		std::string _pendingStr;
 		utils::Position2d _textInset;
+		bool _centerHorizontally;
 		mutable std::mutex _stringMutex;
 		std::atomic<bool> _vertexArrayDirty;
 		GLuint _vertexArray;

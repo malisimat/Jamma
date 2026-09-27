@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="include">
@@ -107,6 +107,12 @@
     <ClInclude Include="src\engine\StationRemote.h">
       <Filter>src\engine</Filter>
     </ClInclude>
+	<ClInclude Include="src\engine\RigSnapshot.h">
+	  <Filter>src\engine</Filter>
+	</ClInclude>
+	<ClInclude Include="src\engine\RigCoordinator.h">
+	  <Filter>src\engine</Filter>
+	</ClInclude>
     <ClInclude Include="lib\rtaudio\RtAudio.h">
       <Filter>lib\rtaudio</Filter>
     </ClInclude>
@@ -443,6 +449,9 @@
     <ClInclude Include="src\io\JamFile.h">
       <Filter>src\io</Filter>
     </ClInclude>
+    <ClInclude Include="src\io\NativeMidiSidecar.h">
+      <Filter>src\io</Filter>
+    </ClInclude>
     <ClInclude Include="src\io\Json.h">
       <Filter>src\io</Filter>
     </ClInclude>
@@ -598,6 +607,12 @@
     <ClCompile Include="src\engine\StationRemote.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
+	<ClCompile Include="src\engine\RigSnapshot.cpp">
+	  <Filter>src\engine</Filter>
+	</ClCompile>
+	<ClCompile Include="src\engine\RigCoordinator.cpp">
+	  <Filter>src\engine</Filter>
+	</ClCompile>
     <ClCompile Include="src\engine\Loop.cpp">
       <Filter>src\engine</Filter>
     </ClCompile>
@@ -818,6 +833,9 @@
       <Filter>src\actions</Filter>
     </ClCompile>
     <ClCompile Include="src\io\JamFile.cpp">
+      <Filter>src\io</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\NativeMidiSidecar.cpp">
       <Filter>src\io</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\PathUtils.cpp">

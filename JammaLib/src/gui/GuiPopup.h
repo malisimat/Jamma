@@ -5,27 +5,20 @@
 #include <string>
 #include <vector>
 #include "GuiPanel.h"
+#include "GuiButton.h"
 #include "GuiLabel.h"
-#include "GuiToggle.h"
 
 namespace gui
 {
+	struct GuiPopupAction
+	{
+		std::string Text;
+		unsigned int Index = 0u;
+	};
+
 	struct GuiPopupButtonConfig
 	{
-		bool ShowYes = true;
-		bool ShowNo = false;
-		bool ShowCancel = true;
-		bool ShowOk = false;
-
-		unsigned int YesIndex = 0u;
-		unsigned int NoIndex = 0u;
-		unsigned int CancelIndex = 0u;
-		unsigned int OkIndex = 0u;
-
-		std::string YesText = "Yes";
-		std::string NoText = "No";
-		std::string CancelText = "Cancel";
-		std::string OkText = "Ok";
+		std::vector<GuiPopupAction> Actions;
 	};
 
 	struct GuiPopupParams : public base::GuiElementParams
@@ -44,7 +37,6 @@ namespace gui
 		void SetBodyLines(const std::vector<std::string>& lines);
 		void ConfigureButtons(const GuiPopupButtonConfig& config);
 		void SetButtonReceiver(std::shared_ptr<base::ActionReceiver> receiver);
-		void ResetButtonStates();
 
 	private:
 		void _LayoutButtons();
@@ -57,13 +49,12 @@ namespace gui
 		static constexpr unsigned int ButtonHeight = 36u;
 		static constexpr unsigned int ButtonMinWidth = 60u;
 		static constexpr int ButtonY = 24;
-		static constexpr int ButtonSpacing = 20;
+		static constexpr int ButtonRightInset = 48;
+		static constexpr int ButtonSpacing = 12;
 
 		std::shared_ptr<GuiLabel> _titleLabel;
 		std::array<std::shared_ptr<GuiLabel>, 3> _lineLabels;
-		std::shared_ptr<GuiToggle> _yesButton;
-		std::shared_ptr<GuiToggle> _noButton;
-		std::shared_ptr<GuiToggle> _cancelButton;
-		std::shared_ptr<GuiToggle> _okButton;
+		std::vector<std::shared_ptr<GuiButton>> _buttons;
+		std::shared_ptr<base::ActionReceiver> _buttonReceiver;
 	};
 }

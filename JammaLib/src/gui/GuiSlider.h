@@ -132,6 +132,7 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+		virtual void ClearPointerState() override;
 		virtual bool Undo(std::shared_ptr<base::ActionUndo> undo) override;
 		virtual bool Redo(std::shared_ptr<base::ActionUndo> undo) override;
 

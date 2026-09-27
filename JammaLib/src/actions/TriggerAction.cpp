@@ -9,6 +9,7 @@ TriggerAction::TriggerAction() :
 	SampleCount(0),
 	InputChannels({}),
 	MidiInputDevices({}),
+	OverdubWriter(nullptr),
 	ApplyToTargetTake(true),
 	ApplyToSourceTake(true),
 	ApplyToTargetAudio(true),

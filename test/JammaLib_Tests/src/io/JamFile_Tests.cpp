@@ -218,8 +218,10 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	station.StationType = 0;
 	station.StationPhaseOffsetSamps = 30;
 	station.AllowedMidiChannels = { 1, 3, 16 };
-	station.TriggerHistory.push_back({ 0u, "prior-take", "recorded-take" });
-	station.TriggerHistory.push_back({ 1u, "recorded-take", "overdub-take" });
+	jam.TriggerHistories.push_back({ "trigger-a", {
+		{ 0u, "prior-take", "recorded-take" },
+		{ 1u, "recorded-take", "overdub-take" } } });
+	jam.TriggerHistories.push_back({ "trigger-b", { { 0u, "other-source", "other-target" } } });
 	station.LoopTakes.push_back(take);
 
 	jam.Stations.push_back(station);
@@ -242,12 +244,17 @@ TEST(JamFile, RoundTripsFileWithIntegerValuedDoubles) {
 	EXPECT_EQ(1, parsed->Stations[0].AllowedMidiChannels[0]);
 	EXPECT_EQ(3, parsed->Stations[0].AllowedMidiChannels[1]);
 	EXPECT_EQ(16, parsed->Stations[0].AllowedMidiChannels[2]);
-	ASSERT_EQ(2u, parsed->Stations[0].TriggerHistory.size());
-	EXPECT_EQ(0u, parsed->Stations[0].TriggerHistory[0].SourceType);
-	EXPECT_EQ("prior-take", parsed->Stations[0].TriggerHistory[0].SourceTakeId);
-	EXPECT_EQ("recorded-take", parsed->Stations[0].TriggerHistory[0].TargetTakeId);
-	EXPECT_EQ(1u, parsed->Stations[0].TriggerHistory[1].SourceType);
-	EXPECT_EQ("overdub-take", parsed->Stations[0].TriggerHistory[1].TargetTakeId);
+	ASSERT_EQ(2u, parsed->TriggerHistories.size());
+	EXPECT_EQ("trigger-a", parsed->TriggerHistories[0].TriggerId);
+	ASSERT_EQ(2u, parsed->TriggerHistories[0].Takes.size());
+	EXPECT_EQ(0u, parsed->TriggerHistories[0].Takes[0].SourceType);
+	EXPECT_EQ("prior-take", parsed->TriggerHistories[0].Takes[0].SourceTakeId);
+	EXPECT_EQ("recorded-take", parsed->TriggerHistories[0].Takes[0].TargetTakeId);
+	EXPECT_EQ(1u, parsed->TriggerHistories[0].Takes[1].SourceType);
+	EXPECT_EQ("overdub-take", parsed->TriggerHistories[0].Takes[1].TargetTakeId);
+	EXPECT_EQ("trigger-b", parsed->TriggerHistories[1].TriggerId);
+	ASSERT_EQ(1u, parsed->TriggerHistories[1].Takes.size());
+	EXPECT_EQ("other-target", parsed->TriggerHistories[1].Takes[0].TargetTakeId);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes.size());
 	ASSERT_EQ(45, parsed->Stations[0].LoopTakes[0].TakePhaseOffsetSamps);
 	ASSERT_EQ(1, parsed->Stations[0].LoopTakes[0].Loops.size());
@@ -340,7 +347,7 @@ TEST(JamFile, RoundTripsUninitialisedCurrentTransport)
 	std::stringstream output;
 	ASSERT_TRUE(JamFile::ToStream(jam, output));
 	const auto text = output.str();
-	EXPECT_NE(std::string::npos, text.find("\"formatVersion\":\"0.2.0\""));
+	EXPECT_NE(std::string::npos, text.find("\"formatVersion\":\"0.3.0\""));
 	EXPECT_NE(std::string::npos, text.find("\"initialized\":false"));
 	EXPECT_EQ(std::string::npos, text.find("\"masterLengthSamps\""));
 

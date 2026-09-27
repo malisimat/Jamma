@@ -21,8 +21,6 @@ GuiRadio::GuiRadio(GuiRadioParams params) :
 
 	for (auto& params : _radioParams.ToggleParams)
 	{
-		std::cout << "Type: " << typeid(params).name() << std::endl;
-
 		params.Index = count;
 		params.ToggleIndex = count;
 
