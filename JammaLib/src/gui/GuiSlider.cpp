@@ -203,6 +203,12 @@ void GuiSlider::ClearPointerState()
 {
 	GuiElement::ClearPointerState();
 	_dragElement.ClearPointerState();
+	if (_isDragging)
+	{
+		_isDragging = false;
+		_valueOffset = 0.0;
+		OnValueChange(false);
+	}
 }
 
 bool GuiSlider::Undo(std::shared_ptr<ActionUndo> undo)
