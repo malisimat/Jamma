@@ -927,12 +927,14 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		startupLog.Write("[RIG] no generated rig published because audio did not start");
 	}
 
+	bool generatedJamPublished = false;
 	if (jamGenerated)
 	{
 		const auto jamPath = NewGeneratedPath(generatedDirectory, L"default", L".jam");
 		const auto candidate = jamSceneFallback ? RecoveryJam(rig, !rigGenerated) : jamForPublication;
 		if (jamPath && SaveGeneratedJam(*jamPath, candidate))
 		{
+			generatedJamPublished = true;
 			defaults->Jam = *jamPath;
 			defaults->JamOrigin = std::string(io::StartupConfig::GeneratedOrigin);
 			std::cout << "[JAM] Published " << EncodeUtf8(*jamPath) << std::endl;
@@ -947,8 +949,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	}
 	const bool rigReadyForDefaults = !rigGenerated ||
 		(generatedRigPath && defaults->Rig == *generatedRigPath && *generatedRigPublished);
-	const bool jamReadyForDefaults = !jamGenerated ||
-		defaults->JamOrigin == io::StartupConfig::GeneratedOrigin;
+	const bool jamReadyForDefaults = !jamGenerated || generatedJamPublished;
 	if (!rigReadyForDefaults)
 		startupLog.Write("[BOOT] defaults publication deferred: no validated rig file");
 	if (!jamReadyForDefaults)
@@ -1118,7 +1119,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	// releases their plugins, while this main thread's COM STA is still valid.
 	scene.value()->Shutdown();
 
-	if (defaultsValid && rigReadyForDefaults)
+	if (defaultsValid && rigReadyForDefaults && jamReadyForDefaults)
 	{
 		auto savedDefaults = defaults.value();
 		const auto restoreConfig = window.GetRestoreConfig();
