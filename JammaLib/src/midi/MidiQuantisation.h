@@ -10,9 +10,9 @@
 namespace midi
 {
 	// Fractional grid resolutions for MIDI start-time quantisation, expressed as
-	// fractions of the current grain size. The numeric value is the divisor of
-	// the grain (1, 2, 4, 8, 16, 32) so the snap step in samples is
-	//   step = grainSamps / divisor
+	// fractions of the current grain size. Playback boundaries are rounded from
+	//   boundary(k) = round(k * grainSamps / divisor)
+	// so fractional sample spacing does not accumulate drift across grains.
 	enum class MidiQuantisationFraction : std::uint8_t
 	{
 		Whole = 0,        // 1   * grain
@@ -89,13 +89,12 @@ namespace midi
 			return "?";
 		}
 
-		// Snap-step in samples for the given settings. Returns 0 when quantisation
-		// is inactive (disabled or grain not yet known) — callers must treat 0 as
-		// a no-op signal.
+		// Integer approximation used by the legacy sample-offset helper and UI.
+		// Playback uses rounded rational boundaries instead.
 		static constexpr std::uint32_t StepSamps(const MidiQuantisationSettings& settings) noexcept;
-		static std::int64_t NearestRemoteBoundaryIndex(std::int64_t relativeSamps,
+		static std::int64_t NearestBoundaryIndex(std::int64_t relativeSamps,
 			std::uint64_t intervalSamps, std::uint64_t divisions) noexcept;
-		static std::int64_t RemoteBoundarySampleAt(std::int64_t index,
+		static std::int64_t BoundarySampleAt(std::int64_t index,
 			std::uint64_t intervalSamps, std::uint64_t divisions) noexcept;
 
 		static MidiQuantisationSettings ApplyGesture(const MidiQuantisationSettings& current,

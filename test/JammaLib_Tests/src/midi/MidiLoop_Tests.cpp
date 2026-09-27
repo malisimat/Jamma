@@ -881,7 +881,7 @@ TEST(LoopTakeMidiQuantisation, GuiActionTogglesQuantisation) {
 	EXPECT_EQ(1600u, applied.GrainSamps);
 }
 
-TEST(LoopTakeMidiQuantisation, TransportStartContributesNaturalPhaseOffset) {
+TEST(LoopTakeMidiQuantisation, TransportStartDoesNotBecomeUserPhaseOffset) {
 	auto take = MakeLoopTake("take-phase-anchor");
 	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
 
@@ -893,12 +893,12 @@ TEST(LoopTakeMidiQuantisation, TransportStartContributesNaturalPhaseOffset) {
 
 	take->Record({}, "station", { 0u }, {}, {}, 250u);
 	EXPECT_EQ(250u, take->MidiQuantisationTransportStartSamps());
-	EXPECT_EQ(-50, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(0, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 
 	settings.PhaseOffsetSamps = 20;
 	take->SetMidiQuantisation(settings);
 	take->SetMidiQuantisationInheritedPhaseOffset(10);
-	EXPECT_EQ(-20, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(30, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
 TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid) {
@@ -945,6 +945,41 @@ TEST(LoopTakeMidiQuantisation, DifferentTakeStartsQuantiseToSharedTransportGrid)
 	EXPECT_EQ(300u,
 		shiftedSink.events[0].event.sampleOffset
 		+ static_cast<std::uint32_t>(shiftedTake->MidiQuantisationTransportStartSamps()));
+}
+
+TEST(LoopTakeMidiQuantisation, CapturedStartAndCursorOverrideDelayedTriggerTiming) {
+	auto take = MakeLoopTake("delayed-midi-start");
+	take->SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState::Mixed);
+	MidiQuantisationSettings settings;
+	settings.Enabled = true;
+	settings.Fraction = MidiQuantisationFraction::Whole;
+	settings.GrainSamps = 100u;
+	take->SetMidiQuantisation(settings);
+
+	// The structural trigger reported 250, but the first recorded audio block
+	// began at 300. The take's MIDI sample positions use that captured boundary.
+	take->Record({ 0u }, "station", { 0u }, {}, {}, 250u);
+	take->CaptureMidiTransportStartAtAudioBoundary(300u);
+	take->EndMultiWrite(60u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOn(360u, 0u, 60u, 100u), 360u));
+	take->EndMultiWrite(100u, true, Audible::AUDIOSOURCE_ADC);
+	ASSERT_TRUE(take->RecordMidiEvent(MidiEvent::MakeNoteOff(460u, 0u, 60u), 460u));
+	take->EndMultiWrite(40u, true, Audible::AUDIOSOURCE_ADC);
+
+	// Trigger duration gives -100, while the captured playback cursor is 200.
+	take->Play(700u, 1000u, 0u, -100);
+	EXPECT_EQ(300u, take->MidiQuantisationTransportStartSamps());
+	EXPECT_EQ(0, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	const auto visual = take->QuantisationVisual();
+	ASSERT_TRUE(visual.has_value());
+	EXPECT_NEAR(0.8, visual->LoopIndexFrac, 1.0e-6);
+	EXPECT_TRUE(visual->UseAbsoluteLocalGrid);
+	MidiLoopCapturingOutputSink sink;
+	EXPECT_EQ(1u, take->ReadMidiBlock(0u, 950u, sink));
+	const auto noteOn = std::find_if(sink.events.begin(), sink.events.end(),
+		[](const auto& event) { return event.event.IsNoteOn(); });
+	ASSERT_NE(sink.events.end(), noteOn);
+	EXPECT_EQ(900u, noteOn->event.sampleOffset);
 }
 
 TEST(LoopTakeMidiQuantisation, RestoredMidiUsesDeferredJobAfterGlobalAllGrainPropagation) {
@@ -1085,7 +1120,7 @@ TEST(LoopTakeMidiQuantisation, ResolvedPhasePublicationComposesGlobalStationTake
 	take->SetMidiQuantisation(settings);
 
 	take->Record({}, station->Name(), { 0u }, {}, {}, 250u);
-	EXPECT_EQ(85, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
+	EXPECT_EQ(135, take->ResolvedMidiQuantisation().PhaseOffsetSamps);
 }
 
 TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
@@ -1103,7 +1138,8 @@ TEST(LoopTakeMidiQuantisation, QuantisationVisualPublishesResolvedPhase) {
 
 	auto visual = take->QuantisationVisual();
 	ASSERT_TRUE(visual.has_value());
-	EXPECT_EQ(-8, visual->PhaseOffsetSamps);
+	EXPECT_EQ(42, visual->PhaseOffsetSamps);
+	EXPECT_FALSE(visual->UseAbsoluteLocalGrid);
 	EXPECT_EQ(100u, visual->GrainSamps);
 	EXPECT_EQ(10u, visual->LoopGrains);
 }

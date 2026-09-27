@@ -326,6 +326,9 @@ namespace engine
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetMidiQuantisationInheritedPhaseOffset(std::int32_t offsetSamps) noexcept;
 		void SetMidiQuantisationTransportStartSamps(std::uint64_t startSamps) noexcept;
+		// Called at the first captured audio block so MIDI's local sample zero has
+		// the same transport origin as the recorded sample counter.
+		void CaptureMidiTransportStartAtAudioBoundary(std::uint64_t startSamps) noexcept;
 		std::uint64_t MidiQuantisationTransportStartSamps() const noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps) noexcept;
@@ -364,6 +367,7 @@ namespace engine
 		void _UpdateLoops();
 		void _UpdateMidiModels(bool force = false);
 		void _UpdateMidiModelRotation();
+		double _MidiLoopIndexFrac() const noexcept;
 		void _RemoveMidiModelChildren();
 		void _WireVuSliders();
 		void _PublishMidiLoopSnapshot();
@@ -408,7 +412,6 @@ namespace engine
 		void _ApplyMidiQuantisationGesture(midi::MidiQuantisationGesture gesture,
 			midi::MidiQuantisationFraction fraction,
 			const char* source) noexcept;
-		std::int32_t _NaturalMidiQuantisationPhaseOffset(const midi::MidiQuantisationSettings& settings) const noexcept;
 		midi::MidiQuantisationGrainCandidates _MidiQuantisationGrainCandidates() const noexcept;
 		midi::MidiNoteSnapshot _SnapshotSourceMidiAtSample(std::size_t loopIndex, std::uint32_t targetSample) const noexcept;
 		midi::MidiNoteSnapshot _SnapshotLiveMidiState(std::size_t loopIndex) const noexcept;
@@ -481,6 +484,8 @@ namespace engine
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
+		// Audio callback publishes the captured start; the record-end job reads it.
+		std::atomic_bool _midiTransportStartFromAudio{ false };
 		// Seqlock-style publication avoids torn remote-grid reads without placing a
 		// lock or allocation on any real-time path.
 		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };

@@ -86,7 +86,11 @@ namespace engine
 		float HalfHeight = 0.0f;
 		float Radius = 0.0f;
 		midi::MidiQuantisationFraction Fraction;
+		// Intentional user/station/global offset. For local MIDI, the renderer
+		// derives recording-start translation from TransportStartSamps.
 		std::int32_t PhaseOffsetSamps = 0;
+		std::uint64_t TransportStartSamps = 0u;
+		bool UseAbsoluteLocalGrid = false;
 	};
 
 	struct QuantisationPolicy

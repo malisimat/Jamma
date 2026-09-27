@@ -1032,7 +1032,20 @@ void Station::EndMultiWrite(unsigned int numSamps,
 		return;
 
 	for (const auto& weakTake : state->LoopTakes)
-		if (auto take = weakTake.lock()) take->EndMultiWrite(numSamps, updateIndex, source);
+	{
+		if (auto take = weakTake.lock())
+		{
+			if (_clock && _clock->SeedSourceLength() > 0ul
+				&& take->IsArmed() && take->NumRecordedSamps() == 0ul)
+			{
+				const auto start = static_cast<std::int64_t>(_clock->AbsoluteSamplePos())
+					+ static_cast<std::int64_t>(TransportOffsetSamps());
+				take->CaptureMidiTransportStartAtAudioBoundary(
+					start < 0 ? 0ull : static_cast<std::uint64_t>(start));
+			}
+			take->EndMultiWrite(numSamps, updateIndex, source);
+		}
+	}
 }
 
 void Station::SetSelectDepth(base::SelectDepth depth)
@@ -1267,6 +1280,15 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (loopTake.has_value())
 			{
+				if (_loggingConfig.Ui == "verbose" && !loopTake.value()->GetMidiLoops().empty())
+				{
+					std::cout << "MIDI grid trace: take=" << loopTake.value()->Id()
+						<< " start=" << loopTake.value()->MidiQuantisationTransportStartSamps()
+						<< " end=" << transportStartSamps
+						<< " recorded=" << loopTake.value()->NumRecordedSamps()
+						<< " length=" << loopLength
+						<< " lengthError=" << errorSamps << '\n';
+				}
 				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
 			}
 
