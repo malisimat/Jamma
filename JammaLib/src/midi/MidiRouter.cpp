@@ -1165,7 +1165,8 @@ MidiRouter::TriggerDispatchSummary MidiRouter::_DispatchMidiTriggerEvent(std::ui
 
 		std::cout << "[MIDI Trigger] trigger=\"" << route.Trigger->Name()
 			<< "\" " << engine::Trigger::ActionLabel(res.ResultType)
-			<< midi::MidiEvent::Direction(event) << " (";
+			<< midi::MidiEvent::Direction(event)
+			<< " sample=" << event.sampleOffset << " (";
 		midi::MidiEvent::LogDetail(std::cout, route.DeviceSlot, event);
 		std::cout << ")\n";
 	}

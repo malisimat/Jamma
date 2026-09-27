@@ -1266,6 +1266,33 @@ TEST(Trigger, QueuedMidiDebounceUsesDriverEventTimeInsteadOfPumpActionTime)
 	EXPECT_EQ(1u, receiver->Actions().size());
 }
 
+TEST(Trigger, QueuedMidiPressSampleReachesRecordStartAndEnd)
+{
+	const auto json = "{\"name\":\"TimedMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"note\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";
+	auto trigger = MakeTriggerFromRigJson(json, 0u);
+	ASSERT_NE(nullptr, trigger);
+	auto receiver = std::make_shared<SequenceTriggerReceiver>();
+	trigger->SetReceiver(receiver);
+	base::Action action;
+	const auto eventMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+		GetTime().time_since_epoch()).count();
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(1000u, 0u, 60u, 100u), action, eventMicros).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_EQ(1u, receiver->Actions().size());
+	EXPECT_EQ(1000u, receiver->Actions()[0].MidiSample);
+
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOff(1100u, 0u, 60u), action, eventMicros + 1000).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueMidiInputEvent(engine::TRIGGER_INPUT_JOB, 0u,
+		midi::MidiEvent::MakeNoteOn(4000u, 0u, 60u, 100u), action, eventMicros + 2000).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_EQ(2u, receiver->Actions().size());
+	EXPECT_EQ(TriggerAction::TRIGGER_REC_END, receiver->Actions()[1].ActionType);
+	EXPECT_EQ(4000u, receiver->Actions()[1].MidiSample);
+}
+
 TEST(Trigger, NoteOffMidiActivateBindingStartsAndEndsRecordingOnRelease) {
 	auto receiver = std::make_shared<SequenceTriggerReceiver>();
 	auto str = "{\"name\":\"TrigMidi\",\"stationtype\":0,\"trigger\":{\"type\":\"midi\",\"device\":\"TriggerPad\",\"activate\":{\"kind\":\"noteoff\",\"channel\":1,\"id\":60},\"ditch\":{\"kind\":\"cc\",\"channel\":1,\"id\":64}}}";

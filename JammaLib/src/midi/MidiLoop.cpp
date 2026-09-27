@@ -414,6 +414,16 @@ bool MidiLoop::TryGetEvent(std::size_t index, MidiEvent& ev) const noexcept
 	return true;
 }
 
+bool MidiLoop::TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept
+{
+	if (index >= _eventCount)
+		return false;
+
+	const auto* quantised = _quantisedEvents.load(std::memory_order_acquire);
+	ev = quantised ? quantised->Events[index] : _events[index];
+	return true;
+}
+
 void MidiLoop::AttachModel(std::shared_ptr<graphics::MidiModel> model) noexcept
 {
 	auto publishedModel = std::move(model);

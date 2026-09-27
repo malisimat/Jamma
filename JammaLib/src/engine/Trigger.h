@@ -60,6 +60,7 @@ namespace engine
 		TriggerControl Control = TRIGGER_CONTROL_ACTIVATE;
 		TriggerEdge Edge = TRIGGER_EDGE_UP;
 		std::int64_t EventTimeUsec = 0;
+		std::optional<std::uint32_t> MidiSample;
 	};
 
 	class TriggerBinding
@@ -309,7 +310,8 @@ namespace engine
 			unsigned int state,
 			const base::Action& action,
 			const std::string& device = "",
-			std::optional<std::int64_t> eventTimeUsec = std::nullopt);
+			std::optional<std::int64_t> eventTimeUsec = std::nullopt,
+			std::optional<std::uint32_t> midiSample = std::nullopt);
 		actions::ActionResult QueueMidiInputEvent(TriggerInputDomain domain,
 			std::uint64_t rigRevision,
 			const midi::MidiEvent& event,
@@ -446,6 +448,7 @@ namespace engine
 			StructuralCompletion Completion = STRUCTURAL_NONE;
 			std::uint64_t HistoryToken = 0u;
 			unsigned long SampleCount = 0u;
+			std::optional<std::uint32_t> MidiSample;
 			bool ApplyToTargetTake = true;
 			bool ApplyToSourceTake = true;
 			bool ApplyToTargetAudio = true;
@@ -519,6 +522,8 @@ namespace engine
 			std::atomic<std::uint8_t> Control{ 0u };
 			std::atomic<std::uint8_t> Edge{ 0u };
 			std::atomic<std::int64_t> EventTimeUsec{ 0 };
+			std::atomic<std::uint32_t> MidiSample{ 0u };
+			std::atomic<bool> HasMidiSample{ false };
 		};
 		static std::size_t _InputFallbackIndex(const TriggerInputEdge& edge) noexcept;
 		void _PublishInputFallback(TriggerInputDomain domain, const TriggerInputEdge& edge) noexcept;
@@ -526,6 +531,8 @@ namespace engine
 			const std::array<std::uint64_t, _InputFallbackCount>& consumedSequences) const noexcept;
 		static_assert(std::atomic<std::uint64_t>::is_always_lock_free &&
 			std::atomic<std::int64_t>::is_always_lock_free &&
+			std::atomic<std::uint32_t>::is_always_lock_free &&
+			std::atomic<bool>::is_always_lock_free &&
 			std::atomic<std::uint16_t>::is_always_lock_free &&
 			std::atomic<std::uint8_t>::is_always_lock_free,
 			"Trigger ingress fallback must remain lock-free on the audio path");
@@ -556,6 +563,8 @@ namespace engine
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
 		// (relaxed) gives a coherent snapshot without locks on the RT path.
 		std::atomic<unsigned long> _recordSampCount;
+		std::optional<std::uint32_t> _currentInputMidiSample;
+		std::optional<std::uint32_t> _debouncedActivateMidiSample;
 		Time _lastActivateTime;
 		Time _lastDitchTime;
 		bool _isDitchDown;

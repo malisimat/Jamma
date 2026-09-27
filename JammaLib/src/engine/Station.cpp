@@ -1035,13 +1035,17 @@ void Station::EndMultiWrite(unsigned int numSamps,
 	{
 		if (auto take = weakTake.lock())
 		{
-			if (_clock && _clock->SeedSourceLength() > 0ul
-				&& take->IsArmed() && take->NumRecordedSamps() == 0ul)
+			if (take->IsArmed() && take->NumRecordedSamps() == 0ul)
 			{
-				const auto start = static_cast<std::int64_t>(_clock->AbsoluteSamplePos())
-					+ static_cast<std::int64_t>(TransportOffsetSamps());
-				take->CaptureMidiTransportStartAtAudioBoundary(
-					start < 0 ? 0ull : static_cast<std::uint64_t>(start));
+				take->CaptureFirstRecordBlockSceneAtAudioBoundary(
+					_clock ? _clock->SceneSamplePos() : 0u);
+				if (_clock && _clock->SeedSourceLength() > 0ul)
+				{
+					const auto start = static_cast<std::int64_t>(_clock->AbsoluteSamplePos())
+						+ static_cast<std::int64_t>(TransportOffsetSamps());
+					take->CaptureMidiTransportStartAtAudioBoundary(
+						start < 0 ? 0ull : static_cast<std::uint64_t>(start));
+				}
 			}
 			take->EndMultiWrite(numSamps, updateIndex, source);
 		}
@@ -1210,12 +1214,28 @@ ActionResult Station::OnAction(TriggerAction action)
 			heldSnapshot = _liveHeldMidi;
 		}
 		auto newLoopTake = AddTake();
+		// Before a master clock exists, MIDI timestamps provide the actual press
+		// origin. The take may reach the audio snapshot much later.
+		const auto midiRecordStart = _clock && _clock->SeedSourceLength() == 0ul
+			? action.MidiSample : std::nullopt;
 		newLoopTake->Record(action.InputChannels,
 			Name(),
 			midiInputChannels,
 			action.MidiInputDevices,
 			std::move(heldSnapshot),
-			transportStartSamps);
+			transportStartSamps,
+			midiRecordStart);
+		if (!newLoopTake->GetMidiLoops().empty())
+		{
+			std::cout << "MIDI record start: take=" << newLoopTake->Id()
+				<< " scene=" << (_clock ? _clock->SceneSamplePos() : 0u)
+				<< " clockLength=" << (_clock ? _clock->SeedSourceLength() : 0ul)
+				<< " transportStart=" << transportStartSamps
+				<< " midiTriggerStart=" << (midiRecordStart ? std::to_string(*midiRecordStart) : "none")
+				<< " sampleRate=" << (action.GetAudioParams() ? action.GetAudioParams()->SampleRate : 0u)
+				<< " preDelay=" << (action.GetUserConfig() ? action.GetUserConfig()->Trigger.PreDelay : 0u)
+				<< '\n';
+		}
 
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
@@ -1228,6 +1248,21 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_REC_END:
 	{
 		auto loopLength = action.SampleCount;
+		std::optional<std::uint32_t> midiOnlyStopSample;
+		// MIDI-only first takes must use the same two press timestamps as their
+		// note positions. Trigger::SampleCount starts on a later audio tick.
+		if (loopTake && loopTake.value()->GetLoops().empty()
+			&& _clock && !_clock->IsQuantisable()
+			&& loopTake.value()->MidiRecordStartSample() && action.MidiSample)
+		{
+			const auto midiElapsed = static_cast<std::int32_t>(
+				*action.MidiSample - *loopTake.value()->MidiRecordStartSample());
+			if (midiElapsed > 0)
+			{
+				loopLength = static_cast<unsigned long>(midiElapsed);
+				midiOnlyStopSample = action.MidiSample;
+			}
+		}
 
 		if (0 == loopLength)
 		{
@@ -1240,6 +1275,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		else
 		{
 			auto errorSamps = 0;
+			std::optional<std::uint32_t> midiStopAgeSamps;
 			auto cfg = action.GetUserConfig();
 			auto streamParams = action.GetAudioParams();
 
@@ -1254,8 +1290,20 @@ ActionResult Station::OnAction(TriggerAction action)
 				}
 				else
 				{
-						_TrySeedClockFromFirstLoop(_clock, action.SampleCount, cfg, streamParams);
-						loopLength = _clock->SeedSourceLength();
+					_TrySeedClockFromFirstLoop(_clock, loopLength, cfg, streamParams);
+					loopLength = _clock->SeedSourceLength();
+					if (midiOnlyStopSample && loopLength > 0ul)
+					{
+						const auto age = static_cast<std::int32_t>(
+							static_cast<std::uint32_t>(_clock->SceneSamplePos()) - *midiOnlyStopSample);
+						if (age >= 0)
+						{
+							midiStopAgeSamps = static_cast<std::uint32_t>(age);
+							const auto phaseSamps = static_cast<unsigned long>(age) % loopLength;
+							_clock->SetMasterLoopIndexFrac(1.0 -
+								static_cast<double>(phaseSamps) / static_cast<double>(loopLength));
+						}
+					}
 				}
 			}
 			auto outLatency = streamParams.has_value() ?
@@ -1280,6 +1328,7 @@ ActionResult Station::OnAction(TriggerAction action)
 
 			if (loopTake.has_value())
 			{
+				const auto recordedSamps = loopTake.value()->NumRecordedSamps();
 				if (_loggingConfig.Ui == "verbose" && !loopTake.value()->GetMidiLoops().empty())
 				{
 					std::cout << "MIDI grid trace: take=" << loopTake.value()->Id()
@@ -1289,7 +1338,40 @@ ActionResult Station::OnAction(TriggerAction action)
 						<< " length=" << loopLength
 						<< " lengthError=" << errorSamps << '\n';
 				}
-				loopTake.value()->Play(playPos, loopLength, endRecordSamps, errorSamps);
+				const auto midiPlayErrorSamps = midiStopAgeSamps && _clock
+					? static_cast<int>(_clock->SampOffset()) : errorSamps;
+				loopTake.value()->Play(playPos, loopLength, endRecordSamps, midiPlayErrorSamps);
+				if (!loopTake.value()->GetMidiLoops().empty())
+				{
+					const auto midiSettings = loopTake.value()->ResolvedMidiQuantisation();
+					std::cout << "MIDI record end: take=" << loopTake.value()->Id()
+						<< " triggerSamps=" << action.SampleCount
+						<< " midiTriggerStart=" << (loopTake.value()->MidiRecordStartSample()
+							? std::to_string(*loopTake.value()->MidiRecordStartSample()) : "none")
+						<< " midiTriggerEnd=" << (action.MidiSample ? std::to_string(*action.MidiSample) : "none")
+						<< " midiStopAge=" << (midiStopAgeSamps
+							? std::to_string(*midiStopAgeSamps) : "none")
+						<< " recordedSamps=" << recordedSamps
+						<< " loopLength=" << loopLength
+						<< " midiStart=" << loopTake.value()->MidiQuantisationTransportStartSamps()
+						<< " firstRecordScene=" << loopTake.value()->FirstRecordBlockSceneSamps()
+						<< " midiCursor=" << loopTake.value()->MidiPlayIndex()
+						<< " audioLoops=" << loopTake.value()->GetLoops().size()
+						<< " audioPlayPos=" << playPos
+						<< " grain=" << midiSettings.GrainSamps
+						<< " quantEnabled=" << midiSettings.Enabled
+						<< " scene=" << (_clock ? _clock->SceneSamplePos() : 0u)
+						<< " clockLength=" << (_clock ? _clock->SeedSourceLength() : 0ul)
+						<< " clockPhase=" << (_clock ? _clock->SampOffset() : 0u)
+						<< " inputLatencyReported=" << (streamParams ? streamParams->InputLatency : 0u)
+						<< " inputLatencyRig=" << (cfg ? cfg->Audio.LatencyIn : 0u)
+						<< " outputLatencyReported=" << (streamParams ? streamParams->OutputLatency : 0u)
+						<< " outputLatencyRig=" << (cfg ? cfg->Audio.LatencyOut : 0u)
+						<< " outputLatencyUsed=" << outLatency;
+					if (!loopTake.value()->GetLoops().empty())
+						std::cout << " audioBodyCursor=" << loopTake.value()->GetLoops().front()->BodyPlayIndex();
+					std::cout << '\n';
+				}
 			}
 
 			res.IsEaten = true;

@@ -2626,6 +2626,9 @@ void Scene::_HandleAudioLocalContentState(bool hasLocalContent)
 
 	// No local takes remain, so there is no station hierarchy to update. Keep
 	// the destructive Quantiser cleanup on this job-owned edge and off OnTick.
+	if (auto clock = _quantisation.Clock())
+		std::cout << "MIDI timing reset: reason=empty-local clockLength="
+			<< clock->SeedSourceLength() << " scene=" << clock->SceneSamplePos() << '\n';
 	_quantisation.Clear(false);
 }
 

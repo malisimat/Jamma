@@ -1143,6 +1143,7 @@ ActionResult LoopTake::OnAction(JobAction action)
 			if (midiLoop)
 				midiLoop->SetQuantisation(settings, MidiQuantisationTransportStartSamps());
 		}
+		_LogMidiNoteTiming("grid-update");
 
 		const auto displayLength = static_cast<std::uint32_t>(_recordedSampCount.load(std::memory_order_relaxed));
 		for (auto& midiLoop : action.MidiLoops)
@@ -1405,14 +1406,17 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	std::vector<unsigned int> midiChannels,
 	std::vector<std::string> midiDevices,
 	std::vector<std::pair<std::string, midi::MidiNoteSnapshot>> heldAtStart,
-	std::uint64_t transportStartSamps)
+	std::uint64_t transportStartSamps,
+	std::optional<std::uint32_t> midiRecordStartSample)
 {
 	if (STATE_INACTIVE != _state.load(std::memory_order_relaxed))
 		return;
 
 	std::scoped_lock midiLock(_midiCaptureMutex);
+	_midiRecordStartSample = midiRecordStartSample;
 
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
+	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
 	_recordedSampCount = 0;
 	_state.store(STATE_RECORDING, std::memory_order_release);
@@ -1558,7 +1562,9 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 		}
 
 		midi::MidiEvent stamped = ev;
-		stamped.sampleOffset = ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
+		stamped.sampleOffset = _midiRecordStartSample
+			? ResolveMidiRecordSampleFromTrigger(ev.sampleOffset, *_midiRecordStartSample)
+			: ResolveMidiRecordSample(ev.sampleOffset, globalSampleNow, recordedNow);
 		if (i < _midiRecordHeld.size())
 		{
 			auto& held = _midiRecordHeld[i];
@@ -1569,6 +1575,17 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 		}
 		if (!_midiLoops[i]->RecordEvent(stamped))
 			continue;
+		if (ev.IsNoteOn() && _midiLoops[i]->EventCount() <= 8u)
+		{
+			std::cout << "MIDI record note: take=" << _id
+				<< " loop=" << i
+				<< " note=" << static_cast<unsigned int>(ev.data1)
+				<< " eventGlobal=" << ev.sampleOffset
+				<< " pumpGlobal=" << globalSampleNow
+				<< " recordedNow=" << recordedNow
+				<< " stored=" << stamped.sampleOffset
+				<< " transportStart=" << MidiQuantisationTransportStartSamps() << '\n';
+		}
 
 		// Drive visual updates directly from MIDI ingress so note rendering does
 		// not depend on audio-loop update cadence.
@@ -1683,6 +1700,15 @@ std::uint32_t LoopTake::ResolveMidiRecordSample(std::uint32_t eventGlobalSample,
 		return 0u;
 
 	return recordedSampleCount - delta;
+}
+
+std::uint32_t LoopTake::ResolveMidiRecordSampleFromTrigger(
+	std::uint32_t eventGlobalSample,
+	std::uint32_t triggerSample) noexcept
+{
+	// Both timestamps use the MIDI router's wrapping device-sample ruler.
+	const auto elapsed = static_cast<std::int32_t>(eventGlobalSample - triggerSample);
+	return elapsed > 0 ? static_cast<std::uint32_t>(elapsed) : 0u;
 }
 
 void LoopTake::Play(unsigned long index,
@@ -1831,6 +1857,7 @@ void LoopTake::Play(unsigned long index,
 			midiLoop->QueueModelUpdateFromEvents(midiLoopLength, true);
 		}
 	}
+	_LogMidiNoteTiming("record-end");
 
 	_midiRecordHeld.clear();
 
@@ -2017,6 +2044,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	std::scoped_lock midiLock(_midiCaptureMutex);
 
 	_midiTransportStartSamps.store(transportStartSamps, std::memory_order_release);
+	_firstRecordBlockSceneSamps.store(0u, std::memory_order_relaxed);
 	_midiTransportStartFromAudio.store(false, std::memory_order_release);
 	_recordedSampCount = 0;
 	_state.store(STATE_OVERDUBBING, std::memory_order_release);
@@ -2875,6 +2903,17 @@ std::uint64_t LoopTake::MidiQuantisationTransportStartSamps() const noexcept
 	return _midiTransportStartSamps.load(std::memory_order_acquire);
 }
 
+void LoopTake::CaptureFirstRecordBlockSceneAtAudioBoundary(std::uint64_t sceneSamps) noexcept
+{
+	if (_recordedSampCount.load(std::memory_order_relaxed) == 0ul)
+		_firstRecordBlockSceneSamps.store(sceneSamps, std::memory_order_release);
+}
+
+std::uint64_t LoopTake::FirstRecordBlockSceneSamps() const noexcept
+{
+	return _firstRecordBlockSceneSamps.load(std::memory_order_acquire);
+}
+
 void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps) noexcept
 {
@@ -3433,6 +3472,53 @@ void LoopTake::_LogMidiQuantisationFractionChange(midi::MidiQuantisationFraction
 		<< " source=" << source
 		<< " " << midi::MidiQuantisation::FractionLabel(previous)
 		<< " -> " << midi::MidiQuantisation::FractionLabel(updated) << '\n';
+}
+
+void LoopTake::_LogMidiNoteTiming(const char* stage) const
+{
+	for (std::size_t loopIndex = 0u; loopIndex < _midiLoops.size(); ++loopIndex)
+	{
+		const auto& loop = _midiLoops[loopIndex];
+		if (!loop || loop->State() == midi::MidiLoopState::Recording)
+			continue;
+
+		const auto settings = loop->Quantisation();
+		const auto length = loop->LoopLengthSamps();
+		std::size_t outside = 0u;
+		std::size_t rawShown = 0u;
+		std::size_t playbackShown = 0u;
+		std::cout << "MIDI note timing: take=" << _id
+			<< " stage=" << stage
+			<< " loop=" << loopIndex
+			<< " events=" << loop->EventCount()
+			<< " length=" << length
+			<< " quantActive=" << loop->IsQuantisationActive()
+			<< " grain=" << settings.GrainSamps
+			<< " fraction=" << midi::MidiQuantisation::FractionLabel(settings.Fraction)
+			<< " phaseOffset=" << settings.PhaseOffsetSamps
+			<< " remoteOrigin=" << settings.RemoteOriginSamps
+			<< " rawNotes=";
+		for (std::size_t eventIndex = 0u; eventIndex < loop->EventCount(); ++eventIndex)
+		{
+			midi::MidiEvent raw;
+			if (!loop->TryGetEvent(eventIndex, raw))
+				break;
+			if (raw.sampleOffset >= length)
+				++outside;
+			if (raw.IsNoteOn() && raw.sampleOffset < length && rawShown++ < 8u)
+				std::cout << static_cast<unsigned int>(raw.data1) << '@' << raw.sampleOffset << ',';
+		}
+		std::cout << " playbackNotes=";
+		for (std::size_t eventIndex = 0u; eventIndex < loop->EventCount(); ++eventIndex)
+		{
+			midi::MidiEvent playback;
+			if (!loop->TryGetPlaybackEvent(eventIndex, playback))
+				break;
+			if (playback.IsNoteOn() && playback.sampleOffset < length && playbackShown++ < 8u)
+				std::cout << static_cast<unsigned int>(playback.data1) << '@' << playback.sampleOffset << ',';
+		}
+		std::cout << " outside=" << outside << '\n';
+	}
 }
 
 void LoopTake::_RemoveMidiModelChildren()

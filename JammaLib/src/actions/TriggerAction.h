@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 #include "Action.h"
 #include "CommonTypes.h"
@@ -33,6 +35,7 @@ namespace actions
 		std::string TargetId;
 		std::string SourceId;
 		unsigned long SampleCount;
+		std::optional<std::uint32_t> MidiSample;
 		std::vector<unsigned int> InputChannels;
 		std::vector<std::string> MidiInputDevices;
 		std::shared_ptr<base::BounceWriter> OverdubWriter;

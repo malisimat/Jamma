@@ -356,7 +356,8 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 	unsigned int state,
 	const base::Action& action,
 	const std::string& device,
-	std::optional<std::int64_t> eventTimeUsec)
+	std::optional<std::int64_t> eventTimeUsec,
+	std::optional<std::uint32_t> midiSample)
 {
 	auto enqueue = [&](TriggerControl control, std::uint16_t bindingIndex,
 		DualBinding::TestResult match)
@@ -366,7 +367,7 @@ ActionResult Trigger::QueueInputEvent(TriggerInputDomain domain,
 				action.GetActionTime().time_since_epoch()).count();
 		const TriggerInputEdge edge{ rigRevision, bindingIndex, control,
 			match == DualBinding::MATCH_DOWN ? TRIGGER_EDGE_DOWN : TRIGGER_EDGE_UP,
-			edgeTimeUsec };
+			edgeTimeUsec, midiSample };
 		auto& queue = domain == TRIGGER_INPUT_UI ? _uiInputQueue : _jobInputQueue;
 		if (!queue.Push(edge))
 			_PublishInputFallback(domain, edge);
@@ -400,7 +401,7 @@ ActionResult Trigger::QueueMidiInputEvent(TriggerInputDomain domain,
 	if (!TryEncodeMidiEvent(event, value, state))
 		return ActionResult::NoAction();
 	return QueueInputEvent(domain, rigRevision, TRIGGER_MIDI, value, state, action,
-		"", eventTimeUsec);
+		"", eventTimeUsec, event.sampleOffset);
 }
 
 void Trigger::OnTick(Time curTime,
@@ -450,7 +451,10 @@ void Trigger::OnTick(Time curTime,
 		{
 			_lastActivateTime = Timer::GetZero();
 			_isLastActivateDown = _isLastActivateDownRaw;
+			_currentInputMidiSample = _debouncedActivateMidiSample;
 			StateMachine(_isLastActivateDownRaw, true, cfg, params);
+			_currentInputMidiSample.reset();
+			_debouncedActivateMidiSample.reset();
 		}
 
 		elapsedMs = Timer::GetElapsedSeconds(_lastDitchTime, curTime) * 1000.0;
@@ -520,7 +524,9 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 	auto applyStateMachine = [&]()
 	{
 		const auto priorState = _state;
+		_currentInputMidiSample = edge.MidiSample;
 		const auto changed = StateMachine(isDown, isActivate, cfg, params);
+		_currentInputMidiSample.reset();
 		if (changed && isActivate && isDown && priorState != _state &&
 			_pendingCompletion == STRUCTURAL_NONE)
 			_activationOutcomeCount.fetch_add(1u, std::memory_order_release);
@@ -548,7 +554,12 @@ bool Trigger::_ApplyInputEdge(const TriggerInputEdge& edge,
 	if (match == DualBinding::MATCH_NONE || !IgnoreRepeats(isActivate, match)) return false;
 	const auto eventDuration = std::chrono::duration_cast<Time::duration>(
 		std::chrono::microseconds(edge.EventTimeUsec));
-	if (!Debounce(isActivate, match, Time(eventDuration))) return false;
+	if (!Debounce(isActivate, match, Time(eventDuration)))
+	{
+		if (isActivate) _debouncedActivateMidiSample = edge.MidiSample;
+		return false;
+	}
+	if (isActivate) _debouncedActivateMidiSample.reset();
 	return applyStateMachine();
 }
 
@@ -699,6 +710,8 @@ void Trigger::InputFallback::Publish(const TriggerInputEdge& edge) noexcept
 	Control.store(static_cast<std::uint8_t>(edge.Control), std::memory_order_relaxed);
 	Edge.store(static_cast<std::uint8_t>(edge.Edge), std::memory_order_relaxed);
 	EventTimeUsec.store(edge.EventTimeUsec, std::memory_order_relaxed);
+	MidiSample.store(edge.MidiSample.value_or(0u), std::memory_order_relaxed);
+	HasMidiSample.store(edge.MidiSample.has_value(), std::memory_order_relaxed);
 	Sequence.fetch_add(1u, std::memory_order_release);
 }
 
@@ -714,6 +727,9 @@ bool Trigger::InputFallback::ReadLatest(std::uint64_t consumedSequence,
 	edge.Control = static_cast<TriggerControl>(Control.load(std::memory_order_relaxed));
 	edge.Edge = static_cast<TriggerEdge>(Edge.load(std::memory_order_relaxed));
 	edge.EventTimeUsec = EventTimeUsec.load(std::memory_order_relaxed);
+	edge.MidiSample = HasMidiSample.load(std::memory_order_relaxed)
+		? std::optional<std::uint32_t>(MidiSample.load(std::memory_order_relaxed))
+		: std::nullopt;
 	const auto after = Sequence.load(std::memory_order_acquire);
 	if (before != after || (after & 1u) != 0u)
 		return false;
@@ -845,6 +861,8 @@ void Trigger::Reset()
 	_state = TriggerState::TRIGSTATE_DEFAULT;
 	_PublishTriggerStateSnapshot();
 	_recordSampCount = 0;
+	_currentInputMidiSample.reset();
+	_debouncedActivateMidiSample.reset();
 	_loopTakeHistorySize = 0u;
 	_activeHistoryIndex.reset();
 	_delayedActionCount = 0u;
@@ -959,6 +977,7 @@ bool Trigger::_QueueStructuralCommand(TriggerAction::TriggerActionType actionTyp
 	command.Completion = completion;
 	command.HistoryToken = historyToken;
 	command.SampleCount = sampleCount;
+	command.MidiSample = _currentInputMidiSample;
 	command.ApplyToTargetTake = applyToTargetTake;
 	command.ApplyToSourceTake = applyToSourceTake;
 	command.ApplyToTargetAudio = applyToTargetAudio;
@@ -1035,6 +1054,7 @@ void Trigger::ProcessStructuralActionsOnJob(
 			TriggerAction action;
 			action.ActionType = command.ActionType;
 			action.SampleCount = command.SampleCount;
+			action.MidiSample = command.MidiSample;
 			action.ApplyToTargetTake = command.ApplyToTargetTake;
 			action.ApplyToSourceTake = command.ApplyToSourceTake;
 			action.ApplyToTargetAudio = command.ApplyToTargetAudio;
