@@ -278,12 +278,24 @@ void GuiHud::Draw(base::DrawContext& ctx)
 	if (!_isVisible)
 		return;
 
-	if (_topInputRow)
-		_topInputRow->ComputeLayout();
 	if (_topStrip)
 		_topStrip->ComputeLayout();
+	if (_topSourceRow)
+		_topSourceRow->ComputeLayout();
+	if (_topInputRow)
+		_topInputRow->ComputeLayout();
+	if (_topMidiRow)
+		_topMidiRow->ComputeLayout();
 	if (_triggerList)
 		_triggerList->ComputeLayout();
+	const int audioOffset = _topAudioScroll ? _topAudioScroll->ScrollOffset() : 0;
+	const int midiOffset = _topMidiScroll ? _topMidiScroll->ScrollOffset() : 0;
+	if (_lastAudioScrollOffset != audioOffset || _lastMidiScrollOffset != midiOffset)
+	{
+		_lastAudioScrollOffset = audioOffset;
+		_lastMidiScrollOffset = midiOffset;
+		_cablesDirty = true;
+	}
 	if (_triggerScroll && _lastTriggerScrollOffset != _triggerScroll->ScrollOffset())
 	{
 		_lastTriggerScrollOffset = _triggerScroll->ScrollOffset();
@@ -310,10 +322,25 @@ void GuiHud::Draw(base::DrawContext& ctx)
 
 	_DrawCables(ctx);
 
-	for (auto& vu : _inputVus)
-		vu->Draw(ctx);
-	for (const auto& widgets : _sourceWidgets)
-		_DrawOverlayElement(ctx, widgets.Socket);
+	const auto drawSourceOverlays = [this, &ctx, &glCtx](const std::shared_ptr<GuiScrollPanel>& scroll,
+		io::RigFileRouting::SourceKind kind)
+	{
+		if (!scroll)
+			return;
+		auto clipPos = scroll->GlobalPosition();
+		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
+		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		for (size_t i = 0u; i < _sourceWidgets.size(); ++i)
+		{
+			if (_sourceEndpoints[i].Kind != kind)
+				continue;
+			_inputVus[i]->Draw(ctx);
+			_DrawOverlayElement(ctx, _sourceWidgets[i].Socket);
+		}
+		glCtx.PopScissorRect();
+	};
+	drawSourceOverlays(_topAudioScroll, io::RigFileRouting::SourceKind::Adc);
+	drawSourceOverlays(_topMidiScroll, io::RigFileRouting::SourceKind::Midi);
 	if (_triggerScroll)
 	{
 		glCtx.PushScissorRect(_triggerScroll->GlobalPosition(),
@@ -398,17 +425,27 @@ void GuiHud::_BuildTopStrip()
 {
 	_topStrip->AddChild(_MakeHeader("Inputs", _TopStripWidth - (_TopStripPadding * 2u)));
 
-	GuiStackPanelParams inputRowParams = GuiStackPanelParams::PanelHorizontalRow(
-		_TopStripWidth - (_TopStripPadding * 2u),
-		_SourceButtonHeight);
-	inputRowParams.WrapContent = false;
-	_topInputRow = std::make_shared<GuiStackPanel>(inputRowParams);
-
-	const unsigned int totalInputs = static_cast<unsigned int>(_sourceEndpoints.size());
+	const auto audioCount = static_cast<unsigned int>(std::count_if(_sourceEndpoints.begin(), _sourceEndpoints.end(),
+		[](const auto& source) { return source.Kind == io::RigFileRouting::SourceKind::Adc; }));
+	const auto midiCount = static_cast<unsigned int>(_sourceEndpoints.size()) - audioCount;
+	const auto contentWidth = [](unsigned int count) {
+		return count == 0u ? 0u : count * _SourceButtonWidth +
+			(count - 1u) * GuiStackPanelParams::PanelRowSpacing;
+	};
 	const unsigned int innerWidth = _TopStripWidth - (_TopStripPadding * 2u);
-	const unsigned int totalSpacing = totalInputs > 1u ? GuiStackPanelParams::PanelRowSpacing * (totalInputs - 1u) : 0u;
-	const unsigned int widthBudget = innerWidth > totalSpacing ? innerWidth - totalSpacing : innerWidth;
-	const unsigned int sourceButtonWidth = totalInputs > 0u ? std::max(64u, widthBudget / totalInputs) : _SourceButtonWidth;
+	GuiStackPanelParams sourceRowParams = GuiStackPanelParams::PanelHorizontalRow(innerWidth, _SourceViewportHeight);
+	sourceRowParams.Spacing = _SourcePanelGap;
+	_topSourceRow = std::make_shared<GuiStackPanel>(sourceRowParams);
+	if (audioCount > 0u)
+	{
+		auto rowParams = GuiStackPanelParams::PanelHorizontalRow(contentWidth(audioCount), _SourceButtonHeight);
+		_topInputRow = std::make_shared<GuiStackPanel>(rowParams);
+	}
+	if (midiCount > 0u)
+	{
+		auto rowParams = GuiStackPanelParams::PanelHorizontalRow(contentWidth(midiCount), _SourceButtonHeight);
+		_topMidiRow = std::make_shared<GuiStackPanel>(rowParams);
+	}
 
 	for (const auto& source : _sourceEndpoints)
 	{
@@ -419,16 +456,16 @@ void GuiHud::_BuildTopStrip()
 			label += " (unavailable)";
 		auto button = _MakeSourceButton(label,
 			source.Available ? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f)) : glm::vec3(0.50f),
-			sourceButtonWidth);
+			_SourceButtonWidth);
 		auto socket = std::make_shared<GuiHudSocket>(
-			utils::Position2d{ static_cast<int>(sourceButtonWidth / 2u - _SocketSize / 2u), 0 },
+			utils::Position2d{ static_cast<int>(_SourceButtonWidth / 2u - _SocketSize / 2u), 0 },
 			_SocketSize,
 			source.Available
 			? (isAdc ? glm::vec3(0.92f, 0.52f, 0.24f) : glm::vec3(0.22f, 0.72f, 0.66f))
 			: glm::vec3(0.35f));
 		button->AddChild(socket);
 		_sourceWidgets.push_back({ button, socket });
-		_topInputRow->AddChild(button);
+		(isAdc ? _topInputRow : _topMidiRow)->AddChild(button);
 		GuiVuParams vuParams;
 		if (isAdc)
 			vuParams.HoldSamps = _AudioInputPeakHoldSamps;
@@ -441,8 +478,30 @@ void GuiHud::_BuildTopStrip()
 		}
 		_inputVus.push_back(std::make_unique<GuiVu>(vuParams));
 	}
-
-	_topStrip->AddChild(_topInputRow);
+	const auto makeScroll = [](const std::shared_ptr<GuiStackPanel>& row) {
+		GuiScrollPanelParams params;
+		params.Orientation = GuiScrollOrientation::Horizontal;
+		params.ScrollBarWidth = _SourceScrollBarHeight;
+		params.WheelStep = _SourceButtonWidth;
+		params.Size = { row->GetSize().Width, _SourceViewportHeight };
+		params.MinSize = { 60u, _SourceViewportHeight };
+		params.Texture = "";
+		params.ScrollBarTexture = "rounded_but";
+		auto scroll = std::make_shared<GuiScrollPanel>(params);
+		scroll->SetContent(row);
+		return scroll;
+	};
+	if (_topInputRow)
+	{
+		_topAudioScroll = makeScroll(_topInputRow);
+		_topSourceRow->AddChild(_topAudioScroll);
+	}
+	if (_topMidiRow)
+	{
+		_topMidiScroll = makeScroll(_topMidiRow);
+		_topSourceRow->AddChild(_topMidiScroll);
+	}
+	_topStrip->AddChild(_topSourceRow);
 }
 
 void GuiHud::_BuildTriggerRail()
@@ -523,12 +582,18 @@ void GuiHud::_BuildTriggerRail()
 void GuiHud::_RebuildPanels()
 {
 	const int previousScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
+	const int previousAudioOffset = _topAudioScroll ? _topAudioScroll->ScrollOffset() : 0;
+	const int previousMidiOffset = _topMidiScroll ? _topMidiScroll->ScrollOffset() : 0;
 	const bool revealNewest = _revealNewestTrigger;
 	_sourceWidgets.clear();
 	_triggerWidgets.clear();
 	_inputVus.clear();
 	_topStrip.reset();
+	_topSourceRow.reset();
 	_topInputRow.reset();
+	_topMidiRow.reset();
+	_topAudioScroll.reset();
+	_topMidiScroll.reset();
 	_triggerRail.reset();
 	_triggerScroll.reset();
 	_triggerList.reset();
@@ -543,7 +608,13 @@ void GuiHud::_RebuildPanels()
 	_resourcesNeedInitialising.store(true, std::memory_order_release);
 	if (_triggerScroll && !revealNewest)
 		_triggerScroll->SetScrollOffset(previousScrollOffset);
+	if (_topAudioScroll)
+		_topAudioScroll->SetScrollOffset(previousAudioOffset);
+	if (_topMidiScroll)
+		_topMidiScroll->SetScrollOffset(previousMidiOffset);
 	_lastTriggerScrollOffset = _triggerScroll ? _triggerScroll->ScrollOffset() : 0;
+	_lastAudioScrollOffset = _topAudioScroll ? _topAudioScroll->ScrollOffset() : 0;
+	_lastMidiScrollOffset = _topMidiScroll ? _topMidiScroll->ScrollOffset() : 0;
 	_hoveredCableEndpoint.reset();
 	_hoveredCableRoute.reset();
 	_hoveredCableEnd.reset();
@@ -646,8 +717,20 @@ void GuiHud::_LayoutPanels()
 	_topStrip->SetPosition({ topPosX, topPosY });
 	_topStrip->SetSize({ topWidth, _TopStripHeight });
 
-	if (_topInputRow)
-		_topInputRow->SetSize({ topWidth - (_TopStripPadding * 2u), _SourceButtonHeight });
+	const unsigned int innerWidth = topWidth - (_TopStripPadding * 2u);
+	if (auto header = _topStrip->TryGetChild(0u))
+		header->SetSize({ innerWidth, header->GetSize().Height });
+	_topSourceRow->SetSize({ innerWidth, _SourceViewportHeight });
+	const unsigned int midiContentWidth = _topMidiRow ? _topMidiRow->GetSize().Width : 0u;
+	const unsigned int midiViewportWidth = _topAudioScroll && _topMidiScroll
+		? std::min(midiContentWidth, std::max(_SourceButtonWidth, innerWidth / 3u))
+		: (_topMidiScroll ? innerWidth : 0u);
+	const unsigned int audioViewportWidth = _topAudioScroll
+		? innerWidth - midiViewportWidth - (_topMidiScroll ? _SourcePanelGap : 0u) : 0u;
+	if (_topAudioScroll)
+		_topAudioScroll->SetSize({ audioViewportWidth, _SourceViewportHeight });
+	if (_topMidiScroll)
+		_topMidiScroll->SetSize({ midiViewportWidth, _SourceViewportHeight });
 
 	const int railPosY = static_cast<int>(viewHeight) - static_cast<int>(railHeight) - _TopPosY + 42u;
 	_triggerRail->SetPosition({ railPosX, railPosY });
@@ -912,13 +995,26 @@ void GuiHud::_DrawCableSockets(base::DrawContext& ctx)
 	};
 	for (const auto& cable : cables)
 	{
-		if (cable.Start.Kind != CableInteraction::EndpointKind::TriggerInput &&
-			cable.Start.Kind != CableInteraction::EndpointKind::TriggerOutput)
-			drawEnd(cable, CableInteraction::End::Start);
 		if (cable.Finish.Kind != CableInteraction::EndpointKind::TriggerInput &&
 			cable.Finish.Kind != CableInteraction::EndpointKind::TriggerOutput)
 			drawEnd(cable, CableInteraction::End::Finish);
 	}
+	const auto drawSourceEnds = [&ctx, &cables, &drawEnd](const std::shared_ptr<GuiScrollPanel>& scroll,
+		CableInteraction::EndpointKind kind)
+	{
+		if (!scroll)
+			return;
+		auto clipPos = scroll->GlobalPosition();
+		clipPos.Y += static_cast<int>(scroll->GetSize().Height - scroll->ViewportHeight());
+		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
+		glCtx.PushScissorRect(clipPos, { scroll->ViewportWidth(), scroll->ViewportHeight() });
+		for (const auto& cable : cables)
+			if (cable.Start.Kind == kind)
+				drawEnd(cable, CableInteraction::End::Start);
+		glCtx.PopScissorRect();
+	};
+	drawSourceEnds(_topAudioScroll, CableInteraction::EndpointKind::AdcSource);
+	drawSourceEnds(_topMidiScroll, CableInteraction::EndpointKind::MidiSource);
 	if (_triggerScroll)
 	{
 		auto& glCtx = dynamic_cast<GlDrawContext&>(ctx);
@@ -1198,6 +1294,22 @@ std::vector<GuiHud::CableRoute> GuiHud::BuildCableRoutes(const engine::RoutingGr
 	return routes;
 }
 
+bool GuiHud::_SourceVisible(size_t index) const
+{
+	if (index >= _sourceEndpoints.size() || index >= _sourceWidgets.size())
+		return false;
+	const auto& scroll = _sourceEndpoints[index].Kind == io::RigFileRouting::SourceKind::Adc
+		? _topAudioScroll : _topMidiScroll;
+	if (!scroll)
+		return false;
+	const auto center = _sourceWidgets[index].Socket->GlobalPosition();
+	const auto origin = scroll->GlobalPosition();
+	const int socketCenterX = center.X + static_cast<int>(_SocketSize / 2u);
+	// Keep the whole hit target within its own viewport at the scroll edges.
+	return socketCenterX >= origin.X + static_cast<int>(_SocketHitRadius) &&
+		socketCenterX < origin.X + static_cast<int>(scroll->ViewportWidth()) - static_cast<int>(_SocketHitRadius);
+}
+
 void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& endpoints,
 	std::vector<CableInteraction::Cable>& cables) const
 {
@@ -1206,6 +1318,8 @@ void GuiHud::_BuildInteractionGeometry(std::vector<CableInteraction::Endpoint>& 
 	const auto rootPos = GlobalPosition();
 	for (size_t i = 0u; i < _sourceWidgets.size() && i < _sourceEndpoints.size(); ++i)
 	{
+		if (!_SourceVisible(i))
+			continue;
 		const auto& source = _sourceEndpoints[i];
 		endpoints.push_back({ source.Kind == io::RigFileRouting::SourceKind::Adc
 			? CableInteraction::EndpointKind::AdcSource : CableInteraction::EndpointKind::MidiSource,

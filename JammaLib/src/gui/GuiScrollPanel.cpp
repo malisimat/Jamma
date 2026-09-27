@@ -16,10 +16,18 @@ GuiScrollBarParams GuiScrollPanel::_MakeScrollBarParams(const GuiScrollPanelPara
 	sb.Texture = params.ScrollBarTexture;
 	sb.TextureShader = params.TextureShader;
 	sb.ThumbTexture = params.ThumbTexture;
+	sb.Orientation = params.Orientation;
 	const int w = (int)params.ScrollBarWidth;
-	const int h = (int)params.Size.Height;
-	sb.Size = { (unsigned int)std::max(1, w), (unsigned int)std::max(1, h) };
-	sb.Position = { std::max(0, (int)params.Size.Width - w), 0 };
+	if (params.Orientation == GuiScrollOrientation::Horizontal)
+	{
+		sb.Size = { std::max(1u, params.Size.Width), (unsigned int)std::max(1, w) };
+		sb.Position = { 0, 0 };
+	}
+	else
+	{
+		sb.Size = { (unsigned int)std::max(1, w), std::max(1u, params.Size.Height) };
+		sb.Position = { std::max(0, (int)params.Size.Width - w), 0 };
+	}
 	return sb;
 }
 
@@ -30,6 +38,7 @@ GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 	_scrollBar(std::make_shared<GuiScrollBar>(_MakeScrollBarParams(params))),
 	_scrollBarWidth(params.ScrollBarWidth),
 	_wheelStep(params.WheelStep),
+	_orientation(params.Orientation),
 	_scrollOffset(0),
 	_draggingScrollBar(false)
 {
@@ -60,11 +69,15 @@ std::shared_ptr<base::GuiElement> GuiScrollPanel::Content() const { return _cont
 
 unsigned int GuiScrollPanel::ViewportWidth() const
 {
-	const int w = (int)GetSize().Width - (IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
+	const int w = (int)GetSize().Width - (_orientation == GuiScrollOrientation::Vertical && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
 	return (unsigned int)std::max(0, w);
 }
 
-unsigned int GuiScrollPanel::ViewportHeight() const { return GetSize().Height; }
+unsigned int GuiScrollPanel::ViewportHeight() const
+{
+	const int h = (int)GetSize().Height - (_orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
+	return (unsigned int)std::max(0, h);
+}
 
 bool GuiScrollPanel::IsScrollBarVisible() const
 {
@@ -76,9 +89,16 @@ unsigned int GuiScrollPanel::_ContentHeight() const
 	return _content ? _content->GetSize().Height : 0u;
 }
 
+unsigned int GuiScrollPanel::_ContentWidth() const
+{
+	return _content ? _content->GetSize().Width : 0u;
+}
+
 int GuiScrollPanel::MaxScrollOffset() const
 {
-	return std::max(0, (int)_ContentHeight() - (int)ViewportHeight());
+	return _orientation == GuiScrollOrientation::Horizontal
+		? std::max(0, (int)_ContentWidth() - (int)ViewportWidth())
+		: std::max(0, (int)_ContentHeight() - (int)ViewportHeight());
 }
 
 int GuiScrollPanel::ScrollOffset() const { return _scrollOffset; }
@@ -93,9 +113,15 @@ void GuiScrollPanel::_UpdateContentHostPosition()
 {
 	if (_contentHost)
 	{
-		// Top-align content so the first item stays put as later items append.
-		const int topAlignedPosition = static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentHeight());
-		_contentHost->SetPosition({ 0, topAlignedPosition + _scrollOffset });
+		if (_orientation == GuiScrollOrientation::Horizontal)
+			_contentHost->SetPosition({ -_scrollOffset,
+				std::max(0, static_cast<int>(GetSize().Height) - static_cast<int>(_ContentHeight())) });
+		else
+		{
+			// Top-align content so the first item stays put as later items append.
+			const int topAlignedPosition = static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentHeight());
+			_contentHost->SetPosition({ 0, topAlignedPosition + _scrollOffset });
+		}
 	}
 }
 
@@ -118,7 +144,10 @@ void GuiScrollPanel::SetScrollFraction(double fraction)
 
 void GuiScrollPanel::_UpdateMetrics()
 {
-	_scrollBar->SetMetrics((double)ViewportHeight(), (double)_ContentHeight());
+	if (_orientation == GuiScrollOrientation::Horizontal)
+		_scrollBar->SetMetrics((double)ViewportWidth(), (double)_ContentWidth());
+	else
+		_scrollBar->SetMetrics((double)ViewportHeight(), (double)_ContentHeight());
 	if (_contentHost && _content)
 		_contentHost->SetSize(_content->GetSize());
 	_ClampOffset();
@@ -127,8 +156,16 @@ void GuiScrollPanel::_UpdateMetrics()
 void GuiScrollPanel::SetSize(Size2d size)
 {
 	GuiElement::SetSize(size);
-	_scrollBar->SetSize({ _scrollBarWidth, size.Height });
-	_scrollBar->SetPosition({ std::max(0, (int)size.Width - (int)_scrollBarWidth), 0 });
+	if (_orientation == GuiScrollOrientation::Horizontal)
+	{
+		_scrollBar->SetSize({ size.Width, _scrollBarWidth });
+		_scrollBar->SetPosition({ 0, 0 });
+	}
+	else
+	{
+		_scrollBar->SetSize({ _scrollBarWidth, size.Height });
+		_scrollBar->SetPosition({ std::max(0, (int)size.Width - (int)_scrollBarWidth), 0 });
+	}
 	_UpdateMetrics();
 }
 
@@ -163,7 +200,7 @@ void GuiScrollPanel::Draw(base::DrawContext& ctx)
 	{
 		auto clipPos = GlobalPosition();
 		clipPos.X += (int)_ContentClipPadding;
-		clipPos.Y += (int)_ContentClipPadding;
+		clipPos.Y += (int)_ContentClipPadding + (_orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
 
 		const int clipWidth = std::max(0, (int)ViewportWidth() - 2 * (int)_ContentClipPadding);
 		const int clipHeight = std::max(0, (int)ViewportHeight() - 2 * (int)_ContentClipPadding);
@@ -282,9 +319,9 @@ void GuiScrollPanel::ClearPointerState()
 bool GuiScrollPanel::_IsInViewport(Position2d localPos) const
 {
 	const int minX = static_cast<int>(_ContentClipPadding);
-	const int minY = static_cast<int>(_ContentClipPadding);
+	const int minY = static_cast<int>(_ContentClipPadding) + (_orientation == GuiScrollOrientation::Horizontal && IsScrollBarVisible() ? (int)_scrollBarWidth : 0);
 	const int maxX = std::max(minX, static_cast<int>(ViewportWidth()) - static_cast<int>(_ContentClipPadding));
-	const int maxY = std::max(minY, static_cast<int>(ViewportHeight()) - static_cast<int>(_ContentClipPadding));
+	const int maxY = std::max(minY, static_cast<int>(GetSize().Height) - static_cast<int>(_ContentClipPadding));
 
 	return (localPos.X >= minX)
 		&& (localPos.X < maxX)
