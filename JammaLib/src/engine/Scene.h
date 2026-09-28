@@ -159,23 +159,25 @@ namespace engine
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi(bool generatedRig = false)
 		{
-			_midiConnectionResult = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
+			auto result = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
 				_audioEngine->GetStreamParams().SampleRate,
 				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
 			std::vector<std::string> connectedNames;
-			connectedNames.reserve(_midiConnectionResult.Connected.size());
-			for (const auto& endpoint : _midiConnectionResult.Connected)
+			connectedNames.reserve(result.Connected.size());
+			for (const auto& endpoint : result.Connected)
 				if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
 					connectedNames.push_back(endpoint.Name);
-			_connectedMidiNames = connectedNames;
+			_midiState.store(
+				std::make_shared<const MidiState>(MidiState{ std::move(result), std::move(connectedNames) }),
+				std::memory_order_release);
 		}
 		void SetMidiInputInventory(midi::MidiInputInventory inventory)
 		{
 			_midiInputInventory = std::move(inventory);
 		}
-		const midi::MidiConnectionResult& GetMidiConnectionResult() const noexcept
+		midi::MidiConnectionResult GetMidiConnectionResult() const
 		{
-			return _midiConnectionResult;
+			return _midiState.load(std::memory_order_acquire)->Connection;
 		}
 		void CloseMidi()
 		{
@@ -326,8 +328,12 @@ namespace engine
 		std::unique_ptr<audio::AudioHost> _audioEngine;
 		std::unique_ptr<io::IoInputSubsystem> _inputSubsystem;
 		std::optional<midi::MidiInputInventory> _midiInputInventory;
-		midi::MidiConnectionResult _midiConnectionResult;
-		std::vector<std::string> _connectedMidiNames;
+		struct MidiState
+		{
+			midi::MidiConnectionResult Connection;
+			std::vector<std::string> ConnectedNames;
+		};
+		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;

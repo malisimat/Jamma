@@ -674,7 +674,7 @@ void Scene::Draw(DrawContext& ctx)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
 
 		unsigned int midiInput = 0u;
-		for (const auto& deviceName : _connectedMidiNames)
+		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedNames)
 		{
 			_hudPanel->SetMidiInputPeak(midiInput++,
 				_inputSubsystem->ConsumeMidiInputPeak(deviceName),
@@ -1625,11 +1625,8 @@ void Scene::_AdvanceRigPublication()
 		// Protect the HUD tree while routing rebuilds replace widgets used by rendering.
 		std::scoped_lock lock(_sceneMutex);
 		unsigned int audioInputs = _audioEngine->GetStreamParams().NumInputChannels;
-		std::vector<std::string> midiInputs;
-		for (const auto& device : _midiConnectionResult.Connected)
-			if (!device.Name.empty() && std::find(midiInputs.begin(), midiInputs.end(), device.Name) == midiInputs.end())
-				midiInputs.push_back(device.Name);
-		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
+		const auto midiState = _midiState.load(std::memory_order_acquire);
+		_hudPanel->SetRoutingConfig(audioInputs, midiState->ConnectedNames, *pending);
 	}
 	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
@@ -1854,11 +1851,11 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	else
 	{
 		CloseMidi();
-		_midiConnectionResult = {};
-		_connectedMidiNames.clear();
+		_midiState.store( std::make_shared<const MidiState>(), std::memory_order_release);
 	}
+	const auto midiState = _midiState.load(std::memory_order_acquire);
 	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
-	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, _connectedMidiNames))
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
 	{
 		_audioEngine->PublishPendingRigSnapshot(runtime);
 		_inputSubsystem->PublishRigInputDispatch(runtime);
@@ -1866,7 +1863,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 		if (_hudPanel)
 		{
 			std::scoped_lock lock(_sceneMutex);
-			_hudPanel->SetRoutingConfig(actualInputs, _connectedMidiNames, *runtime);
+			_hudPanel->SetRoutingConfig(actualInputs, midiState->ConnectedNames, *runtime);
 		}
 	}
 
