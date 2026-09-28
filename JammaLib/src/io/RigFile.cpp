@@ -7,6 +7,7 @@
 
 #include "RigFile.h"
 #include "../utils/StringUtils.h"
+#include "../midi/MidiDevice.h"
 
 #include <algorithm>
 #include <unordered_set>
@@ -582,6 +583,16 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 	const std::vector<std::string>& availableMidiDevices)
 {
 	Resolution result{ rig };
+	// Resolve legacy WinMM names when the matching base name becomes available.
+	std::vector<midi::MidiInputDeviceInfo> availablePorts;
+	availablePorts.reserve(availableMidiDevices.size());
+	for (const auto& name : availableMidiDevices)
+		availablePorts.push_back({ 0u, name });
+	for (auto& device : result.CandidateRig.User.Midi.Devices)
+	{
+		const auto base = midi::MidiDevice::ResolveSavedInputName(device.Name, availablePorts);
+		if (base != device.Name) { device.Name = base; result.RequiresSave = true; }
+	}
 	std::unordered_set<std::string> triggerIds;
 	triggerIds.reserve(rig.Triggers.size());
 	for (const auto& trigger : rig.Triggers)
@@ -601,6 +612,12 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 		resolved.TriggerName = trigger.Name;
 
 		auto& candidateTrigger = result.CandidateRig.Triggers[triggerIndex];
+		if (candidateTrigger.MidiTrigger)
+		{
+			auto& name = candidateTrigger.MidiTrigger->Device;
+			const auto base = midi::MidiDevice::ResolveSavedInputName(name, availablePorts);
+			if (base != name) { name = base; result.RequiresSave = true; }
+		}
 		if (candidateTrigger.Id.empty())
 		{
 			do candidateTrigger.Id = utils::GetGuid();
@@ -618,8 +635,10 @@ RigFileRouting::Resolution RigFileRouting::Resolve(const RigFile& rig,
 		if (trigger.MidiInputs == RigFile::Trigger::MidiInputMode::Selected)
 		{
 			candidateTrigger.MidiInputDevices.clear();
-			for (const auto& device : trigger.MidiInputDevices)
+			for (const auto& savedDevice : trigger.MidiInputDevices)
 			{
+				const auto device = midi::MidiDevice::ResolveSavedInputName(savedDevice, availablePorts);
+				if (device != savedDevice) result.RequiresSave = true;
 				if (device.empty() || std::find(candidateTrigger.MidiInputDevices.begin(), candidateTrigger.MidiInputDevices.end(), device) != candidateTrigger.MidiInputDevices.end())
 					continue;
 				candidateTrigger.MidiInputDevices.push_back(device);

@@ -127,7 +127,7 @@ TEST_F(SceneRoutingIntegrationTest, FreshScenesLeaveRenamedMissingAmbiguousAndFe
 	fewer->Shutdown();
 }
 
-TEST_F(SceneRoutingIntegrationTest, FailedInitialMigrationPersistenceKeepsLegacyRuntimeRoute)
+TEST_F(SceneRoutingIntegrationTest, InitialMigrationKeepsLegacyRuntimeRouteWithoutSaving)
 {
 	auto legacy = Trigger("legacy", "");
 	legacy.StationTarget.reset();
@@ -138,7 +138,7 @@ TEST_F(SceneRoutingIntegrationTest, FailedInitialMigrationPersistenceKeepsLegacy
 		return false;
 	});
 	ASSERT_TRUE(scene);
-	EXPECT_EQ(1u, saves);
+	EXPECT_EQ(0u, saves);
 	EXPECT_EQ((std::vector<std::pair<std::string, std::size_t>>{ { "Station", 1u } }), Memberships(scene));
 	scene->Shutdown();
 }

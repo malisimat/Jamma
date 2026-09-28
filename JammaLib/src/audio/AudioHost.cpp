@@ -65,26 +65,24 @@ namespace audio
 		Close();
 	}
 
-	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController, TickCallback tickCallback)
+	bool AudioHost::Init(std::shared_ptr<ninjam::NinjamController> ninjamController,
+		TickCallback tickCallback, bool generatedRig, const AsioInventory* inventory)
 	{
 		std::scoped_lock lock(_audioMutex);
+		if (_audioDevice)
+		{
+			_audioDevice->Stop();
+			_audioDevice.reset();
+		}
 
 		_ninjamController = ninjamController;
 		_tickCallback = tickCallback;
 
-		auto dev = audio::AudioDevice::Open(AudioHost::AudioCallback,
-			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
-			_userConfig.Audio,
-			this);
-
-		if (dev.has_value())
+		_audioSampleCounter.store(0u, std::memory_order_release);
+		_audioCallbackHeartbeat.store(0u, std::memory_order_release);
+		const auto prepareForStart = [this](const AudioStreamParams& audioStreamParams)
 		{
-			_audioDevice = std::move(dev.value());
-			_audioSampleCounter.store(0u, std::memory_order_release);
-			_audioCallbackHeartbeat.store(0u, std::memory_order_release);
-
-			auto audioStreamParams = _audioDevice->GetAudioStreamParams();
-			_tickStreamParams = audioStreamParams;
+			_preparedStreamParams = audioStreamParams;
 			_ninjamMetronome.Configure(audioStreamParams.SampleRate);
 
 			auto inLatency = (0u == audioStreamParams.InputLatency) ?
@@ -127,15 +125,13 @@ namespace audio
 					outLatency);
 			}
 
-			if (!_audioDevice->Start())
-			{
-				_audioDevice.reset();
-				return false;
-			}
-			_audioDevice->GetAudioStreamParams().PrintParams();
-			return true;
-		}
-		return false;
+		};
+		auto dev = audio::AudioDevice::Open(AudioHost::AudioCallback,
+			[](RtAudioError::Type type, const std::string& err) { std::cout << "[" << type << " RtAudio Error] " << err << std::endl; },
+			_userConfig.Audio, this, generatedRig, inventory, &_asioOpenReport, prepareForStart);
+		if (!dev) return false;
+		_audioDevice = std::move(*dev);
+		return true;
 	}
 
 	void AudioHost::Close()
@@ -516,8 +512,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 	{
 		_audioCallbackHeartbeat.fetch_add(1u, std::memory_order_relaxed);
 		ApplyPendingRigSnapshotAtAudioBoundary();
-		const auto audioStreamParams = nullptr == _audioDevice ?
-			audio::AudioStreamParams() : _audioDevice->GetAudioStreamParams();
+		const auto& audioStreamParams = *_preparedStreamParams;
 		const auto blockStartSample = _audioSampleCounter.load(std::memory_order_relaxed);
 		const auto stationsSnapshot = _audioStations.load(std::memory_order_acquire);
 		static const std::vector<std::shared_ptr<Station>> emptyStations;
@@ -724,13 +719,13 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 			{
 				if (trigger.Instance)
 					trigger.Instance->OnTick(Timer::GetTime(), numSamps,
-						_tickUserConfig, _tickStreamParams, _audioRigRevision);
+						_tickUserConfig, _preparedStreamParams, _audioRigRevision);
 			}
 		}
 
 		if (_tickCallback)
 		{
-			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _tickStreamParams);
+			_tickCallback(Timer::GetTime(), numSamps, _tickUserConfig, _preparedStreamParams);
 		}
 		for (const auto& station : stations)
 			if (station) station->AcknowledgeAudioBoundary();

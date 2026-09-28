@@ -196,8 +196,9 @@ bool RigCoordinator::BuildInitial(const io::RigFile& rig,
 	_triggerParams = triggerParams;
 	auto resolution = io::RigFileRouting::Resolve(rig, stationDescriptors, availableAdcChannels, availableMidiDevices);
 	if (!resolution.IsValid) return false;
-	if (resolution.RequiresSave && persistMigration)
-		persistMigration(resolution.CandidateRig);
+	// Startup normalization is kept in memory. Legacy selected rig files must
+	// remain byte-identical until the user explicitly changes rig settings.
+	(void)persistMigration;
 	auto snapshot = _BuildSnapshot(_AllocateRevision(), rig, stationDescriptors, stations,
 		availableAdcChannels, availableMidiDevices, triggerParams, {});
 	if (!snapshot) return false;
@@ -206,6 +207,21 @@ bool RigCoordinator::BuildInitial(const io::RigFile& rig,
 	_inputAcknowledgement.store(snapshot->Revision, std::memory_order_release);
 	_editsEnabled.store(true, std::memory_order_release);
 	return true;
+}
+
+RigCoordinator::SnapshotPtr RigCoordinator::RefreshRuntimeAvailability(unsigned int availableAdcChannels,
+	std::vector<std::string> availableMidiDevices)
+{
+	if (_shuttingDown.load(std::memory_order_acquire) || !EditsEnabled()) return {};
+	const auto accepted = Accepted();
+	if (!accepted) return {};
+	auto snapshot = _BuildSnapshot(_AllocateRevision(), accepted->Rig, _stationDescriptors, _stations,
+		availableAdcChannels, availableMidiDevices, _triggerParams, accepted);
+	if (!snapshot) return {};
+	_availableAdcChannels = availableAdcChannels;
+	_availableMidiDevices = std::move(availableMidiDevices);
+	_accepted.store(snapshot, std::memory_order_release);
+	return snapshot;
 }
 
 RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig)

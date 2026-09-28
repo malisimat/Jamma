@@ -362,6 +362,24 @@ TEST(RigFileRouting, SupportsManyToOneAndReportsUnavailableSources) {
 	EXPECT_TRUE(result.Triggers[0].Sources[2].Available); EXPECT_FALSE(result.Triggers[0].Sources[3].Available);
 }
 
+TEST(RigFileRouting, MigratesIndexedMidiNamesWhenBaseNameAppears) {
+	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
+	rig.User.Midi.Devices = { { "CASIO USB-MIDI 0", true } };
+	auto& trigger = rig.Triggers[0];
+	trigger.StationTarget = "Station";
+	trigger.MidiInputs = RigFile::Trigger::MidiInputMode::Selected;
+	trigger.MidiInputDevices = { "CASIO USB-MIDI 0" };
+	const auto unavailable = io::RigFileRouting::Resolve(rig, { { "Station" } }, 2u, {});
+	EXPECT_EQ("CASIO USB-MIDI 0", unavailable.CandidateRig.User.Midi.Devices[0].Name);
+	const auto available = io::RigFileRouting::Resolve(rig, { { "Station" } }, 2u,
+		{ "CASIO USB-MIDI" });
+	ASSERT_TRUE(available.IsValid);
+	EXPECT_TRUE(available.RequiresSave);
+	EXPECT_EQ("CASIO USB-MIDI", available.CandidateRig.User.Midi.Devices[0].Name);
+	EXPECT_EQ("CASIO USB-MIDI", available.CandidateRig.Triggers[0].MidiInputDevices[0]);
+	EXPECT_TRUE(available.Triggers[0].Sources.back().Available);
+}
+
 TEST(RigFileRouting, MutationHelpersArePureAndRejectDuplicateCaptureRoutes) {
 	auto rig = RigFile::FromStream(std::stringstream(RigFile::DefaultJson)).value();
 	rig.Triggers.clear();

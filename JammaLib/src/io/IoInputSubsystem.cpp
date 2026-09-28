@@ -26,10 +26,20 @@ namespace io
 		Close();
 	}
 
-	void IoInputSubsystem::Init(midi::MidiClockAnchor& midiClockAnchor)
+	midi::MidiConnectionResult IoInputSubsystem::Init(midi::MidiClockAnchor& midiClockAnchor,
+		unsigned int actualSampleRate, const midi::MidiInputInventory* inventory, bool generatedRig)
 	{
-		_midiRouter.InitMidi(_userConfig, _loggingConfig, midiClockAnchor);
+		auto result = _midiRouter.InitMidi(_userConfig, _loggingConfig,
+			midiClockAnchor, actualSampleRate, inventory, generatedRig);
 		_midiRouter.InitSerial(_userConfig);
+		return result;
+	}
+
+	midi::MidiConnectionResult IoInputSubsystem::RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,
+		unsigned int actualSampleRate, const midi::MidiInputInventory& inventory)
+	{
+		return _midiRouter.InitMidi(_userConfig, _loggingConfig,
+			midiClockAnchor, actualSampleRate, &inventory);
 	}
 
 	void IoInputSubsystem::SetLogging(io::LoggingConfig loggingConfig) noexcept

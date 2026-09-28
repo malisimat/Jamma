@@ -16,7 +16,8 @@ GuiElementParams GuiScrollBar::_MakeThumbParams(const GuiScrollBarParams& params
 	GuiElementParams p(0,
 		DrawableParams{ "" },
 		MoveableParams(Position2d{ 0, 0 }, Position3d{ 0, 0, 0 }, 1.0),
-		SizeableParams{ params.Size.Width, params.MinThumb },
+		SizeableParams{ params.Orientation == GuiScrollOrientation::Horizontal ? params.MinThumb : params.Size.Width,
+			params.Orientation == GuiScrollOrientation::Horizontal ? params.Size.Height : params.MinThumb },
 		"", "", "", {});
 	p.Texture = params.ThumbTexture;
 	p.GuiPassThrough = false;
@@ -29,9 +30,10 @@ GuiScrollBar::GuiScrollBar(GuiScrollBarParams params) :
 	_viewportLength(1.0),
 	_contentLength(1.0),
 	_minThumb(params.MinThumb),
+	_orientation(params.Orientation),
 	_thumb(_MakeThumbParams(params)),
 	_dragging(false),
-	_dragStartY(0),
+	_dragStartPosition(0),
 	_dragStartValue(0.0),
 	_onScroll()
 {
@@ -103,12 +105,20 @@ void GuiScrollBar::SetSize(Size2d size)
 
 void GuiScrollBar::_UpdateThumb()
 {
-	const unsigned int track = GetSize().Height;
+	const unsigned int track = _orientation == GuiScrollOrientation::Horizontal ? GetSize().Width : GetSize().Height;
 	const unsigned int thumbLen = ThumbLength(track, _viewportLength, _contentLength, _minThumb);
-	const int offsetFromTop = ThumbOffset(track, thumbLen, _value);
+	const int offset = ThumbOffset(track, thumbLen, _value);
 
-	_thumb.SetSize({ GetSize().Width, thumbLen });
-	_thumb.SetPosition({ 0, static_cast<int>(track - thumbLen) - offsetFromTop });
+	if (_orientation == GuiScrollOrientation::Horizontal)
+	{
+		_thumb.SetSize({ thumbLen, GetSize().Height });
+		_thumb.SetPosition({ offset, 0 });
+	}
+	else
+	{
+		_thumb.SetSize({ GetSize().Width, thumbLen });
+		_thumb.SetPosition({ 0, static_cast<int>(track - thumbLen) - offset });
+	}
 }
 
 void GuiScrollBar::_InitResources(ResourceLib& resourceLib, bool forceInit)
@@ -139,7 +149,7 @@ ActionResult GuiScrollBar::OnAction(TouchAction action)
 	if (TouchAction::TouchState::TOUCH_DOWN == action.State && HitTest(action.Position))
 	{
 		_dragging = true;
-		_dragStartY = action.Position.Y;
+		_dragStartPosition = _orientation == GuiScrollOrientation::Horizontal ? action.Position.X : action.Position.Y;
 		_dragStartValue = _value;
 		return {
 			true, std::to_string(_index), "", ACTIONRESULT_DEFAULT, nullptr,
@@ -164,12 +174,14 @@ ActionResult GuiScrollBar::OnAction(TouchMoveAction action)
 	if (!_dragging)
 		return ActionResult::NoAction();
 
-	const unsigned int track = GetSize().Height;
+	const unsigned int track = _orientation == GuiScrollOrientation::Horizontal ? GetSize().Width : GetSize().Height;
 	const unsigned int thumbLen = ThumbLength(track, _viewportLength, _contentLength, _minThumb);
 	const int startOffset = ThumbOffset(track, thumbLen, _dragStartValue);
-	const int dy = _dragStartY - action.Position.Y;
+	const int delta = _orientation == GuiScrollOrientation::Horizontal
+		? action.Position.X - _dragStartPosition
+		: _dragStartPosition - action.Position.Y;
 
-	_value = ValueFromOffset(track, thumbLen, startOffset + dy);
+	_value = ValueFromOffset(track, thumbLen, startOffset + delta);
 	_UpdateThumb();
 
 	if (_onScroll)

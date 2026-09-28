@@ -674,13 +674,10 @@ void Scene::Draw(DrawContext& ctx)
 			_hudPanel->SetAudioInputPeak(channel, _audioEngine->GetAdcPeak(channel), numSamps);
 
 		unsigned int midiInput = 0u;
-		for (const auto& device : _userConfig.Midi.Devices)
+		for (const auto& deviceName : _midiState.load(std::memory_order_acquire)->ConnectedNames)
 		{
-			if (!device.Enabled || device.Name.empty())
-				continue;
-
 			_hudPanel->SetMidiInputPeak(midiInput++,
-				_inputSubsystem->ConsumeMidiInputPeak(device.Name),
+				_inputSubsystem->ConsumeMidiInputPeak(deviceName),
 				numSamps);
 		}
 	}
@@ -1475,6 +1472,7 @@ void Scene::OnJobTick(Time curTime)
 {
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
+	_RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
 	_AdvanceRigPublication();
 	_PumpMidi();
@@ -1549,8 +1547,66 @@ void Scene::OnJobTick(Time curTime)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
 
+void Scene::_RefreshMidiIfNeeded()
+{
+	if (!_midiActive.load(std::memory_order_acquire) ||
+		_isSceneQuitting.load(std::memory_order_acquire))
+		return;
+	const auto now = std::chrono::steady_clock::now();
+	const bool requested = _midiRefreshRequested.exchange(false, std::memory_order_acq_rel);
+	if (!requested && now - _lastMidiInventoryCheck < std::chrono::seconds(1))
+		return;
+	_lastMidiInventoryCheck = now;
+	const auto inventory = midi::MidiDevice::InventoryInputDevices();
+	if (!inventory.Error.empty())
+		return; // A transient inventory error must not tear down working ports.
+	const auto previous = _midiState.load(std::memory_order_acquire);
+	const auto& oldPorts = previous->Connection.Inventory.Devices;
+	const bool sameInventory = oldPorts.size() == inventory.Devices.size() &&
+		std::equal(oldPorts.begin(), oldPorts.end(), inventory.Devices.begin(),
+			[](const auto& a, const auto& b) {
+				return a.DeviceId == b.DeviceId && a.PortName == b.PortName;
+			});
+	if (sameInventory)
+	{
+		const auto retryable = std::any_of(previous->Connection.Attempts.begin(),
+			previous->Connection.Attempts.end(), [](const auto& attempt) {
+				return attempt.Status == midi::MidiConnectionStatus::Missing ||
+					attempt.Status == midi::MidiConnectionStatus::Failed;
+			});
+		if (!requested || !retryable)
+			return;
+	}
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire) ||
+		_isSceneQuitting.load(std::memory_order_acquire))
+		return;
+	auto result = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(),
+		_audioEngine->GetStreamParams().SampleRate, inventory);
+	std::vector<std::string> connectedNames;
+	for (const auto& endpoint : result.Connected)
+		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
+			connectedNames.push_back(endpoint.Name);
+	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
+		std::memory_order_release);
+	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedNames))
+	{
+		_audioEngine->PublishPendingRigSnapshot(runtime);
+		_inputSubsystem->PublishRigInputDispatch(runtime);
+		_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
+		if (_hudPanel)
+		{
+			std::scoped_lock sceneLock(_sceneMutex);
+			_hudPanel->SetRoutingConfig(inputs, connectedNames, *runtime);
+		}
+	}
+}
+
 void Scene::_PumpMidi()
 {
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire)) return;
 	auto stations = SnapshotStations();
 	_inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(),
 		_audioEngine->GetStreamParams(), _sceneMutex);
@@ -1627,11 +1683,9 @@ void Scene::_AdvanceRigPublication()
 	{
 		// Protect the HUD tree while routing rebuilds replace widgets used by rendering.
 		std::scoped_lock lock(_sceneMutex);
-		unsigned int audioInputs = std::max(1u, pending->Rig.User.Audio.NumChannelsIn);
-		std::vector<std::string> midiInputs;
-		for (const auto& device : pending->Rig.User.Midi.Devices)
-			if (device.Enabled && !device.Name.empty()) midiInputs.push_back(device.Name);
-		_hudPanel->SetRoutingConfig(audioInputs, std::move(midiInputs), *pending);
+		unsigned int audioInputs = _audioEngine->GetStreamParams().NumInputChannels;
+		const auto midiState = _midiState.load(std::memory_order_acquire);
+		_hudPanel->SetRoutingConfig(audioInputs, midiState->ConnectedNames, *pending);
 	}
 	_inputSubsystem->OpenRigTriggerInput(pending->Revision);
 }
@@ -1690,6 +1744,8 @@ gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 
 void Scene::_PumpSerial()
 {
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire)) return;
 	_inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
 }
 
@@ -1836,22 +1892,41 @@ void Scene::InitGui()
 	_selector->Init();
 }
 
-void Scene::InitAudio()
+void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 {
 	// Setup audio engine which starts device
 	bool started = _audioEngine->Init(_networkService->GetController(), [this](Time streamTime, unsigned int numSamps,
 		const std::optional<io::UserConfig>& cfg,
 		const std::optional<audio::AudioStreamParams>& params) {
 		this->OnTick(Timer::GetTime(), numSamps, cfg, params);
-	});
+	}, generatedRig, inventory);
 
 	// Share the master transport clock so the audio callback can apply unified
 	// NINJAM timing commands to the Timer and local takes at one boundary.
 	_audioEngine->SetTimingClock(_quantisation.Clock());
 
 	if (started) {
-		InitMidi();
+		InitMidi(generatedRig);
 		InitSerial();
+	}
+	else
+	{
+		_midiInputInventory.reset();
+		CloseMidi();
+		_midiState.store( std::make_shared<const MidiState>(), std::memory_order_release);
+	}
+	const auto midiState = _midiState.load(std::memory_order_acquire);
+	const auto actualInputs = started ? _audioEngine->GetStreamParams().NumInputChannels : 0u;
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(actualInputs, midiState->ConnectedNames))
+	{
+		_audioEngine->PublishPendingRigSnapshot(runtime);
+		_inputSubsystem->PublishRigInputDispatch(runtime);
+		_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
+		if (_hudPanel)
+		{
+			std::scoped_lock lock(_sceneMutex);
+			_hudPanel->SetRoutingConfig(actualInputs, midiState->ConnectedNames, *runtime);
+		}
 	}
 
 	CommitChanges();
