@@ -83,7 +83,10 @@ MidiInputInventory MidiDevice::InventoryInputDevices()
 		inventory.Devices.reserve(count);
 
 		for (unsigned int i = 0; i < count; ++i)
-			inventory.Devices.push_back({ i, midiIn.getPortName(i) });
+		{
+			auto portName = midiIn.getPortName(i);
+			inventory.Devices.push_back({ i, BaseInputName(portName, i), std::move(portName) });
+		}
 	}
 	catch (const rt::midi::RtMidiError& err)
 	{
@@ -95,6 +98,34 @@ MidiInputInventory MidiDevice::InventoryInputDevices()
 	}
 
 	return inventory;
+}
+
+std::string MidiDevice::BaseInputName(const std::string& portName, unsigned int portId)
+{
+	const auto suffix = " " + std::to_string(portId);
+	return portName.size() > suffix.size() &&
+		portName.compare(portName.size() - suffix.size(), suffix.size(), suffix) == 0
+		? portName.substr(0, portName.size() - suffix.size()) : portName;
+}
+
+std::string MidiDevice::ResolveSavedInputName(const std::string& savedName,
+	const std::vector<MidiInputDeviceInfo>& devices)
+{
+	// A current base name takes priority; only recognize a legacy suffix when
+	// its stripped name actually exists in this inventory.
+	for (const auto& device : devices)
+		if (device.Name == savedName)
+			return savedName;
+	const auto suffixStart = savedName.find_last_of(' ');
+	if (suffixStart == std::string::npos || suffixStart + 1u == savedName.size() ||
+		!std::all_of(savedName.begin() + suffixStart + 1u, savedName.end(),
+			[](unsigned char c) { return c >= '0' && c <= '9'; }))
+		return savedName;
+	const auto base = savedName.substr(0, suffixStart);
+	for (const auto& device : devices)
+		if (device.Name == base)
+			return base;
+	return savedName;
 }
 
 const MidiInputDeviceInfo* MidiDevice::FindExactInput(
@@ -150,7 +181,8 @@ bool MidiDevice::OpenPort(const MidiInputDeviceInfo& port, MidiMessageCallback c
 	{
 		_midiIn = std::make_unique<rt::midi::RtMidiIn>();
 		const auto count = _midiIn->getPortCount();
-		if (port.DeviceId >= count || _midiIn->getPortName(port.DeviceId) != port.Name)
+		if (port.DeviceId >= count || _midiIn->getPortName(port.DeviceId) !=
+			(port.PortName.empty() ? port.Name : port.PortName))
 		{
 			error = "MIDI port changed after inventory";
 			_midiIn.reset();

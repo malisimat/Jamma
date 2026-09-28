@@ -489,8 +489,9 @@ MidiConnectionResult MidiRouter::InitMidi(const io::UserConfig& cfg,
 			result.Attempts.push_back(std::move(attempt));
 			continue;
 		}
+		const auto requestedName = MidiDevice::ResolveSavedInputName(midiConfig.Name, result.Inventory.Devices);
 		const auto* selected = MidiDevice::SelectStartupInput(result.Inventory.Devices,
-			midiConfig.Name, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
+			requestedName, claimedIds, requestIndex, generatedRig, attempt.DuplicateName);
 		if (!selected)
 		{
 			attempt.Status = MidiConnectionStatus::Missing;

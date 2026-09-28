@@ -44,6 +44,19 @@ TEST(MidiDevice, SelectsExactUnclaimedPortAndReportsDuplicateNames) {
 	EXPECT_FALSE(ambiguous);
 }
 
+TEST(MidiDevice, RemovesOnlyTheCurrentWinMmPortSuffix) {
+	EXPECT_EQ("CASIO USB-MIDI", MidiDevice::BaseInputName("CASIO USB-MIDI 3", 3u));
+	EXPECT_EQ("Launchkey 49", MidiDevice::BaseInputName("Launchkey 49 3", 3u));
+	EXPECT_EQ("Launchkey 49", MidiDevice::BaseInputName("Launchkey 49", 3u));
+}
+
+TEST(MidiDevice, MigratesLegacyIndexedNameWhenBasePortAppears) {
+	const std::vector<midi::MidiInputDeviceInfo> ports{ { 1u, "CASIO USB-MIDI", "CASIO USB-MIDI 1" } };
+	EXPECT_EQ("CASIO USB-MIDI", MidiDevice::ResolveSavedInputName("CASIO USB-MIDI 0", ports));
+	EXPECT_EQ("CASIO USB-MIDI", MidiDevice::ResolveSavedInputName("CASIO USB-MIDI", ports));
+	EXPECT_EQ("Missing 0", MidiDevice::ResolveSavedInputName("Missing 0", ports));
+}
+
 TEST(MidiDevice, GeneratedStartupSelectsEveryPhysicalPortWithDuplicateNames) {
 	const std::vector<midi::MidiInputDeviceInfo> ports{ { 2u, "Pad" }, { 5u, "Pad" }, { 7u, "Keys" } };
 	bool ambiguous = false;

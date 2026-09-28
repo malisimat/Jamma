@@ -18,6 +18,8 @@ namespace midi
 	{
 		unsigned int DeviceId = 0u;
 		std::string Name;
+		// RtMidi's WinMM display name, including its current enumeration suffix.
+		std::string PortName;
 	};
 	struct MidiInputInventory
 	{
@@ -58,6 +60,9 @@ namespace midi
 
 		static std::vector<MidiInputDeviceInfo> EnumerateInputDevices();
 		static MidiInputInventory InventoryInputDevices();
+		static std::string BaseInputName(const std::string& portName, unsigned int portId);
+		static std::string ResolveSavedInputName(const std::string& savedName,
+			const std::vector<MidiInputDeviceInfo>& devices);
 		static const MidiInputDeviceInfo* FindExactInput(const std::vector<MidiInputDeviceInfo>& devices,
 			const std::string& name) noexcept;
 		static const MidiInputDeviceInfo* SelectUnclaimedExactInput(
