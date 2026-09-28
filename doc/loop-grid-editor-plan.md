@@ -1,48 +1,92 @@
-# Loop grid editor plan
+# Loop grid editor: implementation and orchestration plan
 
-## Scope and interaction
+## Outcome and scope
 
-- Enter an editor for one selected audio `Loop` or one selected `midi::MidiLoop`. Keep its identity stable while editing; close the editor if that loop is removed. Show one loop only, even when its `LoopTake` contains several loops.
-- Animate the selected loop from its ring position to a centred rectangular grid and move the camera to a top-down pose. Move other loops, takes, and stations away and fade them during the transition. Reverse the same animation on exit. Disable scene picking for displaced objects while the editor is active.
-- Put time on X from 0 to the loop length. For MIDI, put pitch on Y with one row per semitone and draw note spans with velocity shading. For audio, draw the min/max waveform envelope as height over the time axis; audio is view only in this first version.
-- Show a playhead, loop boundary, pitch labels for MIDI, and grid lines using the loop's current quantisation settings. Keep the visual grid and editing snap based on the same boundary calculation.
+Open one selected, completed audio `Loop` or `midi::MidiLoop` in a responsive 3D grid editor. Keep the loop near its current scene position and orientation while its ring unwraps into a flat surface. Move the perspective camera into an almost top-down view, retaining visible 3D depth. Leave surrounding objects in place, dim them, and disable their picking. Reverse the transition on exit. Audio is view-only; MIDI supports mouse editing, preview, one commit per gesture, undo/redo, and persistence.
 
-## Geometry and rendering
+Edit one loop, even when its `LoopTake` contains several. Do not change transport, recording, overdub, audio content, automation, remote-follow policy, or existing quantisation-control gestures. Keep edit operations separate from mouse input so another interface can use them later. Avoid a general editor framework or a second note data model.
 
-1. Define a shared canonical surface in local coordinates: `u` is loop time in `[0,1]`, `v` is pitch row or waveform amplitude, and `h` is visual height. Use fixed vertex and instance data across both views.
-2. Add a render-only morph value in `[0,1]` to the waveform and MIDI note vertex shaders. At 0, project the canonical surface into the existing circular position; at 1, project into the rectangular grid. Interpolate positions in the shader, using a single scene animation clock and the same morph value for every part of the selected loop. Preserve the existing ring appearance at morph 0.
-3. Resolve the seam explicitly: maintain separate vertices for `u=0` and `u=1`, identical ring positions at morph 0, opposite grid edges at morph 1. Tessellate long note spans enough that their intermediate vertices follow the ring during the morph. Keep pitch, envelope, and time mapping independent of camera pose so the image does not jump as the camera moves.
-4. Feed the selected model's morph, placement, opacity, and picking state through the existing draw path. Do not rebuild waveform samples or MIDI note instances per animation frame; update uniforms and transforms only. Preserve the current waveform texture update path.
-5. Add a dedicated camera editor target and transition in `graphics::Camera`; restore the prior view and selection depth on exit. Verify endpoints and intermediate geometry across aspect ratios and window resize.
+## Instructions for the implementing orchestration session
 
-## MIDI editing
+1. Work on `feature/loop-grid-editor`. Record baseline commit and `git status`; preserve unrelated changes. Read `AGENTS.md`, this plan, `doc/glossary.md`, `doc/realtime-audio.md`, `doc/loop-alignment-and-ninjam-sync.md`, and `doc/build.md`. Before **every** build or native test run, read `.vscode/tasks.json` and use its applicable command/tool path. If it has no applicable command, report that limit instead of guessing. Build only affected projects, incrementally.
+2. Run one sustained session through every phase and the final review. The main agent owns architecture, cross-subsystem changes, integration, review decisions, and commits. Spawn subagents for bounded code research: MIDI publication/lifetime, scene input/camera, graphics/shaders, and test/build conventions. Request file-and-line evidence and have research agents avoid edits. Reconcile findings centrally before choosing an implementation. If implementation is delegated, assign disjoint files and precise contracts; review the integration centrally.
+3. Keep a durable progress log in the session or a temporary file: baseline, current phase, decisions and evidence, changed files, build/unit-test results, review findings/fixes, phase commit hashes, and next action. After interruption, compaction, or agent failure, re-read it and `git status`; resume without repeating completed work. Diagnose routine failures, fix them, rerun focused unit tests, and review again. Raise only genuine external blockers.
+4. Each phase includes implementation, focused native **unit** tests, and code review. Review correctness against this plan and the original spec, ownership boundaries, UX, lifecycle, and thread safety. Fix findings and repeat the gate until none remain. Commit that phase to the feature branch only then, staging only its files. Record the hash. Do not use Clean/Rebuild, a solution build, or broad suites without a concrete reason. UI automation, hardware, and end-to-end testing are not phase gates.
+5. Prefer the simplest solution that gives the best local editing experience and visual result. Make surgical changes, match conventions, keep engine behavior in JammaLib and Scene glue thin. Avoid anonymous namespaces, per-frame CPU remeshing, scene-wide transform changes, and new synchronization schemes where published immutable snapshots fit.
+6. After phase 5, perform one final cross-phase review. Fix and commit remaining findings, confirm unit-test evidence and feature worktree status, then create a self-contained HTML summary in a newly created temporary directory. State precisely what works, mouse behavior, phase commits, exact build/unit-test commands and results, review conclusions, and any remaining concerns or work. Open the HTML in a browser and report its path. Strive to finish the whole feature in this major session; report honestly if a real blocker remains.
 
-1. Introduce a loop-specific edit controller on the UI/job side. Convert pointer coordinates to canonical `(time, pitch)` only after the camera has reached the stable top-down editor pose; use an unprojected grid plane and explicit bounds checks. Suppress background pan, selection paint, and quantisation overlay gestures while an editor drag owns the pointer.
-2. Add a non-real-time edit operation to `midi::MidiLoop` that replaces a targeted note span by stable event identity or by a snapshot revision plus span key. Construct and validate the complete new event list off the audio callback, then publish it through the existing immutable playback-buffer mechanism. Reject stale edits and capacity overflow atomically. Refresh the model from the accepted event snapshot and create one undo record per gesture.
-3. Quantisation active: a click toggles the occupied pitch/time slot. A drag paints a consistent add or remove action across slots crossed, visiting each slot once. Derive slot boundaries from the selected take's resolved MIDI quantisation; never use an unrelated scene grid. New notes occupy one slot by default.
-4. Quantisation inactive: clicking empty space creates a note at that time and pitch; dragging an existing note near its left edge adjusts onset, near its right edge adjusts end, and from its centre moves the note in time and pitch. Hit regions use a minimum screen pixel width. Preserve a minimum positive duration, clamp pitch to 0–127, and handle the loop seam using the existing wrap-span convention.
-5. During drag, show a preview without mutating playback on every pointer move. Commit on release, cancel on Escape or loss of capture. Make undo/redo and save/export see the accepted events.
+## Product and interaction contract
 
-## Integration order
+### Enter, view, and exit
 
-1. Add pure geometry and pointer-to-grid mapping helpers with tests for endpoints, seam, pitch rows, quantised cells, and resize.
-2. Add the selected-loop editor state and enter/exit control in `engine::Scene`, with camera and other-object transitions. Gate scene picking and mouse routing.
-3. Implement shader morph and grid rendering in `graphics::LoopModel`, `graphics::MidiModel`, and `Jamma/resources/shaders`. Verify audio and MIDI rings at morph 0 and rectangular views at morph 1.
-4. Add non-real-time MIDI event edits, publication, preview, and gesture logic. Keep audio view only.
-5. Add native tests for note creation, removal, resize, move, quantised paint, wrap, capacity, stale revision, undo, and playback snapshot integrity. Run the relevant `JammaLib_Tests` target and an incremental affected-project build using the copied `.vscode/tasks.json` commands.
+- Offer a discoverable action on a selected loop and a visible close affordance. Escape also exits. Disable entry for recording, incomplete, or zero-length loops with a brief explanation.
+- Track a stable loop and take identity with weak ownership or equivalent validation. If either is removed or replaced, cancel any gesture and exit safely. At most one editor exists. Restore the exact entry camera pose/view, selection depth, opacity, picking, and pointer behavior, even after interrupted transitions.
+- Keep the loop approximately in its current screen location and local orientation while unwrapping. Allow a small placement/scale adjustment for legibility. Move the camera to read the plane from above, retaining perspective and surface thickness. Do not move other loops, takes, or stations; dim them in place and keep them from intercepting input.
+- Start gestures only after the camera and morph settle. On resize, recompute projection and pointer ray to the editor plane; do not change time/pitch coordinates. Initially frame existing MIDI notes with padding and a useful empty-range fallback. Provide mouse wheel pitch scrolling or zoom so all 128 rows remain reachable, with readable labels and hit targets.
 
-## Invariants and acceptance
+### MIDI mouse behavior
 
-- Only one loop is editable. All other objects become visually subordinate and cannot intercept editor input.
-- Morph 0 matches current ring visuals; morph 1 is a stable top-down Cartesian grid. No per-frame CPU remeshing, seam jump, or floating-point drift from repeated transforms.
-- Audio callback remains allocation-free, exception-free, and lock-free. It sees either the complete old MIDI event snapshot or the complete new one.
-- Grid edits use the selected MIDI loop's time base and resolved quantisation, including nonzero phase offset and note spans crossing the seam.
-- Exiting the editor restores the previous scene view, visibility, picking, and pointer behavior.
+- Derive time cells from the selected take's **resolved** MIDI quantisation, its transport start, and the selected loop's own length. Use the same integer boundaries for grid lines, pointer hit testing, and playback preview. Include local phase offsets and the accepted remote descriptor. The current visual overlay lacks that full descriptor (`doc/loop-alignment-and-ninjam-sync.md`); it is not the editing authority. If quantisation is off or a grid cannot be resolved, use free editing and indicate that state.
+- With quantisation active, pressing an empty `(pitch, time cell)` starts add paint; pressing an occupied cell starts erase paint. One drag applies the initial action to every crossed adjacent cell and pitch row, including cells skipped between pointer samples, and visits each cell once. Cross the loop seam deterministically. Occupancy means displayed, quantised coverage at the cell midpoint; overlapping notes need deterministic treatment. Add/remove that cell's coverage without unintentionally changing adjacent cells; split/coalesce spans when needed. New notes use one-cell duration, a conventional velocity, and the selected/default MIDI channel. Preserve unaffected notes' channel/velocity and all non-note events. Reject an unrepresentable or overflowing gesture atomically with feedback.
+- With quantisation off, click empty space to create a note at that sample and pitch with a modest default duration. Drag near the left or right edge to trim that edge, or drag the body to move in time and pitch. Give edge hit zones a minimum screen-pixel width. Keep positive duration, clamp pitch to 0–127, and use precise sample coordinates. Specify deterministic hit precedence for overlaps and retain selected note/channel identity through a drag. Respect the existing `MidiNote::ExtractSpans` seam convention.
+- Pointer ownership lasts from press to release/cancel and suppresses scene pan, background selection, picking, and quantisation overlay gestures. Show hover and drag preview without publishing on every move; commit once on release. Escape, lost capture, loop invalidation, grid change, or interrupted transition cancels without a source edit or undo entry. Show commit/rejection feedback. Existing undo/redo reverses/reapplies one complete gesture; save/export sees accepted raw events.
+- Quantisation stays non-destructive: disabling it exposes the edited raw source. Define and unit-test translation from displayed quantised cells to source events. If that translation is ambiguous for a particular gesture, reject it atomically instead of changing unrelated notes.
 
-## Relevant existing paths
+### Visual design and performance
 
-- Scene routing and camera: `JammaLib/src/engine/Scene.cpp`, `JammaLib/src/graphics/Camera.cpp`.
-- Audio model and waveform shader: `JammaLib/src/graphics/LoopModel.cpp`, `Jamma/resources/shaders/waveform.vert`.
-- MIDI model and note shader: `JammaLib/src/graphics/MidiModel.cpp`, `Jamma/resources/shaders/midi_note.vert`.
-- MIDI event owner and take quantisation: `JammaLib/src/midi/MidiLoop.cpp`, `JammaLib/src/engine/LoopTake.cpp`.
-- Core ownership and real-time rules: `doc/glossary.md`, `doc/realtime-audio.md`.
+- Use a coherent restrained palette, crisp major/minor grid lines, a low-contrast surface with depth/bevel, readable pitch/time labels, velocity-sensitive note color/height, and a distinct hover/preview. Keep selected content legible over the dimmed scene. Audio's min/max envelope retains existing waveform texture sampling and reads as an elevated ribbon or relief above the time grid.
+- Give the playhead a shader-driven luminous sweep: narrow bright core, soft falloff, subtle pulse/trail. Derive time from the selected loop's **own** playback phase, not master phase or scene sample count. It must remain readable during ring, morph, and grid states without masking content. Bound transparency/overdraw and use uniforms rather than CPU geometry updates per tick. Handle pause, wrap, zero length, and GL context restoration.
+- At morph 0 preserve the existing ring appearance and automation visuals; at 1 show a rectangular time-by-pitch MIDI grid or time-by-amplitude audio surface. Separate `u=0` and `u=1` vertices: coincident on the ring, opposite grid edges. Fixed tessellation lets long note spans follow the ring during morph. Keep loop coordinates independent of camera pose and world orientation stable. Cover wide/narrow aspect ratios and resize with pure geometry/camera unit tests where practical.
+
+## Technical design and safety
+
+### Geometry, camera, and input
+
+Use a small pure mapping contract for loop-local `u` (sample/time in `[0, loopLength)`) and vertical position (MIDI pitch or audio amplitude), shared by shader inputs, grid drawing, and hit testing. Waveform and MIDI need not use identical vertex formats: waveform already samples a 1D texture; MIDI uses note instances. Preserve these paths, adding only required attributes/uniforms. Compute ring and grid positions from unchanged local inputs and interpolate one morph value. Reuse existing scene/model placement and opacity where possible. `graphics::Camera` already has `TopDown`, remembered poses, and transitions; do not overwrite the user's remembered TopDown pose. Save the actual entry pose and selection depth for exit.
+
+### MIDI source and publication
+
+`MidiLoop` currently has mutable `_events`/`_eventCount` read by callback playback, plus a raw pointer to retained **quantised** buffers. Mutating `_events` and merely republishing quantised events would race with playback. Retaining every edit buffer forever would also grow memory. Before live editing, establish a coherent immutable playback snapshot covering raw/quantised events, count, and revision, with bounded callback-safe lifetime/reclamation. Prepare complete buffers off the callback and publish atomically at a safe boundary. Keep recording/MIDI ingress ownership distinct: edit only completed, non-recording loops and serialize edits with take finalisation/merge/restore and quantisation updates on their established owner thread. Never make the callback allocate, copy, lock, wait, destroy shared ownership, or read a half-updated count/source. Document owner, readers, writers, publication, retirement, and teardown for every new cross-thread field.
+
+Represent each edit as a source-revision-checked transform of raw events. Identify a target note robustly within that revision, including duplicate pitch/channel/time events; preserve note-on/off pairing, canonical same-sample ordering, velocities, channels, non-note events, automation, and loop length. Validate timestamps, positive durations, capacity, state, and revision before publication. Stale/invalid/overflowing gestures reject as a whole. Refresh the model from the accepted snapshot. Undo/redo uses the same safe publication path and rejects an invalidated revision. Review held-note behavior explicitly: removing, moving, or trimming a sounding note must not leave a stuck note or create an unmatched off at wrap.
+
+Use `MidiQuantisation::BoundarySampleAt`, resolved take settings, and `MidiQuantisationTransportStartSamps`, not `StepSamps` or a separate float grid. Cover non-dividing loop lengths, phase offsets, remote origin, unequal master/loop lengths, and a grid change while the editor is open. Cancel an active gesture when its grid changes; keep display and hit mapping coherent.
+
+### Review and verification
+
+Only native unit tests are required. Place pure mapping/transform tests beside existing JammaLib tests; use bounded fake sinks for playback and held-note checks. Unit tests must assert behavior and boundaries rather than mirror implementation. After shared-state or hot-path edits, run `.agents/skills/threading-review/audio-hotpath-audit.ps1` and manually inspect the callback-owned functions in `doc/realtime-audio.md`; the script alone is not proof. Review source/playback lifetimes, callback bounds, model publication, GL thread ownership, transition cancellation, and raw-source save behavior.
+
+## Phases and commit gates
+
+### Phase 1 — Contracts and pure helpers
+
+Implement compact coordinate/grid helpers for sample-to-`u`, pitch rows, integer boundaries, traversed cells, seam, hit zones, and note-operation validation. Establish exact edit owner/thread and playback snapshot lifetime from code research; document invariants next to relevant declarations or here. Add focused unit tests for endpoints, zero length, nonzero phase, non-dividing length, remote origin, skipped/crossed cells, duplicates, wrap, and resize math. Review against `MidiQuantisation` and loop-local phase ownership; fix, incrementally build, run focused unit tests, and commit.
+
+### Phase 2 — Editor state, camera, and routing
+
+Add single-loop editor state in `engine::Scene`, entry/exit camera handling, entry/close UI, lifetime validation, pointer ownership, and reversible visual/picking overrides. Keep other transforms fixed. Unit-test state transitions, cancellation, removal, input routing, camera restoration, and interrupted transition through testable state seams. Review all exit paths and existing selection/quantisation gestures; fix, build, run focused unit tests, and commit.
+
+### Phase 3 — Unwrap and visual finish
+
+Extend `graphics::LoopModel`, `graphics::MidiModel`, and shaders with fixed-geometry ring-to-grid morph, grid/depth styling, loop-phase playhead glow, and preview drawing. Preserve the ring endpoint, waveform texture, and automation rendering. Unit-test morph endpoints, seam, long-note tessellation inputs, phase wrap, and camera/viewport math. Review GL lifecycle, picking geometry, overdraw, transitions, and exact ring endpoint; fix, build, run focused unit tests, and commit.
+
+### Phase 4 — Safe MIDI edit publication and undo
+
+Implement off-callback revision-checked edit preparation, immutable raw/quantised playback publication and retirement, model refresh, save/export visibility, and one undo record per gesture through existing history. Audio remains view-only. Unit-test atomic acceptance/rejection, capacity, stale revision, same-sample order, duplicates/channels, non-note preservation, raw/quantised divergence, undo/redo, save snapshot, old/new callback snapshot consistency, and held notes. Run threading audit and manual hot-path review; fix, build, run focused unit tests, and commit.
+
+### Phase 5 — Mouse editing and integration
+
+Connect gesture state/preview to edit operations. Implement quantised add/erase paint over all traversed cells/pitches and free create/move/edge trim, seam, cancellation, feedback, and grid-change invalidation. Do not publish during pointer moves. Unit-test skipped/revisited cells, filled/empty start, overlaps, wrap, clamping, lost capture, grid change, and one undo step. Review against the product contract, thread ownership, routing, stale state, and phase 4 publication; fix, build, run focused unit tests, and commit.
+
+### Final cross-phase gate
+
+Inspect the accumulated feature commits against this plan and original spec. Check enter/edit/undo/save/exit, selected-loop phase versus master phase, audio/MIDI views, callback safety, scene restoration, and evidence for every acceptance claim. Run only focused unit tests needed to close remaining risk. Fix, review, and commit any findings. Confirm no uncommitted feature changes. Generate and open the HTML summary, then report the final commit and honest limits.
+
+## Relevant existing code
+
+- Scene/camera: `JammaLib/src/engine/Scene.cpp`, `JammaLib/src/engine/Scene.h`, `JammaLib/src/graphics/Camera.cpp`, `JammaLib/src/graphics/Camera.h`.
+- Waveform: `JammaLib/src/graphics/LoopModel.cpp`, `Jamma/resources/shaders/waveform.vert`.
+- MIDI rendering: `JammaLib/src/graphics/MidiModel.cpp`, `JammaLib/src/graphics/MidiModel.h`, `Jamma/resources/shaders/midi_note.vert`.
+- MIDI source/spans/grid: `JammaLib/src/midi/MidiLoop.cpp`, `JammaLib/src/midi/MidiLoop.h`, `JammaLib/src/midi/MidiNote.h`, `JammaLib/src/midi/MidiQuantisation.h`.
+- Take/undo: `JammaLib/src/engine/LoopTake.cpp`, `JammaLib/src/engine/LoopTake.h`, `JammaLib/src/actions/ActionUndoHistory.cpp`, `JammaLib/src/base/ActionUndo.h`.
+- Ownership/timing/real-time guidance: `doc/glossary.md`, `doc/loop-alignment-and-ninjam-sync.md`, `doc/realtime-audio.md`.
