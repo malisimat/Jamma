@@ -713,7 +713,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	std::function<bool(const io::RigFile&)> saveRig;
 	const auto generatedDirectory = utils::GetParentDirectory(initPath);
 	const auto generatedRigPath = rigGenerated ? NewGeneratedPath(generatedDirectory, L"default", L".rig") : std::nullopt;
-	const auto generatedRigPublished = std::make_shared<bool>(false);
+	const auto generatedRigPublished = std::make_shared<std::atomic<bool>>(false);
 	if (defaults.has_value() && !rigGenerated)
 	{
 		const auto rigPath = defaults->Rig;
@@ -723,8 +723,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		const auto path = *generatedRigPath;
 		saveRig = [path, generatedRigPublished](const io::RigFile& candidate) {
-			const bool saved = *generatedRigPublished ? SaveRigAtomic(path, candidate) : SaveGeneratedRig(path, candidate);
-			if (saved) *generatedRigPublished = true;
+			const bool saved = generatedRigPublished->load(std::memory_order_acquire) ? SaveRigAtomic(path, candidate) : SaveGeneratedRig(path, candidate);
+			if (saved) generatedRigPublished->store(true, std::memory_order_release);
 			return saved;
 		};
 	}
@@ -905,7 +905,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		const auto accepted = scene.value()->AcceptedRigSnapshot();
 		std::stringstream acceptedStream;
 		if (accepted) RigFile::ToJsonStream(accepted->Rig, acceptedStream);
-		if (*generatedRigPublished && acceptedStream.str() == finalStream.str())
+		if (generatedRigPublished->load(std::memory_order_acquire) && acceptedStream.str() == finalStream.str())
 		{
 			defaults->Rig = *generatedRigPath;
 			defaults->RigOrigin = std::string(io::StartupConfig::GeneratedOrigin);
@@ -948,7 +948,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		}
 	}
 	const bool rigReadyForDefaults = !rigGenerated ||
-		(generatedRigPath && defaults->Rig == *generatedRigPath && *generatedRigPublished);
+		(generatedRigPath && defaults->Rig == *generatedRigPath && generatedRigPublished->load(std::memory_order_acquire));
 	const bool jamReadyForDefaults = !jamGenerated || generatedJamPublished;
 	if (!rigReadyForDefaults)
 		startupLog.Write("[BOOT] defaults publication deferred: no validated rig file");
