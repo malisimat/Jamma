@@ -6,6 +6,8 @@
 ///////////////////////////////////////////////////////////
 
 #include "NetworkSession.h"
+#include "ConsoleBroker.h"
+#include "ConsoleLaunch.h"
 #include "Main.h"
 #include "Window.h"
 #include "PathUtils.h"
@@ -548,6 +550,23 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		else
 			std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
 	});
+	// Temporary migration switch: the old console continues handling input
+	// until the companion's command and event paths reach parity.
+	std::unique_ptr<console::ConsoleBroker> consoleBroker;
+	if (ReadEnvironmentVariable(L"JAMMA_CONSOLE_PREVIEW") == L"1")
+	{
+		std::wstring modulePath(32768, L'\0');
+		const auto length = GetModuleFileNameW(nullptr, modulePath.data(),
+			static_cast<DWORD>(modulePath.size()));
+		if (length && length < modulePath.size())
+		{
+			modulePath.resize(length);
+			const auto companionPath = console::SiblingCompanionPath(modulePath);
+			consoleBroker = std::make_unique<console::ConsoleBroker>();
+			if (!consoleBroker->Start(companionPath))
+				std::cerr << "[CONSOLE] Could not start preview companion beside Jamma.exe.\n";
+		}
+	}
 
 	NetworkSession socketSession;
 	if (!socketSession.IsInitialised())
@@ -1036,6 +1055,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 				scene.value()->RequestMidiRefresh();
 			if (msg.message == WM_QUIT)
 			{
+				if (consoleBroker) consoleBroker->Stop();
 				scene.value()->Shutdown();
 				vst::DrainUiThreadDestroyQueue();
 				active = false;
@@ -1048,6 +1068,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 		if (!active)
 			break;
+		if (consoleBroker && consoleBroker->ConsumeFallbackNotice())
+			std::cout << "[CONSOLE] Windows Terminal unavailable; using Console Host." << std::endl;
 
 		actions::KeyAction globalKeyAction;
 		if (scene.value()->PumpGlobalKeyCapture(globalKeyAction))
@@ -1133,6 +1155,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 
 	// Shutdown stops the audio callback before it closes VST editor windows and
 	// releases their plugins, while this main thread's COM STA is still valid.
+	if (consoleBroker) consoleBroker->Stop();
 	scene.value()->Shutdown();
 
 	if (defaultsValid && rigReadyForDefaults && jamReadyForDefaults)

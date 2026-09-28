@@ -121,3 +121,37 @@ lock/wait or shared-state keywords in the diff.
 Independent review found and fixed a caret position inside a newly merged
 grapheme, missing semantic frame validation, unstable selection indices, and
 a difference between Unicode grapheme widths and pinned FTXUI render widths.
+
+## Phase 1 lifecycle record
+
+The companion is now in the x64 solution and writes beside `Jamma.exe`. The
+app broker owns one pipe generation and worker. It mints a new pipe name and
+token per Terminal or Console Host attempt, creates a user/System-only local
+pipe, verifies the client Windows user and `hello` token, and accepts increasing
+request IDs only while the session is open. `JAMMA_CONSOLE_PREVIEW=1` opens the
+companion during migration; the original `ConsoleTui` remains authoritative
+for commands until Phase 2. The broker has no Scene pointer or callback path.
+
+| State | Owner / synchronization | Teardown |
+| --- | --- | --- |
+| Broker generation and worker | App UI owns `ConsoleBroker`; worker captures shared `State` | UI signals stop and joins; a timed-out worker remains owned and blocks reopen. |
+| `Connected`, `Finished`, fallback notice | Worker writes; app reads atomics | Worker clears connection at exit; UI consumes notice and later joins. |
+| Pipe and process handles | Worker alone owns RAII handles | Cancel pending pipe work; request shutdown; wait up to 500 ms for direct child, then terminate it. |
+| Companion inbox and screen | Pipe reader posts bounded updates; FTXUI thread owns model | Exit screen, stop reader, and exit companion if OS pipe cancellation remains stuck. |
+
+Windows Terminal can hand child creation to an existing terminal process, so
+Jamma cannot reliably terminate a child after a failed Terminal handshake.
+That child exits when its named pipe is unavailable. Each fallback attempt uses
+another random pipe and token, preventing an old child from joining it. Windows
+overlapped cancellation is drained before a stack buffer is released; if the
+OS does not complete cancellation within the broker's 2.5-second join budget,
+the broker keeps that generation and refuses reopen. At final process exit it
+retains the shared state in the detached worker. Terminal host behavior and
+pathological OS cancellation remain unverified under the unit-only test scope.
+
+The app and native test Debug x64 projects built incrementally with the local
+task's absolute MSBuild and absolute `SolutionDir`. The focused test command
+`JammaLib_Tests.exe --gtest_filter=ConsoleProtocol.*:ConsoleTextCoordinates.*:ConsolePromptEditor.*:ConsoleSession.*:ConsoleLaunch.*`
+passed 23 of 23 tests. New cases cover one-client tokens, request ordering,
+reconnect generations, a buffered request after stop, shutdown pipe/child
+ordering with fake boundaries, quoting, fallback, and no duplicate launch.

@@ -201,6 +201,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
     <ClCompile Include="src\io\Json_Tests.cpp" />
     <ClCompile Include="src\io\ConsoleProtocol_Tests.cpp" />
     <ClCompile Include="src\io\ConsoleTextCoordinates_Tests.cpp" />
+    <ClCompile Include="src\io\ConsoleSession_Tests.cpp" />
     <ClCompile Include="src\io\RigFile_Tests.cpp" />
     <ClCompile Include="src\io\UserConfig_Tests.cpp" />
     <ClCompile Include="src\midi\MidiDevice_Tests.cpp" />
