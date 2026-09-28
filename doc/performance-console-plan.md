@@ -1,291 +1,174 @@
 # Jamma Performance Console Plan
 
-## Decision
+## Outcome
 
-Build a separate `JammaConsole.exe` companion process in C++ using FTXUI, and launch it automatically in a dedicated Windows Terminal window. Communicate with `Jamma.exe` over a versioned local named-pipe protocol.
+Build one C++ FTXUI companion, `JammaConsole.exe`. Jamma opens it automatically in a dedicated Windows Terminal window when `wt.exe` is available. If Windows Terminal is absent or cannot launch, Jamma opens the same companion automatically in the built-in Console Host. Commands, transcript, prompt, status, keyboard editing, and basic colour work in both. Console Host may offer less capable font, emoji, transparency, and mouse presentation. Recommend Windows Terminal without making installation a prerequisite.
 
-This gives Jamma a Codex-like terminal interface while leaving font shaping, emoji, GPU text rendering, window resizing, scroll presentation, and native Windows composition to Windows Terminal. Windows 10 remains a first-class target. When Windows Terminal is missing, launch the same companion in the classic Console Host with reduced visual features.
-
-The first release has one window and one layout:
+The first release has one screen: fixed header, bounded scrolling transcript, single-line prompt, and one-line status. Future Jamma-owned panels may be added later without building a panel framework now. There is no PowerShell, arbitrary shell execution, assistant integration, command history, suggestions, or multiline editor.
 
 ```text
 +------------------------------------------------------------------+
 | JAMMA                                      connected · 122 BPM   |
 |                                                                  |
-| scrolling transcript: Jamma events, stdout, stderr, chat, help  |
+| Jamma events, stdout, stderr, NINJAM chat, help, results        |
 |                                                                  |
-|                                                                  |
-| > /connect server.example.net                                   |
-| last: station 4 muted · loops 18 · memory 612 MB · assistant ●  |
+| > /connect 2                                                     |
+| last: connected · loops 18 · memory 612 MB                       |
 +------------------------------------------------------------------+
 ```
 
-The architecture must allow Jamma-owned tabs or panels later, but the first release does not implement them. It does not expose PowerShell or arbitrary shell commands.
+### Current behavior to preserve
 
-## Recommendation percentages
+`Jamma/src/Main.cpp` currently calls `AllocConsole`, starts `io::ConsoleTui` from `JammaLib/src/io`, redirects `std::cout`/`std::cerr`, and dispatches prompt input. Existing slash commands are `/`, `/?`, `/help`, `/c <number>`, `/connect <number>`, and disconnect aliases `/d`, `/q`, `/quit`, `/exit`, `/disconnect`. Ordinary input is NINJAM chat. `/connect` takes a **server-list number**, not a hostname. Preserve the asynchronous server-directory help behavior and Scene replacement safety. Do not advertise `/mute` or `/status` unless later work adds and tests them.
 
-The percentages express relative fit for the stated requirements, not mathematical probabilities.
+The repo has a vcpkg manifest and Visual Studio projects but no tracked installer project. A source checkout must work without an installer or a Windows Terminal profile.
 
-| Approach | Fit | Recommendation |
-| --- | ---: | --- |
-| C++ FTXUI companion in Windows Terminal | **68%** | Choose this. It provides the requested terminal quality with the least new platform and build complexity. |
-| Rust Ratatui companion in Windows Terminal | **22%** | Strong fallback if the C++ selection prototype fails. It closely resembles the Codex CLI stack, but adds a Rust toolchain and a second implementation ecosystem. |
-| Native Win32/DirectWrite terminal-style window | **10%** | Reserve for a future product direction that requires exact window ownership or rich visual controls beyond terminal cells. It adds substantial rendering, input, selection, clipboard, accessibility, and resize work. |
+## Implementation rules
 
-### Weighted comparison
+- Inspect touched code first. Select the simplest design that meets the behavior with the smallest change radius. Make surgical edits; follow existing naming, ownership, project, and test conventions. Do not add a general event bus, command framework, theme engine, installer, or telemetry subsystem for this screen.
+- Keep audio, loop, and NINJAM behavior in JammaLib and app orchestration in Jamma. Keep FTXUI and rendering in JammaConsole. Put shared protocol types in a neutral location only if both processes actually need them.
+- Follow `doc/glossary.md` and `doc/realtime-audio.md`. Callback-owned paths must stay bounded, allocation-free, exception-free, lock-free, and free of formatting, logging, console writes, and pipe I/O.
+- Do not promise a status value without an authoritative, safely published source. Start with connection state and last event. Add loop count, memory, BPM, phase, or mute count only after verifying ownership and snapshot access.
+- Keep TUI model mutation and rendering on one owner thread. Pipe workers post bounded updates to it. For each new shared variable record owner, readers, writers, synchronization, and teardown. Prefer existing immutable snapshot patterns across thread boundaries.
+- Bound queues, messages, input, and transcript retention. Coalesce replaceable status. Keep event order; when events must be dropped, count them and emit a visible loss notice once space returns. A full queue must never block audio or UI-critical work.
+- Never introduce anonymous namespaces.
 
-| Requirement | Weight | C++/FTXUI + Windows Terminal | Rust/Ratatui + Windows Terminal | Native DirectWrite window |
-| --- | ---: | ---: | ---: | ---: |
-| Modern font, emoji, GPU rendering | 20 | Excellent | Excellent | Potentially excellent, but Jamma must build it |
-| Dynamic drag selection and prompt editing | 20 | Good after a focused selection layer | Good after a focused selection layer | Excellent with substantially more UI work |
-| Windows 10 experience | 15 | Excellent when Windows Terminal is installed; functional fallback | Same host behavior | Good, fully bundled |
-| Implementation effort | 15 | Best | Moderate | Poor |
-| C++/Visual Studio integration | 10 | Excellent | Weak | Excellent |
-| Resize and scroll behavior | 10 | Good; terminal and FTXUI handle geometry | Good; terminal and Ratatui handle geometry | Jamma owns all behavior |
-| Future internal tabs/panels | 5 | Good | Excellent | Excellent |
-| Dependency size and maintenance | 5 | Good; compact, active, no runtime dependency | Moderate | Poor total ownership cost |
+## User experience
 
-## Why this is a terminal, not a shell
+### Launch and lifecycle
 
-- Windows Terminal is the host window and renderer. It provides the font, emoji, GPU rendering, window chrome, resizing, opacity, and terminal protocol support.
-- `JammaConsole.exe` is the terminal application. It draws the banner, transcript, prompt, status line, selection, and future panels.
-- PowerShell and Command Prompt are shells. They are not part of this design because the console accepts only Jamma commands.
-- ConPTY is primarily useful when a host needs to run another console application. Jamma is the terminal application, so it does not need to embed PowerShell or build its own ConPTY host.
+- Open on app startup by default. Add a persisted disable-startup option and an app action to reopen. Reopening must not create duplicate active companions.
+- Use supported `wt -w <unique-name> --size <columns>,<rows>` syntax with a correctly quoted absolute companion path. Name the window uniquely per Jamma process so `wt` does not add a tab to an existing window. The named-pipe handshake, not the `wt.exe` handle, determines readiness.
+- If `wt` is absent or launch/handshake fails, create a new Console Host window for the companion and report the fallback once. Jamma remains usable without either host's optional visual features.
+- Closing or crashing the companion disconnects only its IPC session. Jamma and audio continue. Reopen creates a fresh authenticated session. On Jamma shutdown, request companion exit and tear down workers with bounded waits.
+- Let the terminal host own resize, focus, minimization, placement, and font. Do not locate or manipulate the terminal `HWND`.
 
-## Target experience
+### Appearance
 
-### Window and launch
+- Use semantic colours and the host's font. Emoji must not be essential to interpreting state. Remain legible in narrow widths and Console Host.
+- A Windows Terminal JSON fragment with `opacity` and `useAcrylic` is optional. Install it only through a supported real packaging or first-run path; do not edit user `settings.json`. Default launch must work without the fragment. Acrylic may be unavailable on Windows 10 because of OS, power, remote desktop, or graphics conditions.
+- Document the terminal's native transparency gesture where supported. Do not add an `/opacity` command or window-handle hacks.
 
-- `Jamma.exe` launches one dedicated, named Windows Terminal window containing `JammaConsole.exe`; the user never types a launch command.
-- The window opens automatically by default. Add a setting to disable startup opening and an app action to reopen it.
-- Closing the terminal window disconnects only the companion. Jamma and audio continue running.
-- Closing Jamma asks the companion to exit; its terminal window then closes naturally.
-- Windows Terminal owns manual resize, minimize, restore, focus, and remembered placement. Do not locate or manipulate its `HWND` with heuristics.
-- Start at a practical size with `wt.exe --window <unique-name> --size <columns>,<rows>`. Let the user resize freely afterward.
-- Future Jamma tabs and panels live inside the one TUI. Do not create Windows Terminal tabs for Jamma features.
+### Transcript, prompt, and status
 
-### Windows 10 setup
+- Show one ordered stream of existing non-real-time application events, stdout/stderr, NINJAM chat, help, and command results. Audit producer threads before replacing stream buffers; do not redirect callback logging into a locking or allocating path. Avoid recursive logging of broker errors.
+- Store logical entries with stable IDs separately from wrapped rows. Initially cap at **64 MiB and 100,000 entries, whichever is reached first**. Render visible rows plus a small margin. Preserve a logical viewport anchor across resize and new output. Define selection/anchor behavior when an entry is evicted.
+- Follow the newest entry until the user scrolls, clicks older content, or selects. `End` or a follow action resumes. Wheel and Page Up/Down scroll the transcript.
+- Prompt supports UTF-8 insertion, left/right, Home/End, Backspace/Delete, word movement/deletion, paste, mouse caret placement where supported, selection, and `Ctrl+C` copy. Bound input length; reject malformed or oversize input clearly. Jamma validates/executes commands, while the companion submits text and displays results.
+- Update status at no more than 1 Hz without busy polling. Keep connection state and last significant event at narrow widths, then include only safely available fields. Status is presentation, never transport authority.
 
-- Detect `wt.exe` during installation and startup.
-- Recommend Windows Terminal strongly on Windows 10 and offer an installer link when absent.
-- Install a Jamma Windows Terminal profile through the supported JSON-fragment mechanism instead of editing the user's `settings.json`.
-- The profile inherits the user's default terminal font unless the user selects another font.
-- If Windows Terminal is unavailable, run `JammaConsole.exe` in classic Console Host. Preserve commands, transcript, prompt, status, keyboard input, and basic colour; clearly omit GPU-specific presentation and acrylic.
+### Mouse selection and clipboard
 
-### Appearance and opacity
+The companion enables terminal mouse reporting and owns ordinary left-drag selection; the terminal host consequently does not own ordinary drag selection in that mode. Use FTXUI's supported mouse/selection APIs where sufficient and add only a small local model for logical transcript mapping and edge scrolling. Do not fork FTXUI.
 
-- Use semantic TUI colours mapped onto the terminal palette so the console looks good with user themes.
-- Provide a small set of optional Jamma colour schemes without overriding a user's chosen font.
-- Configure opacity through the Jamma Windows Terminal profile using official `opacity` and `useAcrylic` settings.
-- On Windows 10, prefer acrylic because unblurred profile opacity is a Windows 11 feature.
-- Support Windows Terminal's native live opacity gesture, `Ctrl+Shift` plus mouse wheel. Do not add window-handle hacks for a `/opacity` command.
-- Treat opacity as progressive enhancement: Windows policy, battery state, Remote Desktop, or GPU capability can disable acrylic.
+- Press/drag/release updates selection continuously; dragging above or below the viewport extends it with bounded automatic scrolling. Selection expands and contracts.
+- Prompt click without drag places the caret; drag selects prompt text. Starting one region's selection clears the other.
+- `Ctrl+C` copies selected plain Unicode text to the Windows clipboard and must not terminate the companion. Copy logical newlines, never visual wrap breaks. Preserve grapheme and full-width character boundaries in caret, wrap, selection, and copy mapping.
+- If mouse reporting is unavailable, retain keyboard input and host-native selection as reduced behavior; click-to-place is unavailable and the limitation is clear.
 
-## Mouse selection decision
-
-Ordinary left-button dragging must dynamically select transcript or prompt text. Dragging beyond the transcript viewport must extend the selection and scroll. `Ctrl+C` must copy the exact selected Unicode text.
-
-Terminal mouse capture is all-or-nothing: when an application asks for mouse events, the terminal stops owning ordinary drag selection. Cursor placement therefore cannot coexist with terminal-owned unmodified selection. The companion will enable mouse capture and own selection as a real application interaction, in the same way a GUI text control owns its selection.
-
-Implement one explicit selection controller on top of FTXUI's mouse and selection support:
-
-- Press in the transcript starts a transcript selection.
-- Drag updates the active endpoint on every mouse movement and repaints the selected cells.
-- Dragging above or below the transcript starts bounded automatic scrolling and continues extending the selection.
-- Press in the prompt starts a prompt selection; a click without a drag moves the prompt caret.
-- Transcript and prompt selections are separate. Starting one clears the other.
-- `Ctrl+C` copies the active selection as plain UTF-8/Unicode text through the Windows clipboard.
-- Scrolling or selecting disables follow-tail. `End` or an explicit follow action returns to the newest line.
-- If mouse reporting is unavailable, retain keyboard input and offer terminal-native selection as a degraded fallback; click-to-place is disabled in that mode.
-
-This is the highest-risk interaction in the plan. Prove it on Windows 10 before building the rest of the UI.
-
-## TUI behavior
-
-### Layout
-
-- Fixed banner/header at the top.
-- Virtualized, scrollable transcript in the middle.
-- Single-line prompt above the status line.
-- One-line status bar at the bottom, refreshed once per second.
-- No command history, suggestions, multiline editor, dropdowns, or shell mode in the first release.
-
-### Transcript
-
-- Show all application events, stdout, stderr, NINJAM chat, help output, and future assistant responses in one ordered stream.
-- Style event categories distinctly while preserving copyable plain text.
-- Store logical entries separately from their wrapped screen rows so resizing can reflow the viewport.
-- Use a bounded ring buffer. Start with 64 MiB or 100,000 logical lines, whichever comes first, and make the limit configurable later.
-- Render only visible rows plus a small margin.
-- Maintain follow-tail while the user is at the bottom.
-- Pause follow-tail when the user scrolls, clicks older content, or begins a selection.
-- Preserve the viewport anchor across resize and new output.
-- Never let terminal backpressure block an audio or UI-critical Jamma thread.
-
-### Prompt
-
-- Accept only registered Jamma commands such as `/connect`, `/mute`, `/status`, and `/help`.
-- Support Unicode insertion, left/right, Home/End, Backspace/Delete, word movement/deletion, clipboard paste, mouse caret placement, prompt selection, and `Ctrl+C` copy.
-- Keep command parsing and permission checks in `Jamma.exe`; the companion submits command text and displays structured results.
-
-### Status line
-
-Refresh at 1 Hz and show a width-aware subset of:
-
-- connection and session state;
-- last significant event;
-- loop count;
-- memory use;
-- BPM/phase or audio health when useful;
-- muted-station count;
-- future assistant connectivity.
-
-At narrow widths, keep connection state and the last event, then remove lower-priority fields. Do not horizontally scroll the status line.
-
-## Process and data architecture
+## Process and IPC contract
 
 ```text
-Jamma.exe
-  engine/audio state
-        |
-        | immutable status snapshots + structured events
-        v
-  non-real-time console broker
-        ||  versioned local named pipe
-        vv
-JammaConsole.exe
-  model -> FTXUI layout -> ANSI/VT output
-        |
-        v
-Windows Terminal / classic Console Host fallback
+Jamma.exe: app/Scene owner + non-real-time console broker
+    || versioned local named pipe
+JammaConsole.exe: pipe client -> single-owner model -> FTXUI
+    -> Windows Terminal or Console Host
 ```
 
-### Responsibilities
+- Use one local duplex named pipe, one active client, explicit protocol version, and a per-launch unpredictable session identifier. Restrict access to the current user. In Phase 0, choose and document a rendezvous that works when Windows Terminal launches the child from an existing terminal process; do not assume handle inheritance from Jamma. Validate the identifier and pipe client identity before accepting commands. Define the threat model honestly: a command-line identifier or same-user-readable storage cannot authenticate against another process already running as that same user.
+- Frame explicit UTF-8 messages with a bounded length prefix. JSON is acceptable outside the audio path. Specify maximum frame/input/event sizes, invalid version or frame behavior, disconnect behavior, and monotonically increasing command request IDs.
+- Minimum messages: `hello`, `event`, `status_snapshot`, `command_request`, `command_result`, and `shutdown`. Add heartbeat only if pipe disconnect handling leaves a concrete liveness gap.
+- On connect/reconnect, send current status then live events. A new companion need not replay a previous process's transcript; document this. Execute an accepted command ID at most once per session and reject requests from stale sessions.
+- Serialize command execution onto the app/Scene owner path. Preserve the current Scene replacement lifetime boundary. Never hold a pipe/console lock while calling Scene or emitting output.
+- Separate event capture, queueing, pipe I/O, and rendering. All serialization and writes run outside callbacks. If a producer is callback-owned, leave it on an already safe diagnostic path or omit it from console capture.
+- Shutdown order: stop accepting commands; detach sources; request companion exit if connected; cancel/close pipe operations; join workers with bounded behavior; restore any intercepted streams; destroy Scene under its existing ownership rules.
 
-`Jamma.exe` owns:
+## One-session orchestration instructions
 
-- application and session state;
-- command validation and execution;
-- status snapshot production;
-- log/event fan-out;
-- launching and stopping the companion;
-- permission policy for future external assistants.
+Execute the phases **in order within one long-running session** and strive to complete the feature. Start by recording branch, status, plan revision, and repo instructions. Work on the feature branch; never commit unrelated user changes. Read `doc/glossary.md`, `doc/realtime-audio.md`, `doc/build.md`, and local `.vscode/tasks.json`; reread tasks before **every** build or native-test run as repo policy requires. Build affected projects incrementally. Run **unit tests only**; do not substitute GUI/manual/system/integration tests. Report host behavior that unit tests cannot prove.
 
-`JammaConsole.exe` owns:
+Spawn subagents for **bounded code research and independent read-only review**. Suggested research: command/Scene lifetime, stdout/stderr producer threads, FTXUI mouse/selection hooks, Windows launch/profile semantics, protocol/security, and thread safety. Give each a question, paths, requested file/line evidence, and a short deliverable. The orchestrator owns design and edits, reconciles findings, and prevents simultaneous edits of the same files. Keep implementation serial across dependent phases; parallelize independent research/review. Maintain a compact checkpoint with decisions, phase state, tests, findings, commit hashes, and blockers in session context and, for recovery, a temporary file outside tracked source.
 
-- transcript buffering, wrapping, viewport, and selection;
-- prompt editing and command submission;
-- banner and status rendering;
-- palette mapping;
-- reconnect/error presentation;
-- future Jamma-owned tabs and panels.
+For **every phase**:
 
-### IPC
+1. Research affected paths. Record a small change list, state ownership table, failure behavior, and unit-test list. Choose the smallest convention-matching solution.
+2. Implement only that slice, preserving the preceding committed phase. Update this plan before widening scope if new facts change the design.
+3. Build affected projects incrementally. Add and run relevant native **unit tests**. Record exact command, result, and test counts. If the machine lacks a prerequisite, report it instead of guessing a build tool path.
+4. Obtain independent read-only review against this plan and original behavior, including correctness, thread safety, teardown, callback safety, and diff radius. Fix findings, rerun affected unit tests, and repeat review until no required fixes remain. For cross-thread changes run the `threading-review` audit and manually inspect callback-owned bodies named in `doc/realtime-audio.md`.
+5. Inspect diff and status. Commit that phase to the feature branch with a descriptive message **only after** tests and review pass. Record the hash and result. Carry no known required fix to the next phase.
 
-- Use a local duplex named pipe with an explicit protocol version and per-launch random token.
-- Use length-prefixed messages; JSON is acceptable initially because traffic is low and outside the audio path.
-- Define structured message types: `hello`, `event`, `status_snapshot`, `command_request`, `command_result`, `shutdown`, and `heartbeat`.
-- Authenticate the companion with the inherited token and restrict the pipe to the current user.
-- Keep a bounded non-real-time outbound queue in Jamma. Coalesce status snapshots but do not silently coalesce transcript events.
-- If output exceeds safety limits, protect audio first and emit an explicit dropped-event count. Logging from real-time callbacks remains prohibited.
-- Make reconnect idempotent so the console can be closed and reopened without restarting Jamma.
-
-## Dependency and project placement
-
-- Add FTXUI through the existing vcpkg manifest and pin the version used by the build.
-- Add a small `JammaConsole` application project to the solution.
-- Keep TUI presentation and IPC client code in `JammaConsole`.
-- Keep reusable command DTOs and protocol definitions in a non-audio part of `JammaLib` only if both processes genuinely need them.
-- Keep engine and audio behavior in `JammaLib`; never link terminal rendering into an audio callback path.
-- Retire the current `AllocConsole` plus hand-written `ConsoleTui` path after the companion reaches feature parity. Preserve a temporary feature flag during migration.
-
-FTXUI is a reasonable dependency here because it is C++, cross-platform, active, supports Windows, UTF-8, mouse input, layout, input components, and selection, and does not require a separate runtime. Its source footprint is comparable with existing vendored support libraries, although the exact binary delta must be measured in the spike.
+If interrupted or compacted, resume from the latest commit, checkpoint, and git status; inspect uncommitted work before proceeding. Retry failed subagent tasks narrowly or complete research/review directly. Do not loop indefinitely on a blocked dependency or call an unverified phase complete. Finish independent work, record the exact blocker, and report an honest final status. A successful build alone never closes a phase.
 
 ## Delivery phases
 
-### Phase 0: feasibility spike and gate
+### Phase 0 — contract and feasibility foundation
 
-Build a disposable `JammaConsole.exe` that proves the following on the current Windows 10 development machine:
+**Implementation:** Map existing command/chat, logging, Scene replacement, startup/shutdown, and status sources with file/line evidence. Confirm pinned FTXUI/vcpkg integration, Windows Terminal syntax, Console Host fallback, mouse hooks, and Unicode clipboard against primary sources. Add a compilable companion skeleton and only the pure input/selection/terminal-capability interfaces needed to prove the selected APIs. Define frame schema, limits, error cases, Windows Terminal-compatible rendezvous and threat model, and shared-state ownership. Confirm selection needs no FTXUI fork.
 
-1. Jamma launches a dedicated Windows Terminal window without user command-line work.
-2. Font inheritance, emoji, colours, banner, transcript, prompt, and status line render correctly.
-3. Resize reflows without corruption or high CPU use.
-4. Ordinary left-drag selection works in transcript and prompt.
-5. Selection expands and contracts dynamically, auto-scrolls during edge drag, and copies exact Unicode text.
-6. A click in the prompt moves the caret.
-7. A sustained synthetic log stream remains responsive.
-8. Acrylic/opacity works through official Windows Terminal settings on Windows 10.
-9. Classic Console Host fallback remains usable.
+**Unit tests:** Protocol framing/version/size cases and pure prompt/selection coordinates, including expansion/contraction, Unicode/full-width text, edge movement, and copy extraction, using mocked events/clipboard.
 
-Do not proceed with full integration until these pass. If FTXUI's selection hooks cannot meet the interaction without invasive patching, repeat this spike in Ratatui. Choose the native DirectWrite route only if both terminal stacks fail the required selection behavior.
+**Review:** API compatibility, dependency fit, smallest viable adapter, and model support for required selection behavior. Commit when no required fix remains.
 
-### Phase 1: companion and IPC foundation
+### Phase 1 — companion, broker, and lifecycle
 
-- Add `JammaConsole` project and FTXUI dependency.
-- Implement named-pipe handshake, reconnect, shutdown, and protocol versioning.
-- Add a non-real-time console broker in Jamma.
-- Launch Windows Terminal with a unique named window and fall back to Console Host.
-- Keep the existing console behind a feature flag.
+**Implementation:** Add JammaConsole to the solution; pin FTXUI via the manifest/baseline mechanism; implement pipe framing, authentication, one-client lifecycle, app broker, unique-window launch, Console Host fallback, reopen, and bounded shutdown. Keep old console startup behind a temporary migration switch until parity. Keep host launch outside JammaLib.
 
-### Phase 2: Codex-like core screen
+**Unit tests:** Bad frames/versions/tokens, duplicate clients/requests, disconnect/reconnect generation, launch argument quoting, fallback decision, and shutdown with mocked process/pipe boundaries.
 
-- Implement banner, virtualized transcript, prompt, and one-second status line.
-- Route structured events and current stdout/stderr into the transcript.
-- Implement resize, wrapping, follow-tail, wheel/Page Up/Page Down, and bounded retention.
-- Add semantic colour themes and distinct styling for future assistant messages.
+**Review:** Pipe ACL and secret exposure; process/handle lifetime; duplicate/orphan prevention; no callback path into broker; bounded teardown. Fix and commit.
 
-### Phase 3: complete mouse and clipboard behavior
+### Phase 2 — commands, events, and status
 
-- Implement transcript and prompt selection models.
-- Add continuous drag updates, edge auto-scroll, Unicode extraction, and `Ctrl+C`.
-- Add click-to-place in the prompt and prompt selection editing.
-- Exercise selection while output is arriving and while the window resizes.
+**Implementation:** Move submit dispatch to app-owned serialized execution, preserving numbered connect, help, disconnect aliases, and chat. Route safe stdout/stderr and events to a bounded ordered stream without recursive capture. Publish only safe status values; coalesce status and expose event-loss count. Add no unrelated commands or engine telemetry.
 
-### Phase 4: packaging and polish
+**Unit tests:** Existing command parsing and fake-Scene dispatch/lifetime, request/result correlation, duplicate rejection, event ordering, overflow notices, status coalescing, and teardown during an in-flight command.
 
-- Install the supported Windows Terminal JSON fragment.
-- Add startup preference and reopen action.
-- Add Win10 detection, recommendation, and fallback messaging.
-- Add crash/restart handling and final removal of `AllocConsole` from normal startup.
-- Document terminal shortcuts, including live opacity adjustment.
+**Review:** Compare every command/chat path with `Main.cpp`; inspect touched producer threads, Scene replacement, lock order, callback safety, and event order. Fix and commit.
 
-## Acceptance criteria
+### Phase 3 — core screen and keyboard
 
-- No user must open a terminal or type a command to start the console.
-- Windows 10 plus Windows Terminal gives the full-quality experience.
-- The window uses the terminal's font and supports Unicode and emoji.
-- The banner, transcript, prompt, and status line remain correct after arbitrary resizing.
-- Status refreshes once per second without busy polling.
-- The transcript remains responsive under sustained log output and retains a bounded scrollback.
-- Ordinary left-drag selects transcript or prompt text dynamically without a modifier key.
-- Selection can auto-scroll, and `Ctrl+C` copies exact text.
-- Clicking in the prompt places the caret.
-- The console cannot execute arbitrary shell commands.
-- Closing or crashing the console does not stop audio or Jamma.
-- Console output and IPC never block a real-time audio callback.
-- Opacity uses supported Windows Terminal composition settings; unsupported systems degrade cleanly.
+**Implementation:** Build header, visible-row transcript, logical retention, follow-tail, resize anchoring, bounded prompt editor, 1 Hz status, and narrow/Console Host presentation. Pipe workers post updates to the single TUI owner. Use existing FTXUI components where they meet the contract.
 
-## Explicitly deferred
+**Unit tests:** Retention/eviction, wrap/reflow, visible-row mapping, follow-tail, narrow status priority, Unicode edit/paste/input limits, and fake-clock refresh with no busy poll.
 
-- multiple Jamma console windows;
-- internal tabs and panel layouts;
-- general PowerShell or shell execution;
-- command history, suggestions, and multiline prompts;
-- searchable transcript history and persistence across runs;
-- dropdowns, modal dialogs, tables, station maps, and 3D control widgets;
-- OpenClaw protocol, assistant permissions, and action confirmation policy;
-- programmatic `HWND` manipulation of the Windows Terminal window;
-- a custom terminal emulator, ConPTY host, font shaper, or GPU text renderer.
+**Review:** Bound work under sustained synthetic model updates; check grapheme handling, resize, queue/render ownership, and subsystem scope. Fix and commit.
 
-## Sources informing the decision
+### Phase 4 — selection and clipboard
 
-- [Windows console and terminal definitions](https://learn.microsoft.com/en-us/windows/console/definitions)
-- [Windows Terminal overview and GPU rendering](https://learn.microsoft.com/en-us/windows/terminal/)
-- [Windows Terminal command-line launch options](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments)
-- [Windows Terminal JSON fragment extensions](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions)
-- [Windows Terminal profile opacity and acrylic](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/profile-appearance)
-- [Windows Terminal mouse interaction](https://learn.microsoft.com/en-us/windows/terminal/tips-and-tricks)
-- [FTXUI project and supported features](https://github.com/ArthurSonzogni/FTXUI)
-- [FTXUI selection implementation](https://github.com/ArthurSonzogni/FTXUI/blob/main/src/ftxui/component/app.cpp)
-- [Codex CLI Ratatui/Crossterm TUI source](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui.rs)
+**Implementation:** Integrate ordinary left drag in transcript/prompt, repaint, bounded edge scrolling, prompt click-to-place, logical-text copy, and reduced behavior without mouse reporting. Ensure `Ctrl+C` cannot accidentally end the companion.
 
+**Unit tests:** Press/move/release, expansion/contraction, region reset, edge scrolling, resize and eviction during selection, new output during selection, full-width/combining/emoji mapping, logical newline copy, clipboard failure, and no-mouse fallback.
+
+**Review:** Check pinned FTXUI event semantics, cursor/selection invariants, clipboard encoding/lifetime, and bounded mouse work. Fix and commit.
+
+### Phase 5 — default launch, migration, distribution, and docs
+
+**Implementation:** Make companion startup normal; add startup preference and app reopen action using existing settings/UI conventions; retire normal `AllocConsole`/`ConsoleTui` startup after parity. Ensure companion and runtime dependencies ship beside Jamma through the actual distribution path. If no installer exists, do not create one solely for a Terminal fragment; document optional profile settings and keep launch functional without them. Document fallback, shortcuts, installation link, and transcript behavior across restart.
+
+**Unit tests:** Preference default/persistence, reopen idempotence, Terminal-absent/failure fallback, companion path resolution, shutdown order, and packaging/config generation functions if present.
+
+**Review:** Check source checkout and shipped layout, automatic startup on both hosts, old-console cleanup, and documentation matching behavior. Fix and commit.
+
+## Final completion gate
+
+After Phase 5, perform one **final independent review of the whole feature** against this plan, original command/chat behavior, `doc/glossary.md`, and `doc/realtime-audio.md`. Inspect cumulative diff and all new cross-thread ownership/teardown; run the threading audit and manually inspect callback-owned bodies. Fix findings, rerun affected **unit tests**, and commit final fixes. Confirm phase commits and clean git status. State which Windows Terminal/Console Host visual or OS interactions remain unverified because the requested testing scope is unit tests only.
+
+Create a self-contained HTML completion summary in the **system temporary directory** and **open it in a browser** for the user. Include delivered behavior, changes and commit hashes by phase, exact build/unit-test evidence, review findings and fixes, fallback behavior, unmet acceptance items or concerns with severity and next action, feature branch, and head commit. Escape HTML content; do not put the report in tracked source. Link it in the final response. Strive to finish every phase in the one session; never claim completion if a required gate failed.
+
+## Acceptance checklist
+
+- Jamma automatically starts a usable companion in Windows Terminal or Console Host without requiring terminal installation or user commands.
+- Existing help, numbered server connect, disconnect aliases, and chat retain their meanings and safe Scene lifetime.
+- Resize/narrow layouts remain coherent; transcript and prompt memory are bounded.
+- Status uses safe sources, updates at 1 Hz or less, and does not busy poll.
+- Ordinary left drag selects dynamically; edge scroll, caret click, and exact Unicode copy work when mouse reporting exists. Keyboard editing and host-native selection remain usable otherwise.
+- Companion close/crash/reopen never interrupts Jamma or audio. IPC and output never block callbacks.
+- There is no arbitrary shell execution. Optional visual styling never gates functional use.
+- Every phase has unit-test and review evidence and a feature-branch commit; final review and opened HTML report are complete.
+
+## References
+
+- Repo: `Jamma/src/Main.cpp`, `JammaLib/src/io/ConsoleTui.*`, `doc/glossary.md`, `doc/realtime-audio.md`, `doc/build.md`, `.agents/skills/threading-review/SKILL.md`.
+- [Windows Terminal command-line arguments](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments) for `-w` and `--size`.
+- [Windows Terminal JSON fragments](https://learn.microsoft.com/en-us/windows/terminal/json-fragment-extensions), [profile appearance](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/profile-appearance), and [transparency troubleshooting](https://learn.microsoft.com/en-us/windows/terminal/troubleshooting).
+- [FTXUI project](https://github.com/ArthurSonzogni/FTXUI) and [selection implementation](https://github.com/ArthurSonzogni/FTXUI/blob/main/src/ftxui/component/app.cpp); verify behavior against the pinned source in Phase 0.
