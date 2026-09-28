@@ -1472,6 +1472,7 @@ void Scene::OnJobTick(Time curTime)
 {
 	if (!_isSceneQuitting.load(std::memory_order_acquire))
 		_inputSubsystem->AcknowledgeRigTriggerInputCloseFromJob();
+	_RefreshMidiIfNeeded();
 	_PumpTriggerStructuralActions();
 	_AdvanceRigPublication();
 	_PumpMidi();
@@ -1546,8 +1547,66 @@ void Scene::OnJobTick(Time curTime)
 		vst::QueueForUiThreadDestroy(std::move(job.PreInitPlugin));
 }
 
+void Scene::_RefreshMidiIfNeeded()
+{
+	if (!_midiActive.load(std::memory_order_acquire) ||
+		_isSceneQuitting.load(std::memory_order_acquire))
+		return;
+	const auto now = std::chrono::steady_clock::now();
+	const bool requested = _midiRefreshRequested.exchange(false, std::memory_order_acq_rel);
+	if (!requested && now - _lastMidiInventoryCheck < std::chrono::seconds(1))
+		return;
+	_lastMidiInventoryCheck = now;
+	const auto inventory = midi::MidiDevice::InventoryInputDevices();
+	if (!inventory.Error.empty())
+		return; // A transient inventory error must not tear down working ports.
+	const auto previous = _midiState.load(std::memory_order_acquire);
+	const auto& oldPorts = previous->Connection.Inventory.Devices;
+	const bool sameInventory = oldPorts.size() == inventory.Devices.size() &&
+		std::equal(oldPorts.begin(), oldPorts.end(), inventory.Devices.begin(),
+			[](const auto& a, const auto& b) {
+				return a.DeviceId == b.DeviceId && a.PortName == b.PortName;
+			});
+	if (sameInventory)
+	{
+		const auto retryable = std::any_of(previous->Connection.Attempts.begin(),
+			previous->Connection.Attempts.end(), [](const auto& attempt) {
+				return attempt.Status == midi::MidiConnectionStatus::Missing ||
+					attempt.Status == midi::MidiConnectionStatus::Failed;
+			});
+		if (!requested || !retryable)
+			return;
+	}
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire) ||
+		_isSceneQuitting.load(std::memory_order_acquire))
+		return;
+	auto result = _inputSubsystem->RefreshMidi(_audioEngine->GetMidiClockAnchor_Ref(),
+		_audioEngine->GetStreamParams().SampleRate, inventory);
+	std::vector<std::string> connectedNames;
+	for (const auto& endpoint : result.Connected)
+		if (std::find(connectedNames.begin(), connectedNames.end(), endpoint.Name) == connectedNames.end())
+			connectedNames.push_back(endpoint.Name);
+	_midiState.store(std::make_shared<const MidiState>(MidiState{ std::move(result), connectedNames }),
+		std::memory_order_release);
+	const auto inputs = _audioEngine->GetStreamParams().NumInputChannels;
+	if (const auto runtime = _rigCoordinator.RefreshRuntimeAvailability(inputs, connectedNames))
+	{
+		_audioEngine->PublishPendingRigSnapshot(runtime);
+		_inputSubsystem->PublishRigInputDispatch(runtime);
+		_inputSubsystem->OpenRigTriggerInput(runtime->Revision);
+		if (_hudPanel)
+		{
+			std::scoped_lock sceneLock(_sceneMutex);
+			_hudPanel->SetRoutingConfig(inputs, connectedNames, *runtime);
+		}
+	}
+}
+
 void Scene::_PumpMidi()
 {
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire)) return;
 	auto stations = SnapshotStations();
 	_inputSubsystem->PumpMidi(stations, _audioEngine->GetAudioSampleCounter(),
 		_audioEngine->GetStreamParams(), _sceneMutex);
@@ -1685,6 +1744,8 @@ gui::RoutingEditAvailability Scene::_RoutingEditAvailability()
 
 void Scene::_PumpSerial()
 {
+	std::scoped_lock midiLock(_midiLifecycleMutex);
+	if (!_midiActive.load(std::memory_order_acquire)) return;
 	_inputSubsystem->PumpSerial(_stations, _audioEngine->GetStreamParams(), _sceneMutex);
 }
 

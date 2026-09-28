@@ -159,6 +159,7 @@ namespace engine
 		bool IsUiVerbose() const noexcept { return _loggingConfig.Ui == "verbose"; }
 		void InitMidi(bool generatedRig = false)
 		{
+			std::scoped_lock midiLock(_midiLifecycleMutex);
 			auto result = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
 				_audioEngine->GetStreamParams().SampleRate,
 				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
@@ -171,6 +172,7 @@ namespace engine
 			_midiState.store(
 				std::make_shared<const MidiState>(MidiState{ std::move(result), std::move(connectedNames) }),
 				std::memory_order_release);
+			_midiActive.store(true, std::memory_order_release);
 		}
 		void SetMidiInputInventory(midi::MidiInputInventory inventory)
 		{
@@ -182,8 +184,11 @@ namespace engine
 		}
 		void CloseMidi()
 		{
+			std::scoped_lock midiLock(_midiLifecycleMutex);
+			_midiActive.store(false, std::memory_order_release);
 			_inputSubsystem->Close();
 		}
+		void RequestMidiRefresh() noexcept { _midiRefreshRequested.store(true, std::memory_order_release); }
 		void InitSerial() {}
 		void CloseSerial() {}
 		void CommitChanges();
@@ -261,6 +266,7 @@ namespace engine
 		void _ForceGlobalMidiQuantStateMixedOnLocalEdit();
 		void _JobLoop();
 		void _PumpMidi();
+		void _RefreshMidiIfNeeded();
 		void _PumpTriggerStructuralActions();
 		void _AdvanceRigPublication();
 		gui::RoutingEditAvailability _RoutingEditAvailability();
@@ -335,6 +341,10 @@ namespace engine
 			std::vector<std::string> ConnectedNames;
 		};
 		std::atomic<std::shared_ptr<const MidiState>> _midiState = std::make_shared<const MidiState>();
+		std::mutex _midiLifecycleMutex;
+		std::atomic<bool> _midiRefreshRequested{ false };
+		std::atomic<bool> _midiActive{ false };
+		std::chrono::steady_clock::time_point _lastMidiInventoryCheck{};
 		std::unique_ptr<vst::VstEditorWindowManager> _windowSubsystem;
 		std::unique_ptr<ninjam::NinjamNetworkService> _networkService;
 		engine::Quantiser _quantisation;

@@ -16,6 +16,7 @@
 #include "../io/ConsoleTui.h"
 #include "../vst/Vst3Plugin.h"
 #include <objbase.h>
+#include <dbt.h>
 #include <atomic>
 #include <algorithm>
 #include <chrono>
@@ -680,6 +681,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 		std::cout << device.ProbeError << std::endl;
 	}
 	const auto midiInventory = midi::MidiDevice::InventoryInputDevices();
+	if (!rigGenerated)
+	{
+		for (auto& device : rig.User.Midi.Devices)
+			device.Name = midi::MidiDevice::ResolveSavedInputName(device.Name, midiInventory.Devices);
+		for (auto& trigger : rig.Triggers)
+		{
+			for (auto& name : trigger.MidiInputDevices)
+				name = midi::MidiDevice::ResolveSavedInputName(name, midiInventory.Devices);
+			if (trigger.MidiTrigger)
+				trigger.MidiTrigger->Device = midi::MidiDevice::ResolveSavedInputName(
+					trigger.MidiTrigger->Device, midiInventory.Devices);
+		}
+	}
 	startupLog.Write("[MIDI] inventory=" + std::to_string(midiInventory.Devices.size()) +
 		(midiInventory.Error.empty() ? "" : " error=" + midiInventory.Error));
 	std::cout << "[MIDI] Discovered " << midiInventory.Devices.size() << " input(s) " << midiInventory.Error << std::endl;
@@ -1018,6 +1032,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
 	{
 		while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
+			if (msg.message == WM_DEVICECHANGE && msg.wParam == DBT_DEVNODES_CHANGED)
+				scene.value()->RequestMidiRefresh();
 			if (msg.message == WM_QUIT)
 			{
 				scene.value()->Shutdown();

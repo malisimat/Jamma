@@ -35,6 +35,13 @@ namespace io
 		return result;
 	}
 
+	midi::MidiConnectionResult IoInputSubsystem::RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,
+		unsigned int actualSampleRate, const midi::MidiInputInventory& inventory)
+	{
+		return _midiRouter.InitMidi(_userConfig, _loggingConfig,
+			midiClockAnchor, actualSampleRate, &inventory);
+	}
+
 	void IoInputSubsystem::SetLogging(io::LoggingConfig loggingConfig) noexcept
 	{
 		_loggingConfig = std::move(loggingConfig);

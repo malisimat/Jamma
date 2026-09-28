@@ -29,6 +29,8 @@ namespace io
 		midi::MidiConnectionResult Init(midi::MidiClockAnchor& midiClockAnchor,
 			unsigned int actualSampleRate, const midi::MidiInputInventory* inventory = nullptr,
 			bool generatedRig = false);
+		midi::MidiConnectionResult RefreshMidi(midi::MidiClockAnchor& midiClockAnchor,
+			unsigned int actualSampleRate, const midi::MidiInputInventory& inventory);
 		void SetLogging(io::LoggingConfig loggingConfig) noexcept;
 		void Close();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
