@@ -2,20 +2,32 @@
 #include "ConsoleLaunch.h"
 #include "../../console/WindowsPipe.h"
 #include "../../console/SessionGate.h"
+#include "../../console/CommandMailbox.h"
+#include "../../console/OutboundMailbox.h"
 #include <bcrypt.h>
 #include <sddl.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <utility>
 #include <vector>
 
 namespace console
 {
 	struct ConsoleBroker::State
 	{
-		explicit State(std::wstring path) : CompanionPath(std::move(path)),
-			StopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+		explicit State(std::wstring path, std::shared_ptr<CommandMailbox> commands,
+			std::string initialStatus)
+			: CompanionPath(std::move(path)), Commands(std::move(commands)),
+			Events(std::make_shared<OutboundMailbox>()),
+			StopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr))
+		{
+			Events->SetStatus(std::move(initialStatus));
+		}
 		std::wstring CompanionPath;
+		std::shared_ptr<CommandMailbox> Commands;
+		std::shared_ptr<OutboundMailbox> Events;
 		UniqueHandle StopEvent;
 		std::atomic<bool> Connected{ false };
 		std::atomic<bool> FallbackNotice{ false };
@@ -221,21 +233,52 @@ namespace console
 			return false;
 		}
 		state->Connected.store(true, std::memory_order_release);
-		WriteMessage(pipe.Get(), state->StopEvent.Get(),
-			{ MessageType::StatusSnapshot, 0, "Connected to Jamma preview" });
-		WriteMessage(pipe.Get(), state->StopEvent.Get(),
-			{ MessageType::Event, 0, "Commands remain in the original console during migration." });
-		for (;;)
+		std::atomic<bool> writerStopping{ false };
+		std::thread writer([&] {
+			try
+			{
+				while (!writerStopping.load(std::memory_order_acquire)
+					&& WaitForSingleObject(state->StopEvent.Get(), 0) != WAIT_OBJECT_0)
+				{
+					auto outbound = state->Events->Take(writerStopping);
+					if (outbound && !WriteMessage(pipe.Get(), state->StopEvent.Get(), *outbound, 500))
+					{
+						SetEvent(state->StopEvent.Get());
+						break;
+					}
+				}
+			}
+			catch (...) { SetEvent(state->StopEvent.Get()); }
+		});
+		try
 		{
-			const auto message = ReadMessage(pipe.Get(), state->StopEvent.Get());
-			if (!message.Value) break;
-			if (message.Value->Type != MessageType::CommandRequest) break;
-			if (!gate.AcceptRequest(message.Value->RequestId,
-				WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0)) break;
-			if (!WriteMessage(pipe.Get(), state->StopEvent.Get(),
-				{ MessageType::CommandResult, message.Value->RequestId,
-					"Preview mode: use the original console for commands." })) break;
+			for (;;)
+			{
+				const auto message = ReadMessage(pipe.Get(), state->StopEvent.Get());
+				if (!message.Value) break;
+				if (message.Value->Type != MessageType::CommandRequest) break;
+				if (!gate.AcceptRequest(message.Value->RequestId,
+					WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0)) break;
+				auto completion = state->Commands->Submit(std::move(message.Value->Text));
+				if (!completion)
+				{
+					if (!state->Events->PublishResult({ MessageType::CommandResult,
+						message.Value->RequestId, "Command queue full or shutting down" },
+						[&] { return WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0; })) break;
+					continue;
+				}
+				while (completion->wait_for(std::chrono::milliseconds(50))
+					!= std::future_status::ready)
+					if (WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0) break;
+				if (WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0) break;
+				if (!state->Events->PublishResult({ MessageType::CommandResult,
+					message.Value->RequestId, completion->get() },
+					[&] { return WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0; })) break;
+			}
 		}
+		catch (...) { SetEvent(state->StopEvent.Get()); }
+		writerStopping.store(true, std::memory_order_release);
+		writer.join();
 		FinishSession(gate,
 			WaitForSingleObject(state->StopEvent.Get(), 0) == WAIT_OBJECT_0,
 			!terminal,
@@ -269,6 +312,7 @@ namespace console
 		}
 		catch (...) { OutputDebugStringW(L"[CONSOLE] Broker worker failed.\n"); }
 		state->Connected.store(false, std::memory_order_release);
+		state->Events->Close();
 		state->Finished.store(true, std::memory_order_release);
 	}
 
@@ -283,12 +327,15 @@ namespace console
 		}
 	}
 
-	bool ConsoleBroker::Start(const std::wstring& companionPath)
+	bool ConsoleBroker::Start(const std::wstring& companionPath,
+		std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
 	{
 		if (_state && !_state->Finished.load(std::memory_order_acquire)) return false;
 		if (!Stop()) return false;
+		if (!commands) return false;
 		if (GetFileAttributesW(companionPath.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
-		_state = std::make_shared<State>(companionPath);
+		_state = std::make_shared<State>(companionPath, std::move(commands),
+			std::move(initialStatus));
 		if (!_state->StopEvent.Valid()) { _state.reset(); return false; }
 		_worker = std::thread([state = _state] { Run(state); });
 		return true;
@@ -308,12 +355,13 @@ namespace console
 		return true;
 	}
 
-	bool ConsoleBroker::Reopen(const std::wstring& companionPath)
+	bool ConsoleBroker::Reopen(const std::wstring& companionPath,
+		std::shared_ptr<CommandMailbox> commands, std::string initialStatus)
 	{
 		if (Connected() && WaitForSingleObject(_state->StopEvent.Get(), 0) != WAIT_OBJECT_0)
 			return true;
 		if (!Stop()) return false;
-		return Start(companionPath);
+		return Start(companionPath, std::move(commands), std::move(initialStatus));
 	}
 
 	bool ConsoleBroker::Connected() const noexcept
@@ -324,5 +372,10 @@ namespace console
 	bool ConsoleBroker::ConsumeFallbackNotice() noexcept
 	{
 		return _state && _state->FallbackNotice.exchange(false, std::memory_order_acq_rel);
+	}
+
+	std::shared_ptr<OutboundMailbox> ConsoleBroker::Events() const noexcept
+	{
+		return _state ? _state->Events : nullptr;
 	}
 }

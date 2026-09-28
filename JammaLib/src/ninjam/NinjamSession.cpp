@@ -43,7 +43,21 @@ std::mutex NinjamSession::_PublicServerListMutex;
 std::vector<NinjamSession::PublicServerInfo> NinjamSession::_PublicServerListCache;
 std::chrono::steady_clock::time_point NinjamSession::_PublicServerListLastFetch{};
 std::atomic_bool NinjamSession::_PublicServerListFetchInFlight{ false };
+std::mutex NinjamSession::_PublicServerOutputMutex;
+bool NinjamSession::_PublicServerOutputEnabled = true;
 bool NinjamSession::_PublicServerListHasLiveData = false;
+
+void NinjamSession::WithPublicServerOutput(const std::function<void()>& output)
+{
+	std::scoped_lock lock(_PublicServerOutputMutex);
+	if (_PublicServerOutputEnabled) output();
+}
+
+void NinjamSession::DisablePublicServerDirectoryOutput()
+{
+	std::scoped_lock lock(_PublicServerOutputMutex);
+	_PublicServerOutputEnabled = false;
+}
 
 std::vector<NinjamSession::PublicServerInfo> NinjamSession::BuildStaticServerList()
 {
@@ -426,18 +440,21 @@ void NinjamSession::Stop()
 		old->Disconnect();
 }
 
-void NinjamSession::SendChat(const std::string& msg)
+bool NinjamSession::SendChat(const std::string& msg)
 {
 	NinjamConnectionUse conn(*this);
 	if (conn && conn->IsConnected())
 	{
-		conn->SendChat(msg);
-		std::cout << "[NINJAM] <you> " << msg << std::endl;
+		if (conn->SendChat(msg))
+		{
+			std::cout << "[NINJAM] <you> " << msg << std::endl;
+			return true;
+		}
+		std::cout << "[NINJAM] Message not sent" << std::endl;
+		return false;
 	}
-	else
-	{
-		std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
-	}
+	std::cout << "[NINJAM] Not connected - message not sent" << std::endl;
+	return false;
 }
 
 bool NinjamSession::IsConnected() const noexcept
@@ -570,7 +587,8 @@ std::vector<NinjamSession::PublicServerInfo> NinjamSession::GetReachablePublicSe
 	return servers;
 }
 
-bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onComplete)
+bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onComplete,
+	std::function<void()> onThreadStart, std::function<void()> onStarted)
 {
 	const auto now = std::chrono::steady_clock::now();
 	{
@@ -586,15 +604,21 @@ bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onCo
 	bool expected = false;
 	if (!_PublicServerListFetchInFlight.compare_exchange_strong(expected, true))
 		return false;
+	try { if (onStarted) onStarted(); }
+	catch (...) { _PublicServerListFetchInFlight = false; throw; }
 
-	std::thread([onComplete = std::move(onComplete)]() mutable {
+	std::thread([onComplete = std::move(onComplete),
+		onThreadStart = std::move(onThreadStart)]() mutable {
+		if (onThreadStart) onThreadStart();
 		auto clearInFlight = []() { _PublicServerListFetchInFlight = false; };
 
 		auto html = FetchAutosongServerListHtml();
 		if (!html.has_value())
 		{
 			clearInFlight();
-			std::cout << "[NINJAM] Live server refresh timed out; using cached server list" << std::endl;
+			WithPublicServerOutput([] {
+				std::cout << "[NINJAM] Live server refresh timed out; using cached server list" << std::endl;
+			});
 			return;
 		}
 
@@ -602,7 +626,9 @@ bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onCo
 		if (parsed.empty())
 		{
 			clearInFlight();
-			std::cout << "[NINJAM] Live server refresh returned no parsable entries" << std::endl;
+			WithPublicServerOutput([] {
+				std::cout << "[NINJAM] Live server refresh returned no parsable entries" << std::endl;
+			});
 			return;
 		}
 
@@ -614,9 +640,10 @@ bool NinjamSession::RefreshPublicServerDirectoryAsync(std::function<void()> onCo
 		}
 
 		clearInFlight();
-		std::cout << "[NINJAM] Live server metadata refreshed" << std::endl;
-		if (onComplete)
-			onComplete();
+		WithPublicServerOutput([&] {
+			std::cout << "[NINJAM] Live server metadata refreshed" << std::endl;
+			if (onComplete) onComplete();
+		});
 	}).detach();
 
 	return true;

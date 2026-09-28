@@ -10,6 +10,8 @@
 
 namespace console
 {
+	class CommandMailbox;
+	class OutboundMailbox;
 	class UniqueHandle;
 	// App-owned, non-real-time preview broker. The worker owns all pipe I/O;
 	// Start/Stop/Reopen are called only by the app owner thread.
@@ -20,11 +22,14 @@ namespace console
 		~ConsoleBroker();
 		ConsoleBroker(const ConsoleBroker&) = delete;
 		ConsoleBroker& operator=(const ConsoleBroker&) = delete;
-		bool Start(const std::wstring& companionPath);
+		bool Start(const std::wstring& companionPath,
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
 		bool Stop() noexcept;
-		bool Reopen(const std::wstring& companionPath);
+		bool Reopen(const std::wstring& companionPath,
+			std::shared_ptr<CommandMailbox> commands, std::string initialStatus);
 		bool Connected() const noexcept;
 		bool ConsumeFallbackNotice() noexcept;
+		std::shared_ptr<OutboundMailbox> Events() const noexcept;
 
 	private:
 		struct State;

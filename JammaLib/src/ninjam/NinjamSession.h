@@ -128,7 +128,7 @@ namespace ninjam
 
 		// Send a chat message. Logs "[NINJAM] <you> ..." on success.
 		// No-op if not connected.
-		void SendChat(const std::string& msg);
+		bool SendChat(const std::string& msg);
 
 		// Request a tempo change on the server. Returns true on success.
 		// No-op (returns false) if not connected.
@@ -136,7 +136,11 @@ namespace ninjam
 
 		static PublicServerDirectorySnapshot GetPublicServerDirectorySnapshot();
 		static std::vector<PublicServerInfo> GetReachablePublicServers();
-		static bool RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {});
+		static bool RefreshPublicServerDirectoryAsync(std::function<void()> onComplete = {},
+			std::function<void()> onThreadStart = {}, std::function<void()> onStarted = {});
+		// Quiesces the detached directory worker's output before console buffers
+		// are restored; its network fetch may finish later without logging.
+		static void DisablePublicServerDirectoryOutput();
 		static std::string FormatPublicServerSummary(const PublicServerInfo& server);
 
 	private:
@@ -150,6 +154,9 @@ namespace ninjam
 		static std::vector<PublicServerInfo> _PublicServerListCache;
 		static std::chrono::steady_clock::time_point _PublicServerListLastFetch;
 		static std::atomic_bool _PublicServerListFetchInFlight;
+		static std::mutex _PublicServerOutputMutex;
+		static bool _PublicServerOutputEnabled;
+		static void WithPublicServerOutput(const std::function<void()>& output);
 		static bool _PublicServerListHasLiveData;
 
 		static std::vector<PublicServerInfo> BuildStaticServerList();

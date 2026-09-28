@@ -5,10 +5,15 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <atomic>
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 
 struct ConsoleClientState
 {
@@ -19,7 +24,9 @@ struct ConsoleClientState
 		return {};
 	}
 	std::mutex InboxMutex;
+	std::condition_variable InboxReady;
 	std::deque<console::Message> Inbox;
+	std::optional<console::Message> PendingStatus;
 	std::mutex PostMutex;
 	std::atomic<bool> NotificationPending{ false };
 	std::string Status = "Connecting to Jamma...";
@@ -60,20 +67,29 @@ int wmain(int argc, wchar_t** argv)
 	ConsoleClientState state;
 	auto drain = [&] {
 		std::deque<console::Message> batch;
+		std::optional<console::Message> status;
+		std::size_t dropped = 0;
 		{
 			std::scoped_lock lock(state.InboxMutex);
 			batch.swap(state.Inbox);
+			status.swap(state.PendingStatus);
+			dropped = std::exchange(state.Dropped, 0);
 		}
+		state.InboxReady.notify_all();
+		if (status) state.Status = std::move(status->Text);
 		for (auto& message : batch)
 		{
-			if (message.Type == console::MessageType::StatusSnapshot)
-				state.Status = std::move(message.Text);
-			else if (message.Type == console::MessageType::Event
+			if (message.Type == console::MessageType::Event
 				|| message.Type == console::MessageType::CommandResult)
 			{
 				if (state.Lines.size() == 100) state.Lines.pop_front();
 				state.Lines.push_back(std::move(message.Text));
 			}
+		}
+		if (dropped)
+		{
+			if (state.Lines.size() == 100) state.Lines.pop_front();
+			state.Lines.push_back("[CONSOLE] Lost " + std::to_string(dropped) + " events");
 		}
 	};
 	auto view = ftxui::Renderer([&] {
@@ -118,15 +134,37 @@ int wmain(int argc, wchar_t** argv)
 				&& received.Value->Type != console::MessageType::StatusSnapshot
 				&& received.Value->Type != console::MessageType::CommandResult) break;
 			{
-				std::scoped_lock lock(state.InboxMutex);
+				std::unique_lock lock(state.InboxMutex);
 				if (received.Value->Type == console::MessageType::StatusSnapshot)
 				{
-					for (auto it = state.Inbox.begin(); it != state.Inbox.end();)
-						it = it->Type == console::MessageType::StatusSnapshot
-							? state.Inbox.erase(it) : ++it;
+					state.PendingStatus = std::move(*received.Value);
 				}
-				if (state.Inbox.size() == 256) ++state.Dropped;
-				else state.Inbox.push_back(std::move(*received.Value));
+				else if (received.Value->Type == console::MessageType::CommandResult)
+				{
+					while (state.Inbox.size() == 256
+						&& WaitForSingleObject(stop.Get(), 0) != WAIT_OBJECT_0)
+					{
+						auto event = std::find_if(state.Inbox.begin(), state.Inbox.end(),
+							[](const console::Message& item) {
+								return item.Type == console::MessageType::Event;
+							});
+						if (event != state.Inbox.end())
+						{
+							state.Inbox.erase(event);
+							++state.Dropped;
+							break;
+						}
+						state.InboxReady.wait_for(lock, std::chrono::milliseconds(50));
+					}
+				}
+				if (WaitForSingleObject(stop.Get(), 0) != WAIT_OBJECT_0) break;
+				if (received.Value->Type != console::MessageType::StatusSnapshot
+					&& state.Inbox.size() == 256)
+				{
+					if (received.Value->Type == console::MessageType::Event) ++state.Dropped;
+				}
+				else if (received.Value->Type != console::MessageType::StatusSnapshot)
+					state.Inbox.push_back(std::move(*received.Value));
 			}
 			std::scoped_lock postLock(state.PostMutex);
 			if (WaitForSingleObject(stop.Get(), 0) == WAIT_OBJECT_0) break;

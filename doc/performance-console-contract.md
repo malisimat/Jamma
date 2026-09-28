@@ -155,3 +155,56 @@ task's absolute MSBuild and absolute `SolutionDir`. The focused test command
 passed 23 of 23 tests. New cases cover one-client tokens, request ordering,
 reconnect generations, a buffered request after stop, shutdown pipe/child
 ordering with fake boundaries, quoting, fallback, and no duplicate launch.
+
+## Phase 2 command and event boundary
+
+The old console and companion pipe reader now put bounded submissions into
+`CommandMailbox` (64 entries, 4 KiB each). The Jamma app thread takes at most
+eight per loop, releases the queue lock, then uses the current Scene. JAM
+replacement and command execution therefore share the app owner; no raw Scene
+pointer crosses to a console thread. Shutdown closes intake before stopping
+the broker and Scene. A command already taken by the app finishes its result.
+The session gate rejects duplicate IDs, and the broker retains each accepted
+request ID until the app result is placed in the outbound queue.
+
+The app, Scene job, legacy console input, and server-directory threads opt in
+to `ConsoleTui`'s line capture hook. Audio and vendor callback threads do not.
+The hook copies at most 4 KiB into a preallocated 256-line ring using bounded
+atomics; the app drains and validates lines into the broker's ordered queue.
+Event order is assigned at that app-to-broker ingress. Synchronous output from
+a command is drained before its result; a concurrent job line captured after
+that drain can follow the result.
+Captured loss and invalid UTF-8 are counted and reported when outbound space
+returns. The outbound queue holds 512 messages and at most 1 MiB of text;
+status has a separate replaceable slot. Results can evict events but never
+earlier results. One pipe writer sends frames without a queue or Scene lock.
+The companion protects results in its 256-message inbox, coalesces status
+separately, and shows event-loss counts after its UI owner drains.
+
+| State | Owner / synchronization | Teardown |
+| --- | --- | --- |
+| Command submissions | Input/pipe producers enqueue under `CommandMailbox` mutex; app owner takes and executes | `Close` rejects new work and completes queued futures before Scene shutdown. |
+| Captured lines | Opted-in producer claims a fixed `LineRing` slot atomically; app owner drains | Scene job and console input threads join; detached directory output is quiesced before stream buffers are restored. |
+| Outbound events/results/status | App owner publishes under a short mailbox mutex; broker writer takes | Closed at broker worker exit; late callback references see a closed mailbox. |
+| Companion inbox/status | Pipe reader enqueues under inbox mutex; FTXUI owner renders | Stop wakes a reader waiting for UI space; results remain until drained or process exit. |
+
+The first status is sampled from `Scene::NinjamConnected()`, which checks the
+physical NINJAM connection through `NinjamSession::IsConnected()`, before the
+broker starts. Later status replaces the slot at most once per second. It
+contains physical connection and the last published event. It does not infer
+tempo, phase, memory, or other unverified fields.
+
+`std::cout` and `std::cerr` on opted-in non-audio threads are mirrored; C
+stdio, wide C++ streams, and callback-owned diagnostics are excluded. The
+legacy TUI still handles those diagnostics during migration. Phase 5 must
+keep the capture path when retiring its visual/input UI, and the final review
+must check any required callback diagnostic policy against real-time rules.
+
+Debug x64 `JammaLib`, `Jamma`, `JammaConsole`, and native tests built
+incrementally with task-defined MSBuild and absolute `SolutionDir`. The
+focused native command
+`JammaLib_Tests.exe --gtest_filter=ConsoleSession.*:ConsoleCommand.*:ConsoleLaunch.*:NinjamSessionAudio.ChatReportsNotSentWithoutConnection`
+passed 20 of 20 tests after the thread opt-in changes. The tests cover parser aliases, owner
+replacement, close with queued and in-flight submissions, result IDs and
+overflow, status replacement, capture bounds, final loss notice, and
+disconnected chat outcome.

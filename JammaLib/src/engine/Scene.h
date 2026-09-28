@@ -67,6 +67,7 @@ namespace engine
 		public base::SizeableParams
 	{
 	public:
+		std::function<void()> OnJobThreadStart;
 		SceneParams(base::DrawableParams drawParams,
 			base::MoveableParams moveParams,
 			base::SizeableParams sizeParams) :
@@ -204,9 +205,14 @@ namespace engine
 		std::vector<std::shared_ptr<Station>> SnapshotStations() const;
 
 		// Send a chat message on the active ninjam session (no-op if none).
-		void SendNinjamChat(const std::string& msg)
+		bool SendNinjamChat(const std::string& msg)
 		{
-			_networkService->SendChat(msg);
+			return _networkService->SendChat(msg);
+		}
+		// App-owner presentation query; NinjamSession pins the physical connection.
+		bool NinjamConnected() const noexcept
+		{
+			return _networkService->GetController()->Session()->IsConnected();
 		}
 
 		// Close all open VST editor windows immediately.

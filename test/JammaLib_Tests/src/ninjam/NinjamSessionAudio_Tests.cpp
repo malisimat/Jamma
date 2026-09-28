@@ -6,6 +6,12 @@
 
 #include "ninjam/NinjamSession.h"
 
+TEST(NinjamSessionAudio, ChatReportsNotSentWithoutConnection)
+{
+	ninjam::NinjamSession session;
+	EXPECT_FALSE(session.SendChat("hello"));
+}
+
 TEST(NinjamSessionAudio, StopCannotInvalidateBorrowDuringSynchronousConsume)
 {
 	ninjam::NinjamSession session;
