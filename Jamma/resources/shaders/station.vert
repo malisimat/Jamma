@@ -29,8 +29,17 @@ void main()
     vec3 pos = PositionIN;
     pos.xz *= radiusScale;
 
-    Normal = NormalIN;
-    ProbeNormal = normalize(mat3(ModelView) * NormalIN);
+    vec3 normal = NormalIN;
+    if (UvIN.y > 0.5 && UvIN.y < 1.5)
+    {
+        // The bevel drops 10 units over a 2-unit radial run. Keep the deck
+        // and side normals separate so their hard edges remain visible.
+        vec2 radial = normalize(PositionIN.xz);
+        float vertical = PositionIN.y > -235.0 ? 2.0 : -2.0;
+        normal = normalize(vec3(10.0 * radial.x, vertical, 10.0 * radial.y));
+    }
+    Normal = normal;
+    ProbeNormal = normalize(mat3(ModelView) * normal);
     Uv = UvIN;
     WorldPos = pos;
     StationLevelOut = stationLevel;

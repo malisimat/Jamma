@@ -41,8 +41,13 @@ void main()
     gl_Position = MVP * vec4(scaledXZ.x, y, scaledXZ.y, 1.0);
     float colorV = clamp(0.5 - (y * colorScale * WaveformColorMultiplier), 0.0, 1.0);
     UV = vec2(u, colorV);
-    ProbeNormal = normalize(mat3(ModelView) * NormalIN);
-    ProbeRadial = normalize(mat3(ModelView) * vec3(normalize(PositionIN.xz).x, 0.0, normalize(PositionIN.xz).y));
+    vec2 radial = normalize(PositionIN.xz);
+    vec3 radialNormal = vec3(radial.x, 0.0, radial.y);
+    // Tilt the probe lookup on horizontal faces toward the rim. The flat
+    // geometry, amplitude colour lookup and wall normals stay unchanged.
+    ProbeNormal = normalize(mat3(ModelView) *
+        normalize(NormalIN + radialNormal * (0.72 * abs(NormalIN.y))));
+    ProbeRadial = normalize(mat3(ModelView) * radialNormal);
     ProbeUp = normalize(mat3(ModelView) * vec3(0.0, 1.0, 0.0));
     BevelEdge = vec2(clamp((y - yMin) / max(yMax - yMin, 0.001), 0.0, 1.0),
         clamp((length(PositionIN.xz) / safeUnitRadius - 0.95) / 0.1, 0.0, 1.0));

@@ -17,7 +17,7 @@ namespace graphics
 
 	// Procedural "halo deck" geometry for a Station.
 	// Static mesh built once at construction; no per-frame work.
-	// UV layout: x = radialFrac (0..1), y = partKind (0=top,1=bevel,2=side,3=rib).
+	// UV layout: x = radialFrac (0..1), y = partKind (0=top,1=bevel,2=side,3=rib,4=bottom).
 	//
 	// Shader selection:
 	//   ModelShaders[0] = "station"   (scene pass and highlight pass)
@@ -122,6 +122,7 @@ namespace graphics
 		static constexpr float UV_BEVEL = 1.0f;
 		static constexpr float UV_SIDE = 2.0f;
 		static constexpr float UV_RIB = 3.0f;
+		static constexpr float UV_BOTTOM = 4.0f;
 		static constexpr float UV_STATE_RING_BRIGHT = 4.0f;
 		static constexpr float UV_STATE_RING_DARK = 5.0f;
 		static constexpr unsigned int StateRingSides = 64u;

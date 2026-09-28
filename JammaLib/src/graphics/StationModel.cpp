@@ -237,9 +237,9 @@ StationModel::BuildDeckBottom(unsigned int numSides, float radius,
 
 		// Winding: center, p0, p1 gives -Y normal.
 		PushTri(verts, uvs,
-			center, uCenter, UV_SIDE,
-			p0, 1.0f, UV_SIDE,
-			p1, 1.0f, UV_SIDE);
+			center, uCenter, UV_BOTTOM,
+			p0, 1.0f, UV_BOTTOM,
+			p1, 1.0f, UV_BOTTOM);
 	}
 
 	return { verts, uvs };

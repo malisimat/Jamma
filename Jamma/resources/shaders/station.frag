@@ -32,7 +32,7 @@ void main()
 	else if (partKind > 0.5) base = bevelColour;
 
 	// -- side-wall level gradient bands --
-	if (partKind > 1.5)
+	if (partKind > 1.5 && partKind < 2.5)
 	{
 		float heightFrac = clamp(radialFrac, 0.0, 1.0);
 		vec3 lowHue = mix(vec3(0.20, 0.90, 0.22), vec3(0.98, 0.92, 0.18), heightFrac);
@@ -49,8 +49,11 @@ void main()
 	vec3 lightDir  = normalize(vec3(0.3, 1.0, 0.4));
 	float diffuse  = clamp(dot(normalize(Normal), lightDir), 0.0, 1.0);
 	base *= (0.90 + 0.35 * diffuse);
-	vec3 probe = texture(ProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
-	base *= 0.34 + 0.90 * probe;
+	if (partKind < 1.5 || partKind > 3.5)
+	{
+		vec3 probe = texture(ProbeSampler, clamp(normalize(ProbeNormal).xy * 0.49 + 0.5, 0.01, 0.99)).rgb;
+		base *= 0.34 + 0.90 * probe;
+	}
 
 	// -- highlight flash (selection) --
 	float hi = clamp(Highlight, 0.0, 1.0);
