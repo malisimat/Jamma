@@ -102,13 +102,16 @@ namespace gui
 	private:
 		static constexpr int _OuterMargin = 20;
 		static constexpr int _TopPosY = 18;
-		static constexpr unsigned int _TopStripHeight = 88u;
+		static constexpr unsigned int _TopStripHeight = 104u;
 		static constexpr unsigned int _TopStripWidth = 760u;
 		static constexpr unsigned int _TopStripMinWidth = 320u;
 		static constexpr unsigned int _TopStripPadding = 12u;
 		static constexpr unsigned int _TopStripSpacing = 10u;
 		static constexpr unsigned int _SourceButtonWidth = 118u;
 		static constexpr unsigned int _SourceButtonHeight = 34u;
+		static constexpr unsigned int _SourceScrollBarHeight = 12u;
+		static constexpr unsigned int _SourceViewportHeight = _SourceButtonHeight + _SourceScrollBarHeight;
+		static constexpr unsigned int _SourcePanelGap = 8u;
 		static constexpr unsigned int _RightRailWidth = 134u;
 		static constexpr unsigned int _RightRailHeight = 460u;
 		static constexpr unsigned int _RightRailMinHeight = 220u;
@@ -155,6 +158,7 @@ namespace gui
 			std::vector<CableInteraction::Cable>& cables) const;
 		void _UpdateCableHover(utils::Position2d point);
 		void _UpdateSocketHighlights();
+		bool _SourceVisible(size_t index) const;
 		actions::ActionResult _BeginCableDrag(utils::Position2d point);
 		void _CancelCableDrag();
 		utils::Position2d _ElementCenter(const std::shared_ptr<base::GuiElement>& element) const;
@@ -189,7 +193,11 @@ namespace gui
 
 
 		std::shared_ptr<GuiStackPanel> _topStrip;
+		std::shared_ptr<GuiStackPanel> _topSourceRow;
 		std::shared_ptr<GuiStackPanel> _topInputRow;
+		std::shared_ptr<GuiStackPanel> _topMidiRow;
+		std::shared_ptr<GuiScrollPanel> _topAudioScroll;
+		std::shared_ptr<GuiScrollPanel> _topMidiScroll;
 		std::shared_ptr<GuiPanel> _triggerRail;
 		std::shared_ptr<GuiScrollPanel> _triggerScroll;
 		std::shared_ptr<GuiStackPanel> _triggerList;
@@ -200,6 +208,8 @@ namespace gui
 		std::vector<SourceWidgets> _sourceWidgets;
 		std::vector<TriggerWidgets> _triggerWidgets;
 		std::vector<std::unique_ptr<GuiVu>> _inputVus;
+		int _lastAudioScrollOffset = 0;
+		int _lastMidiScrollOffset = 0;
 		unsigned int _audioInputCount = 0u;
 		std::vector<std::string> _midiInputNames;
 		std::vector<std::string> _triggerNames;

@@ -114,6 +114,47 @@ TEST_F(RigSnapshotTest, ResolvesLegacyTargetAndKeepsNormalizedRuntimeIdentity)
 	EXPECT_EQ(io::RigFileRouting::Warning::LegacyStationTargetMigrated, runtime->Graph.Triggers[0].Reason);
 }
 
+TEST_F(RigSnapshotTest, StartupMigrationDoesNotPersistSelectedRig)
+{
+	io::RigFile rig{};
+	rig.Triggers = { TriggerDescriptor("legacy", std::nullopt) };
+	unsigned int writes = 0u;
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, { StationDescriptor("Station") }, { station }, 0u, {},
+		engine::TriggerParams(), [&writes](const io::RigFile&) { ++writes; return true; }));
+	EXPECT_EQ(0u, writes);
+	ASSERT_TRUE(coordinator.Accepted());
+	EXPECT_EQ("Station", coordinator.Accepted()->Rig.Triggers[0].StationTarget.value());
+}
+
+TEST_F(RigSnapshotTest, RuntimeAvailabilityUsesOpenedInputsWithoutRewritingSelectedRig)
+{
+	io::RigFile rig{};
+	rig.User.Audio.NumChannelsIn = 4u;
+	auto trigger = TriggerDescriptor("capture", "Station");
+	trigger.InputChannels = { 0u, 3u };
+	rig.Triggers = { trigger };
+	auto station = RuntimeStation("Station");
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, { StationDescriptor("Station") }, { station },
+		4u, {}, engine::TriggerParams(), {}));
+	ASSERT_TRUE(coordinator.Accepted());
+	ASSERT_TRUE(coordinator.Accepted()->Graph.Triggers[0].Sources[1].Available);
+
+	const auto runtime = coordinator.RefreshRuntimeAvailability(1u, {});
+	ASSERT_TRUE(runtime);
+	EXPECT_EQ(4u, runtime->Rig.User.Audio.NumChannelsIn);
+	EXPECT_EQ(std::vector<unsigned int>({ 0u, 3u }), runtime->Rig.Triggers[0].InputChannels);
+	ASSERT_EQ(2u, runtime->Graph.Triggers[0].Sources.size());
+	EXPECT_TRUE(runtime->Graph.Triggers[0].Sources[0].Available);
+	EXPECT_FALSE(runtime->Graph.Triggers[0].Sources[1].Available);
+
+	EXPECT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(runtime->Rig));
+	ASSERT_TRUE(coordinator.Staged());
+	EXPECT_FALSE(coordinator.Staged()->Graph.Triggers[0].Sources[1].Available);
+}
+
 TEST_F(RigSnapshotTest, RetainsUnavailableSourcesWithoutCreatingWildcardMidiRoutes)
 {
 	io::RigFile rig{};

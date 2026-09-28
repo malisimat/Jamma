@@ -1,7 +1,6 @@
 #include "MidiDevice.h"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <exception>
 #include <iomanip>
@@ -10,15 +9,6 @@
 #include "rtmidi/RtMidi.h"
 
 using namespace midi;
-
-std::string MidiDevice::_ToLower(std::string str)
-{
-	std::transform(str.begin(),
-	               str.end(),
-	               str.begin(),
-	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-	return str;
-}
 
 void MidiDevice::_LogMidiMessageDetail(std::ostream& out,
 	const unsigned char* message, std::size_t size)
@@ -79,118 +69,172 @@ MidiDevice::~MidiDevice()
 
 std::vector<MidiInputDeviceInfo> MidiDevice::EnumerateInputDevices()
 {
-	std::vector<MidiInputDeviceInfo> devices;
+	return InventoryInputDevices().Devices;
+}
+
+MidiInputInventory MidiDevice::InventoryInputDevices()
+{
+	MidiInputInventory inventory;
 
 	try
 	{
 		rt::midi::RtMidiIn midiIn;
 		const auto count = midiIn.getPortCount();
-		devices.reserve(count);
+		inventory.Devices.reserve(count);
 
 		for (unsigned int i = 0; i < count; ++i)
-			devices.push_back({ i, midiIn.getPortName(i) });
+		{
+			auto portName = midiIn.getPortName(i);
+			inventory.Devices.push_back({ i, BaseInputName(portName, i), std::move(portName) });
+		}
 	}
 	catch (const rt::midi::RtMidiError& err)
 	{
-		std::cout << "[MIDI] Failed to enumerate MIDI input devices: " << err.getMessage() << std::endl;
+		inventory.Error = err.getMessage();
 	}
 	catch (const std::exception& err)
 	{
-		std::cout << "[MIDI] Failed to enumerate MIDI input devices: " << err.what() << std::endl;
+		inventory.Error = err.what();
 	}
 
-	return devices;
+	return inventory;
 }
 
-bool MidiDevice::Open(const std::string& preferredDeviceName,
-                      MidiMessageCallback callback,
-                      bool loggingVerbose)
+std::string MidiDevice::BaseInputName(const std::string& portName, unsigned int portId)
+{
+	const auto suffix = " " + std::to_string(portId);
+	return portName.size() > suffix.size() &&
+		portName.compare(portName.size() - suffix.size(), suffix.size(), suffix) == 0
+		? portName.substr(0, portName.size() - suffix.size()) : portName;
+}
+
+std::string MidiDevice::ResolveSavedInputName(const std::string& savedName,
+	const std::vector<MidiInputDeviceInfo>& devices)
+{
+	// A current base name takes priority; only recognize a legacy suffix when
+	// its stripped name actually exists in this inventory.
+	for (const auto& device : devices)
+		if (device.Name == savedName)
+			return savedName;
+	const auto suffixStart = savedName.find_last_of(' ');
+	if (suffixStart == std::string::npos || suffixStart + 1u == savedName.size() ||
+		!std::all_of(savedName.begin() + suffixStart + 1u, savedName.end(),
+			[](unsigned char c) { return c >= '0' && c <= '9'; }))
+		return savedName;
+	const auto base = savedName.substr(0, suffixStart);
+	for (const auto& device : devices)
+		if (device.Name == base)
+			return base;
+	return savedName;
+}
+
+const MidiInputDeviceInfo* MidiDevice::FindExactInput(
+	const std::vector<MidiInputDeviceInfo>& devices, const std::string& name) noexcept
+{
+	const auto found = std::find_if(devices.begin(), devices.end(),
+		[&name](const MidiInputDeviceInfo& device) { return device.Name == name; });
+	return found == devices.end() ? nullptr : &*found;
+}
+
+const MidiInputDeviceInfo* MidiDevice::SelectUnclaimedExactInput(
+	const std::vector<MidiInputDeviceInfo>& devices, const std::string& name,
+	const std::vector<unsigned int>& claimedIds, bool& ambiguous) noexcept
+{
+	const MidiInputDeviceInfo* selected = nullptr;
+	unsigned int matchingNames = 0u;
+	for (const auto& device : devices)
+	{
+		if (device.Name != name)
+			continue;
+		++matchingNames;
+		if (!selected && std::find(claimedIds.begin(), claimedIds.end(), device.DeviceId) == claimedIds.end())
+			selected = &device;
+	}
+	ambiguous = matchingNames > 1u;
+	return selected;
+}
+
+const MidiInputDeviceInfo* MidiDevice::SelectStartupInput(
+	const std::vector<MidiInputDeviceInfo>& devices, const std::string& name,
+	const std::vector<unsigned int>& claimedIds, size_t requestIndex,
+	bool generatedRig, bool& ambiguous) noexcept
+{
+	if (!generatedRig)
+		return SelectUnclaimedExactInput(devices, name, claimedIds, ambiguous);
+	ambiguous = std::count_if(devices.begin(), devices.end(),
+		[&name](const MidiInputDeviceInfo& device) { return device.Name == name; }) > 1u;
+	return requestIndex < devices.size() && devices[requestIndex].Name == name
+		? &devices[requestIndex] : nullptr;
+}
+
+bool MidiDevice::OpenPort(const MidiInputDeviceInfo& port, MidiMessageCallback callback,
+	std::string& error, bool loggingVerbose)
 {
 	Close();
 	_verbosePackets.Clear();
 	_lastVerboseDroppedCount = 0u;
 	_callback = std::move(callback);
 	_loggingVerbose = loggingVerbose;
+	error.clear();
 
 	try
 	{
 		_midiIn = std::make_unique<rt::midi::RtMidiIn>();
-	}
-	catch (const rt::midi::RtMidiError& err)
-	{
-		std::cout << "[MIDI] Failed to create RtMidiIn instance: " << err.getMessage() << std::endl;
-		return false;
-	}
-
-	std::vector<MidiInputDeviceInfo> devices;
-	const auto count = _midiIn->getPortCount();
-	devices.reserve(count);
-	for (unsigned int i = 0; i < count; ++i)
-		devices.push_back({ i, _midiIn->getPortName(i) });
-
-	std::cout << "[MIDI] Input devices found: " << devices.size() << std::endl;
-	for (const auto& d : devices)
-		std::cout << "[MIDI]   #" << d.DeviceId << "  " << d.Name << std::endl;
-
-	if (devices.empty())
-	{
-		std::cout << "[MIDI] No MIDI input devices available." << std::endl;
-		return false;
-	}
-
-	auto selected = devices.front();
-	if (!preferredDeviceName.empty() && (preferredDeviceName != "default"))
-	{
-		const auto wanted = _ToLower(preferredDeviceName);
-
-		auto exact = std::find_if(devices.begin(), devices.end(), [&](const MidiInputDeviceInfo& d) {
-			return _ToLower(d.Name) == wanted;
-		});
-		if (exact != devices.end())
+		const auto count = _midiIn->getPortCount();
+		if (port.DeviceId >= count || _midiIn->getPortName(port.DeviceId) !=
+			(port.PortName.empty() ? port.Name : port.PortName))
 		{
-			selected = *exact;
+			error = "MIDI port changed after inventory";
+			_midiIn.reset();
+			_callback = MidiMessageCallback();
+			return false;
 		}
-		else
-		{
-			auto partial = std::find_if(devices.begin(), devices.end(), [&](const MidiInputDeviceInfo& d) {
-				return _ToLower(d.Name).find(wanted) != std::string::npos;
-			});
-			if (partial != devices.end())
-			{
-				selected = *partial;
-			}
-			else
-			{
-				std::cout << "[MIDI] Preferred device not found: \"" << preferredDeviceName
-				          << "\". Falling back to #" << selected.DeviceId << " (" << selected.Name << ")"
-				          << std::endl;
-			}
-		}
-	}
-
-	try
-	{
 		_midiIn->ignoreTypes(false, false, false);
 		if (_callback)
 			_midiIn->setCallback(&MidiDevice::_RtMidiCallback, this);
-		_midiIn->openPort(selected.DeviceId, "Jamma MIDI In");
+		_midiIn->openPort(port.DeviceId, "Jamma MIDI In");
 	}
 	catch (const rt::midi::RtMidiError& err)
 	{
-		std::cout << "[MIDI] Failed to open input device #" << selected.DeviceId
-			<< " (" << selected.Name << "): " << err.getMessage() << std::endl;
+		error = err.getMessage();
 		_callback = MidiMessageCallback();
 		_midiIn.reset();
 		return false;
 	}
-
-	_deviceName = selected.Name;
-	_deviceId = selected.DeviceId;
+	catch (const std::exception& err)
+	{
+		error = err.what();
+		_callback = MidiMessageCallback();
+		_midiIn.reset();
+		return false;
+	}
+	_deviceName = port.Name;
+	_deviceId = port.DeviceId;
 	_isOpen = true;
 
 	std::cout << "[MIDI] Connected input device #" << _deviceId
 	          << " (" << _deviceName << ")" << std::endl;
 	return true;
+}
+
+bool MidiDevice::Open(const std::string& preferredDeviceName,
+	MidiMessageCallback callback, bool loggingVerbose)
+{
+	const auto inventory = InventoryInputDevices();
+	const auto* port = FindExactInput(inventory.Devices, preferredDeviceName);
+	if (!port)
+	{
+		Close();
+		std::cout << "[MIDI] Exact input device missing: \"" << preferredDeviceName << "\""
+			<< (inventory.Error.empty() ? "" : " (inventory error: " + inventory.Error + ")") << std::endl;
+		return false;
+	}
+	std::string error;
+	const auto opened = OpenPort(*port, std::move(callback), error, loggingVerbose);
+	if (!opened)
+		std::cout << "[MIDI] Failed to open input device #" << port->DeviceId
+			<< " (" << port->Name << "): " << error << std::endl;
+	return opened;
 }
 
 void MidiDevice::Close()

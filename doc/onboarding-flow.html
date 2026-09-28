@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jamma startup flow</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07131c;--panel:#10232e;--panel2:#142d39;--line:#315462;--text:#eaf7f5;--muted:#a6c0c6;--mint:#58e0bd;--gold:#ffd280;--coral:#ff9d88}
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 84% 0%,#163846 0,transparent 36%),var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+    main{max-width:1160px;margin:auto;padding:48px 24px 70px} header{display:grid;grid-template-columns:1fr auto;align-items:end;gap:24px;margin-bottom:32px}
+    .eyebrow{color:var(--mint);font-size:.75rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase} h1{font-size:clamp(2.3rem,5vw,4rem);line-height:1.04;letter-spacing:-.045em;margin:10px 0 14px} header p{color:var(--muted);max-width:660px;margin:0}
+    .mark{font-size:4rem;font-weight:900;letter-spacing:-.12em;color:var(--mint);opacity:.85;line-height:1}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;padding:7px;background:#0d202a;border:1px solid var(--line);border-radius:16px;width:max-content;max-width:100%;margin:0 0 29px}
+    button{border:0;border-radius:11px;background:transparent;color:var(--muted);font:inherit;font-weight:750;padding:10px 17px;cursor:pointer;transition:background .2s,color .2s} button:hover{background:#24414b;color:var(--text)} button[aria-pressed="true"]{background:var(--mint);color:#08221e;box-shadow:0 4px 15px #58e0bd32} button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 305px;gap:28px;align-items:start} .flow{position:relative;display:grid;gap:16px;counter-reset:step}
+    .flow:before{content:"";position:absolute;top:38px;bottom:38px;left:29px;width:2px;background:linear-gradient(var(--mint),var(--line) 75%,var(--mint));z-index:0}
+    .step{position:relative;z-index:1;display:grid;grid-template-columns:58px minmax(0,1fr);gap:16px;padding:18px 21px 19px 12px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(130deg,var(--panel2),var(--panel));box-shadow:0 8px 30px #0002}
+    .num{display:grid;place-items:center;align-self:start;width:36px;height:36px;margin:1px auto;border:2px solid var(--mint);border-radius:50%;background:#0d2730;color:var(--mint);font-size:.9rem;font-weight:850}
+    .step h2{font-size:1.17rem;margin:0 0 5px;letter-spacing:-.015em}.step p{margin:0;color:var(--muted)} .tag{display:inline-block;margin-top:10px;padding:4px 9px;border-radius:7px;background:#1d433f;color:#aef8df;font-size:.78rem;font-weight:750;letter-spacing:.02em}
+    .aside{position:sticky;top:24px;display:grid;gap:16px}.card{border:1px solid var(--line);border-radius:18px;background:#10232e;padding:22px}.card h2{font-size:1rem;margin:0 0 10px;color:var(--mint);letter-spacing:.02em}.card p{color:var(--muted);margin:0 0 12px;font-size:.92rem}.card p:last-child{margin-bottom:0}
+    .file{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid #315462;color:var(--text);font-size:.86rem}.file b{color:var(--gold);font-weight:700;text-align:right}.legend{display:grid;gap:10px}.legend span{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:.86rem}.dot{width:10px;height:10px;border-radius:50%;background:var(--mint);flex:none}.dot.gold{background:var(--gold)}.dot.coral{background:var(--coral)}
+    .principles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:34px}.principles div{padding:16px 17px;border:1px solid var(--line);border-radius:13px;background:#0d202a}.principles strong{display:block;color:var(--gold);font-size:.83rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}.principles span{color:var(--muted);font-size:.89rem}
+    footer{margin-top:26px;color:var(--muted);font-size:.86rem} a{color:var(--mint)}
+    @media(max-width:850px){header{grid-template-columns:1fr}.mark{display:none}.layout{grid-template-columns:1fr}.aside{position:static;grid-template-columns:repeat(2,1fr)}.principles{grid-template-columns:1fr}}
+    @media(max-width:570px){main{padding:28px 15px 50px}.tabs{width:100%}.tabs button{flex:1;padding:10px 5px;font-size:.88rem}.aside{grid-template-columns:1fr}.step{gap:9px;padding-right:13px}}
+    @media(prefers-reduced-motion:reduce){button{transition:none}}
+    @media print{body{background:#fff;color:#14232c}.step,.card,.principles div{background:#fff;color:#14232c;box-shadow:none}.step p,.card p,.principles span{color:#40545e}.aside{position:static}.tabs{display:none}.flow:before{background:#547b73}}
+  </style>
+</head>
+<body>
+<main>
+  <header><div><div class="eyebrow">Jamma · onboarding map</div><h1>From launch to live inputs</h1><p>Follow each startup decision from configuration files through ASIO and MIDI connection, safe publication, and the next launch.</p></div><div class="mark" aria-hidden="true">J↗</div></header>
+  <nav class="tabs" aria-label="Startup scenario">
+    <button type="button" data-mode="fresh" aria-pressed="true">Fresh launch</button>
+    <button type="button" data-mode="selected" aria-pressed="false">Selected files</button>
+    <button type="button" data-mode="recovery" aria-pressed="false">Recovery</button>
+  </nav>
+  <div class="layout">
+    <section class="flow" aria-label="Startup decision flow">
+      <article class="step"><span class="num">01</span><div><h2>Read defaults</h2><p id="step-0"></p><span class="tag" id="tag-0"></span></div></article>
+      <article class="step"><span class="num">02</span><div><h2>Classify rig and jam</h2><p id="step-1"></p><span class="tag" id="tag-1"></span></div></article>
+      <article class="step"><span class="num">03</span><div><h2>Discover ports</h2><p id="step-2"></p><span class="tag" id="tag-2"></span></div></article>
+      <article class="step"><span class="num">04</span><div><h2>Open and verify</h2><p id="step-3"></p><span class="tag" id="tag-3"></span></div></article>
+      <article class="step"><span class="num">05</span><div><h2>Publish safe files</h2><p id="step-4"></p><span class="tag" id="tag-4"></span></div></article>
+      <article class="step"><span class="num">06</span><div><h2>Restart with evidence</h2><p id="step-5"></p><span class="tag" id="tag-5"></span></div></article>
+    </section>
+    <aside class="aside" aria-label="Scenario details">
+      <div class="card"><h2 id="scenario-title"></h2><p id="scenario-copy"></p><div class="file"><span>defaults.json</span><b id="file-defaults"></b></div><div class="file"><span>Rig and jam</span><b id="file-rig-jam"></b></div><div class="file"><span>startup.log</span><b>Always rotated</b></div></div>
+      <div class="card"><h2>Reading the route</h2><p>ADC indices in a rig are zero based. <code>[0,1]</code> means physical inputs 1 and 2. The started channel count comes from the opened stream.</p><div class="legend"><span><i class="dot"></i>Started and verified</span><span><i class="dot gold"></i>Generated or recovered</span><span><i class="dot coral"></i>Original retained</span></div></div>
+    </aside>
+  </div>
+  <section class="principles" aria-label="Startup guarantees"><div><strong>Keep originals</strong><span>Selected or invalid existing rig and jam files stay byte identical during startup.</span></div><div><strong>Use actual hardware</strong><span>Saved generated audio settings and MIDI names come from successful connections.</span></div><div><strong>Explain the outcome</strong><span>The bounded startup log records inventory, attempts, routing, warnings, paths, and a final summary.</span></div></section>
+  <footer>For exact JSON fields and regeneration steps, see <a href="first-run-setup.md">first-run setup and support</a>.</footer>
+</main>
+<script>
+  const scenarios = {
+    fresh: {
+      title: "No defaults file", copy: "Jamma starts with in-memory defaults and chooses free names in its data directory.", defaults: "Created after success", files: "New rig + jam",
+      steps: [
+        ["No defaults.json exists. Start a startup.log before reading configuration or touching hardware.", "IN MEMORY"],
+        ["Use a provisional rig and an empty one-Station jam. No selected file is overwritten.", "PROVISIONAL"],
+        ["Inventory each ASIO driver and physical MIDI input once, including channel counts, rates, names, and IDs.", "DISCOVERED"],
+        ["Try the default ASIO device at its highest working channel counts, then bounded fallbacks. Connect each MIDI port; use the actual stream rate and latency.", "STARTED VALUES"],
+        ["After the runtime rig accepts final routing, write the generated rig and jam, then defaults.json. A failed audio start never publishes a rig path.", "ATOMIC PUBLICATION"],
+        ["Load those paths directly next time. The rig and jam should remain byte identical; startup.log records any hardware change.", "NO CONFIG DRIFT"]]
+    },
+    selected: {
+      title: "Existing selected files", copy: "The referenced rig and jam are parsed and checked before startup. Runtime fallback may change what runs, while selected files remain intact.", defaults: "Existing", files: "Retained byte for byte",
+      steps: [
+        ["Read defaults.json and its referenced rig and jam paths. Legacy load flags do not decide startup selection.", "EXPLICIT PATHS"],
+        ["Validate the file content and Station targets. Keep usable selected files exactly as they were read.", "VALID SELECTED"],
+        ["Inventory current ASIO and MIDI devices. Exact requested names are preferred and missing names are reported.", "REQUEST VS INVENTORY"],
+        ["Try the selected audio request, then ordered fallback if needed. Attempt enabled MIDI inputs independently by exact name.", "RUNTIME RESULT"],
+        ["Leave selected rig and jam bytes unchanged. Record differences between requested and started devices in the startup log.", "NO SILENT REWRITE"],
+        ["Reload the same files on the next launch. Their paths and content remain user controlled.", "PRESERVED"]]
+    },
+    recovery: {
+      title: "Missing or invalid file", copy: "Rig and jam are classified independently. A present invalid original is kept for inspection; recovery uses a free path.", defaults: "Retained if invalid", files: "New recovery paths",
+      steps: [
+        ["Read defaults. If it is invalid, preserve it and prepare a separate recovery defaults path.", "ORIGINAL RETAINED"],
+        ["Classify each rig and jam as selected, missing, or invalid. Generate only the part that needs recovery.", "INDEPENDENT DECISIONS"],
+        ["Discover hardware and log why candidates are skipped. Existing invalid files are never a write target.", "EVIDENCE KEPT"],
+        ["Try bounded audio fallbacks and available MIDI ports. Recovery still runs in memory if persistence cannot complete.", "USABLE SESSION"],
+        ["Publish successful recovery files at free names, then defaults. For invalid defaults, publish defaults-recovered.json and log how to select it.", "SAFE NEW FILES"],
+        ["Use the recovered defaults path deliberately on the next run; the original remains available for diagnosis.", "EXPLICIT RESTART"]]
+    }
+  };
+  function show(mode) {
+    const data = scenarios[mode];
+    document.querySelectorAll("[data-mode]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.mode === mode)));
+    data.steps.forEach(([copy, tag], index) => { document.getElementById(`step-${index}`).textContent = copy; document.getElementById(`tag-${index}`).textContent = tag; });
+    document.getElementById("scenario-title").textContent = data.title;
+    document.getElementById("scenario-copy").textContent = data.copy;
+    document.getElementById("file-defaults").textContent = data.defaults;
+    document.getElementById("file-rig-jam").textContent = data.files;
+  }
+  document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => show(button.dataset.mode)));
+  show("fresh");
+</script>
+</body>
+</html>

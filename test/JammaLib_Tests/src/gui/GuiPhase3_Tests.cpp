@@ -33,6 +33,7 @@ using gui::GuiScrollBar;
 using gui::GuiScrollBarParams;
 using gui::GuiScrollPanel;
 using gui::GuiScrollPanelParams;
+using gui::GuiScrollOrientation;
 using actions::KeyAction;
 using actions::TouchAction;
 using actions::TouchMoveAction;
@@ -338,6 +339,18 @@ TEST(GuiScrollBar, ClearingPointerCancelsDrag) {
 	EXPECT_DOUBLE_EQ(0.0, scrollBar->Value());
 }
 
+TEST(GuiScrollBar, HorizontalDragMovesThumbToTheRight) {
+	GuiScrollBarParams p;
+	p.Orientation = GuiScrollOrientation::Horizontal;
+	p.Size = { 100u, 18u };
+	auto scrollBar = std::make_shared<GuiScrollBar>(p);
+	scrollBar->SetMetrics(100.0, 200.0);
+	ASSERT_TRUE(scrollBar->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 5, 9 })).IsEaten);
+	EXPECT_TRUE(scrollBar->OnAction(MakeTouchMove({ 55, 9 })).IsEaten);
+	EXPECT_DOUBLE_EQ(1.0, scrollBar->Value());
+	EXPECT_TRUE(scrollBar->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 55, 9 })).IsEaten);
+}
+
 // GuiScrollPanel offset tests
 
 TEST(GuiScrollPanel, OffsetClampsToContentRange) {
@@ -482,6 +495,64 @@ TEST(GuiScrollPanel, ContentIsTopAlignedAtTheStartOfTheScrollRange) {
 
 	panel->SetScrollOffset(10);
 	EXPECT_EQ(0, content->GlobalPosition().Y);
+}
+
+TEST(GuiScrollPanel, HorizontalViewportAndOffsetFollowContentWidth) {
+	GuiScrollPanelParams p;
+	p.Orientation = GuiScrollOrientation::Horizontal;
+	p.Size = { 100u, 60u };
+	p.ScrollBarWidth = 18u;
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	auto content = std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 250u, 42u }));
+	panel->SetContent(content);
+
+	EXPECT_TRUE(panel->IsScrollBarVisible());
+	EXPECT_EQ(100u, panel->ViewportWidth());
+	EXPECT_EQ(42u, panel->ViewportHeight());
+	EXPECT_EQ(150, panel->MaxScrollOffset());
+	EXPECT_EQ(18, content->GlobalPosition().Y);
+
+	panel->SetScrollOffset(1000);
+	EXPECT_EQ(150, panel->ScrollOffset());
+	EXPECT_EQ(-150, content->GlobalPosition().X);
+	panel->SetScrollOffset(-1);
+	EXPECT_EQ(0, panel->ScrollOffset());
+}
+
+TEST(GuiScrollPanel, HorizontalWheelAndBottomBarDragScrollContent) {
+	GuiScrollPanelParams p;
+	p.Orientation = GuiScrollOrientation::Horizontal;
+	p.Size = { 100u, 60u };
+	p.ScrollBarWidth = 18u;
+	p.WheelStep = 24u;
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 200u, 42u })));
+
+	auto wheel = MakeTouch(TouchAction::TOUCH_DOWN, { 50, 40 });
+	wheel.Index = 4;
+	wheel.Value = -1;
+	EXPECT_TRUE(panel->OnAction(wheel).IsEaten);
+	EXPECT_EQ(24, panel->ScrollOffset());
+
+	panel->SetScrollOffset(0);
+	ASSERT_TRUE(panel->OnAction(MakeTouch(TouchAction::TOUCH_DOWN, { 5, 9 })).IsEaten);
+	EXPECT_TRUE(panel->OnAction(MakeTouchMove({ 55, 9 })).IsEaten);
+	EXPECT_EQ(100, panel->ScrollOffset());
+	EXPECT_TRUE(panel->OnAction(MakeTouch(TouchAction::TOUCH_UP, { 55, 9 })).IsEaten);
+}
+
+TEST(GuiScrollPanel, HorizontalBarHidesWhenContentFits) {
+	GuiScrollPanelParams p;
+	p.Orientation = GuiScrollOrientation::Horizontal;
+	p.Size = { 100u, 60u };
+	p.ScrollBarWidth = 18u;
+	auto panel = std::make_shared<GuiScrollPanel>(p);
+	panel->SetContent(std::make_shared<GuiButton>(MakeSizedButton({ 0, 0 }, { 80u, 60u })));
+
+	EXPECT_FALSE(panel->IsScrollBarVisible());
+	EXPECT_EQ(100u, panel->ViewportWidth());
+	EXPECT_EQ(60u, panel->ViewportHeight());
+	EXPECT_EQ(0, panel->MaxScrollOffset());
 }
 
 // GuiTextBox editing tests

@@ -82,9 +82,12 @@ namespace midi
 		MidiRouter(const MidiRouter&) = delete;
 		MidiRouter& operator=(const MidiRouter&) = delete;
 
-		void InitMidi(const io::UserConfig& cfg,
+		MidiConnectionResult InitMidi(const io::UserConfig& cfg,
 			const base::LoggingConfig& loggingConfig,
-			midi::MidiClockAnchor& midiClockAnchor);
+			midi::MidiClockAnchor& midiClockAnchor,
+			unsigned int actualSampleRate,
+			const MidiInputInventory* inventory = nullptr,
+			bool generatedRig = false);
 		void CloseMidi();
 		void PublishRigInputDispatch(std::shared_ptr<const engine::RigSnapshot> snapshot);
 		void PublishEmptyRigInputDispatch();

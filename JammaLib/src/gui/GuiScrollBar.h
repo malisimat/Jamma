@@ -7,6 +7,8 @@
 
 namespace gui
 {
+	enum class GuiScrollOrientation { Vertical, Horizontal };
+
 	struct GuiScrollBarParams : public base::GuiElementParams
 	{
 		GuiScrollBarParams()
@@ -16,9 +18,10 @@ namespace gui
 
 		unsigned int MinThumb     = 16u;   // minimum thumb length in pixels.
 		std::string  ThumbTexture = "blue";
+		GuiScrollOrientation Orientation = GuiScrollOrientation::Vertical;
 	};
 
-	// Vertical scrollbar with normalized position callbacks and testable range math.
+	// Scrollbar with normalized position callbacks and testable range math.
 	class GuiScrollBar : public base::GuiElement
 	{
 	public:
@@ -57,9 +60,10 @@ namespace gui
 		double            _viewportLength;
 		double            _contentLength;
 		unsigned int      _minThumb;
+		GuiScrollOrientation _orientation;
 		base::GuiElement  _thumb;
 		bool              _dragging;
-		int               _dragStartY;
+		int               _dragStartPosition;
 		double            _dragStartValue;
 		std::function<void(double)> _onScroll;
 	};

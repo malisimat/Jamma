@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 #include "RigSnapshot.h"
 
@@ -32,6 +33,9 @@ namespace engine
 			const TriggerParams& triggerParams,
 			const PersistRig& persistMigration);
 		EditResult SubmitCandidate(const io::RigFile& candidateRig);
+		// Refresh source availability after the audio stream and MIDI inputs actually open.
+		SnapshotPtr RefreshRuntimeAvailability(unsigned int availableAdcChannels,
+			std::vector<std::string> availableMidiDevices);
 		EditResult CompleteTransition(std::uint64_t revision,
 			bool acceptedAtAudioBoundary,
 			const PersistRig& persistRig);

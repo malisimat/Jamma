@@ -20,6 +20,7 @@ namespace gui
 
 		unsigned int ScrollBarWidth = 18u;
 		unsigned int WheelStep      = 24u;   // pixels scrolled per wheel notch.
+		GuiScrollOrientation Orientation = GuiScrollOrientation::Vertical;
 		std::string  ScrollBarTexture = "rounded_but";
 		std::string  ThumbTexture      = "blue";
 
@@ -34,7 +35,7 @@ namespace gui
 		}
 	};
 
-	// Scrollable viewport for full-height content, driven by wheel or scrollbar.
+	// Scrollable viewport driven by wheel or scrollbar.
 	class GuiScrollPanel : public GuiPanel
 	{
 	public:
@@ -67,6 +68,7 @@ namespace gui
 
 	private:
 		unsigned int _ContentHeight() const;
+		unsigned int _ContentWidth() const;
 		void _UpdateMetrics();
 		void _ClampOffset();
 		void _UpdateContentHostPosition();
@@ -80,6 +82,7 @@ namespace gui
 		static constexpr unsigned int _ContentClipPadding = 2u;
 		unsigned int _scrollBarWidth;
 		unsigned int _wheelStep;
+		GuiScrollOrientation _orientation;
 		int          _scrollOffset;
 		bool         _draggingScrollBar;
 	};
