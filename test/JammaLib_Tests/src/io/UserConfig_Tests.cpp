@@ -359,6 +359,22 @@ TEST(StartupConfig, GeneratedRigUsesOpenedInputsAndFirstConnectedMidiWithoutCapt
 	EXPECT_FALSE(noMidi.Triggers.front().MidiTrigger.has_value());
 }
 
+TEST(StartupConfig, GeneratedRigKeepsDuplicateMidiPortsOnReload) {
+	auto templateRig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
+	ASSERT_TRUE(templateRig.has_value());
+	const auto rig = io::StartupConfig::GeneratedRig(*templateRig, 2u,
+		{ "Port A", "Port A", "Port B" });
+	ASSERT_EQ(3u, rig.User.Midi.Devices.size());
+	std::stringstream stream;
+	ASSERT_TRUE(io::RigFile::ToJsonStream(rig, stream));
+	auto parsed = io::RigFile::FromStream(std::stringstream(stream.str()));
+	ASSERT_TRUE(parsed.has_value());
+	ASSERT_EQ(3u, parsed->User.Midi.Devices.size());
+	EXPECT_EQ("Port A", parsed->User.Midi.Devices[0].Name);
+	EXPECT_EQ("Port A", parsed->User.Midi.Devices[1].Name);
+	EXPECT_EQ("Port B", parsed->User.Midi.Devices[2].Name);
+}
+
 TEST(StartupConfig, GeneratedRigTargetsAnExistingSelectedJamStation) {
 	auto templateRig = io::RigFile::FromStream(std::stringstream(io::RigFile::DefaultJson));
 	ASSERT_TRUE(templateRig.has_value());

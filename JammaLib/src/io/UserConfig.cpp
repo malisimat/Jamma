@@ -308,11 +308,8 @@ std::optional<UserConfig::MidiConfig> UserConfig::MidiConfig::FromJson(Json::Jso
 		if (device->Name.empty())
 			device->Name = "default";
 
-		const auto exists = std::find_if(midi.Devices.begin(), midi.Devices.end(), [&](const MidiSettings& current) {
-			return current.Name == device->Name;
-		});
-		if (exists == midi.Devices.end())
-			midi.Devices.push_back(device.value());
+		// Repeated names request distinct physical ports with the same display name.
+		midi.Devices.push_back(std::move(*device));
 	}
 
 	return midi;
