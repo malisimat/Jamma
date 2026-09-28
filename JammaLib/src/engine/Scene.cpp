@@ -1850,6 +1850,7 @@ void Scene::InitAudio(bool generatedRig, const audio::AsioInventory* inventory)
 	}
 	else
 	{
+		_midiInputInventory.reset();
 		CloseMidi();
 		_midiState.store( std::make_shared<const MidiState>(), std::memory_order_release);
 	}

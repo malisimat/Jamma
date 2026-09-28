@@ -162,6 +162,7 @@ namespace engine
 			auto result = _inputSubsystem->Init(_audioEngine->GetMidiClockAnchor_Ref(),
 				_audioEngine->GetStreamParams().SampleRate,
 				_midiInputInventory ? &*_midiInputInventory : nullptr, generatedRig);
+			_midiInputInventory.reset();
 			std::vector<std::string> connectedNames;
 			connectedNames.reserve(result.Connected.size());
 			for (const auto& endpoint : result.Connected)
